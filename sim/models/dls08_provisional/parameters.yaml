@@ -1,0 +1,44 @@
+model_name: dls08_provisional
+evidence:
+  identity: visually_matched_candidate_not_seller_confirmed
+  catalogue: manufacturer_catalog_pdf_pages_12_13
+  dimensions: image_proportion_estimates_not_measured
+  dynamics: simulation_assumptions_not_identified
+catalogue:
+  overall_length_m: 1.46
+  overall_width_m: 0.63
+  overall_height_m: 1.01
+  net_mass_kg: 24.0
+dimensions:
+  rear_extent_x_m: -0.51
+  front_axle_x_m: 0.30
+  rear_axle_x_m: -0.34
+  wheel_radius_m: 0.135
+  wheel_width_m: 0.10
+  wheel_track_m: 0.51
+  body_front_x_m: 0.44
+  mast_x_m: 0.48
+  mast_height_m: 0.67
+  mast_width_m: 0.36
+  fork_root_x_m: 0.53
+  fork_spacing_m: 0.29
+  fork_width_m: 0.055
+  fork_thickness_m: 0.024
+  fork_center_height_m: 0.04
+  carriage_width_m: 0.47
+  carriage_height_m: 0.43
+  lift_travel_m: 0.28
+assumptions:
+  steering_axle: front
+  steering_limit_rad: 0.45
+  steering_torque_limit_nm: 4.0
+  urdf_steering_speed_limit_radps: 1.0
+  wheel_mass_kg: 0.55
+  steering_carrier_mass_kg: 0.05
+  carriage_mass_kg: 1.6
+  sliding_friction: 0.8
+  wheel_speed_limit_radps: 8.0
+  wheel_torque_limit_nm: 3.0
+  lift_force_limit_n: 180.0
+  urdf_lift_speed_limit_mps: 1.0
+  lift_position_gain: 1800.0

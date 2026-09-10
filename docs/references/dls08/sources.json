@@ -1,0 +1,48 @@
+{
+  "checked_on": "2026-09-10",
+  "product_url": "https://smartstore.naver.com/skybaesong/products/11789657592",
+  "files": [
+    {
+      "path": "data/references/dls08/catalog.pdf",
+      "url": "https://img2.tradewheel.com/uploads/company/brochure/863140/622809c1d260f-attachment.pdf",
+      "description": "DLS manufacturer catalog; PDF pages 12 and 13 (printed 07-08)",
+      "sha256": "ee3e23681c02db01a03b19a6d11ef9b3e9590d393bc1b1a1d31e6fc04df5c9c4",
+      "bytes": 4728575
+    },
+    {
+      "path": "data/references/dls08/yellow_front.jpg",
+      "url": "https://img.alicdn.com/imgextra/i4/2206552206057/O1CN01EBFg8Z1uc9ed1HhoK_!!2206552206057.jpg",
+      "description": "Naver detail image 7; yellow front view",
+      "sha256": "a523ae396d1e940c76e1520ea81499b1dc8615678a22d802cbd5dc3befed8105",
+      "bytes": 197948
+    },
+    {
+      "path": "data/references/dls08/red_side.jpg",
+      "url": "https://img.alicdn.com/imgextra/i3/2206552206057/O1CN01NuB2Wo1uc9eOawYbt_!!2206552206057.jpg",
+      "description": "Naver detail image 4; side proportions",
+      "sha256": "d641abac016581af2b011544a7fc214a96b5cbc2422b73e3dac98cb36d4f6dbf",
+      "bytes": 53176
+    },
+    {
+      "path": "data/references/dls08/fork_lift.jpg",
+      "url": "https://img.alicdn.com/imgextra/i1/2206552206057/O1CN01orC1ph1uc9eOaxUpZ_!!2206552206057.jpg",
+      "description": "Naver detail image 5; electric fork elevation",
+      "sha256": "5bc2b6d21a967717ce0d54b186e896d810742f679c22d5eb74eb676e236b8258",
+      "bytes": 117988
+    },
+    {
+      "path": "data/references/dls08/rear.jpg",
+      "url": "https://img.alicdn.com/imgextra/i4/2206552206057/O1CN017ssmdi1uc9eTGrWBo_!!2206552206057.jpg",
+      "description": "Naver detail image 6; rear body and cabin",
+      "sha256": "5bd6b5fcaf09b458a677b83aea9fa7b4dd22ed1b9cdd9c4bb40c2ff35e77d53c",
+      "bytes": 70736
+    },
+    {
+      "path": "data/references/dls08/roof.jpg",
+      "url": "https://img.alicdn.com/imgextra/i3/2206552206057/O1CN01NkdZpG1uc9eTGou32_!!2206552206057.jpg",
+      "description": "Naver detail image 9; slotted roof",
+      "sha256": "8375857677afda8b96ca7bc10ab5b5c1bce0bfbe5c2fec9d38210d1c115db52c",
+      "bytes": 102444
+    }
+  ]
+}

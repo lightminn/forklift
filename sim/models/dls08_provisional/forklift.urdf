@@ -1,0 +1,2190 @@
+<?xml version="1.0"?>
+<robot name="dls08_provisional">
+  <mujoco>
+    <compiler discardvisual="false" fusestatic="false" />
+  </mujoco>
+  <link name="base_link">
+    <inertial>
+      <origin xyz="-0.09 0 0.28" rpy="0 0 0" />
+      <mass value="20.1" />
+      <inertia ixx="0.7646643000000001" iyy="1.850875" izz="1.9371642999999998" ixy="0" ixz="0" iyz="0" />
+    </inertial>
+    <visual name="underbody_visual">
+      <origin xyz="-0.035 0 0.1875" rpy="0 0 0" />
+      <geometry>
+        <box size="0.95 0.4284 0.105" />
+      </geometry>
+      <material name="underbody">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="underbody_collision">
+      <origin xyz="-0.035 0 0.1875" rpy="0 0 0" />
+      <geometry>
+        <box size="0.95 0.4284 0.105" />
+      </geometry>
+    </collision>
+    <visual name="footwell_visual">
+      <origin xyz="0.01 0 0.26" rpy="0 0 0" />
+      <geometry>
+        <box size="0.5 0.4914 0.05" />
+      </geometry>
+      <material name="footwell">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <collision name="footwell_collision">
+      <origin xyz="0.01 0 0.26" rpy="0 0 0" />
+      <geometry>
+        <box size="0.5 0.4914 0.05" />
+      </geometry>
+    </collision>
+    <visual name="rear_counterweight_visual">
+      <origin xyz="-0.387 0 0.3225" rpy="0 0 0" />
+      <geometry>
+        <box size="0.234 0.5292 0.235" />
+      </geometry>
+      <material name="rear_counterweight">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <collision name="rear_counterweight_collision">
+      <origin xyz="-0.387 0 0.3225" rpy="0 0 0" />
+      <geometry>
+        <box size="0.234 0.5292 0.235" />
+      </geometry>
+    </collision>
+    <visual name="rear_hood_visual">
+      <origin xyz="-0.36 0 0.45" rpy="0 0 0" />
+      <geometry>
+        <box size="0.3 0.567 0.055" />
+      </geometry>
+      <material name="rear_hood">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <collision name="rear_hood_collision">
+      <origin xyz="-0.36 0 0.45" rpy="0 0 0" />
+      <geometry>
+        <box size="0.3 0.567 0.055" />
+      </geometry>
+    </collision>
+    <visual name="rear_grille_visual">
+      <origin xyz="-0.5055 0 0.382" rpy="0 0 0" />
+      <geometry>
+        <box size="0.009 0.3591 0.06" />
+      </geometry>
+      <material name="rear_grille">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="rear_light_neg_0_2016_visual">
+      <origin xyz="-0.504 -0.2016 0.4" rpy="0 0 0" />
+      <geometry>
+        <box size="0.012 0.04 0.025" />
+      </geometry>
+      <material name="rear_light_neg_0_2016">
+        <color rgba="0.75 0.035 0.025 1" />
+      </material>
+    </visual>
+    <visual name="rear_light_0_2016_visual">
+      <origin xyz="-0.504 0.2016 0.4" rpy="0 0 0" />
+      <geometry>
+        <box size="0.012 0.04 0.025" />
+      </geometry>
+      <material name="rear_light_0_2016">
+        <color rgba="0.75 0.035 0.025 1" />
+      </material>
+    </visual>
+    <visual name="dashboard_body_visual">
+      <origin xyz="0.32 0 0.39" rpy="0 0 0" />
+      <geometry>
+        <box size="0.16 0.4599 0.15" />
+      </geometry>
+      <material name="dashboard_body">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <collision name="dashboard_body_collision">
+      <origin xyz="0.32 0 0.39" rpy="0 0 0" />
+      <geometry>
+        <box size="0.16 0.4599 0.15" />
+      </geometry>
+    </collision>
+    <visual name="dashboard_top_visual">
+      <origin xyz="0.305 0 0.482" rpy="0 -0.2 0" />
+      <geometry>
+        <box size="0.19 0.4599 0.035" />
+      </geometry>
+      <material name="dashboard_top">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="seat_cushion_visual">
+      <origin xyz="-0.17 0 0.36" rpy="0 0 0" />
+      <geometry>
+        <box size="0.29 0.3843 0.055" />
+      </geometry>
+      <material name="seat_cushion">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="seat_back_visual">
+      <origin xyz="-0.32 0 0.48" rpy="0 -0.12 0" />
+      <geometry>
+        <box size="0.055 0.3969 0.235" />
+      </geometry>
+      <material name="seat_back">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="seat_insert_visual">
+      <origin xyz="-0.279 0 0.49" rpy="0 -0.12 0" />
+      <geometry>
+        <box size="0.009 0.2016 0.16" />
+      </geometry>
+      <material name="seat_insert">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="left_door_top_visual">
+      <origin xyz="-0.04 0.29 0.55" rpy="0 -0 0" />
+      <geometry>
+        <box size="0.56 0.043 0.043" />
+      </geometry>
+      <material name="left_door_top">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="left_door_top_collision">
+      <origin xyz="-0.04 0.29 0.55" rpy="0 -0 0" />
+      <geometry>
+        <box size="0.56 0.043 0.043" />
+      </geometry>
+    </collision>
+    <visual name="left_door_rear_visual">
+      <origin xyz="-0.27 0.29 0.44" rpy="0 1.144168834 0" />
+      <geometry>
+        <box size="0.2416609195 0.045 0.045" />
+      </geometry>
+      <material name="left_door_rear">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="left_door_rear_collision">
+      <origin xyz="-0.27 0.29 0.44" rpy="0 1.144168834 0" />
+      <geometry>
+        <box size="0.2416609195 0.045 0.045" />
+      </geometry>
+    </collision>
+    <visual name="left_door_bottom_visual">
+      <origin xyz="-0.06 0.29 0.33" rpy="0 -0 0" />
+      <geometry>
+        <box size="0.32 0.045 0.045" />
+      </geometry>
+      <material name="left_door_bottom">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="left_door_bottom_collision">
+      <origin xyz="-0.06 0.29 0.33" rpy="0 -0 0" />
+      <geometry>
+        <box size="0.32 0.045 0.045" />
+      </geometry>
+    </collision>
+    <visual name="left_door_front_visual">
+      <origin xyz="0.17 0.29 0.44" rpy="0 -1.004067109 0" />
+      <geometry>
+        <box size="0.2607680962 0.048 0.048" />
+      </geometry>
+      <material name="left_door_front">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="left_door_front_collision">
+      <origin xyz="0.17 0.29 0.44" rpy="0 -1.004067109 0" />
+      <geometry>
+        <box size="0.2607680962 0.048 0.048" />
+      </geometry>
+    </collision>
+    <visual name="left_door_brace_visual">
+      <origin xyz="0 0.29 0.445" rpy="0 -0.9561333749 3.141592654" />
+      <geometry>
+        <box size="0.2080865205 0.035 0.035" />
+      </geometry>
+      <material name="left_door_brace">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="left_door_brace_collision">
+      <origin xyz="0 0.29 0.445" rpy="0 -0.9561333749 3.141592654" />
+      <geometry>
+        <box size="0.2080865205 0.035 0.035" />
+      </geometry>
+    </collision>
+    <visual name="left_sill_visual">
+      <origin xyz="-0.01 0.29 0.23" rpy="0 0 0" />
+      <geometry>
+        <box size="0.32 0.05 0.06" />
+      </geometry>
+      <material name="left_sill">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <collision name="left_sill_collision">
+      <origin xyz="-0.01 0.29 0.23" rpy="0 0 0" />
+      <geometry>
+        <box size="0.32 0.05 0.06" />
+      </geometry>
+    </collision>
+    <visual name="left_rear_post_visual">
+      <origin xyz="-0.39 0.29 0.702" rpy="0 -1.570796327 0" />
+      <geometry>
+        <box size="0.544 0.045 0.045" />
+      </geometry>
+      <material name="left_rear_post">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="left_rear_post_collision">
+      <origin xyz="-0.39 0.29 0.702" rpy="0 -1.570796327 0" />
+      <geometry>
+        <box size="0.544 0.045 0.045" />
+      </geometry>
+    </collision>
+    <visual name="left_front_post_visual">
+      <origin xyz="0.265 0.29 0.632" rpy="0 -1.299849476 3.141592654" />
+      <geometry>
+        <box size="0.7098985843 0.045 0.045" />
+      </geometry>
+      <material name="left_front_post">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="left_front_post_collision">
+      <origin xyz="0.265 0.29 0.632" rpy="0 -1.299849476 3.141592654" />
+      <geometry>
+        <box size="0.7098985843 0.045 0.045" />
+      </geometry>
+    </collision>
+    <visual name="left_roof_rail_visual">
+      <origin xyz="-0.12 0.29 0.978" rpy="0 -0 0" />
+      <geometry>
+        <box size="0.58 0.04 0.04" />
+      </geometry>
+      <material name="left_roof_rail">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="left_roof_rail_collision">
+      <origin xyz="-0.12 0.29 0.978" rpy="0 -0 0" />
+      <geometry>
+        <box size="0.58 0.04 0.04" />
+      </geometry>
+    </collision>
+    <visual name="left_grab_handle_visual">
+      <origin xyz="0.2675 0.29 0.735" rpy="0 -1.312025435 3.141592654" />
+      <geometry>
+        <box size="0.175855054 0.016 0.016" />
+      </geometry>
+      <material name="left_grab_handle">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="left_front_lamp_visual">
+      <origin xyz="0.2322777778 0.29 0.865" rpy="0 0 0" />
+      <geometry>
+        <box size="0.026 0.045 0.065" />
+      </geometry>
+      <material name="left_front_lamp">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="left_lamp_red_visual">
+      <origin xyz="0.2472777778 0.29 0.881" rpy="0 0 0" />
+      <geometry>
+        <box size="0.004 0.032 0.03" />
+      </geometry>
+      <material name="left_lamp_red">
+        <color rgba="0.75 0.035 0.025 1" />
+      </material>
+    </visual>
+    <visual name="left_lamp_white_visual">
+      <origin xyz="0.2472777778 0.29 0.847" rpy="0 0 0" />
+      <geometry>
+        <box size="0.004 0.032 0.024" />
+      </geometry>
+      <material name="left_lamp_white">
+        <color rgba="0.88 0.93 1 1" />
+      </material>
+    </visual>
+    <visual name="front_left_fender_0_visual">
+      <origin xyz="0.4560547578 0.265 0.1597166455" rpy="0 1.413716694 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="front_left_fender_0">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="front_left_fender_1_visual">
+      <origin xyz="0.4407790308 0.265 0.206730499" rpy="0 1.099557429 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="front_left_fender_1">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="front_left_fender_2_visual">
+      <origin xyz="0.4117228714 0.265 0.2467228714" rpy="0 0.7853981634 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="front_left_fender_2">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="front_left_fender_3_visual">
+      <origin xyz="0.371730499 0.265 0.2757790308" rpy="0 0.471238898 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="front_left_fender_3">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="front_left_fender_4_visual">
+      <origin xyz="0.3247166455 0.265 0.2910547578" rpy="0 0.1570796327 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="front_left_fender_4">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="front_left_fender_5_visual">
+      <origin xyz="0.2752833545 0.265 0.2910547578" rpy="0 -0.1570796327 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="front_left_fender_5">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="front_left_fender_6_visual">
+      <origin xyz="0.228269501 0.265 0.2757790308" rpy="0 -0.471238898 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="front_left_fender_6">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="front_left_fender_7_visual">
+      <origin xyz="0.1882771286 0.265 0.2467228714" rpy="0 -0.7853981634 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="front_left_fender_7">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="front_left_fender_8_visual">
+      <origin xyz="0.1592209692 0.265 0.206730499" rpy="0 -1.099557429 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="front_left_fender_8">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="front_left_fender_9_visual">
+      <origin xyz="0.1439452422 0.265 0.1597166455" rpy="0 -1.413716694 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="front_left_fender_9">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="rear_left_fender_0_visual">
+      <origin xyz="-0.1839452422 0.265 0.1597166455" rpy="0 1.413716694 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="rear_left_fender_0">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="rear_left_fender_1_visual">
+      <origin xyz="-0.1992209692 0.265 0.206730499" rpy="0 1.099557429 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="rear_left_fender_1">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="rear_left_fender_2_visual">
+      <origin xyz="-0.2282771286 0.265 0.2467228714" rpy="0 0.7853981634 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="rear_left_fender_2">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="rear_left_fender_3_visual">
+      <origin xyz="-0.268269501 0.265 0.2757790308" rpy="0 0.471238898 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="rear_left_fender_3">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="rear_left_fender_4_visual">
+      <origin xyz="-0.3152833545 0.265 0.2910547578" rpy="0 0.1570796327 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="rear_left_fender_4">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="rear_left_fender_5_visual">
+      <origin xyz="-0.3647166455 0.265 0.2910547578" rpy="0 -0.1570796327 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="rear_left_fender_5">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="rear_left_fender_6_visual">
+      <origin xyz="-0.411730499 0.265 0.2757790308" rpy="0 -0.471238898 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="rear_left_fender_6">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="rear_left_fender_7_visual">
+      <origin xyz="-0.4517228714 0.265 0.2467228714" rpy="0 -0.7853981634 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="rear_left_fender_7">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="rear_left_fender_8_visual">
+      <origin xyz="-0.4807790308 0.265 0.206730499" rpy="0 -1.099557429 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="rear_left_fender_8">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="rear_left_fender_9_visual">
+      <origin xyz="-0.4960547578 0.265 0.1597166455" rpy="0 -1.413716694 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="rear_left_fender_9">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="right_door_top_visual">
+      <origin xyz="-0.04 -0.29 0.55" rpy="0 -0 0" />
+      <geometry>
+        <box size="0.56 0.043 0.043" />
+      </geometry>
+      <material name="right_door_top">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="right_door_top_collision">
+      <origin xyz="-0.04 -0.29 0.55" rpy="0 -0 0" />
+      <geometry>
+        <box size="0.56 0.043 0.043" />
+      </geometry>
+    </collision>
+    <visual name="right_door_rear_visual">
+      <origin xyz="-0.27 -0.29 0.44" rpy="0 1.144168834 0" />
+      <geometry>
+        <box size="0.2416609195 0.045 0.045" />
+      </geometry>
+      <material name="right_door_rear">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="right_door_rear_collision">
+      <origin xyz="-0.27 -0.29 0.44" rpy="0 1.144168834 0" />
+      <geometry>
+        <box size="0.2416609195 0.045 0.045" />
+      </geometry>
+    </collision>
+    <visual name="right_door_bottom_visual">
+      <origin xyz="-0.06 -0.29 0.33" rpy="0 -0 0" />
+      <geometry>
+        <box size="0.32 0.045 0.045" />
+      </geometry>
+      <material name="right_door_bottom">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="right_door_bottom_collision">
+      <origin xyz="-0.06 -0.29 0.33" rpy="0 -0 0" />
+      <geometry>
+        <box size="0.32 0.045 0.045" />
+      </geometry>
+    </collision>
+    <visual name="right_door_front_visual">
+      <origin xyz="0.17 -0.29 0.44" rpy="0 -1.004067109 0" />
+      <geometry>
+        <box size="0.2607680962 0.048 0.048" />
+      </geometry>
+      <material name="right_door_front">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="right_door_front_collision">
+      <origin xyz="0.17 -0.29 0.44" rpy="0 -1.004067109 0" />
+      <geometry>
+        <box size="0.2607680962 0.048 0.048" />
+      </geometry>
+    </collision>
+    <visual name="right_door_brace_visual">
+      <origin xyz="0 -0.29 0.445" rpy="0 -0.9561333749 3.141592654" />
+      <geometry>
+        <box size="0.2080865205 0.035 0.035" />
+      </geometry>
+      <material name="right_door_brace">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="right_door_brace_collision">
+      <origin xyz="0 -0.29 0.445" rpy="0 -0.9561333749 3.141592654" />
+      <geometry>
+        <box size="0.2080865205 0.035 0.035" />
+      </geometry>
+    </collision>
+    <visual name="right_sill_visual">
+      <origin xyz="-0.01 -0.29 0.23" rpy="0 0 0" />
+      <geometry>
+        <box size="0.32 0.05 0.06" />
+      </geometry>
+      <material name="right_sill">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <collision name="right_sill_collision">
+      <origin xyz="-0.01 -0.29 0.23" rpy="0 0 0" />
+      <geometry>
+        <box size="0.32 0.05 0.06" />
+      </geometry>
+    </collision>
+    <visual name="right_rear_post_visual">
+      <origin xyz="-0.39 -0.29 0.702" rpy="0 -1.570796327 0" />
+      <geometry>
+        <box size="0.544 0.045 0.045" />
+      </geometry>
+      <material name="right_rear_post">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="right_rear_post_collision">
+      <origin xyz="-0.39 -0.29 0.702" rpy="0 -1.570796327 0" />
+      <geometry>
+        <box size="0.544 0.045 0.045" />
+      </geometry>
+    </collision>
+    <visual name="right_front_post_visual">
+      <origin xyz="0.265 -0.29 0.632" rpy="0 -1.299849476 3.141592654" />
+      <geometry>
+        <box size="0.7098985843 0.045 0.045" />
+      </geometry>
+      <material name="right_front_post">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="right_front_post_collision">
+      <origin xyz="0.265 -0.29 0.632" rpy="0 -1.299849476 3.141592654" />
+      <geometry>
+        <box size="0.7098985843 0.045 0.045" />
+      </geometry>
+    </collision>
+    <visual name="right_roof_rail_visual">
+      <origin xyz="-0.12 -0.29 0.978" rpy="0 -0 0" />
+      <geometry>
+        <box size="0.58 0.04 0.04" />
+      </geometry>
+      <material name="right_roof_rail">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="right_roof_rail_collision">
+      <origin xyz="-0.12 -0.29 0.978" rpy="0 -0 0" />
+      <geometry>
+        <box size="0.58 0.04 0.04" />
+      </geometry>
+    </collision>
+    <visual name="right_grab_handle_visual">
+      <origin xyz="0.2675 -0.29 0.735" rpy="0 -1.312025435 3.141592654" />
+      <geometry>
+        <box size="0.175855054 0.016 0.016" />
+      </geometry>
+      <material name="right_grab_handle">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="right_front_lamp_visual">
+      <origin xyz="0.2322777778 -0.29 0.865" rpy="0 0 0" />
+      <geometry>
+        <box size="0.026 0.045 0.065" />
+      </geometry>
+      <material name="right_front_lamp">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="right_lamp_red_visual">
+      <origin xyz="0.2472777778 -0.29 0.881" rpy="0 0 0" />
+      <geometry>
+        <box size="0.004 0.032 0.03" />
+      </geometry>
+      <material name="right_lamp_red">
+        <color rgba="0.75 0.035 0.025 1" />
+      </material>
+    </visual>
+    <visual name="right_lamp_white_visual">
+      <origin xyz="0.2472777778 -0.29 0.847" rpy="0 0 0" />
+      <geometry>
+        <box size="0.004 0.032 0.024" />
+      </geometry>
+      <material name="right_lamp_white">
+        <color rgba="0.88 0.93 1 1" />
+      </material>
+    </visual>
+    <visual name="front_right_fender_0_visual">
+      <origin xyz="0.4560547578 -0.265 0.1597166455" rpy="0 1.413716694 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="front_right_fender_0">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="front_right_fender_1_visual">
+      <origin xyz="0.4407790308 -0.265 0.206730499" rpy="0 1.099557429 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="front_right_fender_1">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="front_right_fender_2_visual">
+      <origin xyz="0.4117228714 -0.265 0.2467228714" rpy="0 0.7853981634 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="front_right_fender_2">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="front_right_fender_3_visual">
+      <origin xyz="0.371730499 -0.265 0.2757790308" rpy="0 0.471238898 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="front_right_fender_3">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="front_right_fender_4_visual">
+      <origin xyz="0.3247166455 -0.265 0.2910547578" rpy="0 0.1570796327 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="front_right_fender_4">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="front_right_fender_5_visual">
+      <origin xyz="0.2752833545 -0.265 0.2910547578" rpy="0 -0.1570796327 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="front_right_fender_5">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="front_right_fender_6_visual">
+      <origin xyz="0.228269501 -0.265 0.2757790308" rpy="0 -0.471238898 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="front_right_fender_6">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="front_right_fender_7_visual">
+      <origin xyz="0.1882771286 -0.265 0.2467228714" rpy="0 -0.7853981634 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="front_right_fender_7">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="front_right_fender_8_visual">
+      <origin xyz="0.1592209692 -0.265 0.206730499" rpy="0 -1.099557429 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="front_right_fender_8">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="front_right_fender_9_visual">
+      <origin xyz="0.1439452422 -0.265 0.1597166455" rpy="0 -1.413716694 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="front_right_fender_9">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="rear_right_fender_0_visual">
+      <origin xyz="-0.1839452422 -0.265 0.1597166455" rpy="0 1.413716694 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="rear_right_fender_0">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="rear_right_fender_1_visual">
+      <origin xyz="-0.1992209692 -0.265 0.206730499" rpy="0 1.099557429 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="rear_right_fender_1">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="rear_right_fender_2_visual">
+      <origin xyz="-0.2282771286 -0.265 0.2467228714" rpy="0 0.7853981634 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="rear_right_fender_2">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="rear_right_fender_3_visual">
+      <origin xyz="-0.268269501 -0.265 0.2757790308" rpy="0 0.471238898 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="rear_right_fender_3">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="rear_right_fender_4_visual">
+      <origin xyz="-0.3152833545 -0.265 0.2910547578" rpy="0 0.1570796327 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="rear_right_fender_4">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="rear_right_fender_5_visual">
+      <origin xyz="-0.3647166455 -0.265 0.2910547578" rpy="0 -0.1570796327 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="rear_right_fender_5">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="rear_right_fender_6_visual">
+      <origin xyz="-0.411730499 -0.265 0.2757790308" rpy="0 -0.471238898 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="rear_right_fender_6">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="rear_right_fender_7_visual">
+      <origin xyz="-0.4517228714 -0.265 0.2467228714" rpy="0 -0.7853981634 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="rear_right_fender_7">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="rear_right_fender_8_visual">
+      <origin xyz="-0.4807790308 -0.265 0.206730499" rpy="0 -1.099557429 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="rear_right_fender_8">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="rear_right_fender_9_visual">
+      <origin xyz="-0.4960547578 -0.265 0.1597166455" rpy="0 -1.413716694 0" />
+      <geometry>
+        <box size="0.05363716393 0.1 0.018" />
+      </geometry>
+      <material name="rear_right_fender_9">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="roof_slat_0_visual">
+      <origin xyz="-0.39 0 0.998" rpy="0 0 0" />
+      <geometry>
+        <box size="0.062 0.527 0.024" />
+      </geometry>
+      <material name="roof_slat_0">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <collision name="roof_slat_0_collision">
+      <origin xyz="-0.39 0 0.998" rpy="0 0 0" />
+      <geometry>
+        <box size="0.062 0.527 0.024" />
+      </geometry>
+    </collision>
+    <visual name="roof_slat_1_visual">
+      <origin xyz="-0.285 0 0.998" rpy="0 0 0" />
+      <geometry>
+        <box size="0.062 0.527 0.024" />
+      </geometry>
+      <material name="roof_slat_1">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <collision name="roof_slat_1_collision">
+      <origin xyz="-0.285 0 0.998" rpy="0 0 0" />
+      <geometry>
+        <box size="0.062 0.527 0.024" />
+      </geometry>
+    </collision>
+    <visual name="roof_slat_2_visual">
+      <origin xyz="-0.18 0 0.998" rpy="0 0 0" />
+      <geometry>
+        <box size="0.062 0.527 0.024" />
+      </geometry>
+      <material name="roof_slat_2">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <collision name="roof_slat_2_collision">
+      <origin xyz="-0.18 0 0.998" rpy="0 0 0" />
+      <geometry>
+        <box size="0.062 0.527 0.024" />
+      </geometry>
+    </collision>
+    <visual name="roof_slat_3_visual">
+      <origin xyz="-0.075 0 0.998" rpy="0 0 0" />
+      <geometry>
+        <box size="0.062 0.527 0.024" />
+      </geometry>
+      <material name="roof_slat_3">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <collision name="roof_slat_3_collision">
+      <origin xyz="-0.075 0 0.998" rpy="0 0 0" />
+      <geometry>
+        <box size="0.062 0.527 0.024" />
+      </geometry>
+    </collision>
+    <visual name="roof_slat_4_visual">
+      <origin xyz="0.03 0 0.998" rpy="0 0 0" />
+      <geometry>
+        <box size="0.062 0.527 0.024" />
+      </geometry>
+      <material name="roof_slat_4">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <collision name="roof_slat_4_collision">
+      <origin xyz="0.03 0 0.998" rpy="0 0 0" />
+      <geometry>
+        <box size="0.062 0.527 0.024" />
+      </geometry>
+    </collision>
+    <visual name="roof_slat_5_visual">
+      <origin xyz="0.135 0 0.998" rpy="0 0 0" />
+      <geometry>
+        <box size="0.062 0.527 0.024" />
+      </geometry>
+      <material name="roof_slat_5">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <collision name="roof_slat_5_collision">
+      <origin xyz="0.135 0 0.998" rpy="0 0 0" />
+      <geometry>
+        <box size="0.062 0.527 0.024" />
+      </geometry>
+    </collision>
+    <visual name="roof_edge_neg_1_visual">
+      <origin xyz="-0.125 -0.28 0.9975" rpy="0 0 0" />
+      <geometry>
+        <box size="0.59 0.033 0.025" />
+      </geometry>
+      <material name="roof_edge_neg_1">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <collision name="roof_edge_neg_1_collision">
+      <origin xyz="-0.125 -0.28 0.9975" rpy="0 0 0" />
+      <geometry>
+        <box size="0.59 0.033 0.025" />
+      </geometry>
+    </collision>
+    <visual name="roof_edge_1_visual">
+      <origin xyz="-0.125 0.28 0.9975" rpy="0 0 0" />
+      <geometry>
+        <box size="0.59 0.033 0.025" />
+      </geometry>
+      <material name="roof_edge_1">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <collision name="roof_edge_1_collision">
+      <origin xyz="-0.125 0.28 0.9975" rpy="0 0 0" />
+      <geometry>
+        <box size="0.59 0.033 0.025" />
+      </geometry>
+    </collision>
+    <visual name="steering_rim_0_visual">
+      <origin xyz="0.287572996 0.01190567607 0.5818748331" rpy="0 0.05324857931 1.6904327" />
+      <geometry>
+        <box size="0.02401681937 0.018 0.018" />
+      </geometry>
+      <material name="steering_rim_0">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="steering_rim_1_visual">
+      <origin xyz="0.2819457827 0.03490567607 0.5793618741" rpy="0 0.1566834723 1.932381614" />
+      <geometry>
+        <box size="0.02401681937 0.018 0.018" />
+      </geometry>
+      <material name="steering_rim_1">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="steering_rim_2_visual">
+      <origin xyz="0.2710748416 0.05552691193 0.5745072103" rpy="0 0.2508514357 2.181950207" />
+      <geometry>
+        <box size="0.02401681937 0.018 0.018" />
+      </geometry>
+      <material name="steering_rim_2">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="steering_rim_3_visual">
+      <origin xyz="0.2557010092 0.07236408051 0.5676416788" rpy="0 0.3294240668 2.442719508" />
+      <geometry>
+        <box size="0.02401681937 0.018 0.018" />
+      </geometry>
+      <material name="steering_rim_3">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="steering_rim_4_visual">
+      <origin xyz="0.2368719868 0.08426975658 0.5592331543" rpy="0 0.3862545294 2.715715922" />
+      <geometry>
+        <box size="0.02401681937 0.018 0.018" />
+      </geometry>
+      <material name="steering_rim_4">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="steering_rim_5_visual">
+      <origin xyz="0.2158709412 0.09043258801 0.5498546639" rpy="0 0.4161827543 2.998395863" />
+      <geometry>
+        <box size="0.02401681937 0.018 0.018" />
+      </geometry>
+      <material name="steering_rim_5">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="steering_rim_6_visual">
+      <origin xyz="0.1941290588 0.09043258801 0.5401453361" rpy="0 0.4161827543 -2.998395863" />
+      <geometry>
+        <box size="0.02401681937 0.018 0.018" />
+      </geometry>
+      <material name="steering_rim_6">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="steering_rim_7_visual">
+      <origin xyz="0.1731280132 0.08426975658 0.5307668457" rpy="0 0.3862545294 -2.715715922" />
+      <geometry>
+        <box size="0.02401681937 0.018 0.018" />
+      </geometry>
+      <material name="steering_rim_7">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="steering_rim_8_visual">
+      <origin xyz="0.1542989908 0.07236408051 0.5223583212" rpy="0 0.3294240668 -2.442719508" />
+      <geometry>
+        <box size="0.02401681937 0.018 0.018" />
+      </geometry>
+      <material name="steering_rim_8">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="steering_rim_9_visual">
+      <origin xyz="0.1389251584 0.05552691193 0.5154927897" rpy="0 0.2508514357 -2.181950207" />
+      <geometry>
+        <box size="0.02401681937 0.018 0.018" />
+      </geometry>
+      <material name="steering_rim_9">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="steering_rim_10_visual">
+      <origin xyz="0.1280542173 0.03490567607 0.5106381259" rpy="0 0.1566834723 -1.932381614" />
+      <geometry>
+        <box size="0.02401681937 0.018 0.018" />
+      </geometry>
+      <material name="steering_rim_10">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="steering_rim_11_visual">
+      <origin xyz="0.122427004 0.01190567607 0.5081251669" rpy="0 0.05324857931 -1.6904327" />
+      <geometry>
+        <box size="0.02401681937 0.018 0.018" />
+      </geometry>
+      <material name="steering_rim_11">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="steering_rim_12_visual">
+      <origin xyz="0.122427004 -0.01190567607 0.5081251669" rpy="0 -0.05324857931 -1.451159954" />
+      <geometry>
+        <box size="0.02401681937 0.018 0.018" />
+      </geometry>
+      <material name="steering_rim_12">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="steering_rim_13_visual">
+      <origin xyz="0.1280542173 -0.03490567607 0.5106381259" rpy="0 -0.1566834723 -1.20921104" />
+      <geometry>
+        <box size="0.02401681937 0.018 0.018" />
+      </geometry>
+      <material name="steering_rim_13">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="steering_rim_14_visual">
+      <origin xyz="0.1389251584 -0.05552691193 0.5154927897" rpy="0 -0.2508514357 -0.9596424461" />
+      <geometry>
+        <box size="0.02401681937 0.018 0.018" />
+      </geometry>
+      <material name="steering_rim_14">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="steering_rim_15_visual">
+      <origin xyz="0.1542989908 -0.07236408051 0.5223583212" rpy="0 -0.3294240668 -0.6988731457" />
+      <geometry>
+        <box size="0.02401681937 0.018 0.018" />
+      </geometry>
+      <material name="steering_rim_15">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="steering_rim_16_visual">
+      <origin xyz="0.1731280132 -0.08426975658 0.5307668457" rpy="0 -0.3862545294 -0.4258767313" />
+      <geometry>
+        <box size="0.02401681937 0.018 0.018" />
+      </geometry>
+      <material name="steering_rim_16">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="steering_rim_17_visual">
+      <origin xyz="0.1941290588 -0.09043258801 0.5401453361" rpy="0 -0.4161827543 -0.143196791" />
+      <geometry>
+        <box size="0.02401681937 0.018 0.018" />
+      </geometry>
+      <material name="steering_rim_17">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="steering_rim_18_visual">
+      <origin xyz="0.2158709412 -0.09043258801 0.5498546639" rpy="0 -0.4161827543 0.143196791" />
+      <geometry>
+        <box size="0.02401681937 0.018 0.018" />
+      </geometry>
+      <material name="steering_rim_18">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="steering_rim_19_visual">
+      <origin xyz="0.2368719868 -0.08426975658 0.5592331543" rpy="0 -0.3862545294 0.4258767313" />
+      <geometry>
+        <box size="0.02401681937 0.018 0.018" />
+      </geometry>
+      <material name="steering_rim_19">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="steering_rim_20_visual">
+      <origin xyz="0.2557010092 -0.07236408051 0.5676416788" rpy="0 -0.3294240668 0.6988731457" />
+      <geometry>
+        <box size="0.02401681937 0.018 0.018" />
+      </geometry>
+      <material name="steering_rim_20">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="steering_rim_21_visual">
+      <origin xyz="0.2710748416 -0.05552691193 0.5745072103" rpy="0 -0.2508514357 0.9596424461" />
+      <geometry>
+        <box size="0.02401681937 0.018 0.018" />
+      </geometry>
+      <material name="steering_rim_21">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="steering_rim_22_visual">
+      <origin xyz="0.2819457827 -0.03490567607 0.5793618741" rpy="0 -0.1566834723 1.20921104" />
+      <geometry>
+        <box size="0.02401681937 0.018 0.018" />
+      </geometry>
+      <material name="steering_rim_22">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="steering_rim_23_visual">
+      <origin xyz="0.287572996 -0.01190567607 0.5818748331" rpy="0 -0.05324857931 1.451159954" />
+      <geometry>
+        <box size="0.02401681937 0.018 0.018" />
+      </geometry>
+      <material name="steering_rim_23">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="steering_column_visual">
+      <origin xyz="0.2375 0 0.4875" rpy="0 -1.056345014 3.141592654" />
+      <geometry>
+        <box size="0.1320984481 0.035 0.035" />
+      </geometry>
+      <material name="steering_column">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="steering_spoke_0_visual">
+      <origin xyz="0.24380628 0 0.5623298193" rpy="0 -0.42 0" />
+      <geometry>
+        <box size="0.085 0.016 0.016" />
+      </geometry>
+      <material name="steering_spoke_0">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="steering_spoke_2_0943951023931953_visual">
+      <origin xyz="0.18559686 0.03680607966 0.5363350904" rpy="0 0.2053197728 2.055944615" />
+      <geometry>
+        <box size="0.085 0.016 0.016" />
+      </geometry>
+      <material name="steering_spoke_2_0943951023931953">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="steering_spoke_4_1887902047863905_visual">
+      <origin xyz="0.18559686 -0.03680607966 0.5363350904" rpy="0 0.2053197728 -2.055944615" />
+      <geometry>
+        <box size="0.085 0.016 0.016" />
+      </geometry>
+      <material name="steering_spoke_4_1887902047863905">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="control_lever_neg_1_visual">
+      <origin xyz="0.245 -0.18 0.505" rpy="0 -1.063697822 3.141592654" />
+      <geometry>
+        <box size="0.1029563014 0.015 0.015" />
+      </geometry>
+      <material name="control_lever_neg_1">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="control_lever_1_visual">
+      <origin xyz="0.245 0.18 0.505" rpy="0 -1.063697822 3.141592654" />
+      <geometry>
+        <box size="0.1029563014 0.015 0.015" />
+      </geometry>
+      <material name="control_lever_1">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="mast_rail_neg_1_visual">
+      <origin xyz="0.48 -0.16 0.36" rpy="0 0 0" />
+      <geometry>
+        <box size="0.052 0.04 0.62" />
+      </geometry>
+      <material name="mast_rail_neg_1">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="mast_rail_neg_1_collision">
+      <origin xyz="0.48 -0.16 0.36" rpy="0 0 0" />
+      <geometry>
+        <box size="0.052 0.04 0.62" />
+      </geometry>
+    </collision>
+    <visual name="mast_rail_1_visual">
+      <origin xyz="0.48 0.16 0.36" rpy="0 0 0" />
+      <geometry>
+        <box size="0.052 0.04 0.62" />
+      </geometry>
+      <material name="mast_rail_1">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="mast_rail_1_collision">
+      <origin xyz="0.48 0.16 0.36" rpy="0 0 0" />
+      <geometry>
+        <box size="0.052 0.04 0.62" />
+      </geometry>
+    </collision>
+    <visual name="mast_cross_0_visual">
+      <origin xyz="0.48 0 0.085" rpy="0 0 0" />
+      <geometry>
+        <box size="0.05 0.36 0.04" />
+      </geometry>
+      <material name="mast_cross_0">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="mast_cross_0_collision">
+      <origin xyz="0.48 0 0.085" rpy="0 0 0" />
+      <geometry>
+        <box size="0.05 0.36 0.04" />
+      </geometry>
+    </collision>
+    <visual name="mast_cross_1_visual">
+      <origin xyz="0.48 0 0.4" rpy="0 0 0" />
+      <geometry>
+        <box size="0.05 0.36 0.04" />
+      </geometry>
+      <material name="mast_cross_1">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="mast_cross_1_collision">
+      <origin xyz="0.48 0 0.4" rpy="0 0 0" />
+      <geometry>
+        <box size="0.05 0.36 0.04" />
+      </geometry>
+    </collision>
+    <visual name="mast_cross_2_visual">
+      <origin xyz="0.48 0 0.65" rpy="0 0 0" />
+      <geometry>
+        <box size="0.05 0.36 0.04" />
+      </geometry>
+      <material name="mast_cross_2">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="mast_cross_2_collision">
+      <origin xyz="0.48 0 0.65" rpy="0 0 0" />
+      <geometry>
+        <box size="0.05 0.36 0.04" />
+      </geometry>
+    </collision>
+    <visual name="lift_drive_cover_visual">
+      <origin xyz="0.48 0 0.26" rpy="0 0 0" />
+      <geometry>
+        <box size="0.058 0.09 0.32" />
+      </geometry>
+      <material name="lift_drive_cover">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <collision name="lift_drive_cover_collision">
+      <origin xyz="0.48 0 0.26" rpy="0 0 0" />
+      <geometry>
+        <box size="0.058 0.09 0.32" />
+      </geometry>
+    </collision>
+    <visual name="mast_scale_0_visual">
+      <origin xyz="0.507 -0.15 0.47" rpy="0 0 0" />
+      <geometry>
+        <box size="0.002 0.035 0.008" />
+      </geometry>
+      <material name="mast_scale_0">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="mast_scale_1_visual">
+      <origin xyz="0.507 -0.15 0.488" rpy="0 0 0" />
+      <geometry>
+        <box size="0.002 0.035 0.008" />
+      </geometry>
+      <material name="mast_scale_1">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="mast_scale_2_visual">
+      <origin xyz="0.507 -0.15 0.506" rpy="0 0 0" />
+      <geometry>
+        <box size="0.002 0.035 0.008" />
+      </geometry>
+      <material name="mast_scale_2">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="mast_scale_3_visual">
+      <origin xyz="0.507 -0.15 0.524" rpy="0 0 0" />
+      <geometry>
+        <box size="0.002 0.035 0.008" />
+      </geometry>
+      <material name="mast_scale_3">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="mast_scale_4_visual">
+      <origin xyz="0.507 -0.15 0.542" rpy="0 0 0" />
+      <geometry>
+        <box size="0.002 0.035 0.008" />
+      </geometry>
+      <material name="mast_scale_4">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="mast_scale_5_visual">
+      <origin xyz="0.507 -0.15 0.56" rpy="0 0 0" />
+      <geometry>
+        <box size="0.002 0.035 0.008" />
+      </geometry>
+      <material name="mast_scale_5">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="mast_scale_6_visual">
+      <origin xyz="0.507 -0.15 0.578" rpy="0 0 0" />
+      <geometry>
+        <box size="0.002 0.035 0.008" />
+      </geometry>
+      <material name="mast_scale_6">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="mast_scale_7_visual">
+      <origin xyz="0.507 -0.15 0.596" rpy="0 0 0" />
+      <geometry>
+        <box size="0.002 0.035 0.008" />
+      </geometry>
+      <material name="mast_scale_7">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="mast_scale_8_visual">
+      <origin xyz="0.507 -0.15 0.614" rpy="0 0 0" />
+      <geometry>
+        <box size="0.002 0.035 0.008" />
+      </geometry>
+      <material name="mast_scale_8">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+  </link>
+  <link name="left_steering_carrier">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="0.05" />
+      <inertia ixx="5.208333333333334e-06" iyy="5.208333333333334e-06" izz="5.208333333333334e-06" ixy="0" ixz="0" iyz="0" />
+    </inertial>
+  </link>
+  <joint name="left_steer" type="revolute">
+    <parent link="base_link" />
+    <child link="left_steering_carrier" />
+    <origin xyz="0.3 0.255 0.135" rpy="0 0 0" />
+    <axis xyz="0 0 1" />
+    <limit lower="-0.45" upper="0.45" effort="4.0" velocity="1.0" />
+  </joint>
+  <link name="front_left_wheel">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="0.55" />
+      <inertia ixx="0.002958340114583334" iyy="0.005000013562500001" izz="0.002958340114583334" ixy="0" ixz="0" iyz="0" />
+    </inertial>
+    <visual name="front_left_tire_visual">
+      <origin xyz="0 0 0" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.135" length="0.1" />
+      </geometry>
+      <material name="front_left_tire">
+        <color rgba="0.023 0.026 0.032 1" />
+      </material>
+    </visual>
+    <collision name="front_left_tire_collision">
+      <origin xyz="0 0 0" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.135" length="0.1" />
+      </geometry>
+    </collision>
+    <visual name="front_left_ring_visual">
+      <origin xyz="0 0.052 0" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.10260000000000001" length="0.004" />
+      </geometry>
+      <material name="front_left_ring">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="front_left_hub_visual">
+      <origin xyz="0 0.054 0" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.08910000000000001" length="0.004" />
+      </geometry>
+      <material name="front_left_hub">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="front_left_cap_visual">
+      <origin xyz="0 0.056 0" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.031050000000000005" length="0.004" />
+      </geometry>
+      <material name="front_left_cap">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="front_left_bolt_0_visual">
+      <origin xyz="0.075 0.057 0" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="front_left_bolt_0">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="front_left_bolt_1_visual">
+      <origin xyz="0.05303300859 0.057 0.05303300859" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="front_left_bolt_1">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="front_left_bolt_2_visual">
+      <origin xyz="4.592425497e-18 0.057 0.075" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="front_left_bolt_2">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="front_left_bolt_3_visual">
+      <origin xyz="-0.05303300859 0.057 0.05303300859" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="front_left_bolt_3">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="front_left_bolt_4_visual">
+      <origin xyz="-0.075 0.057 9.184850994e-18" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="front_left_bolt_4">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="front_left_bolt_5_visual">
+      <origin xyz="-0.05303300859 0.057 -0.05303300859" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="front_left_bolt_5">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="front_left_bolt_6_visual">
+      <origin xyz="-1.377727649e-17 0.057 -0.075" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="front_left_bolt_6">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="front_left_bolt_7_visual">
+      <origin xyz="0.05303300859 0.057 -0.05303300859" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="front_left_bolt_7">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+  </link>
+  <joint name="front_left_spin" type="continuous">
+    <parent link="left_steering_carrier" />
+    <child link="front_left_wheel" />
+    <origin xyz="0 0 0" rpy="0 0 0" />
+    <axis xyz="0 1 0" />
+    <limit effort="3.0" velocity="8.0" />
+  </joint>
+  <link name="right_steering_carrier">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="0.05" />
+      <inertia ixx="5.208333333333334e-06" iyy="5.208333333333334e-06" izz="5.208333333333334e-06" ixy="0" ixz="0" iyz="0" />
+    </inertial>
+  </link>
+  <joint name="right_steer" type="revolute">
+    <parent link="base_link" />
+    <child link="right_steering_carrier" />
+    <origin xyz="0.3 -0.255 0.135" rpy="0 0 0" />
+    <axis xyz="0 0 1" />
+    <limit lower="-0.45" upper="0.45" effort="4.0" velocity="1.0" />
+  </joint>
+  <link name="front_right_wheel">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="0.55" />
+      <inertia ixx="0.002958340114583334" iyy="0.005000013562500001" izz="0.002958340114583334" ixy="0" ixz="0" iyz="0" />
+    </inertial>
+    <visual name="front_right_tire_visual">
+      <origin xyz="0 0 0" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.135" length="0.1" />
+      </geometry>
+      <material name="front_right_tire">
+        <color rgba="0.023 0.026 0.032 1" />
+      </material>
+    </visual>
+    <collision name="front_right_tire_collision">
+      <origin xyz="0 0 0" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.135" length="0.1" />
+      </geometry>
+    </collision>
+    <visual name="front_right_ring_visual">
+      <origin xyz="0 -0.052 0" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.10260000000000001" length="0.004" />
+      </geometry>
+      <material name="front_right_ring">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="front_right_hub_visual">
+      <origin xyz="0 -0.054 0" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.08910000000000001" length="0.004" />
+      </geometry>
+      <material name="front_right_hub">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="front_right_cap_visual">
+      <origin xyz="0 -0.056 0" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.031050000000000005" length="0.004" />
+      </geometry>
+      <material name="front_right_cap">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="front_right_bolt_0_visual">
+      <origin xyz="0.075 -0.057 0" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="front_right_bolt_0">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="front_right_bolt_1_visual">
+      <origin xyz="0.05303300859 -0.057 0.05303300859" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="front_right_bolt_1">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="front_right_bolt_2_visual">
+      <origin xyz="4.592425497e-18 -0.057 0.075" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="front_right_bolt_2">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="front_right_bolt_3_visual">
+      <origin xyz="-0.05303300859 -0.057 0.05303300859" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="front_right_bolt_3">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="front_right_bolt_4_visual">
+      <origin xyz="-0.075 -0.057 9.184850994e-18" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="front_right_bolt_4">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="front_right_bolt_5_visual">
+      <origin xyz="-0.05303300859 -0.057 -0.05303300859" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="front_right_bolt_5">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="front_right_bolt_6_visual">
+      <origin xyz="-1.377727649e-17 -0.057 -0.075" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="front_right_bolt_6">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="front_right_bolt_7_visual">
+      <origin xyz="0.05303300859 -0.057 -0.05303300859" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="front_right_bolt_7">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+  </link>
+  <joint name="front_right_spin" type="continuous">
+    <parent link="right_steering_carrier" />
+    <child link="front_right_wheel" />
+    <origin xyz="0 0 0" rpy="0 0 0" />
+    <axis xyz="0 1 0" />
+    <limit effort="3.0" velocity="8.0" />
+  </joint>
+  <link name="rear_left_wheel">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="0.55" />
+      <inertia ixx="0.002958340114583334" iyy="0.005000013562500001" izz="0.002958340114583334" ixy="0" ixz="0" iyz="0" />
+    </inertial>
+    <visual name="rear_left_tire_visual">
+      <origin xyz="0 0 0" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.135" length="0.1" />
+      </geometry>
+      <material name="rear_left_tire">
+        <color rgba="0.023 0.026 0.032 1" />
+      </material>
+    </visual>
+    <collision name="rear_left_tire_collision">
+      <origin xyz="0 0 0" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.135" length="0.1" />
+      </geometry>
+    </collision>
+    <visual name="rear_left_ring_visual">
+      <origin xyz="0 0.052 0" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.10260000000000001" length="0.004" />
+      </geometry>
+      <material name="rear_left_ring">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="rear_left_hub_visual">
+      <origin xyz="0 0.054 0" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.08910000000000001" length="0.004" />
+      </geometry>
+      <material name="rear_left_hub">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="rear_left_cap_visual">
+      <origin xyz="0 0.056 0" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.031050000000000005" length="0.004" />
+      </geometry>
+      <material name="rear_left_cap">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="rear_left_bolt_0_visual">
+      <origin xyz="0.075 0.057 0" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="rear_left_bolt_0">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="rear_left_bolt_1_visual">
+      <origin xyz="0.05303300859 0.057 0.05303300859" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="rear_left_bolt_1">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="rear_left_bolt_2_visual">
+      <origin xyz="4.592425497e-18 0.057 0.075" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="rear_left_bolt_2">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="rear_left_bolt_3_visual">
+      <origin xyz="-0.05303300859 0.057 0.05303300859" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="rear_left_bolt_3">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="rear_left_bolt_4_visual">
+      <origin xyz="-0.075 0.057 9.184850994e-18" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="rear_left_bolt_4">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="rear_left_bolt_5_visual">
+      <origin xyz="-0.05303300859 0.057 -0.05303300859" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="rear_left_bolt_5">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="rear_left_bolt_6_visual">
+      <origin xyz="-1.377727649e-17 0.057 -0.075" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="rear_left_bolt_6">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="rear_left_bolt_7_visual">
+      <origin xyz="0.05303300859 0.057 -0.05303300859" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="rear_left_bolt_7">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+  </link>
+  <joint name="rear_left_spin" type="continuous">
+    <parent link="base_link" />
+    <child link="rear_left_wheel" />
+    <origin xyz="-0.34 0.255 0.135" rpy="0 0 0" />
+    <axis xyz="0 1 0" />
+    <limit effort="3.0" velocity="8.0" />
+  </joint>
+  <link name="rear_right_wheel">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="0.55" />
+      <inertia ixx="0.002958340114583334" iyy="0.005000013562500001" izz="0.002958340114583334" ixy="0" ixz="0" iyz="0" />
+    </inertial>
+    <visual name="rear_right_tire_visual">
+      <origin xyz="0 0 0" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.135" length="0.1" />
+      </geometry>
+      <material name="rear_right_tire">
+        <color rgba="0.023 0.026 0.032 1" />
+      </material>
+    </visual>
+    <collision name="rear_right_tire_collision">
+      <origin xyz="0 0 0" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.135" length="0.1" />
+      </geometry>
+    </collision>
+    <visual name="rear_right_ring_visual">
+      <origin xyz="0 -0.052 0" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.10260000000000001" length="0.004" />
+      </geometry>
+      <material name="rear_right_ring">
+        <color rgba="1 0.72 0.015 1" />
+      </material>
+    </visual>
+    <visual name="rear_right_hub_visual">
+      <origin xyz="0 -0.054 0" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.08910000000000001" length="0.004" />
+      </geometry>
+      <material name="rear_right_hub">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <visual name="rear_right_cap_visual">
+      <origin xyz="0 -0.056 0" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.031050000000000005" length="0.004" />
+      </geometry>
+      <material name="rear_right_cap">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="rear_right_bolt_0_visual">
+      <origin xyz="0.075 -0.057 0" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="rear_right_bolt_0">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="rear_right_bolt_1_visual">
+      <origin xyz="0.05303300859 -0.057 0.05303300859" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="rear_right_bolt_1">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="rear_right_bolt_2_visual">
+      <origin xyz="4.592425497e-18 -0.057 0.075" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="rear_right_bolt_2">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="rear_right_bolt_3_visual">
+      <origin xyz="-0.05303300859 -0.057 0.05303300859" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="rear_right_bolt_3">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="rear_right_bolt_4_visual">
+      <origin xyz="-0.075 -0.057 9.184850994e-18" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="rear_right_bolt_4">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="rear_right_bolt_5_visual">
+      <origin xyz="-0.05303300859 -0.057 -0.05303300859" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="rear_right_bolt_5">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="rear_right_bolt_6_visual">
+      <origin xyz="-1.377727649e-17 -0.057 -0.075" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="rear_right_bolt_6">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+    <visual name="rear_right_bolt_7_visual">
+      <origin xyz="0.05303300859 -0.057 -0.05303300859" rpy="1.570796327 0 0" />
+      <geometry>
+        <cylinder radius="0.007" length="0.004" />
+      </geometry>
+      <material name="rear_right_bolt_7">
+        <color rgba="0.25 0.29 0.34 1" />
+      </material>
+    </visual>
+  </link>
+  <joint name="rear_right_spin" type="continuous">
+    <parent link="base_link" />
+    <child link="rear_right_wheel" />
+    <origin xyz="-0.34 -0.255 0.135" rpy="0 0 0" />
+    <axis xyz="0 1 0" />
+    <limit effort="3.0" velocity="8.0" />
+  </joint>
+  <link name="fork_carriage">
+    <inertial>
+      <origin xyz="0.59 0 0.15" rpy="0 0 0" />
+      <mass value="1.6" />
+      <inertia ixx="0.05410666666666666" iyy="0.048173333333333325" izz="0.05297333333333333" ixy="0" ixz="0" iyz="0" />
+    </inertial>
+    <visual name="left_fork_visual">
+      <origin xyz="0.74 0.145 0.04" rpy="0 0 0" />
+      <geometry>
+        <box size="0.42 0.055 0.024" />
+      </geometry>
+      <material name="left_fork">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="left_fork_collision">
+      <origin xyz="0.74 0.145 0.04" rpy="0 0 0" />
+      <geometry>
+        <box size="0.42 0.055 0.024" />
+      </geometry>
+    </collision>
+    <visual name="left_fork_heel_visual">
+      <origin xyz="0.53 0.145 0.15825" rpy="0 0 0" />
+      <geometry>
+        <box size="0.026 0.055 0.2365" />
+      </geometry>
+      <material name="left_fork_heel">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="left_fork_heel_collision">
+      <origin xyz="0.53 0.145 0.15825" rpy="0 0 0" />
+      <geometry>
+        <box size="0.026 0.055 0.2365" />
+      </geometry>
+    </collision>
+    <visual name="carriage_side_left_visual">
+      <origin xyz="0.53 0.2175 0.255" rpy="0 0 0" />
+      <geometry>
+        <box size="0.026 0.035 0.43" />
+      </geometry>
+      <material name="carriage_side_left">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="carriage_side_left_collision">
+      <origin xyz="0.53 0.2175 0.255" rpy="0 0 0" />
+      <geometry>
+        <box size="0.026 0.035 0.43" />
+      </geometry>
+    </collision>
+    <visual name="right_fork_visual">
+      <origin xyz="0.74 -0.145 0.04" rpy="0 0 0" />
+      <geometry>
+        <box size="0.42 0.055 0.024" />
+      </geometry>
+      <material name="right_fork">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="right_fork_collision">
+      <origin xyz="0.74 -0.145 0.04" rpy="0 0 0" />
+      <geometry>
+        <box size="0.42 0.055 0.024" />
+      </geometry>
+    </collision>
+    <visual name="right_fork_heel_visual">
+      <origin xyz="0.53 -0.145 0.15825" rpy="0 0 0" />
+      <geometry>
+        <box size="0.026 0.055 0.2365" />
+      </geometry>
+      <material name="right_fork_heel">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="right_fork_heel_collision">
+      <origin xyz="0.53 -0.145 0.15825" rpy="0 0 0" />
+      <geometry>
+        <box size="0.026 0.055 0.2365" />
+      </geometry>
+    </collision>
+    <visual name="carriage_side_right_visual">
+      <origin xyz="0.53 -0.2175 0.255" rpy="0 0 0" />
+      <geometry>
+        <box size="0.026 0.035 0.43" />
+      </geometry>
+      <material name="carriage_side_right">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="carriage_side_right_collision">
+      <origin xyz="0.53 -0.2175 0.255" rpy="0 0 0" />
+      <geometry>
+        <box size="0.026 0.035 0.43" />
+      </geometry>
+    </collision>
+    <visual name="carriage_cross_0_visual">
+      <origin xyz="0.53 0 0.085" rpy="0 0 0" />
+      <geometry>
+        <box size="0.028 0.47 0.032" />
+      </geometry>
+      <material name="carriage_cross_0">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="carriage_cross_0_collision">
+      <origin xyz="0.53 0 0.085" rpy="0 0 0" />
+      <geometry>
+        <box size="0.028 0.47 0.032" />
+      </geometry>
+    </collision>
+    <visual name="carriage_cross_1_visual">
+      <origin xyz="0.53 0 0.3" rpy="0 0 0" />
+      <geometry>
+        <box size="0.028 0.47 0.032" />
+      </geometry>
+      <material name="carriage_cross_1">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="carriage_cross_1_collision">
+      <origin xyz="0.53 0 0.3" rpy="0 0 0" />
+      <geometry>
+        <box size="0.028 0.47 0.032" />
+      </geometry>
+    </collision>
+    <visual name="carriage_cross_2_visual">
+      <origin xyz="0.53 0 0.45" rpy="0 0 0" />
+      <geometry>
+        <box size="0.028 0.47 0.032" />
+      </geometry>
+      <material name="carriage_cross_2">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="carriage_cross_2_collision">
+      <origin xyz="0.53 0 0.45" rpy="0 0 0" />
+      <geometry>
+        <box size="0.028 0.47 0.032" />
+      </geometry>
+    </collision>
+    <visual name="carriage_grille_0_visual">
+      <origin xyz="0.53 -0.16 0.39" rpy="0 0 0" />
+      <geometry>
+        <box size="0.02 0.012 0.13" />
+      </geometry>
+      <material name="carriage_grille_0">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="carriage_grille_0_collision">
+      <origin xyz="0.53 -0.16 0.39" rpy="0 0 0" />
+      <geometry>
+        <box size="0.02 0.012 0.13" />
+      </geometry>
+    </collision>
+    <visual name="carriage_grille_1_visual">
+      <origin xyz="0.53 -0.08 0.39" rpy="0 0 0" />
+      <geometry>
+        <box size="0.02 0.012 0.13" />
+      </geometry>
+      <material name="carriage_grille_1">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="carriage_grille_1_collision">
+      <origin xyz="0.53 -0.08 0.39" rpy="0 0 0" />
+      <geometry>
+        <box size="0.02 0.012 0.13" />
+      </geometry>
+    </collision>
+    <visual name="carriage_grille_2_visual">
+      <origin xyz="0.53 0 0.39" rpy="0 0 0" />
+      <geometry>
+        <box size="0.02 0.012 0.13" />
+      </geometry>
+      <material name="carriage_grille_2">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="carriage_grille_2_collision">
+      <origin xyz="0.53 0 0.39" rpy="0 0 0" />
+      <geometry>
+        <box size="0.02 0.012 0.13" />
+      </geometry>
+    </collision>
+    <visual name="carriage_grille_3_visual">
+      <origin xyz="0.53 0.08 0.39" rpy="0 0 0" />
+      <geometry>
+        <box size="0.02 0.012 0.13" />
+      </geometry>
+      <material name="carriage_grille_3">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="carriage_grille_3_collision">
+      <origin xyz="0.53 0.08 0.39" rpy="0 0 0" />
+      <geometry>
+        <box size="0.02 0.012 0.13" />
+      </geometry>
+    </collision>
+    <visual name="carriage_grille_4_visual">
+      <origin xyz="0.53 0.16 0.39" rpy="0 0 0" />
+      <geometry>
+        <box size="0.02 0.012 0.13" />
+      </geometry>
+      <material name="carriage_grille_4">
+        <color rgba="0.045 0.052 0.065 1" />
+      </material>
+    </visual>
+    <collision name="carriage_grille_4_collision">
+      <origin xyz="0.53 0.16 0.39" rpy="0 0 0" />
+      <geometry>
+        <box size="0.02 0.012 0.13" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="fork_lift" type="prismatic">
+    <parent link="base_link" />
+    <child link="fork_carriage" />
+    <origin xyz="0 0 0" rpy="0 0 0" />
+    <axis xyz="0 0 1" />
+    <limit lower="0" upper="0.28" effort="180.0" velocity="1.0" />
+  </joint>
+  <link name="left_fork_tip" />
+  <joint name="left_fork_tip_fixed" type="fixed">
+    <parent link="fork_carriage" />
+    <child link="left_fork_tip" />
+    <origin xyz="0.95 0.145 0.04" rpy="0 0 0" />
+  </joint>
+  <link name="right_fork_tip" />
+  <joint name="right_fork_tip_fixed" type="fixed">
+    <parent link="fork_carriage" />
+    <child link="right_fork_tip" />
+    <origin xyz="0.95 -0.145 0.04" rpy="0 0 0" />
+  </joint>
+</robot>

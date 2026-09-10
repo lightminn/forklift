@@ -1,0 +1,12 @@
+**
+!pyproject.toml
+!forklift_core/
+!forklift_core/**
+!tests/
+!tests/**
+!deploy/
+!deploy/ros2/
+!deploy/ros2/Dockerfile
+**/__pycache__/
+**/*.pyc
+**/*.pyo

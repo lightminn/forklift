@@ -1,0 +1,30 @@
+{
+  "model_name": "dls08_provisional",
+  "parameter_sha256": "f85722718f66be0bc05906487d44850570f2dbe43a96e5bb2af8eebee248fbff",
+  "evidence": {
+    "identity": "visually_matched_candidate_not_seller_confirmed",
+    "catalogue": "manufacturer_catalog_pdf_pages_12_13",
+    "dimensions": "image_proportion_estimates_not_measured",
+    "dynamics": "simulation_assumptions_not_identified"
+  },
+  "catalogue": {
+    "overall_length_m": 1.46,
+    "overall_width_m": 0.63,
+    "overall_height_m": 1.01,
+    "net_mass_kg": 24.0
+  },
+  "steering_axle_assumption": "front",
+  "self_collision": {
+    "mjcf": false,
+    "urdf": "importer_defined_requires_configuration"
+  },
+  "urdf_scope": "geometry_and_kinematics_not_equivalent_physics",
+  "drive_interface": "four_independent_wheel_speed_actuators_assumed",
+  "links": 8,
+  "parts": 193,
+  "outputs": [
+    "forklift.xml",
+    "forklift.urdf",
+    "scene.xml"
+  ]
+}

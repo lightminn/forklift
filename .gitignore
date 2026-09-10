@@ -1,0 +1,38 @@
+# Python bytecode and tool caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Python build and local environments
+/build/
+/dist/
+*.egg-info/
+.venv/
+venv/
+
+# ROS 2 / colcon outputs
+/ros2/build/
+/ros2/install/
+/ros2/log/
+
+# Generated data and validation outputs
+/artifacts/
+/data/
+/forklift-development-web.zip
+
+# Local secrets, editor state and machine-specific environment files
+.env
+.env.*
+!.env.example
+.envrc
+.direnv/
+.idea/
+.vscode/
+/ENV.md
+/ENV.local.md
+.DS_Store

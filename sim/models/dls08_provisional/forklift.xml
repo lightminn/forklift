@@ -1,0 +1,311 @@
+<?xml version="1.0"?>
+<mujoco model="dls08_provisional">
+  <compiler angle="radian" inertiafromgeom="false" />
+  <option timestep="0.002" integrator="implicitfast" gravity="0 0 -9.81" cone="elliptic" />
+  <visual>
+    <global offwidth="1600" offheight="1200" />
+    <quality shadowsize="2048" offsamples="4" />
+    <headlight ambient=".3 .3 .3" diffuse=".65 .65 .65" />
+  </visual>
+  <statistic center=".15 0 .48" extent="1.7" />
+  <default>
+    <geom friction="0.8 .01 .001" solref=".015 1" condim="4" />
+    <joint damping=".04" armature=".002" />
+  </default>
+  <custom>
+    <text name="evidence_status" data="candidate_catalogue_dimensions_photo_estimates_unmeasured_dynamics" />
+  </custom>
+  <worldbody>
+    <body name="base_link" pos="0 0 0">
+      <inertial mass="20.1" pos="-0.09 0 0.28" diaginertia="0.7646643 1.850875 1.9371643" />
+      <freejoint name="floating_base" />
+      <geom name="underbody_visual" type="box" size="0.475 0.2142 0.0525" pos="-0.035 0 0.1875" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="underbody_collision" type="box" size="0.475 0.2142 0.0525" pos="-0.035 0 0.1875" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="footwell_visual" type="box" size="0.25 0.2457 0.025" pos="0.01 0 0.26" quat="1 0 0 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="footwell_collision" type="box" size="0.25 0.2457 0.025" pos="0.01 0 0.26" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="rear_counterweight_visual" type="box" size="0.117 0.2646 0.1175" pos="-0.387 0 0.3225" quat="1 0 0 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="rear_counterweight_collision" type="box" size="0.117 0.2646 0.1175" pos="-0.387 0 0.3225" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="rear_hood_visual" type="box" size="0.15 0.2835 0.0275" pos="-0.36 0 0.45" quat="1 0 0 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="rear_hood_collision" type="box" size="0.15 0.2835 0.0275" pos="-0.36 0 0.45" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="rear_grille_visual" type="box" size="0.0045 0.17955 0.03" pos="-0.5055 0 0.382" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="rear_light_neg_0_2016_visual" type="box" size="0.006 0.02 0.0125" pos="-0.504 -0.2016 0.4" quat="1 0 0 0" rgba="0.75 0.035 0.025 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="rear_light_0_2016_visual" type="box" size="0.006 0.02 0.0125" pos="-0.504 0.2016 0.4" quat="1 0 0 0" rgba="0.75 0.035 0.025 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="dashboard_body_visual" type="box" size="0.08 0.22995 0.075" pos="0.32 0 0.39" quat="1 0 0 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="dashboard_body_collision" type="box" size="0.08 0.22995 0.075" pos="0.32 0 0.39" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="dashboard_top_visual" type="box" size="0.095 0.22995 0.0175" pos="0.305 0 0.482" quat="0.9950041653 0 -0.09983341665 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="seat_cushion_visual" type="box" size="0.145 0.19215 0.0275" pos="-0.17 0 0.36" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="seat_back_visual" type="box" size="0.0275 0.19845 0.1175" pos="-0.32 0 0.48" quat="0.9982005399 0 -0.05996400648 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="seat_insert_visual" type="box" size="0.0045 0.1008 0.08" pos="-0.279 0 0.49" quat="0.9982005399 0 -0.05996400648 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="left_door_top_visual" type="box" size="0.28 0.0215 0.0215" pos="-0.04 0.29 0.55" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="left_door_top_collision" type="box" size="0.28 0.0215 0.0215" pos="-0.04 0.29 0.55" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="left_door_rear_visual" type="box" size="0.1208304597 0.0225 0.0225" pos="-0.27 0.29 0.44" quat="0.8407743289 0 0.5413857477 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="left_door_rear_collision" type="box" size="0.1208304597 0.0225 0.0225" pos="-0.27 0.29 0.44" quat="0.8407743289 0 0.5413857477 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="left_door_bottom_visual" type="box" size="0.16 0.0225 0.0225" pos="-0.06 0.29 0.33" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="left_door_bottom_collision" type="box" size="0.16 0.0225 0.0225" pos="-0.06 0.29 0.33" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="left_door_front_visual" type="box" size="0.1303840481 0.024 0.024" pos="0.17 0.29 0.44" quat="0.87660581 0 -0.4812091582 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="left_door_front_collision" type="box" size="0.1303840481 0.024 0.024" pos="0.17 0.29 0.44" quat="0.87660581 0 -0.4812091582 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="left_door_brace_visual" type="box" size="0.1040432602 0.0175 0.0175" pos="0 0.29 0.445" quat="5.436733911e-17 0.4600634752 -2.817076311e-17 0.887886028" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="left_door_brace_collision" type="box" size="0.1040432602 0.0175 0.0175" pos="0 0.29 0.445" quat="5.436733911e-17 0.4600634752 -2.817076311e-17 0.887886028" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="left_sill_visual" type="box" size="0.16 0.025 0.03" pos="-0.01 0.29 0.23" quat="1 0 0 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="left_sill_collision" type="box" size="0.16 0.025 0.03" pos="-0.01 0.29 0.23" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="left_rear_post_visual" type="box" size="0.272 0.0225 0.0225" pos="-0.39 0.29 0.702" quat="0.7071067812 0 -0.7071067812 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="left_rear_post_collision" type="box" size="0.272 0.0225 0.0225" pos="-0.39 0.29 0.702" quat="0.7071067812 0 -0.7071067812 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="left_front_post_visual" type="box" size="0.3549492922 0.0225 0.0225" pos="0.265 0.29 0.632" quat="4.874886262e-17 0.6051264893 -3.705331091e-17 0.7961293437" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="left_front_post_collision" type="box" size="0.3549492922 0.0225 0.0225" pos="0.265 0.29 0.632" quat="4.874886262e-17 0.6051264893 -3.705331091e-17 0.7961293437" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="left_roof_rail_visual" type="box" size="0.29 0.02 0.02" pos="-0.12 0.29 0.978" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="left_roof_rail_collision" type="box" size="0.29 0.02 0.02" pos="-0.12 0.29 0.978" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="left_grab_handle_visual" type="box" size="0.08792752698 0.008 0.008" pos="0.2675 0.29 0.735" quat="4.852238083e-17 0.6099620643 -3.734940448e-17 0.7924306154" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="left_front_lamp_visual" type="box" size="0.013 0.0225 0.0325" pos="0.2322777778 0.29 0.865" quat="1 0 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="left_lamp_red_visual" type="box" size="0.002 0.016 0.015" pos="0.2472777778 0.29 0.881" quat="1 0 0 0" rgba="0.75 0.035 0.025 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="left_lamp_white_visual" type="box" size="0.002 0.016 0.012" pos="0.2472777778 0.29 0.847" quat="1 0 0 0" rgba="0.88 0.93 1 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="front_left_fender_0_visual" type="box" size="0.02681858196 0.05 0.009" pos="0.4560547578 0.265 0.1597166455" quat="0.7604059656 0 0.6494480483 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="front_left_fender_1_visual" type="box" size="0.02681858196 0.05 0.009" pos="0.4407790308 0.265 0.206730499" quat="0.8526401644 0 0.5224985647 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="front_left_fender_2_visual" type="box" size="0.02681858196 0.05 0.009" pos="0.4117228714 0.265 0.2467228714" quat="0.9238795325 0 0.3826834324 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="front_left_fender_3_visual" type="box" size="0.02681858196 0.05 0.009" pos="0.371730499 0.265 0.2757790308" quat="0.9723699204 0 0.2334453639 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="front_left_fender_4_visual" type="box" size="0.02681858196 0.05 0.009" pos="0.3247166455 0.265 0.2910547578" quat="0.9969173337 0 0.07845909573 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="front_left_fender_5_visual" type="box" size="0.02681858196 0.05 0.009" pos="0.2752833545 0.265 0.2910547578" quat="0.9969173337 0 -0.07845909573 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="front_left_fender_6_visual" type="box" size="0.02681858196 0.05 0.009" pos="0.228269501 0.265 0.2757790308" quat="0.9723699204 0 -0.2334453639 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="front_left_fender_7_visual" type="box" size="0.02681858196 0.05 0.009" pos="0.1882771286 0.265 0.2467228714" quat="0.9238795325 0 -0.3826834324 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="front_left_fender_8_visual" type="box" size="0.02681858196 0.05 0.009" pos="0.1592209692 0.265 0.206730499" quat="0.8526401644 0 -0.5224985647 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="front_left_fender_9_visual" type="box" size="0.02681858196 0.05 0.009" pos="0.1439452422 0.265 0.1597166455" quat="0.7604059656 0 -0.6494480483 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="rear_left_fender_0_visual" type="box" size="0.02681858196 0.05 0.009" pos="-0.1839452422 0.265 0.1597166455" quat="0.7604059656 0 0.6494480483 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="rear_left_fender_1_visual" type="box" size="0.02681858196 0.05 0.009" pos="-0.1992209692 0.265 0.206730499" quat="0.8526401644 0 0.5224985647 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="rear_left_fender_2_visual" type="box" size="0.02681858196 0.05 0.009" pos="-0.2282771286 0.265 0.2467228714" quat="0.9238795325 0 0.3826834324 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="rear_left_fender_3_visual" type="box" size="0.02681858196 0.05 0.009" pos="-0.268269501 0.265 0.2757790308" quat="0.9723699204 0 0.2334453639 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="rear_left_fender_4_visual" type="box" size="0.02681858196 0.05 0.009" pos="-0.3152833545 0.265 0.2910547578" quat="0.9969173337 0 0.07845909573 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="rear_left_fender_5_visual" type="box" size="0.02681858196 0.05 0.009" pos="-0.3647166455 0.265 0.2910547578" quat="0.9969173337 0 -0.07845909573 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="rear_left_fender_6_visual" type="box" size="0.02681858196 0.05 0.009" pos="-0.411730499 0.265 0.2757790308" quat="0.9723699204 0 -0.2334453639 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="rear_left_fender_7_visual" type="box" size="0.02681858196 0.05 0.009" pos="-0.4517228714 0.265 0.2467228714" quat="0.9238795325 0 -0.3826834324 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="rear_left_fender_8_visual" type="box" size="0.02681858196 0.05 0.009" pos="-0.4807790308 0.265 0.206730499" quat="0.8526401644 0 -0.5224985647 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="rear_left_fender_9_visual" type="box" size="0.02681858196 0.05 0.009" pos="-0.4960547578 0.265 0.1597166455" quat="0.7604059656 0 -0.6494480483 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="right_door_top_visual" type="box" size="0.28 0.0215 0.0215" pos="-0.04 -0.29 0.55" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="right_door_top_collision" type="box" size="0.28 0.0215 0.0215" pos="-0.04 -0.29 0.55" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="right_door_rear_visual" type="box" size="0.1208304597 0.0225 0.0225" pos="-0.27 -0.29 0.44" quat="0.8407743289 0 0.5413857477 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="right_door_rear_collision" type="box" size="0.1208304597 0.0225 0.0225" pos="-0.27 -0.29 0.44" quat="0.8407743289 0 0.5413857477 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="right_door_bottom_visual" type="box" size="0.16 0.0225 0.0225" pos="-0.06 -0.29 0.33" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="right_door_bottom_collision" type="box" size="0.16 0.0225 0.0225" pos="-0.06 -0.29 0.33" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="right_door_front_visual" type="box" size="0.1303840481 0.024 0.024" pos="0.17 -0.29 0.44" quat="0.87660581 0 -0.4812091582 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="right_door_front_collision" type="box" size="0.1303840481 0.024 0.024" pos="0.17 -0.29 0.44" quat="0.87660581 0 -0.4812091582 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="right_door_brace_visual" type="box" size="0.1040432602 0.0175 0.0175" pos="0 -0.29 0.445" quat="5.436733911e-17 0.4600634752 -2.817076311e-17 0.887886028" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="right_door_brace_collision" type="box" size="0.1040432602 0.0175 0.0175" pos="0 -0.29 0.445" quat="5.436733911e-17 0.4600634752 -2.817076311e-17 0.887886028" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="right_sill_visual" type="box" size="0.16 0.025 0.03" pos="-0.01 -0.29 0.23" quat="1 0 0 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="right_sill_collision" type="box" size="0.16 0.025 0.03" pos="-0.01 -0.29 0.23" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="right_rear_post_visual" type="box" size="0.272 0.0225 0.0225" pos="-0.39 -0.29 0.702" quat="0.7071067812 0 -0.7071067812 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="right_rear_post_collision" type="box" size="0.272 0.0225 0.0225" pos="-0.39 -0.29 0.702" quat="0.7071067812 0 -0.7071067812 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="right_front_post_visual" type="box" size="0.3549492922 0.0225 0.0225" pos="0.265 -0.29 0.632" quat="4.874886262e-17 0.6051264893 -3.705331091e-17 0.7961293437" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="right_front_post_collision" type="box" size="0.3549492922 0.0225 0.0225" pos="0.265 -0.29 0.632" quat="4.874886262e-17 0.6051264893 -3.705331091e-17 0.7961293437" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="right_roof_rail_visual" type="box" size="0.29 0.02 0.02" pos="-0.12 -0.29 0.978" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="right_roof_rail_collision" type="box" size="0.29 0.02 0.02" pos="-0.12 -0.29 0.978" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="right_grab_handle_visual" type="box" size="0.08792752698 0.008 0.008" pos="0.2675 -0.29 0.735" quat="4.852238083e-17 0.6099620643 -3.734940448e-17 0.7924306154" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="right_front_lamp_visual" type="box" size="0.013 0.0225 0.0325" pos="0.2322777778 -0.29 0.865" quat="1 0 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="right_lamp_red_visual" type="box" size="0.002 0.016 0.015" pos="0.2472777778 -0.29 0.881" quat="1 0 0 0" rgba="0.75 0.035 0.025 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="right_lamp_white_visual" type="box" size="0.002 0.016 0.012" pos="0.2472777778 -0.29 0.847" quat="1 0 0 0" rgba="0.88 0.93 1 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="front_right_fender_0_visual" type="box" size="0.02681858196 0.05 0.009" pos="0.4560547578 -0.265 0.1597166455" quat="0.7604059656 0 0.6494480483 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="front_right_fender_1_visual" type="box" size="0.02681858196 0.05 0.009" pos="0.4407790308 -0.265 0.206730499" quat="0.8526401644 0 0.5224985647 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="front_right_fender_2_visual" type="box" size="0.02681858196 0.05 0.009" pos="0.4117228714 -0.265 0.2467228714" quat="0.9238795325 0 0.3826834324 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="front_right_fender_3_visual" type="box" size="0.02681858196 0.05 0.009" pos="0.371730499 -0.265 0.2757790308" quat="0.9723699204 0 0.2334453639 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="front_right_fender_4_visual" type="box" size="0.02681858196 0.05 0.009" pos="0.3247166455 -0.265 0.2910547578" quat="0.9969173337 0 0.07845909573 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="front_right_fender_5_visual" type="box" size="0.02681858196 0.05 0.009" pos="0.2752833545 -0.265 0.2910547578" quat="0.9969173337 0 -0.07845909573 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="front_right_fender_6_visual" type="box" size="0.02681858196 0.05 0.009" pos="0.228269501 -0.265 0.2757790308" quat="0.9723699204 0 -0.2334453639 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="front_right_fender_7_visual" type="box" size="0.02681858196 0.05 0.009" pos="0.1882771286 -0.265 0.2467228714" quat="0.9238795325 0 -0.3826834324 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="front_right_fender_8_visual" type="box" size="0.02681858196 0.05 0.009" pos="0.1592209692 -0.265 0.206730499" quat="0.8526401644 0 -0.5224985647 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="front_right_fender_9_visual" type="box" size="0.02681858196 0.05 0.009" pos="0.1439452422 -0.265 0.1597166455" quat="0.7604059656 0 -0.6494480483 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="rear_right_fender_0_visual" type="box" size="0.02681858196 0.05 0.009" pos="-0.1839452422 -0.265 0.1597166455" quat="0.7604059656 0 0.6494480483 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="rear_right_fender_1_visual" type="box" size="0.02681858196 0.05 0.009" pos="-0.1992209692 -0.265 0.206730499" quat="0.8526401644 0 0.5224985647 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="rear_right_fender_2_visual" type="box" size="0.02681858196 0.05 0.009" pos="-0.2282771286 -0.265 0.2467228714" quat="0.9238795325 0 0.3826834324 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="rear_right_fender_3_visual" type="box" size="0.02681858196 0.05 0.009" pos="-0.268269501 -0.265 0.2757790308" quat="0.9723699204 0 0.2334453639 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="rear_right_fender_4_visual" type="box" size="0.02681858196 0.05 0.009" pos="-0.3152833545 -0.265 0.2910547578" quat="0.9969173337 0 0.07845909573 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="rear_right_fender_5_visual" type="box" size="0.02681858196 0.05 0.009" pos="-0.3647166455 -0.265 0.2910547578" quat="0.9969173337 0 -0.07845909573 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="rear_right_fender_6_visual" type="box" size="0.02681858196 0.05 0.009" pos="-0.411730499 -0.265 0.2757790308" quat="0.9723699204 0 -0.2334453639 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="rear_right_fender_7_visual" type="box" size="0.02681858196 0.05 0.009" pos="-0.4517228714 -0.265 0.2467228714" quat="0.9238795325 0 -0.3826834324 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="rear_right_fender_8_visual" type="box" size="0.02681858196 0.05 0.009" pos="-0.4807790308 -0.265 0.206730499" quat="0.8526401644 0 -0.5224985647 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="rear_right_fender_9_visual" type="box" size="0.02681858196 0.05 0.009" pos="-0.4960547578 -0.265 0.1597166455" quat="0.7604059656 0 -0.6494480483 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="roof_slat_0_visual" type="box" size="0.031 0.2635 0.012" pos="-0.39 0 0.998" quat="1 0 0 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="roof_slat_0_collision" type="box" size="0.031 0.2635 0.012" pos="-0.39 0 0.998" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="roof_slat_1_visual" type="box" size="0.031 0.2635 0.012" pos="-0.285 0 0.998" quat="1 0 0 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="roof_slat_1_collision" type="box" size="0.031 0.2635 0.012" pos="-0.285 0 0.998" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="roof_slat_2_visual" type="box" size="0.031 0.2635 0.012" pos="-0.18 0 0.998" quat="1 0 0 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="roof_slat_2_collision" type="box" size="0.031 0.2635 0.012" pos="-0.18 0 0.998" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="roof_slat_3_visual" type="box" size="0.031 0.2635 0.012" pos="-0.075 0 0.998" quat="1 0 0 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="roof_slat_3_collision" type="box" size="0.031 0.2635 0.012" pos="-0.075 0 0.998" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="roof_slat_4_visual" type="box" size="0.031 0.2635 0.012" pos="0.03 0 0.998" quat="1 0 0 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="roof_slat_4_collision" type="box" size="0.031 0.2635 0.012" pos="0.03 0 0.998" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="roof_slat_5_visual" type="box" size="0.031 0.2635 0.012" pos="0.135 0 0.998" quat="1 0 0 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="roof_slat_5_collision" type="box" size="0.031 0.2635 0.012" pos="0.135 0 0.998" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="roof_edge_neg_1_visual" type="box" size="0.295 0.0165 0.0125" pos="-0.125 -0.28 0.9975" quat="1 0 0 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="roof_edge_neg_1_collision" type="box" size="0.295 0.0165 0.0125" pos="-0.125 -0.28 0.9975" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="roof_edge_1_visual" type="box" size="0.295 0.0165 0.0125" pos="-0.125 0.28 0.9975" quat="1 0 0 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="roof_edge_1_collision" type="box" size="0.295 0.0165 0.0125" pos="-0.125 0.28 0.9975" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="steering_rim_0_visual" type="box" size="0.01200840968 0.009 0.009" pos="0.287572996 0.01190567607 0.5818748331" quat="0.6633342708 -0.0199156692 0.01766497792 0.7478495569" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="steering_rim_1_visual" type="box" size="0.01200840968 0.009 0.009" pos="0.2819457827 0.03490567607 0.5793618741" quat="0.5666940911 -0.06438790458 0.04448684782 0.8202029781" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="steering_rim_2_visual" type="box" size="0.01200840968 0.009 0.009" pos="0.2710748416 0.05552691193 0.5745072103" quat="0.4579943338 -0.1109708345 0.05774740606 0.880109028" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="steering_rim_3_visual" type="box" size="0.01200840968 0.009 0.009" pos="0.2557010092 0.07236408051 0.5676416788" quat="0.3377347376 -0.1540589712 0.05613756772 0.9268493156" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="steering_rim_4_visual" type="box" size="0.01200840968 0.009 0.009" pos="0.2368719868 0.08426975658 0.5592331543" quat="0.2074038825 -0.1875940774 0.04056088476 0.9592428818" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="steering_rim_5_visual" type="box" size="0.01200840968 0.009 0.009" pos="0.2158709412 0.09043258801 0.5498546639" quat="0.06999396581 -0.2060635238 0.01477908046 0.9759202056" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="steering_rim_6_visual" type="box" size="0.01200840968 0.009 0.009" pos="0.1941290588 0.09043258801 0.5401453361" quat="0.06999396581 0.2060635238 0.01477908046 -0.9759202056" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="steering_rim_7_visual" type="box" size="0.01200840968 0.009 0.009" pos="0.1731280132 0.08426975658 0.5307668457" quat="0.2074038825 0.1875940774 0.04056088476 -0.9592428818" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="steering_rim_8_visual" type="box" size="0.01200840968 0.009 0.009" pos="0.1542989908 0.07236408051 0.5223583212" quat="0.3377347376 0.1540589712 0.05613756772 -0.9268493156" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="steering_rim_9_visual" type="box" size="0.01200840968 0.009 0.009" pos="0.1389251584 0.05552691193 0.5154927897" quat="0.4579943338 0.1109708345 0.05774740606 -0.880109028" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="steering_rim_10_visual" type="box" size="0.01200840968 0.009 0.009" pos="0.1280542173 0.03490567607 0.5106381259" quat="0.5666940911 0.06438790458 0.04448684782 -0.8202029781" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="steering_rim_11_visual" type="box" size="0.01200840968 0.009 0.009" pos="0.122427004 0.01190567607 0.5081251669" quat="0.6633342708 0.0199156692 0.01766497792 -0.7478495569" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="steering_rim_12_visual" type="box" size="0.01200840968 0.009 0.009" pos="0.122427004 -0.01190567607 0.5081251669" quat="0.7478495569 -0.01766497792 -0.0199156692 -0.6633342708" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="steering_rim_13_visual" type="box" size="0.01200840968 0.009 0.009" pos="0.1280542173 -0.03490567607 0.5106381259" quat="0.8202029781 -0.04448684782 -0.06438790458 -0.5666940911" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="steering_rim_14_visual" type="box" size="0.01200840968 0.009 0.009" pos="0.1389251584 -0.05552691193 0.5154927897" quat="0.880109028 -0.05774740606 -0.1109708345 -0.4579943338" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="steering_rim_15_visual" type="box" size="0.01200840968 0.009 0.009" pos="0.1542989908 -0.07236408051 0.5223583212" quat="0.9268493156 -0.05613756772 -0.1540589712 -0.3377347376" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="steering_rim_16_visual" type="box" size="0.01200840968 0.009 0.009" pos="0.1731280132 -0.08426975658 0.5307668457" quat="0.9592428818 -0.04056088476 -0.1875940774 -0.2074038825" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="steering_rim_17_visual" type="box" size="0.01200840968 0.009 0.009" pos="0.1941290588 -0.09043258801 0.5401453361" quat="0.9759202056 -0.01477908046 -0.2060635238 -0.06999396581" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="steering_rim_18_visual" type="box" size="0.01200840968 0.009 0.009" pos="0.2158709412 -0.09043258801 0.5498546639" quat="0.9759202056 0.01477908046 -0.2060635238 0.06999396581" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="steering_rim_19_visual" type="box" size="0.01200840968 0.009 0.009" pos="0.2368719868 -0.08426975658 0.5592331543" quat="0.9592428818 0.04056088476 -0.1875940774 0.2074038825" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="steering_rim_20_visual" type="box" size="0.01200840968 0.009 0.009" pos="0.2557010092 -0.07236408051 0.5676416788" quat="0.9268493156 0.05613756772 -0.1540589712 0.3377347376" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="steering_rim_21_visual" type="box" size="0.01200840968 0.009 0.009" pos="0.2710748416 -0.05552691193 0.5745072103" quat="0.880109028 0.05774740606 -0.1109708345 0.4579943338" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="steering_rim_22_visual" type="box" size="0.01200840968 0.009 0.009" pos="0.2819457827 -0.03490567607 0.5793618741" quat="0.8202029781 0.04448684782 -0.06438790458 0.5666940911" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="steering_rim_23_visual" type="box" size="0.01200840968 0.009 0.009" pos="0.287572996 -0.01190567607 0.5818748331" quat="0.7478495569 0.01766497792 -0.0199156692 0.6633342708" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="steering_column_visual" type="box" size="0.06604922407 0.0175 0.0175" pos="0.2375 0 0.4875" quat="5.288817764e-17 0.5039557239 -3.085838821e-17 0.8637294879" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="steering_spoke_0_visual" type="box" size="0.0425 0.008 0.008" pos="0.24380628 0 0.5623298193" quat="0.9780309147 0 -0.2084598998 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="steering_spoke_2_0943951023931953_visual" type="box" size="0.0425 0.008 0.008" pos="0.18559686 0.03680607966 0.5363350904" quat="0.5138365081 -0.08774854907 0.05293649516 0.8517452451" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="steering_spoke_4_1887902047863905_visual" type="box" size="0.0425 0.008 0.008" pos="0.18559686 -0.03680607966 0.5363350904" quat="0.5138365081 0.08774854907 0.05293649516 -0.8517452451" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="control_lever_neg_1_visual" type="box" size="0.0514781507 0.0075 0.0075" pos="0.245 -0.18 0.505" quat="5.277437256e-17 0.5071277299 -3.105261756e-17 0.86187091" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="control_lever_1_visual" type="box" size="0.0514781507 0.0075 0.0075" pos="0.245 0.18 0.505" quat="5.277437256e-17 0.5071277299 -3.105261756e-17 0.86187091" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="mast_rail_neg_1_visual" type="box" size="0.026 0.02 0.31" pos="0.48 -0.16 0.36" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="mast_rail_neg_1_collision" type="box" size="0.026 0.02 0.31" pos="0.48 -0.16 0.36" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="mast_rail_1_visual" type="box" size="0.026 0.02 0.31" pos="0.48 0.16 0.36" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="mast_rail_1_collision" type="box" size="0.026 0.02 0.31" pos="0.48 0.16 0.36" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="mast_cross_0_visual" type="box" size="0.025 0.18 0.02" pos="0.48 0 0.085" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="mast_cross_0_collision" type="box" size="0.025 0.18 0.02" pos="0.48 0 0.085" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="mast_cross_1_visual" type="box" size="0.025 0.18 0.02" pos="0.48 0 0.4" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="mast_cross_1_collision" type="box" size="0.025 0.18 0.02" pos="0.48 0 0.4" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="mast_cross_2_visual" type="box" size="0.025 0.18 0.02" pos="0.48 0 0.65" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="mast_cross_2_collision" type="box" size="0.025 0.18 0.02" pos="0.48 0 0.65" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="lift_drive_cover_visual" type="box" size="0.029 0.045 0.16" pos="0.48 0 0.26" quat="1 0 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="lift_drive_cover_collision" type="box" size="0.029 0.045 0.16" pos="0.48 0 0.26" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+      <geom name="mast_scale_0_visual" type="box" size="0.001 0.0175 0.004" pos="0.507 -0.15 0.47" quat="1 0 0 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="mast_scale_1_visual" type="box" size="0.001 0.0175 0.004" pos="0.507 -0.15 0.488" quat="1 0 0 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="mast_scale_2_visual" type="box" size="0.001 0.0175 0.004" pos="0.507 -0.15 0.506" quat="1 0 0 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="mast_scale_3_visual" type="box" size="0.001 0.0175 0.004" pos="0.507 -0.15 0.524" quat="1 0 0 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="mast_scale_4_visual" type="box" size="0.001 0.0175 0.004" pos="0.507 -0.15 0.542" quat="1 0 0 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="mast_scale_5_visual" type="box" size="0.001 0.0175 0.004" pos="0.507 -0.15 0.56" quat="1 0 0 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="mast_scale_6_visual" type="box" size="0.001 0.0175 0.004" pos="0.507 -0.15 0.578" quat="1 0 0 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="mast_scale_7_visual" type="box" size="0.001 0.0175 0.004" pos="0.507 -0.15 0.596" quat="1 0 0 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <geom name="mast_scale_8_visual" type="box" size="0.001 0.0175 0.004" pos="0.507 -0.15 0.614" quat="1 0 0 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+      <body name="left_steering_carrier" pos="0.3 0.255 0.135">
+        <inertial mass="0.05" pos="0 0 0" diaginertia="5.208333333e-06 5.208333333e-06 5.208333333e-06" />
+        <joint name="left_steer" axis="0 0 1" type="hinge" range="-0.45 0.45" limited="true" />
+        <body name="front_left_wheel" pos="0 0 0">
+          <inertial mass="0.55" pos="0 0 0" diaginertia="0.002958340115 0.005000013563 0.002958340115" />
+          <joint name="front_left_spin" axis="0 1 0" type="hinge" />
+          <geom name="front_left_tire_visual" type="cylinder" size="0.135 0.05" pos="0 0 0" quat="0.7071067812 0.7071067812 0 0" rgba="0.023 0.026 0.032 1" group="1" mass="0" contype="0" conaffinity="0" />
+          <geom name="front_left_tire_collision" type="cylinder" size="0.135 0.05" pos="0 0 0" quat="0.7071067812 0.7071067812 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+          <geom name="front_left_ring_visual" type="cylinder" size="0.1026 0.002" pos="0 0.052 0" quat="0.7071067812 0.7071067812 0 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+          <geom name="front_left_hub_visual" type="cylinder" size="0.0891 0.002" pos="0 0.054 0" quat="0.7071067812 0.7071067812 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+          <geom name="front_left_cap_visual" type="cylinder" size="0.03105 0.002" pos="0 0.056 0" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+          <geom name="front_left_bolt_0_visual" type="cylinder" size="0.007 0.002" pos="0.075 0.057 0" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+          <geom name="front_left_bolt_1_visual" type="cylinder" size="0.007 0.002" pos="0.05303300859 0.057 0.05303300859" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+          <geom name="front_left_bolt_2_visual" type="cylinder" size="0.007 0.002" pos="4.592425497e-18 0.057 0.075" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+          <geom name="front_left_bolt_3_visual" type="cylinder" size="0.007 0.002" pos="-0.05303300859 0.057 0.05303300859" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+          <geom name="front_left_bolt_4_visual" type="cylinder" size="0.007 0.002" pos="-0.075 0.057 9.184850994e-18" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+          <geom name="front_left_bolt_5_visual" type="cylinder" size="0.007 0.002" pos="-0.05303300859 0.057 -0.05303300859" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+          <geom name="front_left_bolt_6_visual" type="cylinder" size="0.007 0.002" pos="-1.377727649e-17 0.057 -0.075" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+          <geom name="front_left_bolt_7_visual" type="cylinder" size="0.007 0.002" pos="0.05303300859 0.057 -0.05303300859" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+        </body>
+      </body>
+      <body name="right_steering_carrier" pos="0.3 -0.255 0.135">
+        <inertial mass="0.05" pos="0 0 0" diaginertia="5.208333333e-06 5.208333333e-06 5.208333333e-06" />
+        <joint name="right_steer" axis="0 0 1" type="hinge" range="-0.45 0.45" limited="true" />
+        <body name="front_right_wheel" pos="0 0 0">
+          <inertial mass="0.55" pos="0 0 0" diaginertia="0.002958340115 0.005000013563 0.002958340115" />
+          <joint name="front_right_spin" axis="0 1 0" type="hinge" />
+          <geom name="front_right_tire_visual" type="cylinder" size="0.135 0.05" pos="0 0 0" quat="0.7071067812 0.7071067812 0 0" rgba="0.023 0.026 0.032 1" group="1" mass="0" contype="0" conaffinity="0" />
+          <geom name="front_right_tire_collision" type="cylinder" size="0.135 0.05" pos="0 0 0" quat="0.7071067812 0.7071067812 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+          <geom name="front_right_ring_visual" type="cylinder" size="0.1026 0.002" pos="0 -0.052 0" quat="0.7071067812 0.7071067812 0 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+          <geom name="front_right_hub_visual" type="cylinder" size="0.0891 0.002" pos="0 -0.054 0" quat="0.7071067812 0.7071067812 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+          <geom name="front_right_cap_visual" type="cylinder" size="0.03105 0.002" pos="0 -0.056 0" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+          <geom name="front_right_bolt_0_visual" type="cylinder" size="0.007 0.002" pos="0.075 -0.057 0" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+          <geom name="front_right_bolt_1_visual" type="cylinder" size="0.007 0.002" pos="0.05303300859 -0.057 0.05303300859" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+          <geom name="front_right_bolt_2_visual" type="cylinder" size="0.007 0.002" pos="4.592425497e-18 -0.057 0.075" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+          <geom name="front_right_bolt_3_visual" type="cylinder" size="0.007 0.002" pos="-0.05303300859 -0.057 0.05303300859" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+          <geom name="front_right_bolt_4_visual" type="cylinder" size="0.007 0.002" pos="-0.075 -0.057 9.184850994e-18" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+          <geom name="front_right_bolt_5_visual" type="cylinder" size="0.007 0.002" pos="-0.05303300859 -0.057 -0.05303300859" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+          <geom name="front_right_bolt_6_visual" type="cylinder" size="0.007 0.002" pos="-1.377727649e-17 -0.057 -0.075" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+          <geom name="front_right_bolt_7_visual" type="cylinder" size="0.007 0.002" pos="0.05303300859 -0.057 -0.05303300859" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+        </body>
+      </body>
+      <body name="rear_left_wheel" pos="-0.34 0.255 0.135">
+        <inertial mass="0.55" pos="0 0 0" diaginertia="0.002958340115 0.005000013563 0.002958340115" />
+        <joint name="rear_left_spin" axis="0 1 0" type="hinge" />
+        <geom name="rear_left_tire_visual" type="cylinder" size="0.135 0.05" pos="0 0 0" quat="0.7071067812 0.7071067812 0 0" rgba="0.023 0.026 0.032 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="rear_left_tire_collision" type="cylinder" size="0.135 0.05" pos="0 0 0" quat="0.7071067812 0.7071067812 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+        <geom name="rear_left_ring_visual" type="cylinder" size="0.1026 0.002" pos="0 0.052 0" quat="0.7071067812 0.7071067812 0 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="rear_left_hub_visual" type="cylinder" size="0.0891 0.002" pos="0 0.054 0" quat="0.7071067812 0.7071067812 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="rear_left_cap_visual" type="cylinder" size="0.03105 0.002" pos="0 0.056 0" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="rear_left_bolt_0_visual" type="cylinder" size="0.007 0.002" pos="0.075 0.057 0" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="rear_left_bolt_1_visual" type="cylinder" size="0.007 0.002" pos="0.05303300859 0.057 0.05303300859" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="rear_left_bolt_2_visual" type="cylinder" size="0.007 0.002" pos="4.592425497e-18 0.057 0.075" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="rear_left_bolt_3_visual" type="cylinder" size="0.007 0.002" pos="-0.05303300859 0.057 0.05303300859" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="rear_left_bolt_4_visual" type="cylinder" size="0.007 0.002" pos="-0.075 0.057 9.184850994e-18" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="rear_left_bolt_5_visual" type="cylinder" size="0.007 0.002" pos="-0.05303300859 0.057 -0.05303300859" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="rear_left_bolt_6_visual" type="cylinder" size="0.007 0.002" pos="-1.377727649e-17 0.057 -0.075" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="rear_left_bolt_7_visual" type="cylinder" size="0.007 0.002" pos="0.05303300859 0.057 -0.05303300859" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+      </body>
+      <body name="rear_right_wheel" pos="-0.34 -0.255 0.135">
+        <inertial mass="0.55" pos="0 0 0" diaginertia="0.002958340115 0.005000013563 0.002958340115" />
+        <joint name="rear_right_spin" axis="0 1 0" type="hinge" />
+        <geom name="rear_right_tire_visual" type="cylinder" size="0.135 0.05" pos="0 0 0" quat="0.7071067812 0.7071067812 0 0" rgba="0.023 0.026 0.032 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="rear_right_tire_collision" type="cylinder" size="0.135 0.05" pos="0 0 0" quat="0.7071067812 0.7071067812 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+        <geom name="rear_right_ring_visual" type="cylinder" size="0.1026 0.002" pos="0 -0.052 0" quat="0.7071067812 0.7071067812 0 0" rgba="1 0.72 0.015 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="rear_right_hub_visual" type="cylinder" size="0.0891 0.002" pos="0 -0.054 0" quat="0.7071067812 0.7071067812 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="rear_right_cap_visual" type="cylinder" size="0.03105 0.002" pos="0 -0.056 0" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="rear_right_bolt_0_visual" type="cylinder" size="0.007 0.002" pos="0.075 -0.057 0" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="rear_right_bolt_1_visual" type="cylinder" size="0.007 0.002" pos="0.05303300859 -0.057 0.05303300859" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="rear_right_bolt_2_visual" type="cylinder" size="0.007 0.002" pos="4.592425497e-18 -0.057 0.075" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="rear_right_bolt_3_visual" type="cylinder" size="0.007 0.002" pos="-0.05303300859 -0.057 0.05303300859" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="rear_right_bolt_4_visual" type="cylinder" size="0.007 0.002" pos="-0.075 -0.057 9.184850994e-18" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="rear_right_bolt_5_visual" type="cylinder" size="0.007 0.002" pos="-0.05303300859 -0.057 -0.05303300859" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="rear_right_bolt_6_visual" type="cylinder" size="0.007 0.002" pos="-1.377727649e-17 -0.057 -0.075" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="rear_right_bolt_7_visual" type="cylinder" size="0.007 0.002" pos="0.05303300859 -0.057 -0.05303300859" quat="0.7071067812 0.7071067812 0 0" rgba="0.25 0.29 0.34 1" group="1" mass="0" contype="0" conaffinity="0" />
+      </body>
+      <body name="fork_carriage" pos="0 0 0">
+        <inertial mass="1.6" pos="0.59 0 0.15" diaginertia="0.05410666667 0.04817333333 0.05297333333" />
+        <joint name="fork_lift" axis="0 0 1" type="slide" range="0 0.28" limited="true" damping="25" armature=".02" />
+        <geom name="left_fork_visual" type="box" size="0.21 0.0275 0.012" pos="0.74 0.145 0.04" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="left_fork_collision" type="box" size="0.21 0.0275 0.012" pos="0.74 0.145 0.04" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+        <geom name="left_fork_heel_visual" type="box" size="0.013 0.0275 0.11825" pos="0.53 0.145 0.15825" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="left_fork_heel_collision" type="box" size="0.013 0.0275 0.11825" pos="0.53 0.145 0.15825" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+        <geom name="carriage_side_left_visual" type="box" size="0.013 0.0175 0.215" pos="0.53 0.2175 0.255" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="carriage_side_left_collision" type="box" size="0.013 0.0175 0.215" pos="0.53 0.2175 0.255" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+        <geom name="right_fork_visual" type="box" size="0.21 0.0275 0.012" pos="0.74 -0.145 0.04" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="right_fork_collision" type="box" size="0.21 0.0275 0.012" pos="0.74 -0.145 0.04" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+        <geom name="right_fork_heel_visual" type="box" size="0.013 0.0275 0.11825" pos="0.53 -0.145 0.15825" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="right_fork_heel_collision" type="box" size="0.013 0.0275 0.11825" pos="0.53 -0.145 0.15825" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+        <geom name="carriage_side_right_visual" type="box" size="0.013 0.0175 0.215" pos="0.53 -0.2175 0.255" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="carriage_side_right_collision" type="box" size="0.013 0.0175 0.215" pos="0.53 -0.2175 0.255" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+        <geom name="carriage_cross_0_visual" type="box" size="0.014 0.235 0.016" pos="0.53 0 0.085" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="carriage_cross_0_collision" type="box" size="0.014 0.235 0.016" pos="0.53 0 0.085" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+        <geom name="carriage_cross_1_visual" type="box" size="0.014 0.235 0.016" pos="0.53 0 0.3" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="carriage_cross_1_collision" type="box" size="0.014 0.235 0.016" pos="0.53 0 0.3" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+        <geom name="carriage_cross_2_visual" type="box" size="0.014 0.235 0.016" pos="0.53 0 0.45" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="carriage_cross_2_collision" type="box" size="0.014 0.235 0.016" pos="0.53 0 0.45" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+        <geom name="carriage_grille_0_visual" type="box" size="0.01 0.006 0.065" pos="0.53 -0.16 0.39" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="carriage_grille_0_collision" type="box" size="0.01 0.006 0.065" pos="0.53 -0.16 0.39" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+        <geom name="carriage_grille_1_visual" type="box" size="0.01 0.006 0.065" pos="0.53 -0.08 0.39" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="carriage_grille_1_collision" type="box" size="0.01 0.006 0.065" pos="0.53 -0.08 0.39" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+        <geom name="carriage_grille_2_visual" type="box" size="0.01 0.006 0.065" pos="0.53 0 0.39" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="carriage_grille_2_collision" type="box" size="0.01 0.006 0.065" pos="0.53 0 0.39" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+        <geom name="carriage_grille_3_visual" type="box" size="0.01 0.006 0.065" pos="0.53 0.08 0.39" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="carriage_grille_3_collision" type="box" size="0.01 0.006 0.065" pos="0.53 0.08 0.39" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+        <geom name="carriage_grille_4_visual" type="box" size="0.01 0.006 0.065" pos="0.53 0.16 0.39" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="carriage_grille_4_collision" type="box" size="0.01 0.006 0.065" pos="0.53 0.16 0.39" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+        <site name="left_fork_tip" pos="0.95 0.145 0.04" size=".008" rgba="0 .65 .85 1" group="4" />
+        <site name="right_fork_tip" pos="0.95 -0.145 0.04" size=".008" rgba="0 .65 .85 1" group="4" />
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <position name="left_steer_position" joint="left_steer" kp="35" kv="3" ctrllimited="true" ctrlrange="-0.45 0.45" forcelimited="true" forcerange="-4 4" />
+    <velocity name="front_left_spin_speed" joint="front_left_spin" kv="1.2" ctrllimited="true" ctrlrange="-8 8" forcelimited="true" forcerange="-3 3" />
+    <position name="right_steer_position" joint="right_steer" kp="35" kv="3" ctrllimited="true" ctrlrange="-0.45 0.45" forcelimited="true" forcerange="-4 4" />
+    <velocity name="front_right_spin_speed" joint="front_right_spin" kv="1.2" ctrllimited="true" ctrlrange="-8 8" forcelimited="true" forcerange="-3 3" />
+    <velocity name="rear_left_spin_speed" joint="rear_left_spin" kv="1.2" ctrllimited="true" ctrlrange="-8 8" forcelimited="true" forcerange="-3 3" />
+    <velocity name="rear_right_spin_speed" joint="rear_right_spin" kv="1.2" ctrllimited="true" ctrlrange="-8 8" forcelimited="true" forcerange="-3 3" />
+    <position name="fork_height" joint="fork_lift" kp="1800.0" kv="60" ctrllimited="true" ctrlrange="0 0.28" forcelimited="true" forcerange="-180 180" />
+  </actuator>
+</mujoco>
