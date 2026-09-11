@@ -150,4 +150,50 @@ base = given.base_from_optical.apply(optical)
 
 캡처 생산자는 RGB·depth·CameraInfo가 **같은 header stamp**인 한 세트를 저장한다. 카탈로그 정답은 시각이 없는 기하이므로 `stamp_ns=0`, `clock_domain="synthetic"`를 사용한다. 캡처 시 정답 사본에 해당 프레임의 stamp와 `clock_domain="ros_sim"`을 붙이고 `source_provenance="synthetic_ground_truth"`는 유지한다. `load_scene_sample`은 `ground_truth.stamp_ns == scene.stamp_ns`와 clock domain 일치를 추가로 요구한다. 팔레트가 없으면 정답은 `no_pallet` 상태이며, 가림은 정답 기하를 바꾸지 않고 장면의 가시성 메타데이터로 기록한다.
 
-배치 최상위 `manifest.json`에는 파일별 SHA-256과 성공·실패 기록을 두지만, 이 단일 장면 로더는 manifest 해시·배치 완전성을 검사하지 않는다. 카탈로그·캡처·배치 검증과 실물 정확도 검증은 후속 단계다.
+배치 최상위 `manifest.json`에는 파일별 SHA-256과 성공·실패 기록을 두지만, 이 단일 장면 로더는 manifest 해시·배치 완전성을 검사하지 않는다. 카탈로그·batch 완비 검증은 아래 병합 도구가 담당하며 실물 정확도 검증은 별도다.
+
+## 캡처 생산자와 batch/세트 manifest
+
+[`scene_files.py`](../../ros2/src/forklift_ros/forklift_ros/scene_files.py)가 ROS 없이
+PNG·JSON을 인코딩하고, `scene_capture` 노드가 실제 수신 세트를 선택한다.
+[`capture_scenes.py`](../../sim/gazebo/capture_scenes.py)는 카탈로그 범위를 실행하고
+`scene_capture/manifest.json`을 장면마다 갱신한다. 구독·warmup·deadline 순서는
+[캡처 절차](../../sim/gazebo/README.md#장면-캡처)를 따른다.
+
+생산자는 RGB `rgb8`·depth `32FC1`의 little-endian packed payload, step·길이·frame을
+검사한다. 촬영 시각은 header의 정수 `sec × 1_000_000_000 + nanosec`다.
+RGB·depth·CameraInfo에 같은 stamp를 요구하고, static TF의 stamp 0에는 영상과의
+시각 일치를 요구하지 않는다. `scene.json`은 기존 필수 키에 `camera`, `image_id`,
+`source_snapshot_sha256`, `run_id`, `visibility`, `wall_times_s`를 추가한다.
+`clock_domain`은 `ros_sim`, 입력 출처는 `synthetic`이다. GT는 카탈로그 전체 사본에서
+`stamp_ns`·`clock_domain`만 치환하며 `synthetic_ground_truth`를 유지한다.
+
+| batch manifest 필드 | 의미 |
+|---|---|
+| `catalogue_version`, `catalogue_sha256`, `camera` | 카탈로그 버전·입력 YAML 실제 바이트 SHA-256·합성 카메라 설정 |
+| `image_id`, `source_snapshot_sha256`, `run_id` | 원격 wrapper가 전달한 immutable 이미지·검증된 snapshot digest·실행 ID |
+| `requested_scenes` | 요청한 모든 장면 ID |
+| `scenes[id].passed`, `.error`, `.files`, `.wall_times_s` | 성공 여부·실패 사유·파일 8개 SHA-256·누적 monotonic 도달 시각 |
+| `failed_count` | 기록된 실패 장면 수. 요청·결과 집합 일치와 모든 `passed`도 확인해야 batch 성공 |
+
+[`merge_scene_batches.py`](../../tools/merge_scene_batches.py)는 회수 디렉터리 안의
+`scene_capture/manifest.json`과 `scene_capture/scenes/sNNN/`을 받아 새 세트를 만든다.
+기존 출력 디렉터리는 거부하며 검증에 실패한 batch의 일부 장면을 회수하지 않는다.
+실패 batch 전체를 새 run ID로 재제출하고 원래 batch는 입력에서 제외한다.
+
+병합 시 모든 batch의 카탈로그 버전·실제 파일 해시·camera·image ID·snapshot digest가
+일치해야 한다. `failed_count == 0`, 모든 장면 `passed`, 요청 ID·결과 키·디렉터리명·
+`scene.json.scene_id` 일치를 검사하고, 요청 ID 합집합이 중복·누락 없이 카탈로그와
+같아야 한다. 장면 category·split·버전·camera·image·snapshot·run ID를 카탈로그와
+batch에 대조한다. GT는 허용한 시각 치환 외에는 카탈로그와 동일해야 하고, 양성·가림은
+`valid`, 음성 두 범주는 `no_pallet`이어야 한다. 각 장면 파일 해시 재계산과
+`load_scene_sample`도 모두 성공해야 한다.
+
+세트 출력은 `manifest.json`과 `scenes/sNNN/`이며 장면마다 필수 7개 파일과 preview
+1개를 복사한다. 복사본의 해시를 다시 확인하며 로그·world는 원본 batch에 보존한다.
+세트 manifest는 공통 카탈로그·camera·image·snapshot 메타데이터,
+`scenes[id]: {batch_run_id, files}`, `category_counts`, `split_counts`를 담는다.
+실행 명령은 [개발 환경의 원격 절](../development.md#장면-batch-제출과-병합-scenes)을 따른다.
+
+단일 장면 로딩 성공, 세트 완비·해시 검증, 실제 Gazebo 관측, 실물 보정·성능은 각각
+다른 증거다. 구현과 호스트 시험만으로 실제 100장면 캡처가 완료됐다고 판단하지 않는다.

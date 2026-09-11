@@ -8,8 +8,8 @@
 set -euo pipefail
 umask 0007
 
-if [[ "$#" -ne 6 ]]; then
-    echo "usage: model_check.sbatch MODE SOURCE OUTPUT PYTHON IMAGE DURATION" >&2
+if [[ "$#" -ne 6 && "$#" -ne 8 ]]; then
+    echo "usage: model_check.sbatch MODE SOURCE OUTPUT PYTHON IMAGE DURATION [CATALOGUE RANGE]" >&2
     exit 2
 fi
 
@@ -19,6 +19,8 @@ output_dir=$3
 python_path=$4
 image=$5
 duration=$6
+catalogue=${7:--}
+scene_range=${8:--}
 
 args=(
     --mode "$mode"
@@ -31,6 +33,11 @@ if [[ "$python_path" != "-" ]]; then
 fi
 if [[ "$image" != "-" ]]; then
     args+=(--image "$image")
+fi
+
+if [[ "$mode" == "scenes" ]]; then
+    args+=(--catalogue "$catalogue" --scene-range "$scene_range"
+           --run-id "$(basename -- "$source_dir")")
 fi
 
 export PYTHONDONTWRITEBYTECODE=1

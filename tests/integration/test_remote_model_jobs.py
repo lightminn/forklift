@@ -726,3 +726,348 @@ def test_prepare_core_environment_installs_snapshot_wheel_into_run_venv(
     finally:
         for path in [source, *source.rglob("*")]:
             path.chmod(path.stat().st_mode | (0o700 if path.is_dir() else 0o600))
+
+
+CATALOGUE = "sim/gazebo/scenes/catalogue_v1.yaml"
+
+
+def _scenes_source(source: Path) -> None:
+    _write_source(source)
+    path = source / CATALOGUE
+    path.parent.mkdir(parents=True)
+    path.write_text("scenes:\n- scene_id: s001\n- scene_id: s002\n")
+
+
+def _scenes_request(source: Path, **changes) -> submit_model_check.SubmitRequest:
+    return submit_model_check.SubmitRequest(
+        **{
+            "host": "example-host",
+            "remote_root": "/tmp/scene jobs",
+            "source": source,
+            "mode": "scenes",
+            "python": None,
+            "image": "gazebo:mutable",
+            "run_id": "batch-01",
+            "catalogue": CATALOGUE,
+            "scene_range": "s001-s002",
+            **changes,
+        }
+    )
+
+
+def test_scenes_dry_run_cli_records_selection_and_default_time(tmp_path, capsys):
+    _scenes_source(tmp_path)
+    before = _tree_listing(tmp_path)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("dry-run must not contact remote")
+
+    assert (
+        submit_model_check.main(
+            [
+                "submit",
+                "--host",
+                "X",
+                "--remote-root",
+                "/tmp/x",
+                "--source",
+                str(tmp_path),
+                "--mode",
+                "scenes",
+                "--image",
+                "i",
+                "--catalogue",
+                CATALOGUE,
+                "--scene-range",
+                "s001-s002",
+                "--dry-run",
+            ],
+            command_runner=forbidden,
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["catalogue"] == CATALOGUE
+    assert payload["scene_range"] == "s001-s002"
+    assert payload["time_limit"] == "01:30:00"
+    assert _tree_listing(tmp_path) == before
+
+
+@pytest.mark.parametrize("field", ["image", "catalogue", "scene_range"])
+def test_scenes_requires_image_catalogue_and_range(tmp_path, field):
+    _scenes_source(tmp_path)
+    with pytest.raises(ValueError, match=field.replace("_", "-")):
+        submit_model_check.dry_run_plan(_scenes_request(tmp_path, **{field: None}))
+
+
+@pytest.mark.parametrize(
+    "catalogue",
+    [
+        "../catalogue.yaml",
+        "/tmp/catalogue.yaml",
+        "sim/gazebo/../catalogue.yaml",
+        "./sim/gazebo/scenes/catalogue_v1.yaml",
+        "sim//gazebo/scenes/catalogue_v1.yaml",
+        "sim/gazebo/.hidden.yaml",
+        "sim/gazebo/scenes/catalogue_v1.yaml/",
+        "sim/gazebo/missing.yaml",
+        "docs/catalogue.yaml",
+    ],
+)
+def test_scenes_rejects_catalogue_outside_snapshot(tmp_path, catalogue):
+    _scenes_source(tmp_path)
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "catalogue.yaml").write_text((tmp_path / CATALOGUE).read_text())
+    with pytest.raises(ValueError, match="catalogue"):
+        submit_model_check.dry_run_plan(_scenes_request(tmp_path, catalogue=catalogue))
+
+
+def test_scenes_rejects_linked_catalogue(tmp_path):
+    _scenes_source(tmp_path)
+    (tmp_path / "sim/gazebo/link.yaml").symlink_to(tmp_path / CATALOGUE)
+    with pytest.raises(ValueError, match="catalogue"):
+        submit_model_check.dry_run_plan(
+            _scenes_request(tmp_path, catalogue="sim/gazebo/link.yaml")
+        )
+
+
+@pytest.mark.parametrize(
+    "scene_range",
+    [
+        "s002-s001",
+        "s1-s2",
+        "s001",
+        "s001-s003",
+        "s000-s001",
+        "s001-s002\n",
+    ],
+)
+def test_scenes_rejects_invalid_or_absent_range_ids(tmp_path, scene_range):
+    _scenes_source(tmp_path)
+    with pytest.raises(ValueError, match="range"):
+        submit_model_check.dry_run_plan(
+            _scenes_request(tmp_path, scene_range=scene_range)
+        )
+
+
+@pytest.mark.parametrize(
+    "mode,time_limit,expected_time",
+    [
+        ("scenes", None, "01:30:00"),
+        ("scenes", "00:12:00", "00:12:00"),
+        ("gazebo", None, None),
+        ("model-cpu", None, None),
+        ("model-render", None, None),
+        ("model-cpu", "00:10:00", "00:10:00"),
+    ],
+)
+def test_submit_sbatch_preserves_six_args_and_adds_scenes_eight_args_and_time(
+    tmp_path, mode, time_limit, expected_time
+):
+    _scenes_source(tmp_path)
+    calls = []
+    records = []
+
+    def remote(argv, **kwargs):
+        if argv[0] == "rsync":
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        command = shlex.split(argv[-1])
+        calls.append(command)
+        if kwargs.get("input"):
+            records.append(json.loads(kwargs["input"]))
+        return subprocess.CompletedProcess(
+            argv, 0, "123;cluster\n" if command[0] == "sbatch" else "", ""
+        )
+
+    record = submit_model_check.submit(
+        _scenes_request(
+            tmp_path,
+            mode=mode,
+            time_limit=time_limit,
+            python="/opt/python",
+            catalogue=CATALOGUE if mode == "scenes" else None,
+            scene_range="s001-s002" if mode == "scenes" else None,
+        ),
+        command_runner=remote,
+    )
+    command = next(c for c in calls if c[0] == "sbatch")
+    script = "/tmp/scene jobs/snapshots/batch-01/deploy/slurm/model_check.sbatch"
+    expected = ["sbatch", "--parsable", "--output=/tmp/scene jobs/jobs/batch-01-%j.log"]
+    if expected_time:
+        expected += ["--time", expected_time]
+    expected += [
+        script,
+        mode,
+        "/tmp/scene jobs/snapshots/batch-01",
+        "/tmp/scene jobs/artifacts/batch-01",
+        "/opt/python",
+        "gazebo:mutable",
+        "30",
+    ]
+    if mode == "scenes":
+        expected += [CATALOGUE, "s001-s002"]
+    assert command == expected
+    assert record == records[0]
+    assert record["time_limit"] == expected_time
+    assert record["catalogue"] == (CATALOGUE if mode == "scenes" else None)
+    assert record["scene_range"] == ("s001-s002" if mode == "scenes" else None)
+
+
+@pytest.mark.parametrize("mode", ["scenes", "gazebo", "model-cpu", "model-render"])
+def test_sbatch_executes_runner_with_exact_optional_arguments(tmp_path, mode):
+    source = tmp_path / "snapshots" / "batch-01"
+    _write_source(source)
+    (source / "tools/remote_model_job.py").write_text(
+        "import json,sys; print(json.dumps(sys.argv[1:]))\n"
+    )
+    output = str(tmp_path / "out")
+    positional = [mode, str(source), output, "-", "image", "30"]
+    expected = [
+        "--mode",
+        mode,
+        "--source",
+        str(source),
+        "--output",
+        output,
+        "--duration",
+        "30",
+        "--image",
+        "image",
+    ]
+    if mode == "scenes":
+        positional += [CATALOGUE, "s001-s002"]
+        expected += [
+            "--catalogue",
+            CATALOGUE,
+            "--scene-range",
+            "s001-s002",
+            "--run-id",
+            "batch-01",
+        ]
+    result = subprocess.run(
+        ["bash", "deploy/slurm/model_check.sbatch", *positional],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == expected
+
+
+@pytest.mark.parametrize("count", [0, 5, 7, 9])
+def test_sbatch_rejects_other_argument_counts(count):
+    result = subprocess.run(
+        ["bash", "deploy/slurm/model_check.sbatch", *(["x"] * count)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert "usage:" in result.stderr
+
+
+def test_scenes_resolves_image_and_passes_verified_provenance(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    _scenes_source(source)
+    _write_manifest(source)
+    output = tmp_path / "output"
+    calls = []
+    import signal
+
+    previous = signal.getsignal(signal.SIGTERM)
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        if argv[:3] == ["docker", "image", "inspect"]:
+            return subprocess.CompletedProcess(argv, 0, "sha256:immutable\n", "")
+        assert signal.getsignal(signal.SIGTERM) != previous
+        return subprocess.CompletedProcess(argv, 7, "capture failed\n", "")
+
+    monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {2, 3})
+    code = remote_model_job.execute_job(
+        mode="scenes",
+        source=source,
+        output=output,
+        python=None,
+        image="gazebo:mutable",
+        duration=30,
+        catalogue=CATALOGUE,
+        scene_range="s001-s002",
+        run_id="batch-01",
+        command_runner=run,
+    )
+    assert code == 7
+    command = calls[1]
+    digest = json.loads((source / submit_model_check.MANIFEST_NAME).read_text())[
+        "snapshot_sha256"
+    ]
+    assert command[command.index("sha256:immutable") :] == [
+        "sha256:immutable",
+        "python3",
+        "sim/gazebo/capture_scenes.py",
+        "--catalogue",
+        f"/workspace/{CATALOGUE}",
+        "--scenes",
+        "s001-s002",
+        "--output",
+        "/output",
+        "--image-id",
+        "sha256:immutable",
+        "--source-sha256",
+        digest,
+        "--run-id",
+        "batch-01",
+    ]
+    gazebo = remote_model_job.build_command(
+        mode="gazebo",
+        source=source,
+        output=output,
+        python=None,
+        image="sha256:immutable",
+        duration=30,
+        container_name="unused",
+    )
+    # Resource, mount and network bounds are identical; the generated name differs.
+    command[command.index("--name") + 1] = "unused"
+    assert (
+        command[: command.index("sha256:immutable")]
+        == gazebo[: gazebo.index("sha256:immutable")]
+    )
+    report = json.loads((output / "job_result.json").read_text())
+    assert report["commands"][1]["label"] == "scenes"
+    assert not (output / ".runtime").exists()
+    assert signal.getsignal(signal.SIGTERM) == previous
+
+
+@pytest.mark.parametrize("defect", ["unlisted", "parent", "bad-range", "missing-run"])
+def test_remote_scenes_rejects_unverified_selection_before_docker(tmp_path, defect):
+    source = tmp_path / "source"
+    _scenes_source(source)
+    if defect == "unlisted":
+        catalogue_bytes = (source / CATALOGUE).read_bytes()
+        (source / CATALOGUE).unlink()
+    _write_manifest(source)
+    if defect == "unlisted":
+        (source / CATALOGUE).write_bytes(catalogue_bytes)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("invalid selection reached docker")
+
+    output = tmp_path / "output"
+    code = remote_model_job.execute_job(
+        mode="scenes",
+        source=source,
+        output=output,
+        python=None,
+        image="i",
+        duration=30,
+        catalogue="../bad.yaml" if defect == "parent" else CATALOGUE,
+        scene_range="s001-s003" if defect == "bad-range" else "s001-s002",
+        run_id=None if defect == "missing-run" else "batch-01",
+        command_runner=forbidden,
+    )
+    report = json.loads((output / "job_result.json").read_text())
+    assert code != 0
+    assert "ValueError" in report["error"]
+    assert report["commands"] == []

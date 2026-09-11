@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import signal
 import subprocess
@@ -85,6 +86,46 @@ def verify_source(source: Path) -> dict[str, Any]:
     return manifest
 
 
+def validate_scene_selection(
+    source: Path,
+    catalogue: str | None,
+    scene_range: str | None,
+    files: Sequence[str] | Mapping[str, Any],
+) -> None:
+    """Require a normalized, included catalogue and an existing ordered ID range."""
+    if not catalogue:
+        raise ValueError("scenes requires --catalogue")
+    path = PurePosixPath(catalogue)
+    if (
+        path.is_absolute()
+        or path.as_posix() != catalogue
+        or any(part.startswith(".") for part in path.parts)
+        or "\\" in catalogue
+        or catalogue not in files
+    ):
+        raise ValueError("catalogue must be a normalized relative snapshot file")
+    if not scene_range or not re.fullmatch(r"s[0-9]{3}-s[0-9]{3}", scene_range):
+        raise ValueError("scene-range must have format sNNN-sMMM")
+    first, last = int(scene_range[1:4]), int(scene_range[6:9])
+    if first > last:
+        raise ValueError("scene-range must be ordered start <= end")
+    # Only scenes needs YAML; existing model/gazebo commands stay stdlib-only.
+    import yaml
+
+    try:
+        entries = yaml.safe_load((source / catalogue).read_text())["scenes"]
+        ids = [entry["scene_id"] for entry in entries]
+        if not ids or any(not isinstance(value, str) for value in ids):
+            raise ValueError("catalogue requires string scene IDs")
+        if len(ids) != len(set(ids)):
+            raise ValueError("catalogue has duplicate scene IDs")
+    except (OSError, KeyError, TypeError, yaml.YAMLError) as error:
+        raise ValueError(f"cannot read catalogue scene IDs: {error}") from error
+    requested = {f"s{number:03d}" for number in range(first, last + 1)}
+    if requested - set(ids):
+        raise ValueError("scene-range contains unknown catalogue IDs")
+
+
 def _format_cpuset(cpus: set[int]) -> str:
     if not cpus:
         raise ValueError("Slurm process has no CPU affinity")
@@ -110,6 +151,10 @@ def build_command(
     image: str | None,
     duration: int,
     container_name: str,
+    catalogue: str | None = None,
+    scene_range: str | None = None,
+    source_sha256: str | None = None,
+    run_id: str | None = None,
 ) -> list[str]:
     if duration <= 0:
         raise ValueError("duration must be positive")
@@ -146,10 +191,10 @@ def build_command(
             "--frames",
             "96",
         ]
-    if mode != "gazebo":
+    if mode not in {"gazebo", "scenes"}:
         raise ValueError(f"unsupported mode: {mode}")
     if not image:
-        raise ValueError("gazebo requires an explicit image ID")
+        raise ValueError(f"{mode} requires an explicit image ID")
     cpuset = _format_cpuset(set(os.sched_getaffinity(0)))
     groups = sorted(set(os.getgroups()) - {os.getgid()})
     argv = [
@@ -188,14 +233,42 @@ def build_command(
             "--workdir",
             "/workspace",
             image,
-            "python3",
-            "sim/gazebo/run_sensor_smoke.py",
-            "--output",
-            "/output",
-            "--duration",
-            str(duration),
         ]
     )
+    if mode == "scenes":
+        if not all((catalogue, scene_range, source_sha256, run_id)):
+            raise ValueError(
+                "scenes requires catalogue, scene-range, source sha and run-id"
+            )
+        argv.extend(
+            [
+                "python3",
+                "sim/gazebo/capture_scenes.py",
+                "--catalogue",
+                f"/workspace/{catalogue}",
+                "--scenes",
+                scene_range,
+                "--output",
+                "/output",
+                "--image-id",
+                image,
+                "--source-sha256",
+                source_sha256,
+                "--run-id",
+                run_id,
+            ]
+        )
+    else:
+        argv.extend(
+            [
+                "python3",
+                "sim/gazebo/run_sensor_smoke.py",
+                "--output",
+                "/output",
+                "--duration",
+                str(duration),
+            ]
+        )
     return argv
 
 
@@ -366,6 +439,9 @@ def execute_job(
     python: str | None,
     image: str | None,
     duration: int,
+    catalogue: str | None = None,
+    scene_range: str | None = None,
+    run_id: str | None = None,
     command_runner: CommandRunner = subprocess.run,
     environment: Mapping[str, str] | None = None,
     core_environment_builder: Callable[..., CoreEnvironment] = prepare_core_environment,
@@ -414,6 +490,10 @@ def execute_job(
             "snapshot_sha256": manifest["snapshot_sha256"],
             "files": manifest["files"],
         }
+        if mode == "scenes":
+            if not image or not run_id:
+                raise ValueError("scenes requires --image and --run-id")
+            validate_scene_selection(source, catalogue, scene_range, manifest["files"])
         immutable_image = image
         if mode in {"model-cpu", "model-render"}:
             if not python:
@@ -429,7 +509,7 @@ def execute_job(
             )
             report["core_environment"] = asdict(core_environment)
             python = core_environment.python
-        if mode == "gazebo":
+        if mode in {"gazebo", "scenes"}:
             inspected = _run_and_record(
                 label="docker-image-inspect",
                 argv=["docker", "image", "inspect", "--format", "{{.Id}}", str(image)],
@@ -454,14 +534,24 @@ def execute_job(
             image=immutable_image,
             duration=duration,
             container_name=container_name,
+            **(
+                {
+                    "catalogue": catalogue,
+                    "scene_range": scene_range,
+                    "source_sha256": manifest["snapshot_sha256"],
+                    "run_id": run_id,
+                }
+                if mode == "scenes"
+                else {}
+            ),
         )
         if mode == "model-render":
             env["MUJOCO_GL"] = "osmesa"
             env["CUDA_VISIBLE_DEVICES"] = ""
-        if mode == "gazebo":
+        if mode in {"gazebo", "scenes"}:
             with _ContainerSignalCleanup(container_name):
                 result = _run_and_record(
-                    label="gazebo",
+                    label=mode,
                     argv=argv,
                     cwd=source,
                     environment=env,
@@ -525,10 +615,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--verify-only", action="store_true")
     parser.add_argument("--source", required=True, type=Path)
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--mode", choices=("model-cpu", "model-render", "gazebo"))
+    parser.add_argument(
+        "--mode", choices=("model-cpu", "model-render", "gazebo", "scenes")
+    )
     parser.add_argument("--python")
     parser.add_argument("--image")
     parser.add_argument("--duration", type=int, default=30)
+    parser.add_argument("--catalogue")
+    parser.add_argument("--scene-range")
+    parser.add_argument("--run-id")
     return parser
 
 
@@ -547,6 +642,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         python=args.python,
         image=args.image,
         duration=args.duration,
+        catalogue=args.catalogue,
+        scene_range=args.scene_range,
+        run_id=args.run_id,
     )
 
 

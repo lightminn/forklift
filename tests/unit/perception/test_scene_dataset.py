@@ -16,8 +16,8 @@ WIDTH, HEIGHT = 8, 6
 K = [4.0, 0.0, 4.0, 0.0, 4.0, 3.0, 0.0, 0.0, 1.0]  # fx=fy=4, cx=4, cy=3
 
 
-def write_scene(root: Path, **overrides) -> Path:
-    scene = root / "s001"
+def write_scene(root: Path, scene_id: str = "s001", **overrides) -> Path:
+    scene = root / scene_id
     scene.mkdir(parents=True, exist_ok=False)  # distinct root per call
     rgb = np.full((HEIGHT, WIDTH, 3), 90, dtype=np.uint8)
     Image.fromarray(rgb).save(scene / "rgb.png")
@@ -78,7 +78,7 @@ def write_scene(root: Path, **overrides) -> Path:
             "reason": None,
         },
         "scene.json": {
-            "scene_id": "s001",
+            "scene_id": scene_id,
             "catalogue_version": "test",
             "category": "positive",
             "split": "dev",

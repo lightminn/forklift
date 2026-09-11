@@ -197,6 +197,75 @@ memory/swap 상한을 그대로 적용하고, snapshot은 `/workspace` read-only
 `artifacts/<run-id>/`와 `jobs/<run-id>-<job-id>.log`에 남으며 현재 `collect`는 성공
 작업만 회수한다. 실패 진단 파일은 해당 실행 디렉터리에서 별도로 읽거나 복사한다.
 
+### 장면 batch 제출과 병합 (`scenes`)
+
+`scenes`는 카탈로그 범위마다 RGB-D 한 세트씩 캡처한다. 제출 측 Python과 원격
+wrapper의 `/usr/bin/python3`에는 카탈로그 검사용 PyYAML이 필요하다. 캡처는 위의
+Jazzy/Harmonic 이미지에서 실행하며 코어 패키지 설치는 필요하지 않다.
+
+```bash
+python tools/submit_model_check.py submit \
+  --host <SSH_HOST> --remote-root '<REMOTE_PROJECT_ROOT>' \
+  --source . --mode scenes --image forklift/gazebo:jazzy-harmonic \
+  --catalogue sim/gazebo/scenes/catalogue_v1.yaml \
+  --scene-range s001-s025 --time-limit 01:30:00 \
+  --run-id scenes-v1-batch-01 --wait \
+  --output artifacts/scenes-v1-batch-01
+```
+
+먼저 같은 명령에 `--dry-run`을 붙이면 JSON에서 `catalogue`, `scene_range`,
+`time_limit`을 확인할 수 있다. `--catalogue`는 `--source` 기준 정규화된 상대
+POSIX 경로여야 하며 실제 snapshot 파일 목록에 포함돼야 한다. 절대·숨김·`..`·
+심볼릭 링크 경로, 미존재 파일은 거부한다. `--scene-range`는 양끝을 포함하는
+`sNNN-sMMM` 형식이며 시작 ≤ 끝이고 범위의 모든 ID가 카탈로그에 존재해야 한다.
+
+`scenes`의 기본 Slurm 제한은 `01:30:00`이며 `--time-limit`으로 바꾼다. 기존
+model/gazebo mode는 이 옵션을 생략하면 스크립트의 `00:20:00`을 그대로 쓴다.
+`--duration`은 기존 gazebo 관측용이며 scenes의 장면 수·제한 시간을 조정하지 않는다.
+원격 runner는 검증된 snapshot digest, inspect한 immutable image ID, 제출 run ID를
+캡처 노드와 batch manifest까지 전달한다. sbatch의 기존 mode는 6개, scenes는
+카탈로그·범위를 더한 8개 위치 인자를 쓴다.
+
+아래 25개씩 4 batch는 실행 예시다. 먼저 `s001-s002` spike를 별도 run ID로 실행하고
+`wall_times_s`를 측정해 batch 크기와 `--time-limit`을 확정한다. 2장면 spike 결과를
+아래 전체 세트에 함께 넣으면 ID가 중복되므로 병합 입력에서 제외한다.
+
+| run ID 예시 | 범위 | 회수 디렉터리 |
+|---|---|---|
+| `scenes-v1-batch-01` | `s001-s025` | `artifacts/scenes-v1-batch-01` |
+| `scenes-v1-batch-02` | `s026-s050` | `artifacts/scenes-v1-batch-02` |
+| `scenes-v1-batch-03` | `s051-s075` | `artifacts/scenes-v1-batch-03` |
+| `scenes-v1-batch-04` | `s076-s100` | `artifacts/scenes-v1-batch-04` |
+
+모든 batch는 같은 소스 snapshot·카탈로그 바이트·카메라 설정·immutable image ID를
+사용해야 한다. 제출 사이 소스를 수정하거나 이미지 태그의 대상을 바꾸지 않는다.
+runner는 장면 실패를 기록하고 다음 장면을 시도하지만 batch 전체는 nonzero로 끝난다.
+**실패 batch 전체를 같은 범위·새 run ID로 재제출**한다. 실패 ID만 재제출하거나
+원래 batch에서 성공 장면만 병합하지 않는다. `collect`에는 부분 회수 규약이 없으며
+실패 batch는 병합 입력에서 제외한다. 예를 들어 batch-02 재실행이 성공하면 아래
+입력 중 batch-02 경로를 새 실행의 회수 경로로 바꾼다.
+
+성공한 batch를 모두 회수한 뒤, 코어·Pillow·PyYAML이 설치된 로컬 환경에서 실행한다.
+
+```bash
+python tools/merge_scene_batches.py \
+  --catalogue sim/gazebo/scenes/catalogue_v1.yaml \
+  --batches artifacts/scenes-v1-batch-01 artifacts/scenes-v1-batch-02 \
+            artifacts/scenes-v1-batch-03 artifacts/scenes-v1-batch-04 \
+  --output data/synthetic_scenes/catalogue_v1
+```
+
+병합 도구는 카탈로그의 모든 ID가 중복·누락 없이 한 번씩 있는지, batch·장면 메타데이터와
+GT가 정합한지, 파일 해시와 실제 `load_scene_sample` 로딩이 통과하는지 확인한다.
+기존 출력은 덮어쓰지 않는다. 세트에는 검증된 장면 파일 8개씩과 집계 manifest를
+복사하며 원래 world·로그는 회수 디렉터리에 남는다. 파일 형식과 manifest 필드는
+[장면 데이터 세트 생산자 계약](interfaces/scene-dataset.md#캡처-생산자와-batch세트-manifest),
+캡처 순서는 [Gazebo 캡처 절](../sim/gazebo/README.md#장면-캡처)을 따른다.
+
+이 명령 안내와 호스트 시험은 원격 캡처 성공이나 100개 데이터 완성을 뜻하지 않는다.
+실제 Gazebo/ROS 실행, 2장면 시간·반복 해시 측정, 100장면 생성과 시각 검토는
+[계획 Task 7](plans/2026-09-11-scene-capture-and-remote.md#task-7-검증실행-claude)에서 수행한다.
+
 ## Gazebo 센서 통합 이미지와 실행
 
 `deploy/gazebo/Dockerfile`은 ROS 2 Jazzy와 Gazebo Harmonic, bridge, rosbag2,

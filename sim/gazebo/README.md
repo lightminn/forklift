@@ -59,4 +59,61 @@ python -m pytest ros2/src/forklift_ros/test tests/simulation/test_gazebo_sensor_
 - `build_scene_world.py --catalogue scenes/catalogue_v1.yaml --scene s001 --output <dir>`: 항목 하나를 `scene_world.sdf`(회전된 팔레트·유사물·가림 상자·distractor·조명·표면·RGB-D 카메라, LiDAR 없음), `bridge.yaml`(카메라 3토픽 + `/clock`), `transforms.yaml`(카메라 변환), `scene.yaml`(항목 + 카탈로그 버전·카메라)로 바꾼다. 정답은 카탈로그 값을 그대로 옮기며 SDF에서 재계산하지 않는다.
 - `sdf_parts.py`: 두 생성기가 공유하는 SDF 헬퍼. 기존 `build_sensor_world.py`의 출력은 `tests/simulation/test_gazebo_sensor_world.py`의 SHA-256 고정 시험으로 바이트 동일을 보호한다.
 
-호스트 시험(`tests/simulation/test_scene_catalogue.py`, `test_build_scene_world.py`)은 정답의 독립 기대값, 시야 투영, 구성 비율, 결정론, SDF 구조를 검사한다. 장면 캡처(Gazebo 실행·파일 저장)와 원격 batch 실행은 3단계 계획에서 추가한다.
+호스트 시험(`tests/simulation/test_scene_catalogue.py`, `test_build_scene_world.py`)은 정답의 독립 기대값, 시야 투영, 구성 비율, 결정론, SDF 구조를 검사한다. 캡처·원격 batch 도구의 사용법은 아래와 같으며, 실제 Gazebo/원격 실행 증거는 별도로 확인해야 한다.
+
+## 장면 캡처
+
+[`capture_scenes.py`](capture_scenes.py)는 카탈로그의 지정 범위를 장면별로 실행한다.
+Jazzy/Harmonic 이미지에서 ROS 환경을 source하고 저장소 루트에서 실행한다. 원격
+`scenes` mode가 아래의 image/source/run 식별자를 채운다. 직접 실행 시에도 실제
+immutable image ID와 검증된 source snapshot digest를 전달한다.
+
+```bash
+python3 sim/gazebo/capture_scenes.py \
+  --catalogue /workspace/sim/gazebo/scenes/catalogue_v1.yaml \
+  --scenes s001-s002 --output /output \
+  --image-id '<IMMUTABLE_IMAGE_ID>' \
+  --source-sha256 '<VERIFIED_SOURCE_SNAPSHOT_SHA256>' \
+  --run-id '<RUN_ID>' --scene-deadline-s 120
+```
+
+`/output/scene_capture/`가 존재하면 실패한다. batch당 colcon build/test와 설치 경로
+import 확인을 한 번 수행하고, source한 설치 환경을 모든 자식 프로세스에 전달한다.
+`/output/.runtime/install`은 장면 사이에 재사용하고 원격 wrapper가 batch 종료 시
+`.runtime`을 지운다.
+
+1. 카탈로그 항목으로 world·bridge·TF 설정을 생성한다.
+2. `scene_capture` 노드의 구독 준비(`ready.json`)를 기다린 뒤 bridge와 Gazebo를 시작한다.
+3. 실제 `/clock` 수신을 확인한 다음 static TF publisher를 시작한다.
+4. simulation stamp ≥ 2초, 검정이 아닌 RGB와 depth·CameraInfo가 같은 header stamp인
+   첫 완전한 세트 및 실제 수신 TF가 준비되면 저장한다. 늦게 온 TF도 저장 조건을 재평가한다.
+5. 장면마다 자식 프로세스를 정리하고 batch manifest를 즉시 갱신한다.
+
+ready·clock·캡처 대기는 장면 전체 monotonic deadline의 잔여 시간을 공유한다.
+`--scene-deadline-s` 기본은 120초이며 Slurm batch 시간 제한과 별개다. 장면 실패 후에도
+다음 장면을 시도하며 하나라도 실패하거나 정리에 실패하면 최종 종료 코드는 nonzero다.
+부분 회수 없이 **실패 batch 전체를 새 run ID로 재제출**한다.
+
+```text
+/output/scene_capture/
+├── manifest.json
+├── colcon_build.log / colcon_test.log / installed_import.log
+└── scenes/s001/
+    ├── rgb.png / depth_mm.png / depth_preview.png
+    ├── depth_meta.json / camera_info.json / tf.json
+    ├── ground_truth.json / scene.json
+    ├── ready.json / progress.json / result.json
+    ├── world/
+    └── 각 자식 프로세스의 .log
+```
+
+PNG·JSON 필수 7개와 0–5 m 범위의 `depth_preview.png`는
+[데이터 세트 계약](../../docs/interfaces/scene-dataset.md)을 따른다. preview는 unknown을
+검정으로 표시하는 보조 영상이며 깊이 입력은 16-bit mm PNG다. 장면별 manifest의
+`wall_times_s`는 시작 이후 `build_world`, `ready`, `first_clock`, `captured`, `stopped`
+도달 시점까지 누적 monotonic 초이며 도달하지 못한 값은 null이다. 단계 소요 시간은
+인접 도달 시각의 차이로 계산한다.
+
+실행·회수·완비 병합 명령과 실패 정책은 [원격 장면 실행 안내](../../docs/development.md#장면-batch-제출과-병합-scenes)를 따른다.
+호스트 시험은 합성 파일 왕복과 fake process로 검사한다. 실제 100개 캡처, RGB·preview
+시각 검토, 반복 실행 해시·소요 시간 관찰은 아직 이 도구 구현만으로 검증되지 않는다.

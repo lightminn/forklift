@@ -180,6 +180,18 @@ class SubmitRequest:
     image: str | None
     run_id: str
     duration: int = 30
+    catalogue: str | None = None
+    scene_range: str | None = None
+    time_limit: str | None = None
+
+    @property
+    def effective_time_limit(self) -> str | None:
+        """Use the script default for existing modes and 90 minutes for scenes."""
+        return (
+            self.time_limit
+            if self.time_limit is not None
+            else ("01:30:00" if self.mode == "scenes" else None)
+        )
 
 
 @dataclass(frozen=True)
@@ -331,15 +343,28 @@ def _validate_request(request: SubmitRequest) -> None:
     _validate_remote_root(request.remote_root)
     if not _RUN_ID_RE.fullmatch(request.run_id):
         raise ValueError("run ID must use letters, digits, dot, underscore, or hyphen")
-    if request.mode not in {"model-cpu", "model-render", "gazebo"}:
+    if request.mode not in {"model-cpu", "model-render", "gazebo", "scenes"}:
         raise ValueError(f"unsupported mode: {request.mode}")
     if request.duration <= 0:
         raise ValueError("duration must be positive")
-    if request.mode == "gazebo":
+    if request.mode in {"gazebo", "scenes"}:
         if not request.image:
-            raise ValueError("gazebo mode requires --image")
+            raise ValueError(f"{request.mode} mode requires --image")
     elif not request.python:
         raise ValueError("model modes require --python")
+    if request.mode == "scenes":
+        if __package__:
+            from .remote_model_job import validate_scene_selection
+        else:
+            from remote_model_job import validate_scene_selection
+
+        plan = discover_snapshot(request.source)
+        validate_scene_selection(
+            request.source,
+            request.catalogue,
+            request.scene_range,
+            [item.relative_path for item in plan.files],
+        )
 
 
 def remote_layout(remote_root: str, run_id: str) -> RemoteLayout:
@@ -540,6 +565,11 @@ def submit(
         "sbatch",
         "--parsable",
         f"--output={layout.slurm_log}",
+        *(
+            ["--time", request.effective_time_limit]
+            if request.effective_time_limit is not None
+            else []
+        ),
         f"{layout.snapshot}/deploy/slurm/model_check.sbatch",
         request.mode,
         layout.snapshot,
@@ -548,6 +578,8 @@ def submit(
         request.image or "-",
         str(request.duration),
     ]
+    if request.mode == "scenes":
+        sbatch_argv.extend([request.catalogue, request.scene_range])
     submitted = _ssh(command_runner, request.host, sbatch_argv)
     if submitted.returncode:
         raise RemoteError(submitted.stderr.strip() or "sbatch failed")
@@ -559,6 +591,9 @@ def submit(
         "run_id": request.run_id,
         "job_id": job_id,
         "mode": request.mode,
+        "catalogue": request.catalogue,
+        "scene_range": request.scene_range,
+        "time_limit": request.effective_time_limit,
         "snapshot": layout.snapshot,
         "output": layout.output,
         "snapshot_sha256": plan.sha256,
@@ -584,6 +619,9 @@ def dry_run_plan(request: SubmitRequest, *, wait: bool = False) -> dict[str, Any
         "host": request.host,
         "run_id": request.run_id,
         "mode": request.mode,
+        "catalogue": request.catalogue,
+        "scene_range": request.scene_range,
+        "time_limit": request.effective_time_limit,
         "duration": request.duration,
         "python": request.python,
         "image": request.image,
@@ -807,12 +845,19 @@ def _build_parser() -> argparse.ArgumentParser:
     submit_parser.add_argument("--remote-root", required=True)
     submit_parser.add_argument("--source", required=True, type=Path)
     submit_parser.add_argument(
-        "--mode", required=True, choices=("model-cpu", "model-render", "gazebo")
+        "--mode",
+        required=True,
+        choices=("model-cpu", "model-render", "gazebo", "scenes"),
     )
     submit_parser.add_argument("--python")
     submit_parser.add_argument("--image")
     submit_parser.add_argument("--run-id", default=None)
     submit_parser.add_argument("--duration", type=int, default=30)
+    submit_parser.add_argument("--catalogue")
+    submit_parser.add_argument("--scene-range")
+    submit_parser.add_argument(
+        "--time-limit", help="Slurm time limit; scenes default: 01:30:00"
+    )
     submit_parser.add_argument("--dry-run", action="store_true")
     submit_parser.add_argument("--wait", action="store_true")
     submit_parser.add_argument("--output", type=Path)
@@ -844,6 +889,9 @@ def main(
             image=args.image,
             run_id=run_id,
             duration=args.duration,
+            catalogue=args.catalogue,
+            scene_range=args.scene_range,
+            time_limit=args.time_limit,
         )
         if args.dry_run:
             print(
