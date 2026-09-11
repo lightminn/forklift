@@ -151,15 +151,20 @@ src = [".", "src"]
 ```python
 @dataclass(frozen=True)
 class CoreEnvironment:
-    python: str            # 실행별 venv의 interpreter 절대 경로
-    wheel_path: str        # output/wheels/forklift_core-<ver>-py3-none-any.whl
+    python: str  # 실행별 venv의 interpreter 절대 경로
+    wheel_path: str  # output/wheels/forklift_core-<ver>-py3-none-any.whl
     wheel_sha256: str
-    import_path: str       # venv 안에서 확인한 forklift_core.__file__
+    import_path: str  # venv 안에서 확인한 forklift_core.__file__
 
 
 def prepare_core_environment(
-    *, python: str, source: Path, output: Path, runtime: Path,
-    environment: Mapping[str, str], command_runner: CommandRunner,
+    *,
+    python: str,
+    source: Path,
+    output: Path,
+    runtime: Path,
+    environment: Mapping[str, str],
+    command_runner: CommandRunner,
     commands: list[dict[str, Any]],
 ) -> CoreEnvironment: ...
 ```
@@ -193,25 +198,43 @@ def test_prepare_core_environment_installs_snapshot_wheel_into_run_venv(
     commands: list[dict] = []
 
     env = remote_model_job.prepare_core_environment(
-        python=sys.executable, source=source, output=output, runtime=runtime,
-        environment=dict(os.environ), command_runner=subprocess.run,
+        python=sys.executable,
+        source=source,
+        output=output,
+        runtime=runtime,
+        environment=dict(os.environ),
+        command_runner=subprocess.run,
         commands=commands,
     )
 
     assert Path(env.python).is_file() and str(runtime) in env.python
     assert Path(env.wheel_path).is_file() and env.wheel_path.startswith(str(output))
-    assert env.import_path.startswith(str(runtime))  # not the snapshot, not site-packages of the base interpreter
+    assert env.import_path.startswith(
+        str(runtime)
+    )  # not the snapshot, not site-packages of the base interpreter
     assert not (source / "build").exists()  # read-only snapshot untouched
-    assert not list(source.rglob("*.egg-info"))  # no in-tree build artefacts in the snapshot
-    assert _tree_listing(source) == before  # contents and modes unchanged (see helper below)
-    shutil.rmtree(runtime)  # the run-time copy must be removable despite the read-only source
+    assert not list(
+        source.rglob("*.egg-info")
+    )  # no in-tree build artefacts in the snapshot
+    assert (
+        _tree_listing(source) == before
+    )  # contents and modes unchanged (see helper below)
+    shutil.rmtree(
+        runtime
+    )  # the run-time copy must be removable despite the read-only source
     probe = subprocess.run(
         [env.python, "-c", "import forklift_core; print(forklift_core.VALUE)"],
-        capture_output=True, text=True, check=True, cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=tmp_path,
     )
     assert probe.stdout.strip() == "1"
     assert [c["label"] for c in commands] == [
-        "core-wheel", "core-venv", "core-install", "core-import-check"
+        "core-wheel",
+        "core-venv",
+        "core-install",
+        "core-import-check",
     ]
 ```
 
@@ -282,12 +305,27 @@ RUN python3 -m venv --system-site-packages /opt/forklift/venv \
 
 ```python
 import re, pathlib
-root = pathlib.Path('.'); bad = []
-for md in sorted([*root.glob('*.md'), *root.glob('docs/**/*.md'), *root.glob('sim/**/*.md'), *root.glob('requirements/*.md')]):
-    if 'presentation' in md.parts or 'artifacts' in md.parts: continue
-    for m in re.finditer(r'\[[^\]]*\]\(([^)]+)\)', md.read_text(encoding='utf-8')):
-        t = m.group(1).split('#')[0].strip()
-        if t and not t.startswith(('http://', 'https://', 'mailto:')) and not (md.parent / t).resolve().exists(): bad.append((str(md), t))
+
+root = pathlib.Path(".")
+bad = []
+for md in sorted(
+    [
+        *root.glob("*.md"),
+        *root.glob("docs/**/*.md"),
+        *root.glob("sim/**/*.md"),
+        *root.glob("requirements/*.md"),
+    ]
+):
+    if "presentation" in md.parts or "artifacts" in md.parts:
+        continue
+    for m in re.finditer(r"\[[^\]]*\]\(([^)]+)\)", md.read_text(encoding="utf-8")):
+        t = m.group(1).split("#")[0].strip()
+        if (
+            t
+            and not t.startswith(("http://", "https://", "mailto:"))
+            and not (md.parent / t).resolve().exists()
+        ):
+            bad.append((str(md), t))
 print(len(bad), bad)
 ```
 
