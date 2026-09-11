@@ -87,7 +87,7 @@ class PocketObservation:
 | `category` | `positive` 60 / `occluded` 20 / `negative_no_pallet` 10 / `negative_lookalike` 10 |
 | `pallet` | 양성·가림만: `x_m`(C의 x)∈[2.0, 4.0], `y_m`∈[−1.0, 1.0], `yaw_rad`∈[−0.52, 0.52], `opening_width_m`∈[0.20, 0.28]. 두 음성 범주는 `pallet: null`(목표 팔레트 부재를 명시) |
 | `lookalike` | `negative_lookalike`만: 개구부 없는 0.6×0.8×0.30 상자, 같은 위치 범위. 쉬운 음성 기준선이며 "잘못된 두 포켓 패턴"에 대한 강건성 주장은 아니다 |
-| `occluder` | `occluded`만: 한쪽 포켓(좌/우 명시) 전면에서 a 방향으로 0.3–0.6 m 앞, 카메라보다 최소 0.3 m 앞(x ≥ 1.05 m)에 놓인 상자. `occluded_fraction_nominal` = 상자 폭 / 개구 폭 ∈ [0.2, 0.6]**(물리 폭 기준이며 영상 면적이 아님)**, 높이는 개구 높이 이상 |
+| `occluder` | `occluded`만: 한쪽 포켓(좌/우 명시) 전면에서 a 방향으로 0.3–0.6 m 앞, 카메라보다 최소 0.3 m 앞(x ≥ 1.05 m)에 놓인 상자. `occluded_fraction_nominal` = 상자 폭 / 개구 폭 ∈ [0.2, 0.6]**(물리 폭 기준이며 영상 면적이 아님)**, 높이 0.80 m(카메라가 위에서 내려다보므로 개구 높이 0.20만으로는 시선을 막지 못하는 배치가 있어 충분히 높게 둔다; 2026-09-11 Codex 검토 반례 반영) |
 | `distractors` | 프리셋 배치 목록(6종)에서 0–2개 선택. 팔레트·가림 상자와 겹치지 않음 |
 | `lighting` | 방향 프리셋 3종 × diffuse 강도 {0.5, 0.9} |
 | `surfaces` | 바닥·배경 색 프리셋 4종 |
