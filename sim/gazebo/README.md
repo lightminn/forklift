@@ -50,3 +50,13 @@ python -m pytest ros2/src/forklift_ros/test tests/simulation/test_gazebo_sensor_
 ```
 
 실제 Gazebo 렌더링·ROS·bag 증거는 [날짜가 있는 검증 기록](../../docs/validation/2026-09-10-gazebo-sensor-baseline.md)을 확인한다.
+
+## 합성 평가 장면 세트 (카탈로그 v1)
+
+고정 reference experiment와 **별도 경로**로, 로드맵 M1-b의 독립 합성 장면 100개를 만든다. 설계와 승인된 조건은 [설계 문서](../../docs/design/2026-09-11-pocket-observation-and-scene-set.md) §5·§6, 관측 계약과 파일 형식은 [`docs/interfaces/`](../../docs/interfaces/pocket-observation.md)를 따른다.
+
+- `scenes/catalogue_v1.yaml`: 결정론적으로 생성해 **저장소에 고정한** 장면 100개(양성 60 · 가림 20 · 무팔레트 10 · 유사물 10, dev 70 / eval 30). 각 항목에 팔레트 자세·개구 폭, 가림 상자, distractor 프리셋 이름, 조명·표면 프리셋, 가시성 메타데이터, `PocketObservation` 형식의 정답(해석식으로 계산, `stamp_ns 0`·`clock_domain synthetic`)이 들어 있다. 카메라는 640×480·HFOV 1.204 rad·5 Hz의 **합성 설정**이며 D435i 보정값이 아니다. 재생성은 `python tools/generate_scene_catalogue.py --seed 20260911 --count 100 --output <새 파일>`로만 하며, 같은 seed는 바이트 동일한 파일을 만든다. v1 파일은 수정하지 않는다.
+- `build_scene_world.py --catalogue scenes/catalogue_v1.yaml --scene s001 --output <dir>`: 항목 하나를 `scene_world.sdf`(회전된 팔레트·유사물·가림 상자·distractor·조명·표면·RGB-D 카메라, LiDAR 없음), `bridge.yaml`(카메라 3토픽 + `/clock`), `transforms.yaml`(카메라 변환), `scene.yaml`(항목 + 카탈로그 버전·카메라)로 바꾼다. 정답은 카탈로그 값을 그대로 옮기며 SDF에서 재계산하지 않는다.
+- `sdf_parts.py`: 두 생성기가 공유하는 SDF 헬퍼. 기존 `build_sensor_world.py`의 출력은 `tests/simulation/test_gazebo_sensor_world.py`의 SHA-256 고정 시험으로 바이트 동일을 보호한다.
+
+호스트 시험(`tests/simulation/test_scene_catalogue.py`, `test_build_scene_world.py`)은 정답의 독립 기대값, 시야 투영, 구성 비율, 결정론, SDF 구조를 검사한다. 장면 캡처(Gazebo 실행·파일 저장)와 원격 batch 실행은 3단계 계획에서 추가한다.

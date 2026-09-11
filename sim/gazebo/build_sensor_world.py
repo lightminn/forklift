@@ -2,6 +2,7 @@
 
 import argparse
 import copy
+import importlib.util
 import math
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -10,105 +11,16 @@ import numpy as np
 import yaml
 
 
-def element(parent, tag, text=None, **attrs):
-    node = ET.SubElement(parent, tag, attrs)
-    if text is not None:
-        node.text = str(text)
-    return node
-
-
-def rotation_rpy(rpy):
-    r, p, y = rpy
-    cr, sr, cp, sp, cy, sy = (
-        math.cos(r),
-        math.sin(r),
-        math.cos(p),
-        math.sin(p),
-        math.cos(y),
-        math.sin(y),
+def _load_parts():
+    spec = importlib.util.spec_from_file_location(
+        "forklift_sdf_parts", Path(__file__).with_name("sdf_parts.py")
     )
-    return np.array(
-        [
-            [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
-            [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
-            [-sp, cp * sr, cp * cr],
-        ]
-    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def origin_matrix(node):
-    result = np.eye(4)
-    if node is not None:
-        result[:3, 3] = np.fromstring(node.get("xyz", "0 0 0"), sep=" ")
-        result[:3, :3] = rotation_rpy(np.fromstring(node.get("rpy", "0 0 0"), sep=" "))
-    return result
-
-
-def pose_text(matrix):
-    r = matrix[:3, :3]
-    pitch = math.atan2(-r[2, 0], math.hypot(r[0, 0], r[1, 0]))
-    roll = math.atan2(r[2, 1], r[2, 2])
-    yaw = math.atan2(r[1, 0], r[0, 0])
-    return " ".join(str(float(v)) for v in [*matrix[:3, 3], roll, pitch, yaw])
-
-
-def add_urdf_visuals(world, path):
-    robot = ET.parse(path).getroot()
-    poses = {"base_link": np.eye(4)}
-    pending = list(robot.findall("joint"))
-    while pending:
-        progressed = False
-        for joint in pending[:]:
-            parent = joint.find("parent").get("link")
-            if parent in poses:
-                poses[joint.find("child").get("link")] = poses[parent] @ origin_matrix(
-                    joint.find("origin")
-                )
-                pending.remove(joint)
-                progressed = True
-        if not progressed:
-            raise ValueError("URDF has disconnected joints")
-    model = element(world, "model", name="provisional_forklift_visuals")
-    element(model, "static", "true")
-    link = element(model, "link", name="frozen_visuals")
-    count = 0
-    for source in robot.findall("link"):
-        for visual in source.findall("visual"):
-            out = element(link, "visual", name=f"visual_{count}")
-            count += 1
-            element(
-                out,
-                "pose",
-                pose_text(
-                    poses[source.get("name")] @ origin_matrix(visual.find("origin"))
-                ),
-            )
-            geometry = element(out, "geometry")
-            shape = list(visual.find("geometry"))[0]
-            if shape.tag not in {"box", "cylinder", "sphere"}:
-                raise ValueError("Only local primitive URDF visuals are supported")
-            converted = element(geometry, shape.tag)
-            for key, value in shape.attrib.items():
-                element(converted, key, value)
-            color = visual.find("material/color")
-            if color is not None:
-                material = element(out, "material")
-                element(material, "ambient", color.get("rgba"))
-                element(material, "diffuse", color.get("rgba"))
-    return count
-
-
-def box(link, name, center, size, color):
-    for kind in ("visual", "collision"):
-        node = element(link, kind, name=f"{name}_{kind}")
-        element(node, "pose", " ".join(map(str, [*center, 0, 0, 0])))
-        element(
-            element(element(node, "geometry"), "box"), "size", " ".join(map(str, size))
-        )
-        if kind == "visual":
-            material = element(node, "material")
-            element(material, "ambient", color)
-            element(material, "diffuse", color)
+sdf_parts = _load_parts()
 
 
 def load_config(path: Path) -> dict:
@@ -167,41 +79,27 @@ def generate(config_path: Path, output: Path) -> dict:
     config = load_config(config_path)
     output.mkdir(parents=True, exist_ok=True)
     root = ET.Element("sdf", version="1.9")
-    world = element(root, "world", name="sensor_baseline")
-    physics = element(world, "physics", name="fixed_step", type="ignored")
-    element(physics, "max_step_size", 0.01)
-    element(physics, "real_time_factor", 1.0)
-    for filename, name in [
-        ("gz-sim-physics-system", "gz::sim::systems::Physics"),
-        ("gz-sim-user-commands-system", "gz::sim::systems::UserCommands"),
-        ("gz-sim-scene-broadcaster-system", "gz::sim::systems::SceneBroadcaster"),
-        ("gz-sim-sensors-system", "gz::sim::systems::Sensors"),
-    ]:
-        plugin = element(world, "plugin", filename=filename, name=name)
-        if "Sensors" in name:
-            element(plugin, "render_engine", "ogre2")
-    scene = element(world, "scene")
-    element(scene, "ambient", ".7 .7 .7 1")
-    element(scene, "background", ".15 .2 .25 1")
-    light = element(world, "light", name="sun", type="directional")
-    element(light, "direction", "-1 -.5 -1")
-    element(light, "diffuse", ".8 .8 .8 1")
-    count = add_urdf_visuals(world, (config_path.parent / config["urdf"]).resolve())
+    world = sdf_parts.add_world_skeleton(
+        root, "sensor_baseline", ".7 .7 .7 1", ".15 .2 .25 1", "-1 -.5 -1", ".8 .8 .8 1"
+    )
+    count = sdf_parts.add_urdf_visuals(
+        world, (config_path.parent / config["urdf"]).resolve()
+    )
     for name in ("floor", "reference_targets", "synthetic_pallet"):
-        model = element(world, "model", name=name)
-        element(model, "static", "true")
-        link = element(model, "link", name="geometry")
+        model = sdf_parts.element(world, "model", name=name)
+        sdf_parts.element(model, "static", "true")
+        link = sdf_parts.element(model, "link", name="geometry")
         if name == "floor":
-            box(link, "floor", [0, 0, -0.05], [20, 20, 0.1], ".35 .4 .4 1")
+            sdf_parts.box(link, "floor", [0, 0, -0.05], [20, 20, 0.1], ".35 .4 .4 1")
         elif name == "reference_targets":
-            box(
+            sdf_parts.box(
                 link,
                 "front_plane",
                 [config["reference"]["front_surface_x_m"] + 0.05, 0, 1.5],
                 [0.1, 6, 3],
                 ".15 .45 .8 1",
             )
-            box(
+            sdf_parts.box(
                 link,
                 "left_plane",
                 [0.75, config["reference"]["left_surface_y_m"] + 0.05, 1.5],
@@ -210,77 +108,46 @@ def generate(config_path: Path, output: Path) -> dict:
             )
         else:
             x = config["pallet"]["center_x_m"]
-            box(link, "bottom", [x, 0, 0.025], [0.6, 0.8, 0.05], ".6 .35 .12 1")
-            box(link, "top", [x, 0, 0.275], [0.6, 0.8, 0.05], ".7 .45 .18 1")
+            sdf_parts.box(
+                link, "bottom", [x, 0, 0.025], [0.6, 0.8, 0.05], ".6 .35 .12 1"
+            )
+            sdf_parts.box(link, "top", [x, 0, 0.275], [0.6, 0.8, 0.05], ".7 .45 .18 1")
             for index, y in enumerate([-0.35, 0, 0.35]):
-                box(
+                sdf_parts.box(
                     link, f"spacer_{index}", [x, y, 0.15], [0.6, 0.1, 0.2], ".5 .3 .1 1"
                 )
-    model = element(world, "model", name="synthetic_sensor_rig")
-    element(model, "static", "true")
-    for kind in ("camera", "lidar"):
-        settings = config[kind]
-        link = element(model, "link", name=f"{kind}_link")
-        element(link, "pose", " ".join(map(str, [*settings["translation_m"], 0, 0, 0])))
-        sensor = element(
-            link,
-            "sensor",
-            name=kind,
-            type="rgbd_camera" if kind == "camera" else "gpu_lidar",
-        )
-        element(sensor, "always_on", "true")
-        element(sensor, "update_rate", settings["rate_hz"])
-        element(sensor, "topic", "/camera" if kind == "camera" else "/scan")
-        element(sensor, "gz_frame_id", f"{kind}_link")
-        if kind == "camera":
-            camera = element(sensor, "camera")
-            element(camera, "optical_frame_id", "camera_optical_frame")
-            element(camera, "horizontal_fov", settings["horizontal_fov_rad"])
-            im = element(camera, "image")
-            element(im, "width", settings["width"])
-            element(im, "height", settings["height"])
-            element(im, "format", "R8G8B8")
-            clip = element(camera, "clip")
-            element(clip, "near", 0.05)
-            element(clip, "far", 10)
-        else:
-            lidar = element(sensor, "lidar")
-            horizontal = element(element(lidar, "scan"), "horizontal")
-            for key, value in [
-                ("samples", settings["samples"]),
-                ("resolution", 1),
-                ("min_angle", -math.pi),
-                ("max_angle", math.pi),
-            ]:
-                element(horizontal, key, value)
-            limits = element(lidar, "range")
-            for key, value in [("min", 0.05), ("max", 10), ("resolution", 0.01)]:
-                element(limits, key, value)
+    model = sdf_parts.element(world, "model", name="synthetic_sensor_rig")
+    sdf_parts.element(model, "static", "true")
+    camera = config["camera"]
+    sdf_parts.add_rgbd_camera(
+        model,
+        camera["translation_m"],
+        camera["width"],
+        camera["height"],
+        camera["horizontal_fov_rad"],
+        camera["rate_hz"],
+    )
+    lidar = config["lidar"]
+    sdf_parts.add_gpu_lidar(
+        model, lidar["translation_m"], lidar["samples"], lidar["rate_hz"]
+    )
     ET.indent(root)
     ET.ElementTree(root).write(
         output / "sensor_world.sdf", encoding="utf-8", xml_declaration=True
     )
-    mappings = []
-    for topic, ros_type, gz_type in [
-        ("/camera/image", "sensor_msgs/msg/Image", "gz.msgs.Image"),
-        ("/camera/depth_image", "sensor_msgs/msg/Image", "gz.msgs.Image"),
-        ("/camera/camera_info", "sensor_msgs/msg/CameraInfo", "gz.msgs.CameraInfo"),
-        ("/scan", "sensor_msgs/msg/LaserScan", "gz.msgs.LaserScan"),
-        ("/clock", "rosgraph_msgs/msg/Clock", "gz.msgs.Clock"),
-    ]:
-        mappings.append(
-            dict(
-                ros_topic_name=topic,
-                gz_topic_name=topic,
-                ros_type_name=ros_type,
-                gz_type_name=gz_type,
-                direction="GZ_TO_ROS",
-            )
-        )
-    (output / "bridge.yaml").write_text(yaml.safe_dump(mappings))
-    transforms = {
-        "source_provenance": "synthetic",
-        "transforms": [
+    sdf_parts.write_bridge(
+        output / "bridge.yaml",
+        [
+            ("/camera/image", "sensor_msgs/msg/Image", "gz.msgs.Image"),
+            ("/camera/depth_image", "sensor_msgs/msg/Image", "gz.msgs.Image"),
+            ("/camera/camera_info", "sensor_msgs/msg/CameraInfo", "gz.msgs.CameraInfo"),
+            ("/scan", "sensor_msgs/msg/LaserScan", "gz.msgs.LaserScan"),
+            ("/clock", "rosgraph_msgs/msg/Clock", "gz.msgs.Clock"),
+        ],
+    )
+    sdf_parts.write_transforms(
+        output / "transforms.yaml",
+        [
             {
                 "parent": "base_link",
                 "child": "camera_optical_frame",
@@ -294,8 +161,7 @@ def generate(config_path: Path, output: Path) -> dict:
                 "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0],
             },
         ],
-    }
-    (output / "transforms.yaml").write_text(yaml.safe_dump(transforms))
+    )
     (output / "scene_config.yaml").write_text(yaml.safe_dump(copy.deepcopy(config)))
     return {"visual_count": count, "source_provenance": "synthetic"}
 
