@@ -54,6 +54,6 @@ GPU 작업의 예상 시작은 9월 11일 20:18이었고 이번 검사의 완료
   --output "$FORKLIFT_NEW_OUTPUT" --backend osmesa
 ```
 
-`requirements-model-py311.txt`, wheelhouse, `job.sbatch`, `run_stage.py`, `physics_probe.py`는 이번 실행 기록에 보존했다. `tools/submit_model_check.py`, `requirements/model_py311.txt`, `deploy/slurm/`의 표준화된 제출·재현 도구는 아직 구현하지 않았다. GPU 할당 후 NVIDIA EGL과 전체 시험 81개를 다시 검증해야 한다.
+`requirements-model-py311.txt`, wheelhouse, `job.sbatch`, `run_stage.py`, `physics_probe.py`는 이번 실행 기록에 보존했다. 이 파일들은 Git 추적 대상이 아니며 로컬 `artifacts/20260910T125341Z_remote_model_smoke_01/`과 원격 팀 작업 공간 `artifacts/`의 같은 실행 ID에만 있다(2026-09-11 확인). `physics_probe.py`는 모듈 수준에서 인자를 파싱하고 특정 모델의 관절 이름에 의존하므로, `tools/`로 승격하려면 진입점 정리와 시험이 필요한 별도 작업이다. `tools/submit_model_check.py`, `requirements/model_py311.txt`, `deploy/slurm/`의 표준화된 제출·재현 도구는 아직 구현하지 않았다. GPU 할당 후 NVIDIA EGL과 전체 시험 81개를 다시 검증해야 한다.
 
 D435i/RPLIDAR 센서 출력, ROS–Gazebo 통합, 팔레트 인식·삽입·적재, A–D 자율주행 시나리오, GUI 원격 조작과 실물 검증은 이번 테스트런에 포함하지 않았다.
