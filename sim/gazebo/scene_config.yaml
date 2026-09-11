@@ -1,0 +1,19 @@
+# All mounting, target and pallet values below are synthetic test geometry.
+source_provenance: synthetic
+urdf: ../models/dls08_provisional/forklift.urdf
+camera:
+  translation_m: [0.75, 0.0, 0.5]
+  optical_quaternion_xyzw: [-0.5, 0.5, -0.5, 0.5]
+  width: 320
+  height: 240
+  rate_hz: 5
+  horizontal_fov_rad: 1.5707963267948966
+lidar:
+  translation_m: [0.75, 0.0, 0.5]
+  samples: 360
+  rate_hz: 5
+reference:
+  front_surface_x_m: 3.0
+  left_surface_y_m: 2.0
+pallet:
+  center_x_m: 2.0
