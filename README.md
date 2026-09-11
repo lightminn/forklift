@@ -30,6 +30,8 @@ python -m pytest tests --ignore=tests/simulation -q -p no:cacheprovider -W error
 python examples/sensor_geometry.py
 ```
 
+`.[dev]`는 장면 PNG 로더에 필요한 Pillow도 포함한다.
+
 설치 후 pytest 명령은 자동시험, 예제 명령은 합성 깊이값과 LiDAR 스캔을 실제 변환 함수에 넣는다. 예제는 JSON으로 미터 단위 좌표와 유효 여부를 출력한다. `null`과 `valid: false`는 측정 불가를 뜻하며, 장애물이 없다는 의미가 아니다. 예제의 내·외부 보정값과 센서 수치는 모두 계산 확인용 가상값이다.
 
 현재 구현:
@@ -37,6 +39,8 @@ python examples/sensor_geometry.py
 - [`rgbd.py`](src/forklift_core/sensors/rgbd.py): 왜곡이 보정된 깊이 영상의 픽셀 → 카메라 광학 좌표 변환. 깊이 단위·격자·좌표계를 명시적으로 받는다.
 - [`geometry.py`](src/forklift_core/geometry.py): 보정 회전·이동을 이용한 센서 → 로봇 기준 좌표 변환. 잘못된 좌표계와 회전행렬을 거부한다.
 - [`lidar.py`](src/forklift_core/sensors/lidar.py): 거리·각도 → LiDAR 기준 평면 좌표 변환. 누락된 빔의 위치를 유지한다.
+- [`perception/pocket_observation.py`](src/forklift_core/perception/pocket_observation.py): `base_link` 포켓 관측의 기하·상태·불확실성·시각·출처 검증과 JSON 변환. [관측 계약](docs/interfaces/pocket-observation.md).
+- [`perception/scene_dataset.py`](src/forklift_core/perception/scene_dataset.py): 합성 장면 PNG·JSON 로더. 인식기 입력과 정답을 가진 평가 표본을 분리한다. [데이터 세트 계약](docs/interfaces/scene-dataset.md).
 - [`tests/`](tests/): 단위, 축 방향, 누락값, 잘못된 보정값·메타데이터, 실행 예제를 검증한다.
 
 위 명령은 코어 합성 시험 **64개**와 원격 제출 도구의 로컬 시험을 함께 실행한다. 코어 64개 통과는 위 수학·입력 계약의 합성 시험 결과다. D435i/RPLIDAR의 실측 정확도, 포켓 검출 성능, 지게차 A–D 동작 성공을 뜻하지 않는다. [검증 기록](docs/validation/2026-09-10-sensor-core.md)에 확인 범위와 미검증 항목을 구분했다.

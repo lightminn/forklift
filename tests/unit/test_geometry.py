@@ -86,3 +86,40 @@ def test_mutating_constructor_inputs_cannot_change_calibration_or_points():
     translation[:] = 99
     xyz[:] = 99
     np.testing.assert_array_equal(transform.apply(points).xyz_m, [[1, 2, 3]])
+
+
+def test_quaternion_xyzw_to_rotation_matches_optical_to_base_convention():
+    # Existing synthetic mounting: optical +z -> base +x, +x -> -y, +y -> -z.
+    rotation = g.rotation_matrix_from_quaternion_xyzw([-0.5, 0.5, -0.5, 0.5])
+    np.testing.assert_allclose(
+        rotation, [[0, 0, 1], [-1, 0, 0], [0, -1, 0]], atol=1e-12
+    )
+    identity = g.rotation_matrix_from_quaternion_xyzw([0, 0, 0, 1])
+    np.testing.assert_allclose(identity, np.eye(3), atol=1e-12)
+
+
+@pytest.mark.parametrize(
+    "quaternion",
+    [[0, 0, 0, 0.5], [0, 0, 0, 2], [1, 0, 0], [0, 0, np.nan, 1], [0, 0, 0, np.inf]],
+)
+def test_non_unit_or_malformed_quaternions_are_rejected(quaternion):
+    with pytest.raises(ValueError):
+        g.rotation_matrix_from_quaternion_xyzw(quaternion)
+
+
+def test_near_unit_quaternion_is_normalised_before_rigid_transform_validation():
+    rotation = g.rotation_matrix_from_quaternion_xyzw([1.0000005, 0, 0, 0])
+    transform = g.RigidTransform("a", "b", rotation, [0, 0, 0])
+    np.testing.assert_allclose(transform.rotation, np.diag([1, -1, -1]), atol=1e-12)
+
+
+def test_quaternion_sign_does_not_change_rotation():
+    rotation = g.rotation_matrix_from_quaternion_xyzw([-0.5, 0.5, -0.5, 0.5])
+    negated = g.rotation_matrix_from_quaternion_xyzw([0.5, -0.5, 0.5, -0.5])
+    np.testing.assert_allclose(rotation, negated, atol=1e-12)
+
+
+@pytest.mark.parametrize("quaternion", [[0, 0, 0, 0], [1e308, 0, 0, 0], [[0, 0, 0, 1]]])
+def test_zero_huge_and_matrix_quaternions_are_rejected(quaternion):
+    with pytest.raises(ValueError):
+        g.rotation_matrix_from_quaternion_xyzw(quaternion)

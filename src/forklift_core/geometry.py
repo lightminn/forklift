@@ -1,11 +1,35 @@
 """Explicit coordinate frames and metric rigid transforms."""
 
 from dataclasses import dataclass
+from math import hypot
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 from forklift_core._validation import _frame_id, _real_array
+
+
+def rotation_matrix_from_quaternion_xyzw(q: ArrayLike) -> NDArray[np.float64]:
+    """Return a float64 (3, 3) rotation from a finite unit quaternion [x,y,z,w].
+
+    Norm error up to 1e-6 is accepted and removed before conversion. A quaternion
+    and its negation represent the same rotation; non-unit inputs raise ValueError.
+    """
+    quaternion = _real_array(q, "quaternion_xyzw")
+    if quaternion.shape != (4,) or not np.isfinite(quaternion).all():
+        raise ValueError("quaternion_xyzw must be a finite four-vector")
+    norm = hypot(*quaternion)
+    if abs(norm - 1.0) > 1e-6:
+        raise ValueError("quaternion_xyzw must have unit norm within 1e-6")
+    x, y, z, w = quaternion / norm
+    return np.array(
+        [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ],
+        dtype=np.float64,
+    )
 
 
 @dataclass(frozen=True)
