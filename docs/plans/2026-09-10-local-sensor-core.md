@@ -6,7 +6,7 @@
 
 **Tech Stack:** Python >= 3.10, NumPy >= 1.23, pytest >= 7.
 
-**Spec:** `docs/superpowers/specs/2026-09-10-local-sensor-core-design.md`
+**Spec:** `docs/design/2026-09-10-local-sensor-core-design.md`
 
 ## Global constraints
 

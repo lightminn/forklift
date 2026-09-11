@@ -38,7 +38,7 @@ python -m forklift_core.demo
 - [`lidar.py`](forklift_core/lidar.py): 거리·각도 → LiDAR 기준 평면 좌표 변환. 누락된 빔의 위치를 유지한다.
 - [`tests/`](tests/): 단위, 축 방향, 누락값, 잘못된 보정값·메타데이터, 실행 예제를 검증한다.
 
-위 명령은 코어 합성 시험 **64개**와 원격 제출 도구의 로컬 시험을 함께 실행한다. 코어 64개 통과는 위 수학·입력 계약의 합성 시험 결과다. D435i/RPLIDAR의 실측 정확도, 포켓 검출 성능, 지게차 A–D 동작 성공을 뜻하지 않는다. [검증 기록](docs/LOCAL_VALIDATION.md)에 확인 범위와 미검증 항목을 구분했다.
+위 명령은 코어 합성 시험 **64개**와 원격 제출 도구의 로컬 시험을 함께 실행한다. 코어 64개 통과는 위 수학·입력 계약의 합성 시험 결과다. D435i/RPLIDAR의 실측 정확도, 포켓 검출 성능, 지게차 A–D 동작 성공을 뜻하지 않는다. [검증 기록](docs/validation/2026-09-10-sensor-core.md)에 확인 범위와 미검증 항목을 구분했다.
 
 ## 중간 정리와 전체 로드맵
 
@@ -72,8 +72,8 @@ PNG 다각도 이미지와 포크 승강·조향 자세 MP4를 만든다. EGL �
 
 ## 과제와 발표자료
 
-- [`quest.txt`](quest.txt): 과제 원문 Google Slides 링크
-- [`forklift_store_link.txt`](forklift_store_link.txt): 개조 후보 전동 지게차 판매 링크
+- [`quest.txt`](docs/references/quest.txt): 과제 원문 Google Slides 링크
+- [`forklift_store_link.txt`](docs/references/forklift_store_link.txt): 개조 후보 전동 지게차 판매 링크
 - **[공개 발표자료](https://lightminn.github.io/forklift-presentations/)**: 주차별 웹 발표
 - **[발표 전용 GitHub 레포](https://github.com/lightminn/forklift-presentations)**: 로컬 원본은 `../forklift-presentations/`
 - [`presentation/`](presentation/README.md): 발표 전용 레포로 연결되는 로컬 바로가기

@@ -22,14 +22,14 @@ As of 2026-09-10 the directory holds the brief and candidate-platform links, `fo
 - **RPLIDAR is confirmed; A2 from the brief is planned** following the user's clarification. The A2 subvariant and its communication/scan settings remain unconfirmed.
 - The current purchase recommendation is the official **Jetson Orin Nano Super Developer Kit 8GB with a 256GB M.2 2280 NVMe SSD**. A 128GB SSD is acceptable when already owned or required by cost. Neither the computer nor storage has been purchased.
 - Final chassis identification remains deferred until delivery. The user subsequently requested a provisional model from product images/specifications. `dls08_provisional` uses a visually matching candidate catalogue for its envelope and explicitly labelled estimates for components, steering and dynamics; do not promote these into measured robot specifications.
-- The development baseline is **ROS 2 Jazzy in an Ubuntu 24.04 laptop container**. Gazebo Harmonic is used for the approved remote static sensor baseline; MuJoCo remains the fast local/product-model check. The proposed onboard baseline is JetPack 7.2.1 (Ubuntu 24.04) with Jazzy, subject to real D435i validation before freezing versions. See `docs/hardware.md`, `docs/decisions/0001-development-and-deployment-platforms.md`, and `docs/LOCAL_VALIDATION.md` for decision and evidence boundaries.
+- The development baseline is **ROS 2 Jazzy in an Ubuntu 24.04 laptop container**. Gazebo Harmonic is used for the approved remote static sensor baseline; MuJoCo remains the fast local/product-model check. The proposed onboard baseline is JetPack 7.2.1 (Ubuntu 24.04) with Jazzy, subject to real D435i validation before freezing versions. See `docs/hardware.md`, `docs/decisions/0001-development-and-deployment-platforms.md`, and `docs/validation/2026-09-10-sensor-core.md` for decision and evidence boundaries.
 
 ## The assignment brief (11 slides)
 
 Re-fetch it without a browser — the deck is link-shared and both exports work anonymously (`<scratchpad>` = the session scratchpad directory):
 
 ```bash
-ID=$(grep -oE 'presentation/d/[^/]+' quest.txt | cut -d/ -f3)
+ID=$(grep -oE 'presentation/d/[^/]+' docs/references/quest.txt | cut -d/ -f3)
 curl -sL "https://docs.google.com/presentation/d/$ID/export?format=txt" -o "<scratchpad>/quest.txt"
 curl -sL "https://docs.google.com/presentation/d/$ID/export/pdf"        -o "<scratchpad>/quest.pdf"
 pdftoppm -r 60 -png "<scratchpad>/quest.pdf" "<scratchpad>/pg"   # slides 4 and 8–11 are pictures only
