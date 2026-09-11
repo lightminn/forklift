@@ -24,7 +24,7 @@ Codex가 구현 중 자체 리뷰로 찾은 결함 2건(고정 메타데이터�
 | 문서의 코어 명령 `--ignore=tests/simulation` | 320 passed |
 | `ruff check .` / `ruff format --check .` | 통과 / 69 files |
 | `/tmp`에서 `from forklift_core.perception import pocket_observation, scene_dataset` | `<checkout>/src/forklift_core/perception/scene_dataset.py` |
-| Markdown 상대 링크 | 0개(설계 문서의 `[0.20, 0.28](s_o …)` 오탐은 공백을 넣어 해소) |
+| Markdown 상대 링크 | 0개(설계 문서에서 대괄호 뒤에 괄호가 바로 이어져 링크로 오인되던 표기는 공백을 넣어 해소) |
 | wheel `python -m build --wheel` METADATA | `Provides-Extra: dataset`, `Requires-Dist: Pillow>=10; extra == "dataset"`, `forklift_core/perception/*` 3개 파일 포함 |
 
 계획의 수치 기대값(yaw 0.5 좌표, yaw 차이 5쌍, 역투영 (2.2, −1.0, 1.5), quaternion 회전행렬)은 구현 전 독립 계산으로 확인했고, Codex 계획 검토도 같은 값을 재계산했다.
