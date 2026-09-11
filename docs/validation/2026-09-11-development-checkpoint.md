@@ -15,6 +15,7 @@
 | 개발 환경 | 노트북 Ubuntu 24.04 / ROS 2 Jazzy 컨테이너. 원격 Gazebo Harmonic 센서 검사, MuJoCo 빠른 모델 검사 |
 | 원격 운영 | 리보틱스 팀 공간, 실행별 snapshot·Slurm·결과 회수·해시 검증 구현. 기존 연구 작업과 분리 |
 | 저장소 구조 | 컨벤션 합의 완료. 2026-09-11 같은 날 후속으로 `src/forklift_core/`·`examples/`·`tests/unit|integration/` 구조 전환을 적용했다([전환 검증 기록](2026-09-11-src-layout-migration.md)) |
+| M1-b (같은 날 후속) | 포켓 관측 계약·장면 로더([기록](2026-09-11-pocket-observation-contract.md)), 카탈로그 v1 100장면·장면 월드 생성([기록](2026-09-11-scene-catalogue-and-world.md)), 원격 캡처로 100장면 데이터 세트 생성·병합·로더 검증([기록](2026-09-11-scene-dataset-v1.md)). 데이터는 Git 밖(`data/synthetic_scenes/catalogue_v1/`, 로컬·원격). 팔레트 인식기(M2)는 미착수 |
 | Git | 정리 시점 HEAD `fc3c1d91e93d09e15d9e3f01339073e3490ae26d`, 이후 환경·Gazebo·문서 변경은 미커밋이었다. 같은 날 사용자 승인으로 이 변경을 commit해 인계했다(해시는 `git log`) |
 
 장비와 배포 후보의 정본은 [hardware.md](../hardware.md), 역할 분리는 [ADR 0001](../decisions/0001-development-and-deployment-platforms.md)이다. Jetson의 OS·JetPack·SDK 조합은 실제 센서 동시 구동 후 동결한다.
