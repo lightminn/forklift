@@ -60,7 +60,7 @@ class PocketObservation:
 
 - **좌우 정의:** 삽입축 a와 왼쪽축 ℓ=(−sin ψ, cos ψ, 0)에 대해 `left`는 ℓ·(center_left − center_right) > 0인 쪽이다. 검증은 이 내적으로 하며 단순 y 비교를 쓰지 않는다(yaw가 커도 성립).
 - **방향 정본:** `insertion_yaw_rad` 하나만 저장한다. 포켓별 축 벡터·정면 법선은 파생값이며 저장하지 않는다.
-- **검증(`ValueError`):** 좌표·치수·yaw 유한, 폭·높이 > 0, σ ≥ 0 또는 None, `stamp_ns` 정수 ≥ 0, `clock_domain`/`status`/`source_provenance`는 허용 집합, `frame_id == "base_link"`, `status == "valid"`면 left/right/yaw 필수·`reason` None, 아니면 left/right/yaw/σ 모두 None·`reason` 필수, 두 중심 간 거리가 (0.05, 2.0) m 안(두 폭의 합보다 큼).
+- **검증(`ValueError`):** 좌표·치수·yaw 유한, 폭·높이 > 0, σ ≥ 0 또는 None, `stamp_ns` 정수 ≥ 0, `clock_domain`/`status`/`source_provenance`는 허용 집합, `frame_id == "base_link"`, `status == "valid"`면 left/right/yaw 필수·`reason` None, 아니면 left/right/yaw/σ 모두 None·`reason` 필수, 두 중심 간 거리가 (0.05, 2.0) m 안이고 개구부가 겹치지 않음: `ℓ·(left.center − right.center) > (left.width_m + right.width_m)/2` (2026-09-11 Codex 검토로 정정; 이전 "두 폭의 합보다 큼"은 중심 간격 0.10+w < 2w라 승인 범위 전체를 거부하는 모순이었다).
 - **frame 정책:** 공개 타입은 `base_link` 출력으로 제한한다. optical 기준 점·벡터는 `RigidTransform.apply`(점)와 회전만 적용하는 방향 변환으로 먼저 base로 옮긴 뒤 관측을 구성한다. 별도 `transform_observation` 헬퍼는 만들지 않는다(YAGNI).
 - **정답 σ:** 합성 정답은 `position_sigma_m = 0.0`, `yaw_sigma_rad = 0.0`이며 이는 모델 기하가 정확하다는 뜻이지 렌더·양자화 오차가 없다는 뜻이 아니다.
 - **평가 규약(M2가 사용):** 포켓별 위치 오차 ‖ĉ − c‖(좌/우 각각), yaw 오차는 (−π, π]로 wrap한 차이, 장면별로 두 포켓 중 최대를 그 장면의 위치 오차로 집계. 검출률 분모는 `positive`와 `occluded`를 분리하고 음성은 오검출률로 센다. 인식기가 `invalid`를 내면 실패 표본으로 별도 집계한다.
@@ -128,7 +128,7 @@ class PocketObservation:
 
 - `SceneInput`: `rgb uint8[H,W,3]`, `depth_m float64[H,W]`(NaN=unknown), `intrinsics: PinholeIntrinsics`, `base_from_optical: RigidTransform`, `stamp_ns`, `clock_domain`, `rectified=True`, `pixel_frame`, `rgb_registered_to_depth_grid=True`. **인식기는 이 타입만 받는다.**
 - `SceneSample = SceneInput + ground_truth: PocketObservation + catalogue entry`. **평가기만 소유**한다(정답 누출 방지).
-- CameraInfo → `PinholeIntrinsics` 변환은 좁은 계약: `D` 전부 0, `R = I`, `P[:, :3] = K`, skew 0, binning 0/1, roi 없음. 벗어나면 `ValueError`(조용히 K만 뽑지 않음). 값은 그대로 보존한다.
+- CameraInfo → `PinholeIntrinsics` 변환은 좁은 계약: `D` 전부 0, `R = I`, `P[:, :3] = K`이고 `P[:, 3] = 0`(단안, 기준선 없음), skew 0, binning 0/1, roi 없음. 벗어나면 `ValueError`(조용히 K만 뽑지 않음). 값은 그대로 보존한다.
 - depth는 `meters_per_unit`을 적용해 m로 만들며, 이후 `deproject_depth_pixels(depth_m, …, meters_per_unit=1.0)`로 호출한다(이중 스케일 방지를 문서·시험에 명시).
 - 시험 fixture는 파일이 아니라 시험 코드가 tmp 디렉터리에 생성한다(8×6 픽셀, 손으로 정한 값; snapshot 허용 목록이 `tests/`의 `.py`만 보내므로). 비중앙 픽셀의 역투영 기대값을 독립 계산으로 대조한다.
 - 의존성: Pillow를 `dataset` extra로 추가하고 `dev` extra에도 포함한다. 로더 안에서 지연 import.
