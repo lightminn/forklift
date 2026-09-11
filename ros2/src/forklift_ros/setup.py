@@ -17,6 +17,7 @@ setup(
     entry_points={
         "console_scripts": [
             "sensor_validator = forklift_ros.sensor_validator:main",
+            "scene_capture = forklift_ros.scene_capture:main",
             "synthetic_tf = forklift_ros.synthetic_tf:main",
         ]
     },
