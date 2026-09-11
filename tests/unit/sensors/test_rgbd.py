@@ -1,11 +1,10 @@
-from importlib import import_module
-
 import numpy as np
 import pytest
 
+from forklift_core.sensors import rgbd
+
 
 def setup_camera(**overrides):
-    rgbd = import_module("forklift_core.rgbd")
     values = dict(width=5, height=3, fx=2, fy=4, cx=2, cy=1, frame_id="depth_optical")
     values.update(overrides)
     return rgbd, rgbd.PinholeIntrinsics(**values)

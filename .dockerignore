@@ -1,7 +1,7 @@
 **
 !pyproject.toml
-!forklift_core/
-!forklift_core/**
+!src/
+!src/**
 !tests/
 !tests/**
 !deploy/
@@ -10,3 +10,4 @@
 **/__pycache__/
 **/*.pyc
 **/*.pyo
+**/*.egg-info/

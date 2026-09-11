@@ -2,7 +2,7 @@
 
 주변 장애물을 고려한 팔레트 핸들링 경로 생성 및 제어 — 임베디드구동 및 실습.
 
-개발 규칙은 **[CONTRIBUTING.md](CONTRIBUTING.md)**를 따른다. 전체 로봇 코드는 이 저장소에서 관리하고 발표는 별도 저장소에 둔다. 컨벤션의 목표 폴더 구조로 이동하는 작업은 아직 수행하지 않았으며, 아래 실행 명령은 현재 구조 기준이다.
+개발 규칙은 **[CONTRIBUTING.md](CONTRIBUTING.md)**를 따른다. 전체 로봇 코드는 이 저장소에서 관리하고 발표는 별도 저장소에 둔다. 2026-09-11에 `src/forklift_core/`, `examples/`, `tests/unit|integration/` 구조를 적용했다. 실행 전에 대상 Python 환경에 editable로 설치한다.
 
 ## 현재 개발 상태
 
@@ -22,20 +22,21 @@
 
 ## 로컬 실행
 
-Python 3.10 이상, NumPy 1.23 이상이 필요하다. 테스트에는 pytest 7 이상이 필요하다. 해당 의존성이 있는 Python 환경에서 프로젝트 루트를 작업 디렉터리로 실행한다. ROS·GPU·실물 센서는 필요하지 않다. ROS 작업은 [Ubuntu 24.04 / ROS 2 Jazzy 개발 컨테이너 안내](docs/development.md)를 따른다. 확인한 명령과 증거 경계는 [노트북 환경 검증 기록](docs/validation/2026-09-10-laptop-environment.md)에 있다.
+Python 3.10 이상, NumPy 1.23 이상이 필요하다. 테스트에는 pytest 7 이상이 필요하다. 해당 의존성이 있는 Python 환경에 아래처럼 설치한 뒤 프로젝트 루트에서 명령을 실행한다. 설치된 코어는 작업 디렉터리와 무관하게 import할 수 있다. ROS·GPU·실물 센서는 필요하지 않다. ROS 작업은 [Ubuntu 24.04 / ROS 2 Jazzy 개발 컨테이너 안내](docs/development.md)를 따른다. 확인한 명령과 증거 경계는 [노트북 환경 검증 기록](docs/validation/2026-09-10-laptop-environment.md)에 있다.
 
 ```bash
+python -m pip install -e '.[dev]'
 python -m pytest tests --ignore=tests/simulation -q -p no:cacheprovider -W error
-python -m forklift_core.demo
+python examples/sensor_geometry.py
 ```
 
-첫 명령은 자동시험, 둘째는 합성 깊이값과 LiDAR 스캔을 실제 변환 함수에 넣는 예제다. 예제는 JSON으로 미터 단위 좌표와 유효 여부를 출력한다. `null`과 `valid: false`는 측정 불가를 뜻하며, 장애물이 없다는 의미가 아니다. 예제의 내·외부 보정값과 센서 수치는 모두 계산 확인용 가상값이다.
+설치 후 pytest 명령은 자동시험, 예제 명령은 합성 깊이값과 LiDAR 스캔을 실제 변환 함수에 넣는다. 예제는 JSON으로 미터 단위 좌표와 유효 여부를 출력한다. `null`과 `valid: false`는 측정 불가를 뜻하며, 장애물이 없다는 의미가 아니다. 예제의 내·외부 보정값과 센서 수치는 모두 계산 확인용 가상값이다.
 
 현재 구현:
 
-- [`rgbd.py`](forklift_core/rgbd.py): 왜곡이 보정된 깊이 영상의 픽셀 → 카메라 광학 좌표 변환. 깊이 단위·격자·좌표계를 명시적으로 받는다.
-- [`geometry.py`](forklift_core/geometry.py): 보정 회전·이동을 이용한 센서 → 로봇 기준 좌표 변환. 잘못된 좌표계와 회전행렬을 거부한다.
-- [`lidar.py`](forklift_core/lidar.py): 거리·각도 → LiDAR 기준 평면 좌표 변환. 누락된 빔의 위치를 유지한다.
+- [`rgbd.py`](src/forklift_core/sensors/rgbd.py): 왜곡이 보정된 깊이 영상의 픽셀 → 카메라 광학 좌표 변환. 깊이 단위·격자·좌표계를 명시적으로 받는다.
+- [`geometry.py`](src/forklift_core/geometry.py): 보정 회전·이동을 이용한 센서 → 로봇 기준 좌표 변환. 잘못된 좌표계와 회전행렬을 거부한다.
+- [`lidar.py`](src/forklift_core/sensors/lidar.py): 거리·각도 → LiDAR 기준 평면 좌표 변환. 누락된 빔의 위치를 유지한다.
 - [`tests/`](tests/): 단위, 축 방향, 누락값, 잘못된 보정값·메타데이터, 실행 예제를 검증한다.
 
 위 명령은 코어 합성 시험 **64개**와 원격 제출 도구의 로컬 시험을 함께 실행한다. 코어 64개 통과는 위 수학·입력 계약의 합성 시험 결과다. D435i/RPLIDAR의 실측 정확도, 포켓 검출 성능, 지게차 A–D 동작 성공을 뜻하지 않는다. [검증 기록](docs/validation/2026-09-10-sensor-core.md)에 확인 범위와 미검증 항목을 구분했다.
@@ -44,7 +45,7 @@ python -m forklift_core.demo
 
 **[2026-09-11 개발 중간 정리](docs/validation/2026-09-11-development-checkpoint.md)**에서 구현·검증·미완료 범위와 원본 증거를 확인한다. **[전체 개발 로드맵](docs/plans/2026-09-11-development-roadmap.md)**은 15주 수업 중 시험·공휴일을 제외한 유효 개발 약 12주를 기준으로 한다.
 
-다음 순서는 현재 기준선 인계 → 컨벤션에 따른 별도 구조 전환 → 다양한 합성 장면·포켓 관측 계약 → RGB-D 기반 포켓 위치 추정·추적이다. 실물 조사·센서 보정·하위 제어를 병행하고, 기구·정지 검증 후 주행을 연결한다. A 직진 조건의 삽입·적재·이송·하역을 먼저 완성한 뒤 B 곡선 접근, C 후진 접근, D 후방 장애물 조건으로 확장한다.
+다음 순서는 구조 전환의 컨테이너·원격 검증과 기준선 인계 → 다양한 합성 장면·포켓 관측 계약 → RGB-D 기반 포켓 위치 추정·추적이다. 실물 조사·센서 보정·하위 제어를 병행하고, 기구·정지 검증 후 주행을 연결한다. A 직진 조건의 삽입·적재·이송·하역을 먼저 완성한 뒤 B 곡선 접근, C 후진 접근, D 후방 장애물 조건으로 확장한다.
 
 실물 제어는 현재 잠정 모델의 조향·치수 가정을 그대로 사용하지 않는다. GPU EGL·실물 센서·자율 제어는 별도 검증 항목이며, 마지막 두 개발 주차는 반복 검증과 시연 준비에 배정한다. 환경별 실행 역할과 준비 이력은 [노트북·원격 개발 계획](docs/plans/2026-09-10-local-and-remote-development-environment.md)을 따른다.
 

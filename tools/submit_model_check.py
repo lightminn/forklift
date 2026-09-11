@@ -30,7 +30,8 @@ _ROOT_FILES = {
     "deploy/gazebo/Dockerfile",
 }
 _SOURCE_RULES = {
-    "forklift_core": {".py"},
+    "src": {".py"},
+    "examples": {".py"},
     "tools": {".py", ".sh"},
     "tests": {".py"},
     "sim/models": {

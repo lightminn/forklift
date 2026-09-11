@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -15,8 +16,9 @@ from tools import remote_model_job, submit_model_check
 
 def _write_source(source: Path) -> None:
     files = {
-        "pyproject.toml": "[project]\nname='forklift-sensor-core'\n",
-        "forklift_core/__init__.py": "VALUE = 1\n",
+        "pyproject.toml": "[project]\nname='forklift-core'\n",
+        "src/forklift_core/__init__.py": "VALUE = 1\n",
+        "examples/sensor_geometry.py": "print('example')\n",
         "tools/remote_model_job.py": "# runner\n",
         "sim/gazebo/run_sensor_smoke.py": "# new untracked source\n",
         "ros2/src/forklift_ros/setup.cfg": "[develop]\nscript_dir=$base/lib/forklift_ros\n",
@@ -46,11 +48,13 @@ def test_snapshot_includes_named_untracked_source_but_excludes_links_and_secrets
     (source / "tools/access_token.py").write_text("TOKEN = 'no'\n")
     (source / "tools/server.pem").write_text("private\n")
     (source / ".env").write_text("PASSWORD=no\n")
-    (source / "tools/core_link.py").symlink_to(source / "forklift_core/__init__.py")
+    (source / "tools/core_link.py").symlink_to(source / "src/forklift_core/__init__.py")
 
     plan = submit_model_check.discover_snapshot(source)
     paths = {item.relative_path for item in plan.files}
 
+    assert "src/forklift_core/__init__.py" in paths
+    assert "examples/sensor_geometry.py" in paths
     assert "sim/gazebo/run_sensor_smoke.py" in paths
     assert "ros2/src/forklift_ros/setup.cfg" in paths
     assert "ros2/src/forklift_ros/resource/forklift_ros" in paths
@@ -178,16 +182,18 @@ def test_transport_timeout_kills_orphan_that_keeps_capture_pipe_open(
     )
     parent_code = (
         "import pathlib,subprocess,sys,time;"
-        "p=subprocess.Popen([sys.executable,'-c',sys.argv[1],sys.argv[2]]);"
+        "p=subprocess.Popen([sys.executable,'-I','-S','-c',sys.argv[1],sys.argv[2]]);"
         "f=pathlib.Path(sys.argv[2]);"
         "[(time.sleep(.01)) for _ in range(100) if not f.exists()]"
     )
     started = time.monotonic()
 
+    # The fixture uses only stdlib; ignore inherited startup hooks/cache paths
+    # so the timeout measures pipe/process cleanup rather than Python startup.
     with pytest.raises(submit_model_check.RemoteError, match="timed out"):
         submit_model_check._run(
             subprocess.run,
-            [sys.executable, "-c", parent_code, child_code, str(pid_file)],
+            [sys.executable, "-I", "-S", "-c", parent_code, child_code, str(pid_file)],
             timeout=0.1,
         )
 
@@ -260,6 +266,9 @@ def test_failed_child_command_is_recorded_and_propagated(tmp_path: Path) -> None
         return subprocess.CompletedProcess(argv, 9, "", "model failed")
 
     code = remote_model_job.execute_job(
+        core_environment_builder=lambda **kw: remote_model_job.CoreEnvironment(
+            python=sys.executable, wheel_path="", wheel_sha256="", import_path=""
+        ),
         mode="model-cpu",
         source=source,
         output=output,
@@ -281,10 +290,13 @@ def test_manifest_failure_still_writes_a_failed_job_result(tmp_path: Path) -> No
     source = tmp_path / "source"
     _write_source(source)
     _write_manifest(source)
-    (source / "forklift_core/__init__.py").write_text("CHANGED = True\n")
+    (source / "src/forklift_core/__init__.py").write_text("CHANGED = True\n")
     output = tmp_path / "output"
 
     code = remote_model_job.execute_job(
+        core_environment_builder=lambda **kw: remote_model_job.CoreEnvironment(
+            python=sys.executable, wheel_path="", wheel_sha256="", import_path=""
+        ),
         mode="model-cpu",
         source=source,
         output=output,
@@ -315,6 +327,9 @@ def test_model_cpu_rejects_a_zero_exit_pytest_run_with_skips(tmp_path: Path) -> 
         return subprocess.CompletedProcess(argv, 0, "1 passed, 1 skipped\n", "")
 
     code = remote_model_job.execute_job(
+        core_environment_builder=lambda **kw: remote_model_job.CoreEnvironment(
+            python=sys.executable, wheel_path="", wheel_sha256="", import_path=""
+        ),
         mode="model-cpu",
         source=source,
         output=output,
@@ -352,6 +367,9 @@ def test_model_cpu_rejects_missing_or_malformed_junit(
         return subprocess.CompletedProcess(argv, 0, "pytest exited zero\n", "")
 
     code = remote_model_job.execute_job(
+        core_environment_builder=lambda **kw: remote_model_job.CoreEnvironment(
+            python=sys.executable, wheel_path="", wheel_sha256="", import_path=""
+        ),
         mode="model-cpu",
         source=source,
         output=output,
@@ -444,6 +462,9 @@ def test_runner_removes_its_runtime_tree_before_collection(tmp_path: Path) -> No
         return subprocess.CompletedProcess(argv, 0, "1 passed\n", "")
 
     code = remote_model_job.execute_job(
+        core_environment_builder=lambda **kw: remote_model_job.CoreEnvironment(
+            python=sys.executable, wheel_path="", wheel_sha256="", import_path=""
+        ),
         mode="model-cpu",
         source=source,
         output=output,
@@ -455,6 +476,8 @@ def test_runner_removes_its_runtime_tree_before_collection(tmp_path: Path) -> No
     )
 
     assert code == 0
+    result = json.loads((output / "job_result.json").read_text())
+    assert "core_environment" in result
     assert not (output / ".runtime").exists()
     assert not any(path.is_symlink() for path in output.rglob("*"))
 
@@ -482,6 +505,9 @@ def test_cleanup_failure_is_recorded_without_suppressing_job_result(
     monkeypatch.setattr(remote_model_job.shutil, "rmtree", cleanup_failure)
 
     code = remote_model_job.execute_job(
+        core_environment_builder=lambda **kw: remote_model_job.CoreEnvironment(
+            python=sys.executable, wheel_path="", wheel_sha256="", import_path=""
+        ),
         mode="model-cpu",
         source=source,
         output=output,
@@ -621,3 +647,82 @@ def test_gazebo_resolves_and_records_immutable_image_before_launch(
         "requested": "forklift/gazebo:mutable",
         "id": "sha256:abc123",
     }
+
+
+def _tree_listing(root: Path) -> list[tuple[str, int, bytes | None]]:
+    return sorted(
+        (
+            str(p.relative_to(root)),
+            p.stat().st_mode,
+            p.read_bytes() if p.is_file() else None,
+        )
+        for p in root.rglob("*")
+    )
+
+
+def _write_buildable_source(source: Path) -> None:
+    _write_source(source)
+    (source / "pyproject.toml").write_text(
+        "[build-system]\nrequires=['setuptools>=61']\n"
+        "build-backend='setuptools.build_meta'\n"
+        "[project]\nname='forklift-core'\nversion='0.0.1'\n"
+        "[tool.setuptools.packages.find]\nwhere=['src']\n"
+    )
+
+
+def test_prepare_core_environment_installs_snapshot_wheel_into_run_venv(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    _write_buildable_source(source)
+    for path in [source, *source.rglob("*")]:  # mimic the submitter's chmod -R a-w
+        path.chmod(path.stat().st_mode & ~0o222)
+    try:
+        before = _tree_listing(source)
+        output = tmp_path / "output"
+        runtime = output / ".runtime"
+        runtime.mkdir(parents=True)
+        commands: list[dict] = []
+
+        env = remote_model_job.prepare_core_environment(
+            python=sys.executable,
+            source=source,
+            output=output,
+            runtime=runtime,
+            environment=dict(os.environ),
+            command_runner=subprocess.run,
+            commands=commands,
+        )
+
+        assert Path(env.python).is_file() and str(runtime) in env.python
+        assert Path(env.wheel_path).is_file() and env.wheel_path.startswith(str(output))
+        assert env.import_path.startswith(
+            str(runtime)
+        )  # not the snapshot, not site-packages of the base interpreter
+        assert not (source / "build").exists()  # read-only snapshot untouched
+        assert not list(
+            source.rglob("*.egg-info")
+        )  # no in-tree build artefacts in the snapshot
+        assert (
+            _tree_listing(source) == before
+        )  # contents and modes unchanged (see helper below)
+        probe = subprocess.run(
+            [env.python, "-c", "import forklift_core; print(forklift_core.VALUE)"],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=tmp_path,
+        )
+        assert probe.stdout.strip() == "1"
+        shutil.rmtree(
+            runtime
+        )  # the run-time copy must be removable despite the read-only source
+        assert [c["label"] for c in commands] == [
+            "core-wheel",
+            "core-venv",
+            "core-install",
+            "core-import-check",
+        ]
+    finally:
+        for path in [source, *source.rglob("*")]:
+            path.chmod(path.stat().st_mode | (0o700 if path.is_dir() else 0o600))

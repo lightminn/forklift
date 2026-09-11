@@ -3,11 +3,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+EXAMPLE = Path(__file__).resolve().parents[2] / "examples" / "sensor_geometry.py"
 
-def test_documented_demo_executes_real_converters_and_preserves_unknown_samples():
+
+def test_documented_example_executes_real_converters_and_preserves_unknown_samples(
+    tmp_path: Path,
+) -> None:
     result = subprocess.run(
-        [sys.executable, "-m", "forklift_core.demo"],
-        cwd=Path(__file__).resolve().parents[1],
+        [sys.executable, str(EXAMPLE)],
+        cwd=tmp_path,  # the example must not depend on the checkout as cwd
         capture_output=True,
         text=True,
         timeout=15,

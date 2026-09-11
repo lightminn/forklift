@@ -6,7 +6,8 @@ from numbers import Integral
 import numpy as np
 from numpy.typing import ArrayLike
 
-from .geometry import FramePoints, _finite_scalar, _frame_id, _real_array
+from forklift_core._validation import _finite_scalar, _frame_id, _real_array
+from forklift_core.geometry import FramePoints
 
 
 @dataclass(frozen=True)

@@ -14,6 +14,7 @@ import subprocess
 import sys
 import traceback
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -31,6 +32,16 @@ _SLURM_KEYS = (
     "SLURM_PARTITION",
 )
 CommandRunner = Callable[..., subprocess.CompletedProcess[str]]
+
+
+@dataclass(frozen=True)
+class CoreEnvironment:
+    python: str
+    wheel_path: str
+    wheel_sha256: str
+    import_path: str
+    venv_pip_version: str = ""
+    venv_setuptools_version: str = ""
 
 
 def _utc_now() -> str:
@@ -211,6 +222,111 @@ def _run_and_record(
     return result
 
 
+def prepare_core_environment(
+    *,
+    python: str,
+    source: Path,
+    output: Path,
+    runtime: Path,
+    environment: Mapping[str, str],
+    command_runner: CommandRunner,
+    commands: list[dict[str, Any]],
+) -> CoreEnvironment:
+    """Install a snapshot wheel without writing to the read-only source tree."""
+    source = Path(source).resolve()
+    output = Path(output).absolute()
+    runtime = Path(runtime).absolute()
+    build_src = runtime / "core-build"
+    build_src.mkdir(parents=True)
+    shutil.copyfile(source / "pyproject.toml", build_src / "pyproject.toml")
+    shutil.copytree(source / "src", build_src / "src", copy_function=shutil.copyfile)
+    # copytree also copies directory modes, including the snapshot's a-w bits.
+    for path in [build_src, *build_src.rglob("*")]:
+        os.chmod(path, path.stat().st_mode | (0o700 if path.is_dir() else 0o600))
+
+    def run(label: str, argv: list[str]) -> subprocess.CompletedProcess[str]:
+        result = _run_and_record(
+            label=label,
+            argv=argv,
+            cwd=runtime,
+            environment=environment,
+            command_runner=command_runner,
+            output=output,
+            commands=commands,
+        )
+        if result.returncode:
+            raise RuntimeError(f"{label} failed with exit code {result.returncode}")
+        return result
+
+    wheels = output / "wheels"
+    wheels.mkdir()
+    run(
+        "core-wheel",
+        [
+            python,
+            "-m",
+            "pip",
+            "wheel",
+            "--no-deps",
+            "--no-build-isolation",
+            "--no-index",
+            "--wheel-dir",
+            str(wheels),
+            str(build_src),
+        ],
+    )
+    built = sorted(wheels.glob("*.whl"))
+    if len(built) != 1:
+        raise RuntimeError(
+            f"core-wheel must produce exactly one wheel, got {len(built)}"
+        )
+    wheel = built[0]
+    wheel_sha256 = hashlib.sha256(wheel.read_bytes()).hexdigest()
+    venv = runtime / "venv"
+    run("core-venv", [python, "-m", "venv", "--system-site-packages", str(venv)])
+    venv_python = str(venv / "bin" / "python")
+    run(
+        "core-install",
+        [
+            venv_python,
+            "-m",
+            "pip",
+            "install",
+            "--no-deps",
+            "--no-index",
+            "--force-reinstall",
+            str(wheel),
+        ],
+    )
+    # Query metadata without importing pip/setuptools, whose distutils hooks
+    # conflict in some base environments. Keep one recorded import-check step.
+    checked = run(
+        "core-import-check",
+        [
+            venv_python,
+            "-c",
+            "import forklift_core, json; from importlib.metadata import version; "
+            "print(json.dumps({'import_path': forklift_core.__file__, "
+            "'venv_pip_version': version('pip'), "
+            "'venv_setuptools_version': version('setuptools')}))",
+        ],
+    )
+    metadata = json.loads(checked.stdout)
+    import_path = metadata["import_path"]
+    if not isinstance(import_path, str) or not Path(
+        import_path
+    ).resolve().is_relative_to(venv.resolve()):
+        raise RuntimeError(f"core import is outside the run venv: {import_path}")
+    return CoreEnvironment(
+        python=venv_python,
+        wheel_path=str(wheel),
+        wheel_sha256=wheel_sha256,
+        import_path=import_path,
+        venv_pip_version=metadata["venv_pip_version"],
+        venv_setuptools_version=metadata["venv_setuptools_version"],
+    )
+
+
 class _ContainerSignalCleanup:
     def __init__(self, name: str):
         self.name = name
@@ -252,6 +368,7 @@ def execute_job(
     duration: int,
     command_runner: CommandRunner = subprocess.run,
     environment: Mapping[str, str] | None = None,
+    core_environment_builder: Callable[..., CoreEnvironment] = prepare_core_environment,
 ) -> int:
     source = Path(source).resolve()
     output = Path(output).absolute()
@@ -298,6 +415,20 @@ def execute_job(
             "files": manifest["files"],
         }
         immutable_image = image
+        if mode in {"model-cpu", "model-render"}:
+            if not python:
+                raise ValueError(f"{mode} requires an explicit Python interpreter")
+            core_environment = core_environment_builder(
+                python=python,
+                source=source,
+                output=output,
+                runtime=runtime,
+                environment=env,
+                command_runner=command_runner,
+                commands=commands,
+            )
+            report["core_environment"] = asdict(core_environment)
+            python = core_environment.python
         if mode == "gazebo":
             inspected = _run_and_record(
                 label="docker-image-inspect",

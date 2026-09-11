@@ -1,8 +1,33 @@
 # 개발 환경
 
-이 문서는 현재 root의 `forklift_core/` 배치를 유지한 채 노트북에서 코어를
-개발하고, 격리된 ROS 2 Jazzy 컨테이너에서 ROS 명령을 확인하는 방법을 설명한다.
+이 문서는 `src/forklift_core/` 코어와 `examples/` 예제, `tests/unit/`·
+`tests/integration/` 시험 배치를 기준으로 노트북 개발과 격리된 ROS 2 Jazzy
+컨테이너에서의 실행 방법을 설명한다. 실행 전 대상 Python 환경에 editable로 설치한다.
 정적 Gazebo 장면과 ROS 센서 검증 패키지는 아래 별도 통합 이미지로 실행한다. 실제 장치 드라이버와 자율 주행은 아직 구현하지 않았다.
+
+2026-09-11 구조 전환에서 로컬 editable import, 코어 합성 시험 64개와 읽기 전용
+snapshot의 wheel·실행별 venv를 통한 model-cpu 시험 118개를 확인했다.
+아래 Dockerfile의 새 editable 구성을 반영한 이미지 재빌드·컨테이너 확인과 실제
+원격 Slurm 실행은 별도 검증이 남아 있다. 이전 날짜의 컨테이너·원격 결과를 이번
+구조 전환의 검증 결과로 간주하지 않는다.
+
+## 새 checkout에서 시작하기
+
+Python 3.10 이상 환경에서 다음 순서로 설치하고 로컬 코어를 확인한다.
+
+```bash
+git clone https://github.com/lightminn/forklift.git
+cd forklift
+python -m pip install -e '.[dev]'
+python -m pytest tests --ignore=tests/simulation -q -p no:cacheprovider -W error
+python examples/sensor_geometry.py
+python tools/submit_model_check.py submit \
+  --host <SSH_HOST> --remote-root '<REMOTE_PROJECT_ROOT>' \
+  --source . --mode model-cpu --python '<REMOTE_PYTHON>' --dry-run
+```
+
+마지막 명령은 SSH 없이 제출 계획만 출력한다. 실제 원격 사용 권한과 환경은 팀
+계정을 배정받은 뒤 별도로 확인한다.
 
 ## 호스트 Python 개발
 
@@ -12,13 +37,13 @@ Python 3.10 이상 환경에서 저장소 루트를 editable로 설치한다. �
 ```bash
 python -m pip install -e '.[dev]'
 python -m pytest tests --ignore=tests/simulation -q -p no:cacheprovider -W error
-python -m forklift_core.demo
+python examples/sensor_geometry.py
 python -m ruff check .
 python -m ruff format --check .
 ```
 
 첫 pytest 명령은 코어 시험과 원격 제출 도구의 로컬 시험을 함께 실행한다. Ruff는
-`pyproject.toml`의 제외 목록을 적용해 `forklift_core`, `tests`, `tools`뿐 아니라
+`pyproject.toml`의 제외 목록을 적용해 `src/`, `examples/`, `tests/`, `tools/`뿐 아니라
 `ros2/`, `sim/`의 Python도 검사한다. 경로를 일부만 지정하면 새 코드가 검사에서
 빠진다.
 
@@ -60,12 +85,16 @@ docker build \
 ```
 
 다른 검증된 base image가 필요할 때만 `--build-arg ROS_BASE_IMAGE=<image>`를
-추가한다. 이미지에는 빌드 시점의 코어 snapshot이 `/opt/forklift/venv`에
-일반 설치된다. launcher로 실행하면 현재 checkout을 `/workspace`에 mount하고 그
-위치에서 명령을 시작하므로, 개발 중인 `forklift_core/`가 snapshot보다 먼저
-import된다. 실행할 때 editable 재설치 없이 checkout 코드를 우선 사용한다.
-`/workspace` 밖에서 실행하면 이미지에 설치된 snapshot을 사용할 수 있으므로,
-그 경로에서 최신 코드를 사용하려면 이미지를 다시 빌드한다.
+추가한다. Dockerfile은 코어를 `/workspace/src`에 복사한 뒤 `/opt/forklift/venv`에
+`/workspace`를 editable로 설치한다. launcher는 현재 checkout을 `/workspace`에
+mount하므로 `/tmp` 등 다른 작업 디렉터리에서도 mount된 소스를 import한다.
+코드 편집은 이미지 재빌드 없이 반영된다. mount 없이 실행하면 이미지에 복사된
+빌드 시점의 소스를 사용한다.
+
+이 구성은 기본 editable 모드와 단순한 `src/` 구조에서 정적 `.pth`가
+`/workspace/src`를 가리키는 방식에 의존한다. strict editable 모드는 사용하지
+않는다. 설치 metadata(버전·의존성)는 이미지 빌드 시점에 고정되므로
+`pyproject.toml`을 바꾸면 이미지를 다시 빌드하고 import 경로를 확인한다.
 
 저장소 어느 작업 디렉터리에서든 launcher를 실행할 수 있다.
 
@@ -73,7 +102,7 @@ import된다. 실행할 때 editable 재설치 없이 checkout 코드를 우선 
 bash tools/ros2_dev.sh ros2 doctor --report
 bash tools/ros2_dev.sh python -m pytest tests --ignore=tests/simulation \
   -q -p no:cacheprovider -W error
-bash tools/ros2_dev.sh python -m forklift_core.demo
+bash tools/ros2_dev.sh python examples/sensor_geometry.py
 ```
 
 ROS publish/subscribe 확인은 두 터미널에서 실행한다.
@@ -121,6 +150,12 @@ manifest를 만든다. `.git`, `presentation`, `artifacts`, `data`, cache, 비�
 `model-cpu`와 `model-render`는 준비된 Python 3.11 interpreter를 사용한다. 현재 `model-render`는
 OSMesa CPU 렌더링만 수행하며 NVIDIA GPU 검사가 아니다. `gazebo`는 제출 시 지정한
 이미지 tag를 job 시작 때 immutable image ID로 해석해 기록하고 그 ID로 실행한다.
+
+model 모드는 검증한 snapshot의 소스를 쓰기 가능한 실행별 복사본에 옮겨 wheel을
+만들고, `--system-site-packages` venv에 설치한 Python으로 실행한다. snapshot은
+읽기 전용으로 유지한다. `job_result.json`의 `core_environment`에는 wheel 경로와
+SHA-256, 실제 import 경로, 실행 Python과 venv의 pip·setuptools 버전을 남긴다.
+wheel은 결과의 `wheels/`에 보존하고 실행별 `.runtime/`은 종료 시 삭제한다.
 
 ```bash
 python tools/submit_model_check.py submit \

@@ -44,14 +44,15 @@ RUN set -eux; \
     usermod --gid "${DEV_GID}" forklift-dev; \
     install -d -o "${DEV_UID}" -g "${DEV_GID}" /workspace
 
-# Install a non-editable core snapshot in an isolated venv. During development,
-# Python commands started in /workspace resolve the bind-mounted checkout first.
-COPY pyproject.toml /opt/forklift/source/pyproject.toml
-COPY forklift_core /opt/forklift/source/forklift_core
+# Editable install that points at /workspace/src. The launcher bind-mounts the
+# checkout at /workspace, so imports resolve to the live source from any cwd.
+# Without the mount, the copy baked below is used (stale snapshot semantics).
+COPY pyproject.toml /workspace/pyproject.toml
+COPY src /workspace/src
 RUN python3 -m venv --system-site-packages /opt/forklift/venv \
     && /opt/forklift/venv/bin/python -m pip install \
-        --no-build-isolation --no-deps /opt/forklift/source \
-    && rm -rf /opt/forklift/source
+        --no-build-isolation --no-deps -e /workspace \
+    && chown -R "${DEV_UID}:${DEV_GID}" /workspace /opt/forklift/venv
 
 ENV PATH="/opt/forklift/venv/bin:${PATH}" \
     PYTHONUNBUFFERED=1

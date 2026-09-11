@@ -1,11 +1,10 @@
-from importlib import import_module
-
 import numpy as np
 import pytest
 
+from forklift_core.sensors import lidar
+
 
 def scan(ranges, **overrides):
-    lidar = import_module("forklift_core.lidar")
     options = dict(
         angle_min_rad=0,
         angle_increment_rad=np.pi / 2,

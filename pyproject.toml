@@ -3,7 +3,7 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "forklift-sensor-core"
+name = "forklift-core"
 version = "0.1.0"
 description = "Hardware-independent sensor geometry for the forklift assignment"
 requires-python = ">=3.10"
@@ -15,6 +15,7 @@ model = ["PyYAML>=6", "mujoco>=3.3,<4", "Pillow>=10"]
 dev = ["pytest>=7", "ruff", "build", "pip-tools"]
 
 [tool.setuptools.packages.find]
+where = ["src"]
 include = ["forklift_core*"]
 
 [tool.pytest.ini_options]
@@ -25,6 +26,7 @@ markers = [
 ]
 
 [tool.ruff]
+src = [".", "src"]
 line-length = 88
 target-version = "py310"
 extend-exclude = [

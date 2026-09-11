@@ -1,12 +1,12 @@
-"""Run a synthetic sensor-math example: python -m forklift_core.demo."""
+"""Run a synthetic sensor-math example: python examples/sensor_geometry.py."""
 
 import json
 
 import numpy as np
 
-from .geometry import FramePoints, RigidTransform
-from .lidar import scan_to_points
-from .rgbd import PinholeIntrinsics, deproject_depth_pixels
+from forklift_core.geometry import FramePoints, RigidTransform
+from forklift_core.sensors.lidar import scan_to_points
+from forklift_core.sensors.rgbd import PinholeIntrinsics, deproject_depth_pixels
 
 
 def _json_points(points: FramePoints) -> dict:
