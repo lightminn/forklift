@@ -1,6 +1,6 @@
 # 노트북 개발 · 원격 워크스테이션 시뮬레이션 구성안
 
-작성일: 2026-09-10. **상태: 개발·배포 기준 선택 및 노트북 기본 구성 검증 완료. Docker 이미지 빌드, 컨테이너 코어 시험 64개와 ROS 2 프로세스 간 통신, 호스트 기준 시험 81개를 확인했다. 원격 동기화·시뮬레이션 작업 제출과 Jetson 실물 검증은 실행하지 않았다.**
+작성일: 2026-09-10. **상태(2026-09-11 갱신): 노트북 개발 환경과 ROS 2 Jazzy 컨테이너, 원격 팀 작업 공간·전용 모델 환경·Slurm 제출/회수 도구, 원격 Gazebo 정적 합성 센서 관측과 30초 이상 기록/재생 검증까지 완료. 최신 회귀 결과와 증거는 [개발 중간 정리](../validation/2026-09-11-development-checkpoint.md)를 따르며, 본문에 남긴 시험 개수는 각 실행 시점의 기록이다. GPU EGL·자율 주행·Jetson 실물 검증은 미완료다.**
 
 사용자가 시뮬레이션을 별도 고성능 워크스테이션에서 실행하는 방향을 제안했다. 이 문서가 [기존 단일 머신 환경 계획](2026-09-10-local-development-environment.md)의 실행 위치와 우선순위를 대체한다. 기존 계획의 의존성 보존·wheel 검사 원칙은 유지한다. 호스트명·SSH 별칭·개인 경로·설치 사양과 실행 당시 대기열은 개인 환경 기록에 둔다.
 
@@ -15,12 +15,52 @@
 | 노트북 | 코드·모델 설정 편집, Ruff, 코어 시험, ROS 2 개발, 간단한 모델 자세 확인, 결과 열람 | 호스트 편집 도구 + Ubuntu 24.04 / ROS 2 Jazzy 컨테이너 |
 | 원격 CPU 작업 | 모델 생성, 비렌더링 시험, 향후 물리 적분·파라미터 반복 시험 | 프로젝트 전용 Python, Slurm CPU 자원 |
 | 원격 GPU 작업 | EGL 렌더링, 향후 RGB-D 렌더·영상 인식 등 GPU가 필요한 작업 | 같은 모델 환경, Slurm GPU 할당 |
-| 원격 ROS 통합 | 센서 메시지·TF·rosbag·SLAM·계획/제어 연결과 장시간 실험 | Ubuntu 24.04 / ROS 2 Jazzy + Gazebo Harmonic 계획 |
+| 원격 ROS 통합 | 센서 메시지·TF·rosbag·SLAM·계획/제어 연결과 장시간 실험 | Ubuntu 24.04 / ROS 2 Jazzy + Gazebo Harmonic 센서 기준선 확인 |
 | 향후 Jetson | 실제 D435i/RPLIDAR·구동기와 연결되는 상위 제어 | Orin Nano Super / JetPack 7.2.1 후보, 실물 ARM64 검증 후 동결 |
 
 현재 모델 검사는 노트북에서도 짧게 실행할 수 있다. 원격 GPU 대기열이 길 때 이 경로를 유지한다. 현재 `mujoco.mj_step` 검사에는 GPU 요청이 필요하지 않으며 EGL 렌더링 작업과 구분한다. 여러 물리 실험을 GPU에서 자동 병렬화하는 MJX/Warp 구현은 현재 없다.
 
 코어 알고리즘과 센서 관측·명령 계약은 두 머신에서 같은 코드를 사용한다. 원격 시뮬레이터가 미래 실물 로봇의 실시간 제어 루프를 네트워크 너머에서 맡도록 설계하지 않는다.
+
+### 1.1. 학기·기업·팀 단위의 공용 작업 공간
+
+2026-09-10 사용자 최종 정정: 이 프로젝트는 **2026-2 임베설의 리보틱스 팀** 작업이며 워크스테이션은 다른 팀도 사용한다. 사용자가 제공한 [과목 공유 Drive](https://drive.google.com/drive/folders/1NUFh5lr1UhUKqeia3k8B6X_eoAgmFgGj)의 분류를 원격 작업 공간에도 맞춘다.
+
+같은 날 로그인된 브라우저에서 확인한 최상위 폴더와 우리 과제의 하위 구조는 다음과 같다. 다른 기업 폴더 내부는 이번 확인 범위에 포함하지 않았다.
+
+```text
+2026 2학기 임베설/
+├── 다우테크놀로지/
+├── 리보틱스/
+│   └── 발표자료/
+│       └── 2주차 발표자료.txt
+├── 장자동화 + 두루기계/
+├── 파워크래프트(매트릭스배터리)/
+├── 파워크래프트(태양광)/
+├── 팜테크/
+└── 플라즈마 큐어링/
+```
+
+**원격 배치 완료 — 2026-09-10:** 사용자 승인 후 기업·과제 폴더 7개를 Drive와 같은 이름으로 생성했다. 팀명 정정에 따라 중간 팀 계층을 제거하고 `리보틱스/forklift/`를 우리 실행 공간으로 사용한다. Drive의 `리보틱스/` 폴더가 이미 우리 팀 분류이므로 팀 이름을 중복해서 넣지 않는다. 실행용 하위 폴더는 서버에만 추가했다.
+
+```text
+<COURSE_ROOT>/                       # Drive의 "2026 2학기 임베설"에 대응
+└── 리보틱스/
+    ├── 발표자료/                    # Drive와 같은 분류; 공유용 결과·링크
+    └── forklift/                    # 팀 프로젝트 작업 공간
+        ├── repo/                   # 실행 준비용 Git checkout
+        ├── snapshots/              # 제출할 때 고정한 소스
+        ├── artifacts/              # 실행별 로그·지표·PNG·MP4
+        ├── data/                   # 원본 rosbag·데이터셋·가중치
+        └── cache/                  # 다시 생성할 수 있는 캐시
+```
+
+- 과목 공용 루트의 실제 절대 경로·서버 계정·그룹 이름은 환경 기록에서 지정한다. 원격 제출 도구는 프로젝트 루트를 인자로 받고 개인 홈이나 팀 경로를 코드에 고정하지 않는다.
+- 공용 과목 루트와 아직 배정하지 않은 다른 기업 폴더는 관리자 소유다. 우리 팀의 `리보틱스/`에는 팀 그룹·setgid·기본 ACL을 적용했다. 팀명에 맞춰 그룹 이름을 정정하되 GID와 기존 구성원은 유지한다. 새 SSH 연결의 그룹 적용과 보수적인 umask에서도 새 파일의 팀 그룹·공동 쓰기 권한이 상속되는 것을 검증한다. 다른 팀의 구성원·쓰기 권한은 아직 배정하지 않았다. 개인 개발 checkout·Python 환경과 버전을 고정한 팀별 컨테이너 구성은 후속 단계다.
+- 초기 `repo/`는 노트북의 Git bundle에서 복제하고 origin을 기존 GitHub 저장소로 지정했다. 초기 commit 위의 미커밋 팀·폴더 문서 변경도 전달했다. commit과 원격 파일 해시를 검증했으며, 원격 GitHub 인증·fetch는 이번 검사에 포함하지 않았다. 이는 실행별 스냅샷 생성·자동 동기화 도구의 구현 완료를 뜻하지 않는다.
+- 실행은 §5의 새 소스 스냅샷에서 수행한다. 결과는 기존 컨벤션대로 `artifacts/<UTC시각>_<시나리오>_<구분자>/`에 남기고 작성자·팀·job ID를 함께 기록한다. 팀별 결과 보관 기간과 용량 기준은 공용 운영 설정 단계에서 정한다.
+- 이 계층은 저장소 **밖의 과목 작업 공간**이다. 코드 저장소 내부의 폴더·네이밍은 `CONTRIBUTING.md`를 유지한다. 실행 도구는 한글·공백·괄호가 있는 상위 경로를 지원하도록 인자 전달과 셸 인용을 검증한다.
+- Drive와 동일한 분류를 쓰는 것이 자동 파일 동기화를 뜻하지는 않는다. 로봇 코드 정본은 Git, 발표 소스 정본은 별도 발표 저장소이며 Drive에는 선택한 공유 자료·링크를 둔다. 이번 원격 폴더 구성에서는 Drive의 폴더·파일, 기존 연구 환경, Slurm 설정과 실행 중인 작업을 변경하지 않았다.
 
 ## 2. 대안 비교
 
@@ -54,12 +94,14 @@ FORKLIFT_RENDER_TEST=1 python -m pytest tests/simulation -q -p no:cacheprovider 
 
 원격의 기존 연구 환경을 재사용하거나 수정하지 않고 프로젝트 전용 Python 3.11 환경을 만든다. 노트북과 같은 Python minor·MuJoCo 버전으로 첫 재현의 변수를 줄인다. ROS 런타임은 이 환경과 분리한다.
 
-**구현할 파일:** `requirements/model_py311.txt`, `requirements/README.md`, `deploy/slurm/model_cpu.sbatch`, `deploy/slurm/model_render.sbatch`. Python 의존성 정본은 `pyproject.toml`이고 lock은 그중 `test`·`model` extra에서 생성한다. 개인 전체 `pip freeze`를 프로젝트 lock으로 쓰지 않는다.
+**구현한 파일:** `requirements/model_py311.txt`, `requirements/README.md`, 공통 배치 `deploy/slurm/model_check.sbatch`와 `tools/remote_model_job.py`. CPU 시험·CPU 렌더·Gazebo는 명시적인 mode로 구분한다. GPU mode는 아직 추가하지 않았다. Python 의존성 정본은 `pyproject.toml`이고 lock은 그중 `test`·`model` extra에서 생성한다. 개인 전체 `pip freeze`를 프로젝트 lock으로 쓰지 않는다.
 
-- [ ] 전용 환경을 만들고 MuJoCo 3.10.0을 첫 재현 기준으로 삼아 `test`·`model` 의존성을 고정한다. Python 환경 생성 위치는 개인 환경 기록에서 지정한다.
-- [ ] 첫 소스 스냅샷을 보내고 설치 후 `pip check`, `forklift_core` import 위치, 모델 생성 결과를 확인한다.
-- [ ] CPU job은 4 CPU·8GiB·10분을 초기 요청값으로 삼고 `python -m pytest tests -m 'not rendering' -q -p no:cacheprovider -W error`를 실행한다. 렌더 시험 1개는 deselect되므로 기대값은 현재 **80개 통과·1개 deselect**다. 모델 의존성이 없어 발생한 skip을 정상 결과로 받지 않는다.
+- [x] Python 3.11.16 전용 환경에 MuJoCo 3.10.0과 `test`·`model` 의존성을 설치했다. Linux x86_64/Python 3.11 대상 wheel 16개를 SHA-256으로 고정해 실행 기록에 보관했다. 환경 생성 위치는 개인 환경 기록에 둔다.
+- [x] 첫 소스 스냅샷 21개 파일을 고정하고 설치 후 `pip check`, source 밖 wheel import, 모델 생성·로딩 시험을 통과했다.
+- [x] 첫 CPU job은 가용 자원에 맞춰 **2 CPU·4GiB·10분**을 요청했다. `python -m pytest tests -m 'not rendering' -q -p no:cacheprovider -W error` 결과 **80개 통과·1개 deselect, skip 0개**다. 같은 자원으로 20초 물리 적분과 별도 4초 OSMesa 영상도 생성했다. 자원 요청은 후속 실행의 실제 사용량에 맞춰 조정한다.
 - [ ] GPU job은 4 CPU·8GiB·GPU 1개·10분으로 전체 시험과 아래 미리보기를 실행한다. 자원 요청값은 실행 후 최대 사용량에 맞춰 조정한다.
+
+첫 테스트런의 GPU job은 2 CPU·4GiB·GPU 1개·5분으로 제출했으나, 예상 시작이 실행 기한을 넘어 미실행 상태로 취소했다. NVIDIA EGL·전체 81개 시험 조건은 미완료다. [원격 검증 기록](../validation/2026-09-10-remote-model-smoke.md)에 실제 종료 상태와 증거를 남겼다. 첫 테스트런의 일회성 도구는 당시 `artifacts/`에 보존했다. 이후 lock과 공통 배치를 저장소에 추가하고 아래 표준 제출 도구로 새 CPU 작업을 실행·회수했다.
 
 ```bash
 FORKLIFT_RENDER_TEST=1 python -m pytest tests -q -p no:cacheprovider -W error
@@ -74,15 +116,14 @@ python tools/preview_forklift_model.py \
 
 ## 5. 소스와 결과의 전달
 
-**구현할 도구:** `tools/submit_model_check.py` 하나에 CPU/GPU 모드, 명시적 SSH host·remote root·Python 경로·출력 ID를 받도록 한다. 개인 기본 SSH 별칭이나 경로를 코드에 고정하지 않는다. 내부적으로 `rsync`와 `sbatch`를 호출하며 `--dry-run`은 원격 변경 없이 전송 파일·제출 내용을 보여준다.
+**현재 도구:** `tools/submit_model_check.py`의 `submit`, `status`, `collect`를 사용한다. `model-cpu`, `model-render`(CPU OSMesa), `gazebo` mode와 SSH host·remote root·Python 또는 image를 명시한다. 개인 기본 SSH 별칭이나 경로는 코드에 고정하지 않는다. 실행 ID를 생략하면 UTC 기반 새 ID를 만든다. `--dry-run`은 원격 접속·파일 쓰기 없이 계획을 출력한다.
 
-- [ ] 원격 실행에는 동일 Git commit을 사용한다. 2026-09-10 사용자의 별도 업로드 요청으로 로컬 Git을 초기화했다. 미커밋 검증은 소스 SHA-256 스냅샷으로 식별하며, 이후 commit/push는 사용자가 승인한 범위에서 수행한다.
-- [ ] 실행마다 **새 원격 소스 디렉터리**에 `forklift_core/`, `tools/`, `tests/`, `sim/models/`, `pyproject.toml`, 필요한 lock·job 파일만 보낸다. `.git/`, `presentation/`, `data/`, 기존 `artifacts/`, 캐시·비밀 파일은 제외한다.
-- [ ] 편집 중인 공유 checkout 위에서 job을 실행하지 않는다. 전송 후 소스 해시를 확인하고 스냅샷을 고정한다. 기존 원격 트리에 `rsync --delete`를 적용하지 않는다.
-- [ ] 출력은 source와 별도 디렉터리에 둔다. 소스/설정 해시, 환경 버전, 명령, job ID, 종료 코드, 입력 종류, 사용 seed, 결과를 회수한다.
-- [ ] 큰 rosbag·데이터셋은 원격에 보관하고 필요한 로그·지표·대표 PNG/MP4만 회수한다. 나중에 데이터 재생을 추가하면 파일 해시로 참조한다.
+- 실행마다 허용 목록의 일반 파일만 새 원격 snapshot에 보내고, 파일별 SHA-256과 전체 manifest를 검증해 read-only로 고정한다. `.git`, 발표 링크, data, 기존 artifacts, cache, 비밀명 파일과 symlink는 제외한다.
+- 편집 중인 공유 checkout에서 job을 실행하지 않으며 기존 snapshot·output·job record를 덮어쓰지 않는다. Git revision과 미커밋 snapshot 해시는 별도로 기록한다. 이후 commit/push는 사용자가 승인한 범위에서만 수행한다.
+- 출력은 source와 별도 디렉터리에 둔다. 실제 명령·job ID·종료 코드·source hash·image ID와 관측 결과를 보존한다. Slurm 완료 상태와 결과 exit code를 함께 확인하고 회수 파일 SHA-256을 대조한다.
+- 현재 collector는 성공 실행의 전체 결과를 회수한다. 30초 통합 검사의 bag도 회수 대상이다. 큰 실험 데이터에 대한 선택 회수는 후속 요구가 생기면 별도로 추가한다.
 
-제출 도구를 구현할 때는 전송 제외·기존 출력 거부·Slurm 실패 전파를 자동시험으로 먼저 확인하고, 마지막에 짧은 실제 원격 job으로 검증한다. 외부 명령 mock 통과를 원격 실행 성공으로 기록하지 않는다.
+실제 Slurm 970의 CPU 100개 시험과 수정 후 새 Slurm 972의 102개 시험·결과 회수까지 확인했다. 제출 도구의 추가 오류 처리 시험은 [센서 관측 검증 기록](../validation/2026-09-10-gazebo-sensor-baseline.md)을 따른다. 실패 작업 로그는 원격에 보존하며 성공 회수와 구분한다. 명령은 [개발 안내](../development.md#원격-slurm-모델gazebo-검사)를 따른다.
 
 ## 6. 화면 보기와 SSH 단절
 
@@ -94,7 +135,7 @@ Remote SSH는 로그 확인·원격 디버깅에 사용한다. 실시간 3D 조�
 
 개발·원격 통합의 선택 조합은 **Ubuntu 24.04 + ROS 2 Jazzy + Gazebo Harmonic**이다. [ROS 지원 플랫폼](https://docs.ros.org/en/jazzy/Installation/Alternatives/Ubuntu-Install-Binary.html), [Gazebo 공식 ROS 설치 안내](https://gazebosim.org/docs/harmonic/ros_installation/)
 
-현재 MJCF 모델 검사를 먼저 원격에서 재현한다. 이후 RGB-D·LiDAR 출력, `ros_gz`·TF·`/clock`·rosbag·제어기 요구를 작은 장면에서 검사한 뒤 통합 엔진을 확정한다. URDF는 형상·운동학 교환용이므로 Gazebo의 접촉·관절 구동·센서·관성을 따로 검사한다. 모델 변환만으로 동역학이 같다고 간주하지 않는다.
+MJCF 원격 재현 후 정적 장면의 RGB-D·LiDAR, `ros_gz`·TF·`/clock`·rosbag 기록과 새 프로세스 재생을 확인했다. [센서 관측 검증 기록](../validation/2026-09-10-gazebo-sensor-baseline.md)에 확인 범위를 남긴다. 제어기 연결은 후속 작업이다. URDF는 형상·운동학 교환용이므로 Gazebo의 접촉·관절 구동·센서·관성을 따로 검사한다. 모델 변환만으로 동역학이 같다고 간주하지 않는다.
 
 원격에 기존 Isaac Sim/Isaac Lab 환경이 있으면 새로 설치하기 전에 별도 실행 검사 대상으로 둔다. 설치 디렉터리·버전 파일의 존재만으로 지게차 프로젝트에서 사용 가능하다고 결론내리지 않는다. 기존 연구 환경을 수정하지 않고 모델 가져오기·센서 출력·GPU 메모리 사용량을 비교한 뒤 재사용 여부를 정한다.
 
@@ -110,4 +151,4 @@ ROS 컨테이너를 추가할 때 NVIDIA의 기본 `compute,utility`만으로 EG
 4. 제출/결과 수집을 도구화하고 새 셸에서 다시 실행.
 5. 별도 구조 전환, ROS/센서 통합, A–D 시나리오 개발을 각각 검증하며 진행.
 
-이번 조사에서는 원격 실행 중인 작업, 드라이버, Slurm 설정, 기존 컨테이너·연구 환경을 변경하지 않았다. 원격 시뮬레이션 성능·렌더링·설치 성공은 아직 미검증이다.
+첫 원격 테스트런에서는 새 프로젝트 전용 환경과 작업만 추가했다. 기존 연구 작업·드라이버·Slurm 설정·컨테이너는 변경하지 않았다. MuJoCo CPU 물리 계산·소프트웨어 렌더링과 Gazebo 합성 센서 전달·재생을 확인했다. GPU·실물 센서·자율주행 성능은 아직 미검증이다.

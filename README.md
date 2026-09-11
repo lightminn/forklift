@@ -6,7 +6,9 @@
 
 ## 현재 개발 상태
 
-2026-09-10 기준, 센서 좌표 처리 코어와 합성 입력 예제, 상품 사진·제조사 카탈로그 기반의 **잠정 지게차 모델(URDF/MJCF)**을 구현했다. 모델의 관절 자세·무부하 안정화·렌더링을 검사했다. 노트북용 ROS 2 Jazzy 개발 이미지를 빌드해 컨테이너 코어 시험 64개와 ROS 2 talker/listener 프로세스 간 통신을 확인했다. 실제 센서 드라이버·팔레트 인식·SLAM·자율 주행 시뮬레이션은 아직 구현하지 않았다.
+2026-09-11 기준, 센서 좌표 처리 코어와 합성 입력 예제, 상품 사진·제조사 카탈로그 기반의 **잠정 지게차 모델(URDF/MJCF)**을 구현했다. 모델의 관절 자세·무부하 안정화·렌더링을 검사했다. 노트북용 ROS 2 Jazzy 개발 이미지를 빌드해 컨테이너 코어 시험 64개와 ROS 2 talker/listener 프로세스 간 통신을 확인했다. 고정 지게차·팔레트·장애물의 Gazebo 장면에서 합성 RGB-D·2D LiDAR를 ROS 2로 전달하고 30초 이상 기록·재생·좌표 검증까지 확인했다. 실제 센서 드라이버·팔레트 인식·SLAM·자율 주행은 아직 구현하지 않았다. 여기 적힌 시험 개수는 각 검증 시점의 기록이며, 최신 전체 회귀 결과와 원본 증거는 [개발 중간 정리](docs/validation/2026-09-11-development-checkpoint.md)를 따른다.
+
+원격 전용 MuJoCo 환경에서도 Slurm CPU 시험 **80개 통과**, **20초 물리 적분**, 포크 승강을 포함한 **4초 소프트웨어 렌더 영상**을 확인했다. GPU EGL 시험은 자원 대기로 실행하지 못했다. 상세 결과와 영상 위치는 [원격 모델 테스트런 기록](docs/validation/2026-09-10-remote-model-smoke.md)에 있다.
 
 | 구성 | 결정 상태 |
 |---|---|
@@ -14,7 +16,7 @@
 | LiDAR | **RPLIDAR 확정**, 과제 자료의 **A2 사용 예정**. A2 세부형은 미확인 |
 | 상위 제어기 | **NVIDIA 공식 Jetson Orin Nano Super 개발자 키트 8GB + M.2 2280 NVMe 256GB 권장**. 128GB는 보유 중이거나 비용 제약 시 허용. 미구매 |
 | 차체 | DLS08 외형 대응 후보로 잠정 모델 생성. SKU 동일성·조향·부품 치수는 실물 수령 후 확인 |
-| 소프트웨어 | 노트북 Ubuntu 24.04 컨테이너 + **ROS 2 Jazzy** 개발 기준. 원격 **Gazebo Harmonic** 통합 시뮬레이션 예정, MuJoCo 빠른 모델 검사 유지 |
+| 소프트웨어 | 노트북 Ubuntu 24.04 컨테이너 + **ROS 2 Jazzy** 개발 기준. 원격 **Gazebo Harmonic** 정적 장면·센서 기록/재생 검증, MuJoCo 빠른 모델 검사 유지 |
 
 과제 원문의 Gemini 335Le는 참고 장비이며 이번 프로젝트의 확정 카메라는 D435i다. 장비 상태와 구매 근거는 [하드웨어 정본](docs/hardware.md), 개발·배포 역할은 [기술 결정](docs/decisions/0001-development-and-deployment-platforms.md)에 기록했다.
 
@@ -36,17 +38,21 @@ python -m forklift_core.demo
 - [`lidar.py`](forklift_core/lidar.py): 거리·각도 → LiDAR 기준 평면 좌표 변환. 누락된 빔의 위치를 유지한다.
 - [`tests/`](tests/): 단위, 축 방향, 누락값, 잘못된 보정값·메타데이터, 실행 예제를 검증한다.
 
-**64개 테스트 통과**는 위 수학·입력 계약의 합성 시험 결과다. D435i/RPLIDAR의 실측 정확도, 포켓 검출 성능, 지게차 A–D 동작 성공을 뜻하지 않는다. [검증 기록](docs/LOCAL_VALIDATION.md)에 확인 범위와 미검증 항목을 구분했다.
+위 명령은 코어 합성 시험 **64개**와 원격 제출 도구의 로컬 시험을 함께 실행한다. 코어 64개 통과는 위 수학·입력 계약의 합성 시험 결과다. D435i/RPLIDAR의 실측 정확도, 포켓 검출 성능, 지게차 A–D 동작 성공을 뜻하지 않는다. [검증 기록](docs/LOCAL_VALIDATION.md)에 확인 범위와 미검증 항목을 구분했다.
 
-## 다음 작업
+## 중간 정리와 전체 로드맵
 
-상품 모델은 아래 명령으로 지금 검사할 수 있다. 환경 구성은 **[노트북 개발·원격 시뮬레이션 계획](docs/plans/2026-09-10-local-and-remote-development-environment.md)**을 따른다. 노트북은 컨테이너 기반 ROS 개발과 빠른 검사를 맡고, 원격 워크스테이션은 Gazebo 통합 시뮬레이션·학습·장시간 실행을 맡는다. 원격 작업과 실물 센서 연결은 아직 검증하지 않았다. [컨벤션의 구조 전환 목록](CONTRIBUTING.md#10-현재-파일의-적용-계획)에 따른 기존 코드 이동은 별도 작업이다.
+**[2026-09-11 개발 중간 정리](docs/validation/2026-09-11-development-checkpoint.md)**에서 구현·검증·미완료 범위와 원본 증거를 확인한다. **[전체 개발 로드맵](docs/plans/2026-09-11-development-roadmap.md)**은 15주 수업 중 시험·공휴일을 제외한 유효 개발 약 12주를 기준으로 한다.
 
-1. 기록 데이터 재생과 ROS 센서 어댑터의 공통 입력 계약: RGB·깊이 정합, 촬영 시각, CameraInfo, TF, LiDAR 스캔 메타데이터.
-2. 팔레트·포켓 인식 및 추적과 오래된 관측·추적 상실의 처리. 알려진 포켓 좌표를 넣는 시험과 영상에서 검출하는 시험을 구분한다.
-3. 실물 수령 후 잠정 모델의 부품 치수·조향 기구·구동 성능을 보정하고 Gazebo 모델을 검증한다. 이후 A 직진 / B 곡선 접근 / C 후진 후 접근 / D 후방 장애물의 네 조건을 시험한다.
+다음 순서는 현재 기준선 인계 → 컨벤션에 따른 별도 구조 전환 → 다양한 합성 장면·포켓 관측 계약 → RGB-D 기반 포켓 위치 추정·추적이다. 실물 조사·센서 보정·하위 제어를 병행하고, 기구·정지 검증 후 주행을 연결한다. A 직진 조건의 삽입·적재·이송·하역을 먼저 완성한 뒤 B 곡선 접근, C 후진 접근, D 후방 장애물 조건으로 확장한다.
 
-[설계](docs/superpowers/specs/2026-09-10-local-sensor-core-design.md)와 [구현 계획](docs/superpowers/plans/2026-09-10-local-sensor-core.md)에 이번 단계의 계약과 제외 범위를 적었다.
+실물 제어는 현재 잠정 모델의 조향·치수 가정을 그대로 사용하지 않는다. GPU EGL·실물 센서·자율 제어는 별도 검증 항목이며, 마지막 두 개발 주차는 반복 검증과 시연 준비에 배정한다. 환경별 실행 역할과 준비 이력은 [노트북·원격 개발 계획](docs/plans/2026-09-10-local-and-remote-development-environment.md)을 따른다.
+
+## 원격 센서 시뮬레이션
+
+[`sim/gazebo/README.md`](sim/gazebo/README.md)에서 합성 장면과 검증 계약을 확인한다. 원격 실행은 소스 snapshot을 고정하고 Slurm에서 별도 Docker 이미지로 실행한다. [개발 안내](docs/development.md)의 `tools/submit_model_check.py submit --mode gazebo --duration 30 --wait` 명령으로 제출·완료 확인·결과 회수를 연결한다. SSH host와 원격 project root, image는 명시적으로 지정한다.
+
+결과에는 실제 RGB·depth·scan PNG, ROS bag, live/저장 bag/새 프로세스 replay의 개수·기간·거리·TF 검사, Slurm 상태와 파일 SHA-256이 남는다. [실행·실패 수정·검증 기록](docs/validation/2026-09-10-gazebo-sensor-baseline.md)을 함께 확인한다. CPU llvmpipe로 확인한 결과이며 실물 D435i/RPLIDAR의 성능·잡음 모델이나 주행 성공을 뜻하지 않는다.
 
 ## 상품 기반 지게차 모델
 
