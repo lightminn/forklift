@@ -67,6 +67,72 @@ Ruff lint 설정은 Python 3.10, 88열과 `E4`, `E7`, `E9`, `F`, `I`, `UP`, `B`
 규칙을 적용한다. 규칙 전체를 숨기는 ignore는 없으며 lint와 format 검사를 모두
 통과해야 한다.
 
+## 포켓 인식 평가 실행
+
+합성 장면 데이터 세트 v1의 RGB·깊이 입력으로 포켓을 인식하고, 정답과 비교한
+지표·장면별 진단·overlay를 저장한다. `.[dev]`에 포함된 NumPy, Pillow, PyYAML이
+필요하고 MP4 생성에는 별도의 ffmpeg가 필요하다. 데이터 세트는 **Git 밖**에서
+관리하므로 clone만으로 `data/synthetic_scenes/catalogue_v1/`이 생기지 않는다.
+세트를 별도로 준비하고 원본은 읽기 전용으로 유지한다.
+[데이터 세트 계약](interfaces/scene-dataset.md)과
+[포켓 인식 설계](design/2026-09-13-pocket-detector-baseline.md)를 함께 따른다.
+
+파라미터와 문턱은 **dev에서만 튜닝하고 eval은 확정 후 한 번** 실행한다.
+아래 명령은 실행 예시이며, 데이터 세트 성능 검증이 끝났다는 뜻이 아니다.
+
+```bash
+# Development: repeated runs are allowed, with a fresh output directory each time.
+python tools/evaluate_pocket_detector.py \
+  --dataset data/synthetic_scenes/catalogue_v1 --split dev \
+  --prior config/pallet_prior_v1.yaml \
+  --output "artifacts/$(date -u +%Y%m%dT%H%M%SZ)_pocket_eval_dev_01"
+
+# Optional: inspect selected dev scenes using explicit parameter overrides.
+python tools/evaluate_pocket_detector.py \
+  --dataset data/synthetic_scenes/catalogue_v1 --split dev \
+  --prior config/pallet_prior_v1.yaml --params config/detector_params_v1.yaml \
+  --scenes s003,s006,s010 \
+  --output "artifacts/$(date -u +%Y%m%dT%H%M%SZ)_pocket_eval_dev_02"
+
+# Final evaluation: run once, only after the freeze gate described below.
+python tools/evaluate_pocket_detector.py \
+  --dataset data/synthetic_scenes/catalogue_v1 --split eval \
+  --prior config/pallet_prior_v1.yaml --params config/detector_params_v1.yaml \
+  --video \
+  --output "artifacts/$(date -u +%Y%m%dT%H%M%SZ)_pocket_eval_eval_01"
+```
+
+`config/detector_params_v1.yaml`은 dev에서 선택한 뒤 준비하는 파일이다. 아직 없으면
+첫 dev 명령처럼 `--params`를 생략하여 기본값을 사용한다. YAML에는 `DetectorParams`의
+필드만 허용하며, 생략한 필드는 기본값으로 채운다. eval 전에는 기본값을 선택했더라도
+유효 파라미터 전체를 YAML로 저장하고 같은 파일을 dev에서 다시 읽어 확인한다.
+구현·시험·prior·params를 커밋해 revision을 고정하고 깨끗한 트리에서 같은 `--params`로
+eval 30장면 전체를 한 번 실행한다. eval 결과를 보고 파라미터를 바꾸면 그 실행은 최종
+보고가 아니며 검증 기록에 그 사실을 남긴다. 상세 동결 절차는
+[실행 계획의 Task 5.5](plans/2026-09-13-pocket-detector-evaluation-run.md)를 따른다.
+
+`--split`은 `dev` 또는 `eval`만 받는다. `--scenes`는 선택한 split의 ID만 허용하며,
+빈 선택·없는 ID·다른 split의 ID를 거부한다. 장면은 ID 오름차순으로 평가한다.
+출력 디렉터리가 이미 있으면 덮어쓰지 않고 실패하므로 새 UTC 시각 또는 번호를 쓴다.
+
+| 산출물 | 내용 |
+|---|---|
+| `metrics.json` | `evaluation.summarize`의 범주별 개수·검출률·오차·처리 시간·목표 도달 여부와 `run` 재현 정보 |
+| `scenes.csv` | 장면당 18열: 상태·판정·좌우/최대 위치 오차·yaw 오차·사유·시간·평면 진단·좌우 광선 비율 |
+| `observations/sNNN.json` | 추정 `PocketObservation`과 진단, 내부 예외의 `diagnostics.exception_traceback` |
+| `overlay/sNNN.png` | 초록색 정답·자홍색 추정 사각형과 상태·오차 글자. `--no-overlay`이면 생략 |
+| `overlay.mp4` | `--video`일 때 PNG를 5 fps로 묶은 독립 장면 모음. 연속 관측이 아니라는 표시 포함 |
+| `run.json` | 입력 경로·manifest/prior SHA-256·split·실제 장면 ID/개수·기본값과 seed를 포함한 params·판정 허용오차·Git revision/dirty·UTC 시작/종료·Python/NumPy 버전. `metrics.json["run"]`과 동일 |
+
+광선 진단이 없으면 CSV는 빈칸, JSON의 비율은 `null`이다. 없는 값을 0 %로 만들지
+않는다. CLI가 직접 잡은 장면별 예외의 진단에는 traceback 키만 있을 수 있다.
+인식·평가 예외는 해당 장면을 `invalid`로 남기고 다음 장면을 계속 처리한다.
+설정·입력 오류, 출력 디렉터리 중복, 필수 산출물 저장 실패는 비정상 종료하며,
+실행 중 도구 오류는 stderr JSON의 같은 `diagnostics.exception_traceback` 경로에 남긴다.
+목표 미달과 MP4 생성 실패는 정상 종료한다. MP4 실패 사유는 `run.json["video_error"]`에
+남고, 저장된 PNG로 인식기를 재실행하지 않고 다시 영상을 만들 수 있다.
+`--video --no-overlay` 조합도 영상 입력이 없다는 `video_error`를 기록한다.
+
 ## ROS 2 Jazzy 개발 이미지
 
 컨테이너는 Ubuntu 24.04용 공식 `ros:jazzy-ros-base-noble` 이미지의 확인된

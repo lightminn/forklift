@@ -53,7 +53,7 @@
 
 **Interfaces — Produces:** `DetectionDiagnostics`에 `exception_traceback: str | None = None` 필드를 **마지막에** 추가한다(기존 위치 인자 호출을 깨지 않는다). 정상 경로에서는 `None`, `except` 분기에서는 `traceback.format_exc()`.
 
-- [ ] **Step 1: 시험 작성** — `tests/unit/perception/test_pocket_detector.py`에 추가.
+- [x] **Step 1: 시험 작성** — `tests/unit/perception/test_pocket_detector.py`에 추가.
 
 ```python
 def test_an_internal_failure_becomes_invalid_and_keeps_its_traceback(
@@ -79,8 +79,8 @@ def test_a_successful_detection_carries_no_traceback(pallet_scene):
     assert result.diagnostics.exception_traceback is None
 ```
 
-- [ ] **Step 2: 실패 확인** → `AttributeError: 'DetectionDiagnostics' object has no attribute 'exception_traceback'`.
-- [ ] **Step 3: 구현.** **Step 4: 통과 확인** + Ruff.
+- [x] **Step 2: 실패 확인** → `AttributeError: 'DetectionDiagnostics' object has no attribute 'exception_traceback'`.
+- [x] **Step 3: 구현.** **Step 4: 통과 확인** + Ruff.
 
 ### Task 2: overlay 그리기
 
@@ -130,7 +130,7 @@ def draw_scene_overlay(
 
 `draw_scene_overlay`는 정답을 `TRUTH_COLOUR`, 추정을 `ESTIMATE_COLOUR`, 글자를 `CAPTION_COLOUR`로 그린다. 선 굵기 2 px, `ImageDraw`의 `line`은 안티에일리어싱을 하지 않으므로 시험이 색을 정확히 비교할 수 있다. Pillow는 `draw_scene_overlay` 안에서만 import하고, 없으면 `ImportError`에 `pip install 'forklift-core[dataset]'`를 안내한다.
 
-- [ ] **Step 1: 시험 작성** — `tests/unit/perception/test_overlay.py`
+- [x] **Step 1: 시험 작성** — `tests/unit/perception/test_overlay.py`
 
 ```python
 import math
@@ -307,8 +307,8 @@ def test_the_overlay_still_renders_when_the_estimate_has_no_pockets():
     assert out.shape == rgb.shape
 ```
 
-- [ ] **Step 2: 실패 확인** — `python -m pytest tests/unit/perception/test_overlay.py -q -p no:cacheprovider -W error` → `ModuleNotFoundError: forklift_core.perception.overlay`.
-- [ ] **Step 3: 구현.** **Step 4: 통과 확인** + Ruff.
+- [x] **Step 2: 실패 확인** — `python -m pytest tests/unit/perception/test_overlay.py -q -p no:cacheprovider -W error` → `ModuleNotFoundError: forklift_core.perception.overlay`.
+- [x] **Step 3: 구현.** **Step 4: 통과 확인** + Ruff.
 
 ### Task 3: 평가 CLI
 
@@ -344,7 +344,7 @@ python tools/evaluate_pocket_detector.py
 
 **종료 코드:** 설정 오류(미지 파라미터 키·prior 불량), 입력 오류(데이터 세트·split·장면 ID), 출력 디렉터리 중복, 필수 산출물 저장 실패는 **nonzero**. 목표 미달과 MP4 실패(ffmpeg 없음·오류, `run.json["video_error"]`에 기록)는 **정상 종료**다(측정 결과이지 도구 실패가 아니다).
 
-- [ ] **Step 1: 시험 작성** — `tests/integration/test_evaluate_cli.py`
+- [x] **Step 1: 시험 작성** — `tests/integration/test_evaluate_cli.py`
 
 ```python
 import csv
@@ -578,13 +578,13 @@ def test_three_real_dev_scenes_run_end_to_end(tmp_path):
 
 `build_tiny_dataset(root, pallet_scene)`는 **세트 구조**(`root/manifest.json` + `root/scenes/sNNN/`)로 v1 장면 **4개**를 쓴다: `s001`·`s002` 양성(`category: positive`, GT `valid`), `s003` 무팔레트(`category: negative_no_pallet`, **GT는 `status: no_pallet`·기하와 yaw·σ 모두 `None`·비어 있지 않은 `reason`**) — 여기까지 `split: dev` — 그리고 `s004` 양성이지만 **`split: eval`**. 네 번째 장면은 split 격리 시험의 대조군이며, 이것이 없으면 dev 실행이 실제로 걸러내는지 증명할 수 없다. 1단계의 `write_v1_scene`은 GT를 항상 `valid`·category `positive`·split `dev`로 고정하므로 **그대로 재사용하면 잘못된 음성 fixture가 된다**. Task 3 Step 3에서 `write_v1_scene`을 `tests/fixtures/scene_writer.py`로 옮겨 category·split·GT를 인자로 받게 하고 1단계 통합시험도 그 helper를 쓰도록 바꾼다(`load_scene_sample`은 장면 디렉터리만 받고 manifest를 읽지 않는다. manifest는 CLI의 해시 기록용이다).
 
-- [ ] **Step 2: 실패 확인.** **Step 3: 구현.** **Step 4: 통과 확인** + Ruff. `python tools/evaluate_pocket_detector.py --help` 실행.
+- [x] **Step 2: 실패 확인.** **Step 3: 구현.** **Step 4: 통과 확인** + Ruff. `python tools/evaluate_pocket_detector.py --help` 실행.
 
 ### Task 4: 문서
 
-- [ ] `docs/development.md`에 "포켓 인식 평가 실행" 절: CLI 명령 예시(dev·eval), 산출물 목록, **dev에서만 튜닝하고 eval은 한 번**이라는 규칙, 데이터 세트가 Git 밖이라는 점.
-- [ ] `README.md` "현재 구현" 목록에 `perception/pocket_detector.py`·`evaluation.py`·`overlay.py` 한 줄 추가.
-- [ ] 링크 검사 0개, `diff <(tail -n +4 AGENTS.md) <(tail -n +4 CLAUDE.md)` 빈 출력(이 단계는 두 파일을 바꾸지 않는다).
+- [x] `docs/development.md`에 "포켓 인식 평가 실행" 절: CLI 명령 예시(dev·eval), 산출물 목록, **dev에서만 튜닝하고 eval은 한 번**이라는 규칙, 데이터 세트가 Git 밖이라는 점.
+- [x] `README.md` "현재 구현" 목록에 `perception/pocket_detector.py`·`evaluation.py`·`overlay.py` 한 줄 추가.
+- [x] 링크 검사 0개, `diff <(tail -n +4 AGENTS.md) <(tail -n +4 CLAUDE.md)` 빈 출력(이 단계는 두 파일을 바꾸지 않는다).
 
 ### Task 5: dev 실행과 튜닝 (Claude)
 

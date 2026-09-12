@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from forklift_core.perception import pocket_detector
 from forklift_core.perception.pallet_prior import load_pallet_prior
 from forklift_core.perception.pocket_detector import (
     _DEFAULT_PARAMS,
@@ -297,3 +298,26 @@ def test_width_validation_precedes_the_reporting_correction(
     assert obs.status == expected_status
     if expected_status == "invalid":
         assert obs.reason == "opening_width_mismatch"
+
+
+def test_an_internal_failure_becomes_invalid_and_keeps_its_traceback(
+    pallet_scene, monkeypatch
+):
+    scene, _ = pallet_scene()
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("synthetic internal failure")
+
+    monkeypatch.setattr(pocket_detector, "_vertical_plane_candidates", boom)
+    result = detect(scene)
+    assert result.observation.status == "invalid"
+    assert result.observation.reason == "exception:RuntimeError"
+    assert "synthetic internal failure" in result.diagnostics.exception_traceback
+    assert "Traceback" in result.diagnostics.exception_traceback
+
+
+def test_a_successful_detection_carries_no_traceback(pallet_scene):
+    scene, _ = pallet_scene()
+    result = detect(scene)
+    assert result.observation.status == "valid"
+    assert result.diagnostics.exception_traceback is None

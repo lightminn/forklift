@@ -8,6 +8,7 @@ module owns neither catalogue labels nor ground truth; RGB is not inspected.
 
 import math
 import time
+import traceback
 from dataclasses import dataclass, fields
 from numbers import Integral
 
@@ -121,6 +122,7 @@ class DetectionDiagnostics:
     centre_height_is_prior: bool
     elapsed_s: float
     seed: int
+    exception_traceback: str | None = None
 
 
 @dataclass(frozen=True)
@@ -442,6 +444,7 @@ def detect_pockets(
     start = time.perf_counter()
     planes, rejected, candidates = [], {}, []
     selected_plane, selected_pattern, selected_rays = None, None, {}
+    exception_traceback = None
     try:
         points, rays = _base_points(scene_input)
         camera = scene_input.base_from_optical.translation_m
@@ -503,6 +506,7 @@ def detect_pockets(
                     "no_front_plane" if not planes else "no_opening_pattern",
                 )
     except Exception as exc:
+        exception_traceback = traceback.format_exc()
         observation = _status_observation(
             scene_input, "invalid", f"exception:{type(exc).__name__}"
         )
@@ -519,5 +523,6 @@ def detect_pockets(
         True,
         time.perf_counter() - start,
         params.seed,
+        exception_traceback,
     )
     return DetectionResult(observation, diagnostics)

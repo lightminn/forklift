@@ -41,6 +41,7 @@ python examples/sensor_geometry.py
 - [`lidar.py`](src/forklift_core/sensors/lidar.py): 거리·각도 → LiDAR 기준 평면 좌표 변환. 누락된 빔의 위치를 유지한다.
 - [`perception/pocket_observation.py`](src/forklift_core/perception/pocket_observation.py): `base_link` 포켓 관측의 기하·상태·불확실성·시각·출처 검증과 JSON 변환. [관측 계약](docs/interfaces/pocket-observation.md).
 - [`perception/scene_dataset.py`](src/forklift_core/perception/scene_dataset.py): 합성 장면 PNG·JSON 로더. 인식기 입력과 정답을 가진 평가 표본을 분리한다. [데이터 세트 계약](docs/interfaces/scene-dataset.md).
+- [`perception/pocket_detector.py`](src/forklift_core/perception/pocket_detector.py)·[`evaluation.py`](src/forklift_core/perception/evaluation.py)·[`overlay.py`](src/forklift_core/perception/overlay.py): 명시적 팔레트 prior를 쓰는 깊이 기반 포켓 인식, 정답 비교·지표 집계, RGB 정답·추정 표시. [평가 CLI 실행 안내](docs/development.md#포켓-인식-평가-실행). 전체 데이터 세트 튜닝·최종 평가는 별도 단계다.
 - [`tests/`](tests/): 단위, 축 방향, 누락값, 잘못된 보정값·메타데이터, 실행 예제를 검증한다.
 
 위 명령은 코어 합성 시험 **64개**와 원격 제출 도구의 로컬 시험을 함께 실행한다. 코어 64개 통과는 위 수학·입력 계약의 합성 시험 결과다. D435i/RPLIDAR의 실측 정확도, 포켓 검출 성능, 지게차 A–D 동작 성공을 뜻하지 않는다. [검증 기록](docs/validation/2026-09-10-sensor-core.md)에 확인 범위와 미검증 항목을 구분했다.
