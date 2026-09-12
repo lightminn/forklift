@@ -1,0 +1,10 @@
+# Pallet shape of the synthetic catalogue v1. These are NOT measured real-pallet
+# dimensions; a real pallet needs its own file measured after delivery.
+source_provenance: synthetic
+catalogue_version: v1
+height_m: 0.30
+deck_m: 0.05
+opening_height_m: 0.20
+opening_width_range: [0.18, 0.30]
+centre_spacer_range: [0.08, 0.12]
+overall_width_m: 0.8

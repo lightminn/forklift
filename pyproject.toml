@@ -13,7 +13,7 @@ dependencies = ["numpy>=1.23"]
 test = ["pytest>=7"]
 model = ["PyYAML>=6", "mujoco>=3.3,<4", "Pillow>=10"]
 dataset = ["Pillow>=10"]
-dev = ["pytest>=7", "ruff", "build", "pip-tools", "Pillow>=10"]
+dev = ["pytest>=7", "ruff", "build", "pip-tools", "Pillow>=10", "PyYAML>=6"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
