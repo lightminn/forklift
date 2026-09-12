@@ -1,0 +1,19 @@
+# Detector parameters frozen for the M2 evaluation run.
+# Selected on the dev split only; see docs/validation/2026-09-13-pocket-detector-m2.md.
+# Every field is written out so the frozen set is readable without the code.
+band_margin_m: 0.01
+cell_m: 0.01
+floor_z_m: 0.02
+front_margin_m: 0.05
+max_plane_candidates: 3
+max_plane_residual_m: 0.015
+min_band_points: 100
+min_plane_points: 300
+occluded_front_frac: 0.5
+open_behind_frac: 0.3
+plane_inlier_m: 0.02
+range_max_m: 5.0
+range_min_m: 0.8
+ransac_iterations: 200
+seed: 20260913
+width_mismatch_frac: 0.2

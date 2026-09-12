@@ -43,7 +43,10 @@ class DetectorParams:
     front_margin_m: float = 0.05
     occluded_front_frac: float = 0.5
     open_behind_frac: float = 0.3
-    max_plane_residual_m: float = 0.01
+    # Dev-tuned 2026-09-13: correct front planes reach 12.5 mm p95 under
+    # oblique views, so 10 mm rejected them without suppressing any
+    # false pattern. See docs/validation/2026-09-13-pocket-detector-m2.md.
+    max_plane_residual_m: float = 0.015
     width_mismatch_frac: float = 0.20
     seed: int = 20260913
 
