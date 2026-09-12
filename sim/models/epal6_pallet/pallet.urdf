@@ -1,0 +1,170 @@
+<?xml version="1.0"?>
+<robot name="epal6_pallet">
+  <link name="pallet">
+    <visual name="deck_bottom">
+      <origin xyz="0 0 0.011" rpy="0 0 0" />
+      <geometry>
+        <box size="0.6 0.8 0.022" />
+      </geometry>
+      <material name="wood_deck_bottom">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="deck_bottom">
+      <origin xyz="0 0 0.011" rpy="0 0 0" />
+      <geometry>
+        <box size="0.6 0.8 0.022" />
+      </geometry>
+    </collision>
+    <visual name="block_x0_y0">
+      <origin xyz="-0.2635 -0.36 0.061" rpy="0 0 0" />
+      <geometry>
+        <box size="0.073 0.08 0.078" />
+      </geometry>
+      <material name="wood_block_x0_y0">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="block_x0_y0">
+      <origin xyz="-0.2635 -0.36 0.061" rpy="0 0 0" />
+      <geometry>
+        <box size="0.073 0.08 0.078" />
+      </geometry>
+    </collision>
+    <visual name="block_x0_y1">
+      <origin xyz="-0.2635 0 0.061" rpy="0 0 0" />
+      <geometry>
+        <box size="0.073 0.08 0.078" />
+      </geometry>
+      <material name="wood_block_x0_y1">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="block_x0_y1">
+      <origin xyz="-0.2635 0 0.061" rpy="0 0 0" />
+      <geometry>
+        <box size="0.073 0.08 0.078" />
+      </geometry>
+    </collision>
+    <visual name="block_x0_y2">
+      <origin xyz="-0.2635 0.36 0.061" rpy="0 0 0" />
+      <geometry>
+        <box size="0.073 0.08 0.078" />
+      </geometry>
+      <material name="wood_block_x0_y2">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="block_x0_y2">
+      <origin xyz="-0.2635 0.36 0.061" rpy="0 0 0" />
+      <geometry>
+        <box size="0.073 0.08 0.078" />
+      </geometry>
+    </collision>
+    <visual name="block_x1_y0">
+      <origin xyz="0 -0.36 0.061" rpy="0 0 0" />
+      <geometry>
+        <box size="0.073 0.08 0.078" />
+      </geometry>
+      <material name="wood_block_x1_y0">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="block_x1_y0">
+      <origin xyz="0 -0.36 0.061" rpy="0 0 0" />
+      <geometry>
+        <box size="0.073 0.08 0.078" />
+      </geometry>
+    </collision>
+    <visual name="block_x1_y1">
+      <origin xyz="0 0 0.061" rpy="0 0 0" />
+      <geometry>
+        <box size="0.073 0.08 0.078" />
+      </geometry>
+      <material name="wood_block_x1_y1">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="block_x1_y1">
+      <origin xyz="0 0 0.061" rpy="0 0 0" />
+      <geometry>
+        <box size="0.073 0.08 0.078" />
+      </geometry>
+    </collision>
+    <visual name="block_x1_y2">
+      <origin xyz="0 0.36 0.061" rpy="0 0 0" />
+      <geometry>
+        <box size="0.073 0.08 0.078" />
+      </geometry>
+      <material name="wood_block_x1_y2">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="block_x1_y2">
+      <origin xyz="0 0.36 0.061" rpy="0 0 0" />
+      <geometry>
+        <box size="0.073 0.08 0.078" />
+      </geometry>
+    </collision>
+    <visual name="block_x2_y0">
+      <origin xyz="0.2635 -0.36 0.061" rpy="0 0 0" />
+      <geometry>
+        <box size="0.073 0.08 0.078" />
+      </geometry>
+      <material name="wood_block_x2_y0">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="block_x2_y0">
+      <origin xyz="0.2635 -0.36 0.061" rpy="0 0 0" />
+      <geometry>
+        <box size="0.073 0.08 0.078" />
+      </geometry>
+    </collision>
+    <visual name="block_x2_y1">
+      <origin xyz="0.2635 0 0.061" rpy="0 0 0" />
+      <geometry>
+        <box size="0.073 0.08 0.078" />
+      </geometry>
+      <material name="wood_block_x2_y1">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="block_x2_y1">
+      <origin xyz="0.2635 0 0.061" rpy="0 0 0" />
+      <geometry>
+        <box size="0.073 0.08 0.078" />
+      </geometry>
+    </collision>
+    <visual name="block_x2_y2">
+      <origin xyz="0.2635 0.36 0.061" rpy="0 0 0" />
+      <geometry>
+        <box size="0.073 0.08 0.078" />
+      </geometry>
+      <material name="wood_block_x2_y2">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="block_x2_y2">
+      <origin xyz="0.2635 0.36 0.061" rpy="0 0 0" />
+      <geometry>
+        <box size="0.073 0.08 0.078" />
+      </geometry>
+    </collision>
+    <visual name="deck_top">
+      <origin xyz="0 0 0.122" rpy="0 0 0" />
+      <geometry>
+        <box size="0.6 0.8 0.044" />
+      </geometry>
+      <material name="wood_deck_top">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="deck_top">
+      <origin xyz="0 0 0.122" rpy="0 0 0" />
+      <geometry>
+        <box size="0.6 0.8 0.044" />
+      </geometry>
+    </collision>
+  </link>
+</robot>

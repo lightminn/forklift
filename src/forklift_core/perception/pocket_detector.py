@@ -248,8 +248,8 @@ def _vertical_plane_candidates(points, camera, params):
 
 def _column_grid(points, prior, params):
     """Input columns are (normal coordinate, lateral metres, base z metres)."""
-    mask = (points[:, 2] >= prior.deck_m + params.band_margin_m) & (
-        points[:, 2] <= prior.height_m - prior.deck_m - params.band_margin_m
+    mask = (points[:, 2] >= prior.deck_bottom_m + params.band_margin_m) & (
+        points[:, 2] <= prior.height_m - prior.deck_top_m - params.band_margin_m
     )
     lateral = points[mask, 1]
     if not len(lateral):
@@ -316,9 +316,9 @@ def _opening_candidates(plane, prior, params):
         left_edge = (origin + first[0]) * params.cell_m
         right_edge = (origin + second[1]) * params.cell_m
         over_openings = (lateral >= left_edge) & (lateral <= right_edge)
-        lower = np.count_nonzero(over_openings & (local[:, 2] <= prior.deck_m))
+        lower = np.count_nonzero(over_openings & (local[:, 2] <= prior.deck_bottom_m))
         upper = np.count_nonzero(
-            over_openings & (local[:, 2] >= prior.height_m - prior.deck_m)
+            over_openings & (local[:, 2] >= prior.height_m - prior.deck_top_m)
         )
         if min(*supports, lower, upper) < params.min_band_points:
             continue
@@ -347,8 +347,11 @@ def _classify_opening_rays(scene, rays, plane, gap, prior, params):
         (distances > 0)
         & (lateral >= gap[0])
         & (lateral <= gap[1])
-        & (intersections[:, 2] >= prior.deck_m + params.band_margin_m)
-        & (intersections[:, 2] <= prior.height_m - prior.deck_m - params.band_margin_m)
+        & (intersections[:, 2] >= prior.deck_bottom_m + params.band_margin_m)
+        & (
+            intersections[:, 2]
+            <= prior.height_m - prior.deck_top_m - params.band_margin_m
+        )
     )
     depth = scene.depth_m.ravel()[mask]
     unknown = ~np.isfinite(depth) | (depth <= 0)

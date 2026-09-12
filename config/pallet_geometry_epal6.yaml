@@ -1,0 +1,23 @@
+# EPAL 6 published dimensions, not measurements of a delivered pallet.
+# Envelope, block height and deck heights are dimensioned on the official EPAL 6
+# product sheet (PB 05/2016 DE). The block plan widths are NOT dimensioned there;
+# they were read off that sheet's scaled side views, so treat them as +/- 3 mm.
+# The same reading reproduces the sheet's own 217 mm and 333 mm deck-board
+# dimensions and its 100 mm and 144 mm heights exactly, which is what the
+# measurement is trusted on.
+# Axes: x insertion depth, y approach-face width, z up; origin at floor centre.
+# Simplification: continuous lower deck and combined stringer/top deck;
+# individual deck-board gaps are omitted. Envelope and openings are preserved.
+source_provenance: epal6_published_standard
+geometry_version: epal6
+overall_width_m: 0.800
+overall_depth_m: 0.600
+overall_height_m: 0.144
+block_width_m: 0.080
+block_depth_m: 0.073
+block_height_m: 0.078
+deck_bottom_m: 0.022
+# Explicit component thickness checks the independently specified total height.
+deck_top_m: 0.044
+block_count_across: 3
+block_count_deep: 3

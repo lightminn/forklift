@@ -1,0 +1,17 @@
+{
+  "geometry_file": "pallet_geometry_epal6.yaml",
+  "geometry_sha256": "8094042c22b8c2a9966de290fe4e40b86a4fdd96d3ed406d57b27fe1f8447bf5",
+  "geometry_version": "epal6",
+  "source_provenance": "epal6_published_standard",
+  "generated_at": "2026-09-12T17:32:34.586174+00:00",
+  "origin": "footprint_centre_at_floor_z0",
+  "simplifications": [
+    "deck_board_gaps_omitted",
+    "continuous_bottom_and_combined_top_decks"
+  ],
+  "physical_dynamics_validated": false,
+  "model_sha256": {
+    "pallet.xml": "79e32a5e02bbdfd95ca1fba4e7ca934e89985b83f6c0d3de062f111307432c0f",
+    "pallet.urdf": "49eab3a4e473f1e2eaf15590f2328d915b2f3c6727df7fd131ff8c8190ff95f2"
+  }
+}
