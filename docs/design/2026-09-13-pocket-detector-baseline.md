@@ -25,7 +25,7 @@
 | 유효 점 중 바닥 비율 | 중앙값 88.9 % | 바닥 제거가 첫 단계 |
 | 카메라→판 거리, \|yaw\| | 1.10–3.09 m, ≤ 0.52 rad | 근접(< 1.1 m)은 M3 범위 |
 
-**반례 1 — 덱 윗면 점(측정):** z 대역을 [덱 두께, 높이 − 덱 두께] = [0.05, 0.25]로 잡으면 **양성 60장면 전부에서 두 개구 구간을 얻지 못한다**. 카메라가 내려다보므로 아래 덱의 **윗면**이 보이고, 그 점들이 z ≈ 0.0501–0.0514로 대역 하단에 들어와 개구부 열을 채운다(s003 기준 왼쪽 개구부 안에 268점). 대역을 [0.06, 0.24]로 1 cm씩 좁히면 **60/60 성공**한다. 따라서 z 대역에 경계 여유(`band_margin_m`, 기본 0.01)를 둔다.
+**반례 1 — 덱 윗면 점(실데이터에서 측정):** z 대역을 [덱 두께, 높이 − 덱 두께] = [0.05, 0.25]로 잡으면 **양성 60장면 전부에서 두 개구 구간을 얻지 못한다**. 카메라가 내려다보므로 아래 덱의 **윗면**이 보이고, 그 점들이 z ≈ 0.0501–0.0514로 대역 하단에 들어와 개구부 열을 채운다(s003 기준 왼쪽 개구부 안에 268점). 대역을 [0.06, 0.24]로 1 cm씩 좁히면 **60/60 성공**한다. 따라서 z 대역에 경계 여유(`band_margin_m`, 기본 0.01)를 둔다. 이 반례를 만드는 덱 표본은 카메라에서 **픽셀 한 행 남짓**의 각도 창에만 들어온다(2026-09-13 광선 계산 확인). 그래서 합성 fixture로는 해상도·자세에 따라 재현될 수도 안 될 수도 있으므로, 단위시험은 점군을 직접 넣어 열 생성 함수를 검사한다.
 
 **반례 2 — 탐색 창(측정):** 빈 구간 탐색을 팔레트 폭보다 넓은 창에서 하면 팔레트 **바깥**의 빈 공간이 개구부 크기의 가짜 구간 두 개로 잡힌다(60장면 전부 재현). 탐색은 그 대역의 최좌·최우 **점유 열 사이**로 제한한다.
 
@@ -53,7 +53,7 @@
 
 ### 4.1 입력·출력·설정
 
-- 입력: `detect_pockets(scene_input: SceneInput, prior: PalletPrior, params: DetectorParams) -> PocketObservation`. 정답·카탈로그·장면 범주는 받지 않는다(평가기만 `SceneSample`을 소유).
+- 입력: `detect_pockets(scene_input: SceneInput, prior: PalletPrior, params: DetectorParams) -> DetectionResult`(= `observation: PocketObservation` + `diagnostics`; §4.2-9의 진단값이 결과 JSON에 필요하다). 정답·카탈로그·장면 범주는 받지 않는다(평가기만 `SceneSample`을 소유).
 - 출력: `frame_id "base_link"`, `stamp_ns`·`clock_domain`·`source_provenance`는 입력 그대로.
 - **`PalletPrior`(형상, 명시 주입):** `height_m 0.30`, `deck_m 0.05`, `opening_height_m 0.20`, `opening_width_range [0.18, 0.30]`, `centre_spacer_range [0.08, 0.12]`, `overall_width_m 0.8`. `config/pallet_prior_v1.yaml`에서만 읽고 **dataclass 기본값을 두지 않는다**(실물 입력에 합성 치수가 조용히 적용되는 것을 막는다). 파일에 `source_provenance: synthetic`, `catalogue_version: v1`을 적고 실행 결과에 파일 해시를 남긴다. `height_m == 2*deck_m + opening_height_m` 관계와 미지 키를 검증한다. **출력 포켓 중심의 z = deck_m + opening_height_m/2 는 측정값이 아니라 prior 적용 결과**임을 문서와 결과 JSON에 표시한다.
 - **`DetectorParams`(알고리즘, 형상과 분리):** `cell_m 0.01`, `plane_inlier_m 0.02`, `band_margin_m 0.01`, `ransac_iterations`, `min_plane_points`, `max_plane_candidates 3`, `range_m [0.8, 5.0]`(**카메라 원점에서 점까지의 수평 거리**), `floor_z_m 0.02`, `occluded_front_frac 0.5`, `open_behind_frac 0.3`, `front_margin_m 0.05`, `seed`. dev 70장면으로만 조정하고 값을 검증 기록에 남긴다.
