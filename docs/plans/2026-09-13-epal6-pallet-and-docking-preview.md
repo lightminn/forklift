@@ -324,41 +324,77 @@ def test_the_manifest_records_the_geometry_hash(tmp_path): ...
 
 - [ ] **Step 2: 실패 확인.** **Step 3: 구현.** **Step 4: 통과 확인** + Ruff.
 
-### Task 4: 도킹 장면과 영상
+### Task 4: 도킹 장면과 영상 (v2 — 2026-09-13 수정)
 
-**Files:** Create `sim/models/docking_scene.xml`, `tools/preview_docking.py`
+**Files:** Create `sim/models/docking_scene.xml`, `tools/preview_docking.py`, `tests/unit/test_preview_docking.py`
 
-지게차 `forklift.xml`과 생성된 `pallet.xml`을 한 장면에 놓는다. 팔레트는 지게차 앞 약 2.0 m에 두고 `mocap` 또는 고정 body로 배치한다. `tools/preview_docking.py`는 **관절과 base 자세를 프레임마다 직접 지정하는 운동학 애니메이션**을 만든다. 물리 적분과 접촉을 쓰지 않는다.
+**이전 판이 틀렸던 점.** 삽입 깊이 420 mm(포크 전장)를 목표로 잡았는데 불가능하다. 지게차에는 포크보다 앞선 구조물이 있다. `carriage_cross_0`가 x 0.516–0.544, z 0.069–0.101에 있고 포크 끝은 x 0.950이다. 따라서 **포크 끝이 팔레트 전면을 지나갈 수 있는 최대 깊이는 0.950 − 0.544 = 0.406 m**다. 그 지점에서 캐리지 가로대가 팔레트 중앙 블록(z 0.022–0.100)에 닿는다. 뒤꿈치도 비슷하게 앞선다. 2026-09-13 MuJoCo 모델에서 직접 재서 확인했고 Codex도 독립 재현했다.
 
-구간은 네 개다. ① 접근: 2.0 m에서 개구 앞 0.10 m까지 직진 ② 정렬: 남은 측면 오차와 yaw를 0으로 ③ 삽입: 포크가 깊이의 70 %까지 전진 ④ 들어올림: 0.04 m 상승.
+**수정한 목표:** 삽입 깊이 **0.360 m**(깊이의 60 %). 캐리지 여유 46 mm가 남는다.
 
-프레임마다 **양쪽 포크와 팔레트 사이 최소 간극**을 계산해 `clearance.json`에 남기고, 한 프레임이라도 간극이 음수면 **CLI가 nonzero로 끝난다**. 영상 자막에 구간 이름과 그 프레임의 최소 간극을 넣고, 마지막 줄에 `Kinematic preview; contact and payload not simulated`를 고정으로 넣는다.
+**장면.** 지게차 `forklift.xml`과 생성된 `sim/models/epal6_pallet/pallet.xml`을 한 장면에 놓는다. 팔레트는 지게차 정면에 **yaw 0으로 정렬**해 둔다. 이번 v1 영상은 과제의 Case A(정면 정렬 접근)만 다룬다. 곡선 접근(Case B)과 후진(Case C·D)은 주행 제어가 생긴 뒤의 별도 작업이다.
 
-산출물은 `overview.png`, `docking.mp4`(24 fps), `clearance.json`, `run.json`(형상·모델 해시, MuJoCo 버전, 백엔드, 렌더러 이름)이다.
+**간극 계산은 포크만 보지 않는다.** 이전 판의 결함이 바로 그것이었다. 매 프레임 **지게차의 모든 box geom과 팔레트의 모든 box geom 쌍**에 대해 축 정렬 박스 간 분리 거리를 계산하고 그 최솟값을 남긴다. 한 프레임이라도 음수면 CLI가 nonzero로 끝난다.
 
-- [ ] **Step 1: 시험 작성** — `tests/unit/test_preview_docking.py`. 렌더링 없이 궤적 계산만 검사한다(렌더링 시험은 `rendering` 마커).
+**구간.** ① `approach` 팔레트 전면 2.0 m 앞에서 0.10 m 앞까지 직진 ② `insert` 포크 끝이 전면을 0.360 m 지날 때까지 전진 ③ `lift` 0.040 m 상승 ④ `settle` 정지 유지. 승강은 `fork_lift` 관절, 전진은 base 자세로 준다. 물리 적분과 접촉은 쓰지 않는다.
+
+**Interfaces — Produces:**
 
 ```python
-def test_the_trajectory_keeps_the_forks_clear_of_the_pallet_at_every_frame():
-    frames = preview_docking.plan_trajectory(GEOMETRY, FORKS, frames=96)
+@dataclass(frozen=True)
+class DockFrame:
+    index: int
+    phase: str  # approach | insert | lift | settle
+    base_x_m: float
+    lift_m: float
+    penetration_m: float  # fork tip past the pallet front face, negative before it
+    clearance_m: float  # minimum gap over every forklift/pallet box pair
+
+
+def plan_trajectory(
+    model_path: Path, pallet_path: Path, *, frames: int, insertion_m: float = 0.360
+) -> list[DockFrame]:
+    """Kinematic dock trajectory. Raises ValueError when the forks cannot fit."""
+```
+
+- [ ] **Step 1: 시험 작성** — `tests/unit/test_preview_docking.py`. 렌더링 없이 궤적만 검사한다.
+
+```python
+def test_every_frame_keeps_the_whole_truck_clear_of_the_pallet():
+    frames = preview_docking.plan_trajectory(FORKLIFT, PALLET, frames=96)
     assert len(frames) == 96
     assert min(f.clearance_m for f in frames) > 0.0
 
 
-def test_the_insertion_phase_actually_reaches_into_the_pallet():
-    frames = preview_docking.plan_trajectory(GEOMETRY, FORKS, frames=96)
+def test_the_insertion_stops_short_of_the_carriage_touching_the_pallet():
+    frames = preview_docking.plan_trajectory(FORKLIFT, PALLET, frames=96)
     inserted = [f for f in frames if f.phase == "insert"]
-    assert inserted[-1].penetration_m == pytest.approx(0.42, abs=0.01)
+    assert inserted[-1].penetration_m == pytest.approx(0.360, abs=0.002)
+    # the carriage cross member is what runs out first, at 0.406 m
+    assert inserted[-1].clearance_m == pytest.approx(0.046, abs=0.003)
 
 
-def test_a_fork_set_that_cannot_fit_is_refused_before_rendering():
+def test_asking_for_a_deeper_insertion_than_the_truck_allows_is_refused():
     with pytest.raises(ValueError):
-        preview_docking.plan_trajectory(
-            GEOMETRY, {**FORKS, "fork_spacing_m": 0.70}, frames=24
-        )
+        preview_docking.plan_trajectory(FORKLIFT, PALLET, frames=24, insertion_m=0.42)
+
+
+def test_the_phases_run_in_order_and_each_one_is_used():
+    frames = preview_docking.plan_trajectory(FORKLIFT, PALLET, frames=96)
+    seen = [f.phase for f in frames]
+    assert seen == sorted(seen, key=["approach", "insert", "lift", "settle"].index)
+    assert set(seen) == {"approach", "insert", "lift", "settle"}
+
+
+def test_the_forks_only_rise_after_they_are_inside():
+    frames = preview_docking.plan_trajectory(FORKLIFT, PALLET, frames=96)
+    assert all(f.lift_m == 0.0 for f in frames if f.phase in ("approach", "insert"))
+    assert frames[-1].lift_m == pytest.approx(0.040)
 ```
 
-- [ ] **Step 2: 실패 확인.** **Step 3: 구현.** **Step 4: 통과 확인** + Ruff. 렌더링은 Claude가 실행한다.
+- [ ] **Step 2: 실패 확인.** **Step 3: 구현.** **Step 4: 통과 확인** + Ruff.
+
+**산출물**(Claude가 실행): `overview.png`, `docking.mp4`(24 fps), `clearance.json`(프레임별 구간·깊이·간극), `run.json`(형상·모델 해시, MuJoCo 버전, 백엔드, 렌더러 이름). 자막에는 구간 이름, 그 프레임의 삽입 깊이와 최소 간극, 그리고 마지막 줄에 `Kinematic preview; contact and payload not simulated`를 고정으로 넣는다.
 
 ### Task 5: 영상 확인과 기록 (Claude)
 
