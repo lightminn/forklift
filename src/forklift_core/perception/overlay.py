@@ -12,6 +12,7 @@ from forklift_core.sensors.rgbd import PinholeIntrinsics
 TRUTH_COLOUR = (0, 255, 0)  # ground truth openings
 ESTIMATE_COLOUR = (255, 0, 255)  # detector estimate
 CAPTION_COLOUR = (255, 255, 255)
+CAPTION_OUTLINE_COLOUR = (0, 0, 0)
 
 
 def project_point(
@@ -91,5 +92,12 @@ def draw_scene_overlay(
             ]
             if all(pixel is not None for pixel in pixels):
                 draw.line([*pixels, pixels[0]], fill=colour, width=2)
-    draw.text((8, 8), caption, fill=CAPTION_COLOUR)
+    # A dark stroke keeps the caption readable over both sky and pallet pixels.
+    draw.text(
+        (8, 8),
+        caption,
+        fill=CAPTION_COLOUR,
+        stroke_width=1,
+        stroke_fill=CAPTION_OUTLINE_COLOUR,
+    )
     return np.array(image, dtype=np.uint8)
