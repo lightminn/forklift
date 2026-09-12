@@ -197,6 +197,8 @@ memory/swap 상한을 그대로 적용하고, snapshot은 `/workspace` read-only
 `artifacts/<run-id>/`와 `jobs/<run-id>-<job-id>.log`에 남으며 현재 `collect`는 성공
 작업만 회수한다. 실패 진단 파일은 해당 실행 디렉터리에서 별도로 읽거나 복사한다.
 
+원격 `artifacts/` 보관 기준(2026-09-13 기본값 채택): 성공 실행은 로컬 회수·검증 기록 후 30일 뒤 원격 사본을 지울 수 있고, 실패 실행은 원인을 검증 기록에 남긴 뒤 지운다. `snapshots/`는 검증 기록이 참조하는 실행의 것만 유지한다. 삭제 전 로컬 회수본의 manifest 해시가 있는지 확인한다.
+
 ### 장면 batch 제출과 병합 (`scenes`)
 
 `scenes`는 카탈로그 범위마다 RGB-D 한 세트씩 캡처한다. 제출 측 Python과 원격
