@@ -125,7 +125,7 @@ def check_fork_fit(
 
 형상 파일은 미지 키를 `ValueError`로 거부하고, `overall_height_m == deck_bottom_m + block_height_m + deck_top_m` 관계와 `3*block_width_m < overall_width_m`를 검증한다. `deck_top_m`이 음수면 거부한다.
 
-- [ ] **Step 1: 시험 작성** — `tests/unit/perception/test_pallet_geometry.py`
+- [x] **Step 1: 시험 작성** — `tests/unit/perception/test_pallet_geometry.py`
 
 ```python
 import math
@@ -221,8 +221,8 @@ def test_unknown_keys_are_refused(tmp_path):
         load_pallet_geometry(bad)
 ```
 
-- [ ] **Step 2: 실패 확인** → `ModuleNotFoundError: forklift_core.perception.pallet_geometry`.
-- [ ] **Step 3: 구현.** **Step 4: 통과 확인** + Ruff.
+- [x] **Step 2: 실패 확인** → `ModuleNotFoundError: forklift_core.perception.pallet_geometry`.
+- [x] **Step 3: 구현.** **Step 4: 통과 확인** + Ruff.
 
 ### Task 2: 형상에서 prior 생성
 
@@ -236,7 +236,7 @@ def test_unknown_keys_are_refused(tmp_path):
 
 `tools/build_pallet_prior.py`는 형상 YAML을 읽어 prior YAML을 표준출력 또는 `--output`으로 낸다. 개구 폭·중앙 지지대 범위는 형상값에 **대칭 허용오차**를 붙인다: 개구 폭 `[w - 0.02, w + 0.02]`, 중앙 지지대 `[b - 0.015, b + 0.015]`. 허용오차 값은 CLI 인자로 바꿀 수 있게 하고 기본값을 prior 파일에 기록한다.
 
-- [ ] **Step 1: 시험 작성** — `tests/unit/perception/test_pallet_prior.py`에 추가
+- [x] **Step 1: 시험 작성** — `tests/unit/perception/test_pallet_prior.py`에 추가
 
 ```python
 def test_the_committed_epal6_prior_matches_the_geometry_file(tmp_path):
@@ -283,7 +283,7 @@ def test_a_prior_whose_decks_and_opening_do_not_reach_the_height_is_refused(tmp_
         load_pallet_prior(bad)
 ```
 
-- [ ] **Step 2: 실패 확인.** **Step 3: 구현.** **Step 4: 통과 확인** + Ruff. **v1 prior를 쓰는 기존 시험이 전부 통과해야 한다.**
+- [x] **Step 2: 실패 확인.** **Step 3: 구현.** **Step 4: 통과 확인** + Ruff. **v1 prior를 쓰는 기존 시험이 전부 통과해야 한다.**
 
 ### Task 3: 팔레트 시뮬레이션 모델 생성
 
@@ -291,7 +291,7 @@ def test_a_prior_whose_decks_and_opening_do_not_reach_the_height_is_refused(tmp_
 
 형상 YAML에서 MJCF(`pallet.xml`)와 URDF(`pallet.urdf`)를 생성한다. 구성은 아래 덱 1개, 블록 9개, 위 덱 1개로 총 11개 box다. 좌표 원점은 **바닥 위 footprint 중심**(z=0)으로 `build_scene_world.py`의 팔레트 원점 규약과 같게 둔다. `model_manifest.json`에 입력 형상 파일의 SHA-256, 생성 시각, 단순화 항목을 적는다.
 
-- [ ] **Step 1: 시험 작성** — 생성한 MJCF를 MuJoCo로 읽어 기하를 되재는 시험.
+- [x] **Step 1: 시험 작성** — 생성한 MJCF를 MuJoCo로 읽어 기하를 되재는 시험.
 
 ```python
 def test_the_generated_pallet_has_eleven_boxes_in_the_declared_places(tmp_path):
@@ -322,7 +322,7 @@ def test_the_fork_openings_of_the_generated_model_are_actually_empty(tmp_path):
 def test_the_manifest_records_the_geometry_hash(tmp_path): ...
 ```
 
-- [ ] **Step 2: 실패 확인.** **Step 3: 구현.** **Step 4: 통과 확인** + Ruff.
+- [x] **Step 2: 실패 확인.** **Step 3: 구현.** **Step 4: 통과 확인** + Ruff.
 
 ### Task 4: 도킹 장면과 영상 (v2 — 2026-09-13 수정)
 
@@ -363,7 +363,7 @@ def plan_trajectory(
 
 승강 구간이 끝나면 포크는 개구부 안에서 0.040 m 올라가 **상부 덱 밑면과 8 mm를 남긴 채** 멈춘다. 적재를 모사하지 않으므로 팔레트는 움직이지 않는다. 이 자세는 "하중을 받을 준비가 된 위치"이지 적재 성공이 아니다.
 
-- [ ] **Step 1: 시험 작성** — `tests/unit/test_preview_docking.py`. 렌더링 없이 궤적만 검사한다.
+- [x] **Step 1: 시험 작성** — `tests/unit/test_preview_docking.py`. 렌더링 없이 궤적만 검사한다.
 
 ```python
 def test_every_frame_keeps_the_whole_truck_clear_of_the_pallet():
@@ -408,13 +408,13 @@ def test_the_forks_only_rise_after_they_are_inside():
     assert frames[-1].lift_m == pytest.approx(0.040)
 ```
 
-- [ ] **Step 2: 실패 확인.** **Step 3: 구현.** **Step 4: 통과 확인** + Ruff.
+- [x] **Step 2: 실패 확인.** **Step 3: 구현.** **Step 4: 통과 확인** + Ruff.
 
 **산출물**(Claude가 실행): `overview.png`, `docking.mp4`(24 fps), `clearance.json`(프레임별 구간·깊이·간극), `run.json`(형상·모델 해시, MuJoCo 버전, 백엔드, 렌더러 이름). 자막에는 구간 이름, 그 프레임의 삽입 깊이와 최소 간극, 그리고 마지막 줄에 `Kinematic preview; contact and payload not simulated`를 고정으로 넣는다.
 
 ### Task 5: 영상 확인과 기록 (Claude)
 
-- [ ] `tools/preview_docking.py`를 EGL 백엔드로 실행해 MP4를 만든다.
-- [ ] `clearance.json`의 최소 간극과 시험의 기대값을 대조한다.
-- [ ] **영상을 직접 보고** 포크가 개구부에 들어가는지 확인한다. 보지 않은 영상을 완료로 표시하지 않는다.
-- [ ] 검증 기록 작성, 사용자에게 영상 전달, 커밋.
+- [x] `tools/preview_docking.py`를 EGL 백엔드로 실행해 MP4를 만든다.
+- [x] `clearance.json`의 최소 간극과 시험의 기대값을 대조한다.
+- [x] **영상을 직접 보고** 포크가 개구부에 들어가는지 확인한다. 보지 않은 영상을 완료로 표시하지 않는다.
+- [x] 검증 기록 작성, 사용자에게 영상 전달, 커밋.

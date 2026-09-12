@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<mujoco model="case_a_docking_preview">
+  <!-- Components stay in their source models; no geometry is copied here. -->
+  <include file="dls08_provisional/forklift.xml" />
+  <option>
+    <flag contact="disable" />
+  </option>
+  <asset>
+    <model name="epal6" file="epal6_pallet/pallet.xml" />
+    <!-- A low camera looks past the finite ground plane without a skybox. -->
+    <texture name="sky" type="skybox" builtin="gradient" rgb1=".14 .19 .25" rgb2=".38 .43 .49" width="512" height="3072" />
+  </asset>
+  <worldbody>
+    <light name="docking_light" pos="1 0 4" dir="0 0 -1" directional="true" />
+    <geom name="ground" type="plane" size="8 8 0.1" rgba="0.28 0.31 0.34 1" />
+    <!-- Initial pose derived from parameter fork tip + 2 m approach + half depth.
+         preview_docking recalculates it from the selected model/config inputs. -->
+    <body name="pallet_placement" pos="3.25 0 0" quat="1 0 0 0">
+      <attach model="epal6" body="pallet" prefix="" />
+    </body>
+  </worldbody>
+</mujoco>
