@@ -36,14 +36,14 @@
 | `tests/unit/perception/test_overlay.py` | 투영·코너·그리기 시험 |
 | `tests/integration/test_evaluate_cli.py` | 임시 데이터 세트로 CLI 끝까지 실행, split 격리·CSV 스키마·traceback |
 | `tests/fixtures/scene_writer.py` | 1단계 `write_v1_scene`을 옮겨 category·split·GT를 인자로 받게 한 장면 작성기 |
-| `docs/validation/2026-09-1x-pocket-detector-m2.md` | dev 튜닝과 eval 1회 결과(Task 7) |
+| `docs/validation/2026-09-13-pocket-detector-m2.md` | dev 튜닝과 eval 1회 결과(Task 7) |
 
 ---
 
 ### Task 0: 기준 상태
 
-- [ ] `git rev-parse HEAD`가 이 계획 커밋이고 그 부모가 `6738e39`이며 `git status --short`가 비어 있음을 확인한다.
-- [ ] 기준 회귀: `python -m pytest tests ros2/src/forklift_ros/test -m 'not rendering' -q -p no:cacheprovider -W error` → `650 passed, 1 deselected`.
+- [x] `git rev-parse HEAD`가 이 계획 커밋이고 그 부모가 `6738e39`이며 `git status --short`가 비어 있음을 확인한다.
+- [x] 기준 회귀: `python -m pytest tests ros2/src/forklift_ros/test -m 'not rendering' -q -p no:cacheprovider -W error` → `650 passed, 1 deselected`.
 
 ### Task 1: 인식기 내부 예외의 traceback 보존
 
@@ -588,29 +588,29 @@ def test_three_real_dev_scenes_run_end_to_end(tmp_path):
 
 ### Task 5: dev 실행과 튜닝 (Claude)
 
-- [ ] 기본 파라미터로 `--split dev` 1회 실행. `metrics.json`·`scenes.csv`를 읽고 실패 장면(특히 **s009**: 경쟁 평면으로 `no_opening_pattern`)의 `overlay/`·`observations/`를 직접 본다.
-- [ ] 실패 원인별로 파라미터 후보를 정하고 **dev에서만** 재실행한다. 변경한 값과 그 근거, 각 실행의 지표를 표로 기록한다. 시험 허용오차나 `evaluation.py`의 목표 상수는 바꾸지 않는다.
-- [ ] 파라미터를 고치면 `--params` YAML로 저장하고 `config/detector_params_v1.yaml`로 커밋한다(바꾸지 않았다면 기본값을 쓴다고 기록).
-- [ ] dev 실행은 여러 번 할 수 있다. 모든 실행의 run ID와 지표를 검증 기록에 남긴다.
+- [x] 기본 파라미터로 `--split dev` 1회 실행. `metrics.json`·`scenes.csv`를 읽고 실패 장면(특히 **s009**: 경쟁 평면으로 `no_opening_pattern`)의 `overlay/`·`observations/`를 직접 본다.
+- [x] 실패 원인별로 파라미터 후보를 정하고 **dev에서만** 재실행한다. 변경한 값과 그 근거, 각 실행의 지표를 표로 기록한다. 시험 허용오차나 `evaluation.py`의 목표 상수는 바꾸지 않는다.
+- [x] 파라미터를 고치면 `--params` YAML로 저장하고 `config/detector_params_v1.yaml`로 커밋한다(바꾸지 않았다면 기본값을 쓴다고 기록).
+- [x] dev 실행은 여러 번 할 수 있다. 모든 실행의 run ID와 지표를 검증 기록에 남긴다.
 
 ### Task 5.5: 동결 게이트 (Claude)
 
-- [ ] 최종 파라미터 YAML을 CLI로 **다시 읽어 dev 1회** 실행하고 그 실행을 선택 근거로 기록한다.
-- [ ] 구현·시험·prior·params를 커밋해 고정 revision을 만든다. 전체 회귀와 Ruff 통과를 확인한다(`git_dirty`가 `false`인 상태에서 eval을 돌린다).
-- [ ] 최종 eval 명령에 같은 `--params`를 명시한다. 기본값을 택했더라도 유효 파라미터 전체를 `run.json`에 동결 기록한다.
-- [ ] eval split이 **30장면 전체·양성 18개**이고 부분 선택이 없음을 확인한다.
+- [x] 최종 파라미터 YAML을 CLI로 **다시 읽어 dev 1회** 실행하고 그 실행을 선택 근거로 기록한다.
+- [x] 구현·시험·prior·params를 커밋해 고정 revision을 만든다. 전체 회귀와 Ruff 통과를 확인한다(`git_dirty`가 `false`인 상태에서 eval을 돌린다).
+- [x] 최종 eval 명령에 같은 `--params`를 명시한다. 기본값을 택했더라도 유효 파라미터 전체를 `run.json`에 동결 기록한다.
+- [x] eval split이 **30장면 전체·양성 18개**이고 부분 선택이 없음을 확인한다.
 
 ### Task 6: eval 실행 (Claude, 1회)
 
-- [ ] 파라미터 확정 후 `--split eval --video` **한 번** 실행. eval 양성은 18장면이므로 검출률 95 %는 18/18을 뜻한다.
-- [ ] `metrics.json`의 목표 도달 여부를 **있는 그대로** 기록한다. 미달이어도 파라미터를 되돌리지 않는다(되돌리면 그 eval은 최종 보고가 아니며 그 사실을 적는다).
-- [ ] overlay PNG 몇 장과 MP4를 직접 확인한다(양성·가림·음성 각 1장 이상). MP4가 실패했으면 저장된 PNG로 다시 묶는다(인식기를 재실행하지 않는다). **영상을 눈으로 확인하기 전에는 시연물 완료로 표시하지 않는다.**
+- [x] 파라미터 확정 후 `--split eval --video` **한 번** 실행. eval 양성은 18장면이므로 검출률 95 %는 18/18을 뜻한다.
+- [x] `metrics.json`의 목표 도달 여부를 **있는 그대로** 기록한다. 미달이어도 파라미터를 되돌리지 않는다(되돌리면 그 eval은 최종 보고가 아니며 그 사실을 적는다).
+- [x] overlay PNG 몇 장과 MP4를 직접 확인한다(양성·가림·음성 각 1장 이상). MP4가 실패했으면 저장된 PNG로 다시 묶는다(인식기를 재실행하지 않는다). **영상을 눈으로 확인하기 전에는 시연물 완료로 표시하지 않는다.**
 
 ### Task 7: 검증 기록과 커밋 (Claude)
 
-- [ ] `docs/validation/2026-09-1x-pocket-detector-m2.md`: 구현 범위, dev 실행 표(run ID·파라미터·지표), eval 1회 결과(범주별 개수·검출률·오차 p50/p95/max·처리 시간·목표 도달 여부), 실패 장면 분석, eval을 돌린 고정 revision, 경계(합성 세트·prior가 카탈로그 형상을 안다는 점·σ 미상·실물 미검증). **문턱은 전체 100장면의 사전 특성 조사(설계 §2)로 정했으므로 eval을 '전혀 사용하지 않은 holdout'이라고 쓰지 않는다.**
-- [ ] 체크포인트(`docs/validation/2026-09-11-development-checkpoint.md`)에 M2 행 추가, 로드맵 §8의 M2 항목 체크.
-- [ ] 커밋 → `main` ff-merge → push → 원격 repo 갱신. 산출물 디렉터리는 Git 밖(`artifacts/`)이며 run ID와 해시만 기록한다.
+- [x] `docs/validation/2026-09-13-pocket-detector-m2.md`: 구현 범위, dev 실행 표(run ID·파라미터·지표), eval 1회 결과(범주별 개수·검출률·오차 p50/p95/max·처리 시간·목표 도달 여부), 실패 장면 분석, eval을 돌린 고정 revision, 경계(합성 세트·prior가 카탈로그 형상을 안다는 점·σ 미상·실물 미검증). **문턱은 전체 100장면의 사전 특성 조사(설계 §2)로 정했으므로 eval을 '전혀 사용하지 않은 holdout'이라고 쓰지 않는다.**
+- [x] 체크포인트(`docs/validation/2026-09-11-development-checkpoint.md`)에 M2 행 추가, 로드맵 §8의 M2 항목 체크.
+- [x] 커밋 → `main` ff-merge → push → 원격 repo 갱신. 산출물 디렉터리는 Git 밖(`artifacts/`)이며 run ID와 해시만 기록한다.
 
 ## 자체 검토
 
