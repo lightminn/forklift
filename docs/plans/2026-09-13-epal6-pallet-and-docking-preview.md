@@ -349,6 +349,8 @@ class DockFrame:
     lift_m: float
     penetration_m: float  # fork tip past the pallet front face, negative before it
     clearance_m: float  # minimum gap over every forklift/pallet box pair
+    clearance_pair: tuple[str, str]  # the two geoms that produced that minimum
+    insertion_margin_m: float  # how much deeper the forks could still go
 
 
 def plan_trajectory(
@@ -356,6 +358,10 @@ def plan_trajectory(
 ) -> list[DockFrame]:
     """Kinematic dock trajectory. Raises ValueError when the forks cannot fit."""
 ```
+
+**두 간극을 구분한다.** `clearance_m`은 모든 상자 쌍의 최솟값이고, 삽입 끝에서 이 값은 **포크 밑면과 하부 덱 윗면 사이 6 mm**다(포크 밑면 28 mm, 덱 윗면 22 mm). `insertion_margin_m`은 **세로 방향으로 더 들어갈 수 있는 여유**이고, 0.360 m에서 **46 mm**다(캐리지 가로대 앞면 x 0.544, 포크 끝 0.950이므로 한계 0.406 m). 앞선 판은 이 둘을 같은 값으로 적었다. 2026-09-13 모델에서 직접 계산해 확정했고 Codex도 같은 값을 냈다.
+
+승강 구간이 끝나면 포크는 개구부 안에서 0.040 m 올라가 **상부 덱 밑면과 8 mm를 남긴 채** 멈춘다. 적재를 모사하지 않으므로 팔레트는 움직이지 않는다. 이 자세는 "하중을 받을 준비가 된 위치"이지 적재 성공이 아니다.
 
 - [ ] **Step 1: 시험 작성** — `tests/unit/test_preview_docking.py`. 렌더링 없이 궤적만 검사한다.
 
@@ -370,8 +376,18 @@ def test_the_insertion_stops_short_of_the_carriage_touching_the_pallet():
     frames = preview_docking.plan_trajectory(FORKLIFT, PALLET, frames=96)
     inserted = [f for f in frames if f.phase == "insert"]
     assert inserted[-1].penetration_m == pytest.approx(0.360, abs=0.002)
-    # the carriage cross member is what runs out first, at 0.406 m
-    assert inserted[-1].clearance_m == pytest.approx(0.046, abs=0.003)
+    # the tightest pair anywhere is the fork underside over the lower deck,
+    # 28 mm against 22 mm, which is not what limits the depth
+    assert inserted[-1].clearance_m == pytest.approx(0.006, abs=0.001)
+    assert inserted[-1].clearance_pair[1] == "deck_bottom"
+    # what limits the depth is the carriage cross member, which runs out at 0.406 m
+    assert inserted[-1].insertion_margin_m == pytest.approx(0.046, abs=0.003)
+
+
+def test_the_lift_stops_below_the_top_deck_without_moving_the_pallet():
+    frames = preview_docking.plan_trajectory(FORKLIFT, PALLET, frames=96)
+    assert frames[-1].clearance_m == pytest.approx(0.008, abs=0.001)
+    assert frames[-1].clearance_pair[1] == "deck_top"
 
 
 def test_asking_for_a_deeper_insertion_than_the_truck_allows_is_refused():
