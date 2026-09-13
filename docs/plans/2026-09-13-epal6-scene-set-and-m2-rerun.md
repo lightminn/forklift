@@ -91,7 +91,7 @@ Gazebo 팔레트는 `_static_model` 로 `<static>true</static>` 다. 물리가 �
 - [ ] HEAD `be5351a`, 트리 깨끗, 회귀 724 passed / 1 deselected.
 
 ### Task 1: 얇은 덱에서 깨지는 인식기 계약 수정 (설계 → 검토 3회 → Codex 구현)
-- [ ] **설계 초안:** 바닥 필터와 덱 증거 검사를 prior 에서 유도하고 서로 겹치지 않게 한다. 아래 덱 증거는 `z <= deck_bottom_m` 이 아니라 **덱 윗면 주변 대역** `[deck_bottom_m − tol, deck_bottom_m + tol]` 에서 세고, 바닥 필터는 `deck_bottom_m` 보다 확실히 낮게 둔다. `tol` 은 깊이 양자화(1 mm)와 거리에서 유도한다. `floor_z_m >= deck_bottom_m` 이면 설정 오류로 거부한다.
+- [ ] **설계 초안:** 바닥 필터와 덱 증거 검사를 prior 에서 유도하고 서로 겹치지 않게 한다. 아래 덱 증거는 `z <= deck_bottom_m` 이 아니라 **덱 윗면 주변 대역** `[deck_bottom_m − tol, deck_bottom_m + tol]` 에서 세고, 바닥 필터는 `deck_bottom_m` 보다 확실히 낮게 둔다. `tol` 은 유도값이 아니라 dev 튜닝 출발값이다(설계안 v4 §제안 5). `floor_z_m >= deck_bottom_m` 이면 설정 오류로 거부한다.
 - [ ] **반례 시험:** 위 §1 표의 x = 2.0 / 3.0 / 4.0 m 세 자세를 이상적 광선 입력으로 만들어, 수정 전에는 아래 덱 점이 0 이고 수정 후에는 `min_band_points` 를 넘는지 고정한다. 깊이 1 mm 양자화를 반드시 적용한다.
 - [ ] v1 prior(덱 50 mm)에서 **기존 동작이 바뀌지 않음**을 시험으로 고정한다.
 
