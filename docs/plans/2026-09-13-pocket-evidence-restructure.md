@@ -517,13 +517,16 @@ EPAL 6 은 계수가 **0.2195**(= 0.090 / (0.500 − 0.090))다. `range_min_m` 0
 
 **Files:** `src/forklift_core/perception/pocket_detector.py`, `tools/evaluate_pocket_detector.py`, Create `config/pallet_geometry_t11_half.yaml`, `config/pallet_prior_t11_half.yaml`, Create `tests/unit/perception/test_geometry_family.py`, `docs/design/2026-09-13-pocket-detector-baseline.md`, `docs/interfaces/pocket-observation.md`
 
-- [ ] **절대 단위 파라미터 다섯 개를 prior 에서 유도한다.** 선형 치수(`cell_m`·`plane_inlier_m`·`floor_z_m`·`band_margin_m`·`deck_evidence_tol_m`)는 선형, `min_band_points` 는 **면적(제곱)** 으로. 기준점은 EPAL 6 이고 그 형상에서는 **현재 값과 같아야 한다** — §D-1 의 v1 회귀가 깨지면 안 된다.
+- [ ] **절대 단위 파라미터를 prior 에서 유도한다. 단일 배율로는 안 된다 — 시제품에서 확인했다.** `opening_height_m` 하나를 배율로 잡고 EPAL 6 를 기준점에 두면 v1 이 배율 **2.56** 이 되어 `cell_m` 25.6 mm·`min_band_points` **657** 이 나오고 동결 파일(10 mm·100)과 달라져 **§D-1 의 v1 회귀가 깨진다.** 기준점을 v1 으로 바꾸면 EPAL 6 가 0.39 배가 되어 지금까지 잰 값이 전부 달라진다.
+- [ ] **파라미터별 기준을 명시한다:** `cell_m` ← 횡방향 특징(개구 폭 또는 중앙 지지대 폭, **개구 높이가 아니다**), `floor_z_m` ← `deck_bottom_m` 직접 연동, `band_margin_m` ← `opening_height_m`, `deck_evidence_tol_m` ← `deck_bottom_m`, `plane_inlier_m` ← **센서 잡음 특성이므로 형상 축척 대상인지부터 결정**, `min_band_points` ← 투영 면적 / **거리²**(거리가 들어가야 하며 s² 만으로는 부족하다).
+- [ ] **v1 과 EPAL 6 두 기하에서 각각 동결값이 재현되는지 시험으로 고정한다.** 한쪽만 맞추면 다른 쪽이 깨진다.
 - [ ] **`floor_z_m` 은 `deck_bottom_m` 에 연동한다.** 실측: 쿼터 팔레트의 바닥판이 16.5 mm 인데 현행 문턱이 20 mm 라 **바닥판이 통째로 잘린다.** Task 8 의 "`floor_z_m >= deck_bottom_m` 거부"는 이 유도로 자동 충족된다.
-- [ ] **T11 × 0.5 형상·prior 파일을 만든다**: 550 × 550 × 75, 등폭 3 기둥 66.67 mm, 개구 175 mm, 개구 높이 37.5 mm, 바닥판 12.5 mm, 스트링거 12.5 mm, 상판 12.5 mm. 포켓 중심 y = ±120.8 mm, z = 31.25 mm.
+- [ ] **T11 × 0.6 형상·prior 파일을 만든다**: 660 × 660 × 90, 등폭 3 기둥 80.0 mm, 개구 210 mm, 개구 높이 45.0 mm, 바닥판 15.0 mm, 스트링거 15.0 mm, 상판 15.0 mm. 포켓 중심 y = ±145.0 mm, z = 37.5 mm. 근거는 [ADR 0002](../decisions/0002-test-pallet-and-geometry-generality.md).
 - [ ] **`test_geometry_family.py`** — 기하 군 × 거리 격자에서 검출률과 위치 오차를 고정한다. 최소: T11 × 0.5 / 0.55 / 0.6, EPAL 6, 쿼터 유로 600×400, 그리고 대응 범위 밖 한 종. **측정 기준선**(유도 파라미터, 잡음 없는 리그):
 
   | 형상 | 검출되는 거리 |
   |---|---|
+  | **T11 × 0.6 (660) — 채택 형상** | **2.0 – 3.5 m** |
   | T11 × 0.5 (550) | 2.0 – 3.0 m |
   | EPAL 6 (800) | 2.0 – 4.0 m |
   | 600 mm 급 | 2.0 – 4.0 m |
