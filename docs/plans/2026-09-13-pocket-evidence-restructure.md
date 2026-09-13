@@ -310,7 +310,8 @@ EPAL 6 은 계수가 **0.2195**(= 0.090 / (0.500 − 0.090))다. `range_min_m` 0
 - **v1 카탈로그·데이터 세트·prior 는 읽기만 한다.** `COUNTS` 에 범주를 더해 재생성하면 `rng.shuffle`(`tools/generate_scene_catalogue.py:238`)이 밀려 **기존 100 장 중 0 장만 동일**하다. `sample_catalogue(20260911, 100)` 은 커밋된 YAML 과 같다.
 - dev 에서만 튜닝, **eval 은 한 번**. `ruff check .` · `ruff format --check .` 통과.
 - **기준 회귀:** `python -m pytest tests ros2/src/forklift_ros/test -m 'not rendering' -q -p no:cacheprovider -W error`
-  - untracked 데이터가 **있으면** → **759 passed, 1 deselected, skip 0**(독립 확인 4회).
+  - untracked 데이터가 **있으면** → **759 passed, 1 deselected, skip 0**(한산한 기계에서 독립 확인 4회).
+  - **부하가 걸린 기계에서는 초록이 안 나온다.** `test_transport_timeout_kills_orphan_that_keeps_capture_pipe_open` 은 손자 프로세스가 파이썬 인터프리터 둘을 띄우고 pid 파일을 쓰는 데 **0.1 초**를 준다. 18 코어·load 10 에서 실측 0.263~0.281 초로 **3/3 실패**했다. 이것을 이번 변경 탓으로 오인하지 말고, 반대로 **"초록이어야 한다"를 위임자의 차단 조건으로 걸지도 말 것.**
   - **없으면** → skip **3 개**(`test_detector_v1_replay.py` 2 + `test_evaluate_cli.py:219` 1)가 초록으로 보인다.
   - deselect 되는 1 개는 `test_preview_renders_distinct_views_and_records_evidence`(`rendering` 마크).
 - **위임자에게 넘길 untracked 경로(이름 정확히):** `data/synthetic_scenes/catalogue_v1`, `artifacts/20260912T170442Z_pocket_eval_dev_02`, **`artifacts/20260912T170558Z_pocket_eval_eval_01`** — 두 아티팩트는 **타임스탬프가 다르다.**
@@ -320,7 +321,7 @@ EPAL 6 은 계수가 **0.2195**(= 0.090 / (0.500 − 0.090))다. `range_min_m` 0
 # G. 작업
 
 ## Task 0: 기준 확인 (Claude)
-- [ ] 트리 깨끗, 기준 회귀 초록(skip 0 인지 확인 — skip 이 있으면 데이터가 없는 것이다).
+- [ ] 트리 깨끗. 기준 회귀에서 **skip 이 0 인지 확인한다** — skip 이 있으면 데이터가 없는 것이다. **실패가 `test_transport_timeout_kills_orphan_*` 하나뿐이면 부하 탓이므로 통과로 본다**(§F).
 - [ ] 아래 덱 증거의 프로덕션 경로 값 2.0/3.0/4.0 m = **0/12/9** 를 기록한다.
 
 ## Task 0.5: §A 결정 수령 (Claude)
@@ -332,7 +333,7 @@ EPAL 6 은 계수가 **0.2195**(= 0.090 / (0.500 − 0.090))다. `range_min_m` 0
 
 **Files:** `tools/submit_model_check.py`, `tools/remote_model_job.py`, `tests/integration/test_evaluate_cli.py`, `tools/evaluate_pocket_detector.py`, `tests/integration/test_remote_model_jobs.py`
 
-- [ ] snapshot 허용 목록에 `config`·`tests` 의 `.yaml` 추가. 실측 정확히 **6 개**(91 → 97), 비밀 파일 없음. 현재는 `tests/fixtures/thin_deck_legacy_*.yaml` 이 **모듈 import 시점**에 로드되어 원격 pytest 가 수집에서 죽는다.
+- [ ] snapshot 허용 목록에 `config`·`tests` 의 `.yaml` 추가. 실측 정확히 **6 개**(91 → 97, 해시 `9159602c…` → `f7d6c0e2…`), 비밀 파일 없음. **Task 3 이 `tests/fixtures/catalogue_epal6_min.yaml` 를 만들면 98 개·세 번째 해시가 되므로 이 수치는 Task 4.5 시점에 이미 낡는다.** Task 5 의 동결은 그 뒤에 시작하므로 무해하다. 현재는 `tests/fixtures/thin_deck_legacy_*.yaml` 이 **모듈 import 시점**에 로드되어 원격 pytest 가 수집에서 죽는다.
 - [ ] **`git_revision`:** `test_evaluate_cli.py:313` 이 길이 40 을 요구하는데 스냅샷에 `.git` 이 없다. **assert 를 완화하지 말고 스냅샷 생성 시 메타데이터로 주입한다.** 완화하면 `run.json` 에 `None` 이 실려 Task 10 을 산출물로 증명할 수 없다.
 - [ ] **`scenes` 모드에 코어 패키지를 설치하지 않는다**(`remote_model_job.py:494-506`). Task 3 이 `forklift_core` 를 import 하지 않는다. **결정 완료 항목.**
 - [ ] **완료 조건:** ① 원격 `model-cpu` 초록 ② `scenes` 모드 v1 1~2 장면 스모크. **②는 v1 5 상자 경로만 검증한다.**
@@ -368,24 +369,29 @@ EPAL 6 은 계수가 **0.2195**(= 0.090 / (0.500 − 0.090))다. `range_min_m` 0
 
 **Files:** `sim/gazebo/build_scene_world.py`, `tests/simulation/test_build_scene_world.py`, Create `tests/fixtures/catalogue_epal6_min.yaml`
 
-- [ ] **먼저 epal6 헤더 계약을 정한다**(Task 4 보다 앞이다): `catalogue_version` 문자열, 헤더 `pallet` 6 필드에 넣을 값, 정답 포켓 규약(y ±0.18625, z 0.061, 폭 0.2275, 높이 0.078). Task 3 의 광선 시험이 이 규약을 요구한다.
+- [ ] **먼저 epal6 헤더 계약을 정한다**(Task 4 보다 앞이다): `catalogue_version` 문자열, 헤더 `pallet` 필드, 정답 포켓 규약(y ±0.18625, z 0.061, 폭 0.2275, 높이 0.078).
+- [ ] **6 필드 스키마로는 EPAL 6 를 표현할 수 없다.** v1 스키마는 `deck_m` 하나로 위아래를 **대칭**으로 본다(0.05 + 0.20 + 0.05 = 0.30). EPAL 6 는 비대칭이다 — 바닥판 0.022 / 개구 0.078 / 스트링거+상판 0.044 = 0.144 이고, **어떤 `deck_m` 도 닫히지 않는다**(0.022×2+0.078 = 0.122, 0.044×2+0.078 = 0.166). 게다가 `pallet_prior.py:82-87` 이 `height_m == deck_bottom_m + opening_height_m + deck_top_m` 를 **강제**한다. 그대로 밀어붙이면 내부적으로 모순된 헤더를 Task 4 가 `catalogue_epal6.yaml` 로 전파한다. **`deck_bottom_m`·`deck_top_m` 를 나누는 스키마 변경으로 간다.**
+- [ ] **같은 dict 의 두 번째 사본이 `tools/generate_scene_catalogue.py:23-30`(`PALLET`) 에 있다.** `RANGES`·`margin_px` 와 같은 파일이고 역시 **어느 Task 의 Files 목록에도 없다.** 스키마를 바꾸면 여기도 바꾼다.
 - [ ] **최소 fixture 카탈로그를 만든다.** 현재 `tests/simulation/test_build_scene_world.py:11,24-26` 은 모든 fixture 를 커밋된 `catalogue_v1.yaml` 에서 뽑고 합성 생성기가 없어서, 이게 없으면 Task 3 은 **자기 합격 시험을 만들 수 없다.**
 - [ ] **고칠 곳은 최소 여섯 곳이다.** v6 은 두 곳, v7 은 네 곳이라 적었다. 네 곳만 패치하고 epal6 fixture 를 넣으면 **여전히 `pallet dimensions differ from the approved geometry` 로 거부된다**(독립 검토가 실제로 패치해 확인).
   1. 범주 화이트리스트 `:78-83`
   2. `lookalike` 존재 규칙 `:89`
   3. 버전 게이트 `:161`(`catalogue_version != "v1"` 이면 거부 — 안 풀면 22 상자 분기가 죽은 코드)
-  4. **헤더 `pallet` 6 필드 완전일치 게이트 `:174-181`** — 이게 안 풀리면 Task 3 이 스스로 만들라고 한 fixture 를 자기 시험에서 열 수 없다
+  4. **헤더 `pallet` 6 필드 완전일치 게이트 `:174-181`** — 이게 안 풀리면 Task 3 이 스스로 만들라고 한 fixture 를 자기 시험에서 열 수 없다. **그리고 이것은 dict 교체가 아니라 스키마 변경이다**(아래)
   5. **팔레트 배출부 `:233-251`**(v1 5 상자 하드코딩 `bottom`/`top`/`spacer_center`/`spacer_outer_0,1`) — **이 Task 의 본체인데 v7 목록에 없었다.** 22 상자 분기를 여기에 만든다
   6. `lookalike` 배출부 `:252-260`(`category` 로 분기해 블록 아홉 개/개방 구조를 따로 낸다)
 
   (§A ② 가 "재중심화"로 답하면 자세 범위 게이트 `:102-107` 이 일곱째다.)
 - [ ] **새 장면 키를 만들지 않는다.** `_require_keys`(`:24-26`, `:59-71`)는 카탈로그 공용 집합 동일성이라 키 하나를 더하면 v1 100 장면이 전부 거부된다. 새 음성은 기존 `lookalike` 의 `{x_m, y_m, yaw_rad}` 를 쓰고 종류는 `category` 로 구분한다. **한 범주 안에 두 구조 변형을 넣을 수 없다** — §A ①(b) 를 택하지 않는다면 변형마다 범주를 나눠야 하고 분할 산수가 바뀐다.
+- [ ] **URDF 는 상자만 준다. 정답 포켓 규약은 안 준다.** y ±0.18625·z 0.061·폭 0.2275·높이 0.078 은 그 상자들의 **여집합**이라 URDF 어디에도 없고, 계획은 네 숫자를 Task 3 헤더 계약·Task 4 재타깃·시험에 **손으로 베껴 넣게** 한다. `PalletGeometry` 가 이미 유도하지만(`pallet_geometry.py:77`·`:89`) Task 1 이 `scenes` 경로에서 `forklift_core` import 를 금지한다. **URDF 의 블록·바닥판·스트링거 extent 에서 그 규약을 다시 계산해 대조하는 시험을 넣는다.** 현재 `test_pallet_model_build.py:191-196` 은 YAML↔URDF 만 지킨다.
+- [ ] (사소) URDF 의 22 visual 이 전부 한 색(`0.62 0.40 0.20 1`)이다. v1 은 bottom/top/spacer 를 세 색으로 구분했다 — epal6 RGB 영상에서 덱과 블록 대비가 사라진다.
 - [ ] **치수 출처는 `sim/models/epal6_pallet/pallet.urdf` 직독이다.** 이미 스냅샷 허용 목록에 있고(확인됨) 22 visual + 22 collision 을 이름·크기·원점과 함께 갖는다. `ET` 는 `build_scene_world.py:5` 에 이미 import 돼 있다. YAML↔URDF 드리프트는 `tests/integration/test_pallet_model_build.py:191-196` 이 바이트 비교로 이미 막는다.
 - [ ] **경로는 `Path(__file__).resolve().parents[N]` 기준.** `capture_scenes.py:226-236` 이 `cwd=runtime`(스냅샷 밖)에서 띄우므로 cwd 상대경로는 로컬만 통과하고 원격에서만 죽는다.
 - [ ] **v1 경로는 그대로 둔다.** `test_build_scene_world.py:37`(collision 5), `:40`(outer 2), `:144`(스페이서 이름 집합)이 계속 통과해야 한다. **계속 통과해야 하는 3 파일:** `test_build_scene_world.py`, `test_capture_scenes.py`, `test_scene_catalogue.py`.
 - [ ] `sdf_parts.add_urdf_visuals` 는 재사용 불가다(시그니처에 pose 없음, 모델명 하드코딩 `:69`, collision 없음).
 - [ ] §A ④ 대로 `negative_lookalike` 상자(`:260`)를 처리한다.
-- [ ] **시험: 정답 포켓 중심을 지나는 광선이 팔레트 상자 어느 것과도 교차하지 않는다.**
+- [ ] **시험을 중심선 광선 하나로 쓰지 말 것 — 아무것도 증명하지 못한다.** 실측: 폭 0 인 중심선 광선은 y 를 (0.0725, 0.300) 안에서 아무 값이나 줘도, z 를 (0, 0.100) 안에서 아무 값이나 줘도 통과하고(**횡방향 ±110 mm**), **v1 5 상자 월드에 EPAL 6 규약을 쏴도 통과한다.** 두 기하를 구별하는 것이 이 Task 의 존재 이유인데 그걸 못 한다.
+  **대신:** 개구 사각형 **227.5 × 78 mm 전체를 훑어** 하나도 안 맞는 것을 확인하고, **동시에 인접 블록·스트링거는 반드시 맞는다**는 것을 적극적으로 단언한다(예: y 0.05 에서 `block_*_y1` 세 개, z 0.105 에서 `stringer_0..2`).
 
 ## Task 4: 카탈로그 변환과 새 음성 (위임) — **①·⑤ 이후**
 
