@@ -16,7 +16,7 @@
 
 | 결정 | 막는 것 | 비고 |
 |---|---|---|
-| ⓪ | **Task 2·3 전부** | (b) 는 둘 다 보류, (c) 는 Task 2·3 만 수행 |
+| ⓪ | **Task 2·3 전부** | (b) 는 둘 다 보류. **(c) 는 Task 2 만** — Task 3 은 캡처를 위한 작업이라 (c) 에서는 필요 없다 |
 | ⓪′ | Task 2 | **선결 조건이 안 갖춰져 지금 묻지 않는다**(아래). 그래서 **실질 관문이 아니다** |
 | ① | Task 4 | 분모까지 바꾼다(§D-2 b) |
 | ② | **Task 4** (Task 3 보다 강하게) | 재중심화를 택하면 Task 4 의 "자세 완전 일치"가 성립하지 않고 retarget 이 아니라 **재표본추출**이 된다 |
@@ -57,7 +57,9 @@ v5 는 조사 §5.1 의 다중 특징 점수 구조를 "M2 가 포켓 관측을 
 - (b) `negative_open_bay` 20 장을 **안 찍는다.** 독립 검토 두 건이 이걸 권고했다 — flush 변형은 결과를 이미 알고(§C-2), 후퇴 변형은 리그 둘이 갈렸는데(§C-2) 한 구성을 렌더링해도 그 불일치가 안 풀린다. **두 변형을 `test_opening_evidence_cases.py` 안에 상판·기둥 깊이를 매개변수로 넣는 편이 싸고 재현 가능하다.**
 - (c) 지금처럼 별도 보고만 한다.
 
-### ② 자세 범위를 어떻게 하는가 — **Task 3 착수 조건**
+**권고(①):** (a) + (b). 즉 `negative_block_row` 20 장만 찍고 합산 예산을 `targets` 에 넣으며, `negative_open_bay` 는 **찍지 않고** flush·후퇴 두 변형을 `test_opening_evidence_cases.py` 에 매개변수로 넣는다. 근거: flush 결과는 이미 알고(§C-2) 후퇴 변형은 리그 둘이 갈렸는데 **한 구성을 렌더링해도 그 불일치가 안 풀린다.** 다만 §H 대로, 안 찍는 이유는 "결과를 이미 안다"이지 "중요하지 않다"가 아니다.
+
+### ② 자세 범위를 어떻게 하는가 — **Task 4 착수 조건**(Task 3 보다 강하게)
 
 범위 `x 2–4 m, y ±1.0, yaw ±0.52` 는 브리프 요구가 아니라 2026-09-11 에 정한 값이고 **`build_scene_world.py:102-107` 에 하드코딩**되어 있다. 좁히면 **커밋된 v1 카탈로그가 거부된다** — 팔레트 장면 80 개 중 **54 개가 x > 3.0** 이다. 그러면 §D-1 의 회귀 가드와 시험 세 파일이 같이 죽는다.
 
@@ -67,8 +69,6 @@ v5 는 조사 §5.1 의 다중 특징 점수 구조를 "M2 가 포켓 관측을 
 - **브리프 Case C·D 는 "너무 가까워서 못 넣는 상황"** 인데 현행 범위는 2 m 미만이 **0 장면**이다. 로봇이 "후진해야 한다"를 판단하려면 그 거리에서 검출돼야 한다.
 
 → 선택지는 "좁힌다/안 좁힌다"가 아니라 **"재중심화하는가"** 다: 3.5–4.0 m 를 빼고 1.6–2.0 m 를 넣는가. 마운트 위치에서 1.6 m 팔레트가 아예 안 보이면 그것은 **H0 의 장착 결론**이고 4 m 장면 하나보다 가치가 크다.
-
-**권고(⑤):** (a) 두 장면 제외. `margin_px` 재정의는 100 장면 전체의 가시성 판정을 바꿔 자세 완전 일치를 깨고, 자세 미세 조정은 "v1 자세를 그대로 옮긴다"는 이 Task 의 전제를 깬다. 두 장면을 빼고 그 사실을 카탈로그와 검증 기록에 적는 것이 가장 적은 거짓말이다. **다만 §A ② 가 재중심화로 답하면 이 결정은 무의미해진다**(재표본추출이므로).
 
 ### ③ MR6D 를 어떻게 하는가
 
@@ -88,7 +88,7 @@ v1 자세를 그대로 두고 포켓만 EPAL 6 로 옮기면(y ±0.18625, z 0.06
 
 - (a) 두 장면을 제외한다 (b) 자세를 미세 조정해 완전일치를 포기한다 (c) 가시성 여유 `margin_px` 를 EPAL 6 용으로 재정의한다.
 
-**권고(①):** (a) + (b). 즉 `negative_block_row` 20 장만 찍고 합산 예산을 `targets` 에 넣으며, `negative_open_bay` 는 **찍지 않고** flush·후퇴 두 변형을 `test_opening_evidence_cases.py` 에 매개변수로 넣는다. 근거: flush 결과는 이미 알고(§C-2) 후퇴 변형은 리그 둘이 갈렸는데 **한 구성을 렌더링해도 그 불일치가 안 풀린다.** 다만 §H 대로, 안 찍는 이유는 "결과를 이미 안다"이지 "중요하지 않다"가 아니다.
+**권고(⑤):** (a) 두 장면 제외. `margin_px` 재정의는 100 장면 전체의 가시성 판정을 바꿔 자세 완전 일치를 깨고, 자세 미세 조정은 "v1 자세를 그대로 옮긴다"는 이 Task 의 전제를 깬다. 두 장면을 빼고 그 사실을 카탈로그와 검증 기록에 적는 것이 가장 적은 거짓말이다. **다만 §A ② 가 재중심화로 답하면 이 결정은 무의미해진다**(재표본추출이므로).
 
 ### ⑥ `min_band_points` 를 절대 개수로 둘 것인가
 
@@ -313,7 +313,7 @@ EPAL 6 은 계수가 **0.2195**(= 0.090 / (0.500 − 0.090))다. `range_min_m` 0
 **Files:** `src/forklift_core/perception/pocket_detector.py`, `tests/fixtures/synthetic_scene.py`, `tests/unit/perception/test_thin_deck_evidence.py`, Create `tests/unit/perception/test_opening_evidence_cases.py`, `tests/integration/test_detector_v1_replay.py`, `docs/design/2026-09-13-pocket-detector-baseline.md`, `docs/design/2026-09-13-thin-deck-evidence.md`, `docs/design/2026-09-13-floor-through-opening.md`, `docs/validation/2026-09-13-thin-deck-evidence.md`, `docs/interfaces/pocket-observation.md`
 
 - [ ] §B 의 규칙 1–5, 구현 주의, `upper_evidence_absent` 를 구현한다.
-- [ ] **`no_upper_deck` 의 status 를 `no_pallet` 으로 두는 이유를 적는다.** 음성에서 `no_pallet` 은 `true_negative`, `invalid` 는 예산 없는 버킷이다(`evaluation.py:101-108`). 이웃한 `opening_width_mismatch` 가 `invalid` 인 것과 갈리므로 의도임을 명시한다.
+- [ ] **`no_upper_deck` 의 status 는 `invalid` 다**(§B). 그 이유 — 계약이 `no_pallet` 을 팔레트 부재로 정의하는데 §C-3·§C-6 에서는 팔레트가 실제로 있다 — 를 주석과 설계 문서에 적는다. **"음성에서 `true_negative` 로 잡히니까" 라는 이유를 쓰지 말 것.** 그것은 지표를 맞추려고 계약을 구부린 것이고 §B 에서 철회했다.
 - [ ] `_Pattern` 에 `upper_ok: bool` 과 `lower`·`upper_left`·`upper_right`·`support_min` 을 스칼라로 추가. `support_count` 는 합계라 최솟값 지표로 못 쓴다.
 - [ ] **`deck_count = lower + upper_left + upper_right`, 점수식 `score = support_count + deck_count`(`:498`)는 그대로.** 실측: 점수는 16740 → 15726 으로 바뀌지만 **v1 100 장면에서 선택 결과는 한 장면도 안 바뀐다.** 이 재정의로 `test_thin_deck_evidence.py` 시험 **정확히 3 개**가 실패한다(`-231 == 0`) — 하니스가 `deck_count − upper` 로 `lower` 를 역산하는데 **현행에서 그 역산은 정확하다**(16740 − 7866 = 8874 = 실제 `lower`). 결함은 **재정의가 만드는 것**이고 명시 필드 직독이 그 수선이다.
 - [ ] `DetectionDiagnostics` 의 새 필드는 **`exception_traceback` 앞**에. 뒤에 붙이면 클래스 생성 시점에 `TypeError` 로 import 가 깨진다. 두 dataclass 모두 위치 인자 생성(`:347`, `:537-551`).
@@ -401,7 +401,7 @@ EPAL 6 은 계수가 **0.2195**(= 0.090 / (0.500 − 0.090))다. `range_min_m` 0
 
 ## Task 9·10: eval 1 회와 기록 (Claude)
 - [ ] 고정 revision·clean 트리에서 eval 1 회. **§D-2 의 (a)~(e) 로 합불을 적는다.**
-- [ ] 검증 기록: 위양성률과 `invalid` 병기 / **§C 의 한계 다섯 개 전부**(구멍이 좁혀졌을 뿐 닫히지 않았다는 것, 앞면 개방 구조, 머리 위 가림에서 실물 팔레트를 잃는다는 것, 얇은 부재 위에 게이트를 걸었다는 것, 판별 근거가 옮겨간 것) / `position_error_m` 의 z 성분 구조적 0 / `POSITION_TOLERANCE_M` 0.20 m 는 대응 문턱이지 도킹 허용치가 아니라는 점(포크 좌우 45 mm·수직 6 mm 와 무관) / §A ⑥ 의 문턱 절벽과 `range_max_m` 5.0 도달 불가 / 해결하지 않은 것들.
+- [ ] 검증 기록: 위양성률과 `invalid` 병기 / **§C 의 한계 여섯 개 전부**(C-1 구멍이 좁혀졌을 뿐 닫히지 않았다는 것, C-2 앞면 개방 구조, C-3 머리 위 가림에서 실물 팔레트를 잃는다는 것, C-4 얇은 부재 위에 게이트를 걸었다는 것과 그 행 수, **C-6 가림 없는 비스듬한 자세에서도 실물 팔레트를 잃는다는 것**, C-5 판별 근거가 옮겨간 것) / `position_error_m` 의 z 성분 구조적 0 / `POSITION_TOLERANCE_M` 0.20 m 는 대응 문턱이지 도킹 허용치가 아니라는 점(포크 좌우 45 mm·수직 6 mm 와 무관) / §A ⑥ 의 문턱 절벽과 `range_max_m` 5.0 도달 불가 / 해결하지 않은 것들.
 - [ ] `docs/hardware.md` 와 로드맵 위험표에 §E 의 접촉/근접 감지 요구를 남긴다.
 
 ---
