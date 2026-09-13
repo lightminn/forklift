@@ -235,18 +235,20 @@ def _vertical_plane_candidates(points, camera, params):
         plane = _refit_vertical(remaining[best_mask], camera)
         # The grid and residual must use inliers of the vertical model, not
         # the slightly tilted hypothesis that RANSAC used to find that model.
-        residual = np.abs((remaining - plane.point) @ plane.normal)
-        best_mask = residual <= params.plane_inlier_m
-        if np.count_nonzero(best_mask) < params.min_plane_points:
+        # Recover shared evidence consumed by earlier candidate planes.
+        residual = np.abs((points - plane.point) @ plane.normal)
+        full_mask = residual <= params.plane_inlier_m
+        if np.count_nonzero(full_mask) < params.min_plane_points:
             break
         plane = _Plane(
             plane.point,
             plane.normal,
-            remaining[best_mask],
-            float(np.percentile(residual[best_mask], 95)),
+            points[full_mask],
+            float(np.percentile(residual[full_mask], 95)),
         )
         planes.append(plane)
-        remaining = remaining[~best_mask]
+        remaining_residual = np.abs((remaining - plane.point) @ plane.normal)
+        remaining = remaining[remaining_residual > params.plane_inlier_m]
     return planes
 
 

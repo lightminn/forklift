@@ -1,4 +1,4 @@
-"""Replay the untracked, frozen v1 observations without changing expectations."""
+"""Replay frozen v1 observations, allowing only explicitly recorded fixes."""
 
 import json
 from pathlib import Path
@@ -15,10 +15,18 @@ RUNS = (
     ("20260912T170442Z_pocket_eval_dev_02", 70),
     ("20260912T170558Z_pocket_eval_eval_01", 30),
 )
+# Historical observations remain immutable. Each delta is
+# (scene_id, old_status, old_reason, new_status, new_reason).
+EXPECTED_REPLAY_DELTAS = {
+    "20260912T170442Z_pocket_eval_dev_02": {
+        ("s009", "no_pallet", "no_opening_pattern", "valid", None),
+    },
+    "20260912T170558Z_pocket_eval_eval_01": set(),
+}
 
 
 @pytest.mark.parametrize("run_name,expected_count", RUNS)
-def test_saved_v1_observations_are_exactly_reproduced(run_name, expected_count):
+def test_saved_v1_observations_have_only_expected_deltas(run_name, expected_count):
     run_dir = ROOT / "artifacts" / run_name
     if not run_dir.is_dir():
         pytest.skip(f"Untracked v1 evaluation artifacts are absent: {run_dir}")
@@ -37,6 +45,7 @@ def test_saved_v1_observations_are_exactly_reproduced(run_name, expected_count):
         f"Stored observations exist but replay input is missing: {dataset}"
     )
     differences = {}
+    deltas = set()
     for path in observations:
         expected = json.loads(path.read_text())
         expected.pop("diagnostics")
@@ -51,8 +60,28 @@ def test_saved_v1_observations_are_exactly_reproduced(run_name, expected_count):
                 or key not in actual
                 or expected[key] != actual[key]
             }
+            deltas.add(
+                (
+                    path.stem,
+                    expected["status"],
+                    expected["reason"],
+                    actual["status"],
+                    actual["reason"],
+                )
+            )
+            # A newly valid observation adds geometry, but must preserve all
+            # acquisition metadata and the unknown uncertainty fields.
+            assert set(differences[path.stem]) == {
+                "status",
+                "reason",
+                "left",
+                "right",
+                "insertion_yaw_rad",
+            }, json.dumps(differences[path.stem], indent=2, sort_keys=True)
     matched = expected_count - len(differences)
     print(
         f"{run_name}: {matched}/{expected_count} observations match (excluding diagnostics)"
     )
-    assert not differences, json.dumps(differences, indent=2, sort_keys=True)
+    assert deltas == EXPECTED_REPLAY_DELTAS[run_name], json.dumps(
+        differences, indent=2, sort_keys=True
+    )
