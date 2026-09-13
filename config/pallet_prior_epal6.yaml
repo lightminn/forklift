@@ -13,5 +13,6 @@ centre_spacer_range:
 - 0.065
 - 0.095
 overall_width_m: 0.8
+overall_depth_m: 0.6
 opening_width_tolerance_m: 0.02
 centre_spacer_tolerance_m: 0.015

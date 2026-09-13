@@ -40,6 +40,7 @@ def main(argv: list[str] | None = None) -> int:
         "opening_width_range": [prior.opening_width_min_m, prior.opening_width_max_m],
         "centre_spacer_range": [prior.centre_spacer_min_m, prior.centre_spacer_max_m],
         "overall_width_m": prior.overall_width_m,
+        "overall_depth_m": prior.overall_depth_m,
         "opening_width_tolerance_m": args.opening_width_tolerance,
         "centre_spacer_tolerance_m": args.centre_spacer_tolerance,
     }

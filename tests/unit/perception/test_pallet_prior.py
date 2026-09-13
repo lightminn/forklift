@@ -16,6 +16,7 @@ GOOD = {
     "opening_width_range": [0.18, 0.30],
     "centre_spacer_range": [0.08, 0.12],
     "overall_width_m": 0.8,
+    "overall_depth_m": 0.6,
     "source_provenance": "synthetic",
     "catalogue_version": "v1",
 }
@@ -39,6 +40,7 @@ def test_repository_prior_loads_and_reports_the_opening_centre_height():
         prior.opening_height_m,
     ) == (0.30, 0.05, 0.05, 0.20)
     assert prior.opening_centre_height_m == pytest.approx(0.15)
+    assert prior.overall_depth_m == 0.6
     assert prior.source_provenance == "synthetic" and prior.catalogue_version == "v1"
 
 
@@ -60,6 +62,9 @@ def test_the_prior_dataclass_has_no_defaults_so_synthetic_sizes_cannot_leak_in()
         {"opening_width_range": [0.18]},
         {"centre_spacer_range": [0.08, float("inf")]},
         {"overall_width_m": 0.5},
+        {"overall_depth_m": 0.0},
+        {"overall_depth_m": -0.6},
+        {"overall_depth_m": float("nan")},
         {"source_provenance": "guess"},
     ],
 )
@@ -90,6 +95,12 @@ def test_the_committed_epal6_prior_matches_the_geometry_file(tmp_path):
     )
     committed = REPO_ROOT / "config" / "pallet_prior_epal6.yaml"
     assert yaml.safe_load(out.read_text()) == yaml.safe_load(committed.read_text())
+    assert yaml.safe_load(out.read_text())["overall_depth_m"] == 0.6
+
+
+def test_a_prior_without_overall_depth_is_rejected(tmp_path):
+    with pytest.raises(ValueError):
+        load_pallet_prior(write(tmp_path, overall_depth_m=None))
 
 
 def test_the_epal6_prior_carries_the_asymmetric_decks():
@@ -107,6 +118,7 @@ def test_a_prior_whose_decks_and_opening_do_not_reach_the_height_is_refused(tmp_
         "height_m: 0.144\ndeck_bottom_m: 0.022\ndeck_top_m: 0.044\n"
         "opening_height_m: 0.100\nopening_width_range: [0.16, 0.20]\n"
         "centre_spacer_range: [0.13, 0.16]\noverall_width_m: 0.8\n"
+        "overall_depth_m: 0.6\n"
     )
     with pytest.raises(ValueError):
         load_pallet_prior(bad)
@@ -134,6 +146,7 @@ def test_generated_prior_tolerances_can_be_selected_and_are_recorded(capsys):
     assert data["opening_width_tolerance_m"] == 0.01
     assert data["centre_spacer_tolerance_m"] == 0.005
     assert data["source_provenance"] == "epal6_published_standard"
+    assert data["overall_depth_m"] == 0.6
 
 
 def test_the_geometry_can_produce_a_prior_without_a_file_round_trip():
@@ -145,6 +158,7 @@ def test_the_geometry_can_produce_a_prior_without_a_file_round_trip():
     assert prior.opening_width_max_m == pytest.approx(0.300)
     assert prior.centre_spacer_min_m == pytest.approx(0.065)
     assert prior.centre_spacer_max_m == pytest.approx(0.095)
+    assert prior.overall_depth_m == g.overall_depth_m == 0.6
 
 
 @pytest.mark.parametrize("tolerance", [-0.01, 0.0, 0.2, float("nan")])

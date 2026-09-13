@@ -21,6 +21,7 @@ class PalletPrior:
     centre_spacer_min_m: float
     centre_spacer_max_m: float
     overall_width_m: float
+    overall_depth_m: float
     source_provenance: str
     catalogue_version: str
 
@@ -44,6 +45,7 @@ def load_pallet_prior(path: Path) -> PalletPrior:
         "deck_top_m",
         "opening_height_m",
         "overall_width_m",
+        "overall_depth_m",
     )
     ranges = ("opening_width_range", "centre_spacer_range")
     tolerance_keys = {"opening_width_tolerance_m", "centre_spacer_tolerance_m"}

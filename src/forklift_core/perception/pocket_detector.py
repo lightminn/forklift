@@ -33,6 +33,9 @@ class DetectorParams:
     cell_m: float = 0.01
     plane_inlier_m: float = 0.02
     band_margin_m: float = 0.01
+    # Dev-tuning starting value, not derived from plane residuals. For EPAL 6,
+    # the unchanged floor filter leaves less than 2 mm of downward tolerance.
+    deck_evidence_tol_m: float = 0.006
     ransac_iterations: int = 200
     min_plane_points: int = 300
     min_band_points: int = 100
@@ -73,6 +76,7 @@ class DetectorParams:
         for name in (
             "cell_m",
             "plane_inlier_m",
+            "deck_evidence_tol_m",
             "front_margin_m",
             "max_plane_residual_m",
         ):
@@ -293,11 +297,21 @@ def count_interior_gaps(columns: NDArray[np.bool_]) -> int:
     return len(_gap_runs(columns))
 
 
-def _opening_candidates(plane, prior, params):
+def _opening_candidates(plane, prior, params, workspace):
     lateral = plane.points @ plane.left_axis
     local = np.column_stack((np.zeros(len(lateral)), lateral, plane.points[:, 2]))
     counts, origin = _column_grid(local, prior, params)
     gaps = _gap_runs(counts > 0)
+    workspace_lateral = workspace @ plane.left_axis
+    # The normal points towards the camera, so depth behind the plane is negative
+    # signed normal distance. No front-side allowance: even a 0.5 mm strip ahead
+    # of the face must not count as the lower deck.
+    depth = -(workspace - plane.point) @ plane.normal
+    lower_band = (
+        (np.abs(workspace[:, 2] - prior.deck_bottom_m) <= params.deck_evidence_tol_m)
+        & (depth >= 0)
+        & (depth <= prior.overall_depth_m + params.plane_inlier_m)
+    )
     patterns = []
     for first, second in zip(gaps, gaps[1:], strict=False):
         # The occupied spacer includes up to two boundary cells.
@@ -316,7 +330,11 @@ def _opening_candidates(plane, prior, params):
         left_edge = (origin + first[0]) * params.cell_m
         right_edge = (origin + second[1]) * params.cell_m
         over_openings = (lateral >= left_edge) & (lateral <= right_edge)
-        lower = np.count_nonzero(over_openings & (local[:, 2] <= prior.deck_bottom_m))
+        lower = np.count_nonzero(
+            lower_band
+            & (workspace_lateral >= left_edge)
+            & (workspace_lateral <= right_edge)
+        )
         upper = np.count_nonzero(
             over_openings & (local[:, 2] >= prior.height_m - prior.deck_top_m)
         )
@@ -465,7 +483,7 @@ def detect_pockets(
                 if plane.residual_p95_m > params.max_plane_residual_m:
                     rejected[index] = "vertical_refit_residual"
                     continue
-                patterns = _opening_candidates(plane, prior, params)
+                patterns = _opening_candidates(plane, prior, params, workspace)
                 if not patterns:
                     rejected[index] = "no_opening_pattern"
                 for pattern in patterns:

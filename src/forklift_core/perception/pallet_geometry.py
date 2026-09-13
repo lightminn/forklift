@@ -103,6 +103,7 @@ class PalletGeometry:
             centre_spacer_min_m=self.block_width_m - centre_spacer_tolerance_m,
             centre_spacer_max_m=self.block_width_m + centre_spacer_tolerance_m,
             overall_width_m=self.overall_width_m,
+            overall_depth_m=self.overall_depth_m,
             source_provenance=self.source_provenance,
             catalogue_version=self.geometry_version,
         )

@@ -9,3 +9,4 @@ opening_height_m: 0.20
 opening_width_range: [0.18, 0.30]
 centre_spacer_range: [0.08, 0.12]
 overall_width_m: 0.8
+overall_depth_m: 0.6
