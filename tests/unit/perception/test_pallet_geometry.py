@@ -38,15 +38,19 @@ def test_the_published_epal6_envelope_is_what_the_file_says():
         0.600,
         0.144,
     )
-    assert (g.block_width_m, g.block_depth_m, g.block_height_m) == (0.080, 0.073, 0.078)
-    assert g.source_provenance == "epal6_published_standard"
+    assert g.block_widths_m == (0.100, 0.145, 0.100)
+    assert g.bottom_board_widths_m == (0.100, 0.145, 0.100)
+    assert (g.block_depth_m, g.block_height_m) == (0.145, 0.078)
+    assert (g.stringer_m, g.top_board_thickness_m) == (0.022, 0.022)
+    assert g.source_provenance == "epal6_published_standard_plus_cad_measurement"
 
 
 def test_the_opening_geometry_is_derived_not_restated():
     g = load_pallet_geometry(EPAL6)
-    assert g.opening_width_m == pytest.approx(0.280)
-    assert g.opening_centre_offset_m == pytest.approx(0.180)
-    assert g.opening_centre_spacing_m == pytest.approx(0.360)
+    assert g.opening_width_m == pytest.approx(0.2275)
+    assert g.centre_block_width_m == pytest.approx(0.145)
+    assert g.opening_centre_offset_m == pytest.approx(0.18625)
+    assert g.opening_centre_spacing_m == pytest.approx(0.3725)
     assert g.deck_top_m == pytest.approx(0.044)
     assert g.opening_z_band_m == pytest.approx((0.022, 0.100))
     assert g.opening_centre_height_m == pytest.approx(0.061)
@@ -54,19 +58,38 @@ def test_the_opening_geometry_is_derived_not_restated():
 
 def test_block_centres_are_symmetric_and_span_the_envelope():
     g = load_pallet_geometry(EPAL6)
-    assert g.block_centres_y_m() == pytest.approx([-0.360, 0.0, 0.360])
-    assert g.block_centres_x_m() == pytest.approx([-0.2635, 0.0, 0.2635])
+    assert g.block_centres_y_m() == pytest.approx([-0.350, 0.0, 0.350])
+    assert g.block_centres_x_m() == pytest.approx([-0.2275, 0.0, 0.2275])
     # the outer blocks end exactly at the envelope
-    assert g.block_centres_y_m()[-1] + g.block_width_m / 2 == pytest.approx(
+    assert g.block_centres_y_m()[-1] + g.block_widths_m[-1] / 2 == pytest.approx(
         g.overall_width_m / 2
+    )
+
+
+def test_seven_top_boards_span_the_width_with_even_gaps():
+    g = load_pallet_geometry(EPAL6)
+    assert g.top_board_count == 7
+    assert g.top_board_width_m == pytest.approx(0.100)
+    assert g.top_board_pitch_m == pytest.approx(0.116666666667)
+    assert g.top_board_pitch_m - g.top_board_width_m == pytest.approx(0.016666666667)
+    assert g.top_board_centres_y_m() == pytest.approx(
+        [
+            -0.350,
+            -0.233333333333,
+            -0.116666666667,
+            0.0,
+            0.116666666667,
+            0.233333333333,
+            0.350,
+        ]
     )
 
 
 def test_the_estimated_dls08_forks_enter_this_pallet_without_lifting():
     fit = check_fork_fit(load_pallet_geometry(EPAL6), **FORKS)
     assert fit.fits
-    assert fit.lateral_inner_margin_m == pytest.approx(0.0775)
-    assert fit.lateral_outer_margin_m == pytest.approx(0.1475)
+    assert fit.lateral_inner_margin_m == pytest.approx(0.0450)
+    assert fit.lateral_outer_margin_m == pytest.approx(0.1275)
     assert fit.lift_required_m == pytest.approx(0.0)
     assert fit.reach_fraction == pytest.approx(0.42 / 0.600)
 
@@ -104,14 +127,17 @@ def test_unknown_keys_are_refused(tmp_path):
     "overrides",
     [
         {"overall_width_m": math.nan},
-        {"block_width_m": math.inf},
+        {"block_widths_m": [0.100, math.inf, 0.100]},
         {"block_depth_m": 0.3},
-        {"block_width_m": 0.3},
+        {"block_widths_m": [0.3, 0.3, 0.3], "bottom_board_widths_m": [0.3, 0.3, 0.3]},
         {"deck_bottom_m": -0.01},
-        {"deck_top_m": -0.01},
-        {"block_count_across": 4},
-        {"block_count_deep": 2.5},
+        {"stringer_m": -0.01},
+        {"block_widths_m": [0.100, 0.145, 0.100, 0.100]},
+        {"top_board_count": 2.5},
         {"overall_depth_m": True},
+        {"top_board_thickness_m": -0.01},
+        {"bottom_board_widths_m": [0.100, 0.100, 0.100]},
+        {"top_board_count": 9},
     ],
 )
 def test_invalid_geometry_values_are_refused(tmp_path, overrides):

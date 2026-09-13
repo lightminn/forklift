@@ -1,17 +1,16 @@
 {
   "geometry_file": "pallet_geometry_epal6.yaml",
-  "geometry_sha256": "8094042c22b8c2a9966de290fe4e40b86a4fdd96d3ed406d57b27fe1f8447bf5",
+  "geometry_sha256": "3e595d38bf9a18d2d0727afe7f74821fb8490d5ec6651830fba783aaeda61dfb",
   "geometry_version": "epal6",
-  "source_provenance": "epal6_published_standard",
-  "generated_at": "2026-09-12T17:32:34.586174+00:00",
+  "source_provenance": "epal6_published_standard_plus_cad_measurement",
+  "generated_at": "2026-09-13T12:09:33.847103+00:00",
   "origin": "footprint_centre_at_floor_z0",
   "simplifications": [
-    "deck_board_gaps_omitted",
-    "continuous_bottom_and_combined_top_decks"
+    "axis_aligned_boxes_without_chamfers_or_fasteners"
   ],
   "physical_dynamics_validated": false,
   "model_sha256": {
-    "pallet.xml": "79e32a5e02bbdfd95ca1fba4e7ca934e89985b83f6c0d3de062f111307432c0f",
-    "pallet.urdf": "49eab3a4e473f1e2eaf15590f2328d915b2f3c6727df7fd131ff8c8190ff95f2"
+    "pallet.xml": "46f867c4f52b2b5deb665a742472f1fba4e710062106f8be8f46729446261bc8",
+    "pallet.urdf": "fe0948644452e466a3a6a79c697fb79f2c46a7d4edf1d566fb7949cbebcaf64e"
   }
 }

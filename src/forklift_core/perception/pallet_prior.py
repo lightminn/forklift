@@ -102,7 +102,8 @@ def load_pallet_prior(path: Path) -> PalletPrior:
                 raise ValueError(f"{prefix} range must match its symmetric tolerance")
     provenance = data["source_provenance"]
     if not isinstance(provenance, str) or provenance not in PROVENANCES | {
-        "epal6_published_standard"
+        "epal6_published_standard",
+        "epal6_published_standard_plus_cad_measurement",
     }:
         raise ValueError("Unsupported source_provenance")
     version = data["catalogue_version"]

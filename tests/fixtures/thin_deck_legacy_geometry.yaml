@@ -1,0 +1,16 @@
+# Synthetic continuous-slab regression fixture frozen from 9834318.
+# These superseded dimensions are NOT the current EPAL 6 geometry.
+# Keep paired with thin_deck_legacy_prior.yaml to test the v4 evidence contract.
+# Axes: x insertion depth, y approach-face width, z up; origin at floor centre.
+source_provenance: synthetic
+geometry_version: thin_deck_legacy_9834318
+overall_width_m: 0.800
+overall_depth_m: 0.600
+overall_height_m: 0.144
+block_width_m: 0.080
+block_depth_m: 0.073
+block_height_m: 0.078
+deck_bottom_m: 0.022
+deck_top_m: 0.044
+block_count_across: 3
+block_count_deep: 3

@@ -1,23 +1,44 @@
-# EPAL 6 published dimensions, not measurements of a delivered pallet.
-# Envelope, block height and deck heights are dimensioned on the official EPAL 6
-# product sheet (PB 05/2016 DE). The block plan widths are NOT dimensioned there;
-# they were read off that sheet's scaled side views, so treat them as +/- 3 mm.
-# The same reading reproduces the sheet's own 217 mm and 333 mm deck-board
-# dimensions and its 100 mm and 144 mm heights exactly, which is what the
-# measurement is trusted on.
+# EPAL 6 half pallet, 800 x 600 x 144 mm.
+#
+# Provenance of each number:
+#  - envelope, the 100 mm block-top height, the 144 mm total and the 217/333 mm
+#    top-board dimensions are DIMENSIONED on the official EPAL 6 product sheet
+#    (PB 05/2016 DE). The sheet also states 13 boards and 9 blocks.
+#  - the block plan sizes and the board layout are MEASURED from a 800x600 STEP
+#    model and cross-checked against the osrf/gazebo_models euro_pallet mesh.
+#    Both give 100/145/100 mm blocks across the approach face and 227.5 mm
+#    openings, and both reproduce the sheet's dimensioned values.
+#  - an earlier reading of the drawing gave 80 mm blocks and 280 mm openings.
+#    That was WRONG: the side view draws the bottom boards in front of the
+#    blocks, so only a sliver of each block is visible. Superseded.
+#
+# Not a measurement of a delivered pallet. Measure the real one on arrival.
+#
 # Axes: x insertion depth, y approach-face width, z up; origin at floor centre.
-# Simplification: continuous lower deck and combined stringer/top deck;
-# individual deck-board gaps are omitted. Envelope and openings are preserved.
-source_provenance: epal6_published_standard
+source_provenance: epal6_published_standard_plus_cad_measurement
 geometry_version: epal6
-overall_width_m: 0.800
-overall_depth_m: 0.600
-overall_height_m: 0.144
-block_width_m: 0.080
-block_depth_m: 0.073
-block_height_m: 0.078
-deck_bottom_m: 0.022
-# Explicit component thickness checks the independently specified total height.
-deck_top_m: 0.044
-block_count_across: 3
-block_count_deep: 3
+overall_width_m: 0.800      # y, the face the forks enter
+overall_depth_m: 0.600      # x
+overall_height_m: 0.144     # z
+
+# Vertical layers. 0.022 + 0.078 + 0.022 + 0.022 = 0.144, and the sheet
+# dimensions floor-to-block-top as 0.100.
+deck_bottom_m: 0.022        # bottom boards
+block_height_m: 0.078       # fork opening height
+stringer_m: 0.022           # boards spanning the width, on top of the blocks
+top_board_thickness_m: 0.022  # top boards
+
+# Blocks: 3 across the 800 face by 3 along the 600 depth = 9, as the sheet says.
+block_widths_m: [0.100, 0.145, 0.100]   # across the face; centre block is wider
+block_depth_m: 0.145                    # along the insertion axis, all three rows
+
+# Bottom boards run the full depth, one under each block column.
+bottom_board_widths_m: [0.100, 0.145, 0.100]
+
+# Top boards run the full depth, 7 of them, evenly spaced across the face.
+# 7 x 100 + 6 x 16.667 = 800, which reproduces the sheet's 217 and 333 mm.
+top_board_count: 7
+top_board_width_m: 0.100
+
+# The fork openings are between the block columns and are open to the floor:
+# the bottom boards sit under the columns, not under the openings.

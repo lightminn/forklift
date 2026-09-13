@@ -1,0 +1,19 @@
+# Synthetic continuous-slab regression prior frozen from 9834318.
+# These superseded dimensions are NOT the current EPAL 6 recognition prior.
+# Keep paired with thin_deck_legacy_geometry.yaml; no physical-pallet claim.
+source_provenance: synthetic
+catalogue_version: thin_deck_legacy_9834318
+height_m: 0.144
+deck_bottom_m: 0.022
+deck_top_m: 0.044
+opening_height_m: 0.078
+opening_width_range:
+- 0.26
+- 0.3
+centre_spacer_range:
+- 0.065
+- 0.095
+overall_width_m: 0.8
+overall_depth_m: 0.6
+opening_width_tolerance_m: 0.02
+centre_spacer_tolerance_m: 0.015

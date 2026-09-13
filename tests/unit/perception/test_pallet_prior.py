@@ -109,6 +109,30 @@ def test_the_epal6_prior_carries_the_asymmetric_decks():
     assert prior.deck_top_m == pytest.approx(0.044)
     assert prior.opening_height_m == pytest.approx(0.078)
     assert prior.opening_centre_height_m == pytest.approx(0.061)
+    assert (prior.opening_width_min_m, prior.opening_width_max_m) == pytest.approx(
+        [0.2075, 0.2475]
+    )
+    assert (prior.centre_spacer_min_m, prior.centre_spacer_max_m) == pytest.approx(
+        [0.130, 0.160]
+    )
+    assert prior.source_provenance == "epal6_published_standard_plus_cad_measurement"
+
+
+def test_generated_cad_measured_prior_can_be_loaded(tmp_path):
+    from tools import build_pallet_prior
+
+    out = tmp_path / "prior.yaml"
+    build_pallet_prior.main(
+        [
+            "--geometry",
+            str(REPO_ROOT / "config/pallet_geometry_epal6.yaml"),
+            "--output",
+            str(out),
+        ]
+    )
+    prior = load_pallet_prior(out)
+    assert prior.source_provenance == "epal6_published_standard_plus_cad_measurement"
+    assert prior.deck_top_m == pytest.approx(0.044)
 
 
 def test_a_prior_whose_decks_and_opening_do_not_reach_the_height_is_refused(tmp_path):
@@ -141,11 +165,11 @@ def test_generated_prior_tolerances_can_be_selected_and_are_recorded(capsys):
         == 0
     )
     data = yaml.safe_load(capsys.readouterr().out)
-    assert data["opening_width_range"] == pytest.approx([0.270, 0.290])
-    assert data["centre_spacer_range"] == pytest.approx([0.075, 0.085])
+    assert data["opening_width_range"] == pytest.approx([0.2175, 0.2375])
+    assert data["centre_spacer_range"] == pytest.approx([0.140, 0.150])
     assert data["opening_width_tolerance_m"] == 0.01
     assert data["centre_spacer_tolerance_m"] == 0.005
-    assert data["source_provenance"] == "epal6_published_standard"
+    assert data["source_provenance"] == "epal6_published_standard_plus_cad_measurement"
     assert data["overall_depth_m"] == 0.6
 
 
@@ -154,10 +178,10 @@ def test_the_geometry_can_produce_a_prior_without_a_file_round_trip():
 
     g = load_pallet_geometry(REPO_ROOT / "config/pallet_geometry_epal6.yaml")
     prior = g.to_pallet_prior()
-    assert prior.opening_width_min_m == pytest.approx(0.260)
-    assert prior.opening_width_max_m == pytest.approx(0.300)
-    assert prior.centre_spacer_min_m == pytest.approx(0.065)
-    assert prior.centre_spacer_max_m == pytest.approx(0.095)
+    assert prior.opening_width_min_m == pytest.approx(0.2075)
+    assert prior.opening_width_max_m == pytest.approx(0.2475)
+    assert prior.centre_spacer_min_m == pytest.approx(0.130)
+    assert prior.centre_spacer_max_m == pytest.approx(0.160)
     assert prior.overall_depth_m == g.overall_depth_m == 0.6
 
 

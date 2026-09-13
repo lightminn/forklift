@@ -10,49 +10,72 @@ from forklift_core.perception.pallet_prior import PalletPrior
 
 @dataclass(frozen=True)
 class PalletGeometry:
-    """Physical pallet shape. Loaded from YAML only; no dataclass defaults."""
+    """Physical pallet shape. Loaded from YAML only; no dataclass defaults.
+
+    The fork openings are open to the floor: the bottom boards run under the
+    block columns, not under the openings. A continuous lower slab would put a
+    surface there that a real EPAL pallet does not have.
+    """
 
     source_provenance: str
     geometry_version: str
     overall_width_m: float
     overall_depth_m: float
     overall_height_m: float
-    block_width_m: float
-    block_depth_m: float
-    block_height_m: float
     deck_bottom_m: float
-    block_count_across: int
-    block_count_deep: int
+    block_height_m: float
+    stringer_m: float
+    top_board_thickness_m: float
+    block_widths_m: tuple[float, float, float]
+    block_depth_m: float
+    bottom_board_widths_m: tuple[float, float, float]
+    top_board_count: int
+    top_board_width_m: float
 
     def __post_init__(self) -> None:
+        text = {"source_provenance", "geometry_version"}
+        sequences = {"block_widths_m", "bottom_board_widths_m"}
         for field in fields(self):
             value = getattr(self, field.name)
-            if field.name in {"source_provenance", "geometry_version"}:
+            if field.name in text:
                 if not isinstance(value, str) or not value.strip():
                     raise ValueError(f"{field.name} must be nonempty text")
-            elif field.name.startswith("block_count_"):
-                if type(value) is not int or value != 3:
-                    raise ValueError(f"{field.name} must be 3 for two fork openings")
+            elif field.name in sequences:
+                if len(value) != 3:
+                    raise ValueError(f"{field.name} must name three block columns")
+                for index, item in enumerate(value):
+                    if _finite_scalar(item, f"{field.name}[{index}]") <= 0:
+                        raise ValueError(f"{field.name}[{index}] must be positive")
+            elif field.name == "top_board_count":
+                if type(value) is not int or value < 2:
+                    raise ValueError("top_board_count must be at least two boards")
             elif _finite_scalar(value, field.name) <= 0:
                 raise ValueError(f"{field.name} must be positive")
-        if self.deck_top_m <= 0:
-            raise ValueError("deck_top_m must be positive")
-        if 3 * self.block_width_m >= self.overall_width_m:
+        if tuple(self.block_widths_m) != tuple(self.bottom_board_widths_m):
+            raise ValueError("Bottom boards must sit under the block columns")
+        if sum(self.block_widths_m) >= self.overall_width_m:
             raise ValueError("Blocks must leave two open channels across the width")
         if 3 * self.block_depth_m >= self.overall_depth_m:
             raise ValueError("Blocks must leave two open channels along the depth")
+        if self.top_board_count * self.top_board_width_m > self.overall_width_m:
+            raise ValueError("Top boards must fit across the width")
 
     @property
     def deck_top_m(self) -> float:
-        return self.overall_height_m - self.deck_bottom_m - self.block_height_m
+        """Everything above the opening: stringers plus top boards."""
+        return self.stringer_m + self.top_board_thickness_m
 
     @property
     def opening_width_m(self) -> float:
-        return (self.overall_width_m - 3 * self.block_width_m) / 2
+        return (self.overall_width_m - sum(self.block_widths_m)) / 2
+
+    @property
+    def centre_block_width_m(self) -> float:
+        return self.block_widths_m[1]
 
     @property
     def opening_centre_offset_m(self) -> float:
-        return (self.block_width_m + self.opening_width_m) / 2
+        return (self.centre_block_width_m + self.opening_width_m) / 2
 
     @property
     def opening_centre_spacing_m(self) -> float:
@@ -66,13 +89,30 @@ class PalletGeometry:
     def opening_z_band_m(self) -> tuple[float, float]:
         return self.deck_bottom_m, self.deck_bottom_m + self.block_height_m
 
+    @property
+    def top_board_pitch_m(self) -> float:
+        span = self.overall_width_m - self.top_board_width_m
+        return span / (self.top_board_count - 1)
+
     def block_centres_y_m(self) -> list[float]:
-        offset = (self.overall_width_m - self.block_width_m) / 2
-        return [-offset, 0.0, offset]
+        """Column centres across the face; the outer columns touch the edges."""
+        left, centre, right = self.block_widths_m
+        return [
+            -(self.overall_width_m - left) / 2,
+            0.0,
+            (self.overall_width_m - right) / 2,
+        ]
 
     def block_centres_x_m(self) -> list[float]:
         offset = (self.overall_depth_m - self.block_depth_m) / 2
         return [-offset, 0.0, offset]
+
+    def top_board_centres_y_m(self) -> list[float]:
+        start = -(self.overall_width_m - self.top_board_width_m) / 2
+        return [
+            start + index * self.top_board_pitch_m
+            for index in range(self.top_board_count)
+        ]
 
     def to_pallet_prior(
         self,
@@ -83,13 +123,13 @@ class PalletGeometry:
         """Derive an asymmetric-deck prior with symmetric recognition tolerances."""
         for name, tolerance, nominal in (
             ("opening_width", opening_width_tolerance_m, self.opening_width_m),
-            ("centre_spacer", centre_spacer_tolerance_m, self.block_width_m),
+            ("centre_spacer", centre_spacer_tolerance_m, self.centre_block_width_m),
         ):
             if not 0 < _finite_scalar(tolerance, name) < nominal:
                 raise ValueError(f"{name} tolerance must be positive and below nominal")
         if self.overall_width_m <= (
             2 * (self.opening_width_m + opening_width_tolerance_m)
-            + self.block_width_m
+            + self.centre_block_width_m
             + centre_spacer_tolerance_m
         ):
             raise ValueError("Tolerances must leave room for outer supports")
@@ -100,8 +140,8 @@ class PalletGeometry:
             opening_height_m=self.block_height_m,
             opening_width_min_m=self.opening_width_m - opening_width_tolerance_m,
             opening_width_max_m=self.opening_width_m + opening_width_tolerance_m,
-            centre_spacer_min_m=self.block_width_m - centre_spacer_tolerance_m,
-            centre_spacer_max_m=self.block_width_m + centre_spacer_tolerance_m,
+            centre_spacer_min_m=self.centre_block_width_m - centre_spacer_tolerance_m,
+            centre_spacer_max_m=self.centre_block_width_m + centre_spacer_tolerance_m,
             overall_width_m=self.overall_width_m,
             overall_depth_m=self.overall_depth_m,
             source_provenance=self.source_provenance,
@@ -110,20 +150,29 @@ class PalletGeometry:
 
 
 def load_pallet_geometry(path: Path) -> PalletGeometry:
-    """Reject unknown fields and inconsistent component/total dimensions."""
+    """Reject unknown fields and layers that do not add up to the total height."""
     import yaml
 
     try:
         data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     except yaml.YAMLError as exc:
         raise ValueError("Malformed pallet geometry YAML") from exc
-    expected = {field.name for field in fields(PalletGeometry)} | {"deck_top_m"}
+    expected = {field.name for field in fields(PalletGeometry)}
     if not isinstance(data, dict) or set(data) != expected:
         raise ValueError("Pallet geometry must contain exactly the documented fields")
-    top = _finite_scalar(data.pop("deck_top_m"), "deck_top_m")
+    for name in ("block_widths_m", "bottom_board_widths_m"):
+        if not isinstance(data.get(name), list):
+            raise ValueError(f"{name} must be a list of three widths")
+        data[name] = tuple(float(v) for v in data[name])
     geometry = PalletGeometry(**data)
-    if top <= 0 or not math.isclose(top, geometry.deck_top_m, rel_tol=0, abs_tol=1e-9):
-        raise ValueError("overall_height_m must equal both decks plus block_height_m")
+    layers = (
+        geometry.deck_bottom_m
+        + geometry.block_height_m
+        + geometry.stringer_m
+        + geometry.top_board_thickness_m
+    )
+    if not math.isclose(layers, geometry.overall_height_m, rel_tol=0, abs_tol=1e-9):
+        raise ValueError("overall_height_m must equal the four stacked layers")
     return geometry
 
 
@@ -175,9 +224,9 @@ def check_fork_fit(
     ):
         if _finite_scalar(value, name) < 0:
             raise ValueError(f"{name} must be nonnegative")
-    inner = (fork_spacing_m - fork_width_m - geometry.block_width_m) / 2
+    inner = (fork_spacing_m - fork_width_m - geometry.centre_block_width_m) / 2
     outer = (
-        geometry.block_width_m / 2
+        geometry.centre_block_width_m / 2
         + geometry.opening_width_m
         - (fork_spacing_m + fork_width_m) / 2
     )

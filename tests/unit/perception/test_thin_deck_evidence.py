@@ -1,4 +1,9 @@
-"""v4 evidence-location contract, using independent first-hit box rays."""
+"""v4 evidence-location regression on the frozen 9834318 synthetic slab.
+
+Independent first-hit box rays preserve the original gates and counterexamples.
+This fixture has a continuous lower slab and is not the current EPAL 6 shape;
+passing these tests does not resolve that shape's missing lower-deck evidence.
+"""
 
 import dataclasses
 import importlib.util
@@ -7,12 +12,16 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import yaml
 
 from forklift_core.perception import pocket_detector as detector
-from forklift_core.perception.pallet_geometry import load_pallet_geometry
 from forklift_core.perception.pallet_prior import load_pallet_prior
 
 ROOT = Path(__file__).resolve().parents[3]
+LEGACY_PRIOR = ROOT / "tests/fixtures/thin_deck_legacy_prior.yaml"
+LEGACY_GEOMETRY = yaml.safe_load(
+    (ROOT / "tests/fixtures/thin_deck_legacy_geometry.yaml").read_text()
+)
 _SPEC = importlib.util.spec_from_file_location(
     "thin_deck_scene", ROOT / "tests/fixtures/synthetic_scene.py"
 )
@@ -34,31 +43,49 @@ def box_scene(boxes, *, quantize=True):
     return dataclasses.replace(scene, depth_m=depth)
 
 
-def epal6_boxes(x):
-    geometry = load_pallet_geometry(ROOT / "config/pallet_geometry_epal6.yaml")
+def legacy_block_centres(axis):
+    geometry = LEGACY_GEOMETRY
+    across = axis == "y"
+    extent = geometry["overall_width_m" if across else "overall_depth_m"]
+    block = geometry["block_width_m" if across else "block_depth_m"]
+    count = geometry["block_count_across" if across else "block_count_deep"]
+    offset = (extent - block) / 2
+    return np.linspace(-offset, offset, count)
+
+
+def legacy_slab_boxes(x):
+    geometry = LEGACY_GEOMETRY
     boxes = [
         (
-            (x, 0.0, geometry.deck_bottom_m / 2),
+            (x, 0.0, geometry["deck_bottom_m"] / 2),
             (
-                geometry.overall_depth_m,
-                geometry.overall_width_m,
-                geometry.deck_bottom_m,
+                geometry["overall_depth_m"],
+                geometry["overall_width_m"],
+                geometry["deck_bottom_m"],
             ),
         ),
         (
-            (x, 0.0, geometry.overall_height_m - geometry.deck_top_m / 2),
-            (geometry.overall_depth_m, geometry.overall_width_m, geometry.deck_top_m),
+            (x, 0.0, geometry["overall_height_m"] - geometry["deck_top_m"] / 2),
+            (
+                geometry["overall_depth_m"],
+                geometry["overall_width_m"],
+                geometry["deck_top_m"],
+            ),
         ),
     ]
-    for dx in geometry.block_centres_x_m():
-        for y in geometry.block_centres_y_m():
+    for dx in legacy_block_centres("x"):
+        for y in legacy_block_centres("y"):
             boxes.append(
                 (
-                    (x + dx, y, geometry.opening_centre_height_m),
                     (
-                        geometry.block_depth_m,
-                        geometry.block_width_m,
-                        geometry.block_height_m,
+                        x + dx,
+                        y,
+                        geometry["deck_bottom_m"] + geometry["block_height_m"] / 2,
+                    ),
+                    (
+                        geometry["block_depth_m"],
+                        geometry["block_width_m"],
+                        geometry["block_height_m"],
                     ),
                 )
             )
@@ -66,14 +93,20 @@ def epal6_boxes(x):
 
 
 def columns_and_top():
-    # The two 280 mm channels have the EPAL 6 approach-face dimensions.
-    return [((3.0, 0.0, 0.122), (0.6, 0.8, 0.044))] + [
-        ((3.0, y, 0.050), (0.6, 0.08, 0.100)) for y in (-0.36, 0.0, 0.36)
+    # The legacy 280 mm channels intentionally retain the old counterexamples.
+    geometry = LEGACY_GEOMETRY
+    support_height = geometry["deck_bottom_m"] + geometry["block_height_m"]
+    return [legacy_slab_boxes(3.0)[1]] + [
+        (
+            (3.0, y, support_height / 2),
+            (geometry["overall_depth_m"], geometry["block_width_m"], support_height),
+        )
+        for y in legacy_block_centres("y")
     ]
 
 
 def evidence_counts(scene, front_x, *, params=None, extra_points=()):
-    prior = load_pallet_prior(ROOT / "config/pallet_prior_epal6.yaml")
+    prior = load_pallet_prior(LEGACY_PRIOR)
     params = params or detector.DetectorParams()
     points, _ = detector._base_points(scene)
     workspace = detector._filter_workspace(
@@ -119,7 +152,9 @@ def opening_evidence_counts(plane, workspace, prior, params):
 
 @pytest.mark.parametrize("x", [2.0, 3.7, 4.0])
 def test_thin_deck_evidence_exceeds_the_gate_at_each_distance(x):
-    before, after = evidence_counts(box_scene(epal6_boxes(x)), x - 0.3)
+    before, after = evidence_counts(
+        box_scene(legacy_slab_boxes(x)), x - LEGACY_GEOMETRY["overall_depth_m"] / 2
+    )
     print(f"x={x:.1f} m: lower before={before}, after={after}")
     threshold = detector.DetectorParams().min_band_points
     if x == 2.0:
@@ -129,10 +164,10 @@ def test_thin_deck_evidence_exceeds_the_gate_at_each_distance(x):
     assert after > threshold
 
 
-def test_a_quantized_epal6_at_three_metres_reaches_the_final_observation():
+def test_a_quantized_legacy_slab_at_three_metres_reaches_the_final_observation():
     result = detector.detect_pockets(
-        box_scene(epal6_boxes(3.0)),
-        load_pallet_prior(ROOT / "config/pallet_prior_epal6.yaml"),
+        box_scene(legacy_slab_boxes(3.0)),
+        load_pallet_prior(LEGACY_PRIOR),
     )
     assert result.observation.status == "valid", result.observation.reason
 
@@ -142,7 +177,7 @@ def test_a_24mm_strip_ahead_of_the_front_supplies_zero_lower_evidence():
     strips = [((2.690, y, 0.012), (0.019, 0.260, 0.024)) for y in (-0.18, 0.18)]
     # Keep exact depths so the strip's physical x bounds identify its returns.
     scene = box_scene(columns_and_top() + strips, quantize=False)
-    prior = load_pallet_prior(ROOT / "config/pallet_prior_epal6.yaml")
+    prior = load_pallet_prior(LEGACY_PRIOR)
     params = detector.DetectorParams()
     camera = scene.base_from_optical.translation_m
     points, _ = detector._base_points(scene)
@@ -193,15 +228,26 @@ def test_a_box_800mm_beyond_the_rear_supplies_zero_lower_evidence():
 def test_evidence_volume_boundaries(depth_m, z_m, expected):
     # An exact planar scaffold with all supports above the lower band isolates
     # search-volume boundaries from fitting and unrelated front-column returns.
-    prior = load_pallet_prior(ROOT / "config/pallet_prior_epal6.yaml")
+    prior = load_pallet_prior(LEGACY_PRIOR)
     params = detector.DetectorParams()
     scaffold = np.array(
         [
             (2.7, y, 0.07)
-            for centre in (-0.36, 0.0, 0.36)
-            for y in np.linspace(centre - 0.04, centre + 0.04, 200)
+            for centre in legacy_block_centres("y")
+            for y in np.linspace(
+                centre - LEGACY_GEOMETRY["block_width_m"] / 2,
+                centre + LEGACY_GEOMETRY["block_width_m"] / 2,
+                200,
+            )
         ]
-        + [(2.7, y, 0.12) for y in np.linspace(-0.4, 0.4, 400)]
+        + [
+            (2.7, y, 0.12)
+            for y in np.linspace(
+                -LEGACY_GEOMETRY["overall_width_m"] / 2,
+                LEGACY_GEOMETRY["overall_width_m"] / 2,
+                400,
+            )
+        ]
     )
     plane = detector._Plane(
         np.array((2.7, 0.0, 0.0)), np.array((-1.0, 0.0, 0.0)), scaffold, 0.0
@@ -229,9 +275,7 @@ def test_disconnected_pads_are_a_known_valid_false_positive():
     # This pins a known limitation, not desired connectivity: once connectivity
     # checking is implemented, this test should flip and its expectation change.
     scene = box_scene(columns_and_top() + pads)
-    result = detector.detect_pockets(
-        scene, load_pallet_prior(ROOT / "config/pallet_prior_epal6.yaml")
-    )
+    result = detector.detect_pockets(scene, load_pallet_prior(LEGACY_PRIOR))
     assert result.observation.status == "valid", result.observation.reason
 
 

@@ -1,7 +1,7 @@
 """Generate static MJCF/URDF pallet boxes from authoritative geometry YAML.
 
-The origin is the footprint centre at floor level. Continuous bottom and
-combined top decks omit individual board gaps; no payload dynamics are claimed.
+The origin is the footprint centre at floor level. Individual boards, blocks
+and stringers preserve the open lower channels; no payload dynamics are claimed.
 """
 
 import argparse
@@ -18,8 +18,7 @@ from forklift_core.perception.pallet_geometry import (
 )
 
 SIMPLIFICATIONS = [
-    "deck_board_gaps_omitted",
-    "continuous_bottom_and_combined_top_decks",
+    "axis_aligned_boxes_without_chamfers_or_fasteners",
 ]
 
 
@@ -33,31 +32,52 @@ class PalletBox:
 
 
 def pallet_boxes(geometry: PalletGeometry) -> list[PalletBox]:
-    """Use one assembly for both exporters and geometric clearance consumers."""
+    """Use one assembly for both exporters and geometric clearance consumers.
+
+    Twenty two boxes: three bottom boards under the block columns, nine blocks,
+    three stringers across the width, and seven top boards. The fork openings
+    are deliberately open to the floor, because on a real EPAL pallet the bottom
+    boards run under the columns and nothing spans beneath an opening.
+    """
     g = geometry
-    boxes = [
-        PalletBox(
-            "deck_bottom",
-            (g.overall_depth_m, g.overall_width_m, g.deck_bottom_m),
-            (0.0, 0.0, g.deck_bottom_m / 2),
+    boxes: list[PalletBox] = []
+    columns = list(zip(g.block_centres_y_m(), g.block_widths_m, strict=True))
+
+    for index, (y, width) in enumerate(columns):
+        boxes.append(
+            PalletBox(
+                f"bottom_board_{index}",
+                (g.overall_depth_m, width, g.deck_bottom_m),
+                (0.0, y, g.deck_bottom_m / 2),
+            )
         )
-    ]
     for xi, x in enumerate(g.block_centres_x_m()):
-        for yi, y in enumerate(g.block_centres_y_m()):
+        for yi, (y, width) in enumerate(columns):
             boxes.append(
                 PalletBox(
                     f"block_x{xi}_y{yi}",
-                    (g.block_depth_m, g.block_width_m, g.block_height_m),
+                    (g.block_depth_m, width, g.block_height_m),
                     (x, y, g.opening_centre_height_m),
                 )
             )
-    boxes.append(
-        PalletBox(
-            "deck_top",
-            (g.overall_depth_m, g.overall_width_m, g.deck_top_m),
-            (0.0, 0.0, g.overall_height_m - g.deck_top_m / 2),
+    stringer_z = g.deck_bottom_m + g.block_height_m + g.stringer_m / 2
+    for xi, x in enumerate(g.block_centres_x_m()):
+        boxes.append(
+            PalletBox(
+                f"stringer_{xi}",
+                (g.block_depth_m, g.overall_width_m, g.stringer_m),
+                (x, 0.0, stringer_z),
+            )
         )
-    )
+    top_z = g.overall_height_m - g.top_board_thickness_m / 2
+    for index, y in enumerate(g.top_board_centres_y_m()):
+        boxes.append(
+            PalletBox(
+                f"top_board_{index}",
+                (g.overall_depth_m, g.top_board_width_m, g.top_board_thickness_m),
+                (0.0, y, top_z),
+            )
+        )
     return boxes
 
 
