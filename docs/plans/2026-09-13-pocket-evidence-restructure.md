@@ -8,7 +8,28 @@
 
 ---
 
-# A. 먼저 받아야 하는 결정
+# A. 결정 — 2026-09-14 확정
+
+**시험 대상 형상이 EPAL 6 에서 T11 × 0.5(550 × 550 × 75)로 바뀌었다.** 근거와 측정은 [ADR 0002](../decisions/0002-test-pallet-and-geometry-generality.md). 그 결과 아래 결정들이 정리됐다.
+
+| 결정 | 답 | 근거 |
+|---|---|---|
+| **⓪ 재평가를 지금 하는가** | **(c) 규칙만 반영하고 재캡처는 안 한다** | 캡처 대상 형상 자체가 바뀌었다. EPAL 6 장면 140 장은 쓰지 않을 팔레트의 데이터다 |
+| **⓪′ 게이트 아키텍처** | 지금 묻지 않음 (변동 없음) | 선결 조건 미비 |
+| **① 새 음성** | **보류** | 캡처를 안 하므로 대상이 없다. 음성은 §G Task 2 의 시험 리그로 덮는다 |
+| **② 자세 범위** | **H0 이후로 이월** | 형상이 바뀌어 기존 범위가 무의미하고, 자세 범위는 카메라 장착 위치의 함수다 |
+| **③ MR6D** | H2 직후로 이월 | 변동 없음 |
+| **④ lookalike 상자 규격** | 보류 | 캡처를 안 하므로 대상이 없다 |
+| **⑤ 화면 밖 두 장면** | **소멸** | v1 자세 재타깃 자체를 하지 않는다 |
+| **⑥ `min_band_points` 절대 개수** | **고친다 — 필수가 됐다** | 형상 일반화 요구(ADR 0002 결정 2). 더 이상 미룰 수 없다 |
+
+**따라서 이 계획에서 살아 있는 것은 Task 0 · 1(일부) · 2 · 2b 다.** Task 3 ~ 10 은 캡처 경로이므로 **H0 이후로 보류**한다. 폐기가 아니라 보류이며, 재개 조건은 ① 차체 입고와 적재 능력 측정 ② 카메라 장착 확정 ③ 시험 팔레트 실물 제작이다.
+
+아래 원문은 결정 근거로 남긴다.
+
+---
+
+## (원문) 먼저 받아야 했던 결정
 
 이 계획은 아래 답에 따라 **범위가 달라진다.**
 
@@ -396,7 +417,26 @@ EPAL 6 은 계수가 **0.2195**(= 0.090 / (0.500 − 0.090))다. `range_min_m` 0
 - [ ] **인터페이스 문서:** `pocket-observation.md:39` 에는 사유 어휘가 **없고** 기존 여섯 개도 안 적혀 있다. 검증하는 코드도 없다(`pocket_observation.py:93-94`). **일곱 개를 전부 적거나 이 항목을 빼고 설계 문서에만 적는다.**
 - [ ] **인터페이스 문서에 한 줄:** `center_m` 의 **z 는 prior 유래 상수**(`:421`)이고 정답도 같은 값이라 **`position_error_m` 의 z 성분은 구조적으로 0** 이다.
 
-## Task 3: 월드 생성기가 두 기하를 받게 한다 (위임) — **② 이후**
+## Task 2b: 파라미터를 prior 에서 유도한다 (위임) — **ADR 0002 결정 2·3**
+
+**Files:** `src/forklift_core/perception/pocket_detector.py`, `tools/evaluate_pocket_detector.py`, Create `config/pallet_geometry_t11_half.yaml`, `config/pallet_prior_t11_half.yaml`, Create `tests/unit/perception/test_geometry_family.py`, `docs/design/2026-09-13-pocket-detector-baseline.md`, `docs/interfaces/pocket-observation.md`
+
+- [ ] **절대 단위 파라미터 다섯 개를 prior 에서 유도한다.** 선형 치수(`cell_m`·`plane_inlier_m`·`floor_z_m`·`band_margin_m`·`deck_evidence_tol_m`)는 선형, `min_band_points` 는 **면적(제곱)** 으로. 기준점은 EPAL 6 이고 그 형상에서는 **현재 값과 같아야 한다** — §D-1 의 v1 회귀가 깨지면 안 된다.
+- [ ] **`floor_z_m` 은 `deck_bottom_m` 에 연동한다.** 실측: 쿼터 팔레트의 바닥판이 16.5 mm 인데 현행 문턱이 20 mm 라 **바닥판이 통째로 잘린다.** Task 8 의 "`floor_z_m >= deck_bottom_m` 거부"는 이 유도로 자동 충족된다.
+- [ ] **T11 × 0.5 형상·prior 파일을 만든다**: 550 × 550 × 75, 등폭 3 기둥 66.67 mm, 개구 175 mm, 개구 높이 37.5 mm, 바닥판 12.5 mm, 스트링거 12.5 mm, 상판 12.5 mm. 포켓 중심 y = ±120.8 mm, z = 31.25 mm.
+- [ ] **`test_geometry_family.py`** — 기하 군 × 거리 격자에서 검출률과 위치 오차를 고정한다. 최소: T11 × 0.5 / 0.55 / 0.6, EPAL 6, 쿼터 유로 600×400, 그리고 대응 범위 밖 한 종. **측정 기준선**(유도 파라미터, 잡음 없는 리그):
+
+  | 형상 | 검출되는 거리 |
+  |---|---|
+  | T11 × 0.5 (550) | 2.0 – 3.0 m |
+  | EPAL 6 (800) | 2.0 – 4.0 m |
+  | 600 mm 급 | 2.0 – 4.0 m |
+  | 400 mm 급 | 2.0 – 3.0 m |
+
+- [ ] **`range_min_m = 0.8` 을 별도 항목으로 올린다.** 이 값은 카메라 기준 수평 거리라, 1.5 m 에 놓인 550 mm 팔레트는 전면이 카메라에서 0.475 m 여서 작업영역에서 잘리고 `no_front_plane` 이 된다. **브리프 Case C·D 가 그 거리다.** 센서 최소 거리(D435i 실측)와 대조해 값을 다시 정한다.
+- [ ] 설계 문서와 인터페이스 문서에 **대응 범위**(ADR 0002 "대응 범위와 그 밖")를 그대로 적는다. 무엇을 안 하는지가 무엇을 하는지만큼 중요하다.
+
+## Task 3: 월드 생성기가 두 기하를 받게 한다 (위임) — **보류: H0 이후**
 
 **Files:** `sim/gazebo/build_scene_world.py`, `tests/simulation/test_build_scene_world.py`, Create `tests/fixtures/catalogue_epal6_min.yaml`
 
@@ -424,7 +464,7 @@ EPAL 6 은 계수가 **0.2195**(= 0.090 / (0.500 − 0.090))다. `range_min_m` 0
 - [ ] **시험을 중심선 광선 하나로 쓰지 말 것 — 아무것도 증명하지 못한다.** 실측: 폭 0 인 중심선 광선은 y 를 (0.0725, 0.300) 안에서 아무 값이나 줘도, z 를 (0, 0.100) 안에서 아무 값이나 줘도 통과하고(**횡방향 ±110 mm**), **v1 5 상자 월드에 EPAL 6 규약을 쏴도 통과한다.** 두 기하를 구별하는 것이 이 Task 의 존재 이유인데 그걸 못 한다.
   **대신:** 개구 사각형 **227.5 × 78 mm 전체를 훑어** 하나도 안 맞는 것을 확인하고, **동시에 인접 블록·스트링거는 반드시 맞는다**는 것을 적극적으로 단언한다(예: y 0.05 에서 `block_*_y1` 세 개, z 0.105 에서 `stringer_0..2`).
 
-## Task 4: 카탈로그 변환과 새 음성 (위임) — **①·⑤ 이후**
+## Task 4: 카탈로그 변환과 새 음성 (위임) — **①·⑤ 이후** — **보류: H0 이후**
 
 **Files:** Create `tools/retarget_scene_catalogue.py`, `tests/unit/test_retarget_scene_catalogue.py`, `sim/gazebo/scenes/catalogue_epal6.yaml`; Modify `src/forklift_core/perception/evaluation.py`, `tools/merge_scene_batches.py`, `tools/evaluate_pocket_detector.py`, `sim/gazebo/build_scene_world.py`, `tests/simulation/test_scene_catalogue.py`, `docs/interfaces/scene-dataset.md`, `docs/design/2026-09-11-pocket-observation-and-scene-set.md`, `docs/validation/2026-09-11-scene-catalogue-and-world.md`
 
@@ -443,21 +483,21 @@ EPAL 6 은 계수가 **0.2195**(= 0.090 / (0.500 − 0.090))다. `range_min_m` 0
 - [ ] 데이터 세트는 `data/synthetic_scenes/catalogue_epal6/`. **`catalogue_v1` 을 덮지 않는다** — 두 `run.json` 의 `dataset_dir` 가 그 경로라 재현 시험의 **주 경로**가 깨진다.
 - [ ] 범주 등록 **네 곳**: `evaluation.py:18`, `merge_scene_batches.py:41-46`(새 음성 `ground_truth.status` 는 `no_pallet`), `build_scene_world.py:78-83`, `evaluate_pocket_detector.py:292-296`.
 
-## Task 4.5: epal6 스모크 게이트 (Claude + 원격)
+## Task 4.5: epal6 스모크 게이트 (Claude + 원격) — **보류: H0 이후**
 - [ ] **epal6 카탈로그로 1~2 장면을 원격 캡처한다.** Task 1 의 스모크는 v1 경로만 본다. 없으면 22 상자 경로·URDF 직독·`cwd=runtime` 문제가 **되돌릴 수 없는 캡처에서 처음** 드러난다. Task 5 의 명령에서 `--dry-run` 만 빼면 된다.
 
-## Task 5: 동결 게이트 (Claude)
+## Task 5: 동결 게이트 (Claude) — **보류: H0 이후**
 - [ ] `merge_batches` 는 배치 manifest 를 `expected_metadata`(`:174-187`)와 완전일치시키고 거기에 `catalogue_sha256` 뿐 아니라 **`source_snapshot_sha256`·`image_id`** 가 있다. 배치 1 부터 병합까지 **스냅샷 허용 목록의 어떤 파일도** 건드리면 전 배치가 폐기된다. 전수 커버리지도 요구한다(`:220-222`).
 - [ ] **확인 명령(실제로 동작 확인됨, 원격 접속 불필요):**
   `python tools/submit_model_check.py submit --host <h> --remote-root <r> --source . --mode scenes --image <id> --catalogue <c> --scene-range s001-s002 --run-id probe --dry-run` → `source.snapshot_sha256` 출력. 캡처 시작 전과 각 배치 전에 같은 값인지 본다.
 - [ ] 배치는 **중간 발견이 한 배치만 버리도록 작게** 나눈다. 재캡처 예산을 미리 잡는다(공유 `kang` 계정·GPU 대기).
 - [ ] **캡처 중 Task 7 의 파라미터 파일 작업을 시작하지 않는다.**
 
-## Task 6: 캡처·병합 · Task 7: 동결 파라미터 정리 (Claude)
+## Task 6: 캡처·병합 · Task 7: 동결 파라미터 정리 (Claude) — **보류: H0 이후**
 - [ ] 캡처·병합·set manifest·권한 확인.
 - [ ] `config/detector_params_v1.yaml` 은 **16 키**, `DetectorParams` 는 **17 필드**(`deck_evidence_tol_m` 누락, 기본 0.006). `_load_params` 는 없는 키를 조용히 기본값으로 채운다. **동결 파일을 고치지 않는다** — 두 과거 `run.json` 도 16 키라 `test_detector_v1_replay.py:31` 이 지금 True 이고 키를 더하면 False 가 된다. 시험을 **"파일 ⊆ run.params, 나머지는 코드 기본값"** 으로 바꾼다.
 
-## Task 8: dev 튜닝 (Claude)
+## Task 8: dev 튜닝 (Claude) — **보류: H0 이후**
 - [ ] 기준선 1 회 후 한 번에 하나씩.
 - [ ] 지표에 **지지대 최솟값**을 넣는다. 4 m 에서 `min()` 을 결정하는 것은 `upper`(692)도 `u1/u2`(256/268)도 아닌 **지지대**(144/207/144, 최소 1.44 배)다.
 - [ ] **위양성 지표에 `invalid` 를 병기한다.**
@@ -465,7 +505,7 @@ EPAL 6 은 계수가 **0.2195**(= 0.090 / (0.500 − 0.090))다. `range_min_m` 0
 - [ ] **`floor_z_m >= deck_bottom_m` 을 설정 오류로 거부**한다(현행 0.020 대 EPAL 6 0.022, 2 mm 차). `DetectorParams.__post_init__` 은 prior 를 못 보므로 **`detect_pockets` 진입부와 `evaluate_pocket_detector._run` 두 곳**에 넣는다.
 - [ ] **처리 시간은 합격 조건이 아니다.** 후보가 82 → 95 로 는다. 같은 기계에서 순차 best-of-3 는 +56 %, 장면별 교차 best-of-3 는 −0.3 % 다 — 부하 드리프트가 신호를 압도한다.
 
-## Task 9·10: eval 1 회와 기록 (Claude)
+## Task 9·10: eval 1 회와 기록 (Claude) — **보류: H0 이후**
 - [ ] 고정 revision·clean 트리에서 eval 1 회. **§D-2 의 (a)~(e) 로 합불을 적는다.**
 - [ ] 검증 기록: 위양성률과 `invalid` 병기 / **§C 의 한계 전부**(C-1 구멍이 좁혀졌을 뿐 닫히지 않았다는 것, C-2 앞면 개방 구조, C-3 머리 위 가림, C-4 대역의 행 수와 **잡음에서 먼저 무너지는 것이 `max_plane_residual_m` 이라는 것**, **C-7 블록 아홉 개가 `true_negative` 를 잃는다는 것**, C-5 판별 근거가 옮겨간 것, 그리고 **C-6 이 철회되었다는 것**) / `position_error_m` 의 z 성분 구조적 0 / `POSITION_TOLERANCE_M` 0.20 m 는 대응 문턱이지 도킹 허용치가 아니라는 점(포크 좌우 45 mm·수직 6 mm 와 무관) / §A ⑥ 의 문턱 절벽과 `range_max_m` 5.0 도달 불가 / 해결하지 않은 것들.
 - [ ] `docs/hardware.md` 와 로드맵 위험표에 §E 의 접촉/근접 감지 요구를 남긴다.
