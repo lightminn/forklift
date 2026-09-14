@@ -129,6 +129,13 @@ class DetectionDiagnostics:
     centre_height_is_prior: bool
     elapsed_s: float
     seed: int
+    # Evidence of the selected pattern, per term. Recorded even when the
+    # observation is invalid, because the reason a shape was refused is the
+    # count that fell short, and no table could show it before.
+    selected_support_min: int | None
+    selected_lower: int | None
+    selected_upper_left: int | None
+    selected_upper_right: int | None
     exception_traceback: str | None = None
 
 
@@ -156,6 +163,17 @@ class _Pattern:
     gaps: tuple[tuple[float, float], ...]
     support_count: int
     deck_count: int
+    # Evidence kept per term rather than summed. support_count is a total and
+    # cannot stand in for the weakest column, and a caller that recovers `lower`
+    # by subtracting `upper` from `deck_count` is reading a coincidence.
+    support_min: int
+    lower: int
+    upper_left: int
+    upper_right: int
+    # Both openings must show the deck above them. A pattern that fails this is
+    # not a pallet seen badly; it is a shape that has no upper deck over one of
+    # its gaps, and it can never be reported valid.
+    upper_ok: bool
 
 
 def _base_points(scene):
@@ -346,7 +364,39 @@ def _opening_candidates(plane, prior, params, workspace):
             ((origin + start) * params.cell_m, (origin + stop) * params.cell_m)
             for start, stop in (first, second)
         )
-        patterns.append(_Pattern(bounds, int(sum(supports)), int(lower + upper)))
+        # Per-opening upper-deck evidence, from the plane's own inliers inside a
+        # band no thicker than the deck itself. The combined count above cannot
+        # distinguish a pallet from a shape with a deck over one gap and nothing
+        # over the other, because one strong opening carries the sum.
+        deck_band = (local[:, 2] >= prior.height_m - prior.deck_top_m) & (
+            local[:, 2] <= prior.height_m + params.plane_inlier_m
+        )
+        per_opening = []
+        for start, stop in (first, second):
+            low = (origin + start) * params.cell_m
+            high = (origin + stop) * params.cell_m
+            per_opening.append(
+                int(
+                    np.count_nonzero(
+                        deck_band & (lateral >= low) & (lateral <= high)
+                    )
+                )
+            )
+        # bounds are (right, left); report the pair in the same order.
+        upper_right, upper_left = per_opening
+        upper_ok = min(per_opening) >= params.min_band_points
+        patterns.append(
+            _Pattern(
+                bounds,
+                int(sum(supports)),
+                int(lower + upper_left + upper_right),
+                int(min(supports)),
+                int(lower),
+                upper_left,
+                upper_right,
+                upper_ok,
+            )
+        )
     return patterns
 
 
@@ -439,6 +489,15 @@ def _build_observation(scene, prior, params, plane, pattern, opening_rays):
     )
 
 
+def _upper_deck_reason(pattern, params):
+    """Name which upper-deck failure this is, keeping the side when there is one."""
+    counts = {"right": pattern.upper_right, "left": pattern.upper_left}
+    if max(counts.values()) < params.min_band_points:
+        return "no_upper_deck"
+    side = min(counts, key=counts.__getitem__)
+    return f"upper_deck_occluded:{side}"
+
+
 def _status_observation(scene, status, reason):
     return PocketObservation(
         scene.stamp_ns,
@@ -517,14 +576,29 @@ def detect_pockets(
                 for index in range(len(planes)):
                     if index != selected_index and index not in rejected:
                         rejected[index] = "lower_pattern_score"
-                observation = _build_observation(
-                    scene_input,
-                    prior,
-                    params,
-                    selected_plane,
-                    selected_pattern,
-                    selected_rays,
-                )
+                if not selected_pattern.upper_ok:
+                    # A pallet has deck over both openings. Something that does
+                    # not is a real object in view, not an absent one, so the
+                    # status is invalid rather than no_pallet: the contract
+                    # reserves no_pallet for nothing being there.
+                    #
+                    # Separate absence from obstruction. Deck over neither
+                    # opening is a different shape; deck over one and not the
+                    # other is this pallet with something in the way, and the
+                    # side is worth keeping -- collapsing both to one reason
+                    # discards which pocket the caller cannot trust.
+                    observation = _status_observation(
+                        scene_input, "invalid", _upper_deck_reason(selected_pattern, params)
+                    )
+                else:
+                    observation = _build_observation(
+                        scene_input,
+                        prior,
+                        params,
+                        selected_plane,
+                        selected_pattern,
+                        selected_rays,
+                    )
             else:
                 observation = _status_observation(
                     scene_input,
@@ -549,6 +623,10 @@ def detect_pockets(
         True,
         time.perf_counter() - start,
         params.seed,
+        selected_pattern.support_min if selected_pattern else None,
+        selected_pattern.lower if selected_pattern else None,
+        selected_pattern.upper_left if selected_pattern else None,
+        selected_pattern.upper_right if selected_pattern else None,
         exception_traceback,
     )
     return DetectionResult(observation, diagnostics)

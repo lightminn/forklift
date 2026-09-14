@@ -146,8 +146,12 @@ def opening_evidence_counts(plane, workspace, prior, params):
     )
     legacy_lower = np.count_nonzero(across & (inliers[:, 2] <= prior.deck_bottom_m))
     assert upper >= params.min_band_points
-    # deck_count is the production aggregate; subtract the unchanged upper count.
-    return int(legacy_lower), pattern.deck_count - int(upper)
+    # Read the lower count from the pattern instead of recovering it by
+    # subtraction. That arithmetic happened to be exact while deck_count was
+    # lower + upper over both openings together; once the upper term is counted
+    # per opening inside a tightened band the two no longer cancel, and the
+    # harness reported a negative lower count rather than a changed one.
+    return int(legacy_lower), pattern.lower
 
 
 @pytest.mark.parametrize("x", [2.0, 3.7, 4.0])

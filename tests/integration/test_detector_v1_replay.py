@@ -17,12 +17,37 @@ RUNS = (
 )
 # Historical observations remain immutable. Each delta is
 # (scene_id, old_status, old_reason, new_status, new_reason).
+#
+# A delta also records which fields it is allowed to change. Without that, a
+# delta that only renames the reason trips the field-set check written for a
+# delta that adds geometry, and the failure names the wrong cause.
 EXPECTED_REPLAY_DELTAS = {
     "20260912T170442Z_pocket_eval_dev_02": {
+        # Repairing plane extraction made this scene detectable.
         ("s009", "no_pallet", "no_opening_pattern", "valid", None),
+        # Per-opening upper-deck evidence names the obstruction directly.
+        # It picks the same side the ray classification did in every case.
+        ("s007", "invalid", "pocket_occluded:right", "invalid", "upper_deck_occluded:right"),
+        ("s027", "invalid", "pocket_occluded:left", "invalid", "upper_deck_occluded:left"),
+        ("s039", "invalid", "pocket_occluded:left", "invalid", "upper_deck_occluded:left"),
+        ("s051", "invalid", "pocket_occluded:right", "invalid", "upper_deck_occluded:right"),
+        ("s076", "invalid", "pocket_occluded:left", "invalid", "upper_deck_occluded:left"),
+        ("s090", "invalid", "pocket_occluded:right", "invalid", "upper_deck_occluded:right"),
     },
-    "20260912T170558Z_pocket_eval_eval_01": set(),
+    "20260912T170558Z_pocket_eval_eval_01": {
+        ("s060", "invalid", "pocket_occluded:right", "invalid", "upper_deck_occluded:right"),
+        ("s063", "invalid", "pocket_occluded:left", "invalid", "upper_deck_occluded:left"),
+        ("s100", "invalid", "pocket_occluded:right", "invalid", "upper_deck_occluded:right"),
+    },
 }
+# A newly valid observation adds geometry; a renamed reason must not.
+GEOMETRY_FIELDS = {"status", "reason", "left", "right", "insertion_yaw_rad"}
+REASON_ONLY_FIELDS = {"reason"}
+
+
+def allowed_fields(delta):
+    _, old_status, _, new_status, _ = delta
+    return GEOMETRY_FIELDS if old_status != new_status else REASON_ONLY_FIELDS
 
 
 @pytest.mark.parametrize("run_name,expected_count", RUNS)
@@ -69,19 +94,21 @@ def test_saved_v1_observations_have_only_expected_deltas(run_name, expected_coun
                     actual["reason"],
                 )
             )
-            # A newly valid observation adds geometry, but must preserve all
-            # acquisition metadata and the unknown uncertainty fields.
-            assert set(differences[path.stem]) == {
-                "status",
-                "reason",
-                "left",
-                "right",
-                "insertion_yaw_rad",
-            }, json.dumps(differences[path.stem], indent=2, sort_keys=True)
+    # Compare the deltas first. Checking field sets inside the loop made an
+    # unexpected delta surface as a field-set mismatch on some other scene,
+    # which hid the cause.
+    assert deltas == EXPECTED_REPLAY_DELTAS[run_name], json.dumps(
+        differences, indent=2, sort_keys=True
+    )
+    # Then hold each delta to the fields its kind is allowed to touch. Every
+    # observation must preserve its acquisition metadata and the unknown
+    # uncertainty fields either way.
+    for delta in sorted(deltas):
+        scene_id = delta[0]
+        assert set(differences[scene_id]) == allowed_fields(delta), json.dumps(
+            differences[scene_id], indent=2, sort_keys=True
+        )
     matched = expected_count - len(differences)
     print(
         f"{run_name}: {matched}/{expected_count} observations match (excluding diagnostics)"
-    )
-    assert deltas == EXPECTED_REPLAY_DELTAS[run_name], json.dumps(
-        differences, indent=2, sort_keys=True
     )
