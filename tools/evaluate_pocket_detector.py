@@ -49,6 +49,14 @@ SCENE_COLUMNS = (
     "elapsed_s",
     "plane_residual_p95_m",
     "plane_inlier_count",
+    # The gate's own terms. At 4 m the minimum is decided by the supports
+    # (144/207/144) rather than by the upper deck (692) or the per-opening
+    # counts (256/268), and no column showed that -- so a run could not say
+    # which evidence ran out first.
+    "selected_support_min",
+    "selected_lower",
+    "selected_upper_left",
+    "selected_upper_right",
     "left_front_frac",
     "left_behind_frac",
     "right_front_frac",

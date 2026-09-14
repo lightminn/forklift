@@ -161,3 +161,21 @@ def test_deriving_parameters_for_v1_preserves_its_detections():
     assert len(changes) <= 1, changes
     for _, before_status, _, after_status, _ in changes:
         assert before_status == after_status == "invalid"
+
+
+def test_the_clipping_predicate_matches_the_bound_the_derivation_respects():
+    """A question a caller can ask, not a refusal.
+
+    Refusing to run under the frozen parameters would make the baseline that
+    the derivation is compared against impossible to reproduce, so the
+    condition is exposed rather than enforced.
+    """
+    from forklift_core.perception.pocket_detector import lower_band_is_clipped
+
+    for name in ("v1", "epal6", "t11_06"):
+        p = prior(name)
+        assert not lower_band_is_clipped(p, DetectorParams.derived_for(p)), name
+    # Frozen clips it on both real pallets, and not on the shape it was tuned on.
+    assert not lower_band_is_clipped(prior("v1"), FROZEN)
+    assert lower_band_is_clipped(prior("epal6"), FROZEN)
+    assert lower_band_is_clipped(prior("t11_06"), FROZEN)

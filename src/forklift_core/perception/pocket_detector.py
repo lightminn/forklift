@@ -565,6 +565,22 @@ def _build_observation(scene, prior, params, plane, pattern, opening_rays):
     )
 
 
+def lower_band_is_clipped(prior, params) -> bool:
+    """Whether the floor filter cuts into the lower-deck evidence band.
+
+    Above ``deck_bottom_m - deck_evidence_tol_m`` the band is clipped, and past
+    that point a pallet, a structure with no bottom deck, and a rack whose
+    columns reach the floor all supply the same lower evidence: the detector
+    stops being able to tell them apart rather than getting them wrong.
+
+    This is a question a caller can ask, not a refusal. The frozen parameters
+    violate it on both real pallets -- that is the limitation the derivation
+    exists to remove -- and refusing to run would make the baseline those two
+    are compared against impossible to reproduce.
+    """
+    return params.floor_z_m >= prior.deck_bottom_m - params.deck_evidence_tol_m
+
+
 def _upper_deck_reason(pattern, params):
     """Name which upper-deck failure this is, keeping the side when there is one."""
     counts = {"right": pattern.upper_right, "left": pattern.upper_left}

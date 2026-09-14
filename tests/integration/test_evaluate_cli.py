@@ -127,6 +127,10 @@ def test_the_scene_table_has_the_declared_columns(tmp_path, pallet_scene):
         "elapsed_s",
         "plane_residual_p95_m",
         "plane_inlier_count",
+        "selected_support_min",
+        "selected_lower",
+        "selected_upper_left",
+        "selected_upper_right",
         "left_front_frac",
         "left_behind_frac",
         "right_front_frac",
@@ -136,6 +140,15 @@ def test_the_scene_table_has_the_declared_columns(tmp_path, pallet_scene):
     # the no-pallet scene produces no opening rays: blank, never 0.0
     assert rows["s003"]["left_front_frac"] == ""
     assert rows["s003"]["right_behind_frac"] == ""
+    # No pattern survived there either, so its gate terms are blank rather than
+    # zero: zero would read as "measured none", which is a different claim.
+    assert rows["s003"]["selected_support_min"] == ""
+    assert rows["s003"]["selected_lower"] == ""
+    # A detected scene reports which term was scarcest.
+    detected = next(r for r in rows.values() if r["estimate_status"] == "valid")
+    assert int(detected["selected_support_min"]) > 0
+    assert int(detected["selected_upper_left"]) > 0
+    assert int(detected["selected_upper_right"]) > 0
     assert 0.0 <= float(rows["s001"]["left_front_frac"]) <= 1.0
 
 

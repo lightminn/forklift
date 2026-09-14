@@ -178,6 +178,38 @@ def summarize(results: Sequence[SceneResult]) -> dict:
         category: rate(category, Outcome.FALSE_POSITIVE)
         for category in NEGATIVE_CATEGORIES
     }
+    # An invalid observation on a negative scene is not a false positive -- it
+    # carries no geometry, so nothing downstream can act on it -- but it is not
+    # a true negative either, and it is not in any budget. Reporting the rate
+    # beside the false-positive one keeps it from disappearing into a bucket
+    # label: the detector refusing a negative for the wrong reason still looks
+    # like success on every number above.
+    negative_invalid = {
+        category: rate(category, Outcome.INVALID) for category in NEGATIVE_CATEGORIES
+    }
+    # One number over every negative, which is what a budget is actually set
+    # against. Per-category rates cannot be compared with one: the single-sided
+    # 95 % bound on 0 of 6 is 39 %, and on 0 of 18 it is 15.3 %.
+    negative_results = [
+        result for result in results if result.category in NEGATIVE_CATEGORIES
+    ]
+    combined_negative = {
+        "scene_count": len(negative_results),
+        "false_positive": sum(
+            result.outcome is Outcome.FALSE_POSITIVE for result in negative_results
+        ),
+        "invalid": sum(
+            result.outcome is Outcome.INVALID for result in negative_results
+        ),
+        "true_negative": sum(
+            result.outcome is Outcome.TRUE_NEGATIVE for result in negative_results
+        ),
+    }
+    combined_negative["false_positive_rate"] = (
+        combined_negative["false_positive"] / len(negative_results)
+        if negative_results
+        else None
+    )
     valid = [
         result
         for result in results
@@ -212,6 +244,8 @@ def summarize(results: Sequence[SceneResult]) -> dict:
         "counts": counts,
         "detection_rate": detection,
         "false_positive_rate": false_positive,
+        "negative_invalid_rate": negative_invalid,
+        "negatives_combined": combined_negative,
         **errors,
         "elapsed_s": _stats(result.elapsed_s for result in results),
         "targets": {
