@@ -84,6 +84,10 @@ v1 팔레트는 덱이 50 mm 라 전면만으로도 두꺼운 띠가 남아 이 
 1. **아래 덱 증거를 세는 위치만 바꾼다.** 조건 넷을 모두 만족하는 **작업 공간 점**을 센다. ① 현행과 같은 연속 횡방향 범위(두 개구와 중앙 지지대를 포함) ② `|z − deck_bottom_m| <= deck_evidence_tol_m` ③ 전면 평면 뒤로 **`0 <= 깊이 <= overall_depth_m + plane_inlier_m`** ④ 바닥 필터는 그대로 적용한다.
 2. **앞쪽 여유를 두지 않는다.** 검토 2 가 전면 앞 0.5–19.5 mm 에 높이 24 mm 띠를 둔 반례로 `valid` 를 만들어 보였다. `깊이 >= 0` 이면 그 반례의 아래 증거가 0 이 된다.
 3. **집계·위 덱·판정식은 전혀 바꾸지 않는다.** `min(지지대 3개, lower, upper) >= min_band_points` 그대로다.
+
+⚠️ **개정 (2026-09-14): 관문식은 그대로지만 위 덱이 하나 더 늘었다.** 관문은 여전히 `min(지지대 3개, lower, upper) >= min_band_points`이고 이 절의 `lower` 처방은 바뀌지 않았다. 다만 **관문을 통과한 패턴에 개구별 상부 덱 검사가 하나 더 붙는다** — 평면 inlier를 `height_m − deck_top_m ≤ z ≤ height_m + plane_inlier_m`에서 **개구마다** 세고 둘 다 문턱을 넘어야 `valid`가 된다. 합산 `upper`가 한쪽 개구만으로도 채워지기 때문이다. 통과하지 못하면 `no_upper_deck` 또는 `upper_deck_occluded:<side>`다(설계: `2026-09-13-pocket-detector-baseline.md` 8단계).
+
+⚠️ **그리고 `_Pattern.deck_count`의 정의가 바뀌었다** — `lower + upper`(합산)에서 **`lower + upper_left + upper_right`**(개구별)로. 점수식 `score = support_count + deck_count`는 그대로이고, **v1 100장면에서 선택 결과는 한 장면도 바뀌지 않았다.** `lower`·`upper_left`·`upper_right`·`support_min`은 이제 `_Pattern`과 `DetectionDiagnostics`에 **각각 따로** 들어 있으므로, 어느 항이 모자랐는지 알고 싶으면 합계에서 역산하지 말고 그 필드를 읽는다.
 4. **`PalletPrior` 에 `overall_depth_m` 을 추가한다.** 생성기가 형상에서 채우고 v1 prior 는 0.6 을 명시한다.
 5. **`deck_evidence_tol_m` 기본값 0.006 은 유도값이 아니라 dev 튜닝 출발값이라고 적는다.** 바닥 필터와 겹쳐 실효 하향 여유가 2 mm 미만이라는 점도 함께 적는다. 검토 2 의 지적대로 수직 대역 6 mm 를 평면 잔차에서 유도할 수 없다.
 

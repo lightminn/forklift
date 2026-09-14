@@ -102,6 +102,8 @@ HEAD 그대로다. 필수 깊이 누락 시험도 HEAD의 원래 prior 로더를
 
 수정 전 수는 같은 전면과 횡범위의 기존 집계식으로 읽고,
 수정 후 수는 실제 `_Pattern.deck_count`에서 변경하지 않은 위 덱 수를 뺀다.
+
+⚠️ **개정 (2026-09-14): 이 역산은 더 이상 성립하지 않고, 성립했던 것도 우연이었다.** `deck_count`가 `lower + upper`였을 때는 위 덱 수를 빼면 정확히 `lower`가 나왔지만, `deck_count`가 **`lower + upper_left + upper_right`**(개구별)로 바뀌면서 두 항이 상쇄하지 않는다 — 하니스가 **음수 `lower`(−231)** 를 보고했다. **`_Pattern.lower`를 직접 읽는다.** 같은 값이 `DetectionDiagnostics.selected_lower`로도 나온다.
 위 RED에서 HEAD 원래 함수로도 수정 전 수가 동일함을 확인했다.
 0점 측정 시에만 비공개 후보 함수의 count gate를 0으로 내려 관찰하고,
 공개 파라미터와 최종 검출의 `min_band_points=100`은 유지한다.
