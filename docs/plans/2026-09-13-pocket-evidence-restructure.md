@@ -1889,7 +1889,17 @@ $ python tools/measure_pocket_evidence.py evidence --distances 2.0:4.0:0.5     -
 - [ ] `docs/validation/2026-09-14-...md` 에 **명령줄과 출력**을 같이 남긴다. 표만 남기지 않는다.
 - [ ] 시험은 `tests/unit/tools/` 에 **스모크 하나**면 된다(각 서브커맨드가 0 으로 끝나고 표 머리를 낸다). 이 도구의 수치를 회귀로 고정하지 않는다 — 고정해야 할 수치는 Task 2·2b 의 시험에 있다.
 
-## Task 3: 월드 생성기가 두 기하를 받게 한다 (위임) — **보류: H0 이후**
+## Task 3: 월드 생성기가 두 기하를 받게 한다 — ✅ **완료 (2026-09-14)**
+
+> ⚠️ **"보류: H0 이후" 는 틀린 태그였다.** 이 Task 는 SDF 생성기가 두 번째 기하를 받게 하는 것이고 **하드웨어를 전혀 타지 않는다** — `tests/simulation` 이 로컬에서 돈다. 보류 태그가 ⓪(c)(캡처 안 함) 결정에서 잘못 상속됐다.
+>
+> **여섯 곳 전부 고쳤다.** 헤더 `pallet` 게이트를 **버전별 스키마**(`APPROVED_PALLETS`)로 — v1 의 대칭 `deck_m` 으로는 EPAL 6 가 닫히지 않는다(0.022×2+0.078 = 0.122, 0.044×2+0.078 = 0.166, 둘 다 0.144 가 아니다). 버전 게이트를 그 표의 키로. 범주 화이트리스트와 `lookalike` 존재 규칙에 **`negative_block_row`** 추가. **팔레트 배출부에 URDF 22 상자 분기**(덱·블록·스트링거 세 색). lookalike 배출부를 `category` 로 분기 — **새 장면 키를 만들지 않았다**(키 집합 동일성 때문에 v1 100 장면이 전부 거부된다).
+>
+> **`tests/fixtures/catalogue_epal6_min.yaml`** 3 장면을 만들었다. **시험은 중심선 광선을 쓰지 않는다** — 계획이 경고한 대로 그것은 y 슬랙 110 mm 를 통과하고 v1 5 상자 월드에서도 통과해 두 기하를 구별하지 못한다. 개구 사각형을 **9 × 9 × 3 격자로 훑고**, 동시에 기둥·스트링거·바닥판이 개구 아닌 곳에 **있다**를 적극 단언한다(빈 월드 통과 방지).
+>
+> **포켓 규약 네 숫자를 URDF extent 에서 역산하는 시험**도 넣었다(`test_pallet_model_build.py`). y ±0.18625·z 0.061·폭 0.2275·높이 0.078 은 상자들의 여집합이라 어느 파일에도 없고 세 곳에 손으로 베껴진다.
+
+## ~~Task 3: 월드 생성기가 두 기하를 받게 한다 (위임)~~ *(원래 사양)*
 
 **Files:** `sim/gazebo/build_scene_world.py`, `tools/generate_scene_catalogue.py`(`PALLET` 두 번째 사본), `src/forklift_core/perception/pallet_prior.py`(비대칭 덱 스키마), `tests/simulation/test_build_scene_world.py`, `tests/integration/test_pallet_model_build.py`(URDF↔규약 대조 시험), Create `tests/fixtures/catalogue_epal6_min.yaml`
 
@@ -1917,7 +1927,25 @@ $ python tools/measure_pocket_evidence.py evidence --distances 2.0:4.0:0.5     -
 - [ ] **시험을 중심선 광선 하나로 쓰지 말 것 — 아무것도 증명하지 못한다.** 실측: 폭 0 인 중심선 광선은 y 를 (0.0725, 0.300) 안에서 아무 값이나 줘도, z 를 (0, 0.100) 안에서 아무 값이나 줘도 통과하고(**횡방향 ±110 mm**), **v1 5 상자 월드에 EPAL 6 규약을 쏴도 통과한다.** 두 기하를 구별하는 것이 이 Task 의 존재 이유인데 그걸 못 한다.
   **대신:** 개구 사각형 **227.5 × 78 mm 전체를 훑어** 하나도 안 맞는 것을 확인하고, **동시에 인접 블록·스트링거는 반드시 맞는다**는 것을 적극적으로 단언한다(예: y 0.05 에서 `block_*_y1` 세 개, z 0.105 에서 `stringer_0..2`).
 
-## Task 4: 카탈로그 변환과 새 음성 (위임) — **① 이후**(⑤ 는 §A 에서 소멸) — **보류: H0 이후**
+## Task 4: 카탈로그 변환과 새 음성 — ✅ **변환 완료 (2026-09-14)**. 새 음성 *촬영* 만 ① 에 걸린다
+
+> ⚠️ **재타깃 자체는 ① 과 무관하고 하드웨어도 안 탄다.** ① 은 새 음성을 **찍을지**를 정하는 결정이고, 카탈로그 변환과 범주 등록은 그 답과 무관하게 필요하다.
+>
+> **`tools/retarget_scene_catalogue.py`** — v1 100 장면을 다른 기하로 옮기되 **자세는 복사한다.** 다시 뽑으면 기하와 모집단이 같이 바뀌어 하류가 둘을 못 가린다. 시험이 **approx 가 아니라 완전 일치**로 자세·범주·분할·조명·표면·distractor 를 고정한다(12 시험).
+>
+> **재계산한 것:** 헤더(분할 덱), `opening_width_m` → 단일 0.2275(v1 은 80 장면에 78 값), 정답 포켓(**x 성분도 움직인다** — 횡 오프셋이 달라 기울어진 팔레트는 x 도 옮겨간다. 시험이 따로 잡는다), z 0.15 → 0.061, 높이 0.20 → 0.078, 가림물 `size[1] = fraction × opening_width`(**`fraction` 은 물리 폭 비율이지 영상 가림률이 아니다** — 도구와 시험에 적었다), `visibility` 전체.
+>
+> **seed 는 유지**했다 — 그 seed 가 이 자세들을 뽑은 draw 를 식별하고 자세가 정확히 그것이다.
+>
+> **`sim/gazebo/scenes/catalogue_epal6.yaml` 100 장면**을 생성·커밋했다. 생성기 검증 통과, 22 상자 월드 생성 확인. **`catalogue_v1` 은 안 건드렸다.**
+>
+> **범주 등록 네 곳 완료** — `evaluation.py`·`merge_scene_batches.py`·`build_scene_world.py`, 그리고 상수에서 파생하는 `evaluate_pocket_detector.py`. **세 소스가 어긋나면 깨지는 시험**을 넣었다: 생성기가 만들 수 있는데 평가기가 거부하는 장면은 **그것을 만든 캡처가 끝난 뒤에야** 실패한다.
+>
+> ⚠️ **§C-7 이 걱정한 것은 일어나지 않는다** — 맨 블록은 옵션 ② 에서 합산 `upper` 관문이 먼저 거부해 `no_pallet` 이므로 정상 음성으로 집계된다. 규칙 1 을 넣을 때 다시 본다.
+>
+> **안 한 것:** 데이터셋 생성(`data/synthetic_scenes/catalogue_epal6/`)은 **캡처가 필요하다** — ⓪(c) 로 보류. 새 음성 20 장면의 실제 렌더도 같다.
+
+## ~~Task 4: 카탈로그 변환과 새 음성 (위임)~~ *(원래 사양)*
 
 **Files:** Create `tools/retarget_scene_catalogue.py`, `tests/unit/test_retarget_scene_catalogue.py`, `sim/gazebo/scenes/catalogue_epal6.yaml`; Modify `src/forklift_core/perception/evaluation.py`, `tools/merge_scene_batches.py`, `tools/evaluate_pocket_detector.py`, `sim/gazebo/build_scene_world.py`, `tests/simulation/test_scene_catalogue.py`, `docs/interfaces/scene-dataset.md`, `docs/design/2026-09-11-pocket-observation-and-scene-set.md`, `docs/validation/2026-09-11-scene-catalogue-and-world.md`
 
