@@ -39,6 +39,116 @@ def _vector(value, length):
         _finite(v)
 
 
+# Header geometry per catalogue version. v1 keeps its symmetric `deck_m`; a real
+# pallet cannot use it. EPAL 6 is 0.022 bottom + 0.078 opening + 0.044 above,
+# and no single deck thickness closes that -- 0.022*2 + 0.078 is 0.122 and
+# 0.044*2 + 0.078 is 0.166, neither of which is its 0.144 height. Splitting the
+# two decks is a schema change, not a swapped dictionary.
+APPROVED_PALLETS = {
+    "v1": {
+        "depth_m": 0.6,
+        "width_m": 0.8,
+        "height_m": 0.30,
+        "deck_m": 0.05,
+        "center_spacer_m": 0.10,
+        "opening_height_m": 0.20,
+    },
+    "epal6": {
+        "depth_m": 0.6,
+        "width_m": 0.8,
+        "height_m": 0.144,
+        "deck_bottom_m": 0.022,
+        "deck_top_m": 0.044,
+        "center_spacer_m": 0.145,
+        "opening_height_m": 0.078,
+    },
+}
+# Catalogue versions whose pallet is emitted from the committed URDF rather than
+# from the five boxes v1 hardcodes.
+_URDF_PALLETS = {"epal6": "models/epal6_pallet/pallet.urdf"}
+
+
+def _emit_urdf_pallet(link, relative_urdf: str) -> None:
+    """Emit the committed pallet as boxes read from its URDF.
+
+    The URDF is the one geometry source the model exporters and the clearance
+    consumers already share, so reading it here keeps the rendered scene and
+    the measured article from drifting apart. v1's five boxes stay hardcoded
+    because the archived catalogue and its tests describe those exact names.
+    """
+    urdf = Path(__file__).resolve().parents[1] / relative_urdf
+    root = ET.parse(urdf).getroot()
+    for visual in root.findall(".//visual"):
+        name = visual.get("name")
+        origin = [float(v) for v in visual.find("origin").get("xyz").split()]
+        size = [float(v) for v in visual.find("geometry/box").get("size").split()]
+        # Decks and blocks in different colours: one colour across all 22 leaves
+        # no deck-to-block contrast in the RGB image.
+        if name.startswith("bottom_board"):
+            colour = ".6 .35 .12 1"
+        elif name.startswith("top_board"):
+            colour = ".7 .45 .18 1"
+        elif name.startswith("stringer"):
+            colour = ".66 .42 .16 1"
+        else:
+            colour = ".5 .3 .1 1"
+        sdf_parts.box(link, name, origin, size, colour)
+        # Scene consumers address collisions by the plain name, as v1 does.
+        link.find(f"collision[@name='{name}_collision']").set("name", name)
+
+
+def _emit_lookalike(link, category: str, version: str) -> None:
+    """Negative structures, told apart by category rather than by a new key.
+
+    `_require_keys` compares the scene key set for equality, so adding a key
+    would reject all 100 committed v1 scenes. The category carries the shape
+    instead, and the placement fields stay the ones `lookalike` already has.
+    """
+    if category == "negative_block_row":
+        # Nine bare blocks: two openings and no deck over either. This is the
+        # negative the detector must refuse on upper-deck evidence alone.
+        geometry = APPROVED_PALLETS[version]
+        opening = geometry["opening_height_m"]
+        bottom = geometry.get("deck_bottom_m", geometry.get("deck_m", 0.0))
+        spacer = geometry["center_spacer_m"]
+        outer = (geometry["width_m"] - spacer - 2 * _opening_width(geometry)) / 2
+        depth = geometry["depth_m"]
+        for row, x in enumerate((-depth / 3, 0.0, depth / 3)):
+            for index, (y, width) in enumerate(
+                (
+                    (-(geometry["width_m"] - outer) / 2, outer),
+                    (0.0, spacer),
+                    ((geometry["width_m"] - outer) / 2, outer),
+                )
+            ):
+                sdf_parts.box(
+                    link,
+                    f"block_x{row}_y{index}",
+                    [x, y, bottom + opening / 2],
+                    [depth / 3, width, opening],
+                    ".5 .3 .1 1",
+                )
+        return
+    # negative_lookalike keeps v1's solid slab: the same envelope with no
+    # openings at all.
+    sdf_parts.box(link, "solid", [0, 0, 0.15], [0.6, 0.8, 0.30], ".6 .35 .12 1")
+
+
+def _opening_width(geometry) -> float:
+    return (geometry["width_m"] - geometry["center_spacer_m"] - 2 * _outer_block(
+        geometry
+    )) / 2
+
+
+def _outer_block(geometry) -> float:
+    """Outer column width, from the approved header alone.
+
+    EPAL 6's columns are 100/145/100 across the face; v1 has no columns of its
+    own, so its lookalike never reaches here.
+    """
+    return 0.100 if geometry["opening_height_m"] < 0.15 else 0.0
+
+
 def _validate_presets(presets):
     """Distractor geometry travels in the catalogue header, the single source of truth."""
     if not isinstance(presets, dict) or not presets:
@@ -80,13 +190,18 @@ def _validate_scene(scene, presets):
         "occluded",
         "negative_no_pallet",
         "negative_lookalike",
+        # Nine bare blocks: two openings and no deck over either. A separate
+        # category rather than a variant field, because `_require_keys` compares
+        # the scene key set for equality and a new key would reject all 100
+        # committed v1 scenes.
+        "negative_block_row",
     ):
         raise ValueError("unknown scene category")
     if scene["split"] not in ("dev", "eval"):
         raise ValueError("unknown scene split")
     for field, present in (
         ("pallet", category in ("positive", "occluded")),
-        ("lookalike", category == "negative_lookalike"),
+        ("lookalike", category in ("negative_lookalike", "negative_block_row")),
     ):
         target = scene[field]
         if not present:
@@ -158,7 +273,7 @@ def load_catalogue(path: Path) -> dict:
     if (
         type(catalogue["format_version"]) is not int
         or catalogue["format_version"] != 1
-        or catalogue["catalogue_version"] != "v1"
+        or catalogue["catalogue_version"] not in APPROVED_PALLETS
         or catalogue["source_provenance"] != "synthetic"
     ):
         raise ValueError("unsupported catalogue format, version or provenance")
@@ -171,14 +286,7 @@ def load_catalogue(path: Path) -> dict:
         "optical_quaternion_xyzw": [-0.5, 0.5, -0.5, 0.5],
     }:
         raise ValueError("camera differs from the approved synthetic rig")
-    if catalogue["pallet"] != {
-        "depth_m": 0.6,
-        "width_m": 0.8,
-        "height_m": 0.30,
-        "deck_m": 0.05,
-        "center_spacer_m": 0.10,
-        "opening_height_m": 0.20,
-    }:
+    if catalogue["pallet"] != APPROVED_PALLETS[catalogue["catalogue_version"]]:
         raise ValueError("pallet dimensions differ from the approved geometry")
     if not isinstance(catalogue["scenes"], list) or not catalogue["scenes"]:
         raise ValueError("catalogue must contain scenes")
@@ -231,6 +339,7 @@ def generate_scene(catalogue_path: Path, scene_id: str, output: Path) -> dict:
         Path(__file__).resolve().parents[1] / "models/dls08_provisional/forklift.urdf",
     )
     pallet = scene["pallet"]
+    version = catalogue["catalogue_version"]
     if pallet is not None:
         link = _static_model(
             world,
@@ -238,17 +347,25 @@ def generate_scene(catalogue_path: Path, scene_id: str, output: Path) -> dict:
             [pallet["x_m"], pallet["y_m"], 0],
             pallet["yaw_rad"],
         )
-        sdf_parts.box(link, "bottom", [0, 0, 0.025], [0.6, 0.8, 0.05], ".6 .35 .12 1")
-        sdf_parts.box(link, "top", [0, 0, 0.275], [0.6, 0.8, 0.05], ".7 .45 .18 1")
-        outer_width = (0.8 - 2 * pallet["opening_width_m"] - 0.1) / 2
-        for name, y, width in (
-            ("spacer_center", 0, 0.1),
-            ("spacer_outer_0", -(0.4 - outer_width / 2), outer_width),
-            ("spacer_outer_1", 0.4 - outer_width / 2, outer_width),
-        ):
-            sdf_parts.box(link, name, [0, y, 0.15], [0.6, width, 0.2], ".5 .3 .1 1")
-            # Scene consumers use exact spacer IDs; the legacy helper keeps its suffix.
-            link.find(f"collision[@name='{name}_collision']").set("name", name)
+        if version in _URDF_PALLETS:
+            _emit_urdf_pallet(link, _URDF_PALLETS[version])
+        else:
+            sdf_parts.box(
+                link, "bottom", [0, 0, 0.025], [0.6, 0.8, 0.05], ".6 .35 .12 1"
+            )
+            sdf_parts.box(
+                link, "top", [0, 0, 0.275], [0.6, 0.8, 0.05], ".7 .45 .18 1"
+            )
+            outer_width = (0.8 - 2 * pallet["opening_width_m"] - 0.1) / 2
+            for name, y, width in (
+                ("spacer_center", 0, 0.1),
+                ("spacer_outer_0", -(0.4 - outer_width / 2), outer_width),
+                ("spacer_outer_1", 0.4 - outer_width / 2, outer_width),
+            ):
+                sdf_parts.box(link, name, [0, y, 0.15], [0.6, width, 0.2], ".5 .3 .1 1")
+                # Scene consumers use exact spacer IDs; the legacy helper keeps
+                # its suffix.
+                link.find(f"collision[@name='{name}_collision']").set("name", name)
     lookalike = scene["lookalike"]
     if lookalike is not None:
         link = _static_model(
@@ -257,7 +374,7 @@ def generate_scene(catalogue_path: Path, scene_id: str, output: Path) -> dict:
             [lookalike["x_m"], lookalike["y_m"], 0],
             lookalike["yaw_rad"],
         )
-        sdf_parts.box(link, "solid", [0, 0, 0.15], [0.6, 0.8, 0.30], ".6 .35 .12 1")
+        _emit_lookalike(link, scene["category"], version)
     occ = scene["occluder"]
     if occ is not None:
         link = _static_model(world, "occluder", occ["center_m"], pallet["yaw_rad"])

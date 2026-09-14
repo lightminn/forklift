@@ -257,3 +257,141 @@ def test_invalid_catalogue_is_rejected_before_outputs(builder, tmp_path, mutatio
     with pytest.raises(ValueError):
         builder.generate_scene(path, scene["scene_id"], output)
     assert not output.exists()
+
+
+# ---------------------------------------------------------------------------
+# The second geometry. v1's five boxes cannot express a real pallet, so the
+# generator reads the committed URDF instead; these pin that branch.
+# ---------------------------------------------------------------------------
+
+EPAL6_CATALOGUE = (
+    Path(__file__).resolve().parents[2] / "tests/fixtures/catalogue_epal6_min.yaml"
+)
+# The pocket convention: the complement of the pallet's boxes, which appears
+# nowhere in the URDF.
+EPAL6_OPENING_OFFSET_M = 0.18625
+EPAL6_OPENING_WIDTH_M = 0.2275
+EPAL6_OPENING_Z = (0.022, 0.100)
+
+
+def _epal6_world(builder, tmp_path, scene_id):
+    builder.generate_scene(EPAL6_CATALOGUE, scene_id, tmp_path)
+    return ET.parse(next(tmp_path.glob("*.sdf"))).getroot()
+
+
+def _boxes(model):
+    """(name, centre, size) for each collision in a model, in model frame."""
+    out = []
+    for node in model.findall(".//collision"):
+        pose = [float(v) for v in node.find("pose").text.split()]
+        size = [float(v) for v in node.find("geometry/box/size").text.split()]
+        out.append((node.get("name"), pose[:3], size))
+    return out
+
+
+def _hits(boxes, point):
+    return {
+        name
+        for name, centre, size in boxes
+        if all(
+            abs(point[axis] - centre[axis]) <= size[axis] / 2 + 1e-9
+            for axis in range(3)
+        )
+    }
+
+
+def test_the_epal6_pallet_is_emitted_from_its_urdf(builder, tmp_path):
+    world = _epal6_world(builder, tmp_path, "e001")
+    model = world.find(".//model[@name='synthetic_pallet']")
+    assert model is not None
+    boxes = _boxes(model)
+    assert len(boxes) == 22, "the committed URDF has 22 boxes"
+    names = {name for name, _, _ in boxes}
+    assert sum(n.startswith("bottom_board") for n in names) == 3
+    assert sum(n.startswith("block_") for n in names) == 9
+    assert sum(n.startswith("stringer") for n in names) == 3
+    assert sum(n.startswith("top_board") for n in names) == 7
+
+
+def test_both_fork_openings_are_empty_across_their_whole_rectangle(builder, tmp_path):
+    """Sweep the opening, not its centreline.
+
+    A zero-width centreline ray passes for any y in (0.0725, 0.300) and any z
+    in (0, 0.100) -- a 110 mm lateral slack -- and it also passes when fired at
+    a v1 five-box world. It cannot tell the two geometries apart, which is the
+    only thing this branch exists to do.
+    """
+    boxes = _boxes(_epal6_world(builder, tmp_path, "e001").find(".//model[@name='synthetic_pallet']"))
+    steps = 9
+    for sign in (1.0, -1.0):
+        centre_y = sign * EPAL6_OPENING_OFFSET_M
+        for i in range(steps):
+            y = centre_y + EPAL6_OPENING_WIDTH_M * (i / (steps - 1) - 0.5) * 0.98
+            for j in range(steps):
+                low, high = EPAL6_OPENING_Z
+                z = low + (high - low) * (0.01 + 0.98 * j / (steps - 1))
+                for x in (-0.29, 0.0, 0.29):
+                    hit = _hits(boxes, (x, y, z))
+                    assert not hit, f"opening blocked at {(x, y, z)} by {hit}"
+
+
+def test_the_columns_and_stringers_are_where_the_openings_are_not(builder, tmp_path):
+    """The negative sweep alone would pass on an empty world."""
+    boxes = _boxes(_epal6_world(builder, tmp_path, "e001").find(".//model[@name='synthetic_pallet']"))
+    # Mid-opening height, on each column centre.
+    for y in (-0.35, 0.0, 0.35):
+        hit = _hits(boxes, (0.0, y, 0.061))
+        assert any(n.startswith("block_") for n in hit), f"no column at y={y}: {hit}"
+    # Above the opening, the stringers span the full width.
+    hit = _hits(boxes, (0.0, 0.18625, 0.111))
+    assert any(n.startswith("stringer") for n in hit), hit
+    # Below it, the bottom boards sit under the columns and not under the gaps.
+    assert any(n.startswith("bottom_board") for n in _hits(boxes, (0.0, 0.0, 0.011)))
+    assert not _hits(boxes, (0.0, 0.18625, 0.011))
+
+
+def test_the_block_row_negative_has_two_openings_and_no_deck(builder, tmp_path):
+    """The negative the detector must refuse on upper-deck evidence alone."""
+    model = _epal6_world(builder, tmp_path, "e002").find(".//model[@name='lookalike']")
+    boxes = _boxes(model)
+    assert len(boxes) == 9
+    assert all(name.startswith("block_") for name, _, _ in boxes)
+    # Openings present ...
+    assert not _hits(boxes, (0.0, EPAL6_OPENING_OFFSET_M, 0.061))
+    assert not _hits(boxes, (0.0, -EPAL6_OPENING_OFFSET_M, 0.061))
+    # ... columns present ...
+    assert _hits(boxes, (0.0, 0.0, 0.061))
+    # ... and nothing above the openings at all.
+    for z in (0.111, 0.133):
+        assert not _hits(boxes, (0.0, EPAL6_OPENING_OFFSET_M, z))
+
+
+def test_the_v1_lookalike_is_unchanged_by_the_new_branch(builder, tmp_path):
+    model = _epal6_world(builder, tmp_path, "e003").find(".//model[@name='lookalike']")
+    boxes = _boxes(model)
+    # Unchanged, suffix included: only the pallet's own boxes are renamed, and
+    # v1 scene consumers address this one as it has always been named.
+    assert [name for name, _, _ in boxes] == ["solid_collision"]
+
+
+def test_a_v1_header_on_an_epal6_catalogue_is_refused(builder, tmp_path):
+    """The header gate is per version, so a mismatched pair cannot slip through."""
+    import yaml
+
+    data = yaml.safe_load(EPAL6_CATALOGUE.read_text())
+    data["pallet"] = builder.APPROVED_PALLETS["v1"]
+    path = tmp_path / "mismatched.yaml"
+    path.write_text(yaml.safe_dump(data))
+    with pytest.raises(ValueError, match="pallet dimensions"):
+        builder.load_catalogue(path)
+
+
+def test_an_unknown_catalogue_version_is_still_refused(builder, tmp_path):
+    import yaml
+
+    data = yaml.safe_load(EPAL6_CATALOGUE.read_text())
+    data["catalogue_version"] = "v99"
+    path = tmp_path / "unknown.yaml"
+    path.write_text(yaml.safe_dump(data))
+    with pytest.raises(ValueError, match="unsupported catalogue"):
+        builder.load_catalogue(path)

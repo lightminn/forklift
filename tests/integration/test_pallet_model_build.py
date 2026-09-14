@@ -201,3 +201,87 @@ def test_the_committed_models_match_fresh_generation(tmp_path):
     old.pop("generated_at")
     fresh.pop("generated_at")
     assert old == fresh
+
+
+def test_the_pocket_convention_is_recoverable_from_the_urdf_extents():
+    """y +/-0.18625, z 0.061, width 0.2275, height 0.078 appear in no file.
+
+    They are the complement of the pallet's boxes, so the plan has them
+    hand-copied into the catalogue header, the retargeting and the tests. This
+    re-derives all four from the URDF's own box extents, so a change to the
+    model cannot leave those copies behind.
+    """
+    import xml.etree.ElementTree as ET
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    urdf = ET.parse(root / "sim/models/epal6_pallet/pallet.urdf").getroot()
+    boxes = {}
+    for visual in urdf.findall(".//visual"):
+        origin = [float(v) for v in visual.find("origin").get("xyz").split()]
+        size = [float(v) for v in visual.find("geometry/box").get("size").split()]
+        boxes[visual.get("name")] = (origin, size)
+
+    # One row of three columns is enough; every row shares the lateral plan.
+    row = sorted(
+        (origin[1], size[1], origin[2], size[2])
+        for name, (origin, size) in boxes.items()
+        if name.startswith("block_x0_")
+    )
+    assert len(row) == 3, row
+    left, centre, right = row
+    # The opening is the gap between neighbouring columns.
+    gap_low = centre[0] + centre[1] / 2
+    gap_high = right[0] - right[1] / 2
+    width = gap_high - gap_low
+    offset = (gap_low + gap_high) / 2
+    height = centre[3]
+    z_centre = centre[2]
+
+    assert width == pytest.approx(0.2275, abs=1e-6)
+    assert offset == pytest.approx(0.18625, abs=1e-6)
+    assert height == pytest.approx(0.078, abs=1e-6)
+    assert z_centre == pytest.approx(0.061, abs=1e-6)
+    # Symmetric about the centre column, which sits on the axis.
+    assert centre[0] == pytest.approx(0.0, abs=1e-9)
+    assert left[0] == pytest.approx(-right[0], abs=1e-9)
+
+
+def test_the_catalogue_header_matches_the_urdf_it_describes():
+    """The EPAL 6 catalogue header is a second copy of the same dimensions."""
+    import xml.etree.ElementTree as ET
+    import sys
+    import importlib.util
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    spec = importlib.util.spec_from_file_location(
+        "scene_world_for_header", root / "sim/gazebo/build_scene_world.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["scene_world_for_header"] = module
+    spec.loader.exec_module(module)
+    header = module.APPROVED_PALLETS["epal6"]
+
+    urdf = ET.parse(root / "sim/models/epal6_pallet/pallet.urdf").getroot()
+    extents = {"x": [], "y": [], "z": []}
+    bottom = top = None
+    for visual in urdf.findall(".//visual"):
+        origin = [float(v) for v in visual.find("origin").get("xyz").split()]
+        size = [float(v) for v in visual.find("geometry/box").get("size").split()]
+        for index, axis in enumerate("xyz"):
+            extents[axis].append((origin[index] - size[index] / 2, origin[index] + size[index] / 2))
+        if visual.get("name").startswith("bottom_board"):
+            bottom = size[2]
+        if visual.get("name").startswith("block_"):
+            top = origin[2] + size[2] / 2
+
+    def span(axis):
+        lows, highs = zip(*extents[axis])
+        return max(highs) - min(lows)
+
+    assert span("x") == pytest.approx(header["depth_m"], abs=1e-6)
+    assert span("y") == pytest.approx(header["width_m"], abs=1e-6)
+    assert span("z") == pytest.approx(header["height_m"], abs=1e-6)
+    assert bottom == pytest.approx(header["deck_bottom_m"], abs=1e-6)
+    assert span("z") - top == pytest.approx(header["deck_top_m"], abs=1e-6)

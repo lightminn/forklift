@@ -1,0 +1,161 @@
+# Minimal EPAL 6 catalogue: enough scenes to exercise the world generator's
+# second geometry, and nothing more. Without it the generator's own tests can
+# only draw fixtures from the committed v1 catalogue, so the branch that emits
+# a real pallet has no scene to run on.
+#
+# The pocket convention below (y +/-0.18625, z 0.061, width 0.2275, height
+# 0.078) is the complement of the pallet's boxes and appears nowhere in the
+# URDF. It is derived from config/pallet_geometry_epal6.yaml, and
+# tests/integration/test_pallet_model_build.py re-derives it from the URDF's
+# own extents so the two cannot drift.
+format_version: 1
+catalogue_version: epal6
+seed: 20260914
+generator: handwritten test fixture
+source_provenance: synthetic
+camera:
+  width: 640
+  height: 480
+  horizontal_fov_rad: 1.204
+  rate_hz: 5
+  translation_m: [0.75, 0.0, 0.5]
+  optical_quaternion_xyzw: [-0.5, 0.5, -0.5, 0.5]
+pallet:
+  depth_m: 0.6
+  width_m: 0.8
+  height_m: 0.144
+  deck_bottom_m: 0.022
+  deck_top_m: 0.044
+  center_spacer_m: 0.145
+  opening_height_m: 0.078
+ranges:
+  x_m: [2.0, 4.0]
+  y_m: [-1.0, 1.0]
+  yaw_rad: [-0.52, 0.52]
+  opening_width_m: [0.2, 0.28]
+  occluder_gap_m: [0.3, 0.6]
+  occluded_fraction: [0.2, 0.6]
+distractor_presets:
+  crate_a:
+    center_m: [1.5, 1.6, 0.2]
+    size_m: [0.4, 0.4, 0.4]
+    color: ".5 .5 .5 1"
+scenes:
+- scene_id: e001
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.0
+    y_m: 0.0
+    yaw_rad: 0.0
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: [0.0, 0.0, -1.0]
+    diffuse: 0.5
+  surfaces:
+    floor: ".35 .4 .4 1"
+    background: ".15 .2 .25 1"
+  visibility:
+    corners_px:
+      left: [[241.5, 405.27], [241.5, 331.81], [147.51, 400.99], [147.51, 329.44]]
+      right: [[378.64, 411.5], [378.64, 335.28], [277.52, 406.9], [277.52, 332.72]]
+    left_in_view: true
+    right_in_view: true
+    occluded_side: null
+    occluded_fraction_image: null
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    left:
+      center_m: [2.7, 0.18625, 0.061]
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m: [2.7, -0.18625, 0.061]
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: 0.0
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+- scene_id: e002
+  split: dev
+  category: negative_block_row
+  pallet: null
+  lookalike:
+    x_m: 3.0
+    y_m: 0.0
+    yaw_rad: 0.0
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: [0.0, 0.0, -1.0]
+    diffuse: 0.5
+  surfaces:
+    floor: ".35 .4 .4 1"
+    background: ".15 .2 .25 1"
+  visibility:
+    corners_px:
+      left: null
+      right: null
+    left_in_view: false
+    right_in_view: false
+    occluded_side: null
+    occluded_fraction_image: null
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: no_pallet
+    left: null
+    right: null
+    insertion_yaw_rad: null
+    position_sigma_m: null
+    yaw_sigma_rad: null
+    reason: no_pallet
+- scene_id: e003
+  split: eval
+  category: negative_lookalike
+  pallet: null
+  lookalike:
+    x_m: 3.4
+    y_m: -0.2
+    yaw_rad: 0.1
+  occluder: null
+  distractors: [crate_a]
+  lighting:
+    name: sun_top
+    direction: [0.0, 0.0, -1.0]
+    diffuse: 0.5
+  surfaces:
+    floor: ".35 .4 .4 1"
+    background: ".15 .2 .25 1"
+  visibility:
+    corners_px:
+      left: null
+      right: null
+    left_in_view: false
+    right_in_view: false
+    occluded_side: null
+    occluded_fraction_image: null
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: no_pallet
+    left: null
+    right: null
+    insertion_yaw_rad: null
+    position_sigma_m: null
+    yaw_sigma_rad: null
+    reason: no_pallet
