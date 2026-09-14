@@ -198,8 +198,19 @@ def test_transport_timeout_kills_orphan_that_keeps_capture_pipe_open(
         )
 
     elapsed = time.monotonic() - started
-    child_pid = int(pid_file.read_text())
     assert elapsed < 3
+
+    # Measure the timeout first, then wait for the child to announce itself.
+    # The parent is killed after 0.1 s, so under load the orphan can still be
+    # starting its interpreter when _run returns and the pid file does not
+    # exist yet. Reading it immediately turned that race into a FileNotFoundError
+    # that looked like a product failure. The wait is outside the elapsed
+    # measurement, so it cannot mask a slow timeout path.
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and not pid_file.exists():
+        time.sleep(0.01)
+    assert pid_file.exists(), "the orphan never started; nothing to reap"
+    child_pid = int(pid_file.read_text())
     # Orphan reaping is asynchronous; zombies still respond to kill(pid, 0).
     deadline = time.monotonic() + 2
     while time.monotonic() < deadline:
@@ -1071,3 +1082,82 @@ def test_remote_scenes_rejects_unverified_selection_before_docker(tmp_path, defe
     assert code != 0
     assert "ValueError" in report["error"]
     assert report["commands"] == []
+
+
+def test_evaluation_reads_its_revision_from_the_snapshot_manifest(tmp_path):
+    """A remote export has no .git, and a run whose revision is unknown cannot
+    be tied to the code that produced it -- which is what the artifact is for.
+
+    submit_model_check records the source revision in the manifest it writes
+    beside the export; the evaluation CLI falls back to it.
+    """
+    import importlib.util
+    import json
+
+    spec = importlib.util.spec_from_file_location(
+        "evaluate_for_revision", Path(__file__).resolve().parents[2] / "tools/evaluate_pocket_detector.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    revision = "a" * 40
+    (tmp_path / module._SNAPSHOT_MANIFEST_NAME).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source_revision": revision,
+                "source_dirty_status": "",
+                "snapshot_sha256": "0" * 64,
+                "files": {},
+            }
+        )
+    )
+    original = module.REPO_ROOT
+    try:
+        module.REPO_ROOT = tmp_path
+        assert module._snapshot_git_state() == (revision, False)
+        # A dirty export must not be reported clean.
+        (tmp_path / module._SNAPSHOT_MANIFEST_NAME).write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "source_revision": revision,
+                    "source_dirty_status": " M tools/x.py",
+                    "snapshot_sha256": "0" * 64,
+                    "files": {},
+                }
+            )
+        )
+        assert module._snapshot_git_state() == (revision, True)
+        # Neither a checkout nor a verified export: unknown, never claimed clean.
+        (tmp_path / module._SNAPSHOT_MANIFEST_NAME).unlink()
+        assert module._snapshot_git_state() == (None, None)
+    finally:
+        module.REPO_ROOT = original
+
+
+def test_the_snapshot_allowlist_carries_the_yaml_read_at_import_time():
+    """tests/fixtures/thin_deck_legacy_*.yaml and config/*.yaml are read while
+    their modules import, so omitting them kills remote pytest at collection
+    rather than failing a test."""
+    import importlib.util
+    import sys
+
+    root = Path(__file__).resolve().parents[2]
+    spec = importlib.util.spec_from_file_location(
+        "submit_for_allowlist", root / "tools/submit_model_check.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["submit_for_allowlist"] = module
+    spec.loader.exec_module(module)
+    plan = module.discover_snapshot(root)
+    paths = {item.relative_path for item in plan.files}
+    for required in (
+        "tests/fixtures/thin_deck_legacy_geometry.yaml",
+        "tests/fixtures/thin_deck_legacy_prior.yaml",
+        "config/detector_params_v1.yaml",
+        "config/pallet_prior_v1.yaml",
+        "config/pallet_prior_t11_06.yaml",
+        "config/pallet_geometry_t11_06.yaml",
+    ):
+        assert required in paths, required

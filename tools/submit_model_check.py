@@ -33,7 +33,11 @@ _SOURCE_RULES = {
     "src": {".py"},
     "examples": {".py"},
     "tools": {".py", ".sh"},
-    "tests": {".py"},
+    # Test YAML is not optional data: tests/fixtures/thin_deck_legacy_*.yaml and
+    # config/*.yaml are read at MODULE IMPORT time, so leaving them out makes
+    # remote pytest die during collection rather than fail a test.
+    "tests": {".py", ".yaml"},
+    "config": {".yaml"},
     "sim/models": {
         ".dae",
         ".json",
