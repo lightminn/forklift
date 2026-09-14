@@ -156,8 +156,15 @@ def _snapshot_git_state():
     dirty_status = data.get("source_dirty_status")
     if not isinstance(revision, str) or len(revision) != 40:
         return None, None
-    # The snapshot records the porcelain text, or an empty string when clean.
-    return revision, bool(dirty_status)
+    # The snapshot records the word "clean" or "dirty", not porcelain text and
+    # not an empty string. Truth-testing the value would call a clean export
+    # dirty, so match the vocabulary and refuse to guess at anything else --
+    # unknown is never claimed clean.
+    if dirty_status == "clean":
+        return revision, False
+    if dirty_status == "dirty":
+        return revision, True
+    return None, None
 
 
 def _diagnostics_json(diagnostics):

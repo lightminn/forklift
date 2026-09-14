@@ -1106,7 +1106,7 @@ def test_evaluation_reads_its_revision_from_the_snapshot_manifest(tmp_path):
             {
                 "schema_version": 1,
                 "source_revision": revision,
-                "source_dirty_status": "",
+                "source_dirty_status": "clean",
                 "snapshot_sha256": "0" * 64,
                 "files": {},
             }
@@ -1122,13 +1122,28 @@ def test_evaluation_reads_its_revision_from_the_snapshot_manifest(tmp_path):
                 {
                     "schema_version": 1,
                     "source_revision": revision,
-                    "source_dirty_status": " M tools/x.py",
+                    "source_dirty_status": "dirty",
                     "snapshot_sha256": "0" * 64,
                     "files": {},
                 }
             )
         )
         assert module._snapshot_git_state() == (revision, True)
+        # An unrecognised value is not a guess: submit_model_check writes the
+        # words "clean" and "dirty", and anything else means this manifest was
+        # produced by something whose convention we do not know.
+        (tmp_path / module._SNAPSHOT_MANIFEST_NAME).write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "source_revision": revision,
+                    "source_dirty_status": "",
+                    "snapshot_sha256": "0" * 64,
+                    "files": {},
+                }
+            )
+        )
+        assert module._snapshot_git_state() == (None, None)
         # Neither a checkout nor a verified export: unknown, never claimed clean.
         (tmp_path / module._SNAPSHOT_MANIFEST_NAME).unlink()
         assert module._snapshot_git_state() == (None, None)
