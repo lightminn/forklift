@@ -1645,9 +1645,26 @@ p_max = (개구 대역 상단 z − 터널 바닥 z) × R_perp / (카메라 높�
 
 # G. 작업
 
-## Task 0: 기준 확인 (Claude)
-- [ ] 트리 깨끗. 기준 회귀에서 **skip 이 0 인지 확인한다** — skip 이 있으면 데이터가 없는 것이다. **실패가 `test_transport_timeout_kills_orphan_*` 하나뿐이면 부하 탓이므로 통과로 본다**(§F).
-- [ ] 아래 덱 증거의 프로덕션 경로 값 2.0/3.0/4.0 m = **0/12/9** 를 기록한다.
+## Task 0: 기준 확인 — ✅ **완료 (2026-09-14)**
+
+- [x] 트리 깨끗. `pytest tests --ignore=tests/simulation` **643 통과, skip 0, 실패 0.**
+- [x] **아래 덱 증거 2.0/2.5/3.0/3.5/4.0 m = `0 / 0 / 12 / 0 / 9` — 정확히 재현됐다.**
+
+```
+$ python tools/measure_pocket_evidence.py evidence --distances 2.0:4.0:0.5     --geometry config/pallet_geometry_epal6.yaml --prior config/pallet_prior_epal6.yaml
+    x_m  planes     supports (l,c,r)   lower  u_left  u_right  observation
+  2.000       1   (1484, 1988, 1484)       0    2653     2674  no_pallet/no_opening_pattern
+  2.500       2      (626, 893, 626)       0    1060     1033  no_pallet/no_opening_pattern
+  3.000       1      (349, 490, 349)      12     532      532  no_pallet/no_opening_pattern
+  3.500       1      (220, 297, 220)       0     358      358  no_pallet/no_opening_pattern
+  4.000       1      (144, 207, 144)       9     268      256  no_pallet/no_opening_pattern
+```
+
+**커밋된 리그가 완전히 다른 스크래치 스크립트의 수치를 맞췄다** — Task 2c 의 목적이 이것이었다. 비양자화로 돌리면 `0 / 0 / 5 / 3 / 8` 이고, 이것도 계획이 적은 값과 일치한다(§C-10 의 양자화 민감도).
+
+⚠️ **두 가지를 재현 과정에서 배웠고 도구에 반영했다.**
+1. **`lower` 는 선택된 패턴의 횡방향 구간 안에서만 센다.** 작업영역 전체로 세면 같은 장면이 168 / 94 / 50 / 32 / 24 로 **몇 배 크게** 나오고 비교가 불가능하다. §C-10 은 그 제한을 적었지만 계산식이 없으면 재현되지 않는다.
+2. **시드가 결과를 바꾼다.** `evidence` 가 시드 0 을 기본으로 쓰던 동안 같은 장면의 `lower` 가 3.0 m 에서 **0** 이었다(동결 시드에서는 12). 기본값을 `--params` 의 시드로 바꿨다 — 경계 구간의 계수는 이진이 아니다.
 
 ## Task 0.5: ~~§A 결정 수령~~ — **완료 (2026-09-14)**
 

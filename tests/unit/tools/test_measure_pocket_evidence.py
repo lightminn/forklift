@@ -87,3 +87,27 @@ def test_grounded_has_no_gap_beneath_its_columns():
     assert columns, "grounded must extend its columns"
     for box in columns:
         assert box.centre_m[2] == pytest.approx(box.size_m[2] / 2), "column must reach z=0"
+
+
+def test_evidence_sweeps_distances_and_names_the_terms(capsys):
+    assert main(["evidence", "--distances", "3.0:3.5:0.5", *FAST]) == 0
+    out = capsys.readouterr().out
+    for column in ("supports (l,c,r)", "lower", "u_left", "u_right", "observation"):
+        assert column in out
+
+
+def test_evidence_defaults_to_the_configured_seed_not_zero(capsys):
+    """Boundary counts are seed-sensitive; a zero default reports different
+    evidence for the same scene than the configuration it claims to measure."""
+    import yaml
+    from pathlib import Path
+
+    from tools.measure_pocket_evidence import DEFAULT_PARAMS
+
+    configured = yaml.safe_load(Path(DEFAULT_PARAMS).read_text())["seed"]
+    assert configured != 0, "this test is vacuous if the frozen seed is zero"
+    main(["evidence", "--x", "3.0", *FAST])
+    default_out = capsys.readouterr().out
+    main(["evidence", "--x", "3.0", "--seed", str(configured), *FAST])
+    explicit_out = capsys.readouterr().out
+    assert default_out == explicit_out

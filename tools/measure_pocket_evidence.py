@@ -297,6 +297,10 @@ def cmd_evidence(args) -> int:
     """
     geometry, prior, params, camera = load(args)
     header(args, f"structure={args.structure} x={args.x} y={args.y} yaw={args.yaw}")
+    if args.seed is not None:
+        params = dataclasses.replace(params, seed=args.seed)
+    if args.distances:
+        return _evidence_sweep(args, geometry, prior, params, camera)
     scene = scene_rig.render(
         scene_rig.place(
             structure(geometry, args.structure), x_m=args.x, y_m=args.y, yaw_rad=args.yaw
@@ -304,7 +308,6 @@ def cmd_evidence(args) -> int:
         camera=camera,
         quantize=args.quantize,
     )
-    params = dataclasses.replace(params, seed=args.seed)
     points, _ = detector._base_points(scene)
     cam = scene.base_from_optical.translation_m
     workspace = detector._filter_workspace(points, cam, prior, params)
@@ -361,6 +364,81 @@ def cmd_evidence(args) -> int:
     observation = detect(scene, prior, params, args.rule).observation
     print(f"\nobservation: {observation.status} / {observation.reason}")
     return 0
+
+
+def _evidence_sweep(args, geometry, prior, params, camera) -> int:
+    """One row per distance: the gate's terms for the best plane's best pattern.
+
+    The lower count is taken over the selected pattern's lateral span, which is
+    the definition the plan's C-10 table uses. Counting over the whole
+    workspace instead gives numbers several times larger and is not comparable.
+    """
+    boxes = structure(geometry, args.structure)
+    print(
+        f"{'x_m':>7s} {'planes':>7s} {'supports (l,c,r)':>20s} {'lower':>7s}"
+        f" {'u_left':>7s} {'u_right':>8s}  observation"
+    )
+    for x in arange(args.distances):
+        scene = scene_rig.render(
+            scene_rig.place(boxes, x_m=x, y_m=args.y, yaw_rad=args.yaw),
+            camera=camera,
+            quantize=args.quantize,
+        )
+        points, _ = detector._base_points(scene)
+        cam = scene.base_from_optical.translation_m
+        workspace = detector._filter_workspace(points, cam, prior, params)
+        planes = detector._vertical_plane_candidates(workspace, cam, params)
+        terms = _gate_terms(planes[0], workspace, prior, params) if planes else None
+        observation = detect(scene, prior, params, args.rule).observation
+        if terms is None:
+            print(f"{x:7.3f} {0:7d} {'-':>20s} {'-':>7s} {'-':>7s} {'-':>8s}"
+                  f"  {observation.status}/{observation.reason}")
+            continue
+        supports, lower, upper_left, upper_right = terms
+        print(
+            f"{x:7.3f} {len(planes):7d} {str(supports):>20s} {lower:7d}"
+            f" {upper_left:7d} {upper_right:8d}"
+            f"  {observation.status}/{observation.reason}"
+        )
+    return 0
+
+
+def _gate_terms(plane, workspace, prior, params):
+    """(supports, lower, upper_left, upper_right) for the plane's first pattern."""
+    lateral = plane.points @ plane.left_axis
+    local = np.column_stack((np.zeros(len(lateral)), lateral, plane.points[:, 2]))
+    counts, origin = detector._column_grid(local, prior, params)
+    gaps = detector._gap_runs(counts > 0)
+    if len(gaps) < 2:
+        return None
+    first, second = gaps[0], gaps[1]
+    supports = (
+        int(counts[: first[0]].sum()),
+        int(counts[first[1] : second[0]].sum()),
+        int(counts[second[1] :].sum()),
+    )
+    left_edge = (origin + first[0]) * params.cell_m
+    right_edge = (origin + second[1]) * params.cell_m
+    depth = -(workspace - plane.point) @ plane.normal
+    workspace_lateral = workspace @ plane.left_axis
+    lower = int(
+        np.count_nonzero(
+            (np.abs(workspace[:, 2] - prior.deck_bottom_m) <= params.deck_evidence_tol_m)
+            & (depth >= 0)
+            & (depth <= prior.overall_depth_m + params.plane_inlier_m)
+            & (workspace_lateral >= left_edge)
+            & (workspace_lateral <= right_edge)
+        )
+    )
+    band = (local[:, 2] >= prior.height_m - prior.deck_top_m) & (
+        local[:, 2] <= prior.height_m + params.plane_inlier_m
+    )
+    per = []
+    for start, stop in (first, second):
+        low = (origin + start) * params.cell_m
+        high = (origin + stop) * params.cell_m
+        per.append(int(np.count_nonzero(band & (lateral >= low) & (lateral <= high))))
+    return supports, lower, per[1], per[0]
 
 
 def cmd_structures(args) -> int:
@@ -538,7 +616,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     ev.add_argument("--x", type=float, default=3.0)
     ev.add_argument("--y", type=float, default=0.0)
     ev.add_argument("--yaw", type=float, default=0.0)
-    ev.add_argument("--seed", type=int, default=0)
+    ev.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="RANSAC seed; default is the one in --params, not 0. Boundary "
+        "counts are seed-sensitive, so a different default silently reports "
+        "different evidence for the same scene",
+    )
+    ev.add_argument(
+        "--distances",
+        default=None,
+        metavar="START:STOP:STEP",
+        help="Sweep instead of a single --x, printing one row per distance",
+    )
     ev.set_defaults(func=cmd_evidence)
 
     st = sub.add_parser("structures", help="every structure over the same distances")
