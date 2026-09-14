@@ -104,6 +104,9 @@ def load_pallet_prior(path: Path) -> PalletPrior:
     if not isinstance(provenance, str) or provenance not in PROVENANCES | {
         "epal6_published_standard",
         "epal6_published_standard_plus_cad_measurement",
+        # A published standard envelope scaled to a printable test article. The
+        # scaling is designed, not measured; replace once the article exists.
+        "t11_published_standard_scaled_design",
     }:
         raise ValueError("Unsupported source_provenance")
     version = data["catalogue_version"]

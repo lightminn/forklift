@@ -1,0 +1,50 @@
+# Adopted test article: a T11 pallet scaled to six tenths, 660 x 660 x 90 mm.
+#
+# Provenance of each number:
+#  - the T11 base is the JIS Z 0601 / ISO 6780 1100 x 1100 x 144 mm four-way
+#    pallet as PUBLISHED. This file scales its nominal envelope by 0.6 and
+#    rounds each dimension to 0.1 mm; it is a DESIGNED article, not a measured
+#    one, and not a scaled measurement of any delivered pallet.
+#  - the scale 0.6 was chosen so the openings clear the provisional fork
+#    dimensions with margin; see docs/decisions/0002-*.md. Half scale did not
+#    fit the forks at all.
+#  - top_board_count and top_board_width_m are CHOSEN, not derived. Five top
+#    board layouts were measured and the upper-deck evidence moved by under
+#    10 % with identical detection range, so 7 x 82.5 mm is fixed here to make
+#    the article printable and the evidence reproducible.
+#
+# Nothing here is measured. Once the article is printed, measure it and build
+# the prior from those measurements, not from this file (ADR 0002 decision 1).
+#
+# Axes: x insertion depth, y approach-face width, z up; origin at floor centre.
+source_provenance: t11_published_standard_scaled_design
+geometry_version: t11_06
+overall_width_m: 0.660      # y, the face the forks enter
+overall_depth_m: 0.660      # x; square, so all four faces present a prior match
+overall_height_m: 0.090     # z
+
+# Vertical layers. 0.015 + 0.045 + 0.015 + 0.015 = 0.090.
+deck_bottom_m: 0.015        # bottom boards
+block_height_m: 0.045       # fork opening height
+stringer_m: 0.015           # boards spanning the width, on top of the blocks
+top_board_thickness_m: 0.015  # top boards
+
+# Blocks: 3 across the 660 face by 3 along the 660 depth = 9.
+# 3 x 80 + 2 x 210 = 660.
+block_widths_m: [0.080, 0.080, 0.080]
+block_depth_m: 0.080                   # along the insertion axis, all three rows
+
+# Bottom boards run the full depth, one under each block column. On this
+# article they are longitudinal: they span x, not y. That is what makes the
+# lower band visible through the openings under yaw.
+bottom_board_widths_m: [0.080, 0.080, 0.080]
+
+# Top boards run the full depth, 7 of them across the face.
+# 7 x 82.5 = 577.5 of the 660 mm face, leaving six 13.75 mm slots.
+top_board_count: 7
+top_board_width_m: 0.0825
+
+# The fork openings are between the block columns and are open to the floor:
+# the bottom boards sit under the columns, not under the openings.
+# Derived: opening width (660 - 240) / 2 = 210 mm, deck_top 15 + 15 = 30 mm,
+# pocket centres y = +/- 145 mm, z = 37.5 mm.
