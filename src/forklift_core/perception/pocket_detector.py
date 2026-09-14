@@ -39,6 +39,12 @@ class DetectorParams:
     ransac_iterations: int = 200
     min_plane_points: int = 300
     min_band_points: int = 100
+    # Per-opening upper-deck threshold. Separate from min_band_points because
+    # the two answer different questions -- how much evidence a support column
+    # must show, against how much deck must sit over one opening -- and the
+    # measurement that would set them apart needs a real sensor. Zero means
+    # "follow min_band_points", which is the frozen behaviour.
+    upper_band_points: int = 0
     max_plane_candidates: int = 3
     range_min_m: float = 0.8
     range_max_m: float = 5.0
@@ -58,13 +64,14 @@ class DetectorParams:
             "ransac_iterations",
             "min_plane_points",
             "min_band_points",
+            "upper_band_points",
             "max_plane_candidates",
             "seed",
         }
         for field in fields(self):
             value = getattr(self, field.name)
             if field.name in integers:
-                minimum = 0 if field.name == "seed" else 1
+                minimum = 0 if field.name in {"seed", "upper_band_points"} else 1
                 if (
                     isinstance(value, (bool, np.bool_))
                     or not isinstance(value, Integral)
@@ -384,7 +391,8 @@ def _opening_candidates(plane, prior, params, workspace):
             )
         # bounds are (right, left); report the pair in the same order.
         upper_right, upper_left = per_opening
-        upper_ok = min(per_opening) >= params.min_band_points
+        upper_threshold = params.upper_band_points or params.min_band_points
+        upper_ok = min(per_opening) >= upper_threshold
         patterns.append(
             _Pattern(
                 bounds,
@@ -492,7 +500,8 @@ def _build_observation(scene, prior, params, plane, pattern, opening_rays):
 def _upper_deck_reason(pattern, params):
     """Name which upper-deck failure this is, keeping the side when there is one."""
     counts = {"right": pattern.upper_right, "left": pattern.upper_left}
-    if max(counts.values()) < params.min_band_points:
+    threshold = params.upper_band_points or params.min_band_points
+    if max(counts.values()) < threshold:
         return "no_upper_deck"
     side = min(counts, key=counts.__getitem__)
     return f"upper_deck_occluded:{side}"

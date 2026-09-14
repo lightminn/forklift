@@ -79,7 +79,7 @@ def upper_deck_lifted_clear(boxes, geometry, *, rise_m):
     return lifted
 
 
-def upper_deck_over_one_opening(boxes, geometry, *, keep_sign):
+def upper_deck_over_one_opening(boxes, geometry, *, keep_sign, cut_m=0.0):
     """Clip the upper deck to one side, so one opening has deck and one has sky.
 
     Removing whole boxes does not work: the stringers span the full width, so
@@ -95,9 +95,9 @@ def upper_deck_over_one_opening(boxes, geometry, *, keep_sign):
         y, half = box.centre_m[1], box.size_m[1] / 2
         low, high = y - half, y + half
         if keep_sign > 0:
-            low = max(low, 0.0)
+            low = max(low, cut_m)
         else:
-            high = min(high, 0.0)
+            high = min(high, -cut_m)
         if high - low <= 1e-9:
             continue
         kept.append(
@@ -292,3 +292,57 @@ def test_known_limitation_floor_standing_columns_match_a_pallet_term_by_term():
             len(detector._gap_runs(counts > 0)),
         )
     assert scenes["pallet"] == scenes["grounded"]
+
+
+# --------------------------------------------------------------------------
+# The per-opening threshold is separable, and defaults to the frozen behaviour
+# --------------------------------------------------------------------------
+
+
+def test_upper_band_points_defaults_to_following_min_band_points():
+    """Zero means "follow min_band_points", so the frozen config is unchanged."""
+    boxes = upper_deck_over_one_opening(at(EPAL6, "slab", 3.0), EPAL6, keep_sign=1.0)
+    default = observe(boxes, EPAL6_PRIOR, max_plane_residual_m=0.030)
+    explicit = observe(
+        boxes,
+        EPAL6_PRIOR,
+        max_plane_residual_m=0.030,
+        upper_band_points=FROZEN.min_band_points,
+    )
+    assert default.observation.reason == explicit.observation.reason
+    assert default.observation.status == explicit.observation.status
+
+
+def test_lowering_the_upper_threshold_admits_a_thinly_decked_opening():
+    """Separate knob, separate question.
+
+    A support column and the deck over an opening are seen at different
+    incidence and do not deserve one threshold. The value that should separate
+    them needs a real sensor, so only the separation lands here.
+
+    The cut leaves part of the weak opening covered, so the side has a real but
+    small count. Cutting at the centre leaves it at exactly zero, which no
+    threshold above zero can admit and which would test nothing.
+    """
+    boxes = upper_deck_over_one_opening(
+        at(EPAL6, "slab", 3.0), EPAL6, keep_sign=-1.0, cut_m=-0.10
+    )
+    refused = observe(boxes, EPAL6_PRIOR, max_plane_residual_m=0.030)
+    assert refused.observation.status == "invalid"
+    assert refused.observation.reason.startswith("upper_deck_occluded:")
+    weak = min(
+        refused.diagnostics.selected_upper_left,
+        refused.diagnostics.selected_upper_right,
+    )
+    assert 0 < weak < FROZEN.min_band_points, "the weak side must be thin, not empty"
+    admitted = observe(
+        boxes, EPAL6_PRIOR, max_plane_residual_m=0.030, upper_band_points=weak
+    )
+    assert admitted.observation.status == "valid", admitted.observation.reason
+
+
+def test_the_upper_threshold_rejects_a_negative_but_allows_zero():
+    """Zero is the sentinel; anything below it is a configuration error."""
+    dataclasses.replace(FROZEN, upper_band_points=0)
+    with pytest.raises(ValueError):
+        dataclasses.replace(FROZEN, upper_band_points=-1)
