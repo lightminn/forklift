@@ -244,3 +244,50 @@ def test_position_threshold_is_inclusive_away_from_the_coordinate_origin():
 )
 def test_roundoff_handling_does_not_accept_errors_beyond_the_threshold(estimate):
     assert evaluate_scene(sample("positive"), estimate).outcome is Outcome.WRONG_POSE
+
+
+def test_bare_blocks_score_as_a_negative_not_as_an_unbudgeted_invalid():
+    """negative_block_row is registered everywhere a category must be.
+
+    The plan worried this negative would land in `invalid`, which has no
+    budget, and quietly cost a true negative. With `lower` still in the gate it
+    returns no_pallet instead, so it scores as the negative it is -- but only
+    because the category is registered; an unregistered one raises instead.
+    """
+    from forklift_core.perception.evaluation import (
+        NEGATIVE_CATEGORIES,
+        POSITIVE_CATEGORIES,
+    )
+
+    assert "negative_block_row" in NEGATIVE_CATEGORIES
+    assert "negative_block_row" not in POSITIVE_CATEGORIES
+
+
+def test_every_category_the_world_generator_emits_is_known_to_the_evaluator():
+    """Four places register a category and they drift apart silently.
+
+    A scene the generator can build but the evaluator refuses fails only once
+    the dataset exists, which is after the capture that produced it.
+    """
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    from forklift_core.perception.evaluation import (
+        NEGATIVE_CATEGORIES,
+        POSITIVE_CATEGORIES,
+    )
+
+    root = Path(__file__).resolve().parents[3]
+    spec = importlib.util.spec_from_file_location(
+        "merge_for_categories", root / "tools/merge_scene_batches.py"
+    )
+    merge = importlib.util.module_from_spec(spec)
+    sys.modules["merge_for_categories"] = merge
+    spec.loader.exec_module(merge)
+
+    known = set(POSITIVE_CATEGORIES) | set(NEGATIVE_CATEGORIES)
+    assert set(merge.CATEGORY_STATUS) == known
+    source = (root / "sim/gazebo/build_scene_world.py").read_text()
+    for category in known:
+        assert f'"{category}"' in source, category

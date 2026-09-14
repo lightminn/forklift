@@ -43,6 +43,7 @@ CATEGORY_STATUS = {
     "occluded": "valid",
     "negative_no_pallet": "no_pallet",
     "negative_lookalike": "no_pallet",
+    "negative_block_row": "no_pallet",
 }
 
 

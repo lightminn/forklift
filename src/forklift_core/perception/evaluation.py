@@ -15,7 +15,14 @@ from forklift_core.perception.pocket_observation import (
 from forklift_core.perception.scene_dataset import SceneSample
 
 POSITIVE_CATEGORIES = ("positive", "occluded")
-NEGATIVE_CATEGORIES = ("negative_no_pallet", "negative_lookalike")
+# negative_block_row is nine bare blocks: two openings, no deck over either.
+# It is the negative that tests upper-deck evidence rather than the absence of
+# a pallet-shaped object, so it belongs with the negatives and not with them.
+NEGATIVE_CATEGORIES = (
+    "negative_no_pallet",
+    "negative_lookalike",
+    "negative_block_row",
+)
 POSITION_TOLERANCE_M = 0.20
 YAW_TOLERANCE_RAD = 0.35
 TARGET_POSITION_P95_M = 0.020
