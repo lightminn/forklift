@@ -1,5 +1,6 @@
 """Replay frozen v1 observations, allowing only explicitly recorded fixes."""
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -61,7 +62,17 @@ def test_saved_v1_observations_have_only_expected_deltas(run_name, expected_coun
     assert {path.stem for path in observations} == set(run["scene_ids"])
     prior = load_pallet_prior(ROOT / "config/pallet_prior_v1.yaml")
     params_data = yaml.safe_load((ROOT / "config/detector_params_v1.yaml").read_text())
-    assert params_data == run["params"]  # both historical runs used this frozen set
+    # The frozen file is a SUBSET of the parameter set, not the whole of it:
+    # deck_evidence_tol_m and upper_band_points are absent and come from the
+    # code's defaults. Asserting containment rather than equality says that
+    # plainly and keeps working if a later run records more keys than the file
+    # carries. It does not make the gap safe -- changing a default still moves
+    # this "frozen" set silently.
+    assert params_data.items() <= run["params"].items()
+    missing = {f.name for f in dataclasses.fields(DetectorParams)} - set(params_data)
+    assert missing == {"deck_evidence_tol_m", "upper_band_points"}, (
+        "a parameter left the frozen file without anyone recording it"
+    )
     params = DetectorParams(**params_data)
     dataset = Path(run["dataset_dir"])
     if not dataset.is_dir():

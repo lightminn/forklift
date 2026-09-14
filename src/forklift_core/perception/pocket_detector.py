@@ -26,6 +26,17 @@ from forklift_core.perception.scene_dataset import SceneInput
 from forklift_core.sensors.rgbd import deproject_depth_pixels
 
 
+# The catalogue v1 pallet's opening height. Every scaled parameter is written
+# against this pallet because the frozen values were tuned on it: anchoring
+# here makes s(v1) = 1, so the derivation reproduces them exactly.
+_ANCHOR_OPENING_HEIGHT_M = 0.20
+# floor_z_m = max(_FLOOR_Z_FLOOR_M, deck_bottom_m / _FLOOR_Z_DIVISOR). Both
+# constants are dev-tuned on a rig that quantises depth to 1 mm; only the
+# fractional form and its upper bound have a mechanism behind them.
+_FLOOR_Z_DIVISOR = 3.0
+_FLOOR_Z_FLOOR_M = 0.004
+
+
 @dataclass(frozen=True)
 class DetectorParams:
     """Finite algorithm parameters, separate from explicitly supplied shape."""
@@ -58,6 +69,63 @@ class DetectorParams:
     max_plane_residual_m: float = 0.015
     width_mismatch_frac: float = 0.20
     seed: int = 20260913
+
+    @classmethod
+    def derived_for(cls, prior, **overrides) -> "DetectorParams":
+        """Scale the shape-dependent parameters to this pallet.
+
+        Five of these parameters are absolute lengths or absolute point counts
+        tuned on one pallet, which is why the detector was tied to one size.
+        The scale factor is the opening height against the catalogue v1
+        pallet's 200 mm:
+
+            s = prior.opening_height_m / 0.200
+
+        Anchoring at v1 rather than at any other shape matters. s(v1) = 1, so
+        the four scaled terms come back as the frozen values by identity -- the
+        v1 regression is preserved by definition, not by measurement. Anchoring
+        on EPAL 6 instead makes v1's factor 2.56 and takes its detection from
+        65/100 to 0/100.
+
+        Lengths scale with s and point counts with s squared, because a count
+        is a projected area. Vertical dimensions are what the scale must
+        follow: the inlier band's failure mode is mixing a block face with a
+        deck edge, which is a vertical confusion. Width-based factors were
+        measured and do not work.
+
+        floor_z_m does not scale with s. It comes from the bottom deck, and it
+        has a hard upper bound -- above ``deck_bottom_m - deck_evidence_tol_m``
+        the lower-deck evidence band is clipped and a pallet, a bottom-deckless
+        structure and a floor-standing rack produce identical evidence. The
+        divisor and the 4 mm clamp are dev-tuning constants, not derived: they
+        come from a rig that quantises depth to 1 mm, and they must be
+        re-measured on a real sensor.
+
+        Deliberately NOT derived, each for a measured reason:
+        ``cell_m`` (the width gate's lower bound is
+        ``opening_width_min_m - 2 * cell_m``, so shrinking cells shrinks the
+        acceptance window with them), ``max_plane_residual_m`` (tying it to
+        plane_inlier_m reopens the detection comb), and
+        ``deck_evidence_tol_m`` and ``front_margin_m``, which have not been
+        measured against shape at all.
+        """
+        scale = _finite_scalar(prior.opening_height_m, "opening_height_m") / (
+            _ANCHOR_OPENING_HEIGHT_M
+        )
+        if scale <= 0:
+            raise ValueError("opening_height_m must be positive")
+        base = cls()
+        area = scale * scale
+        derived = {
+            "plane_inlier_m": base.plane_inlier_m * scale,
+            "band_margin_m": base.band_margin_m * scale,
+            "min_band_points": max(1, round(base.min_band_points * area)),
+            "min_plane_points": max(3, round(base.min_plane_points * area)),
+            "floor_z_m": max(
+                _FLOOR_Z_FLOOR_M, prior.deck_bottom_m / _FLOOR_Z_DIVISOR
+            ),
+        }
+        return cls(**(derived | overrides))
 
     def __post_init__(self) -> None:
         integers = {

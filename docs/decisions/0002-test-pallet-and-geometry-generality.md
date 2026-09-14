@@ -101,6 +101,10 @@ M2 검출기를 실물로 검증하려면 이 차체가 실제로 들 수 있는
 
 즉 현재 코드가 한 규격에 묶인 것은 **우연이고 고칠 수 있다.** **유도 대상은 네 항이다 (개정 4 — 독립 검토가 하나를 되돌렸다):** `min_band_points`·`min_plane_points` ← **s²**, `plane_inlier_m` ← **s**, `band_margin_m` ← **s**, 그리고 **`floor_z_m` ← `deck_bottom_m`**. 앞의 셋이면 채택 형상의 검출 창이 **2.0 ~ 4.8 m 연속**(사각지대 0)이고 커밋된 자세가 **56/60**, **`floor_z_m` 을 더하면 60/60** 이다(계획 §C-13·§C-14 (2)). ⚠️ **그 60/60 은 EPAL 6 앵커의 값이다** — 이 문서가 위에서 채택한 **v1 앵커**에서는 같은 네 항이 **59/60**(`floor_z` 3.75 mm) 또는 **57/60**(`floor_z` 15 mm, 아래 참조)이다. 두 앵커의 수치를 섞지 않는다.
 
+✅ **구현됐다 (2026-09-14).** `DetectorParams.derived_for(prior)` — 공식과 근거는 `docs/design/2026-09-13-pocket-detector-baseline.md` §7b 에 표로 적혀 있고, `tests/unit/perception/test_geometry_family.py` 가 고정한다. **v1 은 네 축척 항이 동결값과 항등**이고, 커밋된 v1 100 장면에서 **`valid` 65/100 로 같으며** 상태·사유가 바뀌는 장면이 **하나**(둘 다 `invalid`, 같은 쪽)다.
+
+⚠️ **prior 공차도 절대 단위였다.** `opening_width_tolerance_m` ±20 mm·`centre_spacer_tolerance_m` ±15 mm 는 EPAL 6 에서 8.8 % / 10.3 % 인데 **T11 × 0.6 에서 9.5 % / 18.8 %** 로 **증거가 가장 약한 형상에서 공차가 가장 느슨해진다.** `build_pallet_prior.py --scale-tolerances` 로 같은 s 를 적용할 수 있고(3.4 / 4.0 % 와 2.1 / 4.2 %), **기본값은 끄고 뒀다** — 인쇄물의 실제 치수 오차를 모르는 상태에서 조이면 실물을 `opening_width_mismatch` 로 거부한다. **결정 1 대로 prior 는 인쇄 후 실측에서 생성하고, 그때 이 플래그의 사용 여부를 정한다.**
+
 ✅ **네 번째 항이 정해졌다 (2026-09-14, 계획 §C-18).**
 
 ```

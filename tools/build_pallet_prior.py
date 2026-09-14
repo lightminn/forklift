@@ -7,6 +7,11 @@ import yaml
 
 from forklift_core.perception.pallet_geometry import load_pallet_geometry
 
+# The catalogue v1 pallet's opening height, the same anchor the detector's
+# parameter derivation uses. Keeping one anchor means a shape's prior and its
+# parameters shrink together rather than drifting apart.
+ANCHOR_OPENING_HEIGHT_M = 0.20
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -24,8 +29,21 @@ def main(argv: list[str] | None = None) -> int:
         default=0.015,
         help="Symmetric centre-spacer tolerance in metres (default: 0.015)",
     )
+    parser.add_argument(
+        "--scale-tolerances",
+        action="store_true",
+        help="Scale both tolerances by this pallet's opening height against the "
+        "catalogue v1 pallet's 200 mm, instead of using the absolute defaults. "
+        "The defaults are absolute, so they loosen as the shape shrinks: "
+        "+/-15 mm is 10.3 %% of EPAL 6's centre spacer but 18.8 %% of "
+        "T11 x0.6's, which is the shape with the least evidence to spare.",
+    )
     args = parser.parse_args(argv)
     geometry = load_pallet_geometry(args.geometry)
+    if args.scale_tolerances:
+        scale = geometry.block_height_m / ANCHOR_OPENING_HEIGHT_M
+        args.opening_width_tolerance *= scale
+        args.centre_spacer_tolerance *= scale
     prior = geometry.to_pallet_prior(
         opening_width_tolerance_m=args.opening_width_tolerance,
         centre_spacer_tolerance_m=args.centre_spacer_tolerance,

@@ -70,9 +70,15 @@ def _write_json(path, data):
     )
 
 
-def _load_params(path):
+def _load_params(path, prior=None):
+    """Frozen YAML, or the shape-scaled derivation when no file is given.
+
+    With neither a file nor a prior this returns the dataclass defaults, which
+    are the catalogue v1 pallet's values -- fine for v1 and wrong for anything
+    else. Passing the prior derives them instead.
+    """
     if path is None:
-        return DetectorParams()
+        return DetectorParams() if prior is None else DetectorParams.derived_for(prior)
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
     except yaml.YAMLError as exc:
@@ -128,8 +134,30 @@ def _git_state():
     try:
         return git("rev-parse", "HEAD"), bool(git("status", "--porcelain"))
     except (OSError, subprocess.CalledProcessError):
-        # A source export has no Git metadata; unknown is never claimed clean.
+        # A remote source export has no .git, but the snapshot that produced it
+        # recorded the revision it was taken from. Read that rather than writing
+        # None into run.json: a run whose revision is unknown cannot be tied to
+        # the code that produced it, which is what the artifact is for.
+        return _snapshot_git_state()
+
+
+# Written by tools/submit_model_check.py alongside the exported source.
+_SNAPSHOT_MANIFEST_NAME = ".remote-source-manifest.json"
+
+
+def _snapshot_git_state():
+    manifest = REPO_ROOT / _SNAPSHOT_MANIFEST_NAME
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        # Neither a checkout nor a verified export; unknown is never claimed clean.
         return None, None
+    revision = data.get("source_revision")
+    dirty_status = data.get("source_dirty_status")
+    if not isinstance(revision, str) or len(revision) != 40:
+        return None, None
+    # The snapshot records the porcelain text, or an empty string when clean.
+    return revision, bool(dirty_status)
 
 
 def _diagnostics_json(diagnostics):
@@ -252,7 +280,7 @@ def _run(args):
     prior_path = args.prior.resolve()
     params_path = args.params.resolve() if args.params is not None else None
     prior = load_pallet_prior(prior_path)
-    params = _load_params(params_path)
+    params = _load_params(params_path, prior if args.derive_params else None)
     # This is a configuration error, before the per-scene recovery boundary.
     if 2 * params.band_margin_m >= prior.opening_height_m:
         raise ValueError("band_margin_m must leave a nonempty opening height band")
@@ -345,6 +373,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="new artifacts/<UTC>_pocket_eval_<split>_NN directory",
     )
     parser.add_argument("--params", type=Path, help="DetectorParams overrides as YAML")
+    parser.add_argument(
+        "--derive-params",
+        action="store_true",
+        help="With no --params, scale the shape-dependent parameters from the "
+        "prior instead of using the catalogue v1 defaults. Required for any "
+        "pallet that is not v1; see the derivation table in "
+        "docs/design/2026-09-13-pocket-detector-baseline.md",
+    )
     parser.add_argument(
         "--scenes", help="comma-separated scene IDs within the chosen split"
     )
