@@ -111,3 +111,36 @@ def test_evidence_defaults_to_the_configured_seed_not_zero(capsys):
     main(["evidence", "--x", "3.0", "--seed", str(configured), *FAST])
     explicit_out = capsys.readouterr().out
     assert default_out == explicit_out
+
+
+def test_planes_reports_margin_and_pairwise_overlap(capsys):
+    assert main(["planes", "--distances", "2.5:2.5:0.5", *FAST]) == 0
+    out = capsys.readouterr().out
+    for column in ("cands", "resid_mm", "margin_mm", "overlap"):
+        assert column in out
+
+
+def test_zcut_derives_the_beam_height_from_the_shadow_height(capsys):
+    """The sweep axis is the shadow on the pallet face, not the beam itself.
+
+    A beam low enough to shadow a 100 mm deck sits below the camera and hides
+    the whole scene, so sweeping the beam directly measures nothing.
+    """
+    assert main(["zcut", "--cuts", "0.10:0.11:0.005", *FAST]) == 0
+    out = capsys.readouterr().out
+    assert "beam bottom =" in out and "beam_z_m" in out
+    # The beam must sit well above the shadow it casts.
+    rows = [r.split() for r in out.splitlines() if r.startswith("  0.1")]
+    assert rows, out
+    for row in rows:
+        z_cut, beam_z = float(row[0]), float(row[1])
+        assert beam_z > z_cut
+
+
+def test_zcut_places_the_obstruction_by_its_front_face(capsys):
+    """Centring it on the nominal x puts the face half a box further forward,
+    where it eats the support columns and every count collapses for the wrong
+    reason."""
+    main(["zcut", "--cuts", "0.13:0.13:0.005", "--front-x", "1.6", *FAST])
+    out = capsys.readouterr().out
+    assert "FRONT FACE at x=1.6" in out

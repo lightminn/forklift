@@ -441,6 +441,128 @@ def _gate_terms(plane, workspace, prior, params):
     return supports, lower, per[1], per[0]
 
 
+def cmd_planes(args) -> int:
+    """Plane candidates: how many survive, by how much, and how far they overlap.
+
+    Repairing plane extraction made a confirmed plane collect its inliers from
+    the whole cloud rather than from what earlier candidates left. That means
+    two candidates can now share points, and a structure beside the pallet on
+    the same plane joins its column grid. Neither the overlap nor the residual
+    margin was observable before.
+    """
+    geometry, prior, params, camera = load(args)
+    header(args, f"structure={args.structure}")
+    boxes = structure(geometry, args.structure)
+    print(
+        f"{'x_m':>7s} {'cands':>6s} {'idx':>4s} {'inliers':>8s} {'resid_mm':>9s}"
+        f" {'margin_mm':>10s} {'dist_m':>7s} {'cells':>6s} {'gaps':>5s} {'overlap':>8s}"
+    )
+    for x in arange(args.distances):
+        scene = scene_rig.render(
+            scene_rig.place(boxes, x_m=x, y_m=args.y, yaw_rad=args.yaw),
+            camera=camera,
+            quantize=args.quantize,
+        )
+        points, _ = detector._base_points(scene)
+        cam = scene.base_from_optical.translation_m
+        workspace = detector._filter_workspace(points, cam, prior, params)
+        planes = detector._vertical_plane_candidates(workspace, cam, params)
+        if not planes:
+            print(f"{x:7.3f} {0:6d}   -- no vertical plane candidate --")
+            continue
+        keys = [{tuple(np.round(p, 6)) for p in plane.points} for plane in planes]
+        for index, plane in enumerate(planes):
+            lateral = plane.points @ plane.left_axis
+            local = np.column_stack(
+                (np.zeros(len(lateral)), lateral, plane.points[:, 2])
+            )
+            counts, _ = detector._column_grid(local, prior, params)
+            gaps = detector._gap_runs(counts > 0)
+            margin = params.max_plane_residual_m - plane.residual_p95_m
+            # Worst pairwise share of this candidate's own inliers.
+            overlap = 0.0
+            for other in range(len(planes)):
+                if other == index or not keys[index]:
+                    continue
+                overlap = max(
+                    overlap, len(keys[index] & keys[other]) / len(keys[index])
+                )
+            distance = float(np.linalg.norm((plane.point - cam)[:2]))
+            print(
+                f"{x:7.3f} {len(planes):6d} {index:4d} {len(plane.points):8d}"
+                f" {plane.residual_p95_m * 1000:9.2f} {margin * 1000:10.2f}"
+                f" {distance:7.3f} {int((counts > 0).sum()):6d} {len(gaps):5d}"
+                f" {overlap:8.3f}"
+            )
+    return 0
+
+
+def cmd_zcut(args) -> int:
+    """An overhead obstruction lowered until it hides the upper deck.
+
+    Two traps, both paid for once already. The shadow height depends on the
+    pallet's own depth, so it is computed from overall_depth_m rather than the
+    0.300 m that suited EPAL 6 and puts the shadow in the wrong place on a
+    660 mm article. And the obstruction is placed by its FRONT face: centring
+    it on the nominal x puts its face half a box further forward, where it eats
+    the support columns and every count collapses to zero for the wrong reason.
+    """
+    geometry, prior, params, camera = load(args)
+    front_x = args.front_x
+    # The pallet's approach face, which is what the shadow is measured against.
+    pallet_front_x = args.x - geometry.overall_depth_m / 2
+    cam_x, _, cam_z = camera.xyz_m
+    lever = (front_x - cam_x) / (pallet_front_x - cam_x)
+    header(
+        args,
+        f"structure={args.structure}; obstruction FRONT FACE at x={front_x} m,"
+        f" depth {args.obstruction_depth} m; pallet face at"
+        f" x={pallet_front_x:.3f} m (half-depth {geometry.overall_depth_m / 2:.3f} m);"
+        f" beam bottom = {cam_z:.3f} + (z_cut - {cam_z:.3f}) * {lever:.4f}",
+    )
+    boxes = structure(geometry, args.structure)
+    print(
+        f"{'z_cut_m':>8s} {'beam_z_m':>9s} {'supports (l,c,r)':>20s} {'lower':>7s}"
+        f" {'u_left':>7s} {'u_right':>8s}  observation"
+    )
+    for z_cut in arange(args.cuts):
+        # z_cut is the shadow height ON THE PALLET FACE, not the beam's own
+        # height. Sweeping the beam directly is meaningless: a beam low enough
+        # to shadow a 100 mm deck sits below the camera and hides everything.
+        beam_z = cam_z + (z_cut - cam_z) * lever
+        obstruction = Box(
+            (
+                front_x + args.obstruction_depth / 2,
+                args.y,
+                beam_z + args.obstruction_height / 2,
+            ),
+            (args.obstruction_depth, args.obstruction_width, args.obstruction_height),
+        )
+        placed = scene_rig.place(
+            boxes, x_m=args.x, y_m=args.y, yaw_rad=args.yaw
+        ) + [obstruction]
+        scene = scene_rig.render(placed, camera=camera, quantize=args.quantize)
+        points, _ = detector._base_points(scene)
+        cam = scene.base_from_optical.translation_m
+        workspace = detector._filter_workspace(points, cam, prior, params)
+        planes = detector._vertical_plane_candidates(workspace, cam, params)
+        observation = detect(scene, prior, params, args.rule).observation
+        terms = _gate_terms(planes[0], workspace, prior, params) if planes else None
+        if terms is None:
+            print(
+                f"{z_cut:8.4f} {beam_z:9.4f} {'-':>20s} {'-':>7s} {'-':>7s} {'-':>8s}"
+                f"  {observation.status}/{observation.reason}"
+            )
+            continue
+        supports, lower, upper_left, upper_right = terms
+        print(
+            f"{z_cut:8.4f} {beam_z:9.4f} {str(supports):>20s} {lower:7d}"
+            f" {upper_left:7d} {upper_right:8d}"
+            f"  {observation.status}/{observation.reason}"
+        )
+    return 0
+
+
 def cmd_structures(args) -> int:
     """Every structure at the same distances, so a table says which is which."""
     geometry, prior, params, camera = load(args)
@@ -651,6 +773,32 @@ def main(argv: Sequence[str] | None = None) -> int:
     noise.add_argument("--sigmas", default="0,0.005,0.010,0.020,0.030")
     noise.add_argument("--sigma-at", type=float, default=3.0)
     noise.set_defaults(func=cmd_noise)
+
+    planes = sub.add_parser("planes", help="plane candidates, margins and overlap")
+    add_common(planes)
+    planes.add_argument("--structure", choices=STRUCTURES, default="pallet")
+    planes.add_argument("--distances", default="2.0:4.0:0.5")
+    planes.add_argument("--y", type=float, default=0.0)
+    planes.add_argument("--yaw", type=float, default=0.0)
+    planes.set_defaults(func=cmd_planes)
+
+    zcut = sub.add_parser("zcut", help="overhead obstruction lowered onto the deck")
+    add_common(zcut)
+    zcut.add_argument("--structure", choices=STRUCTURES, default="pallet")
+    zcut.add_argument("--x", type=float, default=2.5)
+    zcut.add_argument("--y", type=float, default=0.0)
+    zcut.add_argument("--yaw", type=float, default=0.0)
+    zcut.add_argument(
+        "--front-x",
+        type=float,
+        default=1.60,
+        help="x of the obstruction's FRONT FACE, not its centre",
+    )
+    zcut.add_argument("--obstruction-depth", type=float, default=0.10)
+    zcut.add_argument("--obstruction-width", type=float, default=2.0)
+    zcut.add_argument("--obstruction-height", type=float, default=1.0)
+    zcut.add_argument("--cuts", default="0.090:0.120:0.005")
+    zcut.set_defaults(func=cmd_zcut)
 
     poses = sub.add_parser("poses", help="the committed catalogue poses")
     add_common(poses)
