@@ -1967,7 +1967,23 @@ $ python tools/measure_pocket_evidence.py evidence --distances 2.0:4.0:0.5     -
 ## Task 4.5: epal6 스모크 게이트 (Claude + 원격) — **보류: H0 이후**
 - [ ] **epal6 카탈로그로 1~2 장면을 원격 캡처한다.** Task 1 의 스모크는 v1 경로만 본다. 없으면 22 상자 경로·URDF 직독·`cwd=runtime` 문제가 **되돌릴 수 없는 캡처에서 처음** 드러난다. Task 5 의 명령에서 `--dry-run` 만 빼면 된다.
 
-## Task 5: 동결 게이트 (Claude) — **보류: H0 이후**
+## Task 5: 동결 게이트 — ⚠️ **확인 명령은 돌렸다. 게이트 자체는 캡처가 있어야 의미가 생긴다 (2026-09-14)**
+
+> 이 Task 는 "배치 1 부터 병합까지 스냅샷 허용 목록의 어떤 파일도 건드리면 전 배치가 폐기된다" 를 지키는 것이다. **캡처가 없으면 지킬 배치가 없다.** 다만 **확인 명령은 원격 접속 없이 돌아가고, 돌렸다.**
+>
+> ```
+> $ python tools/submit_model_check.py submit --host <h> --remote-root <r> --source . \
+>     --mode scenes --image <id> --catalogue sim/gazebo/scenes/catalogue_epal6.yaml \
+>     --scene-range s001-s002 --run-id probe --dry-run
+> snapshot_sha256: 178bf2f1f836cd01851329b54d15b54ffc78f962cad57e5478e34565637c7718
+> files: 110  revision: f863879e74be7825efb5f3812c5eb47fa9201cd2  status: clean
+> ```
+>
+> **파일 110 개** — Task 1 의 106 개에 이번에 더한 네 개(재타깃 도구·그 시험·epal6 카탈로그·epal6 fixture)다. 캡처를 시작할 때 이 값을 다시 찍어 배치마다 대조한다.
+>
+> ⚠️ **이 명령을 돌려서 버그를 하나 찾았다.** 매니페스트의 `source_dirty_status` 는 포슬린 텍스트나 빈 문자열이 아니라 **`"clean"` / `"dirty"` 두 단어**다. Task 1 에서 넣은 revision 폴백이 그 값을 참거짓으로 검사해 **깨끗한 export 를 더럽다고 보고**하고 있었다 — `bool("clean")` 은 참이다. 고쳤다(`f863879`). **문서만 읽고 넘어갔으면 원격 캡처 기록에 그대로 들어갔을 값이다.**
+
+## ~~Task 5: 동결 게이트 (Claude)~~ *(원래 사양)*
 - [ ] `merge_batches` 는 배치 manifest 를 `expected_metadata`(`:174-191`)와 완전일치시키고 거기에 `catalogue_sha256` 뿐 아니라 **`source_snapshot_sha256`·`image_id`** 가 있다. 배치 1 부터 병합까지 **스냅샷 허용 목록의 어떤 파일도** 건드리면 전 배치가 폐기된다. 전수 커버리지도 요구한다(`:220-222`).
 - [ ] **확인 명령(실제로 동작 확인됨, 원격 접속 불필요):**
   `python tools/submit_model_check.py submit --host <h> --remote-root <r> --source . --mode scenes --image <id> --catalogue <c> --scene-range s001-s002 --run-id probe --dry-run` → `source.snapshot_sha256` 출력. 캡처 시작 전과 각 배치 전에 같은 값인지 본다.
