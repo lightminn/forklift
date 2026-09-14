@@ -36,7 +36,31 @@ M2 인식기의 출력, M3 추적기의 입력, 평가기의 정답은 동일한
 | `insertion_yaw_rad` | rad 또는 `None` | 공통 삽입축 yaw, 유한하고 (−π, π]. `valid`일 때 필수 |
 | `position_sigma_m` | m 또는 `None` | 두 중심에 공통으로 적용하는 등방 위치 1σ 상한, 유한 ≥ 0 |
 | `yaw_sigma_rad` | rad 또는 `None` | yaw의 1σ 불확실성, 유한 ≥ 0 |
-| `reason` | 문자열 또는 `None` | 비valid 상태의 사유. 공백만 있는 문자열은 거부 |
+| `reason` | 문자열 또는 `None` | 비valid 상태의 사유. 공백만 있는 문자열은 거부. 어휘는 아래 표 |
+
+### `reason` 어휘
+
+`reason`은 자유 문자열이고 코드는 **비어 있지 않은지만** 검사한다(`pocket_observation.py:93-94`). 허용 집합이 없으므로 이 표가 정본이다. 검출기가 내는 값 전부:
+
+| 사유 | 상태 | 의미 |
+|---|---|---|
+| `insufficient_points` | `no_pallet` | 작업영역에 평면 적합에 쓸 점이 부족하다 |
+| `no_front_plane` | `no_pallet` | 수직 평면 후보가 하나도 남지 않았다 |
+| `no_opening_pattern` | `no_pallet` | 평면은 있으나 관문을 통과한 개구 쌍이 없다 |
+| `opening_width_mismatch` | `invalid` | 측정 개구 폭이 prior 범위 밖이거나 좌우가 어긋난다 |
+| `pocket_occluded:{side}` | `invalid` | 그 포켓을 지나는 광선 중 전면 앞에서 끊긴 비율이 한계를 넘었다 |
+| `pocket_ambiguous:{side}` | `invalid` | 그 포켓 뒤가 뚫려 있다는 증거가 부족하다 |
+| **`no_upper_deck`** | `invalid` | **두 개구 어느 쪽에도 이 팔레트의 상부 덱이 없다.** 물체는 있고 형상이 다르다 — 그래서 `no_pallet`이 아니다 |
+| **`upper_deck_occluded:{side}`** | `invalid` | **한 개구 위에는 덱이 있고 다른 쪽에는 없다.** 이 팔레트에 무언가 가려져 있다는 뜻이고, 신뢰할 수 없는 포켓이 어느 쪽인지 남긴다 |
+| `exception:{type}` | `invalid` | 검출 중 예외. 역추적은 진단에 들어간다 |
+
+⚠️ **`no_upper_deck`을 "덱이 없었다"로 읽지 말 것.** 관문이 합산 상부 계수를 먼저 보므로, 덱이 통째로 없는 형상은 여기 오기 전에 `no_opening_pattern`으로 거부된다. 이 사유가 말하는 것은 **합산 계수는 통과했는데 개구별로 보니 어느 쪽도 이 팔레트의 덱이 아니었다**는 것이다(예: 너무 높이 있는 머리 위 구조물).
+
+⚠️ **`no_upper_deck`의 상태가 `invalid`인 이유는 계약이 `no_pallet`을 "아무것도 없음"으로 정의하기 때문이다.** 그 자리에 물체는 실제로 있다 — `no_pallet`을 내면 호출자에게 공간이 비었다고 말하는 것이 된다. **"음성 장면에서 `true_negative`로 집계되니까"는 이유가 아니다.** 그것은 지표에 맞춰 계약을 구부리는 것이다.
+
+### 좌표의 z 성분
+
+`center_m`의 **z는 prior에서 온 상수**다(`pocket_detector.py:423`이 `opening_centre_height_m`으로 덮어쓴다). 합성 정답도 같은 값을 쓰므로 **위치 오차의 z 성분은 구조적으로 0**이다. 위치 오차를 인용할 때 이것이 xy 오차임을 같이 적는다.
 
 `None`인 σ는 **미상**이다. 0으로 대체해서는 안 된다. 합성 정답은 두 σ를 0.0으로 기록하지만, 이는 모델 기하가 정확하다는 의미이며 렌더링·깊이 양자화 오차가 없다는 뜻은 아니다.
 
