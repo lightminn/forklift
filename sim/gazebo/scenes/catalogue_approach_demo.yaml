@@ -1,0 +1,6575 @@
+format_version: 1
+catalogue_version: epal6
+seed: 20260911
+generator: 'scratch: continuous approach demo within the approved range'
+source_provenance: synthetic
+camera:
+  width: 640
+  height: 480
+  horizontal_fov_rad: 1.204
+  rate_hz: 5
+  translation_m:
+  - 0.75
+  - 0.0
+  - 0.5
+  optical_quaternion_xyzw:
+  - -0.5
+  - 0.5
+  - -0.5
+  - 0.5
+pallet:
+  depth_m: 0.6
+  width_m: 0.8
+  height_m: 0.144
+  deck_bottom_m: 0.022
+  deck_top_m: 0.044
+  center_spacer_m: 0.145
+  opening_height_m: 0.078
+ranges:
+  x_m:
+  - 2.0
+  - 4.0
+  y_m:
+  - -1.0
+  - 1.0
+  yaw_rad:
+  - -0.52
+  - 0.52
+  opening_width_m:
+  - 0.2275
+  - 0.2275
+  occluder_gap_m:
+  - 0.3
+  - 0.6
+  occluded_fraction:
+  - 0.2
+  - 0.6
+distractor_presets:
+  crate_a:
+    center_m:
+    - 1.5
+    - 1.6
+    - 0.2
+    size_m:
+    - 0.4
+    - 0.4
+    - 0.4
+    color: .5 .5 .5 1
+  crate_b:
+    center_m:
+    - 4.5
+    - -1.8
+    - 0.3
+    size_m:
+    - 0.6
+    - 0.6
+    - 0.6
+    color: .2 .3 .7 1
+  post:
+    center_m:
+    - 3.0
+    - 2.2
+    - 0.5
+    size_m:
+    - 0.3
+    - 0.3
+    - 1.0
+    color: .8 .7 .2 1
+  wall_block:
+    center_m:
+    - 5.5
+    - 0.0
+    - 0.4
+    size_m:
+    - 1.0
+    - 0.5
+    - 0.8
+    color: .7 .2 .2 1
+  bin:
+    center_m:
+    - 2.2
+    - -2.0
+    - 0.15
+    size_m:
+    - 0.5
+    - 0.3
+    - 0.3
+    color: .2 .6 .3 1
+  cube:
+    center_m:
+    - 4.0
+    - 1.9
+    - 0.25
+    size_m:
+    - 0.5
+    - 0.5
+    - 0.5
+    color: .9 .9 .9 1
+scenes:
+- scene_id: s001
+  split: dev
+  category: positive
+  pallet:
+    x_m: 4.0
+    y_m: 0.266247
+    yaw_rad: -0.136927
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: &id001
+    - 0.0
+    - 0.0
+    - -1.0
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 260.41780886654067
+        - 315.14225506648097
+      - - 260.41780886654067
+        - 302.8805481727874
+      - - 225.97476419224412
+        - 314.3628197024743
+      - - 225.97476419224412
+        - 302.2283010062547
+      right:
+      - - 318.3997657231204
+        - 316.4543686753585
+      - - 318.3997657231204
+        - 303.9785511927687
+      - - 282.7498059764265
+        - 315.6476211994967
+      - - 282.7498059764265
+        - 303.3034487025077
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.728231
+      - 0.491704
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.677385
+      - 0.12269
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.136927
+- scene_id: s002
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.98
+    y_m: 0.263472
+    yaw_rad: -0.1355
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 260.51371600251434
+        - 315.65708699072167
+      - - 260.51371600251434
+        - 303.3113698667127
+      - - 225.81905839659314
+        - 314.8750894650419
+      - - 225.81905839659314
+        - 302.65697863183425
+      right:
+      - - 318.9134273377163
+        - 316.97338272372076
+      - - 318.9134273377163
+        - 304.4128725721513
+      - - 283.00747680045095
+        - 316.16408335560914
+      - - 283.00747680045095
+        - 303.7356346072043
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.70791
+      - 0.488541
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.65759
+      - 0.119455
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.1355
+- scene_id: s003
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.96
+    y_m: 0.26067
+    yaw_rad: -0.134059
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 260.6159076447691
+        - 316.1790478494486
+      - - 260.6159076447691
+        - 303.7481571961913
+      - - 225.66599340525528
+        - 315.3945732848457
+      - - 225.66599340525528
+        - 303.09169312539393
+      right:
+      - - 319.4391701831597
+        - 317.4993759324328
+      - - 319.4391701831597
+        - 304.8530342530819
+      - - 283.2737147331833
+        - 316.6876177197129
+      - - 283.2737147331833
+        - 304.173738677584
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.687586
+      - 0.485346
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.637798
+      - 0.116188
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.134059
+- scene_id: s004
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.94
+    y_m: 0.257842
+    yaw_rad: -0.132604
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 260.72435570764594
+        - 316.7082862769864
+      - - 260.72435570764594
+        - 304.1910345414112
+      - - 225.5154687355044
+        - 315.9214241685375
+      - - 225.5154687355044
+        - 303.5325725259728
+      right:
+      - - 319.9770753098576
+        - 318.0324894508732
+      - - 319.9770753098576
+        - 305.29915435219516
+      - - 283.54853559827933
+        - 317.21837006141766
+      - - 283.54853559827933
+        - 304.61788289658386
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.667259
+      - 0.482122
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.618009
+      - 0.112892
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.132604
+- scene_id: s005
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.92
+    y_m: 0.254988
+    yaw_rad: -0.131137
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 260.83910443377476
+        - 317.24494910781016
+      - - 260.83910443377476
+        - 304.6401247764102
+      - - 225.36748036781907
+        - 316.4557817962462
+      - - 225.36748036781907
+        - 303.9797337207081
+      right:
+      - - 320.5272796516206
+        - 318.5728825760168
+      - - 320.5272796516206
+        - 305.751366172399
+      - - 283.83201762138697
+        - 317.756491952636
+      - - 283.83201762138697
+        - 305.06819410262426
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.64693
+      - 0.478867
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.598222
+      - 0.109566
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.131137
+- scene_id: s006
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.9
+    y_m: 0.252111
+    yaw_rad: -0.129657
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 260.9598445992445
+        - 317.78919625953074
+      - - 260.9598445992445
+        - 305.0955617234567
+      - - 225.22163231311242
+        - 316.9978162972128
+      - - 225.22163231311242
+        - 304.4333190771655
+      right:
+      - - 321.08959482844637
+        - 319.1206976533214
+      - - 321.08959482844637
+        - 306.2097888312313
+      - - 284.12390184842735
+        - 318.3021365993054
+      - - 284.12390184842735
+        - 305.5248005015108
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.626599
+      - 0.475586
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.578437
+      - 0.106213
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.129657
+- scene_id: s007
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.88
+    y_m: 0.249209
+    yaw_rad: -0.128165
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 261.0869879243554
+        - 318.3411861440415
+      - - 261.0869879243554
+        - 305.5574779448046
+      - - 225.0782669032382
+        - 317.5476847693467
+      - - 225.0782669032382
+        - 304.89346005803066
+      right:
+      - - 321.66454832367
+        - 319.67609546848894
+      - - 321.66454832367
+        - 306.6745568773966
+      - - 284.4246447219805
+        - 318.85546330318334
+      - - 284.4246447219805
+        - 305.9878354001535
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.606266
+      - 0.472276
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.558655
+      - 0.102831
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.128165
+- scene_id: s008
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.86
+    y_m: 0.246286
+    yaw_rad: -0.126661
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 261.22001267810583
+        - 318.9010847289544
+      - - 261.22001267810583
+        - 306.0260123254849
+      - - 224.93678689361926
+        - 318.10555784852744
+      - - 224.93678689361926
+        - 305.3602994548347
+      right:
+      - - 322.25173178161214
+        - 320.2392340267565
+      - - 322.25173178161214
+        - 307.1458025328506
+      - - 284.7337701978406
+        - 319.4166349801338
+      - - 284.7337701978406
+        - 306.45743512981903
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.585931
+      - 0.468941
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.538876
+      - 0.099425
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.126661
+- scene_id: s009
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.84
+    y_m: 0.243341
+    yaw_rad: -0.125147
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 261.35912199859024
+        - 319.469056549815
+      - - 261.35912199859024
+        - 306.5013025521464
+      - - 224.79733758918678
+        - 318.6715925258193
+      - - 224.79733758918678
+        - 305.83396864085296
+      right:
+      - - 322.85145760417
+        - 320.8102910160492
+      - - 322.85145760417
+        - 307.6236744904178
+      - - 285.0515217090014
+        - 319.9858211639162
+      - - 285.0515217090014
+        - 306.93374155976255
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.565594
+      - 0.465581
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.519098
+      - 0.095994
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.125147
+- scene_id: s010
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.82
+    y_m: 0.240375
+    yaw_rad: -0.123621
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 261.5043739273089
+        - 320.0452833700118
+      - - 261.5043739273089
+        - 306.98350072804334
+      - - 224.65986380866295
+        - 319.2459877267781
+      - - 224.65986380866295
+        - 306.31463408098585
+      right:
+      - - 323.46393411157874
+        - 321.38941866594837
+      - - 323.46393411157874
+        - 308.1083001388689
+      - - 285.3780211387975
+        - 320.56319233780084
+      - - 285.3780211387975
+        - 307.4168973538083
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.545255
+      - 0.462196
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.499324
+      - 0.092538
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.123621
+- scene_id: s011
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.8
+    y_m: 0.23739
+    yaw_rad: -0.122086
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 261.6554276416418
+        - 320.62993649599474
+      - - 261.6554276416418
+        - 307.47275020585334
+      - - 224.52398152490892
+        - 319.82890088473545
+      - - 224.52398152490892
+        - 306.8024275186071
+      right:
+      - - 324.08891827818127
+        - 321.9768123805986
+      - - 324.08891827818127
+        - 308.5998429963168
+      - - 285.7129615885135
+        - 321.1489289788068
+      - - 285.7129615885135
+        - 307.90705353875046
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.524915
+      - 0.458789
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.479551
+      - 0.089061
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.122086
+- scene_id: s012
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.78
+    y_m: 0.234386
+    yaw_rad: -0.120541
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 261.81245893887666
+        - 321.22320495430216
+      - - 261.81245893887666
+        - 307.96920916678005
+      - - 224.38976085873924
+        - 320.4205322282931
+      - - 224.38976085873924
+        - 307.2975165090319
+      right:
+      - - 324.72673582209063
+        - 322.5726419730494
+      - - 324.72673582209063
+        - 309.09844516573173
+      - - 286.056580724339
+        - 321.743212765646
+      - - 286.056580724339
+        - 308.4043621469841
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.504573
+      - 0.455359
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.45978
+      - 0.085562
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.120541
+- scene_id: s013
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.76
+    y_m: 0.231364
+    yaw_rad: -0.118987
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 261.97538337850926
+        - 321.82527693788757
+      - - 261.97538337850926
+        - 308.4730350944666
+      - - 224.25703922325144
+        - 321.02106857474547
+      - - 224.25703922325144
+        - 307.80005738472425
+      right:
+      - - 325.37743231943784
+        - 323.17709815752437
+      - - 325.37743231943784
+        - 309.6042662406062
+      - - 286.40884438429293
+        - 322.3462328314039
+      - - 286.40884438429293
+        - 308.90898144887353
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.48423
+      - 0.451909
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.440012
+      - 0.082043
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.118987
+- scene_id: s014
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.74
+    y_m: 0.228325
+    yaw_rad: -0.117424
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 262.1441614401183
+        - 322.43634948217186
+      - - 262.1441614401183
+        - 308.9843928721104
+      - - 224.12568198403454
+        - 321.6307121216611
+      - - 224.12568198403454
+        - 308.31021934867033
+      right:
+      - - 326.04111289917654
+        - 323.7903692129617
+      - - 326.04111289917654
+        - 310.117463776537
+      - - 286.76977102720986
+        - 322.95818284827567
+      - - 286.76977102720986
+        - 309.4210735132014
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.463886
+      - 0.448439
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.420246
+      - 0.078504
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.117424
+- scene_id: s015
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.72
+    y_m: 0.225271
+    yaw_rad: -0.115854
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 262.31848260329406
+        - 323.0566189320305
+      - - 262.31848260329406
+        - 309.50344680504645
+      - - 223.9953113575266
+        - 322.24965101382736
+      - - 223.9953113575266
+        - 308.828159844207
+      right:
+      - - 326.7175929394032
+        - 324.4126657912216
+      - - 326.7175929394032
+        - 310.6382140512315
+      - - 287.13909671743426
+        - 323.5792645964971
+      - - 287.13909671743426
+        - 309.94080719372147
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.443541
+      - 0.444951
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.400482
+      - 0.074948
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.115854
+- scene_id: s016
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.7
+    y_m: 0.222201
+    yaw_rad: -0.114275
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 262.4987455323511
+        - 323.6863008585119
+      - - 262.4987455323511
+        - 310.03037728745767
+      - - 223.86619288824107
+        - 322.8781196647424
+      - - 223.86619288824107
+        - 309.35407503325723
+      right:
+      - - 327.40745054137193
+        - 325.04417112878576
+      - - 327.40745054137193
+        - 311.16667040065755
+      - - 287.5172958217888
+        - 324.2096812839673
+      - - 287.5172958217888
+        - 310.4683525388848
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.423194
+      - 0.441444
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.380719
+      - 0.071374
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.114275
+- scene_id: s017
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.68
+    y_m: 0.219118
+    yaw_rad: -0.112689
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 262.6844603782649
+        - 324.325603983481
+      - - 262.6844603782649
+        - 310.5653589819925
+      - - 223.73776533467213
+        - 323.51631867677963
+      - - 223.73776533467213
+        - 309.88813278391603
+      right:
+      - - 328.11032828373584
+        - 325.68510813434204
+      - - 328.11032828373584
+        - 311.70301935928205
+      - - 287.9039276505613
+        - 324.84964701931403
+      - - 287.9039276505613
+        - 311.0038887190912
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.402847
+      - 0.437922
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.360959
+      - 0.067785
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.112689
+- scene_id: s018
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.66
+    y_m: 0.216021
+    yaw_rad: -0.111097
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 262.8758821886181
+        - 324.97474677195623
+      - - 262.8758821886181
+        - 311.10857470456585
+      - - 223.6101881820743
+        - 324.1644649170311
+      - - 223.6101881820743
+        - 310.43051457492146
+      right:
+      - - 328.8266403946658
+        - 326.33569820920843
+      - - 328.8266403946658
+        - 312.2474462001744
+      - - 288.29930878018354
+        - 325.4993813614717
+      - - 288.29930878018354
+        - 311.54759946566674
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.382499
+      - 0.434383
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.3412
+      - 0.06418
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.111097
+- scene_id: s019
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.64
+    y_m: 0.212913
+    yaw_rad: -0.109498
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 263.0726565416927
+        - 325.6339613184217
+      - - 263.0726565416927
+        - 311.6602186765035
+      - - 223.4829855835665
+        - 324.8228031790175
+      - - 223.4829855835665
+        - 310.98142525440795
+      right:
+      - - 329.55620478553215
+        - 326.9961517582337
+      - - 329.55620478553215
+        - 312.8001269943378
+      - - 288.70315588362695
+        - 326.15910809673653
+      - - 288.70315588362695
+        - 312.0996720474783
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.36215
+      - 0.430831
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.321443
+      - 0.060562
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.109498
+- scene_id: s020
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.62
+    y_m: 0.209793
+    yaw_rad: -0.107893
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 263.27504003492163
+        - 326.3034800249459
+      - - 263.27504003492163
+        - 312.22048537652375
+      - - 223.3563118872617
+        - 325.4915645747007
+      - - 223.3563118872617
+        - 311.5410582215069
+      right:
+      - - 330.29944754231303
+        - 327.66670361757855
+      - - 330.29944754231303
+        - 313.36125825738793
+      - - 289.1157911940651
+        - 326.82906052526744
+      - - 289.1157911940651
+        - 312.6603016947845
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.341801
+      - 0.427265
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.301688
+      - 0.056931
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.107893
+- scene_id: s021
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.6
+    y_m: 0.206662
+    yaw_rad: -0.106283
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 263.48293320315076
+        - 326.98354255902956
+      - - 263.48293320315076
+        - 312.7895753632047
+      - - 223.229965425734
+        - 326.1709872984638
+      - - 223.229965425734
+        - 312.10961280206175
+      right:
+      - - 331.0564388680831
+        - 328.3475962061178
+      - - 331.0564388680831
+        - 313.93104285030785
+      - - 289.53718091233736
+        - 327.5094793335116
+      - - 289.53718091233736
+        - 313.22968981883815
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.321451
+      - 0.423686
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.281935
+      - 0.053288
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.106283
+- scene_id: s022
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.58
+    y_m: 0.203523
+    yaw_rad: -0.104669
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 263.69586637663815
+        - 327.6743961403902
+      - - 263.69586637663815
+        - 313.3676955149709
+      - - 223.10337425202772
+        - 326.86131690080236
+      - - 223.10337425202772
+        - 312.6872944776589
+      right:
+      - - 331.8268791736625
+        - 329.03907983380077
+      - - 331.8268791736625
+        - 314.5096902374902
+      - - 289.96692115060875
+        - 328.2006128893697
+      - - 289.96692115060875
+        - 313.8080442588868
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.301101
+      - 0.420097
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.262183
+      - 0.049636
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.104669
+- scene_id: s023
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.56
+    y_m: 0.200375
+    yaw_rad: -0.10305
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 263.91419718757453
+        - 328.37630306679364
+      - - 263.91419718757453
+        - 313.9550653278608
+      - - 222.97675319019777
+        - 327.56282925498334
+      - - 222.97675319019777
+        - 313.27433410458855
+      right:
+      - - 332.61133189141486
+        - 329.7413936677496
+      - - 332.61133189141486
+        - 315.09740055878626
+      - - 290.40545389120956
+        - 328.90271462223257
+      - - 290.40545389120956
+        - 314.39557708973433
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.280751
+      - 0.416497
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.242432
+      - 0.045973
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.10305
+- scene_id: s024
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.54
+    y_m: 0.197219
+    yaw_rad: -0.101427
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 264.1378183144852
+        - 329.0895268282394
+      - - 264.1378183144852
+        - 314.5519052955978
+      - - 222.8498814204111
+        - 328.2757865176548
+      - - 222.8498814204111
+        - 313.87095106079903
+      right:
+      - - 333.40987760121516
+        - 330.45480374152845
+      - - 333.40987760121516
+        - 315.69439643642545
+      - - 290.8527446122968
+        - 329.61604895693273
+      - - 290.8527446122968
+        - 314.9925095873914
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.2604
+      - 0.412888
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.222683
+      - 0.042302
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.101427
+- scene_id: s025
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.52
+    y_m: 0.194057
+    yaw_rad: -0.099801
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 264.36643083336105
+        - 329.8143394221707
+      - - 264.36643083336105
+        - 315.1584430311052
+      - - 222.7223442822468
+        - 329.0004591501486
+      - - 222.7223442822468
+        - 314.47737167376454
+      right:
+      - - 334.22240932261116
+        - 331.1795849464161
+      - - 334.22240932261116
+        - 316.3009079049507
+      - - 291.30856870514043
+        - 330.34088895935463
+      - - 291.30856870514043
+        - 315.59907025887424
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.24005
+      - 0.409271
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.202936
+      - 0.038624
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.099801
+- scene_id: s026
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.5
+    y_m: 0.19089
+    yaw_rad: -0.098172
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 264.59996815649663
+        - 330.5510254404828
+      - - 264.59996815649663
+        - 315.7749166865965
+      - - 222.59393837192147
+        - 329.73713811306044
+      - - 222.59393837192147
+        - 315.0938394251552
+      right:
+      - - 335.04907094009855
+        - 331.9160111884314
+      - - 335.04907094009855
+        - 316.9171641744196
+      - - 291.77294354080937
+        - 331.0775150998739
+      - - 291.77294354080937
+        - 316.21549380742584
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.2197
+      - 0.405648
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.183189
+      - 0.034941
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.098172
+- scene_id: s027
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.48
+    y_m: 0.187717
+    yaw_rad: -0.09654
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 264.8387434918165
+        - 331.2998788700192
+      - - 264.8387434918165
+        - 316.4015722761667
+      - - 222.46483209820576
+        - 330.48612408163524
+      - - 222.46483209820576
+        - 315.7206059260546
+      right:
+      - - 335.8903986734966
+        - 332.6643652420612
+      - - 335.8903986734966
+        - 317.54340187620187
+      - - 292.246271245727
+        - 331.8262170392842
+      - - 292.246271245727
+        - 316.84202262701604
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.19935
+      - 0.402017
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.163444
+      - 0.031251
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.09654
+- scene_id: s028
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.46
+    y_m: 0.184541
+    yaw_rad: -0.094907
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 265.08220227582194
+        - 332.06119582361976
+      - - 265.08220227582194
+        - 317.0386575929873
+      - - 222.33435897936477
+        - 331.24770338911736
+      - - 222.33435897936477
+        - 316.35791078587226
+      right:
+      - - 336.74604042286126
+        - 333.42496030071226
+      - - 336.74604042286126
+        - 318.17988309683034
+      - - 292.7280731133243
+        - 332.587297377225
+      - - 292.7280731133243
+        - 317.47890993910045
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.179
+      - 0.398382
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.1437
+      - 0.027559
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.094907
+- scene_id: s029
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.44
+    y_m: 0.181362
+    yaw_rad: -0.093272
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 265.3305167578842
+        - 332.8352938694194
+      - - 265.3305167578842
+        - 317.6864383844514
+      - - 222.2025233870609
+        - 332.0222086616364
+      - - 222.2025233870609
+        - 317.0060323528338
+      right:
+      - - 337.6164121417736
+        - 334.1980883718817
+      - - 337.6164121417736
+        - 318.8268521940432
+      - - 293.2186209621237
+        - 333.3610638677267
+      - - 293.2186209621237
+        - 318.12641327843244
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.158651
+      - 0.394743
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.123957
+      - 0.023863
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.093272
+- scene_id: s030
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.42
+    y_m: 0.178182
+    yaw_rad: -0.091636
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 265.5833636433203
+        - 333.62249353370873
+      - - 265.5833636433203
+        - 318.3451828733964
+      - - 222.06886321807474
+        - 332.80995901730756
+      - - 222.06886321807474
+        - 317.6652376713871
+      right:
+      - - 338.50142006840866
+        - 334.9840727115751
+      - - 338.50142006840866
+        - 319.48457967495824
+      - - 293.71768046693916
+        - 334.14783803476365
+      - - 293.71768046693916
+        - 318.7848017027311
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.138302
+      - 0.391103
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.104215
+      - 0.020166
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.091636
+- scene_id: s031
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.4
+    y_m: 0.175
+    yaw_rad: -0.09
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 265.84100096587605
+        - 334.42312622497104
+      - - 265.84100096587605
+        - 319.0151683890971
+      - - 221.93348751102008
+        - 333.6112842181109
+      - - 221.93348751102008
+        - 318.3358026929799
+      right:
+      - - 339.4015691706304
+        - 335.78324786744395
+      - - 339.4015691706304
+        - 320.15334549576903
+      - - 294.2256052952944
+        - 334.94795244102215
+      - - 294.2256052952944
+        - 319.45435350713154
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.117954
+      - 0.38746
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.084474
+      - 0.016467
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.09
+- scene_id: s032
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.38
+    y_m: 0.171818
+    yaw_rad: -0.088364
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 266.1031536980936
+        - 335.23753872075406
+      - - 266.1031536980936
+        - 319.69668512196995
+      - - 221.79595630233516
+        - 334.4265381461181
+      - - 221.79595630233516
+        - 319.01802355323696
+      right:
+      - - 340.3168394066951
+        - 336.5959487600514
+      - - 340.3168394066951
+        - 320.8334299247292
+      - - 294.7422219275322
+        - 335.76174928148197
+      - - 294.7422219275322
+        - 320.13535504726525
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.097607
+      - 0.383816
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.064734
+      - 0.012769
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.088364
+- scene_id: s033
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.36
+    y_m: 0.168638
+    yaw_rad: -0.086728
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 266.36953723164953
+        - 336.0660898385125
+      - - 266.36953723164953
+        - 320.3900333376674
+      - - 221.65581417090868
+        - 335.25608709174435
+      - - 221.65581417090868
+        - 319.7122067713342
+      right:
+      - - 341.24721001651545
+        - 337.42252174522173
+      - - 341.24721001651545
+        - 321.52512279934876
+      - - 295.2673508252411
+        - 336.589582555829
+      - - 295.2673508252411
+        - 320.8281025571791
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.07726
+      - 0.380174
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.044995
+      - 0.009074
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.086728
+- scene_id: s034
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.34
+    y_m: 0.165459
+    yaw_rad: -0.085093
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 266.64040809210564
+        - 336.9091468397802
+      - - 266.64040809210564
+        - 321.0955203680169
+      - - 221.51315151681166
+        - 336.1002968446334
+      - - 221.51315151681166
+        - 320.418658447392
+      right:
+      - - 342.1932121947337
+        - 338.2633369649825
+      - - 342.1932121947337
+        - 322.2287338619101
+      - - 295.8013549868418
+        - 337.4318205749967
+      - - 295.8013549868418
+        - 321.5329042468592
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.056915
+      - 0.376532
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.025256
+      - 0.00538
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.085093
+- scene_id: s035
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.32
+    y_m: 0.162283
+    yaw_rad: -0.08346
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 266.9154180568714
+        - 337.76708989703184
+      - - 266.9154180568714
+        - 321.81346434898063
+      - - 221.36745302066043
+        - 336.95954583807264
+      - - 221.36745302066043
+        - 321.13769526198547
+      right:
+      - - 343.15477437704953
+        - 339.11877792977464
+      - - 343.15477437704953
+        - 322.94458404165243
+      - - 296.3439933760146
+        - 338.2888447359959
+      - - 296.3439933760146
+        - 322.250079276984
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.036571
+      - 0.372894
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 3.005518
+      - 0.00169
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.08346
+- scene_id: s036
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.3
+    y_m: 0.15911
+    yaw_rad: -0.081828
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 267.1947353782431
+        - 338.64032112552127
+      - - 267.1947353782431
+        - 322.5442017786789
+      - - 221.21867796552294
+        - 337.8342535184239
+      - - 221.21867796552294
+        - 321.8696682162543
+      right:
+      - - 344.13237110799935
+        - 339.98921747328103
+      - - 344.13237110799935
+        - 323.6729853332896
+      - - 296.89555886985977
+        - 339.1610458911486
+      - - 296.89555886985977
+        - 322.97995472062644
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 3.016227
+      - 0.369258
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.98578
+      - -0.001996
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.081828
+- scene_id: s037
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.28
+    y_m: 0.155943
+    yaw_rad: -0.080199
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 267.47773354640634
+        - 339.5292443140918
+      - - 267.47773354640634
+        - 323.28807055572537
+      - - 221.06603710684593
+        - 338.7248125519824
+      - - 221.06603710684593
+        - 322.6149059012405
+      right:
+      - - 345.12566459686957
+        - 340.87507880821363
+      - - 345.12566459686957
+        - 324.4142918897185
+      - - 297.4555339233745
+        - 340.04883520671973
+      - - 297.4555339233745
+        - 323.72287464997464
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.995885
+      - 0.365628
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.966043
+      - -0.005674
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.080199
+- scene_id: s038
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.26
+    y_m: 0.152781
+    yaw_rad: -0.078573
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 267.76472202786147
+        - 340.4342864462603
+      - - 267.76472202786147
+        - 324.0454279885023
+      - - 220.90963133753905
+        - 339.631657871169
+      - - 220.90963133753905
+        - 323.37377227712886
+      right:
+      - - 346.13528927549373
+        - 341.77677572100737
+      - - 346.13528927549373
+        - 325.1688499757384
+      - - 298.0243569626329
+        - 340.95263455556176
+      - - 298.0243569626329
+        - 324.47919209670437
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.975545
+      - 0.362004
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.946306
+      - -0.009347
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.078573
+- scene_id: s039
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.24
+    y_m: 0.149625
+    yaw_rad: -0.07695
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 268.05559755947615
+        - 341.3558901384662
+      - - 268.05559755947615
+        - 324.8166444673357
+      - - 220.74914457910873
+        - 340.5552404674412
+      - - 220.74914457910873
+        - 324.14664474262867
+      right:
+      - - 347.1614727907838
+        - 342.69473693398425
+      - - 347.1614727907838
+        - 325.9370183547985
+      - - 298.6020561459612
+        - 341.8728811719812
+      - - 298.6020561459612
+        - 325.2492729472646
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.955206
+      - 0.358386
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.92657
+      - -0.013012
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.07695
+- scene_id: s040
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.22
+    y_m: 0.146477
+    yaw_rad: -0.075331
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 268.3499784412801
+        - 342.29450990278383
+      - - 268.3499784412801
+        - 325.6021003370576
+      - - 220.58399246621997
+        - 341.4960132521808
+      - - 220.58399246621997
+        - 324.9339023030801
+      right:
+      - - 348.20416817261923
+        - 343.6294201267744
+      - - 348.20416817261923
+        - 326.71918002240534
+      - - 299.18837958235673
+        - 342.81003071782493
+      - - 299.18837958235673
+        - 326.0334985086401
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.934868
+      - 0.354777
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.906834
+      - -0.016667
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.075331
+- scene_id: s041
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.2
+    y_m: 0.143338
+    yaw_rad: -0.073717
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 268.647684472614
+        - 343.2506171246221
+      - - 268.647684472614
+        - 326.4021900624453
+      - - 220.4137824952218
+        - 342.45444568855635
+      - - 220.4137824952218
+        - 325.7359378146915
+      right:
+      - - 349.26354649732787
+        - 344.58130039938567
+      - - 349.26354649732787
+        - 327.5157325517872
+      - - 299.78328320546007
+        - 343.76455593818775
+      - - 299.78328320546007
+        - 326.8322643834207
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.914532
+      - 0.351177
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.887097
+      - -0.020311
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.073717
+- scene_id: s042
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.18
+    y_m: 0.140207
+    yaw_rad: -0.072107
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 268.9490882237688
+        - 344.22471001858474
+      - - 268.9490882237688
+        - 327.21733055948516
+      - - 220.23862996641128
+        - 343.4310553885535
+      - - 220.23862996641128
+        - 326.5531844255678
+      right:
+      - - 350.3403615438671
+        - 345.550843321896
+      - - 350.3403615438671
+        - 328.32706554133557
+      - - 300.3872939851969
+        - 344.7369424724575
+      - - 300.3872939851969
+        - 327.64597696439955
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.894198
+      - 0.347586
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.867361
+      - -0.023946
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.072107
+- scene_id: s043
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.16
+    y_m: 0.137087
+    yaw_rad: -0.070502
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 269.2535711962668
+        - 345.2172965164775
+      - - 269.2535711962668
+        - 328.0479468757134
+      - - 220.05768974238836
+        - 344.4263489061866
+      - - 220.05768974238836
+        - 327.3860660302817
+      right:
+      - - 351.4343683543922
+        - 346.53855966296595
+      - - 351.4343683543922
+        - 329.1536064125238
+      - - 300.99993840080816
+        - 345.7276992683703
+      - - 300.99993840080816
+        - 328.47506214926386
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.873865
+      - 0.344007
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.847625
+      - -0.027567
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.070502
+- scene_id: s044
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.14
+    y_m: 0.133979
+    yaw_rad: -0.068903
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 269.5609353409822
+        - 346.2289039504841
+      - - 269.5609353409822
+        - 328.89448029329213
+      - - 219.87052462753368
+        - 345.4408518588878
+      - - 219.87052462753368
+        - 328.23502247605677
+      right:
+      - - 352.54576375573316
+        - 347.5449801644669
+      - - 352.54576375573316
+        - 329.9957993008091
+      - - 301.621171556769
+        - 346.737354893919
+      - - 301.621171556769
+        - 329.31996225432556
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.853535
+      - 0.340442
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.827889
+      - -0.031175
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.068903
+- scene_id: s045
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.12
+    y_m: 0.130882
+    yaw_rad: -0.067311
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 269.87142347205105
+        - 347.26007998763885
+      - - 269.87142347205105
+        - 329.75738911099484
+      - - 219.67712539972274
+        - 346.47510983185583
+      - - 219.67712539972274
+        - 329.10051031954464
+      right:
+      - - 353.6752074527162
+        - 348.57065652507174
+      - - 353.6752074527162
+        - 330.85410587872116
+      - - 302.25139785330987
+        - 347.7664584909836
+      - - 302.25139785330987
+        - 330.1811368125386
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.833207
+      - 0.336888
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.808152
+      - -0.034768
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.067311
+- scene_id: s046
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.1
+    y_m: 0.127799
+    yaw_rad: -0.065725
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 270.1845103627771
+        - 348.3114033196661
+      - - 270.1845103627771
+        - 330.6371575896788
+      - - 219.47667711649763
+        - 347.52972247641753
+      - - 219.47667711649763
+        - 329.9830313610189
+      right:
+      - - 354.8226051521815
+        - 349.6161322554226
+      - - 354.8226051521815
+        - 331.72898096688084
+      - - 302.89026631905386
+        - 348.8155751853978
+      - - 302.89026631905386
+        - 331.05905873255045
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.81288
+      - 0.33335
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.788415
+      - -0.038346
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.065725
+- scene_id: s047
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.08
+    y_m: 0.124729
+    yaw_rad: -0.064146
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 270.5004351362396
+        - 349.38346573710135
+      - - 270.5004351362396
+        - 331.53428095154925
+      - - 219.2691455520523
+        - 348.6052800957421
+      - - 219.2691455520523
+        - 330.88307957802687
+      right:
+      - - 355.98864656876464
+        - 350.68200222100063
+      - - 355.98864656876464
+        - 332.62092236066997
+      - - 303.53819095607554
+        - 349.88529786762933
+      - - 303.53819095607554
+        - 331.95422415701205
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.792556
+      - 0.329827
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.768678
+      - -0.041907
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.064146
+- scene_id: s048
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.06
+    y_m: 0.121675
+    yaw_rad: -0.062576
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 270.81845582246456
+        - 350.47687753913556
+      - - 270.81845582246456
+        - 332.4492699072264
+      - - 219.05352815476795
+        - 349.70237891003
+      - - 219.05352815476795
+        - 331.80115389960673
+      right:
+      - - 357.17304523058107
+        - 351.7689011954401
+      - - 357.17304523058107
+        - 333.5304612514143
+      - - 304.19460268458016
+        - 350.9762461493938
+      - - 304.19460268458016
+        - 332.8671515894508
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.772234
+      - 0.326321
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.74894
+      - -0.04545
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.062576
+- scene_id: s049
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.04
+    y_m: 0.118636
+    yaw_rad: -0.061013
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 271.1390004628184
+        - 351.5922936884931
+      - - 271.1390004628184
+        - 333.382672542672
+      - - 218.82990481857166
+        - 350.8217081969255
+      - - 218.82990481857166
+        - 332.7378311271343
+      right:
+      - - 358.37672849295524
+        - 352.8774263544167
+      - - 358.37672849295524
+        - 334.4580973677127
+      - - 304.8601345312902
+        - 352.08905273875644
+      - - 304.8601345312902
+        - 333.7983704926832
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.751915
+      - 0.322832
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.729202
+      - -0.048975
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.061013
+- scene_id: s050
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.02
+    y_m: 0.115614
+    yaw_rad: -0.059459
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 271.4615379619826
+        - 352.7303754032655
+      - - 271.4615379619826
+        - 334.3350421784649
+      - - 218.5974577895983
+        - 351.9639152369905
+      - - 218.5974577895983
+        - 333.6936529179837
+      right:
+      - - 359.59966327450934
+        - 354.0082631857053
+      - - 359.59966327450934
+        - 335.4044043395023
+      - - 305.5344448642829
+        - 353.22438808266236
+      - - 305.5344448642829
+        - 334.7484419101777
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.731598
+      - 0.319362
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.709462
+      - -0.05248
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.059459
+- scene_id: s051
+  split: dev
+  category: positive
+  pallet:
+    x_m: 3.0
+    y_m: 0.11261
+    yaw_rad: -0.057914
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 271.7858894301187
+        - 353.8918213220004
+      - - 271.7858894301187
+        - 335.3069634493727
+      - - 218.35567202842861
+        - 353.12970922039494
+      - - 218.35567202842861
+        - 334.6692127367322
+      right:
+      - - 360.8421993058009
+        - 355.16209299187443
+      - - 360.8421993058009
+        - 336.3699522944556
+      - - 306.21756378598707
+        - 354.3829440795191
+      - - 306.21756378598707
+        - 335.7179448364177
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.711283
+      - 0.315912
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.689723
+      - -0.055963
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.057914
+- scene_id: s052
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.98
+    y_m: 0.109625
+    yaw_rad: -0.056379
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 272.1117996276222
+        - 355.07735377957596
+      - - 272.1117996276222
+        - 336.2990408197288
+      - - 218.10395990688934
+        - 354.3198103788951
+      - - 218.10395990688934
+        - 335.66511328777835
+      right:
+      - - 362.10462996035653
+        - 356.3396422747216
+      - - 362.10462996035653
+        - 337.3553491838675
+      - - 306.9094488822253
+        - 355.5654445769183
+      - - 306.9094488822253
+        - 336.7074850016053
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.690972
+      - 0.312484
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.669982
+      - -0.059424
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.056379
+- scene_id: s053
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.96
+    y_m: 0.106659
+    yaw_rad: -0.054853
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 272.4393850336997
+        - 356.287736092783
+      - - 272.4393850336997
+        - 337.311913048354
+      - - 217.8420536030796
+        - 355.53500653307856
+      - - 217.8420536030796
+        - 336.6820138352122
+      right:
+      - - 363.3876504513391
+        - 357.5416334168802
+      - - 363.3876504513391
+        - 338.36119951203364
+      - - 307.6104494578258
+        - 356.7726370786847
+      - - 307.6104494578258
+        - 337.7176879319537
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.670662
+      - 0.309077
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.65024
+      - -0.062863
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.054853
+- scene_id: s054
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.94
+    y_m: 0.103714
+    yaw_rad: -0.053339
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 272.76799360471034
+        - 357.5237421246662
+      - - 272.76799360471034
+        - 338.346227719386
+      - - 217.5689764170208
+        - 356.7760424873763
+      - - 217.5689764170208
+        - 337.72053764634
+      right:
+      - - 364.69120039644724
+        - 358.7688901703825
+      - - 364.69120039644724
+        - 339.3881926111988
+      - - 308.3201346477135
+        - 358.0053145206448
+      - - 308.3201346477135
+        - 338.7492171720877
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.650356
+      - 0.305693
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.630497
+      - -0.066277
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.053339
+- scene_id: s055
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.92
+    y_m: 0.100791
+    yaw_rad: -0.051835
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 273.0975496737601
+        - 358.7862063945809
+      - - 273.0975496737601
+        - 339.4026831753815
+      - - 217.28422013137617
+        - 358.04379153823606
+      - - 217.28422013137617
+        - 338.7814155131682
+      right:
+      - - 366.0158323778088
+        - 360.02218199523304
+      - - 366.0158323778088
+        - 340.43697238094813
+      - - 309.0386853232916
+        - 359.26428633137914
+      - - 309.0386853232916
+        - 339.80275006809967
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.630053
+      - 0.302334
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.610753
+      - -0.069665
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.051835
+- scene_id: s056
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.9
+    y_m: 0.097889
+    yaw_rad: -0.050343
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 273.4281885987742
+        - 360.07597714953647
+      - - 273.4281885987742
+        - 340.4819892464741
+      - - 216.98753984884127
+        - 359.3390859782634
+      - - 216.98753984884127
+        - 339.8653439148648
+      right:
+      - - 367.3623375877174
+        - 361.30238482918037
+      - - 367.3623375877174
+        - 341.5082718235819
+      - - 309.7664870503582
+        - 360.55041130118303
+      - - 309.7664870503582
+        - 340.87900527295653
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.609753
+      - 0.299
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.591008
+      - -0.073029
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.050343
+- scene_id: s057
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.88
+    y_m: 0.095012
+    yaw_rad: -0.048863
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 273.7589274210742
+        - 361.39395103259164
+      - - 273.7589274210742
+        - 341.58489626158297
+      - - 216.67752578542132
+        - 360.66283425508846
+      - - 216.67752578542132
+        - 340.9730830586514
+      right:
+      - - 368.7304076078659
+        - 362.6103760074386
+      - - 368.7304076078659
+        - 342.60282511082727
+      - - 310.50282303043736
+        - 361.86457855365893
+      - - 310.50282303043736
+        - 341.97872682314556
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.589455
+      - 0.295693
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.571261
+      - -0.076363
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.048863
+- scene_id: s058
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.86
+    y_m: 0.092158
+    yaw_rad: -0.047396
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 274.09020639008344
+        - 362.74105850795047
+      - - 274.09020639008344
+        - 342.71218285184136
+      - - 216.35418167789845
+        - 362.01596421349836
+      - - 216.35418167789845
+        - 342.10540938368064
+      right:
+      - - 370.1212031968631
+        - 363.9470911058347
+      - - 370.1212031968631
+        - 343.72141515132614
+      - - 311.24841303107985
+        - 363.2077204189804
+      - - 311.24841303107985
+        - 343.10269491128065
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.569161
+      - 0.292412
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.551513
+      - -0.079669
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.047396
+- scene_id: s059
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.84
+    y_m: 0.08933
+    yaw_rad: -0.045941
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 274.42133652580713
+        - 364.11828346357163
+      - - 274.42133652580713
+        - 343.8646723544533
+      - - 216.01633202918117
+        - 363.3994874354876
+      - - 216.01633202918117
+        - 343.26316940208164
+      right:
+      - - 371.5347748818752
+        - 365.31346792362876
+      - - 371.5347748818752
+        - 344.86482671433373
+      - - 312.00286444569826
+        - 364.58080295536814
+      - - 312.00286444569826
+        - 344.251717954283
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.54887
+      - 0.289161
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.531763
+      - -0.082946
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.045941
+- scene_id: s060
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.82
+    y_m: 0.086528
+    yaw_rad: -0.0445
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 274.7521586690977
+        - 365.52663625208027
+      - - 274.7521586690977
+        - 345.0432102527869
+      - - 215.66336197786188
+        - 364.8143966361154
+      - - 215.66336197786188
+        - 344.4471938377535
+      right:
+      - - 372.971746484245
+        - 366.710547338834
+      - - 372.971746484245
+        - 346.0339308274761
+      - - 312.76631727360495
+        - 365.98484815081264
+      - - 312.76631727360495
+        - 345.42665117222816
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.528582
+      - 0.285939
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.512012
+      - -0.086192
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.0445
+- scene_id: s061
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.8
+    y_m: 0.083753
+    yaw_rad: -0.043073
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 275.08239348794257
+        - 366.9671855182103
+      - - 275.08239348794257
+        - 346.2486908102178
+      - - 215.29447801985583
+        - 366.2617731229702
+      - - 215.29447801985583
+        - 345.6583875506027
+      right:
+      - - 374.43265470242
+        - 368.1393773429685
+      - - 374.43265470242
+        - 347.22960447110336
+      - - 313.5388136379416
+        - 367.4209165981113
+      - - 313.5388136379416
+        - 346.62838209046976
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.508298
+      - 0.282748
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.492258
+      - -0.089406
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.043073
+- scene_id: s062
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.78
+    y_m: 0.081006
+    yaw_rad: -0.04166
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 275.4117487268428
+        - 368.44104937826586
+      - - 275.4117487268428
+        - 347.48204968892543
+      - - 214.9088497358851
+        - 367.7427484443009
+      - - 214.9088497358851
+        - 346.8976974429296
+      right:
+      - - 375.91806102684933
+        - 369.601054153557
+      - - 375.91806102684933
+        - 348.45276498205607
+      - - 314.32039764935365
+        - 368.89011787473515
+      - - 314.32039764935365
+        - 347.85783922571983
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.488017
+      - 0.279589
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.472503
+      - -0.092588
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.04166
+- scene_id: s063
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.76
+    y_m: 0.078288
+    yaw_rad: -0.040262
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 275.7398399351158
+        - 369.9493919055052
+      - - 275.7398399351158
+        - 348.74426100879094
+      - - 214.50554892923003
+        - 369.2584839383704
+      - - 214.50554892923003
+        - 348.16609534591663
+      right:
+      - - 377.4284773880938
+        - 371.09674722928264
+      - - 377.4284773880938
+        - 349.7043909868474
+      - - 315.1110327825763
+        - 370.3936180142274
+      - - 315.1110327825763
+        - 349.1159983382656
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.46774
+      - 0.276462
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.452746
+      - -0.095736
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.040262
+- scene_id: s064
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.74
+    y_m: 0.0756
+    yaw_rad: -0.03888
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 276.06626420408713
+        - 371.49343215775076
+      - - 276.06626420408713
+        - 350.03634490188347
+      - - 214.08360291508313
+        - 370.8101951602622
+      - - 214.08360291508313
+        - 349.4645984604704
+      right:
+      - - 378.9644415112672
+        - 372.62768228913194
+      - - 378.9644415112672
+        - 350.9855081917422
+      - - 315.9106810370858
+        - 371.9326385286539
+      - - 315.9106810370858
+        - 350.40388161393633
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.447466
+      - 0.27337
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.432987
+      - -0.098848
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.03888
+- scene_id: s065
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.72
+    y_m: 0.072943
+    yaw_rad: -0.037513
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 276.3907601136383
+        - 373.0744607751645
+      - - 276.3907601136383
+        - 351.3593814018113
+      - - 213.64211238826942
+        - 372.3992040620966
+      - - 213.64211238826942
+        - 350.794313022675
+      right:
+      - - 380.5266720832263
+        - 374.1950980506747
+      - - 380.5266720832263
+        - 352.2971531804809
+      - - 316.7194720811569
+        - 373.5084499442161
+      - - 316.7194720811569
+        - 351.72255225457417
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.427196
+      - 0.270313
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.413226
+      - -0.101925
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.037513
+- scene_id: s066
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.7
+    y_m: 0.070318
+    yaw_rad: -0.036163
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 276.7128091380156
+        - 374.6938108613623
+      - - 276.7128091380156
+        - 352.7144860764538
+      - - 213.17995136207878
+        - 374.0268228337385
+      - - 213.17995136207878
+        - 352.15633709936276
+      right:
+      - - 382.1156890308492
+        - 375.8003636188902
+      - - 382.1156890308492
+        - 353.6404716476069
+      - - 317.53728494832615
+        - 375.12239911557754
+      - - 317.53728494832615
+        - 353.07313733521136
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.40693
+      - 0.267293
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.393462
+      - -0.104964
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.036163
+- scene_id: s067
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.68
+    y_m: 0.067725
+    yaw_rad: -0.03483
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 277.03231730242294
+        - 376.3528944475716
+      - - 277.03231730242294
+        - 354.10284054190095
+      - - 212.69634541841782
+        - 375.69447737580106
+      - - 212.69634541841782
+        - 353.5518639128042
+      right:
+      - - 383.73248437830034
+        - 377.44486849422464
+      - - 383.73248437830034
+        - 355.01662635499974
+      - - 318.3644525320655
+        - 376.7758892769183
+      - - 318.3644525320655
+        - 354.4568111103919
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.386668
+      - 0.264309
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.373696
+      - -0.107965
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.03483
+- scene_id: s068
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.66
+    y_m: 0.065166
+    yaw_rad: -0.033514
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 277.348608393033
+        - 378.0531937797315
+      - - 277.348608393033
+        - 355.52568517132346
+      - - 212.18990673759603
+        - 377.4036646625706
+      - - 212.18990673759603
+        - 354.98214616114694
+      right:
+      - - 385.37751712476825
+        - 379.1300710030905
+      - - 385.37751712476825
+        - 356.42683765949
+      - - 319.2007449092187
+        - 378.47039333392786
+      - - 319.2007449092187
+        - 355.8748061371781
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.366409
+      - 0.261364
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.353928
+      - -0.110927
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.033514
+- scene_id: s069
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.64
+    y_m: 0.062642
+    yaw_rad: -0.032216
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 277.6611797561722
+        - 379.79625852839314
+      - - 277.6611797561722
+        - 356.9843167601616
+      - - 211.65940485635792
+        - 379.1559303043406
+      - - 211.65940485635792
+        - 356.44847724212605
+      right:
+      - - 387.05148533132643
+        - 380.8575284746004
+      - - 387.05148533132643
+        - 357.87240876535594
+      - - 320.04612536868336
+        - 380.20746378752176
+      - - 320.04612536868336
+        - 357.32842157951615
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.346155
+      - 0.258458
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.334156
+      - -0.113848
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.032216
+- scene_id: s070
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.62
+    y_m: 0.060153
+    yaw_rad: -0.030936
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 277.9698850510865
+        - 381.5837245110347
+      - - 277.9698850510865
+        - 358.4801041933345
+      - - 211.1039054518007
+        - 380.9529252187199
+      - - 211.1039054518007
+        - 357.95223867675304
+      right:
+      - - 388.7555022766767
+        - 382.6288522331344
+      - - 388.7555022766767
+        - 359.35468806120036
+      - - 320.9009423787389
+        - 381.98872688657605
+      - - 320.9009423787389
+        - 358.8190183151264
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.325904
+      - 0.255593
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.314383
+      - -0.116729
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.030936
+- scene_id: s071
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.6
+    y_m: 0.0577
+    yaw_rad: -0.029674
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 278.27427041219653
+        - 383.41731202672497
+      - - 278.27427041219653
+        - 360.01448705165274
+      - - 210.52212723969836
+        - 382.79638575495926
+      - - 210.52212723969836
+        - 359.49488347695336
+      right:
+      - - 390.4904363220379
+        - 384.44573654981116
+      - - 390.4904363220379
+        - 360.87509334712234
+      - - 321.7652615411059
+        - 383.81589276103944
+      - - 321.7652615411059
+        - 360.34802741509577
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.305658
+      - 0.252769
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.294606
+      - -0.119567
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.029674
+- scene_id: s072
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.58
+    y_m: 0.055285
+    yaw_rad: -0.028432
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 278.5733776004804
+        - 385.2988160187341
+      - - 278.5733776004804
+        - 361.5889673796938
+      - - 209.91228677678487
+        - 384.68808128972415
+      - - 209.91228677678487
+        - 361.0778922926562
+      right:
+      - - 392.25673401484164
+        - 386.3100200797204
+      - - 392.25673401484164
+        - 362.43516324662795
+      - - 322.63866331719544
+        - 385.6907730938125
+      - - 322.63866331719544
+        - 361.91696493206064
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.285416
+      - 0.249988
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.274827
+      - -0.122361
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.028432
+- scene_id: s073
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.56
+    y_m: 0.052909
+    yaw_rad: -0.02721
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 278.8666842261666
+        - 387.2301417435036
+      - - 278.8666842261666
+        - 363.20513953431265
+      - - 209.27294630012386
+        - 386.62993178126703
+      - - 209.27294630012386
+        - 362.7028717834871
+      right:
+      - - 394.0553420569076
+        - 388.2235842862816
+      - - 394.0553420569076
+        - 364.0364722060934
+      - - 323.5212015293752
+        - 387.615263838436
+      - - 323.5212015293752
+        - 363.5274174380218
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.265178
+      - 0.247252
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.255044
+      - -0.12511
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.02721
+- scene_id: s074
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.54
+    y_m: 0.050571
+    yaw_rad: -0.026008
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 279.15426419511016
+        - 389.2132967899745
+      - - 279.15426419511016
+        - 364.86468350625483
+      - - 208.60321255648918
+        - 388.6239604280547
+      - - 208.60321255648918
+        - 364.37151500255624
+      right:
+      - - 395.88788643070995
+        - 390.1884114997372
+      - - 395.88788643070995
+        - 365.680679079278
+      - - 324.4135588629128
+        - 389.5913627073927
+      - - 324.4135588629128
+        - 365.1810566589061
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.244945
+      - 0.24456
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.235258
+      - -0.127814
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.026008
+- scene_id: s075
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.52
+    y_m: 0.048274
+    yaw_rad: -0.024827
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 279.43483775203845
+        - 391.25038983042054
+      - - 279.43483775203845
+        - 366.5693638748289
+      - - 207.9008142316867
+        - 390.6722693598024
+      - - 207.9008142316867
+        - 366.085581054228
+      right:
+      - - 397.75472521100414
+        - 392.20662220286374
+      - - 397.75472521100414
+        - 367.3695583287563
+      - - 325.3150908706561
+        - 391.62118280724053
+      - - 325.3150908706561
+        - 366.8796508847201
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.224716
+      - 0.241914
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.215469
+      - -0.130471
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.024827
+- scene_id: s076
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.5
+    y_m: 0.046018
+    yaw_rad: -0.023666
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 279.70820351713735
+        - 393.3436624151884
+      - - 279.70820351713735
+        - 368.32105641438363
+      - - 207.16445257488618
+        - 392.77713958924767
+      - - 207.16445257488618
+        - 367.8469787357721
+      right:
+      - - 399.65737295027907
+        - 394.28039289236756
+      - - 399.65737295027907
+        - 369.10493129068414
+      - - 326.2262761036167
+        - 393.7069404315124
+      - - 326.2262761036167
+        - 368.62505475440366
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.204491
+      - 0.239315
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.195677
+      - -0.133081
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.023666
+- scene_id: s077
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.48
+    y_m: 0.043804
+    yaw_rad: -0.022528
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 279.9734445777376
+        - 395.4954474335624
+      - - 279.9734445777376
+        - 370.12171333352507
+      - - 206.39214896398528
+        - 394.94084930507165
+      - - 206.39214896398528
+        - 369.6576144812316
+      right:
+      - - 401.59676520433374
+        - 396.41214868810965
+      - - 401.59676520433374
+        - 370.8888273540667
+      - - 327.14690160093005
+        - 395.85100397495347
+      - - 327.14690160093005
+        - 370.4192501882456
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.184272
+      - 0.236765
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.175881
+      - -0.135641
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.022528
+- scene_id: s078
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.46
+    y_m: 0.041633
+    yaw_rad: -0.021411
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 280.2300724365259
+        - 397.7082532165513
+      - - 280.2300724365259
+        - 371.97343365401787
+      - - 205.58217139923744
+        - 397.16597070785696
+      - - 205.58217139923744
+        - 371.51964075971296
+      right:
+      - - 403.5743181834175
+        - 398.6042921685807
+      - - 403.5743181834175
+        - 372.7232570448374
+      - - 328.0772398165633
+        - 398.05584077896395
+      - - 328.0772398165633
+        - 372.2643019070828
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.164056
+      - 0.234263
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.156081
+      - -0.138152
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.021411
+- scene_id: s079
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.44
+    y_m: 0.039506
+    yaw_rad: -0.020317
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 280.4771803226282
+        - 399.98469705346093
+      - - 280.4771803226282
+        - 373.878407576118
+      - - 204.73239687628794
+        - 399.4550879835691
+      - - 204.73239687628794
+        - 373.4352200699323
+      right:
+      - - 405.59118591414125
+        - 400.8594967309689
+      - - 405.59118591414125
+        - 374.6104575154551
+      - - 329.0171757084004
+        - 400.3240896906717
+      - - 329.0171757084004
+        - 374.16241815118974
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.143846
+      - 0.231812
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.136278
+      - -0.140611
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.020317
+- scene_id: s080
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.42
+    y_m: 0.037424
+    yaw_rad: -0.019247
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 280.71390723613877
+        - 402.3275575935816
+      - - 280.71390723613877
+        - 375.838960329357
+      - - 203.84065242005107
+        - 401.81096838394365
+      - - 203.84065242005107
+        - 375.4066681037186
+      right:
+      - - 407.64868002142646
+        - 403.1805608143454
+      - - 407.64868002142646
+        - 376.5527705559376
+      - - 329.9666902572951
+        - 402.6585368959961
+      - - 329.9666902572951
+        - 376.11593045690057
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.12364
+      - 0.229413
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.116471
+      - -0.143018
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.019247
+- scene_id: s081
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.4
+    y_m: 0.035388
+    yaw_rad: -0.018199
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 280.93964298195317
+        - 404.73980624136317
+      - - 280.93964298195317
+        - 377.85757844465536
+      - - 202.90486092344284
+        - 404.2366520753848
+      - - 202.90486092344284
+        - 377.43652893337645
+      right:
+      - - 409.74845079565785
+        - 405.57034214543705
+      - - 409.74845079565785
+        - 378.5525875694034
+      - - 330.92607418009555
+        - 405.0621097121524
+      - - 330.92607418009555
+        - 378.1272884620522
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.103439
+      - 0.227067
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.09666
+      - -0.145372
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.018199
+- scene_id: s082
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.38
+    y_m: 0.033398
+    yaw_rad: -0.017176
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 281.15357980616284
+        - 407.22454520046074
+      - - 281.15357980616284
+        - 379.93685790833536
+      - - 201.92278936471928
+        - 406.73517578917154
+      - - 201.92278936471928
+        - 379.52734375662897
+      right:
+      - - 411.8921605175621
+        - 408.0320527605776
+      - - 411.8921605175621
+        - 380.61259645236623
+      - - 331.8954607839544
+        - 407.5379527063488
+      - - 331.8954607839544
+        - 380.1991236036391
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.083243
+      - 0.224773
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.076845
+      - -0.147672
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.017176
+- scene_id: s083
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.36
+    y_m: 0.031456
+    yaw_rad: -0.016177
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 281.3545650857259
+        - 409.78510484047297
+      - - 281.3545650857259
+        - 382.07958564056315
+      - - 200.8916688570376
+        - 409.3099119860585
+      - - 200.8916688570376
+        - 381.681934716367
+      right:
+      - - 414.08121678190116
+        - 410.5689537874102
+      - - 414.08121678190116
+        - 382.7355261819332
+      - - 332.87470679845126
+        - 410.0893693443347
+      - - 332.87470679845126
+        - 382.33420028814623
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.063052
+      - 0.222535
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.057026
+      - -0.149917
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.016177
+- scene_id: s084
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.34
+    y_m: 0.029563
+    yaw_rad: -0.015204
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 281.54141911077414
+        - 412.4249916143613
+      - - 281.54141911077414
+        - 384.28869591159946
+      - - 199.808684040191
+        - 411.9643230431309
+      - - 199.808684040191
+        - 383.90319919927276
+      right:
+      - - 416.31721005758754
+        - 413.1846256948591
+      - - 416.31721005758754
+        - 384.9243729664093
+      - - 333.86369704222074
+        - 412.71989461739156
+      - - 333.86369704222074
+        - 384.5354766672733
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.042866
+      - 0.220352
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.037203
+      - -0.152104
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.015204
+- scene_id: s085
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.32
+    y_m: 0.027719
+    yaw_rad: -0.014256
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 281.71357559609083
+        - 415.1479635407992
+      - - 281.71357559609083
+        - 386.5673335069449
+      - - 198.67144610254053
+        - 414.7022094343002
+      - - 198.67144610254053
+        - 386.1943175182429
+      right:
+      - - 418.6024712920946
+        - 415.882756684505
+      - - 418.6024712920946
+        - 387.1822231669498
+      - - 334.8630058724317
+        - 415.43325941348735
+      - - 334.8630058724317
+        - 386.80607482300195
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.022686
+      - 0.218227
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 2.017375
+      - -0.154235
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.014256
+- scene_id: s086
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.3
+    y_m: 0.025926
+    yaw_rad: -0.013333
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 281.8695787702694
+        - 417.9580087022159
+      - - 281.8695787702694
+        - 388.9188357340719
+      - - 197.47659030569736
+        - 417.52757402262125
+      - - 197.47659030569736
+        - 388.5586393494739
+      right:
+      - - 420.93864070976593
+        - 418.66731107681505
+      - - 420.93864070976593
+        - 389.51239420653985
+      - - 335.8723869990102
+        - 418.2334425016352
+      - - 335.8723869990102
+        - 389.1493242691508
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 2.00251
+      - 0.216159
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 1.997543
+      - -0.156308
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.013333
+- scene_id: s087
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.28
+    y_m: 0.024184
+    yaw_rad: -0.012438
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 282.00830248946926
+        - 420.8593408893121
+      - - 282.00830248946926
+        - 391.346728777667
+      - - 196.2210439451861
+        - 420.4445464301343
+      - - 196.2210439451861
+        - 390.999620443627
+      right:
+      - - 423.3279541888053
+        - 421.5426429261473
+      - - 423.3279541888053
+        - 391.9185296453116
+      - - 336.8919969030468
+        - 421.12471190976737
+      - - 336.8919969030468
+        - 391.56879657721123
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 1.98234
+      - 0.214151
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 1.977707
+      - -0.15832
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.012438
+- scene_id: s088
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.26
+    y_m: 0.022495
+    yaw_rad: -0.011569
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 282.1283398856236
+        - 423.85650827950485
+      - - 282.1283398856236
+        - 393.85481864393716
+      - - 194.9011789165612
+        - 423.45774965400045
+      - - 194.9011789165612
+        - 393.5211294175736
+      right:
+      - - 425.7724880230142
+        - 424.51317694138345
+      - - 425.7724880230142
+        - 394.4043321685217
+      - - 337.92180738937896
+        - 424.11156789816897
+      - - 337.92180738937896
+        - 394.06825765537155
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 1.962175
+      - 0.212203
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 1.957865
+      - -0.160272
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.011569
+- scene_id: s089
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.24
+    y_m: 0.020859
+    yaw_rad: -0.010727
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 282.22862827874854
+        - 426.95433020630134
+      - - 282.22862827874854
+        - 396.44713824795093
+      - - 193.51365145305454
+        - 426.5719804752023
+      - - 193.51365145305454
+        - 396.1271803139768
+      right:
+      - - 428.2749619133099
+        - 427.583770447298
+      - - 428.2749619133099
+        - 396.9738664830945
+      - - 338.9622209929505
+        - 427.19884443258775
+      - - 338.9622209929505
+        - 396.6517526632534
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 1.942015
+      - 0.210316
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 1.938019
+      - -0.162162
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.010727
+- scene_id: s090
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.22
+    y_m: 0.019277
+    yaw_rad: -0.009914
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 282.30751786572415
+        - 430.1579424478208
+      - - 282.30751786572415
+        - 399.12798531198393
+      - - 192.05440887899553
+        - 429.79231080772036
+      - - 192.05440887899553
+        - 398.8220174123183
+      right:
+      - - 430.83779305969426
+        - 430.7596654104252
+      - - 430.83779305969426
+        - 399.63151917190396
+      - - 340.0131512770302
+        - 430.39171838777565
+      - - 340.0131512770302
+        - 399.3236137136198
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 1.921861
+      - 0.208492
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 1.918168
+      - -0.16399
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.009914
+- scene_id: s091
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.2
+    y_m: 0.01775
+    yaw_rad: -0.009128
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 282.36371862931315
+        - 433.47288701497234
+      - - 282.36371862931315
+        - 401.90199750206887
+      - - 190.51946373757448
+        - 433.12436063225607
+      - - 190.51946373757448
+        - 401.61034362531893
+      right:
+      - - 433.46394783868396
+        - 434.0462752620217
+      - - 433.46394783868396
+        - 402.38182030294706
+      - - 341.074988838941
+        - 433.69568186104027
+      - - 341.074988838941
+        - 402.0884367037994
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 1.901713
+      - 0.206731
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 1.898312
+      - -0.165754
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.009128
+- scene_id: s092
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.18
+    y_m: 0.016279
+    yaw_rad: -0.008372
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 282.39524551445265
+        - 436.905034143473
+      - - 282.39524551445265
+        - 404.77408714934984
+      - - 188.90410830687102
+        - 436.5738910607653
+      - - 188.90410830687102
+        - 404.4969799671676
+      right:
+      - - 436.1561251090651
+        - 437.4496510257745
+      - - 436.1561251090651
+        - 405.229833494372
+      - - 342.1475383037812
+        - 437.1166751505685
+      - - 342.1475383037812
+        - 404.95119259461796
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 1.88157
+      - 0.205034
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 1.878451
+      - -0.167453
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.008372
+- scene_id: s093
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.16
+    y_m: 0.014866
+    yaw_rad: -0.007645
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 282.4000428912077
+        - 440.4607284696538
+      - - 282.4000428912077
+        - 407.74956357293206
+      - - 187.20323585469887
+        - 440.1472836107859
+      - - 187.20323585469887
+        - 407.4872666199045
+      right:
+      - - 438.9171894339852
+        - 440.9760765830595
+      - - 438.9171894339852
+        - 408.1808172243176
+      - - 343.23067047992805
+        - 440.6610192994931
+      - - 343.23067047992805
+        - 407.91717096191894
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 1.861433
+      - 0.203404
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 1.858585
+      - -0.169085
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.007645
+- scene_id: s094
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.14
+    y_m: 0.01351
+    yaw_rad: -0.006948
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 282.3769350910681
+        - 444.1467527668202
+      - - 282.3769350910681
+        - 410.8341027337408
+      - - 185.41246428089133
+        - 443.85127751162395
+      - - 185.41246428089133
+        - 410.5868431059615
+      right:
+      - - 441.75130560145266
+        - 444.6324067636382
+      - - 441.75130560145266
+        - 411.2405077519985
+      - - 344.3252751092465
+        - 444.33552501940835
+      - - 344.3252751092465
+        - 410.99207114594844
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 1.841301
+      - 0.20184
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 1.838713
+      - -0.170651
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.006948
+- scene_id: s095
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.12
+    y_m: 0.012213
+    yaw_rad: -0.006281
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 282.3234811841051
+        - 447.97041001981734
+      - - 282.3234811841051
+        - 414.03381591616517
+      - - 183.52587496236941
+        - 447.6931682998677
+      - - 183.52587496236941
+        - 413.80181447687676
+      right:
+      - - 444.6617427122071
+        - 448.42595687526125
+      - - 444.6617427122071
+        - 414.4150266738588
+      - - 345.4311316135623
+        - 448.1475000750944
+      - - 345.4311316135623
+        - 414.18200843104137
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 1.821176
+      - 0.200344
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 1.818836
+      - -0.172149
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.006281
+- scene_id: s096
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.1
+    y_m: 0.010976
+    yaw_rad: -0.005645
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 282.2373676261956
+        - 451.9395440951962
+      - - 282.2373676261956
+        - 417.35526702526886
+      - - 181.53745026202125
+        - 451.6807443308139
+      - - 181.53745026202125
+        - 417.13869818478156
+      right:
+      - - 447.6523669793824
+        - 452.3646622480055
+      - - 447.6523669793824
+        - 417.71101443347743
+      - - 346.5483149800152
+        - 452.10482385369085
+      - - 346.5483149800152
+        - 417.49357644660324
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 1.801056
+      - 0.198917
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 1.798953
+      - -0.173578
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.005645
+- scene_id: s097
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.08
+    y_m: 0.0098
+    yaw_rad: -0.00504
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 282.11623402673655
+        - 456.06262194015835
+      - - 282.11623402673655
+        - 420.8055413725175
+      - - 179.44080274595595
+        - 455.82245465180773
+      - - 179.44080274595595
+        - 420.6045645621822
+      right:
+      - - 450.72744887749195
+        - 456.4570190977946
+      - - 450.72744887749195
+        - 421.1355808349746
+      - - 347.67704048371843
+        - 456.21597470344796
+      - - 347.67704048371843
+        - 420.9338700447263
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 1.780943
+      - 0.19756
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 1.779065
+      - -0.174936
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.00504
+- scene_id: s098
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.06
+    y_m: 0.008686
+    yaw_rad: -0.004467
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 281.95739793629474
+        - 460.3487642619359
+      - - 281.95739793629474
+        - 424.3922713489004
+      - - 177.22894645536098
+        - 460.1273487632131
+      - - 177.22894645536098
+        - 424.20698641273066
+      right:
+      - - 453.8914992525331
+        - 460.7122650513784
+      - - 453.8914992525331
+        - 424.6964561099401
+      - - 348.81740403196767
+        - 460.4901187972599
+      - - 348.81740403196767
+        - 424.51055966297906
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 1.760835
+      - 0.196274
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 1.759171
+      - -0.176222
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.004467
+- scene_id: s099
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.04
+    y_m: 0.007634
+    yaw_rad: -0.003926
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 281.7585687939661
+        - 464.80784345339805
+      - - 281.7585687939661
+        - 428.1237183710444
+      - - 174.8949021990971
+        - 464.6052667674219
+      - - 174.8949021990971
+        - 427.95419813173385
+      right:
+      - - 457.1499710651517
+        - 465.1403251111302
+      - - 457.1499710651517
+        - 428.40194569969054
+      - - 349.97011953067783
+        - 464.93714904746787
+      - - 349.97011953067783
+        - 428.2319238890945
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 1.740734
+      - 0.19506
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 1.739271
+      - -0.177437
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.003926
+- scene_id: s100
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.02
+    y_m: 0.006646
+    yaw_rad: -0.003418
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 281.51616652105247
+        - 469.4505276565996
+      - - 281.51616652105247
+        - 432.00880975447666
+      - - 172.43006182502413
+        - 469.26678486879655
+      - - 172.43006182502413
+        - 431.8550500994113
+      right:
+      - - 460.5077062796923
+        - 469.75201797564677
+      - - 460.5077062796923
+        - 432.261102908491
+      - - 351.1348573435873
+        - 469.56779220070064
+      - - 351.1348573435873
+        - 432.1069390800842
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 1.720638
+      - 0.19392
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 1.719365
+      - -0.178578
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.003418
+- scene_id: s101
+  split: dev
+  category: positive
+  pallet:
+    x_m: 2.0
+    y_m: 0.005722
+    yaw_rad: -0.002943
+    opening_width_m: 0.2275
+  lookalike: null
+  occluder: null
+  distractors: []
+  lighting:
+    name: sun_top
+    direction: *id001
+    diffuse: 0.5
+  surfaces:
+    floor: .35 .4 .4 1
+    background: .15 .2 .25 1
+  visibility:
+    corners_px:
+      left:
+      - - 281.22743408406035
+        - 474.2883988976721
+      - - 281.22743408406035
+        - 436.05723757127373
+      - - 169.8261772125347
+        - 474.1234329940003
+      - - 169.8261772125347
+        - 435.91919078995846
+      right:
+      - - 463.9710457837961
+        - 474.55901043196627
+      - - 463.9710457837961
+        - 436.2836907380471
+      - - 352.3123861769674
+        - 474.3936633595713
+      - - 352.3123861769674
+        - 436.145324987089
+    left_in_view: true
+    right_in_view: true
+  ground_truth:
+    stamp_ns: 0
+    clock_domain: synthetic
+    frame_id: base_link
+    source_provenance: synthetic_ground_truth
+    status: valid
+    position_sigma_m: 0.0
+    yaw_sigma_rad: 0.0
+    reason: null
+    left:
+      center_m:
+      - 1.700549
+      - 0.192854
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    right:
+      center_m:
+      - 1.699453
+      - -0.179644
+      - 0.061
+      width_m: 0.2275
+      height_m: 0.078
+    insertion_yaw_rad: -0.002943
