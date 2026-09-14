@@ -1636,7 +1636,8 @@ p_max = (개구 대역 상단 z − 터널 바닥 z) × R_perp / (카메라 높�
 - dev 에서만 튜닝, **eval 은 한 번**. `ruff check .` · `ruff format --check .` 통과.
 - **기준 회귀:** `python -m pytest tests ros2/src/forklift_ros/test -m 'not rendering' -q -p no:cacheprovider -W error`
   - untracked 데이터가 **있으면** → **759 passed, 1 deselected, skip 0**(한산한 기계에서 독립 확인 4회).
-  - **부하가 걸린 기계에서는 초록이 안 나온다.** `test_transport_timeout_kills_orphan_that_keeps_capture_pipe_open` 은 손자 프로세스가 파이썬 인터프리터 둘을 띄우고 pid 파일을 쓰는 데 **0.1 초**를 준다. 18 코어·load 10 에서 실측 0.263~0.281 초로 **3/3 실패**했다. 이것을 이번 변경 탓으로 오인하지 말고, 반대로 **"초록이어야 한다"를 위임자의 차단 조건으로 걸지도 말 것.**
+  - ~~**부하가 걸린 기계에서는 초록이 안 나온다.**~~ ✅ **고쳤다 (2026-09-14).** `test_transport_timeout_kills_orphan_that_keeps_capture_pipe_open` 은 부모가 0.1 초 뒤 죽은 **직후** pid 파일을 읽었는데, 부하가 걸리면 고아 프로세스가 아직 인터프리터를 띄우는 중이라 파일이 없어 `FileNotFoundError` 가 났다. **제품 결함처럼 보이는 경합이었다.** 경과 시간 단언(`elapsed < 3`) 뒤에 pid 파일 대기를 넣어 **경합만 제거했다** — 단언 셋은 그대로다. CPU 를 일부러 4 중으로 걸어도 통과한다(3/3 + 부하 1/1).
+    **그래도 이 회차에 이 시험 때문에 두 번 신호를 잃었다** — pytest 세 개가 동시에 돌던 동안 전체 실행이 "664 통과 1 실패" 로 나왔고 둘 다 이 시험이었다. **실패 하나를 부하 탓으로 넘기는 규칙 자체가 위험하다**(진짜 실패도 같은 모양이다). 고치는 쪽이 맞았다.
   - **없으면** → skip **3 개**(`test_detector_v1_replay.py` 2 + `test_evaluate_cli.py:219` 1)가 초록으로 보인다.
   - deselect 되는 1 개는 `test_preview_renders_distinct_views_and_records_evidence`(`rendering` 마크).
 - **위임자에게 넘길 untracked 경로(이름 정확히):** `data/synthetic_scenes/catalogue_v1`, `artifacts/20260912T170442Z_pocket_eval_dev_02`, **`artifacts/20260912T170558Z_pocket_eval_eval_01`** — 두 아티팩트는 **타임스탬프가 다르다.**
@@ -1676,7 +1677,17 @@ $ python tools/measure_pocket_evidence.py evidence --distances 2.0:4.0:0.5     -
 - [ ] **⓪′ 를 다시 묻게 되면** 그 전에 점수 함수 형태·수락 문턱·네 구조 점수표 반 페이지를 만든다. 지금은 선결 조건이 없어 묻지 않는다.
 - [ ] **§D-2 (b) 의 분모는 ① 에 매여 있고 ① 은 보류다.** 캡처를 재개할 때 함께 푼다 — 지금 숫자를 채울 수 없다.
 
-## Task 1: 원격 경로 수리 (위임) — **일부만 필요**(⓪ 가 (c) 로 답해 캡처를 안 하므로 완료 조건 ② 는 빠진다)
+## Task 1: 원격 경로 수리 — ✅ **완료 (2026-09-14)**(⓪ 가 (c) 로 답해 완료 조건 ② 는 빠진다)
+
+> **스냅샷 허용 목록에 `config`·`tests` 의 `.yaml` 을 넣었다.** 파일 수 **98 → 106**, yaml **8 개** 추가 — 계획이 예상한 6 개에 **이번에 만든 T11 기하·prior 2 개**가 더해진 값이다. 비밀 파일 없음. **이 yaml 들은 선택적 데이터가 아니라 모듈 import 시점에 읽힌다** — `tests/fixtures/thin_deck_legacy_*.yaml` 과 `config/*.yaml`(`test_geometry_family.py`·`test_opening_evidence_cases.py` 가 import 시 읽는다). 빠지면 원격 pytest 가 **시험 실패가 아니라 수집 단계에서 죽는다.**
+>
+> **`git_revision` 을 완화하지 않고 주입 경로를 만들었다.** 원격 export 에는 `.git` 이 없지만 **스냅샷 매니페스트(`.remote-source-manifest.json`)가 `source_revision` 을 이미 기록하고 있었다** — `_git_state()` 가 git 실패 시 그것을 읽는다. 더러운 export 를 깨끗하다고 보고하지 않고(`source_dirty_status` 를 그대로 본다), 매니페스트도 없으면 `(None, None)` 이다. 시험 3 개로 고정했다.
+>
+> **완료 조건 ①**(원격 `model-cpu` 초록)은 **원격 실행이 필요하므로 미확인**이다. 로컬에서 확인한 것은 스냅샷 목록과 revision 경로이고, 클러스터 제출은 하지 않았다.
+
+*(원래 사양)*
+
+## ~~Task 1: 원격 경로 수리 (위임)~~ — **일부만 필요**
 
 **Files:** `tools/submit_model_check.py`, `tools/remote_model_job.py`, `tests/integration/test_evaluate_cli.py`, `tools/evaluate_pocket_detector.py`, `tests/integration/test_remote_model_jobs.py`
 
@@ -1745,7 +1756,31 @@ $ python tools/measure_pocket_evidence.py evidence --distances 2.0:4.0:0.5     -
 - [ ] **인터페이스 문서:** `pocket-observation.md:39` 에는 사유 어휘가 **없고** 기존 일곱 개도 안 적혀 있다. 검증하는 코드도 없다(`pocket_observation.py:93-94`). **열 개를 전부 적거나 이 항목을 빼고 설계 문서에만 적는다** — 기존 일곱(`insufficient_points`, `no_front_plane`, `no_opening_pattern`, `opening_width_mismatch`, `pocket_occluded:{side}`, `pocket_ambiguous:{side}`, `exception:{type}`)에 **`no_upper_deck`·`upper_deck_occluded`·`upper_deck_occluded:{side}`** 셋을 더한다. `reason` 은 자유 문자열이라 코드 비용은 0 이다(`pocket_observation.py:93-94` 가 비어 있지 않은지만 본다).
 - [ ] **인터페이스 문서에 한 줄:** `center_m` 의 **z 는 prior 유래 상수**(`:423`)이고 정답도 같은 값이라 **`position_error_m` 의 z 성분은 구조적으로 0** 이다.
 
-## Task 2b: 파라미터를 prior 에서 유도한다 (위임) — **Task 2 다음** — ADR 0002 결정 2·3
+## Task 2b: 파라미터를 prior 에서 유도한다 — ✅ **완료 (2026-09-14)**
+
+> **구현:** `DetectorParams.derived_for(prior)`. 공식과 근거는 **설계 문서 §7b 에 표로** 적었다(`docs/design/2026-09-13-pocket-detector-baseline.md`) — 이 Task 가 "지금은 어디에도 없다" 고 지적한 그 표다. 시험은 `tests/unit/perception/test_geometry_family.py`(19 개).
+>
+> | 파라미터 | 규칙 | v1 | EPAL 6 | T11 × 0.6 |
+> |---|---|---|---|---|
+> | `plane_inlier_m`·`band_margin_m` | **s** | 20.0 / 10.0 mm | 7.80 / 3.90 | 4.50 / 2.25 |
+> | `min_band_points`·`min_plane_points` | **s²** | 100 / 300 | 15 / 46 | 5 / 15 |
+> | `floor_z_m` | `max(4 mm, deck_bottom_m/3)` | 16.7 mm | 7.3 mm | 5.0 mm |
+>
+> **v1 회귀:** 네 축척 항이 **동결값과 항등**(s = 1). 커밋된 100 장면에서 `valid` **65/100 로 동일**, 상태·사유 변화 **1 건**(`s051`, 둘 다 `invalid` 에 같은 쪽), 공통 `valid` 장면의 포켓 최대 이동 **7.35 mm**.
+>
+> ⚠️ **`floor_z_m` 은 v1 에서도 항등이 아니다**(16.7 대 동결 20). s 를 따르지 않고 바닥판에서 오기 때문이며, 시험이 그 사실을 따로 고정한다. **동결 20 mm 는 EPAL 6·T11 두 실물 형상에서 상한 `deck_bottom_m − deck_evidence_tol_m` 을 넘는다** — 이것도 시험으로 고정했다.
+>
+> **동결 재생 시험이 못 보는 것을 보는 가드를 넣었다**(§C-17 (8) 설계). 동결 YAML 재생은 유도 경로를 실행하지 않으므로, 같은 100 장면을 **유도 파라미터로** 돌려 검출 수를 비교하는 시험을 `test_geometry_family.py` 에 뒀다.
+>
+> **동결 파일의 거짓 머리말을 고쳤다** — "Every field is written out" 인데 실제로는 `deck_evidence_tol_m`·`upper_band_points` 둘이 빠져 코드 기본값으로 떨어진다. 파일은 그대로 두고(키를 더하면 재생 시험이 깨진다) 머리말이 사실을 적게 했으며, 재생 시험의 단언을 **`파일 ⊆ run.params`** 로 바꾸고 **빠진 키 집합을 명시적으로 고정**했다 — 파라미터가 아무도 모르게 동결 파일을 떠나면 깨진다.
+>
+> **prior 공차 축척**은 `build_pallet_prior.py --scale-tolerances` 로 넣었고 **기본값은 끔**. 절대 공차가 T11 에서 ±18.8 % 로 가장 느슨해지는 것은 맞지만, 인쇄물 실측 오차를 모르는 채 조이면 실물을 `opening_width_mismatch` 로 거부한다. ADR 결정 1 대로 **prior 는 인쇄 후 실측에서 생성**하고 그때 정한다.
+>
+> **안 한 것:** `ransac_iterations` 유도(표본 성공 확률 식 — §C-10 처방이라 규칙 1 과 함께), `evaluation.py` 의 음성 합산 집계(§D-2 (b) 의 분모가 §A ① 에 매여 있고 ① 은 보류), 형상 군의 **검출률** 고정(HEAD 는 두 실물 형상을 전 거리 검출하지 못한다 — 규칙 1 이 먼저다).
+
+*(원래 사양)*
+
+## ~~Task 2b: 파라미터를 prior 에서 유도한다 (위임)~~ — ADR 0002 결정 2·3
 
 > **Task 2 보다 앞에 둘 수 없다.** 이 Task 의 산출물인 `test_geometry_family.py` 는 형상 군의 **검출률**을 고정하는데, HEAD 는 EPAL 6·T11 × 0.6 를 전 거리 검출하지 못한다(0/12, 직접 재측정). 검출률을 단언하려면 규칙이 먼저 들어가야 한다.
 
