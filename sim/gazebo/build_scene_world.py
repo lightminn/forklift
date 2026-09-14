@@ -39,6 +39,42 @@ def _vector(value, length):
         _finite(v)
 
 
+# Camera mounts a catalogue may declare. The mount is NOT decided: the brief
+# puts the camera on the mast, where it rises with the forks, and no position
+# has been measured on a delivered chassis. It is listed rather than hardcoded
+# so a candidate mount can be captured and compared, while an accidental drift
+# in a catalogue header is still refused.
+#
+# What the mount decides, measured: the near limit is the camera's vertical
+# field of view, not any detector gate. At the baseline mount nothing below
+# 1.90 m is detectable at any pose, and no parameter recovers it. See C-19 of
+# docs/plans/2026-09-13-pocket-evidence-restructure.md.
+_SENSOR = {"width": 640, "height": 480, "horizontal_fov_rad": 1.204, "rate_hz": 5}
+_LEVEL = [-0.5, 0.5, -0.5, 0.5]
+APPROVED_CAMERAS = {
+    # The mount every 2026-09 measurement was taken at. Provisional.
+    "baseline_0p50": {
+        **_SENSOR,
+        "translation_m": [0.75, 0.0, 0.5],
+        "optical_quaternion_xyzw": _LEVEL,
+    },
+    # Candidate: lowered. Measured to reach 1.6-1.8 m when range_min_m is also
+    # lowered; below about 1.56 m the horizontal field of view cuts the pallet
+    # out of frame and no mount at this focal length recovers it.
+    "low_0p27": {
+        **_SENSOR,
+        "translation_m": [0.75, 0.0, 0.27],
+        "optical_quaternion_xyzw": _LEVEL,
+    },
+    # Candidate: mast height, which is where the brief actually puts it.
+    "mast_0p90": {
+        **_SENSOR,
+        "translation_m": [0.75, 0.0, 0.90],
+        "optical_quaternion_xyzw": _LEVEL,
+    },
+}
+
+
 # Header geometry per catalogue version. v1 keeps its symmetric `deck_m`; a real
 # pallet cannot use it. EPAL 6 is 0.022 bottom + 0.078 opening + 0.044 above,
 # and no single deck thickness closes that -- 0.022*2 + 0.078 is 0.122 and
@@ -277,15 +313,8 @@ def load_catalogue(path: Path) -> dict:
         or catalogue["source_provenance"] != "synthetic"
     ):
         raise ValueError("unsupported catalogue format, version or provenance")
-    if catalogue["camera"] != {
-        "width": 640,
-        "height": 480,
-        "horizontal_fov_rad": 1.204,
-        "rate_hz": 5,
-        "translation_m": [0.75, 0.0, 0.5],
-        "optical_quaternion_xyzw": [-0.5, 0.5, -0.5, 0.5],
-    }:
-        raise ValueError("camera differs from the approved synthetic rig")
+    if catalogue["camera"] not in APPROVED_CAMERAS.values():
+        raise ValueError("camera differs from every approved synthetic rig")
     if catalogue["pallet"] != APPROVED_PALLETS[catalogue["catalogue_version"]]:
         raise ValueError("pallet dimensions differ from the approved geometry")
     if not isinstance(catalogue["scenes"], list) or not catalogue["scenes"]:

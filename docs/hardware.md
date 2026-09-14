@@ -9,6 +9,7 @@
 | 항목 | 상태 | 결정과 남은 확인 |
 |---|---|---|
 | RGB-D 카메라 | **확정** | Intel RealSense D435i를 사용한다. 실물 장착 위치·외부 보정·Jetson 드라이버 동작은 미검증 |
+| RGB-D **장착 위치** | ⚠️ **미확정 — 결정 대기** | 합성 측정은 전부 잠정값 (0.75, 0, 0.5)에서 냈다. **장착이 검출 근접한계를 직접 정한다**(검출기 게이트가 아니라 수직 화각이다). EPAL 6 실측: 0.50 m 에서 최근접 2.3 m, 0.27 m 에서 2.1 m, **브리프가 말하는 마스트 높이 0.90 m 에서 2.8 m**. 삽입은 그보다 가까이서 끝나므로 **마스트 장착이면 마지막 접근을 못 본다.** 후보 장착은 `sim/gazebo/build_scene_world.py` 의 `APPROVED_CAMERAS` 에 등록돼 있고, 측정은 `tools/measure_pocket_evidence.py --camera-z/--camera-tilt`, 캡처용 카탈로그는 `tools/retarget_scene_catalogue.py --camera` 로 낸다. 근거: `docs/validation/2026-09-14-epal6-capture-and-evaluation.md` §6 |
 | 2D LiDAR | **확정 / 세부형 미확인** | Slamtec RPLIDAR를 사용하며 과제 자료의 A2를 계획한다. A2 세부형, 인터페이스, 스캔 설정은 장비 확인 후 고정 |
 | 상위 제어기 | **구매 권장 / 미구매** | NVIDIA 공식 Jetson Orin Nano Super Developer Kit 8GB 권장 |
 | 저장장치 | **구매 권장 / 미구매** | M.2 2280 NVMe 256GB 권장. 128GB는 이미 보유했거나 비용 제약이 있을 때 허용 |
