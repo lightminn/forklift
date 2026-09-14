@@ -63,6 +63,11 @@ def structure(geometry: PalletGeometry, kind: str) -> list[Box]:
     ``shelf``     front-open: full-depth columns to the floor and a solid top
                   deck, with no stringers or bottom boards.
     ``blocks``    nine free-standing blocks, no decks at all.
+    ``slab``      the pallet with its bottom boards replaced by one continuous
+                  slab spanning the full width, so the openings are closed
+                  underneath. Real EPAL and T11 pallets are open to the floor;
+                  this is the shape the frozen detector was tuned on, and it is
+                  the only one of these that supplies lower-deck evidence.
     """
     boxes = scene_rig.pallet(geometry)
     if kind == "pallet":
@@ -102,10 +107,23 @@ def structure(geometry: PalletGeometry, kind: str) -> list[Box]:
         return columns + [deck]
     if kind == "blocks":
         return [b for b in boxes if _is_block(b, geometry)]
+    if kind == "slab":
+        kept = [b for b in boxes if not _is_bottom_board(b, geometry)]
+        kept.append(
+            Box(
+                (0.0, 0.0, geometry.deck_bottom_m / 2),
+                (
+                    geometry.overall_depth_m,
+                    geometry.overall_width_m,
+                    geometry.deck_bottom_m,
+                ),
+            )
+        )
+        return kept
     raise ValueError(f"unknown structure: {kind}")
 
 
-STRUCTURES = ("pallet", "deckless", "grounded", "shelf", "blocks")
+STRUCTURES = ("pallet", "deckless", "grounded", "shelf", "blocks", "slab")
 
 
 def _is_bottom_board(box: Box, geometry: PalletGeometry) -> bool:
