@@ -87,10 +87,10 @@ def side_view(geometry):
         note = '앞면이 화면에 들어온다' if face_seen else '앞면이 화면 밖이다'
         d.text((ax, top - 28), f'{distance:.2f} m · {note}', font=R.F(21), fill=colour)
 
-    d.text((16, PH + 18), '가까워지면 앞면이 화면에서 사라지는 이유', font=R.F(29), fill=R.FG)
+    d.text((16, PH + 18), f'화면 아래 경계 · 바닥 교점 {EDGE_M:.2f} m', font=R.F(29), fill=R.FG)
     d.text((16, PH + 60),
-           f'카메라 높이 {CAM_Z:.2f} m에서는 {EDGE_M:.2f} m보다 가까운 바닥이 화면 밖이다\n'
-           '팔레트 앞면이 바닥에 닿아 있어 함께 보이지 않는다',
+           f'카메라 높이 {CAM_Z:.2f} m 기준 · 이보다 가까운 바닥은 화면 밖이다\n'
+           '앞면은 높이가 있어 일부가 더 가까이까지 남는다',
            font=R.F(23), fill=R.SUB)
     return img
 

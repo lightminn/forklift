@@ -127,14 +127,10 @@ def build():
 
     W = 2 * PW + 18
     canvas, d, TOP = R.titled((W, 92 + PH + BAR + 44), '아랫판 증거 측정점과 판정 문턱',
-                              f'같은 자세 {SCENE} 를 두 팔레트로 촬영 · 주황 띠는 아랫판 윗면 ±'
-                              f'{frozen.deck_evidence_tol_m * 1000:.0f} mm, 여기 든 측정점을 센다')
+                              f'같은 자세 {SCENE} · 주황 띠는 아랫판 윗면 ±'
+                              f'{frozen.deck_evidence_tol_m * 1000:.0f} mm')
     for i, p in enumerate(panels):
         canvas.paste(p, (i * (PW + 18), TOP))
-    d.text((14, TOP + PH + BAR + 12),
-           f'문턱 {need}개는 아랫판이 50 mm 이던 초기 팔레트에서 정한 값이다 · '
-           '아랫판이 얇아지면 띠도 얇아져 같은 문턱을 넘지 못한다',
-           font=R.F(21), fill=R.SUB)
     R.OUT.mkdir(parents=True, exist_ok=True)
     canvas.save(R.OUT / '22_lower_deck.png')
     print('22_lower_deck.png', canvas.size)

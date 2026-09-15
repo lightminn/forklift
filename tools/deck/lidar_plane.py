@@ -14,7 +14,7 @@ import render as R  # noqa: E402
 import mujoco  # noqa: E402
 
 SENSOR_XY = (0.60, 0.0)          # 차체 앞쪽
-SENSOR_Z = 0.50                  # 실제 설치 조건
+SENSOR_Z = 0.50                  # 설정한 가정 높이 (실제 장착은 미확정)
 PALLET = (2.60, 0.0, 0.0)
 SAMPLES, RANGE_M = 720, 8.0
 
@@ -82,7 +82,7 @@ def build():
     pu, pv = to_px(PALLET[0], PALLET[1])
     td.rectangle([pu - 0.30 * PXPM, pv - 0.40 * PXPM, pu + 0.30 * PXPM, pv + 0.40 * PXPM],
                  outline=(212, 170, 96), width=2)
-    td.text((pu - 0.30 * PXPM, pv + 0.40 * PXPM + 4), '팔레트 · 측정점 0개', font=R.F(16),
+    td.text((pu - 0.30 * PXPM, pv + 0.40 * PXPM + 4), f'팔레트 · 측정점 {on_pallet}개', font=R.F(16),
             fill=(212, 170, 96))
     # 무엇이 찍힌 점인지 이름을 붙인다
     for wx, wy, text, dx, dy in ((5.6, -0.9, '벽', 10, -8), (2.6, 2.55, '벽', -10, -24),
@@ -93,22 +93,22 @@ def build():
     GAP, TOP, BAR = 14, 96, 92
     W = side.width + GAP + PW
     canvas, d, _ = R.titled((W, TOP + max(side.height, PH) + BAR + 36),
-                            '2D LiDAR가 거리를 측정하는 높이',
-                            f'바닥 기준 {SENSOR_Z:.2f} m · 수평 360° 가상 거리 측정 (MuJoCo) · 차체 반사 제외')
+                            '2D LiDAR 관측 평면과 팔레트 높이',
+                            '수평 360° 가상 거리 측정 (MuJoCo) · 차체 반사 제외')
     canvas.paste(side, (0, TOP))
     canvas.paste(top, (side.width + GAP, TOP))
     d = ImageDraw.Draw(canvas)
     y = TOP + max(side.height, PH)
     d.rectangle([0, y + 8, side.width, y + 12], fill=(96, 164, 232))
     d.text((6, y + 24), '옆에서 본 모습 · 하늘색은 거리 측정 높이', font=R.F(21), fill=R.FG)
-    d.text((6, y + 56), '팔레트 높이 144 mm는 측정 높이 500 mm보다 낮다', font=R.F(21), fill=R.SUB)
+    d.text((6, y + 56), f'측정 높이 {SENSOR_Z * 1000:.0f} mm · 팔레트 높이 144 mm', font=R.F(21), fill=R.SUB)
     x2 = side.width + GAP
     d.rectangle([x2, y + 8, W, y + 12], fill=R.RED)
     d.text((x2 + 6, y + 24), f'위에서 본 모습 · 측정점 {len(hits)}개 중 팔레트 {on_pallet}개',
            font=R.F(21), fill=R.FG)
-    d.text((x2 + 6, y + 56), '이 장면에서 벽·기둥·상자는 측정되지만 팔레트는 빠진다', font=R.F(20), fill=R.RED)
+    d.text((x2 + 6, y + 56), '벽·기둥·상자는 측정된다', font=R.F(20), fill=R.SUB)
     d.text((6, y + BAR + 4),
-           '현재 설치 조건의 거리 측정 결과 · LiDAR 지도 작성과 실제 장애물 회피는 미구현',
+           '설치 높이는 가정값 · 지도 작성과 실제 장애물 회피는 미구현',
            font=R.F(20), fill=(212, 150, 80))
     R.OUT.mkdir(parents=True, exist_ok=True)
     canvas.save(R.OUT / '21_lidar_plane.png')

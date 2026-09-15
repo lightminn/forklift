@@ -73,14 +73,14 @@ def build():
 
     panels = []
 
-    img, d = panel('① 깊이 영상', '각 화소에 카메라에서 물체까지의 거리 기록')
+    img, d = panel('① 깊이 영상', '화소마다 카메라까지의 거리')
     img.paste(Image.open(SCENE / 'depth_preview.png').convert('RGB').crop(CROP)
               .resize((PW, PH), Image.LANCZOS), (0, 0))
     ImageDraw.Draw(img).rectangle([0, PH, PW, PH + 4], fill=R.BLUE)
     tag(ImageDraw.Draw(img), '카메라에서 본 모습')
     panels.append(img)
 
-    img, d = panel('② 팔레트 앞면 추출', f'전체 {len(points):,}개 · 작업 범위 {len(workspace):,}개')
+    img, d = panel('② 앞면 추출', '수직인 평면을 찾아 앞면으로 삼는다')
     scatter(d, points[::3], (44, 48, 58))
     scatter(d, workspace, (60, 150, 96))
     scatter(d, plane.points, R.AMBER, size=2)
@@ -88,10 +88,9 @@ def build():
     tag(d, '초록: 작업 범위 · 주황: 앞면 후보', y=46, fill=(190, 198, 212))
     panels.append(img)
 
-    img, d = panel('③ 받침목·빈 공간 구분',
-                   f'{len(counts)}칸 중 받침목 {int((counts > 0).sum())}칸 · 빈 공간 {len(gaps)}구간')
+    img, d = panel('③ 빈 공간 구분', '측정점이 없는 칸이 포켓 입구')
     tag(d, '앞면을 좌우로 나눈 결과')
-    tag(d, '갈색: 받침목 · 자홍 테두리: 빈 공간', y=46, fill=(190, 198, 212))
+    tag(d, '갈색: 측정점 있음 · 자홍 테두리: 빈 공간', y=46, fill=(190, 198, 212))
     # 판정에 쓰는 것은 칸에 측정점이 있느냐 없느냐뿐이다. 개수를 막대 높이로
     # 그리면 아무 뜻도 없는 높낮이가 눈에 먼저 들어오므로, 있고 없음만 띠로 그린다.
     n = len(counts)
@@ -110,14 +109,9 @@ def build():
         d.text(((ax + bx - tw) / 2, top - 32), text, font=R.F(21), fill=R.MAGENTA)
         d.line([(ax + 2, bot + 14), (bx - 2, bot + 14)], fill=R.MAGENTA, width=2)
     d.rectangle([x0, top, x1, bot], outline=(96, 102, 114), width=1)
-    d.text((x0, bot + 28), f'전체 {n * params.cell_m * 1000:.0f} mm · 칸 폭 {params.cell_m * 1000:.0f} mm',
-           font=R.F(18), fill=R.SUB)
-    d.text((x0, bot + 54), f'높이 {prior.deck_bottom_m * 1000:.0f}~'
-                           f'{(prior.height_m - prior.deck_top_m) * 1000:.0f} mm 구간의 측정점만 사용',
-           font=R.F(18), fill=R.SUB)
     panels.append(img)
 
-    img, d = panel('④ 포켓 위치 판정', '두 포켓의 중심과 포크 삽입 방향 계산', R.GREEN)
+    img, d = panel('④ 포켓 위치·방향', '두 포켓의 중심과 삽입 방향', R.GREEN)
     rgb = Image.fromarray(scene.rgb).crop(CROP).resize((PW, PH), Image.LANCZOS)
     sx, sy = PW / (CROP[2] - CROP[0]), PH / (CROP[3] - CROP[1])
     dd = ImageDraw.Draw(rgb)
