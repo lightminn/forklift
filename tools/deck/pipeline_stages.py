@@ -35,6 +35,13 @@ def panel(title, note, colour=R.BLUE):
     return img, d
 
 
+def tag(d, text, y=10, size=19, fill=(232, 236, 244)):
+    """밝은 화면 위에서도 읽히도록 어두운 받침 위에 올린 한 줄."""
+    f = R.F(size)
+    w = d.textlength(text, font=f)
+    d.rectangle([8, y, 8 + w + 16, y + size + 11], fill=(16, 18, 23))
+    d.text((16, y + 4), text, font=f, fill=fill)
+
 def build():
     prior = load_pallet_prior(R.ROOT / 'config/pallet_prior_epal6.yaml')
     params = dataclasses.replace(DetectorParams.derived_for(prior), seed=0)
@@ -70,27 +77,44 @@ def build():
     img.paste(Image.open(SCENE / 'depth_preview.png').convert('RGB').crop(CROP)
               .resize((PW, PH), Image.LANCZOS), (0, 0))
     ImageDraw.Draw(img).rectangle([0, PH, PW, PH + 4], fill=R.BLUE)
+    tag(ImageDraw.Draw(img), '카메라에서 본 모습')
     panels.append(img)
 
     img, d = panel('② 팔레트 앞면 추출', f'전체 {len(points):,}개 · 작업 범위 {len(workspace):,}개')
     scatter(d, points[::3], (44, 48, 58))
     scatter(d, workspace, (60, 150, 96))
     scatter(d, plane.points, R.AMBER, size=2)
-    d.text((12, 12), '초록: 작업 범위 · 주황: 앞면 후보', font=R.F(19), fill=R.SUB)
+    tag(d, '위에서 본 모습')
+    tag(d, '초록: 작업 범위 · 주황: 앞면 후보', y=46, fill=(190, 198, 212))
     panels.append(img)
 
     img, d = panel('③ 받침목·빈 공간 구분',
                    f'{len(counts)}칸 중 받침목 {int((counts > 0).sum())}칸 · 빈 공간 {len(gaps)}구간')
-    n = len(counts); cw = PW / n; top, bottom = 46, PH - 40
-    hi = max(1, counts.max())
-    gapset = {i for a, b in gaps for i in range(a, b)}
+    tag(d, '앞면을 좌우로 나눈 결과')
+    tag(d, '갈색: 받침목 · 자홍 테두리: 빈 공간', y=46, fill=(190, 198, 212))
+    # 판정에 쓰는 것은 칸에 측정점이 있느냐 없느냐뿐이다. 개수를 막대 높이로
+    # 그리면 아무 뜻도 없는 높낮이가 눈에 먼저 들어오므로, 있고 없음만 띠로 그린다.
+    n = len(counts)
+    x0, x1 = 18, PW - 18
+    top, bot = 132, 236
+    cw = (x1 - x0) / n
     for i, c in enumerate(counts):
-        if c:
-            h = (bottom - top) * (c / hi)
-            d.rectangle([i * cw + 1, bottom - h, (i + 1) * cw - 1, bottom], fill=(72, 200, 120))
-        elif i in gapset:
-            d.rectangle([i * cw + 1, bottom - 8, (i + 1) * cw - 1, bottom], fill=R.MAGENTA)
-    d.text((12, 12), '초록: 받침목 · 자홍: 빈 공간', font=R.F(21), fill=R.SUB)
+        a, b = x0 + i * cw, x0 + (i + 1) * cw
+        d.rectangle([a, top, b, bot], fill=(150, 108, 64) if c else (24, 26, 32))
+    for a, b in gaps:
+        ax, bx = x0 + a * cw, x0 + b * cw
+        d.rectangle([ax, top, bx, bot], fill=(24, 26, 32), outline=R.MAGENTA, width=3)
+        mm = (b - a) * params.cell_m * 1000
+        text = f'{mm:.0f} mm'
+        tw = d.textlength(text, font=R.F(21))
+        d.text(((ax + bx - tw) / 2, top - 32), text, font=R.F(21), fill=R.MAGENTA)
+        d.line([(ax + 2, bot + 14), (bx - 2, bot + 14)], fill=R.MAGENTA, width=2)
+    d.rectangle([x0, top, x1, bot], outline=(96, 102, 114), width=1)
+    d.text((x0, bot + 28), f'전체 {n * params.cell_m * 1000:.0f} mm · 칸 폭 {params.cell_m * 1000:.0f} mm',
+           font=R.F(18), fill=R.SUB)
+    d.text((x0, bot + 54), f'높이 {prior.deck_bottom_m * 1000:.0f}~'
+                           f'{(prior.height_m - prior.deck_top_m) * 1000:.0f} mm 구간의 측정점만 사용',
+           font=R.F(18), fill=R.SUB)
     panels.append(img)
 
     img, d = panel('④ 포켓 위치 판정', '두 포켓의 중심과 포크 삽입 방향 계산', R.GREEN)
@@ -106,6 +130,7 @@ def build():
                 dd.line([*pts, pts[0]], fill=R.MAGENTA, width=3)
     img.paste(rgb, (0, 0))
     ImageDraw.Draw(img).rectangle([0, PH, PW, PH + 4], fill=R.GREEN)
+    tag(ImageDraw.Draw(img), '카메라에서 본 모습')
     panels.append(img)
 
     carries = ['거리 측정점', '앞면 평면', '빈 공간 위치']
