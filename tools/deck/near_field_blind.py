@@ -1,7 +1,7 @@
-"""11쪽: 가까워질수록 팔레트 앞면이 화면 밖으로 밀려나는 것을 두 거리로 비교한다.
+"""11쪽: 가까워질수록 팔레트 전면이 화면 밖으로 밀려나는 것을 두 거리로 비교한다.
 
 한 장만 보여 주면 널만 찍힌 화면이 되어 '무엇이 사라졌는지'가 보이지 않는다.
-앞면이 보이는 거리와 사라진 거리를 나란히 놓아야 사라졌다는 사실이 읽힌다.
+전면이 관측되는 거리와 관측되지 않는 거리를 나란히 놓아야 사라졌다는 사실이 읽힌다.
 
 화면과 판정은 **같은 카메라 모형**이어야 한다. 그래서 두 화면 모두 검출
 판정에 쓰는 측정 리그(`tools/scene_rig.py`)의 거리 영상으로 그린다. MuJoCo
@@ -26,7 +26,7 @@ from forklift_core.perception.pallet_prior import load_pallet_prior  # noqa: E40
 from forklift_core.perception.pocket_detector import DetectorParams, detect_pockets  # noqa: E402
 
 CAM_X, CAM_Z = 0.75, 0.50           # 측정에 쓴 카메라 위치
-DISTANCES = (1.20, 0.60)            # 카메라에서 팔레트 앞면까지
+DISTANCES = (1.20, 0.60)            # 카메라에서 팔레트 전면까지
 PW, PH, BAR = 620, 470, 150
 SW = 700                            # 옆모습 도해 폭
 GAP = 24
@@ -72,7 +72,7 @@ def side_view(geometry):
         ex = x0 + EDGE_M * scale
         d.line([(ex, y0 - 7), (ex, y0 + 12)], fill=R.AMBER, width=3)
         if row == 0:
-            d.text((x0 + 12, cy - 28), '카메라가 보는 아래쪽 경계', font=R.F(20), fill=R.AMBER)
+            d.text((x0 + 12, cy - 28), '카메라 관측 범위의 하한', font=R.F(20), fill=R.AMBER)
             d.text((ex - 34, y0 + 15), f'{EDGE_M:.2f} m', font=R.F(19), fill=R.AMBER)
 
         ax = x0 + distance * scale
@@ -84,13 +84,13 @@ def side_view(geometry):
             d.rectangle([cut, top, bx, y0], fill=(146, 104, 62), outline=R.GREEN, width=3)
         face_seen = ax >= ex
         colour = R.GREEN if face_seen else R.RED
-        note = '앞면이 경계 위' if face_seen else '앞면이 경계 아래'
+        note = '전면이 하한보다 멀다' if face_seen else '전면이 하한보다 가깝다'
         d.text((ax, top - 28), f'{distance:.2f} m · {note}', font=R.F(21), fill=colour)
 
-    d.text((16, PH + 18), '왜 사라지는가', font=R.F(31), fill=R.FG)
+    d.text((16, PH + 18), '전면이 관측되지 않는 이유', font=R.F(31), fill=R.FG)
     d.text((16, PH + 60),
-           f'카메라가 {CAM_Z:.2f} m 높이에 있으면 {EDGE_M:.2f} m 보다 가까운 바닥은\n'
-           '화면에 안 들어온다 · 팔레트 앞면은 바로 그 바닥에 붙어 있다',
+           f'설치 높이 {CAM_Z:.2f} m 에서는 {EDGE_M:.2f} m 보다 가까운 바닥이 화면에 들어오지\n'
+           '않으며, 팔레트 전면은 그 바닥에 접해 있다',
            font=R.F(23), fill=R.SUB)
     return img
 
@@ -110,11 +110,11 @@ def build():
         d = ImageDraw.Draw(img)
         colour = R.GREEN if found else R.RED
         d.rectangle([0, PH, PW, PH + 5], fill=colour)
-        d.text((14, 12), '주황 = 팔레트 · 회색 = 바닥과 벽', font=R.F(20), fill=(230, 230, 230))
-        d.text((16, PH + 18), f'{distance:.2f} m 에서 본 거리 영상', font=R.F(30), fill=R.FG)
+        d.text((14, 12), '주황: 팔레트 · 회색: 바닥과 벽', font=R.F(20), fill=(230, 230, 230))
+        d.text((16, PH + 18), f'전면까지 {distance:.2f} m · 깊이 영상', font=R.F(30), fill=R.FG)
         d.text((16, PH + 58),
-               '앞면과 포켓이 화면 안에 들어온다' if found
-               else '윗판만 보이고 앞면은 화면 밖이다',
+               '전면과 포켓이 화면 안에 관측된다' if found
+               else '상판만 관측되고 전면은 화면 밖이다',
                font=R.F(23), fill=R.SUB)
         badge = '포켓 검출' if found else '미검출'
         bw = d.textlength(badge, font=R.F(24))
@@ -124,16 +124,16 @@ def build():
         panels.append(img)
 
     W = SW + 2 * PW + 2 * GAP
-    canvas, d, TOP = R.titled((W, 92 + PH + BAR + 8), '가까워지면 팔레트 앞면이 화면 밖으로 내려간다',
+    canvas, d, TOP = R.titled((W, 92 + PH + BAR + 8), '근접 시 팔레트 전면의 관측 한계',
                               f'카메라 높이 {CAM_Z:.2f} m 고정 · 정면 접근 · '
-                              '화면과 검출 판정 모두 측정 리그의 같은 카메라')
+                              '화면과 검출 판정 모두 측정 리그의 동일 카메라')
     x = 0
     for p in panels:
         canvas.paste(p, (x, TOP))
         x += p.width + GAP
     R.OUT.mkdir(parents=True, exist_ok=True)
     canvas.save(R.OUT / '06_near_field_blind.png')
-    print('06_near_field_blind.png', canvas.size, f'아래쪽 경계 {EDGE_M:.3f} m')
+    print('06_near_field_blind.png', canvas.size, f'관측 하한 {EDGE_M:.3f} m')
 
 
 if __name__ == '__main__':

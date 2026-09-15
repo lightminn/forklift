@@ -49,8 +49,8 @@ def build():
         (pick('positive', lambda m: pal(m).get('x_m', 0), True), '먼 거리'),
         (pick('positive', lambda m: pal(m).get('x_m', 9)), '가까운 거리'),
         (pick('positive', lambda m: abs(pal(m).get('yaw_rad', 0)), True), '비스듬한 자세'),
-        (pick('occluded'), '기둥에 가림'),
-        (pick('negative_lookalike'), '비슷하게 생긴 물체'),
+        (pick('occluded'), '기둥에 의한 가림'),
+        (pick('negative_lookalike'), '유사 형상 물체'),
         (pick('negative_no_pallet'), '팔레트 없음'),
     ]
 
@@ -62,8 +62,8 @@ def build():
         if category == 'positive':
             return '미검출', RED
         if category == 'occluded':
-            return '판단 불가로 거부', AMBER
-        return '검출하지 않음', BLUE_
+            return '판별 불가로 거부', AMBER
+        return '비검출', BLUE_
 
     rows = (len(chosen) + COLS - 1) // COLS
     W = COLS * PW + (COLS - 1) * GAP

@@ -22,10 +22,10 @@ OUTPUT = R.OUT / '09_docking_preview.mp4'
 
 # 영상 안에서는 영어 단계 이름 대신 무엇을 하는 중인지 한 줄로 말한다.
 PHASE_KO = {
-    'approach': ('① 접근', '팔레트 앞까지 곧게 다가간다'),
-    'insert': ('② 삽입', '포크를 두 구멍에 밀어 넣는다'),
-    'lift': ('③ 들어올리기', '팔레트를 바닥에서 띄운다'),
-    'settle': ('④ 정지', '들어올린 자세를 유지한다'),
+    'approach': ('① 접근', '팔레트 전면까지 직진 접근'),
+    'insert': ('② 삽입', '좌우 포켓에 포크 삽입'),
+    'lift': ('③ 승강', '팔레트를 바닥에서 들어 올림'),
+    'settle': ('④ 정지', '적재 자세 유지'),
 }
 
 
@@ -33,10 +33,10 @@ def _lines(frame):
     name, what = PHASE_KO[frame.phase]
     mm = frame.penetration_m * 1000
     if mm < 0:
-        second = f'포크 끝에서 팔레트까지 남은 거리 {-mm:,.0f} mm'
+        second = f'포크 끝에서 팔레트 전면까지 {-mm:,.0f} mm'
     else:
-        second = (f'구멍에 들어간 깊이 {mm:,.0f} mm'
-                  f'  ·  포크와 팔레트가 가장 가까운 곳 {frame.clearance_m * 1000:,.0f} mm')
+        second = (f'포켓 삽입 깊이 {mm:,.0f} mm'
+                  f'  ·  포크와 팔레트의 최소 간격 {frame.clearance_m * 1000:,.0f} mm')
     return f'{name}  ·  {what}', second
 
 
@@ -90,7 +90,7 @@ def build(frames_n=240):
                     head, detail = _lines(frame)
                     d.text((26, H - BAND + 20), head, font=R.F(34), fill=R.FG)
                     d.text((26, H - BAND + 66), detail, font=R.F(24), fill=(198, 226, 206))
-                    d.text((26, H - 32), '접촉과 화물 무게는 계산하지 않은 동작 미리보기',
+                    d.text((26, H - 32), '접촉과 화물 하중을 반영하지 않은 동작 미리보기',
                            font=R.F(20), fill=R.SUB)
                     # 진행 막대: 지금이 전체 어디쯤인지 한눈에 보이게.
                     t = frame.index / max(1, len(frames) - 1)

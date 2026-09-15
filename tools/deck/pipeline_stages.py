@@ -66,21 +66,21 @@ def build():
 
     panels = []
 
-    img, d = panel('① 거리 영상', '각 화소에 물체까지의 거리 기록')
+    img, d = panel('① 깊이 영상', '각 화소에 카메라에서 물체까지의 거리 기록')
     img.paste(Image.open(SCENE / 'depth_preview.png').convert('RGB').crop(CROP)
               .resize((PW, PH), Image.LANCZOS), (0, 0))
     ImageDraw.Draw(img).rectangle([0, PH, PW, PH + 4], fill=R.BLUE)
     panels.append(img)
 
-    img, d = panel('② 팔레트 앞면 찾기', f'{len(points)//1000:,}천 점에서 {len(workspace):,} 점만 남긴다')
+    img, d = panel('② 팔레트 전면 추출', f'측정점 {len(points):,}개 중 {len(workspace):,}개로 수직 평면 추출')
     scatter(d, points[::3], (44, 48, 58))
     scatter(d, workspace, (60, 150, 96))
     scatter(d, plane.points, R.AMBER, size=2)
-    d.text((12, 12), '초록 = 남긴 점 · 주황 = 팔레트 앞면', font=R.F(19), fill=R.SUB)
+    d.text((12, 12), '초록: 남긴 측정점 · 주황: 팔레트 전면', font=R.F(19), fill=R.SUB)
     panels.append(img)
 
-    img, d = panel('③ 받침목과 빈 칸 구분',
-                   f'{len(counts)}칸 중 받침목 {int((counts > 0).sum())}칸 · 빈 칸 {len(gaps)}군데')
+    img, d = panel('③ 받침목·빈 칸 구분',
+                   f'전체 {len(counts)}칸 중 받침목 {int((counts > 0).sum())}칸 · 빈 칸 구간 {len(gaps)}개')
     n = len(counts); cw = PW / n; top, bottom = 46, PH - 40
     hi = max(1, counts.max())
     gapset = {i for a, b in gaps for i in range(a, b)}
@@ -93,7 +93,7 @@ def build():
     d.text((12, 12), '초록: 받침목 · 자홍: 빈 칸', font=R.F(21), fill=R.SUB)
     panels.append(img)
 
-    img, d = panel('④ 구멍 두 개를 포켓으로 확정', '좌우 포켓 중심과 포크를 넣을 방향', R.GREEN)
+    img, d = panel('④ 포켓 판정', '좌우 포켓 중심 및 삽입 방향 산출', R.GREEN)
     rgb = Image.fromarray(scene.rgb).crop(CROP).resize((PW, PH), Image.LANCZOS)
     sx, sy = PW / (CROP[2] - CROP[0]), PH / (CROP[3] - CROP[1])
     dd = ImageDraw.Draw(rgb)
@@ -108,12 +108,12 @@ def build():
     ImageDraw.Draw(img).rectangle([0, PH, PW, PH + 4], fill=R.GREEN)
     panels.append(img)
 
-    carries = ['거리 값', '앞면 한 장', '빈 칸 위치']
+    carries = ['측정점', '전면 평면', '빈 칸 위치']
     TOP = 100
     W = len(panels) * PW + (len(panels) - 1) * ARROW
     H = TOP + PH + BAR + 10
-    canvas, d, _ = R.titled((W, H), '포켓 인식 네 단계',
-                            '왼쪽 결과가 화살표를 따라 다음 단계의 입력이 된다 · 학습 모델을 쓰지 않고 팔레트 치수와 모양만 사용')
+    canvas, d, _ = R.titled((W, H), '포켓 인식 절차',
+                            '각 단계의 결과가 다음 단계의 입력이 된다 · 학습 모델을 적용하지 않고 팔레트의 치수와 형상만 이용')
     for i, p in enumerate(panels):
         x = i * (PW + ARROW)
         canvas.paste(p, (x, TOP))

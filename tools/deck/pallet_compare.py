@@ -38,8 +38,8 @@ def build():
     tallest = max(d for _, _, d, _, _, _ in CANDIDATES)
     H = TOP + int(tallest * PXMM) + BASE_PAD
     canvas, d, _ = R.titled(
-        (W, H), '포크가 닿는 깊이로 본 팔레트 후보',
-        f'가로선은 포크 길이 {FORK_MM:.0f} mm · 선 위쪽은 포크가 닿지 않는 부분 · 같은 축척')
+        (W, H), '포크 도달 깊이 기준 팔레트 후보 비교',
+        f'가로선은 포크 길이 {FORK_MM:.0f} mm · 선 위쪽은 포크가 도달하지 못하는 구간 · 동일 축척')
     base = TOP + int(tallest * PXMM)
     fork_y = base - int(FORK_MM * PXMM)
 
@@ -69,19 +69,19 @@ def build():
         y += 30 * len(name.split('\n')) + 8
         d.text((x, y), f'{w_mm} × {depth_mm} mm', font=R.F(21), fill=R.SUB)
         if mass is None:
-            d.text((x, y + 30), '제작 · 무게 조절 가능', font=R.F(21), fill=(140, 230, 170))
+            d.text((x, y + 30), '제작 대상 · 무게 조정 가능', font=R.F(21), fill=(140, 230, 170))
         else:
             over = mass > PAYLOAD_KG
-            d.text((x, y + 30), f'자중 {mass:g} kg' + (' · 한도 초과' if over else ''),
+            d.text((x, y + 30), f'자중 {mass:g} kg' + (' · 적재 한도 초과' if over else ''),
                    font=R.F(21), fill=R.RED if over else R.SUB)
         x += pw + GAP
 
     # 포크 길이 가로선
     d.line([(30, fork_y), (W - 30, fork_y)], fill=(120, 220, 150), width=3)
-    d.text((30, fork_y - 34), f'포크 끝 {FORK_MM:.0f} mm', font=R.F(24), fill=(120, 220, 150))
+    d.text((30, fork_y - 34), f'포크 길이 {FORK_MM:.0f} mm', font=R.F(24), fill=(120, 220, 150))
     d.line([(30, base), (W - 30, base)], fill=(150, 158, 172), width=2)
     d.text((30, H - 40),
-           f'아래쪽 선이 포크가 들어가는 면 · 갈색이 포크가 닿는 부분 · 차체 적재 한도 {PAYLOAD_KG:.0f} kg',
+           f'하단 선이 포크 삽입면 · 갈색이 포크 도달 구간 · 차체 적재 한도 {PAYLOAD_KG:.0f} kg',
            font=R.F(21), fill=R.SUB)
     R.OUT.mkdir(parents=True, exist_ok=True)
     canvas.save(R.OUT / '15_pallet_choice.png')

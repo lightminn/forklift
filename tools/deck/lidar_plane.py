@@ -82,7 +82,7 @@ def build():
     pu, pv = to_px(PALLET[0], PALLET[1])
     td.rectangle([pu - 0.30 * PXPM, pv - 0.40 * PXPM, pu + 0.30 * PXPM, pv + 0.40 * PXPM],
                  outline=(212, 170, 96), width=2)
-    td.text((pu - 0.30 * PXPM, pv + 0.40 * PXPM + 4), '팔레트 · 반사 없음', font=R.F(16),
+    td.text((pu - 0.30 * PXPM, pv + 0.40 * PXPM + 4), '팔레트 · 반사점 없음', font=R.F(16),
             fill=(212, 170, 96))
     # 무엇이 찍힌 점인지 이름을 붙인다
     for wx, wy, text, dx, dy in ((5.6, -0.9, '벽', 10, -8), (2.6, 2.55, '벽', -10, -24),
@@ -93,22 +93,22 @@ def build():
     GAP, TOP, BAR = 14, 96, 92
     W = side.width + GAP + PW
     canvas, d, _ = R.titled((W, TOP + max(side.height, PH) + BAR + 36),
-                            '2D LiDAR 가 관측하는 평면',
+                            '2D LiDAR 의 관측 평면',
                             f'설치 높이 {SENSOR_Z:.2f} m · 360° 광선 투사 (MuJoCo) · 차체 자체 반사 제외')
     canvas.paste(side, (0, TOP))
     canvas.paste(top, (side.width + GAP, TOP))
     d = ImageDraw.Draw(canvas)
     y = TOP + max(side.height, PH)
     d.rectangle([0, y + 8, side.width, y + 12], fill=(96, 164, 232))
-    d.text((6, y + 24), '옆에서 본 모습 · 하늘색 면이 LiDAR 가 보는 평면', font=R.F(21), fill=R.FG)
-    d.text((6, y + 56), '팔레트 전체 높이 144 mm 는 그 평면보다 낮다', font=R.F(21), fill=R.SUB)
+    d.text((6, y + 24), '측면도 · 하늘색 면이 LiDAR 의 관측 평면', font=R.F(21), fill=R.FG)
+    d.text((6, y + 56), '팔레트 전체 높이 144 mm 는 관측 평면보다 낮다', font=R.F(21), fill=R.SUB)
     x2 = side.width + GAP
     d.rectangle([x2, y + 8, W, y + 12], fill=R.RED)
-    d.text((x2 + 6, y + 24), f'위에서 본 반사점 · 전체 {len(hits)}개 중 팔레트 {on_pallet}개',
+    d.text((x2 + 6, y + 24), f'평면도 · 반사점 {len(hits)}개 중 팔레트 {on_pallet}개',
            font=R.F(21), fill=R.FG)
-    d.text((x2 + 6, y + 56), '벽·기둥·상자는 보이고 팔레트만 빠진다', font=R.F(21), fill=R.RED)
+    d.text((x2 + 6, y + 56), '벽·기둥·상자는 관측되고 팔레트만 관측되지 않는다', font=R.F(21), fill=R.RED)
     d.text((6, y + BAR + 4),
-           '2D LiDAR 는 장애물·벽 관측용이라 팔레트보다 높이 설치한다 · SLAM 지도 작성은 미구현',
+           '2D LiDAR 는 장애물·벽 관측용이므로 팔레트보다 높게 설치한다 · SLAM 지도 작성은 미구현',
            font=R.F(20), fill=(212, 150, 80))
     R.OUT.mkdir(parents=True, exist_ok=True)
     canvas.save(R.OUT / '21_lidar_plane.png')
