@@ -22,7 +22,7 @@ PRESENTATION = R.ROOT.parent / 'forklift-presentations'
 SOURCE_REV = 'ba3c0b840d75eb1b334a8cc3e9ba93f3efacde98'
 CLIPS = (
     ('11_gazebo_approach.mp4', 'Gazebo 합성 카메라 · 초록: 정답 · 자홍: 검출 위치'),
-    ('14_external_approach.mp4', 'MuJoCo 외부 시점 · 같은 합성 자세 · 실제 주행 아님'),
+    ('14_external_approach.mp4', 'MuJoCo 외부 시점 · 왼쪽과 같은 자세 · 실제 주행 아님'),
 )
 
 
@@ -50,10 +50,14 @@ def build_one(name: str, provenance: str) -> None:
             d.rectangle((0, 0, img.width, 73), fill=R.BG)
             d.text((18, 18), f'카메라–팔레트 앞면 {2.95 - 0.02*i:.2f} m',
                    font=R.F(25), fill=R.FG)
-            status = ('포켓 검출' if detected else '포켓 미검출') if name.startswith('11_') else (
-                '카메라 시야에 들어옴' if detected else '카메라 시야 밖')
-            d.text((395, 18), status,
-                   font=R.F(25), fill=R.GREEN if detected else R.RED)
+            # 판정 배지는 검출 결과를 보여 주는 왼쪽 영상에만 붙인다. 오른쪽은
+            # 같은 자세를 외부에서 본 화면이고, 원본에 박힌 플래그가 무엇을
+            # 뜻하는지 기록이 없다 — 시야 안팎으로 바꿔 부르면 기하학적 시야와
+            # 13프레임 어긋난다(2026-09-15 확인).
+            if name.startswith('11_'):
+                status = '포켓 검출' if detected else '포켓 미검출'
+                d.text((395, 18), status,
+                       font=R.F(25), fill=R.GREEN if detected else R.RED)
             d.text((660, 23), provenance, font=R.F(18), fill=R.SUB)
             img.save(frames / f'{i:04d}.png')
         video.release()
