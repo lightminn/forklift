@@ -97,7 +97,7 @@ def build():
             canvas.paste(img, (x0, BAR))
             d.rectangle([x0, BAR - 4, x0 + PW, BAR], fill=R.GREEN if ok else R.RED)
             d.text((x0 + 12, 52), name, font=f_t, fill=(235, 235, 235))
-            verdict = '포켓 검출' if ok else '못 찾음'
+            verdict = '포켓 검출' if ok else '미검출'
             d.text((x0 + PW - d.textlength(verdict, font=f_t) - 14, 52), verdict,
                    font=f_t, fill=R.GREEN if ok else R.RED)
             y0 = BAR + PH + 6

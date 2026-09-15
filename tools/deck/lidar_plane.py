@@ -101,7 +101,7 @@ def build():
     y = TOP + max(side.height, PH)
     d.rectangle([0, y + 8, side.width, y + 12], fill=(96, 164, 232))
     d.text((6, y + 24), '옆에서 본 모습 · 하늘색 면이 LiDAR 가 보는 평면', font=R.F(21), fill=R.FG)
-    d.text((6, y + 56), '팔레트 전고 144 mm 는 그 평면보다 낮다', font=R.F(21), fill=R.SUB)
+    d.text((6, y + 56), '팔레트 전체 높이 144 mm 는 그 평면보다 낮다', font=R.F(21), fill=R.SUB)
     x2 = side.width + GAP
     d.rectangle([x2, y + 8, W, y + 12], fill=R.RED)
     d.text((x2 + 6, y + 24), f'위에서 본 반사점 · 전체 {len(hits)}개 중 팔레트 {on_pallet}개',
