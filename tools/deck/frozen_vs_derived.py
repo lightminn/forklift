@@ -1,7 +1,8 @@
-"""6쪽: 같은 촬영 주행을 두 설정으로 돌린 비교.
+"""7쪽: 같은 촬영 주행을 두 설정으로 돌린 비교.
 
-앞 장에서 배운 '버리는 띠'를 그대로 얹는다. 왼쪽은 띠가 바닥판을 덮어
-끝까지 못 찾고, 오른쪽은 띠가 얇아 바닥판이 남아 계속 찾는다.
+앞 장의 아랫판 증거 문턱이 갈리는 항이다. 101장에 항을 하나씩만 바꿔 재보면
+문턱만 100 → 15 로 낮춰도 50장이 살아나고, 바닥 제외 높이만 고치면 0장
+그대로다(2026-09-15 측정). 그래서 바닥 제외 띠는 더 이상 그리지 않는다.
 """
 from __future__ import annotations
 
@@ -17,7 +18,6 @@ from PIL import Image, ImageDraw
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import render as R  # noqa: E402
-from floor_cut import front_face_line  # noqa: E402
 
 sys.path[:0] = [str(R.ROOT / 'src'), str(R.ROOT)]
 from forklift_core.perception.overlay import opening_corners_m, project_point  # noqa: E402
@@ -38,15 +38,6 @@ def panel(scene, pose, params, name, accent, valid):
     inp = load_scene_input(scene)
     sx, sy = PW / (CROP[2] - CROP[0]), PH / (CROP[3] - CROP[1])
     to_panel = lambda p: ((p[0] - CROP[0]) * sx, (p[1] - CROP[1]) * sy)
-
-    layer = Image.new('RGBA', (PW, PH), (0, 0, 0, 0))
-    ld = ImageDraw.Draw(layer)
-    floor = [to_panel(p) for p in front_face_line(pose, None, 0.6, 0.8, 0.0, inp)]
-    cut = [to_panel(p) for p in front_face_line(pose, None, 0.6, 0.8, params.floor_z_m, inp)]
-    if floor and cut:
-        ld.polygon(cut + floor[::-1], fill=accent + (120,))
-        ld.line(cut, fill=accent + (255,), width=3)
-    img = Image.alpha_composite(img.convert('RGBA'), layer).convert('RGB')
 
     d = ImageDraw.Draw(img)
     obs = detect_pockets(inp, PRIOR, params).observation
@@ -91,8 +82,8 @@ def build():
         label = f'같은 합성 접근 자세 · 카메라–팔레트 앞면 거리 {rng:4.2f} m'
         d.text(((W - d.textlength(label, font=f_d)) / 2, 10), label, font=f_d, fill=R.FG)
         for k, (img, ok, name, accent) in enumerate((
-                (left, lok, f'고정 기준 · 바닥부터 {frozen.floor_z_m*1000:.0f} mm 제외', R.RED),
-                (right, rok, f'치수에 맞춘 기준 · 바닥부터 {derived.floor_z_m*1000:.1f} mm 제외', R.GREEN))):
+                (left, lok, f'고정 기준 · 아랫판 증거 문턱 {frozen.min_band_points}개', R.RED),
+                (right, rok, f'치수에 맞춘 기준 · 문턱 {derived.min_band_points}개', R.GREEN))):
             x0 = k * (PW + GAP)
             canvas.paste(img, (x0, BAR))
             d.rectangle([x0, BAR - 4, x0 + PW, BAR], fill=R.GREEN if ok else R.RED)

@@ -103,3 +103,20 @@ def titled(canvas_size, title, subtitle, *, top=92):
     if subtitle:
         d.text((20, 62), subtitle, font=F(21), fill=SUB)
     return img, d, top
+
+def front_face_line(pose, geometry_depth, geometry_width, z, scene, samples=40):
+    """팔레트 앞면을 따라 높이 z 를 지나는 선을 영상 좌표로 투영한다."""
+    import numpy as np
+    import sys as _sys
+    _sys.path[:0] = [str(ROOT / 'src')]
+    from forklift_core.perception.overlay import project_point
+    yaw = pose['yaw_rad']
+    c, s = math.cos(yaw), math.sin(yaw)
+    pts = []
+    for t in np.linspace(-geometry_width / 2, geometry_width / 2, samples):
+        lx, ly = -geometry_depth / 2, float(t)
+        base = (pose['x_m'] + lx * c - ly * s, pose['y_m'] + lx * s + ly * c, z)
+        px = project_point(base, scene.intrinsics, scene.base_from_optical)
+        if px is not None:
+            pts.append(px)
+    return pts
