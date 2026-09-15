@@ -72,7 +72,7 @@ def side_view(geometry):
         ex = x0 + EDGE_M * scale
         d.line([(ex, y0 - 7), (ex, y0 + 12)], fill=R.AMBER, width=3)
         if row == 0:
-            d.text((x0 + 12, cy - 28), '카메라 관측 범위의 하한', font=R.F(20), fill=R.AMBER)
+            d.text((x0 + 12, cy - 28), '화면 아래 경계', font=R.F(20), fill=R.AMBER)
             d.text((ex - 34, y0 + 15), f'{EDGE_M:.2f} m', font=R.F(19), fill=R.AMBER)
 
         ax = x0 + distance * scale
@@ -84,13 +84,13 @@ def side_view(geometry):
             d.rectangle([cut, top, bx, y0], fill=(146, 104, 62), outline=R.GREEN, width=3)
         face_seen = ax >= ex
         colour = R.GREEN if face_seen else R.RED
-        note = '전면이 하한보다 멀다' if face_seen else '전면이 하한보다 가깝다'
+        note = '앞면이 화면에 들어온다' if face_seen else '앞면이 화면 밖이다'
         d.text((ax, top - 28), f'{distance:.2f} m · {note}', font=R.F(21), fill=colour)
 
-    d.text((16, PH + 18), '전면이 관측되지 않는 이유', font=R.F(31), fill=R.FG)
+    d.text((16, PH + 18), '가까워지면 앞면이 화면에서 사라지는 이유', font=R.F(29), fill=R.FG)
     d.text((16, PH + 60),
-           f'설치 높이 {CAM_Z:.2f} m 에서는 {EDGE_M:.2f} m 보다 가까운 바닥이 화면에 들어오지\n'
-           '않으며, 팔레트 전면은 그 바닥에 접해 있다',
+           f'카메라 높이 {CAM_Z:.2f} m에서는 {EDGE_M:.2f} m보다 가까운 바닥이 화면 밖이다\n'
+           '팔레트 앞면이 바닥에 닿아 있어 함께 보이지 않는다',
            font=R.F(23), fill=R.SUB)
     return img
 
@@ -111,10 +111,10 @@ def build():
         colour = R.GREEN if found else R.RED
         d.rectangle([0, PH, PW, PH + 5], fill=colour)
         d.text((14, 12), '주황: 팔레트 · 회색: 바닥과 벽', font=R.F(20), fill=(230, 230, 230))
-        d.text((16, PH + 18), f'전면까지 {distance:.2f} m · 깊이 영상', font=R.F(30), fill=R.FG)
+        d.text((16, PH + 18), f'카메라–앞면 {distance:.2f} m · 깊이 영상', font=R.F(28), fill=R.FG)
         d.text((16, PH + 58),
-               '전면과 포켓이 화면 안에 관측된다' if found
-               else '상판만 관측되고 전면은 화면 밖이다',
+               '앞면과 포켓이 화면에 보인다' if found
+               else '윗판만 보이고 앞면은 화면 밖이다',
                font=R.F(23), fill=R.SUB)
         badge = '포켓 검출' if found else '미검출'
         bw = d.textlength(badge, font=R.F(24))
@@ -124,9 +124,9 @@ def build():
         panels.append(img)
 
     W = SW + 2 * PW + 2 * GAP
-    canvas, d, TOP = R.titled((W, 92 + PH + BAR + 8), '근접 시 팔레트 전면의 관측 한계',
-                              f'카메라 높이 {CAM_Z:.2f} m 고정 · 정면 접근 · '
-                              '화면과 검출 판정 모두 측정 리그의 동일 카메라')
+    canvas, d, TOP = R.titled((W, 92 + PH + BAR + 8), '가까워지면 팔레트 앞면이 화면 밖으로 나간다',
+                              f'카메라 높이 {CAM_Z:.2f} m 고정 · 정면 합성 자세 · '
+                              '깊이 영상과 검출 판정에 같은 카메라 모형 사용')
     x = 0
     for p in panels:
         canvas.paste(p, (x, TOP))

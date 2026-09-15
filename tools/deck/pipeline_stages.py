@@ -72,15 +72,15 @@ def build():
     ImageDraw.Draw(img).rectangle([0, PH, PW, PH + 4], fill=R.BLUE)
     panels.append(img)
 
-    img, d = panel('② 팔레트 전면 추출', f'측정점 {len(points):,}개 중 {len(workspace):,}개로 수직 평면 추출')
+    img, d = panel('② 팔레트 앞면 추출', f'전체 {len(points):,}개 · 작업 범위 {len(workspace):,}개')
     scatter(d, points[::3], (44, 48, 58))
     scatter(d, workspace, (60, 150, 96))
     scatter(d, plane.points, R.AMBER, size=2)
-    d.text((12, 12), '초록: 남긴 측정점 · 주황: 팔레트 전면', font=R.F(19), fill=R.SUB)
+    d.text((12, 12), '초록: 작업 범위 · 주황: 앞면 후보', font=R.F(19), fill=R.SUB)
     panels.append(img)
 
-    img, d = panel('③ 받침목·빈 칸 구분',
-                   f'전체 {len(counts)}칸 중 받침목 {int((counts > 0).sum())}칸 · 빈 칸 구간 {len(gaps)}개')
+    img, d = panel('③ 받침목·빈 공간 구분',
+                   f'{len(counts)}칸 중 받침목 {int((counts > 0).sum())}칸 · 빈 공간 {len(gaps)}구간')
     n = len(counts); cw = PW / n; top, bottom = 46, PH - 40
     hi = max(1, counts.max())
     gapset = {i for a, b in gaps for i in range(a, b)}
@@ -90,10 +90,10 @@ def build():
             d.rectangle([i * cw + 1, bottom - h, (i + 1) * cw - 1, bottom], fill=(72, 200, 120))
         elif i in gapset:
             d.rectangle([i * cw + 1, bottom - 8, (i + 1) * cw - 1, bottom], fill=R.MAGENTA)
-    d.text((12, 12), '초록: 받침목 · 자홍: 빈 칸', font=R.F(21), fill=R.SUB)
+    d.text((12, 12), '초록: 받침목 · 자홍: 빈 공간', font=R.F(21), fill=R.SUB)
     panels.append(img)
 
-    img, d = panel('④ 포켓 판정', '좌우 포켓 중심 및 삽입 방향 산출', R.GREEN)
+    img, d = panel('④ 포켓 위치 판정', '두 포켓의 중심과 포크 삽입 방향 계산', R.GREEN)
     rgb = Image.fromarray(scene.rgb).crop(CROP).resize((PW, PH), Image.LANCZOS)
     sx, sy = PW / (CROP[2] - CROP[0]), PH / (CROP[3] - CROP[1])
     dd = ImageDraw.Draw(rgb)
@@ -108,12 +108,12 @@ def build():
     ImageDraw.Draw(img).rectangle([0, PH, PW, PH + 4], fill=R.GREEN)
     panels.append(img)
 
-    carries = ['측정점', '전면 평면', '빈 칸 위치']
+    carries = ['거리 측정점', '앞면 평면', '빈 공간 위치']
     TOP = 100
     W = len(panels) * PW + (len(panels) - 1) * ARROW
     H = TOP + PH + BAR + 10
-    canvas, d, _ = R.titled((W, H), '포켓 인식 절차',
-                            '각 단계의 결과가 다음 단계의 입력이 된다 · 학습 모델을 적용하지 않고 팔레트의 치수와 형상만 이용')
+    canvas, d, _ = R.titled((W, H), '포켓 위치를 찾는 네 단계',
+                            '앞 단계의 결과를 다음 단계에 전달 · 학습 모델 대신 팔레트 치수와 형상 규칙 사용')
     for i, p in enumerate(panels):
         x = i * (PW + ARROW)
         canvas.paste(p, (x, TOP))
@@ -124,8 +124,8 @@ def build():
             d.polygon([(ax + ARROW - 14, cy), (ax + ARROW - 30, cy - 9),
                        (ax + ARROW - 30, cy + 9)], fill=(160, 168, 182))
             label = carries[i]
-            w = d.textlength(label, font=R.F(19))
-            d.text((ax + (ARROW - w) / 2, cy - 38), label, font=R.F(19), fill=(186, 194, 208))
+            w = d.textlength(label, font=R.F(15))
+            d.text((ax + (ARROW - w) / 2, cy - 38), label, font=R.F(15), fill=(186, 194, 208))
     R.OUT.mkdir(parents=True, exist_ok=True)
     canvas.save(R.OUT / '20_pipeline_stages.png')
     print('20_pipeline_stages.png', canvas.size, f'gaps={len(gaps)} status={obs.status}')

@@ -67,7 +67,7 @@ def build():
     to_panel = lambda p: ((p[0] - CROP[0]) * sx, (p[1] - CROP[1]) * sy)
 
     panels = []
-    for params, name, accent in ((frozen, '고정 기준값', R.RED), (derived, '치수 기반 산출값', R.GREEN)):
+    for params, name, accent in ((frozen, '크기와 무관한 고정 기준', R.RED), (derived, '팔레트 치수에 맞춘 기준', R.GREEN)):
         cut = params.floor_z_m
         got, need = evidence(dataclasses.replace(params, seed=0))
         img = Image.open(DATA / SCENE / 'rgb.png').convert('RGB').crop(CROP).resize((PW, PH), Image.LANCZOS)
@@ -105,18 +105,14 @@ def build():
         if board:
             d.text((12, max(4, board[0][1] - 30)), '노란 선: 바닥판 상면 22 mm',
                    font=R.F(18), fill=(240, 200, 120))
-        if line:
-            d.text((12, min(PH - 30, line[0][1] + 10)), f'바닥에서 {cut*1000:.1f} mm 제외',
-                   font=R.F(19), fill=accent)
-
         bar = Image.new('RGB', (PW, BAR), R.BG)
         bd = ImageDraw.Draw(bar)
         bd.rectangle([0, 0, PW, 4], fill=accent)
         ok = got >= need
-        bd.text((14, 16), f'{name} · 바닥에서 {cut*1000:.1f} mm 까지 제외', font=R.F(24), fill=R.FG)
+        bd.text((14, 16), f'{name} · 바닥부터 {cut*1000:.1f} mm 제외', font=R.F(24), fill=R.FG)
         bd.text((14, 56), '바닥판이 제외 구간에 포함된다' if not ok else '바닥판이 남는다',
                 font=R.F(23), fill=accent)
-        bd.text((14, 92), '→ 팔레트로 판정하지 못함' if not ok else '→ 팔레트로 판정',
+        bd.text((14, 92), '→ 팔레트 미검출' if not ok else '→ 팔레트 검출',
                 font=R.F(23), fill=accent)
         cell = Image.new('RGB', (PW, PH + BAR), R.BG)
         cell.paste(img, (0, 0)); cell.paste(bar, (0, PH))
@@ -125,12 +121,12 @@ def build():
 
     GAP, TOP = 12, 92
     W = PW * 2 + GAP
-    canvas, d, _ = R.titled((W, TOP + PH + BAR + 44), '제외 구간과 팔레트 바닥판',
-                            f'촬영 장면 {SCENE} · 색칠한 띠가 제외 구간 · 노란 선이 바닥판 상면')
+    canvas, d, _ = R.titled((W, TOP + PH + BAR + 44), '바닥 제외 높이가 바닥판 인식에 미친 영향',
+                            '같은 Gazebo 합성 장면 · 색칠한 띠는 제외 범위 · 노란 선은 바닥판 위쪽')
     for i, p in enumerate(panels):
         canvas.paste(p, (i * (PW + GAP), TOP))
     d.text((20, TOP + PH + BAR + 12),
-           '팔레트 판정에는 바닥판 관측이 필요하며, 좌측은 그 바닥판이 제외 구간에 포함된다',
+           '팔레트로 판정하려면 바닥판이 보여야 한다 · 왼쪽 기준은 바닥판까지 제외한다',
            font=R.F(21), fill=R.SUB)
     R.OUT.mkdir(parents=True, exist_ok=True)
     canvas.save(R.OUT / '22_floor_cut.png')

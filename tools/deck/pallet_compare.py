@@ -20,7 +20,7 @@ PAYLOAD_KG = 10.0        # 차체 포크 적재 한도
 # 도달률은 ADR 0002 의 후보 표 값을 그대로 쓴다.
 CANDIDATES = [
     ('T11\n국내 표준', 1100, 1100, 19.5, 38, False),
-    ('PA11\nKPP 최소 품목', 1100, 800, 18.0, 53, False),
+    ('PA11\n시장 판매 후보', 1100, 800, 18.0, 53, False),
     ('1회용 수출용', 1100, 740, 6.4, 57, False),
     ('EPAL 6\n유럽 하프', 800, 600, 9.0, 70, False),
     ('T11 × 0.6\n제작', 660, 660, None, 64, True),
@@ -38,8 +38,8 @@ def build():
     tallest = max(d for _, _, d, _, _, _ in CANDIDATES)
     H = TOP + int(tallest * PXMM) + BASE_PAD
     canvas, d, _ = R.titled(
-        (W, H), '포크 도달 깊이 기준 팔레트 후보 비교',
-        f'가로선은 포크 길이 {FORK_MM:.0f} mm · 선 위쪽은 포크가 도달하지 못하는 구간 · 동일 축척')
+        (W, H), '포크 길이와 팔레트 규격 후보 비교',
+        f'모든 후보를 같은 축척으로 표시 · 가로선은 포크 길이 {FORK_MM:.0f} mm · 선 위는 포크가 닿지 않는 깊이')
     base = TOP + int(tallest * PXMM)
     fork_y = base - int(FORK_MM * PXMM)
 
@@ -57,7 +57,7 @@ def build():
         d.rectangle([x, top, x + pw, base],
                     outline=(120, 220, 150) if adopted else (150, 140, 120),
                     width=4 if adopted else 2)
-        label = f'{pct} %'
+        label = f'{pct}%'
         lw = d.textlength(label, font=R.F(28))
         d.text((x + (pw - lw) / 2, (ry + base) / 2 - 20), label, font=R.F(28),
                fill=(245, 240, 230))
@@ -81,7 +81,7 @@ def build():
     d.text((30, fork_y - 34), f'포크 길이 {FORK_MM:.0f} mm', font=R.F(24), fill=(120, 220, 150))
     d.line([(30, base), (W - 30, base)], fill=(150, 158, 172), width=2)
     d.text((30, H - 40),
-           f'하단 선이 포크 삽입면 · 갈색이 포크 도달 구간 · 차체 적재 한도 {PAYLOAD_KG:.0f} kg',
+           f'갈색은 포크가 닿는 깊이 비율(%) · 차체 포크의 적재 한도 {PAYLOAD_KG:.0f} kg',
            font=R.F(21), fill=R.SUB)
     R.OUT.mkdir(parents=True, exist_ok=True)
     canvas.save(R.OUT / '15_pallet_choice.png')

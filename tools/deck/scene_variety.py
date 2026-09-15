@@ -49,8 +49,8 @@ def build():
         (pick('positive', lambda m: pal(m).get('x_m', 0), True), '먼 거리'),
         (pick('positive', lambda m: pal(m).get('x_m', 9)), '가까운 거리'),
         (pick('positive', lambda m: abs(pal(m).get('yaw_rad', 0)), True), '비스듬한 자세'),
-        (pick('occluded'), '기둥에 의한 가림'),
-        (pick('negative_lookalike'), '유사 형상 물체'),
+        (pick('occluded'), '기둥이 일부 가린 장면'),
+        (pick('negative_lookalike'), '팔레트와 비슷한 물체'),
         (pick('negative_no_pallet'), '팔레트 없음'),
     ]
 
@@ -78,7 +78,7 @@ def build():
         d.text((x0 + 10, y0 + 6), label, font=R.F(21), fill=R.FG)
         p = pal(sid and meta[sid])
         if p:
-            extra = f"팔레트까지 {p.get('x_m', 0) - CAM_X - HALF:.2f} m · 틀어진 각 {p.get('yaw_rad', 0)*57.3:+.0f}°"
+            extra = f"카메라–앞면 {p.get('x_m', 0) - CAM_X - HALF:.2f} m · 팔레트 각도 {p.get('yaw_rad', 0)*57.3:+.0f}°"
             d.text((x0 + 10, y0 + 33), extra, font=R.F(17), fill=(150, 156, 168))
         text, colour = verdict(sid)
         w = d.textlength(text, font=R.F(19))

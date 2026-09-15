@@ -90,7 +90,7 @@ def build(frames_n=240):
                     head, detail = _lines(frame)
                     d.text((26, H - BAND + 20), head, font=R.F(34), fill=R.FG)
                     d.text((26, H - BAND + 66), detail, font=R.F(24), fill=(198, 226, 206))
-                    d.text((26, H - 32), '접촉과 화물 하중을 반영하지 않은 동작 미리보기',
+                    d.text((26, H - 32), 'MuJoCo 시각화 · 접촉·하중·실제 주행 제어 미반영',
                            font=R.F(20), fill=R.SUB)
                     # 진행 막대: 지금이 전체 어디쯤인지 한눈에 보이게.
                     t = frame.index / max(1, len(frames) - 1)

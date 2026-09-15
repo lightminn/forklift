@@ -44,9 +44,9 @@ def build():
         bar = Image.new('RGB', (PW, BAR), R.BG)
         d = ImageDraw.Draw(bar)
         d.rectangle([0, 0, PW, 5], fill=accent)
-        d.text((14, 16), f'높이 {z:.2f} m', font=R.F(29), fill=R.FG)
+        d.text((14, 16), f'카메라 높이 {z:.2f} m', font=R.F(29), fill=R.FG)
         d.text((14, 54), label, font=R.F(21), fill=accent)
-        d.text((14, 86), f'검출 가능한 최근접 거리 {limit:.2f} m', font=R.F(22), fill=(192, 198, 210))
+        d.text((14, 86), f'포켓이 검출된 가장 가까운 거리 {limit:.2f} m', font=R.F(21), fill=(192, 198, 210))
         cell = Image.new('RGB', (PW, img.height + BAR), R.BG)
         cell.paste(img, (0, 0))
         cell.paste(bar, (0, img.height))
@@ -55,15 +55,15 @@ def build():
     GAP, TOP = 8, 96
     W = PW * len(panels) + GAP * (len(panels) - 1)
     body_h = panels[0][0].height
-    canvas, d, _ = R.titled((W, TOP + body_h + 108), '카메라 설치 높이별 근거리 인식 한계',
-                            '거리는 카메라에서 팔레트 전면까지 · 주황은 카메라의 수직 관측 범위')
+    canvas, d, _ = R.titled((W, TOP + body_h + 108), '카메라 높이별 가까운 거리의 포켓 인식 결과',
+                            '거리는 카메라–팔레트 앞면 기준 · 주황색은 카메라의 수직 관측 범위')
     for i, (cell, gap_mm, points, accent) in enumerate(panels):
         x = i * (PW + GAP)
         canvas.paste(cell, (x, TOP))
         y = TOP + body_h + 12
-        d.text((x + 14, y), f'검출 중단 시 포크 끝에서 {gap_mm:.0f} mm 잔여',
+        d.text((x + 14, y), f'검출 중단 시 포크 끝–팔레트 앞면 {gap_mm:.0f} mm',
                font=R.F(23), fill=accent)
-        d.text((x + 14, y + 36), f'정면 {SWEEP}자세 중 {points}자세 검출',
+        d.text((x + 14, y + 36), f'정면 합성 자세 {SWEEP}개 중 {points}개 검출',
                font=R.F(21), fill=R.SUB)
     R.OUT.mkdir(parents=True, exist_ok=True)
     canvas.save(R.OUT / '13_camera_mount.png')

@@ -88,11 +88,11 @@ def build():
         rng = pose['x_m'] - CAM_X - HALF
         canvas = Image.new('RGB', (W, BAR + PH + STRIP), R.BG)
         d = ImageDraw.Draw(canvas)
-        label = f'동일 접근 주행 · 팔레트 전면까지 {rng:4.2f} m'
+        label = f'같은 합성 접근 자세 · 카메라–팔레트 앞면 거리 {rng:4.2f} m'
         d.text(((W - d.textlength(label, font=f_d)) / 2, 10), label, font=f_d, fill=R.FG)
         for k, (img, ok, name, accent) in enumerate((
-                (left, lok, f'고정 기준값 · 바닥에서 {frozen.floor_z_m*1000:.0f} mm 제외', R.RED),
-                (right, rok, f'치수 기반 산출값 · 바닥에서 {derived.floor_z_m*1000:.1f} mm 제외', R.GREEN))):
+                (left, lok, f'고정 기준 · 바닥부터 {frozen.floor_z_m*1000:.0f} mm 제외', R.RED),
+                (right, rok, f'치수에 맞춘 기준 · 바닥부터 {derived.floor_z_m*1000:.1f} mm 제외', R.GREEN))):
             x0 = k * (PW + GAP)
             canvas.paste(img, (x0, BAR))
             d.rectangle([x0, BAR - 4, x0 + PW, BAR], fill=R.GREEN if ok else R.RED)
