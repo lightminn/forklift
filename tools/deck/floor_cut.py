@@ -111,11 +111,12 @@ def build():
         bar = Image.new('RGB', (PW, BAR), R.BG)
         bd = ImageDraw.Draw(bar)
         bd.rectangle([0, 0, PW, 4], fill=accent)
+        ok = got >= need
         bd.text((14, 16), f'{name} · 바닥에서 {cut*1000:.1f} mm 아래를 버린다', font=R.F(24), fill=R.FG)
-        bd.text((14, 56), f'남은 바닥판 증거 {got}개 · 팔레트로 인정하려면 {need}개 필요',
+        bd.text((14, 56), '팔레트 바닥판이 그 안에 들어간다' if not ok else '팔레트 바닥판이 남는다',
                 font=R.F(23), fill=accent)
-        bd.text((14, 92), '충족 → 팔레트로 인정' if got >= need else '미달 → 팔레트가 아니라고 판단',
-                font=R.F(22), fill=accent)
+        bd.text((14, 92), '→ 팔레트가 아니라고 판단' if not ok else '→ 팔레트로 인정',
+                font=R.F(23), fill=accent)
         cell = Image.new('RGB', (PW, PH + BAR), R.BG)
         cell.paste(img, (0, 0)); cell.paste(bar, (0, PH))
         panels.append(cell)
@@ -128,7 +129,7 @@ def build():
     for i, p in enumerate(panels):
         canvas.paste(p, (i * (PW + GAP), TOP))
     d.text((20, TOP + PH + BAR + 12),
-           '팔레트로 인정하려면 바닥판이 보여야 하는데, 왼쪽은 그 바닥판이 버리는 띠 안에 들어간다',
+           '팔레트인지 판단하려면 바닥판이 보여야 한다 · 왼쪽은 그 바닥판이 버리는 띠 안에 들어간다',
            font=R.F(21), fill=R.SUB)
     R.OUT.mkdir(parents=True, exist_ok=True)
     canvas.save(R.OUT / '22_floor_cut.png')
