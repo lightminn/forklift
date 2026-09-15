@@ -34,6 +34,7 @@ ZOOM = 3.0            # 바닥 띠 확대 배율
 
 
 def front_face_line(pose, prior, geometry_depth, geometry_width, z, scene, samples=40):
+    # prior 는 쓰지 않지만 호출부 호환을 위해 자리를 남긴다.
     """팔레트 앞면을 따라 높이 z 를 지나는 선을 영상에 투영한다."""
     yaw = pose['yaw_rad']
     c, s = math.cos(yaw), math.sin(yaw)
