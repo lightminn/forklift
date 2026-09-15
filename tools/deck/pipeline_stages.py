@@ -73,13 +73,15 @@ def build():
     panels.append(img)
 
     img, d = panel('② 팔레트가 있을 범위만 남기기', f'{len(points):,} 점 중 {len(workspace):,} 점')
-    scatter(d, points[::3], DIM)
+    scatter(d, points[::3], (48, 52, 62))
     scatter(d, workspace, (72, 200, 120))
+    d.text((12, 12), '초록 = 남긴 점', font=R.F(17), fill=(72, 200, 120))
     panels.append(img)
 
     img, d = panel('③ 수직으로 선 면 찾기', f'점과 면의 어긋남 {plane.residual_p95_m*1000:.1f} mm')
-    scatter(d, workspace, DIM)
-    scatter(d, plane.points, R.AMBER)
+    scatter(d, workspace, (52, 56, 66))
+    scatter(d, plane.points, R.AMBER, size=2)
+    d.text((12, 12), '주황 = 팔레트 앞면', font=R.F(17), fill=R.AMBER)
     panels.append(img)
 
     img, d = panel('④ 기둥과 빈 칸 구분',

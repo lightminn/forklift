@@ -82,8 +82,13 @@ def build():
     pu, pv = to_px(PALLET[0], PALLET[1])
     td.rectangle([pu - 0.30 * PXPM, pv - 0.40 * PXPM, pu + 0.30 * PXPM, pv + 0.40 * PXPM],
                  outline=(212, 170, 96), width=2)
-    td.text((pu - 0.30 * PXPM, pv + 0.40 * PXPM + 4), '팔레트 위치', font=R.F(16),
+    td.text((pu - 0.30 * PXPM, pv + 0.40 * PXPM + 4), '팔레트 · 반사 없음', font=R.F(16),
             fill=(212, 170, 96))
+    # 무엇이 찍힌 점인지 이름을 붙인다
+    for wx, wy, text, dx, dy in ((5.6, -0.9, '벽', 10, -8), (2.6, 2.55, '벽', -10, -24),
+                                 (3.4, -1.6, '상자', 8, 4), (1.9, 1.25, '기둥', 8, -22)):
+        u, v = to_px(wx, wy)
+        td.text((u + dx, v + dy), text, font=R.F(17), fill=(150, 190, 235))
 
     GAP, TOP, BAR = 14, 96, 92
     W = side.width + GAP + PW
