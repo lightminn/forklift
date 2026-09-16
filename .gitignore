@@ -33,6 +33,7 @@ venv/
 .direnv/
 .idea/
 .vscode/
+/.playwright-mcp/
 /ENV.md
 /ENV.local.md
 .DS_Store
