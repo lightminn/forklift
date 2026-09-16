@@ -82,8 +82,8 @@ def build():
         label = f'같은 합성 접근 자세 · 카메라–팔레트 앞면 거리 {rng:4.2f} m'
         d.text(((W - d.textlength(label, font=f_d)) / 2, 10), label, font=f_d, fill=R.FG)
         for k, (img, ok, name, accent) in enumerate((
-                (left, lok, '고정 기준 · 처음 개발에 쓴 형상에 맞춘 값', R.RED),
-                (right, rok, '치수에 맞춘 기준 · 팔레트 규격에서 계산', R.GREEN))):
+                (left, lok, '① 고정 기준값', R.RED),
+                (right, rok, '② 치수 기반 산출 · 채택', R.GREEN))):
             x0 = k * (PW + GAP)
             canvas.paste(img, (x0, BAR))
             d.rectangle([x0, BAR - 4, x0 + PW, BAR], fill=R.GREEN if ok else R.RED)
