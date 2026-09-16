@@ -136,6 +136,31 @@ def cmd_evidence(args) -> int:
         oth_hi = max((cells[(x, y, other)]["ratio"] for x, y in [(p[0], p[1]) for p in pairs]))
         print(f"    fixed threshold: {ref} min {ref_lo:.3f} vs {other} max {oth_hi:.3f}"
               f" -> {'SEPARABLE' if ref_lo > oth_hi else 'OVERLAP'}")
+    # A threshold conditioned only on range sees min-over-yaw(ref) - max-over-yaw(other),
+    # which is NOT the cell-wise minimum.  Revision 28 quoted the cell-wise figure as if
+    # it were the range-conditioned one; they differ by up to 1.6x.
+    print(f"\n# range-conditioned margins (a threshold tau(x) only knows x)")
+    for other in others:
+        row_all, row_pass = [], []
+        for x in xs:
+            r = [cells[(x, y, ref)] for y in yaws if (x, y, ref) in cells]
+            o = [cells[(x, y, other)] for y in yaws if (x, y, other) in cells]
+            if not r or not o:
+                continue
+            row_all.append((x, min(c["ratio"] for c in r) - max(c["ratio"] for c in o)))
+            rp = [c for c in r if c["pass"]]
+            op = [c for c in o if c["pass"]]
+            if rp and op:
+                row_pass.append((x, min(c["ratio"] for c in rp) - max(c["ratio"] for c in op)))
+        if row_all:
+            w = min(row_all, key=lambda p: p[1])
+            print(f"{ref} vs {other}: worst {w[1]:+.3f} at x={w[0]}"
+                  f"   per x: " + " ".join(f"{x}:{m:+.3f}" for x, m in row_all))
+        if row_pass:
+            w = min(row_pass, key=lambda p: p[1])
+            print(f"{'':>{len(ref) + len(other) + 4}} gate-passing worst {w[1]:+.3f} at x={w[0]}"
+                  f"   per x: " + " ".join(f"{x}:{m:+.3f}" for x, m in row_pass))
+
     rejected = [(x, y) for x in xs for y in yaws
                 if (x, y, ref) in cells and cells[(x, y, ref)]["pass"] is False]
     print(f"gate-rejected ({ref}): {len(rejected)} cells -> {rejected}")
