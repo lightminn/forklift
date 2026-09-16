@@ -142,7 +142,7 @@
 | dev/eval 42/42·18/18 | `docs/validation/2026-09-14-epal6-capture-and-evaluation.md` §3 |
 | **장착별 근접 한계(실거리)** | 아래 (1) |
 | LiDAR 161회 / 32.0초, 기록 재생 일치 | `docs/validation/2026-09-10-gazebo-sensor-baseline.md` |
-| **2D LiDAR 팔레트 반사 0점 / 53점** | 2026-09-15, MuJoCo `mj_ray` 360빔·8 m, 같은 장면에서 높이만 0.50 / 0.10 m |
+| **2D LiDAR 팔레트 반사 0점 / 53점** | 2026-09-15, MuJoCo `mj_ray` 720빔·8 m, 같은 장면에서 높이만 0.50 / 0.10 m |
 
 ### 발표에 넣기 전에 바로잡은 것 셋
 
