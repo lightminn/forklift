@@ -48,6 +48,12 @@ BACK_WALL_X_M = 6.0
 OPTICAL_FRAME_ID = "camera_optical_frame"
 BASE_FRAME_ID = "base_link"
 QUANTIZE_STEP_M = 0.001
+# Axial depth noise, off by default so every committed figure keeps reproducing.
+# A real D435i's dominant error is noise, not quantisation: the datasheet's ~2 % of
+# range is 40 mm at 2 m against a 5.4 mm disparity step (tools/depth_quantisation_model.py),
+# so a rig with only rounding omits the larger term.  sigma(z) = NOISE_K * z^2 is the
+# usual stereo form; NOISE_K = 0.002 reproduces "2 mm at 1 m", and 0.005 is ~2 % at 4 m.
+DEFAULT_NOISE_K = 0.0
 
 
 class Box(NamedTuple):
@@ -143,6 +149,8 @@ def render(
     quantize: bool = True,
     floor: bool = True,
     back_wall: bool = True,
+    noise_k: float = DEFAULT_NOISE_K,
+    noise_seed: int = 0,
 ) -> SceneInput:
     """First-hit depth of ``boxes`` over the floor and back wall.
 
@@ -174,6 +182,13 @@ def render(
         )
         depth = np.fmin(depth, hit)
     depth = np.where(np.isfinite(depth), depth, np.nan)
+    if noise_k:
+        # Noise is applied before quantisation because that is the physical order:
+        # the stereo match is noisy, then the ASIC rounds it.
+        rng = np.random.default_rng(noise_seed)
+        finite = np.isfinite(depth)
+        sigma = noise_k * np.square(np.where(finite, depth, 0.0))
+        depth = np.where(finite, depth + rng.normal(0.0, 1.0, depth.shape) * sigma, depth)
     if quantize:
         depth = np.round(depth / QUANTIZE_STEP_M) * QUANTIZE_STEP_M
     rgb = np.zeros((spec.height, spec.width, 3), dtype=np.uint8)
