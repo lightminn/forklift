@@ -127,7 +127,7 @@ def build():
 
     W = SW + 2 * PW + 2 * GAP
     canvas, d, TOP = R.titled((W, 92 + PH + BAR + 8), '거리별 앞면 관측 여부와 검출 판정',
-                              f'카메라 높이 {CAM_Z:.2f} m 고정 · 정면 합성 자세 · '
+                              f'카메라 높이 {CAM_Z:.2f} m 고정 · 정면 자세 · '
                               '깊이 영상과 검출 판정에 같은 카메라 모형 사용')
     x = 0
     for p in panels:

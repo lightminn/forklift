@@ -21,8 +21,8 @@ import render as R  # noqa: E402
 PRESENTATION = R.ROOT.parent / 'forklift-presentations'
 SOURCE_REV = 'ba3c0b840d75eb1b334a8cc3e9ba93f3efacde98'
 CLIPS = (
-    ('11_gazebo_approach.mp4', 'Gazebo 합성 카메라 · 초록: 정답 · 자홍: 검출 위치'),
-    ('14_external_approach.mp4', 'MuJoCo 외부 시점 · 왼쪽과 같은 자세 · 실제 주행 아님'),
+    ('11_gazebo_approach.mp4', 'Gazebo 카메라 · 초록: 정답 · 자홍: 검출 위치'),
+    ('14_external_approach.mp4', 'MuJoCo 외부 시점 · 왼쪽과 같은 자세'),
 )
 
 

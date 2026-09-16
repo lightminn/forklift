@@ -79,7 +79,7 @@ def build():
         rng = pose['x_m'] - CAM_X - HALF
         canvas = Image.new('RGB', (W, BAR + PH + STRIP), R.BG)
         d = ImageDraw.Draw(canvas)
-        label = f'같은 합성 접근 자세 · 카메라–팔레트 앞면 거리 {rng:4.2f} m'
+        label = f'같은 접근 자세 · 카메라–팔레트 앞면 거리 {rng:4.2f} m'
         d.text(((W - d.textlength(label, font=f_d)) / 2, 10), label, font=f_d, fill=R.FG)
         for k, (img, ok, name, accent) in enumerate((
                 (left, lok, '① 고정 기준값', R.RED),

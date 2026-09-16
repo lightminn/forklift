@@ -95,7 +95,7 @@ def build():
     W = side.width + GAP + PW
     canvas, d, _ = R.titled((W, TOP + max(side.height, PH) + BAR + 36),
                             '2D LiDAR 관측 평면과 팔레트 높이',
-                            '수평 360° 가상 거리 측정 (MuJoCo) · 차체 반사 제외')
+                            '수평 360° 거리 측정 (MuJoCo) · 차체 반사 제외')
     canvas.paste(side, (0, TOP))
     canvas.paste(top, (side.width + GAP, TOP))
     d = ImageDraw.Draw(canvas)
