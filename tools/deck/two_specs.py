@@ -144,7 +144,11 @@ def build():
 
     out = R.OUT / '05_two_specs.mp4'
     R.OUT.mkdir(parents=True, exist_ok=True)
-    subprocess.run(['ffmpeg', '-y', '-loglevel', 'error', '-framerate', '8',
+    # 101 자세를 8 fps 로 내보내면 12.6 초다. 발표에서 그 장면 앞에 12 초를
+    # 머무르지 않으므로 절반만 보고 넘어간다. 16 fps 로 두 배 빠르게 재생하면
+    # 6.3 초라 배정 시간 안에 한 바퀴가 다 돈다 — 접근이 끝까지 이어지는 것이
+    # 이 화면의 요지이므로 한 바퀴를 다 보이는 쪽이 맞다.
+    subprocess.run(['ffmpeg', '-y', '-loglevel', 'error', '-framerate', '16',
                     '-i', str(frames_dir / '%04d.png'), '-c:v', 'libx264',
                     '-pix_fmt', 'yuv420p', '-crf', '18',
                     '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2', str(out)], check=True)
