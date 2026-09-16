@@ -110,7 +110,9 @@ def build():
         d = ImageDraw.Draw(img)
         colour = R.GREEN if found else R.RED
         d.rectangle([0, PH, PW, PH + 5], fill=colour)
-        d.text((14, 12), '주황: 팔레트 · 회색: 바닥과 벽', font=R.F(20), fill=(230, 230, 230))
+        # 범례는 두 패널이 같으므로 첫 패널에만 단다.
+        if distance == DISTANCES[0]:
+            d.text((14, 12), '주황: 팔레트 · 회색: 바닥과 벽', font=R.F(20), fill=(230, 230, 230))
         d.text((16, PH + 18), f'카메라–앞면 {distance:.2f} m · 깊이 영상', font=R.F(28), fill=R.FG)
         d.text((16, PH + 58),
                '앞면과 포켓이 화면에 보인다' if found
