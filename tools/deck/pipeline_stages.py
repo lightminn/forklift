@@ -131,7 +131,7 @@ def build():
     TOP = 100
     W = len(panels) * PW + (len(panels) - 1) * ARROW
     H = TOP + PH + BAR + 10
-    canvas, d, _ = R.titled((W, H), '포켓 위치를 찾는 네 단계',
+    canvas, d, _ = R.titled((W, H), '단계별 중간 결과',
                             '앞 단계의 결과를 다음 단계에 전달 · 학습 모델 대신 팔레트 치수와 형상 규칙 사용')
     for i, p in enumerate(panels):
         x = i * (PW + ARROW)

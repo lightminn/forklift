@@ -100,7 +100,7 @@ def build():
     W = PW * len(panels) + GAP * (len(panels) - 1)
     body_h = panels[0].height
     canvas, d, _ = R.titled((W, TOP + body_h + 16),
-                            '장착 높이 0.27 / 0.50 / 0.90 m 의 근거리 관측 비교',
+                            '설치 높이 0.27 / 0.50 / 0.90 m 의 근거리 관측 비교',
                             f'그림은 세 패널 모두 카메라–앞면 {SHOWN_M:.2f} m · '
                             f'수치는 {NEAR:.1f}~{FAR:.1f} m 를 {STEP * 100:.0f} cm 간격으로 훑은 결과 · '
                             '주황색은 카메라의 수직 관측 범위')

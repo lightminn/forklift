@@ -82,7 +82,8 @@ def build():
     pu, pv = to_px(PALLET[0], PALLET[1])
     td.rectangle([pu - 0.30 * PXPM, pv - 0.40 * PXPM, pu + 0.30 * PXPM, pv + 0.40 * PXPM],
                  outline=(212, 170, 96), width=2)
-    td.text((pu - 0.30 * PXPM, pv + 0.40 * PXPM + 4), f'팔레트 · 측정점 {on_pallet}개', font=R.F(16),
+    # 개수는 아래 띠가 '측정점 298개 중 팔레트 0개' 로 말한다. 여기서는 위치만 가리킨다.
+    td.text((pu - 0.30 * PXPM, pv + 0.40 * PXPM + 4), '팔레트', font=R.F(16),
             fill=(212, 170, 96))
     # 무엇이 찍힌 점인지 이름을 붙인다
     for wx, wy, text, dx, dy in ((5.6, -0.9, '벽', 10, -8), (2.6, 2.55, '벽', -10, -24),
@@ -101,7 +102,7 @@ def build():
     y = TOP + max(side.height, PH)
     d.rectangle([0, y + 8, side.width, y + 12], fill=(96, 164, 232))
     d.text((6, y + 24), '옆에서 본 모습 · 하늘색은 거리 측정 높이', font=R.F(21), fill=R.FG)
-    d.text((6, y + 56), f'측정 높이 {SENSOR_Z * 1000:.0f} mm · 팔레트 높이 144 mm', font=R.F(21), fill=R.SUB)
+    d.text((6, y + 56), f'설치 높이 {SENSOR_Z:.2f} m · 팔레트 높이 0.144 m', font=R.F(21), fill=R.SUB)
     x2 = side.width + GAP
     d.rectangle([x2, y + 8, W, y + 12], fill=R.RED)
     d.text((x2 + 6, y + 24), f'위에서 본 모습 · 측정점 {len(hits)}개 중 팔레트 {on_pallet}개',
