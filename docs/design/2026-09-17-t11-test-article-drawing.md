@@ -211,10 +211,12 @@ python tools/build_t11_drawing.py --opening-reading 350 --scale 0.6 \
   통과, 같은 파일에 `python -m ruff format --check` 실행 결과 **2 files already formatted**.
 - 두 CLI 호출 모두 성공했고 각 묶음의 SVG·치수표·차이표·기하 사본·JSON을 확인했다.
   두 묶음을 각각 별도 임시 경로에서 다시 생성했을 때 **각 5개 파일이 바이트 단위로 같았다**.
-  `verification.json`이 기록하는 SHA-256도 현재 파일과 대조해 일치했다.
+  `verification.json`이 기록하는 SHA-256은 **생성 당시** 현재 파일과 일치했다.
+  ⚠️ **2026-09-17 이후로는 일치하지 않는다** — ADR 0002·0003 을 뒤이어 고쳤기 때문에 저장된
+  해시가 작업트리와 어긋난다. **해시 재생성이 필요하다.**
   ⚠️ **그 해시 목록은 전이적 closure 가 아니다.** `build_t11_drawing.py:1025-1034` 가 여덟 파일을
   명시적으로 나열한다 — 입력 기하·`parameters.yaml`·prior·ADR 0002·ADR 0003·`pallet_geometry.py`·
-  `build_pallet_model.py`·생성기 자신. **계산에 직접 쓰는 `pallet_prior.py` 는 목록에 없다.**
+  `build_pallet_model.py`·생성기 자신. **계산에 직접 쓰는 `pallet_prior.py` 도, 삽입 규칙의 현행 정본인 [ADR 0004](../decisions/0004-simulation-engine-and-insertion-depth.md) 도 목록에 없다** — 생성기는 삽입 규칙을 상수로 구현하고 출처를 ADR 0003 의 고정 360 mm 줄에 연결했다. **ADR 0004 의 규칙이 바뀌어도 이 해시 closure 는 감지하지 못한다.**
   산출 수치는 검산으로 확인했으나 "모든 코드를 해시했다"는 주장은 성립하지 않는다.
 - 실제 SVG 렌더: `rsvg-convert .../reading_235/drawing.svg -o /tmp/t11_final_235.png`,
   `rsvg-convert .../reading_350/drawing.svg -o /tmp/t11_final_350.png`가 모두 성공했다.
