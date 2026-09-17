@@ -1,5 +1,8 @@
 # ADR 0003 독립 검토 루프 — 중간 인계 (2026-09-16)
 
+> **후속 인계(2026-09-17):** [EPAL 6·T11 공통 지원 및 Isaac/Pro 검토](2026-09-17-dual-pallet-isaac-review-handoff.md)를 먼저 읽는다. 아래는 17회차 중단 당시의 역사적 기록이다. 두 형상 택일 제안, 실센서 잡음 실패·장착 불가능 단정은 후속 인계에서 정정했으며, 원격 GT 임무 시연과 기존 EPAL 평가의 범위도 그 문서에 정리했다.
+
+
 17 회차 진행 중 중단. **다음 검토자(Codex / Claude / 사람)가 맥락 없이 이어받을 수 있게 쓴 문서다.**
 대상: [`docs/decisions/0003-target-selection-and-blind-zone-insertion.md`](../decisions/0003-target-selection-and-blind-zone-insertion.md) (166 KB, 개정 30).
 

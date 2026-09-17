@@ -48,6 +48,8 @@ python examples/sensor_geometry.py
 
 ## 중간 정리와 전체 로드맵
 
+**최신 인계(2026-09-17): [EPAL 6·T11 공통 지원 / Isaac Sim·Pro 검토](docs/validation/2026-09-17-dual-pallet-isaac-review-handoff.md).** 기존 합성 인식·원격 GT 운반 실험, 두 형상 지원 요구, 남은 검증과 재개 순서를 정리했다. 아래 9월 10–11일 수치와 상태는 당시 기록이다.
+
 **[2026-09-11 개발 중간 정리](docs/validation/2026-09-11-development-checkpoint.md)**에서 구현·검증·미완료 범위와 원본 증거를 확인한다. **[전체 개발 로드맵](docs/plans/2026-09-11-development-roadmap.md)**은 15주 수업 중 시험·공휴일을 제외한 유효 개발 약 12주를 기준으로 한다.
 
 구조 전환은 호스트·wheel·컨테이너·원격에서 동등성을 확인했다([검증 기록](docs/validation/2026-09-11-src-layout-migration.md)). 다음 순서는 다양한 합성 장면·포켓 관측 계약 → RGB-D 기반 포켓 위치 추정·추적이다. 실물 조사·센서 보정·하위 제어를 병행하고, 기구·정지 검증 후 주행을 연결한다. A 직진 조건의 삽입·적재·이송·하역을 먼저 완성한 뒤 B 곡선 접근, C 후진 접근, D 후방 장애물 조건으로 확장한다.
