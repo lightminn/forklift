@@ -161,13 +161,21 @@ def seed_pass(
     rule: str,
     seeds: int,
     truth: np.ndarray | None = None,
+    render_for_seed=None,
 ) -> tuple[int, float, str | None]:
-    """Return (valid seeds, worst position error over valid seeds, top reason)."""
+    """Return (valid seeds, worst position error over valid seeds, top reason).
+
+    ``render_for_seed(seed)`` re-renders the scene per trial.  It is needed only when
+    the rig adds noise: without it every trial would share one noise draw, so the
+    result would measure RANSAC variance and not the sensor's.  With noise off the
+    scene is reused and the figures are byte-identical to before.
+    """
     valid = 0
     worst = 0.0
     reasons: dict[str, int] = {}
     for seed in range(seeds):
-        result = detect(scene, prior, dataclasses.replace(params, seed=seed), rule)
+        trial = render_for_seed(seed) if render_for_seed is not None else scene
+        result = detect(trial, prior, dataclasses.replace(params, seed=seed), rule)
         observation = result.observation
         if observation.status == "valid":
             valid += 1
@@ -208,6 +216,14 @@ def add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--camera-tilt", type=float, default=0.0, help="Radians, positive downwards"
     )
+    parser.add_argument(
+        "--noise-k",
+        type=float,
+        default=0.0,
+        help="Axial depth noise sigma(z) = k * z^2, applied before quantisation. "
+        "0 (default) keeps every committed figure reproducing; 0.002 is 2 mm at 1 m.",
+    )
+    parser.add_argument("--noise-seed", type=int, default=0)
     parser.add_argument(
         "--no-quantize",
         dest="quantize",
@@ -268,12 +284,26 @@ def cmd_grid(args) -> int:
                     scene_rig.place(boxes, x_m=x, y_m=y, yaw_rad=yaw),
                     camera=camera,
                     quantize=args.quantize,
+                    noise_k=args.noise_k,
+                    noise_seed=args.noise_seed,
                 )
                 truth = scene_rig.true_pockets(
                     geometry, x_m=x, y_m=y, yaw_rad=yaw
                 )
+                placed = scene_rig.place(boxes, x_m=x, y_m=y, yaw_rad=yaw)
+                per_seed = (
+                    (lambda s: scene_rig.render(
+                        placed,
+                        camera=camera,
+                        quantize=args.quantize,
+                        noise_k=args.noise_k,
+                        noise_seed=args.noise_seed + s,
+                    ))
+                    if args.noise_k
+                    else None
+                )
                 valid, worst, reason = seed_pass(
-                    scene, prior, params, args.rule, args.seeds, truth
+                    scene, prior, params, args.rule, args.seeds, truth, per_seed
                 )
                 if valid == 0:
                     dead += 1
@@ -307,6 +337,8 @@ def cmd_evidence(args) -> int:
         ),
         camera=camera,
         quantize=args.quantize,
+        noise_k=args.noise_k,
+        noise_seed=args.noise_seed,
     )
     points, _ = detector._base_points(scene)
     cam = scene.base_from_optical.translation_m
@@ -383,6 +415,8 @@ def _evidence_sweep(args, geometry, prior, params, camera) -> int:
             scene_rig.place(boxes, x_m=x, y_m=args.y, yaw_rad=args.yaw),
             camera=camera,
             quantize=args.quantize,
+            noise_k=args.noise_k,
+            noise_seed=args.noise_seed,
         )
         points, _ = detector._base_points(scene)
         cam = scene.base_from_optical.translation_m
@@ -462,6 +496,8 @@ def cmd_planes(args) -> int:
             scene_rig.place(boxes, x_m=x, y_m=args.y, yaw_rad=args.yaw),
             camera=camera,
             quantize=args.quantize,
+            noise_k=args.noise_k,
+            noise_seed=args.noise_seed,
         )
         points, _ = detector._base_points(scene)
         cam = scene.base_from_optical.translation_m
@@ -541,7 +577,7 @@ def cmd_zcut(args) -> int:
         placed = scene_rig.place(
             boxes, x_m=args.x, y_m=args.y, yaw_rad=args.yaw
         ) + [obstruction]
-        scene = scene_rig.render(placed, camera=camera, quantize=args.quantize)
+        scene = scene_rig.render(placed, camera=camera, quantize=args.quantize, noise_k=args.noise_k, noise_seed=args.noise_seed)
         points, _ = detector._base_points(scene)
         cam = scene.base_from_optical.translation_m
         workspace = detector._filter_workspace(points, cam, prior, params)
@@ -577,6 +613,8 @@ def cmd_structures(args) -> int:
                 scene_rig.place(structure(geometry, name), x_m=x),
                 camera=camera,
                 quantize=args.quantize,
+                noise_k=args.noise_k,
+                noise_seed=args.noise_seed,
             )
             valid, _, _ = seed_pass(scene, prior, params, args.rule, args.seeds)
             row.append(f"{valid:4d}/{args.seeds:<2d}".rjust(10))
@@ -614,7 +652,9 @@ def cmd_fov(args) -> int:
     print(f"\n{'x_m':>7s} {'valid':>7s} {'band_px':>9s} {'deck_px':>9s}  reason")
     for x in arange(args.distances):
         scene = scene_rig.render(
-            scene_rig.place(boxes, x_m=x), camera=camera, quantize=args.quantize
+            scene_rig.place(boxes, x_m=x), camera=camera, quantize=args.quantize,
+            noise_k=args.noise_k,
+            noise_seed=args.noise_seed,
         )
         points, _ = detector._base_points(scene)
         finite = points[np.isfinite(points).all(axis=1)]
@@ -693,6 +733,8 @@ def cmd_poses(args) -> int:
             scene_rig.place(boxes, x_m=x, y_m=y, yaw_rad=yaw),
             camera=camera,
             quantize=args.quantize,
+            noise_k=args.noise_k,
+            noise_seed=args.noise_seed,
         )
         truth = scene_rig.true_pockets(geometry, x_m=x, y_m=y, yaw_rad=yaw)
         valid, worst, _ = seed_pass(
