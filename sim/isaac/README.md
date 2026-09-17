@@ -42,15 +42,27 @@ controller experiment, not hardware acceptance.
 Isaac Sim work for this project. [ADR 0004](../../docs/decisions/0004-simulation-engine-and-insertion-depth.md)
 makes Isaac the designated engine for new dynamic simulation (M4–M6); Gazebo is
 frozen rather than deleted, and `tools/scene_rig.py` and MuJoCo stay as CPU
-fixtures. Nothing in this directory is an approved milestone baseline yet: the
-remote `bench03` mission code is still to be brought in under D2, with its
-interpreter path, extension cache and transitive source hashes in the manifest.
+fixtures. Nothing in this directory is an approved milestone baseline yet.
+
+The `bench03` mission code came in with PR #1 (`a3eb2c1`, 2026-09-17), so it can
+be reviewed and its CPU tests run from a clone. **D2 is not finished.** Still
+outstanding: `deploy/isaac/`, the procedure for rebuilding the external base
+scene this directory expects, and the manifest D2 asks for -- interpreter path,
+extension cache, asset revision, driver and GPU SKU, and hashes of every
+transitively imported source (`run_transport.py` currently hashes the three
+adapters plus `control/` and `planning/`, which leaves out `forklift_core`'s own
+`geometry.py` and `_validation.py`). There is also **no negative-scene capture
+path**: the transport run writes an overhead RGBA video, not an RGB-D/TF dataset
+in the `scene_dataset` v1 format that ADR 0004 D5 and D6 need.
 
 ## What is here
 
 | 파일 | 하는 일 |
 |---|---|
 | `determinism_probe.py` | 같은 장면의 깊이 영상이 프로세스를 새로 띄워도 비트 단위로 같은지 잰다 |
+| `run_transport.py` | Hybrid A* 운반 임무를 Isaac 에서 실행하고 기록한다 (PR #1) |
+| `scene.py` | 운반 장면을 구성한다 — 외부 base scene 을 전제로 한다 (PR #1) |
+| `insertion_geometry.py` | 포크·팔레트 박스의 **순간** 여유를 기하로 검사한다. PhysX 접촉력도, 갱신 사이의 연속 비접촉도 증명하지 않는다 (PR #1) |
 
 ## 실행
 
