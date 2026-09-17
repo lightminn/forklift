@@ -1,0 +1,706 @@
+"""Physical Hybrid A* pallet transport using official warehouse props.
+
+Run with Isaac Sim's Python after installing forklift-core in that environment.
+All pose feedback is simulator ground truth; configuration is synthetic. Camera
+output is 60fps by default, and the floor destination is marked by a green ring.
+"""
+
+import argparse
+import hashlib
+import json
+import math
+import subprocess
+import sys
+import time
+import traceback
+from dataclasses import asdict
+from pathlib import Path
+
+import numpy as np
+
+
+def record_json(value: object, *, indent: int | None = None) -> str:
+    """Encode simulator numerical records without coercing numbers to strings."""
+
+    def native(value: object) -> object:
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+        if isinstance(value, np.generic):
+            return value.item()
+        raise TypeError(f"Unsupported record type: {type(value).__name__}")
+
+    return json.dumps(value, default=native, indent=indent, allow_nan=False)
+
+
+def camera_hz(value: str) -> int:
+    """Camera sample period must divide the 120Hz physics time step."""
+    rate = int(value)
+    if rate <= 0 or 120 % rate:
+        raise argparse.ArgumentTypeError(
+            "camera frequency must be positive and divide 120"
+        )
+    return rate
+
+
+def arguments() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--base-scene", required=True)
+    parser.add_argument("--pallet-urdf", type=Path, required=True)
+    parser.add_argument(
+        "--forklift-urdf",
+        type=Path,
+        default=Path(__file__).resolve().parent.parent
+        / "models/dls08_provisional/forklift.urdf",
+    )
+    parser.add_argument("--settings", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--seed", type=int, required=True)
+    parser.add_argument("--obstacles", type=int, default=4)
+    parser.add_argument("--fps", type=camera_hz, default=60)
+    parser.add_argument("--video", action="store_true")
+    parser.add_argument("--max-sim-seconds", type=float, default=300)
+    parser.add_argument(
+        "--asset-root",
+        default=(
+            "https://omniverse-content-production.s3-us-west-2.amazonaws.com/"
+            "Assets/Isaac/5.1/Isaac/Environments/Simple_Warehouse/Props"
+        ),
+    )
+    args, unknown = parser.parse_known_args()
+    if args.obstacles < 1 or args.max_sim_seconds <= 0:
+        parser.error("obstacles and max-sim-seconds must be positive")
+    # Kit's --portable-root and related application arguments are consumed by Kit.
+    args.kit_arguments = unknown
+    return args
+
+
+def yaw_and_tilt(quaternion: np.ndarray) -> tuple[float, float]:
+    """Return world yaw and z-axis tilt from scalar-first quaternion."""
+    w, x, y, z = quaternion
+    yaw = math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+    tilt = math.acos(float(np.clip(1 - 2 * (x * x + y * y), -1, 1)))
+    return yaw, tilt
+
+
+def require(condition: bool, reason: str) -> None:
+    """A failed experimental invariant always aborts, even under Python -O."""
+    if not condition:
+        raise RuntimeError(reason)
+
+
+def path_record(path) -> dict:
+    return {
+        "success": path.success,
+        "status": path.status,
+        "poses": path.poses.tolist(),
+        "directions": path.directions.tolist(),
+        "curvatures_inv_m": path.curvatures_inv_m.tolist(),
+        "length_m": path.length_m,
+        "expanded_nodes": path.expanded_nodes,
+    }
+
+
+def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
+    """Construct and execute one immutable seeded scenario; state keeps evidence."""
+    import omni.usd
+    from insertion_geometry import InsertionGeometry
+    from isaacsim.core.api import World
+    from isaacsim.core.api.robots import Robot
+    from isaacsim.core.utils.extensions import enable_extension
+    from isaacsim.core.utils.types import ArticulationAction
+    from isaacsim.sensors.camera import Camera
+    from PIL import Image
+    from pxr import Gf
+    from scene import (
+        add_destination,
+        add_path_display,
+        add_props,
+        configure_drives,
+        create_pallet,
+        read_catalogue,
+    )
+
+    import forklift_core
+    from forklift_core.control import (
+        AckermannGeometry,
+        RearAxlePathTracker,
+        TrackerConfig,
+        ackermann_command,
+    )
+    from forklift_core.planning import (
+        Footprint,
+        PlannerConfig,
+        Rectangle,
+        collision_free_pose,
+    )
+    from forklift_core.planning.pallet_mission import (
+        SyntheticMissionGeometry,
+        make_scenario,
+        plan_transport,
+    )
+
+    source_files = [
+        Path(__file__),
+        Path(__file__).with_name("scene.py"),
+        Path(__file__).with_name("insertion_geometry.py"),
+    ]
+    core_root = Path(forklift_core.__file__).parent
+    source_files += sorted((core_root / "control").glob("*.py"))
+    source_files += sorted((core_root / "planning").glob("*.py"))
+    state["source_sha256"] = {
+        str(
+            path.relative_to(core_root.parent)
+            if path.is_relative_to(core_root)
+            else Path("sim/isaac") / path.name
+        ): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in source_files
+    }
+    state["phase"] = "scene"
+    enable_extension("isaacsim.asset.importer.urdf")
+    require(
+        omni.usd.get_context().open_stage(args.base_scene), "Cannot open base scene"
+    )
+    for _ in range(20):
+        app.update()
+    stage = omni.usd.get_context().get_stage()
+    world = World(stage_units_in_meters=1.0, physics_dt=1 / 120, rendering_dt=1 / 120)
+    catalogue, offsets = read_catalogue(stage, app, args.asset_root)
+    geometry = SyntheticMissionGeometry()
+    insertion_geometry = InsertionGeometry.from_urdfs(
+        args.forklift_urdf, args.pallet_urdf
+    )
+    state["pocket_clearance_margin_m"] = 0.002
+    state["pocket_geometry_checks"] = 0
+    state["forbidden_pocket_contacts"] = []
+    scenario = make_scenario(args.seed, catalogue, args.obstacles, geometry=geometry)
+    state["scenario"] = asdict(scenario)
+    state["geometry"] = asdict(geometry)
+    state["asset_origin_offsets_m"] = offsets
+    (args.output / "scenario.json").write_text(
+        record_json(state["scenario"], indent=2) + "\n"
+    )
+    state["props"] = add_props(stage, app, scenario.props, offsets)
+    state["destination_marker"] = add_destination(
+        stage, scenario.destination.x_m, scenario.destination.y_m
+    )
+    pallet = create_pallet(
+        world,
+        stage,
+        app,
+        args.pallet_urdf,
+        args.output,
+        scenario.pickup,
+        settings["pallet_mass_kg"],
+    )
+    base_start = np.array(
+        [
+            scenario.start_rear.x_m + 0.34 * math.cos(scenario.start_rear.yaw_rad),
+            scenario.start_rear.y_m + 0.34 * math.sin(scenario.start_rear.yaw_rad),
+            0.015,
+        ]
+    )
+    start_yaw = scenario.start_rear.yaw_rad
+    robot = world.scene.add(
+        Robot(
+            prim_path="/World/Forklift",
+            name="forklift",
+            position=base_start,
+            orientation=np.array(
+                [math.cos(start_yaw / 2), 0, 0, math.sin(start_yaw / 2)]
+            ),
+        )
+    )
+    state["collision_counts"] = configure_drives(stage, settings)
+    # Physics-step scheduling sets the recording rate. Acquire every rendered
+    # frame so the SDK elapsed-time threshold cannot skip frame metadata.
+    camera = Camera(
+        prim_path="/World/GlobalCamera", frequency=-1, resolution=(1280, 720)
+    )
+    b = scenario.bounds
+    center = np.array([(b.x_min_m + b.x_max_m) / 2, (b.y_min_m + b.y_max_m) / 2, 0.0])
+    eye = center + np.array([0.0, 0.0, 6.0])
+    look = Gf.Matrix4d().SetLookAt(Gf.Vec3d(*eye), Gf.Vec3d(*center), Gf.Vec3d(0, 1, 0))
+    q = look.GetInverse().ExtractRotationQuat()
+    camera.set_world_pose(
+        position=eye,
+        orientation=np.array([q.GetReal(), *q.GetImaginary()]),
+        camera_axes="usd",
+    )
+    camera.set_focal_length(1.1)
+    state["camera"] = {
+        "type": "fixed_global_overview",
+        "eye_m": eye.tolist(),
+        "target_m": center.tolist(),
+        "fps": args.fps,
+        "resolution": [1280, 720],
+    }
+    world.reset()
+    camera.initialize()
+    names = list(robot.dof_names)
+    wheels = np.array(
+        [
+            names.index(n)
+            for n in [
+                "front_left_spin",
+                "front_right_spin",
+                "rear_left_spin",
+                "rear_right_spin",
+            ]
+        ]
+    )
+    steers = np.array([names.index("left_steer"), names.index("right_steer")])
+    lift_index = np.array([names.index("fork_lift")])
+    for _ in range(120):
+        world.step(render=args.video)
+    initial_pallet, initial_pallet_q = pallet.get_world_pose()
+    initial_base, _ = robot.get_world_pose()
+    require(
+        np.linalg.norm(initial_pallet[:2] - [scenario.pickup.x_m, scenario.pickup.y_m])
+        < 0.005
+        and abs(initial_pallet[2]) < 0.005,
+        "Invalid pallet spawn after settling",
+    )
+    require(
+        np.linalg.norm(initial_base[:2] - base_start[:2]) < 0.005,
+        "Truck spawn displaced",
+    )
+    state["initial_pallet_m"] = initial_pallet.tolist()
+    state["phase"] = "planning"
+    planning_start = time.monotonic()
+    plans = plan_transport(
+        scenario,
+        PlannerConfig(
+            curvature_limit_inv_m=settings["planner_curvature_inv_m"],
+            clearance_m=settings["planning_clearance_m"],
+            max_expansions=30000,
+        ),
+        geometry=geometry,
+    )
+    state["planning_wall_s"] = time.monotonic() - planning_start
+    state["planning_status"] = plans.status
+    require(plans.success, f"Mission planning failed: {plans.status}")
+    paths = {
+        name: getattr(plans, name)
+        for name in ["approach", "insert", "extract", "transport", "withdraw"]
+    }
+    state["paths"] = {name: path_record(path) for name, path in paths.items()}
+    (args.output / "paths.json").write_text(
+        record_json(state["paths"], indent=2) + "\n"
+    )
+    add_path_display(stage, paths["approach"], "Approach", (0.05, 0.45, 1.0))
+    add_path_display(stage, paths["transport"], "Transport", (1.0, 0.65, 0.04))
+    stage.GetRootLayer().Export(str(args.output / "scene.usda"))
+    print(
+        "PLANNED",
+        record_json(
+            {
+                k: {"length_m": v.length_m, "expansions": v.expanded_nodes}
+                for k, v in paths.items()
+            }
+        ),
+        flush=True,
+    )
+
+    drive_geometry = AckermannGeometry(0.64, 0.51, 0.135, 0.45, 8.0)
+    obstacles = [item.rectangle for item in scenario.props]
+    pickup_obstacle = Rectangle(
+        scenario.pickup.x_m, scenario.pickup.y_m, 0.6, 0.8, scenario.pickup.yaw_rad
+    )
+    fps_divisor = 120 // args.fps
+    dt = 1 / 120
+    encoder = None
+    frame_audit = []
+    speeds = {
+        "approach": settings["approach_speed_mps"],
+        "insert": settings["insert_speed_mps"],
+        "extract": settings["extract_speed_mps"],
+        "transport": settings["transport_speed_mps"],
+        "withdraw": settings["withdraw_speed_mps"],
+    }
+    trackers = {
+        name: RearAxlePathTracker(
+            path.poses,
+            path.directions,
+            path.curvatures_inv_m,
+            TrackerConfig(
+                cruise_speed_mps=speeds[name],
+                max_curvature_inv_m=settings["tracker_curvature_inv_m"],
+                max_acceleration_mps2=settings["drive_acceleration_mps2"],
+                lookahead_m=0.28,
+                position_tolerance_m=0.008,
+                yaw_tolerance_rad=0.02,
+                stop_speed_mps=0.012,
+                max_cross_track_error_m=0.35,
+            ),
+        )
+        for name, path in paths.items()
+    }
+    phase = "approach"
+    phase_started = 0.0
+    initial_time = world.current_time
+    simulation_started_wall = time.monotonic()
+    lift_command = 0.0
+    steering_command = np.zeros(2)
+    state["transitions"] = []
+    state["samples"] = []
+    state["frames"] = 0
+    state["phase"] = phase
+
+    def snapshot(label: str) -> None:
+        if args.video:
+            rgba = camera.get_rgba()
+            if rgba is not None and rgba.shape == (720, 1280, 4):
+                Image.fromarray(rgba.astype(np.uint8)).convert("RGB").save(
+                    args.output / f"{label}.png"
+                )
+
+    def transition(next_phase: str, t: float) -> None:
+        nonlocal phase, phase_started
+        state["transitions"].append({"from": phase, "to": next_phase, "time_s": t})
+        print("TRANSITION", record_json(state["transitions"][-1]), flush=True)
+        snapshot(phase)
+        phase, phase_started = next_phase, t
+        state["phase"] = phase
+
+    try:
+        if args.video:
+            encoder = subprocess.Popen(
+                [
+                    "ffmpeg",
+                    "-nostdin",
+                    "-n",
+                    "-loglevel",
+                    "error",
+                    "-f",
+                    "rawvideo",
+                    "-pix_fmt",
+                    "rgb24",
+                    "-s",
+                    "1280x720",
+                    "-r",
+                    str(args.fps),
+                    "-i",
+                    "-",
+                    "-an",
+                    "-c:v",
+                    "libx264",
+                    "-threads",
+                    "2",
+                    "-crf",
+                    "20",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-movflags",
+                    "+faststart",
+                    str(args.output / "transport.mp4"),
+                ],
+                stdin=subprocess.PIPE,
+            )
+        for step in range(int(120 * args.max_sim_seconds)):
+            t = world.current_time - initial_time
+            base, q = robot.get_world_pose()
+            ppos, pq = pallet.get_world_pose()
+            yaw, tilt = yaw_and_tilt(q)
+            pallet_yaw, pallet_tilt = yaw_and_tilt(pq)
+            forward = np.array([math.cos(yaw), math.sin(yaw)])
+            rear = np.array(
+                [base[0] - 0.34 * forward[0], base[1] - 0.34 * forward[1], yaw]
+            )
+            velocity = robot.get_linear_velocity()
+            signed_speed = float(np.dot(velocity[:2], forward))
+            require(np.isfinite([base, ppos]).all(), "Nonfinite body state")
+            require(
+                tilt < 0.1 and pallet_tilt < 0.15, f"Excessive body tilt in {phase}"
+            )
+            loaded = phase in ["lift", "extract", "transport", "lower"]
+            footprint = (
+                geometry.loaded_footprint if loaded else geometry.unloaded_footprint
+            )
+            checked_obstacles = obstacles + (
+                [pickup_obstacle] if phase == "approach" else []
+            )
+            require(
+                collision_free_pose(
+                    rear, checked_obstacles, footprint, scenario.bounds
+                ),
+                f"Actual truck/load footprint overlap in {phase}",
+            )
+            require(
+                collision_free_pose(
+                    [ppos[0], ppos[1], pallet_yaw],
+                    obstacles,
+                    Footprint(0.3, 0.3, 0.4),
+                    scenario.bounds,
+                ),
+                f"Measured pallet footprint overlap in {phase}",
+            )
+            relative = ppos[:2] - base[:2]
+            if phase in ["extract", "transport"]:
+                require(ppos[2] > 0.04, "Pallet dropped during transport")
+                require(
+                    abs(float(np.dot(relative, forward)) - 0.89) < 0.08
+                    and abs(float(np.dot(relative, [-forward[1], forward[0]]))) < 0.04,
+                    "Pallet slipped off forks",
+                )
+            if phase in ["approach", "insert"]:
+                require(
+                    np.linalg.norm(ppos[:2] - initial_pallet[:2]) < 0.018,
+                    "Pallet displaced before pickup",
+                )
+            if phase in ["insert", "withdraw"]:
+                contacts = insertion_geometry.forbidden_contacts(
+                    base,
+                    q,
+                    float(robot.get_joint_positions()[lift_index[0]]),
+                    ppos,
+                    pq,
+                    clearance_m=state["pocket_clearance_margin_m"],
+                )
+                state["pocket_geometry_checks"] += 1
+                if contacts:
+                    state["forbidden_pocket_contacts"] = contacts
+                require(
+                    not contacts,
+                    f"Forbidden fork/pallet contact in {phase}: {contacts}",
+                )
+            requested_speed, curvature = 0.0, 0.0
+            tracking = None
+            if phase in trackers:
+                limit = max(30.0, 3 * paths[phase].length_m / speeds[phase] + 10)
+                require(t - phase_started < limit, f"Tracking timeout in {phase}")
+                tracking = trackers[phase].update(rear, signed_speed, dt)
+                require(
+                    tracking.status != "failed",
+                    f"Tracking failed in {phase}: pos={tracking.position_error_m:.4f},yaw={tracking.yaw_error_rad:.4f}",
+                )
+                requested_speed, curvature = (
+                    tracking.speed_mps,
+                    tracking.curvature_inv_m,
+                )
+                if tracking.status == "arrived":
+                    if phase == "approach":
+                        transition("insert", t)
+                    elif phase == "insert":
+                        state["insertion_error"] = {
+                            "position_m": tracking.position_error_m,
+                            "yaw_rad": tracking.yaw_error_rad,
+                        }
+                        transition("lift", t)
+                    elif phase == "extract":
+                        transition("transport", t)
+                    elif phase == "transport":
+                        transition("lower", t)
+                    elif phase == "withdraw":
+                        transition("settle", t)
+            desired_lift = (
+                settings["lift_target_m"]
+                if phase in ["lift", "extract", "transport"]
+                else 0.0
+            )
+            lift_command += float(
+                np.clip(
+                    desired_lift - lift_command,
+                    -settings["lift_rate_mps"] * dt,
+                    settings["lift_rate_mps"] * dt,
+                )
+            )
+            if phase == "lift" and t - phase_started > 4.5:
+                require(ppos[2] > 0.06, "Pallet was not lifted")
+                transition("extract", t)
+            if phase == "lower" and t - phase_started > 4.5:
+                require(
+                    abs(ppos[2]) < 0.008, "Pallet did not settle onto destination floor"
+                )
+                require(
+                    robot.get_joint_positions()[lift_index[0]] < 0.012,
+                    "Fork did not lower",
+                )
+                transition("withdraw", t)
+            if phase == "settle" and t - phase_started > 1.0:
+                transition("complete", t)
+                break
+            drive = ackermann_command(requested_speed, curvature, drive_geometry)
+            target_steering = np.asarray(drive.steering_rad)
+            actual_steering = robot.get_joint_positions()[steers]
+            # Creep while steering catches up; log the measured physical response.
+            steering_error = float(np.max(np.abs(target_steering - actual_steering)))
+            if steering_error > 0.05:
+                drive = ackermann_command(
+                    requested_speed * 0.25, curvature, drive_geometry
+                )
+            rate = settings["steering_command_rate_rad_s"] * dt
+            steering_command += np.clip(target_steering - steering_command, -rate, rate)
+            robot.apply_action(
+                ArticulationAction(
+                    joint_velocities=np.asarray(drive.wheel_rates_rad_s),
+                    joint_indices=wheels,
+                )
+            )
+            robot.apply_action(
+                ArticulationAction(
+                    joint_positions=steering_command, joint_indices=steers
+                )
+            )
+            robot.apply_action(
+                ArticulationAction(
+                    joint_positions=np.array([lift_command]), joint_indices=lift_index
+                )
+            )
+            world.step(render=args.video and step % fps_divisor == 0)
+            if args.video and step % fps_divisor == 0:
+                frame = camera.get_current_frame()
+                rgba = camera.get_rgba()
+                # get_rgba reads the RGB annotator directly. The SDK's cached
+                # frame metadata can lag; retain it for audit without treating
+                # its timestamp as a control or image-acquisition failure.
+                require(
+                    rgba is not None and rgba.shape == (720, 1280, 4),
+                    "Camera did not produce RGB",
+                )
+                encoder.stdin.write(
+                    np.ascontiguousarray(rgba[:, :, :3], dtype=np.uint8).tobytes()
+                )
+                state["frames"] += 1
+                frame_audit.append(
+                    {
+                        "simulation_time_s": world.current_time - initial_time,
+                        "rendering_time": frame.get("rendering_time"),
+                    }
+                )
+                if state["frames"] == 1:
+                    snapshot("start")
+            if step % 12 == 0:
+                sample = {
+                    "time_s": t,
+                    "phase": phase,
+                    "base_position_m": base.tolist(),
+                    "rear_pose": rear.tolist(),
+                    "base_tilt_rad": tilt,
+                    "signed_speed_mps": signed_speed,
+                    "pallet_position_m": ppos.tolist(),
+                    "pallet_yaw_rad": pallet_yaw,
+                    "pallet_tilt_rad": pallet_tilt,
+                    "speed_command_mps": drive.speed_mps,
+                    "curvature_inv_m": drive.curvature_inv_m,
+                    "steering_command_rad": steering_command.tolist(),
+                    "steering_actual_rad": actual_steering.tolist(),
+                    "lift_m": float(robot.get_joint_positions()[lift_index[0]]),
+                }
+                if tracking is not None:
+                    sample["tracking"] = asdict(tracking)
+                state["samples"].append(sample)
+                if step % 240 == 0:
+                    print("SAMPLE", record_json(sample), flush=True)
+        require(phase == "complete", "Mission exceeded simulation time budget")
+        final_pallet, _ = pallet.get_world_pose()
+        destination = np.array([scenario.destination.x_m, scenario.destination.y_m])
+        delivery_error = float(np.linalg.norm(final_pallet[:2] - destination))
+        require(delivery_error < 0.08, "Pallet missed the green destination center")
+        require(abs(final_pallet[2]) < 0.008, "Delivered pallet is not grounded")
+        final_base, final_q = robot.get_world_pose()
+        final_yaw = yaw_and_tilt(final_q)[0]
+        tip = final_base[:2] + 0.95 * np.array(
+            [math.cos(final_yaw), math.sin(final_yaw)]
+        )
+        destination_axis = np.array(
+            [
+                math.cos(scenario.destination.yaw_rad),
+                math.sin(scenario.destination.yaw_rad),
+            ]
+        )
+        require(
+            float(np.dot(final_pallet[:2] - tip, destination_axis)) > 0.38,
+            "Fork still inside delivered pallet",
+        )
+        snapshot("delivered")
+        state.update(
+            {
+                "success": True,
+                "delivery_error_m": delivery_error,
+                "final_pallet_m": final_pallet.tolist(),
+                "simulated_time_s": world.current_time - initial_time,
+                "simulation_wall_s": time.monotonic() - simulation_started_wall,
+                "pallet_max_height_m": max(
+                    r["pallet_position_m"][2] for r in state["samples"]
+                ),
+            }
+        )
+    finally:
+        if encoder is not None:
+            encoder.stdin.close()
+            require(encoder.wait(timeout=60) == 0, "Video encoding failed")
+        (args.output / "frame_audit.json").write_text(
+            record_json(frame_audit, indent=2) + "\n"
+        )
+
+
+def main() -> None:
+    args = arguments()
+    args.output = args.output.resolve()
+    args.output.mkdir(parents=True, exist_ok=False)
+    import yaml
+
+    settings = yaml.safe_load(args.settings.read_text())
+    require(settings["physics_hz"] == 120, "This adapter requires 120Hz physics")
+    require(
+        all(
+            isinstance(v, (int, float)) and math.isfinite(v) and v > 0
+            for v in settings.values()
+        ),
+        "Settings must be positive finite values",
+    )
+    state = {
+        "success": False,
+        "seed": args.seed,
+        "feedback": "simulator_ground_truth",
+        "physical_wheel_drive": True,
+        "pallet_fixed_attachment": False,
+        "pose_teleportation_after_reset": False,
+        "settings_synthetic": settings,
+        "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "pallet_urdf_sha256": hashlib.sha256(args.pallet_urdf.read_bytes()).hexdigest(),
+        "forklift_urdf_sha256": hashlib.sha256(
+            args.forklift_urdf.read_bytes()
+        ).hexdigest(),
+        "python": sys.version,
+        "arguments": {
+            k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()
+        },
+    }
+    started = time.monotonic()
+    app = None
+    try:
+        from isaacsim import SimulationApp
+
+        app = SimulationApp(
+            {
+                "headless": True,
+                "width": 1280,
+                "height": 720,
+                "renderer": "RaytracedLighting",
+                "multi_gpu": False,
+            }
+        )
+        run(app, args, settings, state)
+    except BaseException as exc:
+        state["success"] = False
+        state["failure_reason"] = str(exc)
+        (args.output / "failure.txt").write_text(traceback.format_exc())
+        traceback.print_exc()
+    finally:
+        state["wall_time_s"] = time.monotonic() - started
+        (args.output / "result.json").write_text(record_json(state, indent=2) + "\n")
+        print(
+            "MISSION_RESULT",
+            record_json(
+                {k: v for k, v in state.items() if k not in ["samples", "paths"]}
+            ),
+            flush=True,
+        )
+        if app is not None:
+            app.close()
+    raise SystemExit(0 if state["success"] else 1)
+
+
+if __name__ == "__main__":
+    main()
