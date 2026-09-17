@@ -211,7 +211,11 @@ python tools/build_t11_drawing.py --opening-reading 350 --scale 0.6 \
   통과, 같은 파일에 `python -m ruff format --check` 실행 결과 **2 files already formatted**.
 - 두 CLI 호출 모두 성공했고 각 묶음의 SVG·치수표·차이표·기하 사본·JSON을 확인했다.
   두 묶음을 각각 별도 임시 경로에서 다시 생성했을 때 **각 5개 파일이 바이트 단위로 같았다**.
-  `verification.json`의 모든 입력·코드 SHA-256도 현재 파일과 대조해 일치했다.
+  `verification.json`이 기록하는 SHA-256도 현재 파일과 대조해 일치했다.
+  ⚠️ **그 해시 목록은 전이적 closure 가 아니다.** `build_t11_drawing.py:1025-1034` 가 여덟 파일을
+  명시적으로 나열한다 — 입력 기하·`parameters.yaml`·prior·ADR 0002·ADR 0003·`pallet_geometry.py`·
+  `build_pallet_model.py`·생성기 자신. **계산에 직접 쓰는 `pallet_prior.py` 는 목록에 없다.**
+  산출 수치는 검산으로 확인했으나 "모든 코드를 해시했다"는 주장은 성립하지 않는다.
 - 실제 SVG 렌더: `rsvg-convert .../reading_235/drawing.svg -o /tmp/t11_final_235.png`,
   `rsvg-convert .../reading_350/drawing.svg -o /tmp/t11_final_350.png`가 모두 성공했다.
   **최종 렌더 두 장을 직접 열어** 평면·정면·측면, 치수선과 화살표, 작은 판재 치수,
@@ -226,4 +230,4 @@ python tools/build_t11_drawing.py --opening-reading 350 --scale 0.6 \
   PyYAML **6.0.3**, NumPy **2.4.6**, Ruff **0.16.6**.
   `rsvg-convert --version` 결과 **2.62.3**. 설치 요구 버전이 아니라 이번 실행 환경 기록이다.
 - 표준 원문 검증, 실센서 검출, 실물 포크 측정, 프린터 출력·조립, 하중 시험은 수행하지 않았다.
-  커밋·스테이징도 수행하지 않았다.
+  **검증 실행 당시에는** 커밋·스테이징도 수행하지 않았다(이후 `2e80176` 로 커밋됐다).
