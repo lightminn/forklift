@@ -1,0 +1,23 @@
+# Synthetic simulator-only actuation, not identified physical hardware parameters.
+physics_hz: 120
+pallet_mass_kg: 10.0
+static_friction: 0.8
+dynamic_friction: 0.7
+wheel_torque_nm: 3.0
+steering_torque_nm: 20.0
+steering_stiffness: 1000.0
+steering_damping: 100.0
+steering_command_rate_rad_s: 1.0
+lift_force_n: 180.0
+lift_target_m: 0.20
+lift_rate_mps: 0.06
+planner_curvature_inv_m: 0.50
+tracker_curvature_inv_m: 0.62
+planning_clearance_m: 0.10
+# Cruise settings; insertion remains slow for pocket clearance.
+approach_speed_mps: 0.35
+transport_speed_mps: 0.30
+extract_speed_mps: 0.18
+withdraw_speed_mps: 0.12
+insert_speed_mps: 0.055
+drive_acceleration_mps2: 0.30
