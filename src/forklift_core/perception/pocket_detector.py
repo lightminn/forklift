@@ -670,16 +670,19 @@ def detect_pockets(
                     if index != selected_index and index not in rejected:
                         rejected[index] = "lower_pattern_score"
                 if not selected_pattern.upper_ok:
-                    # A pallet has deck over both openings. Something that does
-                    # not is a real object in view, not an absent one, so the
-                    # status is invalid rather than no_pallet: the contract
-                    # reserves no_pallet for nothing being there.
+                    # A candidate was selected and then failed verification,
+                    # which is what invalid means here. no_pallet is for
+                    # finishing the search without a candidate at all (below).
+                    # It does not claim the space is empty -- no_front_plane
+                    # and no_opening_pattern are no_pallet too.
                     #
-                    # Separate absence from obstruction. Deck over neither
-                    # opening is a different shape; deck over one and not the
-                    # other is this pallet with something in the way, and the
-                    # side is worth keeping -- collapsing both to one reason
-                    # discards which pocket the caller cannot trust.
+                    # The reason names which counts fell short, not why. Both
+                    # openings under threshold and one of the two are different
+                    # observations worth separating, but neither identifies
+                    # absence or obstruction: _upper_deck_reason compares
+                    # counts to a threshold and nothing else. Keeping the side
+                    # says where the evidence was missing, not which pocket is
+                    # obstructed.
                     observation = _status_observation(
                         scene_input, "invalid", _upper_deck_reason(selected_pattern, params)
                     )

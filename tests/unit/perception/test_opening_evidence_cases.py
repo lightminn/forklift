@@ -140,17 +140,18 @@ def test_both_openings_supply_upper_deck_evidence_and_the_counts_match(x):
 
 
 # --------------------------------------------------------------------------
-# Missing upper deck: absence, and obstruction on one side
+# Upper-deck evidence below threshold: on both openings, and on one
 # --------------------------------------------------------------------------
 
 
 def test_deck_material_too_high_to_be_this_pallet_is_invalid_not_absent():
-    """Something is there; it is the wrong shape.
+    """A candidate is selected and then fails per-opening verification.
 
-    Reporting no_pallet would tell a caller the space is clear, so the contract
-    reserves that for nothing being there. Here the overhead material is what
-    the combined upper count sees, and the per-opening count correctly refuses
-    to accept it as this pallet's deck.
+    invalid is for a selected candidate that failed verification; no_pallet is
+    for finishing the search without one. Neither claims the space is clear.
+    Here the overhead material is what the combined upper count sees, and the
+    per-opening counts come out zero, so the pattern cannot become valid. The
+    reason reports those counts, not the fact that the material is too high.
     """
     boxes = upper_deck_lifted_clear(at(EPAL6, "slab", 3.0), EPAL6, rise_m=0.10)
     result = observe(boxes, EPAL6_PRIOR)
@@ -175,9 +176,12 @@ def test_removing_the_upper_deck_entirely_never_reaches_the_per_opening_rule():
 
 @pytest.mark.parametrize("keep,missing", [(1.0, "right"), (-1.0, "left")])
 def test_upper_deck_over_one_opening_names_the_side_that_is_missing(keep, missing):
-    """Deck over one gap and not the other is this pallet with something in the way.
+    """One opening meets the upper-evidence threshold and the other does not.
 
-    The side matters: it is the pocket the caller cannot trust.
+    The side names where the evidence fell short, not which pocket is
+    obstructed: nothing is in the way here -- the fixture clips the deck away.
+    The reason string keeps the name `upper_deck_occluded` for compatibility;
+    see `pocket-observation.md`, "사유가 보장하지 않는 것".
     """
     boxes = upper_deck_over_one_opening(at(EPAL6, "slab", 3.0), EPAL6, keep_sign=keep)
     # Clipping the deck exposes its cut face, which the plane fit sees and which
