@@ -1,9 +1,11 @@
 # `sim/isaac/`
 
-Isaac Sim work for this project. The engine decision that put it here is still
-open — see the decision list in
-[검토 수렴 기록](../../docs/validation/2026-09-17-dual-pallet-review-convergence.md).
-Nothing in this directory is an approved milestone baseline.
+Isaac Sim work for this project. [ADR 0004](../../docs/decisions/0004-simulation-engine-and-insertion-depth.md)
+makes Isaac the designated engine for new dynamic simulation (M4–M6); Gazebo is
+frozen rather than deleted, and `tools/scene_rig.py` and MuJoCo stay as CPU
+fixtures. Nothing in this directory is an approved milestone baseline yet: the
+remote `bench03` mission code is still to be brought in under D2, with its
+interpreter path, extension cache and transitive source hashes in the manifest.
 
 ## What is here
 

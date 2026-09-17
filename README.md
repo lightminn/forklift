@@ -48,6 +48,8 @@ python examples/sensor_geometry.py
 
 ## 중간 정리와 전체 로드맵
 
+**엔진·삽입 깊이 결정(2026-09-17): [ADR 0004](docs/decisions/0004-simulation-engine-and-insertion-depth.md)** — 신규 동적 시뮬레이션은 Isaac Sim 하나, Gazebo 는 동결, 삽입 깊이는 값이 아니라 규칙이다.
+
 **최신 인계(2026-09-17): [EPAL 6·T11 공통 지원 / Isaac Sim·Pro 검토](docs/validation/2026-09-17-dual-pallet-isaac-review-handoff.md).** 기존 합성 인식·원격 GT 운반 실험, 두 형상 지원 요구, 남은 검증과 재개 순서를 정리했다. 아래 9월 10–11일 수치와 상태는 당시 기록이다.
 
 **[2026-09-11 개발 중간 정리](docs/validation/2026-09-11-development-checkpoint.md)**에서 구현·검증·미완료 범위와 원본 증거를 확인한다. **[전체 개발 로드맵](docs/plans/2026-09-11-development-roadmap.md)**은 15주 수업 중 시험·공휴일을 제외한 유효 개발 약 12주를 기준으로 한다.
