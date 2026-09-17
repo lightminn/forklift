@@ -1,0 +1,22 @@
+# UNRESOLVED hypothesis; not adopted, not verified against a standard.
+# Derived only for drawing; do not replace the runtime geometry/prior.
+source_provenance: t11_unresolved_opening_hypothesis_not_standard_verified
+geometry_version: t11_reading_350_scale_0.6_unresolved
+overall_width_m: 0.66
+overall_depth_m: 0.66
+overall_height_m: 0.09
+deck_bottom_m: 0.015
+block_height_m: 0.045
+stringer_m: 0.015
+top_board_thickness_m: 0.015
+block_widths_m:
+- 0.08000000000000002
+- 0.08000000000000002
+- 0.08000000000000002
+block_depth_m: 0.08000000000000002
+bottom_board_widths_m:
+- 0.08000000000000002
+- 0.08000000000000002
+- 0.08000000000000002
+top_board_count: 7
+top_board_width_m: 0.0825

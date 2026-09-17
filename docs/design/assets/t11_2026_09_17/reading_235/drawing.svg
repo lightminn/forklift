@@ -1,0 +1,258 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1800 1450" width="1800" height="1450">
+  <title>T11 opening reading 235 mm — unresolved</title>
+  <desc>Dimensioned plan, front and side projections. Nominal mm; not a certified standard or an approved print design. Each dimension references the dimension table; full sources are embedded below.</desc>
+  <metadata>{"opening_reading_mm": 235, "scale": 0.6, "source_scale": 0.6, "adopted": false, "evidence_kind": "conditional_static_geometry_not_standard_or_physical_validation", "sources": {"geometry": "config/pallet_geometry_t11_06.yaml", "geometry_sha256": "4f4fc0386f067d34d055657780c620485de1f94808d12a7db03109a2c0c57287", "files_sha256": {"config/pallet_geometry_t11_06.yaml": "4f4fc0386f067d34d055657780c620485de1f94808d12a7db03109a2c0c57287", "sim/models/dls08_provisional/parameters.yaml": "f85722718f66be0bc05906487d44850570f2dbe43a96e5bb2af8eebee248fbff", "config/pallet_prior_t11_06.yaml": "4fd18abf31ef80f48c92ffa82c257c0a9a6b984c27973a2f56f212dcbefaa9d5", "docs/decisions/0002-test-pallet-and-geometry-generality.md": "c6254e6dea2c56e1958b6fc6ad0cacdb618ed3a57e785e1124018a196aa8a29d", "docs/decisions/0003-target-selection-and-blind-zone-insertion.md": "afd968efbbcc11024b2e5c9fb9002a5f43ba981884a2c692f95dbc64e14c6d60", "src/forklift_core/perception/pallet_geometry.py": "cef052b2a9e72647a77852a83f07a822f2b8b637dd149f4dab2dcea706e93eba", "tools/build_pallet_model.py": "df8d8af939ad3ab66eb3d994b268e370c2ad58b3f0906e52ede1eb5f600268f8", "tools/build_t11_drawing.py": "6c0cc7e4bc314a72d94446411003e2b2496daa1f69b1d504bfbdb0caceba5b3b"}}, "dimensions": [{"id": "W", "name": "전체 폭 y", "value": "660", "source": "config/pallet_geometry_t11_06.yaml:22 (overall_width_m) × (0.6/0.6) [--scale/--source-scale]", "mm": 660.0}, {"id": "D", "name": "전체 깊이 x", "value": "660", "source": "config/pallet_geometry_t11_06.yaml:23 (overall_depth_m) × (0.6/0.6) [--scale/--source-scale]", "mm": 660.0}, {"id": "H", "name": "전체 높이 z", "value": "90", "source": "config/pallet_geometry_t11_06.yaml:24 (overall_height_m) × (0.6/0.6) [--scale/--source-scale]", "mm": 90.0}, {"id": "DB", "name": "하부 판재 두께", "value": "15", "source": "config/pallet_geometry_t11_06.yaml:27 (deck_bottom_m) × (0.6/0.6) [--scale/--source-scale]", "mm": 15.0}, {"id": "BH", "name": "블록 높이 / 로더 개구 높이", "value": "45", "source": "config/pallet_geometry_t11_06.yaml:28 (block_height_m) × (0.6/0.6) [--scale/--source-scale]", "mm": 45.0}, {"id": "ST", "name": "스트링거 두께", "value": "15", "source": "config/pallet_geometry_t11_06.yaml:29 (stringer_m) × (0.6/0.6) [--scale/--source-scale]", "mm": 15.0}, {"id": "TT", "name": "상부 판재 두께", "value": "15", "source": "config/pallet_geometry_t11_06.yaml:30 (top_board_thickness_m) × (0.6/0.6) [--scale/--source-scale]", "mm": 15.0}, {"id": "TW", "name": "상부 판재 폭", "value": "82.5", "source": "config/pallet_geometry_t11_06.yaml:45 (top_board_width_m) × (0.6/0.6) [--scale/--source-scale]", "mm": 82.5}, {"id": "DT", "name": "상부 덱 합계 (스트링거+상판)", "value": "30", "source": "ST + TT", "mm": 30.0}, {"id": "O", "name": "두 개구 각각의 순폭 (조건부)", "value": "141", "source": "CLI --opening-reading 235 mm × --scale 0.6; docs/decisions/0002-test-pallet-and-geometry-generality.md:195; docs/decisions/0002-test-pallet-and-geometry-generality.md:196", "mm": 141.0}, {"id": "B", "name": "각 블록 폭 y = 깊이 x", "value": "126", "source": "(W − 2×O)/3; 같은 폭의 지지대 3개 가정; docs/decisions/0002-test-pallet-and-geometry-generality.md:195; docs/decisions/0002-test-pallet-and-geometry-generality.md:196", "mm": 126.0}, {"id": "BW", "name": "하부 판재 각각의 폭", "value": "126", "source": "B와 동일; src/forklift_core/perception/pallet_geometry.py:55", "mm": 126.0}, {"id": "BC", "name": "블록 수", "value": "3 × 3 = 9", "source": "config/pallet_geometry_t11_06.yaml:34 (block_widths_m); tools/build_pallet_model.py:34", "mm": null}, {"id": "SC", "name": "스트링거 수", "value": "3", "source": "tools/build_pallet_model.py:34; 각 블록 x행에 하나", "mm": null}, {"id": "NC", "name": "하부 판재 수", "value": "3", "source": "tools/build_pallet_model.py:34; 각 블록 y열에 하나", "mm": null}, {"id": "TC", "name": "상부 판재 수 (설계 선택값)", "value": "7", "source": "config/pallet_geometry_t11_06.yaml:44 (top_board_count)", "mm": null}, {"id": "TP", "name": "상부 판재 중심 피치", "value": "96.25", "source": "(W − TW)/(TC − 1)", "mm": 96.25}, {"id": "TG", "name": "상부 판재 사이 슬롯", "value": "13.75", "source": "TP − TW", "mm": 13.75}, {"id": "BZ", "name": "블록 중심 z = 포켓 중심 z", "value": "37.5", "source": "DB + BH/2", "mm": 37.5}, {"id": "P", "name": "포켓 중심 y 절댓값", "value": "133.5", "source": "(B + O)/2", "mm": 133.5}, {"id": "PS", "name": "포켓 중심 간격", "value": "267", "source": "2×P", "mm": 267.0}, {"id": "PX", "name": "전면 포켓 중심 x", "value": "-330", "source": "−D/2; 삽입은 전면 −x에서 +x 방향", "mm": -330.0}, {"id": "OZ", "name": "로더 개구 z 대역", "value": "15–60", "source": "[DB, DB+BH]; src/forklift_core/perception/pallet_geometry.py:89", "mm": null}, {"id": "FH", "name": "정면 통로: 바닥부터 천장까지", "value": "60", "source": "DB+BH; 정면 개구 아래 판재 없음; tools/build_pallet_model.py:34", "mm": 60.0}, {"id": "SH", "name": "측면 개구 순높이", "value": "45", "source": "BH; 측면 아래에는 하부 판재가 가로지름; tools/build_pallet_model.py:34", "mm": 45.0}, {"id": "BX", "name": "블록 / 스트링거 x 중심", "value": "-267, 0, 267", "source": "[−(D−B)/2, 0, +(D−B)/2]; tools/build_pallet_model.py:34", "mm": null}, {"id": "BY", "name": "블록 / 하부 판재 y 중심", "value": "-267, 0, 267", "source": "[−(W−B)/2, 0, +(W−B)/2]; tools/build_pallet_model.py:34", "mm": null}, {"id": "TY", "name": "상부 판재 y 중심", "value": "-288.75, -192.5, -96.25, 0, 96.25, 192.5, 288.75", "source": "−(W−TW)/2 + i×TP; i=0…TC−1; tools/build_pallet_model.py:34", "mm": null}], "parts": [{"name": "bottom_board_0", "size_mm": [660.0, 126.0, 15.0], "centre_mm": [0.0, -267.0, 7.5], "source": "size=(D,BW,DB); centre=(0,BY,DB/2); tools/build_pallet_model.py:34"}, {"name": "bottom_board_1", "size_mm": [660.0, 126.0, 15.0], "centre_mm": [0.0, 0.0, 7.5], "source": "size=(D,BW,DB); centre=(0,BY,DB/2); tools/build_pallet_model.py:34"}, {"name": "bottom_board_2", "size_mm": [660.0, 126.0, 15.0], "centre_mm": [0.0, 267.0, 7.5], "source": "size=(D,BW,DB); centre=(0,BY,DB/2); tools/build_pallet_model.py:34"}, {"name": "block_x0_y0", "size_mm": [126.0, 126.0, 45.0], "centre_mm": [-267.0, -267.0, 37.5], "source": "size=(B,B,BH); centre=(BX,BY,BZ); tools/build_pallet_model.py:34"}, {"name": "block_x0_y1", "size_mm": [126.0, 126.0, 45.0], "centre_mm": [-267.0, 0.0, 37.5], "source": "size=(B,B,BH); centre=(BX,BY,BZ); tools/build_pallet_model.py:34"}, {"name": "block_x0_y2", "size_mm": [126.0, 126.0, 45.0], "centre_mm": [-267.0, 267.0, 37.5], "source": "size=(B,B,BH); centre=(BX,BY,BZ); tools/build_pallet_model.py:34"}, {"name": "block_x1_y0", "size_mm": [126.0, 126.0, 45.0], "centre_mm": [0.0, -267.0, 37.5], "source": "size=(B,B,BH); centre=(BX,BY,BZ); tools/build_pallet_model.py:34"}, {"name": "block_x1_y1", "size_mm": [126.0, 126.0, 45.0], "centre_mm": [0.0, 0.0, 37.5], "source": "size=(B,B,BH); centre=(BX,BY,BZ); tools/build_pallet_model.py:34"}, {"name": "block_x1_y2", "size_mm": [126.0, 126.0, 45.0], "centre_mm": [0.0, 267.0, 37.5], "source": "size=(B,B,BH); centre=(BX,BY,BZ); tools/build_pallet_model.py:34"}, {"name": "block_x2_y0", "size_mm": [126.0, 126.0, 45.0], "centre_mm": [267.0, -267.0, 37.5], "source": "size=(B,B,BH); centre=(BX,BY,BZ); tools/build_pallet_model.py:34"}, {"name": "block_x2_y1", "size_mm": [126.0, 126.0, 45.0], "centre_mm": [267.0, 0.0, 37.5], "source": "size=(B,B,BH); centre=(BX,BY,BZ); tools/build_pallet_model.py:34"}, {"name": "block_x2_y2", "size_mm": [126.0, 126.0, 45.0], "centre_mm": [267.0, 267.0, 37.5], "source": "size=(B,B,BH); centre=(BX,BY,BZ); tools/build_pallet_model.py:34"}, {"name": "stringer_0", "size_mm": [126.0, 660.0, 15.0], "centre_mm": [-267.0, 0.0, 67.5], "source": "size=(B,W,ST); centre=(BX,0,DB+BH+ST/2); tools/build_pallet_model.py:34"}, {"name": "stringer_1", "size_mm": [126.0, 660.0, 15.0], "centre_mm": [0.0, 0.0, 67.5], "source": "size=(B,W,ST); centre=(BX,0,DB+BH+ST/2); tools/build_pallet_model.py:34"}, {"name": "stringer_2", "size_mm": [126.0, 660.0, 15.0], "centre_mm": [267.0, 0.0, 67.5], "source": "size=(B,W,ST); centre=(BX,0,DB+BH+ST/2); tools/build_pallet_model.py:34"}, {"name": "top_board_0", "size_mm": [660.0, 82.5, 15.0], "centre_mm": [0.0, -288.75, 82.5], "source": "size=(D,TW,TT); centre=(0,TY,H−TT/2); tools/build_pallet_model.py:34"}, {"name": "top_board_1", "size_mm": [660.0, 82.5, 15.0], "centre_mm": [0.0, -192.5, 82.5], "source": "size=(D,TW,TT); centre=(0,TY,H−TT/2); tools/build_pallet_model.py:34"}, {"name": "top_board_2", "size_mm": [660.0, 82.5, 15.0], "centre_mm": [0.0, -96.25, 82.5], "source": "size=(D,TW,TT); centre=(0,TY,H−TT/2); tools/build_pallet_model.py:34"}, {"name": "top_board_3", "size_mm": [660.0, 82.5, 15.0], "centre_mm": [0.0, 0.0, 82.5], "source": "size=(D,TW,TT); centre=(0,TY,H−TT/2); tools/build_pallet_model.py:34"}, {"name": "top_board_4", "size_mm": [660.0, 82.5, 15.0], "centre_mm": [0.0, 96.25, 82.5], "source": "size=(D,TW,TT); centre=(0,TY,H−TT/2); tools/build_pallet_model.py:34"}, {"name": "top_board_5", "size_mm": [660.0, 82.5, 15.0], "centre_mm": [0.0, 192.5, 82.5], "source": "size=(D,TW,TT); centre=(0,TY,H−TT/2); tools/build_pallet_model.py:34"}, {"name": "top_board_6", "size_mm": [660.0, 82.5, 15.0], "centre_mm": [0.0, 288.75, 82.5], "source": "size=(D,TW,TT); centre=(0,TY,H−TT/2); tools/build_pallet_model.py:34"}], "fork_inputs": {"fork_spacing_m": 0.29, "fork_width_m": 0.055, "fork_thickness_m": 0.024, "fork_centre_height_m": 0.04, "fork_length_m": 0.41999999999999993, "lift_travel_m": 0.28}, "fork_input_sources": {"fork_spacing_m": "sim/models/dls08_provisional/parameters.yaml:24 (dimensions.fork_spacing_m)", "fork_width_m": "sim/models/dls08_provisional/parameters.yaml:25 (dimensions.fork_width_m)", "fork_thickness_m": "sim/models/dls08_provisional/parameters.yaml:26 (dimensions.fork_thickness_m)", "fork_centre_height_m": "sim/models/dls08_provisional/parameters.yaml:27 (dimensions.fork_center_height_m)", "lift_travel_m": "sim/models/dls08_provisional/parameters.yaml:30 (dimensions.lift_travel_m)", "fork_length_m": "rear_extent_x_m + overall_length_m − fork_root_x_m; sim/models/dls08_provisional/parameters.yaml:13 (dimensions.rear_extent_x_m); sim/models/dls08_provisional/parameters.yaml:8 (catalogue.overall_length_m); sim/models/dls08_provisional/parameters.yaml:23 (dimensions.fork_root_x_m)"}, "fork_fit": {"lateral_ok": true, "vertical_ok": true, "lateral_inner_margin_m": 0.05449999999999998, "lateral_outer_margin_m": 0.03149999999999997, "lift_required_m": 0.0, "reach_fraction": 0.6363636363636362, "fits": true, "ceiling_margin_m": 0.007999999999999993, "floor_clearance_m": 0.004, "source": "src/forklift_core/perception/pallet_geometry.py:195"}, "prior": {"opening_width": {"nominal_m": 0.14099999999999996, "min_m": 0.19, "max_m": 0.23, "within_range": false, "outside_by_m": 0.049000000000000044, "source": "config/pallet_prior_t11_06.yaml:9–11 (opening_width_range)"}, "centre_spacer": {"nominal_m": 0.12600000000000003, "min_m": 0.065, "max_m": 0.095, "within_range": false, "outside_by_m": 0.031000000000000028, "source": "config/pallet_prior_t11_06.yaml:12–14 (centre_spacer_range)"}}, "insertion": {"depth_fraction": 0.6, "depth_fraction_candidate_m": 0.396, "carriage_limit_m": 0.406, "reserve_m": 0.046, "target_m": 0.36000000000000004, "remaining_to_carriage_m": 0.045999999999999985, "source": "사용자 지정 min(D×0.6, 406−46) mm; docs/decisions/0003-target-selection-and-blind-zone-insertion.md:139; 406 = 950−544; 46 = 406−360"}}</metadata>
+  <style>
+text {font-family: 'DejaVu Sans',sans-serif; fill:#182d3b; font-size:18px}
+.heading {font-size:26px; font-weight:bold} .small {font-size:16px}
+.dimension {stroke:#18374b; stroke-width:1.2; fill:none}
+.extension {stroke:#78909e; stroke-width:0.9}
+.dim-label {font-size:17px; paint-order:stroke; stroke:white; stroke-width:5px; stroke-linejoin:round}
+.hidden {stroke:#806040; stroke-width:1.4; stroke-dasharray:7 5; fill:none}
+.outline {stroke:#182d3b; stroke-width:1.6}
+.pocket {stroke:#007e85; stroke-width:2; fill:white}
+.centre {stroke:#007e85; stroke-width:1.2; stroke-dasharray:12 4 2 4}
+</style>
+  <defs>
+    <marker id="start" markerWidth="8" markerHeight="8" refX="0" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M 8,0 L 0,4 L 8,8 Z" fill="#18374b" />
+    </marker>
+    <marker id="end" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M 0,0 L 8,4 L 0,8 Z" fill="#18374b" />
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1800" height="1450" fill="white" />
+  <text x="55" y="58" class="heading">T11 / opening reading 235 mm / scale 0.6</text>
+  <text x="55" y="94">UNRESOLVED HYPOTHESIS — neither reading adopted. Nominal dimensions in mm; no print tolerances assigned.</text>
+  <text x="55" y="122" class="small">Sources: [IDs] refer to dimensions.md; complete sources and part coordinates embedded in SVG metadata.</text>
+  <line x1="45" y1="145" x2="1755" y2="145" class="extension" />
+  <line x1="945" y1="165" x2="945" y2="1385" class="extension" />
+  <g id="plan">
+    <text x="75" y="172">PLAN / viewed from +z; +x up, +y left</text>
+    <rect x="634.2727" y="225" width="110.7273" height="580" fill="#c5dbe8" data-part="bottom_board_0" class="outline" />
+    <rect x="399.6364" y="225" width="110.7273" height="580" fill="#c5dbe8" data-part="bottom_board_1" class="outline" />
+    <rect x="165" y="225" width="110.7273" height="580" fill="#c5dbe8" data-part="bottom_board_2" class="outline" />
+    <rect x="634.2727" y="694.2727" width="110.7273" height="110.7273" fill="#e0c6a4" data-part="block_x0_y0" class="outline" />
+    <rect x="399.6364" y="694.2727" width="110.7273" height="110.7273" fill="#e0c6a4" data-part="block_x0_y1" class="outline" />
+    <rect x="165" y="694.2727" width="110.7273" height="110.7273" fill="#e0c6a4" data-part="block_x0_y2" class="outline" />
+    <rect x="634.2727" y="459.6364" width="110.7273" height="110.7273" fill="#e0c6a4" data-part="block_x1_y0" class="outline" />
+    <rect x="399.6364" y="459.6364" width="110.7273" height="110.7273" fill="#e0c6a4" data-part="block_x1_y1" class="outline" />
+    <rect x="165" y="459.6364" width="110.7273" height="110.7273" fill="#e0c6a4" data-part="block_x1_y2" class="outline" />
+    <rect x="634.2727" y="225" width="110.7273" height="110.7273" fill="#e0c6a4" data-part="block_x2_y0" class="outline" />
+    <rect x="399.6364" y="225" width="110.7273" height="110.7273" fill="#e0c6a4" data-part="block_x2_y1" class="outline" />
+    <rect x="165" y="225" width="110.7273" height="110.7273" fill="#e0c6a4" data-part="block_x2_y2" class="outline" />
+    <rect x="165" y="694.2727" width="580" height="110.7273" fill="#b6d7c0" data-part="stringer_0" class="outline" />
+    <rect x="165" y="459.6364" width="580" height="110.7273" fill="#b6d7c0" data-part="stringer_1" class="outline" />
+    <rect x="165" y="225" width="580" height="110.7273" fill="#b6d7c0" data-part="stringer_2" class="outline" />
+    <rect x="672.5" y="225" width="72.5" height="580" fill="#e5edf1" data-part="top_board_0" class="outline" />
+    <rect x="587.9167" y="225" width="72.5" height="580" fill="#e5edf1" data-part="top_board_1" class="outline" />
+    <rect x="503.3333" y="225" width="72.5" height="580" fill="#e5edf1" data-part="top_board_2" class="outline" />
+    <rect x="418.75" y="225" width="72.5" height="580" fill="#e5edf1" data-part="top_board_3" class="outline" />
+    <rect x="334.1667" y="225" width="72.5" height="580" fill="#e5edf1" data-part="top_board_4" class="outline" />
+    <rect x="249.5833" y="225" width="72.5" height="580" fill="#e5edf1" data-part="top_board_5" class="outline" />
+    <rect x="165" y="225" width="72.5" height="580" fill="#e5edf1" data-part="top_board_6" class="outline" />
+    <rect x="634.2727" y="694.2727" width="110.7273" height="110.7273" class="hidden" />
+    <rect x="399.6364" y="694.2727" width="110.7273" height="110.7273" class="hidden" />
+    <rect x="165" y="694.2727" width="110.7273" height="110.7273" class="hidden" />
+    <rect x="634.2727" y="459.6364" width="110.7273" height="110.7273" class="hidden" />
+    <rect x="399.6364" y="459.6364" width="110.7273" height="110.7273" class="hidden" />
+    <rect x="165" y="459.6364" width="110.7273" height="110.7273" class="hidden" />
+    <rect x="634.2727" y="225" width="110.7273" height="110.7273" class="hidden" />
+    <rect x="399.6364" y="225" width="110.7273" height="110.7273" class="hidden" />
+    <rect x="165" y="225" width="110.7273" height="110.7273" class="hidden" />
+    <rect x="165" y="694.2727" width="580" height="110.7273" class="hidden" />
+    <rect x="165" y="459.6364" width="580" height="110.7273" class="hidden" />
+    <rect x="165" y="225" width="580" height="110.7273" class="hidden" />
+    <line x1="165" y1="225" x2="165" y2="199" class="extension" />
+    <line x1="745" y1="225" x2="745" y2="199" class="extension" />
+    <line x1="165" y1="199" x2="745" y2="199" marker-start="url(#start)" marker-end="url(#end)" class="dimension" data-source="W: config/pallet_geometry_t11_06.yaml:22 (overall_width_m) × (0.6/0.6) [--scale/--source-scale]" />
+    <text x="455" y="190" text-anchor="middle" class="dim-label">660 [W]</text>
+    <line x1="165" y1="225" x2="93" y2="225" class="extension" />
+    <line x1="165" y1="805" x2="93" y2="805" class="extension" />
+    <line x1="93" y1="225" x2="93" y2="805" marker-start="url(#start)" marker-end="url(#end)" class="dimension" data-source="D: config/pallet_geometry_t11_06.yaml:23 (overall_depth_m) × (0.6/0.6) [--scale/--source-scale]" />
+    <text x="85" y="515" text-anchor="middle" transform="rotate(-90 85 515)" class="dim-label">660 [D]</text>
+    <line x1="455" y1="219" x2="455" y2="814" class="centre" />
+    <line x1="159" y1="515" x2="754" y2="515" class="centre" />
+    <text x="463" y="507" class="small">O (floor-centred origin)</text>
+    <text x="455" y="839" text-anchor="middle" class="small">FRONT (-x) / insertion toward +x</text>
+    <line x1="745" y1="225" x2="801" y2="225" class="extension" />
+    <line x1="745" y1="335.7273" x2="801" y2="335.7273" class="extension" />
+    <line x1="801" y1="225" x2="801" y2="335.7273" marker-start="url(#start)" marker-end="url(#end)" class="dimension" data-source="B: (W − 2×O)/3; 같은 폭의 지지대 3개 가정; docs/decisions/0002-test-pallet-and-geometry-generality.md:195; docs/decisions/0002-test-pallet-and-geometry-generality.md:196" />
+    <text x="793" y="280.3636" text-anchor="middle" transform="rotate(-90 793 280.3636)" class="dim-label">126 [B]</text>
+    <line x1="745" y1="335.7273" x2="801" y2="335.7273" class="extension" />
+    <line x1="745" y1="459.6364" x2="801" y2="459.6364" class="extension" />
+    <line x1="801" y1="335.7273" x2="801" y2="459.6364" marker-start="url(#start)" marker-end="url(#end)" class="dimension" data-source="O: CLI --opening-reading 235 mm × --scale 0.6; docs/decisions/0002-test-pallet-and-geometry-generality.md:195; docs/decisions/0002-test-pallet-and-geometry-generality.md:196" />
+    <text x="793" y="397.6818" text-anchor="middle" transform="rotate(-90 793 397.6818)" class="dim-label">141 [O]</text>
+    <line x1="745" y1="459.6364" x2="801" y2="459.6364" class="extension" />
+    <line x1="745" y1="570.3636" x2="801" y2="570.3636" class="extension" />
+    <line x1="801" y1="459.6364" x2="801" y2="570.3636" marker-start="url(#start)" marker-end="url(#end)" class="dimension" data-source="B: (W − 2×O)/3; 같은 폭의 지지대 3개 가정; docs/decisions/0002-test-pallet-and-geometry-generality.md:195; docs/decisions/0002-test-pallet-and-geometry-generality.md:196" />
+    <text x="793" y="515" text-anchor="middle" transform="rotate(-90 793 515)" class="dim-label">126 [B]</text>
+    <line x1="745" y1="570.3636" x2="801" y2="570.3636" class="extension" />
+    <line x1="745" y1="694.2727" x2="801" y2="694.2727" class="extension" />
+    <line x1="801" y1="570.3636" x2="801" y2="694.2727" marker-start="url(#start)" marker-end="url(#end)" class="dimension" data-source="O: CLI --opening-reading 235 mm × --scale 0.6; docs/decisions/0002-test-pallet-and-geometry-generality.md:195; docs/decisions/0002-test-pallet-and-geometry-generality.md:196" />
+    <text x="793" y="632.3182" text-anchor="middle" transform="rotate(-90 793 632.3182)" class="dim-label">141 [O]</text>
+    <line x1="745" y1="694.2727" x2="801" y2="694.2727" class="extension" />
+    <line x1="745" y1="805" x2="801" y2="805" class="extension" />
+    <line x1="801" y1="694.2727" x2="801" y2="805" marker-start="url(#start)" marker-end="url(#end)" class="dimension" data-source="B: (W − 2×O)/3; 같은 폭의 지지대 3개 가정; docs/decisions/0002-test-pallet-and-geometry-generality.md:195; docs/decisions/0002-test-pallet-and-geometry-generality.md:196" />
+    <text x="793" y="749.6364" text-anchor="middle" transform="rotate(-90 793 749.6364)" class="dim-label">126 [B]</text>
+    <line x1="165" y1="805" x2="165" y2="883" class="extension" />
+    <line x1="237.5" y1="805" x2="237.5" y2="883" class="extension" />
+    <line x1="165" y1="883" x2="237.5" y2="883" marker-start="url(#start)" marker-end="url(#end)" class="dimension" data-source="TW: config/pallet_geometry_t11_06.yaml:45 (top_board_width_m) × (0.6/0.6) [--scale/--source-scale]" />
+    <text x="201.25" y="874" text-anchor="middle" class="dim-label">82.5 [TW]</text>
+    <line x1="201.25" y1="805" x2="201.25" y2="925" class="extension" />
+    <line x1="285.8333" y1="805" x2="285.8333" y2="925" class="extension" />
+    <line x1="201.25" y1="925" x2="285.8333" y2="925" marker-start="url(#start)" marker-end="url(#end)" class="dimension" data-source="TP: (W − TW)/(TC − 1)" />
+    <text x="243.5417" y="916" text-anchor="middle" class="dim-label">96.25 [TP]</text>
+    <line x1="243.5417" y1="290" x2="373.5417" y2="325" class="extension" />
+    <text x="381.5417" y="332" class="dim-label">slot 13.75 [TG]</text>
+    <text x="110" y="978" class="small">Dashed: blocks / stringers below top boards. Colours identify parts, not materials.</text>
+  </g>
+  <g id="front">
+    <text x="75" y="1012" class="heading">FRONT / viewed from -x; +y left, +z up</text>
+    <rect x="634.2727" y="1117.2727" width="110.7273" height="39.5455" fill="#e0c6a4" data-part="block_x2_y0" class="outline" />
+    <rect x="399.6364" y="1117.2727" width="110.7273" height="39.5455" fill="#e0c6a4" data-part="block_x2_y1" class="outline" />
+    <rect x="165" y="1117.2727" width="110.7273" height="39.5455" fill="#e0c6a4" data-part="block_x2_y2" class="outline" />
+    <rect x="165" y="1104.0909" width="580" height="13.1818" fill="#b6d7c0" data-part="stringer_2" class="outline" />
+    <rect x="634.2727" y="1156.8182" width="110.7273" height="13.1818" fill="#c5dbe8" data-part="bottom_board_0" class="outline" />
+    <rect x="399.6364" y="1156.8182" width="110.7273" height="13.1818" fill="#c5dbe8" data-part="bottom_board_1" class="outline" />
+    <rect x="165" y="1156.8182" width="110.7273" height="13.1818" fill="#c5dbe8" data-part="bottom_board_2" class="outline" />
+    <rect x="634.2727" y="1117.2727" width="110.7273" height="39.5455" fill="#e0c6a4" data-part="block_x1_y0" class="outline" />
+    <rect x="399.6364" y="1117.2727" width="110.7273" height="39.5455" fill="#e0c6a4" data-part="block_x1_y1" class="outline" />
+    <rect x="165" y="1117.2727" width="110.7273" height="39.5455" fill="#e0c6a4" data-part="block_x1_y2" class="outline" />
+    <rect x="165" y="1104.0909" width="580" height="13.1818" fill="#b6d7c0" data-part="stringer_1" class="outline" />
+    <rect x="672.5" y="1090.9091" width="72.5" height="13.1818" fill="#e5edf1" data-part="top_board_0" class="outline" />
+    <rect x="587.9167" y="1090.9091" width="72.5" height="13.1818" fill="#e5edf1" data-part="top_board_1" class="outline" />
+    <rect x="503.3333" y="1090.9091" width="72.5" height="13.1818" fill="#e5edf1" data-part="top_board_2" class="outline" />
+    <rect x="418.75" y="1090.9091" width="72.5" height="13.1818" fill="#e5edf1" data-part="top_board_3" class="outline" />
+    <rect x="334.1667" y="1090.9091" width="72.5" height="13.1818" fill="#e5edf1" data-part="top_board_4" class="outline" />
+    <rect x="249.5833" y="1090.9091" width="72.5" height="13.1818" fill="#e5edf1" data-part="top_board_5" class="outline" />
+    <rect x="165" y="1090.9091" width="72.5" height="13.1818" fill="#e5edf1" data-part="top_board_6" class="outline" />
+    <rect x="634.2727" y="1117.2727" width="110.7273" height="39.5455" fill="#e0c6a4" data-part="block_x0_y0" class="outline" />
+    <rect x="399.6364" y="1117.2727" width="110.7273" height="39.5455" fill="#e0c6a4" data-part="block_x0_y1" class="outline" />
+    <rect x="165" y="1117.2727" width="110.7273" height="39.5455" fill="#e0c6a4" data-part="block_x0_y2" class="outline" />
+    <rect x="165" y="1104.0909" width="580" height="13.1818" fill="#b6d7c0" data-part="stringer_0" class="outline" />
+    <line x1="155" y1="1170" x2="755" y2="1170" class="extension" />
+    <circle cx="572.3182" cy="1137.0455" r="5" data-y-mm="-133.5" data-z-mm="37.5" class="pocket" />
+    <line x1="560.3182" y1="1137.0455" x2="584.3182" y2="1137.0455" class="centre" />
+    <line x1="572.3182" y1="1125.0455" x2="572.3182" y2="1149.0455" class="centre" />
+    <circle cx="337.6818" cy="1137.0455" r="5" data-y-mm="133.5" data-z-mm="37.5" class="pocket" />
+    <line x1="325.6818" y1="1137.0455" x2="349.6818" y2="1137.0455" class="centre" />
+    <line x1="337.6818" y1="1125.0455" x2="337.6818" y2="1149.0455" class="centre" />
+    <line x1="337.6818" y1="1137.0455" x2="337.6818" y2="1043.0455" class="extension" />
+    <line x1="572.3182" y1="1137.0455" x2="572.3182" y2="1043.0455" class="extension" />
+    <line x1="337.6818" y1="1043.0455" x2="572.3182" y2="1043.0455" marker-start="url(#start)" marker-end="url(#end)" class="dimension" data-source="PS: 2×P" />
+    <text x="455" y="1034.0455" text-anchor="middle" class="dim-label">267 [PS]</text>
+    <line x1="165" y1="1170" x2="165" y2="1219" class="extension" />
+    <line x1="275.7273" y1="1170" x2="275.7273" y2="1219" class="extension" />
+    <line x1="165" y1="1219" x2="275.7273" y2="1219" marker-start="url(#start)" marker-end="url(#end)" class="dimension" data-source="B: (W − 2×O)/3; 같은 폭의 지지대 3개 가정; docs/decisions/0002-test-pallet-and-geometry-generality.md:195; docs/decisions/0002-test-pallet-and-geometry-generality.md:196" />
+    <text x="220.3636" y="1210" text-anchor="middle" class="dim-label">126 [B]</text>
+    <line x1="275.7273" y1="1170" x2="275.7273" y2="1219" class="extension" />
+    <line x1="399.6364" y1="1170" x2="399.6364" y2="1219" class="extension" />
+    <line x1="275.7273" y1="1219" x2="399.6364" y2="1219" marker-start="url(#start)" marker-end="url(#end)" class="dimension" data-source="O: CLI --opening-reading 235 mm × --scale 0.6; docs/decisions/0002-test-pallet-and-geometry-generality.md:195; docs/decisions/0002-test-pallet-and-geometry-generality.md:196" />
+    <text x="337.6818" y="1210" text-anchor="middle" class="dim-label">141 [O]</text>
+    <line x1="399.6364" y1="1170" x2="399.6364" y2="1219" class="extension" />
+    <line x1="510.3636" y1="1170" x2="510.3636" y2="1219" class="extension" />
+    <line x1="399.6364" y1="1219" x2="510.3636" y2="1219" marker-start="url(#start)" marker-end="url(#end)" class="dimension" data-source="B: (W − 2×O)/3; 같은 폭의 지지대 3개 가정; docs/decisions/0002-test-pallet-and-geometry-generality.md:195; docs/decisions/0002-test-pallet-and-geometry-generality.md:196" />
+    <text x="455" y="1210" text-anchor="middle" class="dim-label">126 [B]</text>
+    <line x1="510.3636" y1="1170" x2="510.3636" y2="1219" class="extension" />
+    <line x1="634.2727" y1="1170" x2="634.2727" y2="1219" class="extension" />
+    <line x1="510.3636" y1="1219" x2="634.2727" y2="1219" marker-start="url(#start)" marker-end="url(#end)" class="dimension" data-source="O: CLI --opening-reading 235 mm × --scale 0.6; docs/decisions/0002-test-pallet-and-geometry-generality.md:195; docs/decisions/0002-test-pallet-and-geometry-generality.md:196" />
+    <text x="572.3182" y="1210" text-anchor="middle" class="dim-label">141 [O]</text>
+    <line x1="634.2727" y1="1170" x2="634.2727" y2="1219" class="extension" />
+    <line x1="745" y1="1170" x2="745" y2="1219" class="extension" />
+    <line x1="634.2727" y1="1219" x2="745" y2="1219" marker-start="url(#start)" marker-end="url(#end)" class="dimension" data-source="B: (W − 2×O)/3; 같은 폭의 지지대 3개 가정; docs/decisions/0002-test-pallet-and-geometry-generality.md:195; docs/decisions/0002-test-pallet-and-geometry-generality.md:196" />
+    <text x="689.6364" y="1210" text-anchor="middle" class="dim-label">126 [B]</text>
+    <line x1="165" y1="1170" x2="113" y2="1170" class="extension" />
+    <line x1="165" y1="1090.9091" x2="113" y2="1090.9091" class="extension" />
+    <line x1="113" y1="1170" x2="113" y2="1090.9091" marker-start="url(#start)" marker-end="url(#end)" class="dimension" data-source="H: config/pallet_geometry_t11_06.yaml:24 (overall_height_m) × (0.6/0.6) [--scale/--source-scale]" />
+    <text x="105" y="1130.4545" text-anchor="middle" transform="rotate(-90 105 1130.4545)" class="dim-label">90 [H]</text>
+    <line x1="745" y1="1170" x2="793" y2="1170" class="extension" />
+    <line x1="745" y1="1117.2727" x2="793" y2="1117.2727" class="extension" />
+    <line x1="793" y1="1170" x2="793" y2="1117.2727" marker-start="url(#start)" marker-end="url(#end)" class="dimension" data-source="FH: DB+BH; 정면 개구 아래 판재 없음; tools/build_pallet_model.py:34" />
+    <text x="785" y="1143.6364" text-anchor="middle" transform="rotate(-90 785 1143.6364)" class="dim-label">60 [FH]</text>
+    <text x="110" y="1270" class="small">Pocket datum: (x, y, z) = (-330, +/-133.5, 37.5) [PX,P,BZ]</text>
+    <text x="110" y="1300" class="small">Front open to floor: z=0..60 [FH]. Loader band: z=15–60 [OZ].</text>
+    <text x="110" y="1330" class="small">No lower rail below the front openings; do not add a continuous bottom slab.</text>
+  </g>
+  <g id="side">
+    <text x="985" y="190">SIDE / viewed from -y; +x right, +z up</text>
+    <rect x="1030" y="295.9091" width="580" height="13.1818" fill="#e5edf1" data-part="top_board_6" class="outline" />
+    <rect x="1030" y="361.8182" width="580" height="13.1818" fill="#c5dbe8" data-part="bottom_board_2" class="outline" />
+    <rect x="1030" y="322.2727" width="110.7273" height="39.5455" fill="#e0c6a4" data-part="block_x0_y2" class="outline" />
+    <rect x="1264.6364" y="322.2727" width="110.7273" height="39.5455" fill="#e0c6a4" data-part="block_x1_y2" class="outline" />
+    <rect x="1499.2727" y="322.2727" width="110.7273" height="39.5455" fill="#e0c6a4" data-part="block_x2_y2" class="outline" />
+    <rect x="1030" y="295.9091" width="580" height="13.1818" fill="#e5edf1" data-part="top_board_5" class="outline" />
+    <rect x="1030" y="295.9091" width="580" height="13.1818" fill="#e5edf1" data-part="top_board_4" class="outline" />
+    <rect x="1030" y="361.8182" width="580" height="13.1818" fill="#c5dbe8" data-part="bottom_board_1" class="outline" />
+    <rect x="1030" y="322.2727" width="110.7273" height="39.5455" fill="#e0c6a4" data-part="block_x0_y1" class="outline" />
+    <rect x="1264.6364" y="322.2727" width="110.7273" height="39.5455" fill="#e0c6a4" data-part="block_x1_y1" class="outline" />
+    <rect x="1499.2727" y="322.2727" width="110.7273" height="39.5455" fill="#e0c6a4" data-part="block_x2_y1" class="outline" />
+    <rect x="1030" y="309.0909" width="110.7273" height="13.1818" fill="#b6d7c0" data-part="stringer_0" class="outline" />
+    <rect x="1264.6364" y="309.0909" width="110.7273" height="13.1818" fill="#b6d7c0" data-part="stringer_1" class="outline" />
+    <rect x="1499.2727" y="309.0909" width="110.7273" height="13.1818" fill="#b6d7c0" data-part="stringer_2" class="outline" />
+    <rect x="1030" y="295.9091" width="580" height="13.1818" fill="#e5edf1" data-part="top_board_3" class="outline" />
+    <rect x="1030" y="295.9091" width="580" height="13.1818" fill="#e5edf1" data-part="top_board_2" class="outline" />
+    <rect x="1030" y="295.9091" width="580" height="13.1818" fill="#e5edf1" data-part="top_board_1" class="outline" />
+    <rect x="1030" y="361.8182" width="580" height="13.1818" fill="#c5dbe8" data-part="bottom_board_0" class="outline" />
+    <rect x="1030" y="322.2727" width="110.7273" height="39.5455" fill="#e0c6a4" data-part="block_x0_y0" class="outline" />
+    <rect x="1264.6364" y="322.2727" width="110.7273" height="39.5455" fill="#e0c6a4" data-part="block_x1_y0" class="outline" />
+    <rect x="1499.2727" y="322.2727" width="110.7273" height="39.5455" fill="#e0c6a4" data-part="block_x2_y0" class="outline" />
+    <rect x="1030" y="295.9091" width="580" height="13.1818" fill="#e5edf1" data-part="top_board_0" class="outline" />
+    <line x1="1020" y1="375" x2="1620" y2="375" class="extension" />
+    <line x1="1030" y1="375" x2="1030" y2="428" class="extension" />
+    <line x1="1610" y1="375" x2="1610" y2="428" class="extension" />
+    <line x1="1030" y1="428" x2="1610" y2="428" marker-start="url(#start)" marker-end="url(#end)" class="dimension" data-source="D: config/pallet_geometry_t11_06.yaml:23 (overall_depth_m) × (0.6/0.6) [--scale/--source-scale]" />
+    <text x="1320" y="419" text-anchor="middle" class="dim-label">660 [D]</text>
+    <line x1="1610" y1="375" x2="1698" y2="375" class="extension" />
+    <line x1="1610" y1="295.9091" x2="1698" y2="295.9091" class="extension" />
+    <line x1="1698" y1="375" x2="1698" y2="295.9091" marker-start="url(#start)" marker-end="url(#end)" class="dimension" data-source="H: config/pallet_geometry_t11_06.yaml:24 (overall_height_m) × (0.6/0.6) [--scale/--source-scale]" />
+    <text x="1690" y="335.4545" text-anchor="middle" transform="rotate(-90 1690 335.4545)" class="dim-label">90 [H]</text>
+    <line x1="1030" y1="375" x2="1005" y2="375" class="extension" />
+    <line x1="1030" y1="361.8182" x2="1005" y2="361.8182" class="extension" />
+    <line x1="1005" y1="375" x2="1005" y2="361.8182" marker-start="url(#start)" marker-end="url(#end)" class="dimension" data-source="config/pallet_geometry_t11_06.yaml:27 (deck_bottom_m) × (0.6/0.6) [--scale/--source-scale]" />
+    <line x1="1005" y1="368.4091" x2="1028" y2="210" class="extension" />
+    <text x="1040" y="215" text-anchor="start" class="dim-label">15 [DB]</text>
+    <line x1="1030" y1="361.8182" x2="975" y2="361.8182" class="extension" />
+    <line x1="1030" y1="322.2727" x2="975" y2="322.2727" class="extension" />
+    <line x1="975" y1="361.8182" x2="975" y2="322.2727" marker-start="url(#start)" marker-end="url(#end)" class="dimension" data-source="config/pallet_geometry_t11_06.yaml:28 (block_height_m) × (0.6/0.6) [--scale/--source-scale]" />
+    <line x1="975" y1="342.0455" x2="1028" y2="233" class="extension" />
+    <text x="1040" y="238" text-anchor="start" class="dim-label">45 [BH]</text>
+    <line x1="1030" y1="322.2727" x2="1005" y2="322.2727" class="extension" />
+    <line x1="1030" y1="309.0909" x2="1005" y2="309.0909" class="extension" />
+    <line x1="1005" y1="322.2727" x2="1005" y2="309.0909" marker-start="url(#start)" marker-end="url(#end)" class="dimension" data-source="config/pallet_geometry_t11_06.yaml:29 (stringer_m) × (0.6/0.6) [--scale/--source-scale]" />
+    <line x1="1005" y1="315.6818" x2="1028" y2="256" class="extension" />
+    <text x="1040" y="261" text-anchor="start" class="dim-label">15 [ST]</text>
+    <line x1="1030" y1="309.0909" x2="975" y2="309.0909" class="extension" />
+    <line x1="1030" y1="295.9091" x2="975" y2="295.9091" class="extension" />
+    <line x1="975" y1="309.0909" x2="975" y2="295.9091" marker-start="url(#start)" marker-end="url(#end)" class="dimension" data-source="config/pallet_geometry_t11_06.yaml:30 (top_board_thickness_m) × (0.6/0.6) [--scale/--source-scale]" />
+    <line x1="975" y1="302.5" x2="1028" y2="279" class="extension" />
+    <text x="1040" y="284" text-anchor="start" class="dim-label">15 [TT]</text>
+    <text x="1010" y="470" class="small">Side opening has a lower rail: height [SH] = [BH].</text>
+  </g>
+  <line x1="980" y1="502" x2="1740" y2="502" class="extension" />
+  <text x="985" y="548" class="heading">PART SCHEDULE / size x × y × z (mm)</text>
+  <text x="990" y="594">BOTTOM   3 pcs [NC]</text>
+  <text x="990" y="621" class="small">660 × 126 × 15    [D, BW, DB]</text>
+  <text x="990" y="670">BLOCK   3 × 3 = 9 pcs [BC]</text>
+  <text x="990" y="697" class="small">126 × 126 × 45    [B, BH]</text>
+  <text x="990" y="746">STRINGER   3 pcs [SC]</text>
+  <text x="990" y="773" class="small">126 × 660 × 15    [B, W, ST]</text>
+  <text x="990" y="822">TOP   7 pcs [TC]</text>
+  <text x="990" y="849" class="small">660 × 82.5 × 15    [D, TW, TT]</text>
+  <text x="990" y="927" class="heading">CENTRE COORDINATES (mm)</text>
+  <text x="990" y="964">Blocks x [BX]: -267, 0, 267</text>
+  <text x="990" y="999">Blocks y [BY]: -267, 0, 267</text>
+  <text x="990" y="1034">Blocks z [BZ]: 37.5</text>
+  <text x="990" y="1069">Top y [TY]: start -(W-TW)/2; pitch 96.25 [TP]</text>
+  <text x="990" y="1104" class="small">All individual part centres: dimensions.md / SVG metadata.</text>
+  <line x1="980" y1="1135" x2="1740" y2="1135" class="extension" />
+  <text x="990" y="1174" class="small">Before adoption: identify standard, edition and drawing.</text>
+  <text x="990" y="1204" class="small">Confirm what 235 / 350 measures; verify source height conflict.</text>
+  <text x="990" y="1234" class="small">Measure printed size, warp, joints and fork dimensions.</text>
+  <text x="990" y="1264" class="small">Layer direction, material, joints and load capacity: unresolved.</text>
+  <text x="990" y="1294" class="small">These are nominal inspection views, not slicer files or load proof.</text>
+  <text x="990" y="1324" class="small">See dimensions.md for assumptions, fit and insertion checks.</text>
+  <line x1="45" y1="1385" x2="1755" y2="1385" class="extension" />
+  <text x="55" y="1420" class="small">T11 TEST ARTICLE / CONDITIONAL DRAWING     |     Floor-centred coordinates     |     Read dimension values; not a 1:1 print</text>
+</svg>
