@@ -1,5 +1,10 @@
 # 지게차 프로젝트 현황과 앞으로 할 일
 
+
+> **이 문서는 현황·우선순위의 정본이다.** 단계별 완료 조건은 [개발 로드맵](2026-09-11-development-roadmap.md),
+> 하드웨어는 [`docs/hardware.md`](../hardware.md), 엔진·삽입 결정은 [ADR 0004](../decisions/0004-simulation-engine-and-insertion-depth.md)가 정본이고
+> 여기서는 요약과 링크만 둔다. [2026-09-17 인계문](../validation/2026-09-17-dual-pallet-isaac-review-handoff.md) §6 은
+> **그 시점의 재개안**으로 남긴다.
 작성일: 2026-09-17
 
 **현재는 팔레트·포켓 인식기와 Hybrid A* 운반 코드가 각각 구현된 상태다. 다음 핵심 작업은 기존 인식기의 출력으로 Isaac Sim 지게차를 움직이도록 연결하는 것이다.** 지금 운반 실험은 시뮬레이터의 정답 위치를 사용하며, 센서 인식부터 하역까지 연결된 자율주행 시스템의 완성 단계는 아니다.
@@ -32,7 +37,7 @@
 - [x] **물리 100개 seed·경로 계획 1,000개 seed** 대규모 검증을 제출하고 실행 시작을 확인했다는 기록이 있다.
 - [ ] 대규모 검증의 최종 완료 여부·전체 성공률·실패 원인 집계를 확인하고 반영한다.
 
-근거: [EPAL 6 인식 평가](docs/validation/2026-09-14-epal6-capture-and-evaluation.md), [Isaac 수정·시험·대규모 제출 기록](docs/validation/2026-09-17-isaac-hybrid-astar-bench.md).
+근거: [EPAL 6 인식 평가](../validation/2026-09-14-epal6-capture-and-evaluation.md), [Isaac 수정·시험·대규모 제출 기록](../validation/2026-09-17-isaac-hybrid-astar-bench.md).
 
 ## 2. 지금 운반 코드가 사용하는 입력
 
@@ -43,7 +48,7 @@
 | 장애물 위치·크기 | 에셋의 위치·외곽으로 만든 지도 | LiDAR 관측으로 갱신한 장애물 지도 |
 | 승강·조향 상태 | 시뮬레이터 관절 상태 | 실물 구동기의 위치·속도 피드백 |
 
-실물 센서 선택은 **RealSense D435i**, **RPLIDAR 사용 확정·A2 예정**이다. A2 세부형·설정과 실제 센서 장착·보정·동시 동작은 확인해야 한다. 상세 상태는 [하드웨어 기록](docs/hardware.md)을 따른다.
+실물 센서 선택은 **RealSense D435i**, **RPLIDAR 사용 확정·A2 예정**이다. A2 세부형·설정과 실제 센서 장착·보정·동시 동작은 확인해야 한다. 상세 상태는 [하드웨어 기록](../hardware.md)을 따른다.
 
 ## 3. 앞으로 할 일 — 권장 순서
 
@@ -110,6 +115,10 @@
 
 아래 네 조건을 인식·계획·제어가 연결된 상태에서 확인한다. 현재 A–D 계획 단위시험 통과가 센서 기반 전체 작업이나 실물 A–D 검증을 뜻하지는 않는다.
 
+⚠️ **EPAL 6 과 T11 ×0.6 각각에 대해 아래 A–D 와 전체 임무를 검증한다. 한 형상의 성공이 다른 형상의 완료를 대신하지 않는다**([ADR 0002](../decisions/0002-test-pallet-and-geometry-generality.md), 사용자 2026-09-17). ⚠️ **T11 은 지금 막혀 있다** — 팔레트 모델이 없고([운반 계획의 「형상 일반화」 절](2026-09-17-hybrid-astar-transport.md)) 삽입구 235/350 해석이 미확정이다.
+
+⚠️ **이 표는 [개발 로드맵](2026-09-11-development-roadmap.md) 완료 조건의 요약이다.** 로드맵의 B 연속 진입·무경로 처리·전체 작업 조건을 대체하지 않는다.
+
 | 사례 | 조건 | 확인할 행동 |
 |---|---|---|
 | A | 정면·정렬된 팔레트 | 직진 접근과 삽입 |
@@ -123,8 +132,8 @@
 
 ## 5. 관련 코드와 기록
 
-- [팔레트·포켓 인식기](src/forklift_core/perception/pocket_detector.py), [관측 계약](docs/interfaces/pocket-observation.md)
-- [Hybrid A*](src/forklift_core/planning/hybrid_astar.py), [운반 경로 구성](src/forklift_core/planning/pallet_mission.py)
-- [경로 추종](src/forklift_core/control/path_tracking.py), [Isaac 운반 실행](sim/isaac/run_transport.py), [속도·구동 설정](config/isaac_transport.yaml)
-- [기존 전체 로드맵](docs/plans/2026-09-11-development-roadmap.md) — 작성 당시의 미구현 항목은 최신 검증 기록과 함께 읽는다.
-- [Isaac 검증 기록](docs/validation/2026-09-17-isaac-hybrid-astar-bench.md)
+- [팔레트·포켓 인식기](../../src/forklift_core/perception/pocket_detector.py), [관측 계약](../interfaces/pocket-observation.md)
+- [Hybrid A*](../../src/forklift_core/planning/hybrid_astar.py), [운반 경로 구성](../../src/forklift_core/planning/pallet_mission.py)
+- [경로 추종](../../src/forklift_core/control/path_tracking.py), [Isaac 운반 실행](../../sim/isaac/run_transport.py), [속도·구동 설정](../../config/isaac_transport.yaml)
+- [기존 전체 로드맵](2026-09-11-development-roadmap.md) — 작성 당시의 미구현 항목은 최신 검증 기록과 함께 읽는다.
+- [Isaac 검증 기록](../validation/2026-09-17-isaac-hybrid-astar-bench.md)
