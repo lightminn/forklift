@@ -2075,7 +2075,7 @@ $ python tools/measure_pocket_evidence.py evidence --distances 2.0:4.0:0.5     -
 >
 > ⚠️ 이 표는 **`scene_rig` 의 구조 수준 결과**다 — 잡음 없는 이상 기하, 시드 하나, 렌더·센서 경로를 거치지 않았다. 렌더 위양성률로 인용하지 말 것. 그러나 **"block_row 20 장이 무엇을 사는가" 를 묻는 데는 충분하다.**
 >
-> **엔진 구현 상태도 비대칭이다.** Gazebo 경로는 네 등록 지점 중 셋이 이미 끝났다 — `evaluation.py:21-25`, `merge_scene_batches.py:41-46`, `build_scene_world.py:143-165`(월드 기하 구현 완료). CLI 는 `NEGATIVE_CATEGORIES` 를 그대로 쓰므로 자동으로 덮인다. **남은 것은 `generate_scene_catalogue.py:39-44` 의 `COUNTS` 표본추출 계약 하나뿐이고, 그마저 `negative_lookalike` 에만 배치를 추첨하므로 대응 배치 생성이 필요하다.** Isaac 경로는 `sim/isaac/` 에 README 와 결정성 probe 두 파일뿐이며 인계문이 지정한 다섯 파일이 전부 없다. **즉 Gazebo 는 정책으로 막혀 있고 Isaac 은 구현으로 막혀 있다.**
+> **엔진 구현 상태도 비대칭이다.** Gazebo 경로는 네 등록 지점 중 셋이 이미 끝났다 — `evaluation.py:21-25`, `merge_scene_batches.py:41-46`, `build_scene_world.py:143-165`(월드 기하 구현 완료). CLI 는 `NEGATIVE_CATEGORIES` 를 그대로 쓰므로 자동으로 덮인다. **남은 것은 `generate_scene_catalogue.py:39-44` 의 `COUNTS` 표본추출 계약 하나뿐이고, 그마저 `negative_lookalike` 에만 배치를 추첨하므로 대응 배치 생성이 필요하다.** Isaac 경로는 `a3eb2c1`(PR #1, 2026-09-17)로 `run_transport.py`·`scene.py`·`insertion_geometry.py`·`pallet_mission.py`·`config/isaac_transport.yaml` 이 들어와 **운반 시나리오는 돌 수 있게 됐다.** ⚠️ **다만 그것이 음성 장면 캡처 경로는 아니다** — 음성 카탈로그 생성기도, v1 데이터셋 형식 exporter 도 없다. **즉 Gazebo 는 정책으로 막혀 있고 Isaac 은 여전히 이 용도의 구현이 없다.**
 
 ## ~~Task 4: 카탈로그 변환과 새 음성 (위임)~~ *(원래 사양)*
 

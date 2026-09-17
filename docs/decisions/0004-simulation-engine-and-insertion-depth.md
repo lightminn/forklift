@@ -188,10 +188,13 @@ Isaac 에서 만들라고 강제하지 않는다.
   거기서 찍지 않는다.
 - **CPU 기전 시험(`scene_rig`)은 병행한다.** Isaac 과 양자택일이 아니다. 다만 **렌더 기반
   위양성률의 분모로 세지 않는다.**
-- **D2 가 실행 선행 작업이 된다.** 논리적 관문은 아니지만 — Isaac 을 고르고 D2 를 먼저 하면 된다 —
-  잔여가 작지 않다. 현재 `sim/isaac/` 에는 `README.md` 와 `determinism_probe.py` 둘뿐이고,
-  인계문이 지정한 `run_transport.py`·`scene.py`·`insertion_geometry.py`·`pallet_mission.py`·
-  `config/isaac_transport.yaml` 이 전부 없으며 `deploy/isaac/` 도 없다.
+- **D2 의 코드 편입은 `a3eb2c1`(PR #1, 2026-09-17)로 들어왔다.** 인계문이 지정한
+  `sim/isaac/run_transport.py`·`scene.py`·`insertion_geometry.py`,
+  `src/forklift_core/planning/pallet_mission.py`, `config/isaac_transport.yaml` 이 모두 있다.
+  ⚠️ **그러나 D2 가 끝난 것은 아니다** — `deploy/isaac/` 가 없고, 위 manifest 요구(인터프리터
+  경로·확장 캐시·자산 판본·드라이버·GPU SKU·전이적 import 해시)가 채워졌는지는 별도로 확인해야
+  한다. **이 PR 은 운반 시나리오용이고 음성 장면 캡처 경로는 아니다** — 음성 카탈로그·데이터셋
+  exporter 는 여전히 없다.
 - **데이터셋 계약을 충족하는 어댑터가 필요하다.** `scene_dataset.py:163` 이 TF `origin` 을
   `received_tf_static` 으로, `:184-194` 가 깊이를 uint16·mm·`optical_axis_z`·scale 0.001·sentinel 0
   으로 강제한다. Isaac 의 `distance_to_image_plane` 은 `optical_axis_z` 와 **같은 물리량**이지만
