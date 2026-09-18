@@ -17,9 +17,13 @@ from xml.etree import ElementTree as ET
 import yaml
 
 from forklift_core.perception.pallet_geometry import (
+    CARRIAGE_INSERTION_LIMIT_M,
+    INSERTION_DEPTH_FRACTION,
+    INSERTION_RESERVE_M,
     PalletGeometry,
     check_fork_fit,
     load_pallet_geometry,
+    target_insertion_depth_m,
 )
 from forklift_core.perception.pallet_prior import load_pallet_prior
 
@@ -38,11 +42,6 @@ GEOMETRY_CODE = ROOT / "src/forklift_core/perception/pallet_geometry.py"
 ASSEMBLY_CODE = ROOT / "tools/build_pallet_model.py"
 # ADR 0002 decision 1: the existing input YAML is already scaled by 0.6.
 DEFAULT_SCALE = 0.6
-# User's requested rule: min(article depth * 0.6, 406 mm - 46 mm).
-INSERTION_FRACTION = 0.6
-# ADR 0003 §2.1: carriage limit 0.950 - 0.544 = 0.406 m, target 0.360 m.
-CARRIAGE_LIMIT_M = 0.406
-INSERTION_RESERVE_M = 0.046
 SVG_NS = "http://www.w3.org/2000/svg"
 
 
@@ -321,8 +320,8 @@ def verification(g: PalletGeometry) -> dict:
             source=yaml_ref(PRIOR, key),
         )
 
-    candidate = g.overall_depth_m * INSERTION_FRACTION
-    target = min(candidate, CARRIAGE_LIMIT_M - INSERTION_RESERVE_M)
+    candidate = g.overall_depth_m * INSERTION_DEPTH_FRACTION
+    target = target_insertion_depth_m(g.overall_depth_m)
     return {
         "fork_inputs": fork,
         "fork_input_sources": {
@@ -368,12 +367,12 @@ def verification(g: PalletGeometry) -> dict:
             ),
         },
         "insertion": {
-            "depth_fraction": INSERTION_FRACTION,
+            "depth_fraction": INSERTION_DEPTH_FRACTION,
             "depth_fraction_candidate_m": candidate,
-            "carriage_limit_m": CARRIAGE_LIMIT_M,
+            "carriage_limit_m": CARRIAGE_INSERTION_LIMIT_M,
             "reserve_m": INSERTION_RESERVE_M,
             "target_m": target,
-            "remaining_to_carriage_m": CARRIAGE_LIMIT_M - target,
+            "remaining_to_carriage_m": CARRIAGE_INSERTION_LIMIT_M - target,
             "source": "사용자 지정 min(D×0.6, 406−46) mm; "
             + line_ref(ADR3, "최대 삽입 406 mm, 목표 깊이 360 mm")
             + "; 406 = 950−544; 46 = 406−360",

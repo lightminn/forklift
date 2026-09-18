@@ -7,12 +7,13 @@ the distinct insertion, loading, transport, unloading, and withdrawal stages.
 """
 
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from math import ceil, cos, pi, sin
 
 import numpy as np
 
 from forklift_core._validation import _finite_scalar
+from forklift_core.perception.pallet_geometry import target_insertion_depth_m
 
 from .geometry import (
     Bounds,
@@ -83,21 +84,48 @@ class SyntheticMissionGeometry:
     """
 
     unloaded_footprint: Footprint = Footprint(1.29, 0.17, 0.36)
-    loaded_footprint: Footprint = Footprint(1.53, 0.17, 0.4)
     pallet_depth_m: float = 0.60
     pallet_width_m: float = 0.80
-    inserted_offset_m: float = 1.23
-    approach_offset_m: float = 1.69
-    prealign_offset_m: float = 2.49
+    axle_to_fork_tip_m: float = 1.29  # Independent of the unloaded front envelope.
+    approach_gap_m: float = 0.10  # Standoff, not planner clearance_m.
+    alignment_straight_m: float = 0.80
+    delivery_straight_m: float = 0.70
     extraction_m: float = 0.65
-    predelivery_offset_m: float = 1.93
     withdrawal_m: float = 0.55
     spawn_clearance_m: float = 0.12
 
+    inserted_offset_m: float = field(init=False)
+    approach_offset_m: float = field(init=False)
+    prealign_offset_m: float = field(init=False)
+    predelivery_offset_m: float = field(init=False)
+    loaded_footprint: Footprint = field(init=False)
+
     def __post_init__(self) -> None:
+        d = target_insertion_depth_m(self.pallet_depth_m)
+        inserted = self.axle_to_fork_tip_m + self.pallet_depth_m / 2 - d
+        approach = (
+            self.axle_to_fork_tip_m + self.pallet_depth_m / 2 + self.approach_gap_m
+        )
+        prealign = approach + self.alignment_straight_m
+        predelivery = inserted + self.delivery_straight_m
+        loaded = Footprint(
+            max(self.unloaded_footprint.front_m, inserted + self.pallet_depth_m / 2),
+            self.unloaded_footprint.rear_m,
+            max(self.unloaded_footprint.half_width_m, self.pallet_width_m / 2),
+        )
+        object.__setattr__(self, "inserted_offset_m", inserted)
+        object.__setattr__(self, "approach_offset_m", approach)
+        object.__setattr__(self, "prealign_offset_m", prealign)
+        object.__setattr__(self, "predelivery_offset_m", predelivery)
+        object.__setattr__(self, "loaded_footprint", loaded)
+
         for value in (
             self.pallet_depth_m,
             self.pallet_width_m,
+            self.axle_to_fork_tip_m,
+            self.approach_gap_m,
+            self.alignment_straight_m,
+            self.delivery_straight_m,
             self.inserted_offset_m,
             self.approach_offset_m,
             self.prealign_offset_m,

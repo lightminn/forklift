@@ -26,10 +26,13 @@ import argparse
 import re
 from pathlib import Path
 
+from forklift_core.perception.pallet_geometry import target_insertion_depth_m
+
+# 이 값은 EPAL 전용이다 -- T11 표준이 확정되고 preview_docking 이 형상을 매개변수로 받게 되면 이 리터럴도 매개변수가 되어야 한다
 # Geometry of the derived columns.  One definition, used by every caller.
 T11_06_HALF_DEPTH_M = 0.330   # config/pallet_geometry_t11_06.yaml overall_depth_m / 2
 FORK_TIP_X_M = 0.950          # sim/models/dls08_provisional/forklift.xml:269 blade tip
-TARGET_INSERTION_M = 0.360    # tools/preview_docking.py:417 default
+TARGET_INSERTION_M = target_insertion_depth_m(0.60)
 
 GRID_ROW = re.compile(r"^\s*([\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+(\d+)/(\d+)")
 CELLS = re.compile(r"all-seed (\d+), partial (\d+), dead (\d+)")

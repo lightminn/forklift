@@ -247,3 +247,18 @@ def check_fork_fit(
         lift_required_m=lift,
         reach_fraction=fork_length_m / geometry.overall_depth_m,
     )
+
+
+CARRIAGE_INSERTION_LIMIT_M = 0.406  # Provisional carriage front (ADR 0003 §1).
+INSERTION_RESERVE_M = 0.046  # Policy anchor, not safety-derived (ADR 0004 D3).
+INSERTION_DEPTH_FRACTION = 0.6  # ADR 0004 D3 rule coefficient.
+
+
+def target_insertion_depth_m(pallet_depth_m: float) -> float:
+    """min(depth * 0.6, carriage limit - reserve); a rule, not a constant (ADR 0004 D3)."""
+    if _finite_scalar(pallet_depth_m, "pallet depth") <= 0:
+        raise ValueError("pallet depth must be positive")
+    return min(
+        pallet_depth_m * INSERTION_DEPTH_FRACTION,
+        CARRIAGE_INSERTION_LIMIT_M - INSERTION_RESERVE_M,
+    )

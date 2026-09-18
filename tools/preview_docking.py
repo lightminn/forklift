@@ -24,11 +24,13 @@ import yaml
 from forklift_core.perception.pallet_geometry import (
     check_fork_fit,
     load_pallet_geometry,
+    target_insertion_depth_m,
 )
 
 if TYPE_CHECKING:
     import mujoco
 
+# 이 값은 EPAL 전용이다 -- T11 표준이 확정되고 preview_docking 이 형상을 매개변수로 받게 되면 이 리터럴도 매개변수가 되어야 한다
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCENE = REPO_ROOT / "sim/models/docking_scene.xml"
 FORKLIFT = REPO_ROOT / "sim/models/dls08_provisional/forklift.xml"
@@ -272,7 +274,11 @@ def _plan(scene: _DockScene, frames: int, insertion_m: float) -> list[DockFrame]
 
 
 def plan_trajectory(
-    model_path: Path, pallet_path: Path, *, frames: int, insertion_m: float = 0.360
+    model_path: Path,
+    pallet_path: Path,
+    *,
+    frames: int,
+    insertion_m: float = target_insertion_depth_m(0.60),
 ) -> list[DockFrame]:
     """Kinematic dock trajectory. Raises ValueError when the forks cannot fit.
 
@@ -414,7 +420,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--insertion-m",
         type=float,
-        default=0.360,
+        default=target_insertion_depth_m(0.60),
         help="Target insertion depth in metres (default: 0.360)",
     )
     parser.add_argument(

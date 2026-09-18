@@ -1,6 +1,7 @@
 """Synthetic mission orchestration; physical handling is an adapter test."""
 
 import math
+from dataclasses import asdict
 
 import numpy as np
 import pytest
@@ -30,6 +31,53 @@ ASSETS = (
     AssetSpec("test://crate.usd", 0.450, 0.662, 0.188),
     AssetSpec("test://cardbox.usd", 0.797, 0.637, 0.503),
 )
+
+
+def test_t11_derived_geometry_and_serialization():
+    geometry = SyntheticMissionGeometry(pallet_depth_m=0.66, pallet_width_m=0.66)
+    expected = {
+        "inserted_offset_m": 1.26,
+        "approach_offset_m": 1.72,
+        "prealign_offset_m": 2.52,
+        "predelivery_offset_m": 1.96,
+    }
+    serialized = asdict(geometry)
+    for name, value in expected.items():
+        assert getattr(geometry, name) == pytest.approx(value)
+        assert name in serialized
+        assert serialized[name] == pytest.approx(value)
+    assert geometry.loaded_footprint.front_m == pytest.approx(1.59)
+    assert geometry.loaded_footprint.half_width_m == 0.36
+    assert serialized["loaded_footprint"] == pytest.approx(
+        {"front_m": 1.59, "rear_m": 0.17, "half_width_m": 0.36}
+    )
+
+
+def test_t11_loaded_envelope_collision_counterexample():
+    pose = Pose2D(0, 0, 0)
+    obstacles = [Rectangle(1.57, 0, 0.010, 0.010)]
+    bounds = Bounds(-3, 4.7, -1.75, 3.05)
+    epal = SyntheticMissionGeometry()
+    t11 = SyntheticMissionGeometry(pallet_depth_m=0.66, pallet_width_m=0.66)
+    assert collision_free_pose(
+        pose, obstacles, epal.loaded_footprint, bounds, margin_m=0
+    )
+    assert not collision_free_pose(
+        pose, obstacles, t11.loaded_footprint, bounds, margin_m=0
+    )
+
+
+def test_fork_tip_and_unloaded_envelope_are_independent():
+    original = SyntheticMissionGeometry(axle_to_fork_tip_m=1.29)
+    enlarged = SyntheticMissionGeometry(
+        axle_to_fork_tip_m=1.29, unloaded_footprint=Footprint(1.80, 0.17, 0.36)
+    )
+    shifted = SyntheticMissionGeometry(axle_to_fork_tip_m=1.49)
+    assert enlarged.inserted_offset_m == original.inserted_offset_m
+    assert enlarged.approach_offset_m == original.approach_offset_m
+    assert shifted.inserted_offset_m - original.inserted_offset_m == pytest.approx(0.20)
+    assert shifted.approach_offset_m - original.approach_offset_m == pytest.approx(0.20)
+    assert enlarged.loaded_footprint.front_m == 1.80
 
 
 @pytest.mark.parametrize("steering_rad", [-0.45, 0.45])
