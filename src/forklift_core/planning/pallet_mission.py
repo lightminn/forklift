@@ -377,11 +377,49 @@ def _append_straight(first, second):
     )
 
 
+def plan_observation_leg(
+    scenario: TransportScenario,
+    waypoint: Pose2D,
+    config: PlannerConfig | None = None,
+    *,
+    geometry: SyntheticMissionGeometry | None = None,
+) -> PlanResult:
+    """Plan a separate leg to the observation waypoint at full clearance.
+
+    Like plan_transport's target/obstacle split, scenario.pickup is an obstacle,
+    not the goal of this leg.
+    """
+    geometry = geometry if geometry is not None else SyntheticMissionGeometry()
+    config = (
+        config
+        if config is not None
+        else PlannerConfig(clearance_m=DEFAULT_TRANSPORT_CLEARANCE_M)
+    )
+    props = [prop.rectangle for prop in scenario.props]
+    pallet = Rectangle(
+        scenario.pickup.x_m,
+        scenario.pickup.y_m,
+        geometry.pallet_depth_m,
+        geometry.pallet_width_m,
+        scenario.pickup.yaw_rad,
+    )
+    return plan_hybrid_astar(
+        scenario.start_rear,
+        waypoint,
+        props + [pallet],
+        geometry.unloaded_footprint,
+        scenario.bounds,
+        config,
+    )
+
+
 def plan_transport(
     scenario: TransportScenario,
     config: PlannerConfig | None = None,
     *,
     geometry: SyntheticMissionGeometry | None = None,
+    target_pickup: PalletSite | None = None,
+    start_rear: Pose2D | None = None,
 ) -> MissionPlan:
     """Plan all stages with exact final straight approaches and loaded geometry.
 
@@ -391,6 +429,9 @@ def plan_transport(
     capped at half of geometry.approach_gap_m, the fork-to-pallet stopping gap
     (0.05 m for the default 0.10 m gap).
     Other stages use the supplied clearance (default 0.10 m).
+    target_pickup optionally supplies an estimated goal while the pallet
+    obstacle stays at scenario.pickup (ground truth). start_rear optionally
+    replaces scenario.start_rear with the rear-axle pose after observation.
     """
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
     config = (
@@ -399,7 +440,9 @@ def plan_transport(
         else PlannerConfig(clearance_m=DEFAULT_TRANSPORT_CLEARANCE_M)
     )
     props = [prop.rectangle for prop in scenario.props]
-    pickup = site_poses(scenario.pickup, geometry)
+    pickup = site_poses(
+        target_pickup if target_pickup is not None else scenario.pickup, geometry
+    )
     destination = site_poses(scenario.destination, geometry)
     pallet = Rectangle(
         scenario.pickup.x_m,
@@ -412,7 +455,7 @@ def plan_transport(
         config, clearance_m=min(config.clearance_m, geometry.approach_gap_m / 2)
     )
     approach = plan_hybrid_astar(
-        scenario.start_rear,
+        start_rear if start_rear is not None else scenario.start_rear,
         pickup["prealign"],
         props + [pallet],
         geometry.unloaded_footprint,

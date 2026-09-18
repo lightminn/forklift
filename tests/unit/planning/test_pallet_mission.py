@@ -1,7 +1,7 @@
 """Synthetic mission orchestration; physical handling is an adapter test."""
 
 import math
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 import numpy as np
 import pytest
@@ -14,6 +14,7 @@ from forklift_core.planning import (
     Rectangle,
     collision_free_path,
     collision_free_pose,
+    pallet_mission,
 )
 from forklift_core.planning.pallet_mission import (
     AssetSpec,
@@ -31,6 +32,156 @@ ASSETS = (
     AssetSpec("test://crate.usd", 0.450, 0.662, 0.188),
     AssetSpec("test://cardbox.usd", 0.797, 0.637, 0.503),
 )
+
+
+@pytest.fixture
+def observation_scenario():
+    return TransportScenario(
+        0,
+        Pose2D(-3, 0, 0),
+        PalletSite(4, 3, 0),
+        PalletSite(4, -3, 0),
+        (),
+        Bounds(-5, 6, -4, 4),
+    )
+
+
+def test_observation_leg_reaches_independent_waypoint(observation_scenario):
+    result = pallet_mission.plan_observation_leg(observation_scenario, Pose2D(2, 0, 0))
+    assert result.success, result.status
+    np.testing.assert_allclose(result.poses[0], [-3, 0, 0], atol=1e-7)
+    np.testing.assert_allclose(result.poses[-1], [2, 0, 0], atol=1e-7)
+
+
+def test_observation_leg_rejects_waypoint_inside_real_pallet(observation_scenario):
+    result = pallet_mission.plan_observation_leg(observation_scenario, Pose2D(4, 3, 0))
+    assert not result.success
+    assert result.status == "invalid_goal"
+
+
+def test_observation_leg_avoids_props(observation_scenario):
+    obstacle = Rectangle(0, 0, 0.3, 0.3)
+    scenario = replace(
+        observation_scenario,
+        props=(PlacedProp(AssetSpec("test://box", 0.3, 0.3, 1), obstacle),),
+    )
+    geometry = SyntheticMissionGeometry()
+    config = PlannerConfig(clearance_m=0.15)
+    result = pallet_mission.plan_observation_leg(
+        scenario, Pose2D(2, 0, 0), config, geometry=geometry
+    )
+    assert result.success, result.status
+    assert not collision_free_path(
+        np.array([[-3, 0, 0], [2, 0, 0]]),
+        [obstacle],
+        geometry.unloaded_footprint,
+        scenario.bounds,
+    )
+    assert collision_free_path(
+        result.poses,
+        [obstacle, Rectangle(4, 3, 0.6, 0.8)],
+        geometry.unloaded_footprint,
+        scenario.bounds,
+        margin_m=0.15,
+    )
+
+
+@pytest.mark.parametrize("config", [None, PlannerConfig(clearance_m=0.2)])
+def test_observation_leg_preserves_full_clearance(observation_scenario, config):
+    # Fork tip at x=3.29 leaves 0.07 m to the pallet face at x=3.36.
+    scenario = replace(observation_scenario, pickup=PalletSite(3.66, 0, 0))
+    result = pallet_mission.plan_observation_leg(scenario, Pose2D(2, 0, 0), config)
+    assert not result.success
+    assert result.status == "invalid_goal"
+
+
+@pytest.mark.parametrize("seed", [0, 17])
+def test_optional_pickup_and_start_preserve_the_complete_default_plan(seed):
+    scenario = make_scenario(seed, ASSETS)
+    baseline = plan_transport(scenario)
+    assert baseline.success, baseline.status
+    for overrides in (
+        {"target_pickup": None, "start_rear": None},
+        {"target_pickup": scenario.pickup, "start_rear": scenario.start_rear},
+    ):
+        result = plan_transport(scenario, **overrides)
+        assert result.success == baseline.success
+        assert result.status == baseline.status
+        for name in ("approach", "insert", "extract", "transport", "withdraw"):
+            expected = asdict(getattr(baseline, name))
+            actual = asdict(getattr(result, name))
+            for field_name in expected:
+                np.testing.assert_array_equal(actual[field_name], expected[field_name])
+
+
+def test_target_pickup_changes_waypoints_but_keeps_ground_truth_obstacle():
+    geometry = SyntheticMissionGeometry()
+    scenario = TransportScenario(
+        0,
+        Pose2D(-2.34, 0, 0),
+        PalletSite(3.4, 0, 0),
+        PalletSite(0.2, 1, 0),
+        (),
+        Bounds(-3, 4.7, -1.75, 3.05),
+    )
+    target = PalletSite(3.4, 1, 0)
+    baseline = plan_transport(scenario)
+    result = plan_transport(scenario, target_pickup=target)
+    assert baseline.success, baseline.status
+    assert result.success, result.status
+    for name, x_m in (("approach", 1.71), ("insert", 2.17), ("extract", 1.52)):
+        path = getattr(result, name)
+        np.testing.assert_allclose(path.poses[-1], [x_m, 1, 0], atol=1e-12)
+        assert not np.array_equal(path.poses[-1], getattr(baseline, name).poses[-1])
+    for first, second in (
+        ("approach", "insert"),
+        ("insert", "extract"),
+        ("extract", "transport"),
+        ("transport", "withdraw"),
+    ):
+        np.testing.assert_array_equal(
+            getattr(result, first).poses[-1], getattr(result, second).poses[0]
+        )
+    for name in ("transport", "withdraw"):
+        np.testing.assert_array_equal(
+            getattr(result, name).poses[-1], getattr(baseline, name).poses[-1]
+        )
+    pallet = Rectangle(3.4, 0, geometry.pallet_depth_m, geometry.pallet_width_m)
+    assert collision_free_path(
+        result.approach.poses,
+        [pallet],
+        geometry.unloaded_footprint,
+        scenario.bounds,
+        margin_m=0.05,
+    )
+    # This pose clears the estimated pallet but overlaps the real pallet.
+    blocked_start = Pose2D(2.9, 0, 0)
+    assert collision_free_pose(
+        blocked_start,
+        [Rectangle(3.4, 1, 0.6, 0.8)],
+        geometry.unloaded_footprint,
+        scenario.bounds,
+        margin_m=0.05,
+    )
+    blocked = plan_transport(
+        replace(scenario, start_rear=blocked_start), target_pickup=target
+    )
+    assert not blocked.success
+    assert blocked.status == "approach:invalid_start"
+
+
+def test_start_rear_replaces_approach_start_after_observation():
+    scenario = make_scenario(0, ASSETS)
+    observed_start = Pose2D(-2.0, 0, 0)
+    result = plan_transport(scenario, start_rear=observed_start)
+    assert result.success, result.status
+    np.testing.assert_array_equal(result.approach.poses[0], [-2.0, 0, 0])
+    baseline = plan_transport(scenario)
+    assert baseline.success, baseline.status
+    np.testing.assert_array_equal(baseline.approach.poses[0], [-2.34, 0, 0])
+    np.testing.assert_array_equal(
+        result.approach.poses[-1], baseline.approach.poses[-1]
+    )
 
 
 def test_default_clearance_blocks_a_near_margin_delivery_straight_post():
