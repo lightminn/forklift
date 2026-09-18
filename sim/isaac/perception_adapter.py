@@ -164,9 +164,9 @@ def capture_scene_input(
             step_fn()
         # Own both buffers: Isaac/fakes may mutate the same arrays on the next step.
         rgba = np.array(camera.get_rgba(), copy=True)
-        raw_depth = np.array(
-            camera.get_current_frame().get("distance_to_image_plane"), copy=True
-        )
+        raw_depth = np.array(camera.get_depth(), copy=True)
+        if raw_depth.ndim and raw_depth.shape[-1] == 1:
+            raw_depth = np.squeeze(raw_depth, axis=-1)
         # TODO: run_transport.py must verify the actual Isaac frame number/time
         # field in camera.get_current_frame() and supply frame_id_fn from it.
         frame_id = frame_id_fn() if frame_id_fn is not None else None

@@ -62,14 +62,50 @@ class FakeCamera:
         return self.rgba
 
     def get_current_frame(self):
+        raise AssertionError("Capture must read depth directly, not the frame cache")
+
+    def get_depth(self):
         self.reads += 1
-        return {"distance_to_image_plane": self.depth}
+        return self.depth
 
 
 def capture(camera, **kwargs):
     return MODULE.capture_scene_input(
         camera, MODULE.default_base_from_optical(), 123, **kwargs
     )
+
+
+def test_capture_reads_direct_depth_instead_of_stale_frame_cache():
+    class CachedCamera(FakeCamera):
+        def get_current_frame(self):
+            return {"distance_to_image_plane": np.full((480, 640), 9.0)}
+
+    camera = CachedCamera()
+    scene, _, attempts = capture(camera, max_attempts=1)
+    np.testing.assert_array_equal(scene.depth_m, camera.depth)
+    assert attempts == camera.reads == 1
+
+
+def test_capture_squeezes_trailing_singleton_depth_axis_without_reordering():
+    camera = FakeCamera()
+    expected = np.arange(480 * 640, dtype=np.float32).reshape(480, 640) + 1
+    camera.depth = expected[:, :, None].copy()
+    scene, diagnostics, attempts = capture(camera, max_attempts=1)
+    np.testing.assert_array_equal(scene.depth_m, expected)
+    assert diagnostics.finite_positive_count == 480 * 640
+    assert attempts == camera.reads == 1
+    camera.depth[:] = 0
+    np.testing.assert_array_equal(scene.depth_m, expected)
+
+
+@pytest.mark.parametrize("shape", [(640, 480, 1), (480, 640, 2), (1, 480, 640, 1)])
+def test_capture_rejects_incompatible_depth_axes_without_reshaping(shape):
+    camera = FakeCamera()
+    camera.depth = np.ones(shape, dtype=np.float32)
+    with pytest.raises(MODULE.CaptureFailure) as error:
+        capture(camera, max_attempts=3)
+    assert error.value.reason == "depth_not_ready"
+    assert camera.reads == 3
 
 
 def test_xyzw_to_wxyz_known_value_and_round_trip():
