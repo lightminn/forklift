@@ -77,7 +77,7 @@ def arguments() -> argparse.Namespace:
         help=(
             "Ordered observation candidates in metres/radians; repeat this option "
             "for each candidate. Overrides defaults: (-0.10, 0.90, 0), "
-            "(-0.10, -0.60, 0), (-1.20, 0.30, 0), (-1.50, -0.60, 0)."
+            "(-0.10, -0.60, 0), (-1.20, 0.30, 0), (-1.50, -0.60, 0), (-2.00, -0.30, 0)."
         ),
     )
     parser.add_argument(
@@ -91,6 +91,7 @@ def arguments() -> argparse.Namespace:
             [-0.10, -0.60, 0.0],
             [-1.20, 0.30, 0.0],
             [-1.50, -0.60, 0.0],
+            [-2.00, -0.30, 0.0],
         ]
     if not args.observation_waypoints:
         parser.error("--observation-waypoints requires at least one candidate")
@@ -688,6 +689,33 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             )
                         except adapter.CaptureFailure as exc:
                             require(False, f"perception_capture_failed:{exc.reason}")
+                        # Diagnostic dump for offline root-cause analysis; not part
+                        # of the perception contract itself.
+                        Image.fromarray(scene_input.rgb).save(
+                            args.output / "perception_capture_rgb.png"
+                        )
+                        np.save(
+                            args.output / "perception_capture_depth_m.npy",
+                            scene_input.depth_m,
+                        )
+                        finite_depth = scene_input.depth_m[
+                            np.isfinite(scene_input.depth_m)
+                        ]
+                        if finite_depth.size:
+                            depth_range = (
+                                float(finite_depth.min()),
+                                float(finite_depth.max()),
+                            )
+                            normalized = np.clip(
+                                (scene_input.depth_m - depth_range[0])
+                                / max(depth_range[1] - depth_range[0], 1e-6),
+                                0,
+                                1,
+                            )
+                            normalized = np.nan_to_num(normalized, nan=0.0)
+                            Image.fromarray(
+                                (normalized * 255).astype(np.uint8)
+                            ).save(args.output / "perception_capture_depth_vis.png")
                         # Capture steps advance physics; use the accepted frame's pose.
                         base, q = robot.get_world_pose()
                         yaw, _ = yaw_and_tilt(q)
@@ -706,6 +734,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         state["perception"].update({
                             "pocket_observation": asdict(observation),
                             "frame_diagnostics": asdict(frame_diagnostics),
+                            "detection_diagnostics": asdict(detection.diagnostics),
                             "capture_attempts": capture_attempts,
                         })
                         require(
