@@ -400,9 +400,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     if args.use_perception:
         planning_start = time.monotonic()
         state["observation_candidates"] = []
+        state["observation_attempts"] = []
+        next_candidate_index = 0
         state["observation_waypoint_selected"] = None
         observe_plan = None
-        for coordinates in args.observation_waypoints:
+        for candidate_index, coordinates in enumerate(args.observation_waypoints):
+            next_candidate_index = candidate_index + 1
             waypoint = Pose2D(*coordinates)
             candidate_plan = plan_observation_leg(
                 scenario,
@@ -416,6 +419,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 geometry=geometry,
             )
             state["observation_candidates"].append({
+                "candidate_index": candidate_index,
                 "pose": [waypoint.x_m, waypoint.y_m, waypoint.yaw_rad],
                 "success": candidate_plan.success,
                 "status": candidate_plan.status,
@@ -676,11 +680,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 )
                 if tracking.status == "arrived":
                     if args.use_perception and phase == "observe":
-                        state["perception"] = {
+                        attempt_number = len(state["observation_attempts"]) + 1
+                        attempt = {
+                            "candidate_index": next_candidate_index - 1,
+                            "waypoint": list(state["observation_waypoint_selected"]),
+                            "arrived_pose": rear.tolist(),
                             "pocket_observation": None,
                             "frame_diagnostics": None,
+                            "detection_diagnostics": None,
                             "capture_attempts": None,
                         }
+                        state["observation_attempts"].append(attempt)
                         try:
                             scene_input, frame_diagnostics, capture_attempts = (
                                 adapter.capture_scene_input(
@@ -694,14 +704,16 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 )
                             )
                         except adapter.CaptureFailure as exc:
+                            attempt["capture_failure"] = exc.reason
                             require(False, f"perception_capture_failed:{exc.reason}")
                         # Diagnostic dump for offline root-cause analysis; not part
                         # of the perception contract itself.
                         Image.fromarray(scene_input.rgb).save(
-                            args.output / "perception_capture_rgb.png"
+                            args.output / f"perception_capture_{attempt_number}_rgb.png"
                         )
                         np.save(
-                            args.output / "perception_capture_depth_m.npy",
+                            args.output
+                            / f"perception_capture_{attempt_number}_depth_m.npy",
                             scene_input.depth_m,
                         )
                         finite_depth = scene_input.depth_m[
@@ -719,9 +731,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 1,
                             )
                             normalized = np.nan_to_num(normalized, nan=0.0)
-                            Image.fromarray(
-                                (normalized * 255).astype(np.uint8)
-                            ).save(args.output / "perception_capture_depth_vis.png")
+                            Image.fromarray((normalized * 255).astype(np.uint8)).save(
+                                args.output
+                                / f"perception_capture_{attempt_number}_depth_vis.png"
+                            )
                         # Capture steps advance physics; use the accepted frame's pose.
                         base, q = robot.get_world_pose()
                         yaw, _ = yaw_and_tilt(q)
@@ -733,102 +746,229 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 yaw,
                             ]
                         )
+                        attempt.update(
+                            {
+                                "frame_diagnostics": asdict(frame_diagnostics),
+                                "capture_attempts": capture_attempts,
+                            }
+                        )
                         prior = args.pallet_prior_loaded
                         params = DetectorParams.derived_for(prior)
                         detection = detect_pockets(scene_input, prior, params)
                         observation = detection.observation
-                        state["perception"].update({
-                            "pocket_observation": asdict(observation),
-                            "frame_diagnostics": asdict(frame_diagnostics),
-                            "detection_diagnostics": asdict(detection.diagnostics),
-                            "capture_attempts": capture_attempts,
-                        })
-                        require(
-                            observation.status == "valid",
-                            f"perception_{observation.status}:{observation.reason}",
+                        attempt.update(
+                            {
+                                "pocket_observation": asdict(observation),
+                                "frame_diagnostics": asdict(frame_diagnostics),
+                                "detection_diagnostics": asdict(detection.diagnostics),
+                                "capture_attempts": capture_attempts,
+                            }
                         )
-                        base_xy = adapter.estimate_pallet_center_m(
-                            observation, geometry.pallet_depth_m
-                        )
-                        target_pickup = adapter.estimate_world_pallet_site(
-                            base_xy, observation.insertion_yaw_rad,
-                            (base[0], base[1]), yaw,
-                        )
-                        start_rear_pose = Pose2D(rear[0], rear[1], rear[2])
-                        state["perception"]["perception_pickup_estimate_m"] = {
-                            "x_m": target_pickup.x_m,
-                            "y_m": target_pickup.y_m,
-                            "yaw_rad": target_pickup.yaw_rad,
-                        }
-                        # Ground-truth pickup is for error evaluation here, never
-                        # the planning target; the collision map still uses it.
-                        state["perception"]["perception_error"] = {
-                            "position_m": float(np.hypot(
-                                target_pickup.x_m - scenario.pickup.x_m,
-                                target_pickup.y_m - scenario.pickup.y_m,
-                            )),
-                            "yaw_rad": float(math.atan2(
-                                math.sin(target_pickup.yaw_rad - scenario.pickup.yaw_rad),
-                                math.cos(target_pickup.yaw_rad - scenario.pickup.yaw_rad),
-                            )),
-                        }
-                        planning_start = time.monotonic()
-                        plans = plan_transport(
-                            scenario,
-                            PlannerConfig(
-                                curvature_limit_inv_m=settings["planner_curvature_inv_m"],
-                                clearance_m=settings["planning_clearance_m"],
-                                max_expansions=30000,
-                            ),
-                            geometry=geometry,
-                            target_pickup=target_pickup,
-                            start_rear=start_rear_pose,
-                        )
-                        state["planning_wall_s"] += time.monotonic() - planning_start
-                        state["planning_status"] = plans.status
-                        # MissionPlan.status already contains the failing phase.
-                        require(plans.success, plans.status)
-                        paths.update({
-                            name: getattr(plans, name)
-                            for name in ["approach", "insert", "extract", "transport", "withdraw"]
-                        })
-                        trackers.update({
-                            name: RearAxlePathTracker(
-                                path.poses,
-                                path.directions,
-                                path.curvatures_inv_m,
+                        if observation.status != "valid":
+                            attempt["retry_reason"] = (
+                                f"perception_{observation.status}:{observation.reason}"
+                            )
+                            planning_start = time.monotonic()
+                            observe_plan = None
+                            while next_candidate_index < len(
+                                args.observation_waypoints
+                            ):
+                                candidate_index = next_candidate_index
+                                next_candidate_index += 1
+                                coordinates = args.observation_waypoints[
+                                    candidate_index
+                                ]
+                                waypoint = Pose2D(*coordinates)
+                                candidate_plan = plan_observation_leg(
+                                    scenario,
+                                    waypoint,
+                                    PlannerConfig(
+                                        curvature_limit_inv_m=settings[
+                                            "planner_curvature_inv_m"
+                                        ],
+                                        clearance_m=settings["planning_clearance_m"],
+                                        max_expansions=30000,
+                                        primitive_length_m=0.25,
+                                    ),
+                                    geometry=geometry,
+                                    start_rear=Pose2D(rear[0], rear[1], rear[2]),
+                                )
+                                state["observation_candidates"].append(
+                                    {
+                                        "candidate_index": candidate_index,
+                                        "pose": list(coordinates),
+                                        "start_rear": rear.tolist(),
+                                        "success": candidate_plan.success,
+                                        "status": candidate_plan.status,
+                                    }
+                                )
+                                if candidate_plan.success:
+                                    observe_plan = candidate_plan
+                                    state["observation_waypoint_selected"] = list(
+                                        coordinates
+                                    )
+                                    break
+                            state["planning_wall_s"] += (
+                                time.monotonic() - planning_start
+                            )
+                            if observe_plan is None:
+                                state["planning_status"] = "all_candidates_exhausted"
+                                reasons = ";".join(
+                                    candidate["status"]
+                                    for candidate in state["observation_candidates"]
+                                )
+                                require(
+                                    False,
+                                    f"observe:all_candidates_exhausted:{attempt['retry_reason']}:{reasons}",
+                                )
+                            state["planning_status"] = observe_plan.status
+                            paths["observe"] = observe_plan
+                            trackers["observe"] = RearAxlePathTracker(
+                                observe_plan.poses,
+                                observe_plan.directions,
+                                observe_plan.curvatures_inv_m,
                                 TrackerConfig(
-                                    cruise_speed_mps=speeds[name],
-                                    max_curvature_inv_m=settings["tracker_curvature_inv_m"],
-                                    max_acceleration_mps2=settings["drive_acceleration_mps2"],
+                                    cruise_speed_mps=speeds["observe"],
+                                    max_curvature_inv_m=settings[
+                                        "tracker_curvature_inv_m"
+                                    ],
+                                    max_acceleration_mps2=settings[
+                                        "drive_acceleration_mps2"
+                                    ],
                                     lookahead_m=0.28,
                                     position_tolerance_m=0.008,
-                                    yaw_tolerance_rad=0.02,
+                                    yaw_tolerance_rad=0.03,
                                     stop_speed_mps=0.012,
                                     max_cross_track_error_m=0.35,
                                 ),
                             )
-                            for name, path in paths.items()
-                            if name != "observe"
-                        })
-                        state["paths"] = {name: path_record(path) for name, path in paths.items()}
-                        (args.output / "paths.json").write_text(
-                            record_json(state["paths"], indent=2) + "\n"
-                        )
-                        add_path_display(stage, paths["approach"], "Approach", (0.05, 0.45, 1.0))
-                        add_path_display(stage, paths["transport"], "Transport", (1.0, 0.65, 0.04))
-                        stage.GetRootLayer().Export(str(args.output / "scene.usda"))
-                        print(
-                            "PLANNED",
-                            record_json(
+                            phase_started = t
+                        else:
+                            state["perception"] = attempt.copy()
+                            base_xy = adapter.estimate_pallet_center_m(
+                                observation, geometry.pallet_depth_m
+                            )
+                            target_pickup = adapter.estimate_world_pallet_site(
+                                base_xy,
+                                observation.insertion_yaw_rad,
+                                (base[0], base[1]),
+                                yaw,
+                            )
+                            start_rear_pose = Pose2D(rear[0], rear[1], rear[2])
+                            state["perception"]["perception_pickup_estimate_m"] = {
+                                "x_m": target_pickup.x_m,
+                                "y_m": target_pickup.y_m,
+                                "yaw_rad": target_pickup.yaw_rad,
+                            }
+                            # Ground-truth pickup is for error evaluation here, never
+                            # the planning target; the collision map still uses it.
+                            state["perception"]["perception_error"] = {
+                                "position_m": float(
+                                    np.hypot(
+                                        target_pickup.x_m - scenario.pickup.x_m,
+                                        target_pickup.y_m - scenario.pickup.y_m,
+                                    )
+                                ),
+                                "yaw_rad": float(
+                                    math.atan2(
+                                        math.sin(
+                                            target_pickup.yaw_rad
+                                            - scenario.pickup.yaw_rad
+                                        ),
+                                        math.cos(
+                                            target_pickup.yaw_rad
+                                            - scenario.pickup.yaw_rad
+                                        ),
+                                    )
+                                ),
+                            }
+                            planning_start = time.monotonic()
+                            plans = plan_transport(
+                                scenario,
+                                PlannerConfig(
+                                    curvature_limit_inv_m=settings[
+                                        "planner_curvature_inv_m"
+                                    ],
+                                    clearance_m=settings["planning_clearance_m"],
+                                    max_expansions=30000,
+                                ),
+                                geometry=geometry,
+                                target_pickup=target_pickup,
+                                start_rear=start_rear_pose,
+                            )
+                            state["planning_wall_s"] += (
+                                time.monotonic() - planning_start
+                            )
+                            state["planning_status"] = plans.status
+                            # MissionPlan.status already contains the failing phase.
+                            require(plans.success, plans.status)
+                            paths.update(
                                 {
-                                    k: {"length_m": v.length_m, "expansions": v.expanded_nodes}
-                                    for k, v in paths.items()
+                                    name: getattr(plans, name)
+                                    for name in [
+                                        "approach",
+                                        "insert",
+                                        "extract",
+                                        "transport",
+                                        "withdraw",
+                                    ]
                                 }
-                            ),
-                            flush=True,
-                        )
-                        transition("approach", t)
+                            )
+                            trackers.update(
+                                {
+                                    name: RearAxlePathTracker(
+                                        path.poses,
+                                        path.directions,
+                                        path.curvatures_inv_m,
+                                        TrackerConfig(
+                                            cruise_speed_mps=speeds[name],
+                                            max_curvature_inv_m=settings[
+                                                "tracker_curvature_inv_m"
+                                            ],
+                                            max_acceleration_mps2=settings[
+                                                "drive_acceleration_mps2"
+                                            ],
+                                            lookahead_m=0.28,
+                                            position_tolerance_m=0.008,
+                                            yaw_tolerance_rad=0.02,
+                                            stop_speed_mps=0.012,
+                                            max_cross_track_error_m=0.35,
+                                        ),
+                                    )
+                                    for name, path in paths.items()
+                                    if name != "observe"
+                                }
+                            )
+                            state["paths"] = {
+                                name: path_record(path) for name, path in paths.items()
+                            }
+                            (args.output / "paths.json").write_text(
+                                record_json(state["paths"], indent=2) + "\n"
+                            )
+                            add_path_display(
+                                stage, paths["approach"], "Approach", (0.05, 0.45, 1.0)
+                            )
+                            add_path_display(
+                                stage,
+                                paths["transport"],
+                                "Transport",
+                                (1.0, 0.65, 0.04),
+                            )
+                            stage.GetRootLayer().Export(str(args.output / "scene.usda"))
+                            print(
+                                "PLANNED",
+                                record_json(
+                                    {
+                                        k: {
+                                            "length_m": v.length_m,
+                                            "expansions": v.expanded_nodes,
+                                        }
+                                        for k, v in paths.items()
+                                    }
+                                ),
+                                flush=True,
+                            )
+                            transition("approach", t)
                     elif phase == "approach":
                         transition("insert", t)
                     elif phase == "insert":

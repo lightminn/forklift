@@ -383,11 +383,13 @@ def plan_observation_leg(
     config: PlannerConfig | None = None,
     *,
     geometry: SyntheticMissionGeometry | None = None,
+    start_rear: Pose2D | None = None,
 ) -> PlanResult:
     """Plan a separate leg to the observation waypoint at full clearance.
 
     Like plan_transport's target/obstacle split, scenario.pickup is an obstacle,
     not the goal of this leg.
+    start_rear optionally replaces scenario.start_rear with the measured rear pose.
     """
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
     config = (
@@ -404,7 +406,7 @@ def plan_observation_leg(
         scenario.pickup.yaw_rad,
     )
     return plan_hybrid_astar(
-        scenario.start_rear,
+        start_rear if start_rear is not None else scenario.start_rear,
         waypoint,
         props + [pallet],
         geometry.unloaded_footprint,

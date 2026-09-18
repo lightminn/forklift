@@ -53,6 +53,28 @@ def test_observation_leg_reaches_independent_waypoint(observation_scenario):
     np.testing.assert_allclose(result.poses[-1], [2, 0, 0], atol=1e-7)
 
 
+def test_observation_leg_optional_start_preserves_default_plan(observation_scenario):
+    waypoint = Pose2D(2, 0, 0)
+    baseline = asdict(
+        pallet_mission.plan_observation_leg(observation_scenario, waypoint)
+    )
+    for start in (None, observation_scenario.start_rear):
+        result = pallet_mission.plan_observation_leg(
+            observation_scenario, waypoint, start_rear=start
+        )
+        for field_name, expected in baseline.items():
+            np.testing.assert_array_equal(asdict(result)[field_name], expected)
+
+
+def test_observation_leg_starts_at_measured_rear_pose(observation_scenario):
+    result = pallet_mission.plan_observation_leg(
+        observation_scenario, Pose2D(2, 0, 0), start_rear=Pose2D(0, 0, 0)
+    )
+    assert result.success, result.status
+    np.testing.assert_allclose(result.poses[0], [0, 0, 0], atol=1e-7)
+    np.testing.assert_allclose(result.poses[-1], [2, 0, 0], atol=1e-7)
+
+
 def test_observation_leg_rejects_waypoint_inside_real_pallet(observation_scenario):
     result = pallet_mission.plan_observation_leg(observation_scenario, Pose2D(4, 3, 0))
     assert not result.success
