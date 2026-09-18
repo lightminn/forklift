@@ -6,6 +6,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from forklift_core.perception.pallet_geometry import load_pallet_geometry
+
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
     "insertion_geometry", ROOT / "sim/isaac/insertion_geometry.py"
@@ -158,3 +160,20 @@ def test_pallet_boxes_reject_missing_multiple_or_empty_links(tmp_path, links):
     path.write_text(f'<robot name="invalid">{links}</robot>')
     with pytest.raises(ValueError):
         MODULE.pallet_boxes_from_urdf(path)
+
+
+def test_named_boxes_accept_normal_t11(full_t11_pallet_urdf):
+    pallet_geometry = load_pallet_geometry(ROOT / "config/pallet_geometry_t11_06.yaml")
+    path = full_t11_pallet_urdf(swap_all=False, swap_boards_only=False)
+    assert len(MODULE.pallet_boxes_from_urdf(path)) == 22
+    MODULE.assert_pallet_urdf_matches_named_boxes(path, pallet_geometry)
+
+
+@pytest.mark.parametrize("swap", ["swap_all", "swap_boards_only"])
+def test_named_boxes_reject_t11_90_degree_swap(full_t11_pallet_urdf, swap):
+    pallet_geometry = load_pallet_geometry(ROOT / "config/pallet_geometry_t11_06.yaml")
+    path = full_t11_pallet_urdf(**{swap: True})
+    assert len(MODULE.pallet_boxes_from_urdf(path)) == 22
+    MODULE.assert_pallet_urdf_matches_geometry(path, 0.66, 0.66)
+    with pytest.raises(ValueError, match="bottom_board_0"):
+        MODULE.assert_pallet_urdf_matches_named_boxes(path, pallet_geometry)

@@ -13,6 +13,7 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 from forklift_core.geometry import rotation_matrix_from_quaternion_xyzw
+from forklift_core.perception.pallet_geometry import PalletGeometry, pallet_boxes
 
 
 def _vector(value: ArrayLike) -> np.ndarray:
@@ -109,6 +110,53 @@ def assert_pallet_urdf_matches_geometry(
         raise ValueError(
             f"Pallet collision envelope mismatch: got {actual.tolist()}, "
             f"expected {expected.tolist()} within {tolerance_m} m"
+        )
+
+
+def assert_pallet_urdf_matches_named_boxes(
+    pallet_urdf: Path,
+    geometry: PalletGeometry,
+    *,
+    tolerance_m: float = 0.001,
+) -> None:
+    """Compare every named collision box's centre and size against the YAML.
+
+    Catches assembly a bounding-box check cannot: for a square pallet like
+    T11, a 90-degree-swapped or 180-degree-rotated URDF keeps the same
+    envelope, centre and box count but moves most named box centres/sizes.
+    See docs/plans/2026-09-17-hybrid-astar-transport.md:214-245 for the
+    verified counts (21/22 boxes differ under a 90-degree name-preserving
+    swap, 18/22 under 180 degrees).
+    """
+    expected_boxes = {box.name: box for box in pallet_boxes(geometry)}
+    actual_boxes = {}
+    for name, actual_centre_m, actual_half_m in pallet_boxes_from_urdf(pallet_urdf):
+        if name in actual_boxes:
+            raise ValueError(f"Duplicate pallet collision box name: {name}")
+        actual_boxes[name] = (actual_centre_m, actual_half_m)
+    if expected_boxes.keys() != actual_boxes.keys():
+        missing = sorted(expected_boxes.keys() - actual_boxes.keys())
+        extra = sorted(actual_boxes.keys() - expected_boxes.keys())
+        raise ValueError(
+            f"Pallet collision box names mismatch: missing={missing}, extra={extra}"
+        )
+    mismatches = []
+    for name, expected_box in expected_boxes.items():
+        actual_centre_m, actual_half_m = actual_boxes[name]
+        expected_size_m = expected_box.size_m
+        actual_size_m = actual_half_m * 2
+        for field, actual, expected in (
+            ("centre_m", actual_centre_m, expected_box.centre_m),
+            ("size_m", actual_size_m, expected_size_m),
+        ):
+            if not np.allclose(actual, expected, rtol=0, atol=tolerance_m):
+                mismatches.append(
+                    f"{name} {field}: got {actual.tolist()}, expected {list(expected)}"
+                )
+    if mismatches:
+        raise ValueError(
+            f"Pallet named collision boxes mismatch (tolerance {tolerance_m} m): "
+            + "; ".join(mismatches)
         )
 
 

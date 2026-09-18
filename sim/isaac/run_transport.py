@@ -74,6 +74,7 @@ def arguments() -> argparse.Namespace:
         parser.error("obstacles and max-sim-seconds must be positive")
     from insertion_geometry import (
         assert_pallet_urdf_matches_geometry,
+        assert_pallet_urdf_matches_named_boxes,
         read_chassis_reference_m,
     )
 
@@ -86,6 +87,7 @@ def arguments() -> argparse.Namespace:
             pallet_geometry.overall_depth_m,
             pallet_geometry.overall_width_m,
         )
+        assert_pallet_urdf_matches_named_boxes(args.pallet_urdf, pallet_geometry)
         axle_to_fork_tip_m, rear_axle_offset_m = read_chassis_reference_m(
             args.forklift_urdf
         )

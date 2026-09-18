@@ -95,7 +95,7 @@ def run_geometry_cli(tmp_path, pallet_urdf, geometry="t11_06"):
     )
 
 
-def test_t11_configuration_reaches_sdk_startup(tmp_path, synthetic_pallet_urdf):
+def test_t11_configuration_reaches_sdk_startup(tmp_path, full_t11_pallet_urdf):
     # A sentinel SDK stops startup even on hosts with Isaac installed.
     import json
     import os
@@ -105,7 +105,7 @@ def test_t11_configuration_reaches_sdk_startup(tmp_path, synthetic_pallet_urdf):
     from unittest.mock import patch
 
     with patch.dict(os.environ, {"PYTHONPATH": str(tmp_path) + os.pathsep + old}):
-        result = run_geometry_cli(tmp_path, synthetic_pallet_urdf())
+        result = run_geometry_cli(tmp_path, full_t11_pallet_urdf())
     assert result.returncode == 1, result.stderr
     assert "SDK_STARTUP_REACHED" in result.stderr
     record = json.loads((tmp_path / "run/result.json").read_text())
@@ -126,5 +126,15 @@ def test_noncentred_pallet_is_rejected_before_startup(tmp_path, synthetic_pallet
     result = run_geometry_cli(tmp_path, synthetic_pallet_urdf(x_m=0.03))
     assert result.returncode == 2
     assert "envelope" in result.stderr
+    assert "ModuleNotFoundError" not in result.stderr
+    assert not (tmp_path / "run").exists()
+
+
+def test_t11_named_boxes_reject_90_degree_swap_before_startup(
+    tmp_path, full_t11_pallet_urdf
+):
+    result = run_geometry_cli(tmp_path, full_t11_pallet_urdf(swap_all=True))
+    assert result.returncode == 2, result.stderr
+    assert "bottom_board_0" in result.stderr
     assert "ModuleNotFoundError" not in result.stderr
     assert not (tmp_path / "run").exists()

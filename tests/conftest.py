@@ -35,3 +35,11 @@ def synthetic_pallet_urdf(tmp_path):
         return _PALLET.write_pallet_urdf(tmp_path / "pallet.urdf", **kwargs)
 
     return write
+
+
+@pytest.fixture
+def full_t11_pallet_urdf(tmp_path):
+    def write(**kwargs):
+        return _PALLET.write_full_t11_pallet_urdf(tmp_path / "full_t11.urdf", **kwargs)
+
+    return write

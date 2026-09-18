@@ -39,7 +39,7 @@ PRIOR = ROOT / "config/pallet_prior_t11_06.yaml"
 ADR2 = ROOT / "docs/decisions/0002-test-pallet-and-geometry-generality.md"
 ADR3 = ROOT / "docs/decisions/0003-target-selection-and-blind-zone-insertion.md"
 GEOMETRY_CODE = ROOT / "src/forklift_core/perception/pallet_geometry.py"
-ASSEMBLY_CODE = ROOT / "tools/build_pallet_model.py"
+ASSEMBLY_CODE = GEOMETRY_CODE
 # ADR 0002 decision 1: the existing input YAML is already scaled by 0.6.
 DEFAULT_SCALE = 0.6
 SVG_NS = "http://www.w3.org/2000/svg"
