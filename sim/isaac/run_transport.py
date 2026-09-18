@@ -72,14 +72,28 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--use-perception", action="store_true")
     parser.add_argument("--pallet-prior", type=Path, default=None)
     parser.add_argument(
-        "--observation-waypoint", nargs=3, type=float,
-        default=[-0.10, 0.90, 0.0], metavar=("X", "Y", "YAW"),
+        "--observation-waypoints", action="append", nargs=3, type=float,
+        metavar=("X", "Y", "YAW"),
+        help=(
+            "Ordered observation candidates in metres/radians; repeat this option "
+            "for each candidate. Overrides defaults: (-0.10, 0.90, 0), "
+            "(-0.10, -0.60, 0), (-1.20, 0.30, 0), (-1.50, -0.60, 0)."
+        ),
     )
     parser.add_argument(
         "--perception-camera-axes", choices=("world", "usd", "ros"), default="ros",
     )
     parser.add_argument("--perception-max-attempts", type=int, default=200)
     args, unknown = parser.parse_known_args()
+    if args.observation_waypoints is None:
+        args.observation_waypoints = [
+            [-0.10, 0.90, 0.0],
+            [-0.10, -0.60, 0.0],
+            [-1.20, 0.30, 0.0],
+            [-1.50, -0.60, 0.0],
+        ]
+    if not args.observation_waypoints:
+        parser.error("--observation-waypoints requires at least one candidate")
     if args.use_perception:
         if args.pallet_prior is None:
             parser.error("--pallet-prior is required with --use-perception")
@@ -378,19 +392,41 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     state["phase"] = "planning"
     if args.use_perception:
         planning_start = time.monotonic()
-        observe_plan = plan_observation_leg(
-            scenario,
-            Pose2D(*args.observation_waypoint),
-            PlannerConfig(
-                curvature_limit_inv_m=settings["planner_curvature_inv_m"],
-                clearance_m=settings["planning_clearance_m"],
-                max_expansions=30000,
-            ),
-            geometry=geometry,
-        )
+        state["observation_candidates"] = []
+        state["observation_waypoint_selected"] = None
+        observe_plan = None
+        for coordinates in args.observation_waypoints:
+            waypoint = Pose2D(*coordinates)
+            candidate_plan = plan_observation_leg(
+                scenario,
+                waypoint,
+                PlannerConfig(
+                    curvature_limit_inv_m=settings["planner_curvature_inv_m"],
+                    clearance_m=settings["planning_clearance_m"],
+                    max_expansions=30000,
+                    primitive_length_m=0.25,
+                ),
+                geometry=geometry,
+            )
+            state["observation_candidates"].append({
+                "pose": [waypoint.x_m, waypoint.y_m, waypoint.yaw_rad],
+                "success": candidate_plan.success,
+                "status": candidate_plan.status,
+            })
+            if candidate_plan.success:
+                observe_plan = candidate_plan
+                state["observation_waypoint_selected"] = [
+                    waypoint.x_m, waypoint.y_m, waypoint.yaw_rad,
+                ]
+                break
         state["planning_wall_s"] = time.monotonic() - planning_start
+        if observe_plan is None:
+            state["planning_status"] = "all_candidates_failed"
+            reasons = ";".join(
+                candidate["status"] for candidate in state["observation_candidates"]
+            )
+            require(False, f"observe:all_candidates_failed:{reasons}")
         state["planning_status"] = observe_plan.status
-        require(observe_plan.success, f"observe:{observe_plan.status}")
         paths = {"observe": observe_plan}
     else:
         planning_start = time.monotonic()
@@ -462,7 +498,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 max_acceleration_mps2=settings["drive_acceleration_mps2"],
                 lookahead_m=0.28,
                 position_tolerance_m=0.008,
-                yaw_tolerance_rad=0.02,
+                yaw_tolerance_rad=0.03 if name == "observe" else 0.02,
                 stop_speed_mps=0.012,
                 max_cross_track_error_m=0.35,
             ),
@@ -634,7 +670,6 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 if tracking.status == "arrived":
                     if args.use_perception and phase == "observe":
                         state["perception"] = {
-                            "observation_waypoint": list(args.observation_waypoint),
                             "pocket_observation": None,
                             "frame_diagnostics": None,
                             "capture_attempts": None,
