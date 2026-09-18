@@ -50,6 +50,68 @@ def _boxes(link: ET.Element) -> tuple:
     return tuple(boxes)
 
 
+def read_chassis_reference_m(forklift_urdf: Path) -> tuple[float, float]:
+    """Return axle-to-tip distance and signed base-frame rear axle x in metres.
+
+    Read the named provisional URDF joint origins; reject missing or malformed
+    coordinates instead of guessing. The fork-tip origin is base-relative, so
+    subtract the rear axle origin to obtain the axle-relative distance.
+    """
+    truck = ET.parse(forklift_urdf).getroot()
+    coordinates = []
+    for name in ("left_fork_tip_fixed", "rear_left_spin"):
+        origin = truck.find(f"joint[@name='{name}']/origin")
+        if origin is None:
+            raise ValueError(f"Missing chassis joint/origin: {name}")
+        try:
+            xyz = _vector([float(value) for value in origin.get("xyz", "").split()])
+        except ValueError as exc:
+            raise ValueError(f"Malformed chassis joint origin xyz: {name}") from exc
+        coordinates.append(float(xyz[0]))
+    tip, rear = coordinates
+    return tip - rear, rear
+
+
+def pallet_boxes_from_urdf(pallet_urdf: Path) -> tuple:
+    """Return all named collision boxes of the single free pallet link."""
+    pallet = ET.parse(pallet_urdf).getroot()
+    links = pallet.findall("link")
+    if len(links) != 1 or pallet.findall("joint"):
+        raise ValueError("Expected single-link free pallet")
+    return _boxes(links[0])
+
+
+def assert_pallet_urdf_matches_geometry(
+    pallet_urdf: Path,
+    geometry_depth_m: float,
+    geometry_width_m: float,
+    *,
+    tolerance_m: float = 0.001,
+) -> None:
+    """Check depth/width, xy centring and z floor with absolute metre tolerance.
+
+    This checks the overall collision envelope only, not named internal layout.
+    """
+    boxes = pallet_boxes_from_urdf(pallet_urdf)
+    low = np.min([center - half for _, center, half in boxes], axis=0)
+    high = np.max([center + half for _, center, half in boxes], axis=0)
+    actual = np.array([low[0], high[0], low[1], high[1], low[2]])
+    expected = np.array(
+        [
+            -geometry_depth_m / 2,
+            geometry_depth_m / 2,
+            -geometry_width_m / 2,
+            geometry_width_m / 2,
+            0,
+        ]
+    )
+    if not np.allclose(actual, expected, rtol=0, atol=tolerance_m):
+        raise ValueError(
+            f"Pallet collision envelope mismatch: got {actual.tolist()}, "
+            f"expected {expected.tolist()} within {tolerance_m} m"
+        )
+
+
 class InsertionGeometry:
     """Source URDF boxes for the provisional lift chain and a single-link pallet."""
 

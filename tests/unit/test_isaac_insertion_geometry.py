@@ -88,3 +88,73 @@ def test_clearance_margin_rejects_near_scrape(geometry):
 def test_invalid_geometry_state_is_rejected(geometry, kwargs):
     with pytest.raises(ValueError):
         check(geometry, **kwargs)
+
+
+def test_chassis_reference_is_axle_relative():
+    assert MODULE.read_chassis_reference_m(
+        ROOT / "sim/models/dls08_provisional/forklift.urdf"
+    ) == pytest.approx((1.29, -0.34))
+
+
+@pytest.mark.parametrize("joint_name", ["left_fork_tip_fixed", "rear_left_spin"])
+@pytest.mark.parametrize(
+    "defect",
+    ["missing_joint", "missing_origin", "missing_xyz", "short_xyz", "nan", "text"],
+)
+def test_chassis_reference_rejects_missing_or_malformed(tmp_path, joint_name, defect):
+    import xml.etree.ElementTree as ET
+
+    tree = ET.parse(ROOT / "sim/models/dls08_provisional/forklift.urdf")
+    root = tree.getroot()
+    joint = root.find(f"joint[@name='{joint_name}']")
+    origin = joint.find("origin")
+    if defect == "missing_joint":
+        root.remove(joint)
+    elif defect == "missing_origin":
+        joint.remove(origin)
+    elif defect == "missing_xyz":
+        origin.attrib.pop("xyz")
+    else:
+        origin.set(
+            "xyz", {"short_xyz": "1 2", "nan": "nan 0 0", "text": "1 2 bad"}[defect]
+        )
+    path = tmp_path / "truck.urdf"
+    tree.write(path)
+    with pytest.raises(ValueError):
+        MODULE.read_chassis_reference_m(path)
+
+
+def test_epal_urdf_envelope_matches_yaml_dimensions():
+    path = ROOT / "sim/models/epal6_pallet/pallet.urdf"
+    assert len(MODULE.pallet_boxes_from_urdf(path)) == 22
+    MODULE.assert_pallet_urdf_matches_geometry(path, 0.60, 0.80)
+
+
+@pytest.mark.parametrize(
+    "kwargs", [{"x_m": 0.03}, {"z_m": 0.075}, {"depth_m": 0.60}, {"width_m": 0.80}]
+)
+def test_pallet_envelope_rejects_dimensions_or_origin(synthetic_pallet_urdf, kwargs):
+    with pytest.raises(ValueError, match="envelope"):
+        MODULE.assert_pallet_urdf_matches_geometry(
+            synthetic_pallet_urdf(**kwargs), 0.66, 0.66
+        )
+
+
+@pytest.mark.parametrize("shift, accepted", [(0.0009, True), (0.0011, False)])
+def test_pallet_envelope_tolerance_is_absolute(synthetic_pallet_urdf, shift, accepted):
+    path = synthetic_pallet_urdf(x_m=shift)
+    if accepted:
+        MODULE.assert_pallet_urdf_matches_geometry(path, 0.66, 0.66)
+    else:
+        with pytest.raises(ValueError, match="envelope"):
+            MODULE.assert_pallet_urdf_matches_geometry(path, 0.66, 0.66)
+
+
+@pytest.mark.parametrize(
+    "links", ["", '<link name="a"/><link name="b"/>', '<link name="a"/>']
+)
+def test_pallet_boxes_reject_missing_multiple_or_empty_links(tmp_path, links):
+    path = tmp_path / "invalid.urdf"
+    path.write_text(f'<robot name="invalid">{links}</robot>')
+    with pytest.raises(ValueError):
+        MODULE.pallet_boxes_from_urdf(path)

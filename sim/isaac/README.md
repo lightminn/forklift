@@ -12,6 +12,7 @@ Install this repository into the Isaac Sim Python environment with
 python sim/isaac/run_transport.py \
   --base-scene /path/to/imported-forklift-warehouse/scene.usda \
   --pallet-urdf sim/models/epal6_pallet/pallet.urdf \
+  --pallet-geometry config/pallet_geometry_epal6.yaml \
   --settings config/isaac_transport.yaml \
   --output /path/to/new-run --seed 0 --video
 ```

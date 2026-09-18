@@ -18,6 +18,8 @@ from pathlib import Path
 
 import numpy as np
 
+EXIT_CLEARANCE_M = 0.08
+
 
 def record_json(value: object, *, indent: int | None = None) -> str:
     """Encode simulator numerical records without coercing numbers to strings."""
@@ -46,6 +48,7 @@ def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-scene", required=True)
     parser.add_argument("--pallet-urdf", type=Path, required=True)
+    parser.add_argument("--pallet-geometry", type=Path, required=True)
     parser.add_argument(
         "--forklift-urdf",
         type=Path,
@@ -69,6 +72,28 @@ def arguments() -> argparse.Namespace:
     args, unknown = parser.parse_known_args()
     if args.obstacles < 1 or args.max_sim_seconds <= 0:
         parser.error("obstacles and max-sim-seconds must be positive")
+    from insertion_geometry import (
+        assert_pallet_urdf_matches_geometry,
+        read_chassis_reference_m,
+    )
+
+    from forklift_core.perception.pallet_geometry import load_pallet_geometry
+
+    try:
+        pallet_geometry = load_pallet_geometry(args.pallet_geometry)
+        assert_pallet_urdf_matches_geometry(
+            args.pallet_urdf,
+            pallet_geometry.overall_depth_m,
+            pallet_geometry.overall_width_m,
+        )
+        axle_to_fork_tip_m, rear_axle_offset_m = read_chassis_reference_m(
+            args.forklift_urdf
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    args.axle_to_fork_tip_m = axle_to_fork_tip_m
+    args.rear_axle_offset_m = rear_axle_offset_m
+    args.pallet_geometry_loaded = pallet_geometry
     # Kit's --portable-root and related application arguments are consumed by Kit.
     args.kit_arguments = unknown
     return args
@@ -165,7 +190,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     stage = omni.usd.get_context().get_stage()
     world = World(stage_units_in_meters=1.0, physics_dt=1 / 120, rendering_dt=1 / 120)
     catalogue, offsets = read_catalogue(stage, app, args.asset_root)
-    geometry = SyntheticMissionGeometry()
+    geometry = SyntheticMissionGeometry(
+        unloaded_footprint=Footprint(args.axle_to_fork_tip_m, 0.17, 0.36),
+        pallet_depth_m=args.pallet_geometry_loaded.overall_depth_m,
+        pallet_width_m=args.pallet_geometry_loaded.overall_width_m,
+        axle_to_fork_tip_m=args.axle_to_fork_tip_m,
+    )
     insertion_geometry = InsertionGeometry.from_urdfs(
         args.forklift_urdf, args.pallet_urdf
     )
@@ -175,6 +205,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     scenario = make_scenario(args.seed, catalogue, args.obstacles, geometry=geometry)
     state["scenario"] = asdict(scenario)
     state["geometry"] = asdict(geometry)
+    state["pallet_geometry_source"] = str(args.pallet_geometry)
     state["asset_origin_offsets_m"] = offsets
     (args.output / "scenario.json").write_text(
         record_json(state["scenario"], indent=2) + "\n"
@@ -194,8 +225,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     )
     base_start = np.array(
         [
-            scenario.start_rear.x_m + 0.34 * math.cos(scenario.start_rear.yaw_rad),
-            scenario.start_rear.y_m + 0.34 * math.sin(scenario.start_rear.yaw_rad),
+            scenario.start_rear.x_m
+            + abs(args.rear_axle_offset_m) * math.cos(scenario.start_rear.yaw_rad),
+            scenario.start_rear.y_m
+            + abs(args.rear_axle_offset_m) * math.sin(scenario.start_rear.yaw_rad),
             0.015,
         ]
     )
@@ -304,7 +337,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     drive_geometry = AckermannGeometry(0.64, 0.51, 0.135, 0.45, 8.0)
     obstacles = [item.rectangle for item in scenario.props]
     pickup_obstacle = Rectangle(
-        scenario.pickup.x_m, scenario.pickup.y_m, 0.6, 0.8, scenario.pickup.yaw_rad
+        scenario.pickup.x_m,
+        scenario.pickup.y_m,
+        geometry.pallet_depth_m,
+        geometry.pallet_width_m,
+        scenario.pickup.yaw_rad,
     )
     fps_divisor = 120 // args.fps
     dt = 1 / 120
@@ -404,7 +441,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             pallet_yaw, pallet_tilt = yaw_and_tilt(pq)
             forward = np.array([math.cos(yaw), math.sin(yaw)])
             rear = np.array(
-                [base[0] - 0.34 * forward[0], base[1] - 0.34 * forward[1], yaw]
+                [
+                    base[0] - abs(args.rear_axle_offset_m) * forward[0],
+                    base[1] - abs(args.rear_axle_offset_m) * forward[1],
+                    yaw,
+                ]
             )
             velocity = robot.get_linear_velocity()
             signed_speed = float(np.dot(velocity[:2], forward))
@@ -429,7 +470,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 collision_free_pose(
                     [ppos[0], ppos[1], pallet_yaw],
                     obstacles,
-                    Footprint(0.3, 0.3, 0.4),
+                    Footprint(
+                        geometry.pallet_depth_m / 2,
+                        geometry.pallet_depth_m / 2,
+                        geometry.pallet_width_m / 2,
+                    ),
                     scenario.bounds,
                 ),
                 f"Measured pallet footprint overlap in {phase}",
@@ -438,7 +483,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             if phase in ["extract", "transport"]:
                 require(ppos[2] > 0.04, "Pallet dropped during transport")
                 require(
-                    abs(float(np.dot(relative, forward)) - 0.89) < 0.08
+                    abs(
+                        float(np.dot(relative, forward))
+                        - (geometry.inserted_offset_m - abs(args.rear_axle_offset_m))
+                    )
+                    < 0.08
                     and abs(float(np.dot(relative, [-forward[1], forward[0]]))) < 0.04,
                     "Pallet slipped off forks",
                 )
@@ -599,9 +648,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         require(abs(final_pallet[2]) < 0.008, "Delivered pallet is not grounded")
         final_base, final_q = robot.get_world_pose()
         final_yaw = yaw_and_tilt(final_q)[0]
-        tip = final_base[:2] + 0.95 * np.array(
-            [math.cos(final_yaw), math.sin(final_yaw)]
-        )
+        # final_base is base_link, not the rear axle -- axle_to_fork_tip_m is
+        # measured from the axle, so subtract the axle-to-base_link offset first.
+        tip = final_base[:2] + (
+            args.axle_to_fork_tip_m - abs(args.rear_axle_offset_m)
+        ) * np.array([math.cos(final_yaw), math.sin(final_yaw)])
         destination_axis = np.array(
             [
                 math.cos(scenario.destination.yaw_rad),
@@ -609,7 +660,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             ]
         )
         require(
-            float(np.dot(final_pallet[:2] - tip, destination_axis)) > 0.38,
+            float(np.dot(final_pallet[:2] - tip, destination_axis))
+            > geometry.pallet_depth_m / 2 + EXIT_CLEARANCE_M,
             "Fork still inside delivered pallet",
         )
         snapshot("delivered")
@@ -664,7 +716,14 @@ def main() -> None:
         ).hexdigest(),
         "python": sys.version,
         "arguments": {
-            k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()
+            k: (
+                asdict(v)
+                if k == "pallet_geometry_loaded"
+                else str(v)
+                if isinstance(v, Path)
+                else v
+            )
+            for k, v in vars(args).items()
         },
     }
     started = time.monotonic()
