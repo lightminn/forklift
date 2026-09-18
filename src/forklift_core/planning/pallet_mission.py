@@ -25,6 +25,8 @@ from .geometry import (
 )
 from .hybrid_astar import PlannerConfig, PlanResult, plan_hybrid_astar
 
+DEFAULT_TRANSPORT_CLEARANCE_M = 0.10
+
 
 @dataclass(frozen=True)
 class AssetSpec:
@@ -386,11 +388,16 @@ def plan_transport(
     The initial pallet is an obstacle only for approach. During insertion and
     withdrawal, pocket geometry/contact must be checked by the adapter; other
     props and world bounds always remain obstacles. Approach clearance is
-    capped at 0.05 m because the nominal fork-to-pallet stopping gap is 0.10 m.
+    capped at half of geometry.approach_gap_m, the fork-to-pallet stopping gap
+    (0.05 m for the default 0.10 m gap).
     Other stages use the supplied clearance (default 0.10 m).
     """
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
-    config = config if config is not None else PlannerConfig(clearance_m=0.10)
+    config = (
+        config
+        if config is not None
+        else PlannerConfig(clearance_m=DEFAULT_TRANSPORT_CLEARANCE_M)
+    )
     props = [prop.rectangle for prop in scenario.props]
     pickup = site_poses(scenario.pickup, geometry)
     destination = site_poses(scenario.destination, geometry)
@@ -401,7 +408,9 @@ def plan_transport(
         geometry.pallet_width_m,
         scenario.pickup.yaw_rad,
     )
-    approach_config = replace(config, clearance_m=min(config.clearance_m, 0.05))
+    approach_config = replace(
+        config, clearance_m=min(config.clearance_m, geometry.approach_gap_m / 2)
+    )
     approach = plan_hybrid_astar(
         scenario.start_rear,
         pickup["prealign"],

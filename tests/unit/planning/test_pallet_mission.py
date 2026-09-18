@@ -33,6 +33,54 @@ ASSETS = (
 )
 
 
+def test_default_clearance_blocks_a_near_margin_delivery_straight_post():
+    geometry = SyntheticMissionGeometry()
+    lateral = (
+        geometry.loaded_footprint.half_width_m + 0.025 + 0.05
+    )  # prop half-width + surface gap
+    scenario = TransportScenario(
+        0,
+        Pose2D(-2.34, 0, 0),
+        PalletSite(3.4, 0, 0),
+        PalletSite(0.2, 1, 0),
+        (
+            PlacedProp(
+                AssetSpec("test://post", 0.05, 0.05, 1.0),
+                Rectangle(0.0, 1 + lateral, 0.05, 0.05),
+            ),
+        ),
+        Bounds(-3, 4.7, -1.75, 3.05),
+    )
+    # First assert the geometric premise: margin 0 clears, margin 0.10 does not.
+    default = plan_transport(scenario)
+    assert not default.success
+    assert default.status == "transport:straight_collision"
+    zero_clearance = plan_transport(scenario, PlannerConfig(clearance_m=0.00))
+    assert zero_clearance.success
+
+
+def test_approach_clearance_adapts_to_a_smaller_stopping_gap():
+    geometry = SyntheticMissionGeometry(approach_gap_m=0.04)
+    scenario = TransportScenario(
+        0,
+        Pose2D(-2.34, 0, 0),
+        PalletSite(3.4, 0, 0),
+        PalletSite(0.2, 1, 0),
+        (),
+        Bounds(-3, 4.7, -1.75, 3.05),
+    )
+    result = plan_transport(scenario, geometry=geometry)
+    assert result.success, result.status
+    pickup = Rectangle(3.4, 0, geometry.pallet_depth_m, geometry.pallet_width_m)
+    assert collision_free_path(
+        result.approach.poses,
+        [pickup],
+        geometry.unloaded_footprint,
+        scenario.bounds,
+        margin_m=0.02,
+    )
+
+
 def test_t11_derived_geometry_and_serialization():
     geometry = SyntheticMissionGeometry(pallet_depth_m=0.66, pallet_width_m=0.66)
     expected = {

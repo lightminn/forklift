@@ -208,6 +208,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     state["scenario"] = asdict(scenario)
     state["geometry"] = asdict(geometry)
     state["pallet_geometry_source"] = str(args.pallet_geometry)
+    state["pallet_geometry_sha256"] = hashlib.sha256(
+        args.pallet_geometry.read_bytes()
+    ).hexdigest()
     state["asset_origin_offsets_m"] = offsets
     (args.output / "scenario.json").write_text(
         record_json(state["scenario"], indent=2) + "\n"
@@ -245,7 +248,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             ),
         )
     )
-    state["collision_counts"] = configure_drives(stage, settings)
+    state["collision_counts"] = configure_drives(
+        stage,
+        settings,
+        expected_pallet_box_count=len(insertion_geometry.pallet_boxes),
+    )
     # Physics-step scheduling sets the recording rate. Acquire every rendered
     # frame so the SDK elapsed-time threshold cannot skip frame metadata.
     camera = Camera(
@@ -462,6 +469,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             checked_obstacles = obstacles + (
                 [pickup_obstacle] if phase == "approach" else []
             )
+            # Runtime pose checks below use zero margin intentionally --
+            # clearance_m is a planning-time buffer against the intended path,
+            # not a re-check of the executed pose; spawn_clearance_m already
+            # keeps obstacles far enough that a nominal run clears this at
+            # margin 0 (docs/plans/2026-09-17-hybrid-astar-transport.md,
+            # "계획 여유가 시험으로 고정돼 있지 않다").
             require(
                 collision_free_pose(
                     rear, checked_obstacles, footprint, scenario.bounds

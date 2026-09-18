@@ -24,6 +24,7 @@ import numpy as np
 from forklift_core.perception.pallet_geometry import load_pallet_geometry
 from forklift_core.planning import Footprint, PlannerConfig
 from forklift_core.planning.pallet_mission import (
+    DEFAULT_TRANSPORT_CLEARANCE_M,
     AssetSpec,
     SyntheticMissionGeometry,
     make_scenario,
@@ -93,7 +94,9 @@ def main(argv: list[str] | None = None) -> int:
     (args.output / "assets.json").write_bytes(raw_assets)
     (args.output / "pallet_geometry.yaml").write_bytes(raw_pallet_geometry)
     config = PlannerConfig(
-        curvature_limit_inv_m=0.5, clearance_m=0.1, max_expansions=30000
+        curvature_limit_inv_m=0.5,
+        clearance_m=DEFAULT_TRANSPORT_CLEARANCE_M,
+        max_expansions=30000,
     )
     geometry = SyntheticMissionGeometry(
         unloaded_footprint=Footprint(1.29, 0.17, 0.36),
