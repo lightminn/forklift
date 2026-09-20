@@ -122,6 +122,11 @@ class CaptureDiagnostics:
     physics_time_after_s: float | None = None
     pose_before: tuple | None = None
     pose_after: tuple | None = None
+    capture_start_time_s: float | None = None
+    render_steps: int = 0
+    acquisition_since_capture_start_s: float | None = None
+    accepted_pose: tuple | None = None
+    pose_reference: str = "stationary_capture_end"
     attempts: int = 0
     rejection_counts: dict = field(default_factory=dict)
 
@@ -145,9 +150,11 @@ class SensorCapture:
     Camera 5.1 exposes rendering_frame (fabric-time dict) and rendering_time
     (simulation seconds) in get_current_frame(). Read pixels via direct getters.
     Single-threaded stepping is required. Metadata brackets both getters; the
-    pose/time bracket also encloses the render step. Reject delayed frames outside
-    that bracket rather than assigning a current pose to an old acquisition.
-    Endpoint motion limits are a bounded stationary-capture contract, not exact
+    pose/time bracket spans capture start through the latest render step. Flush
+    delayed frames until acquisition is at or after capture start plus the
+    configured render latency. Compare each
+    post-step pose to the fixed start pose; the accepted end pose represents the
+    acquisition under this stationary-capture contract, not exact
     pose interpolation or proof against motion that returns to its start.
     """
 
@@ -161,6 +168,7 @@ class SensorCapture:
         pose_fn,
         position_tolerance_m=0.001,
         angle_tolerance_rad=0.001,
+        render_latency_s=0.066667,
     ):
         self.camera, self.mount = camera, mount
         self.step_fn, self.physics_time_fn, self.pose_fn = (
@@ -176,6 +184,25 @@ class SensorCapture:
         )
         if min(self.position_tolerance_m, self.angle_tolerance_rad) < 0:
             raise ValueError("pose tolerances must be nonnegative")
+        # A conservative flush margin, not a derived pixel latency. The probe
+        # that produced 0.066667 s ran at rendering_dt=1/60 (ws1 Isaac 5.1,
+        # 2026-09-20), where the metadata time trailed physics by four render
+        # frames for 24 steps after warm-up. run_transport steps the world at
+        # rendering_dt=1/120, where the same run's diagnostics show the metadata
+        # trailing by about 0.0167 s - so this default overshoots that config
+        # and forces extra renders rather than fewer.
+        #
+        # What the margin buys is unproven in general: measuring how far the
+        # metadata time trails physics does NOT establish how far the pixels
+        # trail the metadata, and only the latter makes "metadata past
+        # capture_start + L" imply "pixels past capture_start". It held on the
+        # run it was validated against (seed 0, four waypoints, estimates 0.8
+        # and 2.8 mm against ground truth). Recalibrate per render cadence, and
+        # treat a passing capture as evidence only for the configuration it ran
+        # in.
+        self.render_latency_s = _finite_scalar(render_latency_s, "render_latency_s")
+        if self.render_latency_s < 0:
+            raise ValueError("render_latency_s must be nonnegative")
         self.state = CaptureState()
 
     def _metadata(self):
@@ -225,27 +252,14 @@ class SensorCapture:
         def step():
             nonlocal metadata
             diag = self.state.diagnostics
-            diag.pose_before = self._pose()
+            if diag.capture_start_time_s is None:
+                diag.pose_before = self._pose()
+                diag.capture_start_time_s = float(self.physics_time_fn())
             diag.physics_time_before_s = float(self.physics_time_fn())
             self.step_fn()
-            metadata = self._metadata()
-
-        def frame_id():
-            diag = self.state.diagnostics
-            after = self._metadata()
-            diag.sensor_frame_id, diag.acquisition_time_s = after
+            diag.render_steps += 1
             diag.pose_after = self._pose()
             diag.physics_time_after_s = float(self.physics_time_fn())
-            if metadata != after:
-                raise CaptureFailure("sensor_frame_changed_during_read")
-            before_s, after_s = diag.physics_time_before_s, diag.physics_time_after_s
-            # Same simulation clock by Camera's get_sim_time_at_time contract.
-            if not (
-                np.isfinite(before_s)
-                and np.isfinite(after_s)
-                and before_s <= after[1] <= after_s
-            ):
-                raise CaptureFailure("acquisition_outside_capture")
             p0, q0 = map(np.asarray, diag.pose_before)
             p1, q1 = map(np.asarray, diag.pose_after)
             angle = 2 * np.arccos(np.clip(abs(np.dot(q0, q1)), 0, 1))
@@ -254,10 +268,39 @@ class SensorCapture:
                 or angle > self.angle_tolerance_rad
             ):
                 raise CaptureFailure("pose_changed")
+            metadata = self._metadata()
+
+        def frame_id():
+            diag = self.state.diagnostics
+            after = self._metadata()
+            diag.sensor_frame_id, diag.acquisition_time_s = after
+            diag.acquisition_since_capture_start_s = (
+                after[1] - diag.capture_start_time_s
+            )
+            if metadata != after:
+                raise CaptureFailure("sensor_frame_changed_during_read")
+            identifier = after[0]
+            zero_id = (
+                identifier["referenceTimeNumerator"] == 0
+                if isinstance(identifier, dict)
+                else identifier == 0
+            )
+            if zero_id or after[1] == 0:
+                raise CaptureFailure("sensor_frame_not_ready")
+            start_s, after_s = diag.capture_start_time_s, diag.physics_time_after_s
+            # Pixels may lag the reported acquisition reference by this margin.
+            # Keep the upper bound: even after retries, a timestamp ahead of
+            # the current physics clock indicates inconsistent sensor metadata.
+            if not (
+                np.isfinite(start_s)
+                and np.isfinite(after_s)
+                and start_s + self.render_latency_s <= after[1] <= after_s
+            ):
+                raise CaptureFailure("acquisition_outside_capture")
             return after[0]
 
         try:
-            return capture_scene_input(
+            result = capture_scene_input(
                 self.camera,
                 self.mount,
                 max_attempts=max_attempts,
@@ -266,6 +309,8 @@ class SensorCapture:
                 frame_id_fn=frame_id,
                 stamp_ns_fn=lambda: int(metadata[1] * 1e9),
             )
+            self.state.diagnostics.accepted_pose = self.state.diagnostics.pose_after
+            return result
         except CaptureFailure as exc:
             if exc.diagnostics is None:
                 diag = self.state.diagnostics
@@ -296,7 +341,7 @@ def capture_scene_input(
     arrays when IDs are unavailable. Array fallback deliberately favors false
     rejection of identical static renders over reuse, also across calls.
     The generic callbacks must describe the same acquisition. Use SensorCapture
-    for the strict Isaac time/pose bracket and required sensor metadata.
+    for the Isaac capture-start freshness/pose contract and required metadata.
     Return the scene, raw-depth diagnostics and 1-based accepted attempt count.
     An all-unobserved depth frame is returned with finite_positive_count == 0;
     the caller decides how to handle the resulting perception failure.
@@ -333,14 +378,27 @@ def capture_scene_input(
     reason = "timeout"
     for attempt in range(max_attempts):
         state.diagnostics.attempts = attempt + 1
-        if step_fn is not None:
-            step_fn()
-        # Own both buffers: Isaac/fakes may mutate the same arrays on the next step.
-        rgba = np.array(camera.get_rgba(), copy=True)
-        raw_depth = np.array(camera.get_depth(), copy=True)
-        if raw_depth.ndim and raw_depth.shape[-1] == 1:
-            raw_depth = np.squeeze(raw_depth, axis=-1)
-        frame_id = frame_id_fn() if frame_id_fn is not None else None
+        try:
+            if step_fn is not None:
+                step_fn()
+            # Own both buffers: Isaac/fakes may mutate the same arrays on the next step.
+            rgba = np.array(camera.get_rgba(), copy=True)
+            raw_depth = np.array(camera.get_depth(), copy=True)
+            if raw_depth.ndim and raw_depth.shape[-1] == 1:
+                raw_depth = np.squeeze(raw_depth, axis=-1)
+            frame_id = frame_id_fn() if frame_id_fn is not None else None
+        except CaptureFailure as exc:
+            # Only transient sensor readiness/timing failures may consume retries.
+            # Metadata corruption, torn reads and motion still fail immediately.
+            if exc.reason not in {
+                "sensor_frame_not_ready",
+                "acquisition_outside_capture",
+            }:
+                raise
+            reason = exc.reason
+            counts = state.diagnostics.rejection_counts
+            counts[reason] = counts.get(reason, 0) + 1
+            continue
         fresh = True
         if previous is not None:
             if frame_id is not None:

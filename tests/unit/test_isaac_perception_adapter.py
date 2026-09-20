@@ -590,3 +590,224 @@ def test_array_fallback_does_not_forget_accepted_frame_after_rejected_attempt():
     with pytest.raises(MODULE.CaptureFailure):
         capture(camera, state=state, step_fn=step, max_attempts=2)
     assert state.previous[0][0, 0, 0] == 200
+
+
+class DelayedSensorCamera(SensorCamera):
+    """Render clock advances at 60 Hz, with N queued frames and zero warm-up."""
+
+    def __init__(self, delay):
+        super().__init__()
+        self.delay = delay
+        self.tick = 0
+        self.now = 0.0
+        self.queue = [(0, 0.0)] * delay
+
+    def step(self):
+        self.tick += 1
+        self.now += 1 / 60
+        self.queue.append((self.tick, self.now))
+        acquired, stamp = self.queue.pop(0)
+        self.frame = {"rendering_frame": acquired, "rendering_time": stamp}
+
+    def sensor(self, pose=None):
+        return MODULE.SensorCapture(
+            self,
+            MODULE.default_base_from_optical(),
+            step_fn=self.step,
+            physics_time_fn=lambda: self.now,
+            pose_fn=pose or (lambda: ([0, 0, 0], [1, 0, 0, 0])),
+            # This original queue fixture models exact pixel acquisition times,
+            # with no additional pixel/reference latency. MeasuredLagCamera
+            # below separately exercises the measured default margin.
+            render_latency_s=0,
+        )
+
+
+@pytest.mark.parametrize("delay", [2, 4, 7])
+def test_delayed_capture_flushes_warmup_and_previous_waypoint(delay):
+    camera = DelayedSensorCamera(delay)
+    sensor = camera.sensor()
+    scene, _, steps = sensor.capture(max_attempts=20)
+    assert steps == delay + 1
+    assert scene.stamp_ns == int(camera.frame["rendering_time"] * 1e9)
+    assert sensor.state.diagnostics.rejection_counts == {
+        "sensor_frame_not_ready": delay
+    }
+    # Travel without rendering leaves the queue at the previous waypoint.
+    camera.now += 10
+    start = camera.now
+    scene, _, steps = sensor.capture(max_attempts=20)
+    diag = sensor.state.diagnostics
+    assert steps == delay + 1
+    assert start <= scene.stamp_ns / 1e9 <= camera.now
+    assert diag.capture_start_time_s == start
+    assert diag.render_steps == steps
+    assert diag.acquisition_since_capture_start_s == pytest.approx(
+        camera.frame["rendering_time"] - start
+    )
+    assert diag.physics_time_after_s - diag.acquisition_time_s == pytest.approx(
+        delay / 60
+    )
+    assert diag.accepted_pose == diag.pose_after
+    assert diag.pose_reference == "stationary_capture_end"
+
+
+def test_delayed_capture_budget_exhaustion_keeps_last_accepted_frame():
+    camera = DelayedSensorCamera(4)
+    sensor = camera.sensor()
+    sensor.capture(max_attempts=10)
+    accepted = sensor.state.previous_frame_id
+    camera.now += 10
+    with pytest.raises(MODULE.CaptureFailure) as error:
+        sensor.capture(max_attempts=2)
+    assert error.value.reason == "acquisition_outside_capture"
+    assert error.value.diagnostics.attempts == 2
+    assert error.value.diagnostics.render_steps == 2
+    assert sensor.state.previous_frame_id == accepted
+
+
+def test_sensor_retries_reused_id_even_with_in_window_timestamp():
+    camera = SensorCamera()
+    sensor = sensor_capture(
+        camera, step=lambda cam, now: cam.frame.update(rendering_time=now)
+    )
+    sensor.capture(max_attempts=1)
+    with pytest.raises(MODULE.CaptureFailure) as error:
+        sensor.capture(max_attempts=3)
+    assert error.value.reason == "stale_frame"
+    assert error.value.diagnostics.rejection_counts == {"stale_frame": 3}
+
+
+def test_delayed_capture_rejects_cumulative_motion_during_warmup():
+    camera = DelayedSensorCamera(4)
+    sensor = camera.sensor(pose=lambda: ([camera.tick * 0.0004, 0, 0], [1, 0, 0, 0]))
+    with pytest.raises(MODULE.CaptureFailure) as error:
+        sensor.capture(max_attempts=10)
+    assert error.value.reason == "pose_changed"
+    assert error.value.diagnostics.attempts == 3
+    assert sensor.state.previous is None
+
+
+@pytest.mark.parametrize("frame, stamp", [(0, 1.0), (3, 0.0)])
+def test_zero_sensor_metadata_is_retried(frame, stamp):
+    camera = SensorCamera()
+
+    def step(cam, now):
+        cam.frame = {
+            "rendering_frame": frame if now < 3 else 4,
+            "rendering_time": stamp if now < 3 else now,
+        }
+
+    sensor = sensor_capture(camera, step=step)
+    _, _, steps = sensor.capture(max_attempts=3)
+    assert steps == 3
+    assert sensor.state.diagnostics.rejection_counts == {"sensor_frame_not_ready": 2}
+
+
+class MeasuredLagCamera(SensorCamera):
+    """ws1 timing model: acquisition trails physics by four 60 Hz renders."""
+
+    def __init__(self, dt=1 / 60):
+        super().__init__()
+        self.dt = dt
+        self.start = 69.025004
+        self.now = self.start
+        self.tick = 0
+        self.frozen_id = None
+
+    def step(self):
+        self.tick += 1
+        self.now = self.start + self.tick * self.dt
+        self.frame = {
+            "rendering_frame": self.frozen_id or self.tick,
+            "rendering_time": self.start + (self.tick - 4) * self.dt,
+        }
+
+    def sensor(self, **options):
+        return MODULE.SensorCapture(
+            self,
+            MODULE.default_base_from_optical(),
+            step_fn=self.step,
+            physics_time_fn=lambda: self.now,
+            pose_fn=lambda: ([0, 0, 0], [1, 0, 0, 0]),
+            **options,
+        )
+
+
+@pytest.mark.parametrize("budget", [4, 8])
+def test_measured_lag_rejects_capture_start_and_inside_latency_window(budget):
+    # At step 4 acquisition equals capture start exactly; step 8 is still
+    # short of the measured, rounded-up 0.066667 s margin.
+    camera = MeasuredLagCamera()
+    sensor = camera.sensor()
+    with pytest.raises(MODULE.CaptureFailure) as error:
+        sensor.capture(max_attempts=budget)
+    assert error.value.reason == "acquisition_outside_capture"
+    assert error.value.diagnostics.render_steps == budget
+    assert error.value.diagnostics.rejection_counts == {
+        "acquisition_outside_capture": budget
+    }
+    assert sensor.state.previous is None
+
+
+def test_measured_lag_retries_until_default_latency_margin_is_met():
+    camera = MeasuredLagCamera()
+    sensor = camera.sensor()
+    scene, _, attempts = sensor.capture(max_attempts=9)
+    diag = sensor.state.diagnostics
+    assert attempts == diag.render_steps == 9
+    assert diag.capture_start_time_s == 69.025004
+    assert diag.acquisition_since_capture_start_s == pytest.approx(5 / 60)
+    assert diag.physics_time_after_s - diag.acquisition_time_s == pytest.approx(4 / 60)
+    assert diag.rejection_counts == {"acquisition_outside_capture": 8}
+    assert scene.stamp_ns == int(diag.acquisition_time_s * 1e9)
+
+
+def test_measured_lag_still_rejects_previous_accepted_id_after_margin():
+    camera = MeasuredLagCamera()
+    sensor = camera.sensor()
+    sensor.capture(max_attempts=9)
+    accepted = sensor.state.previous_frame_id
+    camera.frozen_id = accepted
+    with pytest.raises(MODULE.CaptureFailure) as error:
+        sensor.capture(max_attempts=11)
+    assert error.value.reason == "stale_frame"
+    assert error.value.diagnostics.rejection_counts == {
+        "acquisition_outside_capture": 8,
+        "stale_frame": 3,
+    }
+    assert error.value.diagnostics.render_steps == 11
+    assert sensor.state.previous_frame_id == accepted
+    assert sensor.state.diagnostics.accepted_pose is None
+
+
+def test_measured_lag_margin_is_configurable_and_inclusive():
+    # Binary-exact times pin equality at start + L without a float tolerance.
+    camera = MeasuredLagCamera(dt=1 / 64)
+    camera.start = camera.now = 64.0
+    sensor = camera.sensor(render_latency_s=1 / 16)
+    _, _, attempts = sensor.capture(max_attempts=8)
+    assert attempts == 8
+    assert sensor.state.diagnostics.acquisition_since_capture_start_s == 1 / 16
+    assert sensor.state.diagnostics.rejection_counts == {
+        "acquisition_outside_capture": 7
+    }
+
+
+@pytest.mark.parametrize("latency", [-0.1, float("nan"), float("inf")])
+def test_sensor_capture_rejects_invalid_render_latency(latency):
+    with pytest.raises(ValueError, match="render_latency_s"):
+        MeasuredLagCamera().sensor(render_latency_s=latency)
+
+
+def test_sensor_capture_rejects_future_acquisition_even_after_multiple_steps():
+    camera = SensorCamera()
+    sensor = sensor_capture(
+        camera, step=lambda cam, now: cam.frame.update(rendering_time=now + 0.1)
+    )
+    with pytest.raises(MODULE.CaptureFailure) as error:
+        sensor.capture(max_attempts=3)
+    assert error.value.reason == "acquisition_outside_capture"
+    assert error.value.diagnostics.rejection_counts == {
+        "acquisition_outside_capture": 3
+    }

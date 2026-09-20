@@ -747,10 +747,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 args.output
                                 / f"perception_capture_{attempt_number}_depth_vis.png"
                             )
-                        # Use the checked capture bracket, never a later live pose.
+                        # Use the accepted end pose as the stationary acquisition
+                        # representative; no timestamp interpolation is implied.
                         capture_diagnostics = perception_capture.state.diagnostics
                         attempt["capture_diagnostics"] = asdict(capture_diagnostics)
-                        base, q = map(np.asarray, capture_diagnostics.pose_after)
+                        base, q = map(np.asarray, capture_diagnostics.accepted_pose)
                         yaw, _ = yaw_and_tilt(q)
                         forward = np.array([math.cos(yaw), math.sin(yaw)])
                         rear = np.array(
