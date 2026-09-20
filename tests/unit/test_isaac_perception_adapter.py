@@ -118,7 +118,9 @@ def test_xyzw_to_wxyz_known_value_and_round_trip():
 
 
 def test_mount_and_intrinsics_reuse_scene_rig():
-    spec = importlib.util.spec_from_file_location("scene_rig_reference", ROOT / "tools/scene_rig.py")
+    spec = importlib.util.spec_from_file_location(
+        "scene_rig_reference", ROOT / "tools/scene_rig.py"
+    )
     rig = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(rig)
     scene, diagnostics, attempts = capture(FakeCamera())
@@ -127,7 +129,9 @@ def test_mount_and_intrinsics_reuse_scene_rig():
     assert scene.base_from_optical.source_frame == expected.source_frame
     assert scene.base_from_optical.target_frame == expected.target_frame
     np.testing.assert_array_equal(scene.base_from_optical.rotation, expected.rotation)
-    np.testing.assert_array_equal(scene.base_from_optical.translation_m, expected.translation_m)
+    np.testing.assert_array_equal(
+        scene.base_from_optical.translation_m, expected.translation_m
+    )
     optical = expected.rotation.T @ (np.array([2.75, 0, 0.5]) - expected.translation_m)
     np.testing.assert_allclose(optical, [0, 0, 2], atol=1e-12)
 
@@ -137,9 +141,14 @@ def test_normalize_depth_reports_raw_sentinels_and_preserves_metres():
     depth, diagnostics = MODULE.normalize_depth(raw)
     assert isinstance(diagnostics, MODULE.FrameDiagnostics)
     assert asdict(diagnostics) == {
-        "nan_count": 1, "posinf_count": 1, "neginf_count": 1,
-        "zero_count": 1, "negative_count": 1, "finite_positive_count": 2,
-        "finite_positive_min": 1.25, "finite_positive_max": 3.0,
+        "nan_count": 1,
+        "posinf_count": 1,
+        "neginf_count": 1,
+        "zero_count": 1,
+        "negative_count": 1,
+        "finite_positive_count": 2,
+        "finite_positive_min": 1.25,
+        "finite_positive_max": 3.0,
     }
     assert depth.dtype == np.float64
     assert np.isnan(depth[0, :5]).all()
@@ -149,7 +158,9 @@ def test_normalize_depth_reports_raw_sentinels_and_preserves_metres():
 
 
 def test_depth_without_finite_positive_values_has_no_minimum_or_maximum():
-    depth, diagnostics = MODULE.normalize_depth(np.array([0, -1, np.nan, np.inf, -np.inf]))
+    depth, diagnostics = MODULE.normalize_depth(
+        np.array([0, -1, np.nan, np.inf, -np.inf])
+    )
     assert np.isnan(depth).all()
     assert diagnostics.finite_positive_count == 0
     assert diagnostics.finite_positive_min is None
@@ -178,7 +189,9 @@ def test_capture_success_copies_buffers_and_sets_contract_metadata():
     assert scene.depth_m[1, 1] == 2 and scene.rgb[1, 2, 0] == 200
 
 
-@pytest.mark.parametrize("defect", ["flat_rgb", "rgb_shape", "none", "empty", "depth_dtype", "depth_shape"])
+@pytest.mark.parametrize(
+    "defect", ["flat_rgb", "rgb_shape", "none", "empty", "depth_dtype", "depth_shape"]
+)
 def test_unready_camera_fails_after_bounded_attempts(defect):
     camera = FakeCamera()
     if defect == "flat_rgb":
@@ -195,7 +208,12 @@ def test_unready_camera_fails_after_bounded_attempts(defect):
         camera.depth = camera.depth[:1]
     with pytest.raises(MODULE.CaptureFailure) as error:
         capture(camera, max_attempts=3)
-    assert error.value.reason in {"rgba_not_ready", "depth_not_ready", "stale_frame", "timeout"}
+    assert error.value.reason in {
+        "rgba_not_ready",
+        "depth_not_ready",
+        "stale_frame",
+        "timeout",
+    }
     assert camera.reads == 3
 
 
@@ -280,19 +298,36 @@ def test_invalid_retry_limit_is_rejected(attempts):
 def observation(yaw=0, status="valid"):
     left = (-math.sin(yaw) * 0.2, math.cos(yaw) * 0.2)
     return PocketObservation(
-        123, "synthetic", "base_link", "synthetic", status,
-        Pocket((2 + left[0], 1 + left[1], 0.1), 0.15, 0.1) if status == "valid" else None,
-        Pocket((2 - left[0], 1 - left[1], 0.1), 0.15, 0.1) if status == "valid" else None,
-        yaw if status == "valid" else None, None, None,
+        123,
+        "synthetic",
+        "base_link",
+        "synthetic",
+        status,
+        Pocket((2 + left[0], 1 + left[1], 0.1), 0.15, 0.1)
+        if status == "valid"
+        else None,
+        Pocket((2 - left[0], 1 - left[1], 0.1), 0.15, 0.1)
+        if status == "valid"
+        else None,
+        yaw if status == "valid" else None,
+        None,
+        None,
         None if status == "valid" else "no_opening_pattern",
     )
 
 
-@pytest.mark.parametrize("yaw, depth, expected", [
-    (0, 0.6, (2.3, 1)), (math.pi / 2, 0.6, (2, 1.3)),
-    (math.pi, 0.6, (1.7, 1)), (-math.pi / 2, 0.66, (2, 0.67)),
-])
-def test_estimated_center_is_half_a_pallet_depth_inside_front_plane(yaw, depth, expected):
+@pytest.mark.parametrize(
+    "yaw, depth, expected",
+    [
+        (0, 0.6, (2.3, 1)),
+        (math.pi / 2, 0.6, (2, 1.3)),
+        (math.pi, 0.6, (1.7, 1)),
+        (-math.pi / 2, 0.66, (2, 0.67)),
+    ],
+)
+def test_estimated_center_is_half_a_pallet_depth_inside_front_plane(
+    yaw, depth, expected
+):
     result = MODULE.estimate_pallet_center_m(observation(yaw), depth)
     assert isinstance(result, tuple)
     assert result == pytest.approx(expected)
@@ -338,7 +373,10 @@ def test_new_frame_id_accepts_unchanged_depth_and_static_rgb():
             camera.depth = np.full((480, 640), 2, dtype=np.float32)
 
     scene, diagnostics, attempts = capture(
-        camera, max_attempts=3, step_fn=step, frame_id_fn=frame_id,
+        camera,
+        max_attempts=3,
+        step_fn=step,
+        frame_id_fn=frame_id,
     )
     assert seen == [None, None, 2]
     assert attempts == 3
@@ -377,8 +415,11 @@ def test_stamp_callback_uses_accepted_attempt_and_overrides_fixed_stamp():
         return now[0]
 
     scene, _, attempts = capture(
-        camera, max_attempts=3, step_fn=step,
-        frame_id_fn=lambda: now[0], stamp_ns_fn=stamp,
+        camera,
+        max_attempts=3,
+        step_fn=step,
+        frame_id_fn=lambda: now[0],
+        stamp_ns_fn=stamp,
     )
     assert scene.stamp_ns == 120
     assert attempts == camera.reads == 2
@@ -387,7 +428,9 @@ def test_stamp_callback_uses_accepted_attempt_and_overrides_fixed_stamp():
 
 def test_stamp_callback_can_be_used_without_fixed_stamp():
     scene, _, attempts = MODULE.capture_scene_input(
-        FakeCamera(), MODULE.default_base_from_optical(), stamp_ns_fn=lambda: 456,
+        FakeCamera(),
+        MODULE.default_base_from_optical(),
+        stamp_ns_fn=lambda: 456,
     )
     assert scene.stamp_ns == 456
     assert attempts == 1
@@ -397,3 +440,153 @@ def test_stamp_callback_can_be_used_without_fixed_stamp():
 def test_invalid_stamp_callback_result_is_rejected(stamp):
     with pytest.raises(ValueError, match="stamp_ns"):
         capture(FakeCamera(), stamp_ns_fn=lambda: stamp)
+
+
+@pytest.mark.parametrize("with_id", [False, True])
+def test_repeated_capture_rejects_previous_accepted_frame_on_first_attempt(with_id):
+    camera = FakeCamera()
+    state = MODULE.CaptureState()
+    options = {"state": state}
+    if with_id:
+        options["frame_id_fn"] = lambda: 7
+    capture(camera, max_attempts=1, **options)
+    with pytest.raises(MODULE.CaptureFailure) as error:
+        capture(camera, max_attempts=2, **options)
+    assert error.value.reason == "stale_frame"
+    assert error.value.diagnostics.rejection_counts == {"stale_frame": 2}
+
+
+def test_cross_call_retry_accepts_new_id_even_for_static_pixels():
+    camera = FakeCamera()
+    state = MODULE.CaptureState()
+    capture(camera, state=state, frame_id_fn=lambda: 7)
+    ids = iter([7, 8])
+    _, _, attempts = capture(camera, state=state, frame_id_fn=lambda: next(ids))
+    assert attempts == 2
+    assert state.diagnostics.sensor_frame_id == 8
+    assert state.diagnostics.rejection_counts == {"stale_frame": 1}
+
+
+class SensorCamera(FakeCamera):
+    def __init__(self):
+        super().__init__()
+        self.frame = {
+            "rendering_frame": {
+                "referenceTimeNumerator": 1,
+                "referenceTimeDenominator": 60,
+            },
+            "rendering_time": 1.0,
+        }
+
+    def get_current_frame(self):
+        return self.frame
+
+
+def sensor_capture(camera, step=None, pose=None):
+    now = [0.0]
+
+    def advance():
+        now[0] += 1.0
+        if step:
+            step(camera, now[0])
+
+    return MODULE.SensorCapture(
+        camera,
+        MODULE.default_base_from_optical(),
+        step_fn=advance,
+        physics_time_fn=lambda: now[0],
+        pose_fn=pose or (lambda: ([0, 0, 0], [1, 0, 0, 0])),
+    )
+
+
+def test_sensor_capture_records_acquisition_and_pose_bracket():
+    sensor = sensor_capture(SensorCamera())
+    scene, _, count = sensor.capture(max_attempts=1)
+    diag = asdict(sensor.state.diagnostics)
+    assert scene.stamp_ns == 1_000_000_000 and count == 1
+    assert diag["acquisition_time_s"] == 1.0
+    assert diag["physics_time_before_s"] == 0.0
+    assert diag["physics_time_after_s"] == 1.0
+    assert diag["pose_before"] == diag["pose_after"]
+    assert diag["attempts"] == 1
+    with pytest.raises(MODULE.CaptureFailure):
+        sensor.capture(max_attempts=1)
+
+
+@pytest.mark.parametrize(
+    "defect, reason",
+    [
+        ("missing", "sensor_metadata_unavailable"),
+        ("old", "acquisition_outside_capture"),
+        ("moving", "pose_changed"),
+        ("torn", "sensor_frame_changed_during_read"),
+    ],
+)
+def test_sensor_capture_fails_closed(defect, reason):
+    camera = SensorCamera()
+    poses = iter([([0, 0, 0], [1, 0, 0, 0]), ([0.1, 0, 0], [1, 0, 0, 0])])
+    if defect == "missing":
+        camera.frame = {}
+    if defect == "old":
+        camera.frame["rendering_time"] = -1.0
+    if defect == "torn":
+        original = camera.get_depth
+
+        def depth():
+            camera.frame["rendering_frame"]["referenceTimeNumerator"] += 1
+            return original()
+
+        camera.get_depth = depth
+    sensor = sensor_capture(
+        camera, pose=(lambda: next(poses)) if defect == "moving" else None
+    )
+    with pytest.raises(MODULE.CaptureFailure) as error:
+        sensor.capture(max_attempts=1)
+    assert error.value.reason == reason
+
+
+def test_sensor_capture_mutable_id_is_copied_across_calls():
+    camera = SensorCamera()
+
+    def update(cam, time):
+        cam.frame["rendering_frame"]["referenceTimeNumerator"] = int(time)
+        cam.frame["rendering_time"] = time
+
+    sensor = sensor_capture(camera, step=update)
+    sensor.capture(max_attempts=1)
+    scene, _, attempts = sensor.capture(max_attempts=1)
+    assert attempts == 1 and scene.stamp_ns == 2_000_000_000
+    assert sensor.state.diagnostics.sensor_frame_id["referenceTimeNumerator"] == 2
+
+
+@pytest.mark.parametrize(
+    "quaternion, reason",
+    [
+        ([math.cos(0.01), 0, 0, math.sin(0.01)], "pose_changed"),
+        ([0, 0, 0, 0], "invalid_capture_pose"),
+    ],
+)
+def test_sensor_capture_rejects_rotation_or_invalid_pose(quaternion, reason):
+    poses = iter([([0, 0, 0], [1, 0, 0, 0]), ([0, 0, 0], quaternion)])
+    sensor = sensor_capture(SensorCamera(), pose=lambda: next(poses))
+    with pytest.raises(MODULE.CaptureFailure) as error:
+        sensor.capture(max_attempts=1)
+    assert error.value.reason == reason
+    assert error.value.diagnostics.rejection_counts == {reason: 1}
+    assert sensor.state.previous is None
+
+
+def test_array_fallback_does_not_forget_accepted_frame_after_rejected_attempt():
+    camera = FakeCamera()
+    state = MODULE.CaptureState()
+    capture(camera, state=state)
+    attempts = [0]
+
+    def step():
+        attempts[0] += 1
+        camera.rgba[:, ::2, :3] = 180 if attempts[0] == 1 else 200
+        camera.depth[:] = 2
+
+    with pytest.raises(MODULE.CaptureFailure):
+        capture(camera, state=state, step_fn=step, max_attempts=2)
+    assert state.previous[0][0, 0, 0] == 200

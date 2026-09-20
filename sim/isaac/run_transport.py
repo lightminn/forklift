@@ -72,7 +72,10 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--use-perception", action="store_true")
     parser.add_argument("--pallet-prior", type=Path, default=None)
     parser.add_argument(
-        "--observation-waypoints", action="append", nargs=3, type=float,
+        "--observation-waypoints",
+        action="append",
+        nargs=3,
+        type=float,
         metavar=("X", "Y", "YAW"),
         help=(
             "Ordered observation candidates in metres/radians; repeat this option "
@@ -81,7 +84,9 @@ def arguments() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--perception-camera-axes", choices=("world", "usd", "ros"), default="ros",
+        "--perception-camera-axes",
+        choices=("world", "usd", "ros"),
+        default="ros",
     )
     parser.add_argument("--perception-max-attempts", type=int, default=200)
     args, unknown = parser.parse_known_args()
@@ -367,6 +372,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         perception_camera.initialize()
         # Capture needs axial depth as well as RGBA (see determinism_probe.py).
         perception_camera.add_distance_to_image_plane_to_frame()
+        perception_capture = adapter.SensorCapture(
+            perception_camera,
+            perception_mount,
+            step_fn=lambda: world.step(render=True),
+            physics_time_fn=lambda: world.current_time,
+            pose_fn=robot.get_world_pose,
+        )
     names = list(robot.dof_names)
     wheels = np.array(
         [
@@ -418,16 +430,20 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 ),
                 geometry=geometry,
             )
-            state["observation_candidates"].append({
-                "candidate_index": candidate_index,
-                "pose": [waypoint.x_m, waypoint.y_m, waypoint.yaw_rad],
-                "success": candidate_plan.success,
-                "status": candidate_plan.status,
-            })
+            state["observation_candidates"].append(
+                {
+                    "candidate_index": candidate_index,
+                    "pose": [waypoint.x_m, waypoint.y_m, waypoint.yaw_rad],
+                    "success": candidate_plan.success,
+                    "status": candidate_plan.status,
+                }
+            )
             if candidate_plan.success:
                 observe_plan = candidate_plan
                 state["observation_waypoint_selected"] = [
-                    waypoint.x_m, waypoint.y_m, waypoint.yaw_rad,
+                    waypoint.x_m,
+                    waypoint.y_m,
+                    waypoint.yaw_rad,
                 ]
                 break
         state["planning_wall_s"] = time.monotonic() - planning_start
@@ -693,18 +709,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         state["observation_attempts"].append(attempt)
                         try:
                             scene_input, frame_diagnostics, capture_attempts = (
-                                adapter.capture_scene_input(
-                                    perception_camera,
-                                    perception_mount,
-                                    stamp_ns=0,
+                                perception_capture.capture(
                                     max_attempts=args.perception_max_attempts,
-                                    step_fn=lambda: world.step(render=True),
-                                    frame_id_fn=lambda: world.current_time,
-                                    stamp_ns_fn=lambda: int(world.current_time * 1e9),
                                 )
                             )
                         except adapter.CaptureFailure as exc:
                             attempt["capture_failure"] = exc.reason
+                            attempt["capture_diagnostics"] = asdict(exc.diagnostics)
+                            attempt["capture_attempts"] = exc.diagnostics.attempts
                             require(False, f"perception_capture_failed:{exc.reason}")
                         # Diagnostic dump for offline root-cause analysis; not part
                         # of the perception contract itself.
@@ -735,8 +747,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 args.output
                                 / f"perception_capture_{attempt_number}_depth_vis.png"
                             )
-                        # Capture steps advance physics; use the accepted frame's pose.
-                        base, q = robot.get_world_pose()
+                        # Use the checked capture bracket, never a later live pose.
+                        capture_diagnostics = perception_capture.state.diagnostics
+                        attempt["capture_diagnostics"] = asdict(capture_diagnostics)
+                        base, q = map(np.asarray, capture_diagnostics.pose_after)
                         yaw, _ = yaw_and_tilt(q)
                         forward = np.array([math.cos(yaw), math.sin(yaw)])
                         rear = np.array(

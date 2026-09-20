@@ -6,7 +6,8 @@ robot pose acquisition. This module neither steps Isaac nor imports its SDK.
 
 import importlib.util
 from collections.abc import Callable
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, field
 from math import atan2, cos, pi, sin
 from numbers import Integral
 from pathlib import Path
@@ -101,9 +102,178 @@ def normalize_depth(raw_depth: np.ndarray) -> tuple[np.ndarray, FrameDiagnostics
 class CaptureFailure(Exception):
     """Bounded capture failure; reason describes the last rejected attempt."""
 
-    def __init__(self, reason: str):
+    def __init__(self, reason: str, diagnostics=None):
         self.reason = reason
+        self.diagnostics = diagnostics
         super().__init__(reason)
+
+
+@dataclass
+class CaptureDiagnostics:
+    """Capture metadata, separate from the unchanged raw-depth statistics.
+
+    Times are simulation seconds; poses are world position metres and wxyz.
+    On failure these describe the last attempt, never an accepted observation.
+    """
+
+    sensor_frame_id: object = None
+    acquisition_time_s: float | None = None
+    physics_time_before_s: float | None = None
+    physics_time_after_s: float | None = None
+    pose_before: tuple | None = None
+    pose_after: tuple | None = None
+    attempts: int = 0
+    rejection_counts: dict = field(default_factory=dict)
+
+
+@dataclass
+class CaptureState:
+    """Caller-owned, single-camera/session state. Never share across cameras.
+
+    Retain this object across observation waypoints. A camera reset requires a
+    new session. Arrays and IDs are owned copies, including mutable SDK IDs.
+    """
+
+    previous: tuple | None = None
+    previous_frame_id: object = None
+    diagnostics: CaptureDiagnostics = field(default_factory=CaptureDiagnostics)
+
+
+class SensorCapture:
+    """Strict Isaac capture boundary, SDK-free for fake-camera verification.
+
+    Camera 5.1 exposes rendering_frame (fabric-time dict) and rendering_time
+    (simulation seconds) in get_current_frame(). Read pixels via direct getters.
+    Single-threaded stepping is required. Metadata brackets both getters; the
+    pose/time bracket also encloses the render step. Reject delayed frames outside
+    that bracket rather than assigning a current pose to an old acquisition.
+    Endpoint motion limits are a bounded stationary-capture contract, not exact
+    pose interpolation or proof against motion that returns to its start.
+    """
+
+    def __init__(
+        self,
+        camera,
+        mount,
+        *,
+        step_fn,
+        physics_time_fn,
+        pose_fn,
+        position_tolerance_m=0.001,
+        angle_tolerance_rad=0.001,
+    ):
+        self.camera, self.mount = camera, mount
+        self.step_fn, self.physics_time_fn, self.pose_fn = (
+            step_fn,
+            physics_time_fn,
+            pose_fn,
+        )
+        self.position_tolerance_m = _finite_scalar(
+            position_tolerance_m, "position_tolerance_m"
+        )
+        self.angle_tolerance_rad = _finite_scalar(
+            angle_tolerance_rad, "angle_tolerance_rad"
+        )
+        if min(self.position_tolerance_m, self.angle_tolerance_rad) < 0:
+            raise ValueError("pose tolerances must be nonnegative")
+        self.state = CaptureState()
+
+    def _metadata(self):
+        try:
+            frame = self.camera.get_current_frame()
+            identifier = deepcopy(frame["rendering_frame"])
+            stamp = float(frame["rendering_time"])
+            if isinstance(identifier, dict):
+                numerator = identifier["referenceTimeNumerator"]
+                denominator = identifier["referenceTimeDenominator"]
+                if (
+                    not np.isfinite(numerator)
+                    or not np.isfinite(denominator)
+                    or denominator <= 0
+                ):
+                    raise ValueError("invalid fabric time")
+                identifier = {
+                    "referenceTimeNumerator": int(numerator),
+                    "referenceTimeDenominator": int(denominator),
+                }
+            elif isinstance(identifier, Integral) and not isinstance(identifier, bool):
+                identifier = int(identifier)
+            else:
+                raise ValueError("unsupported sensor identifier")
+            if not np.isfinite(stamp):
+                raise ValueError("invalid acquisition time")
+            return identifier, stamp
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            raise CaptureFailure("sensor_metadata_unavailable") from exc
+
+    def _pose(self):
+        position, quaternion = self.pose_fn()
+        position, quaternion = np.asarray(position), np.asarray(quaternion)
+        if (
+            position.shape != (3,)
+            or quaternion.shape != (4,)
+            or not np.isfinite(position).all()
+            or not np.isfinite(quaternion).all()
+            or abs(np.linalg.norm(quaternion) - 1) > 1e-5
+        ):
+            raise CaptureFailure("invalid_capture_pose")
+        return tuple(map(float, position)), tuple(map(float, quaternion))
+
+    def capture(self, *, max_attempts=200):
+        metadata = None
+
+        def step():
+            nonlocal metadata
+            diag = self.state.diagnostics
+            diag.pose_before = self._pose()
+            diag.physics_time_before_s = float(self.physics_time_fn())
+            self.step_fn()
+            metadata = self._metadata()
+
+        def frame_id():
+            diag = self.state.diagnostics
+            after = self._metadata()
+            diag.sensor_frame_id, diag.acquisition_time_s = after
+            diag.pose_after = self._pose()
+            diag.physics_time_after_s = float(self.physics_time_fn())
+            if metadata != after:
+                raise CaptureFailure("sensor_frame_changed_during_read")
+            before_s, after_s = diag.physics_time_before_s, diag.physics_time_after_s
+            # Same simulation clock by Camera's get_sim_time_at_time contract.
+            if not (
+                np.isfinite(before_s)
+                and np.isfinite(after_s)
+                and before_s <= after[1] <= after_s
+            ):
+                raise CaptureFailure("acquisition_outside_capture")
+            p0, q0 = map(np.asarray, diag.pose_before)
+            p1, q1 = map(np.asarray, diag.pose_after)
+            angle = 2 * np.arccos(np.clip(abs(np.dot(q0, q1)), 0, 1))
+            if (
+                np.linalg.norm(p1 - p0) > self.position_tolerance_m
+                or angle > self.angle_tolerance_rad
+            ):
+                raise CaptureFailure("pose_changed")
+            return after[0]
+
+        try:
+            return capture_scene_input(
+                self.camera,
+                self.mount,
+                max_attempts=max_attempts,
+                state=self.state,
+                step_fn=step,
+                frame_id_fn=frame_id,
+                stamp_ns_fn=lambda: int(metadata[1] * 1e9),
+            )
+        except CaptureFailure as exc:
+            if exc.diagnostics is None:
+                diag = self.state.diagnostics
+                diag.rejection_counts[exc.reason] = (
+                    diag.rejection_counts.get(exc.reason, 0) + 1
+                )
+                exc.diagnostics = deepcopy(diag)
+            raise
 
 
 def capture_scene_input(
@@ -116,18 +286,17 @@ def capture_scene_input(
     step_fn: Callable[[], None] | None = None,
     frame_id_fn: Callable[[], object] | None = None,
     stamp_ns_fn: Callable[[], int] | None = None,
+    state: CaptureState | None = None,
 ) -> tuple[SceneInput, FrameDiagnostics, int]:
     """Read a ready synthetic frame, calling step_fn before every attempt.
 
-    frame_id_fn is sampled each attempt and compared with the previous ID using
-    !=; the first attempt has no freshness comparison. Without it, both raw
-    buffers must change, which cannot distinguish identical static renders.
-    IDs must support scalar inequality and remain stable after being returned.
-    stamp_ns_fn is called on the accepted attempt and takes precedence over
-    stamp_ns. A fixed stamp_ns remains sufficient for stationary observation
-    waypoint captures where the observation time does not change.
-    The caller must synchronize the stamp and robot pose with the accepted
-    capture, and configure registered, undistorted RGB and axial-z metre depth.
+    Retain state across calls to compare the first attempt against the last
+    accepted frame. Without state this is a one-shot conversion only. The first
+    ever frame has no predecessor; all later attempts compare IDs, or both raw
+    arrays when IDs are unavailable. Array fallback deliberately favors false
+    rejection of identical static renders over reuse, also across calls.
+    The generic callbacks must describe the same acquisition. Use SensorCapture
+    for the strict Isaac time/pose bracket and required sensor metadata.
     Return the scene, raw-depth diagnostics and 1-based accepted attempt count.
     An all-unobserved depth frame is returned with finite_positive_count == 0;
     the caller decides how to handle the resulting perception failure.
@@ -156,10 +325,14 @@ def capture_scene_input(
     # Forced scene_rig calibration, without overrides. Checking actual Isaac K,
     # distortion and camera_axes belongs to the later simulator validation stage.
     shape = (intrinsics.height, intrinsics.width)
-    previous = None
-    previous_frame_id = None
+    if state is None:
+        state = CaptureState()
+    state.diagnostics = CaptureDiagnostics()
+    previous = state.previous
+    previous_frame_id = state.previous_frame_id
     reason = "timeout"
     for attempt in range(max_attempts):
+        state.diagnostics.attempts = attempt + 1
         if step_fn is not None:
             step_fn()
         # Own both buffers: Isaac/fakes may mutate the same arrays on the next step.
@@ -167,29 +340,30 @@ def capture_scene_input(
         raw_depth = np.array(camera.get_depth(), copy=True)
         if raw_depth.ndim and raw_depth.shape[-1] == 1:
             raw_depth = np.squeeze(raw_depth, axis=-1)
-        # TODO: run_transport.py must verify the actual Isaac frame number/time
-        # field in camera.get_current_frame() and supply frame_id_fn from it.
         frame_id = frame_id_fn() if frame_id_fn is not None else None
         fresh = True
-        if attempt:
-            if frame_id_fn is not None:
-                fresh = frame_id != previous_frame_id
+        if previous is not None:
+            if frame_id is not None:
+                fresh = frame_id != previous_frame_id and (
+                    state.previous is None or frame_id != state.previous_frame_id
+                )
             else:
                 # Last resort for cameras without IDs; identical static renders
                 # can be falsely rejected even though they are fresh frames.
-                fresh = not (
-                    np.array_equal(rgba, previous[0], equal_nan=True)
-                    or np.array_equal(raw_depth, previous[1], equal_nan=True)
+                fresh = all(
+                    not (
+                        np.array_equal(rgba, old[0], equal_nan=True)
+                        or np.array_equal(raw_depth, old[1], equal_nan=True)
+                    )
+                    for old in (previous, state.previous)
+                    if old is not None
                 )
         rgba_ready = (
             rgba.shape == (*shape, 4)
             and rgba.dtype == np.uint8
             and float(np.std(rgba[:, :, :3])) > threshold
         )
-        depth_ready = (
-            raw_depth.shape == shape
-            and raw_depth.dtype.kind in "uif"
-        )
+        depth_ready = raw_depth.shape == shape and raw_depth.dtype.kind in "uif"
         if not rgba_ready:
             reason = "rgba_not_ready"
         elif not depth_ready:
@@ -214,10 +388,15 @@ def capture_scene_input(
                 clock_domain="synthetic",
                 source_provenance="synthetic",
             )
+            state.previous = rgba, raw_depth
+            state.previous_frame_id = deepcopy(frame_id)
+            state.diagnostics.sensor_frame_id = deepcopy(frame_id)
             return scene, diagnostics, attempt + 1
+        counts = state.diagnostics.rejection_counts
+        counts[reason] = counts.get(reason, 0) + 1
         previous = rgba, raw_depth
-        previous_frame_id = frame_id
-    raise CaptureFailure(reason)
+        previous_frame_id = deepcopy(frame_id)
+    raise CaptureFailure(reason, deepcopy(state.diagnostics))
 
 
 def estimate_pallet_center_m(
