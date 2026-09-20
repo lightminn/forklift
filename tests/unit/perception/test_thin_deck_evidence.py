@@ -135,7 +135,7 @@ def opening_evidence_counts(plane, workspace, prior, params):
     # Disable only the private candidate's count gate to observe a zero lower
     # count. Public DetectorParams still rejects min_band_points=0.
     measuring = SimpleNamespace(**(dataclasses.asdict(params) | {"min_band_points": 0}))
-    patterns = detector._opening_candidates(plane, prior, measuring, workspace)
+    patterns, _ = detector._opening_candidates(plane, prior, measuring, workspace)
     assert len(patterns) == 1, "fixture must expose exactly two supported openings"
     pattern = patterns[0]
     inliers = plane.points
@@ -260,11 +260,11 @@ def test_evidence_volume_boundaries(depth_m, z_m, expected):
         (np.full(200, 2.7 + depth_m), np.linspace(-0.3, 0.3, 200), np.full(200, z_m))
     )
     measuring = SimpleNamespace(**(dataclasses.asdict(params) | {"min_band_points": 0}))
-    base = detector._opening_candidates(plane, prior, measuring, scaffold)[0]
+    base = detector._opening_candidates(plane, prior, measuring, scaffold)[0][0]
     workspace = detector._filter_workspace(
         np.vstack((scaffold, points)), np.array((0.75, 0.0, 0.5)), prior, params
     )
-    actual = detector._opening_candidates(plane, prior, measuring, workspace)[0]
+    actual = detector._opening_candidates(plane, prior, measuring, workspace)[0][0]
     assert actual.deck_count - base.deck_count == expected
 
 
