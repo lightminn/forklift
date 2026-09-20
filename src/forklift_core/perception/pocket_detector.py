@@ -55,7 +55,11 @@ class DetectorParams:
     # measurement that would set them apart needs a real sensor. Zero means
     # "follow min_band_points", which is the frozen behaviour.
     upper_band_points: int = 0
-    max_plane_candidates: int = 3
+    # Budget 5 recovers the pallet front in ws1 Isaac seed 4 (pallet at 3.30 m):
+    # a 3.35 m-wide object at 2.31 m and the rear wall exhaust budget 3.
+    # User-measured replay of 7 runs / 330 scenes found no selection changes
+    # with 3 -> 5. The frozen v1 YAML explicitly retains budget 3.
+    max_plane_candidates: int = 5
     range_min_m: float = 0.8
     range_max_m: float = 5.0
     floor_z_m: float = 0.02
