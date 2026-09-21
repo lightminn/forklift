@@ -7,6 +7,7 @@ output is 60fps by default, and the floor destination is marked by a green ring.
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import math
 import subprocess
@@ -19,6 +20,20 @@ from pathlib import Path
 import numpy as np
 
 EXIT_CLEARANCE_M = 0.08
+
+
+def load_perception_module(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+CAMERA_CALIBRATION = load_perception_module(
+    "run_transport_camera_calibration",
+    Path(__file__).with_name("camera_calibration.py"),
+)
 
 
 def record_json(value: object, *, indent: int | None = None) -> str:
@@ -160,6 +175,110 @@ def require(condition: bool, reason: str) -> None:
         raise RuntimeError(reason)
 
 
+def verify_camera_intrinsics(camera, calibration, state: dict) -> None:
+    """G1a: record getter provenance and refuse inconsistent camera settings.
+
+    Isaac 5.1 computes K from prim focal length/aperture and cached resolution.
+    Because we set those properties from the nominal K, this checks setting
+    propagation/render-product resolution only, NOT independent calibration.
+    The independent render experiment is verify_perception_camera.py (G1b).
+    """
+    limits = CAMERA_CALIBRATION.G1_LIMITS
+    record = {
+        "status": "FAIL",
+        "intrinsics_source": "Camera.get_intrinsics_matrix() (prim focal/aperture + SDK cached resolution)",
+        "resolution_source": 'omni.usd.get_context().get_stage().GetPrimAtPath(Camera.get_render_product_path()).GetAttribute("resolution").Get()',
+        "cached_resolution_source": "Camera.get_resolution() (SDK cache)",
+        "limits": {
+            key: limits[key] for key in ("focal_relative", "principal_point_px")
+        },
+        "nominal": {
+            name: getattr(calibration, name)
+            for name in ("fx", "fy", "cx", "cy", "width", "height")
+        },
+    }
+    state["perception_camera_intrinsics"] = record
+    try:
+        import omni.usd
+
+        record["render_product_path"] = str(camera.get_render_product_path())
+        matrix = np.asarray(camera.get_intrinsics_matrix(), dtype=float)
+        cached_resolution = tuple(camera.get_resolution())
+        record["cached_resolution"] = list(cached_resolution)
+        product = (
+            omni.usd.get_context()
+            .get_stage()
+            .GetPrimAtPath(record["render_product_path"])
+        )
+        require(product.IsValid(), "Camera render product prim is missing")
+        # Isaac 5.1 Camera.get_resolution() returns self._resolution. Read the
+        # composed USD product independently before any capture or motion.
+        resolution = tuple(product.GetAttribute("resolution").Get())
+        record["resolution"] = list(resolution)
+        require(
+            matrix.shape == (3, 3) and np.isfinite(matrix).all(),
+            "Nonfinite or malformed camera intrinsics",
+        )
+        record["matrix"] = matrix.tolist()
+        require(
+            np.allclose(matrix[2], [0, 0, 1], atol=1e-12, rtol=0)
+            and matrix[0, 1] == 0
+            and matrix[1, 0] == 0,
+            "Camera intrinsics must be an unskewed pinhole matrix",
+        )
+        errors = {
+            "fx_relative": abs(matrix[0, 0] / calibration.fx - 1),
+            "fy_relative": abs(matrix[1, 1] / calibration.fy - 1),
+            "cx_px": abs(matrix[0, 2] - calibration.cx),
+            "cy_px": abs(matrix[1, 2] - calibration.cy),
+        }
+        record["errors"] = errors
+        # Compare authored bounds directly: subtracting cx=320 from 320.1
+        # produces 0.10000000000002274 and must not reject the inclusive limit.
+        require(
+            resolution == (calibration.width, calibration.height)
+            and cached_resolution == resolution
+            and calibration.fx * (1 - limits["focal_relative"])
+            <= matrix[0, 0]
+            <= calibration.fx * (1 + limits["focal_relative"])
+            and calibration.fy * (1 - limits["focal_relative"])
+            <= matrix[1, 1]
+            <= calibration.fy * (1 + limits["focal_relative"])
+            and calibration.cx - limits["principal_point_px"]
+            <= matrix[0, 2]
+            <= calibration.cx + limits["principal_point_px"]
+            and calibration.cy - limits["principal_point_px"]
+            <= matrix[1, 2]
+            <= calibration.cy + limits["principal_point_px"],
+            "Perception camera intrinsics mismatch (G1a)",
+        )
+    except Exception as exc:
+        record["reason"] = str(exc)
+        require(False, f"Perception camera intrinsics check failed: {exc}")
+    record["status"] = "PASS"
+
+
+def source_sha256(repo_root: Path, core_root: Path) -> dict[str, str]:
+    """Hash the full installed core and Isaac source trees plus the shared rig.
+
+    Package keys remain forklift_core/... even for a wheel outside this checkout;
+    repository tools use their actual repository-relative paths, never basenames.
+    Full trees deliberately include future transitive Python dependencies.
+    """
+    repo_root, core_root = repo_root.resolve(), core_root.resolve()
+    files = sorted(core_root.rglob("*.py"))
+    files += sorted((repo_root / "sim/isaac").rglob("*.py"))
+    files.append(repo_root / "tools/scene_rig.py")
+    return {
+        (
+            (Path("forklift_core") / path.relative_to(core_root)).as_posix()
+            if path.is_relative_to(core_root)
+            else path.relative_to(repo_root).as_posix()
+        ): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in files
+    }
+
+
 def path_record(path) -> dict:
     return {
         "success": path.success,
@@ -212,21 +331,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     )
 
     if args.use_perception:
-        import importlib.util
-
         from forklift_core.perception.pocket_detector import (
             DetectorParams,
             detect_pockets,
         )
         from forklift_core.planning import Pose2D
         from forklift_core.planning.pallet_mission import plan_observation_leg
-
-        def load_perception_module(name, path):
-            spec = importlib.util.spec_from_file_location(name, path)
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[name] = module
-            spec.loader.exec_module(module)
-            return module
 
         root = Path(__file__).resolve().parents[2]
         adapter = load_perception_module(
@@ -236,22 +346,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "run_transport_scene_rig", root / "tools/scene_rig.py"
         )
 
-    source_files = [
-        Path(__file__),
-        Path(__file__).with_name("scene.py"),
-        Path(__file__).with_name("insertion_geometry.py"),
-    ]
-    core_root = Path(forklift_core.__file__).parent
-    source_files += sorted((core_root / "control").glob("*.py"))
-    source_files += sorted((core_root / "planning").glob("*.py"))
-    state["source_sha256"] = {
-        str(
-            path.relative_to(core_root.parent)
-            if path.is_relative_to(core_root)
-            else Path("sim/isaac") / path.name
-        ): hashlib.sha256(path.read_bytes()).hexdigest()
-        for path in source_files
-    }
+    state["source_sha256"] = source_sha256(
+        Path(__file__).resolve().parents[2], Path(forklift_core.__file__).parent
+    )
     state["phase"] = "scene"
     enable_extension("isaacsim.asset.importer.urdf")
     require(
@@ -370,6 +467,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     camera.initialize()
     if args.use_perception:
         perception_camera.initialize()
+        verify_camera_intrinsics(perception_camera, perception_calibration, state)
         # Capture needs axial depth as well as RGBA (see determinism_probe.py).
         perception_camera.add_distance_to_image_plane_to_frame()
         perception_capture = adapter.SensorCapture(
