@@ -5,6 +5,9 @@ RGB corners retain subpixel coordinates. Repeated renders are never pooled as
 independent calibration points. All plane comparisons use the base_link origin.
 """
 
+from dataclasses import asdict
+from math import ceil
+
 import numpy as np
 
 from forklift_core.geometry import rotation_matrix_from_quaternion_xyzw
@@ -21,8 +24,33 @@ CORNER_SPACING_PX = 16.0
 REPEATS = 3
 GRID_STRIDE_PX = 2
 EDGE_EROSION_PX = 2
+# Empirical principal-point envelope from the 2026-09-21 G1 run, section 5.4.
+# It establishes only that each axis stays below a whole pixel; the erosion
+# margin below is +1 px for any envelope in (0, 1], so this number does not
+# size that margin and a smaller measurement would not shrink it. This is a
+# selection uncertainty budget, NOT a new acceptance limit for 2a.
+HEIGHT_PRINCIPAL_POINT_BOUND_PX = 0.1442
 GRID_SAMPLES_PER_BIN = 20
 MIN_PLANE_SAMPLES = 6
+# Predeclared floor for the coverage rule (USER decision, 2026-09-21; not a
+# judgment this code made). A distance/screen bin whose baseline holds fewer
+# than this many grid samples cannot carry a statistic, which is the same
+# judgment MIN_PLANE_SAMPLES already encodes for board planes. Losing such a
+# bin to the selection margin is therefore recorded with its count instead of
+# failing the gate: one pixel at the image border must not fail a run. It is
+# currently the same number as MIN_PLANE_SAMPLES but its own constant, so the
+# two can diverge. A bin AT or above this floor that the margin empties still
+# fails coverage, exactly as before.
+MIN_COVERAGE_BASELINE_SAMPLES = 6
+# Measurement region of a height panel: forward and lateral half extents as a
+# fraction of the anchor horizontal range. Unchanged since plan v11; the
+# viewing-direction margin below is added outside it and is never measured.
+HEIGHT_PANEL_HALF_EXTENTS = (0.20, 0.16)
+# Only the far central board is rotated, and only so its endpoint column has a
+# measurable plane. Everything else is front-parallel on purpose: with dZ/du=0
+# the depth gates are structurally insensitive to RGB corner error
+# (docs/validation/2026-09-21-g1-calibration-run.md, section 13.1).
+FAR_CENTRAL_TILT_DEG = 10.0
 
 # Plan v11: one source for both recorded criteria and executable judgments.
 # The two point references are diagnostic only, never acceptance gates.
@@ -45,10 +73,38 @@ G1_LIMITS = {
 }
 
 
+def height_selection_margin() -> dict:
+    """Record the predeclared selection-only margin and its empirical scope."""
+    # u=fx*X/Z+cx, v=fy*Y/Z+cy: with focal lengths fixed, delta(c) is
+    # exactly the image-boundary translation. A subpixel shift can flip an
+    # integer boundary row/column, so the square erosion kernel needs one
+    # whole extra Chebyshev pixel above the evaluation's unchanged 2 px.
+    # ceil() therefore yields +1 for ANY envelope in (0, 1] px: the cited
+    # observations size nothing here, they only establish that the envelope is
+    # below 1. An envelope above 1 px would need a wider margin, and nothing
+    # measured so far says it would get one. This is not a bound on focal
+    # error, arbitrary rasterization, or future fits, nor a diagnosis of the
+    # RGB fitting bias. Never tune it from depth.
+    extra = ceil(HEIGHT_PRINCIPAL_POINT_BOUND_PX)
+    return {
+        "principal_point_bound_px": HEIGHT_PRINCIPAL_POINT_BOUND_PX,
+        "additional_selection_erosion_px": extra,
+        "evaluation_erosion_px": EDGE_EROSION_PX,
+        "selection_erosion_px": EDGE_EROSION_PX + extra,
+        "derivation": "delta(u,v)=delta(cx,cy) at fixed f; ceil() of the envelope, which is +1 square-kernel pixel for any envelope in (0, 1] px; the measured envelope establishes only that it is below 1, it does not scale this margin",
+        "source": "docs/validation/2026-09-21-g1-calibration-run.md section 5.4",
+        "scope": "observed principal-point envelope only; RGB bias cause unresolved",
+    }
+
+
 def protocol() -> dict:
     """Return the predeclared sampling policy, persisted before any rendering."""
     return {
-        "version": "G1-v11-1",
+        # v11-3 supersedes v11-1, the version every executed run recorded up to
+        # section 11 of the run record. It adds the warm-up capture that no fit
+        # uses and the height panels' viewing-direction margin, so the sampling
+        # policy differs from v11-1 and results must not be pooled across them.
+        "version": "G1-v11-3",
         "distance_anchors_m": DISTANCES_M,
         "distance_edges_m": DISTANCE_EDGES_M,
         "distance_definition": "hypot(sample_base.xy - camera_base.xy); not optical Z",
@@ -57,21 +113,23 @@ def protocol() -> dict:
         "board_centres_uv": SCREEN_CENTRES_UV,
         "board_corners": BOARD_CORNERS,
         "corner_spacing_px": CORNER_SPACING_PX,
-        "far_central_board_optical_y_rotation_deg": 10.0,
+        "far_central_board_optical_y_rotation_deg": FAR_CENTRAL_TILT_DEG,
         "corners_per_board_per_repeat": 63,
         "repeats": REPEATS,
         "holdout": "(corner_row + corner_column) % 4 == 0, fixed before rendering",
         "repeat_policy": "separate fit per distance anchor and repeat; never pool repeated views",
         "grid_stride_px": GRID_STRIDE_PX,
         "edge_erosion_px": EDGE_EROSION_PX,
-        "grid_selection": "before depth capture: erode geometric ROI, take stride-grid centres, select min(20, eligible count) per bin by linspace over row-major indices; every selected sample must survive the semantic and finite-depth checks; no replacement or residual rejection",
+        "height_selection_margin": height_selection_margin(),
+        "grid_selection": "before depth capture: erode the rendered panel ROI by evaluation erosion plus selection-only margin, confine the result to the measurement region, take stride-grid centres, select min(20, eligible count) per bin by linspace over row-major indices; record baseline/current counts and lost bins; a bin whose baseline holds at least minimum_coverage_baseline_samples grid samples and that the margin empties fails coverage, while a baseline below that floor is recorded as BELOW_BASELINE_FLOOR with its count and does not fail; every selected sample must survive the semantic and finite-depth checks; no replacement or residual rejection",
         "grid_samples_per_observed_bin_cap": GRID_SAMPLES_PER_BIN,
         "minimum_plane_corners_per_observed_bin": MIN_PLANE_SAMPLES,
+        "minimum_coverage_baseline_samples": MIN_COVERAGE_BASELINE_SAMPLES,
         "corner_depth": "bilinear axial depth, all four neighbours in eroded same-label ROI",
         "height_depth": "native integer depth grid; nominal K and nominal mount; no RGB rounding",
         "height_judgment": "bias and absolute p95 per distance interval; screen-cell statistics are diagnostics; every preselected sample is required",
         "height_surfaces_base_m": HEIGHTS_M,
-        "height_panel_size_m": "forward 0.40*r, lateral 0.32*r; surface at h, no thickness",
+        "height_panel_size_m": "measurement region forward 0.40*r, lateral 0.32*r, surface at h, no thickness; the rendered panel adds a viewing-direction margin near and far, sized as the metres that move each measurement edge by the selection erosion in rows, so the eroded selection still reaches the extreme distance bins; the margin is rendered but never selected, measured or counted as coverage",
         "empty_bin_status": "UNOBSERVED, never PASS; expected-visible missing data fails coverage",
         "guarantee": "Only tested layouts and populated predeclared bins: plane normal/offset and height statistics. No all-point 3D error guarantee.",
         "limits": dict(G1_LIMITS),
@@ -432,6 +490,110 @@ def height_visibility(
         "u_px": float(uv[0]),
         "v_px": float(uv[1]),
         "point_base_m": candidates[index].tolist(),
+    }
+
+
+def row_shift_metres(
+    optical_point: np.ndarray,
+    optical_axis: np.ndarray,
+    rows_px: float,
+    calibration: PinholeIntrinsics,
+) -> float:
+    """Metres along `optical_axis` that move a point's image row by `rows_px`.
+
+    With v = fy*Y/Z + cy and q(m) = q0 + m*a the row shift is
+
+        dv(m) = fy*m*(a_y*Z - a_z*Y) / (Z*(Z + m*a_z)),
+
+    which is linear in m once the target shift is fixed:
+
+        m = s*rows*Z^2 / (fy*(a_y*Z - a_z*Y) - s*rows*Z*a_z),  s = sign(dv).
+
+    Both signs are solved and the smallest positive root is returned, so the
+    caller gets the first place along that axis where the row has moved far
+    enough. This is geometry only: no depth, render or tolerance enters.
+    """
+    y, z = float(optical_point[1]), float(optical_point[2])
+    axis_y, axis_z = float(optical_axis[1]), float(optical_axis[2])
+    gradient = calibration.fy * (axis_y * z - axis_z * y)
+    roots = []
+    for sign in (1.0, -1.0):
+        denominator = gradient - sign * rows_px * z * axis_z
+        if abs(denominator) < 1e-12:
+            continue
+        metres = sign * rows_px * z * z / denominator
+        if np.isfinite(metres) and metres > 0:
+            roots.append(float(metres))
+    if not roots:
+        raise ValueError("No forward extension reaches the requested row shift")
+    return min(roots)
+
+
+def height_panel_geometry(
+    centre_base_m,
+    distance_m: float,
+    height_m: float,
+    calibration: PinholeIntrinsics,
+    actual_mount: np.ndarray,
+) -> dict:
+    """Split a height panel into its measurement region and a viewing margin.
+
+    The measurement region is the plan v11 rectangle, unchanged. Around it the
+    rendered panel is extended along the viewing axis only, by the metres that
+    move its near and far edges `selection_erosion_px + 1` rows further out.
+    The square selection kernel then bites into that margin instead of into the
+    measurement region, so a distance bin that ends one stride-grid row short
+    of the panel edge keeps its rows. Lateral extent, surface height, truth,
+    the 2 px evaluation erosion and every acceptance limit are untouched.
+
+    The extra row is integer rounding, not slack: a panel edge at continuous
+    row p yields integer rows from ceil(p), so a measurement edge at row m is
+    reached after eroding e pixels only when ceil(m) - ceil(p) >= e. A shift of
+    exactly e leaves that difference at e-1 whenever the fractional parts fall
+    the wrong way, and one more row closes it for every phase.
+    """
+    centre = np.asarray(centre_base_m, dtype=float)
+    forward, lateral = (half * distance_m for half in HEIGHT_PANEL_HALF_EXTENTS)
+    measurement = np.array(
+        [
+            [centre[0] - forward, centre[1] - lateral, height_m],
+            [centre[0] + forward, centre[1] - lateral, height_m],
+            [centre[0] + forward, centre[1] + lateral, height_m],
+            [centre[0] - forward, centre[1] + lateral, height_m],
+        ]
+    )
+    # A constant: the selection erosion plus one row of integer rounding. It
+    # is not a share of the measured principal-point envelope, and no measured
+    # number moves it. Only the metres below scale with the geometry.
+    rows = height_selection_margin()["selection_erosion_px"] + 1
+    optical_from_base = np.linalg.inv(rigid_matrix(actual_mount))
+    optical = transform_points(optical_from_base, measurement)
+    axis = optical_from_base[:3, :3] @ np.array([1.0, 0.0, 0.0])
+    near = max(row_shift_metres(optical[i], -axis, rows, calibration) for i in (0, 3))
+    far = max(row_shift_metres(optical[i], axis, rows, calibration) for i in (1, 2))
+    panel = measurement.copy()
+    panel[[0, 3], 0] -= near
+    panel[[1, 2], 0] += far
+    # Verify the derivation against the projection it was derived from, so a
+    # mount or intrinsics that breaks the closed form fails here, not silently.
+    shifts = np.abs(
+        project(transform_points(optical_from_base, panel), calibration)[:, 1]
+        - project(optical, calibration)[:, 1]
+    )
+    if shifts.min() < rows - 1e-9:
+        raise ValueError("Height panel margin does not clear the selection erosion")
+    return {
+        "measurement_vertices_base_m": measurement.tolist(),
+        "panel_vertices_base_m": panel.tolist(),
+        "forward_half_extent_m": float(forward),
+        "lateral_half_extent_m": float(lateral),
+        "near_margin_m": float(near),
+        "far_margin_m": float(far),
+        "margin_rows_px": rows,
+        "measured_row_shift_px": [float(value) for value in shifts],
+        "margin_axis_base": "panel forward axis, base +x",
+        "derivation": "rows = selection_erosion_px + 1, a constant for integer row rounding and not a function of any measured number; m = rows*Z^2 / (fy*(a_y*Z - a_z*Y) -+ rows*Z*a_z) per measurement edge",
+        "scope": "rendered margin only; never selected, measured or counted as coverage",
     }
 
 
@@ -918,16 +1080,32 @@ def board_statistics(
     }
 
 
+def default_tilt_deg(
+    distance_m: float, centre_uv: tuple, calibration: PinholeIntrinsics
+) -> float:
+    """The authored rotation rule of the judging layout, as a readable value."""
+    return (
+        FAR_CENTRAL_TILT_DEG
+        if distance_m == 5.0 and centre_uv[0] == calibration.cx
+        else 0.0
+    )
+
+
 def checkerboard_layout(
     distance_m: float,
     centre_uv: tuple,
     calibration: PinholeIntrinsics,
     nominal_mount: np.ndarray,
+    *,
+    tilt_deg: float | None = None,
 ) -> dict:
     """Author full-screen 10x8 square boards; centre distance is horizontal XY.
 
     These are placement instructions only. Read the composed mesh vertices back
     at capture time to obtain the actual corner truth, including authored scale.
+
+    tilt_deg is a diagnostic override for layout comparisons only. The judging
+    run never passes it, so the authored rule below stays the measured layout.
     """
     ray = np.r_[
         (np.asarray(centre_uv) - [calibration.cx, calibration.cy])
@@ -940,10 +1118,10 @@ def checkerboard_layout(
     # With an untilted central board at r=5, every off-axis column has
     # hypot(x,y)>5. Only one collinear column remains in range. Rotate the
     # board about its unchanged centre so the endpoint has a measurable plane.
-    angle = (
-        np.deg2rad(10.0)
-        if distance_m == 5.0 and centre_uv[0] == calibration.cx
-        else 0.0
+    angle = np.deg2rad(
+        default_tilt_deg(distance_m, centre_uv, calibration)
+        if tilt_deg is None
+        else tilt_deg
     )
     c, s = np.cos(angle), np.sin(angle)
     board_rotation = np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
@@ -982,10 +1160,11 @@ def checkerboard_layout(
     }
 
 
-def erode_mask(mask: np.ndarray) -> np.ndarray:
+def erode_mask(mask: np.ndarray, *, radius: int | None = None) -> np.ndarray:
+    """Erode with a square kernel; evaluation retains the default 2 px radius."""
     import cv2
 
-    radius = EDGE_EROSION_PX
+    radius = EDGE_EROSION_PX if radius is None else radius
     return cv2.erode(
         np.asarray(mask, dtype=np.uint8),
         np.ones((2 * radius + 1, 2 * radius + 1), np.uint8),
@@ -994,21 +1173,61 @@ def erode_mask(mask: np.ndarray) -> np.ndarray:
     ).astype(bool)
 
 
+def within_rectangle(
+    points_base: np.ndarray, axial_m: np.ndarray, vertices_base: np.ndarray
+) -> np.ndarray:
+    """Forward rays whose plane intersection lies inside a horizontal rectangle."""
+    low, high = vertices_base.min(axis=0), vertices_base.max(axis=0)
+    return (
+        np.isfinite(axial_m)
+        & (axial_m > 0)
+        & (points_base[:, 0] >= low[0])
+        & (points_base[:, 0] <= high[0])
+        & (points_base[:, 1] >= low[1])
+        & (points_base[:, 1] <= high[1])
+    )
+
+
 def height_grid_selection(
     vertices_base: np.ndarray,
     rendered_calibration: PinholeIntrinsics,
     actual_mount: np.ndarray,
+    measurement_vertices_base: np.ndarray | None = None,
 ) -> dict:
     """Preselect up to 20 native grid samples per geometrically visible bin.
 
     No depth or semantic measurement enters selection. Bin coordinates use the
     readback plane, actual transform and independent rendered K. Height truth is
     solely the composed surface z, never a fitted reconstructed point cloud.
+
+    `vertices_base` is the rendered panel, `measurement_vertices_base` the part
+    of it that is measured. Both erosions run on the rendered panel, because
+    that is the silhouette the renderer produces, and the result is confined to
+    the measurement region. A viewing-direction margin therefore stops the
+    selection kernel emptying an extreme distance bin without moving the
+    measurement region, changing the truth or relaxing the coverage rule: a bin
+    whose baseline reaches MIN_COVERAGE_BASELINE_SAMPLES and that the margin
+    empties still fails. Defaulting the measurement region to the whole panel
+    keeps the marginless behaviour.
     """
     k = rendered_calibration
     vertices = np.asarray(vertices_base)
     if np.ptp(vertices[:, 2]) > 1e-7:
         raise ValueError("Height panel must be horizontal in base_link")
+    region = (
+        vertices
+        if measurement_vertices_base is None
+        else np.asarray(measurement_vertices_base, dtype=float)
+    )
+    if np.ptp(region[:, 2]) > 1e-7 or abs(region[:, 2].mean() - vertices[0, 2]) > 1e-6:
+        raise ValueError("Measurement region must be horizontal at the panel surface")
+    # 1e-6 m is USD float32 point storage, not a measurement tolerance: the
+    # readback panel and the requested region share their lateral edges exactly
+    # in float64 and differ only by single-precision rounding of the vertices.
+    if (region.min(axis=0)[:2] < vertices.min(axis=0)[:2] - 1e-6).any() or (
+        region.max(axis=0)[:2] > vertices.max(axis=0)[:2] + 1e-6
+    ).any():
+        raise ValueError("Measurement region must lie inside the rendered panel")
     v, u = np.indices((k.height, k.width))
     uv = np.column_stack((u.ravel(), v.ravel()))
     rays = (
@@ -1025,25 +1244,22 @@ def height_grid_selection(
     # Finite dummy positions outside the mask avoid NaN-to-int warnings in bins.
     safe_axial = np.where(np.isfinite(axial), axial, 0.0)
     truth = rays * safe_axial[:, None] + actual_mount[:3, 3]
-    low, high = vertices.min(axis=0), vertices.max(axis=0)
-    inside = (
-        np.isfinite(axial)
-        & (axial > 0)
-        & (truth[:, 0] >= low[0])
-        & (truth[:, 0] <= high[0])
-        & (truth[:, 1] >= low[1])
-        & (truth[:, 1] <= high[1])
-    )
-    geometric_mask = erode_mask(inside.reshape(k.height, k.width)).ravel()
+    inside = within_rectangle(truth, axial, vertices).reshape(k.height, k.width)
+    measured = within_rectangle(truth, axial, region).reshape(k.height, k.width)
+    margin = height_selection_margin()
+    baseline_mask = (erode_mask(inside) & measured).ravel()
+    geometric_mask = (
+        erode_mask(inside, radius=margin["selection_erosion_px"]) & measured
+    ).ravel()
     grid = ((uv[:, 0] % GRID_STRIDE_PX) == 0) & ((uv[:, 1] % GRID_STRIDE_PX) == 0)
     bins = sample_bins(truth, uv, actual_mount[:3, 3], k)
     indices, groups = [], []
     for distance in range(6):
         for col in range(3):
             for row in range(3):
-                candidate = np.flatnonzero(
-                    geometric_mask & grid & (bins == [distance, col, row]).all(axis=1)
-                )
+                bin_grid = grid & (bins == [distance, col, row]).all(axis=1)
+                baseline_count = int(np.count_nonzero(baseline_mask & bin_grid))
+                candidate = np.flatnonzero(geometric_mask & bin_grid)
                 n = min(len(candidate), GRID_SAMPLES_PER_BIN)
                 selected = (
                     candidate[np.linspace(0, len(candidate) - 1, n, dtype=int)]
@@ -1054,17 +1270,53 @@ def height_grid_selection(
                 groups.append(
                     {
                         "bin": [distance, col, row],
+                        "baseline_geometric_count": baseline_count,
+                        "baseline_planned_count": min(
+                            baseline_count, GRID_SAMPLES_PER_BIN
+                        ),
                         "geometric_count": len(candidate),
                         "planned_count": n,
                         "required_count": n,
+                        # A bin the margin empties fails only if its baseline
+                        # could have carried a statistic. Below the floor it is
+                        # reclassified, never deleted: the bin and its baseline
+                        # count stay on record under their own status.
+                        "coverage_status": "COMPLETE"
+                        if n
+                        else "FAIL"
+                        if baseline_count >= MIN_COVERAGE_BASELINE_SAMPLES
+                        else "BELOW_BASELINE_FLOOR"
+                        if baseline_count
+                        else "UNOBSERVED",
                     }
                 )
     indices = np.asarray(indices, dtype=int)
+    baseline_samples = sum(g["baseline_planned_count"] for g in groups)
+    lost_bins = [g["bin"] for g in groups if g["coverage_status"] == "FAIL"]
     return {
         "uv": uv[indices],
         "truth_base_m": truth[indices],
         "bins": bins[indices],
         "groups": groups,
+        "selection_K": asdict(k),
+        "margin": margin,
+        "panel_region": {
+            "measurement_vertices_base_m": np.asarray(region).tolist(),
+            "panel_vertices_base_m": vertices.tolist(),
+            "selection_confined_to_measurement_region": measurement_vertices_base
+            is not None,
+        },
+        "coverage": {
+            "status": "FAIL"
+            if lost_bins
+            else "COMPLETE"
+            if len(indices)
+            else "UNOBSERVED",
+            "baseline_sample_count": baseline_samples,
+            "sample_count": len(indices),
+            "removed_sample_count": baseline_samples - len(indices),
+            "lost_bins": lost_bins,
+        },
         "location_source": "composed surface, actual USD mount, independently rendered fitted K",
     }
 
@@ -1116,10 +1368,19 @@ def height_grid_statistics(
         )
         for i in range(6)
     ]
-    passed = bool(sampling_complete) and all(sampling_complete)
+    lost_bins = [g["bin"] for g in groups if g.get("coverage_status") == "FAIL"]
+    passed = bool(sampling_complete) and all(sampling_complete) and not lost_bins
     passed &= all(g["status"] in ("PASS", "UNOBSERVED") for g in per_distance)
     return {
-        "status": ("PASS" if passed else "FAIL") if len(uv) else "UNOBSERVED",
+        "status": ("PASS" if passed else "FAIL")
+        if len(uv) or lost_bins
+        else "UNOBSERVED",
+        "coverage_status": "FAIL"
+        if lost_bins
+        else "COMPLETE"
+        if len(uv)
+        else "UNOBSERVED",
+        "lost_bins": lost_bins,
         "sample_count": len(uv),
         "missing_count": int((~valid).sum()),
         "surface_height_base_m": truth_height_m,

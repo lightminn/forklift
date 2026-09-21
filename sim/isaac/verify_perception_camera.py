@@ -46,10 +46,281 @@ def load_module(name: str, path: Path):
 ROOT = Path(__file__).resolve().parents[2]
 RUNNER = load_module("perception_camera_runner", ROOT / "sim/isaac/run_transport.py")
 MEASURE = RUNNER.CAMERA_CALIBRATION
+LAYOUT_POWER = load_module(
+    "perception_camera_layout_power", ROOT / "sim/isaac/layout_power.py"
+)
+# The layout diagnostic writes here and nowhere else. No gate reads this key.
+LAYOUT_POWER_KEY = "layout_power_diagnostic"
 
 
 def write_record(path: Path, value: dict) -> None:
     path.write_text(RUNNER.record_json(value, indent=2) + "\n", encoding="utf-8")
+
+
+# Measured transient, NOT an understood root cause. Four diagnostic runs
+# (docs/validation/2026-09-21-g1-calibration-run.md, sections 9 and 10) showed
+# that a calibration board is authored once per placement and then captured
+# repeatedly with bit-identical geometry, depth and semantic segmentation, yet
+# the first capture after authoring is systematically offset by about 0.12 px
+# in the fitted principal point; from the second capture on the offset drops to
+# 0.03-0.08 px with no trend. It reproduces with DLSS on and anti-aliasing off,
+# at rt_subframes 4 and 16, and with the board visit order reversed, and more
+# samples shrink the scatter but not the mean, so it is deterministic rather
+# than sampling noise. Every observed gate 2a failure sits at that first
+# capture. Taking one warm-up capture after authoring and keeping it out of the
+# fits avoids that measured transient; it does not explain or repair it.
+WARMUP_EXCLUSION_REASON = (
+    "First capture after authoring geometry: measured ~0.12 px principal-point "
+    "transient, mechanism unexplained "
+    "(docs/validation/2026-09-21-g1-calibration-run.md, sections 9-10)"
+)
+
+# Predeclared before the run: the fitted K that height-panel work depends on is
+# taken from this measured repeat. A warm-up capture contributes no samples and
+# therefore no fit at all, so it can never be selected here.
+SELECTION_FIT_REPEAT = 0
+
+
+def capture_plan(repeats: int) -> list[dict]:
+    """Ordered captures taken after authoring one piece of geometry.
+
+    The warm-up is captured and recorded like any other frame but never feeds a
+    fit or a gate, so the measured repeat count is unchanged and finish_result's
+    162-board and 18-fit requirements still describe measured captures only.
+    """
+    return [
+        {
+            "suffix": "warmup",
+            "repeat": None,
+            "measured": False,
+            "exclusion_reason": WARMUP_EXCLUSION_REASON,
+        },
+        *(
+            {"suffix": f"repeat{repeat}", "repeat": repeat, "measured": True}
+            for repeat in range(repeats)
+        ),
+    ]
+
+
+def file_capture_record(
+    record: dict, step: dict, measured: list, excluded: list
+) -> dict:
+    """Route one capture's record; a warm-up is set aside, never dropped.
+
+    Both collections receive the same measured statistics. Discarding a
+    measurement without recording it would conceal it.
+    """
+    if step["measured"]:
+        measured.append(record)
+    else:
+        record["excluded_from_measurement"] = True
+        record["exclusion_reason"] = step["exclusion_reason"]
+        excluded.append(record)
+    return record
+
+
+def selection_fit_reference(
+    fits: list, index: int, *, distance: float, repeat: int, role: str
+) -> dict:
+    """Name the fit a height panel depends on, with the gate that validated it.
+
+    One fitted K has two distinct uses - selecting depth samples and physically
+    placing the panel. Recording the role keeps them apart so a later K
+    comparison cannot move the panels without saying so.
+    """
+    return {
+        "collection": "intrinsics_fits",
+        "index": index,
+        "anchor_horizontal_m": distance,
+        "repeat": repeat,
+        "repeat_kind": "measured",
+        "warmup_capture_excluded": True,
+        "gate_2a": fits[index]["gate_2a"],
+        "role": role,
+    }
+
+
+# Machine-readable gate 7a-prime reason for a selection K that never passed
+# gate 2a. It is deliberately NOT an abort: this phase exists to find out
+# whether the warm-up fixes gate 2a, and a run that stops before
+# finish_result() would carry no gate table at all - it would destroy the
+# evidence it was launched to collect. The run completes, the panels stay on
+# record as diagnostics, and the gate fails with this reason named.
+GATE_7A_PRIME_UNVALIDATED_FIT_REASON = "selection_fit_unvalidated"
+
+
+def unvalidated_selection_fit_marks(reference: dict) -> dict:
+    """Mark panels a fit placed and sampled before it ever passed gate 2a.
+
+    An unvalidated fit must never silently become a measurement input. The
+    numbers are kept - they are diagnostics - but they carry the defect with
+    them so no later reader can mistake them for a validated measurement.
+    """
+    if reference["gate_2a"] == "PASS":
+        return {}
+    return {
+        "selection_fit_unvalidated": True,
+        "selection_fit_unvalidated_reason": GATE_7A_PRIME_UNVALIDATED_FIT_REASON,
+        "selection_fit_unvalidated_detail": (
+            f"intrinsics_fits[{reference['index']}] (anchor "
+            f"{reference['anchor_horizontal_m']} m, repeat {reference['repeat']}) "
+            f"has gate_2a={reference['gate_2a']}; this panel's placement and "
+            "sample selection are diagnostic, never a validated measurement"
+        ),
+    }
+
+
+# Machine-readable gate 7a-prime reason for a height panel whose geometry,
+# composed readback or sample selection failed. It is NOT an abort either, and
+# for the same reason: one panel's geometry must not take the other 53 panels'
+# measurements with it and leave the run without a gate table. The panel is
+# recorded as failed, carries its own reason, and gate 7a-prime names it.
+GATE_7A_PRIME_PANEL_GEOMETRY_REASON = "panel_geometry_failed"
+
+
+# Machine-readable gate 7a-prime reason for a panel whose numbers are on
+# record without the provenance that justifies them. An ABSENT record is not a
+# validated one: the checks below read a fit's gate 2a and the selection's
+# coverage status, so a panel carrying neither passes both by omission. Every
+# record the gate reads must be present, and must carry the field the gate
+# reads, before that panel's numbers may count as a measurement.
+GATE_7A_PRIME_MISSING_PROVENANCE_REASON = "panel_provenance_missing"
+PANEL_FIT_REFERENCE_KEYS = ("panel_placement_K_reference", "selection_fit_reference")
+# Required record -> the field gate 7a-prime actually reads from it. An empty
+# dict is as unvalidated as a missing one, so presence alone is not enough.
+PANEL_REQUIRED_RECORDS = {
+    PANEL_FIT_REFERENCE_KEYS[0]: "gate_2a",
+    PANEL_FIT_REFERENCE_KEYS[1]: "gate_2a",
+    "selection_coverage": "status",
+}
+
+
+def panel_provenance_complete(panel: dict) -> bool:
+    """Judge whether every record gate 7a-prime reads is on this panel."""
+    return all(
+        isinstance(panel.get(key), dict) and field in panel[key]
+        for key, field in PANEL_REQUIRED_RECORDS.items()
+    )
+
+
+def panel_status(states: list) -> str:
+    """Judge one height panel from the statuses of its measured captures.
+
+    An empty list is not agreement: `all([])` is True, so a panel that recorded
+    no measured capture would be promoted to PASS by a vacuous quantifier.
+    Nothing measured is a failure, never a pass.
+    """
+    if not states:
+        return "FAIL"
+    if all(state == "PASS" for state in states):
+        return "PASS"
+    if all(state == "UNOBSERVED" for state in states):
+        return "UNOBSERVED"
+    return "FAIL"
+
+
+def panel_geometry_failure_marks(error: Exception) -> dict:
+    """Mark the one panel whose geometry, readback or selection failed.
+
+    The failure is this panel's, so it fails here and nowhere else. Nothing is
+    relaxed: the panel can never reach PASS, and gate 7a-prime fails with the
+    named reason below.
+    """
+    return {
+        "status": "FAIL",
+        "panel_geometry_failed": True,
+        "panel_geometry_failed_reason": GATE_7A_PRIME_PANEL_GEOMETRY_REASON,
+        "panel_geometry_failed_detail": f"{type(error).__name__}: {error}",
+    }
+
+
+# Gates that keep their measured value in the gate table but are excluded from
+# the numerical aggregate. 7b has always been recorded only. 2a joins it by the
+# USER's decision of 2026-09-21 - it is not a judgment this code made and not a
+# measurement change: gate 2a is still measured, still judged against its own
+# unchanged tolerance, and still written to the table with its PASS/FAIL. What
+# it loses is the direct veto over numerical_status.
+DIAGNOSTIC_ONLY_GATES = {
+    "7b": "recorded only; never an input to the numerical aggregate",
+    "2a": (
+        "user decision 2026-09-21: measured and recorded as before, excluded "
+        "from the numerical aggregate only. The production detector is "
+        "depth-only - pocket_detector.py has no .rgb reference - and the "
+        "production K is a FOV-derived constant, so a rendered-RGB intrinsics "
+        "fit is not an input to detection; and the gate was measured to have "
+        "no detection power at its own tolerance, a delta = 0.05 px injection "
+        "being masked in about 90 % of fits. This removes the direct veto "
+        "only: gate 7a-prime still requires gate 2a on the fit references it "
+        "reads, so a selection or placement anchor that failed 2a still fails "
+        "7a-prime and still blocks."
+    ),
+}
+
+
+def layout_power_diagnostic(observations: list, nominal, *, provenance: dict) -> dict:
+    """Record how well the judging layout recovers an injected K error.
+
+    Pure computation on the corners this run already measured: no extra board
+    is authored, no extra frame is captured, and the run is neither slower nor
+    riskier for it. Rendering any OTHER layout is a separate, opt-in script in
+    its own Isaac process, because a board authored mid-run changes the
+    authoring order the measured captures depend on.
+
+    Nothing reads this key. A failure is recorded instead of raised: the gate
+    table is the evidence the run exists to produce, and a diagnostic must
+    never be able to destroy it.
+    """
+    try:
+        return LAYOUT_POWER.compare_layout_power(
+            {"production": {"observations": observations, "provenance": provenance}},
+            nominal,
+        )
+    except Exception as exc:
+        # A degraded record carries the same keys as a healthy one, so a reader
+        # that indexes by_delta or caveats does not break on it. Empty and None
+        # mean "not computed"; no number is invented to fill the hole.
+        return {
+            "question": (
+                "Does an alternative layout still detect a known intrinsics "
+                "error as well as the current one?"
+            ),
+            "judgment": (
+                "none - this diagnostic records numbers. No PASS/FAIL, no "
+                "threshold, no gate, and no input to the G1 result."
+            ),
+            "nominal_intrinsics": None,
+            "injection": None,
+            "reference_layout": None,
+            "arms": {},
+            "by_delta": [],
+            "caveats": [],
+            "provenance": provenance,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
+def save_height_selection(
+    directory: Path, name: str, selection: dict, fit_reference: dict
+) -> dict:
+    """Persist the depth-independent selection and fit provenance before capture."""
+    record = {
+        "selection_K": selection["selection_K"],
+        "selection_K_coordinate_convention": "integer_index_centers",
+        "selection_fit_reference": fit_reference,
+        "selection_groups": selection["groups"],
+        "selection_margin": selection["margin"],
+        "selection_panel_region": selection["panel_region"],
+        "selection_coverage": selection["coverage"],
+        "sample_location_source": selection["location_source"],
+    }
+    write_record(directory / f"{name}_selection.json", record)
+    np.savez_compressed(
+        directory / f"{name}_selection.npz",
+        uv=selection["uv"],
+        truth_base_m=selection["truth_base_m"],
+        bins=selection["bins"],
+    )
+    return record
 
 
 def save_capture(directory: Path, name: str, frame: dict, metadata: dict) -> None:
@@ -367,15 +638,11 @@ class CalibrationScene:
             observe("board_border_authored")
         return path
 
-    def height_panel(self, centre, distance, height) -> str:
-        x, y, _ = centre
-        dx, dy = 0.20 * distance, 0.16 * distance
-        vertices = [
-            [x - dx, y - dy, height],
-            [x + dx, y - dy, height],
-            [x + dx, y + dy, height],
-            [x - dx, y + dy, height],
-        ]
+    def height_panel(self, vertices) -> str:
+        # The caller supplies the measurement rectangle already extended by its
+        # viewing-direction margin, so the rendered silhouette sits outside the
+        # region the selection measures. Geometry is decided in the SDK-free
+        # measurement module; this only authors it.
         path = self.base_path + "/G1HeightPanel"
         self.mesh(
             path, vertices, [[0, 1, 2, 3]], self.materials["white"], "height_panel"
@@ -526,6 +793,21 @@ def _run_measurements(app, args: argparse.Namespace, result: dict, annotators):
     )
     result["marker"], result["boards"], result["height_panels"] = [], [], []
     result["intrinsics_fits"] = []
+    # Warm-up captures are kept here with their own measured statistics. They
+    # are excluded from every fit and gate; nothing reads this collection.
+    result["warmup_boards"] = []
+    result["capture_plan"] = {
+        "steps": capture_plan(MEASURE.REPEATS),
+        "policy": (
+            "One warm-up capture follows every authored board and height panel. "
+            "It is measured and recorded like a repeat but excluded from all "
+            "fits and gates; the measured repeat count is unchanged."
+        ),
+        "basis": "docs/validation/2026-09-21-g1-calibration-run.md, sections 9-10",
+        "mechanism": (
+            "unexplained; this avoids a measured transient, it is not a root-cause fix"
+        ),
+    }
 
     result["segmentation_captures"] = []
     result["annotator_attachment_probes"] = []
@@ -684,6 +966,9 @@ def _run_measurements(app, args: argparse.Namespace, result: dict, annotators):
 
     holdout = np.array([(i + j) % 4 == 0 for i in range(7) for j in range(9)])
     fits_by_distance = {}
+    # Corner sets for the layout diagnostic, collected as the judging fits are
+    # built. They are read only after every gate input is already recorded.
+    layout_observations = []
     for distance in MEASURE.DISTANCES_M:
         samples = [[] for _ in range(MEASURE.REPEATS)]
         for position_index, centre_uv in enumerate(MEASURE.SCREEN_CENTRES_UV):
@@ -694,16 +979,20 @@ def _run_measurements(app, args: argparse.Namespace, result: dict, annotators):
             )
             trace_pipeline(f"before_board_r{distance:.1f}_p{position_index}_authored")
             path = scene.board(geometry, observe=trace_pipeline)
-            for repeat in range(MEASURE.REPEATS):
-                name = f"board_r{distance:.1f}_p{position_index}_repeat{repeat}"
-                record = {
-                    "capture": name,
-                    "anchor_horizontal_m": distance,
-                    "placement_uv": centre_uv,
-                    "repeat": repeat,
-                    "status": "FAIL",
-                }
-                result["boards"].append(record)
+            for step in capture_plan(MEASURE.REPEATS):
+                name = f"board_r{distance:.1f}_p{position_index}_{step['suffix']}"
+                record = file_capture_record(
+                    {
+                        "capture": name,
+                        "anchor_horizontal_m": distance,
+                        "placement_uv": centre_uv,
+                        "repeat": step["repeat"],
+                        "status": "FAIL",
+                    },
+                    step,
+                    result["boards"],
+                    result["warmup_boards"],
+                )
                 frame, wb, wc = capture_board_with_clip_check(
                     camera,
                     scene.vertices_world(path),
@@ -747,7 +1036,8 @@ def _run_measurements(app, args: argparse.Namespace, result: dict, annotators):
                     record["nominal_residual_uv_px"] = (
                         uv - MEASURE.project(truth_optical, nominal_k)
                     ).tolist()
-                    samples[repeat].append((truth_optical, uv, holdout))
+                    if step["measured"]:
+                        samples[step["repeat"]].append((truth_optical, uv, holdout))
                     np.savez_compressed(
                         args.output / f"{name}_samples.npz",
                         truth_base_m=truth_base,
@@ -778,12 +1068,27 @@ def _run_measurements(app, args: argparse.Namespace, result: dict, annotators):
                 np.concatenate([s[i] for s in sets]) for i in range(3)
             )
             record.update(MEASURE.fit_intrinsics(points, uv, heldout, nominal_k))
-            if repeat == 0:
-                fits_by_distance[distance] = PinholeIntrinsics(
+            layout_observations.append(
+                {
+                    "anchor_horizontal_m": distance,
+                    "repeat": repeat,
+                    "position_count": len(sets),
+                    "points_optical": points,
+                    "uv": uv,
+                    "holdout": heldout,
+                }
+            )
+            if repeat == SELECTION_FIT_REPEAT:
+                rendered_k = PinholeIntrinsics(
                     nominal_k.width,
                     nominal_k.height,
                     frame_id=nominal_k.frame_id,
                     **record["estimated"],
+                )
+                fits_by_distance[distance] = (
+                    rendered_k,
+                    len(result["intrinsics_fits"]) - 1,
+                    repeat,
                 )
 
     # Visibility and distance bin assignment use readback geometry and the
@@ -798,7 +1103,27 @@ def _run_measurements(app, args: argparse.Namespace, result: dict, annotators):
                 }
             )
             continue
-        rendered_k = fits_by_distance[distance]
+        rendered_k, fit_index, fit_repeat = fits_by_distance[distance]
+        # One fitted K does two jobs here: it places the panel in the scene and
+        # it selects the depth samples. Keep the two uses separately recorded.
+        # The fit for this anchor is complete before any panel is placed, so its
+        # gate 2a status is known here: every board capture ran in the loop
+        # above. A failed gate 2a marks the panels and fails gate 7a-prime in
+        # finish_result; it never aborts, so the run still produces a gate table.
+        placement_reference = selection_fit_reference(
+            result["intrinsics_fits"],
+            fit_index,
+            distance=distance,
+            repeat=fit_repeat,
+            role="height_panel_physical_placement",
+        )
+        selection_reference = selection_fit_reference(
+            result["intrinsics_fits"],
+            fit_index,
+            distance=distance,
+            repeat=fit_repeat,
+            role="height_grid_sample_selection",
+        )
         for height in MEASURE.HEIGHTS_M:
             for column in (100.0, 320.0, 540.0):
                 visibility = MEASURE.height_visibility(
@@ -809,7 +1134,13 @@ def _run_measurements(app, args: argparse.Namespace, result: dict, annotators):
                     "column_px": column,
                     "requested_surface_height_base_m": height,
                     "centre_visibility": visibility,
+                    # Each panel owns its copy of both role records: one shared
+                    # dict inserted into all nine panels of an anchor would let
+                    # a later per-panel mutation corrupt nine records at once.
+                    "panel_placement_K_reference": dict(placement_reference),
+                    **unvalidated_selection_fit_marks(placement_reference),
                     "captures": [],
+                    "warmup_captures": [],
                     "status": "FAIL",
                 }
                 result["height_panels"].append(record)
@@ -819,7 +1150,28 @@ def _run_measurements(app, args: argparse.Namespace, result: dict, annotators):
                         reason="No forward horizontal-range/column intersection",
                     )
                     continue
-                path = scene.height_panel(visibility["point_base_m"], distance, height)
+                try:
+                    geometry = MEASURE.height_panel_geometry(
+                        visibility["point_base_m"],
+                        distance,
+                        height,
+                        rendered_k,
+                        actual_matrix,
+                    )
+                except np.linalg.LinAlgError:
+                    # numpy raises LinAlgError as a ValueError SUBCLASS, so the
+                    # handler below would absorb it. A linear-algebra failure
+                    # here is not this panel's geometry: the matrix inverted is
+                    # the mount, shared by all 54 panels and already validated
+                    # globally by read_mount, so there is no per-panel defect to
+                    # record and nothing to protect by continuing. It aborts
+                    # once, diagnosably, rather than being relabelled 54 times.
+                    raise
+                except ValueError as exc:
+                    record.update(panel_geometry_failure_marks(exc))
+                    continue
+                record["panel_geometry"] = geometry
+                path = scene.height_panel(geometry["panel_vertices_base_m"])
                 wb = scene.world_matrix(base_path)
                 vertices_world = scene.vertices_world(path)
                 truth_height = MEASURE.surface_height_base(vertices_world, wb)
@@ -830,21 +1182,54 @@ def _run_measurements(app, args: argparse.Namespace, result: dict, annotators):
                 vertices_base = MEASURE.transform_points(
                     np.linalg.inv(wb), vertices_world
                 )
-                selection = MEASURE.height_grid_selection(
-                    vertices_base, rendered_k, actual_matrix
+                # The measured rectangle keeps the readback surface height, so
+                # the margin never moves the plane the heights are judged on.
+                measurement_base = np.column_stack(
+                    (
+                        np.asarray(geometry["measurement_vertices_base_m"])[:, :2],
+                        np.full(4, truth_height),
+                    )
                 )
+                try:
+                    # 1e-5 m absorbs USD's float32 point storage only; the
+                    # margin itself is millimetres, so an authoring mistake
+                    # still fails - on this panel, not on the whole run.
+                    if not np.allclose(
+                        vertices_base,
+                        geometry["panel_vertices_base_m"],
+                        rtol=0,
+                        atol=1e-5,
+                    ):
+                        raise ValueError(
+                            "Composed panel differs from the measurement region "
+                            "plus margin"
+                        )
+                    selection = MEASURE.height_grid_selection(
+                        vertices_base,
+                        rendered_k,
+                        actual_matrix,
+                        measurement_vertices_base=measurement_base,
+                    )
+                except np.linalg.LinAlgError:
+                    # Same narrowing as above: the ValueError handler must not
+                    # relabel a linear-algebra failure of the shared transform
+                    # as this one panel's selection defect.
+                    raise
+                except ValueError as exc:
+                    record.update(panel_geometry_failure_marks(exc))
+                    stage.RemovePrim(path)
+                    continue
                 record["surface_vertices_base_m"] = vertices_base.tolist()
-                record["selection_groups"] = selection["groups"]
-                record["sample_location_source"] = selection["location_source"]
+                record["measurement_vertices_base_m"] = measurement_base.tolist()
                 name_base = f"height_r{distance:.1f}_h{height:.3f}_u{column:.0f}"
-                np.savez_compressed(
-                    args.output / f"{name_base}_selection.npz",
-                    uv=selection["uv"],
-                    truth_base_m=selection["truth_base_m"],
-                    bins=selection["bins"],
+                record.update(
+                    save_height_selection(
+                        args.output, name_base, selection, dict(selection_reference)
+                    )
                 )
-                for repeat in range(MEASURE.REPEATS):
-                    name = f"{name_base}_repeat{repeat}"
+                write_record(args.output / "result.json", result)
+                for step in capture_plan(MEASURE.REPEATS):
+                    name = f"{name_base}_{step['suffix']}"
                     frame, wb, _ = capture(
                         name,
                         path,
@@ -874,17 +1259,29 @@ def _run_measurements(app, args: argparse.Namespace, result: dict, annotators):
                         nominal_matrix,
                         truth_height,
                     )
-                    record["captures"].append({"capture": name, **stats})
-                states = [s["status"] for s in record["captures"]]
-                record["status"] = (
-                    "PASS"
-                    if all(s == "PASS" for s in states)
-                    else "UNOBSERVED"
-                    if all(s == "UNOBSERVED" for s in states)
-                    else "FAIL"
+                    file_capture_record(
+                        {"capture": name, **stats},
+                        step,
+                        record["captures"],
+                        record["warmup_captures"],
+                    )
+                record["status"] = panel_status(
+                    [capture["status"] for capture in record["captures"]]
                 )
                 stage.RemovePrim(path)
                 write_record(args.output / "result.json", result)
+    # Last, after every judged measurement is already on record.
+    result[LAYOUT_POWER_KEY] = layout_power_diagnostic(
+        layout_observations,
+        nominal_k,
+        provenance={
+            "source": "this run's measured calibration boards",
+            "extra_captures": 0,
+            "warmup_captures_excluded": True,
+            "camera_axes": args.camera_axes,
+            "protocol_version": result["protocol"]["version"],
+        },
+    )
     finish_result(result)
     return camera
 
@@ -914,22 +1311,70 @@ def finish_result(result: dict) -> None:
         else "FAIL",
     }
     covered_ranges = set()
+    # A panel's captures supply distance coverage whatever the panel's own
+    # status, so "what this gate measured with" is wider than "what passed".
+    # Both must carry their provenance; a panel that exited before any capture
+    # supplies nothing and needs none.
+    measurement_inputs = []
     for panel in heights:
-        for capture in panel.get("captures", []):
-            covered_ranges.update(
-                g["distance_bin"]
-                for g in capture["per_distance"]
-                if g["status"] == "PASS"
-            )
-    gates["7a_prime"] = (
-        "PASS"
-        if len(heights) == 54
-        and len(covered_ranges) == 6
-        and all(h["status"] in ("PASS", "UNOBSERVED") for h in heights)
-        else "FAIL"
-    )
+        contributed = {
+            g["distance_bin"]
+            for capture in panel.get("captures", [])
+            for g in capture["per_distance"]
+            if g["status"] == "PASS"
+        }
+        covered_ranges.update(contributed)
+        if panel["status"] == "PASS" or contributed:
+            measurement_inputs.append(panel)
+    # Every defect keeps its own reason: a provenance failure must stay visible
+    # beside a coverage or measurement failure instead of absorbing it.
+    # One fitted K is recorded once per role - placing the panel and selecting
+    # its samples - precisely so a later change can move the two apart. Every
+    # recorded role is checked, or a selection-only defect would pass unseen.
+    unvalidated_fits = []
+    for panel in heights:
+        for key in PANEL_FIT_REFERENCE_KEYS:
+            reference = panel.get(key)
+            if not isinstance(reference, dict) or reference.get("gate_2a") == "PASS":
+                continue
+            if reference not in unvalidated_fits:
+                unvalidated_fits.append(reference)
+    reasons = []
+    if len(heights) != 54:
+        reasons.append("incomplete_panel_set")
+    if len(covered_ranges) != 6:
+        reasons.append("distance_bin_not_covered")
+    if any(panel["status"] not in ("PASS", "UNOBSERVED") for panel in heights):
+        reasons.append("panel_measurement_failed")
+    if any(panel.get("panel_geometry_failed") for panel in heights):
+        reasons.append(GATE_7A_PRIME_PANEL_GEOMETRY_REASON)
+    if any(
+        isinstance(panel.get("selection_coverage"), dict)
+        and panel["selection_coverage"].get("status") == "FAIL"
+        for panel in heights
+    ):
+        reasons.append("selection_coverage_lost")
+    # A malformed coverage record reaches the line above as "not FAIL"; it is
+    # caught here instead, for every panel whose numbers this gate used.
+    if any(not panel_provenance_complete(panel) for panel in measurement_inputs):
+        reasons.append(GATE_7A_PRIME_MISSING_PROVENANCE_REASON)
+    if unvalidated_fits:
+        reasons.append(GATE_7A_PRIME_UNVALIDATED_FIT_REASON)
+    gates["7a_prime"] = "FAIL" if reasons else "PASS"
+    result["gate_7a_prime_detail"] = {
+        "status": gates["7a_prime"],
+        "reasons": reasons,
+        "unvalidated_selection_fits": unvalidated_fits,
+    }
     gates["7b"] = "RECORD_ONLY"
-    numerical_pass = all(value == "PASS" for key, value in gates.items() if key != "7b")
+    # The excluded set is named and recorded, so a reader of result.json alone
+    # sees which gates were measured but kept out of the aggregate, and why.
+    result["diagnostic_only_gates"] = dict(DIAGNOSTIC_ONLY_GATES)
+    numerical_pass = all(
+        value == "PASS"
+        for key, value in gates.items()
+        if key not in DIAGNOSTIC_ONLY_GATES
+    )
     # No raster silhouette-centre tolerance is smuggled into the G1 table.
     # A centroid outside the identified marker cannot locate that marker;
     # numeric gate failures instead expose a camera/transform mismatch.

@@ -1,6 +1,9 @@
 """G1 quantitative measurement contracts, without importing the simulator."""
 
 import importlib.util
+import json
+import runpy
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import numpy as np
@@ -283,11 +286,12 @@ def test_height_grid_fixes_samples_before_depth_and_rejects_missing(measurement)
     surface = np.array(
         [
             [2.35, -0.32, 0.022],
-            [3.35, -0.32, 0.022],
-            [3.35, 0.32, 0.022],
+            [3.55, -0.32, 0.022],
+            [3.55, 0.32, 0.022],
             [2.35, 0.32, 0.022],
         ]
     )
+    # Both distance bins retain an interior after selection's additional margin.
     selection = measurement.height_grid_selection(surface, K, mount)
     assert len(selection["uv"]) > 20
     assert selection["uv"].dtype.kind in "iu"
@@ -303,6 +307,377 @@ def test_height_grid_fixes_samples_before_depth_and_rejects_missing(measurement)
     bad = measurement.height_grid_statistics(selection, depth, mask, K, mount, 0.022)
     assert bad["status"] == "FAIL"
     assert bad["missing_count"] == 1
+
+
+def _horizontal_image_rectangle(bounds):
+    # A downward camera one metre above z=0: optical Z=1, base x=(u-cx)/fx,
+    # base y=-(v-cy)/fy. Literal pixel bounds define independent edge truth.
+    k = PinholeIntrinsics(640, 480, 100.0, 100.0, 319.5, 239.5, "optical")
+    mount = np.diag([1.0, -1.0, -1.0, 1.0])
+    mount[2, 3] = 1.0
+    left, right, top, bottom = bounds
+    surface = np.array(
+        [
+            [(u - 319.5) / 100, -(v - 239.5) / 100, 0.0]
+            for u, v in [(left, top), (right, top), (right, bottom), (left, bottom)]
+        ]
+    )
+    return k, mount, surface
+
+
+@pytest.mark.parametrize(
+    "dx,dy", [(-0.1442, 0), (0.1442, 0), (0, -0.1442), (0, 0.1442)]
+)
+def test_height_selection_survives_subpixel_boundary_shift(measurement, dx, dy):
+    # Returning selection erosion to evaluation's 2 px makes this fail: an
+    # integer boundary row/column flips even though the shift is below 1 px.
+    k, mount, surface = _horizontal_image_rectangle((410.01, 425.99, 230.01, 249.99))
+    fitted = replace(k, cx=k.cx + dx, cy=k.cy + dy)
+    selection = measurement.height_grid_selection(surface, fitted, mount)
+    raw_mask = np.zeros((480, 640), dtype=bool)
+    raw_mask[231:250, 411:426] = True
+    evaluation = measurement.erode_mask(raw_mask)
+    expected = np.zeros_like(raw_mask)
+    expected[233:248, 413:424] = True
+    np.testing.assert_array_equal(evaluation, expected)  # evaluation stays 2 px
+    u, v = selection["uv"].T
+    assert len(u) == 20
+    assert evaluation[v, u].all()
+    stats = measurement.height_grid_statistics(
+        selection, np.ones((480, 640)), evaluation, k, mount, 0.0
+    )
+    assert stats["missing_count"] == 0
+    assert stats["status"] == "PASS"
+
+
+def test_height_selection_records_margin_and_reduced_sample_count(measurement):
+    k, mount, surface = _horizontal_image_rectangle((409.9, 426.1, 229.9, 237.1))
+    selection = measurement.height_grid_selection(surface, k, mount)
+    # Raw integer rectangle [410..426] x [230..237]: 2 px gives 7*2
+    # stride-grid centres; 3 px gives 5*1. No depth is supplied to selection.
+    assert len(selection["uv"]) == 5
+    assert selection["coverage"] == {
+        "status": "COMPLETE",
+        "baseline_sample_count": 14,
+        "sample_count": 5,
+        "removed_sample_count": 9,
+        "lost_bins": [],
+    }
+    group = next(g for g in selection["groups"] if g["planned_count"])
+    assert group["baseline_geometric_count"] == group["baseline_planned_count"] == 14
+    assert group["geometric_count"] == group["required_count"] == 5
+    margin = selection["margin"]
+    assert margin["principal_point_bound_px"] == 0.1442
+    assert margin["additional_selection_erosion_px"] == 1
+    assert margin["evaluation_erosion_px"] == 2
+    assert margin["selection_erosion_px"] == 3
+    assert measurement.protocol()["height_selection_margin"] == margin
+
+
+def test_height_margin_lost_bin_is_a_separate_coverage_failure(measurement):
+    k, mount, surface = _horizontal_image_rectangle((410.01, 426.99, 229.9, 234.1))
+    selection = measurement.height_grid_selection(surface, k, mount)
+    # Five rows support 2 px erosion and six stride samples - exactly the
+    # predeclared baseline floor; 3 px erases the whole panel. This is lost
+    # required coverage, not UNOBSERVED/PASS.
+    assert measurement.MIN_COVERAGE_BASELINE_SAMPLES == 6
+    assert len(selection["uv"]) == 0
+    assert selection["coverage"] == {
+        "status": "FAIL",
+        "baseline_sample_count": 6,
+        "sample_count": 0,
+        "removed_sample_count": 6,
+        "lost_bins": [[1, 1, 1]],
+    }
+    stats = measurement.height_grid_statistics(
+        selection, np.ones((480, 640)), np.ones((480, 640), dtype=bool), k, mount, 0.0
+    )
+    assert stats["status"] == stats["coverage_status"] == "FAIL"
+    assert stats["missing_count"] == 0
+    assert stats["lost_bins"] == [[1, 1, 1]]
+
+
+def test_a_lost_bin_below_the_baseline_floor_is_recorded_and_exempt(measurement):
+    # User decision, 2026-09-21: a bin whose baseline holds fewer samples than
+    # the floor cannot carry a statistic, so losing it is recorded with its
+    # count instead of failing the gate. One pixel at the image border must not
+    # fail a run. The same panel one grid column wider still fails (above).
+    k, mount, surface = _horizontal_image_rectangle((410.01, 425.99, 229.9, 234.1))
+    selection = measurement.height_grid_selection(surface, k, mount)
+    assert len(selection["uv"]) == 0
+    assert selection["coverage"] == {
+        "status": "UNOBSERVED",
+        "baseline_sample_count": 5,
+        "sample_count": 0,
+        "removed_sample_count": 5,
+        "lost_bins": [],
+    }
+    # A reclassification, not a deletion: the bin and its baseline stay visible.
+    group = next(g for g in selection["groups"] if g["baseline_geometric_count"])
+    assert group["bin"] == [1, 1, 1]
+    assert group["coverage_status"] == "BELOW_BASELINE_FLOOR"
+    assert group["baseline_geometric_count"] == 5
+    assert group["geometric_count"] == 0
+    stats = measurement.height_grid_statistics(
+        selection, np.ones((480, 640)), np.ones((480, 640), dtype=bool), k, mount, 0.0
+    )
+    assert stats["status"] == stats["coverage_status"] == "UNOBSERVED"
+    assert stats["lost_bins"] == []
+    measured = next(g for g in stats["groups"] if g["bin"] == [1, 1, 1])
+    assert measured["coverage_status"] == "BELOW_BASELINE_FLOOR"
+    assert measured["baseline_geometric_count"] == 5
+
+
+def test_the_coverage_baseline_floor_is_predeclared_in_the_protocol(measurement):
+    # Its own constant, so it can diverge from the plane-fit minimum later.
+    record = measurement.protocol()
+    assert (
+        record["minimum_coverage_baseline_samples"]
+        == measurement.MIN_COVERAGE_BASELINE_SAMPLES
+        == 6
+    )
+    assert "minimum_coverage_baseline_samples" in record["grid_selection"]
+
+
+def test_height_margin_lost_bin_fails_even_with_other_samples(measurement):
+    mount = np.array([[0, 0, 1, 0.75], [-1, 0, 0, 0], [0, -1, 0, 0.5], [0, 0, 0, 1.0]])
+    surface = np.array(
+        [
+            [2.35, -0.32, 0.022],
+            [3.35, -0.32, 0.022],
+            [3.35, 0.32, 0.022],
+            [2.35, 0.32, 0.022],
+        ]
+    )
+    selection = measurement.height_grid_selection(surface, K, mount)
+    assert len(selection["uv"]) == 20
+    assert selection["coverage"]["lost_bins"] == [[3, 1, 2]]
+    v, _ = np.indices((480, 640))
+    depth = np.ones((480, 640))
+    depth[v > 240] = (0.5 - 0.022) * K.fy / (v[v > 240] - 240)
+    stats = measurement.height_grid_statistics(
+        selection, depth, np.ones((480, 640), dtype=bool), K, mount, 0.022
+    )
+    assert stats["missing_count"] == 0
+    assert stats["per_distance"][2]["status"] == "PASS"
+    assert stats["status"] == stats["coverage_status"] == "FAIL"
+
+
+CANONICAL_MOUNT = np.array(
+    [[0, 0, 1, 0.75], [-1, 0, 0, 0], [0, -1, 0, 0.5], [0, 0, 0, 1.0]]
+)
+# Predeclared measurement rectangle, restated here instead of imported so a
+# change to the implementation's half extents fails rather than follows.
+MEASUREMENT_HALF_EXTENTS = (0.20, 0.16)
+# The distance bins that section 9.6 of the run record shows the selection
+# margin emptying, reproduced with this file's K.
+LOST_BINS_AT_R3_H22_U320 = [[2, 1, 2], [4, 1, 1]]
+
+
+def _panel_centre(measurement, distance, height, column):
+    mount = RigidTransform(
+        "optical", "base_link", CANONICAL_MOUNT[:3, :3], CANONICAL_MOUNT[:3, 3]
+    )
+    return measurement.height_visibility(distance, column, height, K, mount)[
+        "point_base_m"
+    ]
+
+
+def _measurement_rectangle(centre, distance, height):
+    forward, lateral = (half * distance for half in MEASUREMENT_HALF_EXTENTS)
+    return np.array(
+        [
+            [centre[0] - forward, centre[1] - lateral, height],
+            [centre[0] + forward, centre[1] - lateral, height],
+            [centre[0] + forward, centre[1] + lateral, height],
+            [centre[0] - forward, centre[1] + lateral, height],
+        ]
+    )
+
+
+def test_height_panel_margin_restores_the_lost_distance_bin_rows(measurement):
+    distance, height, column = 3.0, 0.022, 320.0
+    centre = _panel_centre(measurement, distance, height, column)
+    measured = _measurement_rectangle(centre, distance, height)
+    # Without margin geometry the panel ends inside the extreme distance bins,
+    # which then hold a single stride-grid row that the 3 px selection erases.
+    bare = measurement.height_grid_selection(measured, K, CANONICAL_MOUNT)
+    assert bare["coverage"]["lost_bins"] == LOST_BINS_AT_R3_H22_U320
+
+    geometry = measurement.height_panel_geometry(
+        centre, distance, height, K, CANONICAL_MOUNT
+    )
+    panel = np.asarray(geometry["panel_vertices_base_m"])
+    region = np.asarray(geometry["measurement_vertices_base_m"])
+    # The measurement region is untouched: same rectangle, same horizontal z.
+    np.testing.assert_allclose(region, measured, rtol=0, atol=1e-12)
+    # Only the viewing axis grows; lateral extent and height are identical.
+    np.testing.assert_allclose(panel[:, 1], region[:, 1], rtol=0, atol=1e-12)
+    np.testing.assert_allclose(panel[:, 2], region[:, 2], rtol=0, atol=1e-12)
+    assert panel[:, 0].min() < region[:, 0].min()
+    assert panel[:, 0].max() > region[:, 0].max()
+
+    selection = measurement.height_grid_selection(
+        panel, K, CANONICAL_MOUNT, measurement_vertices_base=region
+    )
+    assert selection["coverage"]["lost_bins"] == []
+    assert selection["coverage"]["status"] == "COMPLETE"
+    # Every previously emptied bin now holds at least two stride-2 grid rows.
+    for lost in LOST_BINS_AT_R3_H22_U320:
+        rows = selection["uv"][(selection["bins"] == lost).all(axis=1)][:, 1]
+        assert len(set(rows.tolist())) >= 2, lost
+    # Selection never leaves the measurement region, so the margin adds no
+    # measured height and no new bin.
+    truth = selection["truth_base_m"]
+    assert (truth[:, 0] >= region[:, 0].min() - 1e-9).all()
+    assert (truth[:, 0] <= region[:, 0].max() + 1e-9).all()
+    assert selection["panel_region"] == {
+        "measurement_vertices_base_m": region.tolist(),
+        "panel_vertices_base_m": panel.tolist(),
+        "selection_confined_to_measurement_region": True,
+    }
+    # The restored samples come from the measurement region's own edge rows,
+    # which the margin takes out of the kernel's reach.
+    assert len(selection["uv"]) > len(bare["uv"])
+
+
+def test_height_panel_margin_is_the_derived_row_shift_not_a_constant(measurement):
+    # Evaluation 2 px, predeclared selection-only 1 px, and 1 px because an
+    # integer row survives erosion only once ceil() has moved a whole row.
+    assert measurement.height_selection_margin()["selection_erosion_px"] == 3
+    rows = 4
+    for distance, height in [(3.0, 0.022), (5.0, 0.144), (2.0, 0.0)]:
+        centre = _panel_centre(measurement, distance, height, 320.0)
+        geometry = measurement.height_panel_geometry(
+            centre, distance, height, K, CANONICAL_MOUNT
+        )
+        # v = fy*Y/Z + cy with Y = camera height above the panel: the metres
+        # that buy `rows` pixels follow from Z alone, independently derived.
+        optical_y = CANONICAL_MOUNT[2, 3] - height
+        forward = MEASUREMENT_HALF_EXTENTS[0] * distance
+        near_z = centre[0] - forward - CANONICAL_MOUNT[0, 3]
+        far_z = centre[0] + forward - CANONICAL_MOUNT[0, 3]
+        assert geometry["near_margin_m"] == pytest.approx(
+            rows * near_z**2 / (K.fy * optical_y + rows * near_z), rel=1e-9
+        )
+        assert geometry["far_margin_m"] == pytest.approx(
+            rows * far_z**2 / (K.fy * optical_y - rows * far_z), rel=1e-9
+        )
+        # The margin is a distance-dependent derivation, never a fixed span.
+        assert geometry["far_margin_m"] > geometry["near_margin_m"] > 0
+    assert "margin" in measurement.protocol()["height_panel_size_m"]
+
+
+def test_the_margin_records_plus_one_as_the_constant_it_is(measurement):
+    # ceil() returns 1 for every envelope up to a whole pixel, so the measured
+    # 0.1442 px does not size the margin; it only shows the envelope is below
+    # 1. The recorded strings must say so instead of reading like a scaling.
+    original = measurement.HEIGHT_PRINCIPAL_POINT_BOUND_PX
+    try:
+        for envelope in (1e-9, 0.05, 0.1442, 0.5, 0.9999, 1.0):
+            measurement.HEIGHT_PRINCIPAL_POINT_BOUND_PX = envelope
+            margin = measurement.height_selection_margin()
+            assert margin["additional_selection_erosion_px"] == 1
+            assert margin["selection_erosion_px"] == 2 + 1
+    finally:
+        measurement.HEIGHT_PRINCIPAL_POINT_BOUND_PX = original
+    margin = measurement.height_selection_margin()
+    assert margin["principal_point_bound_px"] == 0.1442
+    derivation = margin["derivation"]
+    assert "(0, 1]" in derivation
+    assert "below 1" in derivation
+    geometry = measurement.height_panel_geometry(
+        _panel_centre(measurement, 3.0, 0.022, 320.0),
+        3.0,
+        0.022,
+        K,
+        CANONICAL_MOUNT,
+    )
+    assert geometry["margin_rows_px"] == 4
+    assert "constant" in geometry["derivation"]
+
+
+def test_the_protocol_comment_names_only_versions_that_existed(measurement):
+    # The executed runs recorded G1-v11-1 and then G1-v11-3; no v11-2 was ever
+    # authored or run, so nothing may describe the change as coming from it.
+    assert measurement.protocol()["version"] == "G1-v11-3"
+    source = (ROOT / "sim/isaac/camera_calibration.py").read_text(encoding="utf-8")
+    assert "v11-2" not in source
+    assert "v11-1" in source
+
+
+def test_height_selection_never_samples_the_rendered_margin(measurement):
+    # A panel far larger than its measurement region: without confinement the
+    # erosion clears the margin and the grid walks straight out of the region.
+    k, mount, panel = _horizontal_image_rectangle((360.01, 479.99, 180.01, 299.99))
+    _, _, region = _horizontal_image_rectangle((400.01, 439.99, 220.01, 259.99))
+    confined = measurement.height_grid_selection(
+        panel, k, mount, measurement_vertices_base=region
+    )
+    unconfined = measurement.height_grid_selection(panel, k, mount)
+    u, v = confined["uv"].T
+    assert len(u)
+    assert u.min() >= 401 and u.max() <= 439
+    assert v.min() >= 221 and v.max() <= 259
+    assert unconfined["uv"][:, 0].min() < 401
+    assert confined["panel_region"]["selection_confined_to_measurement_region"]
+    assert not unconfined["panel_region"]["selection_confined_to_measurement_region"]
+    # The rendered panel, not the measurement region, supplies both erosions,
+    # so the region's own edge rows stay eligible and the coverage rule keeps
+    # comparing the same two kernels.
+    assert confined["coverage"]["baseline_sample_count"] == len(u)
+    assert confined["coverage"]["removed_sample_count"] == 0
+    with pytest.raises(ValueError, match="inside the rendered panel"):
+        measurement.height_grid_selection(
+            region, k, mount, measurement_vertices_base=panel
+        )
+    tilted = region + [[0, 0, 0], [0, 0, 0], [0, 0, 0.01], [0, 0, 0]]
+    with pytest.raises(ValueError, match="horizontal at the panel surface"):
+        measurement.height_grid_selection(
+            panel, k, mount, measurement_vertices_base=tilted
+        )
+
+
+def test_saved_height_selection_reconstructs_fitted_k_and_coverage(
+    measurement, tmp_path
+):
+    k, mount, surface = _horizontal_image_rectangle((409.9, 426.1, 229.9, 237.1))
+    fitted = replace(k, fx=100.01, cx=319.4293, cy=239.4701)
+    selection = measurement.height_grid_selection(surface, fitted, mount)
+    assert selection.get("selection_K") == asdict(fitted)
+    # Recording the fitted K while secretly snapping the selection rays to a
+    # nominal centre must also fail, even when stride-grid coordinates agree.
+    u, v = selection["uv"].T
+    np.testing.assert_allclose(
+        selection["truth_base_m"],
+        np.column_stack(
+            ((u - 319.4293) / 100.01, -(v - 239.4701) / 100, np.zeros(len(u)))
+        ),
+        rtol=0,
+        atol=1e-12,
+    )
+    save = runpy.run_path(str(ROOT / "sim/isaac/verify_perception_camera.py"))[
+        "save_height_selection"
+    ]
+    reference = {
+        "collection": "intrinsics_fits",
+        "index": 12,
+        "anchor_horizontal_m": 4.0,
+        "repeat": 0,
+    }
+    record = save(tmp_path, "height_test", selection, reference)
+    saved = json.loads((tmp_path / "height_test_selection.json").read_text())
+    assert saved == record
+    assert saved["selection_K"] == asdict(fitted)
+    assert saved["selection_fit_reference"] == reference
+    assert saved["selection_coverage"] == selection["coverage"]
+    assert saved["selection_groups"] == selection["groups"]
+    rebuilt = measurement.height_grid_selection(
+        surface, PinholeIntrinsics(**saved["selection_K"]), mount
+    )
+    with np.load(tmp_path / "height_test_selection.npz") as arrays:
+        for field in ("uv", "truth_base_m", "bins"):
+            np.testing.assert_array_equal(arrays[field], rebuilt[field])
 
 
 def test_checkerboard_layout_covers_screen_and_uses_horizontal_centres(measurement):

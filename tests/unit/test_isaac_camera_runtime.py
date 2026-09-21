@@ -1,5 +1,6 @@
-"""CPU regressions for G1 OpenCV policy and owned annotator teardown."""
+"""CPU regressions for G1 OpenCV policy, annotator teardown and capture plan."""
 
+import ast
 import json
 import runpy
 import sys
@@ -9,7 +10,8 @@ from types import SimpleNamespace
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-VERIFY = runpy.run_path(str(ROOT / "sim/isaac/verify_perception_camera.py"))
+VERIFY_SOURCE = ROOT / "sim/isaac/verify_perception_camera.py"
+VERIFY = runpy.run_path(str(VERIFY_SOURCE))
 MEASURE = VERIFY["MEASURE"]
 
 
@@ -193,6 +195,336 @@ def test_detach_records_errors_and_continues_other_channels(error, status):
     assert depth.is_attached is False
     MEASURE.detach_annotators(owned)
     assert rgb.detach_calls == depth.detach_calls == 1
+
+
+def _gate_complete_result(boards, fits):
+    # Minimal result whose only variables are the two counted collections. The
+    # panels carry the provenance a measured PASS requires, so the counts are
+    # judged on a valid run rather than through the gate's fail-open path.
+    return {
+        "perception_camera_intrinsics": {"status": "PASS"},
+        "mount": {"status": "PASS"},
+        "gate_5": "PASS",
+        "marker": [{"bright_centroid_outside_marker_bbox": True}],
+        "intrinsics_fits": fits,
+        "boards": boards,
+        "height_panels": [
+            {
+                "status": "PASS",
+                "panel_placement_K_reference": _placement_reference("PASS"),
+                "selection_fit_reference": VERIFY["selection_fit_reference"](
+                    [{"gate_2a": "PASS"}],
+                    0,
+                    distance=0.8,
+                    repeat=VERIFY["SELECTION_FIT_REPEAT"],
+                    role="height_grid_sample_selection",
+                ),
+                "selection_coverage": {"status": "COMPLETE", "lost_bins": []},
+                "captures": [
+                    {
+                        "status": "PASS",
+                        "per_distance": [
+                            {"distance_bin": index, "status": "PASS"}
+                            for index in range(6)
+                        ],
+                    }
+                ],
+            }
+            for _ in range(54)
+        ],
+    }
+
+
+def test_capture_plan_puts_one_recorded_warmup_before_the_measured_repeats():
+    # The first capture after authoring geometry is a measured ~0.12 px
+    # transient, so it is taken and kept but never fitted or gated.
+    plan = VERIFY["capture_plan"](MEASURE.REPEATS)
+    assert [step["measured"] for step in plan] == [False] + [True] * MEASURE.REPEATS
+    assert [step["repeat"] for step in plan] == [None, *range(MEASURE.REPEATS)]
+    assert plan[0]["suffix"] == "warmup"
+    assert [step["suffix"] for step in plan[1:]] == [
+        f"repeat{index}" for index in range(MEASURE.REPEATS)
+    ]
+    assert plan[0]["exclusion_reason"] == VERIFY["WARMUP_EXCLUSION_REASON"]
+    assert sum(step["measured"] for step in plan) == MEASURE.REPEATS
+
+
+def test_warmup_capture_is_recorded_outside_the_gated_collections():
+    measured, excluded = [], []
+    for step in VERIFY["capture_plan"](MEASURE.REPEATS):
+        VERIFY["file_capture_record"](
+            {"capture": step["suffix"], "gate_4": "FAIL", "status": "FAIL"},
+            step,
+            measured,
+            excluded,
+        )
+    assert len(measured) == MEASURE.REPEATS
+    assert len(excluded) == 1
+    assert excluded[0]["excluded_from_measurement"] is True
+    assert excluded[0]["exclusion_reason"] == VERIFY["WARMUP_EXCLUSION_REASON"]
+    # Discarding a measurement without recording it would be concealment.
+    assert excluded[0]["gate_4"] == "FAIL"
+    assert excluded[0]["status"] == "FAIL"
+    assert all("excluded_from_measurement" not in record for record in measured)
+
+
+def test_gate_counts_survive_the_recorded_warmup_captures():
+    boards, warmup_boards = [], []
+    for _ in range(len(MEASURE.DISTANCES_M) * len(MEASURE.SCREEN_CENTRES_UV)):
+        for step in VERIFY["capture_plan"](MEASURE.REPEATS):
+            VERIFY["file_capture_record"](
+                {"gate_4": "PASS", "status": "PASS", "repeat": step["repeat"]},
+                step,
+                boards,
+                warmup_boards,
+            )
+    assert len(boards) == 162
+    assert len(warmup_boards) == 54
+    result = _gate_complete_result(
+        boards, [{"gate_2a": "PASS", "gate_2b": "PASS"} for _ in range(18)]
+    )
+    result["warmup_boards"] = warmup_boards
+    VERIFY["finish_result"](result)
+    assert result["gates"]["4"] == "PASS"
+    assert result["gates"]["7a"] == "PASS"
+    assert result["gates"]["2a"] == "PASS"
+    assert result["numerical_status"] == "PASS"
+
+
+def test_warmup_and_measured_captures_share_one_statistics_path():
+    # A discarded capture must not get a second, weaker measurement path.
+    # Both authored targets - board and height panel - repeat over the same
+    # plan, and each statistic is computed exactly once, inside that loop.
+    tree = ast.parse(VERIFY_SOURCE.read_text(encoding="utf-8"))
+    plans = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.For)
+        and isinstance(node.iter, ast.Call)
+        and getattr(node.iter.func, "id", None) == "capture_plan"
+    ]
+    assert len(plans) == 2
+
+    def call_sites(root, name):
+        return sum(
+            1
+            for node in ast.walk(root)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == name
+        )
+
+    for statistic in ("board_statistics", "height_grid_statistics"):
+        assert call_sites(tree, statistic) == 1
+        assert sum(call_sites(plan, statistic) for plan in plans) == 1
+
+
+def test_selection_fit_reference_names_a_measured_repeat_and_its_gate():
+    assert VERIFY["SELECTION_FIT_REPEAT"] in range(MEASURE.REPEATS)
+    plan = VERIFY["capture_plan"](MEASURE.REPEATS)
+    chosen = [
+        step
+        for step in plan
+        if step["measured"] and step["repeat"] == VERIFY["SELECTION_FIT_REPEAT"]
+    ]
+    assert len(chosen) == 1
+    fits = [{"gate_2a": "FAIL"}, {"gate_2a": "PASS"}]
+    reference = VERIFY["selection_fit_reference"](
+        fits, 1, distance=0.8, repeat=VERIFY["SELECTION_FIT_REPEAT"], role="selection"
+    )
+    assert reference["index"] == 1
+    assert reference["repeat"] == VERIFY["SELECTION_FIT_REPEAT"]
+    assert reference["repeat_kind"] == "measured"
+    assert reference["warmup_capture_excluded"] is True
+    assert reference["gate_2a"] == "PASS"
+    assert reference["anchor_horizontal_m"] == 0.8
+
+
+def _placement_reference(gate_2a):
+    return VERIFY["selection_fit_reference"](
+        [{"gate_2a": gate_2a}],
+        0,
+        distance=0.8,
+        repeat=VERIFY["SELECTION_FIT_REPEAT"],
+        role="height_panel_physical_placement",
+    )
+
+
+def test_unvalidated_selection_fit_is_marked_instead_of_aborting_the_run():
+    # Aborting would destroy the evidence the run exists to collect, so the
+    # unvalidated fit is marked and gate 7a-prime carries it instead.
+    assert "require_validated_selection_fit" not in VERIFY
+    assert VERIFY["unvalidated_selection_fit_marks"](_placement_reference("PASS")) == {}
+    marks = VERIFY["unvalidated_selection_fit_marks"](_placement_reference("FAIL"))
+    assert marks["selection_fit_unvalidated"] is True
+    assert (
+        marks["selection_fit_unvalidated_reason"]
+        == VERIFY["GATE_7A_PRIME_UNVALIDATED_FIT_REASON"]
+    )
+    detail = marks["selection_fit_unvalidated_detail"]
+    # The named fit, and that its numbers survive as diagnostics.
+    assert "intrinsics_fits[0]" in detail
+    assert "0.8" in detail
+    assert "repeat 0" in detail
+    assert "gate_2a=FAIL" in detail
+    assert "diagnostic" in detail
+
+
+def test_selection_and_placement_uses_of_one_fit_stay_distinguishable():
+    # The same fitted K both selects samples and physically places the panel.
+    # A later K comparison must not move the panels without saying so.
+    fits = [{"gate_2a": "PASS"}]
+    common = {"distance": 0.8, "repeat": VERIFY["SELECTION_FIT_REPEAT"]}
+    selection = VERIFY["selection_fit_reference"](
+        fits, 0, role="height_grid_sample_selection", **common
+    )
+    placement = VERIFY["selection_fit_reference"](
+        fits, 0, role="height_panel_physical_placement", **common
+    )
+    assert selection["role"] != placement["role"]
+    assert {k: v for k, v in selection.items() if k != "role"} == {
+        k: v for k, v in placement.items() if k != "role"
+    }
+
+
+def _height_geometry_calls(tree):
+    return [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in ("height_panel_geometry", "height_grid_selection")
+    ]
+
+
+def test_panel_geometry_failure_is_marked_instead_of_aborting_the_run():
+    marks = VERIFY["panel_geometry_failure_marks"](
+        ValueError("Height panel margin does not clear the selection erosion")
+    )
+    assert marks["status"] == "FAIL"
+    assert marks["panel_geometry_failed"] is True
+    assert (
+        marks["panel_geometry_failed_reason"]
+        == VERIFY["GATE_7A_PRIME_PANEL_GEOMETRY_REASON"]
+    )
+    detail = marks["panel_geometry_failed_detail"]
+    assert "ValueError" in detail
+    assert "does not clear the selection erosion" in detail
+
+
+def test_one_panels_geometry_never_costs_the_other_panels_their_measurements():
+    # The same posture the change set states for the unvalidated fit: the gate
+    # table is the evidence the run exists to produce, so a geometry or margin
+    # failure fails its own panel and is carried by gate 7a-prime instead.
+    tree = ast.parse(VERIFY_SOURCE.read_text(encoding="utf-8"))
+    calls = _height_geometry_calls(tree)
+    assert len(calls) == 2
+    guarded = {
+        id(node)
+        for handler in ast.walk(tree)
+        if isinstance(handler, ast.Try)
+        for node in _height_geometry_calls(handler)
+    }
+    assert guarded == {id(node) for node in calls}
+    aborts = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "require"
+        and any(
+            isinstance(argument, ast.Constant)
+            and "Composed panel differs" in str(argument.value)
+            for argument in node.args
+        )
+    ]
+    assert not aborts, "the composed-panel check must fail the panel, not the run"
+
+
+def test_a_linear_algebra_failure_is_not_recorded_as_a_panel_geometry_failure():
+    # numpy.linalg.LinAlgError subclasses ValueError, so a bare
+    # `except ValueError` around the panel geometry would absorb it and copy a
+    # failure of the shared mount into one panel record at a time. The handler
+    # is narrowed at the call site: a linear-algebra failure is re-raised.
+    tree = ast.parse(VERIFY_SOURCE.read_text(encoding="utf-8"))
+    guards = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Try) and _height_geometry_calls(node)
+    ]
+    assert len(guards) == 2
+    for guard in guards:
+        handled = [ast.unparse(handler.type) for handler in guard.handlers]
+        assert handled[0].endswith("LinAlgError"), handled
+        assert "ValueError" in handled[1:], handled
+        body = guard.handlers[0].body
+        assert len(body) == 1
+        assert isinstance(body[0], ast.Raise) and body[0].exc is None
+
+
+@pytest.mark.parametrize(
+    "states,expected",
+    [
+        ([], "FAIL"),
+        (["PASS", "PASS", "PASS"], "PASS"),
+        (["UNOBSERVED", "UNOBSERVED"], "UNOBSERVED"),
+        (["PASS", "UNOBSERVED", "PASS"], "FAIL"),
+        (["PASS", "FAIL", "PASS"], "FAIL"),
+        (["FAIL"], "FAIL"),
+        (["SOMETHING_ELSE"], "FAIL"),
+    ],
+)
+def test_panel_status_never_promotes_a_panel_without_measured_captures(
+    states, expected
+):
+    # all([]) is True: a panel with no measured capture would otherwise be
+    # promoted to PASS by a vacuous quantifier.
+    assert VERIFY["panel_status"](states) == expected
+
+
+def test_the_height_panel_loop_judges_through_panel_status():
+    # A helper the loop does not call pins nothing.
+    tree = ast.parse(VERIFY_SOURCE.read_text(encoding="utf-8"))
+    assigns = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and isinstance(node.value, ast.Call)
+        and getattr(node.value.func, "id", None) == "panel_status"
+        and any(
+            isinstance(target, ast.Subscript)
+            and isinstance(target.slice, ast.Constant)
+            and target.slice.value == "status"
+            for target in node.targets
+        )
+    ]
+    assert len(assigns) == 1
+
+
+def test_each_panel_owns_its_copy_of_the_two_fit_references():
+    # One dict inserted by reference into all nine panels of an anchor would
+    # let a later per-panel mutation corrupt nine records at once.
+    tree = ast.parse(VERIFY_SOURCE.read_text(encoding="utf-8"))
+    placements = [
+        value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Dict)
+        for key, value in zip(node.keys, node.values, strict=True)
+        if isinstance(key, ast.Constant) and key.value == "panel_placement_K_reference"
+    ]
+    assert len(placements) == 1
+    assert isinstance(placements[0], ast.Call)
+    assert getattr(placements[0].func, "id", None) == "dict"
+    saves = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "id", None) == "save_height_selection"
+    ]
+    assert len(saves) == 1
+    reference_argument = saves[0].args[-1]
+    assert isinstance(reference_argument, ast.Call)
+    assert getattr(reference_argument.func, "id", None) == "dict"
 
 
 def test_partial_attachment_remains_owned_for_finally_cleanup():
