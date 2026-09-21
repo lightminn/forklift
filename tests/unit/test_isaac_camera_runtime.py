@@ -212,12 +212,8 @@ def _gate_complete_result(boards, fits):
             {
                 "status": "PASS",
                 "panel_placement_K_reference": _placement_reference("PASS"),
-                "selection_fit_reference": VERIFY["selection_fit_reference"](
-                    [{"gate_2a": "PASS"}],
-                    0,
-                    distance=0.8,
-                    repeat=VERIFY["SELECTION_FIT_REPEAT"],
-                    role="height_grid_sample_selection",
+                "selection_fit_reference": _reference(
+                    "PASS", role="height_grid_sample_selection"
                 ),
                 "selection_coverage": {"status": "COMPLETE", "lost_bins": []},
                 "captures": [
@@ -320,34 +316,37 @@ def test_warmup_and_measured_captures_share_one_statistics_path():
 
 
 def test_selection_fit_reference_names_a_measured_repeat_and_its_gate():
-    assert VERIFY["SELECTION_FIT_REPEAT"] in range(MEASURE.REPEATS)
+    # The selected repeat is now chosen by the predeclared rule rather than
+    # fixed, but it is still one MEASURED repeat: a warm-up capture produces no
+    # fit, so it is never a candidate and never nameable here.
     plan = VERIFY["capture_plan"](MEASURE.REPEATS)
-    chosen = [
-        step
-        for step in plan
-        if step["measured"] and step["repeat"] == VERIFY["SELECTION_FIT_REPEAT"]
-    ]
-    assert len(chosen) == 1
+    measured = [step["repeat"] for step in plan if step["measured"]]
     fits = [{"gate_2a": "FAIL"}, {"gate_2a": "PASS"}]
-    reference = VERIFY["selection_fit_reference"](
-        fits, 1, distance=0.8, repeat=VERIFY["SELECTION_FIT_REPEAT"], role="selection"
-    )
+    reference = _reference("PASS", role="selection", gate_2a_first="FAIL")
+    assert reference["repeat"] in measured
     assert reference["index"] == 1
-    assert reference["repeat"] == VERIFY["SELECTION_FIT_REPEAT"]
+    assert reference["repeat"] == 1
     assert reference["repeat_kind"] == "measured"
     assert reference["warmup_capture_excluded"] is True
-    assert reference["gate_2a"] == "PASS"
+    assert reference["gate_2a"] == fits[1]["gate_2a"] == "PASS"
     assert reference["anchor_horizontal_m"] == 0.8
 
 
-def _placement_reference(gate_2a):
-    return VERIFY["selection_fit_reference"](
-        [{"gate_2a": gate_2a}],
-        0,
-        distance=0.8,
-        repeat=VERIFY["SELECTION_FIT_REPEAT"],
-        role="height_panel_physical_placement",
+def _reference(gate_2a, *, role, gate_2a_first=None, distance=0.8):
+    """Build a fit reference the way the run does: choose, then name."""
+    gates = [gate_2a] if gate_2a_first is None else [gate_2a_first, gate_2a]
+    choice = VERIFY["choose_selection_fit"](
+        [
+            {"repeat": repeat, "index": repeat, "gate_2a": gate, "fit_available": True}
+            for repeat, gate in enumerate(gates)
+        ]
     )
+    fits = [{"gate_2a": gate} for gate in gates]
+    return VERIFY["selection_fit_reference"](fits, choice, distance=distance, role=role)
+
+
+def _placement_reference(gate_2a):
+    return _reference(gate_2a, role="height_panel_physical_placement")
 
 
 def test_unvalidated_selection_fit_is_marked_instead_of_aborting_the_run():
@@ -373,14 +372,8 @@ def test_unvalidated_selection_fit_is_marked_instead_of_aborting_the_run():
 def test_selection_and_placement_uses_of_one_fit_stay_distinguishable():
     # The same fitted K both selects samples and physically places the panel.
     # A later K comparison must not move the panels without saying so.
-    fits = [{"gate_2a": "PASS"}]
-    common = {"distance": 0.8, "repeat": VERIFY["SELECTION_FIT_REPEAT"]}
-    selection = VERIFY["selection_fit_reference"](
-        fits, 0, role="height_grid_sample_selection", **common
-    )
-    placement = VERIFY["selection_fit_reference"](
-        fits, 0, role="height_panel_physical_placement", **common
-    )
+    selection = _reference("PASS", role="height_grid_sample_selection")
+    placement = _reference("PASS", role="height_panel_physical_placement")
     assert selection["role"] != placement["role"]
     assert {k: v for k, v in selection.items() if k != "role"} == {
         k: v for k, v in placement.items() if k != "role"
@@ -503,7 +496,8 @@ def test_the_height_panel_loop_judges_through_panel_status():
 
 def test_each_panel_owns_its_copy_of_the_two_fit_references():
     # One dict inserted by reference into all nine panels of an anchor would
-    # let a later per-panel mutation corrupt nine records at once.
+    # let a later per-panel mutation corrupt nine records at once. The copy is
+    # now a deep one: the reference carries nested rejected-repeat records.
     tree = ast.parse(VERIFY_SOURCE.read_text(encoding="utf-8"))
     placements = [
         value
@@ -514,7 +508,7 @@ def test_each_panel_owns_its_copy_of_the_two_fit_references():
     ]
     assert len(placements) == 1
     assert isinstance(placements[0], ast.Call)
-    assert getattr(placements[0].func, "id", None) == "dict"
+    assert getattr(placements[0].func, "id", None) == "panel_reference_copy"
     saves = [
         node
         for node in ast.walk(tree)
@@ -524,7 +518,7 @@ def test_each_panel_owns_its_copy_of_the_two_fit_references():
     assert len(saves) == 1
     reference_argument = saves[0].args[-1]
     assert isinstance(reference_argument, ast.Call)
-    assert getattr(reference_argument.func, "id", None) == "dict"
+    assert getattr(reference_argument.func, "id", None) == "panel_reference_copy"
 
 
 def test_partial_attachment_remains_owned_for_finally_cleanup():
@@ -546,3 +540,149 @@ def test_partial_attachment_remains_owned_for_finally_cleanup():
     MEASURE.detach_annotators(owned)
     assert rgb.is_attached is False
     assert rgb.detach_calls == 1
+
+
+def _candidate(repeat, index, gate_2a, *, fit_available=True):
+    """One measured repeat of one anchor, as the fitting loop records it."""
+    return {
+        "repeat": repeat,
+        "index": index,
+        "gate_2a": gate_2a,
+        "fit_available": fit_available,
+    }
+
+
+def test_the_selection_repeat_is_chosen_by_a_predeclared_rule_not_a_constant():
+    # USER decision, 2026-09-22: the K that selects the height-grid samples and
+    # places the panel is taken from a fit that passed gate 2a, instead of a
+    # fixed repeat 0 whose own gate 2a was never consulted.
+    assert "SELECTION_FIT_REPEAT" not in VERIFY
+    assert VERIFY["SELECTION_FIT_RULE"] == MEASURE.SELECTION_FIT_REPEAT_RULE
+    protocol = MEASURE.protocol()
+    assert protocol["selection_fit_repeat_rule"] == MEASURE.SELECTION_FIT_REPEAT_RULE
+    policy = protocol["selection_fit_repeat_policy"]
+    for phrase in ("gate 2a", "first measured repeat", "warm-up", "7a-prime"):
+        assert phrase in policy
+
+
+def test_selection_takes_the_first_measured_repeat_whose_gate_2a_passed():
+    choice = VERIFY["choose_selection_fit"](
+        [
+            _candidate(0, 12, "FAIL"),
+            _candidate(1, 13, "PASS"),
+            _candidate(2, 14, "PASS"),
+        ]
+    )
+    assert (choice["repeat"], choice["index"]) == (1, 13)
+    assert choice["repeat_choice"] == "gate_2a_pass"
+    assert choice["rule"] == MEASURE.SELECTION_FIT_REPEAT_RULE
+    assert choice["rejected_repeats"] == [
+        {
+            "repeat": 0,
+            "index": 12,
+            "gate_2a": "FAIL",
+            "rejected_because": "gate_2a_failed",
+        }
+    ]
+    # Repeat 2 was never weighed: the rule stops at the first passing repeat.
+    assert choice["unexamined_repeats_after_choice"] == [2]
+    assert "gate 2a" in choice["chosen_because"]
+
+
+def test_selection_keeps_the_first_measured_repeat_when_none_passed_gate_2a():
+    # Unchanged behaviour in that case, which is what run 8 recorded: the panel
+    # is still placed and sampled, and gate 7a-prime fails the unvalidated fit.
+    choice = VERIFY["choose_selection_fit"](
+        [_candidate(repeat, 12 + repeat, "FAIL") for repeat in range(3)]
+    )
+    assert (choice["repeat"], choice["index"]) == (0, 12)
+    assert choice["repeat_choice"] == "fallback_no_repeat_passed_gate_2a"
+    # The chosen fallback is never also listed among the rejected repeats.
+    assert [entry["repeat"] for entry in choice["rejected_repeats"]] == [1, 2]
+    assert choice["unexamined_repeats_after_choice"] == []
+    reference = VERIFY["selection_fit_reference"](
+        [{"gate_2a": "FAIL"} for _ in range(15)],
+        choice,
+        distance=4.0,
+        role="height_panel_physical_placement",
+    )
+    assert reference["gate_2a"] == "FAIL"
+    marks = VERIFY["unvalidated_selection_fit_marks"](reference)
+    assert (
+        marks["selection_fit_unvalidated_reason"]
+        == VERIFY["GATE_7A_PRIME_UNVALIDATED_FIT_REASON"]
+    )
+
+
+def test_a_repeat_that_produced_no_fit_can_never_be_selected():
+    choose = VERIFY["choose_selection_fit"]
+    chosen = choose(
+        [_candidate(0, 12, "FAIL", fit_available=False), _candidate(1, 13, "PASS")]
+    )
+    assert (chosen["repeat"], chosen["index"]) == (1, 13)
+    assert chosen["rejected_repeats"][0]["rejected_because"] == "no_fit"
+    # Nothing passed and the historical anchor produced no fit: the anchor has
+    # no rendered K at all, exactly as before this rule existed.
+    assert (
+        choose(
+            [
+                _candidate(0, 12, "FAIL", fit_available=False),
+                _candidate(1, 13, "FAIL"),
+            ]
+        )
+        is None
+    )
+    assert choose([]) is None
+
+
+def test_the_reference_records_the_rule_the_choice_and_the_rejected_repeats():
+    fits = [{"gate_2a": "FAIL"}, {"gate_2a": "PASS"}, {"gate_2a": "PASS"}]
+    choice = VERIFY["choose_selection_fit"](
+        [_candidate(0, 0, "FAIL"), _candidate(1, 1, "PASS"), _candidate(2, 2, "PASS")]
+    )
+    common = {"distance": 0.8}
+    selection = VERIFY["selection_fit_reference"](
+        fits, choice, role="height_grid_sample_selection", **common
+    )
+    placement = VERIFY["selection_fit_reference"](
+        fits, choice, role="height_panel_physical_placement", **common
+    )
+    # Both role tags survive the rule change, and still differ only by role.
+    assert selection["role"] == "height_grid_sample_selection"
+    assert placement["role"] == "height_panel_physical_placement"
+    assert {k: v for k, v in selection.items() if k != "role"} == {
+        k: v for k, v in placement.items() if k != "role"
+    }
+    # gate_2a is read from the fit itself; the chooser never asserts it.
+    assert selection["gate_2a"] == fits[1]["gate_2a"] == "PASS"
+    assert (selection["index"], selection["repeat"]) == (1, 1)
+    assert selection["repeat_kind"] == "measured"
+    assert selection["warmup_capture_excluded"] is True
+    assert selection["selection_rule"] == MEASURE.SELECTION_FIT_REPEAT_RULE
+    assert selection["repeat_choice"] == "gate_2a_pass"
+    assert [entry["repeat"] for entry in selection["rejected_repeats"]] == [0]
+    assert selection["unexamined_repeats_after_choice"] == [2]
+    # A reader of one panel must see that the placement moves with the repeat.
+    assert selection["panel_placement_repeat_dependent"] is True
+
+
+def test_each_panel_owns_its_nested_choice_record():
+    # dict() is a shallow copy: nine panels sharing one rejected_repeats list
+    # would let a single panel's mutation corrupt nine records at once, which
+    # is the defect the per-panel copy already guards for the flat fields.
+    fits = [{"gate_2a": "FAIL"}, {"gate_2a": "PASS"}]
+    choice = VERIFY["choose_selection_fit"](
+        [_candidate(0, 0, "FAIL"), _candidate(1, 1, "PASS")]
+    )
+    reference = VERIFY["selection_fit_reference"](
+        fits, choice, distance=0.8, role="height_panel_physical_placement"
+    )
+    first = VERIFY["panel_reference_copy"](reference)
+    second = VERIFY["panel_reference_copy"](reference)
+    first["rejected_repeats"][0]["rejected_because"] = "tampered"
+    assert second["rejected_repeats"][0]["rejected_because"] == "gate_2a_failed"
+    assert reference["rejected_repeats"][0]["rejected_because"] == "gate_2a_failed"
+    source = VERIFY_SOURCE.read_text(encoding="utf-8")
+    assert "dict(placement_reference)" not in source
+    assert "dict(selection_reference)" not in source
+    assert source.count("panel_reference_copy(") >= 3

@@ -1,5 +1,6 @@
 """CPU tests of the final G1 decision, including height distance coverage."""
 
+import copy
 import runpy
 from pathlib import Path
 
@@ -391,3 +392,204 @@ def test_demoting_gate_2a_does_not_excuse_an_unvalidated_selection_fit(complete_
         reference
     ]
     assert complete_result["numerical_status"] == "FAIL"
+
+
+# The measured marker record run 8 wrote, as the user's judgement cites it.
+MARKER_MEASURED = {
+    "semantic_minus_projected_centre_px": [5.684341886080802e-14, 0.1392097168059081],
+    "bright_minus_projected_centre_px": [29.48544866612781, -27.688754725562035],
+    "semantic_count": 1052,
+    "bright_count": 1237,
+    "bright_outside_marker_count": 185,
+    "bright_centroid_outside_marker_bbox": True,
+    "sphere_silhouette_is_not_projected_centre": True,
+}
+ANCHOR_KEY = "0.8=0;1.0=0;2.0=0;3.0=0;4.0=0;5.0=0"
+
+
+def test_gate_6_keeps_its_value_and_carries_the_recorded_user_judgment(complete_result):
+    # USER decision, 2026-09-22. Gate 6 is USER_JUDGMENT_REQUIRED by design and
+    # stays that way; what is added is the decision itself, in result.json.
+    FINISH(complete_result)
+    assert complete_result["gates"]["6"] == "USER_JUDGMENT_REQUIRED"
+    assert complete_result["marker_diagnosis"]["status"] == "USER_JUDGMENT_REQUIRED"
+    assert complete_result["numerical_status"] == "PASS"
+    assert complete_result["status"] == "REVIEW_REQUIRED"
+    assert complete_result["g2_allowed"] is False
+    judgment = complete_result["marker_diagnosis"]["user_judgment"]
+    assert judgment["decided"] == "2026-09-22"
+    assert judgment["decided_by"] == "user"
+    assert "measurement method" in judgment["judgment"]
+    assert judgment["claim"] == "this discrepancy is the brightness method's"
+    assert judgment["not_claimed"] == "that the camera is verified"
+    # The basis the user judged on, named in the record rather than implied.
+    basis = " ".join(judgment["basis"])
+    assert "(5.7e-14, 0.139) px" in basis
+    assert "(29.3, -27.5) px" in basis
+    assert "1237" in basis and "185" in basis
+    assert "bright_centroid_outside_marker_bbox" in basis
+    assert "345.95" in basis and "347.10" in basis
+
+
+def test_the_user_judgment_records_what_it_does_not_establish(complete_result):
+    # The reservations must be IN the record, not only in a source comment.
+    FINISH(complete_result)
+    judgment = complete_result["marker_diagnosis"]["user_judgment"]
+    limits = judgment["does_not_establish"]
+    assert len(limits) == 3
+    joined = " ".join(limits)
+    assert "bloom is not proven" in joined
+    assert "0.1 px" in joined and "camera-wide" in joined
+    assert "sphere_silhouette_is_not_projected_centre" in joined
+    assert "USER_JUDGMENT_REQUIRED" in judgment["gate_effect"]
+    assert "g2_allowed" in judgment["gate_effect"]
+
+
+def test_the_user_judgment_names_the_conclusion_it_was_made_on(complete_result):
+    FINISH(complete_result)
+    diagnosis = complete_result["marker_diagnosis"]
+    assert diagnosis["conclusion"] == "global_brightness_method_discrepancy"
+    judgment = diagnosis["user_judgment"]
+    assert judgment["applies_to_conclusion"] == "global_brightness_method_discrepancy"
+    assert judgment["current_conclusion"] == "global_brightness_method_discrepancy"
+    assert judgment["current_conclusion_matches_judgment"] is True
+
+
+def test_a_numeric_gate_moves_the_conclusion_without_retracting_the_judgment(
+    complete_result,
+):
+    # Gates 1-4 decide the conclusion branch before any marker number is read,
+    # so a mismatch records the run's evidence, never a change of the decision.
+    complete_result["perception_camera_intrinsics"]["status"] = "FAIL"
+    FINISH(complete_result)
+    diagnosis = complete_result["marker_diagnosis"]
+    assert diagnosis["conclusion"] == "camera_model_or_transform_discrepancy"
+    judgment = diagnosis["user_judgment"]
+    assert judgment["current_conclusion_matches_judgment"] is False
+    assert "does not retract" in judgment["conclusion_match_note"]
+    assert complete_result["gates"]["6"] == "USER_JUDGMENT_REQUIRED"
+    assert complete_result["g2_allowed"] is False
+
+
+def test_the_user_judgment_reports_the_basis_this_run_actually_measured(
+    complete_result,
+):
+    complete_result["marker"] = [dict(MARKER_MEASURED) for _ in range(3)]
+    FINISH(complete_result)
+    observed = complete_result["marker_diagnosis"]["user_judgment"][
+        "basis_observed_in_this_run"
+    ]
+    assert observed["marker_count"] == 3
+    assert observed["fields_complete"] is True
+    assert observed["all_bright_centroids_outside_marker_bbox"] is True
+    assert observed["identified_minus_projected_max_abs_component_px"] == pytest.approx(
+        0.1392097168059081
+    )
+    assert observed["bright_minus_projected_max_abs_component_px"] == pytest.approx(
+        29.48544866612781
+    )
+    assert observed["bright_count"] == [1237, 1237, 1237]
+    assert observed["bright_outside_marker_count"] == [185, 185, 185]
+
+
+def test_the_observed_basis_is_left_incomplete_rather_than_invented(complete_result):
+    # A number the run did not record must never be filled in, and an empty
+    # marker list must not agree with the judgement through all([]).
+    empty = copy.deepcopy(complete_result)
+    empty["marker"] = []
+    FINISH(complete_result)
+    observed = complete_result["marker_diagnosis"]["user_judgment"][
+        "basis_observed_in_this_run"
+    ]
+    assert observed["marker_count"] == 1
+    assert observed["fields_complete"] is False
+    assert observed["identified_minus_projected_max_abs_component_px"] is None
+    assert observed["bright_minus_projected_max_abs_component_px"] is None
+    assert observed["all_bright_centroids_outside_marker_bbox"] is True
+    FINISH(empty)
+    blank = empty["marker_diagnosis"]["user_judgment"]["basis_observed_in_this_run"]
+    assert blank["marker_count"] == 0
+    assert blank["fields_complete"] is False
+    assert blank["all_bright_centroids_outside_marker_bbox"] is False
+
+
+def test_the_result_names_the_repeat_that_placed_the_panels(complete_result):
+    FINISH(complete_result)
+    choice = complete_result["selection_fit_choice"]
+    assert choice["status"] == "COMPLETE"
+    assert choice["panel_placement_repeat_key"] == ANCHOR_KEY
+    assert [entry["anchor_horizontal_m"] for entry in choice["per_anchor"]] == [
+        0.8,
+        1.0,
+        2.0,
+        3.0,
+        4.0,
+        5.0,
+    ]
+    assert all(entry["repeat"] == 0 for entry in choice["per_anchor"])
+    assert all(entry["panels"] == 9 for entry in choice["per_anchor"])
+    # These references predate the rule; the rule is not attributed to them.
+    assert all(
+        entry["selection_rule"] == "unrecorded" for entry in choice["per_anchor"]
+    )
+    assert all(entry["repeat_choice"] == "unrecorded" for entry in choice["per_anchor"])
+    assert choice["issues"] == []
+    assert choice["panels_without_placement_reference"] == 0
+    assert "not directly comparable" in choice["comparability"]
+    assert "does not prove" in choice["comparability_caveat"]
+
+
+def test_a_different_chosen_repeat_changes_the_comparability_key(complete_result):
+    for panel in complete_result["height_panels"][36:45]:
+        panel["panel_placement_K_reference"]["repeat"] = 1
+    FINISH(complete_result)
+    choice = complete_result["selection_fit_choice"]
+    assert choice["panel_placement_repeat_key"] == "0.8=0;1.0=0;2.0=0;3.0=0;4.0=1;5.0=0"
+    assert choice["panel_placement_repeat_key"] != ANCHOR_KEY
+    assert choice["status"] == "COMPLETE"
+
+
+def test_a_panel_that_never_reached_placement_is_counted_not_guessed(complete_result):
+    complete_result["height_panels"][0] = {"status": "UNOBSERVED", "captures": []}
+    FINISH(complete_result)
+    choice = complete_result["selection_fit_choice"]
+    assert choice["panels_without_placement_reference"] == 1
+    assert choice["per_anchor"][0]["panels"] == 8
+    assert choice["panel_placement_repeat_key"] == ANCHOR_KEY
+    assert choice["status"] == "COMPLETE"
+    assert complete_result["gates"]["7a_prime"] == "PASS"
+
+
+@pytest.mark.parametrize(
+    "defect,gates_unchanged",
+    [
+        ("conflict", True),
+        ("no_anchor", True),
+        ("no_repeat", True),
+        ("not_a_dict", False),
+    ],
+)
+def test_the_key_is_withheld_when_the_placement_records_are_not_one_choice(
+    complete_result, defect, gates_unchanged
+):
+    clean = copy.deepcopy(complete_result)
+    FINISH(clean)
+    panel = complete_result["height_panels"][0]
+    if defect == "conflict":
+        panel["panel_placement_K_reference"]["repeat"] = 2
+    elif defect == "no_anchor":
+        panel["panel_placement_K_reference"].pop("anchor_horizontal_m")
+    elif defect == "no_repeat":
+        panel["panel_placement_K_reference"].pop("repeat")
+    else:
+        panel["panel_placement_K_reference"] = "intrinsics_fits[0]"
+    FINISH(complete_result)
+    choice = complete_result["selection_fit_choice"]
+    assert choice["panel_placement_repeat_key"] is None
+    assert choice["status"] != "COMPLETE"
+    assert choice["issues"]
+    # The rollup reports; it never moves a gate by itself.
+    if gates_unchanged:
+        assert complete_result["gates"] == clean["gates"]
+        assert complete_result["gate_7a_prime_detail"] == clean["gate_7a_prime_detail"]
+        assert complete_result["numerical_status"] == clean["numerical_status"]

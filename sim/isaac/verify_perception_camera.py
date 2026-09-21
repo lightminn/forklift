@@ -7,8 +7,10 @@ Use a NEW --output directory. result.json and raw captures survive failed gates.
 """
 
 import argparse
+import copy
 import hashlib
 import importlib.util
+import math
 import sys
 import traceback
 from pathlib import Path
@@ -75,10 +77,24 @@ WARMUP_EXCLUSION_REASON = (
     "(docs/validation/2026-09-21-g1-calibration-run.md, sections 9-10)"
 )
 
-# Predeclared before the run: the fitted K that height-panel work depends on is
-# taken from this measured repeat. A warm-up capture contributes no samples and
-# therefore no fit at all, so it can never be selected here.
-SELECTION_FIT_REPEAT = 0
+# Predeclared before the run, in the protocol rather than here: the fitted K
+# that height-panel work depends on is taken from the first measured repeat at
+# that anchor whose gate 2a passed. A warm-up capture contributes no samples and
+# therefore no fit at all, so it can never be selected.
+#
+# USER decision, 2026-09-22 - not a judgment this code made and not a
+# measurement change. Gate 2a became diagnostic on 2026-09-21, yet this was the
+# one remaining path where a 2a failure still blocked, and whether it blocked
+# depended on which repeat happened to fail: replayed against run 10's data, a
+# 2a failure injected at repeat 0 (the old fixed anchor) failed gate 7a-prime
+# and the numerical aggregate, while the same failure at repeat 1 or repeat 2
+# left both PASS. The guarantee that gate 7a-prime's measurement input is a
+# validated fit is preserved; what goes away is the dependence on which repeat
+# happened to fail.
+SELECTION_FIT_RULE = MEASURE.SELECTION_FIT_REPEAT_RULE
+# Chosen by the rule above; kept only when no measured repeat passed gate 2a,
+# which is the unchanged behaviour gate 7a-prime then fails as unvalidated.
+SELECTION_FIT_FALLBACK = "fallback_no_repeat_passed_gate_2a"
 
 
 def capture_plan(repeats: int) -> list[dict]:
@@ -119,25 +135,106 @@ def file_capture_record(
     return record
 
 
-def selection_fit_reference(
-    fits: list, index: int, *, distance: float, repeat: int, role: str
-) -> dict:
+def choose_selection_fit(candidates: list) -> dict | None:
+    """Pick the anchor's selection fit by the predeclared rule, and say why.
+
+    `candidates` are that anchor's measured repeats in capture order, each with
+    the global intrinsics_fits index, the gate 2a the fit recorded, and whether
+    a fit was produced at all. A repeat that produced no fit has no K to place
+    or sample with, so it is never selectable, and the warm-up capture is not a
+    candidate because it produces no fit either.
+
+    The rule is the first candidate with a fit whose gate 2a passed. If no
+    measured repeat passed, the first measured repeat is retained - the
+    behaviour before this rule existed - and gate 7a-prime fails it as an
+    unvalidated selection fit. If that repeat produced no fit, the anchor has
+    no rendered K at all, again exactly as before. Nothing here decides gate 2a:
+    the gate value is read back from the fit record itself.
+    """
+    usable = [candidate for candidate in candidates if candidate["fit_available"]]
+    passing = [candidate for candidate in usable if candidate["gate_2a"] == "PASS"]
+    if passing:
+        chosen, kind = passing[0], "gate_2a_pass"
+        because = (
+            "first measured repeat at this anchor whose gate 2a passed; the "
+            "repeats after it were not examined"
+        )
+    elif candidates and candidates[0]["fit_available"]:
+        chosen, kind = candidates[0], SELECTION_FIT_FALLBACK
+        because = (
+            "no measured repeat at this anchor passed gate 2a, so the first "
+            "measured repeat is retained as before; gate 7a-prime fails it as "
+            "an unvalidated selection fit"
+        )
+    else:
+        return None
+    rejected, unexamined, seen = [], [], False
+    for candidate in candidates:
+        if candidate is chosen:
+            seen = True
+            continue
+        if seen and kind == "gate_2a_pass":
+            unexamined.append(candidate["repeat"])
+            continue
+        rejected.append(
+            {
+                "repeat": candidate["repeat"],
+                "index": candidate["index"],
+                "gate_2a": candidate["gate_2a"],
+                "rejected_because": "gate_2a_failed"
+                if candidate["fit_available"]
+                else "no_fit",
+            }
+        )
+    return {
+        "rule": SELECTION_FIT_RULE,
+        "index": chosen["index"],
+        "repeat": chosen["repeat"],
+        "repeat_choice": kind,
+        "chosen_because": because,
+        "rejected_repeats": rejected,
+        "unexamined_repeats_after_choice": unexamined,
+    }
+
+
+def selection_fit_reference(fits: list, choice: dict, *, distance: float, role: str):
     """Name the fit a height panel depends on, with the gate that validated it.
 
     One fitted K has two distinct uses - selecting depth samples and physically
     placing the panel. Recording the role keeps them apart so a later K
     comparison cannot move the panels without saying so.
+
+    The chosen repeat is no longer fixed, so the record also carries the rule
+    that chose it, why, and the repeats it rejected. The panel's physical
+    placement moves with that choice, which is what
+    panel_placement_repeat_dependent warns a reader about.
     """
     return {
         "collection": "intrinsics_fits",
-        "index": index,
+        "index": choice["index"],
         "anchor_horizontal_m": distance,
-        "repeat": repeat,
+        "repeat": choice["repeat"],
         "repeat_kind": "measured",
         "warmup_capture_excluded": True,
-        "gate_2a": fits[index]["gate_2a"],
+        "gate_2a": fits[choice["index"]]["gate_2a"],
         "role": role,
+        "selection_rule": choice["rule"],
+        "repeat_choice": choice["repeat_choice"],
+        "repeat_chosen_because": choice["chosen_because"],
+        "rejected_repeats": choice["rejected_repeats"],
+        "unexamined_repeats_after_choice": choice["unexamined_repeats_after_choice"],
+        "panel_placement_repeat_dependent": True,
     }
+
+
+def panel_reference_copy(reference: dict) -> dict:
+    """Give one panel its own copy of a fit reference, nested records included.
+
+    dict() is a shallow copy: the nested rejected-repeat records would then be
+    shared by all nine panels of an anchor, and one panel's mutation would
+    corrupt nine records at once - the defect the per-panel copy exists to stop.
+    """
+    return copy.deepcopy(reference)
 
 
 # Machine-readable gate 7a-prime reason for a selection K that never passed
@@ -255,6 +352,225 @@ DIAGNOSTIC_ONLY_GATES = {
         "7a-prime and still blocks."
     ),
 }
+
+
+# The USER's judgment of 2026-09-22 on gate 6's ~70 mm marker discrepancy - it
+# is not a judgment this code made, and it changes no measurement. Gate 6 is
+# USER_JUDGMENT_REQUIRED by design and stays that way; numerical_status and
+# g2_allowed are untouched. What is recorded is the decision and its scope, so
+# result.json alone carries both without a reader going to the run record.
+MARKER_METHOD_USER_JUDGMENT = {
+    "decided": "2026-09-22",
+    "decided_by": "user",
+    "judgment": (
+        "The ~70 mm marker discrepancy is a defect of the measurement method - "
+        "the global bright-pixel centroid - and not of the camera model or its "
+        "transforms."
+    ),
+    "claim": "this discrepancy is the brightness method's",
+    "not_claimed": "that the camera is verified",
+    "applies_to_conclusion": "global_brightness_method_discrepancy",
+    "basis": [
+        "identified-marker centroid minus the projected sphere centre: "
+        "(5.7e-14, 0.139) px",
+        "bright-pixel centroid minus the same projected centre: "
+        "(29.3, -27.5) px - this is the ~70 mm",
+        "bright_count 1237, of which bright_outside_marker_count 185 fall "
+        "outside the identified marker",
+        "bright_centroid_outside_marker_bbox: true - the bright centroid left "
+        "the marker's own bounding box",
+        "historical centroids [345.95, 289.16] and [347.10, 288.11] sit in the "
+        "same place, so it reproduces",
+    ],
+    "basis_source": (
+        "docs/validation/2026-09-21-g1-calibration-run.md, sections 9.7 and 11.4"
+    ),
+    # In the record, not only in a comment: a reader of result.json must get
+    # the reservations with the decision, never the decision alone.
+    "does_not_establish": [
+        "bloom is not proven - the measured fact is that bright pixels fall "
+        "outside the marker; whether that is bloom or another emissive "
+        "reflection was never separated",
+        "one marker position does not establish 0.1 px accuracy camera-wide - "
+        "it is a single point of the image",
+        "a sphere's silhouette centre and its projected centre are not the "
+        "same quantity, as the record's own "
+        "sphere_silhouette_is_not_projected_centre: true already says",
+    ],
+    "gate_effect": (
+        "none. Gate 6 keeps its USER_JUDGMENT_REQUIRED value, the numerical "
+        "aggregate is unchanged, and g2_allowed stays false."
+    ),
+}
+# Which components of the cited basis this run can be checked against.
+MARKER_BASIS_VECTORS = {
+    "identified_minus_projected": "semantic_minus_projected_centre_px",
+    "bright_minus_projected": "bright_minus_projected_centre_px",
+}
+MARKER_BASIS_COUNTS = ("bright_count", "bright_outside_marker_count")
+
+
+def observed_marker_basis(markers: list) -> dict:
+    """Recompute the judgement's basis from THIS run's own marker records.
+
+    The judgement cites numbers measured earlier. Repeating them without
+    checking would be trust, so the same quantities are read back here. Nothing
+    is filled in: a marker that did not record a field leaves the summary
+    incomplete and its number None, and an empty marker list agrees with
+    nothing - all([]) must never promote "no markers" into "basis observed".
+    """
+    extremes, complete = {}, bool(markers)
+    for name, key in MARKER_BASIS_VECTORS.items():
+        components = []
+        for marker in markers:
+            values = marker.get(key)
+            if not isinstance(values, (list, tuple)) or not all(
+                isinstance(value, (int, float)) and math.isfinite(value)
+                for value in values
+            ):
+                components, complete = None, False
+                break
+            components.extend(abs(float(value)) for value in values)
+        extremes[f"{name}_max_abs_component_px"] = (
+            max(components) if components else None
+        )
+        if not components:
+            complete = False
+    counts = {}
+    for key in MARKER_BASIS_COUNTS:
+        values = [marker.get(key) for marker in markers]
+        counts[key] = values
+        if any(not isinstance(value, int) for value in values):
+            complete = False
+    return {
+        "marker_count": len(markers),
+        "all_bright_centroids_outside_marker_bbox": bool(markers)
+        and all(
+            marker.get("bright_centroid_outside_marker_bbox") is True
+            for marker in markers
+        ),
+        **extremes,
+        **counts,
+        "fields_complete": complete,
+        "metric": (
+            "largest absolute u or v component over all markers, not a "
+            "Euclidean distance"
+        ),
+    }
+
+
+def marker_method_judgment(conclusion: str, markers: list) -> dict:
+    """Attach the user's judgement together with this run's own evidence."""
+    return {
+        **MARKER_METHOD_USER_JUDGMENT,
+        "current_conclusion": conclusion,
+        "current_conclusion_matches_judgment": (
+            conclusion == MARKER_METHOD_USER_JUDGMENT["applies_to_conclusion"]
+        ),
+        # Gates 1-4 decide the conclusion branch before a single marker number
+        # is read, so a mismatch says what this run measured, not what the user
+        # decided.
+        "conclusion_match_note": (
+            "This run's automatic conclusion is compared with the one the "
+            "judgment was made on. A mismatch does not retract the judgment: "
+            "gates 1-4 select that branch before any marker number is read, so "
+            "a failed numeric gate moves the conclusion whatever the marker "
+            "records show."
+        ),
+        "basis_observed_in_this_run": observed_marker_basis(markers),
+    }
+
+
+# Reporting only - no gate reads this. The chosen repeat's fitted K both selects
+# the height-grid samples and physically places the panel, so a run that chose a
+# different repeat put its panels somewhere else. That has to be visible in the
+# result, not only in prose, or two runs get compared on geometry that was never
+# the same.
+SELECTION_CHOICE_COMPARABILITY = (
+    "Height panels are physically placed with the chosen repeat's fitted K. A "
+    "run whose panel_placement_repeat_key differs from this one chose "
+    "different fits, so its panel geometry is not directly comparable with "
+    "this run's."
+)
+SELECTION_CHOICE_CAVEAT = (
+    "An equal key does not prove equal geometry either: the same repeat index "
+    "is refitted in every run, so the K behind it differs. Compare the stored "
+    "panel vertices to establish that."
+)
+# A reference written before the rule existed records which repeat was used but
+# not why. Filling the rule in for it would attribute a policy to a run that
+# never applied one.
+SELECTION_CHOICE_UNRECORDED = "unrecorded"
+
+
+def selection_fit_choice_summary(panels: list) -> dict:
+    """Roll the per-panel placement references up into one per-anchor record.
+
+    Defensive by construction: this is reporting, so it must never raise on
+    input the gates already accept, and it must never repair one. A panel that
+    never reached placement carries no reference and is counted; a reference
+    that is present but malformed, or anchors whose panels disagree on the
+    repeat, are recorded as issues and withhold the key rather than letting the
+    last record win.
+    """
+    anchors, issues, missing = {}, [], 0
+    for panel in panels:
+        reference = panel.get("panel_placement_K_reference")
+        if reference is None:
+            missing += 1
+            continue
+        if not isinstance(reference, dict):
+            issues.append("placement_reference_not_a_record")
+            continue
+        anchor, repeat = (
+            reference.get("anchor_horizontal_m"),
+            reference.get("repeat"),
+        )
+        if not isinstance(anchor, (int, float)) or not isinstance(repeat, int):
+            issues.append("placement_reference_missing_anchor_or_repeat")
+            continue
+        entry = anchors.setdefault(
+            anchor,
+            {
+                "anchor_horizontal_m": anchor,
+                "repeat": repeat,
+                "index": reference.get("index"),
+                "gate_2a": reference.get("gate_2a"),
+                "selection_rule": reference.get(
+                    "selection_rule", SELECTION_CHOICE_UNRECORDED
+                ),
+                "repeat_choice": reference.get(
+                    "repeat_choice", SELECTION_CHOICE_UNRECORDED
+                ),
+                "rejected_repeats": reference.get("rejected_repeats", []),
+                "panels": 0,
+            },
+        )
+        entry["panels"] += 1
+        # Panels of one anchor must all name the same fit. Letting the first
+        # record stand while the ninth disagrees would report a single choice
+        # that was never made.
+        if (entry["repeat"], entry["index"]) != (repeat, reference.get("index")):
+            issues.append(f"conflicting_repeats_at_anchor_{anchor}")
+    per_anchor = [anchors[key] for key in sorted(anchors)]
+    ordered = sorted(set(issues), key=issues.index)
+    return {
+        "rule": SELECTION_FIT_RULE,
+        "status": "COMPLETE" if per_anchor and not ordered else "INCOMPLETE",
+        "per_anchor": per_anchor,
+        "panel_placement_repeat_key": (
+            ";".join(
+                f"{entry['anchor_horizontal_m']}={entry['repeat']}"
+                for entry in per_anchor
+            )
+            if per_anchor and not ordered
+            else None
+        ),
+        "panels_without_placement_reference": missing,
+        "issues": ordered,
+        "comparability": SELECTION_CHOICE_COMPARABILITY,
+        "comparability_caveat": SELECTION_CHOICE_CAVEAT,
+    }
 
 
 def layout_power_diagnostic(observations: list, nominal, *, provenance: dict) -> dict:
@@ -1051,6 +1367,7 @@ def _run_measurements(app, args: argparse.Namespace, result: dict, annotators):
                     record["reason"] = str(exc)
             stage.RemovePrim(path)
             write_record(args.output / "result.json", result)
+        candidates = []
         for repeat, sets in enumerate(samples):
             record = {
                 "anchor_horizontal_m": distance,
@@ -1059,9 +1376,20 @@ def _run_measurements(app, args: argparse.Namespace, result: dict, annotators):
                 "gate_2b": "FAIL",
             }
             result["intrinsics_fits"].append(record)
+            # The global index, not an index within this anchor: the fit
+            # references name a position in result["intrinsics_fits"].
+            index = len(result["intrinsics_fits"]) - 1
             if len(sets) != len(MEASURE.SCREEN_CENTRES_UV):
                 record["reason"] = (
                     "Missing screen layout; cannot claim full-screen calibration"
+                )
+                candidates.append(
+                    {
+                        "repeat": repeat,
+                        "index": index,
+                        "gate_2a": record["gate_2a"],
+                        "fit_available": False,
+                    }
                 )
                 continue
             points, uv, heldout = (
@@ -1078,18 +1406,29 @@ def _run_measurements(app, args: argparse.Namespace, result: dict, annotators):
                     "holdout": heldout,
                 }
             )
-            if repeat == SELECTION_FIT_REPEAT:
-                rendered_k = PinholeIntrinsics(
+            candidates.append(
+                {
+                    "repeat": repeat,
+                    "index": index,
+                    "gate_2a": record["gate_2a"],
+                    "fit_available": True,
+                }
+            )
+        # Every repeat of this anchor is fitted and recorded before the choice
+        # is made. The loop is never cut short at the first passing repeat: the
+        # 18-fit count, the holdout and the layout observations must not depend
+        # on which repeat the rule ends up selecting.
+        choice = choose_selection_fit(candidates)
+        if choice is not None:
+            fits_by_distance[distance] = (
+                PinholeIntrinsics(
                     nominal_k.width,
                     nominal_k.height,
                     frame_id=nominal_k.frame_id,
-                    **record["estimated"],
-                )
-                fits_by_distance[distance] = (
-                    rendered_k,
-                    len(result["intrinsics_fits"]) - 1,
-                    repeat,
-                )
+                    **result["intrinsics_fits"][choice["index"]]["estimated"],
+                ),
+                choice,
+            )
 
     # Visibility and distance bin assignment use readback geometry and the
     # independent render fit. The measured height always uses nominal K/mount.
@@ -1103,7 +1442,7 @@ def _run_measurements(app, args: argparse.Namespace, result: dict, annotators):
                 }
             )
             continue
-        rendered_k, fit_index, fit_repeat = fits_by_distance[distance]
+        rendered_k, choice = fits_by_distance[distance]
         # One fitted K does two jobs here: it places the panel in the scene and
         # it selects the depth samples. Keep the two uses separately recorded.
         # The fit for this anchor is complete before any panel is placed, so its
@@ -1112,16 +1451,14 @@ def _run_measurements(app, args: argparse.Namespace, result: dict, annotators):
         # finish_result; it never aborts, so the run still produces a gate table.
         placement_reference = selection_fit_reference(
             result["intrinsics_fits"],
-            fit_index,
+            choice,
             distance=distance,
-            repeat=fit_repeat,
             role="height_panel_physical_placement",
         )
         selection_reference = selection_fit_reference(
             result["intrinsics_fits"],
-            fit_index,
+            choice,
             distance=distance,
-            repeat=fit_repeat,
             role="height_grid_sample_selection",
         )
         for height in MEASURE.HEIGHTS_M:
@@ -1137,7 +1474,9 @@ def _run_measurements(app, args: argparse.Namespace, result: dict, annotators):
                     # Each panel owns its copy of both role records: one shared
                     # dict inserted into all nine panels of an anchor would let
                     # a later per-panel mutation corrupt nine records at once.
-                    "panel_placement_K_reference": dict(placement_reference),
+                    "panel_placement_K_reference": panel_reference_copy(
+                        placement_reference
+                    ),
                     **unvalidated_selection_fit_marks(placement_reference),
                     "captures": [],
                     "warmup_captures": [],
@@ -1224,7 +1563,10 @@ def _run_measurements(app, args: argparse.Namespace, result: dict, annotators):
                 name_base = f"height_r{distance:.1f}_h{height:.3f}_u{column:.0f}"
                 record.update(
                     save_height_selection(
-                        args.output, name_base, selection, dict(selection_reference)
+                        args.output,
+                        name_base,
+                        selection,
+                        panel_reference_copy(selection_reference),
                     )
                 )
                 write_record(args.output / "result.json", result)
@@ -1392,8 +1734,15 @@ def finish_result(result: dict) -> None:
         "basis": "Compare identified-marker and global-bright centroids with gates 2-4; a camera failure or a method discrepancy may coexist. Bloom itself is not proven by this comparison.",
         "historical_centroids_uv": [[345.95, 289.16], [347.10, 288.11]],
         "historical_nominal_uv": [320.0, 314.51858496],
+        # The user's decision travels with the diagnosis it judges, and carries
+        # what it does not establish. It is a record, never a gate input: the
+        # line below still writes USER_JUDGMENT_REQUIRED.
+        "user_judgment": marker_method_judgment(conclusion, result["marker"] or []),
     }
     gates["6"] = "USER_JUDGMENT_REQUIRED"
+    # Which repeat's fitted K placed and sampled the panels, per anchor. Written
+    # after every gate is decided, and read by none of them.
+    result["selection_fit_choice"] = selection_fit_choice_summary(heights)
     result["gates"] = gates
     result["numerical_status"] = "PASS" if numerical_pass else "FAIL"
     # The plan explicitly leaves ⑥ to user judgment together with ②–④.

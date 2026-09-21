@@ -42,6 +42,15 @@ MIN_PLANE_SAMPLES = 6
 # two can diverge. A bin AT or above this floor that the margin empties still
 # fails coverage, exactly as before.
 MIN_COVERAGE_BASELINE_SAMPLES = 6
+# Predeclared rule for the one fitted K that height-panel work depends on
+# (USER decision, 2026-09-22; not a judgment this code made). It used to be a
+# fixed repeat 0 whose own gate 2a was never consulted, which left one path
+# where a gate 2a failure still blocked although 2a became diagnostic on
+# 2026-09-21 - and whether it blocked depended on which repeat happened to
+# fail. Naming the rule here, before any rendering, keeps the choice out of
+# runtime discretion. The guarantee is unchanged: gate 7a-prime still requires
+# a validated fit behind the numbers it reads.
+SELECTION_FIT_REPEAT_RULE = "first_measured_repeat_with_gate_2a_pass"
 # Measurement region of a height panel: forward and lateral half extents as a
 # fraction of the anchor horizontal range. Unchanged since plan v11; the
 # viewing-direction margin below is added outside it and is never measured.
@@ -118,6 +127,8 @@ def protocol() -> dict:
         "repeats": REPEATS,
         "holdout": "(corner_row + corner_column) % 4 == 0, fixed before rendering",
         "repeat_policy": "separate fit per distance anchor and repeat; never pool repeated views",
+        "selection_fit_repeat_rule": SELECTION_FIT_REPEAT_RULE,
+        "selection_fit_repeat_policy": "height-panel physical placement and height-grid sample selection both take the fitted K of the first measured repeat at that anchor whose gate 2a passed; a warm-up capture contributes no samples and therefore no fit, so it can never be selected; if no measured repeat at that anchor passed gate 2a the first measured repeat is retained exactly as before and gate 7a-prime fails it as an unvalidated selection fit; if that repeat produced no fit at all the anchor has no rendered K and its panels fail as before; the chosen repeat, the rule that chose it and the repeats it rejected are recorded per anchor, and panels placed from a differently chosen repeat are not comparable on geometry",
         "grid_stride_px": GRID_STRIDE_PX,
         "edge_erosion_px": EDGE_EROSION_PX,
         "height_selection_margin": height_selection_margin(),
