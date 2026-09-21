@@ -37,3 +37,7 @@ venv/
 /ENV.md
 /ENV.local.md
 .DS_Store
+
+# Stray PostScript dropped at the repo root by an unrelated tool (2026-09-19).
+# Not part of this project; kept out of commits rather than deleted.
+/omni
