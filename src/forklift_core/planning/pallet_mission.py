@@ -26,6 +26,22 @@ from .geometry import (
 from .hybrid_astar import PlannerConfig, PlanResult, plan_hybrid_astar
 
 DEFAULT_TRANSPORT_CLEARANCE_M = 0.10
+DEFAULT_TRANSPORT_PRIMITIVE_LENGTH_M = 0.25
+
+
+def make_transport_planner_config(**overrides: float | int) -> PlannerConfig:
+    """Build mission/observation defaults while allowing explicit replay settings.
+
+    Generic PlannerConfig defaults stay independent. Callers may override any
+    planner field, including primitive length and expansion budget.
+    """
+    return replace(
+        PlannerConfig(
+            primitive_length_m=DEFAULT_TRANSPORT_PRIMITIVE_LENGTH_M,
+            clearance_m=DEFAULT_TRANSPORT_CLEARANCE_M,
+        ),
+        **overrides,
+    )
 
 
 @dataclass(frozen=True)
@@ -392,11 +408,7 @@ def plan_observation_leg(
     start_rear optionally replaces scenario.start_rear with the measured rear pose.
     """
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
-    config = (
-        config
-        if config is not None
-        else PlannerConfig(clearance_m=DEFAULT_TRANSPORT_CLEARANCE_M)
-    )
+    config = config if config is not None else make_transport_planner_config()
     props = [prop.rectangle for prop in scenario.props]
     pallet = Rectangle(
         scenario.pickup.x_m,
@@ -436,11 +448,7 @@ def plan_transport(
     replaces scenario.start_rear with the rear-axle pose after observation.
     """
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
-    config = (
-        config
-        if config is not None
-        else PlannerConfig(clearance_m=DEFAULT_TRANSPORT_CLEARANCE_M)
-    )
+    config = config if config is not None else make_transport_planner_config()
     props = [prop.rectangle for prop in scenario.props]
     pickup = site_poses(
         target_pickup if target_pickup is not None else scenario.pickup, geometry

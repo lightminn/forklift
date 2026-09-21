@@ -22,12 +22,12 @@ from pathlib import Path
 import numpy as np
 
 from forklift_core.perception.pallet_geometry import load_pallet_geometry
-from forklift_core.planning import Footprint, PlannerConfig
+from forklift_core.planning import Footprint
 from forklift_core.planning.pallet_mission import (
-    DEFAULT_TRANSPORT_CLEARANCE_M,
     AssetSpec,
     SyntheticMissionGeometry,
     make_scenario,
+    make_transport_planner_config,
     plan_transport,
 )
 
@@ -93,9 +93,8 @@ def main(argv: list[str] | None = None) -> int:
     args.output.mkdir(parents=True, exist_ok=False)
     (args.output / "assets.json").write_bytes(raw_assets)
     (args.output / "pallet_geometry.yaml").write_bytes(raw_pallet_geometry)
-    config = PlannerConfig(
+    config = make_transport_planner_config(
         curvature_limit_inv_m=0.5,
-        clearance_m=DEFAULT_TRANSPORT_CLEARANCE_M,
         max_expansions=30000,
     )
     geometry = SyntheticMissionGeometry(
@@ -137,6 +136,7 @@ def main(argv: list[str] | None = None) -> int:
         },
         "assets": [asdict(asset) for asset in assets],
         "planner_config": asdict(config),
+        "approach_clearance_m": min(config.clearance_m, geometry.approach_gap_m / 2),
         "mission_geometry": asdict(geometry),
         "obstacles": args.obstacles,
         "requested_seeds": requested,

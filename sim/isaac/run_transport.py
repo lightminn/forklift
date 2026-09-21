@@ -175,14 +175,21 @@ def require(condition: bool, reason: str) -> None:
         raise RuntimeError(reason)
 
 
-def verify_camera_intrinsics(camera, calibration, state: dict) -> None:
+def verify_camera_intrinsics(camera, raw_sdk_calibration, state: dict) -> None:
     """G1a: record getter provenance and refuse inconsistent camera settings.
 
     Isaac 5.1 computes K from prim focal length/aperture and cached resolution.
     Because we set those properties from the nominal K, this checks setting
     propagation/render-product resolution only, NOT independent calibration.
     The independent render experiment is verify_perception_camera.py (G1b).
+    raw_sdk_calibration is nominal K in the SDK's half-integer-centre convention.
+    Compare raw getter K to raw nominal K and normalized K to integer-index K;
+    both comparisons retain the original G1 tolerances.
     """
+    adapter = load_perception_module(
+        "g1a_perception_adapter", Path(__file__).with_name("perception_adapter.py")
+    )
+    nominal = adapter.normalize_isaac_intrinsics(raw_sdk_calibration)
     limits = CAMERA_CALIBRATION.G1_LIMITS
     record = {
         "status": "FAIL",
@@ -192,18 +199,31 @@ def verify_camera_intrinsics(camera, calibration, state: dict) -> None:
         "limits": {
             key: limits[key] for key in ("focal_relative", "principal_point_px")
         },
-        "nominal": {
-            name: getattr(calibration, name)
-            for name in ("fx", "fy", "cx", "cy", "width", "height")
-        },
     }
+    # Record the nominal coordinate system even when getter/readback fails.
+    for name, calibration in (
+        ("raw_sdk", nominal.raw_sdk),
+        ("integer_index", nominal.integer_index),
+    ):
+        record[name] = {
+            "status": "FAIL",
+            "coordinate_convention": nominal.to_record()[name]["coordinate_convention"],
+            "nominal": {
+                key: getattr(calibration, key)
+                for key in ("fx", "fy", "cx", "cy", "width", "height")
+            },
+        }
     state["perception_camera_intrinsics"] = record
     try:
         import omni.usd
 
         record["render_product_path"] = str(camera.get_render_product_path())
-        matrix = np.asarray(camera.get_intrinsics_matrix(), dtype=float)
-        cached_resolution = tuple(camera.get_resolution())
+        measured = adapter.read_isaac_intrinsics(camera)
+        measured_record = measured.to_record()
+        record["normalization"] = measured_record["normalization"]
+        for name in ("raw_sdk", "integer_index"):
+            record[name].update(measured_record[name])
+        cached_resolution = (measured.raw_sdk.width, measured.raw_sdk.height)
         record["cached_resolution"] = list(cached_resolution)
         product = (
             omni.usd.get_context()
@@ -216,42 +236,37 @@ def verify_camera_intrinsics(camera, calibration, state: dict) -> None:
         resolution = tuple(product.GetAttribute("resolution").Get())
         record["resolution"] = list(resolution)
         require(
-            matrix.shape == (3, 3) and np.isfinite(matrix).all(),
-            "Nonfinite or malformed camera intrinsics",
-        )
-        record["matrix"] = matrix.tolist()
-        require(
-            np.allclose(matrix[2], [0, 0, 1], atol=1e-12, rtol=0)
-            and matrix[0, 1] == 0
-            and matrix[1, 0] == 0,
-            "Camera intrinsics must be an unskewed pinhole matrix",
-        )
-        errors = {
-            "fx_relative": abs(matrix[0, 0] / calibration.fx - 1),
-            "fy_relative": abs(matrix[1, 1] / calibration.fy - 1),
-            "cx_px": abs(matrix[0, 2] - calibration.cx),
-            "cy_px": abs(matrix[1, 2] - calibration.cy),
-        }
-        record["errors"] = errors
-        # Compare authored bounds directly: subtracting cx=320 from 320.1
-        # produces 0.10000000000002274 and must not reject the inclusive limit.
-        require(
-            resolution == (calibration.width, calibration.height)
-            and cached_resolution == resolution
-            and calibration.fx * (1 - limits["focal_relative"])
-            <= matrix[0, 0]
-            <= calibration.fx * (1 + limits["focal_relative"])
-            and calibration.fy * (1 - limits["focal_relative"])
-            <= matrix[1, 1]
-            <= calibration.fy * (1 + limits["focal_relative"])
-            and calibration.cx - limits["principal_point_px"]
-            <= matrix[0, 2]
-            <= calibration.cx + limits["principal_point_px"]
-            and calibration.cy - limits["principal_point_px"]
-            <= matrix[1, 2]
-            <= calibration.cy + limits["principal_point_px"],
+            resolution == (nominal.raw_sdk.width, nominal.raw_sdk.height)
+            and cached_resolution == resolution,
             "Perception camera intrinsics mismatch (G1a)",
         )
+        matches = []
+        for name in ("raw_sdk", "integer_index"):
+            actual, calibration = getattr(measured, name), getattr(nominal, name)
+            record[name]["errors"] = {
+                "fx_relative": abs(actual.fx / calibration.fx - 1),
+                "fy_relative": abs(actual.fy / calibration.fy - 1),
+                "cx_px": abs(actual.cx - calibration.cx),
+                "cy_px": abs(actual.cy - calibration.cy),
+            }
+            # Direct authored bounds preserve the inclusive 0.1 px limit;
+            # subtracting 320 from 320.1 gives 0.10000000000002274.
+            matches.append(
+                calibration.fx * (1 - limits["focal_relative"])
+                <= actual.fx
+                <= calibration.fx * (1 + limits["focal_relative"])
+                and calibration.fy * (1 - limits["focal_relative"])
+                <= actual.fy
+                <= calibration.fy * (1 + limits["focal_relative"])
+                and calibration.cx - limits["principal_point_px"]
+                <= actual.cx
+                <= calibration.cx + limits["principal_point_px"]
+                and calibration.cy - limits["principal_point_px"]
+                <= actual.cy
+                <= calibration.cy + limits["principal_point_px"]
+            )
+            record[name]["status"] = "PASS" if matches[-1] else "FAIL"
+        require(all(matches), "Perception camera intrinsics mismatch (G1a)")
     except Exception as exc:
         record["reason"] = str(exc)
         require(False, f"Perception camera intrinsics check failed: {exc}")
@@ -320,13 +335,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     )
     from forklift_core.planning import (
         Footprint,
-        PlannerConfig,
         Rectangle,
         collision_free_pose,
     )
     from forklift_core.planning.pallet_mission import (
         SyntheticMissionGeometry,
         make_scenario,
+        make_transport_planner_config,
         plan_transport,
     )
 
@@ -364,6 +379,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         pallet_depth_m=args.pallet_geometry_loaded.overall_depth_m,
         pallet_width_m=args.pallet_geometry_loaded.overall_width_m,
         axle_to_fork_tip_m=args.axle_to_fork_tip_m,
+    )
+    planner_config = make_transport_planner_config(
+        curvature_limit_inv_m=settings["planner_curvature_inv_m"],
+        clearance_m=settings["planning_clearance_m"],
+        max_expansions=30000,
+    )
+    state["planner_config"] = asdict(planner_config)
+    state["approach_clearance_m"] = min(
+        planner_config.clearance_m, geometry.approach_gap_m / 2
     )
     insertion_geometry = InsertionGeometry.from_urdfs(
         args.forklift_urdf, args.pallet_urdf
@@ -520,12 +544,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             candidate_plan = plan_observation_leg(
                 scenario,
                 waypoint,
-                PlannerConfig(
-                    curvature_limit_inv_m=settings["planner_curvature_inv_m"],
-                    clearance_m=settings["planning_clearance_m"],
-                    max_expansions=30000,
-                    primitive_length_m=0.25,
-                ),
+                planner_config,
                 geometry=geometry,
             )
             state["observation_candidates"].append(
@@ -557,11 +576,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         planning_start = time.monotonic()
         plans = plan_transport(
             scenario,
-            PlannerConfig(
-                curvature_limit_inv_m=settings["planner_curvature_inv_m"],
-                clearance_m=settings["planning_clearance_m"],
-                max_expansions=30000,
-            ),
+            planner_config,
             geometry=geometry,
         )
         state["planning_wall_s"] = time.monotonic() - planning_start
@@ -895,14 +910,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 candidate_plan = plan_observation_leg(
                                     scenario,
                                     waypoint,
-                                    PlannerConfig(
-                                        curvature_limit_inv_m=settings[
-                                            "planner_curvature_inv_m"
-                                        ],
-                                        clearance_m=settings["planning_clearance_m"],
-                                        max_expansions=30000,
-                                        primitive_length_m=0.25,
-                                    ),
+                                    planner_config,
                                     geometry=geometry,
                                     start_rear=Pose2D(rear[0], rear[1], rear[2]),
                                 )
@@ -998,13 +1006,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             planning_start = time.monotonic()
                             plans = plan_transport(
                                 scenario,
-                                PlannerConfig(
-                                    curvature_limit_inv_m=settings[
-                                        "planner_curvature_inv_m"
-                                    ],
-                                    clearance_m=settings["planning_clearance_m"],
-                                    max_expansions=30000,
-                                ),
+                                planner_config,
                                 geometry=geometry,
                                 target_pickup=target_pickup,
                                 start_rear=start_rear_pose,

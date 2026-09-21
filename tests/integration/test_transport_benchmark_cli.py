@@ -4,9 +4,12 @@ import hashlib
 import json
 import subprocess
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
+
+from forklift_core.planning import PlannerConfig
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "tools/benchmark_transport_planning.py"
@@ -58,6 +61,10 @@ def test_benchmark_uses_and_snapshots_pallet_yaml(
     )
     assert result.returncode == 0, result.stderr
     report = json.loads((output / "results.json").read_text())
+    assert report["planner_config"] == asdict(
+        PlannerConfig(primitive_length_m=0.25, clearance_m=0.10, max_expansions=30000)
+    )
+    assert report["approach_clearance_m"] == 0.05
     geometry = report["mission_geometry"]
     assert geometry["pallet_depth_m"] == depth
     assert geometry["pallet_width_m"] == width

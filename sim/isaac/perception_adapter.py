@@ -7,7 +7,7 @@ robot pose acquisition. This module neither steps Isaac nor imports its SDK.
 import importlib.util
 from collections.abc import Callable
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from math import atan2, cos, pi, sin
 from numbers import Integral
 from pathlib import Path
@@ -19,6 +19,7 @@ from forklift_core.geometry import RigidTransform
 from forklift_core.perception.pocket_observation import PocketObservation
 from forklift_core.perception.scene_dataset import SceneInput
 from forklift_core.planning.pallet_mission import PalletSite
+from forklift_core.sensors.rgbd import PinholeIntrinsics
 
 # tools is outside the installed src package. Load the repository's canonical
 # rig by path, like the existing Isaac geometry unit tests, without sys.path edits.
@@ -61,6 +62,87 @@ def xyzw_to_wxyz(
 def default_base_from_optical() -> RigidTransform:
     """Return the canonical synthetic baseline_0p50 mount from scene_rig."""
     return _RIG.Camera().base_from_optical()
+
+
+@dataclass(frozen=True)
+class IsaacIntrinsics:
+    """Retain SDK K; derive K for integer-index pixel centres from that source.
+
+    Isaac's SDK locates pixel centres at half integers. The core samples depth
+    at integer array indices, so only cx/cy move by -0.5 px. This conversion is
+    specific to Isaac render inputs, not CPU scene_rig or stored Gazebo inputs.
+    """
+
+    raw_sdk: PinholeIntrinsics
+
+    @property
+    def integer_index(self) -> PinholeIntrinsics:
+        """Return normalized K without mutating or re-normalizing either K."""
+        return replace(self.raw_sdk, cx=self.raw_sdk.cx - 0.5, cy=self.raw_sdk.cy - 0.5)
+
+    def to_record(self) -> dict:
+        """Return JSON-ready raw/normalized matrices with coordinate conventions."""
+        record = {}
+        for name, convention, calibration in (
+            ("raw_sdk", "isaac_sdk_half_integer_centers", self.raw_sdk),
+            ("integer_index", "integer_index_centers", self.integer_index),
+        ):
+            record[name] = {
+                "coordinate_convention": convention,
+                "matrix": [
+                    [float(calibration.fx), 0.0, float(calibration.cx)],
+                    [0.0, float(calibration.fy), float(calibration.cy)],
+                    [0.0, 0.0, 1.0],
+                ],
+                "width": int(calibration.width),
+                "height": int(calibration.height),
+                "frame_id": calibration.frame_id,
+            }
+        record["normalization"] = (
+            "integer_index: cx = raw_sdk.cx - 0.5; cy = raw_sdk.cy - 0.5"
+        )
+        return record
+
+
+def normalize_isaac_intrinsics(
+    calibration: PinholeIntrinsics | IsaacIntrinsics,
+) -> IsaacIntrinsics:
+    """Normalize raw SDK calibration, or preserve an already adapted pair.
+
+    A bare PinholeIntrinsics argument is explicitly raw SDK K. Pass the returned
+    pair through subsequent adapter calls to preserve its convention/provenance.
+    Never pass its integer_index member back as if it were raw SDK calibration.
+    """
+    if isinstance(calibration, IsaacIntrinsics):
+        return calibration
+    if not isinstance(calibration, PinholeIntrinsics):
+        raise TypeError("Expected raw SDK PinholeIntrinsics or IsaacIntrinsics")
+    return IsaacIntrinsics(calibration)
+
+
+def read_isaac_intrinsics(camera) -> IsaacIntrinsics:
+    """Copy SDK K and resolution; reject non-pinhole or malformed calibration."""
+    matrix = _real_array(camera.get_intrinsics_matrix(), "camera intrinsics")
+    if matrix.shape != (3, 3) or not np.isfinite(matrix).all():
+        raise ValueError("Nonfinite or malformed camera intrinsics")
+    if (
+        not np.allclose(matrix[2], [0, 0, 1], atol=1e-12, rtol=0)
+        or matrix[0, 1] != 0
+        or matrix[1, 0] != 0
+    ):
+        raise ValueError("Camera intrinsics must be an unskewed pinhole matrix")
+    width, height = camera.get_resolution()
+    return normalize_isaac_intrinsics(
+        PinholeIntrinsics(
+            width,
+            height,
+            matrix[0, 0],
+            matrix[1, 1],
+            matrix[0, 2],
+            matrix[1, 2],
+            _RIG.intrinsics().frame_id,
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -129,6 +211,7 @@ class CaptureDiagnostics:
     pose_reference: str = "stationary_capture_end"
     attempts: int = 0
     rejection_counts: dict = field(default_factory=dict)
+    intrinsics: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -361,18 +444,19 @@ def capture_scene_input(
     threshold = _finite_scalar(std_threshold, "std_threshold")
     if threshold < 0:
         raise ValueError("std_threshold must be nonnegative")
-    intrinsics = _RIG.intrinsics()
+    calibration = read_isaac_intrinsics(camera)
+    intrinsics = calibration.integer_index
     if (
         base_from_optical.source_frame != intrinsics.frame_id
         or base_from_optical.target_frame != "base_link"
     ):
         raise ValueError("Expected camera_optical_frame to base_link transform")
-    # Forced scene_rig calibration, without overrides. Checking actual Isaac K,
-    # distortion and camera_axes belongs to the later simulator validation stage.
+    # G1a checks SDK settings against nominal K before capture. Here the actual
+    # getter K is converted to the core's integer-index convention exactly once.
     shape = (intrinsics.height, intrinsics.width)
     if state is None:
         state = CaptureState()
-    state.diagnostics = CaptureDiagnostics()
+    state.diagnostics = CaptureDiagnostics(intrinsics=calibration.to_record())
     previous = state.previous
     previous_frame_id = state.previous_frame_id
     reason = "timeout"

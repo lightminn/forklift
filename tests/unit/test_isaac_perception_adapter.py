@@ -2,7 +2,7 @@
 
 import importlib.util
 import math
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import numpy as np
@@ -10,6 +10,7 @@ import pytest
 
 from forklift_core.perception.pocket_observation import Pocket, PocketObservation
 from forklift_core.planning.pallet_mission import PalletSite
+from forklift_core.sensors.rgbd import PinholeIntrinsics, deproject_depth_pixels
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
@@ -57,6 +58,15 @@ class FakeCamera:
         self.rgba[:, ::2, :3] = 200
         self.depth = np.full((480, 640), 2.0, dtype=np.float32)
         self.reads = 0
+        self.matrix = np.array(
+            [[465.741156, 0, 320.0], [0, 465.741156, 240.0], [0, 0, 1.0]]
+        )
+
+    def get_intrinsics_matrix(self):
+        return self.matrix
+
+    def get_resolution(self):
+        return (640, 480)
 
     def get_rgba(self):
         return self.rgba
@@ -117,7 +127,7 @@ def test_xyzw_to_wxyz_known_value_and_round_trip():
     assert MODULE.xyzw_to_wxyz((0, 0, 0, 1)) == (1, 0, 0, 0)
 
 
-def test_mount_and_intrinsics_reuse_scene_rig():
+def test_mount_reuses_scene_rig_but_isaac_intrinsics_use_integer_indices():
     spec = importlib.util.spec_from_file_location(
         "scene_rig_reference", ROOT / "tools/scene_rig.py"
     )
@@ -125,7 +135,10 @@ def test_mount_and_intrinsics_reuse_scene_rig():
     spec.loader.exec_module(rig)
     scene, diagnostics, attempts = capture(FakeCamera())
     expected = rig.Camera().base_from_optical()
-    assert scene.intrinsics == rig.intrinsics()
+    raw = rig.intrinsics()
+    assert (raw.cx, raw.cy) == (320.0, 240.0)
+    assert (scene.intrinsics.cx, scene.intrinsics.cy) == (319.5, 239.5)
+    assert scene.intrinsics.fx == pytest.approx(raw.fx)
     assert scene.base_from_optical.source_frame == expected.source_frame
     assert scene.base_from_optical.target_frame == expected.target_frame
     np.testing.assert_array_equal(scene.base_from_optical.rotation, expected.rotation)
@@ -134,6 +147,60 @@ def test_mount_and_intrinsics_reuse_scene_rig():
     )
     optical = expected.rotation.T @ (np.array([2.75, 0, 0.5]) - expected.translation_m)
     np.testing.assert_allclose(optical, [0, 0, 2], atol=1e-12)
+
+
+@pytest.mark.parametrize("cx,cy", [(320.0, 240.0), (321.25, 238.75)])
+def test_isaac_intrinsics_normalize_exactly_once_and_preserve_raw(cx, cy):
+    raw = PinholeIntrinsics(640, 480, 460.0, 462.0, cx, cy, "camera_optical_frame")
+    first = MODULE.normalize_isaac_intrinsics(raw)
+    second = MODULE.normalize_isaac_intrinsics(first)
+    assert first.raw_sdk == second.raw_sdk == raw
+    expected = replace(raw, cx=cx - 0.5, cy=cy - 0.5)
+    assert first.integer_index == second.integer_index == expected
+    assert (raw.cx, raw.cy) == (cx, cy)
+
+
+def test_capture_uses_sdk_k_without_mutation_or_accumulated_shift():
+    camera, state = FakeCamera(), MODULE.CaptureState()
+    # An off-centre getter must survive; do not substitute the nominal rig K.
+    camera.matrix = np.array([[500.0, 0, 321.25], [0, 510.0, 238.75], [0, 0, 1]])
+    original = camera.matrix.copy()
+    for frame_id in (1, 2):
+        scene, _, _ = capture(
+            camera, state=state, frame_id_fn=lambda frame_id=frame_id: frame_id
+        )
+        assert (scene.intrinsics.cx, scene.intrinsics.cy) == (320.75, 238.25)
+        assert (scene.intrinsics.fx, scene.intrinsics.fy) == (500.0, 510.0)
+        np.testing.assert_array_equal(camera.matrix, original)
+        record = asdict(state.diagnostics)["intrinsics"]
+        assert (
+            record["raw_sdk"]["coordinate_convention"]
+            == "isaac_sdk_half_integer_centers"
+        )
+        assert (
+            record["integer_index"]["coordinate_convention"] == "integer_index_centers"
+        )
+        np.testing.assert_array_equal(record["raw_sdk"]["matrix"], original)
+        assert record["integer_index"]["matrix"] == [
+            [500.0, 0.0, 320.75],
+            [0.0, 510.0, 238.25],
+            [0.0, 0.0, 1.0],
+        ]
+
+
+def test_isaac_capture_deprojects_integer_pixels_on_half_pixel_render_rays():
+    camera = FakeCamera()
+    camera.matrix[:2, :2] = np.diag([500.0, 500.0])
+    scene, _, _ = capture(camera)
+    points = deproject_depth_pixels(
+        scene.depth_m,
+        np.array([[319, 239], [320, 240]]),
+        scene.intrinsics,
+        meters_per_unit=1.0,
+        pixel_frame=scene.intrinsics.frame_id,
+        rectified=True,
+    )
+    np.testing.assert_allclose(points.xyz_m, [[-0.002, -0.002, 2], [0.002, 0.002, 2]])
 
 
 def test_normalize_depth_reports_raw_sentinels_and_preserves_metres():

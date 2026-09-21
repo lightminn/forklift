@@ -447,20 +447,46 @@ def surface_height_base(
     return float(vertices[:, 2].mean())
 
 
-def attach_annotators(rep, camera) -> dict:
-    """Bind all three channels to the initialized camera's exact render product."""
+def attach_annotators(rep, camera, *, annotators: dict | None = None) -> dict:
+    """Bind channels, retaining partial ownership for the caller's finally block."""
     product = camera.get_render_product_path()
-    annotators = {
-        "rgb": rep.AnnotatorRegistry.get_annotator("rgb"),
-        "seg": rep.AnnotatorRegistry.get_annotator(
-            "semantic_segmentation", init_params={"colorize": False}
-        ),
-        "z": rep.AnnotatorRegistry.get_annotator("distance_to_image_plane"),
-    }
-    for annotator in annotators.values():
-        annotator.attach([product])
+    if annotators is None:
+        annotators = {}
+    for key, name, kwargs in (
+        ("rgb", "rgb", {}),
+        ("seg", "semantic_segmentation", {"init_params": {"colorize": False}}),
+        ("z", "distance_to_image_plane", {}),
+    ):
+        annotators[key] = rep.AnnotatorRegistry.get_annotator(name, **kwargs)
+        annotators[key].attach([product])
     rep.orchestrator.set_capture_on_play(False)
     return annotators
+
+
+def detach_annotators(annotators: dict) -> dict:
+    """Release owned channels once; record teardown failures without masking data.
+
+    Render-product changes can already have detached a channel. Query the public
+    Replicator is_attached property and detach its own bindings, not the camera's
+    possibly replaced product. Consume ownership so later cleanup cannot repeat.
+    """
+    report = {}
+    for name in list(annotators):
+        annotator = annotators.pop(name)
+        try:
+            if not annotator.is_attached:
+                report[name] = {"status": "already_detached"}
+                continue
+            annotator.detach()
+            report[name] = {"status": "detached"}
+        except Exception as exc:
+            # A connection can disappear between the readback and detach.
+            already_detached = "not attached to any render products" in str(exc)
+            report[name] = {
+                "status": "already_detached" if already_detached else "error",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+    return report
 
 
 def capture_static(rep, annotators: dict) -> dict:

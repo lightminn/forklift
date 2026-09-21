@@ -397,6 +397,38 @@ class CalibrationScene:
 
 def run(app, args: argparse.Namespace, result: dict) -> None:
     import cv2
+
+    # G1 measurement runs on this thread. SB's CALIB_CB_ACCURACY warpAffine can
+    # otherwise allocate OpenCL buffers on Isaac's GPU and terminate in a C++
+    # destructor, beyond Python try/except. Keep this 640x480 workload on CPU.
+    cv2.ocl.setUseOpenCL(False)
+    result["opencv_version"] = cv2.__version__
+    result["opencv_opencl"] = {
+        "requested_use_opencl": False,
+        "have_opencl": bool(cv2.ocl.haveOpenCL()),
+        "use_opencl": bool(cv2.ocl.useOpenCL()),
+    }
+    # Persist the actual backend before the first measurement, even if a later
+    # native crash prevents Python finally blocks from running.
+    write_record(args.output / "result.json", result)
+    RUNNER.require(
+        not result["opencv_opencl"]["use_opencl"], "OpenCV OpenCL must be disabled"
+    )
+    annotators = {}
+    try:
+        # Keep the SDK camera alive until its owned annotators are detached.
+        # On an exception the traceback retains the measurement frame instead.
+        _camera = _run_measurements(app, args, result, annotators)
+    finally:
+        # Save gates/partial captures before touching the renderer's teardown.
+        try:
+            write_record(args.output / "result.json", result)
+        finally:
+            result["annotator_cleanup"] = MEASURE.detach_annotators(annotators)
+            write_record(args.output / "result.json", result)
+
+
+def _run_measurements(app, args: argparse.Namespace, result: dict, annotators):
     import omni.replicator.core as rep
     import omni.timeline
     import omni.usd
@@ -412,13 +444,14 @@ def run(app, args: argparse.Namespace, result: dict) -> None:
         "perception_camera_check_adapter", ROOT / "sim/isaac/perception_adapter.py"
     )
     rig = load_module("perception_camera_check_rig", ROOT / "tools/scene_rig.py")
-    nominal_mount, nominal_k = adapter.default_base_from_optical(), rig.intrinsics()
+    nominal_mount = adapter.default_base_from_optical()
+    nominal_raw_sdk_k = rig.intrinsics()
+    nominal_k = adapter.normalize_isaac_intrinsics(nominal_raw_sdk_k).integer_index
     nominal_matrix = MEASURE.mount_matrix(nominal_mount)
     result["source_sha256"] = RUNNER.source_sha256(
         ROOT, Path(forklift_core.__file__).parent
     )
     result["gate_5"] = "PASS"
-    result["opencv_version"] = cv2.__version__
     result["nominal_base_from_optical"] = nominal_matrix.tolist()
     RUNNER.require(
         omni.usd.get_context().open_stage(args.base_scene), "Cannot open base scene"
@@ -460,8 +493,11 @@ def run(app, args: argparse.Namespace, result: dict) -> None:
     )
     world.reset()
     camera.initialize()
-    RUNNER.verify_camera_intrinsics(camera, nominal_k, result)
-    annotators = MEASURE.attach_annotators(rep, camera)
+    RUNNER.verify_camera_intrinsics(camera, nominal_raw_sdk_k, result)
+    # RGB/depth array coordinates and all projection/height comparisons below
+    # use integer-index centres. Raw getter settings were compared separately.
+    result["measurement_intrinsics_coordinate_convention"] = "integer_index_centers"
+    MEASURE.attach_annotators(rep, camera, annotators=annotators)
     attached_product = str(camera.get_render_product_path())
     # Preserve the original smoke-check settling period; all measurement
     # captures below use the required orchestrator zero-delta paused step.
@@ -517,7 +553,7 @@ def run(app, args: argparse.Namespace, result: dict) -> None:
         result["annotator_attachment_probes"].append(probe)
         fresh = {}
         try:
-            fresh = MEASURE.attach_annotators(rep, camera)
+            MEASURE.attach_annotators(rep, camera, annotators=fresh)
             comparison, frames = MEASURE.compare_annotator_streams(
                 rep, annotators, fresh, max_steps=8, pipeline_state=pipeline_state
             )
@@ -537,11 +573,14 @@ def run(app, args: argparse.Namespace, result: dict) -> None:
         except Exception as exc:
             probe["error"] = f"{type(exc).__name__}: {exc}"
         finally:
-            for annotator in fresh.values():
-                try:
-                    annotator.detach([camera.get_render_product_path()])
-                except Exception as exc:
-                    probe.setdefault("detach_errors", []).append(str(exc))
+            probe["annotator_cleanup"] = MEASURE.detach_annotators(fresh)
+            errors = [
+                entry["error"]
+                for entry in probe["annotator_cleanup"].values()
+                if entry["status"] == "error"
+            ]
+            if errors:
+                probe["detach_errors"] = errors
             write_record(args.output / f"{name}_attachment_probe.json", probe)
 
     def capture(
@@ -648,8 +687,10 @@ def run(app, args: argparse.Namespace, result: dict) -> None:
     for distance in MEASURE.DISTANCES_M:
         samples = [[] for _ in range(MEASURE.REPEATS)]
         for position_index, centre_uv in enumerate(MEASURE.SCREEN_CENTRES_UV):
+            # Preserve the existing authored targets. Only measurement pixel
+            # coordinates change convention; do not move the calibration scene.
             geometry = MEASURE.checkerboard_layout(
-                distance, centre_uv, nominal_k, nominal_matrix
+                distance, centre_uv, nominal_raw_sdk_k, nominal_matrix
             )
             trace_pipeline(f"before_board_r{distance:.1f}_p{position_index}_authored")
             path = scene.board(geometry, observe=trace_pipeline)
@@ -845,8 +886,7 @@ def run(app, args: argparse.Namespace, result: dict) -> None:
                 stage.RemovePrim(path)
                 write_record(args.output / "result.json", result)
     finish_result(result)
-    for annotator in annotators.values():
-        annotator.detach([camera.get_render_product_path()])
+    return camera
 
 
 def finish_result(result: dict) -> None:

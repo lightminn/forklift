@@ -70,6 +70,28 @@ def test_getter_accepts_matching_intrinsics_and_records_readback_path():
     assert record["render_product_path"] == "/Render/PerceptionCamera"
 
 
+def test_g1a_compares_and_records_raw_and_integer_index_conventions():
+    camera, state = FakeCamera(), {}
+    camera.matrix[0, 2] += 0.0625
+    camera.matrix[1, 2] -= 0.0625
+    RUNNER["verify_camera_intrinsics"](camera, K, state)
+    record = state["perception_camera_intrinsics"]
+    for name, convention, cx, cy in (
+        ("raw_sdk", "isaac_sdk_half_integer_centers", 320.0, 240.0),
+        ("integer_index", "integer_index_centers", 319.5, 239.5),
+    ):
+        comparison = record[name]
+        assert comparison["coordinate_convention"] == convention
+        assert comparison["nominal"]["cx"] == cx
+        assert comparison["nominal"]["cy"] == cy
+        assert comparison["matrix"][0][2] == cx + 0.0625
+        assert comparison["matrix"][1][2] == cy - 0.0625
+        assert comparison["errors"]["cx_px"] == 0.0625
+        assert comparison["errors"]["cy_px"] == 0.0625
+        assert comparison["status"] == "PASS"
+    RUNNER["record_json"](state)
+
+
 @pytest.mark.parametrize("resolution", [(320, 240), (639, 480), (640, 481)])
 def test_render_product_mismatch_is_refused_even_when_camera_cache_matches(
     render_stage, resolution

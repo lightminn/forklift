@@ -23,6 +23,7 @@ from forklift_core.planning.pallet_mission import (
     SyntheticMissionGeometry,
     TransportScenario,
     make_scenario,
+    make_transport_planner_config,
     plan_transport,
     site_poses,
 )
@@ -81,14 +82,23 @@ def test_observation_leg_rejects_waypoint_inside_real_pallet(observation_scenari
     assert result.status == "invalid_goal"
 
 
-def test_observation_leg_avoids_props(observation_scenario):
-    obstacle = Rectangle(0, 0, 0.3, 0.3)
+@pytest.mark.parametrize(
+    "config",
+    [
+        None,
+        PlannerConfig(primitive_length_m=0.25, clearance_m=0.15),
+        PlannerConfig(primitive_length_m=0.5, clearance_m=0.15),
+    ],
+)
+def test_observation_leg_avoids_props(observation_scenario, config):
+    # The lower face at y=0.30 still overlaps the straight truck's y=0.36
+    # envelope. This placement admits a detour with both primitive lengths.
+    obstacle = Rectangle(0, 0.45, 0.3, 0.3)
     scenario = replace(
         observation_scenario,
         props=(PlacedProp(AssetSpec("test://box", 0.3, 0.3, 1), obstacle),),
     )
     geometry = SyntheticMissionGeometry()
-    config = PlannerConfig(clearance_m=0.15)
     result = pallet_mission.plan_observation_leg(
         scenario, Pose2D(2, 0, 0), config, geometry=geometry
     )
@@ -104,7 +114,90 @@ def test_observation_leg_avoids_props(observation_scenario):
         [obstacle, Rectangle(4, 3, 0.6, 0.8)],
         geometry.unloaded_footprint,
         scenario.bounds,
-        margin_m=0.15,
+        margin_m=0.10 if config is None else config.clearance_m,
+    )
+
+
+def test_observation_default_matches_quarter_metre_plan(observation_scenario):
+    scenario = replace(
+        observation_scenario,
+        props=(
+            PlacedProp(
+                AssetSpec("test://box", 0.3, 0.3, 1),
+                Rectangle(0, 0.45, 0.3, 0.3),
+            ),
+        ),
+    )
+    waypoint = Pose2D(2, 0, 0)
+    expected = pallet_mission.plan_observation_leg(
+        scenario, waypoint, PlannerConfig(primitive_length_m=0.25, clearance_m=0.10)
+    )
+    actual = pallet_mission.plan_observation_leg(scenario, waypoint)
+    assert expected.success and actual.success
+    for name, value in asdict(expected).items():
+        np.testing.assert_array_equal(asdict(actual)[name], value)
+
+
+def test_transport_default_matches_quarter_metre_plan():
+    scenario = make_scenario(0, ASSETS)
+    expected = plan_transport(
+        scenario, PlannerConfig(primitive_length_m=0.25, clearance_m=0.10)
+    )
+    actual = plan_transport(scenario)
+    assert expected.success and actual.success
+    for stage in ("approach", "insert", "extract", "transport", "withdraw"):
+        for name, value in asdict(getattr(expected, stage)).items():
+            np.testing.assert_array_equal(asdict(getattr(actual, stage))[name], value)
+
+
+def test_explicit_planner_config_is_preserved(monkeypatch, observation_scenario):
+    # Capture the real planner boundary, still executing its collision/search code.
+    received = []
+    real_plan = pallet_mission.plan_hybrid_astar
+
+    def capture(*args):
+        received.append(args[-1])
+        return real_plan(*args)
+
+    monkeypatch.setattr(pallet_mission, "plan_hybrid_astar", capture)
+    config = PlannerConfig(primitive_length_m=0.5, clearance_m=0.12, max_expansions=321)
+    result = pallet_mission.plan_observation_leg(
+        observation_scenario, Pose2D(2, 0, 0), config
+    )
+    assert result.success
+    assert received.pop() is config
+    scenario = TransportScenario(
+        0,
+        Pose2D(-2.34, 0, 0),
+        PalletSite(0, 0, 0),
+        PalletSite(3.4, 0, 0),
+        (),
+        Bounds(-3, 4.7, -1.75, 3.05),
+    )
+    result = plan_transport(scenario, config)
+    assert result.success, result.status
+    approach_config, transport_config = received
+    assert approach_config == replace(config, clearance_m=0.05)
+    assert transport_config is config
+
+
+def test_transport_config_factory_preserves_general_defaults_and_overrides():
+    assert PlannerConfig().primitive_length_m == 0.5
+    assert make_transport_planner_config() == PlannerConfig(
+        primitive_length_m=0.25, clearance_m=0.10
+    )
+    assert make_transport_planner_config(
+        primitive_length_m=0.5,
+        clearance_m=0.03,
+        max_expansions=30000,
+        xy_resolution_m=0.1,
+        reverse_penalty=1.5,
+    ) == PlannerConfig(
+        primitive_length_m=0.5,
+        clearance_m=0.03,
+        max_expansions=30000,
+        xy_resolution_m=0.1,
+        reverse_penalty=1.5,
     )
 
 
@@ -214,21 +307,45 @@ def test_default_clearance_blocks_a_near_margin_delivery_straight_post():
     scenario = TransportScenario(
         0,
         Pose2D(-2.34, 0, 0),
+        PalletSite(0, 0, 0),
         PalletSite(3.4, 0, 0),
-        PalletSite(0.2, 1, 0),
         (
             PlacedProp(
                 AssetSpec("test://post", 0.05, 0.05, 1.0),
-                Rectangle(0.0, 1 + lateral, 0.05, 0.05),
+                Rectangle(3.2, lateral, 0.05, 0.05),
             ),
         ),
         Bounds(-3, 4.7, -1.75, 3.05),
     )
-    # First assert the geometric premise: margin 0 clears, margin 0.10 does not.
+    # Collinear sites let search reach predelivery at either primitive length;
+    # only the final loaded straight approaches the post's 0.05 m surface gap.
+    destination = site_poses(scenario.destination, geometry)
+    obstacles = [prop.rectangle for prop in scenario.props]
+    assert collision_free_pose(
+        destination["predelivery"],
+        obstacles,
+        geometry.loaded_footprint,
+        scenario.bounds,
+        margin_m=0.10,
+    )
+    tail = np.array(
+        [
+            [destination[name].x_m, destination[name].y_m, destination[name].yaw_rad]
+            for name in ("predelivery", "delivery")
+        ]
+    )
+    assert collision_free_path(
+        tail, obstacles, geometry.loaded_footprint, scenario.bounds, margin_m=0.00
+    )
+    assert not collision_free_path(
+        tail, obstacles, geometry.loaded_footprint, scenario.bounds, margin_m=0.10
+    )
     default = plan_transport(scenario)
     assert not default.success
     assert default.status == "transport:straight_collision"
-    zero_clearance = plan_transport(scenario, PlannerConfig(clearance_m=0.00))
+    zero_clearance = plan_transport(
+        scenario, PlannerConfig(primitive_length_m=0.25, clearance_m=0.00)
+    )
     assert zero_clearance.success
 
 
