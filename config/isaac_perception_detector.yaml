@@ -1,0 +1,5 @@
+# Scene-specific search budget; EPAL 6 geometric evidence gates stay unchanged.
+# Multiple factory-prop faces exhausted the original budget before the pallet
+# plane. Six handled seed 0, but seed 17 needed a larger search budget.
+# Geometric evidence thresholds remain fixed; sparse evidence is still rejected.
+max_plane_candidates: 12
