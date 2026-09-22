@@ -15,7 +15,7 @@ planner_curvature_inv_m: 0.50
 tracker_curvature_inv_m: 0.62
 planning_clearance_m: 0.10
 # Cruise settings; insertion remains slow for pocket clearance.
-approach_speed_mps: 0.35
+approach_speed_mps: 0.60
 transport_speed_mps: 0.30
 extract_speed_mps: 0.18
 withdraw_speed_mps: 0.12
