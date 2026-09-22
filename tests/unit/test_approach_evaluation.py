@@ -3,7 +3,6 @@
 import importlib.util
 import json
 import math
-from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -131,7 +130,7 @@ def test_thresholds_can_be_set_explicitly_and_boundary_is_inclusive():
 def test_explicit_robot_geometry_and_last_pose_of_trajectory_are_used():
     result = evaluate(
         final_rear_pose=[[0, 0, 0], [0.7, 0.1, 0]],
-        geometry=replace(SyntheticMissionGeometry(), approach_offset_m=1.8),
+        geometry=SyntheticMissionGeometry(axle_to_fork_tip_m=1.40),
     )
     assert result["success"]
 

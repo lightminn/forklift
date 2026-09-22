@@ -26,8 +26,11 @@ EXPECTED_REPLAY_DELTAS = {
     "20260912T170442Z_pocket_eval_dev_02": {
         # Repairing plane extraction made this scene detectable.
         ("s009", "no_pallet", "no_opening_pattern", "valid", None),
-        # Per-opening upper-deck evidence names the obstruction directly.
-        # It picks the same side the ray classification did in every case.
+        # Per-opening upper-deck evidence runs before the ray check, so its
+        # reason replaces the ray one. It names the side whose upper count fell
+        # short, not an obstruction. In these nine it happened to be the side
+        # the ray classification named -- an observation about this set, not a
+        # property of the two checks.
         ("s007", "invalid", "pocket_occluded:right", "invalid", "upper_deck_occluded:right"),
         ("s027", "invalid", "pocket_occluded:left", "invalid", "upper_deck_occluded:left"),
         ("s039", "invalid", "pocket_occluded:left", "invalid", "upper_deck_occluded:left"),

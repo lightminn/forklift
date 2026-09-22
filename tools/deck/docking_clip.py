@@ -10,6 +10,10 @@ import pathlib
 import subprocess
 import sys
 
+from forklift_core.perception.pallet_geometry import target_insertion_depth_m
+
+# 이 값은 EPAL 전용이다 -- T11 표준이 확정되고 preview_docking 이 형상을 매개변수로 받게 되면 이 리터럴도 매개변수가 되어야 한다
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import render as R  # noqa: E402
 
@@ -42,7 +46,7 @@ def _lines(frame):
 
 def build(frames_n=240):
     scene = P._load_scene(P.FORKLIFT, P.PALLET)
-    frames = P._plan(scene, frames_n, 0.360)
+    frames = P._plan(scene, frames_n, target_insertion_depth_m(0.60))
 
     import mujoco
     from PIL import Image, ImageDraw

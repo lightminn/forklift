@@ -21,11 +21,13 @@ from pathlib import Path
 
 import numpy as np
 
-from forklift_core.planning import Footprint, PlannerConfig
+from forklift_core.perception.pallet_geometry import load_pallet_geometry
+from forklift_core.planning import Footprint
 from forklift_core.planning.pallet_mission import (
     AssetSpec,
     SyntheticMissionGeometry,
     make_scenario,
+    make_transport_planner_config,
     plan_transport,
 )
 
@@ -77,6 +79,7 @@ def main(argv: list[str] | None = None) -> int:
     """Save incremental evidence for all seeds; exit zero when the batch finishes."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--assets-json", type=Path, required=True)
+    parser.add_argument("--pallet-geometry", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--count", type=int, default=1000)
     parser.add_argument("--start-seed", type=int, default=0)
@@ -85,12 +88,20 @@ def main(argv: list[str] | None = None) -> int:
     if args.count <= 0 or args.start_seed < 0 or args.obstacles < 0:
         parser.error("count must be positive; start-seed and obstacles nonnegative")
     assets, raw_assets = _assets(args.assets_json)
+    pallet_geometry = load_pallet_geometry(args.pallet_geometry)
+    raw_pallet_geometry = args.pallet_geometry.read_bytes()
     args.output.mkdir(parents=True, exist_ok=False)
     (args.output / "assets.json").write_bytes(raw_assets)
-    config = PlannerConfig(
-        curvature_limit_inv_m=0.5, clearance_m=0.1, max_expansions=30000
+    (args.output / "pallet_geometry.yaml").write_bytes(raw_pallet_geometry)
+    config = make_transport_planner_config(
+        curvature_limit_inv_m=0.5,
+        max_expansions=30000,
     )
-    geometry = SyntheticMissionGeometry(unloaded_footprint=Footprint(1.29, 0.17, 0.36))
+    geometry = SyntheticMissionGeometry(
+        unloaded_footprint=Footprint(1.29, 0.17, 0.36),
+        pallet_depth_m=pallet_geometry.overall_depth_m,
+        pallet_width_m=pallet_geometry.overall_width_m,
+    )
     sources = {}
     for name in (
         "forklift_core.planning.geometry",
@@ -113,6 +124,11 @@ def main(argv: list[str] | None = None) -> int:
         "numpy": np.__version__,
         "launcher_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "installed_planning_sources": sources,
+        "pallet_geometry_evidence": {
+            "input_path": str(args.pallet_geometry),
+            "sha256": hashlib.sha256(raw_pallet_geometry).hexdigest(),
+            "copied_to": "pallet_geometry.yaml",
+        },
         "asset_evidence": {
             "input_path": str(args.assets_json),
             "sha256": hashlib.sha256(raw_assets).hexdigest(),
@@ -120,6 +136,7 @@ def main(argv: list[str] | None = None) -> int:
         },
         "assets": [asdict(asset) for asset in assets],
         "planner_config": asdict(config),
+        "approach_clearance_m": min(config.clearance_m, geometry.approach_gap_m / 2),
         "mission_geometry": asdict(geometry),
         "obstacles": args.obstacles,
         "requested_seeds": requested,

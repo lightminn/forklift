@@ -186,7 +186,10 @@ RGB·depth·CameraInfo에 같은 stamp를 요구하고, static TF의 stamp 0에�
 `scene.json.scene_id` 일치를 검사하고, 요청 ID 합집합이 중복·누락 없이 카탈로그와
 같아야 한다. 장면 category·split·버전·camera·image·snapshot·run ID를 카탈로그와
 batch에 대조한다. GT는 허용한 시각 치환 외에는 카탈로그와 동일해야 하고, 양성·가림은
-`valid`, 음성 두 범주는 `no_pallet`이어야 한다. 각 장면 파일 해시 재계산과
+`valid`, 음성 **세** 범주(`negative_no_pallet`·`negative_lookalike`·`negative_block_row`,
+`merge_scene_batches.py:41-46`)는 `no_pallet`이어야 한다. 이는 **정답의 상태** 제약이며,
+검출기의 기대 출력과는 별개다 — 음성 GT 가 `no_pallet` 인 것과 그 장면에서 검출기가
+`invalid` 를 내는 것이 기대값인 것은 양립한다. 각 장면 파일 해시 재계산과
 `load_scene_sample`도 모두 성공해야 한다.
 
 세트 출력은 `manifest.json`과 `scenes/sNNN/`이며 장면마다 필수 7개 파일과 preview

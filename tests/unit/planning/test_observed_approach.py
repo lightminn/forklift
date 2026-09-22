@@ -138,7 +138,7 @@ def test_goal_changes_with_observation_position_and_insertion_yaw():
 def test_explicit_prior_depth_and_robot_offset_are_used_independently():
     result = target(
         prior=replace(PRIOR, overall_depth_m=1.0),
-        geometry=replace(SyntheticMissionGeometry(), approach_offset_m=1.8),
+        geometry=SyntheticMissionGeometry(axle_to_fork_tip_m=1.40),
     )
     assert result.pallet_site.x_m == pytest.approx(2.5)
     assert result.approach_rear.x_m == pytest.approx(0.7)

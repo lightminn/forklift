@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from forklift_core.perception import pallet_geometry
 from forklift_core.perception.pallet_geometry import (
     check_fork_fit,
     load_pallet_geometry,
@@ -11,6 +12,12 @@ from forklift_core.perception.pallet_geometry import (
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 EPAL6 = REPO_ROOT / "config" / "pallet_geometry_epal6.yaml"
+
+
+def test_target_insertion_depth_rule_both_branches():
+    assert pallet_geometry.target_insertion_depth_m(0.50) == 0.30
+    assert pallet_geometry.target_insertion_depth_m(0.66) == pytest.approx(0.36)
+
 
 # dls08_provisional, estimated from product images and not measured
 PARAMETERS = yaml.safe_load(

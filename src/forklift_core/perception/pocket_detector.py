@@ -55,7 +55,11 @@ class DetectorParams:
     # measurement that would set them apart needs a real sensor. Zero means
     # "follow min_band_points", which is the frozen behaviour.
     upper_band_points: int = 0
-    max_plane_candidates: int = 3
+    # Budget 5 recovers the pallet front in ws1 Isaac seed 4 (pallet at 3.30 m):
+    # a 3.35 m-wide object at 2.31 m and the rear wall exhaust budget 3.
+    # User-measured replay of 7 runs / 330 scenes found no selection changes
+    # with 3 -> 5. The frozen v1 YAML explicitly retains budget 3.
+    max_plane_candidates: int = 5
     range_min_m: float = 0.8
     range_max_m: float = 5.0
     floor_z_m: float = 0.02
@@ -194,6 +198,34 @@ class OpeningRayCounts:
 
 
 @dataclass(frozen=True)
+class RejectedPattern:
+    """Evidence at the first failed gate, independent of candidate selection.
+
+    Gaps are lateral metre bounds, right then left; fewer than two means
+    ``no_gap_pair``. Supports are ordered left, middle, right. Unmeasured
+    evidence is None. ``thresholds`` stores (item, threshold) pairs for every
+    measured evidence term, or the gap-count/spacer limits at earlier gates.
+    ``failed_items`` includes all measured terms below their thresholds, even
+    per-opening terms when the earlier evidence gate already failed.
+
+    An ``insufficient_upper`` record does NOT remove the pattern from scoring:
+    the legacy algorithm checks upper_ok only after selecting a candidate.
+    """
+
+    plane_index: int
+    gaps: tuple[tuple[float, float], ...]
+    spacer_m: float | None
+    supports: tuple[int, int, int] | None
+    lower: int | None
+    upper: int | None
+    upper_left: int | None
+    upper_right: int | None
+    stage: str
+    failed_items: tuple[str, ...]
+    thresholds: tuple[tuple[str, float], ...]
+
+
+@dataclass(frozen=True)
 class DetectionDiagnostics:
     """Fit and sampling diagnostics, without an unvalidated uncertainty bound."""
 
@@ -215,6 +247,7 @@ class DetectionDiagnostics:
     selected_upper_left: int | None
     selected_upper_right: int | None
     exception_traceback: str | None = None
+    rejected_patterns: tuple[RejectedPattern, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -403,7 +436,7 @@ def count_interior_gaps(columns: NDArray[np.bool_]) -> int:
     return len(_gap_runs(columns))
 
 
-def _opening_candidates(plane, prior, params, workspace):
+def _opening_candidates(plane, prior, params, workspace, *, plane_index=0):
     lateral = plane.points @ plane.left_axis
     local = np.column_stack((np.zeros(len(lateral)), lateral, plane.points[:, 2]))
     counts, origin = _column_grid(local, prior, params)
@@ -418,8 +451,31 @@ def _opening_candidates(plane, prior, params, workspace):
         & (depth >= 0)
         & (depth <= prior.overall_depth_m + params.plane_inlier_m)
     )
-    patterns = []
+    patterns, rejected_patterns = [], []
+    if len(gaps) < 2:
+        rejected_patterns.append(
+            RejectedPattern(
+                plane_index,
+                tuple(
+                    ((origin + a) * params.cell_m, (origin + b) * params.cell_m)
+                    for a, b in gaps
+                ),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                "no_gap_pair",
+                ("gap_count",),
+                (("gap_count", 2),),
+            )
+        )
     for first, second in zip(gaps, gaps[1:], strict=False):
+        bounds = tuple(
+            ((origin + start) * params.cell_m, (origin + stop) * params.cell_m)
+            for start, stop in (first, second)
+        )
         # The occupied spacer includes up to two boundary cells.
         spacer = (second[0] - first[1]) * params.cell_m
         if not (
@@ -427,6 +483,23 @@ def _opening_candidates(plane, prior, params, workspace):
             <= spacer
             <= prior.centre_spacer_max_m + 2 * params.cell_m
         ):
+            minimum = prior.centre_spacer_min_m - 2 * params.cell_m
+            maximum = prior.centre_spacer_max_m + 2 * params.cell_m
+            rejected_patterns.append(
+                RejectedPattern(
+                    plane_index,
+                    bounds,
+                    spacer,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    "spacer_out_of_range",
+                    ("spacer_m",),
+                    (("spacer_min_m", minimum), ("spacer_max_m", maximum)),
+                )
+            )
             continue
         supports = (
             counts[: first[0]].sum(),
@@ -443,12 +516,6 @@ def _opening_candidates(plane, prior, params, workspace):
         )
         upper = np.count_nonzero(
             over_openings & (local[:, 2] >= prior.height_m - prior.deck_top_m)
-        )
-        if min(*supports, lower, upper) < params.min_band_points:
-            continue
-        bounds = tuple(
-            ((origin + start) * params.cell_m, (origin + stop) * params.cell_m)
-            for start, stop in (first, second)
         )
         # Per-opening upper-deck evidence, from the plane's own inliers inside a
         # band no thicker than the deck itself. The combined count above cannot
@@ -468,6 +535,40 @@ def _opening_candidates(plane, prior, params, workspace):
         upper_right, upper_left = per_opening
         upper_threshold = params.upper_band_points or params.min_band_points
         upper_ok = min(per_opening) >= upper_threshold
+        evidence_failed = min(*supports, lower, upper) < params.min_band_points
+        if evidence_failed or not upper_ok:
+            # The column grid increases right-to-left; expose named sides in
+            # left/middle/right order without altering the legacy aggregates.
+            evidence = (
+                ("support_left", int(supports[2]), params.min_band_points),
+                ("support_middle", int(supports[1]), params.min_band_points),
+                ("support_right", int(supports[0]), params.min_band_points),
+                ("lower", int(lower), params.min_band_points),
+                ("upper", int(upper), params.min_band_points),
+                ("upper_left", upper_left, upper_threshold),
+                ("upper_right", upper_right, upper_threshold),
+            )
+            rejected_patterns.append(
+                RejectedPattern(
+                    plane_index,
+                    bounds,
+                    spacer,
+                    tuple(int(value) for value in reversed(supports)),
+                    int(lower),
+                    int(upper),
+                    upper_left,
+                    upper_right,
+                    "insufficient_evidence"
+                    if evidence_failed
+                    else "insufficient_upper",
+                    tuple(
+                        name for name, value, threshold in evidence if value < threshold
+                    ),
+                    tuple((name, int(threshold)) for name, _, threshold in evidence),
+                )
+            )
+        if evidence_failed:
+            continue
         patterns.append(
             _Pattern(
                 bounds,
@@ -480,7 +581,7 @@ def _opening_candidates(plane, prior, params, workspace):
                 upper_ok,
             )
         )
-    return patterns
+    return patterns, rejected_patterns
 
 
 def _classify_opening_rays(scene, rays, plane, gap, prior, params):
@@ -628,6 +729,7 @@ def detect_pockets(
         raise ValueError("band_margin_m must leave a nonempty opening height band")
     start = time.perf_counter()
     planes, rejected, candidates = [], {}, []
+    rejected_patterns = []
     selected_plane, selected_pattern, selected_rays = None, None, {}
     exception_traceback = None
     try:
@@ -644,7 +746,10 @@ def detect_pockets(
                 if plane.residual_p95_m > params.max_plane_residual_m:
                     rejected[index] = "vertical_refit_residual"
                     continue
-                patterns = _opening_candidates(plane, prior, params, workspace)
+                patterns, pattern_rejections = _opening_candidates(
+                    plane, prior, params, workspace, plane_index=index
+                )
+                rejected_patterns.extend(pattern_rejections)
                 if not patterns:
                     rejected[index] = "no_opening_pattern"
                 for pattern in patterns:
@@ -677,16 +782,19 @@ def detect_pockets(
                     if index != selected_index and index not in rejected:
                         rejected[index] = "lower_pattern_score"
                 if not selected_pattern.upper_ok:
-                    # A pallet has deck over both openings. Something that does
-                    # not is a real object in view, not an absent one, so the
-                    # status is invalid rather than no_pallet: the contract
-                    # reserves no_pallet for nothing being there.
+                    # A candidate was selected and then failed verification,
+                    # which is what invalid means here. no_pallet is for
+                    # finishing the search without a candidate at all (below).
+                    # It does not claim the space is empty -- no_front_plane
+                    # and no_opening_pattern are no_pallet too.
                     #
-                    # Separate absence from obstruction. Deck over neither
-                    # opening is a different shape; deck over one and not the
-                    # other is this pallet with something in the way, and the
-                    # side is worth keeping -- collapsing both to one reason
-                    # discards which pocket the caller cannot trust.
+                    # The reason names which counts fell short, not why. Both
+                    # openings under threshold and one of the two are different
+                    # observations worth separating, but neither identifies
+                    # absence or obstruction: _upper_deck_reason compares
+                    # counts to a threshold and nothing else. Keeping the side
+                    # says where the evidence was missing, not which pocket is
+                    # obstructed.
                     observation = _status_observation(
                         scene_input,
                         "invalid",
@@ -730,5 +838,6 @@ def detect_pockets(
         selected_pattern.upper_left if selected_pattern else None,
         selected_pattern.upper_right if selected_pattern else None,
         exception_traceback,
+        tuple(rejected_patterns),
     )
     return DetectionResult(observation, diagnostics)

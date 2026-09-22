@@ -69,12 +69,17 @@ def target_from_capture(detection, scene, transform):
     )
 
 
-def test_actual_isaac_depth_exhausts_default_candidate_budget_without_a_goal(
+def test_actual_isaac_depth_exhausts_the_frozen_candidate_budget_without_a_goal(
     captured_scene,
 ):
+    """Budget 3 is the frozen v1 value this capture was collected against.
+
+    The warehouse prop faces consume all three candidates, so the pallet front
+    is never examined and no goal is produced. This is the failure the capture
+    was saved to reproduce, not a claim about the current default.
+    """
     scene, transform = captured_scene
-    params = DetectorParams.derived_for(PRIOR)
-    assert params.max_plane_candidates == 3
+    params = DetectorParams.derived_for(PRIOR, max_plane_candidates=3)
     detection = detect_pockets(scene, PRIOR, params)
     assert detection.observation.status == "no_pallet"
     assert detection.observation.reason == "no_opening_pattern"
@@ -82,6 +87,23 @@ def test_actual_isaac_depth_exhausts_default_candidate_budget_without_a_goal(
     target = target_from_capture(detection, scene, transform)
     assert not target.success
     assert target.approach_rear is None
+
+
+def test_current_default_candidate_budget_already_recovers_this_capture(
+    captured_scene,
+):
+    """The default moved 3 -> 5 on main, and 5 already detects this capture.
+
+    Recorded so the runtime budget of 12 is not read as the only setting that
+    recovers this scene. The runtime value was chosen against a different
+    capture; whether it is still needed is a separate question.
+    """
+    scene, transform = captured_scene
+    params = DetectorParams.derived_for(PRIOR)
+    assert params.max_plane_candidates == 5
+    detection = detect_pockets(scene, PRIOR, params)
+    assert detection.observation.status == "valid", detection.observation.reason
+    assert target_from_capture(detection, scene, transform).success
 
 
 def test_actual_isaac_depth_detects_pallet_with_runtime_candidate_budget(

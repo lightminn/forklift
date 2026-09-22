@@ -20,3 +20,26 @@ def pallet_scene():
 @pytest.fixture
 def opening_ray_fractions():
     return _SCENE.opening_ray_fractions
+
+
+_PALLET_SPEC = importlib.util.spec_from_file_location(
+    "pallet_urdf_fixture", Path(__file__).parent / "unit" / "pallet_urdf_fixture.py"
+)
+_PALLET = importlib.util.module_from_spec(_PALLET_SPEC)
+_PALLET_SPEC.loader.exec_module(_PALLET)
+
+
+@pytest.fixture
+def synthetic_pallet_urdf(tmp_path):
+    def write(**kwargs):
+        return _PALLET.write_pallet_urdf(tmp_path / "pallet.urdf", **kwargs)
+
+    return write
+
+
+@pytest.fixture
+def full_t11_pallet_urdf(tmp_path):
+    def write(**kwargs):
+        return _PALLET.write_full_t11_pallet_urdf(tmp_path / "full_t11.urdf", **kwargs)
+
+    return write

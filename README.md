@@ -4,7 +4,14 @@
 
 개발 규칙은 **[CONTRIBUTING.md](CONTRIBUTING.md)**를 따른다. 전체 로봇 코드는 이 저장소에서 관리하고 발표는 별도 저장소에 둔다. 2026-09-11에 `src/forklift_core/`, `examples/`, `tests/unit|integration/` 구조를 적용했다. 실행 전에 대상 Python 환경에 editable로 설치한다.
 
-## 현재 개발 상태
+**현황과 다음 작업: [2026-09-17 프로젝트 현황과 앞으로 할 일](docs/plans/2026-09-17-project-status-and-next-steps.md).**
+무엇이 되어 있고 무엇이 남았는지의 **정본**이다. 단계별 완료 조건은 [개발 로드맵](docs/plans/2026-09-11-development-roadmap.md),
+하드웨어는 [`docs/hardware.md`](docs/hardware.md), 엔진·삽입 결정은 [ADR 0004](docs/decisions/0004-simulation-engine-and-insertion-depth.md)가 정본이다.
+
+## 현재 개발 상태 — 2026-09-11 당시 검증 기록
+
+⚠️ **이 절은 그 시점의 기록이다. 현재 상태는 위 현황 문서를 따른다.** 이후 팔레트·포켓 인식기와
+Hybrid A* 운반 코드가 들어왔다.
 
 2026-09-11 기준, 센서 좌표 처리 코어와 합성 입력 예제, 상품 사진·제조사 카탈로그 기반의 **잠정 지게차 모델(URDF/MJCF)**을 구현했다. 모델의 관절 자세·무부하 안정화·렌더링을 검사했다. 노트북용 ROS 2 Jazzy 개발 이미지를 빌드해 컨테이너 코어 시험 64개와 ROS 2 talker/listener 프로세스 간 통신을 확인했다. 고정 지게차·팔레트·장애물의 Gazebo 장면에서 합성 RGB-D·2D LiDAR를 ROS 2로 전달하고 30초 이상 기록·재생·좌표 검증까지 확인했다. 실제 센서 드라이버·팔레트 인식·SLAM·자율 주행은 아직 구현하지 않았다. 여기 적힌 시험 개수는 각 검증 시점의 기록이며, 최신 전체 회귀 결과와 원본 증거는 [개발 중간 정리](docs/validation/2026-09-11-development-checkpoint.md)를 따른다.
 
@@ -13,7 +20,7 @@
 | 구성 | 결정 상태 |
 |---|---|
 | RGB-D 카메라 | **RealSense D435i 확정** |
-| LiDAR | **RPLIDAR 확정**, 과제 자료의 **A2 사용 예정**. A2 세부형은 미확인 |
+| LiDAR | **RPLIDAR 확정**, 과제 자료의 **A2 계열 사용 예정**. 세부형은 **A2M12 유력**(미확정) |
 | 상위 제어기 | **NVIDIA 공식 Jetson Orin Nano Super 개발자 키트 8GB + M.2 2280 NVMe 256GB 권장**. 128GB는 보유 중이거나 비용 제약 시 허용. 미구매 |
 | 차체 | DLS08 외형 대응 후보로 잠정 모델 생성. SKU 동일성·조향·부품 치수는 실물 수령 후 확인 |
 | 소프트웨어 | 노트북 Ubuntu 24.04 컨테이너 + **ROS 2 Jazzy** 개발 기준. 원격 **Gazebo Harmonic** 정적 장면·센서 기록/재생 검증, MuJoCo 빠른 모델 검사 유지 |
@@ -47,6 +54,10 @@ python examples/sensor_geometry.py
 위 명령은 코어 합성 시험 **64개**와 원격 제출 도구의 로컬 시험을 함께 실행한다. 코어 64개 통과는 위 수학·입력 계약의 합성 시험 결과다. D435i/RPLIDAR의 실측 정확도, 포켓 검출 성능, 지게차 A–D 동작 성공을 뜻하지 않는다. [검증 기록](docs/validation/2026-09-10-sensor-core.md)에 확인 범위와 미검증 항목을 구분했다.
 
 ## 중간 정리와 전체 로드맵
+
+**엔진·삽입 깊이 결정(2026-09-17): [ADR 0004](docs/decisions/0004-simulation-engine-and-insertion-depth.md)** — 신규 동적 시뮬레이션은 Isaac Sim 하나, Gazebo 는 동결, 삽입 깊이는 값이 아니라 규칙이다.
+
+**최신 인계(2026-09-17): [EPAL 6·T11 공통 지원 / Isaac Sim·Pro 검토](docs/validation/2026-09-17-dual-pallet-isaac-review-handoff.md).** 기존 합성 인식·원격 GT 운반 실험, 두 형상 지원 요구, 남은 검증과 재개 순서를 정리했다. 아래 9월 10–11일 수치와 상태는 당시 기록이다.
 
 **[2026-09-11 개발 중간 정리](docs/validation/2026-09-11-development-checkpoint.md)**에서 구현·검증·미완료 범위와 원본 증거를 확인한다. **[전체 개발 로드맵](docs/plans/2026-09-11-development-roadmap.md)**은 15주 수업 중 시험·공휴일을 제외한 유효 개발 약 12주를 기준으로 한다.
 

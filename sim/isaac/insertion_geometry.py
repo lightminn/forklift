@@ -13,6 +13,7 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 from forklift_core.geometry import rotation_matrix_from_quaternion_xyzw
+from forklift_core.perception.pallet_geometry import PalletGeometry, pallet_boxes
 
 
 def _vector(value: ArrayLike) -> np.ndarray:
@@ -48,6 +49,115 @@ def _boxes(link: ET.Element) -> tuple:
     if not boxes:
         raise ValueError("Collision boxes are required")
     return tuple(boxes)
+
+
+def read_chassis_reference_m(forklift_urdf: Path) -> tuple[float, float]:
+    """Return axle-to-tip distance and signed base-frame rear axle x in metres.
+
+    Read the named provisional URDF joint origins; reject missing or malformed
+    coordinates instead of guessing. The fork-tip origin is base-relative, so
+    subtract the rear axle origin to obtain the axle-relative distance.
+    """
+    truck = ET.parse(forklift_urdf).getroot()
+    coordinates = []
+    for name in ("left_fork_tip_fixed", "rear_left_spin"):
+        origin = truck.find(f"joint[@name='{name}']/origin")
+        if origin is None:
+            raise ValueError(f"Missing chassis joint/origin: {name}")
+        try:
+            xyz = _vector([float(value) for value in origin.get("xyz", "").split()])
+        except ValueError as exc:
+            raise ValueError(f"Malformed chassis joint origin xyz: {name}") from exc
+        coordinates.append(float(xyz[0]))
+    tip, rear = coordinates
+    return tip - rear, rear
+
+
+def pallet_boxes_from_urdf(pallet_urdf: Path) -> tuple:
+    """Return all named collision boxes of the single free pallet link."""
+    pallet = ET.parse(pallet_urdf).getroot()
+    links = pallet.findall("link")
+    if len(links) != 1 or pallet.findall("joint"):
+        raise ValueError("Expected single-link free pallet")
+    return _boxes(links[0])
+
+
+def assert_pallet_urdf_matches_geometry(
+    pallet_urdf: Path,
+    geometry_depth_m: float,
+    geometry_width_m: float,
+    *,
+    tolerance_m: float = 0.001,
+) -> None:
+    """Check depth/width, xy centring and z floor with absolute metre tolerance.
+
+    This checks the overall collision envelope only, not named internal layout.
+    """
+    boxes = pallet_boxes_from_urdf(pallet_urdf)
+    low = np.min([center - half for _, center, half in boxes], axis=0)
+    high = np.max([center + half for _, center, half in boxes], axis=0)
+    actual = np.array([low[0], high[0], low[1], high[1], low[2]])
+    expected = np.array(
+        [
+            -geometry_depth_m / 2,
+            geometry_depth_m / 2,
+            -geometry_width_m / 2,
+            geometry_width_m / 2,
+            0,
+        ]
+    )
+    if not np.allclose(actual, expected, rtol=0, atol=tolerance_m):
+        raise ValueError(
+            f"Pallet collision envelope mismatch: got {actual.tolist()}, "
+            f"expected {expected.tolist()} within {tolerance_m} m"
+        )
+
+
+def assert_pallet_urdf_matches_named_boxes(
+    pallet_urdf: Path,
+    geometry: PalletGeometry,
+    *,
+    tolerance_m: float = 0.001,
+) -> None:
+    """Compare every named collision box's centre and size against the YAML.
+
+    Catches assembly a bounding-box check cannot: for a square pallet like
+    T11, a 90-degree-swapped or 180-degree-rotated URDF keeps the same
+    envelope, centre and box count but moves most named box centres/sizes.
+    See docs/plans/2026-09-17-hybrid-astar-transport.md:214-245 for the
+    verified counts (21/22 boxes differ under a 90-degree name-preserving
+    swap, 18/22 under 180 degrees).
+    """
+    expected_boxes = {box.name: box for box in pallet_boxes(geometry)}
+    actual_boxes = {}
+    for name, actual_centre_m, actual_half_m in pallet_boxes_from_urdf(pallet_urdf):
+        if name in actual_boxes:
+            raise ValueError(f"Duplicate pallet collision box name: {name}")
+        actual_boxes[name] = (actual_centre_m, actual_half_m)
+    if expected_boxes.keys() != actual_boxes.keys():
+        missing = sorted(expected_boxes.keys() - actual_boxes.keys())
+        extra = sorted(actual_boxes.keys() - expected_boxes.keys())
+        raise ValueError(
+            f"Pallet collision box names mismatch: missing={missing}, extra={extra}"
+        )
+    mismatches = []
+    for name, expected_box in expected_boxes.items():
+        actual_centre_m, actual_half_m = actual_boxes[name]
+        expected_size_m = expected_box.size_m
+        actual_size_m = actual_half_m * 2
+        for field, actual, expected in (
+            ("centre_m", actual_centre_m, expected_box.centre_m),
+            ("size_m", actual_size_m, expected_size_m),
+        ):
+            if not np.allclose(actual, expected, rtol=0, atol=tolerance_m):
+                mismatches.append(
+                    f"{name} {field}: got {actual.tolist()}, expected {list(expected)}"
+                )
+    if mismatches:
+        raise ValueError(
+            f"Pallet named collision boxes mismatch (tolerance {tolerance_m} m): "
+            + "; ".join(mismatches)
+        )
 
 
 class InsertionGeometry:

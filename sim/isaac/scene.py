@@ -261,7 +261,9 @@ def create_pallet(
     return pallet
 
 
-def configure_drives(stage: Usd.Stage, settings: dict) -> dict:
+def configure_drives(
+    stage: Usd.Stage, settings: dict, *, expected_pallet_box_count: int
+) -> dict:
     """Set documented synthetic dynamics on the execution scene only."""
     physics_material = UsdShade.Material.Define(stage, "/World/ContactMaterial")
     material_api = UsdPhysics.MaterialAPI.Apply(physics_material.GetPrim())
@@ -324,6 +326,11 @@ def configure_drives(stage: Usd.Stage, settings: dict) -> dict:
                 )
                 drive.CreateTargetPositionAttr(0.0)
                 drive.CreateTargetVelocityAttr(0.0)
-    assert collision_counts["/World/Pallet"] == 22, collision_counts
+    # Box-count match only confirms collision prims imported correctly -- it
+    # is not a dimension or layout check (that is
+    # assert_pallet_urdf_matches_named_boxes, run before spawn).
+    assert collision_counts["/World/Pallet"] == expected_pallet_box_count, (
+        collision_counts
+    )
 
     return collision_counts

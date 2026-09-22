@@ -7,12 +7,13 @@ the distinct insertion, loading, transport, unloading, and withdrawal stages.
 """
 
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from math import ceil, cos, pi, sin
 
 import numpy as np
 
 from forklift_core._validation import _finite_scalar
+from forklift_core.perception.pallet_geometry import target_insertion_depth_m
 
 from .geometry import (
     Bounds,
@@ -23,6 +24,24 @@ from .geometry import (
     collision_free_pose,
 )
 from .hybrid_astar import PlannerConfig, PlanResult, plan_hybrid_astar
+
+DEFAULT_TRANSPORT_CLEARANCE_M = 0.10
+DEFAULT_TRANSPORT_PRIMITIVE_LENGTH_M = 0.25
+
+
+def make_transport_planner_config(**overrides: float | int) -> PlannerConfig:
+    """Build mission/observation defaults while allowing explicit replay settings.
+
+    Generic PlannerConfig defaults stay independent. Callers may override any
+    planner field, including primitive length and expansion budget.
+    """
+    return replace(
+        PlannerConfig(
+            primitive_length_m=DEFAULT_TRANSPORT_PRIMITIVE_LENGTH_M,
+            clearance_m=DEFAULT_TRANSPORT_CLEARANCE_M,
+        ),
+        **overrides,
+    )
 
 
 @dataclass(frozen=True)
@@ -83,21 +102,48 @@ class SyntheticMissionGeometry:
     """
 
     unloaded_footprint: Footprint = Footprint(1.29, 0.17, 0.36)
-    loaded_footprint: Footprint = Footprint(1.53, 0.17, 0.4)
     pallet_depth_m: float = 0.60
     pallet_width_m: float = 0.80
-    inserted_offset_m: float = 1.23
-    approach_offset_m: float = 1.69
-    prealign_offset_m: float = 2.49
+    axle_to_fork_tip_m: float = 1.29  # Independent of the unloaded front envelope.
+    approach_gap_m: float = 0.10  # Standoff, not planner clearance_m.
+    alignment_straight_m: float = 0.80
+    delivery_straight_m: float = 0.70
     extraction_m: float = 0.65
-    predelivery_offset_m: float = 1.93
     withdrawal_m: float = 0.55
     spawn_clearance_m: float = 0.12
 
+    inserted_offset_m: float = field(init=False)
+    approach_offset_m: float = field(init=False)
+    prealign_offset_m: float = field(init=False)
+    predelivery_offset_m: float = field(init=False)
+    loaded_footprint: Footprint = field(init=False)
+
     def __post_init__(self) -> None:
+        d = target_insertion_depth_m(self.pallet_depth_m)
+        inserted = self.axle_to_fork_tip_m + self.pallet_depth_m / 2 - d
+        approach = (
+            self.axle_to_fork_tip_m + self.pallet_depth_m / 2 + self.approach_gap_m
+        )
+        prealign = approach + self.alignment_straight_m
+        predelivery = inserted + self.delivery_straight_m
+        loaded = Footprint(
+            max(self.unloaded_footprint.front_m, inserted + self.pallet_depth_m / 2),
+            self.unloaded_footprint.rear_m,
+            max(self.unloaded_footprint.half_width_m, self.pallet_width_m / 2),
+        )
+        object.__setattr__(self, "inserted_offset_m", inserted)
+        object.__setattr__(self, "approach_offset_m", approach)
+        object.__setattr__(self, "prealign_offset_m", prealign)
+        object.__setattr__(self, "predelivery_offset_m", predelivery)
+        object.__setattr__(self, "loaded_footprint", loaded)
+
         for value in (
             self.pallet_depth_m,
             self.pallet_width_m,
+            self.axle_to_fork_tip_m,
+            self.approach_gap_m,
+            self.alignment_straight_m,
+            self.delivery_straight_m,
             self.inserted_offset_m,
             self.approach_offset_m,
             self.prealign_offset_m,
@@ -347,24 +393,66 @@ def _append_straight(first, second):
     )
 
 
+def plan_observation_leg(
+    scenario: TransportScenario,
+    waypoint: Pose2D,
+    config: PlannerConfig | None = None,
+    *,
+    geometry: SyntheticMissionGeometry | None = None,
+    start_rear: Pose2D | None = None,
+) -> PlanResult:
+    """Plan a separate leg to the observation waypoint at full clearance.
+
+    Like plan_transport's target/obstacle split, scenario.pickup is an obstacle,
+    not the goal of this leg.
+    start_rear optionally replaces scenario.start_rear with the measured rear pose.
+    """
+    geometry = geometry if geometry is not None else SyntheticMissionGeometry()
+    config = config if config is not None else make_transport_planner_config()
+    props = [prop.rectangle for prop in scenario.props]
+    pallet = Rectangle(
+        scenario.pickup.x_m,
+        scenario.pickup.y_m,
+        geometry.pallet_depth_m,
+        geometry.pallet_width_m,
+        scenario.pickup.yaw_rad,
+    )
+    return plan_hybrid_astar(
+        start_rear if start_rear is not None else scenario.start_rear,
+        waypoint,
+        props + [pallet],
+        geometry.unloaded_footprint,
+        scenario.bounds,
+        config,
+    )
+
+
 def plan_transport(
     scenario: TransportScenario,
     config: PlannerConfig | None = None,
     *,
     geometry: SyntheticMissionGeometry | None = None,
+    target_pickup: PalletSite | None = None,
+    start_rear: Pose2D | None = None,
 ) -> MissionPlan:
     """Plan all stages with exact final straight approaches and loaded geometry.
 
     The initial pallet is an obstacle only for approach. During insertion and
     withdrawal, pocket geometry/contact must be checked by the adapter; other
     props and world bounds always remain obstacles. Approach clearance is
-    capped at 0.05 m because the nominal fork-to-pallet stopping gap is 0.10 m.
+    capped at half of geometry.approach_gap_m, the fork-to-pallet stopping gap
+    (0.05 m for the default 0.10 m gap).
     Other stages use the supplied clearance (default 0.10 m).
+    target_pickup optionally supplies an estimated goal while the pallet
+    obstacle stays at scenario.pickup (ground truth). start_rear optionally
+    replaces scenario.start_rear with the rear-axle pose after observation.
     """
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
-    config = config if config is not None else PlannerConfig(clearance_m=0.10)
+    config = config if config is not None else make_transport_planner_config()
     props = [prop.rectangle for prop in scenario.props]
-    pickup = site_poses(scenario.pickup, geometry)
+    pickup = site_poses(
+        target_pickup if target_pickup is not None else scenario.pickup, geometry
+    )
     destination = site_poses(scenario.destination, geometry)
     pallet = Rectangle(
         scenario.pickup.x_m,
@@ -373,9 +461,11 @@ def plan_transport(
         geometry.pallet_width_m,
         scenario.pickup.yaw_rad,
     )
-    approach_config = replace(config, clearance_m=min(config.clearance_m, 0.05))
+    approach_config = replace(
+        config, clearance_m=min(config.clearance_m, geometry.approach_gap_m / 2)
+    )
     approach = plan_hybrid_astar(
-        scenario.start_rear,
+        start_rear if start_rear is not None else scenario.start_rear,
         pickup["prealign"],
         props + [pallet],
         geometry.unloaded_footprint,
