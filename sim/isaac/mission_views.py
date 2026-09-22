@@ -21,6 +21,9 @@ PHASE_LABELS = {
     "complete": "하역",
 }
 
+# D435i minimum depth at 1280x720; nearer display pixels are not usable depth.
+DISPLAY_MIN_DEPTH_M = 0.28
+
 
 def parse_extra_views(value: str, video: bool, use_perception: bool) -> tuple[str, ...]:
     """Validate optional comma-separated views without changing empty defaults."""
@@ -66,7 +69,7 @@ def depth_colormap(depth_m):
             [253, 231, 37],
         ]
     )
-    valid = np.isfinite(depth) & (depth > 0)
+    valid = np.isfinite(depth) & (depth >= DISPLAY_MIN_DEPTH_M)
     scaled = np.clip((np.where(valid, depth, 0) - 0.3) / 3.7, 0, 1) * 4
     low = np.minimum(scaled.astype(int), 3)
     colour = anchors[low] * (1 - (scaled - low))[..., None]

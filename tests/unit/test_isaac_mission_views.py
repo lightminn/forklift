@@ -38,12 +38,39 @@ def test_chase_pose_wraps_yaw_and_offsets_behind_base():
 
 
 def test_depth_colormap_uses_fixed_range_and_black_invalid():
-    colors = depth_colormap(np.array([[0.3, 4.0, np.nan, 0.0]]))
-    assert colors.shape == (1, 4, 3)
+    colors = depth_colormap(np.array([[0.279, 0.28, 0.3, 4.0, np.nan, 0.0]]))
+    assert colors.shape == (1, 6, 3)
     assert colors.dtype == np.uint8
-    assert tuple(colors[0, 2]) == (0, 0, 0)
-    assert tuple(colors[0, 3]) == (0, 0, 0)
-    assert not np.array_equal(colors[0, 0], colors[0, 1])
+    assert tuple(colors[0, 0]) == (0, 0, 0)
+    assert tuple(colors[0, 4]) == (0, 0, 0)
+    assert tuple(colors[0, 5]) == (0, 0, 0)
+    assert tuple(colors[0, 1]) != (0, 0, 0)
+    assert not np.array_equal(colors[0, 2], colors[0, 3])
+
+
+def test_observe_plan_window_and_overlay_use_logged_acceptance_time():
+    from tools.deck.isaac_mission_views import observe_plan_selection
+
+    frames = [
+        {"phase": phase, "simulation_time_s": time}
+        for phase, time in (
+            ("observe", 0.0),
+            ("observe", 0.05),
+            ("approach", 0.1),
+            ("approach", 3.1),
+            ("approach", 3.15),
+        )
+    ]
+    selected, overlay_start, fallback = observe_plan_selection(
+        frames, {"acceptance_simulation_time_s": 0.05}
+    )
+    assert selected == [0, 1, 2, 3]
+    assert overlay_start == 0.05
+    assert fallback is False
+    selected, overlay_start, fallback = observe_plan_selection(frames, {})
+    assert selected == [0, 1, 2, 3]
+    assert overlay_start == 0.1
+    assert fallback is True
 
 
 def test_phase_labels_cover_all_mission_phases():

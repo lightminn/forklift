@@ -62,6 +62,30 @@ def camera_hz(value: str) -> int:
     return rate
 
 
+def quarter_vector(value: str) -> tuple[float, float, float]:
+    """Parse one finite world-space camera point."""
+    try:
+        parts = tuple(float(part) for part in value.split(","))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("quarter point needs X,Y,Z floats") from exc
+    if len(parts) != 3 or not all(math.isfinite(part) for part in parts):
+        raise argparse.ArgumentTypeError(
+            "quarter point needs three finite X,Y,Z floats"
+        )
+    return parts
+
+
+def quarter_focal(value: str) -> float:
+    """Parse a positive finite focal length for Camera.set_focal_length."""
+    try:
+        focal = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("quarter focal must be positive") from exc
+    if not math.isfinite(focal) or focal <= 0:
+        raise argparse.ArgumentTypeError("quarter focal must be positive and finite")
+    return focal
+
+
 def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-scene", required=True)
@@ -80,6 +104,9 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--fps", type=camera_hz, default=60)
     parser.add_argument("--video", action="store_true")
     parser.add_argument("--extra-views", default="", metavar="VIEWS")
+    parser.add_argument("--quarter-eye", type=quarter_vector, metavar="X,Y,Z")
+    parser.add_argument("--quarter-target", type=quarter_vector, metavar="X,Y,Z")
+    parser.add_argument("--quarter-focal", type=quarter_focal, default=2.5, metavar="F")
     parser.add_argument("--max-sim-seconds", type=float, default=300)
     parser.add_argument(
         "--asset-root",
@@ -115,6 +142,9 @@ def arguments() -> argparse.Namespace:
         )
     except ValueError as exc:
         parser.error(str(exc))
+    if args.quarter_eye is not None and args.quarter_target is not None:
+        if args.quarter_eye == args.quarter_target:
+            parser.error("quarter eye and target must differ")
     if args.observation_waypoints is None:
         # (-1.20, 0.30) moved ahead of (-0.10, -0.60): both plan equally well
         # for every seed that can reach either, but seed 3 only detects the
@@ -481,18 +511,26 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     if args.extra_views:
         state["extra_views"] = {}
     if "quarter" in args.extra_views:
-        quarter_eye = center + np.array(
+        default_quarter_eye = center + np.array(
             [
                 -0.55 * (b.x_max_m - b.x_min_m),
                 -0.55 * (b.y_max_m - b.y_min_m),
                 3.2,
             ]
         )
+        quarter_eye = np.asarray(
+            args.quarter_eye if args.quarter_eye is not None else default_quarter_eye
+        )
+        quarter_target = np.asarray(
+            args.quarter_target if args.quarter_target is not None else center
+        )
+        if np.array_equal(quarter_eye, quarter_target):
+            raise ValueError("quarter eye and target must differ")
         quarter = Camera(
             prim_path="/World/QuarterCamera", frequency=-1, resolution=(1280, 720)
         )
         look = Gf.Matrix4d().SetLookAt(
-            Gf.Vec3d(*quarter_eye), Gf.Vec3d(*center), Gf.Vec3d(0, 0, 1)
+            Gf.Vec3d(*quarter_eye), Gf.Vec3d(*quarter_target), Gf.Vec3d(0, 0, 1)
         )
         quat = look.GetInverse().ExtractRotationQuat()
         quarter.set_world_pose(
@@ -500,12 +538,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             orientation=np.array([quat.GetReal(), *quat.GetImaginary()]),
             camera_axes="usd",
         )
-        quarter.set_focal_length(2.5)
+        quarter.set_focal_length(args.quarter_focal)
         extra_cameras["quarter"] = quarter
         state["extra_views"]["quarter"] = {
             "eye_m": quarter_eye.tolist(),
-            "target_m": center.tolist(),
-            "focal_length_mm": 2.5,
+            "target_m": quarter_target.tolist(),
+            "focal_length_mm": args.quarter_focal,
         }
     if "chase" in args.extra_views:
         chase = Camera(
@@ -544,7 +582,42 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         # Capture needs axial depth as well as RGBA (see determinism_probe.py).
         perception_camera.add_distance_to_image_plane_to_frame()
         if "perception" in args.extra_views:
-            extra_cameras["perception"] = perception_camera
+            perception_display = Camera(
+                prim_path="/World/Forklift/base_link/PerceptionDisplayCamera",
+                frequency=-1,
+                resolution=(
+                    perception_calibration.width,
+                    perception_calibration.height,
+                ),
+            )
+            perception_display.set_local_pose(
+                translation=np.asarray(perception_mount.translation_m),
+                orientation=np.asarray(
+                    adapter.xyzw_to_wxyz(rig.OPTICAL_QUATERNION_XYZW)
+                ),
+                camera_axes=args.perception_camera_axes,
+            )
+            perception_display.set_projection_mode("perspective")
+            perception_display.set_lens_distortion_model("pinhole")
+            perception_display.set_focal_length(1.0)
+            perception_display.set_horizontal_aperture(
+                perception_calibration.width / perception_calibration.fx,
+                maintain_square_pixels=True,
+            )
+            perception_display.initialize()
+            perception_display.add_distance_to_image_plane_to_frame()
+            _, display_far_m = perception_display.get_clipping_range()
+            perception_display.set_clipping_range(near_distance=0.05)
+            display_clip = list(map(float, perception_display.get_clipping_range()))
+            require(
+                np.isclose(display_clip[0], 0.05) and display_clip[1] == display_far_m,
+                "Perception display clipping range did not preserve the far plane",
+            )
+            extra_cameras["perception"] = perception_display
+            state["extra_views"]["perception_display"] = {
+                "clipping_range_m": display_clip,
+                "min_depth_m": MISSION_VIEWS.DISPLAY_MIN_DEPTH_M,
+            }
             state["extra_views"]["perception_mount"] = {
                 "translation_m": perception_mount.translation_m.tolist(),
                 "rotation": perception_mount.rotation.tolist(),
@@ -1062,6 +1135,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             )
                             phase_started = t
                         else:
+                            if args.extra_views:
+                                attempt["acceptance_simulation_time_s"] = (
+                                    world.current_time - initial_time
+                                )
                             state["perception"] = attempt.copy()
                             base_xy = adapter.estimate_pallet_center_m(
                                 observation, geometry.pallet_depth_m
@@ -1449,7 +1526,11 @@ def main() -> None:
                 else v
             )
             for k, v in vars(args).items()
-            if k != "extra_views" or v
+            if (k != "extra_views" or v)
+            and (
+                k not in {"quarter_eye", "quarter_target", "quarter_focal"}
+                or (v is not None and (k != "quarter_focal" or v != 2.5))
+            )
         },
     }
     if args.use_perception:

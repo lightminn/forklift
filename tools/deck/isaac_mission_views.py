@@ -72,6 +72,32 @@ def draw_label_strip(image: Image.Image) -> None:
     painter.text((652, 4), "깊이", font=label_font, fill="white")
 
 
+def observe_plan_selection(
+    frames: list[dict], perception: dict
+) -> tuple[list[int], float, bool]:
+    """Find the observe-to-approach window and overlay start in log time."""
+    transition = next(
+        (
+            frame["simulation_time_s"]
+            for frame in frames
+            if frame["phase"] == "approach"
+        ),
+        None,
+    )
+    if transition is None:
+        raise ValueError("No observe-to-approach transition in frames.jsonl")
+    accepted_at = perception.get("acceptance_simulation_time_s")
+    fallback = accepted_at is None
+    if fallback:
+        accepted_at = transition
+    selected = [
+        index
+        for index, frame in enumerate(frames)
+        if frame["simulation_time_s"] <= transition + 3.0
+    ]
+    return selected, float(accepted_at), fallback
+
+
 def encode_frames(
     source: Path,
     output: Path,
@@ -80,6 +106,7 @@ def encode_frames(
     height: int,
     stride: int,
     perception: bool,
+    output_fps: int,
     world_openings: list | None = None,
     mount: dict | None = None,
 ) -> None:
@@ -101,7 +128,6 @@ def encode_frames(
         ],
         stdout=subprocess.PIPE,
     )
-    fps = 30 if perception else 20
     encoder = subprocess.Popen(
         [
             "ffmpeg",
@@ -116,7 +142,7 @@ def encode_frames(
             "-s",
             f"{width}x{height}",
             "-r",
-            str(fps),
+            str(output_fps),
             "-i",
             "-",
             "-an",
@@ -189,8 +215,133 @@ def encode_frames(
         )
 
 
+def encode_observe_plan(
+    perception_source: Path,
+    quarter_source: Path,
+    output: Path,
+    frames: list[dict],
+    perception: dict,
+    world_openings: list,
+    mount: dict,
+) -> bool:
+    """Pair equal-index camera frames at 1.5x simulation speed."""
+    selected, overlay_start, fallback = observe_plan_selection(frames, perception)
+    decoders = [
+        subprocess.Popen(
+            [
+                "ffmpeg",
+                "-v",
+                "error",
+                "-nostdin",
+                "-i",
+                str(source),
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgb24",
+                "-",
+            ],
+            stdout=subprocess.PIPE,
+        )
+        for source in (perception_source, quarter_source)
+    ]
+    encoder = subprocess.Popen(
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-nostdin",
+            "-y",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-s",
+            "1920x540",
+            "-r",
+            "30",
+            "-i",
+            "-",
+            "-an",
+            "-c:v",
+            "libx264",
+            "-crf",
+            "23",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            str(output),
+        ],
+        stdin=subprocess.PIPE,
+    )
+    sizes = (1280 * 480 * 3, 1280 * 720 * 3)
+    selected_set = set(selected)
+    next_time = frames[0]["simulation_time_s"]
+    written = 0
+    try:
+        for index, entry in enumerate(frames):
+            raw_perception, raw_quarter = (
+                decoder.stdout.read(size)
+                for decoder, size in zip(decoders, sizes, strict=True)
+            )
+            if len(raw_perception) != sizes[0] or len(raw_quarter) != sizes[1]:
+                raise RuntimeError(f"View video ended before logged frame {index}")
+            time_s = entry["simulation_time_s"]
+            if index not in selected_set or time_s + 1e-8 < next_time:
+                continue
+            rgb_depth = Image.fromarray(
+                np.frombuffer(raw_perception, dtype=np.uint8)
+                .reshape(480, 1280, 3)
+                .copy()
+            )
+            if time_s >= overlay_start:
+                polygons = [
+                    project_world_opening(
+                        corners,
+                        entry["base_position_m"],
+                        entry["base_orientation_wxyz"],
+                        mount,
+                        mount["intrinsics"],
+                    )
+                    for corners in world_openings
+                ]
+                draw_openings(rgb_depth, polygons)
+            left = Image.new("RGB", (960, 540))
+            left.paste(rgb_depth.resize((960, 360), Image.Resampling.LANCZOS), (0, 90))
+            right = Image.fromarray(
+                np.frombuffer(raw_quarter, dtype=np.uint8).reshape(720, 1280, 3).copy()
+            ).resize((960, 540), Image.Resampling.LANCZOS)
+            paired = Image.new("RGB", (1920, 540))
+            paired.paste(left, (0, 0))
+            paired.paste(right, (960, 0))
+            painter = ImageDraw.Draw(paired)
+            label_font = font(22)
+            for x, label in ((0, "인식 카메라 · RGB | 깊이"), (960, "쿼터뷰")):
+                painter.rectangle((x, 0, x + 340, 36), fill=(12, 18, 24))
+                painter.text((x + 12, 4), label, font=label_font, fill="white")
+            encoder.stdin.write(paired.tobytes())
+            written += 1
+            next_time += 1.5 / 30
+        if any(decoder.stdout.read(1) for decoder in decoders):
+            raise ValueError("View video has more frames than frames.jsonl")
+        if not written:
+            raise ValueError("No frames selected for observe_plan.mp4")
+    finally:
+        for decoder in decoders:
+            decoder.stdout.close()
+        encoder.stdin.close()
+        decoder_codes = [decoder.wait() for decoder in decoders]
+        encoder_code = encoder.wait()
+    if any(decoder_codes) or encoder_code:
+        raise RuntimeError(
+            f"ffmpeg failed: decode={decoder_codes}, encode={encoder_code}"
+        )
+    return fallback
+
+
 def render(run_dir: Path, output_dir: Path) -> None:
-    """Create the five presentation artifacts from a matching successful run."""
+    """Create labelled presentation artifacts from a matching successful run."""
     result = json.loads((run_dir / "result.json").read_text())
     if not result["success"] or "perception_mount" not in result["extra_views"]:
         raise ValueError("A successful perception run with extra views is required")
@@ -202,6 +353,7 @@ def render(run_dir: Path, output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     perception = result["perception"]
     mount = result["extra_views"]["perception_mount"]
+    source_fps = int(result["arguments"]["fps"])
     world_openings = opening_world_corners(perception)
     capture_number = len(result["observation_attempts"])
     rgb = Image.open(run_dir / f"perception_capture_{capture_number}_rgb.png").convert(
@@ -237,6 +389,7 @@ def render(run_dir: Path, output_dir: Path) -> None:
         height=480,
         stride=2,
         perception=True,
+        output_fps=source_fps,
         world_openings=world_openings,
         mount=mount,
     )
@@ -245,6 +398,8 @@ def render(run_dir: Path, output_dir: Path) -> None:
         ("chase", "view_chase.mp4"),
         ("overhead", "transport.mp4"),
     ):
+        if not (run_dir / source).exists():  # the view was not requested
+            continue
         encode_frames(
             run_dir / source,
             output_dir / f"{name}.mp4",
@@ -252,6 +407,20 @@ def render(run_dir: Path, output_dir: Path) -> None:
             height=720,
             stride=3,
             perception=False,
+            output_fps=source_fps,
+        )
+    fallback = encode_observe_plan(
+        run_dir / "view_perception.mp4",
+        run_dir / "view_quarter.mp4",
+        output_dir / "observe_plan.mp4",
+        frames,
+        perception,
+        world_openings,
+        mount,
+    )
+    if fallback:
+        print(
+            "observe_plan overlay: acceptance timestamp absent; used observe→approach transition"
         )
 
 
