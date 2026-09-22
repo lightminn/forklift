@@ -25,7 +25,6 @@ from forklift_core.perception.pocket_observation import (
 from forklift_core.perception.scene_dataset import SceneInput
 from forklift_core.sensors.rgbd import deproject_depth_pixels
 
-
 # The catalogue v1 pallet's opening height. Every scaled parameter is written
 # against this pallet because the frozen values were tuned on it: anchoring
 # here makes s(v1) = 1, so the derivation reproduces them exactly.
@@ -121,9 +120,7 @@ class DetectorParams:
             "band_margin_m": base.band_margin_m * scale,
             "min_band_points": max(1, round(base.min_band_points * area)),
             "min_plane_points": max(3, round(base.min_plane_points * area)),
-            "floor_z_m": max(
-                _FLOOR_Z_FLOOR_M, prior.deck_bottom_m / _FLOOR_Z_DIVISOR
-            ),
+            "floor_z_m": max(_FLOOR_Z_FLOOR_M, prior.deck_bottom_m / _FLOOR_Z_DIVISOR),
         }
         return cls(**(derived | overrides))
 
@@ -451,11 +448,7 @@ def _opening_candidates(plane, prior, params, workspace):
             low = (origin + start) * params.cell_m
             high = (origin + stop) * params.cell_m
             per_opening.append(
-                int(
-                    np.count_nonzero(
-                        deck_band & (lateral >= low) & (lateral <= high)
-                    )
-                )
+                int(np.count_nonzero(deck_band & (lateral >= low) & (lateral <= high)))
             )
         # bounds are (right, left); report the pair in the same order.
         upper_right, upper_left = per_opening
@@ -681,7 +674,9 @@ def detect_pockets(
                     # side is worth keeping -- collapsing both to one reason
                     # discards which pocket the caller cannot trust.
                     observation = _status_observation(
-                        scene_input, "invalid", _upper_deck_reason(selected_pattern, params)
+                        scene_input,
+                        "invalid",
+                        _upper_deck_reason(selected_pattern, params),
                     )
                 else:
                     observation = _build_observation(
