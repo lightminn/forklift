@@ -34,6 +34,9 @@ CAMERA_CALIBRATION = load_perception_module(
     "run_transport_camera_calibration",
     Path(__file__).with_name("camera_calibration.py"),
 )
+MISSION_VIEWS = load_perception_module(
+    "run_transport_mission_views", Path(__file__).with_name("mission_views.py")
+)
 
 
 def record_json(value: object, *, indent: int | None = None) -> str:
@@ -76,6 +79,7 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--obstacles", type=int, default=4)
     parser.add_argument("--fps", type=camera_hz, default=60)
     parser.add_argument("--video", action="store_true")
+    parser.add_argument("--extra-views", default="", metavar="VIEWS")
     parser.add_argument("--max-sim-seconds", type=float, default=300)
     parser.add_argument(
         "--asset-root",
@@ -105,6 +109,12 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument("--perception-max-attempts", type=int, default=200)
     args, unknown = parser.parse_known_args()
+    try:
+        args.extra_views = MISSION_VIEWS.parse_extra_views(
+            args.extra_views, args.video, args.use_perception
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.observation_waypoints is None:
         # (-1.20, 0.30) moved ahead of (-0.10, -0.60): both plan equally well
         # for every seed that can reach either, but seed 3 only detects the
@@ -467,6 +477,43 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         "fps": args.fps,
         "resolution": [1280, 720],
     }
+    extra_cameras = {}
+    if args.extra_views:
+        state["extra_views"] = {}
+    if "quarter" in args.extra_views:
+        quarter_eye = center + np.array(
+            [
+                -0.55 * (b.x_max_m - b.x_min_m),
+                -0.55 * (b.y_max_m - b.y_min_m),
+                3.2,
+            ]
+        )
+        quarter = Camera(
+            prim_path="/World/QuarterCamera", frequency=-1, resolution=(1280, 720)
+        )
+        look = Gf.Matrix4d().SetLookAt(
+            Gf.Vec3d(*quarter_eye), Gf.Vec3d(*center), Gf.Vec3d(0, 0, 1)
+        )
+        quat = look.GetInverse().ExtractRotationQuat()
+        quarter.set_world_pose(
+            position=quarter_eye,
+            orientation=np.array([quat.GetReal(), *quat.GetImaginary()]),
+            camera_axes="usd",
+        )
+        quarter.set_focal_length(2.5)
+        extra_cameras["quarter"] = quarter
+        state["extra_views"]["quarter"] = {
+            "eye_m": quarter_eye.tolist(),
+            "target_m": center.tolist(),
+            "focal_length_mm": 2.5,
+        }
+    if "chase" in args.extra_views:
+        chase = Camera(
+            prim_path="/World/ChaseCamera", frequency=-1, resolution=(1280, 720)
+        )
+        chase.set_focal_length(3.0)
+        extra_cameras["chase"] = chase
+        state["extra_views"]["chase"] = {"focal_length_mm": 3.0}
     if args.use_perception:
         perception_mount = adapter.default_base_from_optical()
         perception_calibration = rig.intrinsics()
@@ -489,11 +536,22 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         )
     world.reset()
     camera.initialize()
+    for extra_camera in extra_cameras.values():
+        extra_camera.initialize()
     if args.use_perception:
         perception_camera.initialize()
         verify_camera_intrinsics(perception_camera, perception_calibration, state)
         # Capture needs axial depth as well as RGBA (see determinism_probe.py).
         perception_camera.add_distance_to_image_plane_to_frame()
+        if "perception" in args.extra_views:
+            extra_cameras["perception"] = perception_camera
+            state["extra_views"]["perception_mount"] = {
+                "translation_m": perception_mount.translation_m.tolist(),
+                "rotation": perception_mount.rotation.tolist(),
+                "intrinsics": asdict(
+                    adapter.read_isaac_intrinsics(perception_camera).integer_index
+                ),
+            }
         perception_capture = adapter.SensorCapture(
             perception_camera,
             perception_mount,
@@ -616,6 +674,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     fps_divisor = 120 // args.fps
     dt = 1 / 120
     encoder = None
+    extra_encoders = {}
+    frame_log = None
+    chase_yaw = None
     frame_audit = []
     speeds = {
         "approach": settings["approach_speed_mps"],
@@ -708,6 +769,42 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 ],
                 stdin=subprocess.PIPE,
             )
+        if args.extra_views:
+            frame_log = (args.output / "frames.jsonl").open("w", encoding="utf-8")
+            for name in args.extra_views:
+                height = 480 if name == "perception" else 720
+                extra_encoders[name] = subprocess.Popen(
+                    [
+                        "ffmpeg",
+                        "-nostdin",
+                        "-n",
+                        "-loglevel",
+                        "error",
+                        "-f",
+                        "rawvideo",
+                        "-pix_fmt",
+                        "rgb24",
+                        "-s",
+                        f"1280x{height}",
+                        "-r",
+                        str(args.fps),
+                        "-i",
+                        "-",
+                        "-an",
+                        "-c:v",
+                        "libx264",
+                        "-threads",
+                        "2",
+                        "-crf",
+                        "20",
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-movflags",
+                        "+faststart",
+                        str(args.output / f"view_{name}.mp4"),
+                    ],
+                    stdin=subprocess.PIPE,
+                )
         for step in range(int(120 * args.max_sim_seconds)):
             t = world.current_time - initial_time
             base, q = robot.get_world_pose()
@@ -1152,6 +1249,23 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     joint_positions=np.array([lift_command]), joint_indices=lift_index
                 )
             )
+            if "chase" in extra_cameras and step % fps_divisor == 0:
+                chase_eye, chase_target, chase_yaw = MISSION_VIEWS.chase_pose(
+                    base, yaw, chase_yaw, fps_divisor / 120
+                )
+                chase_look = Gf.Matrix4d().SetLookAt(
+                    Gf.Vec3d(*chase_eye),
+                    Gf.Vec3d(*chase_target),
+                    Gf.Vec3d(0, 0, 1),
+                )
+                chase_quat = chase_look.GetInverse().ExtractRotationQuat()
+                extra_cameras["chase"].set_world_pose(
+                    position=chase_eye,
+                    orientation=np.array(
+                        [chase_quat.GetReal(), *chase_quat.GetImaginary()]
+                    ),
+                    camera_axes="usd",
+                )
             world.step(render=args.video and step % fps_divisor == 0)
             if args.video and step % fps_divisor == 0:
                 frame = camera.get_current_frame()
@@ -1167,6 +1281,52 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     np.ascontiguousarray(rgba[:, :, :3], dtype=np.uint8).tobytes()
                 )
                 state["frames"] += 1
+                if args.extra_views:
+                    for name in args.extra_views:
+                        view_camera = extra_cameras[name]
+                        view_rgba = view_camera.get_rgba()
+                        expected = (
+                            (480, 640, 4) if name == "perception" else (720, 1280, 4)
+                        )
+                        require(
+                            view_rgba is not None and view_rgba.shape == expected,
+                            f"{name} camera did not produce RGB",
+                        )
+                        view_rgb = np.ascontiguousarray(
+                            view_rgba[:, :, :3], dtype=np.uint8
+                        )
+                        if name == "perception":
+                            depth = view_camera.get_depth()
+                            require(
+                                depth is not None and depth.shape[:2] == (480, 640),
+                                "Perception camera did not produce depth",
+                            )
+                            if depth.ndim == 3:
+                                depth = depth[:, :, 0]
+                            view_rgb = np.concatenate(
+                                (view_rgb, MISSION_VIEWS.depth_colormap(depth)),
+                                axis=1,
+                            )
+                        extra_encoders[name].stdin.write(view_rgb.tobytes())
+                    frame_base, frame_q = robot.get_world_pose()
+                    frame_pallet, frame_pq = pallet.get_world_pose()
+                    frame_log.write(
+                        record_json(
+                            {
+                                "frame": state["frames"] - 1,
+                                "simulation_time_s": world.current_time - initial_time,
+                                "phase": phase,
+                                "base_position_m": frame_base,
+                                "base_orientation_wxyz": frame_q,
+                                "pallet_position_m": frame_pallet,
+                                "pallet_orientation_wxyz": frame_pq,
+                                "lift_m": float(
+                                    robot.get_joint_positions()[lift_index[0]]
+                                ),
+                            }
+                        )
+                        + "\n"
+                    )
                 frame_audit.append(
                     {
                         "simulation_time_s": world.current_time - initial_time,
@@ -1235,12 +1395,20 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             }
         )
     finally:
+        if frame_log is not None:
+            frame_log.close()
+        video_results = []
         if encoder is not None:
             encoder.stdin.close()
-            require(encoder.wait(timeout=60) == 0, "Video encoding failed")
+            video_results.append(("transport", encoder.wait(timeout=60)))
+        for name, extra_encoder in extra_encoders.items():
+            extra_encoder.stdin.close()
+            video_results.append((name, extra_encoder.wait(timeout=60)))
         (args.output / "frame_audit.json").write_text(
             record_json(frame_audit, indent=2) + "\n"
         )
+        for name, exit_code in video_results:
+            require(exit_code == 0, f"{name} video encoding failed")
 
 
 def main() -> None:
@@ -1281,6 +1449,7 @@ def main() -> None:
                 else v
             )
             for k, v in vars(args).items()
+            if k != "extra_views" or v
         },
     }
     if args.use_perception:

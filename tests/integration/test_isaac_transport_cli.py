@@ -33,6 +33,38 @@ def test_isaac_transport_rejects_unsupported_camera_rate_before_startup() -> Non
     assert "ModuleNotFoundError" not in result.stderr
 
 
+def test_extra_views_require_video_and_perception_before_startup() -> None:
+    for flags, expected in (
+        (["--extra-views", "chase"], "--video"),
+        (["--extra-views", "perception", "--video"], "--use-perception"),
+        (["--extra-views", "unknown", "--video"], "Unknown"),
+    ):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--base-scene",
+                "unused.usda",
+                "--pallet-urdf",
+                "unused.urdf",
+                "--pallet-geometry",
+                "unused.yaml",
+                "--settings",
+                "unused.yaml",
+                "--output",
+                "unused",
+                "--seed",
+                "2",
+                *flags,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 2
+        assert expected in result.stderr
+
+
 def test_tracking_sample_remains_json_serializable_after_a_gear_change() -> None:
     import json
     from dataclasses import asdict
