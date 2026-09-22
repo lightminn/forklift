@@ -1,0 +1,29 @@
+# Synthetic observation-gated approach/insertion experiment; no hardware calibration.
+# Earlier handoff lets the original camera start with both pockets in its field of view.
+handoff_rear_offset_m: 2.34
+detector_range_min_m: 0.05
+acceleration_mps2: 0.6
+max_angular_speed_rad_s: 0.3
+controller:
+  target_front_x_m: 0.59
+  max_start_front_x_m: 1.76
+  max_observation_age_ns: 150000000
+  max_frame_interval_ns: 110000000
+  confirmation_frames: 3
+  cruise_speed_mps: 0.6
+  max_speed_mps: 0.75
+  insertion_speed_mps: 0.055
+  slowdown_front_x_m: 1.35
+  max_geometry_jump_m: 0.09
+  # Allow measured handoff heading error to be corrected before the pockets.
+  # Per-pocket geometric containment and the independent 3-D abort guard remain active.
+  max_lateral_error_m: 0.04
+
+# Model continuation for the known, empty rigid EPAL 6 pallet only.
+# Current roof geometry must agree with directly observed pockets before handoff.
+roof_tracking:
+  start_front_x_m: 1.4
+  confirmation_frames: 3
+  position_tolerance_m: 0.025
+  yaw_tolerance_rad: 0.03
+  size_tolerance_m: 0.02
