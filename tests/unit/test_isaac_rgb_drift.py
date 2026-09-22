@@ -212,6 +212,8 @@ def test_render_settings_are_read_back_not_inferred_from_condition(drift):
     actual = drift.read_render_settings(SimpleNamespace(get=values.get))
     # The whole DLSS evidence set, not a subset: the run has to record what was
     # actually applied, and an unread key is indistinguishable from an unset one.
+    # The render-stage keys conditions E-H move are read the same way, so an
+    # unset one reads as None here rather than being absent from the record.
     assert actual["values"] == {
         "/rtx/post/aa/op": 1,
         "/rtx/rendermode": "RaytracedLighting",
@@ -219,6 +221,11 @@ def test_render_settings_are_read_back_not_inferred_from_condition(drift):
         "/rtx/post/dlss/enabled": None,
         "/rtx/post/dlss/rr/enabled": True,
         "/rtx-transient/dlssg/enabled": False,
+        "/rtx/post/tonemap/op": None,
+        "/rtx/post/aa/sharpness": None,
+        "/rtx/post/taa/samples": None,
+        "/rtx/pathtracing/spp": None,
+        "/rtx/pathtracing/optixDenoiser/enabled": None,
     }
     assert actual["readback_errors"] == {}
 
@@ -546,3 +553,248 @@ def test_unready_first_capture_is_retained_without_rebasing_or_retry(
             assert raw[name].dtype != object
     with np.load(tmp_path / "board_p0_capture01.npz", allow_pickle=False) as raw:
         assert raw["segmentation"].shape == (10, 10, 1)
+
+
+RENDER_STAGE_CASES = [
+    ("E", {"/rtx/post/tonemap/op": 1}, "RaytracedLighting"),
+    ("F", {"/rtx/post/aa/sharpness": 0.0}, "RaytracedLighting"),
+    ("G", {"/rtx/post/taa/samples": 1}, "RaytracedLighting"),
+    ("H", {}, "PathTracing"),
+]
+
+
+@pytest.mark.parametrize("condition,overrides,renderer", RENDER_STAGE_CASES)
+def test_render_stage_condition_changes_one_thing_against_a(
+    drift, condition, overrides, renderer
+):
+    """Each new condition isolates one render stage; A is the reference.
+
+    A condition that also moved the anchor, the step, the placements or the
+    history would confound two changes, and the curve could not attribute the
+    difference to the stage the condition is named for.
+    """
+    reference = drift.condition_config("A")
+    config = drift.condition_config(condition)
+    assert config["render_setting_overrides"] == overrides
+    assert config["simulation_app"] == {"headless": True, "renderer": renderer}
+    for key in (
+        "step",
+        "distance_m",
+        "captures_per_board",
+        "positions",
+        "initial_history",
+    ):
+        assert config[key] == reference[key], key
+    config["render_setting_overrides"]["/rtx/post/aa/op"] = 99
+    config["simulation_app"]["headless"] = False
+    assert drift.condition_config(condition)["render_setting_overrides"] == overrides
+    assert drift.condition_config(condition)["simulation_app"]["headless"] is True
+
+
+@pytest.mark.parametrize("condition", ["A", "B", "C", "D"])
+def test_the_original_conditions_still_write_nothing_to_carb(drift, condition):
+    """A-D must keep making zero carb writes; only their record grew."""
+    assert drift.condition_config(condition)["render_setting_overrides"] == {}
+
+
+def test_each_condition_records_what_it_changed_and_what_it_left_alone(drift):
+    assert drift.CONDITIONS == ("A", "B", "C", "D", "E", "F", "G", "H")
+    named = {
+        "A": None,
+        "B": "rt_subframes",
+        "C": "anti_aliasing",
+        "D": "board order",
+        "E": "/rtx/post/tonemap/op",
+        "F": "/rtx/post/aa/sharpness",
+        "G": "/rtx/post/taa/samples",
+        "H": "/rtx/rendermode",
+    }
+    for condition in drift.CONDITIONS:
+        notes = drift.condition_config(condition)["changes_relative_to_a"]
+        assert set(notes) == {"changed", "unchanged", "expressed_as"}
+        assert all(isinstance(text, str) and text for text in notes.values())
+        if named[condition] is not None:
+            assert named[condition] in notes["changed"], condition
+    assert (
+        drift.condition_config("A")["changes_relative_to_a"]["expressed_as"] == "none"
+    )
+    for condition in ("E", "F", "G"):
+        assert (
+            drift.condition_config(condition)["changes_relative_to_a"]["expressed_as"]
+            == "runtime carb write"
+        )
+    # /rtx/rendermode is applied while the RTX plugins load, so H can only be
+    # expressed as a launcher argument; the record must not claim otherwise.
+    assert (
+        drift.condition_config("H")["changes_relative_to_a"]["expressed_as"]
+        == "SimulationApp argument"
+    )
+    left_alone = drift.condition_config("H")["changes_relative_to_a"]["unchanged"]
+    assert "spp" in left_alone and "denoiser" in left_alone
+
+
+@pytest.mark.parametrize("condition", ["A", "B", "C", "D", "E", "F", "G", "H"])
+def test_no_condition_carries_a_verdict_or_an_acceptance_number(drift, condition):
+    encoded = json.dumps(drift.condition_config(condition))
+    for word in ("PASS", "FAIL", "threshold", "tolerance", "gate", "limit"):
+        assert word not in encoded, word
+    assert drift.condition_config(condition)["captures_per_board"] == 12
+
+
+def test_every_condition_is_reachable_from_the_command_line(drift):
+    parser = drift.build_parser()
+    for condition in drift.CONDITIONS:
+        args, _ = parser.parse_known_args(
+            ["--condition", condition, "--base-scene", "s.usd", "--output", "o"]
+        )
+        assert args.condition == condition
+    with pytest.raises(SystemExit):
+        parser.parse_known_args(
+            ["--condition", "I", "--base-scene", "s.usd", "--output", "o"]
+        )
+
+
+def test_the_render_stages_under_test_are_read_back_for_every_condition(drift):
+    """Section 12.6: these stages were absent from the record, so unreadable.
+
+    They are read for every condition, not only the one that changes them, so
+    E/F/G/H each have A's actual value to be read against.
+    """
+    probe = {
+        "/rtx/post/tonemap/op": 6,
+        "/rtx/post/aa/sharpness": 0.5,
+        "/rtx/post/taa/samples": 8,
+        "/rtx/pathtracing/spp": 64,
+        "/rtx/pathtracing/optixDenoiser/enabled": True,
+    }
+    actual = drift.read_render_settings(SimpleNamespace(get=probe.get))
+    assert {key: actual["values"][key] for key in probe} == probe
+    # Added to the DLSS evidence set, never in place of it.
+    assert actual["values"]["/rtx/post/aa/op"] is None
+    assert "/rtx/rendermode" in actual["values"]
+    assert "/rtx-transient/dlssg/enabled" in actual["values"]
+
+
+def test_a_requested_setting_that_does_not_apply_is_visible_as_such(drift, tmp_path):
+    """The record must never report a request as though it were the result.
+
+    DLSS was refuted on a read-back value, not a requested one. A carb write can
+    be dropped (unknown key), refused (raise) or coerced, and each of those has
+    to read differently from a write that took.
+    """
+
+    class Settings:
+        def __init__(self):
+            self.store = {"/rtx/post/tonemap/op": 6, "/rtx/post/aa/sharpness": 0.5}
+            self.writes = []
+
+        def set_int(self, key, value):
+            self.writes.append(("int", key, value))
+            if key in self.store:  # An unregistered key is silently dropped.
+                self.store[key] = value
+
+        def set_float(self, key, value):
+            self.writes.append(("float", key, value))
+            if key == "/rtx/post/aa/sharpness":
+                raise RuntimeError("carb refused")
+            self.store[key] = value
+
+        def set_bool(self, key, value):
+            self.writes.append(("bool", key, value))
+            self.store[key] = value
+
+        def set_string(self, key, value):
+            self.writes.append(("string", key, value))
+            self.store[key] = value
+
+        def get(self, key):
+            return self.store.get(key)
+
+    settings = Settings()
+    record = drift.apply_render_settings(
+        settings,
+        {
+            "/rtx/post/tonemap/op": 1,
+            "/rtx/post/aa/sharpness": 0.0,
+            "/rtx/post/taa/samples": 1,
+        },
+    )
+    assert settings.writes == [
+        ("int", "/rtx/post/tonemap/op", 1),
+        ("float", "/rtx/post/aa/sharpness", 0.0),
+        ("int", "/rtx/post/taa/samples", 1),
+    ]
+    assert record["/rtx/post/tonemap/op"] == {
+        "requested": 1,
+        "before": 6,
+        "observed": 1,
+        "applied": True,
+    }
+    refused = record["/rtx/post/aa/sharpness"]
+    assert refused["applied"] is False
+    assert refused["observed"] == 0.5
+    assert refused["set_error"] == "RuntimeError: carb refused"
+    dropped = record["/rtx/post/taa/samples"]
+    assert dropped["before"] is None
+    assert dropped["observed"] is None
+    assert dropped["applied"] is False
+    assert "set_error" not in dropped
+    drift.write_record(tmp_path / "overrides.json", record)
+    assert drift.apply_render_settings(settings, {}) == {}
+
+
+def test_an_override_is_written_with_the_type_carb_registered(drift):
+    """bool is a subclass of int, so a naive dispatch writes True as 1.
+
+    A boolean key written as an integer is exactly the silent non-application
+    this diagnostic exists to make visible, so the order is pinned.
+    """
+    writes = []
+    settings = SimpleNamespace(
+        set_bool=lambda k, v: writes.append(("bool", k, v)),
+        set_int=lambda k, v: writes.append(("int", k, v)),
+        set_float=lambda k, v: writes.append(("float", k, v)),
+        set_string=lambda k, v: writes.append(("string", k, v)),
+        get=lambda k: None,
+    )
+    drift.apply_render_settings(
+        settings, {"/b": True, "/i": 2, "/f": 0.25, "/s": "PathTracing"}
+    )
+    assert writes == [
+        ("bool", "/b", True),
+        ("int", "/i", 2),
+        ("float", "/f", 0.25),
+        ("string", "/s", "PathTracing"),
+    ]
+    unsupported = drift.apply_render_settings(settings, {"/x": [1, 2]})
+    assert "TypeError" in unsupported["/x"]["set_error"]
+
+
+def test_run_applies_the_overrides_once_before_the_first_board(drift):
+    """run() needs Isaac, so the order is pinned in source.
+
+    An override applied after a board was authored and captured would leave part
+    of the twelve under the old setting and mix two renderers in one curve.
+    """
+    run = next(
+        node
+        for node in ast.walk(ast.parse(SCRIPT.read_text(encoding="utf-8")))
+        if isinstance(node, ast.FunctionDef) and node.name == "run"
+    )
+    calls = [
+        node
+        for node in ast.walk(run)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    ]
+    applies = [node for node in calls if node.func.id == "apply_render_settings"]
+    collects = [node for node in calls if node.func.id == "collect_board"]
+    reads = [node for node in calls if node.func.id == "read_render_settings"]
+    assert len(applies) == 1
+    assert len(collects) == 1
+    assert len(reads) == 2, "carb must be read both before and after the writes"
+    assert reads[0].lineno < applies[0].lineno < reads[1].lineno
+    assert applies[0].lineno < collects[0].lineno
+    assert any(
+        isinstance(node, ast.Constant) and node.value == "render_setting_overrides"
+        for node in ast.walk(applies[0])
+    ), ast.dump(applies[0])

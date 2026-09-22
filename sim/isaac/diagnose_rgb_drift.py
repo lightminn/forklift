@@ -3,8 +3,17 @@
 Run each condition in a NEW Isaac Sim Python process, with a NEW output directory:
     python sim/isaac/diagnose_rgb_drift.py --condition A \
         --base-scene /path/to/base.usd --output artifacts/drift_A
-Repeat the command for B, C and D. A/B/D leave SimulationApp AA unspecified;
+Repeat the command for B..H. A/B/D leave SimulationApp AA unspecified;
 C requests anti_aliasing=0. Actual carb settings are read before/after captures.
+
+A is the reference; every other condition names exactly one change against it
+and records both sides of it (CONDITION_NOTES). E, F and G are runtime carb
+writes, requested once before the first board and read straight back, so a write
+that carb drops, refuses or coerces reads as such instead of being reported as
+the request. H is a SimulationApp argument, because Isaac maps the launcher's
+`renderer` onto /rtx/rendermode while the RTX plugins load and no later write
+re-runs that setup; it is verified through the /rtx/rendermode readback that
+every capture already records.
 
 Only r=3 m, nine existing placements, twelve single-step captures per board.
 No warmup, readiness retry, geometry edit or camera setter between captures.
@@ -54,11 +63,94 @@ MEASURE = load_module(
 )
 
 
+CONDITIONS = ("A", "B", "C", "D", "E", "F", "G", "H")
+
+# The stages E-G change are the ones report section 12.6 recorded as missing:
+# "the sub-pixel jitter, sample pattern and reconstruction filter settings are
+# not in the record". The observed starting values on ws1 are op 6
+# (acesApproximation), sharpness 0.5 and 8 TAA samples; tonemap op 1 is the
+# renderer's own "none" operator, i.e. no tone-mapping operation at all.
+RENDER_SETTING_OVERRIDES = {
+    "E": {"/rtx/post/tonemap/op": 1},
+    "F": {"/rtx/post/aa/sharpness": 0.0},
+    "G": {"/rtx/post/taa/samples": 1},
+}
+
+_UNCHANGED_BY_A_RUNTIME_WRITE = (
+    "the renderer, the DLSS anti-aliasing mode, rt_subframes 4, forward board "
+    "order, the nine placements, r = 3.0 m and the capture history"
+)
+
+# What each condition moves and what it leaves where A has it. Kept beside the
+# request so the record answers it without re-deriving it from the settings.
+CONDITION_NOTES = {
+    "A": {
+        "changed": "nothing; A is the reference the others are read against",
+        "unchanged": (
+            "everything: Isaac's default DLSS anti-aliasing, rt_subframes 4, "
+            "forward board order, RaytracedLighting, the acesApproximation "
+            "tone mapper, 0.5 sharpening and the 8-sample TAA sequence"
+        ),
+        "expressed_as": "none",
+    },
+    "B": {
+        "changed": "rt_subframes 4 -> 16",
+        "unchanged": "every carb render setting, the renderer, board order and placements",
+        "expressed_as": "orchestrator step argument",
+    },
+    "C": {
+        "changed": "anti_aliasing 3 (DLSS) -> 0, which Isaac writes to /rtx/post/aa/op",
+        "unchanged": (
+            "the renderer, the tone mapper, sharpening, the TAA sequence, "
+            "rt_subframes 4, board order and placements"
+        ),
+        "expressed_as": "SimulationApp argument",
+    },
+    "D": {
+        "changed": "board order reversed; position 8 is authored first",
+        "unchanged": "every carb render setting, the renderer, rt_subframes 4 and the placements themselves",
+        "expressed_as": "position ordering",
+    },
+    "E": {
+        "changed": (
+            "/rtx/post/tonemap/op 6 (acesApproximation) -> 1 (none: the renderer "
+            "applies no tone-mapping operation)"
+        ),
+        "unchanged": "sharpening, the TAA sequence, " + _UNCHANGED_BY_A_RUNTIME_WRITE,
+        "expressed_as": "runtime carb write",
+    },
+    "F": {
+        "changed": "/rtx/post/aa/sharpness 0.5 -> 0.0",
+        "unchanged": "the tone mapper, the TAA sequence, "
+        + _UNCHANGED_BY_A_RUNTIME_WRITE,
+        "expressed_as": "runtime carb write",
+    },
+    "G": {
+        "changed": "/rtx/post/taa/samples 8 -> 1",
+        "unchanged": "the tone mapper, sharpening, " + _UNCHANGED_BY_A_RUNTIME_WRITE,
+        "expressed_as": "runtime carb write",
+    },
+    "H": {
+        "changed": "/rtx/rendermode RaytracedLighting -> PathTracing",
+        "unchanged": (
+            "the path-tracing sample count (/rtx/pathtracing/spp) and the OptiX "
+            "denoiser stay at Isaac's launcher defaults, 64 and on; so do the "
+            "anti-aliasing mode, the tone mapper, sharpening, the TAA sequence, "
+            "rt_subframes 4, board order and the nine placements"
+        ),
+        "expressed_as": "SimulationApp argument",
+    },
+}
+
+
 def condition_config(condition: str) -> dict:
     """Build independent requests; default AA must remain unspecified in A/B/D."""
-    if condition not in ("A", "B", "C", "D"):
-        raise ValueError("Unknown condition; choose A, B, C or D")
-    app = {"headless": True, "renderer": "RaytracedLighting"}
+    if condition not in CONDITIONS:
+        raise ValueError("Unknown condition; choose one of " + ", ".join(CONDITIONS))
+    app = {
+        "headless": True,
+        "renderer": "PathTracing" if condition == "H" else "RaytracedLighting",
+    }
     if condition == "C":
         app["anti_aliasing"] = 0
     positions = [
@@ -68,6 +160,10 @@ def condition_config(condition: str) -> dict:
     return {
         "condition": condition,
         "simulation_app": app,
+        "render_setting_overrides": deepcopy(
+            RENDER_SETTING_OVERRIDES.get(condition, {})
+        ),
+        "changes_relative_to_a": dict(CONDITION_NOTES[condition]),
         "step": {
             "rt_subframes": 16 if condition == "B" else 4,
             "delta_time": 0.0,
@@ -224,23 +320,88 @@ def recordable_setting_value(value):
     return value
 
 
+RENDER_SETTING_KEYS = (
+    # The anti-aliasing set that refuted DLSS.
+    "/rtx/post/aa/op",
+    "/rtx/rendermode",
+    "/rtx/post/dlss/execMode",
+    "/rtx/post/dlss/enabled",
+    "/rtx/post/dlss/rr/enabled",
+    "/rtx-transient/dlssg/enabled",
+    # The stages conditions E-H move, read for EVERY condition so that each one
+    # has A's actual value to be read against, and so that H's claim to leave
+    # the path-tracing sample count and denoiser alone is checkable.
+    "/rtx/post/tonemap/op",
+    "/rtx/post/aa/sharpness",
+    "/rtx/post/taa/samples",
+    "/rtx/pathtracing/spp",
+    "/rtx/pathtracing/optixDenoiser/enabled",
+)
+
+
 def read_render_settings(settings) -> dict:
     """Read carb, recording missing/version-dependent keys and errors explicitly."""
     values, errors = {}, {}
-    for key in (
-        "/rtx/post/aa/op",
-        "/rtx/rendermode",
-        "/rtx/post/dlss/execMode",
-        "/rtx/post/dlss/enabled",
-        "/rtx/post/dlss/rr/enabled",
-        "/rtx-transient/dlssg/enabled",
-    ):
+    for key in RENDER_SETTING_KEYS:
         try:
             values[key] = recordable_setting_value(settings.get(key))
         except Exception as exc:
             values[key] = None
             errors[key] = f"{type(exc).__name__}: {exc}"
     return {"values": values, "readback_errors": errors}
+
+
+def set_render_setting(settings, key: str, value) -> None:
+    """Write with the type carb registered for the key, as Isaac's helper does.
+
+    bool is tested before int because bool subclasses int: an /enabled key
+    written through set_int is one of the silent non-applications this tool
+    exists to expose, rather than a setting that took.
+    """
+    if isinstance(value, bool):
+        settings.set_bool(key, value)
+    elif isinstance(value, int):
+        settings.set_int(key, value)
+    elif isinstance(value, float):
+        settings.set_float(key, value)
+    elif isinstance(value, str):
+        settings.set_string(key, value)
+    else:
+        raise TypeError(f"Unsupported carb value type: {type(value).__name__}")
+
+
+def apply_render_settings(settings, overrides: dict) -> dict:
+    """Request each override, then read the same key straight back from carb.
+
+    DLSS was refuted on a read-back value, never a requested one, and the same
+    rule holds here: `requested` and `observed` stay side by side, and `applied`
+    is exact equality against what carb returned. A write carb drops (an
+    unregistered key reads back None), refuses (raises) or coerces therefore
+    reads as `applied: false` instead of being reported as the request. An
+    empty override map writes nothing at all, which is how A-D stay untouched.
+    """
+    record = {}
+    for key, value in overrides.items():
+        entry = {"requested": recordable_setting_value(value)}
+        try:
+            entry["before"] = recordable_setting_value(settings.get(key))
+        except Exception as exc:
+            entry["before"] = None
+            entry["before_error"] = f"{type(exc).__name__}: {exc}"
+        try:
+            set_render_setting(settings, key, value)
+        except Exception as exc:
+            entry["set_error"] = f"{type(exc).__name__}: {exc}"
+        try:
+            observed = settings.get(key)
+        except Exception as exc:
+            entry["observed"] = None
+            entry["readback_error"] = f"{type(exc).__name__}: {exc}"
+        else:
+            entry["observed"] = recordable_setting_value(observed)
+            entry["applied"] = observed == value
+        record[key] = entry
+    return record
 
 
 def capture_once(rep, annotators: dict, step: dict) -> dict:
@@ -600,6 +761,13 @@ def run(app, args: argparse.Namespace, result: dict) -> None:
     rig = load_module("rgb_drift_rig", ROOT / "tools/scene_rig.py")
     settings = carb.settings.get_settings()
     result["render_settings_at_start"] = read_render_settings(settings)
+    # Once, before the stage is opened and before any render product exists, so
+    # all twelve captures of every board see the same setting. A-D pass an empty
+    # map and write nothing.
+    result["render_setting_overrides"] = apply_render_settings(
+        settings, result["protocol"]["render_setting_overrides"]
+    )
+    result["render_settings_after_overrides"] = read_render_settings(settings)
     result["source_sha256"] = existing.RUNNER.source_sha256(
         ROOT, Path(forklift_core.__file__).parent
     )
@@ -721,14 +889,19 @@ def run(app, args: argparse.Namespace, result: dict) -> None:
         write_record(args.output / "diagnostic.json", result)
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """One list of conditions, so the CLI cannot drift from condition_config."""
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--condition", choices=("A", "B", "C", "D"), required=True)
+    parser.add_argument("--condition", choices=CONDITIONS, required=True)
     parser.add_argument("--base-scene", required=True)
     parser.add_argument("--output", type=Path, required=True)
-    args, unknown = parser.parse_known_args()
+    return parser
+
+
+def main() -> int:
+    args, unknown = build_parser().parse_known_args()
     # Preserve Isaac's launcher flags, as the existing scripts do.
     sys.argv = [sys.argv[0], *unknown]
     result = {
