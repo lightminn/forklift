@@ -1,6 +1,7 @@
 """CPU regressions for G1 OpenCV policy, annotator teardown and capture plan."""
 
 import ast
+import hashlib
 import json
 import runpy
 import sys
@@ -686,3 +687,126 @@ def test_each_panel_owns_its_nested_choice_record():
     assert "dict(placement_reference)" not in source
     assert "dict(selection_reference)" not in source
     assert source.count("panel_reference_copy(") >= 3
+
+
+# --- render mode (report section 20, 2026-09-22) ------------------------------
+
+
+def test_render_mode_defaults_to_the_renderer_every_executed_run_used():
+    """A run without the flag must still be the run that was already made."""
+    parser = VERIFY["build_parser"]()
+    common = ["--base-scene", "s.usd", "--output", "o"]
+    assert parser.parse_known_args(common)[0].render_mode == "RaytracedLighting"
+    assert VERIFY["DEFAULT_RENDER_MODE"] == "RaytracedLighting"
+    assert VERIFY["RENDER_MODES"] == ("RaytracedLighting", "PathTracing")
+    chosen = parser.parse_known_args([*common, "--render-mode", "PathTracing"])[0]
+    assert chosen.render_mode == "PathTracing"
+    # Isaac's launcher flags must still pass through untouched.
+    assert parser.parse_known_args([*common, "--/app/fake=1"])[1] == ["--/app/fake=1"]
+    with pytest.raises(SystemExit):
+        parser.parse_known_args([*common, "--render-mode", "RayTracedLighting"])
+
+
+def test_the_render_mode_reaches_isaac_as_a_launcher_argument_not_a_carb_write():
+    """Section 20.2, condition H: Isaac maps SimulationApp's `renderer` onto
+    /rtx/rendermode while the RTX plugins load, and no later write re-runs that
+    setup. A hardcoded renderer here would accept the flag and ignore it."""
+    source = VERIFY_SOURCE.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    launches = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "id", None) == "SimulationApp"
+    ]
+    assert len(launches) == 1
+    (config,) = launches[0].args
+    assert isinstance(config, ast.Dict)
+    assert {
+        ast.literal_eval(key): ast.unparse(value)
+        for key, value in zip(config.keys, config.values, strict=True)
+    } == {"headless": "True", "renderer": "args.render_mode"}
+    # The judging run reads carb and never writes it, in either mode.
+    assert "settings.set_" not in source
+
+
+def test_the_recorded_render_mode_is_the_one_carb_reports_not_the_one_requested():
+    read = VERIFY["render_settings_readback"]
+    took = read(
+        SimpleNamespace(get={"/rtx/rendermode": "PathTracing"}.get), "PathTracing"
+    )
+    assert took["requested_render_mode"] == "PathTracing"
+    assert took["observed_render_mode"] == "PathTracing"
+    assert took["render_mode_applied"] is True
+    assert took["expressed_as"] == "SimulationApp argument"
+    ignored = read(
+        SimpleNamespace(get={"/rtx/rendermode": "RaytracedLighting"}.get), "PathTracing"
+    )
+    assert ignored["requested_render_mode"] == "PathTracing"
+    assert ignored["observed_render_mode"] == "RaytracedLighting"
+    assert ignored["render_mode_applied"] is False
+
+
+def test_an_unreadable_or_unencodable_render_setting_cannot_destroy_the_record():
+    """A dropped key reads back None, a refused one raises, and a value this
+    Isaac version types differently must not take result.json down with it."""
+
+    def get(key):
+        if key == "/rtx/rendermode":
+            raise RuntimeError("carb refused")
+        if key == "/rtx/post/aa/sharpness":
+            return float("nan")
+        return {"/rtx/post/aa/op": 3}.get(key)
+
+    record = VERIFY["render_settings_readback"](
+        SimpleNamespace(get=get), "RaytracedLighting"
+    )
+    assert set(record["values"]) == set(VERIFY["RENDER_SETTING_KEYS"])
+    assert "/rtx/rendermode" in VERIFY["RENDER_SETTING_KEYS"]
+    assert record["values"]["/rtx/rendermode"] is None
+    assert "carb refused" in record["readback_errors"]["/rtx/rendermode"]
+    assert record["render_mode_applied"] is False
+    assert record["values"]["/rtx/post/aa/op"] == 3
+    assert record["values"]["/rtx/post/taa/samples"] is None
+    saved = json.loads(VERIFY["RUNNER"].record_json(record))
+    assert saved["values"]["/rtx/post/aa/sharpness"] == {
+        "unserializable_type": "float",
+        "value_repr": "nan",
+    }
+
+
+def test_the_effective_render_mode_is_read_at_both_ends_of_the_captures():
+    """One reading at the start would certify a mode that later changed."""
+    tree = ast.parse(VERIFY_SOURCE.read_text(encoding="utf-8"))
+    measurements = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_run_measurements"
+    )
+    calls = [
+        node
+        for node in ast.walk(measurements)
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "id", None) == "render_settings_readback"
+    ]
+    assert len(calls) == 2
+    assert [ast.unparse(call.args[1]) for call in calls] == ["args.render_mode"] * 2
+
+
+def test_the_render_mode_is_not_part_of_the_predeclared_sampling_policy():
+    """Guard, not a driver: this passes before and after the option exists.
+
+    protocol.json is written before Isaac starts, so it could only ever carry
+    the REQUEST, never the mode carb reports. protocol_sha256 is how sampling
+    policies are told apart, and section 17.2b records a prose-only protocol()
+    edit already being misread as a policy change. Both modes place the same
+    boards, hold out the same corners and select the same samples, so the mode
+    is run configuration: it belongs in result.json, beside the OpenCV backend.
+    """
+    encoded = VERIFY["RUNNER"].record_json(MEASURE.protocol())
+    for word in ("render_mode", "rendermode", "renderer", "rtx", "PathTracing"):
+        assert word not in encoded, word
+    assert (
+        hashlib.sha256(encoded.encode()).hexdigest()
+        == "c399c5756c01c675c5a1ccc7790e6ea65243d4aea94f30fbef5efe2b09dbf406"
+    ), "the render-mode option must not move the protocol hash runs 1-11 carry"

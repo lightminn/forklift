@@ -17,8 +17,28 @@ from pathlib import Path
 
 import numpy as np
 
+# Report section 20 (2026-09-22). The ~-0.06 px principal-point bias gate 2a has
+# carried across eleven runs survived every post-processing change the RGB drift
+# diagnostic tried - tone mapping off, sharpening 0, TAA jitter length 1 all left
+# the steady-state dv at -0.059 - and collapsed to -0.004 px only when the render
+# mode itself changed, where consecutive captures of a static scene also became
+# bit-identical. PathTracing is therefore worth running the gate under, but it is
+# a DIFFERENT INSTRUMENT from the one runs 1-11 measured with and mission
+# rendering has not moved, so RaytracedLighting stays the default: without
+# --render-mode this run renders exactly what runs 1-11 rendered.
+#
+# Deliberately NOT in protocol(). protocol.json is written before Isaac starts,
+# so it could only ever carry the REQUEST, never the mode carb reports; and
+# protocol_sha256 is how sampling policies are told apart, which section 17.2b
+# records a prose-only protocol() edit already disturbing. Both modes place the
+# same boards, hold out the same corners and select the same samples. The mode
+# is run configuration, recorded in result.json beside the OpenCV backend.
+RENDER_MODES = ("RaytracedLighting", "PathTracing")
+DEFAULT_RENDER_MODE = RENDER_MODES[0]
 
-def arguments() -> argparse.Namespace:
+
+def build_parser() -> argparse.ArgumentParser:
+    """One parser, so the CLI cannot drift from what the run actually launches."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-scene", required=True)
     parser.add_argument(
@@ -30,9 +50,24 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument("--camera-axes", choices=("world", "usd", "ros"), default="ros")
     parser.add_argument(
+        "--render-mode",
+        choices=RENDER_MODES,
+        default=DEFAULT_RENDER_MODE,
+        help=(
+            "RTX render mode, passed to SimulationApp as `renderer`: Isaac maps it "
+            "onto /rtx/rendermode while the RTX plugins load. The default is what "
+            "every executed run used. PathTracing is a different instrument, not a "
+            "tolerance or gate change; see the run record, section 20"
+        ),
+    )
+    parser.add_argument(
         "--output", type=Path, required=True, help="New experiment directory"
     )
-    args, unknown = parser.parse_known_args()
+    return parser
+
+
+def arguments() -> argparse.Namespace:
+    args, unknown = build_parser().parse_known_args()
     sys.argv = [sys.argv[0], *unknown]
     return args
 
@@ -682,6 +717,67 @@ def save_capture(directory: Path, name: str, frame: dict, metadata: dict) -> Non
         )
 
 
+RENDER_SETTING_KEYS = (
+    # The render mode itself, and the neighbours the RGB drift diagnostic
+    # measured beside it (report section 20.1), so a PathTracing run records
+    # the sample count and denoiser its images actually came out of and a
+    # RaytracedLighting run records the post-processing stages that were
+    # refuted. This run reads these; it never writes them.
+    "/rtx/rendermode",
+    "/rtx/post/aa/op",
+    "/rtx/post/tonemap/op",
+    "/rtx/post/aa/sharpness",
+    "/rtx/post/taa/samples",
+    "/rtx/pathtracing/spp",
+    "/rtx/pathtracing/optixDenoiser/enabled",
+)
+
+
+def recordable_setting_value(value):
+    """Keep a carb value the strict record cannot encode; never drop its key.
+
+    record_json refuses NaN/inf and unknown types, so one version-dependent
+    setting type must not cost the whole result.json.
+    """
+    try:
+        RUNNER.record_json(value)
+    except (TypeError, ValueError, RecursionError):
+        try:
+            text = repr(value)
+        except Exception as exc:  # A carb proxy may refuse even repr().
+            text = f"<repr failed: {type(exc).__name__}>"
+        return {"unserializable_type": type(value).__name__, "value_repr": text}
+    return value
+
+
+def render_settings_readback(settings, requested_mode: str) -> dict:
+    """Read the renderer back from carb; never report the request as the result.
+
+    /rtx/rendermode is set from SimulationApp's `renderer` while the RTX plugins
+    load. A request Isaac ignored, a key this version does not register (which
+    reads back None) and a getter that raises must each read differently from a
+    mode that took effect, so `render_mode_applied` is exact equality against
+    what carb returned, not against what was asked for. This is a record, not a
+    gate: nothing here passes, fails or aborts the run.
+    """
+    values, errors = {}, {}
+    for key in RENDER_SETTING_KEYS:
+        try:
+            values[key] = recordable_setting_value(settings.get(key))
+        except Exception as exc:
+            values[key] = None
+            errors[key] = f"{type(exc).__name__}: {exc}"
+    observed = values["/rtx/rendermode"]
+    return {
+        "requested_render_mode": requested_mode,
+        "observed_render_mode": observed,
+        "render_mode_applied": observed == requested_mode,
+        "expressed_as": "SimulationApp argument",
+        "values": values,
+        "readback_errors": errors,
+    }
+
+
 def render_pipeline_state(
     stage, camera, timeline, rep, *, attached_product: str
 ) -> dict:
@@ -1012,6 +1108,7 @@ def run(app, args: argparse.Namespace, result: dict) -> None:
 
 
 def _run_measurements(app, args: argparse.Namespace, result: dict, annotators):
+    import carb
     import omni.replicator.core as rep
     import omni.timeline
     import omni.usd
@@ -1023,6 +1120,16 @@ def _run_measurements(app, args: argparse.Namespace, result: dict, annotators):
     from forklift_core.geometry import RigidTransform
     from forklift_core.sensors.rgbd import PinholeIntrinsics
 
+    # Read once here, before the stage opens and before any render product
+    # exists, and once more after the last judged capture: a mode that did not
+    # hold for the whole run must not read as one that did. This run makes no
+    # carb writes, so both readings describe the launcher's renderer alone.
+    settings = carb.settings.get_settings()
+    result["render_settings"] = {
+        "basis": "docs/validation/2026-09-21-g1-calibration-run.md, section 20",
+        "before_measurements": render_settings_readback(settings, args.render_mode),
+        "after_measurements": None,
+    }
     adapter = load_module(
         "perception_camera_check_adapter", ROOT / "sim/isaac/perception_adapter.py"
     )
@@ -1624,6 +1731,9 @@ def _run_measurements(app, args: argparse.Namespace, result: dict, annotators):
             "protocol_version": result["protocol"]["version"],
         },
     )
+    result["render_settings"]["after_measurements"] = render_settings_readback(
+        settings, args.render_mode
+    )
     finish_result(result)
     return camera
 
@@ -1757,6 +1867,8 @@ def main() -> int:
         "status": "FAIL",
         "g2_allowed": False,
         "camera_axes": args.camera_axes,
+        # The request. result["render_settings"] carries what carb reports.
+        "requested_render_mode": args.render_mode,
         "protocol": MEASURE.protocol(),
         "base_scene": args.base_scene,
         "forklift_urdf_source": str(args.forklift_urdf),
@@ -1775,7 +1887,7 @@ def main() -> int:
             result["plan_sha256"] = hashlib.sha256(plan.read_bytes()).hexdigest()
         from isaacsim import SimulationApp
 
-        app = SimulationApp({"headless": True, "renderer": "RaytracedLighting"})
+        app = SimulationApp({"headless": True, "renderer": args.render_mode})
         run(app, args, result)
     except Exception as exc:
         result["status"], result["reason"] = "FAIL", str(exc)
