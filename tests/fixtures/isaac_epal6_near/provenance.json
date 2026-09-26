@@ -1,0 +1,11 @@
+{
+  "capture_id": "20260918_pocket_tracking/isaac_tracking_range/capture0",
+  "engine": "Isaac Sim 5.1.0",
+  "source_depth_npy_sha256": "29469fb64895921b78c9564f41f577509ed0ff756cfee1a4e39a7d5c7495543b",
+  "original_float64_depth_sha256": "abea53be92e92c18593e63cf97fe2c9895ac592b5d1237cf7bcf937aeecff0f7",
+  "stored_dtype": "float32",
+  "original_dtype": "float64",
+  "finite_values_roundtrip_exact": true,
+  "unknown_values_preserved_as_nan": true,
+  "rgb": "omitted; depth-only replay supplies all-zero RGB"
+}

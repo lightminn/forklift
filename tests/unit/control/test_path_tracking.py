@@ -346,3 +346,184 @@ def test_faster_cruise_with_speed_and_steering_lag_arrives(
     assert abs(pose[2] - poses[-1, 2]) < 0.02
     assert maximum_speed > 0.95 * cruise_speed
     assert saw_reverse == has_cusp
+
+
+DOCKING = dict(position_tolerance_m=0.008, yaw_tolerance_rad=0.02)
+CUSP_PATH = (
+    [[0, 0, 0], [0.5, 0, 0], [1, 0, 0], [0.6, 0, 0], [0.3, 0, 0]],
+    [1, 1, 1, -1, -1],
+    [0, 0, 0, 0, 0],
+)
+
+
+def drive_past_cusp_off_line(tracker, lateral=0.015, yaw=0.03):
+    # Reach the gear-change cusp at x = 1 but 15 mm to the side and slightly
+    # yawed, then stand still: the stop a real truck produced (2026-09-26).
+    for x in np.linspace(0, 1, 51):
+        tracker.update([x, lateral, yaw], 0.1, 0.02)
+    return [tracker.update([1.0, lateral, yaw], 0.0, 0.02) for _ in range(200)]
+
+
+def test_without_cusp_tolerance_an_offset_stop_at_a_cusp_holds_forever():
+    tracker = RearAxlePathTracker(*CUSP_PATH, TrackerConfig(**DOCKING))
+    commands = drive_past_cusp_off_line(tracker)
+    # After the commanded speed has slewed down it stays at zero, never
+    # reverses and never fails: the deadlock seen in Isaac.
+    assert all(c.speed_mps == 0 for c in commands[-100:])
+    assert all(c.speed_mps >= 0 for c in commands)
+    assert all(c.status != "failed" for c in commands)
+
+
+def test_cusp_tolerance_releases_an_offset_stop_into_the_next_leg():
+    config = TrackerConfig(
+        **DOCKING, cusp_position_tolerance_m=0.03, cusp_yaw_tolerance_rad=0.05
+    )
+    tracker = RearAxlePathTracker(*CUSP_PATH, config)
+    commands = drive_past_cusp_off_line(tracker)
+    assert any(c.speed_mps < 0 for c in commands)
+    assert all(c.status != "failed" for c in commands)
+
+
+def test_cusp_tolerance_does_not_loosen_the_final_goal():
+    config = TrackerConfig(
+        **DOCKING, cusp_position_tolerance_m=0.03, cusp_yaw_tolerance_rad=0.05
+    )
+    tracker = RearAxlePathTracker([[0, 0, 0], [1, 0, 0]], [1, 1], [0, 0], config)
+    for x in np.linspace(0, 1, 51):
+        tracker.update([x, 0.015, 0.0], 0.1, 0.02)
+    for _ in range(50):
+        command = tracker.update([1.0, 0.015, 0.0], 0.0, 0.02)
+    assert command.status != "arrived"
+
+
+@pytest.mark.parametrize(
+    "field", ["cusp_position_tolerance_m", "cusp_yaw_tolerance_rad"]
+)
+@pytest.mark.parametrize("value", [True, 0, -0.01, np.nan])
+def test_invalid_cusp_tolerance_is_rejected(field, value):
+    with pytest.raises(ValueError):
+        TrackerConfig(**{field: value})
+
+
+def stop_near_final_goal(config, along, across=0.0):
+    # Drive the one-metre straight, then stand still `along` metres past the
+    # goal (negative = short of it) and `across` metres to its left.
+    tracker = RearAxlePathTracker([[0, 0, 0], [1, 0, 0]], [1, 1], [0, 0], config)
+    for x in np.linspace(0, 1 + along, 51):
+        tracker.update([x, across, 0.0], 0.1, 0.02)
+    return [tracker.update([1 + along, across, 0.0], 0.0, 0.02) for _ in range(100)]
+
+
+def test_without_overshoot_tolerance_stopping_just_past_the_goal_deadlocks():
+    commands = stop_near_final_goal(TrackerConfig(**DOCKING), along=0.009)
+    assert all(c.status != "arrived" for c in commands)
+    assert all(c.speed_mps == 0 for c in commands[-50:])
+
+
+def test_overshoot_tolerance_accepts_a_stop_just_past_the_goal():
+    config = TrackerConfig(**DOCKING, overshoot_tolerance_m=0.03)
+    assert stop_near_final_goal(config, along=0.009)[-1].status == "arrived"
+    assert stop_near_final_goal(config, along=0.025)[-1].status == "arrived"
+    assert stop_near_final_goal(config, along=0.035)[-1].status != "arrived"
+
+
+def test_overshoot_tolerance_keeps_the_sideways_and_short_limits():
+    config = TrackerConfig(**DOCKING, overshoot_tolerance_m=0.03)
+    assert stop_near_final_goal(config, along=0.0, across=0.012)[-1].status != (
+        "arrived"
+    )
+    # Short of the goal the tracker keeps driving instead of accepting.
+    short = stop_near_final_goal(config, along=-0.02)
+    assert short[-1].status != "arrived"
+    assert any(c.speed_mps > 0 for c in short)
+
+
+@pytest.mark.parametrize("value", [True, 0, -0.01, np.nan])
+def test_invalid_overshoot_tolerance_is_rejected(value):
+    with pytest.raises(ValueError):
+        TrackerConfig(overshoot_tolerance_m=value)
+
+
+def straight_then_arc(direction=1):
+    # 6 m straight, then a quarter turn of radius 2 m (curvature 0.5).
+    straight = np.column_stack((np.linspace(0, 6, 121), np.zeros(121), np.zeros(121)))
+    angle = np.linspace(0, np.pi / 2, 80)[1:]
+    arc = np.column_stack((6 + 2 * np.sin(angle), 2 * (1 - np.cos(angle)), angle))
+    poses = np.vstack((straight, arc))
+    if direction < 0:
+        poses = poses[::-1]
+    curvature = np.r_[np.zeros(121), np.full(79, 0.5)]
+    if direction < 0:
+        curvature = curvature[::-1] * -1
+    curvature[0] = curvature[1]
+    return poses, np.full(len(poses), direction), curvature
+
+
+def test_lateral_acceleration_limit_slows_down_before_and_on_a_curve():
+    poses, directions, curvatures = straight_then_arc()
+    config = TrackerConfig(
+        cruise_speed_mps=2.2,
+        max_acceleration_mps2=0.5,
+        max_curvature_inv_m=0.62,
+        max_lateral_acceleration_mps2=0.5,
+    )
+    tracker = RearAxlePathTracker(poses, directions, curvatures, config)
+    _, history = rollout(tracker, poses[0])
+    arc_limit = np.sqrt(0.5 / 0.5)  # 1.0 m/s on the 2 m radius
+    on_arc = [c.speed_mps for c in history if c.progress_m > 6.0 + 0.05]
+    assert on_arc and max(on_arc) <= arc_limit + 1e-6
+    assert max(c.speed_mps for c in history) > 1.5  # the straight is still fast
+    assert history[-1].status == "arrived"
+
+
+def test_without_a_lateral_limit_the_curve_is_taken_at_cruise():
+    poses, directions, curvatures = straight_then_arc()
+    config = TrackerConfig(
+        cruise_speed_mps=2.2, max_acceleration_mps2=0.5, max_curvature_inv_m=0.62
+    )
+    tracker = RearAxlePathTracker(poses, directions, curvatures, config)
+    _, history = rollout(tracker, poses[0])
+    assert max(c.speed_mps for c in history if 6.2 < c.progress_m < 8.0) > 1.5
+
+
+def test_reverse_speed_cap_limits_only_reversing():
+    poses, directions, curvatures = straight_then_arc(direction=-1)
+    config = TrackerConfig(
+        cruise_speed_mps=2.2,
+        max_acceleration_mps2=0.5,
+        max_curvature_inv_m=0.62,
+        max_reverse_speed_mps=0.6,
+    )
+    tracker = RearAxlePathTracker(poses, directions, curvatures, config)
+    _, history = rollout(tracker, poses[0])
+    assert min(c.speed_mps for c in history) >= -0.6 - 1e-9
+    assert history[-1].status == "arrived"
+
+
+@pytest.mark.parametrize(
+    "field", ["max_lateral_acceleration_mps2", "max_reverse_speed_mps"]
+)
+@pytest.mark.parametrize("value", [True, 0, -1.0, np.nan])
+def test_invalid_speed_limits_are_rejected(field, value):
+    with pytest.raises(ValueError):
+        TrackerConfig(**{field: value})
+
+
+def test_nominal_duration_is_length_over_cruise_without_caps():
+    poses, directions, curvatures = straight_then_arc()
+    config = TrackerConfig(cruise_speed_mps=2.0, max_curvature_inv_m=0.62)
+    tracker = RearAxlePathTracker(poses, directions, curvatures, config)
+    length = np.sum(np.hypot(*np.diff(poses[:, :2], axis=0).T))
+    assert tracker.nominal_duration_s() == pytest.approx(length / 2.0)
+
+
+def test_nominal_duration_counts_the_slow_curve():
+    poses, directions, curvatures = straight_then_arc()
+    config = TrackerConfig(
+        cruise_speed_mps=2.0,
+        max_curvature_inv_m=0.62,
+        max_lateral_acceleration_mps2=0.125,  # 0.5 m/s on the 2 m arc
+    )
+    tracker = RearAxlePathTracker(poses, directions, curvatures, config)
+    arc_time = (np.pi / 2 * 2) / 0.5
+    assert tracker.nominal_duration_s() > arc_time

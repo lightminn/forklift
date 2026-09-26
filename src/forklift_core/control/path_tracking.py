@@ -35,10 +35,36 @@ class TrackerConfig:
     yaw_tolerance_rad: float = 0.07
     stop_speed_mps: float = 0.015
     max_cross_track_error_m: float = 0.65
+    # Tolerances at intermediate gear-change cusps. None applies the goal
+    # tolerances there too. A cusp is not a goal: the next leg starts from the
+    # measured pose, while a car-like vehicle stopped just off the cusp cannot
+    # close a sideways offset and would otherwise wait at zero speed forever.
+    cusp_position_tolerance_m: float | None = None
+    cusp_yaw_tolerance_rad: float | None = None
+    # How far past an endpoint, along the direction of travel, a stop still
+    # counts as arrived. The sideways and heading limits stay as they are.
+    # Braking lag carries a truck a few millimetres beyond the goal; with no
+    # allowance it neither arrives nor backs up. None keeps the round tolerance.
+    overshoot_tolerance_m: float | None = None
+    # Optional speed caps along the path; None leaves speed to cruise and
+    # braking alone. The lateral limit caps speed at sqrt(a / |curvature|) and
+    # brakes ahead of a curve at max_acceleration_mps2, so a fast cruise does
+    # not carry into a turn the steering cannot follow.
+    max_lateral_acceleration_mps2: float | None = None
+    max_reverse_speed_mps: float | None = None
 
     def __post_init__(self) -> None:
         for name in self.__dataclass_fields__:
-            _positive(name, getattr(self, name))
+            value = getattr(self, name)
+            optional = (
+                "cusp_",
+                "overshoot_",
+                "max_lateral_",
+                "max_reverse_",
+            )
+            if name.startswith(optional) and value is None:
+                continue
+            _positive(name, value)
         if self.yaw_tolerance_rad >= pi:
             raise ValueError("yaw_tolerance_rad must be less than pi")
 
@@ -115,6 +141,7 @@ class RearAxlePathTracker:
         if np.any(self._lengths <= 1e-9):
             raise ValueError("adjacent path positions must differ")
         self._distance = np.r_[0.0, np.cumsum(self._lengths)]
+        self._speed_cap = self._speed_profile()
         self._leg_ends = (
             np.flatnonzero(self._directions[1:-1] != self._directions[2:]) + 1
         ).tolist() + [size - 1]
@@ -124,6 +151,52 @@ class RearAxlePathTracker:
         self._failed = False
         self._arrived = False
         self._command_speed: float | None = None
+
+    def _speed_profile(self) -> np.ndarray:
+        """Largest speed on the segment arriving at each sample, braked ahead."""
+        cfg = self.config
+        cap = np.full(len(self._poses), cfg.cruise_speed_mps)
+        if cfg.max_reverse_speed_mps is not None:
+            cap[self._directions < 0] = np.minimum(
+                cap[self._directions < 0], cfg.max_reverse_speed_mps
+            )
+        if cfg.max_lateral_acceleration_mps2 is not None:
+            curved = np.abs(self._curvatures) > 1e-9
+            cap[curved] = np.minimum(
+                cap[curved],
+                np.sqrt(
+                    cfg.max_lateral_acceleration_mps2 / np.abs(self._curvatures[curved])
+                ),
+            )
+        # Reach each segment's cap by braking over the segments before it.
+        for i in range(len(cap) - 2, -1, -1):
+            cap[i] = min(
+                cap[i],
+                sqrt(
+                    cap[i + 1] ** 2 + 2 * cfg.max_acceleration_mps2 * self._lengths[i]
+                ),
+            )
+        return cap
+
+    def nominal_duration_s(self) -> float:
+        """Path time at each segment's speed cap, ignoring acceleration.
+
+        Without speed caps this is length / cruise speed; a timeout scaled from
+        it then allows for the slow curves the caps impose.
+        """
+        return float(np.sum(self._lengths / self._speed_cap[1:]))
+
+    def _overshoot_accepted(
+        self, pose: np.ndarray, goal: np.ndarray, endpoint: int, tolerance: float
+    ) -> bool:
+        limit = self.config.overshoot_tolerance_m
+        if limit is None:
+            return False
+        offset = pose[:2] - goal[:2]
+        heading = np.array([cos(goal[2]), sin(goal[2])])
+        along = float(self._directions[endpoint] * np.dot(offset, heading))
+        across = abs(float(np.dot(offset, [-heading[1], heading[0]])))
+        return across <= tolerance and 0.0 <= along <= limit
 
     def update(
         self, pose_rear_axle: ArrayLike, signed_speed_mps: float, dt_s: float
@@ -173,11 +246,20 @@ class RearAxlePathTracker:
         if np.linalg.norm(pose[:2] - nearest) > cfg.max_cross_track_error_m:
             self._failed = True
         remaining = max(0.0, float(self._distance[endpoint] - self._progress))
-        at_endpoint = (
-            position_error <= cfg.position_tolerance_m
-            and remaining <= cfg.position_tolerance_m
+        position_tolerance, yaw_tolerance = (
+            cfg.position_tolerance_m,
+            cfg.yaw_tolerance_rad,
         )
-        if at_endpoint and abs(yaw_error) > cfg.yaw_tolerance_rad:
+        if endpoint != len(self._poses) - 1:
+            if cfg.cusp_position_tolerance_m is not None:
+                position_tolerance = cfg.cusp_position_tolerance_m
+            if cfg.cusp_yaw_tolerance_rad is not None:
+                yaw_tolerance = cfg.cusp_yaw_tolerance_rad
+        at_endpoint = remaining <= position_tolerance and (
+            position_error <= position_tolerance
+            or self._overshoot_accepted(pose, goal, endpoint, position_tolerance)
+        )
+        if at_endpoint and abs(yaw_error) > yaw_tolerance:
             self._failed = True
         direction = self._directions[self._segment + 1]
         curvature = 0.0
@@ -230,6 +312,7 @@ class RearAxlePathTracker:
                 cfg.cruise_speed_mps,
                 sqrt(2 * cfg.max_acceleration_mps2 * remaining),
                 1.5 * remaining,
+                float(self._speed_cap[self._segment + 1]),
             )
             target_speed = float(direction * speed_limit)
             if (

@@ -28,6 +28,7 @@ forklift/
 │       │   ├── rgbd.py
 │       │   └── lidar.py
 │       ├── perception/               # 검출·포켓 추적·로봇 기준 자세 추정
+│       ├── localization/             # 바퀴 오도메트리·정답 대비 궤적 오차
 │       ├── planning/                 # 접근 경로·충돌 검사
 │       ├── control/                  # 경로 추종·삽입 제어
 │       ├── mission/                  # 적재·이송·하역의 순서와 상태 전이

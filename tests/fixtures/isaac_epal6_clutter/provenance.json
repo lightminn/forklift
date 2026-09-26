@@ -1,0 +1,13 @@
+{
+  "capture_id": "20260918_perception_approach/seed0",
+  "engine": "Isaac Sim 5.1.0",
+  "seed": 0,
+  "source_depth_npy_sha256": "356fae58c7ae29e106655fd0bf7b2d19ecda2ba0760256b7f8413746147b5c27",
+  "original_float64_depth_sha256": "1b203129926bf3ccd37da25fe21d2675e0dec1198eed6f1ad11b1b7fa5724a38",
+  "stored_dtype": "float32",
+  "original_dtype": "float64",
+  "finite_values_roundtrip_exact": true,
+  "unknown_values_preserved_as_nan": true,
+  "rgb": "omitted; detector is depth-only; replay supplies an all-zero RGB buffer",
+  "original_rgb_png_bytes": 349175
+}

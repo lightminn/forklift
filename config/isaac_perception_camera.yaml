@@ -1,0 +1,8 @@
+# Synthetic renderer calibration and provisional mount; no real D435i measurements.
+mount_calibration: synthetic_fixed_base_mount
+translation_m: [0.75, 0.0, 0.27]
+quaternion_wxyz: [0.5, -0.5, 0.5, -0.5]
+resolution: [640, 480]
+focal_px: 465.741156
+aperture_cm: 2.0955
+clipping_range_m: [0.03, 100.0]

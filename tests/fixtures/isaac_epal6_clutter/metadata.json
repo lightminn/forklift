@@ -1,0 +1,72 @@
+{
+  "stamp_ns": 2016666772,
+  "clock_domain": "synthetic",
+  "source_provenance": "synthetic",
+  "intrinsics": {
+    "width": 640,
+    "height": 480,
+    "fx": 465.74114990234375,
+    "fy": 465.7411193847656,
+    "cx": 320.0,
+    "cy": 240.0,
+    "frame_id": "camera_optical_frame"
+  },
+  "base_from_optical": {
+    "source_frame": "camera_optical_frame",
+    "target_frame": "base_link",
+    "rotation": [
+      [
+        1.7291900192208904e-09,
+        7.470295111488543e-08,
+        0.999999999999997
+      ],
+      [
+        -0.9999999999999999,
+        -6.921961281858485e-09,
+        1.7291904252893848e-09
+      ],
+      [
+        6.9219615220559935e-09,
+        -0.9999999999999971,
+        7.470295121393842e-08
+      ]
+    ],
+    "translation_m": [
+      0.7500000588063793,
+      1.2774767194809597e-10,
+      0.2699999997008469
+    ]
+  },
+  "world_from_base": {
+    "source_frame": "base_link",
+    "target_frame": "world",
+    "rotation": [
+      [
+        0.9999999999999708,
+        9.113616228356407e-08,
+        2.237145634217202e-07
+      ],
+      [
+        -9.113615406780604e-08,
+        0.9999999999999952,
+        -3.6724297805165496e-08
+      ],
+      [
+        -2.237145667686307e-07,
+        3.6724277416679506e-08,
+        0.9999999999999744
+      ]
+    ],
+    "translation_m": [
+      -1.9998228549957275,
+      1.0655973881057434e-08,
+      -6.586313247680664e-06
+    ]
+  },
+  "depth_kind": "optical_axis_z",
+  "depth_unit": "m",
+  "rectified": true,
+  "rgb_registered_to_depth_grid": true,
+  "acquisition": "same_render_product_physics_frozen",
+  "mount_calibration": "synthetic_fixed_base_mount"
+}

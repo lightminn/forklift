@@ -1,0 +1,77 @@
+# Factory floor laid out in the empty south hall of NVIDIA Isaac 5.1
+# Simple_Warehouse/full_warehouse.usd (S3 ETag e9e3449c2454d23e1afb2ea8190bf61c).
+#
+# Measured 2026-09-26 from that USD with usd-core (mesh points, not estimates):
+#   inner wall faces      west x = -26.13, east x = 5.43, south y = -23.37
+#   wall columns          east x in [5.16, 5.56], west x in [-26.43, -26.03]
+#   rack zone south edge  y = 8.74 (SM_RackFrame); nothing floor-level south of it
+# The hall below keeps at least 0.4 m from all of those.
+#
+# Everything else here is a synthetic layout choice, not a plant drawing:
+# 4 m aisles (the planner's 2 m minimum turning radius plus the body), block
+# stacking in back-to-back double rows, a shipping yard with south-facing
+# drop sites, and wall-side work areas. Metres and radians, world frame.
+layout_version: south_hall_v2
+
+hall: {x_min_m: -25.6, x_max_m: 4.7, y_min_m: -22.9, y_max_m: 8.3}
+
+# The original transport bay Bounds(-3.0, 4.7, -1.75, 3.05) plus the region the
+# perception camera sees within 5 m of its observation candidates (+x facing,
+# 87 deg field of view). Nothing is placed here, so perception runs see the
+# same surroundings as in the original bay.
+keep_clear:
+  - {x_min_m: -3.0, x_max_m: 4.7, y_min_m: -4.3, y_max_m: 4.6}
+
+# Block-stacked pallets. Slots fill each region on this pitch (x, y), centred.
+slot_pitch_m: [1.40, 1.25]
+slot_occupancy: 0.9
+slot_jitter_m: 0.03
+slot_yaw_jitter_rad: 0.026
+# A loaded pallet draws a target load height and stacks whole layers of one
+# box type up to it. 0.8-1.6 m is a synthetic unit-load range, not a standard.
+# (v1 stacked 0-3 layers of any box; only 12 % of floor items then reached the
+# 1.05 m LiDAR plane, so the scans saw little besides the walls.)
+load_height_m: [0.8, 1.6]
+empty_pallet_fraction: 0.15
+storage:
+  - {x_min_m: -20.6, x_max_m: -13.4, y_min_m: 2.0, y_max_m: 4.6}
+  - {x_min_m: -9.4, x_max_m: -3.0, y_min_m: 2.0, y_max_m: 4.6}
+  - {x_min_m: -20.6, x_max_m: -13.4, y_min_m: -4.6, y_max_m: -2.0}
+  - {x_min_m: -9.4, x_max_m: -3.0, y_min_m: -4.6, y_max_m: -2.0}
+  - {x_min_m: -20.6, x_max_m: -13.4, y_min_m: -11.2, y_max_m: -8.6}
+  - {x_min_m: -9.4, x_max_m: -1.4, y_min_m: -11.2, y_max_m: -8.6}
+  - {x_min_m: -20.6, x_max_m: -13.4, y_min_m: -17.8, y_max_m: -15.2}
+
+# Drop sites in the shipping yard: pallet centre and fork insertion heading.
+docks:
+  - [-7.5, -21.4, -1.5707963267948966]
+  - [-5.0, -21.4, -1.5707963267948966]
+  - [-2.5, -21.4, -1.5707963267948966]
+  - [0.0, -21.4, -1.5707963267948966]
+  - [2.5, -21.4, -1.5707963267948966]
+dock_jitter_m: 0.3
+dock_yaw_jitter_rad: 0.17453292519943295
+
+# Wall-side work areas with loose barrels, crates, carts and cones.
+clutter:
+  - {region: {x_min_m: -25.6, x_max_m: -24.7, y_min_m: -17.0, y_max_m: 3.5}, count: 10}
+  - {region: {x_min_m: -24.0, x_max_m: -14.0, y_min_m: -22.9, y_max_m: -22.0}, count: 8}
+  - {region: {x_min_m: -1.4, x_max_m: 0.7, y_min_m: -11.2, y_max_m: -8.6}, count: 5}
+
+# Closed survey loop for SLAM recording: rear-axle poses along the aisles.
+# It passes the central aisle twice so a mapper can close the loop.
+survey_route:
+  - [-5.0, 0.0, 3.141592653589793]
+  - [-17.0, 0.0, 3.141592653589793]
+  - [-22.65, -5.0, -1.5707963267948966]
+  - [-22.65, -14.0, -1.5707963267948966]
+  - [-17.0, -19.85, 0.0]
+  - [-6.0, -18.5, 0.0]
+  - [2.7, -12.0, 1.5707963267948966]
+  - [-3.0, -6.6, 3.141592653589793]
+  - [-11.4, -2.5, 1.5707963267948966]
+  - [-11.4, 3.0, 1.5707963267948966]
+  - [-16.0, 6.45, 3.141592653589793]
+  - [-22.65, 3.0, -1.5707963267948966]
+  - [-17.0, 0.0, 0.0]
+  - [-8.0, 0.0, 0.0]

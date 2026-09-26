@@ -72,6 +72,9 @@ class DetectorParams:
     max_plane_residual_m: float = 0.015
     width_mismatch_frac: float = 0.20
     seed: int = 20260913
+    # Opt-in near-range fitting for an independently associated target. It can
+    # also admit shelf/column lookalikes; it does not certify a bottom deck.
+    median_plane_offset: bool = False
 
     @classmethod
     def derived_for(cls, prior, **overrides) -> "DetectorParams":
@@ -139,7 +142,10 @@ class DetectorParams:
         }
         for field in fields(self):
             value = getattr(self, field.name)
-            if field.name in integers:
+            if field.name == "median_plane_offset":
+                if type(value) is not bool:
+                    raise ValueError("median_plane_offset must be an explicit boolean")
+            elif field.name in integers:
                 minimum = 0 if field.name in {"seed", "upper_band_points"} else 1
                 if (
                     isinstance(value, (bool, np.bool_))
@@ -318,14 +324,20 @@ def _filter_workspace(points, camera, prior, params):
     return points[mask]
 
 
-def _refit_vertical(points, camera):
-    """Least-squares XY line fit, extruded vertically; n_z is exactly zero."""
+def _refit_vertical(points, camera, *, median_offset=False):
+    """Least-squares XY direction, optionally robust offset; n_z is zero."""
     centre = points.mean(axis=0)
     delta = points[:, :2] - centre[:2]
     _, vectors = np.linalg.eigh(delta.T @ delta)
     normal = np.array((*vectors[:, 0], 0.0))
     if np.dot(normal, camera - centre) < 0:
         normal = -normal
+    if median_offset:
+        # Nearby deck/side returns can shift the mean behind the dominant face.
+        # The optional median recovers coplanar lower evidence while retaining
+        # the direction and depth >= 0 gate. Column lookalikes can also benefit,
+        # so acquisition keeps the original mean unless explicitly opted in.
+        centre += np.median((points - centre) @ normal) * normal
     residual = np.abs((points - centre) @ normal)
     return _Plane(centre, normal, points, float(np.percentile(residual, 95)))
 
@@ -355,7 +367,9 @@ def _vertical_plane_candidates(points, camera, params):
                 best_mask, best_count = mask, count
         if best_count < params.min_plane_points:
             break
-        plane = _refit_vertical(remaining[best_mask], camera)
+        plane = _refit_vertical(
+            remaining[best_mask], camera, median_offset=params.median_plane_offset
+        )
         # The grid and residual must use inliers of the vertical model, not
         # the slightly tilted hypothesis that RANSAC used to find that model.
         # Recover shared evidence consumed by earlier candidate planes.

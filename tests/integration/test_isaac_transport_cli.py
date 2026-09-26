@@ -21,6 +21,21 @@ def test_isaac_transport_help_does_not_require_simulator_sdk() -> None:
     assert "--video" in result.stdout
 
 
+def test_return_home_is_opt_in_and_documented_in_usage() -> None:
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    usage = " ".join(result.stdout.split())
+    # A bare flag in usage: opting in takes no value, and omitting it keeps the
+    # five-stage mission every recorded run was measured with.
+    assert "[--return-home]" in usage
+    assert "drive back to the rear-axle pose the mission started from" in usage
+
+
 def test_isaac_transport_rejects_unsupported_camera_rate_before_startup() -> None:
     result = subprocess.run(
         [sys.executable, str(SCRIPT), "--fps", "59"],
@@ -136,7 +151,7 @@ def test_isaac_record_encoder_preserves_numpy_numbers_and_arrays() -> None:
     }
 
 
-def run_geometry_cli(tmp_path, pallet_urdf, geometry="t11_06"):
+def run_geometry_cli(tmp_path, pallet_urdf, geometry="t11_06", *extra):
     return subprocess.run(
         [
             sys.executable,
@@ -153,11 +168,50 @@ def run_geometry_cli(tmp_path, pallet_urdf, geometry="t11_06"):
             str(tmp_path / "run"),
             "--seed",
             "0",
+            *extra,
         ],
         capture_output=True,
         text=True,
         check=False,
     )
+
+
+def test_camera_inset_without_perception_is_rejected_before_startup(
+    tmp_path, full_t11_pallet_urdf
+):
+    result = run_geometry_cli(
+        tmp_path, full_t11_pallet_urdf(), "t11_06", "--video", "--camera-inset"
+    )
+    assert result.returncode == 2
+    assert "--camera-inset requires --video and --use-perception" in result.stderr
+    assert not (tmp_path / "run").exists()
+
+
+def test_camera_inset_keeps_the_perception_prior_loaded(tmp_path, full_t11_pallet_urdf):
+    # Regression: the inset check once split the perception block and left the
+    # prior unloaded. Reaching SDK startup with the prior recorded proves it.
+    import json
+    import os
+    from unittest.mock import patch
+
+    (tmp_path / "isaacsim.py").write_text('raise RuntimeError("SDK_STARTUP_REACHED")')
+    old = os.environ.get("PYTHONPATH", "")
+    with patch.dict(os.environ, {"PYTHONPATH": str(tmp_path) + os.pathsep + old}):
+        result = run_geometry_cli(
+            tmp_path,
+            full_t11_pallet_urdf(),
+            "t11_06",
+            "--video",
+            "--use-perception",
+            "--pallet-prior",
+            str(ROOT / "config/pallet_prior_epal6.yaml"),
+            "--camera-inset",
+        )
+    assert result.returncode == 1, result.stderr
+    assert "SDK_STARTUP_REACHED" in result.stderr
+    record = json.loads((tmp_path / "run/result.json").read_text())
+    assert record["arguments"]["camera_inset"] is True
+    assert record["arguments"]["pallet_prior_loaded"] is not None
 
 
 def test_t11_configuration_reaches_sdk_startup(tmp_path, full_t11_pallet_urdf):

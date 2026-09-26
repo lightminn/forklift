@@ -162,10 +162,13 @@ class SyntheticMissionGeometry:
 
 @dataclass(frozen=True)
 class MissionPlan:
-    """All five runnable paths, or no paths if any stage failed.
+    """Every runnable path, or no paths if any stage failed.
 
     Load after insert, unload after transport. Stop at every stage boundary
     and every gear-change cusp. Pocket collision checks are adapter-owned.
+
+    `return_home` is planned only when the caller asks for it, so a mission
+    that does not return keeps exactly the five stages it had before.
     """
 
     success: bool
@@ -175,6 +178,7 @@ class MissionPlan:
     extract: PlanResult | None = None
     transport: PlanResult | None = None
     withdraw: PlanResult | None = None
+    return_home: PlanResult | None = None
 
 
 def site_poses(
@@ -213,9 +217,28 @@ def _swept_reservation(start: Pose2D, end: Pose2D, footprint: Footprint):
     return centre, swept
 
 
+def destination_reservations(
+    destination: PalletSite, geometry: SyntheticMissionGeometry | None = None
+) -> list[tuple[Pose2D, Footprint]]:
+    """Body rectangles swept by the loaded delivery and the unloaded withdrawal.
+
+    Each entry is a centre pose and a footprint around it. Anything placed near
+    a destination must leave these free; they do not guarantee a route there.
+    """
+    geometry = geometry if geometry is not None else SyntheticMissionGeometry()
+    poses = site_poses(destination, geometry)
+    return [
+        _swept_reservation(
+            poses["predelivery"], poses["delivery"], geometry.loaded_footprint
+        ),
+        _swept_reservation(
+            poses["delivery"], poses["withdrawn"], geometry.unloaded_footprint
+        ),
+    ]
+
+
 def _reservations(start, pickup, destination, geometry):
     pickup_poses = site_poses(pickup, geometry)
-    destination_poses = site_poses(destination, geometry)
     return [
         (start, geometry.unloaded_footprint),
         _swept_reservation(
@@ -228,16 +251,7 @@ def _reservations(start, pickup, destination, geometry):
             pickup_poses["extracted"],
             geometry.loaded_footprint,
         ),
-        _swept_reservation(
-            destination_poses["predelivery"],
-            destination_poses["delivery"],
-            geometry.loaded_footprint,
-        ),
-        _swept_reservation(
-            destination_poses["delivery"],
-            destination_poses["withdrawn"],
-            geometry.unloaded_footprint,
-        ),
+        *destination_reservations(destination, geometry),
     ]
 
 
@@ -400,12 +414,14 @@ def plan_observation_leg(
     *,
     geometry: SyntheticMissionGeometry | None = None,
     start_rear: Pose2D | None = None,
+    pickup_bounds: Bounds | None = None,
 ) -> PlanResult:
     """Plan a separate leg to the observation waypoint at full clearance.
 
     Like plan_transport's target/obstacle split, scenario.pickup is an obstacle,
     not the goal of this leg.
     start_rear optionally replaces scenario.start_rear with the measured rear pose.
+    pickup_bounds optionally confines the leg as in plan_transport.
     """
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
     config = config if config is not None else make_transport_planner_config()
@@ -422,7 +438,7 @@ def plan_observation_leg(
         waypoint,
         props + [pallet],
         geometry.unloaded_footprint,
-        scenario.bounds,
+        pickup_bounds if pickup_bounds is not None else scenario.bounds,
         config,
     )
 
@@ -434,6 +450,9 @@ def plan_transport(
     geometry: SyntheticMissionGeometry | None = None,
     target_pickup: PalletSite | None = None,
     start_rear: Pose2D | None = None,
+    return_to: Pose2D | None = None,
+    pickup_bounds: Bounds | None = None,
+    travel_config: PlannerConfig | None = None,
 ) -> MissionPlan:
     """Plan all stages with exact final straight approaches and loaded geometry.
 
@@ -446,9 +465,19 @@ def plan_transport(
     target_pickup optionally supplies an estimated goal while the pallet
     obstacle stays at scenario.pickup (ground truth). start_rear optionally
     replaces scenario.start_rear with the rear-axle pose after observation.
+    return_to optionally adds a final unloaded leg from the withdrawn pose
+    back to that rear-axle pose; pass scenario.start_rear to return to where
+    the mission began. The delivered pallet becomes an obstacle for that leg,
+    because the forks are clear of it once withdrawal has finished.
+    pickup_bounds optionally confines approach, insertion and extraction to a
+    smaller region than scenario.bounds, which the remaining stages keep. On a
+    large floor this keeps the pickup search as tight as in the original bay.
+    travel_config optionally replaces config for the two long Hybrid A* legs,
+    transport and return_home, e.g. to add the obstacle heuristic there only.
     """
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
     config = config if config is not None else make_transport_planner_config()
+    travel_config = travel_config if travel_config is not None else config
     props = [prop.rectangle for prop in scenario.props]
     pickup = site_poses(
         target_pickup if target_pickup is not None else scenario.pickup, geometry
@@ -461,6 +490,7 @@ def plan_transport(
         geometry.pallet_width_m,
         scenario.pickup.yaw_rad,
     )
+    near_bounds = pickup_bounds if pickup_bounds is not None else scenario.bounds
     approach_config = replace(
         config, clearance_m=min(config.clearance_m, geometry.approach_gap_m / 2)
     )
@@ -469,7 +499,7 @@ def plan_transport(
         pickup["prealign"],
         props + [pallet],
         geometry.unloaded_footprint,
-        scenario.bounds,
+        near_bounds,
         approach_config,
     )
     if not approach.success:
@@ -480,7 +510,7 @@ def plan_transport(
         1,
         props + [pallet],
         geometry.unloaded_footprint,
-        scenario.bounds,
+        near_bounds,
         approach_config.clearance_m,
     )
     if not approach_tail.success:
@@ -492,7 +522,7 @@ def plan_transport(
         1,
         props,
         geometry.unloaded_footprint,
-        scenario.bounds,
+        near_bounds,
         config.clearance_m,
     )
     if not insert.success:
@@ -503,7 +533,7 @@ def plan_transport(
         -1,
         props,
         geometry.loaded_footprint,
-        scenario.bounds,
+        near_bounds,
         config.clearance_m,
     )
     if not extract.success:
@@ -514,7 +544,7 @@ def plan_transport(
         props,
         geometry.loaded_footprint,
         scenario.bounds,
-        config,
+        travel_config,
     )
     if not transport.success:
         return MissionPlan(False, f"transport:{transport.status}")
@@ -541,4 +571,34 @@ def plan_transport(
     )
     if not withdraw.success:
         return MissionPlan(False, f"withdraw:{withdraw.status}")
-    return MissionPlan(True, "success", approach, insert, extract, transport, withdraw)
+    if return_to is None:
+        return MissionPlan(
+            True, "success", approach, insert, extract, transport, withdraw
+        )
+    delivered = Rectangle(
+        scenario.destination.x_m,
+        scenario.destination.y_m,
+        geometry.pallet_depth_m,
+        geometry.pallet_width_m,
+        scenario.destination.yaw_rad,
+    )
+    return_home = plan_hybrid_astar(
+        destination["withdrawn"],
+        return_to,
+        props + [delivered],
+        geometry.unloaded_footprint,
+        scenario.bounds,
+        travel_config,
+    )
+    if not return_home.success:
+        return MissionPlan(False, f"return_home:{return_home.status}")
+    return MissionPlan(
+        True,
+        "success",
+        approach,
+        insert,
+        extract,
+        transport,
+        withdraw,
+        return_home,
+    )

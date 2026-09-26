@@ -19,6 +19,7 @@ setup(
             "sensor_validator = forklift_ros.sensor_validator:main",
             "scene_capture = forklift_ros.scene_capture:main",
             "synthetic_tf = forklift_ros.synthetic_tf:main",
+            "slam_recorder = forklift_ros.slam_recorder:main",
         ]
     },
 )

@@ -8,7 +8,7 @@ import numpy as np
 import omni.kit.commands
 from isaacsim.core.api import World
 from isaacsim.core.prims import SingleRigidPrim
-from pxr import Gf, PhysxSchema, Usd, UsdGeom, UsdPhysics, UsdShade
+from pxr import Gf, PhysxSchema, Usd, UsdGeom, UsdLux, UsdPhysics, UsdShade
 
 from forklift_core.planning.pallet_mission import AssetSpec
 
@@ -32,12 +32,18 @@ def bounds_of(prim: Usd.Prim) -> tuple[np.ndarray, np.ndarray]:
     return low, high
 
 
-def read_catalogue(stage: Usd.Stage, app, asset_root: str) -> tuple[list, dict]:
+def read_catalogue(
+    stage: Usd.Stage,
+    app,
+    asset_root: str,
+    filenames: tuple[str, ...] = FACTORY_PROPS,
+    prim_prefix: str = "/World/Catalogue_",
+) -> tuple[list, dict]:
     """Read dimensions from official USD assets, retaining origin offsets."""
     catalogue, offsets = [], {}
-    for index, filename in enumerate(FACTORY_PROPS):
+    for index, filename in enumerate(filenames):
         uri = asset_root.rstrip("/") + "/" + filename
-        prim = stage.DefinePrim(f"/World/Catalogue_{index}", "Xform")
+        prim = stage.DefinePrim(f"{prim_prefix}{index}", "Xform")
         prim.GetReferences().AddReference(uri)
         for _ in range(10):
             app.update()
@@ -115,6 +121,89 @@ def add_props(stage: Usd.Stage, app, props, offsets: dict) -> list[dict]:
             }
         )
     return records
+
+
+def add_factory_items(stage: Usd.Stage, app, work_items, loads, offsets: dict) -> dict:
+    """Place factory work items and their stacked loads as static colliders.
+
+    The same per-prop handling as add_props -- measured origin offsets, no
+    rescaling, rigid-body APIs removed, every mesh a triangle-mesh collider --
+    but all references are defined first and the stage is updated once, since
+    a few hundred props with per-prop updates would dominate start-up time.
+    """
+    placements = [(item, 0.0) for item in work_items] + [
+        (load, load.base_height_m) for load in loads
+    ]
+    prims = []
+    for index, (placed, base_height) in enumerate(placements):
+        rect = placed.rectangle
+        prim = stage.DefinePrim(f"/World/Factory/Item_{index}", "Xform")
+        prim.GetReferences().AddReference(placed.asset.uri)
+        center_x, center_y, floor = offsets[placed.asset.uri]
+        c, s = math.cos(rect.yaw_rad), math.sin(rect.yaw_rad)
+        transform = UsdGeom.Xformable(prim)
+        transform.ClearXformOpOrder()
+        transform.AddTranslateOp().Set(
+            Gf.Vec3d(
+                rect.x_m - c * center_x + s * center_y,
+                rect.y_m - s * center_x - c * center_y,
+                base_height - floor,
+            )
+        )
+        transform.AddOrientOp().Set(
+            Gf.Quatf(math.cos(rect.yaw_rad / 2), 0, 0, math.sin(rect.yaw_rad / 2))
+        )
+        prims.append(prim)
+    for _ in range(10):
+        app.update()
+    meshes = 0
+    for prim, (placed, _) in zip(prims, placements, strict=True):
+        expand_instances(prim)
+        count = 0
+        for child in Usd.PrimRange(prim):
+            if child.HasAPI(UsdPhysics.RigidBodyAPI):
+                child.RemoveAPI(UsdPhysics.RigidBodyAPI)
+            if child.HasAPI(UsdPhysics.ArticulationRootAPI):
+                child.RemoveAPI(UsdPhysics.ArticulationRootAPI)
+            if child.IsA(UsdGeom.Mesh):
+                UsdPhysics.CollisionAPI.Apply(child).CreateCollisionEnabledAttr(True)
+                UsdPhysics.MeshCollisionAPI.Apply(child).CreateApproximationAttr("none")
+                count += 1
+        if not count:
+            raise RuntimeError(
+                f"Factory item has no collision mesh: {placed.asset.uri}"
+            )
+        meshes += count
+    return {
+        "root": "/World/Factory",
+        "work_items": len(work_items),
+        "loads": len(loads),
+        "collision_meshes": meshes,
+    }
+
+
+def hide_overhead(stage: Usd.Stage, root: str = "/World/Environment") -> list[str]:
+    """Hide warehouse parts lying wholly above 3 m, for a top-down overview.
+
+    Only visibility changes: the ceiling, roof trusses, lamp shades and upper
+    wall courses keep their colliders, and every light stays on. The 2D LiDAR
+    plane at about 1 m never reaches these parts either way.
+    """
+    cache = UsdGeom.BBoxCache(
+        Usd.TimeCode.Default(), [UsdGeom.Tokens.default_, UsdGeom.Tokens.render]
+    )
+    hidden = []
+    for prim in stage.GetPrimAtPath(root).GetChildren():
+        # Rect lights have an extent, so the height test alone would put the
+        # hall in the dark; anything holding a light stays visible.
+        if any(item.HasAPI(UsdLux.LightAPI) for item in Usd.PrimRange(prim)):
+            continue
+        box = cache.ComputeWorldBound(prim).ComputeAlignedRange()
+        if box.IsEmpty() or box.GetMin()[2] < 3.0:
+            continue
+        UsdGeom.Imageable(prim).MakeInvisible()
+        hidden.append(str(prim.GetPath()))
+    return hidden
 
 
 def add_destination(stage: Usd.Stage, x_m: float, y_m: float) -> str:
@@ -262,16 +351,25 @@ def create_pallet(
 
 
 def configure_drives(
-    stage: Usd.Stage, settings: dict, *, expected_pallet_box_count: int
+    stage: Usd.Stage,
+    settings: dict,
+    *,
+    expected_pallet_box_count: int | None,
 ) -> dict:
-    """Set documented synthetic dynamics on the execution scene only."""
+    """Set documented synthetic dynamics on the execution scene only.
+
+    expected_pallet_box_count=None means the scene holds no pallet to lift.
+    """
     physics_material = UsdShade.Material.Define(stage, "/World/ContactMaterial")
     material_api = UsdPhysics.MaterialAPI.Apply(physics_material.GetPrim())
     material_api.CreateStaticFrictionAttr(settings["static_friction"])
     material_api.CreateDynamicFrictionAttr(settings["dynamic_friction"])
     material_api.CreateRestitutionAttr(0.0)
+    roots = ["/World/Forklift"]
+    if expected_pallet_box_count is not None:
+        roots.append("/World/Pallet")
     # Importer stores collision groups as instances; edit the stage copy only.
-    for root_path in ["/World/Forklift", "/World/Pallet"]:
+    for root_path in roots:
         instances = [
             p
             for p in Usd.PrimRange(stage.GetPrimAtPath(root_path))
@@ -281,7 +379,7 @@ def configure_drives(
             prim.SetInstanceable(False)
         print("COLLISION_INSTANCES_EXPANDED", root_path, len(instances), flush=True)
     collision_counts = {}
-    for root_path in ["/World/Forklift", "/World/Pallet"]:
+    for root_path in roots:
         collision_counts[root_path] = 0
         for prim in Usd.PrimRange(stage.GetPrimAtPath(root_path)):
             if prim.HasAPI(UsdPhysics.CollisionAPI):
@@ -326,11 +424,19 @@ def configure_drives(
                 )
                 drive.CreateTargetPositionAttr(0.0)
                 drive.CreateTargetVelocityAttr(0.0)
+                if wheel and settings.get("max_wheel_rate_rad_s") is not None:
+                    # The imported model caps wheel joints at its assumed
+                    # 8 rad/s; a settings file may set another synthetic cap
+                    # on this execution stage (PhysX angular units: degrees).
+                    PhysxSchema.PhysxJointAPI.Apply(prim).CreateMaxJointVelocityAttr(
+                        math.degrees(settings["max_wheel_rate_rad_s"])
+                    )
     # Box-count match only confirms collision prims imported correctly -- it
     # is not a dimension or layout check (that is
     # assert_pallet_urdf_matches_named_boxes, run before spawn).
-    assert collision_counts["/World/Pallet"] == expected_pallet_box_count, (
-        collision_counts
-    )
+    if expected_pallet_box_count is not None:
+        assert collision_counts["/World/Pallet"] == expected_pallet_box_count, (
+            collision_counts
+        )
 
     return collision_counts
