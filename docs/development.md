@@ -191,6 +191,32 @@ network, privileged mode, Docker socket, host home은 사용하지 않으며, ch
 하나만 `/workspace`에 mount한다. USB 센서·GPU·GUI가 필요한 단계에서는 필요한
 장치와 권한을 확인한 뒤 별도 실행 구성을 추가한다.
 
+### Isaac SLAM 기록 재생 (slam_toolbox)
+
+이미지에는 `ros-jazzy-slam-toolbox`(2026-09-26 빌드 시 2.8.5)가 들어 있다.
+`sim/isaac/run_slam_drive.py` 가 만든 기록을 bag 으로 바꾸고 slam_toolbox 로
+지도를 만든 뒤, 호스트에서 정답과 비교한다. `slam_replay` 는 `forklift_core` 를
+쓰므로 컨테이너 venv 의 `python3 -m` 으로 실행한다 — colcon 이 만드는 console
+script 는 `/usr/bin/python3` 를 써서 `forklift_core` 를 찾지 못한다.
+
+```bash
+bash tools/ros2_dev.sh bash -lc 'cd ros2 && colcon build --symlink-install \
+  --packages-select forklift_ros forklift_bringup && source install/setup.bash && \
+  python3 -m forklift_ros.slam_replay --record <run> --output <run>_replay && \
+  ros2 launch forklift_bringup isaac_slam_replay.launch.py \
+    bag:=<run>_replay/bag output:=<run>_replay/slam'
+python tools/evaluate_slam_replay.py --record <run> --replay <run>_replay
+```
+
+`--range-noise-std-m`, `--wheel-rate-noise-std-rad-s`, `--steering-noise-std-rad`,
+`--seed` 로 재생 때만 합성 잡음을 넣는다. Isaac 기록은 잡음 없이 남는다.
+launch 에 `map_history:=true` 를 주면 지도 갱신마다 `slam/map_history.npz` 에
+남는다. `--robot-camera` 로 기록한 실행이면 `tools/compose_slam_video.py` 가 로봇 조감·
+SLAM 지도·로봇 카메라를 같은 시각으로 맞춘 3분할 영상을 만든다. 여러 재생의
+`evaluation.json` 은 `tools/summarise_slam_runs.py` 로 표를 만든다. 재생을 여러 번
+돌릴 때는 컨테이너 안에서 `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST` 로 다른 재생과
+토픽이 섞이지 않게 한다.
+
 ## 역할 경계
 
 노트북은 편집, Ruff, 빠른 코어 시험과 ROS 명령 smoke test를 맡는다.
