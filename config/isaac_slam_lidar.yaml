@@ -1,0 +1,23 @@
+# Synthetic 2D LiDAR for the Isaac SLAM recording. Not a measured sensor.
+#
+# Beam count, rate and range follow the RPLIDAR A2M12 catalogue row in
+# docs/hardware.md (16 K samples/s at the default 10 Hz = 1,600 beams per
+# turn, 0.225 deg; 0.2-12 m). A2M12 is the likely subvariant, not a purchase.
+# Every beam of a scan is cast at one physics instant: no rotation skew.
+beam_count: 1600
+rate_hz: 10
+range_min_m: 0.2
+range_max_m: 12.0
+
+# base_link -> laser. On a plate above the overhead guard: the model's highest
+# point is 1.01 m (sim/models/dls08_provisional/parameters.yaml), so the scan
+# plane clears the truck's own body and mast. Synthetic mount, not a hardware
+# decision (docs/hardware.md leaves the LiDAR mount open). It sees walls, racks
+# and loads taller than 1.05 m; it cannot see lower objects.
+mount_xyz_m: [-0.12, 0.0, 1.05]
+mount_yaw_rad: 0.0
+
+# Survey drive (tracker settings for a repositioning move, not docking).
+survey_speed_mps: 0.5
+survey_position_tolerance_m: 0.05
+survey_yaw_tolerance_rad: 0.05
