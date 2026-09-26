@@ -20,6 +20,7 @@ RUN apt-get update \
         python3-venv \
         python3-wheel \
         ros-jazzy-demo-nodes-cpp \
+        ros-jazzy-slam-toolbox \
     && rm -rf /var/lib/apt/lists/*
 
 # Noble's ROS base image already has an ubuntu account at UID/GID 1000. Reuse

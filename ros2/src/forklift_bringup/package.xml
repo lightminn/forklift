@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>forklift_bringup</name><version>0.1.0</version>
+  <description>Launch files and ROS parameters; currently only the Isaac SLAM replay</description>
+  <maintainer email="noreply@example.com">Forklift team</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <exec_depend>forklift_ros</exec_depend><exec_depend>slam_toolbox</exec_depend>
+  <exec_depend>ros2bag</exec_depend><exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <export><build_type>ament_python</build_type></export>
+</package>
