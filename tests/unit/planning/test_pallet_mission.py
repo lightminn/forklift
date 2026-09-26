@@ -632,3 +632,174 @@ def test_impossible_spawn_fails_without_seed_replacement():
 def test_invalid_mission_inputs_raise(build):
     with pytest.raises(ValueError):
         build()
+
+
+@pytest.mark.parametrize("seed", [0, 3, 5])
+def test_return_leg_starts_withdrawn_and_ends_at_the_requested_pose(seed):
+    scenario = make_scenario(seed, ASSETS)
+    geometry = SyntheticMissionGeometry()
+    result = plan_transport(scenario, return_to=scenario.start_rear)
+    assert result.success, result.status
+    destination = site_poses(scenario.destination)
+    start = destination["withdrawn"]
+    np.testing.assert_allclose(
+        result.return_home.poses[0], [start.x_m, start.y_m, start.yaw_rad], atol=1e-7
+    )
+    np.testing.assert_allclose(
+        result.return_home.poses[-1],
+        [scenario.start_rear.x_m, scenario.start_rear.y_m, scenario.start_rear.yaw_rad],
+        atol=1e-7,
+    )
+    # It leaves the delivered pallet behind, so it drives unloaded throughout.
+    assert collision_free_path(
+        result.return_home.poses,
+        [prop.rectangle for prop in scenario.props],
+        geometry.unloaded_footprint,
+        scenario.bounds,
+    )
+
+
+def test_omitting_return_to_leaves_the_five_stage_plan_untouched():
+    scenario = make_scenario(0, ASSETS)
+    without = plan_transport(scenario)
+    with_return = plan_transport(scenario, return_to=scenario.start_rear)
+    assert without.return_home is None
+    assert with_return.return_home is not None
+    for name in ("approach", "insert", "extract", "transport", "withdraw"):
+        np.testing.assert_array_equal(
+            getattr(without, name).poses, getattr(with_return, name).poses
+        )
+
+
+def test_delivered_pallet_obstructs_the_return_leg():
+    # Home sits on the far side of the destination, so the straight line back
+    # runs through the pallet that was just set down. An empty world isolates
+    # the pallet as the only thing the return leg has to avoid.
+    scenario = TransportScenario(
+        0,
+        Pose2D(-10, 0, 0),
+        PalletSite(-6, 0, 0),
+        PalletSite(0, 0, 0),
+        (),
+        Bounds(-12, 8, -5, 5),
+    )
+    geometry = SyntheticMissionGeometry()
+    home = Pose2D(3.5, 0, 0)
+    result = plan_transport(scenario, return_to=home)
+    assert result.success, result.status
+    delivered = Rectangle(
+        scenario.destination.x_m,
+        scenario.destination.y_m,
+        geometry.pallet_depth_m,
+        geometry.pallet_width_m,
+        scenario.destination.yaw_rad,
+    )
+    withdrawn = site_poses(scenario.destination)["withdrawn"]
+    straight = np.array(
+        [[x, 0.0, 0.0] for x in np.linspace(withdrawn.x_m, home.x_m, 200)]
+    )
+    # The shortcut this leg must not take.
+    assert not collision_free_path(
+        straight, [delivered], geometry.unloaded_footprint, scenario.bounds
+    )
+    assert collision_free_path(
+        result.return_home.poses,
+        [delivered],
+        geometry.unloaded_footprint,
+        scenario.bounds,
+    )
+    assert result.return_home.length_m > abs(home.x_m - withdrawn.x_m)
+
+
+def test_unreachable_return_fails_the_whole_mission_without_partial_paths():
+    scenario = make_scenario(0, ASSETS)
+    result = plan_transport(
+        scenario,
+        PlannerConfig(clearance_m=0.10, max_expansions=100),
+        return_to=Pose2D(scenario.start_rear.x_m, scenario.start_rear.y_m, 0.0),
+    )
+    assert not result.success
+    assert result.status.startswith("return_home:")
+    assert all(
+        getattr(result, name) is None
+        for name in ("approach", "insert", "extract", "transport", "withdraw")
+    )
+    assert result.return_home is None
+
+
+# The bay embedded in a larger floor: same seed, same props, wider bounds.
+HALL = Bounds(-9.0, 4.7, -7.0, 7.0)
+
+
+def test_pickup_bounds_reproduce_the_bay_plan_inside_a_larger_floor():
+    bay = make_scenario(0, ASSETS)
+    hall = replace(bay, bounds=HALL)
+    in_bay = plan_transport(bay)
+    in_hall = plan_transport(hall, pickup_bounds=bay.bounds)
+    assert in_bay.success and in_hall.success, (in_bay.status, in_hall.status)
+    for name in ("approach", "insert", "extract"):
+        np.testing.assert_array_equal(
+            getattr(in_bay, name).poses, getattr(in_hall, name).poses
+        )
+
+
+def test_pickup_bounds_confine_only_the_pickup_side_stages():
+    bay = make_scenario(0, ASSETS)
+    # A destination outside the bay: transport has to leave the pickup bounds.
+    hall = replace(bay, bounds=HALL, destination=PalletSite(-6.0, -4.0, -math.pi / 2))
+    result = plan_transport(hall, pickup_bounds=bay.bounds)
+    assert result.success, result.status
+    for name in ("approach", "insert", "extract"):
+        poses = getattr(result, name).poses
+        assert np.all(poses[:, 0] >= bay.bounds.x_min_m)
+        assert np.all(poses[:, 1] <= bay.bounds.y_max_m)
+        assert np.all(poses[:, 1] >= bay.bounds.y_min_m)
+    assert result.transport.poses[:, 0].min() < bay.bounds.x_min_m
+
+
+def test_pickup_bounds_apply_to_the_observation_leg():
+    bay = make_scenario(0, ASSETS)
+    hall = replace(bay, bounds=HALL)
+    waypoint = Pose2D(-0.10, 0.90, 0)
+    in_bay = pallet_mission.plan_observation_leg(bay, waypoint)
+    in_hall = pallet_mission.plan_observation_leg(
+        hall, waypoint, pickup_bounds=bay.bounds
+    )
+    assert in_bay.success, in_bay.status
+    np.testing.assert_array_equal(in_bay.poses, in_hall.poses)
+
+
+def test_travel_config_changes_only_the_travel_legs():
+    bay = make_scenario(0, ASSETS)
+    # A wall between the bay and a destination behind it, so both travel legs
+    # have to search instead of closing with one analytic shot.
+    wall = PlacedProp(
+        AssetSpec("test://wall", 0.3, 10.5, 2), Rectangle(-4.0, -1.75, 0.3, 10.5)
+    )
+    hall = replace(
+        bay,
+        bounds=HALL,
+        props=bay.props + (wall,),
+        destination=PalletSite(-6.5, -4.5, -math.pi / 2),
+    )
+    plain = plan_transport(hall, pickup_bounds=bay.bounds, return_to=bay.start_rear)
+    travel = replace(
+        make_transport_planner_config(), obstacle_heuristic_resolution_m=0.25
+    )
+    guided = plan_transport(
+        hall,
+        pickup_bounds=bay.bounds,
+        return_to=bay.start_rear,
+        travel_config=travel,
+    )
+    assert plain.success and guided.success, (plain.status, guided.status)
+    for name in ("approach", "insert", "extract", "withdraw"):
+        np.testing.assert_array_equal(
+            getattr(plain, name).poses, getattr(guided, name).poses
+        )
+    # Measured 2026-09-26: 24/1400 expansions without the grid term, 552/24
+    # with it. Any difference shows the travel legs used the other config.
+    assert (plain.transport.expanded_nodes, plain.return_home.expanded_nodes) != (
+        guided.transport.expanded_nodes,
+        guided.return_home.expanded_nodes,
+    )

@@ -16,7 +16,7 @@ import heapq
 from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import count
-from math import acos, atan2, ceil, cos, hypot, pi, sin, sqrt
+from math import acos, atan2, ceil, cos, hypot, isfinite, pi, sin, sqrt
 
 import numpy as np
 from numpy.typing import NDArray
@@ -47,6 +47,9 @@ class PlannerConfig:
     steering_penalty: float = 0.15
     steering_change_penalty_m: float = 0.15
     clearance_m: float = 0.0
+    # None keeps the distance/heading heuristic alone. A positive cell size adds
+    # the paper's holonomic-with-obstacles term: a goal-rooted grid distance.
+    obstacle_heuristic_resolution_m: float | None = None
 
     def __post_init__(self) -> None:
         positive = (
@@ -73,6 +76,12 @@ class PlannerConfig:
         for value in (self.max_expansions, self.analytic_expansion_interval):
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise ValueError("expansion limits must be positive integers")
+        resolution = self.obstacle_heuristic_resolution_m
+        if (
+            resolution is not None
+            and _finite_scalar(resolution, "obstacle heuristic resolution") <= 0
+        ):
+            raise ValueError("obstacle heuristic resolution must be positive")
 
 
 @dataclass(frozen=True)
@@ -96,6 +105,95 @@ class PlanResult:
 
 def _wrap(angle):
     return (angle + pi) % (2 * pi) - pi
+
+
+class _ObstacleDistance:
+    """Goal-rooted 8-connected grid distance for the rear axle around obstacles.
+
+    The rear axle always carries a disc of the footprint's shortest semi-axis
+    plus clearance, so it never comes closer than that to an obstacle or the
+    bounds. A cell is blocked only if its centre is closer than that radius
+    minus half a cell diagonal: every cell holding a usable axle position stays
+    open, so a narrow gap is never sealed. Returned distances are shortened by
+    one cell diagonal for the cell-centre offset. The result guides the search
+    and, like the planner's weighted heuristic, carries no optimality claim.
+    Cells the grid cannot reach return 0 and leave the other heuristic terms
+    in charge.
+    """
+
+    def __init__(
+        self,
+        obstacles: Sequence[Rectangle],
+        footprint: Footprint,
+        bounds: Bounds,
+        goal_xy: tuple[float, float],
+        *,
+        resolution_m: float,
+        clearance_m: float,
+    ) -> None:
+        self.bounds, self.resolution_m = bounds, resolution_m
+        self.shape = (
+            max(1, ceil((bounds.x_max_m - bounds.x_min_m) / resolution_m)),
+            max(1, ceil((bounds.y_max_m - bounds.y_min_m) / resolution_m)),
+        )
+        x = bounds.x_min_m + (np.arange(self.shape[0]) + 0.5) * resolution_m
+        y = bounds.y_min_m + (np.arange(self.shape[1]) + 0.5) * resolution_m
+        cx, cy = np.meshgrid(x, y, indexing="ij")
+        radius = min(footprint.front_m, footprint.rear_m, footprint.half_width_m)
+        reach = radius + clearance_m - resolution_m * sqrt(2) / 2
+        blocked = (
+            np.minimum.reduce(
+                [
+                    cx - bounds.x_min_m,
+                    bounds.x_max_m - cx,
+                    cy - bounds.y_min_m,
+                    bounds.y_max_m - cy,
+                ]
+            )
+            < reach
+        )
+        for o in obstacles:
+            c, s = cos(o.yaw_rad), sin(o.yaw_rad)
+            dx, dy = cx - o.x_m, cy - o.y_m
+            along = np.maximum(np.abs(dx * c + dy * s) - o.length_m / 2, 0)
+            across = np.maximum(np.abs(dy * c - dx * s) - o.width_m / 2, 0)
+            blocked |= np.hypot(along, across) < reach
+        self.distance_m = np.full(self.shape, np.inf)
+        goal = self._cell(*goal_xy)
+        self.distance_m[goal] = 0.0
+        queue = [(0.0, goal)]
+        diagonal = resolution_m * sqrt(2)
+        steps = [
+            (di, dj, diagonal if di and dj else resolution_m)
+            for di in (-1, 0, 1)
+            for dj in (-1, 0, 1)
+            if di or dj
+        ]
+        while queue:
+            distance, (i, j) = heapq.heappop(queue)
+            if distance > self.distance_m[i, j]:
+                continue
+            for di, dj, step in steps:
+                k, m = i + di, j + dj
+                if not (0 <= k < self.shape[0] and 0 <= m < self.shape[1]):
+                    continue
+                if blocked[k, m] or distance + step >= self.distance_m[k, m]:
+                    continue
+                self.distance_m[k, m] = distance + step
+                heapq.heappush(queue, (distance + step, (k, m)))
+        self._slack_m = diagonal
+
+    def _cell(self, x_m: float, y_m: float) -> tuple[int, int]:
+        i = int((x_m - self.bounds.x_min_m) / self.resolution_m)
+        j = int((y_m - self.bounds.y_min_m) / self.resolution_m)
+        return (
+            min(max(i, 0), self.shape[0] - 1),
+            min(max(j, 0), self.shape[1] - 1),
+        )
+
+    def distance(self, x_m: float, y_m: float) -> float:
+        value = self.distance_m[self._cell(x_m, y_m)]
+        return max(0.0, value - self._slack_m) if isfinite(value) else 0.0
 
 
 def _advance(pose, distance_m, curvature):
@@ -305,11 +403,25 @@ def plan_hybrid_astar(
             steering,
         )
 
+    field = (
+        None
+        if config.obstacle_heuristic_resolution_m is None
+        else _ObstacleDistance(
+            obstacles,
+            footprint,
+            bounds,
+            (goal.x_m, goal.y_m),
+            resolution_m=config.obstacle_heuristic_resolution_m,
+            clearance_m=config.clearance_m,
+        )
+    )
+
     def heuristic(pose):
-        return max(
+        value = max(
             hypot(pose[0] - goal.x_m, pose[1] - goal.y_m),
             abs(_wrap(pose[2] - goal.yaw_rad)) / config.curvature_limit_inv_m,
         )
+        return value if field is None else max(value, field.distance(*pose[:2]))
 
     root = _Node(start_pose, 0.0, 0, 0, None, [])
     serial = count()

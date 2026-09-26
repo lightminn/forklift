@@ -206,3 +206,88 @@ def test_fixed_seed_scene_is_deterministic():
     assert first.success and second.success
     np.testing.assert_array_equal(first.poses, second.poses)
     assert first.expanded_nodes == second.expanded_nodes
+
+
+# A pocket open to -x with the goal behind its closed end: the only route
+# leaves through the opening and doubles back, which a straight-line
+# heuristic cannot see.
+POCKET = [
+    Rectangle(1.5, 0.0, 0.2, 6.2),
+    Rectangle(-0.75, 3.0, 4.5, 0.2),
+    Rectangle(-0.75, -3.0, 4.5, 0.2),
+]
+POCKET_START, POCKET_GOAL = Pose2D(0, 0, 0), Pose2D(4, 0, 0)
+
+
+def test_obstacle_heuristic_finds_a_detour_the_distance_heuristic_cannot():
+    # Measured 2026-09-26: the distance heuristic alone still fails at 60000
+    # expansions; the grid term succeeds at 13272. The shared budget sits
+    # between the two so the comparison is a pass/fail, not a timing claim.
+    distance_only = PlannerConfig(max_expansions=16000)
+    with_grid = PlannerConfig(max_expansions=16000, obstacle_heuristic_resolution_m=0.2)
+    base = plan_hybrid_astar(
+        POCKET_START, POCKET_GOAL, POCKET, FOOTPRINT, BOUNDS, distance_only
+    )
+    grid = plan_hybrid_astar(
+        POCKET_START, POCKET_GOAL, POCKET, FOOTPRINT, BOUNDS, with_grid
+    )
+    assert_feasible(grid, POCKET_GOAL, with_grid)
+    assert collision_free_path(grid.poses, POCKET, FOOTPRINT, BOUNDS)
+    assert base.status == "expansion_limit"
+
+
+def test_obstacle_heuristic_stays_below_the_found_detour():
+    from forklift_core.planning.hybrid_astar import _ObstacleDistance
+
+    field = _ObstacleDistance(
+        POCKET, FOOTPRINT, BOUNDS, (4.0, 0.0), resolution_m=0.2, clearance_m=0.0
+    )
+    straight = math.hypot(4.0, 0.0)
+    config = PlannerConfig(max_expansions=16000, obstacle_heuristic_resolution_m=0.2)
+    grid = plan_hybrid_astar(
+        POCKET_START, POCKET_GOAL, POCKET, FOOTPRINT, BOUNDS, config
+    )
+    # The field must see the wall (far more than the 4 m straight line) and
+    # still not exceed the length of a route that actually exists.
+    assert straight * 2 < field.distance(0.0, 0.0) < grid.length_m
+
+
+def test_obstacle_heuristic_keeps_a_gap_the_axle_can_use_open():
+    from forklift_core.planning.hybrid_astar import _ObstacleDistance
+
+    # A 0.44 m gap: narrower than the 0.5 m body, wider than the 0.2 m disc
+    # around the rear axle. The field must not wall it off, or it would
+    # overestimate every route that the body could squeeze past sideways.
+    wall = [Rectangle(0, 1.72, 0.2, 3.0), Rectangle(0, -1.72, 0.2, 3.0)]
+    field = _ObstacleDistance(
+        wall, FOOTPRINT, BOUNDS, (1.0, 0.0), resolution_m=0.1, clearance_m=0.0
+    )
+    assert field.distance(-1.0, 0.0) < 2.5
+
+
+@pytest.mark.parametrize("value", [0.0, -0.2, math.nan, math.inf, True])
+def test_obstacle_heuristic_resolution_must_be_positive_finite(value):
+    with pytest.raises(ValueError):
+        PlannerConfig(obstacle_heuristic_resolution_m=value)
+
+
+def test_obstacle_heuristic_tolerates_goal_sealed_off_in_the_grid():
+    # The goal pose is valid but boxed in, so the grid holds no route; the
+    # search must end with a status, not an exception.
+    box = [
+        Rectangle(3.0, 1.0, 2.4, 0.2),
+        Rectangle(3.0, -1.0, 2.4, 0.2),
+        Rectangle(1.9, 0.0, 0.2, 2.2),
+        Rectangle(4.1, 0.0, 0.2, 2.2),
+    ]
+    config = PlannerConfig(max_expansions=300, obstacle_heuristic_resolution_m=0.2)
+    result = plan_hybrid_astar(
+        Pose2D(-3, 0, 0),
+        Pose2D(3.0, 0, 0),
+        box,
+        Footprint(0.3, 0.2, 0.2),
+        BOUNDS,
+        config,
+    )
+    assert not result.success
+    assert result.status in {"no_path", "expansion_limit"}
