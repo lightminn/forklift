@@ -14,7 +14,7 @@ import subprocess
 import sys
 import time
 import traceback
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import numpy as np
@@ -74,6 +74,20 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--obstacles", type=int, default=4)
+    parser.add_argument(
+        "--layout",
+        choices=("bay", "factory"),
+        default="bay",
+        help="bay: the original 7.7 x 4.8 m transport bay (every recorded run). "
+        "factory: the same bay inside the full south hall, filled with stored "
+        "pallets and clutter, delivering to the shipping yard.",
+    )
+    parser.add_argument(
+        "--factory-layout",
+        type=Path,
+        default=Path(__file__).resolve().parent.parent.parent
+        / "config/factory_south_hall.yaml",
+    )
     parser.add_argument("--fps", type=camera_hz, default=60)
     parser.add_argument("--video", action="store_true")
     parser.add_argument("--max-sim-seconds", type=float, default=300)
@@ -85,6 +99,40 @@ def arguments() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--use-perception", action="store_true")
+    parser.add_argument(
+        "--camera-inset",
+        action="store_true",
+        help="Draw the perception camera's live picture at the top left of the "
+        "video, with the detected pockets and the turn needed to align. "
+        "Requires --video and --use-perception.",
+    )
+    parser.add_argument(
+        "--robot-camera",
+        action="store_true",
+        help="Also record the perception camera as camera_rgb.mp4 and "
+        "camera_depth.mp4 (detected pockets drawn in), frame for frame with the "
+        "overview, and write video_frames.json. Requires --video and "
+        "--use-perception.",
+    )
+    parser.add_argument(
+        "--record-slam",
+        action="store_true",
+        help="Record 2D LiDAR scans, wheel joints and ground truth as "
+        "slam_log.npz/meta.json in the run_slam_drive.py format, for a "
+        "slam_toolbox replay of the mission.",
+    )
+    parser.add_argument(
+        "--lidar",
+        type=Path,
+        default=Path(__file__).resolve().parent.parent.parent
+        / "config/isaac_slam_lidar.yaml",
+    )
+    parser.add_argument(
+        "--return-home",
+        action="store_true",
+        help="After unloading, drive back to the rear-axle pose the mission "
+        "started from. The delivered pallet becomes an obstacle for that leg.",
+    )
     parser.add_argument("--pallet-prior", type=Path, default=None)
     parser.add_argument(
         "--observation-waypoints",
@@ -130,6 +178,10 @@ def arguments() -> argparse.Namespace:
             args.pallet_prior_loaded = load_pallet_prior(args.pallet_prior)
         except (ValueError, OSError) as exc:
             parser.error(str(exc))
+    if args.camera_inset and not (args.video and args.use_perception):
+        parser.error("--camera-inset requires --video and --use-perception")
+    if args.robot_camera and not (args.video and args.use_perception):
+        parser.error("--robot-camera requires --video and --use-perception")
     if args.obstacles < 1 or args.max_sim_seconds <= 0:
         parser.error("obstacles and max-sim-seconds must be positive")
     from insertion_geometry import (
@@ -173,6 +225,196 @@ def require(condition: bool, reason: str) -> None:
     """A failed experimental invariant always aborts, even under Python -O."""
     if not condition:
         raise RuntimeError(reason)
+
+
+# Colour range of the robot-camera depth video; display only, not a sensor limit.
+DEPTH_VIDEO_RANGE_M = (0.3, 10.0)
+FONT_PATH = next(
+    (
+        str(path)
+        for path in (
+            Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"),
+            Path("/usr/share/fonts/truetype/nanum/NanumSquareB.ttf"),
+        )
+        if path.exists()
+    ),
+    None,
+)
+
+
+def open_encoder(path: Path, width: int, height: int, fps: int) -> subprocess.Popen:
+    """H.264 encoder fed raw RGB24 frames on stdin, timed by simulation frames."""
+    return subprocess.Popen(
+        [
+            "ffmpeg",
+            "-nostdin",
+            "-n",
+            "-loglevel",
+            "error",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-s",
+            f"{width}x{height}",
+            "-r",
+            str(fps),
+            "-i",
+            "-",
+            "-an",
+            "-c:v",
+            "libx264",
+            "-threads",
+            "2",
+            "-crf",
+            "20",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            str(path),
+        ],
+        stdin=subprocess.PIPE,
+    )
+
+
+def record_robot_camera_frame(
+    camera,
+    calibration,
+    encoders: dict,
+    frames: list,
+    video_frames_module,
+    inset,
+    *,
+    state: dict,
+    stamp: float,
+    phase: str,
+    pose,
+    estimate,
+    fork_tip_x_m: float,
+    overview,
+    bounds,
+) -> None:
+    """Write one robot-camera RGB and depth frame, pockets drawn while on the floor."""
+    width, height = calibration.width, calibration.height
+    if not frames:
+        # Floor points to overview pixels, for placing the overview offline.
+        floor = np.array(
+            [
+                [bounds.x_min_m, bounds.y_min_m, 0.0],
+                [bounds.x_max_m, bounds.y_min_m, 0.0],
+                [bounds.x_max_m, bounds.y_max_m, 0.0],
+                [bounds.x_min_m, bounds.y_max_m, 0.0],
+                [
+                    (bounds.x_min_m + bounds.x_max_m) / 2,
+                    (bounds.y_min_m + bounds.y_max_m) / 2,
+                    0.0,
+                ],
+            ]
+        )
+        state["overview_floor_points"] = {
+            "world_m": floor.tolist(),
+            "pixels_uv": np.asarray(
+                overview.get_image_coords_from_world_points(floor)
+            ).tolist(),
+        }
+    rgb, depth = camera.get_rgba(), camera.get_depth()
+    ready = (
+        rgb is not None
+        and np.shape(rgb)[:2] == (height, width)
+        and depth is not None
+        and np.shape(depth)[:2] == (height, width)
+    )
+    if ready:
+        colour = np.asarray(rgb)[:, :, :3]
+        if estimate is not None and phase in inset.PALLET_ON_FLOOR_PHASES:
+            base, q = pose
+            current = (float(base[0]), float(base[1]), yaw_and_tilt(q)[0])
+            gap = inset.pallet_front_distance_m(estimate, current) - fork_tip_x_m
+            colour = video_frames_module.annotate_detection(
+                colour,
+                inset.projected_openings(estimate, current),
+                f"팔레트 {max(gap, 0.0):.2f} m",
+                font_path=FONT_PATH,
+            )
+        shaded = video_frames_module.colorize_depth(
+            np.asarray(depth).reshape(height, width), *DEPTH_VIDEO_RANGE_M
+        )
+    else:
+        colour = shaded = np.zeros((height, width, 3), np.uint8)
+    encoders["rgb"].stdin.write(np.ascontiguousarray(colour, np.uint8).tobytes())
+    encoders["depth"].stdin.write(np.ascontiguousarray(shaded, np.uint8).tobytes())
+    frames.append({"time_s": stamp, "phase": phase, "camera_ready": bool(ready)})
+
+
+def write_slam_record(args, state, scenario, factory, log, lidar_config) -> None:
+    """slam_log.npz + meta.json in the run_slam_drive.py format, plus the mission."""
+    from forklift_core.sensors.lidar import PlanarScanPattern
+
+    pattern = PlanarScanPattern(
+        lidar_config["beam_count"],
+        float(lidar_config["range_min_m"]),
+        float(lidar_config["range_max_m"]),
+    )
+    np.savez_compressed(
+        args.output / "slam_log.npz", **{k: np.asarray(v) for k, v in log.items()}
+    )
+    obstacles = [
+        {**asdict(prop.rectangle), "height_m": prop.asset.height_m, "base_m": 0.0}
+        for prop in scenario.props
+    ]
+    if factory is not None:
+        obstacles += [
+            {
+                **asdict(load.rectangle),
+                "height_m": load.asset.height_m,
+                "base_m": load.base_height_m,
+            }
+            for load in factory.loads
+        ]
+    meta = {
+        "format": "forklift_slam_log_v1",
+        "clock": "Isaac simulation time since the first recorded step, seconds",
+        "source": "synthetic Isaac Sim 5.1 transport mission, not a physical sensor",
+        "frames": {"odom": "odom", "base": "base_link", "laser": "laser"},
+        "base_pose_world": "x, y, z, qw, qx, qy, qz of base_link in the stage",
+        "laser_pose_world": "x, y, yaw of the laser in the stage (ground truth)",
+        "laser": {
+            "beam_count": pattern.beam_count,
+            "angle_min_rad": pattern.angle_min_rad,
+            "angle_increment_rad": pattern.angle_increment_rad,
+            "range_min_m": pattern.range_min_m,
+            "range_max_m": pattern.range_max_m,
+            "rate_hz": int(lidar_config["rate_hz"]),
+            "ranges": "REP-117: +inf nothing in range, -inf too close",
+            "instantaneous": True,
+            "mount_xyz_m": list(map(float, lidar_config["mount_xyz_m"])),
+            "mount_yaw_rad": float(lidar_config["mount_yaw_rad"]),
+        },
+        "wheel_order": ["front_left", "front_right", "rear_left", "rear_right"],
+        "wheel_rate_sign": "positive rolls the truck forward (drive command sign)",
+        "steering_order": ["front_left", "front_right"],
+        "odometry_geometry": {
+            "wheelbase_m": 0.64,
+            "track_m": 0.51,
+            "wheel_radius_m": 0.135,
+            "rear_axle_x_in_base_m": args.rear_axle_offset_m,
+            "source": "sim/models/dls08_provisional/forklift.urdf joint origins",
+        },
+        "seed": args.seed,
+        "layout_version": "bay" if factory is None else factory.layout_version,
+        "obstacles": obstacles,
+        "hall": asdict(scenario.bounds),
+        "mission": {
+            "start_rear": asdict(scenario.start_rear),
+            "pickup_truth": asdict(scenario.pickup),
+            "destination": asdict(scenario.destination),
+            "pickup_estimate": state.get("perception", {}).get(
+                "perception_pickup_estimate_m"
+            ),
+        },
+    }
+    (args.output / "meta.json").write_text(record_json(meta, indent=2) + "\n")
 
 
 def verify_camera_intrinsics(camera, raw_sdk_calibration, state: dict) -> None:
@@ -319,10 +561,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     from pxr import Gf
     from scene import (
         add_destination,
+        add_factory_items,
         add_path_display,
         add_props,
         configure_drives,
         create_pallet,
+        hide_overhead,
         read_catalogue,
     )
 
@@ -360,6 +604,27 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         rig = load_perception_module(
             "run_transport_scene_rig", root / "tools/scene_rig.py"
         )
+        if args.camera_inset or args.robot_camera:
+            inset = load_perception_module(
+                "run_transport_camera_inset", root / "sim/isaac/camera_inset.py"
+            )
+            inset_font = next(
+                (
+                    str(path)
+                    for path in (
+                        Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"),
+                        Path("/usr/share/fonts/truetype/nanum/NanumSquareB.ttf"),
+                    )
+                    if path.exists()
+                ),
+                None,
+            )
+            state["camera_inset"] = {
+                "source": "perception camera live RGB",
+                "outline": "one detection carried forward by simulator pose, "
+                "not continuous tracking",
+                "font": inset_font,
+            }
 
     state["source_sha256"] = source_sha256(
         Path(__file__).resolve().parents[2], Path(forklift_core.__file__).parent
@@ -385,6 +650,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         clearance_m=settings["planning_clearance_m"],
         max_expansions=30000,
     )
+    mission_stages = ["approach", "insert", "extract", "transport", "withdraw"]
+    if args.return_home:
+        mission_stages.append("return_home")
+    state["mission_stages"] = list(mission_stages)
     state["planner_config"] = asdict(planner_config)
     state["approach_clearance_m"] = min(
         planner_config.clearance_m, geometry.approach_gap_m / 2
@@ -395,7 +664,61 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     state["pocket_clearance_margin_m"] = 0.002
     state["pocket_geometry_checks"] = 0
     state["forbidden_pocket_contacts"] = []
-    scenario = make_scenario(args.seed, catalogue, args.obstacles, geometry=geometry)
+    # None keeps every planner call exactly as in the original bay runs.
+    pickup_bounds = travel_config = factory = None
+    if args.layout == "factory":
+        import factory_assets
+
+        from forklift_core.planning.factory_layout import (
+            load_factory_layout,
+            make_factory_scenario,
+        )
+
+        factory_catalogue, factory_offsets = read_catalogue(
+            stage,
+            app,
+            args.asset_root,
+            filenames=factory_assets.ALL,
+            prim_prefix="/World/FactoryCatalogue_",
+        )
+        offsets.update(factory_offsets)
+        factory = make_factory_scenario(
+            args.seed,
+            load_factory_layout(args.factory_layout),
+            catalogue,
+            factory_assets.factory_assets(
+                dict(zip(factory_assets.ALL, factory_catalogue, strict=True))
+            ),
+            args.obstacles,
+            geometry=geometry,
+        )
+        scenario = factory.transport
+        pickup_bounds = factory.pickup_bounds
+        # The long legs cross the hall; only they get the obstacle heuristic.
+        travel_config = replace(planner_config, obstacle_heuristic_resolution_m=0.25)
+        state["travel_planner_config"] = asdict(travel_config)
+        state["factory"] = {
+            "layout": str(args.factory_layout),
+            "layout_version": factory.layout_version,
+            "layout_sha256": hashlib.sha256(
+                args.factory_layout.read_bytes()
+            ).hexdigest(),
+            "work_items": len(factory.work_items),
+            "loads": len(factory.loads),
+            "pickup_bounds": asdict(pickup_bounds),
+            "asset_dimensions_m": {
+                name: [spec.length_m, spec.width_m, spec.height_m]
+                for name, spec in zip(
+                    factory_assets.ALL, factory_catalogue, strict=True
+                )
+            },
+        }
+    else:
+        scenario = make_scenario(
+            args.seed, catalogue, args.obstacles, geometry=geometry
+        )
+    # The pose the mission began at, or None when no return leg was requested.
+    return_to_pose = scenario.start_rear if args.return_home else None
     state["scenario"] = asdict(scenario)
     state["geometry"] = asdict(geometry)
     state["pallet_geometry_source"] = str(args.pallet_geometry)
@@ -406,7 +729,16 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     (args.output / "scenario.json").write_text(
         record_json(state["scenario"], indent=2) + "\n"
     )
-    state["props"] = add_props(stage, app, scenario.props, offsets)
+    if factory is None:
+        state["props"] = add_props(stage, app, scenario.props, offsets)
+    else:
+        bay_props = scenario.props[: len(scenario.props) - len(factory.work_items)]
+        state["props"] = add_props(stage, app, bay_props, offsets)
+        state["factory_items"] = add_factory_items(
+            stage, app, factory.work_items, factory.loads, offsets
+        )
+        # The overview has to see the whole hall from above the roof line.
+        state["hidden_overhead_prims"] = len(hide_overhead(stage))
     state["destination_marker"] = add_destination(
         stage, scenario.destination.x_m, scenario.destination.y_m
     )
@@ -451,7 +783,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     )
     b = scenario.bounds
     center = np.array([(b.x_min_m + b.x_max_m) / 2, (b.y_min_m + b.y_max_m) / 2, 0.0])
-    eye = center + np.array([0.0, 0.0, 6.0])
+    eye = center + np.array([0.0, 0.0, 6.0 if factory is None else 26.0])
     look = Gf.Matrix4d().SetLookAt(Gf.Vec3d(*eye), Gf.Vec3d(*center), Gf.Vec3d(0, 1, 0))
     q = look.GetInverse().ExtractRotationQuat()
     camera.set_world_pose(
@@ -459,7 +791,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         orientation=np.array([q.GetReal(), *q.GetImaginary()]),
         camera_axes="usd",
     )
-    camera.set_focal_length(1.1)
+    camera.set_focal_length(1.1 if factory is None else 0.85)
     state["camera"] = {
         "type": "fixed_global_overview",
         "eye_m": eye.tolist(),
@@ -546,6 +878,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 waypoint,
                 planner_config,
                 geometry=geometry,
+                pickup_bounds=pickup_bounds,
             )
             state["observation_candidates"].append(
                 {
@@ -578,20 +911,22 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             scenario,
             planner_config,
             geometry=geometry,
+            return_to=return_to_pose,
+            pickup_bounds=pickup_bounds,
+            travel_config=travel_config,
         )
         state["planning_wall_s"] = time.monotonic() - planning_start
         state["planning_status"] = plans.status
         require(plans.success, f"Mission planning failed: {plans.status}")
-        paths = {
-            name: getattr(plans, name)
-            for name in ["approach", "insert", "extract", "transport", "withdraw"]
-        }
+        paths = {name: getattr(plans, name) for name in mission_stages}
         state["paths"] = {name: path_record(path) for name, path in paths.items()}
         (args.output / "paths.json").write_text(
             record_json(state["paths"], indent=2) + "\n"
         )
         add_path_display(stage, paths["approach"], "Approach", (0.05, 0.45, 1.0))
         add_path_display(stage, paths["transport"], "Transport", (1.0, 0.65, 0.04))
+        if "return_home" in paths:
+            add_path_display(stage, paths["return_home"], "Return", (0.55, 0.2, 0.85))
         stage.GetRootLayer().Export(str(args.output / "scene.usda"))
         print(
             "PLANNED",
@@ -604,7 +939,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             flush=True,
         )
 
-    drive_geometry = AckermannGeometry(0.64, 0.51, 0.135, 0.45, 8.0)
+    drive_geometry = AckermannGeometry(
+        0.64, 0.51, 0.135, 0.45, settings["max_wheel_rate_rad_s"]
+    )
     obstacles = [item.rectangle for item in scenario.props]
     pickup_obstacle = Rectangle(
         scenario.pickup.x_m,
@@ -617,6 +954,39 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     dt = 1 / 120
     encoder = None
     frame_audit = []
+    extra_encoders = {}
+    video_frames = []
+    slam_log = None
+    if args.record_slam:
+        import planar_lidar
+        import yaml
+
+        from forklift_core.sensors.lidar import PlanarScanPattern
+
+        lidar_config = yaml.safe_load(args.lidar.read_text())
+        scan_pattern = PlanarScanPattern(
+            lidar_config["beam_count"],
+            float(lidar_config["range_min_m"]),
+            float(lidar_config["range_max_m"]),
+        )
+        laser_mount = planar_lidar.LaserMount(
+            tuple(map(float, lidar_config["mount_xyz_m"])),
+            float(lidar_config["mount_yaw_rad"]),
+        )
+        beam_angles = scan_pattern.beam_angles_rad()
+        scan_every = 120 // int(lidar_config["rate_hz"])
+        slam_log = {
+            "joint_stamps_s": [],
+            "wheel_rates_rad_s": [],
+            "steering_rad": [],
+            "base_pose_world": [],
+            "scan_stamps_s": [],
+            "scan_ranges_m": [],
+            "laser_pose_world": [],
+        }
+        state["lidar_synthetic"] = lidar_config
+    if args.robot_camera:
+        import video_frames as video_frames_module
     speeds = {
         "approach": settings["approach_speed_mps"],
         "insert": settings["insert_speed_mps"],
@@ -627,6 +997,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     if args.use_perception:
         # Observation travel reuses approach speed; no new settings YAML key.
         speeds["observe"] = settings["approach_speed_mps"]
+    if args.return_home:
+        # The return runs unloaded, so it reuses the unloaded approach speed
+        # rather than introducing a settings key the recorded runs never had.
+        speeds["return_home"] = settings["approach_speed_mps"]
     trackers = {
         name: RearAxlePathTracker(
             path.poses,
@@ -637,8 +1011,29 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 max_curvature_inv_m=settings["tracker_curvature_inv_m"],
                 max_acceleration_mps2=settings["drive_acceleration_mps2"],
                 lookahead_m=0.28,
-                position_tolerance_m=0.008,
-                yaw_tolerance_rad=0.03 if name == "observe" else 0.02,
+                position_tolerance_m=(
+                    0.03 if name in ("observe", "return_home") else 0.008
+                ),
+                # Observation and return are repositioning moves, not docking,
+                # in position (3 cm, 2026-09-26) as in heading:
+                # measured seeds 18 and 20 ended the return at 0.024 and
+                # 0.021 rad, inside the repositioning tolerance and outside
+                # the docking one. Insertion tolerances are unchanged.
+                yaw_tolerance_rad=(
+                    0.03 if name in ("observe", "return_home") else 0.02
+                ),
+                # Gear-change cusps are not goals (2026-09-26): the next leg
+                # starts from the measured pose. Final goals keep the rules above.
+                cusp_position_tolerance_m=0.03,
+                cusp_yaw_tolerance_rad=0.05,
+                # Optional path speed caps; absent from the settings = off.
+                max_lateral_acceleration_mps2=settings.get(
+                    "max_lateral_acceleration_mps2"
+                ),
+                max_reverse_speed_mps=settings.get("max_reverse_speed_mps"),
+                # A stop just past the goal is fine except deeper into
+                # the pallet: insertion keeps the round 8 mm.
+                overshoot_tolerance_m=None if name == "insert" else 0.03,
                 stop_speed_mps=0.012,
                 max_cross_track_error_m=0.35,
             ),
@@ -655,6 +1050,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     steering_command = np.zeros(2)
     state["transitions"] = []
     state["samples"] = []
+    inset_estimate = None
+    inset_status = "팔레트 탐색 중"
+    inset_detail = ""
     state["frames"] = 0
     state["phase"] = phase
 
@@ -708,6 +1106,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 ],
                 stdin=subprocess.PIPE,
             )
+        if args.robot_camera:
+            size = (perception_calibration.width, perception_calibration.height)
+            for name in ("rgb", "depth"):
+                extra_encoders[name] = open_encoder(
+                    args.output / f"camera_{name}.mp4", *size, args.fps
+                )
         for step in range(int(120 * args.max_sim_seconds)):
             t = world.current_time - initial_time
             base, q = robot.get_world_pose()
@@ -735,6 +1139,18 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             checked_obstacles = obstacles + (
                 [pickup_obstacle] if phase in ("approach", "observe") else []
             )
+            if phase in ("return_home", "home_settle"):
+                # The pallet is on the floor behind the forks now, so drive
+                # around its measured pose rather than its planned one.
+                checked_obstacles = checked_obstacles + [
+                    Rectangle(
+                        float(ppos[0]),
+                        float(ppos[1]),
+                        geometry.pallet_depth_m,
+                        geometry.pallet_width_m,
+                        pallet_yaw,
+                    )
+                ]
             # Runtime pose checks below use zero margin intentionally --
             # clearance_m is a planning-time buffer against the intended path,
             # not a re-check of the executed pose; spawn_clearance_m already
@@ -796,7 +1212,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             requested_speed, curvature = 0.0, 0.0
             tracking = None
             if phase in trackers:
-                limit = max(30.0, 3 * paths[phase].length_m / speeds[phase] + 10)
+                # Three times the path time at the tracker's own speed caps
+                # (length / cruise when there are none), plus 10 s.
+                limit = max(30.0, 3 * trackers[phase].nominal_duration_s() + 10)
                 require(t - phase_started < limit, f"Tracking timeout in {phase}")
                 tracking = trackers[phase].update(rear, signed_speed, dt)
                 require(
@@ -896,6 +1314,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             attempt["retry_reason"] = (
                                 f"perception_{observation.status}:{observation.reason}"
                             )
+                            inset_status = f"인식 실패 #{attempt_number} · 재관측 이동"
+                            inset_detail = f"사유: {observation.reason}"
                             planning_start = time.monotonic()
                             observe_plan = None
                             while next_candidate_index < len(
@@ -913,6 +1333,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                     planner_config,
                                     geometry=geometry,
                                     start_rear=Pose2D(rear[0], rear[1], rear[2]),
+                                    pickup_bounds=pickup_bounds,
                                 )
                                 state["observation_candidates"].append(
                                     {
@@ -957,8 +1378,20 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                         "drive_acceleration_mps2"
                                     ],
                                     lookahead_m=0.28,
-                                    position_tolerance_m=0.008,
+                                    position_tolerance_m=0.03,
                                     yaw_tolerance_rad=0.03,
+                                    # Gear-change cusps are not goals (2026-09-26): the next leg
+                                    # starts from the measured pose. Final goals keep the rules above.
+                                    cusp_position_tolerance_m=0.03,
+                                    cusp_yaw_tolerance_rad=0.05,
+                                    # Optional path speed caps; absent from the settings = off.
+                                    max_lateral_acceleration_mps2=settings.get(
+                                        "max_lateral_acceleration_mps2"
+                                    ),
+                                    max_reverse_speed_mps=settings.get(
+                                        "max_reverse_speed_mps"
+                                    ),
+                                    overshoot_tolerance_m=0.03,
                                     stop_speed_mps=0.012,
                                     max_cross_track_error_m=0.35,
                                 ),
@@ -976,6 +1409,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 yaw,
                             )
                             start_rear_pose = Pose2D(rear[0], rear[1], rear[2])
+                            if args.camera_inset or args.robot_camera:
+                                inset_estimate = inset.InsetEstimate(
+                                    observation=observation,
+                                    capture_pose=(float(base[0]), float(base[1]), yaw),
+                                    pallet_site=target_pickup,
+                                    intrinsics=scene_input.intrinsics,
+                                    base_from_optical=scene_input.base_from_optical,
+                                    attempt_number=attempt_number,
+                                )
                             state["perception"]["perception_pickup_estimate_m"] = {
                                 "x_m": target_pickup.x_m,
                                 "y_m": target_pickup.y_m,
@@ -1010,6 +1452,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 geometry=geometry,
                                 target_pickup=target_pickup,
                                 start_rear=start_rear_pose,
+                                return_to=return_to_pose,
+                                pickup_bounds=pickup_bounds,
+                                travel_config=travel_config,
                             )
                             state["planning_wall_s"] += (
                                 time.monotonic() - planning_start
@@ -1018,16 +1463,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             # MissionPlan.status already contains the failing phase.
                             require(plans.success, plans.status)
                             paths.update(
-                                {
-                                    name: getattr(plans, name)
-                                    for name in [
-                                        "approach",
-                                        "insert",
-                                        "extract",
-                                        "transport",
-                                        "withdraw",
-                                    ]
-                                }
+                                {name: getattr(plans, name) for name in mission_stages}
                             )
                             trackers.update(
                                 {
@@ -1044,8 +1480,35 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                                 "drive_acceleration_mps2"
                                             ],
                                             lookahead_m=0.28,
-                                            position_tolerance_m=0.008,
-                                            yaw_tolerance_rad=0.02,
+                                            # Same rule as the trackers built
+                                            # without perception: repositioning
+                                            # moves stop within 3 cm, 0.03 rad.
+                                            position_tolerance_m=(
+                                                0.03
+                                                if name in ("observe", "return_home")
+                                                else 0.008
+                                            ),
+                                            yaw_tolerance_rad=(
+                                                0.03
+                                                if name in ("observe", "return_home")
+                                                else 0.02
+                                            ),
+                                            # Gear-change cusps are not goals (2026-09-26): the next leg
+                                            # starts from the measured pose. Final goals keep the rules above.
+                                            cusp_position_tolerance_m=0.03,
+                                            cusp_yaw_tolerance_rad=0.05,
+                                            # Optional path speed caps; absent from the settings = off.
+                                            max_lateral_acceleration_mps2=settings.get(
+                                                "max_lateral_acceleration_mps2"
+                                            ),
+                                            max_reverse_speed_mps=settings.get(
+                                                "max_reverse_speed_mps"
+                                            ),
+                                            # A stop just past the goal is fine except deeper into
+                                            # the pallet: insertion keeps the round 8 mm.
+                                            overshoot_tolerance_m=None
+                                            if name == "insert"
+                                            else 0.03,
                                             stop_speed_mps=0.012,
                                             max_cross_track_error_m=0.35,
                                         ),
@@ -1098,6 +1561,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         transition("lower", t)
                     elif phase == "withdraw":
                         transition("settle", t)
+                    elif phase == "return_home":
+                        transition("home_settle", t)
             desired_lift = (
                 settings["lift_target_m"]
                 if phase in ["lift", "extract", "transport"]
@@ -1123,6 +1588,26 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 )
                 transition("withdraw", t)
             if phase == "settle" and t - phase_started > 1.0:
+                if "return_home" in trackers:
+                    transition("return_home", t)
+                else:
+                    transition("complete", t)
+                    break
+            if phase == "home_settle" and t - phase_started > 1.0:
+                state["return_home_error"] = {
+                    "position_m": float(
+                        np.hypot(
+                            rear[0] - scenario.start_rear.x_m,
+                            rear[1] - scenario.start_rear.y_m,
+                        )
+                    ),
+                    "yaw_rad": float(
+                        math.atan2(
+                            math.sin(rear[2] - scenario.start_rear.yaw_rad),
+                            math.cos(rear[2] - scenario.start_rear.yaw_rad),
+                        )
+                    ),
+                }
                 transition("complete", t)
                 break
             drive = ackermann_command(requested_speed, curvature, drive_geometry)
@@ -1153,6 +1638,32 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 )
             )
             world.step(render=args.video and step % fps_divisor == 0)
+            stamp = world.current_time - initial_time
+            if slam_log is not None:
+                # Encoders and the scan read the state this step produced.
+                now_base, now_q = robot.get_world_pose()
+                slam_log["joint_stamps_s"].append(stamp)
+                slam_log["wheel_rates_rad_s"].append(
+                    robot.get_joint_velocities()[wheels]
+                )
+                slam_log["steering_rad"].append(robot.get_joint_positions()[steers])
+                slam_log["base_pose_world"].append(np.concatenate((now_base, now_q)))
+                if step % scan_every == 0:
+                    origin, directions = planar_lidar.laser_rays_world(
+                        now_base, now_q, laser_mount, beam_angles
+                    )
+                    distances, hits, _ = planar_lidar.cast_scan(
+                        origin, directions, scan_pattern.range_max_m
+                    )
+                    slam_log["scan_stamps_s"].append(stamp)
+                    slam_log["scan_ranges_m"].append(
+                        scan_pattern.ranges_from_hits(distances, hits).astype(
+                            np.float32
+                        )
+                    )
+                    slam_log["laser_pose_world"].append(
+                        planar_lidar.laser_pose_2d(now_base, now_q, laser_mount)
+                    )
             if args.video and step % fps_divisor == 0:
                 frame = camera.get_current_frame()
                 rgba = camera.get_rgba()
@@ -1163,9 +1674,53 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     rgba is not None and rgba.shape == (720, 1280, 4),
                     "Camera did not produce RGB",
                 )
+                video_rgb = rgba[:, :, :3]
+                if args.camera_inset:
+                    # Pose after this render step, so outline and picture agree.
+                    now_base, now_q = robot.get_world_pose()
+                    now_yaw, _ = yaw_and_tilt(now_q)
+                    live = perception_camera.get_rgba()
+                    if live is None or live.ndim != 3 or live.size == 0:
+                        live = None
+                    video_rgb = inset.compose_frame(
+                        video_rgb,
+                        inset.render_inset(
+                            live,
+                            phase=phase,
+                            current_pose=(
+                                float(now_base[0]),
+                                float(now_base[1]),
+                                now_yaw,
+                            ),
+                            estimate=inset_estimate,
+                            status=inset_status,
+                            detail=inset_detail,
+                            fork_tip_x_m=args.axle_to_fork_tip_m
+                            - abs(args.rear_axle_offset_m),
+                            font_path=inset_font,
+                        ),
+                    )
                 encoder.stdin.write(
-                    np.ascontiguousarray(rgba[:, :, :3], dtype=np.uint8).tobytes()
+                    np.ascontiguousarray(video_rgb, dtype=np.uint8).tobytes()
                 )
+                if args.robot_camera:
+                    record_robot_camera_frame(
+                        perception_camera,
+                        perception_calibration,
+                        extra_encoders,
+                        video_frames,
+                        video_frames_module,
+                        inset,
+                        stamp=stamp,
+                        phase=phase,
+                        state=state,
+                        pose=robot.get_world_pose(),
+                        estimate=inset_estimate,
+                        fork_tip_x_m=args.axle_to_fork_tip_m
+                        - abs(args.rear_axle_offset_m),
+                        overview=camera,
+                        bounds=scenario.bounds,
+                    )
                 state["frames"] += 1
                 frame_audit.append(
                     {
@@ -1238,9 +1793,37 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         if encoder is not None:
             encoder.stdin.close()
             require(encoder.wait(timeout=60) == 0, "Video encoding failed")
+        for name, extra in extra_encoders.items():
+            extra.stdin.close()
+            require(extra.wait(timeout=60) == 0, f"{name} video encoding failed")
         (args.output / "frame_audit.json").write_text(
             record_json(frame_audit, indent=2) + "\n"
         )
+        if video_frames:
+            (args.output / "video_frames.json").write_text(
+                record_json(
+                    {
+                        "fps": args.fps,
+                        "clock": "Isaac simulation time since the first recorded step",
+                        "overview_video": "transport.mp4",
+                        "overview_floor_points": state.get("overview_floor_points"),
+                        "robot_camera": {
+                            "mount": "perception camera (synthetic baseline_0p50)",
+                            "resolution": [
+                                perception_calibration.width,
+                                perception_calibration.height,
+                            ],
+                            "depth_video_range_m": list(DEPTH_VIDEO_RANGE_M),
+                            "timing": "video only, not a freshness-checked capture",
+                        },
+                        "frames": video_frames,
+                    },
+                    indent=1,
+                )
+                + "\n"
+            )
+        if slam_log is not None and slam_log["scan_stamps_s"]:
+            write_slam_record(args, state, scenario, factory, slam_log, lidar_config)
 
 
 def main() -> None:

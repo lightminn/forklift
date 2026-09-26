@@ -21,3 +21,6 @@ extract_speed_mps: 0.18
 withdraw_speed_mps: 0.12
 insert_speed_mps: 0.055
 drive_acceleration_mps2: 0.30
+# Wheel-rate cap of the drive command (8 x 0.135 m = 1.08 m/s), formerly a
+# constant in run_transport.py.
+max_wheel_rate_rad_s: 8.0
