@@ -34,6 +34,9 @@ CAMERA_CALIBRATION = load_perception_module(
     "run_transport_camera_calibration",
     Path(__file__).with_name("camera_calibration.py"),
 )
+MISSION_VIEWS = load_perception_module(
+    "run_transport_mission_views", Path(__file__).with_name("mission_views.py")
+)
 
 
 def record_json(value: object, *, indent: int | None = None) -> str:
@@ -57,6 +60,30 @@ def camera_hz(value: str) -> int:
             "camera frequency must be positive and divide 120"
         )
     return rate
+
+
+def quarter_vector(value: str) -> tuple[float, float, float]:
+    """Parse one finite world-space camera point."""
+    try:
+        parts = tuple(float(part) for part in value.split(","))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("quarter point needs X,Y,Z floats") from exc
+    if len(parts) != 3 or not all(math.isfinite(part) for part in parts):
+        raise argparse.ArgumentTypeError(
+            "quarter point needs three finite X,Y,Z floats"
+        )
+    return parts
+
+
+def quarter_focal(value: str) -> float:
+    """Parse a positive finite focal length for Camera.set_focal_length."""
+    try:
+        focal = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("quarter focal must be positive") from exc
+    if not math.isfinite(focal) or focal <= 0:
+        raise argparse.ArgumentTypeError("quarter focal must be positive and finite")
+    return focal
 
 
 def arguments() -> argparse.Namespace:
@@ -90,6 +117,10 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument("--fps", type=camera_hz, default=60)
     parser.add_argument("--video", action="store_true")
+    parser.add_argument("--extra-views", default="", metavar="VIEWS")
+    parser.add_argument("--quarter-eye", type=quarter_vector, metavar="X,Y,Z")
+    parser.add_argument("--quarter-target", type=quarter_vector, metavar="X,Y,Z")
+    parser.add_argument("--quarter-focal", type=quarter_focal, default=2.5, metavar="F")
     parser.add_argument("--max-sim-seconds", type=float, default=300)
     parser.add_argument(
         "--asset-root",
@@ -153,6 +184,15 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument("--perception-max-attempts", type=int, default=200)
     args, unknown = parser.parse_known_args()
+    try:
+        args.extra_views = MISSION_VIEWS.parse_extra_views(
+            args.extra_views, args.video, args.use_perception
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    if args.quarter_eye is not None and args.quarter_target is not None:
+        if args.quarter_eye == args.quarter_target:
+            parser.error("quarter eye and target must differ")
     if args.observation_waypoints is None:
         # (-1.20, 0.30) moved ahead of (-0.10, -0.60): both plan equally well
         # for every seed that can reach either, but seed 3 only detects the
@@ -799,6 +839,51 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         "fps": args.fps,
         "resolution": [1280, 720],
     }
+    extra_cameras = {}
+    if args.extra_views:
+        state["extra_views"] = {}
+    if "quarter" in args.extra_views:
+        default_quarter_eye = center + np.array(
+            [
+                -0.55 * (b.x_max_m - b.x_min_m),
+                -0.55 * (b.y_max_m - b.y_min_m),
+                3.2,
+            ]
+        )
+        quarter_eye = np.asarray(
+            args.quarter_eye if args.quarter_eye is not None else default_quarter_eye
+        )
+        quarter_target = np.asarray(
+            args.quarter_target if args.quarter_target is not None else center
+        )
+        if np.array_equal(quarter_eye, quarter_target):
+            raise ValueError("quarter eye and target must differ")
+        quarter = Camera(
+            prim_path="/World/QuarterCamera", frequency=-1, resolution=(1280, 720)
+        )
+        look = Gf.Matrix4d().SetLookAt(
+            Gf.Vec3d(*quarter_eye), Gf.Vec3d(*quarter_target), Gf.Vec3d(0, 0, 1)
+        )
+        quat = look.GetInverse().ExtractRotationQuat()
+        quarter.set_world_pose(
+            position=quarter_eye,
+            orientation=np.array([quat.GetReal(), *quat.GetImaginary()]),
+            camera_axes="usd",
+        )
+        quarter.set_focal_length(args.quarter_focal)
+        extra_cameras["quarter"] = quarter
+        state["extra_views"]["quarter"] = {
+            "eye_m": quarter_eye.tolist(),
+            "target_m": quarter_target.tolist(),
+            "focal_length_mm": args.quarter_focal,
+        }
+    if "chase" in args.extra_views:
+        chase = Camera(
+            prim_path="/World/ChaseCamera", frequency=-1, resolution=(1280, 720)
+        )
+        chase.set_focal_length(3.0)
+        extra_cameras["chase"] = chase
+        state["extra_views"]["chase"] = {"focal_length_mm": 3.0}
     if args.use_perception:
         perception_mount = adapter.default_base_from_optical()
         perception_calibration = rig.intrinsics()
@@ -821,11 +906,57 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         )
     world.reset()
     camera.initialize()
+    for extra_camera in extra_cameras.values():
+        extra_camera.initialize()
     if args.use_perception:
         perception_camera.initialize()
         verify_camera_intrinsics(perception_camera, perception_calibration, state)
         # Capture needs axial depth as well as RGBA (see determinism_probe.py).
         perception_camera.add_distance_to_image_plane_to_frame()
+        if "perception" in args.extra_views:
+            perception_display = Camera(
+                prim_path="/World/Forklift/base_link/PerceptionDisplayCamera",
+                frequency=-1,
+                resolution=(
+                    perception_calibration.width,
+                    perception_calibration.height,
+                ),
+            )
+            perception_display.set_local_pose(
+                translation=np.asarray(perception_mount.translation_m),
+                orientation=np.asarray(
+                    adapter.xyzw_to_wxyz(rig.OPTICAL_QUATERNION_XYZW)
+                ),
+                camera_axes=args.perception_camera_axes,
+            )
+            perception_display.set_projection_mode("perspective")
+            perception_display.set_lens_distortion_model("pinhole")
+            perception_display.set_focal_length(1.0)
+            perception_display.set_horizontal_aperture(
+                perception_calibration.width / perception_calibration.fx,
+                maintain_square_pixels=True,
+            )
+            perception_display.initialize()
+            perception_display.add_distance_to_image_plane_to_frame()
+            _, display_far_m = perception_display.get_clipping_range()
+            perception_display.set_clipping_range(near_distance=0.05)
+            display_clip = list(map(float, perception_display.get_clipping_range()))
+            require(
+                np.isclose(display_clip[0], 0.05) and display_clip[1] == display_far_m,
+                "Perception display clipping range did not preserve the far plane",
+            )
+            extra_cameras["perception"] = perception_display
+            state["extra_views"]["perception_display"] = {
+                "clipping_range_m": display_clip,
+                "min_depth_m": MISSION_VIEWS.DISPLAY_MIN_DEPTH_M,
+            }
+            state["extra_views"]["perception_mount"] = {
+                "translation_m": perception_mount.translation_m.tolist(),
+                "rotation": perception_mount.rotation.tolist(),
+                "intrinsics": asdict(
+                    adapter.read_isaac_intrinsics(perception_camera).integer_index
+                ),
+            }
         perception_capture = adapter.SensorCapture(
             perception_camera,
             perception_mount,
@@ -953,8 +1084,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     fps_divisor = 120 // args.fps
     dt = 1 / 120
     encoder = None
-    frame_audit = []
     extra_encoders = {}
+    frame_log = None
+    chase_yaw = None
+    frame_audit = []
     video_frames = []
     slam_log = None
     if args.record_slam:
@@ -1111,6 +1244,42 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             for name in ("rgb", "depth"):
                 extra_encoders[name] = open_encoder(
                     args.output / f"camera_{name}.mp4", *size, args.fps
+                )
+        if args.extra_views:
+            frame_log = (args.output / "frames.jsonl").open("w", encoding="utf-8")
+            for name in args.extra_views:
+                height = 480 if name == "perception" else 720
+                extra_encoders[name] = subprocess.Popen(
+                    [
+                        "ffmpeg",
+                        "-nostdin",
+                        "-n",
+                        "-loglevel",
+                        "error",
+                        "-f",
+                        "rawvideo",
+                        "-pix_fmt",
+                        "rgb24",
+                        "-s",
+                        f"1280x{height}",
+                        "-r",
+                        str(args.fps),
+                        "-i",
+                        "-",
+                        "-an",
+                        "-c:v",
+                        "libx264",
+                        "-threads",
+                        "2",
+                        "-crf",
+                        "20",
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-movflags",
+                        "+faststart",
+                        str(args.output / f"view_{name}.mp4"),
+                    ],
+                    stdin=subprocess.PIPE,
                 )
         for step in range(int(120 * args.max_sim_seconds)):
             t = world.current_time - initial_time
@@ -1398,6 +1567,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             )
                             phase_started = t
                         else:
+                            if args.extra_views:
+                                attempt["acceptance_simulation_time_s"] = (
+                                    world.current_time - initial_time
+                                )
                             state["perception"] = attempt.copy()
                             base_xy = adapter.estimate_pallet_center_m(
                                 observation, geometry.pallet_depth_m
@@ -1637,6 +1810,23 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     joint_positions=np.array([lift_command]), joint_indices=lift_index
                 )
             )
+            if "chase" in extra_cameras and step % fps_divisor == 0:
+                chase_eye, chase_target, chase_yaw = MISSION_VIEWS.chase_pose(
+                    base, yaw, chase_yaw, fps_divisor / 120
+                )
+                chase_look = Gf.Matrix4d().SetLookAt(
+                    Gf.Vec3d(*chase_eye),
+                    Gf.Vec3d(*chase_target),
+                    Gf.Vec3d(0, 0, 1),
+                )
+                chase_quat = chase_look.GetInverse().ExtractRotationQuat()
+                extra_cameras["chase"].set_world_pose(
+                    position=chase_eye,
+                    orientation=np.array(
+                        [chase_quat.GetReal(), *chase_quat.GetImaginary()]
+                    ),
+                    camera_axes="usd",
+                )
             world.step(render=args.video and step % fps_divisor == 0)
             stamp = world.current_time - initial_time
             if slam_log is not None:
@@ -1722,6 +1912,52 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         bounds=scenario.bounds,
                     )
                 state["frames"] += 1
+                if args.extra_views:
+                    for name in args.extra_views:
+                        view_camera = extra_cameras[name]
+                        view_rgba = view_camera.get_rgba()
+                        expected = (
+                            (480, 640, 4) if name == "perception" else (720, 1280, 4)
+                        )
+                        require(
+                            view_rgba is not None and view_rgba.shape == expected,
+                            f"{name} camera did not produce RGB",
+                        )
+                        view_rgb = np.ascontiguousarray(
+                            view_rgba[:, :, :3], dtype=np.uint8
+                        )
+                        if name == "perception":
+                            depth = view_camera.get_depth()
+                            require(
+                                depth is not None and depth.shape[:2] == (480, 640),
+                                "Perception camera did not produce depth",
+                            )
+                            if depth.ndim == 3:
+                                depth = depth[:, :, 0]
+                            view_rgb = np.concatenate(
+                                (view_rgb, MISSION_VIEWS.depth_colormap(depth)),
+                                axis=1,
+                            )
+                        extra_encoders[name].stdin.write(view_rgb.tobytes())
+                    frame_base, frame_q = robot.get_world_pose()
+                    frame_pallet, frame_pq = pallet.get_world_pose()
+                    frame_log.write(
+                        record_json(
+                            {
+                                "frame": state["frames"] - 1,
+                                "simulation_time_s": world.current_time - initial_time,
+                                "phase": phase,
+                                "base_position_m": frame_base,
+                                "base_orientation_wxyz": frame_q,
+                                "pallet_position_m": frame_pallet,
+                                "pallet_orientation_wxyz": frame_pq,
+                                "lift_m": float(
+                                    robot.get_joint_positions()[lift_index[0]]
+                                ),
+                            }
+                        )
+                        + "\n"
+                    )
                 frame_audit.append(
                     {
                         "simulation_time_s": world.current_time - initial_time,
@@ -1790,12 +2026,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             }
         )
     finally:
+        if frame_log is not None:
+            frame_log.close()
+        video_results = []
         if encoder is not None:
             encoder.stdin.close()
-            require(encoder.wait(timeout=60) == 0, "Video encoding failed")
-        for name, extra in extra_encoders.items():
-            extra.stdin.close()
-            require(extra.wait(timeout=60) == 0, f"{name} video encoding failed")
+            video_results.append(("transport", encoder.wait(timeout=60)))
+        for name, extra_encoder in extra_encoders.items():
+            extra_encoder.stdin.close()
+            video_results.append((name, extra_encoder.wait(timeout=60)))
         (args.output / "frame_audit.json").write_text(
             record_json(frame_audit, indent=2) + "\n"
         )
@@ -1824,6 +2063,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             )
         if slam_log is not None and slam_log["scan_stamps_s"]:
             write_slam_record(args, state, scenario, factory, slam_log, lidar_config)
+        for name, exit_code in video_results:
+            require(exit_code == 0, f"{name} video encoding failed")
 
 
 def main() -> None:
@@ -1864,6 +2105,11 @@ def main() -> None:
                 else v
             )
             for k, v in vars(args).items()
+            if (k != "extra_views" or v)
+            and (
+                k not in {"quarter_eye", "quarter_target", "quarter_focal"}
+                or (v is not None and (k != "quarter_focal" or v != 2.5))
+            )
         },
     }
     if args.use_perception:

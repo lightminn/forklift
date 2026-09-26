@@ -48,6 +48,71 @@ def test_isaac_transport_rejects_unsupported_camera_rate_before_startup() -> Non
     assert "ModuleNotFoundError" not in result.stderr
 
 
+def test_extra_views_require_video_and_perception_before_startup() -> None:
+    for flags, expected in (
+        (["--extra-views", "chase"], "--video"),
+        (["--extra-views", "perception", "--video"], "--use-perception"),
+        (["--extra-views", "unknown", "--video"], "Unknown"),
+    ):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--base-scene",
+                "unused.usda",
+                "--pallet-urdf",
+                "unused.urdf",
+                "--pallet-geometry",
+                "unused.yaml",
+                "--settings",
+                "unused.yaml",
+                "--output",
+                "unused",
+                "--seed",
+                "2",
+                *flags,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 2
+        assert expected in result.stderr
+
+
+def test_quarter_options_validate_before_simulator_startup(tmp_path) -> None:
+    base = [
+        sys.executable,
+        str(SCRIPT),
+        "--base-scene",
+        "unused.usda",
+        "--pallet-urdf",
+        "unused.urdf",
+        "--pallet-geometry",
+        "unused.yaml",
+        "--settings",
+        "unused.yaml",
+        "--output",
+        str(tmp_path / "run"),
+        "--seed",
+        "2",
+    ]
+    for flags in (
+        ["--quarter-eye", "1,2"],
+        ["--quarter-eye", "1,nan,3"],
+        ["--quarter-target", "inf,2,3"],
+        ["--quarter-focal", "0"],
+        ["--quarter-focal", "nan"],
+        ["--quarter-eye", "1,2,3", "--quarter-target", "1,2,3"],
+    ):
+        result = subprocess.run(
+            base + flags, capture_output=True, text=True, check=False
+        )
+        assert result.returncode == 2, (flags, result.stderr)
+        assert "quarter" in result.stderr.lower()
+        assert "ModuleNotFoundError" not in result.stderr
+
+
 def test_tracking_sample_remains_json_serializable_after_a_gear_change() -> None:
     import json
     from dataclasses import asdict
@@ -166,6 +231,9 @@ def test_t11_configuration_reaches_sdk_startup(tmp_path, full_t11_pallet_urdf):
     assert record["arguments"]["axle_to_fork_tip_m"] == 1.29
     assert record["arguments"]["rear_axle_offset_m"] == -0.34
     assert record["arguments"]["pallet_geometry_loaded"]["overall_depth_m"] == 0.66
+    assert "quarter_eye" not in record["arguments"]
+    assert "quarter_target" not in record["arguments"]
+    assert "quarter_focal" not in record["arguments"]
 
 
 def test_epal_yaml_rejects_t11_envelope_before_startup(tmp_path, synthetic_pallet_urdf):
