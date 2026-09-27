@@ -303,7 +303,7 @@ The profile's two optional keys become `RearAxlePathTracker` speed caps:
 `max_reverse_speed_mps` caps reverse segments. They exist because the synthetic
 1 rad/s steering rate, not grip, is what fails a fast turn. Every stage accepts
 3 cm / 0.05 rad at an intermediate cusp and, except insertion, a stop up to
-3 cm past the goal along the path; observe and return-home finish within 3 cm.
+3 cm past the goal along the path; observe finishes within 3 cm.
 Stage timeouts are three times the tracker's nominal duration plus 10 s, and
 never under 30 s.
 With `--use-perception`, `--robot-camera` writes the perception camera as

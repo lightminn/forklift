@@ -200,7 +200,9 @@ def test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules():
         position = compile(ast.Expression(position_rule), str(SCRIPT), "eval")
         for name in ("observe", "return_home"):
             assert eval(yaw, {"name": name}) == 0.03
-            assert eval(position, {"name": name}) == 0.03
+        assert eval(position, {"name": "observe"}) == 0.03
+        # A 3 cm return stopped short before its heading settled (seed 23).
+        assert eval(position, {"name": "return_home"}) == 0.008
         for name in ("approach", "insert", "extract", "transport", "withdraw"):
             assert eval(yaw, {"name": name}) == 0.02
             assert eval(position, {"name": name}) == 0.008
