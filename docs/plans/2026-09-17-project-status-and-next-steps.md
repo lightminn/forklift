@@ -22,6 +22,15 @@
 [G1 실측 기록](../validation/2026-09-21-g1-calibration-run.md) §1–§21.
 **G2 는 아직 열지 않았다**(사용자 결정) — `g2_allowed` 가 코드에 `false` 로 하드코딩돼 있다.
 
+**2026-10-01 갱신: 차체 실측을 모델에 반영했다.** 5주차 팀 실측(축간 0.66 · 윤거 0.53 · 바퀴
+0.125 m · 조향 15° · 포크 360 mm)으로 `sim/models/dls08_measured/` 를 만들었고, 운반·SLAM 실행기는
+구동 기하와 캐리지 한계(0.346 m → 삽입 목표 두 형상 모두 0.300 m)를 URDF 에서 읽고, base scene 의
+차체·설정 곡률이 그 URDF 와 다르면 시작하지 않는다. 최소 회전 반경은 2.728 m(두 바퀴 15° 배정)로
+잠정 모델의 약 2배라 **아래 운반·A–D·SLAM 성적은 모두 잠정 모델 기준**이다 — 재검증은 이후 작업.
+`run_pocket_insertion.py` 는 `SyntheticMissionGeometry(approach_offset_m=…)` 가 `init=False` 필드를
+넘겨 지금 `TypeError` 로 시작하지 못한다(Codex 재현, 4순위 재측정 전에 고칠 것). 근거:
+[계획](2026-09-30-measured-chassis-model.md).
+
 **2026-09-26 갱신: 공장 홀과 Isaac 2D LiDAR SLAM 기록·재생 경로를 붙였다.**
 `run_transport.py --layout factory` 는 기존 구역을 그대로 둔 채 창고 남쪽 홀(약 30 × 31 m)을
 적재 팔레트·작업장 물품으로 채운다(seed 0–19 에서 소품 476–653 개, 기존 4 개). 기본값
