@@ -45,6 +45,10 @@ class Link:
     sites: dict = field(default_factory=dict)
 
 
+# The image-estimated model and its successor carrying the team's measurements.
+MODEL_NAMES = frozenset({"dls08_provisional", "dls08_measured"})
+
+
 def load_parameters(path: Path) -> dict:
     """Reject missing/unknown fields and impossible geometry before writing files."""
     try:
@@ -71,8 +75,8 @@ def load_parameters(path: Path) -> dict:
     }
     if not isinstance(value, dict) or set(value) != {*keys, "model_name"}:
         raise ValueError("parameters: unexpected or missing top-level fields")
-    if value["model_name"] != "dls08_provisional":
-        raise ValueError("parameters: model_name must preserve provisional identity")
+    if value["model_name"] not in MODEL_NAMES:
+        raise ValueError(f"parameters: model_name must be one of {sorted(MODEL_NAMES)}")
     for group, names in keys.items():
         if not isinstance(value[group], dict) or set(value[group]) != set(
             names.split()
@@ -558,7 +562,8 @@ def assembly(parameters: dict) -> list[Link]:
         (0, 0, 0),
         a["carriage_mass_kg"],
         (0.42, d["carriage_width_m"], d["carriage_height_m"]),
-        (0.59, 0, 0.15),
+        # Inertia centre 0.06 m ahead of the fork root (0.59 in the provisional model).
+        (d["fork_root_x_m"] + 0.06, 0, 0.15),
         "fork_lift",
         "prismatic",
         (0, 0, 1),

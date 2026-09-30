@@ -1,0 +1,46 @@
+model_name: dls08_measured
+# Field-by-field provenance is in README.md. Team measurements of 2026-09-29/30
+# replace the image estimates where they exist; the rest stays estimated.
+evidence:
+  identity: delivered_chassis_dls_marking_sku_unconfirmed
+  catalogue: team_measured_2026_09_30_matches_catalogue
+  dimensions: partly_team_measured_2026_09_30_rest_estimated
+  dynamics: simulation_assumptions_not_identified
+catalogue:
+  overall_length_m: 1.46
+  overall_width_m: 0.63
+  overall_height_m: 1.01
+  net_mass_kg: 24.0
+dimensions:
+  rear_extent_x_m: -0.51
+  front_axle_x_m: 0.32
+  rear_axle_x_m: -0.34
+  wheel_radius_m: 0.125
+  wheel_width_m: 0.08
+  wheel_track_m: 0.53
+  body_front_x_m: 0.50
+  mast_x_m: 0.54
+  mast_height_m: 0.67
+  mast_width_m: 0.36
+  fork_root_x_m: 0.59
+  fork_spacing_m: 0.29
+  fork_width_m: 0.055
+  fork_thickness_m: 0.025
+  fork_center_height_m: 0.04
+  carriage_width_m: 0.47
+  carriage_height_m: 0.43
+  lift_travel_m: 0.28
+assumptions:
+  steering_axle: front
+  steering_limit_rad: 0.2617993878
+  steering_torque_limit_nm: 4.0
+  urdf_steering_speed_limit_radps: 1.0
+  wheel_mass_kg: 0.55
+  steering_carrier_mass_kg: 0.05
+  carriage_mass_kg: 1.6
+  sliding_friction: 0.8
+  wheel_speed_limit_radps: 8.0
+  wheel_torque_limit_nm: 3.0
+  lift_force_limit_n: 180.0
+  urdf_lift_speed_limit_mps: 1.0
+  lift_position_gain: 1800.0
