@@ -177,3 +177,120 @@ def test_named_boxes_reject_t11_90_degree_swap(full_t11_pallet_urdf, swap):
     MODULE.assert_pallet_urdf_matches_geometry(path, 0.66, 0.66)
     with pytest.raises(ValueError, match="bottom_board_0"):
         MODULE.assert_pallet_urdf_matches_named_boxes(path, pallet_geometry)
+
+
+PROVISIONAL_URDF = ROOT / "sim/models/dls08_provisional/forklift.urdf"
+MEASURED_URDF = ROOT / "sim/models/dls08_measured/forklift.urdf"
+
+
+def edited_urdf(tmp_path, edit):
+    import xml.etree.ElementTree as ET
+
+    tree = ET.parse(MEASURED_URDF)
+    edit(tree.getroot())
+    path = tmp_path / "forklift.urdf"
+    tree.write(path)
+    return path
+
+
+@pytest.mark.parametrize(
+    ("urdf", "expected"),
+    [
+        (PROVISIONAL_URDF, (0.64, 0.51, 0.135, 0.45)),
+        (MEASURED_URDF, (0.66, 0.53, 0.125, np.radians(15))),
+    ],
+)
+def test_drive_geometry_is_read_from_the_model(urdf, expected):
+    geometry = MODULE.read_drive_geometry_m(urdf, 8.0)
+    np.testing.assert_allclose(
+        (
+            geometry.wheelbase_m,
+            geometry.track_m,
+            geometry.wheel_radius_m,
+            geometry.max_steering_rad,
+        ),
+        expected,
+        atol=1e-9,
+    )
+    assert geometry.max_wheel_rate_rad_s == 8.0
+
+
+@pytest.mark.parametrize(
+    ("urdf", "expected"), [(PROVISIONAL_URDF, 0.406), (MEASURED_URDF, 0.346)]
+)
+def test_carriage_limit_is_read_from_the_model(urdf, expected):
+    assert MODULE.read_carriage_limit_m(urdf) == pytest.approx(expected)
+
+
+def _insert_parent(root, joint_name, offset):
+    """Move a joint under a new intermediate link offset from base_link."""
+    import xml.etree.ElementTree as ET
+
+    joint = root.find(f"joint[@name='{joint_name}']")
+    ET.SubElement(root, "link", name=f"{joint_name}_mount")
+    mount = ET.SubElement(root, "joint", name=f"{joint_name}_mount_fixed", type="fixed")
+    ET.SubElement(mount, "parent", link="base_link")
+    ET.SubElement(mount, "child", link=f"{joint_name}_mount")
+    ET.SubElement(mount, "origin", xyz=offset, rpy="0 0 0")
+    joint.find("parent").set("link", f"{joint_name}_mount")
+
+
+def test_readers_compose_parent_links(tmp_path):
+    def raise_steering(root):
+        for name in ("left_steer", "right_steer"):
+            _insert_parent(root, name, "0.10 0 0")
+
+    geometry = MODULE.read_drive_geometry_m(edited_urdf(tmp_path, raise_steering), 8.0)
+    assert geometry.wheelbase_m == pytest.approx(0.76)
+
+    def shift_lift(root):
+        origin = root.find("joint[@name='fork_lift']/origin")
+        origin.set("xyz", "0.10 0 0")
+
+    shifted = edited_urdf(tmp_path, shift_lift)
+    assert MODULE.read_chassis_reference_m(shifted)[0] == pytest.approx(1.39)
+    assert MODULE.read_carriage_limit_m(shifted) == pytest.approx(0.346)
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        lambda root: root.find("joint[@name='left_steer']/origin").set(
+            "rpy", "0 0 0.1"
+        ),
+        lambda root: root.find("joint[@name='left_steer']/axis").set("xyz", "0 1 0"),
+        lambda root: root.find("joint[@name='left_steer']/origin").set(
+            "xyz", "0.32 0.27 0.125"
+        ),
+        lambda root: root.find("joint[@name='right_steer']/limit").set("lower", "-0.3"),
+        lambda root: root.find(
+            "link[@name='rear_left_wheel']/collision/geometry/cylinder"
+        ).set("radius", "0.13"),
+    ],
+    ids=["rotated-chain", "steer-axis", "asymmetric", "uneven-limit", "tyre-radius"],
+)
+def test_drive_readers_reject_unsupported_models(tmp_path, edit):
+    path = edited_urdf(tmp_path, edit)
+    with pytest.raises(ValueError):
+        MODULE.read_drive_geometry_m(path, 8.0)
+
+
+def test_carriage_readers_reject_a_rotated_chain(tmp_path):
+    path = edited_urdf(
+        tmp_path,
+        lambda root: root.find("joint[@name='fork_lift']/origin").set("rpy", "0 0 0.1"),
+    )
+    for reader in (MODULE.read_carriage_limit_m, MODULE.read_chassis_reference_m):
+        with pytest.raises(ValueError):
+            reader(path)
+
+
+def test_a_moving_intermediate_parent_is_refused(tmp_path):
+    def revolute_mount(root):
+        for name in ("left_steer", "right_steer"):
+            _insert_parent(root, name, "0.10 0 0")
+            mount = root.find(f"joint[@name='{name}_mount_fixed']")
+            mount.set("type", "revolute")
+
+    with pytest.raises(ValueError, match="moving parent"):
+        MODULE.read_drive_geometry_m(edited_urdf(tmp_path, revolute_mount), 8.0)

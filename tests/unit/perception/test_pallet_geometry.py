@@ -19,6 +19,23 @@ def test_target_insertion_depth_rule_both_branches():
     assert pallet_geometry.target_insertion_depth_m(0.66) == pytest.approx(0.36)
 
 
+def test_target_insertion_depth_takes_the_model_carriage_limit():
+    # dls08_measured: fork tip 0.95 - carriage cross front (0.59 + 0.014) = 0.346
+    for depth in (0.60, 0.66):
+        assert pallet_geometry.target_insertion_depth_m(
+            depth, carriage_limit_m=0.346
+        ) == pytest.approx(0.300)
+    assert pallet_geometry.target_insertion_depth_m(
+        0.60, carriage_limit_m=pallet_geometry.CARRIAGE_INSERTION_LIMIT_M
+    ) == pallet_geometry.target_insertion_depth_m(0.60)
+
+
+@pytest.mark.parametrize("limit", [math.nan, math.inf, 0.046, 0.0, -0.1])
+def test_target_insertion_depth_rejects_a_limit_inside_the_reserve(limit):
+    with pytest.raises(ValueError):
+        pallet_geometry.target_insertion_depth_m(0.60, carriage_limit_m=limit)
+
+
 # dls08_provisional, estimated from product images and not measured
 PARAMETERS = yaml.safe_load(
     (REPO_ROOT / "sim/models/dls08_provisional/parameters.yaml").read_text()

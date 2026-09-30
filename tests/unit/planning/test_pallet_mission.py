@@ -803,3 +803,12 @@ def test_travel_config_changes_only_the_travel_legs():
         guided.transport.expanded_nodes,
         guided.return_home.expanded_nodes,
     )
+
+
+def test_mission_geometry_uses_its_own_carriage_limit():
+    provisional = SyntheticMissionGeometry()
+    measured = SyntheticMissionGeometry(carriage_limit_m=0.346)
+    # 0.60 m pallet: min(0.36, 0.346 - 0.046) = 0.300; axle 1.29 + 0.30 - 0.30
+    assert provisional.inserted_offset_m == pytest.approx(1.29 + 0.30 - 0.36)
+    assert measured.inserted_offset_m == pytest.approx(1.29)
+    assert measured.loaded_footprint.front_m == pytest.approx(1.59)
