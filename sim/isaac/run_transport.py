@@ -181,7 +181,8 @@ def arguments() -> argparse.Namespace:
         help=(
             "Ordered observation candidates in metres/radians; repeat this option "
             "for each candidate. Overrides defaults: (-0.10, 0.90, 0), "
-            "(-1.20, 0.30, 0), (-0.10, -0.60, 0), (-1.50, -0.60, 0), (-2.00, -0.30, 0)."
+            "(-1.20, 0.30, 0), (-0.10, -0.60, 0), (-1.50, -0.60, 0), (-2.00, -0.30, 0), "
+            "(0.00, 2.10, -0.25), (0.40, 1.20, 0), (-0.60, 1.80, -0.25)."
         ),
     )
     parser.add_argument(
@@ -232,12 +233,20 @@ def arguments() -> argparse.Namespace:
         # pocket there. No seed's chosen candidate changes except seed 3's
         # (confirmed 2026-09-19: re-running the full reachability sweep with
         # this order picks the same candidate as before for every other seed).
+        # The last three (G4, 2026-10-02) are tried only after all five above
+        # fail to plan or detect, so seeds served earlier never reach them.
+        # Chosen by tools/observation_candidate_design.py on design seeds
+        # 200-399 for pallets high in the bay, hidden from the far candidates
+        # (docs/plans/2026-10-02-g4-observation-candidates.md).
         args.observation_waypoints = [
             [-0.10, 0.90, 0.0],
             [-1.20, 0.30, 0.0],
             [-0.10, -0.60, 0.0],
             [-1.50, -0.60, 0.0],
             [-2.00, -0.30, 0.0],
+            [0.00, 2.10, -0.25],
+            [0.40, 1.20, 0.0],
+            [-0.60, 1.80, -0.25],
         ]
     if not args.observation_waypoints:
         parser.error("--observation-waypoints requires at least one candidate")
