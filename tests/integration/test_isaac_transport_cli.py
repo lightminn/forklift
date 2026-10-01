@@ -83,6 +83,71 @@ def test_extra_views_require_video_and_perception_before_startup() -> None:
         assert expected in result.stderr
 
 
+def test_g2_rerun_options_validate_before_startup() -> None:
+    prior = str(ROOT / "config/pallet_prior_epal6.yaml")
+    for flags, expected in (
+        (["--planning-target", "oracle_nominal"], "requires --use-perception"),
+        (["--planning-target", "oracle_actual"], "invalid choice"),
+        (
+            ["--use-perception", "--pallet-prior", prior, "--repeat-captures", "10"],
+            "--repeat-at-attempt",
+        ),
+        (
+            [
+                "--use-perception",
+                "--pallet-prior",
+                prior,
+                "--repeat-captures",
+                "10",
+                "--repeat-at-attempt",
+                "0",
+            ],
+            "counts from 1",
+        ),
+        (
+            [
+                "--use-perception",
+                "--pallet-prior",
+                prior,
+                "--repeat-captures",
+                "10",
+                "--repeat-at-attempt",
+                "1",
+                "--planning-target",
+                "oracle_nominal",
+            ],
+            "stops before planning",
+        ),
+        (["--repeat-at-attempt", "1"], "requires --repeat-captures"),
+    ):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--base-scene",
+                "unused.usda",
+                "--pallet-urdf",
+                "unused.urdf",
+                "--forklift-urdf",
+                str(PROVISIONAL_URDF),
+                "--pallet-geometry",
+                "unused.yaml",
+                "--settings",
+                "unused.yaml",
+                "--output",
+                "unused",
+                "--seed",
+                "2",
+                *flags,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 2, (flags, result.stderr)
+        assert expected in result.stderr, (flags, result.stderr)
+
+
 def test_quarter_options_validate_before_simulator_startup(tmp_path) -> None:
     base = [
         sys.executable,
