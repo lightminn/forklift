@@ -922,6 +922,18 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             maintain_square_pixels=True,
         )
     world.reset()
+
+    def body_velocities() -> dict:
+        # Saved scene state could survive the reset; compare runs on values.
+        return {
+            "linear_mps": robot.get_linear_velocity(),
+            "angular_radps": robot.get_angular_velocity(),
+            "joint_names": list(robot.dof_names),
+            "joint_radps_or_mps": robot.get_joint_velocities(),
+            "joint_max_abs": float(np.max(np.abs(robot.get_joint_velocities()))),
+        }
+
+    state["velocities_after_reset"] = body_velocities()
     camera.initialize()
     for extra_camera in extra_cameras.values():
         extra_camera.initialize()
@@ -1010,6 +1022,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         "Truck spawn displaced",
     )
     state["initial_pallet_m"] = initial_pallet.tolist()
+    state["velocities_before_planning"] = body_velocities()
     state["phase"] = "planning"
     if args.use_perception:
         planning_start = time.monotonic()
