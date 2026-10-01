@@ -207,6 +207,14 @@ def arguments() -> argparse.Namespace:
         "hold the wheels and capture this many more times, then stop.",
     )
     parser.add_argument("--repeat-at-attempt", type=int, default=None)
+    parser.add_argument(
+        "--tracker-profile",
+        choices=("current", "20260921"),
+        default="current",
+        help="20260921: the G2 baseline's tracking rules -- gear-change cusps and "
+        "the observation stop at the goal tolerances (8 mm), no overshoot "
+        "allowance. For the G2b diagnosis; current keeps today's rules.",
+    )
     args, unknown = parser.parse_known_args()
     try:
         args.extra_views = MISSION_VIEWS.parse_extra_views(
@@ -1254,12 +1262,27 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         for name, path in paths.items()
     }
 
+    def apply_tracker_profile() -> None:
+        # The 2026-09-21 G2 baseline had no cusp or overshoot tolerances and
+        # stopped observation at 8 mm (git show 6f9fb82:sim/isaac/run_transport.py).
+        if args.tracker_profile != "20260921":
+            return
+        for tracker in trackers.values():
+            tracker.config = replace(
+                tracker.config,
+                cusp_position_tolerance_m=None,
+                cusp_yaw_tolerance_rad=None,
+                overshoot_tolerance_m=None,
+                position_tolerance_m=0.008,
+            )
+
     def record_tracker_configs() -> None:
         # Every tracker's full settings as built (G2 rerun plan, 2026-10-01).
         state.setdefault("tracker_configs", {}).update(
             {name: asdict(tracker.config) for name, tracker in trackers.items()}
         )
 
+    apply_tracker_profile()
     record_tracker_configs()
     phase = "approach"
     if args.use_perception:
@@ -1500,6 +1523,39 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 limit = max(30.0, 3 * trackers[phase].nominal_duration_s() + 10)
                 require(t - phase_started < limit, f"Tracking timeout in {phase}")
                 tracking = trackers[phase].update(rear, signed_speed, dt)
+                if tracking.status == "failed":
+                    # The exception below ends the run before the next sample;
+                    # keep what the G2b diagnosis needs (closeout plan, G2b ㉮).
+                    tracker = trackers[phase]
+                    path = paths[phase]
+                    directions = np.asarray(path.directions)
+                    cusps = [
+                        int(i)
+                        for i in range(1, len(directions) - 1)
+                        if directions[i + 1] != directions[i]
+                    ]
+                    state["tracking_failure"] = {
+                        "phase": phase,
+                        "time_s": t,
+                        "loop_step": step,
+                        "tracking": asdict(tracking),
+                        "config": asdict(tracker.config),
+                        "rear_pose": rear.tolist(),
+                        "signed_speed_mps": signed_speed,
+                        "steering_command_rad": steering_command.tolist(),
+                        "steering_actual_rad": np.asarray(
+                            robot.get_joint_positions()[steers], dtype=float
+                        ).tolist(),
+                        "path_samples": int(len(path.poses)),
+                        "cusp_indices": cusps,
+                        "final_index": int(len(path.poses) - 1),
+                        # Sample-index convention as path.directions; read with
+                        # segment_index, not as a verdict on its own.
+                        "segment_index_is_cusp_sample": tracking.segment_index in cusps,
+                        "path_length_m": float(path.length_m),
+                        "remaining_m": float(path.length_m - tracking.progress_m),
+                        "phase_started_s": phase_started,
+                    }
                 require(
                     tracking.status != "failed",
                     f"Tracking failed in {phase}: pos={tracking.position_error_m:.4f},yaw={tracking.yaw_error_rad:.4f}",
@@ -1800,6 +1856,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 ),
                             )
                             phase_started = t
+                            apply_tracker_profile()
                             record_tracker_configs()
                         else:
                             if args.repeat_captures:
@@ -1985,6 +2042,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                     if name != "observe"
                                 }
                             )
+                            apply_tracker_profile()
                             record_tracker_configs()
                             state["paths"] = {
                                 name: path_record(path) for name, path in paths.items()
