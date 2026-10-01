@@ -814,6 +814,21 @@ def blades(truck: Sequence[Box]) -> dict[str, int]:
     return {("left" if truck[i].centre_m[1] > 0 else "right"): i for i in long}
 
 
+def tip_samples(blade: Box) -> np.ndarray:
+    """TIP_SAMPLES x TIP_SAMPLES base-frame points on the blade top's last TIP_BAND_M."""
+    cx, cy, cz = blade.centre_m
+    sx, sy, sz = blade.size_m
+    tip, top = cx + sx / 2, cz + sz / 2
+    fractions = [(k + 0.5) / TIP_SAMPLES for k in range(TIP_SAMPLES)]
+    return np.array(
+        [
+            [tip - TIP_BAND_M * fx, cy - sy / 2 + sy * fy, top]
+            for fx in fractions
+            for fy in fractions
+        ]
+    )
+
+
 def tip_visibility(
     boxes: Sequence[Box],
     blade_index: int,
@@ -827,28 +842,21 @@ def tip_visibility(
     when it lies in the image, at least ``min_range_m`` of optical depth away,
     and the first thing its ray meets is that blade at that point.
     """
-    blade = boxes[blade_index]
-    cx, cy, cz = blade.centre_m
-    sx, sy, sz = blade.size_m
-    tip, top = cx + sx / 2, cz + sz / 2
     origin = np.asarray(camera.xyz_m, dtype=float)
     transform = camera.base_from_optical()
     spec = scene_rig.intrinsics()
     seen = 0
-    fractions = [(k + 0.5) / TIP_SAMPLES for k in range(TIP_SAMPLES)]
-    for fx in fractions:
-        for fy in fractions:
-            point = np.array([tip - TIP_BAND_M * fx, cy - sy / 2 + sy * fy, top])
-            optical = transform.rotation.T @ (point - origin)
-            if optical[2] < min_range_m:
-                continue
-            u = spec.fx * optical[0] / optical[2] + spec.cx
-            v = spec.fy * optical[1] / optical[2] + spec.cy
-            if not (0 <= u < spec.width and 0 <= v < spec.height):
-                continue
-            kind, index, t = scene_rig.first_hit(boxes, origin, point)
-            if kind == "box" and index == blade_index and abs(t - 1.0) < 1e-6:
-                seen += 1
+    for point in tip_samples(boxes[blade_index]):
+        optical = transform.rotation.T @ (point - origin)
+        if optical[2] < min_range_m:
+            continue
+        u = spec.fx * optical[0] / optical[2] + spec.cx
+        v = spec.fy * optical[1] / optical[2] + spec.cy
+        if not (0 <= u < spec.width and 0 <= v < spec.height):
+            continue
+        kind, index, t = scene_rig.first_hit(boxes, origin, point)
+        if kind == "box" and index == blade_index and abs(t - 1.0) < 1e-6:
+            seen += 1
     return seen / TIP_SAMPLES**2
 
 

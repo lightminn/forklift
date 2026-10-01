@@ -87,6 +87,10 @@ class Camera(NamedTuple):
 
 
 def intrinsics() -> PinholeIntrinsics:
+    return _rig_intrinsics()
+
+
+def _rig_intrinsics() -> PinholeIntrinsics:
     return PinholeIntrinsics(
         width=WIDTH,
         height=HEIGHT,
@@ -153,6 +157,7 @@ def render(
     noise_k: float = DEFAULT_NOISE_K,
     noise_seed: int = 0,
     min_range_m: float | None = None,
+    intrinsics: PinholeIntrinsics | None = None,
 ) -> SceneInput:
     """First-hit depth of ``boxes`` over the floor and back wall.
 
@@ -163,8 +168,12 @@ def render(
     ``min_range_m`` models a stereo camera's minimum depth: pixels whose
     optical-axis depth is below it come back invalid (NaN), after noise and
     rounding. None (the default) leaves every pixel as rendered.
+
+    ``intrinsics`` replaces the rig's K (principal point at the image centre)
+    with another pinhole of the same size, e.g. Isaac's K normalised to
+    integer-index pixel centres. None keeps the rig's own.
     """
-    spec = intrinsics()
+    spec = _rig_intrinsics() if intrinsics is None else intrinsics
     transform = camera.base_from_optical()
     origin = np.asarray(transform.translation_m, dtype=float)
     rays = _rays(spec, transform.rotation)
