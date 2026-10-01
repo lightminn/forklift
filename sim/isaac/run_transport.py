@@ -95,6 +95,13 @@ def arguments() -> argparse.Namespace:
     # other, so neither may be picked silently.
     parser.add_argument("--forklift-urdf", type=Path, required=True)
     parser.add_argument("--settings", type=Path, required=True)
+    parser.add_argument(
+        "--insertion-reserve-m",
+        type=float,
+        default=0.046,
+        help="Insertion reserve behind the carriage limit (ADR 0004 D3 policy "
+        "0.046). Other values are for diagnostic sweeps and are recorded.",
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--obstacles", type=int, default=4)
@@ -692,7 +699,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         pallet_width_m=args.pallet_geometry_loaded.overall_width_m,
         axle_to_fork_tip_m=args.axle_to_fork_tip_m,
         carriage_limit_m=args.carriage_limit_m,
+        insertion_reserve_m=args.insertion_reserve_m,
     )
+    state["insertion_reserve_m"] = args.insertion_reserve_m
     planner_config = make_transport_planner_config(
         curvature_limit_inv_m=settings["planner_curvature_inv_m"],
         clearance_m=settings["planning_clearance_m"],
@@ -1304,6 +1313,32 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             velocity = robot.get_linear_velocity()
             signed_speed = float(np.dot(velocity[:2], forward))
             require(np.isfinite([base, ppos]).all(), "Nonfinite body state")
+            if phase == "lift":
+                # Every physics step, so the peak and the aborting state are
+                # kept; the 0.1 s samples miss both.
+                peak = state.setdefault("lift_tilt_peak", {"pallet_tilt_rad": -1.0})
+                if pallet_tilt > peak["pallet_tilt_rad"]:
+                    peak.update(
+                        time_s=t,
+                        pallet_tilt_rad=pallet_tilt,
+                        pallet_position_m=ppos,
+                        pallet_quaternion_wxyz=pq,
+                        lift_m=float(robot.get_joint_positions()[lift_index[0]]),
+                        lift_command_m=lift_command,
+                    )
+            if not (tilt < 0.1 and pallet_tilt < 0.15):
+                state["tilt_abort_state"] = {
+                    "phase": phase,
+                    "time_s": t,
+                    "base_tilt_rad": tilt,
+                    "pallet_tilt_rad": pallet_tilt,
+                    "base_position_m": base,
+                    "base_quaternion_wxyz": q,
+                    "pallet_position_m": ppos,
+                    "pallet_quaternion_wxyz": pq,
+                    "lift_m": float(robot.get_joint_positions()[lift_index[0]]),
+                    "lift_command_m": lift_command,
+                }
             require(
                 tilt < 0.1 and pallet_tilt < 0.15, f"Excessive body tilt in {phase}"
             )
@@ -1733,6 +1768,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             "position_m": tracking.position_error_m,
                             "yaw_rad": tracking.yaw_error_rad,
                         }
+                        # What the forks actually reach, not the planned target.
+                        state["insertion_measured"] = (
+                            insertion_geometry.insertion_measures(
+                                base,
+                                q,
+                                float(robot.get_joint_positions()[lift_index[0]]),
+                                ppos,
+                                pq,
+                                geometry.pallet_depth_m,
+                            )
+                        )
                         transition("lift", t)
                     elif phase == "extract":
                         transition("transport", t)

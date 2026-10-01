@@ -357,12 +357,77 @@ class InsertionGeometry:
             raise ValueError("Expected fork carriage and single-link free pallet")
         result = cls()
         result.fork_boxes = tuple(b for b in _boxes(carriage) if "fork" in b[0])
+        # Everything on the carriage that is not a blade: heels, sides, cross
+        # members, grille. Diagnostic only; the insertion guard checks forks.
+        result.carriage_boxes = tuple(
+            b for b in _boxes(carriage) if "fork_collision" not in b[0]
+        )
         if len(result.fork_boxes) != 4:
             raise ValueError("Expected two fork blades and two heels")
         result.pallet_boxes = _boxes(links[0])
         result._pallet_centers = np.array([b[1] for b in result.pallet_boxes])
         result._pallet_halves = np.array([b[2] for b in result.pallet_boxes])
         return result
+
+    def insertion_measures(
+        self,
+        base_position_m: ArrayLike,
+        base_quaternion_wxyz: ArrayLike,
+        lift_m: float,
+        pallet_position_m: ArrayLike,
+        pallet_quaternion_wxyz: ArrayLike,
+        pallet_depth_m: float,
+    ) -> dict:
+        """How far each fork reaches into the pallet, and how close the carriage is.
+
+        For each blade: ``insertion_m`` from the entry face to the centre of the
+        blade's front face, projected on the pallet's x axis, and
+        ``beyond_centre_m`` past the pallet's longitudinal centre (the synthetic
+        pallet's centre of mass). ``carriage_face_gap_m`` is the smallest
+        clearance from any non-blade carriage box (heels, sides, cross members,
+        grille) to the entry-face plane, using each whole box's extent along the
+        pallet x axis; ``carriage_overlaps`` lists those boxes sharing volume
+        with or touching a pallet box. Instantaneous geometry, not contact force.
+        """
+        world_from_pallet = _rotation(pallet_quaternion_wxyz)
+        pallet_from_base = world_from_pallet.T @ _rotation(base_quaternion_wxyz)
+        translation = world_from_pallet.T @ (
+            _vector(base_position_m) - _vector(pallet_position_m)
+        )
+        forward = pallet_from_base @ np.array([1.0, 0.0, 0.0])
+        sign = 1.0 if forward[0] >= 0 else -1.0
+        face = -sign * pallet_depth_m / 2
+        out: dict = {}
+        for name, center, half in self.fork_boxes:
+            if "fork_collision" not in name:
+                continue
+            front = translation + pallet_from_base @ (center + [half[0], 0.0, lift_m])
+            side = "left" if "left" in name else "right"
+            out[side] = {
+                "insertion_m": float(sign * (front[0] - face)),
+                "beyond_centre_m": float(sign * front[0]),
+            }
+        gaps = []
+        for name, center, half in self.carriage_boxes:
+            middle = translation + pallet_from_base @ (center + [0.0, 0.0, lift_m])
+            reach = float(np.abs(pallet_from_base[0]) @ half)
+            gaps.append((-pallet_depth_m / 2 - (sign * middle[0] + reach), name))
+        gap, nearest = min(gaps)
+        out["carriage_face_gap_m"] = float(gap)
+        out["carriage_nearest_box"] = nearest
+        out["carriage_overlaps"] = [
+            list(pair)
+            for pair in self.forbidden_contacts(
+                base_position_m,
+                base_quaternion_wxyz,
+                lift_m,
+                pallet_position_m,
+                pallet_quaternion_wxyz,
+                clearance_m=0.0,
+                boxes=self.carriage_boxes,
+            )
+        ]
+        return out
 
     def forbidden_contacts(
         self,
@@ -373,6 +438,7 @@ class InsertionGeometry:
         pallet_quaternion_wxyz: ArrayLike,
         *,
         clearance_m: float = 0.002,
+        boxes: tuple | None = None,
     ) -> tuple[tuple[str, str], ...]:
         """Return potentially contacting (fork, pallet) source collision names.
 
@@ -404,7 +470,7 @@ class InsertionGeometry:
         projected_pallet = self._pallet_halves @ np.abs(axes).T
         projected_fork_axes = np.abs(axes @ pallet_from_base)
         contacts = []
-        for name, center, half in self.fork_boxes:
+        for name, center, half in self.fork_boxes if boxes is None else boxes:
             fork_center = translation + pallet_from_base @ (center + [0, 0, lift_m])
             separations = np.abs((self._pallet_centers - fork_center) @ axes.T)
             radii = projected_pallet + projected_fork_axes @ (half + clearance_m)

@@ -15,6 +15,7 @@ import numpy as np
 from forklift_core._validation import _finite_scalar
 from forklift_core.perception.pallet_geometry import (
     CARRIAGE_INSERTION_LIMIT_M,
+    INSERTION_RESERVE_M,
     target_insertion_depth_m,
 )
 
@@ -115,6 +116,7 @@ class SyntheticMissionGeometry:
     withdrawal_m: float = 0.55
     spawn_clearance_m: float = 0.12
     carriage_limit_m: float = CARRIAGE_INSERTION_LIMIT_M  # Pass the run's model limit.
+    insertion_reserve_m: float = INSERTION_RESERVE_M  # Policy; diagnostic sweeps only.
 
     inserted_offset_m: float = field(init=False)
     approach_offset_m: float = field(init=False)
@@ -123,7 +125,9 @@ class SyntheticMissionGeometry:
     loaded_footprint: Footprint = field(init=False)
 
     def __post_init__(self) -> None:
-        d = target_insertion_depth_m(self.pallet_depth_m, self.carriage_limit_m)
+        d = target_insertion_depth_m(
+            self.pallet_depth_m, self.carriage_limit_m, self.insertion_reserve_m
+        )
         inserted = self.axle_to_fork_tip_m + self.pallet_depth_m / 2 - d
         approach = (
             self.axle_to_fork_tip_m + self.pallet_depth_m / 2 + self.approach_gap_m

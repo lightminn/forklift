@@ -1,6 +1,7 @@
 """URDF box clearances using actual full body poses, without an Isaac SDK."""
 
 import importlib.util
+import math
 from pathlib import Path
 
 import numpy as np
@@ -294,3 +295,62 @@ def test_a_moving_intermediate_parent_is_refused(tmp_path):
 
     with pytest.raises(ValueError, match="moving parent"):
         MODULE.read_drive_geometry_m(edited_urdf(tmp_path, revolute_mount), 8.0)
+
+
+def test_insertion_measures_read_each_fork_against_the_pallet():
+    measured = MODULE.InsertionGeometry.from_urdfs(
+        MEASURED_URDF, ROOT / "sim/models/epal6_pallet/pallet.urdf"
+    )
+    # Truck base at x b, pallet at the origin facing it: tip x = b + 0.95.
+    b = -0.95 + (-0.30 + 0.30)  # tip exactly at the pallet centre
+    m = measured.insertion_measures(
+        (b, 0, 0), (1, 0, 0, 0), 0.0, (0, 0, 0), (1, 0, 0, 0), 0.60
+    )
+    for side in ("left", "right"):
+        assert m[side]["insertion_m"] == pytest.approx(0.30)
+        assert m[side]["beyond_centre_m"] == pytest.approx(0.0)
+    # The cross members' front 0.604 is 0.346 behind the tip: 0.046 before the face.
+    assert m["carriage_face_gap_m"] == pytest.approx(0.046)
+    assert m["carriage_nearest_box"].startswith("carriage_cross")
+    assert m["carriage_overlaps"] == []
+    yawed = measured.insertion_measures(
+        (b, 0, 0),
+        (math.cos(0.025), 0, 0, math.sin(0.025)),
+        0.0,
+        (0, 0, 0),
+        (1, 0, 0, 0),
+        0.60,
+    )
+    assert yawed["left"]["insertion_m"] != pytest.approx(yawed["right"]["insertion_m"])
+
+
+def test_carriage_gap_uses_the_whole_box_and_reports_overlap(tmp_path):
+    import subprocess
+    import sys
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools/build_pallet_model.py"),
+            "--geometry",
+            str(ROOT / "config/pallet_geometry_t11_06.yaml"),
+            "--output",
+            str(tmp_path),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    g = MODULE.InsertionGeometry.from_urdfs(MEASURED_URDF, tmp_path / "pallet.urdf")
+    yaw = 0.0195
+    q = (math.cos(yaw / 2), 0, 0, math.sin(yaw / 2))
+    near = g.insertion_measures(
+        (-0.33 + 0.336 - 0.95, 0, 0), q, 0.0, (0, 0, 0), (1, 0, 0, 0), 0.66
+    )
+    # The yawed cross member's corner, not its centre, sets the clearance.
+    assert 0 < near["carriage_face_gap_m"] < 0.010 - 0.004
+    assert near["carriage_overlaps"] == []
+    into = g.insertion_measures(
+        (-0.33 + 0.342 - 0.95, 0, 0), q, 0.0, (0, 0, 0), (1, 0, 0, 0), 0.66
+    )
+    assert into["carriage_face_gap_m"] < 0
+    assert into["carriage_overlaps"]

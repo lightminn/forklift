@@ -255,20 +255,26 @@ INSERTION_DEPTH_FRACTION = 0.6  # ADR 0004 D3 rule coefficient.
 
 
 def target_insertion_depth_m(
-    pallet_depth_m: float, carriage_limit_m: float = CARRIAGE_INSERTION_LIMIT_M
+    pallet_depth_m: float,
+    carriage_limit_m: float = CARRIAGE_INSERTION_LIMIT_M,
+    reserve_m: float = INSERTION_RESERVE_M,
 ) -> float:
     """min(depth * 0.6, carriage limit - reserve); a rule, not a constant (ADR 0004 D3).
 
     The default limit is the provisional model's; a run on another chassis model
-    passes the limit read from that model.
+    passes the limit read from that model. ``reserve_m`` defaults to the policy
+    value and is opened only for diagnostic sweeps, which must record it.
     """
     if _finite_scalar(pallet_depth_m, "pallet depth") <= 0:
         raise ValueError("pallet depth must be positive")
-    if _finite_scalar(carriage_limit_m, "carriage limit") <= INSERTION_RESERVE_M:
+    reserve = _finite_scalar(reserve_m, "insertion reserve")
+    if reserve < 0:
+        raise ValueError("insertion reserve must not be negative")
+    if _finite_scalar(carriage_limit_m, "carriage limit") <= reserve:
         raise ValueError("carriage limit must exceed the insertion reserve")
     return min(
         pallet_depth_m * INSERTION_DEPTH_FRACTION,
-        carriage_limit_m - INSERTION_RESERVE_M,
+        carriage_limit_m - reserve,
     )
 
 

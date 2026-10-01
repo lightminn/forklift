@@ -179,3 +179,17 @@ def test_a_low_fork_requires_available_lift_and_floor_clearance():
     assert fit.fits
     assert fit.lift_required_m == pytest.approx(0.018)
     assert not check_fork_fit(g, **{**forks, "lift_travel_m": 0.01}).fits
+
+
+def test_target_insertion_depth_takes_a_diagnostic_reserve():
+    assert pallet_geometry.target_insertion_depth_m(
+        0.60, carriage_limit_m=0.346, reserve_m=0.016
+    ) == pytest.approx(0.330)
+    assert pallet_geometry.target_insertion_depth_m(
+        0.60, carriage_limit_m=0.346, reserve_m=0.0
+    ) == pytest.approx(0.346)
+    for reserve in (-0.001, math.nan, 0.346):
+        with pytest.raises(ValueError):
+            pallet_geometry.target_insertion_depth_m(
+                0.60, carriage_limit_m=0.346, reserve_m=reserve
+            )
