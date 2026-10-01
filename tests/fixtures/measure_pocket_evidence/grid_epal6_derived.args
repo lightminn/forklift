@@ -1,0 +1,1 @@
+grid --geometry config/pallet_geometry_epal6.yaml --prior config/pallet_prior_epal6.yaml --distances 1.6:2.4:0.2 --seeds 2 --camera-z 0.27 --set range_min_m=0.1 --set band_margin_m=0.0039 --set floor_z_m=0.007333333333333333 --set min_band_points=15 --set min_plane_points=46 --set plane_inlier_m=0.0078

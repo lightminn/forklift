@@ -152,12 +152,17 @@ def render(
     back_wall: bool = True,
     noise_k: float = DEFAULT_NOISE_K,
     noise_seed: int = 0,
+    min_range_m: float | None = None,
 ) -> SceneInput:
     """First-hit depth of ``boxes`` over the floor and back wall.
 
     Each box carries its own yaw; the caller has already placed its centre.
     Use :func:`place` to put an assembly at a pose -- it rotates the centres,
     which is what makes the rotation rigid.
+
+    ``min_range_m`` models a stereo camera's minimum depth: pixels whose
+    optical-axis depth is below it come back invalid (NaN), after noise and
+    rounding. None (the default) leaves every pixel as rendered.
     """
     spec = intrinsics()
     transform = camera.base_from_optical()
@@ -194,6 +199,9 @@ def render(
         )
     if quantize:
         depth = np.round(depth / QUANTIZE_STEP_M) * QUANTIZE_STEP_M
+    if min_range_m is not None:
+        with np.errstate(invalid="ignore"):
+            depth = np.where(depth < min_range_m, np.nan, depth)
     rgb = np.zeros((spec.height, spec.width, 3), dtype=np.uint8)
     return SceneInput(
         rgb=rgb,
@@ -264,3 +272,114 @@ def position_error_m(reported: Sequence[Sequence[float]], truth: np.ndarray) -> 
 def quantized(scene: SceneInput, *, step_m: float = QUANTIZE_STEP_M) -> SceneInput:
     depth = np.round(np.asarray(scene.depth_m, dtype=float) / step_m) * step_m
     return dataclasses.replace(scene, depth_m=depth)
+
+
+def truck_boxes(forklift_urdf, *, lift_m: float = 0.0) -> list[Box]:
+    """The forklift's carriage and forks as base-frame boxes, raised by ``lift_m``.
+
+    These are the ``fork_carriage`` link's collision boxes placed by the
+    ``fork_lift`` joint origin: blades, heels, carriage sides, cross members
+    and grille. Only this link is returned. The rest of the truck sits behind
+    the carriage front, so it is out of view of a camera mounted on or ahead
+    of the carriage -- and it is not rendered, so a camera behind the carriage
+    front would see through the truck. Callers keep cameras ahead of it.
+    """
+    import xml.etree.ElementTree as ET
+
+    truck = ET.parse(forklift_urdf).getroot()
+
+    def xyz(element, attribute):
+        return np.array([float(v) for v in element.get(attribute, "0 0 0").split()])
+
+    joint = truck.find("joint[@name='fork_lift']")
+    link = truck.find("link[@name='fork_carriage']")
+    if joint is None or link is None or joint.find("parent").get("link") != "base_link":
+        raise ValueError("URDF needs a fork_lift joint from base_link to fork_carriage")
+    origin = joint.find("origin")
+    if origin is not None and np.any(xyz(origin, "rpy")):
+        raise ValueError("fork_lift origin must not be rotated")
+    lift = (np.zeros(3) if origin is None else xyz(origin, "xyz")) + (0.0, 0.0, lift_m)
+    boxes = []
+    for collision in link.findall("collision"):
+        box = collision.find("geometry/box")
+        if box is None:
+            continue
+        place = collision.find("origin")
+        if place is not None and np.any(xyz(place, "rpy")):
+            raise ValueError(f"rotated carriage box {collision.get('name')}")
+        centre = lift + (np.zeros(3) if place is None else xyz(place, "xyz"))
+        boxes.append(
+            Box(
+                tuple(float(v) for v in centre),
+                tuple(float(v) for v in xyz(box, "size")),
+            )
+        )
+    if not boxes:
+        raise ValueError("fork_carriage has no collision boxes")
+    return boxes
+
+
+def first_hit(
+    boxes: Sequence[Box],
+    origin: Sequence[float],
+    target: Sequence[float],
+    *,
+    floor: bool = True,
+    back_wall: bool = True,
+) -> tuple[str, int | None, float]:
+    """What the ray from ``origin`` towards ``target`` meets first.
+
+    Returns (kind, box index or None, t) with t = 1 at ``target``; kind is
+    "box", "floor", "wall" or "none". This identifies the object a pixel sees
+    instead of trusting that a matching depth means the same surface -- another
+    box can sit within a few millimetres of the expected depth.
+    """
+    start = np.asarray(origin, dtype=float)
+    direction = (np.asarray(target, dtype=float) - start).reshape(1, 1, 3)
+    best: tuple[str, int | None, float] = ("none", None, math.inf)
+    d = direction[0, 0]
+    if floor and d[2] < 0 and start[2] > 0:
+        best = min(best, ("floor", None, -start[2] / d[2]), key=lambda h: h[2])
+    if back_wall and d[0] > 0:
+        t = (BACK_WALL_X_M - start[0]) / d[0]
+        if t > 0:
+            best = min(best, ("wall", None, t), key=lambda h: h[2])
+    for index, box in enumerate(boxes):
+        t = float(
+            _box_depth(
+                start,
+                direction,
+                np.asarray(box.centre_m, dtype=float),
+                box.size_m,
+                _yaw_matrix(box.yaw_rad),
+            )[0, 0]
+        )
+        if t < best[2]:
+            best = ("box", index, t)
+    return best
+
+
+def boxes_interpenetrate(a: Box, b: Box, *, tolerance_m: float = 1e-6) -> bool:
+    """True when two boxes share a volume thicker than ``tolerance_m``.
+
+    Separating-axis test on the yawed footprints plus the z interval; touching
+    faces do not count.
+    """
+    (az, bz) = (a.centre_m[2], b.centre_m[2])
+    if abs(az - bz) >= (a.size_m[2] + b.size_m[2]) / 2 - tolerance_m:
+        return False
+    centres = (np.asarray(a.centre_m[:2]), np.asarray(b.centre_m[:2]))
+    axes = []
+    halves = []
+    for box in (a, b):
+        rotation = _yaw_matrix(box.yaw_rad)[:2, :2]
+        axes.extend([rotation[:, 0], rotation[:, 1]])
+        halves.append((rotation, np.asarray(box.size_m[:2]) / 2))
+    delta = centres[1] - centres[0]
+    for axis in axes:
+        reach = sum(
+            float(np.sum(np.abs(rotation.T @ axis) * half)) for rotation, half in halves
+        )
+        if abs(float(delta @ axis)) >= reach - tolerance_m:
+            return False
+    return True

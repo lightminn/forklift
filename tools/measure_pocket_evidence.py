@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import json
 import math
 from collections.abc import Sequence
 from pathlib import Path
@@ -792,6 +793,338 @@ def cmd_poses(args) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------
+# mount: camera on the carriage, with the truck's own carriage and forks drawn
+# --------------------------------------------------------------------------
+
+SHAPES = {
+    "epal6": ("config/pallet_geometry_epal6.yaml", "config/pallet_prior_epal6.yaml"),
+    "t11_06": ("config/pallet_geometry_t11_06.yaml", "config/pallet_prior_t11_06.yaml"),
+}
+DEFAULT_FORKLIFT_URDF = ROOT / "sim/models/dls08_measured/forklift.urdf"
+TIP_BAND_M = 0.02  # length of blade top surface, behind the tip, sampled for visibility
+TIP_SAMPLES = 5  # per axis
+
+
+def blades(truck: Sequence[Box]) -> dict[str, int]:
+    """Indices of the two fork blades among the truck boxes, by side."""
+    long = [i for i, b in enumerate(truck) if b.size_m[0] > 0.3]
+    if len(long) != 2:
+        raise SystemExit("expected exactly two fork blades in the carriage boxes")
+    return {("left" if truck[i].centre_m[1] > 0 else "right"): i for i in long}
+
+
+def tip_visibility(
+    boxes: Sequence[Box],
+    blade_index: int,
+    camera: Camera,
+    min_range_m: float,
+) -> float:
+    """Share of samples on the blade's top surface near the tip that the camera sees.
+
+    The tip end face points away from a camera behind it, so the observable
+    part of the tip is the last TIP_BAND_M of the blade's top. A sample counts
+    when it lies in the image, at least ``min_range_m`` of optical depth away,
+    and the first thing its ray meets is that blade at that point.
+    """
+    blade = boxes[blade_index]
+    cx, cy, cz = blade.centre_m
+    sx, sy, sz = blade.size_m
+    tip, top = cx + sx / 2, cz + sz / 2
+    origin = np.asarray(camera.xyz_m, dtype=float)
+    transform = camera.base_from_optical()
+    spec = scene_rig.intrinsics()
+    seen = 0
+    fractions = [(k + 0.5) / TIP_SAMPLES for k in range(TIP_SAMPLES)]
+    for fx in fractions:
+        for fy in fractions:
+            point = np.array([tip - TIP_BAND_M * fx, cy - sy / 2 + sy * fy, top])
+            optical = transform.rotation.T @ (point - origin)
+            if optical[2] < min_range_m:
+                continue
+            u = spec.fx * optical[0] / optical[2] + spec.cx
+            v = spec.fy * optical[1] / optical[2] + spec.cy
+            if not (0 <= u < spec.width and 0 <= v < spec.height):
+                continue
+            kind, index, t = scene_rig.first_hit(boxes, origin, point)
+            if kind == "box" and index == blade_index and abs(t - 1.0) < 1e-6:
+                seen += 1
+    return seen / TIP_SAMPLES**2
+
+
+def pocket_error_m(observation, truth: np.ndarray) -> float:
+    """M2's error: left to left and right to right, 3-D, the worse of the two.
+
+    ``scene_rig.position_error_m`` compares only x-y and lets each pocket pick
+    the nearer truth, so a 100 mm height error reads 0 there. ``truth`` is
+    ``scene_rig.true_pockets`` order: +y (left) first.
+    """
+    return max(
+        math.dist(observation.left.center_m, truth[0]),
+        math.dist(observation.right.center_m, truth[1]),
+    )
+
+
+def camera_blocks_insertion(args, pallet_boxes: Sequence[Box]) -> bool:
+    """Whether the camera body would meet this placed pallet during insertion.
+
+    The body is a box ``--camera-size`` deep x wide x high whose front face is
+    ``--camera-front`` ahead of the optical centre. It shortens the insertion
+    limit only if its y-z footprint overlaps the pallet's, taken as the placed
+    boxes' y and z extent (exact for yaw 0, slightly generous under yaw).
+    """
+    _, width, height = args.camera_size
+    bottom = args.camera_z + args.lift - height / 2
+    top = bottom + height
+    y0, y1 = args.camera_y - width / 2, args.camera_y + width / 2
+    for box in pallet_boxes:
+        reach = (
+            abs(math.cos(box.yaw_rad)) * box.size_m[1]
+            + abs(math.sin(box.yaw_rad)) * box.size_m[0]
+        ) / 2
+        z0 = box.centre_m[2] - box.size_m[2] / 2
+        z1 = box.centre_m[2] + box.size_m[2] / 2
+        if (
+            box.centre_m[1] - reach < y1
+            and box.centre_m[1] + reach > y0
+            and z0 < top
+            and z1 > bottom
+        ):
+            return True
+    return False
+
+
+def _parse_override(name: str, value: str):
+    field = DetectorParams.__dataclass_fields__.get(name)
+    if field is None:
+        raise SystemExit(f"unknown detector parameter: {name}")
+    if field.type in (bool, "bool"):
+        if value.lower() not in {"true", "false"}:
+            raise SystemExit(f"{name} takes true or false")
+        return value.lower() == "true"
+    if field.type in (int, "int"):
+        return int(value)
+    return float(value)
+
+
+def _runs(cells: Sequence[tuple[float, int]], predicate) -> str:
+    """Contiguous distance runs, nearest first, where ``predicate(ok)`` holds."""
+    runs, start, last = [], None, None
+    for x, ok in cells:
+        if predicate(ok):
+            start = x if start is None else start
+            last = x
+        elif start is not None:
+            runs.append((start, last))
+            start = None
+    if start is not None:
+        runs.append((start, last))
+    return ", ".join(f"{a:.3f}-{b:.3f}" for a, b in runs) or "-"
+
+
+def cmd_mount(args) -> int:
+    from forklift_core.perception.pallet_geometry import target_insertion_depth_m
+    from tools.summarise_sweep import derived
+
+    if args.seeds < 1:
+        raise SystemExit("--seeds must be at least 1")
+    geometry_path, prior_path = (ROOT / path for path in SHAPES[args.shape])
+    geometry = load_pallet_geometry(geometry_path)
+    prior = load_pallet_prior(prior_path)
+    overrides = {"range_min_m": 0.1}
+    for item in args.set:
+        name, _, value = item.partition("=")
+        overrides[name] = _parse_override(name, value)
+    params = DetectorParams.derived_for(prior, **overrides)
+
+    truck = scene_rig.truck_boxes(args.forklift_urdf, lift_m=args.lift)
+    side = blades(truck)
+    tip_x = truck[side["left"]].centre_m[0] + truck[side["left"]].size_m[0] / 2
+    carriage_front = max(
+        b.centre_m[0] + b.size_m[0] / 2
+        for i, b in enumerate(truck)
+        if i not in side.values()
+    )
+    if args.camera_x < carriage_front:
+        raise SystemExit(
+            f"camera x {args.camera_x} is behind the carriage front {carriage_front:.3f}; "
+            "the rest of the truck is not rendered, so it would see through it"
+        )
+    camera = Camera(
+        (args.camera_x, args.camera_y, args.camera_z + args.lift), args.camera_tilt
+    )
+    rays = scene_rig._rays(scene_rig.intrinsics(), camera.base_from_optical().rotation)
+    if float(np.min(rays[..., 0])) <= 0:
+        raise SystemExit(
+            "some pixels look backwards at this tilt; the unrendered truck body "
+            "would be seen through"
+        )
+    carriage_limit = tip_x - carriage_front
+    camera_limit = tip_x - max(carriage_front, args.camera_x + args.camera_front)
+    # The same insertion for every mount, so blind zones compare like for like.
+    common_target = target_insertion_depth_m(geometry.overall_depth_m, carriage_limit)
+    half_depth = geometry.overall_depth_m / 2
+    pallet_boxes = structure(geometry, "pallet")
+
+    def target_for(placed) -> tuple[bool, float]:
+        blocks = camera_blocks_insertion(args, placed)
+        limit = camera_limit if blocks else carriage_limit
+        return blocks, target_insertion_depth_m(geometry.overall_depth_m, limit)
+
+    aligned_blocks, aligned_target = target_for(
+        scene_rig.place(pallet_boxes, x_m=tip_x + 1.0 + half_depth)
+    )
+    lateral = [float(v) for v in args.lateral.split(",")]
+    yaws = [float(v) for v in args.yaw.split(",")]
+    if args.distances:
+        distances = arange(args.distances)
+    else:
+        # From the deepest insertion any pose targets to 2 m of face gap for
+        # every pose; each pose's target and entry offset are its own.
+        near, far = math.inf, -math.inf
+        for y in lateral:
+            for yaw in yaws:
+                probe = tip_x + 1.0 + half_depth
+                truth = scene_rig.true_pockets(geometry, x_m=probe, y_m=y, yaw_rad=yaw)
+                entry_half = probe - float(np.min(truth[:, 0]))
+                _, target = target_for(
+                    scene_rig.place(pallet_boxes, x_m=probe, y_m=y, yaw_rad=yaw)
+                )
+                near = min(near, tip_x + entry_half - target)
+                far = max(far, tip_x + entry_half + 2.0)
+        start = math.floor(near * 100) / 100
+        steps = int(math.ceil(round((far - start) / 0.01, 6)))
+        distances = [round(start + 0.01 * k, 6) for k in range(steps + 1)]
+
+    print(
+        f"# mount shape={args.shape} urdf={args.forklift_urdf} lift={args.lift}"
+        f" camera=({args.camera_x}, {args.camera_y}, {args.camera_z}+lift)"
+        f" tilt={args.camera_tilt} camera_front={args.camera_front}"
+        f" camera_size={tuple(args.camera_size)}\n"
+        f"# seeds={args.seeds} quantize={args.quantize} noise_k={args.noise_k}"
+        f" noise_seed={args.noise_seed} min_range={args.min_range} tau={args.tau}"
+        " rig_fov=69.0x54.5deg@640x480\n"
+        f"# params=derived_for({prior_path.name})"
+        + "".join(f" {k}={v}" for k, v in overrides.items())
+        + f" -> {json.dumps(dataclasses.asdict(params), sort_keys=True)}\n"
+        "# max_plane_candidates is the current detector default; the ADR 0003 tables used 3\n"
+        f"# tip_x={tip_x:.3f} carriage_front={carriage_front:.3f}"
+        f" carriage_limit={carriage_limit:.3f} camera_limit={camera_limit:.3f}"
+        f" aligned: camera_blocks_insertion={aligned_blocks}"
+        f" target={aligned_target:.3f} common_target={common_target:.3f}"
+        f" half_depth={half_depth:.3f}\n"
+        "# error: M2 convention, left-to-left and right-to-right 3-D, worse of two\n"
+        "# face_gap: nearer pocket entry x minus fork tip x (negative = inserted)"
+    )
+    print(
+        f"{'x_m':>7s} {'face_gap':>9s} {'y_m':>6s} {'yaw':>6s} {'ok':>6s} {'valid':>6s}"
+        f" {'worst_mm':>9s} {'tipL':>5s} {'tipR':>5s} {'face_z':>7s} {'target':>7s}"
+        "  reason"
+    )
+    poses: dict[tuple[float, float], list[tuple]] = {}
+    for x in distances:
+        for y in lateral:
+            for yaw in yaws:
+                placed = scene_rig.place(pallet_boxes, x_m=x, y_m=y, yaw_rad=yaw)
+                truth = scene_rig.true_pockets(geometry, x_m=x, y_m=y, yaw_rad=yaw)
+                # Entry face of the nearer pocket: x - half depth when aligned,
+                # several mm off per pocket under yaw.
+                entry_half = x - float(np.min(truth[:, 0]))
+                face_gap = x - entry_half - tip_x
+                rows = poses.setdefault((y, yaw), [])
+                if any(
+                    scene_rig.boxes_interpenetrate(t, p) for t in truck for p in placed
+                ):
+                    print(f"{x:7.3f} {face_gap:9.3f} {y:6.3f} {yaw:6.3f}  penetrating")
+                    continue
+                _, target = target_for(placed)
+                boxes = [*truck, *placed]
+
+                def scene_for(seed, boxes=boxes):
+                    return scene_rig.render(
+                        boxes,
+                        camera=camera,
+                        quantize=args.quantize,
+                        noise_k=args.noise_k,
+                        noise_seed=args.noise_seed + seed,
+                        min_range_m=args.min_range,
+                    )
+
+                fixed = scene_for(0)
+                ok = valid = 0
+                worst = 0.0
+                reasons: dict[str, int] = {}
+                for seed in range(args.seeds):
+                    scene = scene_for(seed) if args.noise_k else fixed
+                    observation = detect_pockets(
+                        scene, prior, dataclasses.replace(params, seed=seed)
+                    ).observation
+                    if observation.status != "valid":
+                        key = f"{observation.status}/{observation.reason}"
+                        reasons[key] = reasons.get(key, 0) + 1
+                        continue
+                    valid += 1
+                    error = pocket_error_m(observation, truth)
+                    worst = max(worst, error)
+                    if error <= args.tau:
+                        ok += 1
+                    else:
+                        reasons["valid/error_over_tau"] = (
+                            reasons.get("valid/error_over_tau", 0) + 1
+                        )
+                tips = {
+                    name: tip_visibility(boxes, index, camera, args.min_range)
+                    for name, index in side.items()
+                }
+                face = camera.base_from_optical().rotation.T @ (
+                    truth[0] - np.asarray(camera.xyz_m)
+                )
+                top = max(reasons, key=reasons.__getitem__) if reasons else ""
+                print(
+                    f"{x:7.3f} {face_gap:9.3f} {y:6.3f} {yaw:6.3f}"
+                    f" {ok:3d}/{args.seeds:<2d} {valid:3d}/{args.seeds:<2d}"
+                    f" {worst * 1000:9.1f} {tips['left']:5.2f} {tips['right']:5.2f}"
+                    f" {face[2]:7.3f} {target:7.3f}  {top}"
+                )
+                rows.append((x, ok, tips["left"], tips["right"], entry_half, target))
+
+    for (y, yaw), rows in poses.items():
+        rows = sorted(rows)
+        label = f"pose y={y:.3f} yaw={yaw:.3f}"
+        print(
+            f"# {label}: measured {len(rows)},"
+            f" all-seed {sum(r[1] == args.seeds for r in rows)},"
+            f" partial {sum(0 < r[1] < args.seeds for r in rows)},"
+            f" dead {sum(r[1] == 0 for r in rows)}"
+        )
+        cells = [(r[0], r[1]) for r in rows]
+        print(f"#   observed runs (ok>0): {_runs(cells, lambda ok: ok > 0)}")
+        print(f"#   dead runs (ok=0):     {_runs(cells, lambda ok: ok == 0)}")
+        nonzero = next((r for r in rows if r[1] > 0), None)
+        allseed = next((r for r in rows if r[1] == args.seeds), None)
+        both = next(
+            (r for r in rows if r[1] == args.seeds and r[2] >= 0.5 and r[3] >= 0.5),
+            None,
+        )
+        for name, row in (
+            ("first non-zero", nonzero),
+            ("first all-seed", allseed),
+            ("simultaneous", both),
+        ):
+            if row is None:
+                print(f"#   {name}: none")
+                continue
+            gap, blind = derived(row[0], row[4], fork_tip_x_m=tip_x, target_m=row[5])
+            _, common = derived(
+                row[0], row[4], fork_tip_x_m=tip_x, target_m=common_target
+            )
+            print(
+                f"#   {name}: x={row[0]:.3f} gap={gap:.3f} blind={blind:.3f}"
+                f" blind_at_common_target={common:.3f}"
+            )
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -879,6 +1212,59 @@ def main(argv: Sequence[str] | None = None) -> int:
     poses.add_argument("--category", default="positive")
     poses.add_argument("--split", type=float, default=3.0)
     poses.set_defaults(func=cmd_poses)
+
+    mount = sub.add_parser(
+        "mount", help="camera on the carriage, with the carriage and forks rendered"
+    )
+    mount.add_argument("--shape", choices=sorted(SHAPES), default="epal6")
+    mount.add_argument("--forklift-urdf", type=Path, default=DEFAULT_FORKLIFT_URDF)
+    mount.add_argument("--lift", type=float, default=0.0)
+    mount.add_argument(
+        "--min-range",
+        type=float,
+        default=0.175,
+        help="Optical depth below which pixels are invalid; D435i Min-Z is 0.175 m "
+        "at 640x480 and 0.28 m at 1280x720 (datasheet)",
+    )
+    mount.add_argument(
+        "--camera-front",
+        type=float,
+        default=0.01,
+        help="How far the camera's front face sits ahead of its optical centre; "
+        "it shortens the insertion limit when ahead of the carriage",
+    )
+    mount.add_argument("--tau", type=float, default=0.02, help="Pocket error bound, m")
+    mount.add_argument(
+        "--camera-size",
+        type=lambda v: tuple(float(x) for x in v.split(",")),
+        default=(0.025, 0.090, 0.025),
+        help="Camera body depth,width,height in m (D435i datasheet 25x90x25 mm)",
+    )
+    mount.add_argument("--camera-x", type=float, default=0.61)
+    mount.add_argument("--camera-y", type=float, default=0.0)
+    mount.add_argument("--camera-z", type=float, default=0.15)
+    mount.add_argument("--camera-tilt", type=float, default=0.0)
+    mount.add_argument("--seeds", type=int, default=12)
+    mount.add_argument("--noise-k", type=float, default=0.0)
+    mount.add_argument("--noise-seed", type=int, default=0)
+    mount.add_argument("--no-quantize", dest="quantize", action="store_false")
+    mount.add_argument(
+        "--distances",
+        default=None,
+        metavar="START:STOP:STEP",
+        help="Pallet centre x; default runs from 2 m of face gap to "
+        "the insertion target in 1 cm steps",
+    )
+    mount.add_argument("--lateral", default="0.0")
+    mount.add_argument("--yaw", default="0.0")
+    mount.add_argument(
+        "--set",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE",
+        help="Override a derived detector parameter",
+    )
+    mount.set_defaults(func=cmd_mount)
 
     args = parser.parse_args(argv)
     return args.func(args)

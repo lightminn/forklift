@@ -42,11 +42,19 @@ GATE = re.compile(r"gate min\s+\d+ vs min_band_points \d+\s+->\s+(\w+)")
 
 
 def derived(
-    first_detection_m: float, half_depth_m: float = T11_06_HALF_DEPTH_M
+    first_detection_m: float,
+    half_depth_m: float = T11_06_HALF_DEPTH_M,
+    *,
+    fork_tip_x_m: float = FORK_TIP_X_M,
+    target_m: float = TARGET_INSERTION_M,
 ) -> tuple[float, float]:
-    """(gap from fork tip to pallet face, blind zone to full insertion), both in m."""
-    gap = first_detection_m - half_depth_m - FORK_TIP_X_M
-    return gap, gap + TARGET_INSERTION_M
+    """(gap from fork tip to pallet face, blind zone to full insertion), both in m.
+
+    The defaults are the provisional model's; a sweep on another chassis model
+    passes its fork tip and insertion target rather than recomputing here.
+    """
+    gap = first_detection_m - half_depth_m - fork_tip_x_m
+    return gap, gap + target_m
 
 
 def read_grid(path: Path) -> dict | None:
