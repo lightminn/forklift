@@ -92,7 +92,7 @@ def test_actual_isaac_depth_exhausts_the_frozen_candidate_budget_without_a_goal(
 def test_current_default_candidate_budget_already_recovers_this_capture(
     captured_scene,
 ):
-    """The default moved 3 -> 5 on main, and 5 already detects this capture.
+    """The default moved 3 -> 5 -> 6 on main, and it already detects this capture.
 
     Recorded so the runtime budget of 12 is not read as the only setting that
     recovers this scene. The runtime value was chosen against a different
@@ -100,7 +100,7 @@ def test_current_default_candidate_budget_already_recovers_this_capture(
     """
     scene, transform = captured_scene
     params = DetectorParams.derived_for(PRIOR)
-    assert params.max_plane_candidates == 5
+    assert params.max_plane_candidates == 6
     detection = detect_pockets(scene, PRIOR, params)
     assert detection.observation.status == "valid", detection.observation.reason
     assert target_from_capture(detection, scene, transform).success
