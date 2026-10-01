@@ -13,7 +13,11 @@ from math import ceil, cos, pi, sin
 import numpy as np
 
 from forklift_core._validation import _finite_scalar
-from forklift_core.perception.pallet_geometry import target_insertion_depth_m
+from forklift_core.perception.pallet_geometry import (
+    CARRIAGE_INSERTION_LIMIT_M,
+    INSERTION_RESERVE_M,
+    target_insertion_depth_m,
+)
 
 from .geometry import (
     Bounds,
@@ -111,6 +115,8 @@ class SyntheticMissionGeometry:
     extraction_m: float = 0.65
     withdrawal_m: float = 0.55
     spawn_clearance_m: float = 0.12
+    carriage_limit_m: float = CARRIAGE_INSERTION_LIMIT_M  # Pass the run's model limit.
+    insertion_reserve_m: float = INSERTION_RESERVE_M  # Policy; diagnostic sweeps only.
 
     inserted_offset_m: float = field(init=False)
     approach_offset_m: float = field(init=False)
@@ -119,7 +125,9 @@ class SyntheticMissionGeometry:
     loaded_footprint: Footprint = field(init=False)
 
     def __post_init__(self) -> None:
-        d = target_insertion_depth_m(self.pallet_depth_m)
+        d = target_insertion_depth_m(
+            self.pallet_depth_m, self.carriage_limit_m, self.insertion_reserve_m
+        )
         inserted = self.axle_to_fork_tip_m + self.pallet_depth_m / 2 - d
         approach = (
             self.axle_to_fork_tip_m + self.pallet_depth_m / 2 + self.approach_gap_m
@@ -453,6 +461,7 @@ def plan_transport(
     return_to: Pose2D | None = None,
     pickup_bounds: Bounds | None = None,
     travel_config: PlannerConfig | None = None,
+    trace: list | None = None,
 ) -> MissionPlan:
     """Plan all stages with exact final straight approaches and loaded geometry.
 
@@ -474,10 +483,31 @@ def plan_transport(
     large floor this keeps the pickup search as tight as in the original bay.
     travel_config optionally replaces config for the two long Hybrid A* legs,
     transport and return_home, e.g. to add the obstacle heuristic there only.
+    trace optionally receives one dict per planning step, in order and up to
+    the step that failed -- search and appended straight parts separately --
+    because a failed MissionPlan keeps no paths. Anything with ``append``
+    works; the plan returned is the same with or without it.
     """
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
     config = config if config is not None else make_transport_planner_config()
     travel_config = travel_config if travel_config is not None else config
+
+    def note(stage: str, result: PlanResult) -> PlanResult:
+        if trace is not None:
+            directions = np.asarray(result.directions)
+            trace.append(
+                {
+                    "stage": stage,
+                    "status": result.status,
+                    "length_m": float(result.length_m),
+                    "expansions": int(result.expanded_nodes),
+                    "gear_changes": int(np.count_nonzero(np.diff(directions)))
+                    if directions.size
+                    else 0,
+                }
+            )
+        return result
+
     props = [prop.rectangle for prop in scenario.props]
     pickup = site_poses(
         target_pickup if target_pickup is not None else scenario.pickup, geometry
@@ -494,80 +524,101 @@ def plan_transport(
     approach_config = replace(
         config, clearance_m=min(config.clearance_m, geometry.approach_gap_m / 2)
     )
-    approach = plan_hybrid_astar(
-        start_rear if start_rear is not None else scenario.start_rear,
-        pickup["prealign"],
-        props + [pallet],
-        geometry.unloaded_footprint,
-        near_bounds,
-        approach_config,
+    approach = note(
+        "approach_search",
+        plan_hybrid_astar(
+            start_rear if start_rear is not None else scenario.start_rear,
+            pickup["prealign"],
+            props + [pallet],
+            geometry.unloaded_footprint,
+            near_bounds,
+            approach_config,
+        ),
     )
     if not approach.success:
         return MissionPlan(False, f"approach:{approach.status}")
-    approach_tail = _straight_plan(
-        pickup["prealign"],
-        pickup["approach"],
-        1,
-        props + [pallet],
-        geometry.unloaded_footprint,
-        near_bounds,
-        approach_config.clearance_m,
+    approach_tail = note(
+        "approach_straight",
+        _straight_plan(
+            pickup["prealign"],
+            pickup["approach"],
+            1,
+            props + [pallet],
+            geometry.unloaded_footprint,
+            near_bounds,
+            approach_config.clearance_m,
+        ),
     )
     if not approach_tail.success:
         return MissionPlan(False, f"approach:{approach_tail.status}")
     approach = _append_straight(approach, approach_tail)
-    insert = _straight_plan(
-        pickup["approach"],
-        pickup["inserted"],
-        1,
-        props,
-        geometry.unloaded_footprint,
-        near_bounds,
-        config.clearance_m,
+    insert = note(
+        "insert",
+        _straight_plan(
+            pickup["approach"],
+            pickup["inserted"],
+            1,
+            props,
+            geometry.unloaded_footprint,
+            near_bounds,
+            config.clearance_m,
+        ),
     )
     if not insert.success:
         return MissionPlan(False, f"insert:{insert.status}")
-    extract = _straight_plan(
-        pickup["inserted"],
-        pickup["extracted"],
-        -1,
-        props,
-        geometry.loaded_footprint,
-        near_bounds,
-        config.clearance_m,
+    extract = note(
+        "extract",
+        _straight_plan(
+            pickup["inserted"],
+            pickup["extracted"],
+            -1,
+            props,
+            geometry.loaded_footprint,
+            near_bounds,
+            config.clearance_m,
+        ),
     )
     if not extract.success:
         return MissionPlan(False, f"extract:{extract.status}")
-    transport = plan_hybrid_astar(
-        pickup["extracted"],
-        destination["predelivery"],
-        props,
-        geometry.loaded_footprint,
-        scenario.bounds,
-        travel_config,
+    transport = note(
+        "transport_search",
+        plan_hybrid_astar(
+            pickup["extracted"],
+            destination["predelivery"],
+            props,
+            geometry.loaded_footprint,
+            scenario.bounds,
+            travel_config,
+        ),
     )
     if not transport.success:
         return MissionPlan(False, f"transport:{transport.status}")
-    transport_tail = _straight_plan(
-        destination["predelivery"],
-        destination["delivery"],
-        1,
-        props,
-        geometry.loaded_footprint,
-        scenario.bounds,
-        config.clearance_m,
+    transport_tail = note(
+        "transport_straight",
+        _straight_plan(
+            destination["predelivery"],
+            destination["delivery"],
+            1,
+            props,
+            geometry.loaded_footprint,
+            scenario.bounds,
+            config.clearance_m,
+        ),
     )
     if not transport_tail.success:
         return MissionPlan(False, f"transport:{transport_tail.status}")
     transport = _append_straight(transport, transport_tail)
-    withdraw = _straight_plan(
-        destination["delivery"],
-        destination["withdrawn"],
-        -1,
-        props,
-        geometry.unloaded_footprint,
-        scenario.bounds,
-        config.clearance_m,
+    withdraw = note(
+        "withdraw",
+        _straight_plan(
+            destination["delivery"],
+            destination["withdrawn"],
+            -1,
+            props,
+            geometry.unloaded_footprint,
+            scenario.bounds,
+            config.clearance_m,
+        ),
     )
     if not withdraw.success:
         return MissionPlan(False, f"withdraw:{withdraw.status}")
@@ -582,13 +633,16 @@ def plan_transport(
         geometry.pallet_width_m,
         scenario.destination.yaw_rad,
     )
-    return_home = plan_hybrid_astar(
-        destination["withdrawn"],
-        return_to,
-        props + [delivered],
-        geometry.unloaded_footprint,
-        scenario.bounds,
-        travel_config,
+    return_home = note(
+        "return_home",
+        plan_hybrid_astar(
+            destination["withdrawn"],
+            return_to,
+            props + [delivered],
+            geometry.unloaded_footprint,
+            scenario.bounds,
+            travel_config,
+        ),
     )
     if not return_home.success:
         return MissionPlan(False, f"return_home:{return_home.status}")

@@ -91,13 +91,17 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--base-scene", required=True)
     parser.add_argument("--pallet-urdf", type=Path, required=True)
     parser.add_argument("--pallet-geometry", type=Path, required=True)
-    parser.add_argument(
-        "--forklift-urdf",
-        type=Path,
-        default=Path(__file__).resolve().parent.parent
-        / "models/dls08_provisional/forklift.urdf",
-    )
+    # Required: the base scene's truck and this URDF are checked against each
+    # other, so neither may be picked silently.
+    parser.add_argument("--forklift-urdf", type=Path, required=True)
     parser.add_argument("--settings", type=Path, required=True)
+    parser.add_argument(
+        "--insertion-reserve-m",
+        type=float,
+        default=0.046,
+        help="Insertion reserve behind the carriage limit (ADR 0004 D3 policy "
+        "0.046). Other values are for diagnostic sweeps and are recorded.",
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--obstacles", type=int, default=4)
@@ -435,11 +439,11 @@ def write_slam_record(args, state, scenario, factory, log, lidar_config) -> None
         "wheel_rate_sign": "positive rolls the truck forward (drive command sign)",
         "steering_order": ["front_left", "front_right"],
         "odometry_geometry": {
-            "wheelbase_m": 0.64,
-            "track_m": 0.51,
-            "wheel_radius_m": 0.135,
+            "wheelbase_m": args.drive_geometry.wheelbase_m,
+            "track_m": args.drive_geometry.track_m,
+            "wheel_radius_m": args.drive_geometry.wheel_radius_m,
             "rear_axle_x_in_base_m": args.rear_axle_offset_m,
-            "source": "sim/models/dls08_provisional/forklift.urdf joint origins",
+            "source": f"{args.forklift_urdf} joint origins",
         },
         "seed": args.seed,
         "layout_version": "bay" if factory is None else factory.layout_version,
@@ -612,7 +616,6 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
 
     import forklift_core
     from forklift_core.control import (
-        AckermannGeometry,
         RearAxlePathTracker,
         TrackerConfig,
         ackermann_command,
@@ -677,6 +680,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     for _ in range(20):
         app.update()
     stage = omni.usd.get_context().get_stage()
+    from chassis_contract import (
+        chassis_record,
+        require_scene_matches_model,
+        stage_chassis,
+    )
+
+    # The truck's physics comes from the scene, its commands from the URDF.
+    scene_chassis = stage_chassis(stage, "/World/Forklift")
+    state["scene_chassis"] = chassis_record(scene_chassis)
+    require_scene_matches_model(scene_chassis, args.forklift_urdf)
+    state["scene_chassis_matches_urdf"] = True
     world = World(stage_units_in_meters=1.0, physics_dt=1 / 120, rendering_dt=1 / 120)
     catalogue, offsets = read_catalogue(stage, app, args.asset_root)
     geometry = SyntheticMissionGeometry(
@@ -684,7 +698,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         pallet_depth_m=args.pallet_geometry_loaded.overall_depth_m,
         pallet_width_m=args.pallet_geometry_loaded.overall_width_m,
         axle_to_fork_tip_m=args.axle_to_fork_tip_m,
+        carriage_limit_m=args.carriage_limit_m,
+        insertion_reserve_m=args.insertion_reserve_m,
     )
+    state["insertion_reserve_m"] = args.insertion_reserve_m
     planner_config = make_transport_planner_config(
         curvature_limit_inv_m=settings["planner_curvature_inv_m"],
         clearance_m=settings["planning_clearance_m"],
@@ -905,6 +922,18 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             maintain_square_pixels=True,
         )
     world.reset()
+
+    def body_velocities() -> dict:
+        # Saved scene state could survive the reset; compare runs on values.
+        return {
+            "linear_mps": robot.get_linear_velocity(),
+            "angular_radps": robot.get_angular_velocity(),
+            "joint_names": list(robot.dof_names),
+            "joint_radps_or_mps": robot.get_joint_velocities(),
+            "joint_max_abs": float(np.max(np.abs(robot.get_joint_velocities()))),
+        }
+
+    state["velocities_after_reset"] = body_velocities()
     camera.initialize()
     for extra_camera in extra_cameras.values():
         extra_camera.initialize()
@@ -993,6 +1022,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         "Truck spawn displaced",
     )
     state["initial_pallet_m"] = initial_pallet.tolist()
+    state["velocities_before_planning"] = body_velocities()
     state["phase"] = "planning"
     if args.use_perception:
         planning_start = time.monotonic()
@@ -1070,9 +1100,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             flush=True,
         )
 
-    drive_geometry = AckermannGeometry(
-        0.64, 0.51, 0.135, 0.45, settings["max_wheel_rate_rad_s"]
-    )
+    drive_geometry = args.drive_geometry
     obstacles = [item.rectangle for item in scenario.props]
     pickup_obstacle = Rectangle(
         scenario.pickup.x_m,
@@ -1298,6 +1326,32 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             velocity = robot.get_linear_velocity()
             signed_speed = float(np.dot(velocity[:2], forward))
             require(np.isfinite([base, ppos]).all(), "Nonfinite body state")
+            if phase == "lift":
+                # Every physics step, so the peak and the aborting state are
+                # kept; the 0.1 s samples miss both.
+                peak = state.setdefault("lift_tilt_peak", {"pallet_tilt_rad": -1.0})
+                if pallet_tilt > peak["pallet_tilt_rad"]:
+                    peak.update(
+                        time_s=t,
+                        pallet_tilt_rad=pallet_tilt,
+                        pallet_position_m=ppos,
+                        pallet_quaternion_wxyz=pq,
+                        lift_m=float(robot.get_joint_positions()[lift_index[0]]),
+                        lift_command_m=lift_command,
+                    )
+            if not (tilt < 0.1 and pallet_tilt < 0.15):
+                state["tilt_abort_state"] = {
+                    "phase": phase,
+                    "time_s": t,
+                    "base_tilt_rad": tilt,
+                    "pallet_tilt_rad": pallet_tilt,
+                    "base_position_m": base,
+                    "base_quaternion_wxyz": q,
+                    "pallet_position_m": ppos,
+                    "pallet_quaternion_wxyz": pq,
+                    "lift_m": float(robot.get_joint_positions()[lift_index[0]]),
+                    "lift_command_m": lift_command,
+                }
             require(
                 tilt < 0.1 and pallet_tilt < 0.15, f"Excessive body tilt in {phase}"
             )
@@ -1727,6 +1781,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             "position_m": tracking.position_error_m,
                             "yaw_rad": tracking.yaw_error_rad,
                         }
+                        # What the forks actually reach, not the planned target.
+                        state["insertion_measured"] = (
+                            insertion_geometry.insertion_measures(
+                                base,
+                                q,
+                                float(robot.get_joint_positions()[lift_index[0]]),
+                                ppos,
+                                pq,
+                                geometry.pallet_depth_m,
+                            )
+                        )
                         transition("lift", t)
                     elif phase == "extract":
                         transition("transport", t)
@@ -2082,6 +2147,14 @@ def main() -> None:
         ),
         "Settings must be positive finite values",
     )
+    from chassis_contract import require_curvature_within_model
+    from insertion_geometry import read_carriage_limit_m, read_drive_geometry_m
+
+    args.drive_geometry = read_drive_geometry_m(
+        args.forklift_urdf, settings["max_wheel_rate_rad_s"]
+    )
+    args.carriage_limit_m = read_carriage_limit_m(args.forklift_urdf)
+    require_curvature_within_model(settings, args.drive_geometry)
     state = {
         "success": False,
         "seed": args.seed,
@@ -2095,11 +2168,17 @@ def main() -> None:
         "forklift_urdf_sha256": hashlib.sha256(
             args.forklift_urdf.read_bytes()
         ).hexdigest(),
+        "chassis_model": {
+            "forklift_urdf": str(args.forklift_urdf),
+            "drive_geometry": asdict(args.drive_geometry),
+            "carriage_limit_m": args.carriage_limit_m,
+            "axle_to_fork_tip_m": args.axle_to_fork_tip_m,
+        },
         "python": sys.version,
         "arguments": {
             k: (
                 asdict(v)
-                if k == "pallet_geometry_loaded"
+                if k in {"pallet_geometry_loaded", "drive_geometry"}
                 else str(v)
                 if isinstance(v, Path)
                 else v

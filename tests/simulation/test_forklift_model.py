@@ -268,3 +268,27 @@ def test_preview_renders_distinct_views_and_records_evidence(tmp_path):
         assert frame.size == (1400, 1000)
         assert np.asarray(frame).std() > 20
     assert (tmp_path / "preview/views.png").exists()
+
+
+MEASURED = ROOT / "sim/models/dls08_measured/parameters.yaml"
+
+
+@pytest.mark.parametrize(
+    "parameters", [PARAMETERS, MEASURED], ids=["provisional", "measured"]
+)
+def test_committed_model_files_are_the_generator_output(tmp_path, parameters):
+    generate(tmp_path, parameters)
+    for name in ["forklift.urdf", "forklift.xml", "scene.xml", "model_manifest.json"]:
+        assert (tmp_path / name).read_bytes() == (parameters.parent / name).read_bytes()
+
+
+def test_measured_model_keeps_the_catalogue_envelope_with_measured_parts(tmp_path):
+    model = generate(tmp_path, MEASURED)
+    lower, upper = geometry_bounds(model)
+    np.testing.assert_allclose(upper - lower, [1.46, 0.63, 1.01], atol=1e-6)
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+    tip = data.site_xpos[model.site("left_fork_tip").id]
+    assert tip[0] == pytest.approx(0.95)
+    limit = model.jnt_range[model.joint("left_steer").id]
+    np.testing.assert_allclose(limit, [-np.radians(15), np.radians(15)], atol=1e-9)

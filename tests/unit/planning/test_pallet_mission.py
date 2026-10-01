@@ -803,3 +803,49 @@ def test_travel_config_changes_only_the_travel_legs():
         guided.transport.expanded_nodes,
         guided.return_home.expanded_nodes,
     )
+
+
+def test_mission_geometry_uses_its_own_carriage_limit():
+    provisional = SyntheticMissionGeometry()
+    measured = SyntheticMissionGeometry(carriage_limit_m=0.346)
+    # 0.60 m pallet: min(0.36, 0.346 - 0.046) = 0.300; axle 1.29 + 0.30 - 0.30
+    assert provisional.inserted_offset_m == pytest.approx(1.29 + 0.30 - 0.36)
+    assert measured.inserted_offset_m == pytest.approx(1.29)
+    assert measured.loaded_footprint.front_m == pytest.approx(1.59)
+
+
+def test_trace_records_every_stage_without_changing_the_plan():
+    scenario = make_scenario(0, ASSETS)
+    plain = pallet_mission.plan_transport(scenario, return_to=scenario.start_rear)
+    trace = []
+    traced = pallet_mission.plan_transport(
+        scenario, return_to=scenario.start_rear, trace=trace
+    )
+    assert (plain.success, plain.status) == (traced.success, traced.status)
+    for name in ("approach", "insert", "extract", "transport", "withdraw"):
+        a, b = getattr(plain, name), getattr(traced, name)
+        assert (a is None) == (b is None)
+        if a is not None:
+            np.testing.assert_array_equal(a.poses, b.poses)
+    names = [entry["stage"] for entry in trace]
+    assert names[:2] == ["approach_search", "approach_straight"]
+    for entry in trace:
+        assert set(entry) >= {
+            "stage",
+            "status",
+            "length_m",
+            "expansions",
+            "gear_changes",
+        }
+
+
+def test_trace_keeps_the_stages_before_a_failure():
+    scenario = make_scenario(0, ASSETS)
+    blocked = replace(scenario, destination=replace(scenario.destination, x_m=99.0))
+    trace = []
+    plan = pallet_mission.plan_transport(blocked, trace=trace)
+    assert not plan.success and plan.transport is None
+    stages = {entry["stage"]: entry for entry in trace}
+    assert stages["approach_search"]["status"] == "success"
+    assert stages["approach_search"]["length_m"] > 0
+    assert trace[-1]["status"] != "success"

@@ -337,3 +337,27 @@ def test_camera_creation_preserves_distinct_prim_paths(tmp_path, monkeypatch):
     )
     assert acquisition.prim_path == "/World/Forklift/base_link/PerceptionCamera"
     assert near.prim_path == "/World/Forklift/base_link/NearCamera"
+
+
+@pytest.mark.parametrize(
+    "acquire", ["acquire_stationary_snapshot", "acquire_frozen_snapshot"]
+)
+def test_snapshot_uses_integer_index_principal_point_once_and_keeps_both(
+    acquire, tmp_path
+):
+    robot, world, camera = RobotBoundary(), WorldBoundary(), CameraBoundary()
+    record = {}
+    scene, world_from_base = getattr(camera_adapter, acquire)(
+        camera, world, robot, record=record
+    )
+    # Isaac reports pixel centres at half integers; the detector indexes integers.
+    assert (scene.intrinsics.cx, scene.intrinsics.cy) == (319.5, 239.5)
+    conventions = record["intrinsics"]
+    assert conventions["raw_sdk"]["matrix"][0][2] == 320.0
+    assert conventions["integer_index"]["matrix"][0][2] == 319.5
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sim/isaac"))
+    metadata = camera_adapter.save_snapshot(
+        tmp_path / "snap", scene, world_from_base, intrinsics_record=conventions
+    )
+    assert metadata["intrinsics"]["cx"] == 319.5
+    assert metadata["intrinsics_conventions"]["raw_sdk"]["matrix"][0][2] == 320.0

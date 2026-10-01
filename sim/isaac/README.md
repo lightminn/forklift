@@ -13,12 +13,29 @@ python sim/isaac/run_transport.py \
   --base-scene /path/to/imported-forklift-warehouse/scene.usda \
   --pallet-urdf sim/models/epal6_pallet/pallet.urdf \
   --pallet-geometry config/pallet_geometry_epal6.yaml \
+  --forklift-urdf sim/models/dls08_provisional/forklift.urdf \
   --settings config/isaac_transport.yaml \
   --output /path/to/new-run --seed 0 --video
 ```
 
+For the measured chassis (`sim/models/dls08_measured/`) pass that URDF with
+`--settings config/isaac_transport_measured.yaml` and a base scene rebuilt from it:
+
+```bash
+python sim/isaac/build_base_scene.py \
+  --source-scene /path/to/imported-forklift-warehouse/scene.usda \
+  --forklift-urdf sim/models/dls08_measured/forklift.urdf \
+  --output /path/to/measured-base-scene
+```
+
+`--forklift-urdf` is required. At start the run reads the truck back from the
+base scene (axle frames and axes, steering limits, tyre radii, carriage and fork
+collision boxes; `chassis_contract.py`) and refuses to start if they differ from
+the URDF, or if the settings' curvature exceeds what the URDF's steering allows.
+What it read is kept in `result.json` under `scene_chassis`.
+
 Use Isaac Sim's Python launcher in place of `python`. The base scene must contain
-this project's imported provisional forklift at `/World/Forklift` and NVIDIA's
+the forklift imported from the `--forklift-urdf` model at `/World/Forklift` and NVIDIA's
 warehouse environment. The output directory must not already exist. Kit options,
 such as a writable portable cache, can be appended. Outputs include scenario,
 paths, sampled physical state, source hashes, scene USD, screenshots, and video.
@@ -319,6 +336,7 @@ height, detection and errors.
 ```bash
 python sim/isaac/run_slam_drive.py \
   --base-scene /path/to/imported-forklift-warehouse/scene.usda \
+  --forklift-urdf sim/models/dls08_provisional/forklift.urdf \
   --output /path/to/new-run --seed 0 --video
 ```
 

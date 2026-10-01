@@ -124,11 +124,8 @@ def arguments() -> argparse.Namespace:
         type=Path,
         default=root / "config/pallet_geometry_epal6.yaml",
     )
-    parser.add_argument(
-        "--forklift-urdf",
-        type=Path,
-        default=root / "sim/models/dls08_provisional/forklift.urdf",
-    )
+    # Required: checked against the base scene's truck (chassis_contract).
+    parser.add_argument("--forklift-urdf", type=Path, required=True)
     parser.add_argument(
         "--asset-root",
         default=(
@@ -151,7 +148,11 @@ def arguments() -> argparse.Namespace:
         parser.error("--max-sim-seconds must be positive")
     if args.robot_camera and not args.video:
         parser.error("--robot-camera requires --video")
-    from insertion_geometry import read_chassis_reference_m
+    from insertion_geometry import (
+        read_carriage_limit_m,
+        read_chassis_reference_m,
+        read_drive_geometry_m,
+    )
 
     from forklift_core.perception.pallet_geometry import load_pallet_geometry
 
@@ -160,6 +161,9 @@ def arguments() -> argparse.Namespace:
         args.axle_to_fork_tip_m, args.rear_axle_offset_m = read_chassis_reference_m(
             args.forklift_urdf
         )
+        # The survey's drive wheel-rate cap was always 8 rad/s, not the settings'.
+        args.drive_geometry = read_drive_geometry_m(args.forklift_urdf, 8.0)
+        args.carriage_limit_m = read_carriage_limit_m(args.forklift_urdf)
     except ValueError as exc:
         parser.error(str(exc))
     args.kit_arguments = unknown
@@ -203,7 +207,6 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
 
     import forklift_core
     from forklift_core.control import (
-        AckermannGeometry,
         RearAxlePathTracker,
         TrackerConfig,
         ackermann_command,
@@ -226,6 +229,9 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
     lidar_config = yaml.safe_load(args.lidar.read_text())
     require(settings["physics_hz"] == 120, "This adapter requires 120Hz physics")
     require(120 % lidar_config["rate_hz"] == 0, "LiDAR rate must divide 120 Hz")
+    from chassis_contract import require_curvature_within_model
+
+    require_curvature_within_model(settings, args.drive_geometry)
     pattern = PlanarScanPattern(
         lidar_config["beam_count"],
         float(lidar_config["range_min_m"]),
@@ -253,6 +259,23 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
     for _ in range(20):
         app.update()
     stage = omni.usd.get_context().get_stage()
+    from chassis_contract import (
+        chassis_record,
+        require_scene_matches_model,
+        stage_chassis,
+    )
+
+    # The truck's physics comes from the scene, its commands from the URDF.
+    scene_chassis = stage_chassis(stage, "/World/Forklift")
+    state["scene_chassis"] = chassis_record(scene_chassis)
+    require_scene_matches_model(scene_chassis, args.forklift_urdf)
+    state["scene_chassis_matches_urdf"] = True
+    state["chassis_model"] = {
+        "forklift_urdf": str(args.forklift_urdf),
+        "drive_geometry": asdict(args.drive_geometry),
+        "carriage_limit_m": args.carriage_limit_m,
+        "axle_to_fork_tip_m": args.axle_to_fork_tip_m,
+    }
     world = World(stage_units_in_meters=1.0, physics_dt=1 / 120, rendering_dt=1 / 120)
     bay_catalogue, offsets = read_catalogue(stage, app, args.asset_root)
     factory_catalogue, factory_offsets = read_catalogue(
@@ -290,6 +313,7 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
         pallet_depth_m=pallet_geometry.overall_depth_m,
         pallet_width_m=pallet_geometry.overall_width_m,
         axle_to_fork_tip_m=args.axle_to_fork_tip_m,
+        carriage_limit_m=args.carriage_limit_m,
     )
     factory = make_factory_scenario(
         args.seed,
@@ -478,7 +502,7 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
             max_cross_track_error_m=0.35,
         ),
     )
-    drive_geometry = AckermannGeometry(0.64, 0.51, 0.135, 0.45, 8.0)
+    drive_geometry = args.drive_geometry
     beam_angles = pattern.beam_angles_rad()
     scan_every = 120 // int(lidar_config["rate_hz"])
     frame_every = 120 // args.fps
@@ -729,11 +753,11 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
         "wheel_rate_sign": "positive rolls the truck forward (drive command sign)",
         "steering_order": ["front_left", "front_right"],
         "odometry_geometry": {
-            "wheelbase_m": 0.64,
-            "track_m": 0.51,
-            "wheel_radius_m": 0.135,
+            "wheelbase_m": args.drive_geometry.wheelbase_m,
+            "track_m": args.drive_geometry.track_m,
+            "wheel_radius_m": args.drive_geometry.wheel_radius_m,
             "rear_axle_x_in_base_m": args.rear_axle_offset_m,
-            "source": "sim/models/dls08_provisional/forklift.urdf joint origins",
+            "source": f"{args.forklift_urdf} joint origins",
         },
         "seed": args.seed,
         "layout_version": layout.layout_version,
@@ -781,7 +805,13 @@ def main() -> None:
         "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "python": sys.version,
         "arguments": {
-            k: (str(v) if isinstance(v, Path) else v)
+            k: (
+                asdict(v)
+                if k == "drive_geometry"
+                else str(v)
+                if isinstance(v, Path)
+                else v
+            )
             for k, v in vars(args).items()
             if k != "pallet_geometry_loaded"
         },

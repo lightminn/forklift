@@ -1,0 +1,10 @@
+# rule=head seeds=2 quantize=True camera=(0.75, 0.0, 0.27) tilt=0.0
+# geometry=pallet_geometry_epal6.yaml prior=pallet_prior_epal6.yaml overrides=range_min_m=0.1 band_margin_m=0.0039 floor_z_m=0.007333333333333333 min_band_points=15 min_plane_points=46 plane_inlier_m=0.0078
+# structure=pallet
+    x_m     y_m    yaw   valid  worst_mm  reason
+  1.600   0.000  0.000    0/2        0.0  no_pallet/no_opening_pattern
+  1.800   0.000  0.000    0/2        0.0  no_pallet/no_opening_pattern
+  2.000   0.000  0.000    0/2        0.0  no_pallet/no_opening_pattern
+  2.200   0.000  0.000    1/2        3.8  no_pallet/no_opening_pattern
+  2.400   0.000  0.000    2/2        3.8  
+# cells: all-seed 1, partial 1, dead 3

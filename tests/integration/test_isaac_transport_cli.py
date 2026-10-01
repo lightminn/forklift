@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "sim/isaac/run_transport.py"
+PROVISIONAL_URDF = ROOT / "sim/models/dls08_provisional/forklift.urdf"
 
 
 def test_isaac_transport_help_does_not_require_simulator_sdk() -> None:
@@ -62,6 +63,8 @@ def test_extra_views_require_video_and_perception_before_startup() -> None:
                 "unused.usda",
                 "--pallet-urdf",
                 "unused.urdf",
+                "--forklift-urdf",
+                str(PROVISIONAL_URDF),
                 "--pallet-geometry",
                 "unused.yaml",
                 "--settings",
@@ -88,6 +91,8 @@ def test_quarter_options_validate_before_simulator_startup(tmp_path) -> None:
         "unused.usda",
         "--pallet-urdf",
         "unused.urdf",
+        "--forklift-urdf",
+        str(PROVISIONAL_URDF),
         "--pallet-geometry",
         "unused.yaml",
         "--settings",
@@ -160,6 +165,8 @@ def run_geometry_cli(tmp_path, pallet_urdf, geometry="t11_06", *extra):
             "unused.usda",
             "--pallet-urdf",
             str(pallet_urdf),
+            "--forklift-urdf",
+            str(PROVISIONAL_URDF),
             "--pallet-geometry",
             str(ROOT / f"config/pallet_geometry_{geometry}.yaml"),
             "--settings",

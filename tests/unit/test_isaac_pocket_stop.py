@@ -158,7 +158,7 @@ def observation(stamp_ns, *, lost=False, x=0.9):
 def install_observations(
     monkeypatch, world, *, failure=None, lose_once=False, restored_x=0.9, initial_x=0.9
 ):
-    def acquire(camera, actual_world, robot):
+    def acquire(camera, actual_world, robot, *, record=None):
         assert actual_world is world
         robot.events.append(("capture", world.current_time))
         if failure == "acquisition" and world.current_time >= 0.29:
@@ -620,3 +620,18 @@ def test_qualified_roof_survives_front_loss_then_its_own_loss_brakes(
     assert result["roof_tracking_qualified"] is True
     assert result["stopped_speed_mps"] < 0.012
     assert not any(e[0] == "drive" and e[1] >= loss["time_s"] for e in robot.events)
+
+
+def test_handoff_geometry_reproduces_the_pr2_positions():
+    import importlib
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sim/isaac"))
+    module = importlib.import_module("run_pocket_insertion")
+    geometry = module.handoff_geometry(2.34)
+    assert geometry.approach_offset_m == pytest.approx(2.34)
+    assert geometry.prealign_offset_m == pytest.approx(2.49)
+    for outside in (1.50, 1.59, 2.49):
+        with pytest.raises(ValueError):
+            module.handoff_geometry(outside)

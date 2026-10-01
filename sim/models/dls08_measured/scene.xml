@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<mujoco model="dls08_model_check_scene">
+  <include file="forklift.xml" />
+  <asset>
+    <texture name="sky" type="skybox" builtin="gradient" rgb1=".14 .19 .25" rgb2=".38 .43 .49" width="512" height="3072" />
+    <texture name="floor_pattern" type="2d" builtin="checker" rgb1=".19 .23 .28" rgb2=".22 .26 .31" width="512" height="512" />
+    <material name="floor_material" texture="floor_pattern" texrepeat="6 6" reflectance=".08" />
+  </asset>
+  <worldbody>
+    <light name="key_light" pos="1 -2 3" dir="-1 2 -3" diffuse=".85 .85 .85" castshadow="true" />
+    <light name="fill_light" pos="-2 1 2" dir="2 -1 -2" diffuse=".5 .5 .5" castshadow="false" />
+    <geom name="ground" type="plane" size="4 4 .1" material="floor_material" contype="2" conaffinity="1" />
+  </worldbody>
+</mujoco>

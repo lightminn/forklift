@@ -1,0 +1,30 @@
+{
+  "model_name": "dls08_measured",
+  "parameter_sha256": "f61c89ba2fafb360a2b4565e230334e1038ea4897f2fec1973a28d5bf96457bb",
+  "evidence": {
+    "identity": "delivered_chassis_dls_marking_sku_unconfirmed",
+    "catalogue": "team_measured_2026_09_30_matches_catalogue",
+    "dimensions": "partly_team_measured_2026_09_30_rest_estimated",
+    "dynamics": "simulation_assumptions_not_identified"
+  },
+  "catalogue": {
+    "overall_length_m": 1.46,
+    "overall_width_m": 0.63,
+    "overall_height_m": 1.01,
+    "net_mass_kg": 24.0
+  },
+  "steering_axle_assumption": "front",
+  "self_collision": {
+    "mjcf": false,
+    "urdf": "importer_defined_requires_configuration"
+  },
+  "urdf_scope": "geometry_and_kinematics_not_equivalent_physics",
+  "drive_interface": "four_independent_wheel_speed_actuators_assumed",
+  "links": 8,
+  "parts": 193,
+  "outputs": [
+    "forklift.xml",
+    "forklift.urdf",
+    "scene.xml"
+  ]
+}
