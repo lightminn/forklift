@@ -111,6 +111,9 @@ def test_all_runner_planning_calls_use_the_recorded_config(
         scenario=scenario,
         waypoint=scenario.start_rear,
         target_pickup=scenario.pickup,
+        # The perception branch plans to planning_pickup (the estimate, or the
+        # nominal pickup under --planning-target oracle_nominal).
+        planning_pickup=scenario.pickup,
         start_rear_pose=scenario.start_rear,
         rear=np.array([-2.34, 0, 0]),
         return_to_pose=None,

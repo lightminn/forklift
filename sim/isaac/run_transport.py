@@ -37,6 +37,9 @@ CAMERA_CALIBRATION = load_perception_module(
 MISSION_VIEWS = load_perception_module(
     "run_transport_mission_views", Path(__file__).with_name("mission_views.py")
 )
+G2 = load_perception_module(
+    "run_transport_g2_records", Path(__file__).with_name("g2_records.py")
+)
 
 
 def record_json(value: object, *, indent: int | None = None) -> str:
@@ -187,6 +190,23 @@ def arguments() -> argparse.Namespace:
         default="ros",
     )
     parser.add_argument("--perception-max-attempts", type=int, default=200)
+    parser.add_argument(
+        "--planning-target",
+        choices=G2.PLANNING_TARGETS,
+        default="perception",
+        help="oracle_nominal: after a valid detection, plan to the scenario's "
+        "nominal pickup instead of the estimate (G2a control, "
+        "docs/plans/2026-10-01-g2-rerun.md). Detection and re-observation are "
+        "unchanged.",
+    )
+    parser.add_argument(
+        "--repeat-captures",
+        type=int,
+        default=0,
+        help="Diagnostic run (G2r): at observation attempt --repeat-at-attempt, "
+        "hold the wheels and capture this many more times, then stop.",
+    )
+    parser.add_argument("--repeat-at-attempt", type=int, default=None)
     args, unknown = parser.parse_known_args()
     try:
         args.extra_views = MISSION_VIEWS.parse_extra_views(
@@ -226,6 +246,21 @@ def arguments() -> argparse.Namespace:
         parser.error("--camera-inset requires --video and --use-perception")
     if args.robot_camera and not (args.video and args.use_perception):
         parser.error("--robot-camera requires --video and --use-perception")
+    if args.planning_target != "perception" and not args.use_perception:
+        parser.error("--planning-target requires --use-perception")
+    if args.repeat_captures < 0:
+        parser.error("--repeat-captures must not be negative")
+    if args.repeat_captures:
+        if not args.use_perception or args.repeat_at_attempt is None:
+            parser.error(
+                "--repeat-captures requires --use-perception and --repeat-at-attempt"
+            )
+        if args.repeat_at_attempt < 1:
+            parser.error("--repeat-at-attempt counts from 1")
+        if args.planning_target != "perception":
+            parser.error("a repeat-capture run stops before planning")
+    elif args.repeat_at_attempt is not None:
+        parser.error("--repeat-at-attempt requires --repeat-captures")
     if args.obstacles < 1 or args.max_sim_seconds <= 0:
         parser.error("obstacles and max-sim-seconds must be positive")
     from insertion_geometry import (
@@ -935,6 +970,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
 
     state["velocities_after_reset"] = body_velocities()
     camera.initialize()
+    import carb
+
+    # Every run records the render mode it used (G2 rerun plan, 2026-10-01).
+    state["render_mode"] = {
+        "before_first_capture": carb.settings.get_settings().get("/rtx/rendermode")
+    }
     for extra_camera in extra_cameras.values():
         extra_camera.initialize()
     if args.use_perception:
@@ -1058,6 +1099,16 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 ]
                 break
         state["planning_wall_s"] = time.monotonic() - planning_start
+        if observe_plan is None and args.repeat_captures:
+            # No observation is reached at all, so attempt K never is.
+            state["planning_status"] = "all_candidates_failed"
+            state["repeat_capture"] = {
+                "status": "repeat_target_not_reached",
+                "attempts_made": 0,
+                "reason": "no_reachable_candidate",
+            }
+            state["phase"] = "repeat_target_not_reached"
+            return
         if observe_plan is None:
             state["planning_status"] = "all_candidates_failed"
             reasons = ";".join(
@@ -1202,6 +1253,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         )
         for name, path in paths.items()
     }
+
+    def record_tracker_configs() -> None:
+        # Every tracker's full settings as built (G2 rerun plan, 2026-10-01).
+        state.setdefault("tracker_configs", {}).update(
+            {name: asdict(tracker.config) for name, tracker in trackers.items()}
+        )
+
+    record_tracker_configs()
     phase = "approach"
     if args.use_perception:
         phase = "observe"
@@ -1460,6 +1519,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             "frame_diagnostics": None,
                             "detection_diagnostics": None,
                             "capture_attempts": None,
+                            # Main-loop step and the t the next phase starts from:
+                            # together they fix the remaining time budget.
+                            "loop_step": step,
+                            "t_before_capture_s": t,
                         }
                         state["observation_attempts"].append(attempt)
                         try:
@@ -1473,6 +1536,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             attempt["capture_diagnostics"] = asdict(exc.diagnostics)
                             attempt["capture_attempts"] = exc.diagnostics.attempts
                             require(False, f"perception_capture_failed:{exc.reason}")
+                        attempt["depth_sha256"] = G2.depth_sha256(scene_input.depth_m)
                         # Diagnostic dump for offline root-cause analysis; not part
                         # of the perception contract itself.
                         Image.fromarray(scene_input.rgb).save(
@@ -1506,6 +1570,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         # representative; no timestamp interpolation is implied.
                         capture_diagnostics = perception_capture.state.diagnostics
                         attempt["capture_diagnostics"] = asdict(capture_diagnostics)
+                        attempt["accepted_pose"] = [
+                            np.asarray(v, dtype=float).tolist()
+                            for v in capture_diagnostics.accepted_pose
+                        ]
                         base, q = map(np.asarray, capture_diagnostics.accepted_pose)
                         yaw, _ = yaw_and_tilt(q)
                         forward = np.array([math.cos(yaw), math.sin(yaw)])
@@ -1524,6 +1592,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         )
                         prior = args.pallet_prior_loaded
                         params = DetectorParams.derived_for(prior)
+                        state["detector_params"] = asdict(params)
                         detection = detect_pockets(scene_input, prior, params)
                         observation = detection.observation
                         attempt.update(
@@ -1534,6 +1603,108 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 "capture_attempts": capture_attempts,
                             }
                         )
+                        if (
+                            args.repeat_captures
+                            and attempt_number == args.repeat_at_attempt
+                        ):
+                            # G2r: the original capture above is G2's; hold the
+                            # wheels, capture again, then stop whatever is seen.
+                            robot.apply_action(
+                                ArticulationAction(
+                                    joint_velocities=np.zeros(len(wheels)),
+                                    joint_indices=wheels,
+                                )
+                            )
+                            first_pose = [
+                                np.asarray(v, dtype=float).tolist()
+                                for v in capture_diagnostics.accepted_pose
+                            ]
+
+                            def observed(obs) -> dict:
+                                valid = obs.status == "valid"
+                                return {
+                                    "status": obs.status,
+                                    "reason": obs.reason,
+                                    "left_center_m": list(obs.left.center_m)
+                                    if valid
+                                    else None,
+                                    "right_center_m": list(obs.right.center_m)
+                                    if valid
+                                    else None,
+                                    "insertion_yaw_rad": obs.insertion_yaw_rad,
+                                }
+
+                            def valid_fraction(depth) -> float:
+                                depth = np.asarray(depth, dtype=float)
+                                return float((np.isfinite(depth) & (depth > 0)).mean())
+
+                            captures = [
+                                {
+                                    "index": 0,
+                                    "accepted_pose": first_pose,
+                                    "drift": G2.drift(first_pose, first_pose),
+                                    "depth_sha256": attempt["depth_sha256"],
+                                    "valid_fraction": valid_fraction(
+                                        scene_input.depth_m
+                                    ),
+                                    **observed(observation),
+                                }
+                            ]
+                            for index in range(1, args.repeat_captures + 1):
+                                record = {"index": index}
+                                try:
+                                    repeat_input, _, repeat_attempts = (
+                                        perception_capture.capture(
+                                            max_attempts=args.perception_max_attempts,
+                                        )
+                                    )
+                                except adapter.CaptureFailure as exc:
+                                    record["capture_failure"] = exc.reason
+                                    record["capture_diagnostics"] = asdict(
+                                        exc.diagnostics
+                                    )
+                                    captures.append(record)
+                                    break
+                                repeat_diagnostics = asdict(
+                                    perception_capture.state.diagnostics
+                                )
+                                pose = [
+                                    np.asarray(v, dtype=float).tolist()
+                                    for v in perception_capture.state.diagnostics.accepted_pose
+                                ]
+                                record.update(
+                                    {
+                                        "capture_diagnostics": repeat_diagnostics,
+                                        "capture_attempts": repeat_attempts,
+                                        "accepted_pose": pose,
+                                        "drift": G2.drift(first_pose, pose),
+                                        "depth_sha256": G2.depth_sha256(
+                                            repeat_input.depth_m
+                                        ),
+                                        "depth_change": G2.depth_change(
+                                            scene_input.depth_m, repeat_input.depth_m
+                                        ),
+                                        "valid_fraction": valid_fraction(
+                                            repeat_input.depth_m
+                                        ),
+                                        **observed(
+                                            detect_pockets(
+                                                repeat_input, prior, params
+                                            ).observation
+                                        ),
+                                    }
+                                )
+                                captures.append(record)
+                            state["repeat_capture"] = {
+                                "status": "repeat_capture_done",
+                                "attempt_number": attempt_number,
+                                "candidate_index": attempt["candidate_index"],
+                                "wheels_held": True,
+                                "captures": captures,
+                                "summary": G2.repeat_summary(captures),
+                            }
+                            transition("repeat_capture_done", t)
+                            break
                         if observation.status != "valid":
                             attempt["retry_reason"] = (
                                 f"perception_{observation.status}:{observation.reason}"
@@ -1577,6 +1748,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             state["planning_wall_s"] += (
                                 time.monotonic() - planning_start
                             )
+                            if observe_plan is None and args.repeat_captures:
+                                state["repeat_capture"] = {
+                                    "status": "repeat_target_not_reached",
+                                    "attempts_made": attempt_number,
+                                    "reason": "candidates_exhausted",
+                                }
+                                transition("repeat_target_not_reached", t)
+                                break
                             if observe_plan is None:
                                 state["planning_status"] = "all_candidates_exhausted"
                                 reasons = ";".join(
@@ -1621,7 +1800,18 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 ),
                             )
                             phase_started = t
+                            record_tracker_configs()
                         else:
+                            if args.repeat_captures:
+                                # G2r took another path to a valid detection
+                                # before the requested attempt: no batch, no plan.
+                                state["repeat_capture"] = {
+                                    "status": "repeat_target_not_reached",
+                                    "attempts_made": attempt_number,
+                                    "reason": "valid_detection_before_target",
+                                }
+                                transition("repeat_target_not_reached", t)
+                                break
                             if args.extra_views:
                                 attempt["acceptance_simulation_time_s"] = (
                                     world.current_time - initial_time
@@ -1673,12 +1863,63 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                     )
                                 ),
                             }
+                            # Against the pallet as it stands, read the way the
+                            # runner reads it; spawn checks XY and z, not yaw.
+                            pallet_position, pallet_orientation = (
+                                pallet.get_world_pose()
+                            )
+                            pallet_position = np.asarray(pallet_position, dtype=float)
+                            pallet_orientation = np.asarray(
+                                pallet_orientation, dtype=float
+                            )
+                            state["perception"]["perception_error_actual"] = (
+                                G2.site_error(
+                                    (
+                                        target_pickup.x_m,
+                                        target_pickup.y_m,
+                                        target_pickup.yaw_rad,
+                                    ),
+                                    (
+                                        pallet_position[0],
+                                        pallet_position[1],
+                                        yaw_and_tilt(pallet_orientation)[0],
+                                    ),
+                                )
+                            )
+                            state["handoff"] = {
+                                "attempt_number": attempt_number,
+                                "candidate_index": attempt["candidate_index"],
+                                "depth_sha256": attempt["depth_sha256"],
+                                "loop_step": step,
+                                "accepted_pose": [
+                                    np.asarray(v, dtype=float).tolist()
+                                    for v in capture_diagnostics.accepted_pose
+                                ],
+                                "linear_velocity_mps": np.asarray(
+                                    robot.get_linear_velocity(), dtype=float
+                                ).tolist(),
+                                "angular_velocity_radps": np.asarray(
+                                    robot.get_angular_velocity(), dtype=float
+                                ).tolist(),
+                                "steering_rad": np.asarray(
+                                    robot.get_joint_positions()[steers], dtype=float
+                                ).tolist(),
+                                "pallet_position_m": pallet_position.tolist(),
+                                "pallet_orientation_wxyz": pallet_orientation.tolist(),
+                                "simulation_time_s": world.current_time - initial_time,
+                                "t_before_capture_s": t,
+                            }
+                            planning_pickup, state["planning_target_source"] = (
+                                G2.planning_target(
+                                    args.planning_target, target_pickup, scenario.pickup
+                                )
+                            )
                             planning_start = time.monotonic()
                             plans = plan_transport(
                                 scenario,
                                 planner_config,
                                 geometry=geometry,
-                                target_pickup=target_pickup,
+                                target_pickup=planning_pickup,
                                 start_rear=start_rear_pose,
                                 return_to=return_to_pose,
                                 pickup_bounds=pickup_bounds,
@@ -1744,6 +1985,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                     if name != "observe"
                                 }
                             )
+                            record_tracker_configs()
                             state["paths"] = {
                                 name: path_record(path) for name, path in paths.items()
                             }
@@ -2053,6 +2295,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 state["samples"].append(sample)
                 if step % 240 == 0:
                     print("SAMPLE", record_json(sample), flush=True)
+        if phase in ("repeat_capture_done", "repeat_target_not_reached"):
+            return
         require(phase == "complete", "Mission exceeded simulation time budget")
         final_pallet, _ = pallet.get_world_pose()
         destination = np.array([scenario.destination.x_m, scenario.destination.y_m])
@@ -2157,6 +2401,9 @@ def main() -> None:
     require_curvature_within_model(settings, args.drive_geometry)
     state = {
         "success": False,
+        # Overwritten once the scene build starts; a result still at "startup"
+        # is an environment failure under the G2 rerun rule.
+        "phase": "startup",
         "seed": args.seed,
         "feedback": "simulator_ground_truth",
         "physical_wheel_drive": True,
@@ -2191,6 +2438,12 @@ def main() -> None:
             )
         },
     }
+    scene_root = Path(args.base_scene).resolve().parent
+    state["scene_sha256"] = {
+        str(path.relative_to(scene_root)): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(scene_root.rglob("*"))
+        if path.is_file() and path.suffix in {".usd", ".usda", ".usdc"}
+    }
     if args.use_perception:
         # PalletPrior is a dataclass, not a JSON-native argparse value.
         state["arguments"]["pallet_prior_loaded"] = asdict(args.pallet_prior_loaded)
@@ -2216,6 +2469,12 @@ def main() -> None:
         traceback.print_exc()
     finally:
         state["wall_time_s"] = time.monotonic() - started
+        if app is not None and "render_mode" in state:
+            import carb
+
+            state["render_mode"]["at_end"] = carb.settings.get_settings().get(
+                "/rtx/rendermode"
+            )
         (args.output / "result.json").write_text(record_json(state, indent=2) + "\n")
         print(
             "MISSION_RESULT",
