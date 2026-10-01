@@ -26,7 +26,8 @@ from __future__ import annotations
 
 import dataclasses
 import math
-from typing import Iterable, NamedTuple, Sequence
+from collections.abc import Iterable, Sequence
+from typing import NamedTuple
 
 import numpy as np
 
@@ -188,7 +189,9 @@ def render(
         rng = np.random.default_rng(noise_seed)
         finite = np.isfinite(depth)
         sigma = noise_k * np.square(np.where(finite, depth, 0.0))
-        depth = np.where(finite, depth + rng.normal(0.0, 1.0, depth.shape) * sigma, depth)
+        depth = np.where(
+            finite, depth + rng.normal(0.0, 1.0, depth.shape) * sigma, depth
+        )
     if quantize:
         depth = np.round(depth / QUANTIZE_STEP_M) * QUANTIZE_STEP_M
     rgb = np.zeros((spec.height, spec.width, 3), dtype=np.uint8)
@@ -217,9 +220,7 @@ def place(
     for box in boxes:
         cx, cy, cz = box.centre_m
         rx, ry, _ = rotation @ np.array([cx, cy, 0.0])
-        placed.append(
-            Box((x_m + rx, y_m + ry, cz), box.size_m, box.yaw_rad + yaw_rad)
-        )
+        placed.append(Box((x_m + rx, y_m + ry, cz), box.size_m, box.yaw_rad + yaw_rad))
     return placed
 
 

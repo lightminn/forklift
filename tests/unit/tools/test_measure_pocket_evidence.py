@@ -6,11 +6,12 @@ regenerate a table, and freezing its output would make every new measurement
 look like a regression.
 """
 
+from pathlib import Path
+
 import pytest
 
-from tools.measure_pocket_evidence import STRUCTURES, main, structure
 from forklift_core.perception.pallet_geometry import load_pallet_geometry
-from pathlib import Path
+from tools.measure_pocket_evidence import STRUCTURES, main, structure
 
 ROOT = Path(__file__).resolve().parents[3]
 GEOMETRY = load_pallet_geometry(ROOT / "config/pallet_geometry_t11_06.yaml")
@@ -48,7 +49,9 @@ def test_fov_states_the_closed_form_and_measures_it(capsys):
 
 
 def test_noise_states_its_model(capsys):
-    assert main(["noise", "--distances", "3.0:3.0:1", "--sigmas", "0,0.010", *FAST]) == 0
+    assert (
+        main(["noise", "--distances", "3.0:3.0:1", "--sigmas", "0,0.010", *FAST]) == 0
+    )
     out = capsys.readouterr().out
     assert "sigma = k*d^2" in out
 
@@ -86,7 +89,9 @@ def test_grounded_has_no_gap_beneath_its_columns():
     columns = [b for b in boxes if b.size_m[2] > GEOMETRY.block_height_m]
     assert columns, "grounded must extend its columns"
     for box in columns:
-        assert box.centre_m[2] == pytest.approx(box.size_m[2] / 2), "column must reach z=0"
+        assert box.centre_m[2] == pytest.approx(box.size_m[2] / 2), (
+            "column must reach z=0"
+        )
 
 
 def test_evidence_sweeps_distances_and_names_the_terms(capsys):
@@ -99,8 +104,9 @@ def test_evidence_sweeps_distances_and_names_the_terms(capsys):
 def test_evidence_defaults_to_the_configured_seed_not_zero(capsys):
     """Boundary counts are seed-sensitive; a zero default reports different
     evidence for the same scene than the configuration it claims to measure."""
-    import yaml
     from pathlib import Path
+
+    import yaml
 
     from tools.measure_pocket_evidence import DEFAULT_PARAMS
 

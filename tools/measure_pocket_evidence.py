@@ -21,16 +21,18 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
-import json
 import math
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Iterable, Sequence
 
 import numpy as np
 import yaml
 
 from forklift_core.perception import pocket_detector as detector
-from forklift_core.perception.pallet_geometry import PalletGeometry, load_pallet_geometry
+from forklift_core.perception.pallet_geometry import (
+    PalletGeometry,
+    load_pallet_geometry,
+)
 from forklift_core.perception.pallet_prior import PalletPrior, load_pallet_prior
 from forklift_core.perception.pocket_detector import DetectorParams, detect_pockets
 from forklift_core.perception.scene_dataset import SceneInput
@@ -143,9 +145,7 @@ def _is_block(box: Box, geometry: PalletGeometry) -> bool:
 # --------------------------------------------------------------------------
 
 
-def detect(
-    scene: SceneInput, prior: PalletPrior, params: DetectorParams, rule: str
-):
+def detect(scene: SceneInput, prior: PalletPrior, params: DetectorParams, rule: str):
     if rule == "head":
         return detect_pockets(scene, prior, params)
     raise NotImplementedError(
@@ -230,8 +230,13 @@ def add_common(parser: argparse.ArgumentParser) -> None:
         action="store_false",
         help="Render unrounded depth; the default rounds to 1 mm as the fixture does",
     )
-    parser.add_argument("--set", action="append", default=[], metavar="NAME=VALUE",
-                        help="Override a detector parameter, e.g. --set floor_z_m=0.005")
+    parser.add_argument(
+        "--set",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE",
+        help="Override a detector parameter, e.g. --set floor_z_m=0.005",
+    )
 
 
 def load(args) -> tuple[PalletGeometry, PalletPrior, DetectorParams, Camera]:
@@ -242,7 +247,9 @@ def load(args) -> tuple[PalletGeometry, PalletPrior, DetectorParams, Camera]:
         name, _, value = item.partition("=")
         if name not in data:
             raise SystemExit(f"unknown detector parameter: {name}")
-        data[name] = type(data[name])(value) if not isinstance(data[name], bool) else value
+        data[name] = (
+            type(data[name])(value) if not isinstance(data[name], bool) else value
+        )
     params = DetectorParams(**data)
     camera = Camera((args.camera_x, args.camera_y, args.camera_z), args.camera_tilt)
     return geometry, prior, params, camera
@@ -287,18 +294,18 @@ def cmd_grid(args) -> int:
                     noise_k=args.noise_k,
                     noise_seed=args.noise_seed,
                 )
-                truth = scene_rig.true_pockets(
-                    geometry, x_m=x, y_m=y, yaw_rad=yaw
-                )
+                truth = scene_rig.true_pockets(geometry, x_m=x, y_m=y, yaw_rad=yaw)
                 placed = scene_rig.place(boxes, x_m=x, y_m=y, yaw_rad=yaw)
                 per_seed = (
-                    (lambda s: scene_rig.render(
-                        placed,
-                        camera=camera,
-                        quantize=args.quantize,
-                        noise_k=args.noise_k,
-                        noise_seed=args.noise_seed + s,
-                    ))
+                    (
+                        lambda s: scene_rig.render(
+                            placed,
+                            camera=camera,
+                            quantize=args.quantize,
+                            noise_k=args.noise_k,
+                            noise_seed=args.noise_seed + s,
+                        )
+                    )
                     if args.noise_k
                     else None
                 )
@@ -333,7 +340,10 @@ def cmd_evidence(args) -> int:
         return _evidence_sweep(args, geometry, prior, params, camera)
     scene = scene_rig.render(
         scene_rig.place(
-            structure(geometry, args.structure), x_m=args.x, y_m=args.y, yaw_rad=args.yaw
+            structure(geometry, args.structure),
+            x_m=args.x,
+            y_m=args.y,
+            yaw_rad=args.yaw,
         ),
         camera=camera,
         quantize=args.quantize,
@@ -347,9 +357,7 @@ def cmd_evidence(args) -> int:
     print(f"workspace points: {len(workspace)}   plane candidates: {len(planes)}")
     for index, plane in enumerate(planes):
         lateral = plane.points @ plane.left_axis
-        local = np.column_stack(
-            (np.zeros(len(lateral)), lateral, plane.points[:, 2])
-        )
+        local = np.column_stack((np.zeros(len(lateral)), lateral, plane.points[:, 2]))
         counts, origin = detector._column_grid(local, prior, params)
         gaps = detector._gap_runs(counts > 0)
         distance = float(np.linalg.norm((plane.point - cam)[:2]))
@@ -361,8 +369,13 @@ def cmd_evidence(args) -> int:
         )
         depth = -(workspace - plane.point) @ plane.normal
         band = (
-            np.abs(workspace[:, 2] - prior.deck_bottom_m) <= params.deck_evidence_tol_m
-        ) & (depth >= 0) & (depth <= prior.overall_depth_m + params.plane_inlier_m)
+            (
+                np.abs(workspace[:, 2] - prior.deck_bottom_m)
+                <= params.deck_evidence_tol_m
+            )
+            & (depth >= 0)
+            & (depth <= prior.overall_depth_m + params.plane_inlier_m)
+        )
         workspace_lateral = workspace @ plane.left_axis
         for first, second in zip(gaps, gaps[1:], strict=False):
             spacer = (second[0] - first[1]) * params.cell_m
@@ -425,8 +438,10 @@ def _evidence_sweep(args, geometry, prior, params, camera) -> int:
         terms = _gate_terms(planes[0], workspace, prior, params) if planes else None
         observation = detect(scene, prior, params, args.rule).observation
         if terms is None:
-            print(f"{x:7.3f} {0:7d} {'-':>20s} {'-':>7s} {'-':>7s} {'-':>8s}"
-                  f"  {observation.status}/{observation.reason}")
+            print(
+                f"{x:7.3f} {0:7d} {'-':>20s} {'-':>7s} {'-':>7s} {'-':>8s}"
+                f"  {observation.status}/{observation.reason}"
+            )
             continue
         supports, lower, upper_left, upper_right = terms
         print(
@@ -457,7 +472,10 @@ def _gate_terms(plane, workspace, prior, params):
     workspace_lateral = workspace @ plane.left_axis
     lower = int(
         np.count_nonzero(
-            (np.abs(workspace[:, 2] - prior.deck_bottom_m) <= params.deck_evidence_tol_m)
+            (
+                np.abs(workspace[:, 2] - prior.deck_bottom_m)
+                <= params.deck_evidence_tol_m
+            )
             & (depth >= 0)
             & (depth <= prior.overall_depth_m + params.plane_inlier_m)
             & (workspace_lateral >= left_edge)
@@ -574,10 +592,16 @@ def cmd_zcut(args) -> int:
             ),
             (args.obstruction_depth, args.obstruction_width, args.obstruction_height),
         )
-        placed = scene_rig.place(
-            boxes, x_m=args.x, y_m=args.y, yaw_rad=args.yaw
-        ) + [obstruction]
-        scene = scene_rig.render(placed, camera=camera, quantize=args.quantize, noise_k=args.noise_k, noise_seed=args.noise_seed)
+        placed = scene_rig.place(boxes, x_m=args.x, y_m=args.y, yaw_rad=args.yaw) + [
+            obstruction
+        ]
+        scene = scene_rig.render(
+            placed,
+            camera=camera,
+            quantize=args.quantize,
+            noise_k=args.noise_k,
+            noise_seed=args.noise_seed,
+        )
         points, _ = detector._base_points(scene)
         cam = scene.base_from_optical.translation_m
         workspace = detector._filter_workspace(points, cam, prior, params)
@@ -652,7 +676,9 @@ def cmd_fov(args) -> int:
     print(f"\n{'x_m':>7s} {'valid':>7s} {'band_px':>9s} {'deck_px':>9s}  reason")
     for x in arange(args.distances):
         scene = scene_rig.render(
-            scene_rig.place(boxes, x_m=x), camera=camera, quantize=args.quantize,
+            scene_rig.place(boxes, x_m=x),
+            camera=camera,
+            quantize=args.quantize,
             noise_k=args.noise_k,
             noise_seed=args.noise_seed,
         )
@@ -663,7 +689,9 @@ def cmd_fov(args) -> int:
         band = int(((near[:, 2] >= z_low) & (near[:, 2] <= z_high)).sum())
         deck = int((near[:, 2] > z_high).sum())
         valid, _, reason = seed_pass(scene, prior, params, args.rule, args.seeds)
-        print(f"{x:7.3f} {valid:4d}/{args.seeds:<2d} {band:9d} {deck:9d}  {reason or ''}")
+        print(
+            f"{x:7.3f} {valid:4d}/{args.seeds:<2d} {band:9d} {deck:9d}  {reason or ''}"
+        )
     return 0
 
 
@@ -674,7 +702,9 @@ def cmd_noise(args) -> int:
     without it: sigma is per pixel, applied to depth_m, before quantisation.
     """
     geometry, prior, params, camera = load(args)
-    header(args, f"sigma = k*d^2 with k set by --sigma-at (metres at {args.sigma_at} m)")
+    header(
+        args, f"sigma = k*d^2 with k set by --sigma-at (metres at {args.sigma_at} m)"
+    )
     boxes = structure(geometry, args.structure)
     sigmas = [float(v) for v in args.sigmas.split(",")]
     print(f"{'x_m':>7s} " + " ".join(f"{s * 1000:>8.0f}mm" for s in sigmas))
@@ -726,7 +756,9 @@ def cmd_poses(args) -> int:
     near = far = 0
     near_ok = far_ok = 0
     worst_accepted = 0.0
-    print(f"{'scene':>8s} {'x_m':>7s} {'y_m':>7s} {'yaw':>6s} {'valid':>7s} {'worst_mm':>9s}")
+    print(
+        f"{'scene':>8s} {'x_m':>7s} {'y_m':>7s} {'yaw':>6s} {'valid':>7s} {'worst_mm':>9s}"
+    )
     for name, pose in poses:
         x, y, yaw = pose["x_m"], pose["y_m"], pose["yaw_rad"]
         scene = scene_rig.render(
@@ -737,9 +769,7 @@ def cmd_poses(args) -> int:
             noise_seed=args.noise_seed,
         )
         truth = scene_rig.true_pockets(geometry, x_m=x, y_m=y, yaw_rad=yaw)
-        valid, worst, _ = seed_pass(
-            scene, prior, params, args.rule, args.seeds, truth
-        )
+        valid, worst, _ = seed_pass(scene, prior, params, args.rule, args.seeds, truth)
         passed = valid == args.seeds
         if x > args.split:
             far += 1

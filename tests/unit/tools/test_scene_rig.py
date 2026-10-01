@@ -67,9 +67,7 @@ def test_place_rotates_centres_not_only_boxes():
     assert all(math.isclose(b.yaw_rad, yaw) for b in placed)
     # ... and the centres have actually moved off the unrotated positions.
     unrotated = place(boxes, x_m=3.0)
-    moved = max(
-        abs(a.centre_m[1] - b.centre_m[1]) for a, b in zip(placed, unrotated)
-    )
+    moved = max(abs(a.centre_m[1] - b.centre_m[1]) for a, b in zip(placed, unrotated))
     assert moved > 0.05, "centres did not rotate; the rotation is not rigid"
 
 
