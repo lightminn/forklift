@@ -1392,6 +1392,56 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     ],
                     stdin=subprocess.PIPE,
                 )
+        last_tracking = None
+
+        def dump_tracking(reason: str, tracking) -> None:
+            # The run aborts right after this, before the next sample; keep what
+            # the G2b diagnosis needs (closeout plan, G2b ㉮).
+            tracker = trackers[phase]
+            path = paths[phase]
+            directions = np.asarray(path.directions)
+            cusps = [
+                int(i)
+                for i in range(1, len(directions) - 1)
+                if directions[i + 1] != directions[i]
+            ]
+            final = int(len(path.poses) - 1)
+            record = {
+                "reason": reason,
+                "phase": phase,
+                "time_s": t,
+                "phase_started_s": phase_started,
+                "loop_step": step,
+                "config": asdict(tracker.config),
+                "rear_pose": rear.tolist(),
+                "signed_speed_mps": signed_speed,
+                "steering_command_rad": steering_command.tolist(),
+                "steering_actual_rad": np.asarray(
+                    robot.get_joint_positions()[steers], dtype=float
+                ).tolist(),
+                "cusp_indices": cusps,
+                "final_index": final,
+                "path_length_m": float(path.length_m),
+                "path": path_record(path),
+                "tracking": None if tracking is None else asdict(tracking),
+            }
+            # The leg being driven, as the tracker itself holds it (its errors
+            # refer to this endpoint): private state, read only for the record.
+            leg = int(tracker._leg)
+            endpoint = int(tracker._leg_ends[leg])
+            record.update(
+                leg=leg,
+                leg_end_index=endpoint,
+                leg_end_is_cusp=endpoint != final,
+                remaining_to_leg_end_m=float(
+                    tracker._distance[endpoint] - tracker._progress
+                ),
+                remaining_to_path_end_m=float(
+                    tracker._distance[-1] - tracker._progress
+                ),
+            )
+            state["tracking_failure"] = record
+
         for step in range(int(120 * args.max_sim_seconds)):
             t = world.current_time - initial_time
             base, q = robot.get_world_pose()
@@ -1521,41 +1571,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 # Three times the path time at the tracker's own speed caps
                 # (length / cruise when there are none), plus 10 s.
                 limit = max(30.0, 3 * trackers[phase].nominal_duration_s() + 10)
+                if t - phase_started >= limit:
+                    dump_tracking("timeout", last_tracking)
                 require(t - phase_started < limit, f"Tracking timeout in {phase}")
                 tracking = trackers[phase].update(rear, signed_speed, dt)
+                last_tracking = tracking
                 if tracking.status == "failed":
-                    # The exception below ends the run before the next sample;
-                    # keep what the G2b diagnosis needs (closeout plan, G2b ㉮).
-                    tracker = trackers[phase]
-                    path = paths[phase]
-                    directions = np.asarray(path.directions)
-                    cusps = [
-                        int(i)
-                        for i in range(1, len(directions) - 1)
-                        if directions[i + 1] != directions[i]
-                    ]
-                    state["tracking_failure"] = {
-                        "phase": phase,
-                        "time_s": t,
-                        "loop_step": step,
-                        "tracking": asdict(tracking),
-                        "config": asdict(tracker.config),
-                        "rear_pose": rear.tolist(),
-                        "signed_speed_mps": signed_speed,
-                        "steering_command_rad": steering_command.tolist(),
-                        "steering_actual_rad": np.asarray(
-                            robot.get_joint_positions()[steers], dtype=float
-                        ).tolist(),
-                        "path_samples": int(len(path.poses)),
-                        "cusp_indices": cusps,
-                        "final_index": int(len(path.poses) - 1),
-                        # Sample-index convention as path.directions; read with
-                        # segment_index, not as a verdict on its own.
-                        "segment_index_is_cusp_sample": tracking.segment_index in cusps,
-                        "path_length_m": float(path.length_m),
-                        "remaining_m": float(path.length_m - tracking.progress_m),
-                        "phase_started_s": phase_started,
-                    }
+                    dump_tracking("failed", tracking)
                 require(
                     tracking.status != "failed",
                     f"Tracking failed in {phase}: pos={tracking.position_error_m:.4f},yaw={tracking.yaw_error_rad:.4f}",
