@@ -14,6 +14,21 @@ from forklift_core.perception.scene_dataset import SceneInput
 from forklift_core.sensors.rgbd import PinholeIntrinsics
 
 
+def _isaac_intrinsics_type():
+    """perception_adapter.IsaacIntrinsics, the one K convention G1 verified."""
+    import importlib.util
+    import sys
+
+    name = "perception_adapter"
+    if name not in sys.modules:
+        path = Path(__file__).with_name("perception_adapter.py")
+        spec = importlib.util.spec_from_file_location(name, path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name].IsaacIntrinsics
+
+
 def load_camera_settings(settings_path: Path) -> dict:
     """Read the explicit synthetic pinhole/mount contract without loading Isaac."""
     import yaml
@@ -108,18 +123,18 @@ def _require_robot_velocity(robot, *, require_stopped):
 
 
 def acquire_stationary_snapshot(
-    camera: Any, world: Any, robot: Any
+    camera: Any, world: Any, robot: Any, *, record: dict | None = None
 ) -> tuple[SceneInput, RigidTransform]:
     """Return SceneInput and acquisition-time world_from_base for a stopped robot.
 
     Linear and angular speeds must remain below the stationary threshold for
     the entire frozen capture, preserving the stationary acquisition contract.
     """
-    return _acquire_snapshot(camera, world, robot, require_stopped=True)
+    return _acquire_snapshot(camera, world, robot, require_stopped=True, record=record)
 
 
 def acquire_frozen_snapshot(
-    camera: Any, world: Any, robot: Any
+    camera: Any, world: Any, robot: Any, *, record: dict | None = None
 ) -> tuple[SceneInput, RigidTransform]:
     """Capture instantaneous RGB-D and world_from_base with physics paused.
 
@@ -127,14 +142,16 @@ def acquire_frozen_snapshot(
     any render or getter call. This function only renders and reads state. The
     caller advances physics between captures, never during acquisition.
     """
-    return _acquire_snapshot(camera, world, robot, require_stopped=False)
+    return _acquire_snapshot(camera, world, robot, require_stopped=False, record=record)
 
 
-def _acquire_snapshot(camera, world, robot, *, require_stopped):
+def _acquire_snapshot(camera, world, robot, *, require_stopped, record=None):
     """Pair same-product RGB-D with frozen simulation time and copied base pose.
 
     Warm-up rendering does not advance physics. SDK cached rendering_time is
-    not used as a sensor timestamp.
+    not used as a sensor timestamp. The scene's K is the SDK's, normalized
+    once to integer-index pixel centres (perception_adapter.IsaacIntrinsics);
+    ``record`` receives both matrices as read in this acquisition.
     """
     stamp_s = world.current_time
     base, base_q_wxyz = robot.get_world_pose()
@@ -177,9 +194,14 @@ def _acquire_snapshot(camera, world, robot, *, require_stopped):
     )
     k = np.array(camera.get_intrinsics_matrix(), copy=True)
     require_frozen_pose()
-    intrinsics = PinholeIntrinsics(
-        640, 480, k[0, 0], k[1, 1], k[0, 2], k[1, 2], "camera_optical_frame"
+    calibration = _isaac_intrinsics_type()(
+        PinholeIntrinsics(
+            640, 480, k[0, 0], k[1, 1], k[0, 2], k[1, 2], "camera_optical_frame"
+        )
     )
+    intrinsics = calibration.integer_index
+    if record is not None:
+        record["intrinsics"] = calibration.to_record()
     scene = scene_input_from_rgbd_snapshot(
         rgb=rgba[:, :, :3],
         depth_m=depth,
@@ -199,7 +221,9 @@ def _acquire_snapshot(camera, world, robot, *, require_stopped):
     return scene, world_from_base
 
 
-def save_snapshot(output: Path, scene, world_from_base) -> dict:
+def save_snapshot(
+    output: Path, scene, world_from_base, *, intrinsics_record: dict | None = None
+) -> dict:
     """Persist raw metric depth and all reconstruction metadata."""
     from PIL import Image
     from run_transport import record_json
@@ -211,7 +235,9 @@ def save_snapshot(output: Path, scene, world_from_base) -> dict:
         "stamp_ns": scene.stamp_ns,
         "clock_domain": scene.clock_domain,
         "source_provenance": scene.source_provenance,
+        # The K the detector used (integer-index centres).
         "intrinsics": asdict(scene.intrinsics),
+        "intrinsics_conventions": intrinsics_record,
         "base_from_optical": asdict(scene.base_from_optical),
         "world_from_base": asdict(world_from_base),
         "depth_kind": "optical_axis_z",

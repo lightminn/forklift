@@ -418,9 +418,15 @@ def run(app, args, state):
     for _ in range(240):
         world.step(render=True)
     state["phase"] = "acquisition"
-    scene, world_from_base = acquire_stationary_snapshot(camera, world, robot)
+    capture = {}
+    scene, world_from_base = acquire_stationary_snapshot(
+        camera, world, robot, record=capture
+    )
     state["acquisition"] = save_snapshot(
-        args.output / "observation", scene, world_from_base
+        args.output / "observation",
+        scene,
+        world_from_base,
+        intrinsics_record=capture.get("intrinsics"),
     )
     prior = load_pallet_prior(args.prior)
     state["phase"] = "detection"

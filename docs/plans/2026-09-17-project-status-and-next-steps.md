@@ -27,8 +27,13 @@
 구동 기하와 캐리지 한계(0.346 m → 삽입 목표 두 형상 모두 0.300 m)를 URDF 에서 읽고, base scene 의
 차체·설정 곡률이 그 URDF 와 다르면 시작하지 않는다. 최소 회전 반경은 2.728 m(두 바퀴 15° 배정)로
 잠정 모델의 약 2배라 **아래 운반·A–D·SLAM 성적은 모두 잠정 모델 기준**이다 — 재검증은 이후 작업.
-`run_pocket_insertion.py` 는 `SyntheticMissionGeometry(approach_offset_m=…)` 가 `init=False` 필드를
-넘겨 지금 `TypeError` 로 시작하지 못한다(Codex 재현, 4순위 재측정 전에 고칠 것). 근거:
+`run_pocket_insertion.py` 의 `TypeError`(`approach_offset_m` 이 파생 필드가 됨)는 2026-10-01 에 고쳤다 — 당시 위치(접근
+2.34 · 정렬 2.49 m)를 접근 간격·정렬 직진으로 재현한다. 같은 날 PR #2 카메라 경로(`perception_camera.py`)도 main 경로와 같은
+**정수 인덱스 K(주점 −0.5 px)** 로 정규화하고 SDK K 와 함께 스냅숏에 기록한다. **이것은 잠정 모델 호환성 복구까지다.**
+근접 추적 재측정 전에 남은 선결: ① 실측 모델 전환 — 접근·근접 제어의 `AckermannGeometry(0.64, …)` 하드코딩, 포크 단면,
+`target_front_x_m 0.59`(명목 삽입 0.360 이 실측 반영 모델 한계 0.346 보다 깊음)를 모델에서 받기 ② **frozen 캡처의 신선도
+검증** — 지금은 물리 시각·자세만 고정을 확인하고 렌더 프레임이 갱신됐는지는 보지 않는다(Codex CPU 반례에서 같은 버퍼가 새
+시각으로 받아들여짐). 근접 추적 재측정 결과의 유효 판정은 ② 뒤에 한다. G2 는 사용자 보류 그대로다. 근거:
 [계획](2026-09-30-measured-chassis-model.md).
 
 **2026-09-26 갱신: 공장 홀과 Isaac 2D LiDAR SLAM 기록·재생 경로를 붙였다.**

@@ -20,6 +20,29 @@ from run_perception_approach import arguments, build_scene, follow_approach
 from run_transport import record_json, require, yaw_and_tilt
 
 
+def handoff_geometry(handoff_rear_offset_m: float):
+    """Mission geometry with the approach target at the camera handoff distance.
+
+    Written when approach and prealign offsets were constructor fields: the
+    run moved only the approach to the handoff (2.34 m behind the pallet
+    centre) and kept the default prealign (2.49 m). Both are derived now, so
+    set the approach gap and the alignment straight that give those two
+    positions. Only the approach rear pose is used by this run.
+    """
+    from forklift_core.planning.pallet_mission import SyntheticMissionGeometry
+
+    default = SyntheticMissionGeometry()
+    lower = default.axle_to_fork_tip_m + default.pallet_depth_m / 2
+    if not lower < handoff_rear_offset_m < default.prealign_offset_m:
+        raise ValueError(
+            f"handoff offset must lie strictly between {lower:.3f} (zero approach "
+            f"gap) and the default prealign {default.prealign_offset_m:.3f} m"
+        )
+    gap = handoff_rear_offset_m - lower
+    straight = default.prealign_offset_m - handoff_rear_offset_m
+    return SyntheticMissionGeometry(approach_gap_m=gap, alignment_straight_m=straight)
+
+
 def associate_observation(observation, world_from_base, reference_target):
     """Associate to the initially observed object, never a truth-labelled object.
 
@@ -102,7 +125,6 @@ def run(app, args, state):
         plan_hybrid_astar,
     )
     from forklift_core.planning.observed_approach import observed_approach_goal
-    from forklift_core.planning.pallet_mission import SyntheticMissionGeometry
 
     settings = yaml.safe_load(args.settings.read_text())
     root = Path(__file__).resolve().parents[2]
@@ -141,16 +163,20 @@ def run(app, args, state):
     overview.initialize()
     for _ in range(360):
         world.step(render=True)
-    scene, transform = acquire_stationary_snapshot(camera, world, robot)
-    save_snapshot(args.output / "initial_observation", scene, transform)
+    capture = {}
+    scene, transform = acquire_stationary_snapshot(camera, world, robot, record=capture)
+    save_snapshot(
+        args.output / "initial_observation",
+        scene,
+        transform,
+        intrinsics_record=capture.get("intrinsics"),
+    )
     prior = load_pallet_prior(args.prior)
     detector_settings = yaml.safe_load(args.detector_settings.read_text())
     detector = DetectorParams.derived_for(prior, **detector_settings)
     detected = detect_pockets(scene, prior, detector)
     state["initial_detection"] = asdict(detected)
-    geometry = SyntheticMissionGeometry(
-        approach_offset_m=tracking_settings["handoff_rear_offset_m"]
-    )
+    geometry = handoff_geometry(tracking_settings["handoff_rear_offset_m"])
     target = observed_approach_goal(
         detected.observation,
         prior,
@@ -384,7 +410,10 @@ def follow_pockets(
             )
             now_ns = round(world.current_time * 1e9)
             if step % 12 == 0:
-                scene, transform = acquire_frozen_snapshot(camera, world, robot)
+                capture = {}
+                scene, transform = acquire_frozen_snapshot(
+                    camera, world, robot, record=capture
+                )
                 injected = (
                     first_drive is not None
                     and args.drop_after_s is not None
@@ -469,7 +498,10 @@ def follow_pockets(
                     loss_time is None and command.status == "lost"
                 ):
                     save_snapshot(
-                        output / f"capture_{len(observations):05d}", scene, transform
+                        output / f"capture_{len(observations):05d}",
+                        scene,
+                        transform,
+                        intrinsics_record=capture.get("intrinsics"),
                     )
                 if command.status == "lost" and loss_time is None:
                     loss_time = world.current_time
