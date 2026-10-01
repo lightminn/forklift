@@ -1172,14 +1172,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 max_curvature_inv_m=settings["tracker_curvature_inv_m"],
                 max_acceleration_mps2=settings["drive_acceleration_mps2"],
                 lookahead_m=0.28,
-                position_tolerance_m=(
-                    0.03 if name in ("observe", "return_home") else 0.008
-                ),
+                position_tolerance_m=0.03 if name == "observe" else 0.008,
                 # Observation and return are repositioning moves, not docking,
-                # in position (3 cm, 2026-09-26) as in heading:
-                # measured seeds 18 and 20 ended the return at 0.024 and
-                # 0.021 rad, inside the repositioning tolerance and outside
-                # the docking one. Insertion tolerances are unchanged.
+                # in heading: measured seeds 18 and 20 ended the return at
+                # 0.024 and 0.021 rad, inside the repositioning tolerance and
+                # outside the docking one. Only observation also stops within
+                # 3 cm: a 3 cm return stopped 3 cm short before the heading
+                # settled (seed 23 at 0.041 rad, 2026-09-27), and the
+                # overshoot tolerance already covers a stop just past the goal.
+                # Insertion tolerances are unchanged.
                 yaw_tolerance_rad=(
                     0.03 if name in ("observe", "return_home") else 0.02
                 ),
@@ -1708,12 +1709,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                             ],
                                             lookahead_m=0.28,
                                             # Same rule as the trackers built
-                                            # without perception: repositioning
-                                            # moves stop within 3 cm, 0.03 rad.
+                                            # without perception: observation
+                                            # stops within 3 cm, both
+                                            # repositioning moves at 0.03 rad.
                                             position_tolerance_m=(
-                                                0.03
-                                                if name in ("observe", "return_home")
-                                                else 0.008
+                                                0.03 if name == "observe" else 0.008
                                             ),
                                             yaw_tolerance_rad=(
                                                 0.03

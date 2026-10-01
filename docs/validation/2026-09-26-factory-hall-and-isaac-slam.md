@@ -302,6 +302,8 @@ ROS `setup.bash` 를 멈춰 재생이 하나도 돌지 않았다(`replay_seed_*_
 경로가 7 절(32.70 m)보다 길어졌다(도착 직전 원형 우회 포함). 관측 도착 자세와 인식 추정이
 달라 계획 입력이 다르지만, 경로가 길어진 원인은 확인하지 않았다. 3 cm 종점 허용 때문에 복귀
 오차는 7 절의 약 5 배다.
+> 후속(2026-09-27): 복귀 3 cm 는 목표 3 cm 앞에서 멈추게 해 기본 설정 seed 23 을 떨어뜨렸다. 복귀는 8 mm
+> 로 되돌렸다 — [기본 속도 회귀 기록](2026-09-27-default-profile-regression.md).
 
 **패널 영상.** `artifacts/replay_record.sh` 로 slam_toolbox 재생 후
 `tools/compose_slam_video.py` 가 `seed_N_replay/mission_panels.mp4` (1920×1080, 60 fps)를
