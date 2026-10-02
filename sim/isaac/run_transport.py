@@ -1114,6 +1114,16 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     "analytic_expansion_interval": (
                         candidate_plan.analytic_expansion_interval
                     ),
+                    # Every search behind this candidate, failed or not: the
+                    # interval alone cannot tell the base lattice from the fine one.
+                    "search_attempts": [
+                        list(entry) for entry in candidate_plan.search_attempts
+                    ],
+                    "start_rear": [
+                        scenario.start_rear.x_m,
+                        scenario.start_rear.y_m,
+                        scenario.start_rear.yaw_rad,
+                    ],
                 }
             )
             if candidate_plan.success:
@@ -1844,6 +1854,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                         "analytic_expansion_interval": (
                                             candidate_plan.analytic_expansion_interval
                                         ),
+                                        "search_attempts": [
+                                            list(entry)
+                                            for entry in candidate_plan.search_attempts
+                                        ],
                                     }
                                 )
                                 if candidate_plan.success:

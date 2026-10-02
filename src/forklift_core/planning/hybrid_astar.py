@@ -101,11 +101,11 @@ class PlanResult:
     curvatures_inv_m: NDArray[np.float64]
     length_m: float
     expanded_nodes: int
-    # Set by pallet_mission._search, which may retry at denser analytic
-    # intervals: the interval of the search that produced this result, and one
-    # (interval, status, expanded_nodes) entry per search it ran, kept free
-    # of timing so equal inputs give equal results. None and () for a direct
-    # plan_hybrid_astar call.
+    # Set by pallet_mission._search, which may retry on a finer lattice and at
+    # denser analytic intervals: the interval of the search that produced this
+    # result, and one (interval, status, expanded_nodes, xy_resolution_m,
+    # yaw_resolution_rad) entry per search it ran, kept free of timing so equal
+    # inputs give equal results. None and () for a direct plan_hybrid_astar call.
     analytic_expansion_interval: int | None = None
     search_attempts: tuple = ()
 

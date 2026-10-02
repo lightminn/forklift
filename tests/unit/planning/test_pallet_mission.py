@@ -889,9 +889,10 @@ def test_a_failed_search_is_retried_with_denser_analytic_connections():
     trace = []
     result = plan_transport(scenario, config, start_rear=SEED4_HANDOFF, trace=trace)
     assert result.success, result.status
-    # The approach search needed a denser interval; the trace says which.
+    # The approach search needed a retry; the trace says which one won.
     search = next(t for t in trace if t["stage"] == "approach_search")
-    assert search["analytic_expansion_interval"] in (4, 2, 1)
+    assert len(search["search_attempts"]) > 1
+    assert search["search_attempts"][0][:2] == [8, "expansion_limit"]
     # Joining the straight tail must not drop the interval from the result.
     transport = next(t for t in trace if t["stage"] == "transport_search")
     assert (
@@ -932,19 +933,24 @@ def test_the_trace_keeps_an_earlier_fallback_when_a_later_search_fails(monkeypat
     assert not result.success
     by_stage = {t["stage"]: t for t in trace}
     assert by_stage["approach_search"]["status"] == "success"
-    assert by_stage["approach_search"]["analytic_expansion_interval"] in (4, 2, 1)
+    assert len(by_stage["approach_search"]["search_attempts"]) > 1
     assert by_stage["transport_search"]["status"] == "no_path"
     assert by_stage["transport_search"]["analytic_expansion_interval"] == 1
     # The cost of every retry is on record, not only the last search's.
     approach = by_stage["approach_search"]["search_attempts"]
     assert approach[0][:2] == [8, "expansion_limit"]
     assert approach[-1][1] == "success"
+    # Fine lattice first, then denser connections on the original lattice
+    # (docs/plans/2026-10-02-second-eval-failure-fixes.md, P4).
     transport = by_stage["transport_search"]["search_attempts"]
-    assert [entry[:2] for entry in transport] == [
-        [8, "no_path"],
-        [4, "no_path"],
-        [2, "no_path"],
-        [1, "no_path"],
+    assert [
+        (entry[0], entry[1], entry[3], round(entry[4], 6)) for entry in transport
+    ] == [
+        (8, "no_path", 0.2, round(np.radians(10), 6)),
+        (8, "no_path", 0.1, round(np.radians(5), 6)),
+        (4, "no_path", 0.2, round(np.radians(10), 6)),
+        (2, "no_path", 0.2, round(np.radians(10), 6)),
+        (1, "no_path", 0.2, round(np.radians(10), 6)),
     ]
     assert all(entry[2] > 0 for entry in approach)
 
@@ -972,6 +978,7 @@ def test_the_fallback_changes_nothing_when_eight_succeeds(monkeypatch, seed):
     scenario = make_scenario(seed, G2_CATALOGUE, 4)
     with_fallback = plan_transport(scenario, g2_config())
     monkeypatch.setattr(pallet_mission, "FALLBACK_ANALYTIC_INTERVALS", ())
+    monkeypatch.setattr(pallet_mission, "FALLBACK_FINE_LATTICE", None)
     without = plan_transport(scenario, g2_config())
     assert with_fallback.success and without.success
     for stage in ("approach", "insert", "extract", "transport", "withdraw"):
@@ -999,3 +1006,82 @@ def test_a_failure_other_than_search_exhaustion_is_not_retried(monkeypatch):
     monkeypatch.setattr(pallet_mission, "plan_hybrid_astar", invalid)
     result = pallet_mission._search(None, None, [], None, None, g2_config())
     assert result.status == "invalid_goal" and received == [8]
+
+
+def _exhausted(received):
+    def plan(*args):
+        received.append(args[-1])
+        return pallet_mission.PlanResult(
+            False,
+            "expansion_limit",
+            np.zeros((0, 3)),
+            np.zeros(0, np.int8),
+            np.zeros(0),
+            0.0,
+            30000,
+        )
+
+    return plan
+
+
+def test_the_fine_lattice_is_tried_first_at_the_same_interval(monkeypatch):
+    received = []
+    monkeypatch.setattr(pallet_mission, "plan_hybrid_astar", _exhausted(received))
+    config = g2_config()
+    pallet_mission._search(None, None, [], None, None, config)
+    lattices = [(c.xy_resolution_m, c.yaw_resolution_rad) for c in received]
+    intervals = [c.analytic_expansion_interval for c in received]
+    base = (config.xy_resolution_m, config.yaw_resolution_rad)
+    assert lattices == [base, (0.1, np.radians(5)), base, base, base]
+    assert intervals == [8, 8, 4, 2, 1]
+    # Nothing else about the search changes on retry.
+    for retry in received[1:]:
+        assert (
+            replace(
+                retry,
+                xy_resolution_m=config.xy_resolution_m,
+                yaw_resolution_rad=config.yaw_resolution_rad,
+                analytic_expansion_interval=config.analytic_expansion_interval,
+            )
+            == config
+        )
+
+
+def test_a_lattice_already_as_fine_is_not_searched_again(monkeypatch):
+    received = []
+    monkeypatch.setattr(pallet_mission, "plan_hybrid_astar", _exhausted(received))
+    fine = replace(g2_config(), xy_resolution_m=0.1, yaw_resolution_rad=np.radians(5))
+    pallet_mission._search(None, None, [], None, None, fine)
+    assert [c.analytic_expansion_interval for c in received] == [8, 4, 2, 1]
+    assert all(c.xy_resolution_m == 0.1 for c in received)
+
+
+def test_a_partly_finer_lattice_only_refines_the_coarser_axis(monkeypatch):
+    received = []
+    monkeypatch.setattr(pallet_mission, "plan_hybrid_astar", _exhausted(received))
+    config = replace(g2_config(), xy_resolution_m=0.05)
+    pallet_mission._search(None, None, [], None, None, config)
+    assert (received[1].xy_resolution_m, received[1].yaw_resolution_rad) == (
+        0.05,
+        np.radians(5),
+    )
+
+
+def test_the_fine_lattice_rescues_the_second_evaluation_seed_2007():
+    """Offline replay of seed 2007's handoff (docs/plans/2026-10-02-second-eval-failure-fixes.md)."""
+    scenario = make_scenario(2007, G2_CATALOGUE, 4)
+    target = pallet_mission.PalletSite(
+        3.3596509836450688, 0.6171614345292817, -0.11854830685801701
+    )
+    start = Pose2D(-1.2235211175476588, 0.30154677671545727, -0.006682678318098347)
+    trace = []
+    result = plan_transport(
+        scenario, g2_config(), target_pickup=target, start_rear=start, trace=trace
+    )
+    assert result.success, result.status
+    search = next(t for t in trace if t["stage"] == "approach_search")
+    assert [entry[:2] for entry in search["search_attempts"]] == [
+        [8, "expansion_limit"],
+        [8, "success"],
+    ]
+    assert search["search_attempts"][1][3] == 0.1

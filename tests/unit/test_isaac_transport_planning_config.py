@@ -314,3 +314,21 @@ def test_path_record_keeps_the_interval_through_the_straight_tail():
     for stage in ("approach", "transport"):
         record = json.loads(json.dumps(namespace["path_record"](getattr(plans, stage))))
         assert record["analytic_expansion_interval"] == 8
+
+
+def test_every_observation_candidate_record_keeps_its_search_attempts():
+    """Both branches record every search behind a candidate, with its start."""
+    tree = ast.parse(SCRIPT.read_text())
+    records = []
+    for call in ast.walk(tree):
+        if (
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "append"
+            and "observation_candidates" in ast.unparse(call.func.value)
+        ):
+            (record,) = call.args
+            records.append({key.value for key in record.keys})
+    assert len(records) == 2
+    for keys in records:
+        assert {"search_attempts", "start_rear", "status"} <= keys
