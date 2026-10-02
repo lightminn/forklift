@@ -37,12 +37,43 @@ DEFAULT_TRANSPORT_CLEARANCE_M = 0.10
 # change (G5 1020/1029, G2' seed 1, G2a seeds 4/7; 2026-10-02 planner/tracker
 # plan). A search that succeeds at its own interval is never repeated.
 FALLBACK_ANALYTIC_INTERVALS = (4, 2, 1)
+# Tried first, at the original interval: a 0.2 m / 10 deg lattice can close its
+# queue from a start it actually drove to while 0.1 m / 5 deg plans in about a
+# second (second-evaluation seeds 2007, 2025; dev 1025). Ahead of the denser
+# intervals it rescues the most bay and perturbed searches without losing any
+# the intervals found (docs/plans/2026-10-02-second-eval-failure-fixes.md, P4).
+# (xy_resolution_m, yaw_resolution_rad), or None for no lattice retry.
+FALLBACK_FINE_LATTICE = (0.1, pi / 36)
+# A start free at the clearance but inside the extra margin that encloses each
+# primitive's swept footprint rejects every primitive, so the search ends after
+# its root (fine-lattice dev seed 1006, 48 mrad off at a prop). Every retry at
+# the same collision step is boxed in the same way; the whole ladder runs again
+# at this step instead, whose smaller margin still encloses the swept footprint
+# (docs/plans/2026-10-02-second-eval-failure-fixes.md, P6).
+FALLBACK_BOXED_COLLISION_STEP_M = 0.01
 _RETRIED_STATUSES = ("expansion_limit", "no_path")
 DEFAULT_TRANSPORT_PRIMITIVE_LENGTH_M = 0.25
 
 
+def _retries(config):
+    """The configs _search tries, in order, after config itself runs out."""
+    if FALLBACK_FINE_LATTICE is not None:
+        xy, yaw = FALLBACK_FINE_LATTICE
+        fine = replace(
+            config,
+            xy_resolution_m=min(xy, config.xy_resolution_m),
+            yaw_resolution_rad=min(yaw, config.yaw_resolution_rad),
+        )
+        if fine != config:
+            yield fine
+    for denser in FALLBACK_ANALYTIC_INTERVALS:
+        if denser < config.analytic_expansion_interval:
+            yield replace(config, analytic_expansion_interval=denser)
+
+
 def _search(start, goal, obstacles, footprint, bounds, config) -> PlanResult:
-    """plan_hybrid_astar, retried at denser analytic intervals if it runs out."""
+    """plan_hybrid_astar, retried on a finer lattice, then at denser analytic
+    intervals, if it runs out."""
     attempts = []
 
     def attempt(attempt_config):
@@ -54,19 +85,28 @@ def _search(start, goal, obstacles, footprint, bounds, config) -> PlanResult:
                 attempt_config.analytic_expansion_interval,
                 result.status,
                 int(result.expanded_nodes),
+                attempt_config.xy_resolution_m,
+                attempt_config.yaw_resolution_rad,
+                attempt_config.collision_step_m,
             )
         )
         return result
 
     result = attempt(config)
     interval = config.analytic_expansion_interval
-    for denser in FALLBACK_ANALYTIC_INTERVALS:
+    if (
+        result.status == "no_path"
+        and result.expanded_nodes == 1
+        and FALLBACK_BOXED_COLLISION_STEP_M is not None
+        and FALLBACK_BOXED_COLLISION_STEP_M < config.collision_step_m
+    ):
+        config = replace(config, collision_step_m=FALLBACK_BOXED_COLLISION_STEP_M)
+        result = attempt(config)
+    for retry in _retries(config):
         if result.success or result.status not in _RETRIED_STATUSES:
             break
-        if denser >= config.analytic_expansion_interval:
-            continue
-        result = attempt(replace(config, analytic_expansion_interval=denser))
-        interval = denser
+        result = attempt(retry)
+        interval = retry.analytic_expansion_interval
     return replace(
         result, analytic_expansion_interval=interval, search_attempts=tuple(attempts)
     )

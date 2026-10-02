@@ -205,8 +205,11 @@ def test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules():
     for yaw_rule, position_rule in rules:
         yaw = compile(ast.Expression(yaw_rule), str(SCRIPT), "eval")
         position = compile(ast.Expression(position_rule), str(SCRIPT), "eval")
-        for name in ("observe", "return_home"):
-            assert eval(yaw, {"name": name}) == 0.03
+        # An observation stop is judged like a cusp in heading: the next leg
+        # and the capture start from the measured pose
+        # (docs/plans/2026-10-02-second-eval-failure-fixes.md, P3).
+        assert eval(yaw, {"name": "observe"}) == 0.05
+        assert eval(yaw, {"name": "return_home"}) == 0.03
         assert eval(position, {"name": "observe"}) == 0.03
         # A 3 cm return stopped short before its heading settled (seed 23).
         assert eval(position, {"name": "return_home"}) == 0.008
@@ -229,7 +232,7 @@ def test_the_re_observation_tracker_uses_the_repositioning_tolerances():
     ]
     assert literal, "the observe re-plan builds its own tracker"
     for keywords in literal:
-        assert keywords["yaw_tolerance_rad"].value == 0.03
+        assert keywords["yaw_tolerance_rad"].value == 0.05
         assert ast.literal_eval(keywords["position_tolerance_m"]) == 0.03
 
 
@@ -314,3 +317,63 @@ def test_path_record_keeps_the_interval_through_the_straight_tail():
     for stage in ("approach", "transport"):
         record = json.loads(json.dumps(namespace["path_record"](getattr(plans, stage))))
         assert record["analytic_expansion_interval"] == 8
+
+
+def test_every_observation_candidate_record_keeps_its_search_attempts():
+    """Both branches record every search behind a candidate, with its start."""
+    tree = ast.parse(SCRIPT.read_text())
+    records = []
+    for call in ast.walk(tree):
+        if (
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "append"
+            and "observation_candidates" in ast.unparse(call.func.value)
+        ):
+            (record,) = call.args
+            records.append({key.value for key in record.keys})
+    assert len(records) == 2
+    for keys in records:
+        assert {"search_attempts", "start_rear", "status"} <= keys
+
+
+def test_the_20260921_profile_restores_the_old_observation_heading():
+    """The 9/21 baseline judged observation at 0.03 rad (git show 6f9fb82)."""
+    from types import SimpleNamespace
+
+    from forklift_core.control.path_tracking import TrackerConfig
+
+    tree = ast.parse(SCRIPT.read_text())
+    function = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "apply_tracker_profile"
+    )
+
+    def build(profile):
+        trackers = {
+            "observe": SimpleNamespace(
+                config=TrackerConfig(position_tolerance_m=0.03, yaw_tolerance_rad=0.05)
+            ),
+            "approach": SimpleNamespace(
+                config=TrackerConfig(position_tolerance_m=0.008, yaw_tolerance_rad=0.02)
+            ),
+        }
+        namespace = {
+            "args": SimpleNamespace(tracker_profile=profile),
+            "trackers": trackers,
+            "replace": replace,
+        }
+        exec(
+            compile(ast.Module(body=[function], type_ignores=[]), str(SCRIPT), "exec"),
+            namespace,
+        )
+        namespace["apply_tracker_profile"]()
+        return trackers
+
+    old = build("20260921")
+    assert old["observe"].config.yaw_tolerance_rad == 0.03
+    assert old["observe"].config.position_tolerance_m == 0.008
+    assert old["approach"].config.yaw_tolerance_rad == 0.02
+    current = build("current")
+    assert current["observe"].config.yaw_tolerance_rad == 0.05
