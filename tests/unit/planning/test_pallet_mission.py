@@ -882,7 +882,7 @@ def g2_config():
     )
 
 
-def test_a_failed_search_is_retried_with_denser_analytic_connections():
+def test_a_failed_search_is_retried_and_the_trace_says_which_retry_won():
     scenario = make_scenario(4, G2_CATALOGUE, 4)
     config = g2_config()
     assert config.analytic_expansion_interval == 8
@@ -1085,3 +1085,24 @@ def test_the_fine_lattice_rescues_the_second_evaluation_seed_2007():
         [8, "success"],
     ]
     assert search["search_attempts"][1][3] == 0.1
+
+
+def test_when_the_fine_lattice_also_runs_out_a_denser_interval_still_rescues():
+    """Dev seed 1020's handoff: fine lattice exhausts, interval 4 on the base lattice plans."""
+    scenario = make_scenario(1020, G2_CATALOGUE, 4)
+    target = pallet_mission.PalletSite(
+        3.1790195627598172, 0.28139591002602726, -0.1785698927944206
+    )
+    start = Pose2D(-0.11716749215274674, -0.6009603022045468, -0.012208772502526596)
+    trace = []
+    result = plan_transport(
+        scenario, g2_config(), target_pickup=target, start_rear=start, trace=trace
+    )
+    assert result.success, result.status
+    search = next(t for t in trace if t["stage"] == "approach_search")
+    assert [(e[0], e[1], e[3]) for e in search["search_attempts"]] == [
+        (8, "expansion_limit", 0.2),
+        (8, "expansion_limit", 0.1),
+        (4, "success", 0.2),
+    ]
+    assert result.approach.analytic_expansion_interval == 4

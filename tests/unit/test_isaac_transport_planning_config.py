@@ -335,3 +335,45 @@ def test_every_observation_candidate_record_keeps_its_search_attempts():
     assert len(records) == 2
     for keys in records:
         assert {"search_attempts", "start_rear", "status"} <= keys
+
+
+def test_the_20260921_profile_restores_the_old_observation_heading():
+    """The 9/21 baseline judged observation at 0.03 rad (git show 6f9fb82)."""
+    from types import SimpleNamespace
+
+    from forklift_core.control.path_tracking import TrackerConfig
+
+    tree = ast.parse(SCRIPT.read_text())
+    function = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "apply_tracker_profile"
+    )
+
+    def build(profile):
+        trackers = {
+            "observe": SimpleNamespace(
+                config=TrackerConfig(position_tolerance_m=0.03, yaw_tolerance_rad=0.05)
+            ),
+            "approach": SimpleNamespace(
+                config=TrackerConfig(position_tolerance_m=0.008, yaw_tolerance_rad=0.02)
+            ),
+        }
+        namespace = {
+            "args": SimpleNamespace(tracker_profile=profile),
+            "trackers": trackers,
+            "replace": replace,
+        }
+        exec(
+            compile(ast.Module(body=[function], type_ignores=[]), str(SCRIPT), "exec"),
+            namespace,
+        )
+        namespace["apply_tracker_profile"]()
+        return trackers
+
+    old = build("20260921")
+    assert old["observe"].config.yaw_tolerance_rad == 0.03
+    assert old["observe"].config.position_tolerance_m == 0.008
+    assert old["approach"].config.yaw_tolerance_rad == 0.02
+    current = build("current")
+    assert current["observe"].config.yaw_tolerance_rad == 0.05

@@ -1310,7 +1310,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         # stopped observation at 8 mm (git show 6f9fb82:sim/isaac/run_transport.py).
         if args.tracker_profile != "20260921":
             return
-        for tracker in trackers.values():
+        for name, tracker in trackers.items():
             tracker.config = replace(
                 tracker.config,
                 cusp_position_tolerance_m=None,
@@ -1319,6 +1319,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 overshoot_tolerance_m=None,
                 position_tolerance_m=0.008,
             )
+            if name == "observe":
+                # It also judged observation stops at 0.03 rad (P3 is newer).
+                tracker.config = replace(tracker.config, yaw_tolerance_rad=0.03)
 
     def record_tracker_configs() -> None:
         # Every tracker's full settings as built (G2 rerun plan, 2026-10-01).
@@ -2089,9 +2092,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                             ],
                                             lookahead_m=0.28,
                                             # Same rule as the trackers built
-                                            # without perception: observation
-                                            # stops within 3 cm at 0.05 rad,
-                                            # the return at 0.03 rad.
+                                            # without perception (observe is
+                                            # excluded below and keeps its own
+                                            # tracker; the return is 0.03 rad).
                                             position_tolerance_m=(
                                                 0.03 if name == "observe" else 0.008
                                             ),
