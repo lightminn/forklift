@@ -226,6 +226,12 @@ def arguments() -> argparse.Namespace:
     if args.quarter_eye is not None and args.quarter_target is not None:
         if args.quarter_eye == args.quarter_target:
             parser.error("quarter eye and target must differ")
+    # Explicit waypoints reproduce earlier diagnostic runs exactly; only the
+    # default list gets run-time viewpoints appended after it.
+    # The placement zone is the synthetic bay's; the factory layout has its own.
+    args.runtime_viewpoints = (
+        args.observation_waypoints is None and args.layout != "factory"
+    )
     if args.observation_waypoints is None:
         # (-1.20, 0.30) moved ahead of (-0.10, -0.60): both plan equally well
         # for every seed that can reach either, but seed 3 only detects the
@@ -696,6 +702,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             detect_pockets,
         )
         from forklift_core.planning import Pose2D
+        from forklift_core.planning.observation_viewpoints import runtime_viewpoints
         from forklift_core.planning.pallet_mission import plan_observation_leg
 
         root = Path(__file__).resolve().parents[2]
@@ -1090,6 +1097,44 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     state["phase"] = "planning"
     if args.use_perception:
         planning_start = time.monotonic()
+        state["fixed_observation_waypoints"] = len(args.observation_waypoints)
+        state["runtime_viewpoints"] = []
+        if args.runtime_viewpoints:
+            # After the fixed list, from the map alone: every occupied rectangle,
+            # unlabelled, and the bay's placement zone -- never the pallet pose
+            # (docs/plans/2026-10-03-runtime-observation-viewpoints.md).
+            occupied = [prop.rectangle for prop in scenario.props] + [
+                Rectangle(
+                    scenario.pickup.x_m,
+                    scenario.pickup.y_m,
+                    geometry.pallet_depth_m,
+                    geometry.pallet_width_m,
+                    scenario.pickup.yaw_rad,
+                )
+            ]
+            viewpoints = runtime_viewpoints(
+                occupied,
+                geometry.unloaded_footprint,
+                scenario.bounds,
+                margin_m=planner_config.clearance_m,
+                pallet_depth_m=geometry.pallet_depth_m,
+                pallet_width_m=geometry.pallet_width_m,
+                rear_to_camera_m=abs(args.rear_axle_offset_m)
+                + float(perception_mount.translation_m[0]),
+                half_fov_rad=math.atan(
+                    (perception_calibration.width / 2) / perception_calibration.fx
+                ),
+            )
+            state["runtime_viewpoints"] = [
+                {
+                    "pose": [v.pose.x_m, v.pose.y_m, v.pose.yaw_rad],
+                    "score": v.score,
+                }
+                for v in viewpoints
+            ]
+            args.observation_waypoints = list(args.observation_waypoints) + [
+                [v.pose.x_m, v.pose.y_m, v.pose.yaw_rad] for v in viewpoints
+            ]
         state["observation_candidates"] = []
         state["observation_attempts"] = []
         next_candidate_index = 0
