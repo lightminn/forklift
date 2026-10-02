@@ -65,7 +65,13 @@ class DetectorParams:
     # 288 CPU structure poses, and none of the other G2-rerun captures.
     # Known limit: in clutter it also reaches a `grounded` lookalike that
     # budget 5 never examined (test_plane_candidate_budget.py).
-    max_plane_candidates: int = 6
+    # Budget 8 (2026-10-02, user decision): second-evaluation seed 2023's
+    # front lost all six candidates to background planes (G3 B). Over 319
+    # saved Isaac captures 6 -> 8 gained 6 valid (3 distinct depth images
+    # beyond the 5 -> 6 gain), lost none, and none landed over 3 cm off; the
+    # 330 stored observations are unchanged (100 extract more than six
+    # planes). Same known limit, in more clutter.
+    max_plane_candidates: int = 8
     range_min_m: float = 0.8
     range_max_m: float = 5.0
     floor_z_m: float = 0.02

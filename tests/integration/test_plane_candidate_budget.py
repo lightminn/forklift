@@ -131,3 +131,54 @@ def test_known_limit_budget_six_also_reaches_a_grounded_lookalike():
     )
     assert five.observation.status == "no_pallet"
     assert detector.detect_pockets(scene, prior, params).observation.status == "valid"
+
+
+SEVEN_PLANE_CLUTTER = (
+    scene_rig.Box((2.9, -1.0, 0.5), (1.2, 1.0, 1.0)),
+    scene_rig.Box((3.2, 1.0, 0.5), (1.2, 1.0, 1.0)),
+    scene_rig.Box((4.3, 0.0, 0.5), (0.3, 1.6, 1.0)),
+    scene_rig.Box((2.3, 0.0, 0.05), (0.2, 0.3, 0.1)),
+    # One more post ahead of the pallet (Codex counterexample, 2026-10-02).
+    scene_rig.Box((2.0, -0.75, 0.5), (0.2, 0.4, 1.0)),
+)
+
+
+def _clutter_scene(boxes):
+    return scene_rig.render(scene_rig.place(boxes, x_m=3.3) + list(SEVEN_PLANE_CLUTTER))
+
+
+def test_default_budget_reaches_a_pallet_behind_six_larger_planes():
+    """Budget 8 (2026-10-02, docs/plans/2026-10-02-detection-and-handoff-fixes.md, D1).
+
+    CPU mechanism regression for second-evaluation seed 2023 (candidate 4),
+    whose front lost all six candidates to background planes (G3 B); not a
+    reproduction of that image.
+    """
+    geometry = load_pallet_geometry(ROOT / "config/pallet_geometry_epal6.yaml")
+    prior = load_pallet_prior(ROOT / "config/pallet_prior_epal6.yaml")
+    params = detector.DetectorParams.derived_for(prior)
+    assert params.max_plane_candidates == 8
+    scene = _clutter_scene(scene_rig.pallet(geometry))
+    six = detector.detect_pockets(scene, prior, replace(params, max_plane_candidates=6))
+    assert six.observation.status == "no_pallet"
+    observation = detector.detect_pockets(scene, prior, params).observation
+    assert observation.status == "valid"
+    truth = scene_rig.true_pockets(geometry, x_m=3.3)
+    reported = np.array([observation.left.center_m, observation.right.center_m])
+    np.testing.assert_allclose(reported, truth, atol=0.005)
+
+
+def test_known_limit_budget_eight_also_reaches_a_grounded_lookalike():
+    """Known limit (Codex counterexample, 2026-10-02): the same clutter with the
+    `grounded` negative is no_pallet at 6 and a false positive at 8, as it was
+    for 5 -> 6. The budget makes the detector's `grounded` weakness reachable
+    in more clutter; render-population impact is unmeasured."""
+    from tools.measure_pocket_evidence import structure
+
+    geometry = load_pallet_geometry(ROOT / "config/pallet_geometry_epal6.yaml")
+    prior = load_pallet_prior(ROOT / "config/pallet_prior_epal6.yaml")
+    params = detector.DetectorParams.derived_for(prior)
+    scene = _clutter_scene(structure(geometry, "grounded"))
+    six = detector.detect_pockets(scene, prior, replace(params, max_plane_candidates=6))
+    assert six.observation.status == "no_pallet"
+    assert detector.detect_pockets(scene, prior, params).observation.status == "valid"
