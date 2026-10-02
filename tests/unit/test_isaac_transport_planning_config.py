@@ -377,3 +377,61 @@ def test_the_20260921_profile_restores_the_old_observation_heading():
     assert old["approach"].config.yaw_tolerance_rad == 0.02
     current = build("current")
     assert current["observe"].config.yaw_tolerance_rad == 0.05
+
+
+def test_runtime_viewpoints_extend_the_default_list_before_any_candidate_is_planned():
+    """Appended once, after the fixed list, and both loops read the same list.
+
+    Fixed candidates keep their indices, so a run that ends inside the fixed
+    list takes the same branches (docs/plans/2026-10-03-runtime-observation-viewpoints.md).
+    """
+    source = SCRIPT.read_text()
+    extend = source.index("args.observation_waypoints = list(args.observation_waypoints) + [")
+    first_loop = source.index("for candidate_index, coordinates in enumerate(args.observation_waypoints):")
+    reobserve = source.index("while next_candidate_index < len(")
+    assert source.count("args.observation_waypoints = list(args.observation_waypoints) + [") == 1
+    assert extend < first_loop < reobserve
+    assert "if args.runtime_viewpoints:" in source[source.rindex("if args.use_perception:", 0, extend) : extend]
+    assert "args.observation_waypoints" in source[reobserve : reobserve + 120]
+
+
+def test_runtime_viewpoints_only_follow_the_default_bay_list():
+    tree = ast.parse(SCRIPT.read_text())
+    (assign,) = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and ast.unparse(node.targets[0]) == "args.runtime_viewpoints"
+    ]
+    rule = ast.unparse(assign.value)
+    assert "args.observation_waypoints is None" in rule
+    assert "args.layout != 'factory'" in rule
+
+
+def test_runtime_viewpoints_see_the_pallet_only_as_an_unlabelled_rectangle():
+    """The call gets one occupied list; nothing passes the pickup pose separately."""
+    tree = ast.parse(SCRIPT.read_text())
+    (call,) = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and ast.unparse(node.func) == "runtime_viewpoints"
+    ]
+    keywords = {k.arg for k in call.keywords}
+    assert [ast.unparse(a) for a in call.args] == [
+        "occupied",
+        "geometry.unloaded_footprint",
+        "scenario.bounds",
+    ]
+    assert not any("pickup" in ast.unparse(k.value) for k in call.keywords)
+    assert {"margin_m", "rear_to_camera_m", "half_fov_rad"} <= keywords
+
+
+def test_runtime_viewpoints_need_both_the_default_list_and_the_bay():
+    tree = ast.parse(SCRIPT.read_text())
+    (assign,) = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and ast.unparse(node.targets[0]) == "args.runtime_viewpoints"
+    ]
+    assert isinstance(assign.value, ast.BoolOp) and isinstance(assign.value.op, ast.And)

@@ -167,15 +167,15 @@ def front_visible(scenario, config: RunConfig, rear: Pose2D) -> int:
 class Evaluator:
     """Caches each (seed, start, candidate) leg and each view."""
 
-    def __init__(self, config: RunConfig):
+    def __init__(self, config: RunConfig, reserved: Sequence[int] = RESERVED_SEEDS):
         self.config = config
+        # Seeds this caller may never generate; the G4 design keeps its own.
+        self.reserved = frozenset(reserved)
         self._scenarios, self._legs, self._views, self._approaches = {}, {}, {}, {}
 
     def scenario(self, seed: int):
-        if seed in RESERVED_SEEDS:
-            raise ValueError(
-                "G5 seeds (1000-1029, formerly 100-129) are not for design"
-            )
+        if seed in self.reserved:
+            raise ValueError(f"seed {seed} is reserved: not for design here")
         if seed not in self._scenarios:
             self._scenarios[seed] = make_scenario(
                 seed,
