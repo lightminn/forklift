@@ -119,6 +119,8 @@ def test_all_runner_planning_calls_use_the_recorded_config(
         return_to_pose=None,
         pickup_bounds=None,
         travel_config=None,
+        # The initial observation loop's ladder pass (earlier, then extended).
+        extended=True,
     )
     calls = [
         node
@@ -387,7 +389,7 @@ def test_runtime_viewpoints_extend_the_default_list_before_any_candidate_is_plan
     """
     source = SCRIPT.read_text()
     extend = source.index("args.observation_waypoints = list(args.observation_waypoints) + [")
-    first_loop = source.index("for candidate_index, coordinates in enumerate(args.observation_waypoints):")
+    first_loop = source.index("for candidate_index, coordinates, extended in initial_candidates:")
     reobserve = source.index("while next_candidate_index < len(")
     assert source.count("args.observation_waypoints = list(args.observation_waypoints) + [") == 1
     assert extend < first_loop < reobserve
@@ -435,3 +437,69 @@ def test_runtime_viewpoints_need_both_the_default_list_and_the_bay():
         and ast.unparse(node.targets[0]) == "args.runtime_viewpoints"
     ]
     assert isinstance(assign.value, ast.BoolOp) and isinstance(assign.value.op, ast.And)
+
+
+def _cusp_replan_branch():
+    tree = ast.parse(SCRIPT.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If) and "max_cusp_replans" in ast.unparse(node.test):
+            return node
+    raise AssertionError("no cusp replan branch")
+
+
+def test_only_a_transport_heading_failure_at_a_cusp_is_replanned():
+    """docs/plans/2026-10-03-transport-stage-fixes.md, T1."""
+    test = _cusp_replan_branch().test
+    assert isinstance(test, ast.BoolOp) and isinstance(test.op, ast.And)
+    parts = {ast.unparse(v) for v in test.values}
+    assert parts == {
+        "tracking.status == 'failed'",
+        "phase == 'transport'",
+        "tracking.failure == 'endpoint_heading'",
+        "tracking.at_cusp",
+        "not tracking.off_path",
+        "len(state['cusp_replans']) < max_cusp_replans",
+    }
+
+
+def test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules():
+    branch = ast.unparse(_cusp_replan_branch())
+    # Moving: keep braking, no plan yet. Stopped means zero command, planar
+    # speed and yaw rate, held for 0.1 s -- not the forward speed alone.
+    assert "tracking.speed_mps == 0.0" in branch
+    assert "np.linalg.norm(velocity[:2])" in branch
+    assert "robot.get_angular_velocity()[2]" in branch
+    assert "cusp_stop_ticks < cusp_stop_needed" in branch
+    assert "replace(tracking, status='braking')" in branch
+    # The replan is the active plan everywhere afterwards.
+    assert "state['paths'][phase] = path_record(replanned)" in branch
+    assert "add_path_display(stage, replanned, 'Transport'" in branch
+    assert "state['planning_wall_s'] = " in branch
+    # Stopped: the transport leg alone, same planner config, from the measured rear pose.
+    assert "plan_transport_leg(scenario, PlanningPose(" in branch
+    assert "planner_config" in branch and "travel_config=travel_config" in branch
+    # Same tracker configuration as the leg it replaces.
+    assert "trackers[phase].config" in branch.split("RearAxlePathTracker(")[1]
+    source = SCRIPT.read_text()
+    assert "max_cusp_replans = 2" in source
+    assert "cusp_stop_ticks, cusp_stop_needed = 0, 12" in source
+    # A failure the branch does not clear still aborts as before.
+    after = source.index("< max_cusp_replans")
+    assert source.index('if tracking.status == "failed":\n                    dump_tracking("failed", tracking)', after) > after
+
+
+def test_the_extended_ladder_is_a_second_pass_for_the_first_observation_only():
+    """Initial candidates: earlier ladder for all, then extended for all;
+    re-observation stays on the earlier ladder (transport-stage plan, T2)."""
+    source = SCRIPT.read_text()
+    assert "for extended in (False, True)\n            for index, coordinates in enumerate(args.observation_waypoints)" in source
+    tree = ast.parse(source)
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and ast.unparse(node.func) == "plan_observation_leg"
+    ]
+    extended = {
+        next(ast.unparse(k.value) for k in c.keywords if k.arg == "extended") for c in calls
+    }
+    assert extended == {"extended", "False"}

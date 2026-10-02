@@ -44,6 +44,17 @@ FALLBACK_ANALYTIC_INTERVALS = (4, 2, 1)
 # the intervals found (docs/plans/2026-10-02-second-eval-failure-fixes.md, P4).
 # (xy_resolution_m, yaw_resolution_rad), or None for no lattice retry.
 FALLBACK_FINE_LATTICE = (0.1, pi / 36)
+# The extended ladder, tried only after every retry above has run out, so a
+# search the earlier ladder solved keeps its path exactly
+# (docs/plans/2026-10-03-transport-stage-fixes.md, T2). First the fine
+# lattice again at this multiple of the caller's budget -- it has eight times
+# the cells, and 30,000 ran out where 56,376 plans fourth-evaluation seed
+# 4013's loaded transport; a factor, so a deliberately small budget stays
+# small -- then the fine lattice with this primitive length: 0.25 m cannot
+# leave seed 4020's start between two props, 0.10 m can at the same 0.10 m
+# clearance. None/1 drops a step.
+FALLBACK_FINE_BUDGET_FACTOR = 4
+FALLBACK_FINE_PRIMITIVE_M = 0.10
 # A start free at the clearance but inside the extra margin that encloses each
 # primitive's swept footprint rejects every primitive, so the search ends after
 # its root (fine-lattice dev seed 1006, 48 mrad off at a prop). Every retry at
@@ -55,8 +66,9 @@ _RETRIED_STATUSES = ("expansion_limit", "no_path")
 DEFAULT_TRANSPORT_PRIMITIVE_LENGTH_M = 0.25
 
 
-def _retries(config):
+def _retries(config, extended=True):
     """The configs _search tries, in order, after config itself runs out."""
+    fine = None
     if FALLBACK_FINE_LATTICE is not None:
         xy, yaw = FALLBACK_FINE_LATTICE
         fine = replace(
@@ -66,17 +78,38 @@ def _retries(config):
         )
         if fine != config:
             yield fine
+        else:
+            fine = None
     for denser in FALLBACK_ANALYTIC_INTERVALS:
         if denser < config.analytic_expansion_interval:
             yield replace(config, analytic_expansion_interval=denser)
+    if not extended or fine is None:
+        return
+    if FALLBACK_FINE_BUDGET_FACTOR and FALLBACK_FINE_BUDGET_FACTOR > 1:
+        fine = replace(
+            fine, max_expansions=fine.max_expansions * FALLBACK_FINE_BUDGET_FACTOR
+        )
+        yield fine
+    if (
+        FALLBACK_FINE_PRIMITIVE_M is not None
+        and FALLBACK_FINE_PRIMITIVE_M < fine.primitive_length_m
+    ):
+        yield replace(fine, primitive_length_m=FALLBACK_FINE_PRIMITIVE_M)
 
 
-def _search(start, goal, obstacles, footprint, bounds, config) -> PlanResult:
+def _search(
+    start, goal, obstacles, footprint, bounds, config, extended=True
+) -> PlanResult:
     """plan_hybrid_astar, retried on a finer lattice, then at denser analytic
-    intervals, if it runs out."""
+    intervals, then (``extended``) on the fine lattice with more budget and a
+    shorter primitive, if it runs out."""
     attempts = []
+    closed = []  # configs whose queue closed (no_path), budget aside
+
+    attempts_config = []
 
     def attempt(attempt_config):
+        attempts_config.append(attempt_config)
         result = plan_hybrid_astar(
             start, goal, obstacles, footprint, bounds, attempt_config
         )
@@ -88,6 +121,8 @@ def _search(start, goal, obstacles, footprint, bounds, config) -> PlanResult:
                 attempt_config.xy_resolution_m,
                 attempt_config.yaw_resolution_rad,
                 attempt_config.collision_step_m,
+                attempt_config.primitive_length_m,
+                attempt_config.max_expansions,
             )
         )
         return result
@@ -102,9 +137,14 @@ def _search(start, goal, obstacles, footprint, bounds, config) -> PlanResult:
     ):
         config = replace(config, collision_step_m=FALLBACK_BOXED_COLLISION_STEP_M)
         result = attempt(config)
-    for retry in _retries(config):
+    for retry in _retries(config, extended):
+        if result.status == "no_path":
+            closed.append(replace(attempts_config[-1], max_expansions=1))
         if result.success or result.status not in _RETRIED_STATUSES:
             break
+        # A queue that closed closes again with more budget: skip it.
+        if replace(retry, max_expansions=1) in closed:
+            continue
         result = attempt(retry)
         interval = retry.analytic_expansion_interval
     return replace(
@@ -504,6 +544,7 @@ def plan_observation_leg(
     geometry: SyntheticMissionGeometry | None = None,
     start_rear: Pose2D | None = None,
     pickup_bounds: Bounds | None = None,
+    extended: bool = True,
 ) -> PlanResult:
     """Plan a separate leg to the observation waypoint at full clearance.
 
@@ -511,6 +552,9 @@ def plan_observation_leg(
     not the goal of this leg.
     start_rear optionally replaces scenario.start_rear with the measured rear pose.
     pickup_bounds optionally confines the leg as in plan_transport.
+    extended=False keeps the search to the earlier ladder: the runner tries
+    every candidate that way first, so a candidate that only the extended
+    ladder reaches never jumps ahead of one the earlier ladder planned.
     """
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
     config = config if config is not None else make_transport_planner_config()
@@ -529,7 +573,52 @@ def plan_observation_leg(
         geometry.unloaded_footprint,
         pickup_bounds if pickup_bounds is not None else scenario.bounds,
         config,
+        extended,
     )
+
+
+def plan_transport_leg(
+    scenario: TransportScenario,
+    start_rear: Pose2D,
+    config: PlannerConfig | None = None,
+    *,
+    geometry: SyntheticMissionGeometry | None = None,
+    travel_config: PlannerConfig | None = None,
+) -> PlanResult:
+    """The loaded transport leg alone, from ``start_rear`` to the delivery pose.
+
+    The same search and final straight as plan_transport's transport stage, for
+    replanning from the measured pose when a gear cusp stops out of heading
+    (docs/plans/2026-10-03-transport-stage-fixes.md). The carried pallet is
+    part of the loaded footprint; the props and bounds stay obstacles.
+    """
+    geometry = geometry if geometry is not None else SyntheticMissionGeometry()
+    config = config if config is not None else make_transport_planner_config()
+    travel_config = travel_config if travel_config is not None else config
+    props = [prop.rectangle for prop in scenario.props]
+    destination = site_poses(scenario.destination, geometry)
+    search = _search(
+        start_rear,
+        destination["predelivery"],
+        props,
+        geometry.loaded_footprint,
+        scenario.bounds,
+        travel_config,
+    )
+    if not search.success:
+        return search
+    tail = _straight_plan(
+        destination["predelivery"],
+        destination["delivery"],
+        1,
+        props,
+        geometry.loaded_footprint,
+        scenario.bounds,
+        config.clearance_m,
+    )
+    if not tail.success:
+        return tail
+    return _append_straight(search, tail)
 
 
 def plan_transport(

@@ -686,3 +686,58 @@ def test_an_observation_goal_entered_yawed_keeps_braking_at_50_mrad():
     command = enter_final_window_yawed(0.05)
     assert command.status == "braking"
     assert command.speed_mps >= 0
+
+
+def test_a_failed_result_says_why_and_whether_the_leg_ends_at_a_cusp():
+    """The runner replans only a heading mismatch at a cusp
+    (docs/plans/2026-10-03-transport-stage-fixes.md)."""
+    off = RearAxlePathTracker([[0, 0, 0], [1, 0, 0]], [1, 1], [0, 0])
+    lost = off.update([0, 3, 0], 0, 0.02)
+    assert (lost.status, lost.failure, lost.at_cusp) == ("failed", "cross_track", False)
+
+    config = TrackerConfig(
+        **DOCKING,
+        cusp_position_tolerance_m=0.03,
+        cusp_yaw_tolerance_rad=0.05,
+        cusp_brake_window_m=0.008,
+    )
+    tracker = RearAxlePathTracker(*CUSP_PATH, config)
+    for x in np.linspace(0, 0.995, 200):
+        command = tracker.update([x, 0.0, 0.0], 0.1, 0.02)
+        assert command.failure is None and command.at_cusp
+    # On the path, at the cusp, 60 mrad off: a heading failure at a cusp.
+    command = tracker.update([0.996, 0.0, 0.06], 0.1, 0.02)
+    assert (command.status, command.failure, command.at_cusp) == (
+        "failed",
+        "endpoint_heading",
+        True,
+    )
+    # The failed tracker keeps braking and the reason does not change.
+    later = tracker.update([0.996, 0.0, 0.06], 0.05, 0.02)
+    assert later.failure == "endpoint_heading" and later.speed_mps < 0.1
+
+
+def test_a_heading_failure_at_the_goal_is_not_at_a_cusp():
+    tracker = RearAxlePathTracker([[0, 0, 0], [1, 0, 0]], [1, 1], [0, 0], TrackerConfig(**DOCKING))
+    for x in np.linspace(0, 1, 101):
+        command = tracker.update([x, 0, 0.4], 0.1, 0.02)
+    assert command.failure in (None, "endpoint_heading")
+    assert command.at_cusp is False
+
+
+def test_leaving_the_path_after_a_heading_failure_is_reported():
+    """The first cause stays, but off_path says the vehicle has since left the path
+    (Codex review: a replan must not follow a later cross-track excursion)."""
+    config = TrackerConfig(
+        **DOCKING,
+        cusp_position_tolerance_m=0.03,
+        cusp_yaw_tolerance_rad=0.05,
+        cusp_brake_window_m=0.008,
+    )
+    tracker = RearAxlePathTracker(*CUSP_PATH, config)
+    for x in np.linspace(0, 0.995, 200):
+        tracker.update([x, 0.0, 0.0], 0.1, 0.02)
+    first = tracker.update([0.996, 0.0, 0.06], 0.1, 0.02)
+    assert first.failure == "endpoint_heading" and not first.off_path
+    away = tracker.update([0.996, config.max_cross_track_error_m + 0.01, 0.06], 0.0, 0.02)
+    assert away.failure == "endpoint_heading" and away.off_path
