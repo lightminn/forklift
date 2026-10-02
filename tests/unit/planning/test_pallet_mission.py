@@ -849,3 +849,153 @@ def test_trace_keeps_the_stages_before_a_failure():
     assert stages["approach_search"]["status"] == "success"
     assert stages["approach_search"]["length_m"] > 0
     assert trace[-1]["status"] != "success"
+
+
+# --- analytic-connection fallback (docs/plans/2026-10-02-planner-tracker-robustness.md, P1) ---
+
+# The bay catalogue as the G2 rerun measured it (FACTORY_PROPS order).
+G2_CATALOGUE = (
+    AssetSpec(
+        "SM_BarelPlastic_A_01.usd",
+        0.5999998721480395,
+        0.7080822595637528,
+        0.9013595379585126,
+    ),
+    AssetSpec(
+        "SM_CratePlastic_D_01.usd",
+        0.449549798453976,
+        0.6620987553425408,
+        0.1880701023026532,
+    ),
+    AssetSpec(
+        "SM_CardBoxA_02.usd", 0.7970254338452492, 0.6365090800111943, 0.5032872468988465
+    ),
+)
+# G2a seed 4: the handoff pose, from which the nominal pickup failed with
+# approach:expansion_limit at interval 8 (docs/validation/2026-10-01-g2-rerun.md).
+SEED4_HANDOFF = Pose2D(-0.08475987919388789, 0.8969545667655244, 0.0008659313366127473)
+
+
+def g2_config():
+    return pallet_mission.make_transport_planner_config(
+        curvature_limit_inv_m=0.5, clearance_m=0.10, max_expansions=30000
+    )
+
+
+def test_a_failed_search_is_retried_with_denser_analytic_connections():
+    scenario = make_scenario(4, G2_CATALOGUE, 4)
+    config = g2_config()
+    assert config.analytic_expansion_interval == 8
+    trace = []
+    result = plan_transport(scenario, config, start_rear=SEED4_HANDOFF, trace=trace)
+    assert result.success, result.status
+    # The approach search needed a denser interval; the trace says which.
+    search = next(t for t in trace if t["stage"] == "approach_search")
+    assert search["analytic_expansion_interval"] in (4, 2, 1)
+    # Joining the straight tail must not drop the interval from the result.
+    transport = next(t for t in trace if t["stage"] == "transport_search")
+    assert (
+        result.approach.analytic_expansion_interval
+        == (search["analytic_expansion_interval"])
+    )
+    assert (
+        result.transport.analytic_expansion_interval
+        == (transport["analytic_expansion_interval"])
+    )
+
+
+def test_the_trace_keeps_an_earlier_fallback_when_a_later_search_fails(monkeypatch):
+    real_plan = pallet_mission.plan_hybrid_astar
+    goals = []
+
+    def transport_fails(start, goal, *rest):
+        if goal not in goals:
+            goals.append(goal)
+        if len(goals) == 1:
+            return real_plan(start, goal, *rest)
+        return pallet_mission.PlanResult(
+            False,
+            "no_path",
+            np.zeros((0, 3)),
+            np.zeros(0, np.int8),
+            np.zeros(0),
+            0.0,
+            0,
+        )
+
+    monkeypatch.setattr(pallet_mission, "plan_hybrid_astar", transport_fails)
+    scenario = make_scenario(4, G2_CATALOGUE, 4)
+    trace = []
+    result = plan_transport(
+        scenario, g2_config(), start_rear=SEED4_HANDOFF, trace=trace
+    )
+    assert not result.success
+    by_stage = {t["stage"]: t for t in trace}
+    assert by_stage["approach_search"]["status"] == "success"
+    assert by_stage["approach_search"]["analytic_expansion_interval"] in (4, 2, 1)
+    assert by_stage["transport_search"]["status"] == "no_path"
+    assert by_stage["transport_search"]["analytic_expansion_interval"] == 1
+    # The cost of every retry is on record, not only the last search's.
+    approach = by_stage["approach_search"]["search_attempts"]
+    assert approach[0][:2] == [8, "expansion_limit"]
+    assert approach[-1][1] == "success"
+    transport = by_stage["transport_search"]["search_attempts"]
+    assert [entry[:2] for entry in transport] == [
+        [8, "no_path"],
+        [4, "no_path"],
+        [2, "no_path"],
+        [1, "no_path"],
+    ]
+    assert all(entry[2] > 0 for entry in approach)
+
+
+def test_a_search_that_succeeds_at_eight_is_not_retried(monkeypatch):
+    received = []
+    real_plan = pallet_mission.plan_hybrid_astar
+
+    def capture(*args):
+        received.append(args[-1].analytic_expansion_interval)
+        return real_plan(*args)
+
+    monkeypatch.setattr(pallet_mission, "plan_hybrid_astar", capture)
+    scenario = make_scenario(0, G2_CATALOGUE, 4)
+    trace = []
+    result = plan_transport(scenario, g2_config(), trace=trace)
+    assert result.success, result.status
+    assert received == [8, 8]  # approach and transport, once each
+    searches = [t for t in trace if t["stage"].endswith("_search")]
+    assert [t["analytic_expansion_interval"] for t in searches] == [8, 8]
+
+
+@pytest.mark.parametrize("seed", [0, 2, 5])
+def test_the_fallback_changes_nothing_when_eight_succeeds(monkeypatch, seed):
+    scenario = make_scenario(seed, G2_CATALOGUE, 4)
+    with_fallback = plan_transport(scenario, g2_config())
+    monkeypatch.setattr(pallet_mission, "FALLBACK_ANALYTIC_INTERVALS", ())
+    without = plan_transport(scenario, g2_config())
+    assert with_fallback.success and without.success
+    for stage in ("approach", "insert", "extract", "transport", "withdraw"):
+        a, b = getattr(with_fallback, stage), getattr(without, stage)
+        np.testing.assert_array_equal(a.poses, b.poses)
+        np.testing.assert_array_equal(a.directions, b.directions)
+        np.testing.assert_array_equal(a.curvatures_inv_m, b.curvatures_inv_m)
+
+
+def test_a_failure_other_than_search_exhaustion_is_not_retried(monkeypatch):
+    received = []
+
+    def invalid(*args):
+        received.append(args[-1].analytic_expansion_interval)
+        return pallet_mission.PlanResult(
+            False,
+            "invalid_goal",
+            np.zeros((0, 3)),
+            np.zeros(0, np.int8),
+            np.zeros(0),
+            0.0,
+            0,
+        )
+
+    monkeypatch.setattr(pallet_mission, "plan_hybrid_astar", invalid)
+    result = pallet_mission._search(None, None, [], None, None, g2_config())
+    assert result.status == "invalid_goal" and received == [8]
