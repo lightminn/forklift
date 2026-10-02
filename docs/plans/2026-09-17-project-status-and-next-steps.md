@@ -111,6 +111,7 @@ P1·P2 개발 39 seed 37/39, 회귀 0 (폴백 f1d369f·제동 창 f0392e4; 일�
 세밀 격자 폴백·관측 끝점 yaw·갇힌 출발점(P4·P3·P6) 개발 69 seed 65/69 (2000–2029 는 개발용으로 씀) — 남은 실패는 검출 2·관측 후보 위치 1·센서 프레임 1, 계획·추종 실패 0 (docs/validation/2026-10-02-fine-lattice-dev-run.md)
 평면 예산 8 개발 69 seed 67/69 (2026-10-03) — 남은 실패는 2018 검출(시점)·1028 관측 후보 위치 (docs/validation/2026-10-02-plane-budget-eight-dev-run.md)
 세 번째 동결 평가 25/30 불합격 (seed 3000–3029, 2026-10-03) — 검출 기각 뒤 관측점 도달 불가 3, 운반 계획 1, 운반 추종 1 (docs/validation/2026-10-03-third-frozen-evaluation.md)
+실행 중 관측점(지도·배치 구역만) 개발 99 seed 97/99, 회귀 0 (2026-10-03) — 남은 실패는 운반 단계 3003·3008 (docs/validation/2026-10-03-runtime-viewpoints-dev-run.md)
 ```
 
 ### 지금 **실제로 되는** 것
