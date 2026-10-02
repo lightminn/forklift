@@ -1163,3 +1163,39 @@ def test_a_boxed_start_repeats_the_whole_ladder_at_the_finer_collision_step(
     base = g2_config().collision_step_m
     assert steps == [base] + [0.01] * 5
     assert [c.analytic_expansion_interval for c in received] == [8, 8, 8, 4, 2, 1]
+
+
+def _no_path_after(expanded, received):
+    def plan(*args):
+        received.append(args[-1])
+        return pallet_mission.PlanResult(
+            False,
+            "no_path",
+            np.zeros((0, 3)),
+            np.zeros(0, np.int8),
+            np.zeros(0),
+            0.0,
+            expanded,
+        )
+
+    return plan
+
+
+def test_a_search_that_got_past_its_root_keeps_the_collision_step(monkeypatch):
+    received = []
+    monkeypatch.setattr(
+        pallet_mission, "plan_hybrid_astar", _no_path_after(2, received)
+    )
+    pallet_mission._search(None, None, [], None, None, g2_config())
+    assert {c.collision_step_m for c in received} == {g2_config().collision_step_m}
+
+
+def test_a_collision_step_already_as_fine_is_not_coarsened(monkeypatch):
+    received = []
+    monkeypatch.setattr(
+        pallet_mission, "plan_hybrid_astar", _no_path_after(1, received)
+    )
+    pallet_mission._search(
+        None, None, [], None, None, replace(g2_config(), collision_step_m=0.005)
+    )
+    assert {c.collision_step_m for c in received} == {0.005}
