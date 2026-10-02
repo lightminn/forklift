@@ -1271,9 +1271,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 # 3 cm: a 3 cm return stopped 3 cm short before the heading
                 # settled (seed 23 at 0.041 rad, 2026-09-27), and the
                 # overshoot tolerance already covers a stop just past the goal.
-                # Insertion tolerances are unchanged.
+                # Insertion tolerances are unchanged. An observation stop is
+                # judged like a cusp in heading (0.05 rad): the next leg and the
+                # capture start from the measured pose (second-evaluation seed
+                # 2018 entered the 3 cm window at 0.036 rad on a curved end;
+                # docs/plans/2026-10-02-second-eval-failure-fixes.md, P3).
                 yaw_tolerance_rad=(
-                    0.03 if name in ("observe", "return_home") else 0.02
+                    0.05
+                    if name == "observe"
+                    else 0.03
+                    if name == "return_home"
+                    else 0.02
                 ),
                 # Gear-change cusps are not goals (2026-09-26): the next leg
                 # starts from the measured pose. Final goals keep the rules above.
@@ -1903,7 +1911,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                     ],
                                     lookahead_m=0.28,
                                     position_tolerance_m=0.03,
-                                    yaw_tolerance_rad=0.03,
+                                    # Judged like a cusp in heading (P3, above).
+                                    yaw_tolerance_rad=0.05,
                                     # Gear-change cusps are not goals (2026-09-26): the next leg
                                     # starts from the measured pose. Final goals keep the rules above.
                                     cusp_position_tolerance_m=0.03,
@@ -2081,14 +2090,16 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                             lookahead_m=0.28,
                                             # Same rule as the trackers built
                                             # without perception: observation
-                                            # stops within 3 cm, both
-                                            # repositioning moves at 0.03 rad.
+                                            # stops within 3 cm at 0.05 rad,
+                                            # the return at 0.03 rad.
                                             position_tolerance_m=(
                                                 0.03 if name == "observe" else 0.008
                                             ),
                                             yaw_tolerance_rad=(
-                                                0.03
-                                                if name in ("observe", "return_home")
+                                                0.05
+                                                if name == "observe"
+                                                else 0.03
+                                                if name == "return_home"
                                                 else 0.02
                                             ),
                                             # Gear-change cusps are not goals (2026-09-26): the next leg

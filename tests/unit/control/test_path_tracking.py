@@ -666,3 +666,23 @@ def test_without_a_brake_window_commands_are_unchanged():
                     )
             streams.append(stream)
         assert streams[0] == streams[1]
+
+
+def enter_final_window_yawed(yaw_tolerance, yaw=-0.0364):
+    """Second-evaluation seed 2018: 29.7 mm short of an observation goal at -36 mrad."""
+    config = TrackerConfig(position_tolerance_m=0.03, yaw_tolerance_rad=yaw_tolerance)
+    tracker = RearAxlePathTracker([[0, 0, 0], [1, 0, 0]], [1, 1], [0, 0], config)
+    for x in np.linspace(0, 0.9703, 60):
+        command = tracker.update([x, 0.0, yaw], 0.0455, 0.02)
+    return command
+
+
+def test_an_observation_goal_entered_yawed_fails_at_30_mrad():
+    assert enter_final_window_yawed(0.03).status == "failed"
+
+
+def test_an_observation_goal_entered_yawed_keeps_braking_at_50_mrad():
+    """P3 (docs/plans/2026-10-02-second-eval-failure-fixes.md): braking, not yet arrived."""
+    command = enter_final_window_yawed(0.05)
+    assert command.status == "braking"
+    assert command.speed_mps >= 0

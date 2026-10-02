@@ -205,8 +205,11 @@ def test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules():
     for yaw_rule, position_rule in rules:
         yaw = compile(ast.Expression(yaw_rule), str(SCRIPT), "eval")
         position = compile(ast.Expression(position_rule), str(SCRIPT), "eval")
-        for name in ("observe", "return_home"):
-            assert eval(yaw, {"name": name}) == 0.03
+        # An observation stop is judged like a cusp in heading: the next leg
+        # and the capture start from the measured pose
+        # (docs/plans/2026-10-02-second-eval-failure-fixes.md, P3).
+        assert eval(yaw, {"name": "observe"}) == 0.05
+        assert eval(yaw, {"name": "return_home"}) == 0.03
         assert eval(position, {"name": "observe"}) == 0.03
         # A 3 cm return stopped short before its heading settled (seed 23).
         assert eval(position, {"name": "return_home"}) == 0.008
@@ -229,7 +232,7 @@ def test_the_re_observation_tracker_uses_the_repositioning_tolerances():
     ]
     assert literal, "the observe re-plan builds its own tracker"
     for keywords in literal:
-        assert keywords["yaw_tolerance_rad"].value == 0.03
+        assert keywords["yaw_tolerance_rad"].value == 0.05
         assert ast.literal_eval(keywords["position_tolerance_m"]) == 0.03
 
 
