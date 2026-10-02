@@ -67,8 +67,8 @@ class DetectorParams:
     # budget 5 never examined (test_plane_candidate_budget.py).
     # Budget 8 (2026-10-02, user decision): second-evaluation seed 2023's
     # front lost all six candidates to background planes (G3 B). Over 319
-    # saved Isaac captures 6 -> 8 gained 6 valid (3 distinct depth images
-    # beyond the 5 -> 6 gain), lost none, and none landed over 3 cm off; the
+    # saved Isaac captures 6 -> 8 turned 240 valid into 245 (3 distinct depth
+    # images), lost none, and none landed over 3 cm off; the
     # 330 stored observations are unchanged (100 extract more than six
     # planes). Same known limit, in more clutter.
     max_plane_candidates: int = 8
