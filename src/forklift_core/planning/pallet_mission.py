@@ -30,7 +30,46 @@ from .geometry import (
 from .hybrid_astar import PlannerConfig, PlanResult, plan_hybrid_astar
 
 DEFAULT_TRANSPORT_CLEARANCE_M = 0.10
+# Denser analytic-connection intervals tried, in order, when a mission search
+# exhausts its expansions or finds no path. The search only reaches its goal
+# through an exact analytic connection tried every N-th expansion, so whether a
+# connectable node comes up on an N-th turn can flip with millimetres of goal
+# change (G5 1020/1029, G2' seed 1, G2a seeds 4/7; 2026-10-02 planner/tracker
+# plan). A search that succeeds at its own interval is never repeated.
+FALLBACK_ANALYTIC_INTERVALS = (4, 2, 1)
+_RETRIED_STATUSES = ("expansion_limit", "no_path")
 DEFAULT_TRANSPORT_PRIMITIVE_LENGTH_M = 0.25
+
+
+def _search(start, goal, obstacles, footprint, bounds, config) -> PlanResult:
+    """plan_hybrid_astar, retried at denser analytic intervals if it runs out."""
+    attempts = []
+
+    def attempt(attempt_config):
+        result = plan_hybrid_astar(
+            start, goal, obstacles, footprint, bounds, attempt_config
+        )
+        attempts.append(
+            (
+                attempt_config.analytic_expansion_interval,
+                result.status,
+                int(result.expanded_nodes),
+            )
+        )
+        return result
+
+    result = attempt(config)
+    interval = config.analytic_expansion_interval
+    for denser in FALLBACK_ANALYTIC_INTERVALS:
+        if result.success or result.status not in _RETRIED_STATUSES:
+            break
+        if denser >= config.analytic_expansion_interval:
+            continue
+        result = attempt(replace(config, analytic_expansion_interval=denser))
+        interval = denser
+    return replace(
+        result, analytic_expansion_interval=interval, search_attempts=tuple(attempts)
+    )
 
 
 def make_transport_planner_config(**overrides: float | int) -> PlannerConfig:
@@ -412,6 +451,8 @@ def _append_straight(first, second):
         curvatures,
         first.length_m + second.length_m,
         first.expanded_nodes + second.expanded_nodes,
+        analytic_expansion_interval=first.analytic_expansion_interval,
+        search_attempts=first.search_attempts,
     )
 
 
@@ -441,7 +482,7 @@ def plan_observation_leg(
         geometry.pallet_width_m,
         scenario.pickup.yaw_rad,
     )
-    return plan_hybrid_astar(
+    return _search(
         start_rear if start_rear is not None else scenario.start_rear,
         waypoint,
         props + [pallet],
@@ -501,6 +542,11 @@ def plan_transport(
                     "status": result.status,
                     "length_m": float(result.length_m),
                     "expansions": int(result.expanded_nodes),
+                    "analytic_expansion_interval": result.analytic_expansion_interval,
+                    # Every search behind this stage; "expansions" is the last one's.
+                    "search_attempts": [
+                        list(entry) for entry in result.search_attempts
+                    ],
                     "gear_changes": int(np.count_nonzero(np.diff(directions)))
                     if directions.size
                     else 0,
@@ -526,7 +572,7 @@ def plan_transport(
     )
     approach = note(
         "approach_search",
-        plan_hybrid_astar(
+        _search(
             start_rear if start_rear is not None else scenario.start_rear,
             pickup["prealign"],
             props + [pallet],
@@ -582,7 +628,7 @@ def plan_transport(
         return MissionPlan(False, f"extract:{extract.status}")
     transport = note(
         "transport_search",
-        plan_hybrid_astar(
+        _search(
             pickup["extracted"],
             destination["predelivery"],
             props,
@@ -635,7 +681,7 @@ def plan_transport(
     )
     return_home = note(
         "return_home",
-        plan_hybrid_astar(
+        _search(
             destination["withdrawn"],
             return_to,
             props + [delivered],

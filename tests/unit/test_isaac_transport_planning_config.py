@@ -135,6 +135,7 @@ def test_all_runner_planning_calls_use_the_recorded_config(
     ]
     for call in calls:
         received.clear()
+        namespace["planning_trace"] = []
         result = eval(compile(ast.Expression(call), str(SCRIPT), "eval"), namespace)
         assert result.success, result.status
         assert received[-1] is config
@@ -143,6 +144,9 @@ def test_all_runner_planning_calls_use_the_recorded_config(
             assert received[0].clearance_m == record["approach_clearance_m"]
             assert received[0].primitive_length_m == 0.25
             assert result.return_home is None
+            # Both branches hand the runner a trace that outlives a failed stage.
+            stages = [entry["stage"] for entry in namespace["planning_trace"]]
+            assert stages[:2] == ["approach_search", "approach_straight"]
 
     # The same two call sites plan the return leg under the same config when a
     # goal is supplied, so the flag cannot reach one runner branch only.
@@ -241,6 +245,8 @@ def test_every_runner_tracker_releases_gear_change_cusps_the_same_way():
     for keywords in configs:
         assert ast.literal_eval(keywords["cusp_position_tolerance_m"]) == 0.03
         assert ast.literal_eval(keywords["cusp_yaw_tolerance_rad"]) == 0.05
+        # Brake and judge cusps at 8 mm (2026-10-02 planner/tracker plan, P2).
+        assert ast.literal_eval(keywords["cusp_brake_window_m"]) == 0.008
 
 
 def test_every_runner_tracker_accepts_small_overshoot_except_insertion():
@@ -281,3 +287,30 @@ def test_every_runner_tracker_reads_the_same_optional_speed_caps():
             "settings.get('max_reverse_speed_mps')",
         )
     }
+
+
+def test_path_record_keeps_the_interval_through_the_straight_tail():
+    tree = ast.parse(SCRIPT.read_text())
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "path_record"
+    )
+    namespace = {}
+    exec(
+        compile(ast.Module(body=[function], type_ignores=[]), str(SCRIPT), "exec"),
+        namespace,
+    )
+    scenario = TransportScenario(
+        0,
+        Pose2D(-2.34, 0, 0),
+        PalletSite(0, 0, 0),
+        PalletSite(3.4, 0, 0),
+        (),
+        Bounds(-3, 4.7, -1.75, 3.05),
+    )
+    plans = pallet_mission.plan_transport(scenario)
+    assert plans.success, plans.status
+    for stage in ("approach", "transport"):
+        record = json.loads(json.dumps(namespace["path_record"](getattr(plans, stage))))
+        assert record["analytic_expansion_interval"] == 8

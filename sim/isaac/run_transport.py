@@ -641,6 +641,12 @@ def path_record(path) -> dict:
         "curvatures_inv_m": path.curvatures_inv_m.tolist(),
         "length_m": path.length_m,
         "expanded_nodes": path.expanded_nodes,
+        "analytic_expansion_interval": getattr(
+            path, "analytic_expansion_interval", None
+        ),
+        "search_attempts": [
+            list(entry) for entry in getattr(path, "search_attempts", ())
+        ],
     }
 
 
@@ -1105,6 +1111,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     "pose": [waypoint.x_m, waypoint.y_m, waypoint.yaw_rad],
                     "success": candidate_plan.success,
                     "status": candidate_plan.status,
+                    "analytic_expansion_interval": (
+                        candidate_plan.analytic_expansion_interval
+                    ),
                 }
             )
             if candidate_plan.success:
@@ -1136,6 +1145,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         paths = {"observe": observe_plan}
     else:
         planning_start = time.monotonic()
+        # The per-stage trace survives a later stage's failure; the result does not.
+        planning_trace = []
         plans = plan_transport(
             scenario,
             planner_config,
@@ -1143,7 +1154,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             return_to=return_to_pose,
             pickup_bounds=pickup_bounds,
             travel_config=travel_config,
+            trace=planning_trace,
         )
+        state.setdefault("planning_traces", []).append(planning_trace)
         state["planning_wall_s"] = time.monotonic() - planning_start
         state["planning_status"] = plans.status
         require(plans.success, f"Mission planning failed: {plans.status}")
@@ -1256,6 +1269,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 # starts from the measured pose. Final goals keep the rules above.
                 cusp_position_tolerance_m=0.03,
                 cusp_yaw_tolerance_rad=0.05,
+                # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad
+                # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).
+                cusp_brake_window_m=0.008,
                 # Optional path speed caps; absent from the settings = off.
                 max_lateral_acceleration_mps2=settings.get(
                     "max_lateral_acceleration_mps2"
@@ -1281,6 +1297,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 tracker.config,
                 cusp_position_tolerance_m=None,
                 cusp_yaw_tolerance_rad=None,
+                cusp_brake_window_m=None,
                 overshoot_tolerance_m=None,
                 position_tolerance_m=0.008,
             )
@@ -1824,6 +1841,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                         "start_rear": rear.tolist(),
                                         "success": candidate_plan.success,
                                         "status": candidate_plan.status,
+                                        "analytic_expansion_interval": (
+                                            candidate_plan.analytic_expansion_interval
+                                        ),
                                     }
                                 )
                                 if candidate_plan.success:
@@ -1874,6 +1894,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                     # starts from the measured pose. Final goals keep the rules above.
                                     cusp_position_tolerance_m=0.03,
                                     cusp_yaw_tolerance_rad=0.05,
+                                    # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad
+                                    # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).
+                                    cusp_brake_window_m=0.008,
                                     # Optional path speed caps; absent from the settings = off.
                                     max_lateral_acceleration_mps2=settings.get(
                                         "max_lateral_acceleration_mps2"
@@ -2003,6 +2026,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 )
                             )
                             planning_start = time.monotonic()
+                            planning_trace = []
                             plans = plan_transport(
                                 scenario,
                                 planner_config,
@@ -2012,6 +2036,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 return_to=return_to_pose,
                                 pickup_bounds=pickup_bounds,
                                 travel_config=travel_config,
+                                trace=planning_trace,
+                            )
+                            state.setdefault("planning_traces", []).append(
+                                planning_trace
                             )
                             state["planning_wall_s"] += (
                                 time.monotonic() - planning_start
@@ -2053,6 +2081,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                             # starts from the measured pose. Final goals keep the rules above.
                                             cusp_position_tolerance_m=0.03,
                                             cusp_yaw_tolerance_rad=0.05,
+                                            # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad
+                                            # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).
+                                            cusp_brake_window_m=0.008,
                                             # Optional path speed caps; absent from the settings = off.
                                             max_lateral_acceleration_mps2=settings.get(
                                                 "max_lateral_acceleration_mps2"
