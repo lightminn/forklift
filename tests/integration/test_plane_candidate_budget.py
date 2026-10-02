@@ -54,3 +54,80 @@ def test_default_budget_reaches_pallet_behind_larger_planes():
     # The lateral occupancy grid resolves centres to half a 10 mm cell.
     np.testing.assert_allclose(reported, truth, atol=0.005)
     assert abs(observation.insertion_yaw_rad) < 0.001
+
+
+def test_default_budget_reaches_a_pallet_behind_five_larger_planes():
+    """Budget 6 (G4, 2026-10-02): the pallet front is the sixth plane here.
+
+    CPU mechanism regression for Isaac seed 1 of the G2 rerun, whose front
+    (941-984 px) lost all five candidates to background planes
+    (docs/validation/2026-10-02-g3-detection-diagnosis.md); not a
+    reproduction of that image.
+    """
+    geometry = load_pallet_geometry(ROOT / "config/pallet_geometry_epal6.yaml")
+    prior = load_pallet_prior(ROOT / "config/pallet_prior_epal6.yaml")
+    params = detector.DetectorParams.derived_for(prior)
+    pallet_x_m = 3.3
+    scene = scene_rig.render(
+        scene_rig.place(scene_rig.pallet(geometry), x_m=pallet_x_m)
+        + [
+            scene_rig.Box((2.9, -1.0, 0.5), (1.2, 1.0, 1.0)),
+            scene_rig.Box((3.2, 1.0, 0.5), (1.2, 1.0, 1.0)),
+            # A wall behind the pallet and a low box in front of it.
+            scene_rig.Box((4.3, 0.0, 0.5), (0.3, 1.6, 1.0)),
+            scene_rig.Box((2.3, 0.0, 0.05), (0.2, 0.3, 0.1)),
+        ]
+    )
+    truth = scene_rig.true_pockets(geometry, x_m=pallet_x_m)
+    points, _ = detector._base_points(scene)
+    camera = scene.base_from_optical.translation_m
+    workspace = detector._filter_workspace(points, camera, prior, params)
+    planes = detector._vertical_plane_candidates(
+        workspace, camera, replace(params, max_plane_candidates=12)
+    )
+    front = [
+        i
+        for i, plane in enumerate(planes)
+        if np.all(np.abs((truth - plane.point) @ plane.normal) < 0.002)
+    ]
+    assert front == [5]
+    five = detector.detect_pockets(
+        scene, prior, replace(params, max_plane_candidates=5)
+    )
+    assert five.observation.status == "no_pallet"
+    # The shipped default reaches it.
+    observation = detector.detect_pockets(scene, prior, params).observation
+    assert observation.status == "valid"
+    reported = np.array([observation.left.center_m, observation.right.center_m])
+    np.testing.assert_allclose(reported, truth, atol=0.005)
+
+
+def test_known_limit_budget_six_also_reaches_a_grounded_lookalike():
+    """Known limit, kept on purpose (Codex counterexample, 2026-10-02).
+
+    The same clutter with the pallet replaced by the `grounded` negative (no
+    bottom boards, columns to the floor): budget 5 never examines it, budget 6
+    does, and the detector's existing weakness on `grounded` (29/36 valid in
+    the CPU pose sweep at either budget) turns it into a false positive. The
+    budget makes that weakness reachable in clutter; it does not create it.
+    Render-population impact is unmeasured.
+    """
+    from tools.measure_pocket_evidence import structure
+
+    geometry = load_pallet_geometry(ROOT / "config/pallet_geometry_epal6.yaml")
+    prior = load_pallet_prior(ROOT / "config/pallet_prior_epal6.yaml")
+    params = detector.DetectorParams.derived_for(prior)
+    scene = scene_rig.render(
+        scene_rig.place(structure(geometry, "grounded"), x_m=3.3)
+        + [
+            scene_rig.Box((2.9, -1.0, 0.5), (1.2, 1.0, 1.0)),
+            scene_rig.Box((3.2, 1.0, 0.5), (1.2, 1.0, 1.0)),
+            scene_rig.Box((4.3, 0.0, 0.5), (0.3, 1.6, 1.0)),
+            scene_rig.Box((2.3, 0.0, 0.05), (0.2, 0.3, 0.1)),
+        ]
+    )
+    five = detector.detect_pockets(
+        scene, prior, replace(params, max_plane_candidates=5)
+    )
+    assert five.observation.status == "no_pallet"
+    assert detector.detect_pockets(scene, prior, params).observation.status == "valid"

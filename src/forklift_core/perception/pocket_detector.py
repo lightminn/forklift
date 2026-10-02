@@ -59,7 +59,13 @@ class DetectorParams:
     # a 3.35 m-wide object at 2.31 m and the rear wall exhaust budget 3.
     # User-measured replay of 7 runs / 330 scenes found no selection changes
     # with 3 -> 5. The frozen v1 YAML explicitly retains budget 3.
-    max_plane_candidates: int = 5
+    # Budget 6 (2026-10-02, user decision): Isaac seed 1's small front lost all
+    # five candidates to background planes (G3); 5 -> 6 changed none of the
+    # 330 stored observations (141 scenes do extract a sixth plane), none of the
+    # 288 CPU structure poses, and none of the other G2-rerun captures.
+    # Known limit: in clutter it also reaches a `grounded` lookalike that
+    # budget 5 never examined (test_plane_candidate_budget.py).
+    max_plane_candidates: int = 6
     range_min_m: float = 0.8
     range_max_m: float = 5.0
     floor_z_m: float = 0.02

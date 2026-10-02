@@ -181,7 +181,8 @@ def arguments() -> argparse.Namespace:
         help=(
             "Ordered observation candidates in metres/radians; repeat this option "
             "for each candidate. Overrides defaults: (-0.10, 0.90, 0), "
-            "(-1.20, 0.30, 0), (-0.10, -0.60, 0), (-1.50, -0.60, 0), (-2.00, -0.30, 0)."
+            "(-1.20, 0.30, 0), (-0.10, -0.60, 0), (-1.50, -0.60, 0), (-2.00, -0.30, 0), "
+            "(0.00, 2.10, -0.25), (0.40, 1.20, 0), (-0.60, 1.80, -0.25)."
         ),
     )
     parser.add_argument(
@@ -207,6 +208,14 @@ def arguments() -> argparse.Namespace:
         "hold the wheels and capture this many more times, then stop.",
     )
     parser.add_argument("--repeat-at-attempt", type=int, default=None)
+    parser.add_argument(
+        "--tracker-profile",
+        choices=("current", "20260921"),
+        default="current",
+        help="20260921: the G2 baseline's tracking rules -- gear-change cusps and "
+        "the observation stop at the goal tolerances (8 mm), no overshoot "
+        "allowance. For the G2b diagnosis; current keeps today's rules.",
+    )
     args, unknown = parser.parse_known_args()
     try:
         args.extra_views = MISSION_VIEWS.parse_extra_views(
@@ -224,12 +233,20 @@ def arguments() -> argparse.Namespace:
         # pocket there. No seed's chosen candidate changes except seed 3's
         # (confirmed 2026-09-19: re-running the full reachability sweep with
         # this order picks the same candidate as before for every other seed).
+        # The last three (G4, 2026-10-02) are tried only after all five above
+        # fail to plan or detect, so seeds served earlier never reach them.
+        # Chosen by tools/observation_candidate_design.py on design seeds
+        # 200-399 for pallets high in the bay, hidden from the far candidates
+        # (docs/plans/2026-10-02-g4-observation-candidates.md).
         args.observation_waypoints = [
             [-0.10, 0.90, 0.0],
             [-1.20, 0.30, 0.0],
             [-0.10, -0.60, 0.0],
             [-1.50, -0.60, 0.0],
             [-2.00, -0.30, 0.0],
+            [0.00, 2.10, -0.25],
+            [0.40, 1.20, 0.0],
+            [-0.60, 1.80, -0.25],
         ]
     if not args.observation_waypoints:
         parser.error("--observation-waypoints requires at least one candidate")
@@ -1254,12 +1271,27 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         for name, path in paths.items()
     }
 
+    def apply_tracker_profile() -> None:
+        # The 2026-09-21 G2 baseline had no cusp or overshoot tolerances and
+        # stopped observation at 8 mm (git show 6f9fb82:sim/isaac/run_transport.py).
+        if args.tracker_profile != "20260921":
+            return
+        for tracker in trackers.values():
+            tracker.config = replace(
+                tracker.config,
+                cusp_position_tolerance_m=None,
+                cusp_yaw_tolerance_rad=None,
+                overshoot_tolerance_m=None,
+                position_tolerance_m=0.008,
+            )
+
     def record_tracker_configs() -> None:
         # Every tracker's full settings as built (G2 rerun plan, 2026-10-01).
         state.setdefault("tracker_configs", {}).update(
             {name: asdict(tracker.config) for name, tracker in trackers.items()}
         )
 
+    apply_tracker_profile()
     record_tracker_configs()
     phase = "approach"
     if args.use_perception:
@@ -1369,6 +1401,56 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     ],
                     stdin=subprocess.PIPE,
                 )
+        last_tracking = None
+
+        def dump_tracking(reason: str, tracking) -> None:
+            # The run aborts right after this, before the next sample; keep what
+            # the G2b diagnosis needs (closeout plan, G2b ㉮).
+            tracker = trackers[phase]
+            path = paths[phase]
+            directions = np.asarray(path.directions)
+            cusps = [
+                int(i)
+                for i in range(1, len(directions) - 1)
+                if directions[i + 1] != directions[i]
+            ]
+            final = int(len(path.poses) - 1)
+            record = {
+                "reason": reason,
+                "phase": phase,
+                "time_s": t,
+                "phase_started_s": phase_started,
+                "loop_step": step,
+                "config": asdict(tracker.config),
+                "rear_pose": rear.tolist(),
+                "signed_speed_mps": signed_speed,
+                "steering_command_rad": steering_command.tolist(),
+                "steering_actual_rad": np.asarray(
+                    robot.get_joint_positions()[steers], dtype=float
+                ).tolist(),
+                "cusp_indices": cusps,
+                "final_index": final,
+                "path_length_m": float(path.length_m),
+                "path": path_record(path),
+                "tracking": None if tracking is None else asdict(tracking),
+            }
+            # The leg being driven, as the tracker itself holds it (its errors
+            # refer to this endpoint): private state, read only for the record.
+            leg = int(tracker._leg)
+            endpoint = int(tracker._leg_ends[leg])
+            record.update(
+                leg=leg,
+                leg_end_index=endpoint,
+                leg_end_is_cusp=endpoint != final,
+                remaining_to_leg_end_m=float(
+                    tracker._distance[endpoint] - tracker._progress
+                ),
+                remaining_to_path_end_m=float(
+                    tracker._distance[-1] - tracker._progress
+                ),
+            )
+            state["tracking_failure"] = record
+
         for step in range(int(120 * args.max_sim_seconds)):
             t = world.current_time - initial_time
             base, q = robot.get_world_pose()
@@ -1498,8 +1580,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 # Three times the path time at the tracker's own speed caps
                 # (length / cruise when there are none), plus 10 s.
                 limit = max(30.0, 3 * trackers[phase].nominal_duration_s() + 10)
+                if t - phase_started >= limit:
+                    dump_tracking("timeout", last_tracking)
                 require(t - phase_started < limit, f"Tracking timeout in {phase}")
                 tracking = trackers[phase].update(rear, signed_speed, dt)
+                last_tracking = tracking
+                if tracking.status == "failed":
+                    dump_tracking("failed", tracking)
                 require(
                     tracking.status != "failed",
                     f"Tracking failed in {phase}: pos={tracking.position_error_m:.4f},yaw={tracking.yaw_error_rad:.4f}",
@@ -1800,6 +1887,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 ),
                             )
                             phase_started = t
+                            apply_tracker_profile()
                             record_tracker_configs()
                         else:
                             if args.repeat_captures:
@@ -1985,6 +2073,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                     if name != "observe"
                                 }
                             )
+                            apply_tracker_profile()
                             record_tracker_configs()
                             state["paths"] = {
                                 name: path_record(path) for name, path in paths.items()
