@@ -44,6 +44,13 @@ FALLBACK_ANALYTIC_INTERVALS = (4, 2, 1)
 # the intervals found (docs/plans/2026-10-02-second-eval-failure-fixes.md, P4).
 # (xy_resolution_m, yaw_resolution_rad), or None for no lattice retry.
 FALLBACK_FINE_LATTICE = (0.1, pi / 36)
+# A start free at the clearance but inside the extra margin that encloses each
+# primitive's swept footprint rejects every primitive, so the search ends after
+# its root (fine-lattice dev seed 1006, 48 mrad off at a prop). Every retry at
+# the same collision step is boxed in the same way; the whole ladder runs again
+# at this step instead, whose smaller margin still encloses the swept footprint
+# (docs/plans/2026-10-02-second-eval-failure-fixes.md, P6).
+FALLBACK_BOXED_COLLISION_STEP_M = 0.01
 _RETRIED_STATUSES = ("expansion_limit", "no_path")
 DEFAULT_TRANSPORT_PRIMITIVE_LENGTH_M = 0.25
 
@@ -80,12 +87,21 @@ def _search(start, goal, obstacles, footprint, bounds, config) -> PlanResult:
                 int(result.expanded_nodes),
                 attempt_config.xy_resolution_m,
                 attempt_config.yaw_resolution_rad,
+                attempt_config.collision_step_m,
             )
         )
         return result
 
     result = attempt(config)
     interval = config.analytic_expansion_interval
+    if (
+        result.status == "no_path"
+        and result.expanded_nodes == 1
+        and FALLBACK_BOXED_COLLISION_STEP_M is not None
+        and FALLBACK_BOXED_COLLISION_STEP_M < config.collision_step_m
+    ):
+        config = replace(config, collision_step_m=FALLBACK_BOXED_COLLISION_STEP_M)
+        result = attempt(config)
     for retry in _retries(config):
         if result.success or result.status not in _RETRIED_STATUSES:
             break

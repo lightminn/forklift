@@ -1106,3 +1106,60 @@ def test_when_the_fine_lattice_also_runs_out_a_denser_interval_still_rescues():
         (4, "success", 0.2),
     ]
     assert result.approach.analytic_expansion_interval == 4
+
+
+def test_a_start_boxed_in_by_the_swept_margin_is_searched_with_finer_collision_steps():
+    """Fine-lattice dev run seed 1006: the start is free at the approach clearance,
+    but within the extra swept-footprint margin of a prop, so every primitive is
+    rejected and the search ends after one expansion
+    (docs/plans/2026-10-02-second-eval-failure-fixes.md, P6)."""
+    scenario = make_scenario(1006, G2_CATALOGUE, 4)
+    target = pallet_mission.PalletSite(
+        2.9369561817130974, 0.8203058927930917, -0.08517051692935226
+    )
+    start = Pose2D(-1.222732341882794, 0.30449959478431576, -0.04754033353286844)
+    trace = []
+    result = plan_transport(
+        scenario, g2_config(), target_pickup=target, start_rear=start, trace=trace
+    )
+    assert result.success, result.status
+    attempts = next(t for t in trace if t["stage"] == "approach_search")[
+        "search_attempts"
+    ]
+    assert attempts[0][:3] == [8, "no_path", 1]
+    assert attempts[-1][1] == "success"
+    assert attempts[-1][5] == 0.01  # collision step of the winning search
+
+
+def test_a_search_that_expands_more_than_its_root_keeps_the_collision_step(monkeypatch):
+    received = []
+    monkeypatch.setattr(pallet_mission, "plan_hybrid_astar", _exhausted(received))
+    pallet_mission._search(None, None, [], None, None, g2_config())
+    assert {c.collision_step_m for c in received} == {g2_config().collision_step_m}
+
+
+def test_a_boxed_start_repeats_the_whole_ladder_at_the_finer_collision_step(
+    monkeypatch,
+):
+    received = []
+
+    def boxed(*args):
+        received.append(args[-1])
+        return pallet_mission.PlanResult(
+            False,
+            "no_path",
+            np.zeros((0, 3)),
+            np.zeros(0, np.int8),
+            np.zeros(0),
+            0.0,
+            1,
+        )
+
+    monkeypatch.setattr(pallet_mission, "plan_hybrid_astar", boxed)
+    pallet_mission._search(None, None, [], None, None, g2_config())
+    # Every retry at the base step would be boxed in the same way, so the
+    # ladder moves straight to the finer step.
+    steps = [c.collision_step_m for c in received]
+    base = g2_config().collision_step_m
+    assert steps == [base] + [0.01] * 5
+    assert [c.analytic_expansion_interval for c in received] == [8, 8, 8, 4, 2, 1]
