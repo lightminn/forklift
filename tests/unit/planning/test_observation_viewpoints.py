@@ -92,3 +92,23 @@ def test_a_narrow_oblique_limit_removes_side_views():
         [], FOOTPRINT, BOUNDS, config=replace(ViewpointConfig(), oblique_max_rad=math.radians(5)), **COMMON
     )
     assert sum(v.score for v in narrow) < sum(v.score for v in wide)
+
+
+def test_a_pose_facing_away_sees_nothing():
+    assert _score(Pose2D(-0.5, 0.65, math.pi), []) == 0.0
+
+
+def test_the_distance_band_is_applied():
+    pose = Pose2D(-0.5, 0.65, 0.0)
+    far_only = replace(ViewpointConfig(), distance_m=(10.0, 20.0))
+    assert view_score(pose, [], BAY_PICKUP_ZONE, 0.6, 0.8, 1.09, HALF_FOV, far_only) == 0.0
+    assert _score(pose, []) > 0.0
+
+
+def test_the_pallet_heading_range_is_sampled():
+    """A side view sees some +-12 deg placements head-on enough; yaw 0 alone differs."""
+    pose = Pose2D(0.0, 2.6, -0.6)
+    flat = replace(BAY_PICKUP_ZONE, yaw_max_rad=0.0)
+    with_range = view_score(pose, [], BAY_PICKUP_ZONE, 0.6, 0.8, 1.09, HALF_FOV, ViewpointConfig())
+    without = view_score(pose, [], flat, 0.6, 0.8, 1.09, HALF_FOV, ViewpointConfig())
+    assert with_range != without

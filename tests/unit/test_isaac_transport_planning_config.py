@@ -424,3 +424,14 @@ def test_runtime_viewpoints_see_the_pallet_only_as_an_unlabelled_rectangle():
     ]
     assert not any("pickup" in ast.unparse(k.value) for k in call.keywords)
     assert {"margin_m", "rear_to_camera_m", "half_fov_rad"} <= keywords
+
+
+def test_runtime_viewpoints_need_both_the_default_list_and_the_bay():
+    tree = ast.parse(SCRIPT.read_text())
+    (assign,) = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and ast.unparse(node.targets[0]) == "args.runtime_viewpoints"
+    ]
+    assert isinstance(assign.value, ast.BoolOp) and isinstance(assign.value.op, ast.And)

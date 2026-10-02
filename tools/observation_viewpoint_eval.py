@@ -113,11 +113,21 @@ def evaluate(evaluator: design.Evaluator, seed: int, proxy: int) -> dict:
     }
 
 
+def evaluator_for(record: dict) -> design.Evaluator:
+    """The G4 evaluator, reserving only the next frozen evaluation's seeds.
+
+    Its visibility uses the EPAL 6 pallet boxes, so other shapes are refused
+    until it builds them from the record's pallet.
+    """
+    urdf = record["arguments"].get("pallet_urdf", "")
+    if "epal6" not in str(urdf):
+        raise ValueError(f"only EPAL 6 records are supported, got {urdf!r}")
+    return design.Evaluator(design.RunConfig.from_record(record), reserved=RESERVED_SEEDS)
+
+
 def _init(record_path: str) -> None:
     global _EVALUATOR
-    _EVALUATOR = design.Evaluator(
-        design.RunConfig.from_record(json.loads(Path(record_path).read_text()))
-    )
+    _EVALUATOR = evaluator_for(json.loads(Path(record_path).read_text()))
 
 
 def _job(job):
