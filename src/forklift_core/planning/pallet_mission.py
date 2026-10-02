@@ -76,10 +76,10 @@ def _retries(config, extended=True):
             xy_resolution_m=min(xy, config.xy_resolution_m),
             yaw_resolution_rad=min(yaw, config.yaw_resolution_rad),
         )
+        # Not searched again when the config is already as fine; the extended
+        # ladder below still uses it (Codex review, 2026-10-03).
         if fine != config:
             yield fine
-        else:
-            fine = None
     for denser in FALLBACK_ANALYTIC_INTERVALS:
         if denser < config.analytic_expansion_interval:
             yield replace(config, analytic_expansion_interval=denser)

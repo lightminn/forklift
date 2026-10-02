@@ -1074,8 +1074,12 @@ def test_a_lattice_already_as_fine_is_not_searched_again(monkeypatch):
     monkeypatch.setattr(pallet_mission, "plan_hybrid_astar", _exhausted(received))
     fine = replace(g2_config(), xy_resolution_m=0.1, yaw_resolution_rad=np.radians(5))
     pallet_mission._search(None, None, [], None, None, fine)
-    assert [c.analytic_expansion_interval for c in received] == [8, 4, 2, 1]
+    # The earlier ladder skips the duplicate fine search; the extended ladder
+    # still runs on it, with more budget and then the shorter primitive.
+    assert [c.analytic_expansion_interval for c in received] == [8, 4, 2, 1, 8, 8]
     assert all(c.xy_resolution_m == 0.1 for c in received)
+    assert [c.max_expansions for c in received[-2:]] == [4 * fine.max_expansions] * 2
+    assert received[-1].primitive_length_m == 0.10
 
 
 def test_a_partly_finer_lattice_only_refines_the_coarser_axis(monkeypatch):

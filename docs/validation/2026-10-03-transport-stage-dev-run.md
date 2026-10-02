@@ -17,3 +17,5 @@
   - 대상마다 해결 경로(cusp 재계획·확장 사다리·관측점 변경)를, cusp 재계획이 일어난 seed 마다 횟수·오차·새 경로 길이·전환 수를, `planning_wall_s` 최대값을
     적는다.
 - 모든 관측 시도를 G3 도구로 분류한다(같은 커밋의 git worktree 에서).
+- 실행 뒤 커밋(`fine-lattice config keeps the extended ladder`, Codex 재검토)은 호출자가 처음부터 세밀 격자(0.1 m/5° 이하)를 줄 때만 동작이 바뀐다. 실행기 설정은
+  0.2 m/10° 라서 이 실행의 탐색 순서와 같다 — snapshot 을 다시 만들지 않는다.
