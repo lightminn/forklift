@@ -1256,6 +1256,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 # starts from the measured pose. Final goals keep the rules above.
                 cusp_position_tolerance_m=0.03,
                 cusp_yaw_tolerance_rad=0.05,
+                # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad
+                # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).
+                cusp_brake_window_m=0.008,
                 # Optional path speed caps; absent from the settings = off.
                 max_lateral_acceleration_mps2=settings.get(
                     "max_lateral_acceleration_mps2"
@@ -1281,6 +1284,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 tracker.config,
                 cusp_position_tolerance_m=None,
                 cusp_yaw_tolerance_rad=None,
+                cusp_brake_window_m=None,
                 overshoot_tolerance_m=None,
                 position_tolerance_m=0.008,
             )
@@ -1874,6 +1878,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                     # starts from the measured pose. Final goals keep the rules above.
                                     cusp_position_tolerance_m=0.03,
                                     cusp_yaw_tolerance_rad=0.05,
+                                    # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad
+                                    # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).
+                                    cusp_brake_window_m=0.008,
                                     # Optional path speed caps; absent from the settings = off.
                                     max_lateral_acceleration_mps2=settings.get(
                                         "max_lateral_acceleration_mps2"
@@ -2053,6 +2060,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                             # starts from the measured pose. Final goals keep the rules above.
                                             cusp_position_tolerance_m=0.03,
                                             cusp_yaw_tolerance_rad=0.05,
+                                            # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad
+                                            # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).
+                                            cusp_brake_window_m=0.008,
                                             # Optional path speed caps; absent from the settings = off.
                                             max_lateral_acceleration_mps2=settings.get(
                                                 "max_lateral_acceleration_mps2"

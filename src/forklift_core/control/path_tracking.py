@@ -41,6 +41,13 @@ class TrackerConfig:
     # close a sideways offset and would otherwise wait at zero speed forever.
     cusp_position_tolerance_m: float | None = None
     cusp_yaw_tolerance_rad: float | None = None
+    # How close to a cusp, along the path, braking and the cusp's heading
+    # check begin. None begins them as soon as the cusp position tolerance is
+    # entered. A wide cusp tolerance then also cuts steering short: entering a
+    # 30 mm window yawed and judging there failed loaded transports at
+    # 54-57 mrad against 50 (G5 1011/1019, 2026-10-02). A narrower window keeps
+    # steering to it; the cusp's acceptance tolerances are unchanged.
+    cusp_brake_window_m: float | None = None
     # How far past an endpoint, along the direction of travel, a stop still
     # counts as arrived. The sideways and heading limits stay as they are.
     # Braking lag carries a truck a few millimetres beyond the goal; with no
@@ -255,7 +262,10 @@ class RearAxlePathTracker:
                 position_tolerance = cfg.cusp_position_tolerance_m
             if cfg.cusp_yaw_tolerance_rad is not None:
                 yaw_tolerance = cfg.cusp_yaw_tolerance_rad
-        at_endpoint = remaining <= position_tolerance and (
+        brake_window = position_tolerance
+        if endpoint != len(self._poses) - 1 and cfg.cusp_brake_window_m is not None:
+            brake_window = min(cfg.cusp_brake_window_m, position_tolerance)
+        at_endpoint = remaining <= brake_window and (
             position_error <= position_tolerance
             or self._overshoot_accepted(pose, goal, endpoint, position_tolerance)
         )

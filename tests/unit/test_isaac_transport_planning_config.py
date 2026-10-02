@@ -241,6 +241,8 @@ def test_every_runner_tracker_releases_gear_change_cusps_the_same_way():
     for keywords in configs:
         assert ast.literal_eval(keywords["cusp_position_tolerance_m"]) == 0.03
         assert ast.literal_eval(keywords["cusp_yaw_tolerance_rad"]) == 0.05
+        # Brake and judge cusps at 8 mm (2026-10-02 planner/tracker plan, P2).
+        assert ast.literal_eval(keywords["cusp_brake_window_m"]) == 0.008
 
 
 def test_every_runner_tracker_accepts_small_overshoot_except_insertion():

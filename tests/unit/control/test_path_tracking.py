@@ -527,3 +527,142 @@ def test_nominal_duration_counts_the_slow_curve():
     tracker = RearAxlePathTracker(poses, directions, curvatures, config)
     arc_time = (np.pi / 2 * 2) / 0.5
     assert tracker.nominal_duration_s() > arc_time
+
+
+# --- cusp brake window (docs/plans/2026-10-02-planner-tracker-robustness.md, P2) ---
+
+CUSP_WIDE = dict(
+    **DOCKING,
+    cusp_position_tolerance_m=0.03,
+    cusp_yaw_tolerance_rad=0.05,
+    overshoot_tolerance_m=0.03,
+)
+
+
+def approach_cusp_yawed(config, remaining=0.02, yaw=0.06):
+    """Close in on the x = 1 cusp, `remaining` short of it and yawed: G5 1011/1019."""
+    tracker = RearAxlePathTracker(*CUSP_PATH, config)
+    for x in np.linspace(0, 1 - remaining, 51):
+        command = tracker.update([x, 0.0, yaw], 0.04, 0.02)
+    return command
+
+
+def test_inside_the_wide_cusp_window_a_yaw_error_fails_at_once():
+    command = approach_cusp_yawed(TrackerConfig(**CUSP_WIDE))
+    assert command.status == "failed"
+
+
+def test_a_cusp_brake_window_keeps_steering_until_it_is_reached():
+    command = approach_cusp_yawed(TrackerConfig(**CUSP_WIDE, cusp_brake_window_m=0.008))
+    assert command.status == "tracking"
+    assert command.speed_mps > 0
+    # Inside the window the same yaw error is still judged.
+    late = approach_cusp_yawed(
+        TrackerConfig(**CUSP_WIDE, cusp_brake_window_m=0.008), remaining=0.005
+    )
+    assert late.status == "failed"
+
+
+def test_the_brake_window_leaves_the_final_goal_alone():
+    """A repositioning goal (30 mm) still brakes on entering its own window."""
+    config = TrackerConfig(
+        position_tolerance_m=0.03,
+        yaw_tolerance_rad=0.03,
+        cusp_brake_window_m=0.008,
+    )
+    tracker = RearAxlePathTracker([[0, 0, 0], [1, 0, 0]], [1, 1], [0, 0], config)
+    for x in np.linspace(0, 0.98, 51):
+        command = tracker.update([x, 0.0, 0.0], 0.04, 0.02)
+    assert command.status == "braking"
+
+
+@pytest.mark.parametrize("direction", [1, -1])
+def test_with_the_brake_window_an_offset_stop_at_a_cusp_still_releases(direction):
+    """The 2026-09-26 deadlock must not come back, forwards or in reverse."""
+    poses, directions, curvatures = CUSP_PATH
+    poses = [[direction * x, y, yaw] for x, y, yaw in poses]
+    directions = [direction * d for d in directions]
+    config = TrackerConfig(**CUSP_WIDE, cusp_brake_window_m=0.008)
+    tracker = RearAxlePathTracker(poses, directions, curvatures, config)
+    for x in np.linspace(0, 1, 51):
+        tracker.update([direction * x, 0.015, 0.03], direction * 0.1, 0.02)
+    commands = [
+        tracker.update([direction * 1.0, 0.015, 0.03], 0.0, 0.02) for _ in range(200)
+    ]
+    assert any(c.speed_mps * direction < 0 for c in commands)
+    assert all(c.status != "failed" for c in commands)
+
+
+@pytest.mark.parametrize("direction", [1, -1])
+def test_with_the_brake_window_a_combined_overshoot_at_a_cusp_releases(direction):
+    """Codex counterexample: 25 mm past and 20 mm aside (32 mm off) must go on."""
+    poses, directions, curvatures = CUSP_PATH
+    poses = [[direction * x, y, yaw] for x, y, yaw in poses]
+    directions = [direction * d for d in directions]
+    config = TrackerConfig(**CUSP_WIDE, cusp_brake_window_m=0.008)
+    tracker = RearAxlePathTracker(poses, directions, curvatures, config)
+    for x in np.linspace(0, 1.025, 51):
+        tracker.update([direction * x, 0.02, 0.0], direction * 0.1, 0.02)
+    commands = [
+        tracker.update([direction * 1.025, 0.02, 0.0], 0.0, 0.02) for _ in range(200)
+    ]
+    assert any(c.speed_mps * direction < 0 for c in commands)
+    assert all(c.status != "failed" for c in commands)
+
+
+@pytest.mark.parametrize("value", [True, 0, -0.01, np.nan])
+def test_invalid_cusp_brake_window_is_rejected(value):
+    with pytest.raises(ValueError):
+        TrackerConfig(cusp_brake_window_m=value)
+
+
+def stop_short_of_cusp(config, short=0.02, lateral=0.015, ticks=500):
+    tracker = RearAxlePathTracker(*CUSP_PATH, config)
+    for x in np.linspace(0, 1 - short, 51):
+        tracker.update([x, lateral, 0.0], 0.04, 0.02)
+    return [tracker.update([1 - short, lateral, 0.0], 0.0, 0.02) for _ in range(ticks)]
+
+
+def test_a_stop_short_of_a_cusp_inside_the_wide_window_creeps_on_with_the_brake_window():
+    """Intended P2 behaviour: 20 mm short is released today but asked to creep with it.
+
+    Not a logical deadlock -- the command stays forward and small; a truck that
+    ignores it ends at the stage time limit.
+    """
+    released = stop_short_of_cusp(TrackerConfig(**CUSP_WIDE))
+    assert any(c.speed_mps < 0 for c in released)
+    creeping = stop_short_of_cusp(TrackerConfig(**CUSP_WIDE, cusp_brake_window_m=0.008))
+    assert all(c.status == "tracking" for c in creeping)
+    assert all(0 < c.speed_mps <= 0.05 for c in creeping[-100:])
+
+
+def test_a_brake_window_wider_than_the_cusp_tolerance_is_capped_by_it():
+    wide = TrackerConfig(**CUSP_WIDE, cusp_brake_window_m=0.1)
+    default = TrackerConfig(**CUSP_WIDE)
+    for remaining in (0.005, 0.02, 0.05):
+        a = approach_cusp_yawed(wide, remaining=remaining)
+        b = approach_cusp_yawed(default, remaining=remaining)
+        assert (a.status, a.speed_mps, a.curvature_inv_m) == (
+            b.status,
+            b.speed_mps,
+            b.curvature_inv_m,
+        )
+
+
+def test_without_a_brake_window_commands_are_unchanged():
+    """None is the old rule exactly: compare whole command streams."""
+    for config_kwargs in (CUSP_WIDE, DOCKING):
+        streams = []
+        for window in (None, 1.0):  # 1 m is capped to the tolerance, i.e. old
+            tracker = RearAxlePathTracker(
+                *CUSP_PATH, TrackerConfig(**config_kwargs, cusp_brake_window_m=window)
+            )
+            stream = []
+            for x in np.linspace(0, 1.02, 80):
+                for lateral in (0.0, 0.012):
+                    command = tracker.update([x, lateral, 0.04], 0.05, 0.02)
+                    stream.append(
+                        (command.status, command.speed_mps, command.curvature_inv_m)
+                    )
+            streams.append(stream)
+        assert streams[0] == streams[1]
