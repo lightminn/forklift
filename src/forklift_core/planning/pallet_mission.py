@@ -581,30 +581,84 @@ def final_straight_prefix(path: PlanResult, keep_m: float) -> PlanResult | None:
     """The approach up to where its final forward straight still has keep_m left.
 
     Online SLAM plan v3.6: the truck stops there to see the pallet again
-    before docking, so only that last straight runs on odometry. None when the
-    path does not end in a forward straight at least keep_m long (or the cut
-    would leave nothing to drive) -- the caller then docks from the far capture.
+    before docking, so only that last straight runs on odometry. The final
+    straight is found by walking back over forward, zero-curvature segments
+    (so a 0.7999999 m straight still counts -- Codex v3.6 P1); the cut is at
+    its start, or further along when it is longer than keep_m. None when the
+    path does not end in such a straight at least keep_m long.
     """
     poses = np.asarray(path.poses, dtype=float)
+    directions = np.asarray(path.directions)
+    curvatures = np.asarray(path.curvatures_inv_m)
     if len(poses) < 3:
         return None
     steps = np.hypot(*np.diff(poses[:, :2], axis=0).T)
+    start = len(poses) - 1
+    while start > 0 and directions[start] > 0 and abs(curvatures[start]) < 1e-9:
+        start -= 1
     remaining = np.concatenate((np.cumsum(steps[::-1])[::-1], [0.0]))
-    cut = int(np.searchsorted(-remaining, -keep_m, side="right")) - 1
-    if cut < 1 or remaining[cut] < keep_m - 1e-9:
+    tolerance = 1e-6
+    if start < 1 or remaining[start] < keep_m - tolerance:
         return None
-    tail = slice(cut + 1, len(poses))
-    if not (
-        np.all(np.asarray(path.directions)[tail] > 0)
-        and np.all(np.abs(np.asarray(path.curvatures_inv_m)[tail]) < 1e-9)
-    ):
-        return None
+    cut = start
+    while cut + 1 < len(poses) and remaining[cut + 1] >= keep_m - tolerance:
+        cut += 1
     return replace(
         path,
         poses=poses[: cut + 1],
-        directions=np.asarray(path.directions)[: cut + 1],
-        curvatures_inv_m=np.asarray(path.curvatures_inv_m)[: cut + 1],
+        directions=directions[: cut + 1],
+        curvatures_inv_m=curvatures[: cut + 1],
         length_m=float(steps[:cut].sum()),
+    )
+
+
+def straight_from_pose(
+    current: Pose2D,
+    line_start: Pose2D,
+    line_end: Pose2D,
+    *,
+    max_lateral_m: float,
+    max_yaw_rad: float,
+    min_length_m: float,
+    step_m: float = 0.04,
+) -> tuple[PlanResult | None, dict]:
+    """The final straight re-drawn from where the truck stands (plan v3.6).
+
+    After the near capture the new pallet estimate moves the straight by a few
+    centimetres; a Hybrid A* search from an offset start makes a manoeuvre
+    with gear changes (Codex v3.6 P2), which would then run held. Instead the
+    truck's pose is projected on the new line and the path is the rest of
+    that line; the tracker takes out the offset. None (with the measured
+    offsets) when the truck is too far off the line, turned too far, or has
+    less than min_length_m of it left.
+    """
+    heading = np.array([cos(line_start.yaw_rad), sin(line_start.yaw_rad)])
+    normal = np.array([-heading[1], heading[0]])
+    offset = np.array([current.x_m - line_start.x_m, current.y_m - line_start.y_m])
+    along = float(offset @ heading)
+    lateral = float(offset @ normal)
+    yaw = float(np.arctan2(np.sin(current.yaw_rad - line_start.yaw_rad), np.cos(current.yaw_rad - line_start.yaw_rad)))
+    total = float(np.hypot(line_end.x_m - line_start.x_m, line_end.y_m - line_start.y_m))
+    left = total - max(along, 0.0)
+    record = {"along_m": along, "lateral_m": lateral, "yaw_rad": yaw, "length_left_m": left}
+    if abs(lateral) > max_lateral_m or abs(yaw) > max_yaw_rad or left < min_length_m:
+        return None, record
+    begin = np.array([line_start.x_m, line_start.y_m]) + max(along, 0.0) * heading
+    count = max(1, ceil(left / step_m))
+    fractions = np.linspace(0.0, 1.0, count + 1)
+    xy = begin + fractions[:, None] * (np.array([line_end.x_m, line_end.y_m]) - begin)
+    poses = np.column_stack((xy, np.full(count + 1, line_start.yaw_rad)))
+    return (
+        PlanResult(
+            True,
+            "success",
+            poses,
+            np.ones(count + 1, dtype=np.int8),
+            np.zeros(count + 1),
+            left,
+            0,
+        ),
+        record,
     )
 
 

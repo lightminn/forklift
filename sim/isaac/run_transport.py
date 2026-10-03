@@ -716,6 +716,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         make_transport_planner_config,
         plan_transport,
         final_straight_prefix,
+        straight_from_pose,
         plan_return_leg,
         plan_transport_leg,
     )
@@ -2247,6 +2248,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     require(replanned.success, f"stall_replan_failed:{replanned.status}")
                     paths[phase] = replanned
                     state["paths"][phase] = path_record(replanned)
+                    (args.output / "paths.json").write_text(
+                        record_json(state["paths"], indent=2) + "\n"
+                    )
+                    add_path_display(
+                        stage,
+                        replanned,
+                        "Transport" if phase == "transport" else "Return",
+                        (1.0, 0.65, 0.04) if phase == "transport" else (0.55, 0.2, 0.85),
+                    )
                     trackers[phase] = RearAxlePathTracker(
                         replanned.poses,
                         replanned.directions,
@@ -2905,8 +2915,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 near_leg = final_straight_prefix(
                                     paths["approach"], geometry.alignment_straight_m
                                 )
+                                # Every approach ends in the 0.8 m alignment straight;
+                                # not finding it is a failure, not a skip (Codex v3.6 P1).
+                                require(near_leg is not None, "near_capture_no_final_straight")
                                 state["near_capture"] = {
-                                    "status": "pending" if near_leg else "no_final_straight",
+                                    "status": "pending",
                                     "far_attempt": attempt_number,
                                     "far_estimate_m": state["perception"][
                                         "perception_pickup_estimate_m"
@@ -2929,6 +2942,43 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 inset_status = "근접 재관측 위치로 이동"
                             else:
                                 if state.get("near_capture", {}).get("status") == "pending":
+                                    # The new estimate moves the straight by a few
+                                    # cm; re-draw it from where the truck stands
+                                    # instead of a Hybrid A* manoeuvre that would
+                                    # run held (Codex v3.6 P2).
+                                    new_prefix = final_straight_prefix(
+                                        paths["approach"], geometry.alignment_straight_m
+                                    )
+                                    require(
+                                        new_prefix is not None,
+                                        "near_capture_no_final_straight",
+                                    )
+                                    line_start = Pose2D(*new_prefix.poses[-1])
+                                    line_end = Pose2D(*paths["approach"].poses[-1])
+                                    straight, offsets = straight_from_pose(
+                                        Pose2D(float(rear[0]), float(rear[1]), float(rear[2])),
+                                        line_start,
+                                        line_end,
+                                        max_lateral_m=0.05,
+                                        max_yaw_rad=0.05,
+                                        min_length_m=0.3,
+                                    )
+                                    state["near_capture"]["offsets_to_new_line"] = offsets
+                                    require(straight is not None, f"near_capture_misaligned:{offsets}")
+                                    paths["approach"] = straight
+                                    state["paths"]["approach"] = path_record(straight)
+                                    (args.output / "paths.json").write_text(
+                                        record_json(state["paths"], indent=2) + "\n"
+                                    )
+                                    add_path_display(
+                                        stage, straight, "Approach", (0.05, 0.45, 1.0)
+                                    )
+                                    trackers["approach"] = RearAxlePathTracker(
+                                        straight.poses,
+                                        straight.directions,
+                                        straight.curvatures_inv_m,
+                                        trackers["approach"].config,
+                                    )
                                     state["near_capture"].update(
                                         status="done",
                                         near_attempt=attempt_number,
