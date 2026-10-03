@@ -718,10 +718,20 @@ MOUNT_SNIPPETS = (
     "orientation=np.asarray(adapter.xyzw_to_wxyz(rig.OPTICAL_QUATERNION_XYZW)),",
     "camera_axes=args.perception_camera_axes,",
 )
-_RUNNER_CACHE: dict[str, str | None] = {}
+# Runners that record each capture's mount (2026-10-03 carriage mount adoption):
+# the mount comes from the adapter's named table and is written per attempt.
+MOUNT_SNIPPETS_NAMED = (
+    "perception_mount = adapter.mount_base_from_optical(args.perception_mount)",
+    "perception_mount = adapter.default_base_from_optical()",
+    'attempt["base_from_optical"] = {',
+    "camera_axes=args.perception_camera_axes,",
+)
+_RUNNER_CACHE: dict[tuple, str | None] = {}
 
 
-def runner_mount_commit(script_sha256: str | None) -> str | None:
+def runner_mount_commit(
+    script_sha256: str | None, snippets: tuple = MOUNT_SNIPPETS
+) -> str | None:
     """The commit whose run_transport.py has this hash and applies the nominal mount.
 
     The run record keeps only the runner's hash, so the mount the runner applied
@@ -733,8 +743,8 @@ def runner_mount_commit(script_sha256: str | None) -> str | None:
 
     if script_sha256 is None:
         return None
-    if script_sha256 in _RUNNER_CACHE:
-        return _RUNNER_CACHE[script_sha256]
+    if (script_sha256, snippets) in _RUNNER_CACHE:
+        return _RUNNER_CACHE[(script_sha256, snippets)]
     found = None
     try:
         commits = subprocess.run(
@@ -753,13 +763,40 @@ def runner_mount_commit(script_sha256: str | None) -> str | None:
             ).stdout
             if hashlib.sha256(blob).hexdigest() == script_sha256:
                 text = blob.decode()
-                if all(snippet in text for snippet in MOUNT_SNIPPETS):
+                if all(snippet in text for snippet in snippets):
                     found = commit
                 break
     except (OSError, subprocess.CalledProcessError):
         found = None
-    _RUNNER_CACHE[script_sha256] = found
+    _RUNNER_CACHE[(script_sha256, snippets)] = found
     return found
+
+
+def _adapter():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "diagnose_perception_adapter", ROOT / "sim/isaac/perception_adapter.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def recorded_mount_matches(result: dict, attempt: dict) -> bool:
+    """The attempt's recorded base<-optical is the named mount the run asked for."""
+    recorded = attempt.get("base_from_optical")
+    name = result["arguments"].get("perception_mount", "legacy")
+    if recorded is None:
+        return False
+    try:
+        planned = _adapter().mount_base_from_optical(name)
+    except KeyError:
+        return False
+    return bool(
+        np.allclose(recorded["rotation"], planned.rotation, atol=1e-9)
+        and np.allclose(recorded["translation_m"], planned.translation_m, atol=1e-9)
+    )
 
 
 def depth_array_sha256(depth: np.ndarray) -> str:
@@ -793,14 +830,17 @@ def observe_pallet_pose(result: dict):
 
 
 def attempt_scene(result: dict, attempt: dict, depth: np.ndarray) -> SceneInput:
-    import importlib.util
-
-    # The runner's mount: the adapter's nominal base_from_optical.
-    spec = importlib.util.spec_from_file_location(
-        "diagnose_perception_adapter", ROOT / "sim/isaac/perception_adapter.py"
-    )
-    perception_adapter = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(perception_adapter)
+    perception_adapter = _adapter()
+    # The runner's mount: the recorded named mount when the run recorded one
+    # (checked by the runner_mount gate), else the adapter's nominal mount.
+    if "base_from_optical" in attempt:
+        mount = perception_adapter.mount_base_from_optical(
+            result["arguments"].get("perception_mount", "legacy")
+        )
+    else:
+        mount = perception_adapter.default_base_from_optical()
+    if attempt.get("depth_quantize_mm"):
+        depth = perception_adapter.quantize_depth_mm(depth)
 
     k = attempt["capture_diagnostics"]["intrinsics"]["integer_index"]["matrix"]
     intrinsics = PinholeIntrinsics(
@@ -811,7 +851,7 @@ def attempt_scene(result: dict, attempt: dict, depth: np.ndarray) -> SceneInput:
         rgb=np.zeros((480, 640, 3), dtype=np.uint8),
         depth_m=np.asarray(depth, dtype=float),
         intrinsics=intrinsics,
-        base_from_optical=perception_adapter.default_base_from_optical(),
+        base_from_optical=mount,
         stamp_ns=int(observation["stamp_ns"]),
         clock_domain="synthetic",
         source_provenance="synthetic",
@@ -879,8 +919,16 @@ def diagnose_attempt(run_dir: Path, number: int, pallet_urdf: Path) -> dict:
     out["gates"]["camera_axes"] = (
         result["arguments"].get("perception_camera_axes") == "ros"
     )
-    out["runner_commit"] = runner_mount_commit(result.get("script_sha256"))
-    out["gates"]["runner_mount"] = out["runner_commit"] is not None
+    if "base_from_optical" in attempt:
+        out["runner_commit"] = runner_mount_commit(
+            result.get("script_sha256"), MOUNT_SNIPPETS_NAMED
+        )
+        out["gates"]["runner_mount"] = out[
+            "runner_commit"
+        ] is not None and recorded_mount_matches(result, attempt)
+    else:
+        out["runner_commit"] = runner_mount_commit(result.get("script_sha256"))
+        out["gates"]["runner_mount"] = out["runner_commit"] is not None
     out["gates"]["pallet_urdf"] = result.get("pallet_urdf_sha256") == _sha256_file(
         pallet_urdf
     )

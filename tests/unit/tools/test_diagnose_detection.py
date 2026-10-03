@@ -139,7 +139,7 @@ def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def write_run(tmp_path, s, x, *, tamper_depth=False):
+def write_run(tmp_path, s, x, *, tamper_depth=False, mount="legacy", recorded=None, quantize=0):
     """A run directory shaped like run_transport's, around a rig scene."""
     # run_transport scenes are clock_domain/provenance "synthetic".
     s = dataclasses.replace(s, clock_domain="synthetic", source_provenance="synthetic")
@@ -156,6 +156,7 @@ def write_run(tmp_path, s, x, *, tamper_depth=False):
     record = {
         "arguments": {
             "perception_camera_axes": "ros",
+            "perception_mount": mount,
             "pallet_prior_loaded": dataclasses.asdict(PRIOR),
             "pallet_geometry_loaded": {"overall_depth_m": GEOMETRY.overall_depth_m},
         },
@@ -176,6 +177,15 @@ def write_run(tmp_path, s, x, *, tamper_depth=False):
             {
                 "candidate_index": 0,
                 "depth_sha256": diag.depth_array_sha256(depth),
+                # The committed runner records each capture's mount.
+                "base_from_optical": recorded
+                or {
+                    "translation_m": np.asarray(
+                        s.base_from_optical.translation_m
+                    ).tolist(),
+                    "rotation": np.asarray(s.base_from_optical.rotation).tolist(),
+                },
+                "depth_quantize_mm": quantize,
                 "capture_diagnostics": {
                     "accepted_pose": LEVEL,
                     "intrinsics": {
@@ -334,3 +344,31 @@ def test_a_front_partly_out_of_view_is_not_occlusion():
     assert 0 < vis["front_face_pixels"] < PARAMS.min_plane_points
     assert vis["front_face_nearer"] == 0
     assert out["family"] == {"family": "A", "why": "partial_view"}
+
+
+def test_a_recorded_mount_that_is_not_the_named_one_fails_the_mount_gate(tmp_path):
+    """The run asked for carriage_low but recorded the legacy transform."""
+    out = diag.diagnose_attempt(
+        write_run(tmp_path, scene(2.5), 2.5, mount="carriage_low"), 1, URDF
+    )
+    assert out["gates"]["runner_mount"] is False
+    assert out["family"] == {"family": "undecidable", "why": "gate_failed"}
+
+
+def test_the_replayed_scene_uses_the_recorded_mount_and_rounding():
+    import numpy as np
+
+    adapter = diag._adapter()
+    low = adapter.mount_base_from_optical("carriage_low")
+    result = {"arguments": {"perception_mount": "carriage_low"}}
+    attempt = {
+        "base_from_optical": {"translation_m": list(low.translation_m), "rotation": np.asarray(low.rotation).tolist()},
+        "depth_quantize_mm": 1,
+        "capture_diagnostics": {"intrinsics": {"integer_index": {"matrix": [[465.7, 0, 319.5], [0, 465.7, 239.5], [0, 0, 1]]}}},
+        "pocket_observation": {"stamp_ns": 1},
+    }
+    assert diag.recorded_mount_matches(result, attempt)
+    depth = np.full((480, 640), 1.23449)
+    scene = diag.attempt_scene(result, attempt, depth)
+    np.testing.assert_allclose(scene.base_from_optical.translation_m, low.translation_m)
+    assert float(scene.depth_m[0, 0]) == 1.234

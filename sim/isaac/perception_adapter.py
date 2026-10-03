@@ -64,6 +64,54 @@ def default_base_from_optical() -> RigidTransform:
     return _RIG.Camera().base_from_optical()
 
 
+# Named perception mounts: optical centre in base_link at lift 0 and downward
+# tilt. legacy is the baseline every recorded run used; carriage_low is the low
+# carriage mount the near-field study chose for the provisional chassis
+# (docs/validation/2026-10-03-near-field-mount-study.md) and is only valid
+# while the lift is at 0, where fork_carriage coincides with base_link.
+PERCEPTION_MOUNTS = {
+    "legacy": (tuple(_RIG.DEFAULT_CAMERA_XYZ_M), 0.0),
+    "carriage_low": ((0.559, 0.0, 0.27), 0.10),
+}
+
+
+def mount_base_from_optical(name: str) -> RigidTransform:
+    """base_link <- optical for a named mount (legacy == default_base_from_optical)."""
+    xyz, tilt = PERCEPTION_MOUNTS[name]
+    return _RIG.Camera(xyz, tilt).base_from_optical()
+
+
+def quaternion_xyzw(rotation) -> tuple[float, float, float, float]:
+    """Unit quaternion (x, y, z, w, w >= 0) of a proper rotation matrix."""
+    m = np.asarray(rotation, dtype=float)
+    if m.shape != (3, 3) or not np.allclose(m @ m.T, np.eye(3), atol=1e-9):
+        raise ValueError("rotation must be an orthonormal 3x3 matrix")
+    trace = float(np.trace(m))
+    if trace > 0:
+        s = 2.0 * np.sqrt(trace + 1.0)
+        q = ((m[2, 1] - m[1, 2]) / s, (m[0, 2] - m[2, 0]) / s, (m[1, 0] - m[0, 1]) / s, s / 4)
+    elif m[0, 0] > m[1, 1] and m[0, 0] > m[2, 2]:
+        s = 2.0 * np.sqrt(1.0 + m[0, 0] - m[1, 1] - m[2, 2])
+        q = (s / 4, (m[0, 1] + m[1, 0]) / s, (m[0, 2] + m[2, 0]) / s, (m[2, 1] - m[1, 2]) / s)
+    elif m[1, 1] > m[2, 2]:
+        s = 2.0 * np.sqrt(1.0 + m[1, 1] - m[0, 0] - m[2, 2])
+        q = ((m[0, 1] + m[1, 0]) / s, s / 4, (m[1, 2] + m[2, 1]) / s, (m[0, 2] - m[2, 0]) / s)
+    else:
+        s = 2.0 * np.sqrt(1.0 + m[2, 2] - m[0, 0] - m[1, 1])
+        q = ((m[0, 2] + m[2, 0]) / s, (m[1, 2] + m[2, 1]) / s, s / 4, (m[1, 0] - m[0, 1]) / s)
+    q = np.asarray(q, dtype=float)
+    q /= np.linalg.norm(q)
+    if q[3] < 0:
+        q = -q
+    return tuple(float(v) for v in q)
+
+
+def quantize_depth_mm(depth_m: np.ndarray) -> np.ndarray:
+    """Round finite depth to whole millimetres, as a z16 depth stream reports it."""
+    depth = np.asarray(depth_m, dtype=float)
+    return np.where(np.isfinite(depth), np.round(depth * 1000.0) / 1000.0, depth)
+
+
 @dataclass(frozen=True)
 class IsaacIntrinsics:
     """Retain SDK K; derive K for integer-index pixel centres from that source.
@@ -252,8 +300,13 @@ class SensorCapture:
         position_tolerance_m=0.001,
         angle_tolerance_rad=0.001,
         render_latency_s=0.066667,
+        guard_fn=None,
     ):
         self.camera, self.mount = camera, mount
+        # Optional check run before the first render step and after every one;
+        # it raises CaptureFailure when the mount is no longer valid (e.g. a
+        # carriage camera whose lift left 0 during the capture).
+        self.guard_fn = guard_fn
         self.step_fn, self.physics_time_fn, self.pose_fn = (
             step_fn,
             physics_time_fn,
@@ -336,11 +389,15 @@ class SensorCapture:
             nonlocal metadata
             diag = self.state.diagnostics
             if diag.capture_start_time_s is None:
+                if self.guard_fn is not None:
+                    self.guard_fn()
                 diag.pose_before = self._pose()
                 diag.capture_start_time_s = float(self.physics_time_fn())
             diag.physics_time_before_s = float(self.physics_time_fn())
             self.step_fn()
             diag.render_steps += 1
+            if self.guard_fn is not None:
+                self.guard_fn()
             diag.pose_after = self._pose()
             diag.physics_time_after_s = float(self.physics_time_fn())
             p0, q0 = map(np.asarray, diag.pose_before)
