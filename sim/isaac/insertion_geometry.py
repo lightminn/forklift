@@ -429,6 +429,48 @@ class InsertionGeometry:
         ]
         return out
 
+    def lateral_clearances(
+        self,
+        base_position_m: ArrayLike,
+        base_quaternion_wxyz: ArrayLike,
+        lift_m: float,
+        pallet_position_m: ArrayLike,
+        pallet_quaternion_wxyz: ArrayLike,
+    ) -> dict:
+        """Smallest sideways gap from each blade to the pallet boxes beside it.
+
+        In the pallet frame, each blade is replaced by its axis-aligned bounding
+        box (conservative under yaw, pitch and roll: the gap can only come out
+        smaller). Pallet boxes overlapping that box along x and z are the pocket
+        walls; the result is the smallest y separation to any of them, negative
+        when they overlap. None when no pallet box is beside the blade (outside
+        the pallet). Online SLAM plan S2: lateral clearance >= 10 mm.
+        """
+        world_from_pallet = _rotation(pallet_quaternion_wxyz)
+        pallet_from_base = world_from_pallet.T @ _rotation(base_quaternion_wxyz)
+        translation = world_from_pallet.T @ (
+            _vector(base_position_m) - _vector(pallet_position_m)
+        )
+        out: dict = {}
+        for name, center, half in self.fork_boxes:
+            if "fork_collision" not in name:
+                continue
+            fork_center = translation + pallet_from_base @ (center + [0.0, 0.0, lift_m])
+            fork_half = np.abs(pallet_from_base) @ half
+            low, high = fork_center - fork_half, fork_center + fork_half
+            box_low = self._pallet_centers - self._pallet_halves
+            box_high = self._pallet_centers + self._pallet_halves
+            beside = (
+                (box_low[:, 0] < high[0])
+                & (box_high[:, 0] > low[0])
+                & (box_low[:, 2] < high[2])
+                & (box_high[:, 2] > low[2])
+            )
+            gaps = np.maximum(box_low[beside, 1] - high[1], low[1] - box_high[beside, 1])
+            side = "left" if "left" in name else "right"
+            out[side] = float(gaps.min()) if gaps.size else None
+        return out
+
     def forbidden_contacts(
         self,
         base_position_m: ArrayLike,

@@ -741,3 +741,12 @@ def test_leaving_the_path_after_a_heading_failure_is_reported():
     assert first.failure == "endpoint_heading" and not first.off_path
     away = tracker.update([0.996, config.max_cross_track_error_m + 0.01, 0.06], 0.0, 0.02)
     assert away.failure == "endpoint_heading" and away.off_path
+
+
+def test_remaining_to_goal_counts_down_to_zero_at_arrival():
+    tracker = RearAxlePathTracker(*route(), TrackerConfig())
+    total = tracker.remaining_to_goal_m()
+    assert total == pytest.approx(0.6 / 0.4 + 0.99, abs=0.02)
+    pose, history = rollout(tracker, route()[0][0])
+    assert history[-1].status == "arrived"
+    assert tracker.remaining_to_goal_m() <= tracker.config.position_tolerance_m + 1e-3

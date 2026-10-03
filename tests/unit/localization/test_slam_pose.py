@@ -186,3 +186,38 @@ def test_stop_detector_rejects_reversing_and_turning_in_either_sign(speed, yaw_r
     assert not any(
         detector.update(commanded_speed=0.0, speed=speed, yaw_rate=yaw_rate) for _ in range(240)
     )
+
+
+def test_holding_counts_distance_travelled_not_displacement():
+    # Insert 0.8 m forward, then back out 0.8 m: displacement 0, travel 1.6 m.
+    tracker = _tracking()
+    tracker.hold(odom_from_base=(0, 0, 0))
+    tracker.receive(5, 0.5, "processed", (0, 0, 0))
+    tracker.map_from_base(0.5, (0.8, 0, 0))
+    with pytest.raises(LocalizationStale):
+        tracker.map_from_base(0.5, (0.0, 0, 0))
+    assert tracker.hold_travel_m == pytest.approx(1.6)
+
+
+def test_tracker_speed_waits_for_the_stop_detector():
+    detector = StopDetector(tick_s=1 / 120)
+    detector.update(commanded_speed=0.0, speed=0.004, yaw_rate=0.0)
+    # A lucky slow sample is not a stop: the tracker sees just over its threshold.
+    assert abs(detector.tracker_speed(0.012)) > 0.012
+    for _ in range(240):
+        detector.update(commanded_speed=0.0, speed=0.0, yaw_rate=0.0)
+    assert detector.stopped and detector.tracker_speed(0.012) == 0.0
+    moving = StopDetector(tick_s=1 / 120)
+    for _ in range(12):
+        moving.update(commanded_speed=-0.2, speed=-0.2, yaw_rate=0.0)
+    assert moving.tracker_speed(0.012) == pytest.approx(-0.2)
+
+
+def test_tracker_speed_from_rest_follows_the_command_sign_not_the_noise():
+    detector = StopDetector(tick_s=1 / 120)
+    for _ in range(240):
+        detector.update(commanded_speed=0.0, speed=0.0, yaw_rate=0.0)
+    # Start a reverse leg; the noisy mean is still slightly positive.
+    detector.update(commanded_speed=-0.003, speed=0.002, yaw_rate=0.0)
+    assert not detector.stopped
+    assert detector.tracker_speed(0.012) < 0

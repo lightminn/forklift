@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from math import atan2, cos, sin
 
+import math
+
 import numpy as np
 
 from forklift_core._validation import _finite_scalar
@@ -144,6 +146,8 @@ class SlamPoseTracker:
         self.applied = None
         self.version = 0
         self._hold_start = None
+        self._hold_last = None
+        self.hold_travel_m = 0.0
         self.warmup_replies = 0
 
     def receive(self, scan_id: int, stamp_s: float, status: str, map_from_odom) -> None:
@@ -175,6 +179,8 @@ class SlamPoseTracker:
             raise ValueError("can only hold while tracking")
         self.mode = "holding"
         self._hold_start = tuple(float(v) for v in odom_from_base)
+        self._hold_last = self._hold_start
+        self.hold_travel_m = 0.0
 
     def release(self, *, odom_from_base) -> tuple[float, float]:
         """Apply the received correction; return the position and yaw jump."""
@@ -183,7 +189,7 @@ class SlamPoseTracker:
         before = compose(self.applied[0], odom_from_base)
         self.applied = self.received
         after = compose(self.applied[0], odom_from_base)
-        self.mode, self._hold_start = "tracking", None
+        self.mode, self._hold_start, self._hold_last = "tracking", None, None
         return (
             float(np.hypot(after[0] - before[0], after[1] - before[1])),
             abs(wrap(after[2] - before[2])),
@@ -198,14 +204,19 @@ class SlamPoseTracker:
             if age > self.max_age_s + 1e-12:
                 raise LocalizationStale(f"last processed correction {age:.3f} s old")
         if self.mode == "holding":
-            moved = float(
+            # Distance travelled (sum of steps), not displacement: insert and
+            # back out again is dead reckoning both ways.
+            self.hold_travel_m += float(
                 np.hypot(
-                    odom_from_base[0] - self._hold_start[0],
-                    odom_from_base[1] - self._hold_start[1],
+                    odom_from_base[0] - self._hold_last[0],
+                    odom_from_base[1] - self._hold_last[1],
                 )
             )
-            if moved > self.hold_limit_m:
-                raise LocalizationStale(f"dead reckoning {moved:.2f} m while holding")
+            self._hold_last = (float(odom_from_base[0]), float(odom_from_base[1]))
+            if self.hold_travel_m > self.hold_limit_m:
+                raise LocalizationStale(
+                    f"dead reckoning {self.hold_travel_m:.2f} m while holding"
+                )
         return compose(self.applied[0], odom_from_base)
 
 
@@ -233,18 +244,43 @@ class StopDetector:
         self.speed_mps, self.yaw_rate_radps = speed_mps, yaw_rate_radps
         self._speeds, self._yaw_rates = [], []
         self._zero_command = self._run = 0
+        self.stopped = False
+        self._direction = 1.0
 
     def update(self, *, commanded_speed: float, speed: float, yaw_rate: float) -> bool:
         self._speeds = (self._speeds + [float(speed)])[-self.window :]
         self._yaw_rates = (self._yaw_rates + [float(yaw_rate)])[-self.window :]
         self._zero_command = self._zero_command + 1 if commanded_speed == 0.0 else 0
+        if commanded_speed != 0.0:
+            self._direction = math.copysign(1.0, commanded_speed)
         quiet = (
             len(self._speeds) == self.window
             and abs(sum(self._speeds) / self.window) <= self.speed_mps
             and abs(sum(self._yaw_rates) / self.window) <= self.yaw_rate_radps
         )
         self._run = self._run + 1 if quiet else 0
-        return self._zero_command >= self.command_ticks and self._run >= self.run_ticks
+        self.stopped = self._zero_command >= self.command_ticks and self._run >= self.run_ticks
+        return self.stopped
+
+    @property
+    def mean_speed(self) -> float:
+        return sum(self._speeds) / len(self._speeds) if self._speeds else 0.0
+
+    def tracker_speed(self, stop_speed_mps: float) -> float:
+        """The speed to hand a path tracker that judges a stop by one sample.
+
+        The windowed mean, except that while this detector has not passed a
+        stop its magnitude is kept just above ``stop_speed_mps`` -- so the
+        tracker's own arrival and gear-change checks wait for this detector
+        (noisy odometry would otherwise pass them on a lucky sample). That
+        magnitude carries the sign of the last non-zero command, never the
+        noise: starting a reverse leg from rest must not read as still rolling
+        forward, which the tracker would brake against.
+        """
+        mean = self.mean_speed
+        if self.stopped or abs(mean) > stop_speed_mps:
+            return mean
+        return self._direction * stop_speed_mps * 1.01
 
 
 class OdometryNoise:

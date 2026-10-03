@@ -118,6 +118,7 @@ class IsaacSlamBridge(Node):
         )
         self.create_subscription(OccupancyGrid, "/map", self.on_map, map_qos)
         self.maps: list[dict] = []
+        self.map_lock = threading.Lock()  # metadata and grids change together
         self.map_arrays: dict[str, np.ndarray] = {}
         self.last_scan_id = -1
         self.records: list[dict] = []
@@ -134,6 +135,10 @@ class IsaacSlamBridge(Node):
             self.cond.notify_all()
 
     def on_map(self, msg: OccupancyGrid) -> None:
+        with self.map_lock:
+            self._add_map(msg)
+
+    def _add_map(self, msg: OccupancyGrid) -> None:
         index = len(self.maps)
         info = msg.info
         self.maps.append(
@@ -257,9 +262,11 @@ class IsaacSlamBridge(Node):
     def save(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         (self.output_dir / "bridge_records.json").write_text(json.dumps(self.records))
-        (self.output_dir / "maps.json").write_text(json.dumps(self.maps))
-        if self.map_arrays:
-            np.savez_compressed(self.output_dir / "maps.npz", **self.map_arrays)
+        with self.map_lock:
+            maps, arrays = list(self.maps), dict(self.map_arrays)
+        (self.output_dir / "maps.json").write_text(json.dumps(maps))
+        if arrays:
+            np.savez_compressed(self.output_dir / "maps.npz", **arrays)
 
 
 def main(args=None) -> int:
@@ -274,8 +281,10 @@ def main(args=None) -> int:
         node.wait_ready()
         node.serve()
     finally:
-        node.save()
+        # Stop the callbacks first, then save one consistent snapshot.
         executor.shutdown()
+        spinner.join(timeout=5.0)
+        node.save()
         node.destroy_node()
         rclpy.shutdown()
     return 0

@@ -1340,6 +1340,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             OdometryNoise,
             SlamPoseTracker,
             StopDetector,
+            compose,
         )
         from forklift_core.localization.wheel_odometry import AckermannOdometryGeometry
 
@@ -1366,7 +1367,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 ),
                 initial_pose=slam_start,
             ),
-            "tracker": SlamPoseTracker(max_age_s=0.25, hold_limit_m=1.5),
+            "tracker": SlamPoseTracker(max_age_s=0.25, hold_limit_m=2.0),
             "stale": LocalizationStale,
             "stop": StopDetector(tick_s=1 / 120),
             "odom_rear": slam_start,
@@ -1379,6 +1380,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "holds": [],
             "pending_release": None,
             "stop_now": False,
+            "tracker_speed": 0.0,
             "last_command": 0.0,
         }
         state["slam_feedback"] = {
@@ -1386,8 +1388,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "noise_seed": args.slam_noise_seed,
             "start_rear": list(slam_start),
             "max_age_s": 0.25,
-            "hold_limit_m": 1.5,
-            "hold_phases": ["insert", "lift", "extract", "lower", "withdraw"],
+            "hold_limit_m": 2.0,
+            "hold_phases": [
+                "approach (last 0.5 m)",
+                "insert",
+                "lift",
+                "extract",
+                "lower",
+                "withdraw",
+            ],
             "release_limits": {"position_m": 0.02, "yaw_rad": 0.02},
         }
 
@@ -1395,6 +1404,42 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         x, y, yaw_o = slam["odom_rear"]
         offset = abs(args.rear_axle_offset_m)
         return (x + offset * math.cos(yaw_o), y + offset * math.sin(yaw_o), yaw_o)
+
+    def slam_error():
+        """Estimate minus truth in the true rear-axle frame (along, lateral, yaw)."""
+        truth_base, truth_q = robot.get_world_pose()
+        truth_yaw = yaw_and_tilt(truth_q)[0]
+        offset = abs(args.rear_axle_offset_m)
+        truth = np.array(
+            [
+                truth_base[0] - offset * math.cos(truth_yaw),
+                truth_base[1] - offset * math.sin(truth_yaw),
+            ]
+        )
+        if slam["tracker"].applied is None:
+            x, y, yaw_e = slam["odom_rear"]
+        else:
+            bx, by, yaw_e = compose(slam["tracker"].applied[0], slam_odom_base())
+            x, y = bx - offset * math.cos(yaw_e), by - offset * math.sin(yaw_e)
+        dx, dy = x - truth[0], y - truth[1]
+        c, s_ = math.cos(truth_yaw), math.sin(truth_yaw)
+        return {
+            "along_m": float(c * dx + s_ * dy),
+            "lateral_m": float(-s_ * dx + c * dy),
+            "yaw_rad": float(math.atan2(math.sin(yaw_e - truth_yaw), math.cos(yaw_e - truth_yaw))),
+        }
+
+    def annotation_pose():
+        """World (position, wxyz) for video annotations: the truth, or under
+        SLAM feedback the applied estimate (no freshness check -- drawing only)."""
+        position, orientation = robot.get_world_pose()
+        if slam is None or slam["tracker"].applied is None:
+            return position, orientation
+        x, y, yaw_e = compose(slam["tracker"].applied[0], slam_odom_base())
+        return (
+            np.array([x, y, float(position[2])]),
+            np.array([math.cos(yaw_e / 2), 0.0, 0.0, math.sin(yaw_e / 2)]),
+        )
 
     def slam_rear(now_s):
         if slam["tracker"].applied is None:
@@ -1539,11 +1584,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             return
         # Docking phases freeze the applied correction (plan v3.1); the next
         # travel leg waits for a stop and the release below.
-        if phase in ("insert", "lower"):
+        if phase in ("insert", "lower") and slam["tracker"].mode == "tracking":
             slam["tracker"].hold(odom_from_base=slam_odom_base())
             slam["holds"].append({"phase": phase, "time_s": t, "event": "hold"})
         elif phase in ("transport", "settle"):
             slam["pending_release"] = phase
+            slam["release_wait_from"] = t
 
     def slam_release(t: float) -> None:
         """Apply the received correction while stopped; replan the next leg
@@ -1583,6 +1629,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 travel_config=travel_config,
             )
         event.update(
+            replaced_path=path_record(paths[leg]),
             replanned=True,
             replan_status=replanned.status,
             planning_wall_s=time.monotonic() - replan_start,
@@ -1596,6 +1643,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             replanned.directions,
             replanned.curvatures_inv_m,
             trackers[leg].config,
+        )
+        add_path_display(
+            stage,
+            replanned,
+            "Transport" if leg == "transport" else "Return",
+            (1.0, 0.65, 0.04) if leg == "transport" else (0.55, 0.2, 0.85),
         )
         if leg == phase:
             phase_started = t
@@ -1726,16 +1779,140 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             )
             state["tracking_failure"] = record
 
+        def write_video_frame(stamp: float) -> None:
+            """One video frame per fps tick of physics, capture steps included
+            (SLAM plan v3.1: frames match the run length)."""
+            frame = camera.get_current_frame()
+            rgba = camera.get_rgba()
+            # get_rgba reads the RGB annotator directly. The SDK's cached
+            # frame metadata can lag; retain it for audit without treating
+            # its timestamp as a control or image-acquisition failure.
+            require(
+                rgba is not None and rgba.shape == (720, 1280, 4),
+                "Camera did not produce RGB",
+            )
+            video_rgb = rgba[:, :, :3]
+            if args.camera_inset:
+                # Pose after this render step, so outline and picture agree;
+                # under SLAM feedback the pose the robot believes.
+                now_base, now_q = annotation_pose()
+                now_yaw, _ = yaw_and_tilt(now_q)
+                live = perception_camera.get_rgba()
+                if live is None or live.ndim != 3 or live.size == 0:
+                    live = None
+                video_rgb = inset.compose_frame(
+                    video_rgb,
+                    inset.render_inset(
+                        live,
+                        phase=phase,
+                        current_pose=(
+                            float(now_base[0]),
+                            float(now_base[1]),
+                            now_yaw,
+                        ),
+                        estimate=inset_estimate,
+                        status=inset_status,
+                        detail=inset_detail,
+                        fork_tip_x_m=args.axle_to_fork_tip_m
+                        - abs(args.rear_axle_offset_m),
+                        font_path=inset_font,
+                    ),
+                )
+            encoder.stdin.write(
+                np.ascontiguousarray(video_rgb, dtype=np.uint8).tobytes()
+            )
+            if args.robot_camera:
+                record_robot_camera_frame(
+                    perception_camera,
+                    perception_calibration,
+                    extra_encoders,
+                    video_frames,
+                    video_frames_module,
+                    inset,
+                    stamp=stamp,
+                    phase=phase,
+                    state=state,
+                    pose=annotation_pose(),
+                    estimate=inset_estimate,
+                    fork_tip_x_m=args.axle_to_fork_tip_m
+                    - abs(args.rear_axle_offset_m),
+                    overview=camera,
+                    bounds=scenario.bounds,
+                )
+                if slam is not None:
+                    # The map panel may show only maps the bridge recorded
+                    # after a scan id below this one (received before it).
+                    video_frames[-1]["slam_last_scan_id"] = slam["scan_id"] - 1
+                    video_frames[-1]["slam_mode"] = slam["tracker"].mode
+            state["frames"] += 1
+            if args.extra_views:
+                for name in args.extra_views:
+                    view_camera = extra_cameras[name]
+                    view_rgba = view_camera.get_rgba()
+                    expected = (
+                        (480, 640, 4) if name == "perception" else (720, 1280, 4)
+                    )
+                    require(
+                        view_rgba is not None and view_rgba.shape == expected,
+                        f"{name} camera did not produce RGB",
+                    )
+                    view_rgb = np.ascontiguousarray(
+                        view_rgba[:, :, :3], dtype=np.uint8
+                    )
+                    if name == "perception":
+                        depth = view_camera.get_depth()
+                        require(
+                            depth is not None and depth.shape[:2] == (480, 640),
+                            "Perception camera did not produce depth",
+                        )
+                        if depth.ndim == 3:
+                            depth = depth[:, :, 0]
+                        view_rgb = np.concatenate(
+                            (view_rgb, MISSION_VIEWS.depth_colormap(depth)),
+                            axis=1,
+                        )
+                    extra_encoders[name].stdin.write(view_rgb.tobytes())
+                frame_base, frame_q = robot.get_world_pose()
+                frame_pallet, frame_pq = pallet.get_world_pose()
+                frame_log.write(
+                    record_json(
+                        {
+                            "frame": state["frames"] - 1,
+                            "simulation_time_s": world.current_time - initial_time,
+                            "phase": phase,
+                            "base_position_m": frame_base,
+                            "base_orientation_wxyz": frame_q,
+                            "pallet_position_m": frame_pallet,
+                            "pallet_orientation_wxyz": frame_pq,
+                            "lift_m": float(
+                                robot.get_joint_positions()[lift_index[0]]
+                            ),
+                        }
+                    )
+                    + "\n"
+                )
+            frame_audit.append(
+                {
+                    "simulation_time_s": world.current_time - initial_time,
+                    "rendering_time": frame.get("rendering_time"),
+                }
+            )
+            if state["frames"] == 1:
+                snapshot("start")
+
         def step_world(render: bool) -> None:
             """One physics step and everything that must see every step
             (SLAM plan v3.1): encoders, odometry, the 10 Hz scan by physics
             tick (not loop step) and the SLAM lockstep. Capture steps too."""
-            world.step(render=render)
-            if slam_log is None:
-                return
-            stamp_now = world.current_time - initial_time
             tick = stepper["tick"]
             stepper["tick"] = tick + 1
+            frame_due = args.video and tick % fps_divisor == 0
+            world.step(render=render or frame_due)
+            stamp_now = world.current_time - initial_time
+            if frame_due:
+                write_video_frame(stamp_now)
+            if slam_log is None:
+                return
             now_base, now_q = robot.get_world_pose()
             rates_true = robot.get_joint_velocities()[wheels]
             steer_true = robot.get_joint_positions()[steers]
@@ -1755,6 +1932,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     speed=slam["odom_speed"],
                     yaw_rate=slam["odom_yaw_rate"],
                 )
+                # Every tracker in this runner stops at 0.012 m/s; its arrival
+                # and gear-change checks wait for the noise-aware detector.
+                slam["tracker_speed"] = slam["stop"].tracker_speed(0.012)
             if tick % scan_every:
                 return
             origin, directions = planar_lidar.laser_rays_world(
@@ -1791,6 +1971,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     )
                 )
             except link.SlamLinkFailure as exc:
+                slam["records"].append(
+                    {
+                        "scan_id": slam["scan_id"],
+                        "stamp_s": float(stamp_now),
+                        "phase": phase,
+                        "status": "link_failure",
+                        "error": str(exc),
+                    }
+                )
                 require(False, f"slam_link_failed: {exc}")
             slam["tracker"].receive(
                 reply.scan_id, reply.stamp_s, reply.status, reply.map_from_odom
@@ -1804,6 +1993,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     "status": reply.status,
                     "mode": slam["tracker"].mode,
                     "map_from_odom": list(reply.map_from_odom),
+                    # What control uses (holding keeps an older one).
+                    "applied_map_from_odom": list(slam["tracker"].applied[0])
+                    if slam["tracker"].applied is not None
+                    else None,
                     "odom_base": list(slam_odom_base()),
                     "truth_base": [float(now_base[0]), float(now_base[1]), truth_yaw],
                     "slam_wall_s": reply.slam_wall_s,
@@ -1833,7 +2026,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             truth_rear = rear
             if slam is not None:
                 rear = slam_rear(t)
-                signed_speed = slam["odom_speed"]
+                signed_speed = slam["tracker_speed"]
                 slam["control"].append([t, *rear.tolist(), *truth_rear.tolist()])
             require(np.isfinite([base, ppos]).all(), "Nonfinite body state")
             if phase == "lift":
@@ -1942,13 +2135,34 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     not contacts,
                     f"Forbidden fork/pallet contact in {phase}: {contacts}",
                 )
+            if phase in ["insert", "extract", "withdraw"]:
+                # Smallest sideways gap per blade over every check (SLAM plan
+                # S2 insertion criterion), kept per phase.
+                lateral = insertion_geometry.lateral_clearances(
+                    base,
+                    q,
+                    float(robot.get_joint_positions()[lift_index[0]]),
+                    ppos,
+                    pq,
+                )
+                minima = state.setdefault("lateral_clearance_min_m", {}).setdefault(
+                    phase, {"left": None, "right": None}
+                )
+                for side, gap in lateral.items():
+                    if gap is not None and (minima[side] is None or gap < minima[side]):
+                        minima[side] = gap
             requested_speed, curvature = 0.0, 0.0
             tracking = None
             releasing = slam is not None and slam.get("pending_release") is not None
-            if releasing and slam["stop_now"]:
-                slam_release(t)
-                releasing = False
-            if phase in trackers and not releasing:
+            if releasing:
+                waited = t - slam["release_wait_from"]
+                require(waited < 10.0, f"slam_release_no_stop after {waited:.1f} s")
+                if slam["stop_now"]:
+                    slam_release(t)
+                    releasing = False
+                    rear = slam_rear(t)  # the released estimate, this very tick
+            warming = slam is not None and not slam["tracker"].may_drive()
+            if phase in trackers and not releasing and not warming:
                 # Three times the path time at the tracker's own speed caps
                 # (length / cruise when there are none), plus 10 s.
                 limit = max(30.0, 3 * trackers[phase].nominal_duration_s() + 10)
@@ -1957,6 +2171,18 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 require(t - phase_started < limit, f"Tracking timeout in {phase}")
                 tracking = trackers[phase].update(rear, signed_speed, dt)
                 last_tracking = tracking
+                if (
+                    slam is not None
+                    and phase == "approach"
+                    and slam["tracker"].mode == "tracking"
+                    and trackers[phase].remaining_to_goal_m() <= 0.5
+                ):
+                    # The docking stop is judged at 8 mm like insertion: freeze
+                    # the correction for its last half metre (plan v3.2).
+                    slam["tracker"].hold(odom_from_base=slam_odom_base())
+                    slam["holds"].append(
+                        {"phase": phase, "time_s": t, "event": "hold", "error": slam_error()}
+                    )
                 if (
                     tracking.status == "failed"
                     and phase == "transport"
@@ -2133,6 +2359,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 ]
                             )
                             attempt["control_pose_source"] = "slam_estimate"
+                            attempt["slam_error"] = slam_error()
                         attempt.update(
                             {
                                 "frame_diagnostics": asdict(frame_diagnostics),
@@ -2608,6 +2835,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 geometry.pallet_depth_m,
                             )
                         )
+                        # Insertion-axis yaw against the true pallet (fork axis
+                        # along the pallet x axis either way round).
+                        relative_yaw = yaw_and_tilt(q)[0] - yaw_and_tilt(pq)[0]
+                        state["insertion_truth_yaw_rad"] = float(
+                            math.atan2(math.sin(2 * relative_yaw), math.cos(2 * relative_yaw)) / 2
+                        )
+                        if slam is not None:
+                            state["slam_error_insert_end"] = slam_error()
                         transition("lift", t)
                     elif phase == "extract":
                         transition("transport", t)
@@ -2710,120 +2945,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 )
             if slam is not None:
                 slam["last_command"] = requested_speed
-            stepper["fn"](args.video and step % fps_divisor == 0)
-            stamp = world.current_time - initial_time
-            if args.video and step % fps_divisor == 0:
-                frame = camera.get_current_frame()
-                rgba = camera.get_rgba()
-                # get_rgba reads the RGB annotator directly. The SDK's cached
-                # frame metadata can lag; retain it for audit without treating
-                # its timestamp as a control or image-acquisition failure.
-                require(
-                    rgba is not None and rgba.shape == (720, 1280, 4),
-                    "Camera did not produce RGB",
-                )
-                video_rgb = rgba[:, :, :3]
-                if args.camera_inset:
-                    # Pose after this render step, so outline and picture agree.
-                    now_base, now_q = robot.get_world_pose()
-                    now_yaw, _ = yaw_and_tilt(now_q)
-                    live = perception_camera.get_rgba()
-                    if live is None or live.ndim != 3 or live.size == 0:
-                        live = None
-                    video_rgb = inset.compose_frame(
-                        video_rgb,
-                        inset.render_inset(
-                            live,
-                            phase=phase,
-                            current_pose=(
-                                float(now_base[0]),
-                                float(now_base[1]),
-                                now_yaw,
-                            ),
-                            estimate=inset_estimate,
-                            status=inset_status,
-                            detail=inset_detail,
-                            fork_tip_x_m=args.axle_to_fork_tip_m
-                            - abs(args.rear_axle_offset_m),
-                            font_path=inset_font,
-                        ),
-                    )
-                encoder.stdin.write(
-                    np.ascontiguousarray(video_rgb, dtype=np.uint8).tobytes()
-                )
-                if args.robot_camera:
-                    record_robot_camera_frame(
-                        perception_camera,
-                        perception_calibration,
-                        extra_encoders,
-                        video_frames,
-                        video_frames_module,
-                        inset,
-                        stamp=stamp,
-                        phase=phase,
-                        state=state,
-                        pose=robot.get_world_pose(),
-                        estimate=inset_estimate,
-                        fork_tip_x_m=args.axle_to_fork_tip_m
-                        - abs(args.rear_axle_offset_m),
-                        overview=camera,
-                        bounds=scenario.bounds,
-                    )
-                state["frames"] += 1
-                if args.extra_views:
-                    for name in args.extra_views:
-                        view_camera = extra_cameras[name]
-                        view_rgba = view_camera.get_rgba()
-                        expected = (
-                            (480, 640, 4) if name == "perception" else (720, 1280, 4)
-                        )
-                        require(
-                            view_rgba is not None and view_rgba.shape == expected,
-                            f"{name} camera did not produce RGB",
-                        )
-                        view_rgb = np.ascontiguousarray(
-                            view_rgba[:, :, :3], dtype=np.uint8
-                        )
-                        if name == "perception":
-                            depth = view_camera.get_depth()
-                            require(
-                                depth is not None and depth.shape[:2] == (480, 640),
-                                "Perception camera did not produce depth",
-                            )
-                            if depth.ndim == 3:
-                                depth = depth[:, :, 0]
-                            view_rgb = np.concatenate(
-                                (view_rgb, MISSION_VIEWS.depth_colormap(depth)),
-                                axis=1,
-                            )
-                        extra_encoders[name].stdin.write(view_rgb.tobytes())
-                    frame_base, frame_q = robot.get_world_pose()
-                    frame_pallet, frame_pq = pallet.get_world_pose()
-                    frame_log.write(
-                        record_json(
-                            {
-                                "frame": state["frames"] - 1,
-                                "simulation_time_s": world.current_time - initial_time,
-                                "phase": phase,
-                                "base_position_m": frame_base,
-                                "base_orientation_wxyz": frame_q,
-                                "pallet_position_m": frame_pallet,
-                                "pallet_orientation_wxyz": frame_pq,
-                                "lift_m": float(
-                                    robot.get_joint_positions()[lift_index[0]]
-                                ),
-                            }
-                        )
-                        + "\n"
-                    )
-                frame_audit.append(
-                    {
-                        "simulation_time_s": world.current_time - initial_time,
-                        "rendering_time": frame.get("rendering_time"),
-                    }
-                )
-                if state["frames"] == 1:
-                    snapshot("start")
+            stepper["fn"](False)
             if step % 12 == 0:
                 sample = {
                     "time_s": t,
@@ -2886,6 +3008,35 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             }
         )
     finally:
+        if slam is not None:
+            # First, so a video shutdown failure cannot lose the SLAM record.
+            slam["link"].close()
+            (args.output / "slam_records.json").write_text(
+                record_json(slam["records"]) + "\n"
+            )
+            control = np.asarray(slam["control"], dtype=float).reshape(-1, 7)
+            np.save(args.output / "slam_control.npy", control)
+            error = np.hypot(control[:, 1] - control[:, 4], control[:, 2] - control[:, 5])
+            yaw_error = np.abs(np.angle(np.exp(1j * (control[:, 3] - control[:, 6]))))
+            statuses = [record["status"] for record in slam["records"]]
+            state["slam_summary"] = {
+                "control_samples": int(len(control)),
+                "raw_position_rmse_m": float(np.sqrt(np.mean(error**2)))
+                if len(error)
+                else None,
+                "raw_position_max_m": float(error.max()) if len(error) else None,
+                "raw_yaw_rmse_rad": float(np.sqrt(np.mean(yaw_error**2)))
+                if len(error)
+                else None,
+                "raw_yaw_max_rad": float(yaw_error.max()) if len(error) else None,
+                "scans": len(statuses),
+                "processed": statuses.count("processed"),
+                "warmup": statuses.count("warmup"),
+                "holds": slam["holds"],
+                "link_failures": statuses.count("link_failure"),
+                "pending_release_at_end": slam["pending_release"],
+                "final_mode": slam["tracker"].mode,
+            }
         if frame_log is not None:
             frame_log.close()
         video_results = []
@@ -2923,27 +3074,6 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             )
         if slam_log is not None and slam_log["scan_stamps_s"]:
             write_slam_record(args, state, scenario, factory, slam_log, lidar_config)
-        if slam is not None:
-            slam["link"].close()
-            (args.output / "slam_records.json").write_text(
-                record_json(slam["records"]) + "\n"
-            )
-            control = np.asarray(slam["control"], dtype=float).reshape(-1, 7)
-            np.save(args.output / "slam_control.npy", control)
-            error = np.hypot(control[:, 1] - control[:, 4], control[:, 2] - control[:, 5])
-            statuses = [record["status"] for record in slam["records"]]
-            state["slam_summary"] = {
-                "control_samples": int(len(control)),
-                "raw_position_rmse_m": float(np.sqrt(np.mean(error**2)))
-                if len(error)
-                else None,
-                "raw_position_max_m": float(error.max()) if len(error) else None,
-                "scans": len(statuses),
-                "processed": statuses.count("processed"),
-                "warmup": statuses.count("warmup"),
-                "holds": slam["holds"],
-                "final_mode": slam["tracker"].mode,
-            }
         for name, exit_code in video_results:
             require(exit_code == 0, f"{name} video encoding failed")
 

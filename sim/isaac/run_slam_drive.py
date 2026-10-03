@@ -550,6 +550,7 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
             LocalizationStale,
             OdometryNoise,
             SlamPoseTracker,
+            StopDetector,
         )
         from forklift_core.localization.wheel_odometry import AckermannOdometryGeometry
 
@@ -576,6 +577,9 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
             "module": slam_link,
             "odom_rear": start_rear,
             "odom_speed": 0.0,
+            "stop": StopDetector(tick_s=1 / 120),
+            "odom_yaw": start_rear[2],
+            "last_command": 0.0,
             "scan_id": 0,
             "records": [],
             "control": [],
@@ -634,10 +638,15 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
             if slam is not None:
                 # Control sees only the estimate and wheel odometry from here.
                 truth_rear = rear
-                try:
-                    est = slam["tracker"].map_from_base(t, odom_base())
-                except slam["stale"] as exc:
-                    require(False, f"localization_stale: {exc}")
+                if slam["tracker"].applied is None:
+                    # Before the first scan: odom = map at the known start;
+                    # warming up holds the drive anyway (plan v3.1).
+                    est = odom_base()
+                else:
+                    try:
+                        est = slam["tracker"].map_from_base(t, odom_base())
+                    except slam["stale"] as exc:
+                        require(False, f"localization_stale: {exc}")
                 rear = np.array(
                     [
                         est[0] - rear_offset * math.cos(est[2]),
@@ -645,7 +654,8 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
                         est[2],
                     ]
                 )
-                signed_speed = slam["odom_speed"]
+                # The tracker's stop checks wait for the noise-aware detector.
+                signed_speed = slam["stop"].tracker_speed(tracker.config.stop_speed_mps)
                 hold_still = not slam["tracker"].may_drive()
                 slam["control"].append(
                     [t, *rear.tolist(), *truth_rear.tolist(), slam["tracker"].mode == "holding"]
@@ -691,6 +701,8 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
                     joint_positions=np.array([0.0]), joint_indices=lift_index
                 )
             )
+            if slam is not None:
+                slam["last_command"] = requested if not hold_still else 0.0
             render = args.video and step % frame_every == 0
             world.step(render=render)
             # Encoders and the scan both read the state this step produced.
@@ -704,7 +716,14 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
                 rates = slam["noise"].wheel_rates(robot.get_joint_velocities()[wheels][2:4])
                 angles = slam["noise"].steering(robot.get_joint_positions()[steers])
                 slam["odom_rear"] = slam["odometry"].update(stamp, rates, angles)
+                previous_yaw = slam["odom_yaw"]
                 slam["odom_speed"] = float(np.mean(rates)) * drive_geometry.wheel_radius_m
+                slam["odom_yaw"] = slam["odom_rear"][2]
+                slam["stop"].update(
+                    commanded_speed=slam["last_command"],
+                    speed=slam["odom_speed"],
+                    yaw_rate=(slam["odom_yaw"] - previous_yaw) * 120.0,
+                )
             if step % scan_every == 0:
                 cast_started = time.monotonic()
                 origin, directions = planar_lidar.laser_rays_world(

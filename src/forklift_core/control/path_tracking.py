@@ -204,6 +204,10 @@ class RearAxlePathTracker:
         """
         return float(np.sum(self._lengths / self._speed_cap[1:]))
 
+    def remaining_to_goal_m(self) -> float:
+        """Path length still to drive to the final pose, from current progress."""
+        return max(0.0, float(self._distance[-1] - self._progress))
+
     def _overshoot_accepted(
         self, pose: np.ndarray, goal: np.ndarray, endpoint: int, tolerance: float
     ) -> bool:
