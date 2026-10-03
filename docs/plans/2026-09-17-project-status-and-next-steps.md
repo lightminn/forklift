@@ -113,6 +113,7 @@ P1·P2 개발 39 seed 37/39, 회귀 0 (폴백 f1d369f·제동 창 f0392e4; 일�
 세 번째 동결 평가 25/30 불합격 (seed 3000–3029, 2026-10-03) — 검출 기각 뒤 관측점 도달 불가 3, 운반 계획 1, 운반 추종 1 (docs/validation/2026-10-03-third-frozen-evaluation.md)
 실행 중 관측점(지도·배치 구역만) 개발 99 seed 97/99, 회귀 0 (2026-10-03) — 남은 실패는 운반 단계 3003·3008 (docs/validation/2026-10-03-runtime-viewpoints-dev-run.md)
 네 번째 동결 평가 27/30 불합격 (seed 4000–4029, 2026-10-03) — 운반 단계 2, 출발점 탈출 탐색 실패 1 (docs/validation/2026-10-03-fourth-frozen-evaluation.md)
+운반 단계 수정(cusp 재계획·확장 사다리) 개발 129 seed 125/129 (2026-10-03) — 3003·4020 해결, 3012 는 실행 간 변동으로 회귀 1(예외 기록 후 채택, 사용자 결정), 남은 실패 3 개가 150 s 예산 (docs/validation/2026-10-03-transport-stage-dev-run.md)
 ```
 
 ### 지금 **실제로 되는** 것
