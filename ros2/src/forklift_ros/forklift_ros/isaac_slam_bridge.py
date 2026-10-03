@@ -276,9 +276,17 @@ class IsaacSlamBridge(Node):
     def save(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         with self.cond:
-            if self.stray and not any(r.get("stray_pose_stamps_ns") for r in self.records):
-                # Arrived after the last reply: keep it in the record.
-                self.records.append({"status": "stray_after_last_reply", "stray": self.stray})
+            stray = list(self.stray)
+        if stray and not any(r.get("stray_pose_stamps_ns") for r in self.records):
+            # Arrived after the last reply: keep it in the record.
+            self.records.append({"status": "stray_after_last_reply", "stray": stray})
+        failed = [r for r in self.records if r["status"] != "processed" and r["status"] != "skipped"]
+        # The verdict a run summary must read: a stray after the last reply
+        # never reached the runner (Codex v3.4 P2).
+        self.ok = not stray and not failed
+        (self.output_dir / "bridge_status.json").write_text(
+            json.dumps({"ok": self.ok, "stray_pose_stamps_ns": stray, "failed": len(failed)})
+        )
         (self.output_dir / "bridge_records.json").write_text(json.dumps(self.records))
         with self.map_lock:
             maps, arrays = list(self.maps), dict(self.map_arrays)
@@ -303,9 +311,10 @@ def main(args=None) -> int:
         executor.shutdown()
         spinner.join(timeout=5.0)
         node.save()
+        status = 0 if node.ok else 3
         node.destroy_node()
         rclpy.shutdown()
-    return 0
+    return status
 
 
 if __name__ == "__main__":
