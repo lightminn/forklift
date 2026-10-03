@@ -1367,7 +1367,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 ),
                 initial_pose=slam_start,
             ),
-            "tracker": SlamPoseTracker(max_age_s=0.25, hold_limit_m=2.0),
+            # Holding now spans approach + insert + extract (up to ~11 m in
+            # the recorded runs): the bound is on odometry since the capture.
+            "tracker": SlamPoseTracker(max_age_s=0.25, hold_limit_m=15.0),
             "stale": LocalizationStale,
             "stop": StopDetector(tick_s=1 / 120),
             "odom_rear": slam_start,
@@ -1388,9 +1390,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "noise_seed": args.slam_noise_seed,
             "start_rear": list(slam_start),
             "max_age_s": 0.25,
-            "hold_limit_m": 2.0,
+            "hold_limit_m": 15.0,
             "hold_phases": [
-                "approach (last 0.5 m)",
+                "approach (from the accepted capture)",
                 "insert",
                 "lift",
                 "extract",
@@ -1584,9 +1586,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             return
         # Docking phases freeze the applied correction (plan v3.1); the next
         # travel leg waits for a stop and the release below.
-        if phase in ("insert", "lower") and slam["tracker"].mode == "tracking":
+        # approach: the pallet estimate was made with the correction applied at
+        # the accepted capture (this same instant -- the truck stands still for
+        # the capture, so no keyframe lands in between). Keep that correction
+        # until extract: the docking then runs on odometry relative to what was
+        # seen, and a later SLAM correction cannot slide the truck against the
+        # pallet estimate (plan v3.5; S2 seed 0 on v3.4 hit a block that way).
+        if phase in ("approach", "insert", "lower") and slam["tracker"].mode == "tracking":
             slam["tracker"].hold(odom_from_base=slam_odom_base())
-            slam["holds"].append({"phase": phase, "time_s": t, "event": "hold"})
+            slam["holds"].append(
+                {"phase": phase, "time_s": t, "event": "hold", "error": slam_error()}
+            )
         elif phase in ("transport", "settle"):
             slam["pending_release"] = phase
             slam["release_wait_from"] = t
@@ -2177,12 +2187,16 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 last_tracking = tracking
                 if (
                     slam is not None
-                    and phase == "approach"
+                    and phase in ("approach", "transport", "return_home")
                     and slam["tracker"].mode == "tracking"
                     and trackers[phase].remaining_to_goal_m() <= 0.5
                 ):
-                    # The docking stop is judged at 8 mm like insertion: freeze
-                    # the correction for its last half metre (plan v3.2).
+                    # A final goal is judged at 8 mm (3 cm for the return):
+                    # a SLAM correction landing in the last half metre moves
+                    # the estimate by centimetres and leaves the truck stopped
+                    # outside the tolerance (S2 seed 1 on v3.4, transport).
+                    # Freeze it there (plan v3.5; approach already holds from
+                    # the capture). Released at settle as before.
                     slam["tracker"].hold(odom_from_base=slam_odom_base())
                     slam["holds"].append(
                         {"phase": phase, "time_s": t, "event": "hold", "error": slam_error()}

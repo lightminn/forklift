@@ -45,4 +45,12 @@ S2 진행은 Codex v3.4 검토와 합의했다(파라미터 변경을 기다릴 
 **기대 완주 목록: {0, 1, 3, 5}.** seed 2·4 는 출발 전 복귀 경로 계획이 확장 한도에서 실패했다(인식·SLAM 과 무관한 계획기 동작, 각 약 45 분 탐색 —
 py-spy 로 `plan_transport` 의 Hybrid A* 안임을 확인). 판정 "대조 완주 seed 중 SLAM 실패 ≤ 1" 은 이 네 seed 에 적용된다.
 
-**SLAM(snapshot `slam_5845e88`, 작업 766·767):** 실행 중.
+**SLAM v3.4(snapshot `slam_5845e88`, 작업 766) — 두 seed 뒤 중단, 계획 v3.5 로 수정.**
+
+| seed | 결과 | 원인 |
+|---|---|---|
+| 0 | **실패 — 안전 위반** `Forbidden fork/pallet contact in insert: right_fork_collision–block_x0_y1` | 캡처 뒤 접근 중 적용된 보정이 캡처 오차의 상쇄를 깨뜨림(캡처 횡 −20.7 mm·yaw +0.0059 rad → 접근 끝 −22.5 mm·−0.0010 rad). 브리지 ok, raw RMSE 17 mm·최대 46 mm |
+| 1 | 실패 `Tracking timeout in transport` | 삽입 무접촉(횡 최소 14.0 mm, 대조 35.5 mm; 깊이 400 mm 로 목표 360 보다 40 mm 깊음; yaw 0.56°). 해제 점프 24 mm → 운반 재계획 → 운반 끝 8 mm 판정 근처 보정으로 위치 오차 5 cm 에서 정지, 시간 초과 |
+
+**S2 v3.4 판정: 안전 위반이 있어 실패.** 나머지 seed(2–5)와 그 S3(작업 767·770)는 같은 결함을 되풀이하므로 취소했다. v3.5(캡처부터 고정·끝점 고정 확대)로
+다시 돌린다 — 정답 대조는 실행기의 SLAM 분기만 바뀌어 그대로 쓴다.
