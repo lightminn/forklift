@@ -160,7 +160,7 @@ def arguments() -> argparse.Namespace:
         help="With --slam-feedback: add the plan's assumed wheel/steering/range "
         "noise from this seed (default: no noise).",
     )
-    parser.add_argument("--slam-reply-timeout", type=float, default=15.0)
+    parser.add_argument("--slam-reply-timeout", type=float, default=90.0)
     args, unknown = parser.parse_known_args()
     if args.max_sim_seconds <= 0:
         parser.error("--max-sim-seconds must be positive")

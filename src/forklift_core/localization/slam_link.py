@@ -3,33 +3,101 @@
 Plan: docs/plans/2026-10-04-online-slam-closed-loop.md. The simulator sends
 one ``Scan`` per LiDAR period and does not advance physics until the bridge
 answers with the ``Reply`` for that same scan id: ``processed`` carries the
-map<-odom slam_toolbox's /pose for that scan stamp implies, ``warmup`` the
-previous correction for the scans slam_toolbox skips at start-up, ``failed``
-ends the run. Framing: a 4-byte big-endian length, then a JSON header line and,
+map<-odom slam_toolbox's /pose for that scan stamp implies, ``skipped`` the
+previous correction for a scan slam_toolbox does not process (``ScanGate``
+predicts which, exactly as slam_toolbox decides -- plan v3.3), ``failed`` ends
+the run. Framing: a 4-byte big-endian length, then a JSON header line and,
 for scans, the float32 ranges. Plain sockets and numpy only (no ROS here).
 """
 
 from __future__ import annotations
 
 import json
+import math
 import socket
 import struct
 from dataclasses import dataclass
 
 import numpy as np
 
-STATUSES = ("processed", "warmup", "failed")
-# Measured on ws1 job 747 (slam_toolbox 2.8.5 sync, travel/time thresholds 0):
-# the first scan is processed, the next three are not, then every scan is.
-WARMUP_SCAN_IDS = frozenset({1, 2, 3})
+STATUSES = ("processed", "skipped", "failed")
 
 
 class SlamLinkFailure(RuntimeError):
     """The bridge did not answer this scan correctly in time."""
 
 
-def is_warmup(scan_id: int) -> bool:
-    return scan_id in WARMUP_SCAN_IDS
+class ScanGate:
+    """slam_toolbox 2.8.5's SlamToolbox::shouldProcessScan, reproduced.
+
+    Plan v3.3: the online run keeps the validated replay thresholds (0.5 m,
+    0.5 rad, 0.5 s) instead of processing every scan, so the bridge must know
+    which scans get a /pose. Same order and arithmetic as the C++ (source
+    src/slam_toolbox_common.cpp, tag 2.8.5): first scan passes; throttle by
+    count; time since the last accepted scan (integer nanoseconds, as
+    rclcpp::Time); the first four scans are dropped; then squared distance of
+    the odom->base poses against 0.8 x minimum_travel_distance^2 (or, in the
+    precise mode, distance and heading both below their minimums). With equal
+    time intervals in the node and Karto's HasMovedEnough, an accepted scan
+    always passes Karto's check too (its time test returns first). The pause
+    service is never used here.
+    """
+
+    def __init__(
+        self,
+        *,
+        minimum_travel_distance: float,
+        minimum_travel_heading: float,
+        minimum_time_interval: float,
+        throttle_scans: int = 1,
+        check_min_dist_and_heading_precisely: bool = False,
+    ):
+        self.min_dist2 = float(minimum_travel_distance) * float(minimum_travel_distance)
+        self.min_rotation = float(minimum_travel_heading)
+        self.min_interval_ns = int(round(float(minimum_time_interval) * 1e9))
+        self.throttle = int(throttle_scans)
+        self.precise = bool(check_min_dist_and_heading_precisely)
+        self.scan_ctr = 0
+        self.first = True
+        self.last_pose = None
+        self.last_ns = 0
+
+    @classmethod
+    def from_params(cls, params: dict) -> "ScanGate":
+        return cls(
+            minimum_travel_distance=params["minimum_travel_distance"],
+            minimum_travel_heading=params["minimum_travel_heading"],
+            minimum_time_interval=params["minimum_time_interval"],
+            throttle_scans=params.get("throttle_scans", 1),
+            check_min_dist_and_heading_precisely=params.get(
+                "check_min_dist_and_heading_precisely", False
+            ),
+        )
+
+    def will_process(self, stamp_s: float, odom_from_base) -> bool:
+        stamp_ns = int(round(float(stamp_s) * 1e9))
+        pose = tuple(float(v) for v in odom_from_base)
+        self.scan_ctr += 1
+        if self.first:
+            self.first, self.last_pose, self.last_ns = False, pose, stamp_ns
+            return True
+        if self.scan_ctr % self.throttle != 0:
+            return False
+        if stamp_ns - self.last_ns < self.min_interval_ns:
+            return False
+        if self.scan_ctr < 5:
+            return False
+        dx, dy = pose[0] - self.last_pose[0], pose[1] - self.last_pose[1]
+        dist2 = dx * dx + dy * dy
+        if self.precise:
+            turn = pose[2] - self.last_pose[2]
+            heading = abs(math.atan2(math.sin(turn), math.cos(turn)))
+            if dist2 < self.min_dist2 and heading < self.min_rotation:
+                return False
+        elif dist2 < 0.8 * self.min_dist2:
+            return False
+        self.last_pose, self.last_ns = pose, stamp_ns
+        return True
 
 
 @dataclass(frozen=True)
@@ -178,13 +246,12 @@ __all__ = [
     "STATUSES",
     "Scan",
     "SlamLinkClient",
+    "ScanGate",
     "SlamLinkFailure",
-    "WARMUP_SCAN_IDS",
     "decode_reply",
     "decode_scan",
     "encode_reply",
     "encode_scan",
-    "is_warmup",
     "recv_body",
     "recv_scan",
 ]

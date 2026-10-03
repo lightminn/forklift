@@ -22,22 +22,19 @@ def _rules():
     spec = importlib.util.spec_from_file_location("bridge_under_test", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.WarmupState
+    return module
 
 
-def test_missing_poses_after_the_first_are_warmup_three_times_then_failure():
-    state = _rules()()
-    assert state.on_missing() == "failed"  # before any processed scan
-    state = _rules()()
-    state.on_processed(0)
-    assert [state.on_missing() for _ in range(4)] == ["warmup", "warmup", "warmup", "failed"]
+def test_the_bridge_predicts_with_slam_toolbox_s_rule_and_the_replay_config():
+    """Plan v3.3: no warm-up guessing; ScanGate on the validated replay params."""
+    module = _rules()
+    assert not hasattr(module, "WarmupState")
+    import yaml
 
-
-def test_warmup_ends_with_a_processed_scan_four_or_later():
-    state = _rules()()
-    state.on_processed(0)
-    state.on_missing()
-    state.on_processed(4)
-    assert not state.warming
-    assert state.on_missing() == "failed"
-    assert state.wait_s(1.0, 10.0) == 10.0
+    config = Path(__file__).resolve().parents[2] / (
+        "forklift_bringup/config/slam_toolbox_isaac_replay.yaml"
+    )
+    params = yaml.safe_load(config.read_text())["slam_toolbox"]["ros__parameters"]
+    gate = module.slam_link.ScanGate.from_params(params)
+    assert gate.min_dist2 == 0.25 and gate.min_interval_ns == 500_000_000
+    assert gate.throttle == 1 and not gate.precise

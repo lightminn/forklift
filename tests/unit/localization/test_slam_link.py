@@ -41,9 +41,54 @@ def test_unknown_reply_status_is_rejected():
         slam_link.Reply(7, 12.5, "stale", (0, 0, 0), 0, 0.0)
 
 
-def test_the_warmup_scans_are_the_three_after_the_first():
-    """Measured on ws1 job 747: slam_toolbox skips scans 1-3 (0-based)."""
-    assert [slam_link.is_warmup(k) for k in range(6)] == [False, True, True, True, False, False]
+def _gate(**overrides):
+    params = {
+        "minimum_travel_distance": 0.5,
+        "minimum_travel_heading": 0.5,
+        "minimum_time_interval": 0.5,
+        "throttle_scans": 1,
+        "check_min_dist_and_heading_precisely": False,
+    }
+    params.update(overrides)
+    return slam_link.ScanGate.from_params(params)
+
+
+def test_the_gate_processes_the_first_scan_and_then_needs_time_and_distance():
+    """slam_toolbox 2.8.5 shouldProcessScan with the replay config (plan v3.3)."""
+    gate = _gate()
+    assert gate.will_process(0.0, (0.0, 0.0, 0.0))
+    # Scans 2-4 are dropped for start-up whatever the motion.
+    assert not gate.will_process(0.6, (5.0, 0.0, 0.0))
+    assert not gate.will_process(0.7, (5.0, 0.0, 0.0))
+    assert not gate.will_process(0.8, (5.0, 0.0, 0.0))
+    # Time is checked first: 0.4 s after the last processed is too soon.
+    gate = _gate()
+    gate.will_process(0.0, (0, 0, 0))
+    for k in range(1, 4):
+        gate.will_process(0.1 * k, (0, 0, 0))
+    assert not gate.will_process(0.4, (1.0, 0, 0))
+    # Distance squared against 0.8 x 0.5^2 = 0.2, i.e. 0.4472 m; heading ignored.
+    assert not gate.will_process(0.5, (0.44, 0, 3.0))
+    assert gate.will_process(0.6, (0.45, 0, 0))
+    # The reference moves to the processed scan.
+    assert not gate.will_process(1.2, (0.80, 0, 0))
+    assert gate.will_process(1.3, (0.90, 0, 0))
+
+
+def test_the_precise_mode_needs_distance_or_heading():
+    gate = _gate(check_min_dist_and_heading_precisely=True)
+    gate.will_process(0.0, (0, 0, 0))
+    for k in range(1, 5):
+        gate.will_process(0.1 * k, (0, 0, 0))
+    assert gate.will_process(1.0, (0.0, 0.0, 0.6))  # heading alone
+    assert not gate.will_process(1.6, (0.3, 0.0, 0.6))
+
+
+def test_the_gate_throttles_by_scan_count():
+    gate = _gate(throttle_scans=2, minimum_time_interval=0.0, minimum_travel_distance=0.0)
+    results = [gate.will_process(0.1 * k, (0, 0, 0)) for k in range(8)]
+    # First always; then only even counts (scan_ctr 6, 8 -> ids 5, 7) once past start-up.
+    assert results == [True, False, False, False, False, True, False, True]
 
 
 def _serve(server_sock, handler):

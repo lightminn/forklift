@@ -7,16 +7,19 @@ slam_toolbox's /pose with exactly that stamp, and answers with the map<-odom it
 implies. base_link->laser is published once on /tf_static before the socket
 opens, and the socket only opens once slam_toolbox subscribes to /scan.
 
-Warm-up (plan v3): after the first processed scan, slam_toolbox skips its next
-few scans; while warming up a missing /pose after ``warmup_wait_s`` is answered
-``warmup`` (at most three), and warming up ends with a processed reply for scan
-id >= 4. Outside warm-up a missing /pose within ``reply_timeout_s`` is
-``failed``. Every /map is kept with the scan id it arrived after, so a video can
+Which scans get a /pose (plan v3.3): slam_toolbox runs with the validated
+replay thresholds, and ``slam_link.ScanGate`` -- slam_toolbox's own
+shouldProcessScan, fed the same stamps and odom poses -- predicts each scan.
+Predicted processed: wait up to ``reply_timeout_s`` for the /pose with that
+stamp, else ``failed``. Predicted skipped: answer ``skipped`` with the last
+correction at once. A /pose for any stamp not predicted is a disagreement with
+slam_toolbox and fails the run, so the prediction is checked on every scan. Every /map is kept with the scan id it arrived after, so a video can
 show only maps the run had actually received by then.
 
     ros2 run forklift_ros isaac_slam_bridge --ros-args \\
         -p socket_path:=/run/slam.sock -p output_dir:=/out \\
-        -p laser_xyz_yaw:="[-0.12, 0.0, 1.05, 0.0]"
+        -p laser_xyz_yaw:="[-0.12, 0.0, 1.05, 0.0]" \\
+        -p slam_params_file:=/path/slam_toolbox_isaac_replay.yaml
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ from pathlib import Path
 
 import numpy as np
 import rclpy
+import yaml
 from builtin_interfaces.msg import Time
 from geometry_msgs.msg import PoseWithCovarianceStamped, TransformStamped
 from nav_msgs.msg import OccupancyGrid, Odometry
@@ -61,43 +65,22 @@ def quaternion_yaw(q) -> float:
     return math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
 
 
-class WarmupState:
-    """The reply-status rule of plan v3, kept apart from ROS for testing."""
-
-    def __init__(self, max_warmups: int = 3):
-        self.max_warmups = max_warmups
-        self.first_processed = False
-        self.warming = True
-        self.warmups = 0
-
-    def on_missing(self) -> str:
-        if self.warming and self.first_processed and self.warmups < self.max_warmups:
-            self.warmups += 1
-            return "warmup"
-        return "failed"
-
-    def on_processed(self, scan_id: int) -> None:
-        self.first_processed = True
-        if scan_id >= 4:
-            self.warming = False
-
-    def wait_s(self, warmup_wait_s: float, reply_timeout_s: float) -> float:
-        return warmup_wait_s if (self.warming and self.first_processed) else reply_timeout_s
-
-
 class IsaacSlamBridge(Node):
     def __init__(self):
         super().__init__("isaac_slam_bridge")
         self.declare_parameter("socket_path", "/run/slam/slam.sock")
         self.declare_parameter("output_dir", "/tmp/slam_bridge")
         self.declare_parameter("laser_xyz_yaw", [-0.12, 0.0, 1.05, 0.0])
-        self.declare_parameter("reply_timeout_s", 10.0)
-        self.declare_parameter("warmup_wait_s", 1.0)
+        self.declare_parameter("reply_timeout_s", 60.0)
+        self.declare_parameter("slam_params_file", "")
         self.socket_path = self.get_parameter("socket_path").value
         self.output_dir = Path(self.get_parameter("output_dir").value)
         self.laser = [float(v) for v in self.get_parameter("laser_xyz_yaw").value]
         self.reply_timeout_s = float(self.get_parameter("reply_timeout_s").value)
-        self.warmup_wait_s = float(self.get_parameter("warmup_wait_s").value)
+        params_file = self.get_parameter("slam_params_file").value
+        self.slam_params = yaml.safe_load(Path(params_file).read_text())["slam_toolbox"][
+            "ros__parameters"
+        ]
         self.clock_pub = self.create_publisher(Clock, "/clock", 10)
         self.tf_pub = self.create_publisher(TFMessage, "/tf", 100)
         static_qos = QoSProfile(
@@ -216,7 +199,7 @@ class IsaacSlamBridge(Node):
         server.listen(1)
         (self.output_dir / "bridge_ready").write_text("ready\n")
         conn, _ = server.accept()
-        state = WarmupState()
+        gate = slam_link.ScanGate.from_params(self.slam_params)
         map_from_odom = (0.0, 0.0, 0.0)
         version = 0
         with conn:
@@ -229,18 +212,29 @@ class IsaacSlamBridge(Node):
                 key = int(round(scan.stamp_s * 1e9))
                 start = time.monotonic()
                 self.publish_scan(scan)
-                wait = state.wait_s(self.warmup_wait_s, self.reply_timeout_s)
+                expected = gate.will_process(scan.stamp_s, scan.odom_from_base)
+                pose, stray = None, []
+                if expected:
+                    with self.cond:
+                        got = self.cond.wait_for(
+                            lambda: key in self.poses, timeout=self.reply_timeout_s
+                        )
+                        pose = self.poses.pop(key, None) if got else None
                 with self.cond:
-                    got = self.cond.wait_for(lambda: key in self.poses, timeout=wait)
-                    pose = self.poses.pop(key, None) if got else None
+                    # Any other /pose is one slam_toolbox made against the gate.
+                    stray = sorted(self.poses)
+                    self.poses.clear()
                 elapsed = time.monotonic() - start
-                if pose is not None:
-                    state.on_processed(scan.scan_id)
+                if stray:
+                    status = "failed"
+                elif expected and pose is not None:
                     map_from_odom = compose(pose, invert(scan.odom_from_base))
                     version += 1
                     status = "processed"
+                elif expected:
+                    status = "failed"
                 else:
-                    status = state.on_missing()
+                    status = "skipped"
                 reply = slam_link.Reply(
                     scan.scan_id, scan.stamp_s, status, map_from_odom, version, elapsed
                 )
@@ -249,6 +243,8 @@ class IsaacSlamBridge(Node):
                         "scan_id": scan.scan_id,
                         "stamp_s": scan.stamp_s,
                         "status": status,
+                        "predicted_processed": expected,
+                        "stray_pose_stamps_ns": stray,
                         "map_from_odom": list(map_from_odom),
                         "slam_pose": list(pose) if pose else None,
                         "wall_s": elapsed,

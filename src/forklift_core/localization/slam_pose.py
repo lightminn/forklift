@@ -125,13 +125,15 @@ class SlamPoseEstimator:
 
 
 class SlamPoseTracker:
-    """map<-base for control from SLAM replies, in three modes (plan v3).
+    """map<-base for control from SLAM replies, in three modes (plan v3.3).
 
-    ``received`` is the last ``processed`` correction (value, scan stamp);
-    ``applied`` is the one control uses. warming_up: drive held, no freshness
-    check, until a ``processed`` reply for scan id >= 4. tracking: every
-    processed correction is applied; stale when the received stamp is older
-    than ``max_age_s``. holding (docking): new corrections are received but not
+    ``received`` is the last ``processed`` correction with the stamp of the
+    last reply that confirmed it (``processed`` or ``skipped`` -- a skipped scan
+    is one slam_toolbox's own thresholds pass over, so SLAM is alive and the
+    correction stands); ``applied`` is the one control uses. warming_up: drive
+    held, until the first ``processed`` reply (the start pose is known, so the
+    first correction is enough). tracking: every processed correction is
+    applied; stale when the received stamp is older than ``max_age_s``. holding (docking): new corrections are received but not
     applied; freshness is checked on the received stamp, and dead reckoning
     since the hold must stay within ``hold_limit_m``.
     """
@@ -148,28 +150,29 @@ class SlamPoseTracker:
         self._hold_start = None
         self._hold_last = None
         self.hold_travel_m = 0.0
-        self.warmup_replies = 0
+        self.skipped_replies = 0
 
     def receive(self, scan_id: int, stamp_s: float, status: str, map_from_odom) -> None:
-        if status == "warmup":
-            if self.mode != "warming_up":
-                raise ValueError("a warmup reply outside warming up")
-            self.warmup_replies += 1
+        stamp = _finite_scalar(stamp_s, "stamp_s")
+        if self.received is not None and stamp < self.received[1]:
+            raise ValueError("SLAM replies must not go back in time")
+        if status == "skipped":
+            if self.received is None:
+                raise ValueError("a skipped reply before any processed one")
+            # Liveness only: the correction is the last processed one.
+            self.received = (self.received[0], stamp, int(scan_id))
+            if self.mode == "tracking":
+                self.applied = self.received
+            self.skipped_replies += 1
             return
         if status != "processed":
             raise ValueError(f"unexpected reply status {status!r}")
-        stamp = _finite_scalar(stamp_s, "stamp_s")
-        if self.received is not None and stamp < self.received[1]:
-            raise ValueError("SLAM corrections must not go back in time")
         pose = tuple(_finite_scalar(v, "map_from_odom") for v in map_from_odom)
         self.received = (pose, stamp, int(scan_id))
         self.version += 1
-        if self.mode == "warming_up":
+        if self.mode in ("warming_up", "tracking"):
             self.applied = self.received
-            if scan_id >= 4:
-                self.mode = "tracking"
-        elif self.mode == "tracking":
-            self.applied = self.received
+            self.mode = "tracking"
 
     def may_drive(self) -> bool:
         return self.mode != "warming_up"

@@ -203,7 +203,7 @@ def arguments() -> argparse.Namespace:
         "Requires --record-slam (the LiDAR) and --use-perception.",
     )
     parser.add_argument("--slam-noise-seed", type=int, default=None)
-    parser.add_argument("--slam-reply-timeout", type=float, default=15.0)
+    parser.add_argument("--slam-reply-timeout", type=float, default=90.0)
     parser.add_argument(
         "--planning-target",
         choices=G2.PLANNING_TARGETS,
@@ -3035,7 +3035,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 "raw_yaw_max_rad": float(yaw_error.max()) if len(error) else None,
                 "scans": len(statuses),
                 "processed": statuses.count("processed"),
-                "warmup": statuses.count("warmup"),
+                "skipped": statuses.count("skipped"),
                 "holds": slam["holds"],
                 "link_failures": statuses.count("link_failure"),
                 "pending_release_at_end": slam["pending_release"],
