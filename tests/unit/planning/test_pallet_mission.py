@@ -935,22 +935,27 @@ def test_the_trace_keeps_an_earlier_fallback_when_a_later_search_fails(monkeypat
     assert by_stage["approach_search"]["status"] == "success"
     assert len(by_stage["approach_search"]["search_attempts"]) > 1
     assert by_stage["transport_search"]["status"] == "no_path"
-    assert by_stage["transport_search"]["analytic_expansion_interval"] == 1
+    # The last search is the extended ladder's, at the original interval.
+    assert by_stage["transport_search"]["analytic_expansion_interval"] == 8
     # The cost of every retry is on record, not only the last search's.
     approach = by_stage["approach_search"]["search_attempts"]
     assert approach[0][:2] == [8, "expansion_limit"]
     assert approach[-1][1] == "success"
-    # Fine lattice first, then denser connections on the original lattice
-    # (docs/plans/2026-10-02-second-eval-failure-fixes.md, P4).
+    # Fine lattice first (P4), then denser connections on the original
+    # lattice, then the extended ladder: the fine lattice already closed, so
+    # only its shorter-primitive search runs
+    # (docs/plans/2026-10-03-transport-stage-fixes.md, T2).
     transport = by_stage["transport_search"]["search_attempts"]
     assert [
-        (entry[0], entry[1], entry[3], round(entry[4], 6)) for entry in transport
+        (entry[0], entry[1], entry[3], round(entry[4], 6), entry[6])
+        for entry in transport
     ] == [
-        (8, "no_path", 0.2, round(np.radians(10), 6)),
-        (8, "no_path", 0.1, round(np.radians(5), 6)),
-        (4, "no_path", 0.2, round(np.radians(10), 6)),
-        (2, "no_path", 0.2, round(np.radians(10), 6)),
-        (1, "no_path", 0.2, round(np.radians(10), 6)),
+        (8, "no_path", 0.2, round(np.radians(10), 6), 0.25),
+        (8, "no_path", 0.1, round(np.radians(5), 6), 0.25),
+        (4, "no_path", 0.2, round(np.radians(10), 6), 0.25),
+        (2, "no_path", 0.2, round(np.radians(10), 6), 0.25),
+        (1, "no_path", 0.2, round(np.radians(10), 6), 0.25),
+        (8, "no_path", 0.1, round(np.radians(5), 6), 0.10),
     ]
     assert all(entry[2] > 0 for entry in approach)
 
@@ -1032,10 +1037,19 @@ def test_the_fine_lattice_is_tried_first_at_the_same_interval(monkeypatch):
     lattices = [(c.xy_resolution_m, c.yaw_resolution_rad) for c in received]
     intervals = [c.analytic_expansion_interval for c in received]
     base = (config.xy_resolution_m, config.yaw_resolution_rad)
-    assert lattices == [base, (0.1, np.radians(5)), base, base, base]
-    assert intervals == [8, 8, 4, 2, 1]
-    # Nothing else about the search changes on retry.
-    for retry in received[1:]:
+    fine = (0.1, np.radians(5))
+    assert lattices == [base, fine, base, base, base, fine, fine]
+    assert intervals == [8, 8, 4, 2, 1, 8, 8]
+    # The earlier ladder keeps the caller's budget and primitive; the extended
+    # one runs after it: the fine lattice at four times the budget, then with
+    # a 0.10 m primitive (docs/plans/2026-10-03-transport-stage-fixes.md, T2).
+    assert [c.max_expansions for c in received] == [config.max_expansions] * 5 + [
+        4 * config.max_expansions
+    ] * 2
+    assert [c.primitive_length_m for c in received] == [
+        config.primitive_length_m
+    ] * 6 + [0.10]
+    for retry in received[1:5]:
         assert (
             replace(
                 retry,
@@ -1047,13 +1061,25 @@ def test_the_fine_lattice_is_tried_first_at_the_same_interval(monkeypatch):
         )
 
 
+def test_the_extended_ladder_can_be_left_out(monkeypatch):
+    received = []
+    monkeypatch.setattr(pallet_mission, "plan_hybrid_astar", _exhausted(received))
+    pallet_mission._search(None, None, [], None, None, g2_config(), extended=False)
+    assert [c.analytic_expansion_interval for c in received] == [8, 8, 4, 2, 1]
+    assert {c.max_expansions for c in received} == {g2_config().max_expansions}
+
+
 def test_a_lattice_already_as_fine_is_not_searched_again(monkeypatch):
     received = []
     monkeypatch.setattr(pallet_mission, "plan_hybrid_astar", _exhausted(received))
     fine = replace(g2_config(), xy_resolution_m=0.1, yaw_resolution_rad=np.radians(5))
     pallet_mission._search(None, None, [], None, None, fine)
-    assert [c.analytic_expansion_interval for c in received] == [8, 4, 2, 1]
+    # The earlier ladder skips the duplicate fine search; the extended ladder
+    # still runs on it, with more budget and then the shorter primitive.
+    assert [c.analytic_expansion_interval for c in received] == [8, 4, 2, 1, 8, 8]
     assert all(c.xy_resolution_m == 0.1 for c in received)
+    assert [c.max_expansions for c in received[-2:]] == [4 * fine.max_expansions] * 2
+    assert received[-1].primitive_length_m == 0.10
 
 
 def test_a_partly_finer_lattice_only_refines_the_coarser_axis(monkeypatch):
@@ -1087,8 +1113,13 @@ def test_the_fine_lattice_rescues_the_second_evaluation_seed_2007():
     assert search["search_attempts"][1][3] == 0.1
 
 
-def test_when_the_fine_lattice_also_runs_out_a_denser_interval_still_rescues():
-    """Dev seed 1020's handoff: fine lattice exhausts, interval 4 on the base lattice plans."""
+def test_when_the_fine_lattice_also_runs_out_a_denser_interval_still_rescues(
+    monkeypatch,
+):
+    """Dev seed 1020's handoff: fine lattice exhausts, interval 4 on the base lattice plans.
+
+    The extended ladder runs only after this, so the plan is unchanged.
+    """
     scenario = make_scenario(1020, G2_CATALOGUE, 4)
     target = pallet_mission.PalletSite(
         3.1790195627598172, 0.28139591002602726, -0.1785698927944206
@@ -1161,8 +1192,9 @@ def test_a_boxed_start_repeats_the_whole_ladder_at_the_finer_collision_step(
     # ladder moves straight to the finer step.
     steps = [c.collision_step_m for c in received]
     base = g2_config().collision_step_m
-    assert steps == [base] + [0.01] * 5
-    assert [c.analytic_expansion_interval for c in received] == [8, 8, 8, 4, 2, 1]
+    assert steps == [base] + [0.01] * 6
+    # The fine lattice closed, so its larger-budget search is skipped.
+    assert [c.analytic_expansion_interval for c in received] == [8, 8, 8, 4, 2, 1, 8]
 
 
 def _no_path_after(expanded, received):
@@ -1199,3 +1231,51 @@ def test_a_collision_step_already_as_fine_is_not_coarsened(monkeypatch):
         None, None, [], None, None, replace(g2_config(), collision_step_m=0.005)
     )
     assert {c.collision_step_m for c in received} == {0.005}
+
+
+def test_the_transport_leg_alone_matches_the_mission_plan():
+    """plan_transport_leg from the extracted pose is plan_transport's transport
+    (docs/plans/2026-10-03-transport-stage-fixes.md)."""
+    for seed in (0, 2):
+        scenario = make_scenario(seed, G2_CATALOGUE, 4)
+        mission = plan_transport(scenario, g2_config())
+        assert mission.success
+        start = Pose2D(*mission.transport.poses[0])
+        leg = pallet_mission.plan_transport_leg(scenario, start, g2_config())
+        assert leg.success
+        np.testing.assert_array_equal(leg.poses, mission.transport.poses)
+        np.testing.assert_array_equal(leg.directions, mission.transport.directions)
+        np.testing.assert_array_equal(
+            leg.curvatures_inv_m, mission.transport.curvatures_inv_m
+        )
+
+
+def test_the_fine_lattice_budget_plans_the_fourth_evaluation_seed_4013_transport():
+    """Its handoff's transport closed the base lattice and ran out of the fine
+    one at 30,000 expansions; four times that plans it."""
+    scenario = make_scenario(4013, G2_CATALOGUE, 4)
+    start = Pose2D(1.1398248485991234, 0.32419656228973015, -0.03151695982182697)
+    leg = pallet_mission.plan_transport_leg(scenario, start, g2_config())
+    assert leg.success, leg.status
+    assert [tuple(e[:2]) for e in leg.search_attempts] == [
+        (8, "no_path"),
+        (8, "expansion_limit"),
+        (4, "no_path"),
+        (2, "no_path"),
+        (1, "no_path"),
+        (8, "success"),
+    ]
+    winning = leg.search_attempts[-1]
+    assert winning[3] == 0.1 and winning[6] == 0.25 and winning[7] == 120000
+
+
+def test_a_short_primitive_leaves_the_fourth_evaluation_seed_4020_start():
+    """Two props narrow the start; 0.25 m primitives close every lattice at the
+    0.10 m clearance, 0.10 m ones on the fine lattice find the way."""
+    scenario = make_scenario(4020, G2_CATALOGUE, 4)
+    leg = pallet_mission.plan_observation_leg(
+        scenario, Pose2D(0.40, 1.20, 0.0), g2_config()
+    )
+    assert leg.success, leg.status
+    winning = leg.search_attempts[-1]
+    assert winning[1] == "success" and winning[3] == 0.1 and winning[6] == 0.10

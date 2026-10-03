@@ -689,11 +689,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         Rectangle,
         collision_free_pose,
     )
+    from forklift_core.planning import Pose2D as PlanningPose
     from forklift_core.planning.pallet_mission import (
         SyntheticMissionGeometry,
         make_scenario,
         make_transport_planner_config,
         plan_transport,
+        plan_transport_leg,
     )
 
     if args.use_perception:
@@ -786,6 +788,16 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     state["pocket_clearance_margin_m"] = 0.002
     state["pocket_geometry_checks"] = 0
     state["forbidden_pocket_contacts"] = []
+    # A loaded gear cusp reached on the path but out of heading: stop and plan
+    # the rest of the transport again from the measured pose, at the same
+    # clearance, at most this many times (third- and fourth-evaluation seeds
+    # 3003 and 4007; docs/plans/2026-10-03-transport-stage-fixes.md).
+    state["cusp_replans"] = []
+    max_cusp_replans = 2
+    # Stopped = zero command, planar speed and yaw rate under these for this
+    # many consecutive ticks (0.1 s), not the forward speed alone (Codex review).
+    cusp_stop_ticks, cusp_stop_needed = 0, 12
+    cusp_stop_yaw_rate_radps = 0.02
     # None keeps every planner call exactly as in the original bay runs.
     pickup_bounds = travel_config = factory = None
     if args.layout == "factory":
@@ -1140,7 +1152,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         next_candidate_index = 0
         state["observation_waypoint_selected"] = None
         observe_plan = None
-        for candidate_index, coordinates in enumerate(args.observation_waypoints):
+        # Every candidate on the earlier ladder first, then -- only if none
+        # plans -- every candidate again on the extended one, so a candidate the
+        # earlier ladder planned is never displaced by an earlier-numbered one
+        # only the extended ladder reaches (fourth-evaluation seed 4020;
+        # docs/plans/2026-10-03-transport-stage-fixes.md, T2).
+        initial_candidates = [
+            (index, coordinates, extended)
+            for extended in (False, True)
+            for index, coordinates in enumerate(args.observation_waypoints)
+        ]
+        for candidate_index, coordinates, extended in initial_candidates:
             next_candidate_index = candidate_index + 1
             waypoint = Pose2D(*coordinates)
             candidate_plan = plan_observation_leg(
@@ -1149,6 +1171,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 planner_config,
                 geometry=geometry,
                 pickup_bounds=pickup_bounds,
+                extended=extended,
             )
             state["observation_candidates"].append(
                 {
@@ -1169,6 +1192,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         scenario.start_rear.y_m,
                         scenario.start_rear.yaw_rad,
                     ],
+                    "extended_ladder": extended,
                 }
             )
             if candidate_plan.success:
@@ -1668,6 +1692,76 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 require(t - phase_started < limit, f"Tracking timeout in {phase}")
                 tracking = trackers[phase].update(rear, signed_speed, dt)
                 last_tracking = tracking
+                if (
+                    tracking.status == "failed"
+                    and phase == "transport"
+                    and tracking.failure == "endpoint_heading"
+                    and tracking.at_cusp
+                    and not tracking.off_path
+                    and len(state["cusp_replans"]) < max_cusp_replans
+                ):
+                    stopped = (
+                        tracking.speed_mps == 0.0
+                        and float(np.linalg.norm(velocity[:2]))
+                        <= trackers[phase].config.stop_speed_mps
+                        and abs(float(robot.get_angular_velocity()[2]))
+                        <= cusp_stop_yaw_rate_radps
+                    )
+                    cusp_stop_ticks = cusp_stop_ticks + 1 if stopped else 0
+                    if cusp_stop_ticks < cusp_stop_needed:
+                        # The failed tracker already commands zero; let it stop.
+                        tracking = replace(tracking, status="braking")
+                    else:
+                        cusp_stop_ticks = 0
+                        replan_start = time.monotonic()
+                        replanned = plan_transport_leg(
+                            scenario,
+                            PlanningPose(float(rear[0]), float(rear[1]), float(rear[2])),
+                            planner_config,
+                            geometry=geometry,
+                            travel_config=travel_config,
+                        )
+                        replan_wall_s = time.monotonic() - replan_start
+                        state["planning_wall_s"] = (
+                            state.get("planning_wall_s") or 0.0
+                        ) + replan_wall_s
+                        state["cusp_replans"].append(
+                            {
+                                "time_s": t,
+                                "loop_step": step,
+                                "rear_pose": rear.tolist(),
+                                "position_error_m": tracking.position_error_m,
+                                "yaw_error_rad": tracking.yaw_error_rad,
+                                "status": replanned.status,
+                                "planning_wall_s": replan_wall_s,
+                                "search_attempts": [
+                                    list(entry) for entry in replanned.search_attempts
+                                ],
+                                "path": path_record(replanned)
+                                if replanned.success
+                                else None,
+                                "replaced_path": path_record(paths[phase]),
+                            }
+                        )
+                        if replanned.success:
+                            paths[phase] = replanned
+                            # The active plan everywhere: record, file, display.
+                            state["paths"][phase] = path_record(replanned)
+                            (args.output / "paths.json").write_text(
+                                record_json(state["paths"], indent=2) + "\n"
+                            )
+                            add_path_display(
+                                stage, replanned, "Transport", (1.0, 0.65, 0.04)
+                            )
+                            trackers[phase] = RearAxlePathTracker(
+                                replanned.poses,
+                                replanned.directions,
+                                replanned.curvatures_inv_m,
+                                trackers[phase].config,
+                            )
+                            phase_started = t
+                            tracking = trackers[phase].update(rear, signed_speed, dt)
+                            last_tracking = tracking
                 if tracking.status == "failed":
                     dump_tracking("failed", tracking)
                 require(
@@ -1899,6 +1993,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                     geometry=geometry,
                                     start_rear=Pose2D(rear[0], rear[1], rear[2]),
                                     pickup_bounds=pickup_bounds,
+                                    # Re-observation keeps the earlier ladder.
+                                    extended=False,
                                 )
                                 state["observation_candidates"].append(
                                     {

@@ -41,7 +41,7 @@ FIXED = (
     (-0.60, 1.80, -0.25),
 )
 # The next frozen evaluation (plan, check 4): never generated here.
-RESERVED_SEEDS = range(4000, 4030)
+RESERVED_SEEDS = range(5000, 5030)
 REAR_TO_CAMERA_FROM_BASE_M = 0.75  # scene_rig.DEFAULT_CAMERA_XYZ_M[0]
 
 _EVALUATOR: design.Evaluator | None = None
@@ -94,7 +94,7 @@ def good_views(evaluator: design.Evaluator, seed: int, candidates, proxy: int):
 
 def evaluate(evaluator: design.Evaluator, seed: int, proxy: int) -> dict:
     if seed in RESERVED_SEEDS:
-        raise ValueError("seeds 4000-4029 are reserved for the next frozen evaluation")
+        raise ValueError("seeds 5000-5029 are reserved for the next frozen evaluation")
     extra = viewpoints_for(evaluator, seed)
     base = evaluator.sequence(seed, FIXED, proxy)
     new = base if base["served"] else evaluator.sequence(seed, list(FIXED) + extra, proxy)

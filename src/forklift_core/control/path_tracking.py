@@ -92,6 +92,16 @@ class TrackingCommand:
     segment_index: int
     position_error_m: float
     yaw_error_rad: float
+    # Why a failed result failed: "cross_track" (off the path) or
+    # "endpoint_heading" (at a leg end out of heading tolerance); None otherwise.
+    # The latter at a gear cusp leaves the vehicle on the path, stopping, so a
+    # caller may stop and replan from there instead of aborting.
+    failure: Literal["cross_track", "endpoint_heading"] | None = None
+    # Whether the leg being driven ends at a gear cusp rather than the goal.
+    at_cusp: bool = False
+    # Whether this pose is beyond max_cross_track_error_m right now. failure
+    # keeps the first cause; this says whether the vehicle has since left the path.
+    off_path: bool = False
 
 
 class RearAxlePathTracker:
@@ -156,6 +166,7 @@ class RearAxlePathTracker:
         self._segment = 0
         self._progress = 0.0
         self._failed = False
+        self._failure = None
         self._arrived = False
         self._command_speed: float | None = None
 
@@ -250,7 +261,12 @@ class RearAxlePathTracker:
         )
         self._progress = max(self._progress, min(projected, advance_limit))
         nearest = self._poses[i, :2] + np.clip(fraction, 0, 1) * self._vectors[i]
-        if np.linalg.norm(pose[:2] - nearest) > cfg.max_cross_track_error_m:
+        off_path = bool(
+            np.linalg.norm(pose[:2] - nearest) > cfg.max_cross_track_error_m
+        )
+        if off_path:
+            if not self._failed:
+                self._failure = "cross_track"
             self._failed = True
         remaining = max(0.0, float(self._distance[endpoint] - self._progress))
         position_tolerance, yaw_tolerance = (
@@ -270,6 +286,8 @@ class RearAxlePathTracker:
             or self._overshoot_accepted(pose, goal, endpoint, position_tolerance)
         )
         if at_endpoint and abs(yaw_error) > yaw_tolerance:
+            if not self._failed:
+                self._failure = "endpoint_heading"
             self._failed = True
         direction = self._directions[self._segment + 1]
         curvature = 0.0
@@ -367,6 +385,9 @@ class RearAxlePathTracker:
             self._segment,
             position_error,
             yaw_error,
+            self._failure if self._failed else None,
+            endpoint != len(self._poses) - 1,
+            off_path,
         )
 
 
