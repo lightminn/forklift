@@ -1923,13 +1923,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         state["detector_params"] = asdict(params)
                         # B1c: the detector sees millimetre depth when asked; the
                         # saved depth above stays raw (G3 applies the same rounding).
-                        detector_input = (
-                            replace(
-                                scene_input,
-                                depth_m=adapter.quantize_depth_mm(scene_input.depth_m),
-                            )
-                            if args.depth_quantize_mm
-                            else scene_input
+                        detector_input = adapter.detector_input(
+                            scene_input, args.depth_quantize_mm
                         )
                         attempt["base_from_optical"] = {
                             "translation_m": np.asarray(
@@ -2036,14 +2031,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                         ),
                                         **observed(
                                             detect_pockets(
-                                                replace(
-                                                    repeat_input,
-                                                    depth_m=adapter.quantize_depth_mm(
-                                                        repeat_input.depth_m
-                                                    ),
-                                                )
-                                                if args.depth_quantize_mm
-                                                else repeat_input,
+                                                adapter.detector_input(
+                                                    repeat_input, args.depth_quantize_mm
+                                                ),
                                                 prior,
                                                 params,
                                             ).observation

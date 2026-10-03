@@ -794,8 +794,10 @@ def recorded_mount_matches(result: dict, attempt: dict) -> bool:
     except KeyError:
         return False
     return bool(
-        np.allclose(recorded["rotation"], planned.rotation, atol=1e-9)
-        and np.allclose(recorded["translation_m"], planned.translation_m, atol=1e-9)
+        np.allclose(recorded["rotation"], planned.rotation, rtol=0, atol=1e-9)
+        and np.allclose(
+            recorded["translation_m"], planned.translation_m, rtol=0, atol=1e-9
+        )
     )
 
 
@@ -834,8 +836,15 @@ def attempt_scene(result: dict, attempt: dict, depth: np.ndarray) -> SceneInput:
     # The runner's mount: the recorded named mount when the run recorded one
     # (checked by the runner_mount gate), else the adapter's nominal mount.
     if "base_from_optical" in attempt:
-        mount = perception_adapter.mount_base_from_optical(
-            result["arguments"].get("perception_mount", "legacy")
+        from forklift_core.geometry import RigidTransform
+
+        recorded = attempt["base_from_optical"]
+        default = perception_adapter.default_base_from_optical()
+        mount = RigidTransform(
+            default.source_frame,
+            default.target_frame,
+            np.asarray(recorded["rotation"], dtype=float),
+            np.asarray(recorded["translation_m"], dtype=float),
         )
     else:
         mount = perception_adapter.default_base_from_optical()
@@ -992,12 +1001,22 @@ def chain_check(records: Sequence[dict]) -> dict:
     by_config: dict[tuple, list] = {}
     for record in records:
         result = json.loads((Path(record["run"]) / "result.json").read_text())
-        key = (result.get("script_sha256"), result.get("pallet_urdf_sha256"))
+        # The same runner can now run several mounts and depth roundings: each
+        # is its own configuration (Codex review, 2026-10-04).
+        key = (
+            result.get("script_sha256"),
+            result.get("pallet_urdf_sha256"),
+            result["arguments"].get("perception_mount", "legacy"),
+            int(result["arguments"].get("depth_quantize_mm", 0) or 0),
+        )
         by_config.setdefault(key, []).append(record)
     out = {}
     for key, group in by_config.items():
         best = max(((r.get("visibility") or {}).get("agreement") or 0.0) for r in group)
-        out[str(key[0])[:12]] = {
+        label = str(key[0])[:12]
+        if key[2] != "legacy" or key[3]:
+            label += f"/{key[2]}/q{key[3]}"
+        out[label] = {
             "attempts": len(group),
             "best_agreement": best,
             "ok": best >= CHAIN_AGREEMENT,

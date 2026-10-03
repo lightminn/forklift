@@ -5,6 +5,8 @@ import math
 from dataclasses import asdict, replace
 from pathlib import Path
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -962,8 +964,62 @@ def test_the_guard_runs_before_and_after_every_render_step():
     assert calls[:2] == [0.0, 0.002]
 
 
+def test_the_guard_catches_a_lift_that_moves_late_in_a_multi_step_capture():
+    """Three render steps before the frame is accepted; the lift leaves 0 only
+    after the third (Codex: a guard run after the first step alone passed)."""
+    camera = SensorCamera()
+    camera.frame["rendering_time"] = -1.0  # old metadata: the capture retries
+    now = [0.0]
+    steps = [0]
+
+    def advance():
+        now[0] += 1.0
+        steps[0] += 1
+        if steps[0] >= 3:
+            camera.frame["rendering_time"] = now[0]  # becomes acceptable
+
+    def guard():
+        if steps[0] >= 3:
+            raise MODULE.CaptureFailure("lift_not_zero")
+
+    sensor = MODULE.SensorCapture(
+        camera,
+        MODULE.mount_base_from_optical("carriage_low"),
+        step_fn=advance,
+        physics_time_fn=lambda: now[0],
+        pose_fn=lambda: ([0, 0, 0], [1, 0, 0, 0]),
+        render_latency_s=0.0,
+        guard_fn=guard,
+    )
+    with pytest.raises(MODULE.CaptureFailure) as error:
+        sensor.capture(max_attempts=5)
+    assert error.value.reason == "lift_not_zero"
+    assert steps[0] == 3
+
+
+def test_the_detector_input_rounds_only_when_asked_and_never_the_capture():
+    depth = np.full((480, 640), 1.23449)
+    scene = SimpleNamespace(depth_m=depth)
+    assert MODULE.detector_input(scene, 0) is scene
+    rounded = MODULE.detector_input(_scene_with_depth(depth), 1)
+    assert float(rounded.depth_m[0, 0]) == 1.234
+    assert float(depth[0, 0]) == 1.23449  # the caller's (saved) depth is untouched
+    with pytest.raises(ValueError):
+        MODULE.detector_input(scene, 2)
+
+
 def test_without_a_guard_capture_is_unchanged():
     sensor = sensor_capture(SensorCamera())
     assert sensor.guard_fn is None
     _, _, count = sensor.capture(max_attempts=1)
     assert count == 1
+
+
+def _scene_with_depth(depth):
+    from dataclasses import dataclass
+
+    @dataclass(frozen=True)
+    class Scene:
+        depth_m: object
+
+    return Scene(depth_m=depth)

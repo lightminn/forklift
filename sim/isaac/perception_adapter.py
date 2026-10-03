@@ -112,6 +112,18 @@ def quantize_depth_mm(depth_m: np.ndarray) -> np.ndarray:
     return np.where(np.isfinite(depth), np.round(depth * 1000.0) / 1000.0, depth)
 
 
+def detector_input(scene_input, quantize_mm: int):
+    """The scene the detector sees: millimetre depth when asked, else unchanged.
+
+    The capture itself (and the depth the runner saves and hashes) stays raw.
+    """
+    if quantize_mm not in (0, 1):
+        raise ValueError("quantize_mm must be 0 or 1")
+    if not quantize_mm:
+        return scene_input
+    return replace(scene_input, depth_m=quantize_depth_mm(scene_input.depth_m))
+
+
 @dataclass(frozen=True)
 class IsaacIntrinsics:
     """Retain SDK K; derive K for integer-index pixel centres from that source.

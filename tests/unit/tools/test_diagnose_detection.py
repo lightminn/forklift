@@ -372,3 +372,41 @@ def test_the_replayed_scene_uses_the_recorded_mount_and_rounding():
     scene = diag.attempt_scene(result, attempt, depth)
     np.testing.assert_allclose(scene.base_from_optical.translation_m, low.translation_m)
     assert float(scene.depth_m[0, 0]) == 1.234
+
+
+def test_the_replay_uses_the_recorded_matrix_and_a_tiny_offset_fails_the_gate():
+    import numpy as np
+
+    adapter = diag._adapter()
+    low = adapter.mount_base_from_optical("carriage_low")
+    shifted = {"translation_m": [0.559005, 0.0, 0.27], "rotation": np.asarray(low.rotation).tolist()}
+    result = {"arguments": {"perception_mount": "carriage_low"}}
+    attempt = {
+        "base_from_optical": shifted,
+        "depth_quantize_mm": 0,
+        "capture_diagnostics": {"intrinsics": {"integer_index": {"matrix": [[465.7, 0, 319.5], [0, 465.7, 239.5], [0, 0, 1]]}}},
+        "pocket_observation": {"stamp_ns": 1},
+    }
+    assert not diag.recorded_mount_matches(result, attempt)  # rtol 0, atol 1e-9
+    scene = diag.attempt_scene(result, attempt, np.full((480, 640), 2.0))
+    assert scene.base_from_optical.translation_m[0] == 0.559005  # the record, not the table
+
+
+def test_configurations_with_different_mounts_are_checked_separately(tmp_path):
+    runs = []
+    for name, mount in (("a", "legacy"), ("b", "carriage_low")):
+        d = tmp_path / name
+        d.mkdir()
+        (d / "result.json").write_text(json.dumps({
+            "script_sha256": "x", "pallet_urdf_sha256": "y",
+            "arguments": {"perception_mount": mount, "depth_quantize_mm": 1 if mount != "legacy" else 0},
+        }))
+        runs.append(d)
+    records = [
+        {"run": str(runs[0]), "visibility": {"agreement": 1.0}, "family": {"family": "OK"}},
+        {"run": str(runs[1]), "visibility": {"agreement": 0.1}, "family": {"family": "C"}},
+    ]
+    chains = diag.chain_check(records)
+    assert len(chains) == 2
+    assert records[1]["family"] == {"family": "undecidable", "why": "truth_chain_unverified"}
+    assert records[0]["family"] == {"family": "OK"}
