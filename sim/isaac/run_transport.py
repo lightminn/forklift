@@ -715,6 +715,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         make_scenario,
         make_transport_planner_config,
         plan_transport,
+        final_straight_prefix,
         plan_return_leg,
         plan_transport_leg,
     )
@@ -2503,6 +2504,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             attempt["retry_reason"] = (
                                 f"perception_{observation.status}:{observation.reason}"
                             )
+                            if state.get("near_capture", {}).get("status") == "pending":
+                                # No silent fallback to the far estimate (v3.6).
+                                state["near_capture"]["status"] = "failed"
+                                require(
+                                    False,
+                                    f"near_capture_failed:{attempt['retry_reason']}",
+                                )
                             inset_status = f"인식 실패 #{attempt_number} · 재관측 이동"
                             inset_detail = f"사유: {observation.reason}"
                             planning_start = time.monotonic()
@@ -2834,7 +2842,48 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 ),
                                 flush=True,
                             )
-                            transition("approach", t)
+                            near_leg = None
+                            if slam is not None and "near_capture" not in state:
+                                # Plan v3.6: see the pallet again where the final
+                                # straight begins, so only that straight (and the
+                                # insert/extract) runs on held odometry. Curved
+                                # approaches drifted 0.02-0.03 rad held (S2 v3.5).
+                                near_leg = final_straight_prefix(
+                                    paths["approach"], geometry.alignment_straight_m
+                                )
+                                state["near_capture"] = {
+                                    "status": "pending" if near_leg else "no_final_straight",
+                                    "far_attempt": attempt_number,
+                                    "far_estimate_m": state["perception"][
+                                        "perception_pickup_estimate_m"
+                                    ],
+                                    "far_error": state["perception"]["perception_error"],
+                                }
+                            if near_leg is not None:
+                                paths["observe"] = near_leg
+                                trackers["observe"] = RearAxlePathTracker(
+                                    near_leg.poses,
+                                    near_leg.directions,
+                                    near_leg.curvatures_inv_m,
+                                    trackers["observe"].config,
+                                )
+                                state["observation_waypoint_selected"] = (
+                                    near_leg.poses[-1].tolist()
+                                )
+                                state["near_capture"]["waypoint"] = near_leg.poses[-1].tolist()
+                                phase_started = t
+                                inset_status = "근접 재관측 위치로 이동"
+                            else:
+                                if state.get("near_capture", {}).get("status") == "pending":
+                                    state["near_capture"].update(
+                                        status="done",
+                                        near_attempt=attempt_number,
+                                        near_estimate_m=state["perception"][
+                                            "perception_pickup_estimate_m"
+                                        ],
+                                        near_error=state["perception"]["perception_error"],
+                                    )
+                                transition("approach", t)
                     elif phase == "approach":
                         transition("insert", t)
                     elif phase == "insert":

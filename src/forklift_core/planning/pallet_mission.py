@@ -577,6 +577,37 @@ def plan_observation_leg(
     )
 
 
+def final_straight_prefix(path: PlanResult, keep_m: float) -> PlanResult | None:
+    """The approach up to where its final forward straight still has keep_m left.
+
+    Online SLAM plan v3.6: the truck stops there to see the pallet again
+    before docking, so only that last straight runs on odometry. None when the
+    path does not end in a forward straight at least keep_m long (or the cut
+    would leave nothing to drive) -- the caller then docks from the far capture.
+    """
+    poses = np.asarray(path.poses, dtype=float)
+    if len(poses) < 3:
+        return None
+    steps = np.hypot(*np.diff(poses[:, :2], axis=0).T)
+    remaining = np.concatenate((np.cumsum(steps[::-1])[::-1], [0.0]))
+    cut = int(np.searchsorted(-remaining, -keep_m, side="right")) - 1
+    if cut < 1 or remaining[cut] < keep_m - 1e-9:
+        return None
+    tail = slice(cut + 1, len(poses))
+    if not (
+        np.all(np.asarray(path.directions)[tail] > 0)
+        and np.all(np.abs(np.asarray(path.curvatures_inv_m)[tail]) < 1e-9)
+    ):
+        return None
+    return replace(
+        path,
+        poses=poses[: cut + 1],
+        directions=np.asarray(path.directions)[: cut + 1],
+        curvatures_inv_m=np.asarray(path.curvatures_inv_m)[: cut + 1],
+        length_m=float(steps[:cut].sum()),
+    )
+
+
 def plan_transport_leg(
     scenario: TransportScenario,
     start_rear: Pose2D,

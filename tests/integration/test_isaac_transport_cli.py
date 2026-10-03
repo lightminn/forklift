@@ -413,3 +413,11 @@ def test_slam_release_replans_both_travel_legs_and_gates_on_a_stop() -> None:
     assert "if slam[\"stop_now\"]:\n                    slam_release(t)" in source
     assert "rear = slam_rear(t)  # the released estimate" in source
     assert "if phase in trackers and not releasing and not warming:" in source
+
+
+def test_slam_runs_see_the_pallet_again_before_the_final_straight() -> None:
+    """Plan v3.6: near capture from final_straight_prefix, no silent fallback."""
+    source = SCRIPT.read_text()
+    assert "final_straight_prefix(\n                                    paths[\"approach\"], geometry.alignment_straight_m" in source
+    assert 'f"near_capture_failed:{attempt[\'retry_reason\']}"' in source
+    assert 'if slam is not None and "near_capture" not in state:' in source

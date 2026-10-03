@@ -54,3 +54,14 @@ py-spy 로 `plan_transport` 의 Hybrid A* 안임을 확인). 판정 "대조 완�
 
 **S2 v3.4 판정: 안전 위반이 있어 실패.** 나머지 seed(2–5)와 그 S3(작업 767·770)는 같은 결함을 되풀이하므로 취소했다. v3.5(캡처부터 고정·끝점 고정 확대)로
 다시 돌린다 — 정답 대조는 실행기의 SLAM 분기만 바뀌어 그대로 쓴다.
+
+**SLAM v3.5(snapshot `slam_cae2e10`, 작업 771·772) — seed 0·1·3·5 뒤 중단, 계획 v3.6 으로 수정.**
+
+| seed | 결과 | 비고 |
+|---|---|---|
+| 0 | **실패 — 안전 위반** `Actual truck/load footprint overlap in approach` | 고정한 접근 4.3 m 동안 추정−정답 along −106 mm·횡 +42 mm·yaw +0.018 rad 변화 |
+| 1 | **실패 — 안전 위반** 같은 사유 | 접근 7.8 m 동안 along −120 mm·횡 +24 mm·yaw −0.028 rad |
+| 3 | 실패 `Pallet missed the green destination center` | 삽입 무접촉이나 횡 최소 20.7/65.4 mm, 깊이 327 mm(목표 360 − 20 = 340 미달), 해제 점프 44·91 mm |
+| 5 | 실패 `Tracking failed in observe: pos=0.0299,yaw=-0.0512` | 관측 위치 도착 yaw 판정(0.05) 근처 |
+
+**S2 v3.5 판정: 안전 위반 2 건으로 실패.** seed 2·4(작업 772)는 취소했다. 원인과 v3.6 은 계획의 "v3.6" 항목.

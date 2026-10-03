@@ -1292,3 +1292,39 @@ def test_the_return_leg_alone_matches_the_mission_plan():
     assert leg.success
     np.testing.assert_array_equal(leg.poses, mission.return_home.poses)
     np.testing.assert_array_equal(leg.directions, mission.return_home.directions)
+
+
+def _plan(poses, directions, curvatures):
+    from forklift_core.planning.hybrid_astar import PlanResult
+
+    poses = np.asarray(poses, dtype=float)
+    length = float(np.hypot(*np.diff(poses[:, :2], axis=0).T).sum())
+    return PlanResult(True, "ok", poses, np.asarray(directions, np.int8),
+                      np.asarray(curvatures, float), length, 0)
+
+
+def test_the_near_capture_point_is_where_the_final_straight_begins():
+    from forklift_core.planning.pallet_mission import final_straight_prefix
+
+    # 1 m arc-ish lead-in (curved), then 1.2 m straight along +x.
+    lead = [(-1.0 + 0.1 * k, 0.1 * (10 - k) ** 2 / 100, 0.0) for k in range(10)]
+    straight = [(0.1 * k, 0.0, 0.0) for k in range(13)]
+    poses = lead + straight
+    curv = [0.5] * len(lead) + [0.0] * len(straight)
+    plan = _plan(poses, [1] * len(poses), curv)
+    prefix = final_straight_prefix(plan, keep_m=0.8)
+    assert prefix is not None
+    np.testing.assert_allclose(prefix.poses[-1], (0.4, 0.0, 0.0), atol=1e-9)
+    assert prefix.length_m == pytest.approx(plan.length_m - 0.8, abs=1e-9)
+    assert len(prefix.poses) == len(prefix.directions) == len(prefix.curvatures_inv_m)
+
+
+def test_no_near_capture_when_the_end_is_not_a_long_enough_forward_straight():
+    from forklift_core.planning.pallet_mission import final_straight_prefix
+
+    straight = [(0.1 * k, 0.0, 0.0) for k in range(6)]  # only 0.5 m
+    assert final_straight_prefix(_plan(straight, [1] * 6, [0.0] * 6), keep_m=0.8) is None
+    curved = [(0.1 * k, 0.0, 0.0) for k in range(13)]
+    assert final_straight_prefix(_plan(curved, [1] * 13, [0.3] * 13), keep_m=0.8) is None
+    reverse = [(-0.1 * k, 0.0, 0.0) for k in range(13)]
+    assert final_straight_prefix(_plan(reverse, [-1] * 13, [0.0] * 13), keep_m=0.8) is None
