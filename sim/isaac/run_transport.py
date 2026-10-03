@@ -191,6 +191,19 @@ def arguments() -> argparse.Namespace:
         default="ros",
     )
     parser.add_argument("--perception-max-attempts", type=int, default=200)
+    # Online SLAM closed loop (docs/plans/2026-10-04-online-slam-closed-loop.md).
+    parser.add_argument(
+        "--slam-feedback",
+        type=Path,
+        default=None,
+        metavar="SOCKET",
+        help="Unix socket of forklift_ros isaac_slam_bridge: control, planning "
+        "starts and the perception world transform use the SLAM estimate and "
+        "wheel odometry; ground truth only checks, evaluates and renders. "
+        "Requires --record-slam (the LiDAR) and --use-perception.",
+    )
+    parser.add_argument("--slam-noise-seed", type=int, default=None)
+    parser.add_argument("--slam-reply-timeout", type=float, default=15.0)
     parser.add_argument(
         "--planning-target",
         choices=G2.PLANNING_TARGETS,
@@ -256,6 +269,13 @@ def arguments() -> argparse.Namespace:
         ]
     if not args.observation_waypoints:
         parser.error("--observation-waypoints requires at least one candidate")
+    if args.slam_feedback is not None:
+        if not (args.record_slam and args.use_perception):
+            parser.error("--slam-feedback needs --record-slam and --use-perception")
+        if args.planning_target == "oracle_nominal":
+            parser.error("--slam-feedback forbids --planning-target oracle_nominal")
+    if args.slam_noise_seed is not None and args.slam_feedback is None:
+        parser.error("--slam-noise-seed requires --slam-feedback")
     if args.use_perception:
         if args.pallet_prior is None:
             parser.error("--pallet-prior is required with --use-perception")
@@ -695,6 +715,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         make_scenario,
         make_transport_planner_config,
         plan_transport,
+        plan_return_leg,
         plan_transport_leg,
     )
 
@@ -1072,7 +1093,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         perception_capture = adapter.SensorCapture(
             perception_camera,
             perception_mount,
-            step_fn=lambda: world.step(render=True),
+            # Every physics step, capture included, goes through step_world
+            # (SLAM plan: odometry, scans and the lockstep must see them all).
+            step_fn=lambda: stepper["fn"](True),
             physics_time_fn=lambda: world.current_time,
             pose_fn=robot.get_world_pose,
         )
@@ -1278,6 +1301,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     frame_audit = []
     video_frames = []
     slam_log = None
+    slam = None
+    # step_world replaces this before the main loop; captures call through it.
+    stepper = {"fn": lambda render: world.step(render=render), "tick": 0}
     if args.record_slam:
         import planar_lidar
         import yaml
@@ -1306,6 +1332,84 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "laser_pose_world": [],
         }
         state["lidar_synthetic"] = lidar_config
+    if args.slam_feedback is not None:
+        from forklift_core.localization import slam_link
+        from forklift_core.localization.slam_pose import (
+            IncrementalWheelOdometry,
+            LocalizationStale,
+            OdometryNoise,
+            SlamPoseTracker,
+            StopDetector,
+        )
+        from forklift_core.localization.wheel_odometry import AckermannOdometryGeometry
+
+        # The known start (odom = map = world); the plan's v3 state machine.
+        slam_start = (
+            scenario.start_rear.x_m,
+            scenario.start_rear.y_m,
+            scenario.start_rear.yaw_rad,
+        )
+        slam = {
+            "link": slam_link.SlamLinkClient(
+                str(args.slam_feedback), timeout_s=args.slam_reply_timeout
+            ),
+            "module": slam_link,
+            "noise": OdometryNoise(
+                seed=args.slam_noise_seed or 0,
+                enabled=args.slam_noise_seed is not None,
+            ),
+            "odometry": IncrementalWheelOdometry(
+                AckermannOdometryGeometry(
+                    args.drive_geometry.wheelbase_m,
+                    args.drive_geometry.track_m,
+                    args.drive_geometry.wheel_radius_m,
+                ),
+                initial_pose=slam_start,
+            ),
+            "tracker": SlamPoseTracker(max_age_s=0.25, hold_limit_m=1.5),
+            "stale": LocalizationStale,
+            "stop": StopDetector(tick_s=1 / 120),
+            "odom_rear": slam_start,
+            "odom_speed": 0.0,
+            "odom_yaw_rate": 0.0,
+            "scan_id": 0,
+            "tick": 0,
+            "records": [],
+            "control": [],
+            "holds": [],
+            "pending_release": None,
+            "stop_now": False,
+            "last_command": 0.0,
+        }
+        state["slam_feedback"] = {
+            "socket": str(args.slam_feedback),
+            "noise_seed": args.slam_noise_seed,
+            "start_rear": list(slam_start),
+            "max_age_s": 0.25,
+            "hold_limit_m": 1.5,
+            "hold_phases": ["insert", "lift", "extract", "lower", "withdraw"],
+            "release_limits": {"position_m": 0.02, "yaw_rad": 0.02},
+        }
+
+    def slam_odom_base():
+        x, y, yaw_o = slam["odom_rear"]
+        offset = abs(args.rear_axle_offset_m)
+        return (x + offset * math.cos(yaw_o), y + offset * math.sin(yaw_o), yaw_o)
+
+    def slam_rear(now_s):
+        if slam["tracker"].applied is None:
+            # Before the first scan: odom = map at the known start (plan v3.1);
+            # warming up holds the drive anyway.
+            x, y, yaw_o = slam["odom_rear"]
+            return np.array([x, y, yaw_o])
+        try:
+            est = slam["tracker"].map_from_base(now_s, slam_odom_base())
+        except slam["stale"] as exc:
+            require(False, f"localization_stale: {exc}")
+        offset = abs(args.rear_axle_offset_m)
+        return np.array(
+            [est[0] - offset * math.cos(est[2]), est[1] - offset * math.sin(est[2]), est[2]]
+        )
     if args.robot_camera:
         import video_frames as video_frames_module
     speeds = {
@@ -1431,6 +1535,70 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         snapshot(phase)
         phase, phase_started = next_phase, t
         state["phase"] = phase
+        if slam is None:
+            return
+        # Docking phases freeze the applied correction (plan v3.1); the next
+        # travel leg waits for a stop and the release below.
+        if phase in ("insert", "lower"):
+            slam["tracker"].hold(odom_from_base=slam_odom_base())
+            slam["holds"].append({"phase": phase, "time_s": t, "event": "hold"})
+        elif phase in ("transport", "settle"):
+            slam["pending_release"] = phase
+
+    def slam_release(t: float) -> None:
+        """Apply the received correction while stopped; replan the next leg
+        from the new estimate if it moved more than 2 cm or 0.02 rad."""
+        nonlocal phase_started
+        leg = "transport" if slam["pending_release"] == "transport" else "return_home"
+        slam["pending_release"] = None
+        before = slam_rear(t)
+        jump_m, jump_rad = slam["tracker"].release(odom_from_base=slam_odom_base())
+        after = slam_rear(t)
+        event = {
+            "phase": phase,
+            "time_s": t,
+            "event": "release",
+            "jump_m": jump_m,
+            "jump_rad": jump_rad,
+            "rear_before": before.tolist(),
+            "rear_after": after.tolist(),
+            "replanned": False,
+        }
+        slam["holds"].append(event)
+        if leg not in trackers or (jump_m <= 0.02 and abs(jump_rad) <= 0.02):
+            return
+        start = PlanningPose(float(after[0]), float(after[1]), float(after[2]))
+        replan_start = time.monotonic()
+        if leg == "transport":
+            replanned = plan_transport_leg(
+                scenario, start, planner_config, geometry=geometry, travel_config=travel_config
+            )
+        else:
+            replanned = plan_return_leg(
+                scenario,
+                start,
+                return_to_pose,
+                planner_config,
+                geometry=geometry,
+                travel_config=travel_config,
+            )
+        event.update(
+            replanned=True,
+            replan_status=replanned.status,
+            planning_wall_s=time.monotonic() - replan_start,
+        )
+        require(replanned.success, f"slam_release_replan_failed: {replanned.status}")
+        paths[leg] = replanned
+        state["paths"][leg] = path_record(replanned)
+        (args.output / "paths.json").write_text(record_json(state["paths"], indent=2) + "\n")
+        trackers[leg] = RearAxlePathTracker(
+            replanned.poses,
+            replanned.directions,
+            replanned.curvatures_inv_m,
+            trackers[leg].config,
+        )
+        if leg == phase:
+            phase_started = t
 
     try:
         if args.video:
@@ -1558,6 +1726,92 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             )
             state["tracking_failure"] = record
 
+        def step_world(render: bool) -> None:
+            """One physics step and everything that must see every step
+            (SLAM plan v3.1): encoders, odometry, the 10 Hz scan by physics
+            tick (not loop step) and the SLAM lockstep. Capture steps too."""
+            world.step(render=render)
+            if slam_log is None:
+                return
+            stamp_now = world.current_time - initial_time
+            tick = stepper["tick"]
+            stepper["tick"] = tick + 1
+            now_base, now_q = robot.get_world_pose()
+            rates_true = robot.get_joint_velocities()[wheels]
+            steer_true = robot.get_joint_positions()[steers]
+            slam_log["joint_stamps_s"].append(stamp_now)
+            slam_log["wheel_rates_rad_s"].append(rates_true)
+            slam_log["steering_rad"].append(steer_true)
+            slam_log["base_pose_world"].append(np.concatenate((now_base, now_q)))
+            if slam is not None:
+                rates = slam["noise"].wheel_rates(rates_true[2:4])
+                angles = slam["noise"].steering(steer_true)
+                previous_yaw = slam["odom_rear"][2]
+                slam["odom_rear"] = slam["odometry"].update(stamp_now, rates, angles)
+                slam["odom_speed"] = float(np.mean(rates)) * args.drive_geometry.wheel_radius_m
+                slam["odom_yaw_rate"] = (slam["odom_rear"][2] - previous_yaw) * 120.0
+                slam["stop_now"] = slam["stop"].update(
+                    commanded_speed=slam.get("last_command", 0.0),
+                    speed=slam["odom_speed"],
+                    yaw_rate=slam["odom_yaw_rate"],
+                )
+            if tick % scan_every:
+                return
+            origin, directions = planar_lidar.laser_rays_world(
+                now_base, now_q, laser_mount, beam_angles
+            )
+            distances, hits, _ = planar_lidar.cast_scan(
+                origin, directions, scan_pattern.range_max_m
+            )
+            ranges = scan_pattern.ranges_from_hits(distances, hits)
+            slam_log["scan_stamps_s"].append(stamp_now)
+            slam_log["scan_ranges_m"].append(ranges.astype(np.float32))
+            slam_log["laser_pose_world"].append(
+                planar_lidar.laser_pose_2d(now_base, now_q, laser_mount)
+            )
+            if slam is None:
+                return
+            link = slam["module"]
+            sent = slam["noise"].ranges(
+                ranges,
+                range_min_m=scan_pattern.range_min_m,
+                range_max_m=scan_pattern.range_max_m,
+            )
+            try:
+                reply = slam["link"].exchange(
+                    link.Scan(
+                        slam["scan_id"],
+                        float(stamp_now),
+                        slam_odom_base(),
+                        sent.astype(np.float32),
+                        scan_pattern.angle_min_rad,
+                        scan_pattern.angle_increment_rad,
+                        scan_pattern.range_min_m,
+                        scan_pattern.range_max_m,
+                    )
+                )
+            except link.SlamLinkFailure as exc:
+                require(False, f"slam_link_failed: {exc}")
+            slam["tracker"].receive(
+                reply.scan_id, reply.stamp_s, reply.status, reply.map_from_odom
+            )
+            truth_yaw, _ = yaw_and_tilt(now_q)
+            slam["records"].append(
+                {
+                    "scan_id": slam["scan_id"],
+                    "stamp_s": float(stamp_now),
+                    "phase": phase,
+                    "status": reply.status,
+                    "mode": slam["tracker"].mode,
+                    "map_from_odom": list(reply.map_from_odom),
+                    "odom_base": list(slam_odom_base()),
+                    "truth_base": [float(now_base[0]), float(now_base[1]), truth_yaw],
+                    "slam_wall_s": reply.slam_wall_s,
+                }
+            )
+            slam["scan_id"] += 1
+
+        stepper["fn"] = step_world
         for step in range(int(120 * args.max_sim_seconds)):
             t = world.current_time - initial_time
             base, q = robot.get_world_pose()
@@ -1574,6 +1828,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             )
             velocity = robot.get_linear_velocity()
             signed_speed = float(np.dot(velocity[:2], forward))
+            # Ground truth checks, evaluates and renders; control below uses
+            # `rear`/`signed_speed`, which --slam-feedback replaces.
+            truth_rear = rear
+            if slam is not None:
+                rear = slam_rear(t)
+                signed_speed = slam["odom_speed"]
+                slam["control"].append([t, *rear.tolist(), *truth_rear.tolist()])
             require(np.isfinite([base, ppos]).all(), "Nonfinite body state")
             if phase == "lift":
                 # Every physics step, so the peak and the aborting state are
@@ -1631,7 +1892,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             # "계획 여유가 시험으로 고정돼 있지 않다").
             require(
                 collision_free_pose(
-                    rear, checked_obstacles, footprint, scenario.bounds
+                    truth_rear, checked_obstacles, footprint, scenario.bounds
                 ),
                 f"Actual truck/load footprint overlap in {phase}",
             )
@@ -1683,7 +1944,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 )
             requested_speed, curvature = 0.0, 0.0
             tracking = None
-            if phase in trackers:
+            releasing = slam is not None and slam.get("pending_release") is not None
+            if releasing and slam["stop_now"]:
+                slam_release(t)
+                releasing = False
+            if phase in trackers and not releasing:
                 # Three times the path time at the tracker's own speed caps
                 # (length / cruise when there are none), plus 10 s.
                 limit = max(30.0, 3 * trackers[phase].nominal_duration_s() + 10)
@@ -1701,11 +1966,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     and len(state["cusp_replans"]) < max_cusp_replans
                 ):
                     stopped = (
-                        tracking.speed_mps == 0.0
-                        and float(np.linalg.norm(velocity[:2]))
-                        <= trackers[phase].config.stop_speed_mps
-                        and abs(float(robot.get_angular_velocity()[2]))
-                        <= cusp_stop_yaw_rate_radps
+                        slam["stop_now"]
+                        if slam is not None
+                        else (
+                            tracking.speed_mps == 0.0
+                            and float(np.linalg.norm(velocity[:2]))
+                            <= trackers[phase].config.stop_speed_mps
+                            and abs(float(robot.get_angular_velocity()[2]))
+                            <= cusp_stop_yaw_rate_radps
+                        )
                     )
                     cusp_stop_ticks = cusp_stop_ticks + 1 if stopped else 0
                     if cusp_stop_ticks < cusp_stop_needed:
@@ -1772,6 +2041,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     tracking.speed_mps,
                     tracking.curvature_inv_m,
                 )
+                if slam is not None and not slam["tracker"].may_drive():
+                    requested_speed = 0.0  # warming up: hold still
                 if tracking.status == "arrived":
                     if args.use_perception and phase == "observe":
                         attempt_number = len(state["observation_attempts"]) + 1
@@ -1848,6 +2119,20 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 yaw,
                             ]
                         )
+                        if slam is not None:
+                            # The accepted ground-truth pose only validated the
+                            # capture; control takes the estimate at this instant.
+                            rear = slam_rear(world.current_time - initial_time)
+                            yaw = float(rear[2])
+                            forward = np.array([math.cos(yaw), math.sin(yaw)])
+                            base = np.array(
+                                [
+                                    rear[0] + abs(args.rear_axle_offset_m) * forward[0],
+                                    rear[1] + abs(args.rear_axle_offset_m) * forward[1],
+                                    float(base[2]),
+                                ]
+                            )
+                            attempt["control_pose_source"] = "slam_estimate"
                         attempt.update(
                             {
                                 "frame_diagnostics": asdict(frame_diagnostics),
@@ -2366,14 +2651,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 state["return_home_error"] = {
                     "position_m": float(
                         np.hypot(
-                            rear[0] - scenario.start_rear.x_m,
-                            rear[1] - scenario.start_rear.y_m,
+                            truth_rear[0] - scenario.start_rear.x_m,
+                            truth_rear[1] - scenario.start_rear.y_m,
                         )
                     ),
                     "yaw_rad": float(
                         math.atan2(
-                            math.sin(rear[2] - scenario.start_rear.yaw_rad),
-                            math.cos(rear[2] - scenario.start_rear.yaw_rad),
+                            math.sin(truth_rear[2] - scenario.start_rear.yaw_rad),
+                            math.cos(truth_rear[2] - scenario.start_rear.yaw_rad),
                         )
                     ),
                 }
@@ -2423,33 +2708,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     ),
                     camera_axes="usd",
                 )
-            world.step(render=args.video and step % fps_divisor == 0)
+            if slam is not None:
+                slam["last_command"] = requested_speed
+            stepper["fn"](args.video and step % fps_divisor == 0)
             stamp = world.current_time - initial_time
-            if slam_log is not None:
-                # Encoders and the scan read the state this step produced.
-                now_base, now_q = robot.get_world_pose()
-                slam_log["joint_stamps_s"].append(stamp)
-                slam_log["wheel_rates_rad_s"].append(
-                    robot.get_joint_velocities()[wheels]
-                )
-                slam_log["steering_rad"].append(robot.get_joint_positions()[steers])
-                slam_log["base_pose_world"].append(np.concatenate((now_base, now_q)))
-                if step % scan_every == 0:
-                    origin, directions = planar_lidar.laser_rays_world(
-                        now_base, now_q, laser_mount, beam_angles
-                    )
-                    distances, hits, _ = planar_lidar.cast_scan(
-                        origin, directions, scan_pattern.range_max_m
-                    )
-                    slam_log["scan_stamps_s"].append(stamp)
-                    slam_log["scan_ranges_m"].append(
-                        scan_pattern.ranges_from_hits(distances, hits).astype(
-                            np.float32
-                        )
-                    )
-                    slam_log["laser_pose_world"].append(
-                        planar_lidar.laser_pose_2d(now_base, now_q, laser_mount)
-                    )
             if args.video and step % fps_divisor == 0:
                 frame = camera.get_current_frame()
                 rgba = camera.get_rgba()
@@ -2661,6 +2923,27 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             )
         if slam_log is not None and slam_log["scan_stamps_s"]:
             write_slam_record(args, state, scenario, factory, slam_log, lidar_config)
+        if slam is not None:
+            slam["link"].close()
+            (args.output / "slam_records.json").write_text(
+                record_json(slam["records"]) + "\n"
+            )
+            control = np.asarray(slam["control"], dtype=float).reshape(-1, 7)
+            np.save(args.output / "slam_control.npy", control)
+            error = np.hypot(control[:, 1] - control[:, 4], control[:, 2] - control[:, 5])
+            statuses = [record["status"] for record in slam["records"]]
+            state["slam_summary"] = {
+                "control_samples": int(len(control)),
+                "raw_position_rmse_m": float(np.sqrt(np.mean(error**2)))
+                if len(error)
+                else None,
+                "raw_position_max_m": float(error.max()) if len(error) else None,
+                "scans": len(statuses),
+                "processed": statuses.count("processed"),
+                "warmup": statuses.count("warmup"),
+                "holds": slam["holds"],
+                "final_mode": slam["tracker"].mode,
+            }
         for name, exit_code in video_results:
             require(exit_code == 0, f"{name} video encoding failed")
 

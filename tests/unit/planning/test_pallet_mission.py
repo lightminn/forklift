@@ -1279,3 +1279,16 @@ def test_a_short_primitive_leaves_the_fourth_evaluation_seed_4020_start():
     assert leg.success, leg.status
     winning = leg.search_attempts[-1]
     assert winning[1] == "success" and winning[3] == 0.1 and winning[6] == 0.10
+
+
+def test_the_return_leg_alone_matches_the_mission_plan():
+    """plan_return_leg from the withdrawn pose is plan_transport's return_home."""
+    scenario = make_scenario(0, G2_CATALOGUE, 4)
+    mission = plan_transport(scenario, g2_config(), return_to=scenario.start_rear)
+    assert mission.success and mission.return_home is not None
+    leg = pallet_mission.plan_return_leg(
+        scenario, Pose2D(*mission.return_home.poses[0]), scenario.start_rear, g2_config()
+    )
+    assert leg.success
+    np.testing.assert_array_equal(leg.poses, mission.return_home.poses)
+    np.testing.assert_array_equal(leg.directions, mission.return_home.directions)

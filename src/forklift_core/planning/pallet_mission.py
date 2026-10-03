@@ -621,6 +621,42 @@ def plan_transport_leg(
     return _append_straight(search, tail)
 
 
+def plan_return_leg(
+    scenario: TransportScenario,
+    start_rear: Pose2D,
+    return_to: Pose2D,
+    config: PlannerConfig | None = None,
+    *,
+    geometry: SyntheticMissionGeometry | None = None,
+    travel_config: PlannerConfig | None = None,
+) -> PlanResult:
+    """The unloaded return leg alone, as plan_transport's return_home stage.
+
+    For replanning from the measured pose after a SLAM correction is applied
+    at the destination (docs/plans/2026-10-04-online-slam-closed-loop.md); the
+    delivered pallet is an obstacle, as in plan_transport.
+    """
+    geometry = geometry if geometry is not None else SyntheticMissionGeometry()
+    config = config if config is not None else make_transport_planner_config()
+    travel_config = travel_config if travel_config is not None else config
+    props = [prop.rectangle for prop in scenario.props]
+    delivered = Rectangle(
+        scenario.destination.x_m,
+        scenario.destination.y_m,
+        geometry.pallet_depth_m,
+        geometry.pallet_width_m,
+        scenario.destination.yaw_rad,
+    )
+    return _search(
+        start_rear,
+        return_to,
+        props + [delivered],
+        geometry.unloaded_footprint,
+        scenario.bounds,
+        travel_config,
+    )
+
+
 def plan_transport(
     scenario: TransportScenario,
     config: PlannerConfig | None = None,
