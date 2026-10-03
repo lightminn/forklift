@@ -1909,9 +1909,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             frame_due = args.video and tick % fps_divisor == 0
             world.step(render=render or frame_due)
             stamp_now = world.current_time - initial_time
-            if frame_due:
-                write_video_frame(stamp_now)
             if slam_log is None:
+                if frame_due:
+                    write_video_frame(stamp_now)
                 return
             now_base, now_q = robot.get_world_pose()
             rates_true = robot.get_joint_velocities()[wheels]
@@ -1935,6 +1935,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 # Every tracker in this runner stops at 0.012 m/s; its arrival
                 # and gear-change checks wait for the noise-aware detector.
                 slam["tracker_speed"] = slam["stop"].tracker_speed(0.012)
+            if frame_due:
+                # After this tick's odometry, so the annotation matches the image.
+                write_video_frame(stamp_now)
             if tick % scan_every:
                 return
             origin, directions = planar_lidar.laser_rays_world(
@@ -2161,6 +2164,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     slam_release(t)
                     releasing = False
                     rear = slam_rear(t)  # the released estimate, this very tick
+                    slam["control"][-1][1:4] = rear.tolist()
             warming = slam is not None and not slam["tracker"].may_drive()
             if phase in trackers and not releasing and not warming:
                 # Three times the path time at the tracker's own speed caps
@@ -3039,13 +3043,6 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             }
         if frame_log is not None:
             frame_log.close()
-        video_results = []
-        if encoder is not None:
-            encoder.stdin.close()
-            video_results.append(("transport", encoder.wait(timeout=60)))
-        for name, extra_encoder in extra_encoders.items():
-            extra_encoder.stdin.close()
-            video_results.append((name, extra_encoder.wait(timeout=60)))
         (args.output / "frame_audit.json").write_text(
             record_json(frame_audit, indent=2) + "\n"
         )
@@ -3074,8 +3071,24 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             )
         if slam_log is not None and slam_log["scan_stamps_s"]:
             write_slam_record(args, state, scenario, factory, slam_log, lidar_config)
-        for name, exit_code in video_results:
-            require(exit_code == 0, f"{name} video encoding failed")
+        # Records first, encoders last: a slow ffmpeg shutdown must neither
+        # lose the records above nor replace the run's own failure reason.
+        failing = sys.exc_info()[0] is not None
+        video_results = []
+        encoders = ([("transport", encoder)] if encoder is not None else []) + list(
+            extra_encoders.items()
+        )
+        for name, process in encoders:
+            try:
+                process.stdin.close()
+                video_results.append((name, process.wait(timeout=60)))
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                process.kill()
+                state.setdefault("video_shutdown_errors", []).append(f"{name}: {exc!r}")
+                video_results.append((name, None))
+        if not failing:
+            for name, exit_code in video_results:
+                require(exit_code == 0, f"{name} video encoding failed")
 
 
 def main() -> None:

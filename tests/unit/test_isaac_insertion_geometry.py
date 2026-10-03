@@ -382,3 +382,13 @@ def test_lateral_clearance_shrinks_with_relative_yaw(geometry):
     turned = lateral(geometry, q=(np.cos(angle / 2), 0, 0, np.sin(angle / 2)))
     centred = lateral(geometry)
     assert min(turned.values()) < min(centred.values())
+
+
+def test_lateral_clearance_ignores_the_boards_and_stringers_over_the_blade(geometry):
+    # Codex counterexample: lifted 50 mm, pitched 0.01 rad, a hair into the
+    # stringer above -- not a side wall; the block columns are still 45 mm away.
+    angle = 0.01
+    q = (np.cos(angle / 2), 0, np.sin(angle / 2), 0)
+    gaps = geometry.lateral_clearances((-0.89, 0, 0.0036), q, 0.05, (0, 0, 0), (1, 0, 0, 0))
+    assert gaps["left"] == pytest.approx(0.045, abs=1e-3)
+    assert gaps["right"] == pytest.approx(0.045, abs=1e-3)

@@ -441,8 +441,8 @@ class InsertionGeometry:
 
         In the pallet frame, each blade is replaced by its axis-aligned bounding
         box (conservative under yaw, pitch and roll: the gap can only come out
-        smaller). Pallet boxes overlapping that box along x and z are the pocket
-        walls; the result is the smallest y separation to any of them, negative
+        smaller). Pallet boxes overlapping that box along x and z, and not
+        spanning the blade's centreline in y, are the pocket walls; the result is the smallest y separation to any of them, negative
         when they overlap. None when no pallet box is beside the blade (outside
         the pallet). Online SLAM plan S2: lateral clearance >= 10 mm.
         """
@@ -460,11 +460,16 @@ class InsertionGeometry:
             low, high = fork_center - fork_half, fork_center + fork_half
             box_low = self._pallet_centers - self._pallet_halves
             box_high = self._pallet_centers + self._pallet_halves
+            # A box spanning the blade's centreline in y lies over or under it
+            # (deck boards, stringers, bottom boards): vertical support, not a
+            # pocket wall. A side block that reached the centreline would be
+            # a 27 mm overlap, which forbidden_contacts reports anyway.
             beside = (
                 (box_low[:, 0] < high[0])
                 & (box_high[:, 0] > low[0])
                 & (box_low[:, 2] < high[2])
                 & (box_high[:, 2] > low[2])
+                & ~((box_low[:, 1] <= fork_center[1]) & (box_high[:, 1] >= fork_center[1]))
             )
             gaps = np.maximum(box_low[beside, 1] - high[1], low[1] - box_high[beside, 1])
             side = "left" if "left" in name else "right"

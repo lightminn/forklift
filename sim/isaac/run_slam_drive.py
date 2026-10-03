@@ -765,6 +765,14 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
                             )
                         )
                     except link.SlamLinkFailure as exc:
+                        slam["records"].append(
+                            {
+                                "scan_id": scan_id,
+                                "stamp_s": float(stamp),
+                                "status": "link_failure",
+                                "error": str(exc),
+                            }
+                        )
                         require(False, f"slam_link_failed: {exc}")
                     slam["tracker"].receive(
                         reply.scan_id, reply.stamp_s, reply.status, reply.map_from_odom
@@ -971,13 +979,12 @@ def slam_summary(slam: dict) -> dict:
     """Raw (unaligned) error of the pose control actually used, and reply counts."""
     control = np.asarray(slam["control"], dtype=float).reshape(-1, 8)
     statuses = [r["status"] for r in slam["records"]]
+    walls = [r["slam_wall_s"] for r in slam["records"] if "slam_wall_s" in r]
     out = {
         "scans_sent": len(slam["records"]),
         "replies": {s: statuses.count(s) for s in sorted(set(statuses))},
-        "slam_wall_s_max": max((r["slam_wall_s"] for r in slam["records"]), default=0.0),
-        "slam_wall_s_median": float(np.median([r["slam_wall_s"] for r in slam["records"]]))
-        if slam["records"]
-        else 0.0,
+        "slam_wall_s_max": max(walls, default=0.0),
+        "slam_wall_s_median": float(np.median(walls)) if walls else 0.0,
         "control_samples": int(len(control)),
     }
     driving = control[~np.isnan(control[:, 1])] if len(control) else control
@@ -1002,7 +1009,9 @@ def main() -> None:
     state = {
         "success": False,
         "seed": args.seed,
-        "control_feedback": "simulator_ground_truth",
+        "control_feedback": (
+            "slam_estimate" if args.slam_feedback is not None else "simulator_ground_truth"
+        ),
         "recorded_for_slam": ["scans", "wheel_rates", "steering_angles"],
         "ground_truth_recorded_for_evaluation": True,
         "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),

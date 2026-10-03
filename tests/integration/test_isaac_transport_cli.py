@@ -410,5 +410,6 @@ def test_slam_release_replans_both_travel_legs_and_gates_on_a_stop() -> None:
     assert "jump_m <= 0.02 and abs(jump_rad) <= 0.02" in body
     assert "plan_transport_leg(" in body and "plan_return_leg(" in body
     source = SCRIPT.read_text()
-    assert "if releasing and slam[\"stop_now\"]:" in source
-    assert "if phase in trackers and not releasing:" in source
+    assert "if slam[\"stop_now\"]:\n                    slam_release(t)" in source
+    assert "rear = slam_rear(t)  # the released estimate" in source
+    assert "if phase in trackers and not releasing and not warming:" in source
