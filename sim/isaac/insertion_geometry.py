@@ -321,6 +321,9 @@ def assert_pallet_urdf_matches_named_boxes(
         )
 
 
+PALLET_SUPPORT_PREFIXES = ("bottom_board_", "stringer_", "top_board_")
+
+
 class InsertionGeometry:
     """Source URDF boxes for the provisional lift chain and a single-link pallet."""
 
@@ -367,6 +370,11 @@ class InsertionGeometry:
         result.pallet_boxes = _boxes(links[0])
         result._pallet_centers = np.array([b[1] for b in result.pallet_boxes])
         result._pallet_halves = np.array([b[2] for b in result.pallet_boxes])
+        # Horizontal members over and under the pockets; every other box
+        # (blocks, and anything unnamed) is a pocket wall for lateral_clearances.
+        result._pallet_support = np.array(
+            [b[0].startswith(PALLET_SUPPORT_PREFIXES) for b in result.pallet_boxes]
+        )
         return result
 
     def insertion_measures(
@@ -441,8 +449,8 @@ class InsertionGeometry:
 
         In the pallet frame, each blade is replaced by its axis-aligned bounding
         box (conservative under yaw, pitch and roll: the gap can only come out
-        smaller). Pallet boxes overlapping that box along x and z, and not
-        spanning the blade's centreline in y, are the pocket walls; the result is the smallest y separation to any of them, negative
+        smaller). Pallet boxes overlapping that box along x and z, other than
+        the boards and stringers (PALLET_SUPPORT_PREFIXES), are the pocket walls; the result is the smallest y separation to any of them, negative
         when they overlap. None when no pallet box is beside the blade (outside
         the pallet). Online SLAM plan S2: lateral clearance >= 10 mm.
         """
@@ -460,16 +468,15 @@ class InsertionGeometry:
             low, high = fork_center - fork_half, fork_center + fork_half
             box_low = self._pallet_centers - self._pallet_halves
             box_high = self._pallet_centers + self._pallet_halves
-            # A box spanning the blade's centreline in y lies over or under it
-            # (deck boards, stringers, bottom boards): vertical support, not a
-            # pocket wall. A side block that reached the centreline would be
-            # a 27 mm overlap, which forbidden_contacts reports anyway.
+            # Boards and stringers carry the load over and under the blade;
+            # they are support, not pocket walls, by kind -- a block stays a
+            # wall wherever the blade is relative to it.
             beside = (
                 (box_low[:, 0] < high[0])
                 & (box_high[:, 0] > low[0])
                 & (box_low[:, 2] < high[2])
                 & (box_high[:, 2] > low[2])
-                & ~((box_low[:, 1] <= fork_center[1]) & (box_high[:, 1] >= fork_center[1]))
+                & ~self._pallet_support
             )
             gaps = np.maximum(box_low[beside, 1] - high[1], low[1] - box_high[beside, 1])
             side = "left" if "left" in name else "right"

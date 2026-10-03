@@ -392,3 +392,13 @@ def test_lateral_clearance_ignores_the_boards_and_stringers_over_the_blade(geome
     gaps = geometry.lateral_clearances((-0.89, 0, 0.0036), q, 0.05, (0, 0, 0), (1, 0, 0, 0))
     assert gaps["left"] == pytest.approx(0.045, abs=1e-3)
     assert gaps["right"] == pytest.approx(0.045, abs=1e-3)
+
+
+def test_a_block_over_the_blade_centreline_still_counts_as_a_wall(geometry):
+    # Codex counterexample: lifted, pallet turned 0.22 rad and offset; the right
+    # blade overlaps block_x0_y1 / block_x1_y1, so its gap must be negative.
+    angle = 0.22
+    pq = (np.cos(angle / 2), 0, 0, np.sin(angle / 2))
+    gaps = geometry.lateral_clearances((-0.89, 0.039, 0), (1, 0, 0, 0), 0.20, (0, 0, 0.152), pq)
+    assert geometry.forbidden_contacts((-0.89, 0.039, 0), (1, 0, 0, 0), 0.20, (0, 0, 0.152), pq)
+    assert gaps["right"] < 0
