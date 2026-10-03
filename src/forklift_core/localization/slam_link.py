@@ -41,10 +41,12 @@ class KeyframeGate:
     Start-up: the first ``startup_scans`` (5) are all sent while the runner
     holds the drive; slam_toolbox processes the 1st and 5th. After that a scan
     is a keyframe when at least ``min_interval_s`` has passed since the last
-    keyframe and the odom->base pose has moved at least ``min_distance_m``
+    keyframe and the odom->base pose has travelled at least ``min_distance_m``
     (0.447 m = sqrt(0.8) x 0.5, the replay config's effective rule) or turned
     at least ``min_heading_rad`` (0.5; the replay config ignores heading, which
-    left turns on the spot uncorrected). Time in integer nanoseconds.
+    left turns on the spot uncorrected) -- both summed scan to scan, so going
+    back and forth cannot dodge a correction (Codex v3.3 P3). Time in integer
+    nanoseconds.
     """
 
     def __init__(
@@ -60,31 +62,34 @@ class KeyframeGate:
         self.min_interval_ns = int(round(float(min_interval_s) * 1e9))
         self.startup_scans = int(startup_scans)
         self.sent = 0
-        self.reference = None  # (stamp_ns, pose) of the last processed keyframe
+        self.reference = None  # stamp_ns of the last processed keyframe
+        self.previous = None  # pose of the previous scan seen
+        self.travel_m = 0.0  # summed since the last processed keyframe
+        self.turn_rad = 0.0
 
     def classify(self, stamp_s: float, odom_from_base) -> str:
         """'expect_pose', 'startup_drop' (sent, no /pose expected) or 'local'."""
+        pose = tuple(float(v) for v in odom_from_base)
+        if self.previous is not None:
+            turn = pose[2] - self.previous[2]
+            self.travel_m += math.hypot(pose[0] - self.previous[0], pose[1] - self.previous[1])
+            self.turn_rad += abs(math.atan2(math.sin(turn), math.cos(turn)))
+        self.previous = pose
         if self.sent < self.startup_scans:
             self.sent += 1
             return "expect_pose" if self.sent in (1, self.startup_scans) else "startup_drop"
         stamp_ns = int(round(float(stamp_s) * 1e9))
-        last_ns, last = self.reference
-        if stamp_ns - last_ns < self.min_interval_ns:
+        if stamp_ns - self.reference < self.min_interval_ns:
             return "local"
-        dx, dy = float(odom_from_base[0]) - last[0], float(odom_from_base[1]) - last[1]
-        turn = float(odom_from_base[2]) - last[2]
-        heading = abs(math.atan2(math.sin(turn), math.cos(turn)))
-        if dx * dx + dy * dy < self.min_distance2 and heading < self.min_heading:
+        if self.travel_m * self.travel_m < self.min_distance2 and self.turn_rad < self.min_heading:
             return "local"
         self.sent += 1
         return "expect_pose"
 
     def processed(self, stamp_s: float, odom_from_base) -> None:
         """The reference for the next keyframe: the last scan with a /pose."""
-        self.reference = (
-            int(round(float(stamp_s) * 1e9)),
-            tuple(float(v) for v in odom_from_base),
-        )
+        self.reference = int(round(float(stamp_s) * 1e9))
+        self.travel_m = self.turn_rad = 0.0
 
 
 @dataclass(frozen=True)

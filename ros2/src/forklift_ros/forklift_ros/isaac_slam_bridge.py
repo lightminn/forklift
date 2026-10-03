@@ -89,6 +89,11 @@ class IsaacSlamBridge(Node):
         self.odom_pub = self.create_publisher(Odometry, "/odom", 100)
         self.scan_pub = self.create_publisher(LaserScan, "/scan", 100)
         self.poses: dict[int, tuple] = {}
+        # Stamps a /pose may legitimately carry: the scan being waited for.
+        # Anything else is kept here and fails the run, even after the last
+        # reply (Codex v3.3 P2).
+        self.awaited: int | None = None
+        self.stray: list[int] = []
         self.cond = threading.Condition()
         self.create_subscription(PoseWithCovarianceStamped, "/pose", self.on_pose, 100)
         map_qos = QoSProfile(
@@ -107,7 +112,11 @@ class IsaacSlamBridge(Node):
     def on_pose(self, msg: PoseWithCovarianceStamped) -> None:
         p = msg.pose.pose
         with self.cond:
-            self.poses[stamp_ns(msg.header.stamp)] = (
+            key = stamp_ns(msg.header.stamp)
+            if key != self.awaited:
+                self.stray.append(key)
+                return
+            self.poses[key] = (
                 p.position.x,
                 p.position.y,
                 quaternion_yaw(p.orientation),
@@ -211,6 +220,9 @@ class IsaacSlamBridge(Node):
                 key = int(round(scan.stamp_s * 1e9))
                 start = time.monotonic()
                 kind = gate.classify(scan.stamp_s, scan.odom_from_base)
+                if kind != "local":
+                    with self.cond:
+                        self.awaited = key
                 self.publish_scan(scan, send_scan=kind != "local")
                 expected = kind == "expect_pose"
                 pose, stray = None, []
@@ -219,12 +231,17 @@ class IsaacSlamBridge(Node):
                     with self.cond:
                         got = self.cond.wait_for(lambda: key in self.poses, timeout=wait)
                         pose = self.poses.pop(key, None) if got else None
+                        self.awaited = None
                 with self.cond:
-                    # Any other /pose is one slam_toolbox made against the gate.
-                    stray = sorted(self.poses)
+                    stray = sorted(self.stray)
                     self.poses.clear()
+                # A skipped reply vouches for the bridge; check slam_toolbox is
+                # still there too (Codex v3.3 P2: skipped is not SLAM liveness).
+                slam_alive = (
+                    self.count_publishers("/pose") > 0 and self.count_subscribers("/scan") > 0
+                )
                 elapsed = time.monotonic() - start
-                if stray:
+                if stray or not slam_alive:
                     status = "failed"
                 elif pose is not None:
                     map_from_odom = compose(pose, invert(scan.odom_from_base))
@@ -245,6 +262,7 @@ class IsaacSlamBridge(Node):
                         "status": status,
                         "sent": kind,
                         "stray_pose_stamps_ns": stray,
+                        "slam_alive": slam_alive,
                         "map_from_odom": list(map_from_odom),
                         "slam_pose": list(pose) if pose else None,
                         "wall_s": elapsed,
@@ -257,6 +275,10 @@ class IsaacSlamBridge(Node):
 
     def save(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        with self.cond:
+            if self.stray and not any(r.get("stray_pose_stamps_ns") for r in self.records):
+                # Arrived after the last reply: keep it in the record.
+                self.records.append({"status": "stray_after_last_reply", "stray": self.stray})
         (self.output_dir / "bridge_records.json").write_text(json.dumps(self.records))
         with self.map_lock:
             maps, arrays = list(self.maps), dict(self.map_arrays)

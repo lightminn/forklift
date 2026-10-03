@@ -59,14 +59,20 @@ def test_start_up_sends_five_scans_and_expects_poses_for_the_first_and_fifth():
 
 def test_keyframes_need_half_a_second_and_0p447_m_or_0p5_rad():
     gate, _ = _started()  # reference: t=0.4, pose 0
-    assert gate.classify(0.8, (1.0, 0.0, 0.0)) == "local"  # 0.4 s: too soon
-    assert gate.classify(0.9, (0.44, 0.0, 0.0)) == "local"  # 0.44 m, no turn
+    assert gate.classify(0.8, (0.30, 0.0, 0.0)) == "local"  # 0.4 s: too soon
+    assert gate.classify(0.9, (0.44, 0.0, 0.0)) == "local"  # 0.44 m travelled, no turn
     assert gate.classify(1.0, (0.45, 0.0, 0.0)) == "expect_pose"
     gate.processed(1.0, (0.45, 0.0, 0.0))
     assert gate.classify(1.5, (0.45, 0.0, 0.49)) == "local"
-    assert gate.classify(1.6, (0.45, 0.0, -0.51)) == "expect_pose"  # turning on the spot
+    assert gate.classify(1.6, (0.45, 0.0, -0.02)) == "expect_pose"  # 0.49 + 0.51 rad turned
     # The reference moves only with processed(): an unanswered keyframe does not.
-    assert gate.classify(2.2, (0.45, 0.0, -0.51)) == "expect_pose"
+    assert gate.classify(2.2, (0.45, 0.0, -0.02)) == "expect_pose"
+
+
+def test_going_back_and_forth_still_makes_keyframes():
+    gate, _ = _started()
+    kinds = [gate.classify(0.5 + 0.1 * k, (0.1 * (k % 4), 0.0, 0.0)) for k in range(12)]
+    assert "expect_pose" in kinds  # displacement never exceeds 0.3 m
 
 
 def test_keyframe_heading_wraps_at_pi():
