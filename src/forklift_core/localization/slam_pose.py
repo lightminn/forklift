@@ -119,7 +119,186 @@ class SlamPoseEstimator:
         return compose(self.map_from_odom, odom_from_base)
 
 
+# --- plan v3: received/applied corrections, stop detection, sensor noise ------
+
+
+class SlamPoseTracker:
+    """map<-base for control from SLAM replies, in three modes (plan v3).
+
+    ``received`` is the last ``processed`` correction (value, scan stamp);
+    ``applied`` is the one control uses. warming_up: drive held, no freshness
+    check, until a ``processed`` reply for scan id >= 4. tracking: every
+    processed correction is applied; stale when the received stamp is older
+    than ``max_age_s``. holding (docking): new corrections are received but not
+    applied; freshness is checked on the received stamp, and dead reckoning
+    since the hold must stay within ``hold_limit_m``.
+    """
+
+    def __init__(self, *, max_age_s: float, hold_limit_m: float):
+        self.max_age_s = _finite_scalar(max_age_s, "max_age_s")
+        self.hold_limit_m = _finite_scalar(hold_limit_m, "hold_limit_m")
+        if self.max_age_s <= 0 or self.hold_limit_m <= 0:
+            raise ValueError("limits must be positive")
+        self.mode = "warming_up"
+        self.received = None  # (map_from_odom, stamp_s, scan_id)
+        self.applied = None
+        self.version = 0
+        self._hold_start = None
+        self.warmup_replies = 0
+
+    def receive(self, scan_id: int, stamp_s: float, status: str, map_from_odom) -> None:
+        if status == "warmup":
+            if self.mode != "warming_up":
+                raise ValueError("a warmup reply outside warming up")
+            self.warmup_replies += 1
+            return
+        if status != "processed":
+            raise ValueError(f"unexpected reply status {status!r}")
+        stamp = _finite_scalar(stamp_s, "stamp_s")
+        if self.received is not None and stamp < self.received[1]:
+            raise ValueError("SLAM corrections must not go back in time")
+        pose = tuple(_finite_scalar(v, "map_from_odom") for v in map_from_odom)
+        self.received = (pose, stamp, int(scan_id))
+        self.version += 1
+        if self.mode == "warming_up":
+            self.applied = self.received
+            if scan_id >= 4:
+                self.mode = "tracking"
+        elif self.mode == "tracking":
+            self.applied = self.received
+
+    def may_drive(self) -> bool:
+        return self.mode != "warming_up"
+
+    def hold(self, *, odom_from_base) -> None:
+        if self.mode != "tracking":
+            raise ValueError("can only hold while tracking")
+        self.mode = "holding"
+        self._hold_start = tuple(float(v) for v in odom_from_base)
+
+    def release(self, *, odom_from_base) -> tuple[float, float]:
+        """Apply the received correction; return the position and yaw jump."""
+        if self.mode != "holding":
+            raise ValueError("not holding")
+        before = compose(self.applied[0], odom_from_base)
+        self.applied = self.received
+        after = compose(self.applied[0], odom_from_base)
+        self.mode, self._hold_start = "tracking", None
+        return (
+            float(np.hypot(after[0] - before[0], after[1] - before[1])),
+            abs(wrap(after[2] - before[2])),
+        )
+
+    def map_from_base(self, now_s, odom_from_base) -> tuple[float, float, float]:
+        now = _finite_scalar(now_s, "now_s")
+        if self.applied is None:
+            raise LocalizationStale("no SLAM correction yet")
+        if self.mode != "warming_up":
+            age = now - self.received[1]
+            if age > self.max_age_s + 1e-12:
+                raise LocalizationStale(f"last processed correction {age:.3f} s old")
+        if self.mode == "holding":
+            moved = float(
+                np.hypot(
+                    odom_from_base[0] - self._hold_start[0],
+                    odom_from_base[1] - self._hold_start[1],
+                )
+            )
+            if moved > self.hold_limit_m:
+                raise LocalizationStale(f"dead reckoning {moved:.2f} m while holding")
+        return compose(self.applied[0], odom_from_base)
+
+
+class StopDetector:
+    """Stopped = zero command held, and windowed mean speed and yaw rate small.
+
+    Noisy odometry speed (sigma about 0.019 m/s at rest with the plan's wheel
+    noise) cannot pass a per-sample 0.012 m/s gate reliably; the 0.1 s mean
+    cuts the sigma by sqrt(12).
+    """
+
+    def __init__(
+        self,
+        *,
+        tick_s: float,
+        command_hold_s: float = 0.2,
+        window_s: float = 0.1,
+        run_s: float = 0.1,
+        speed_mps: float = 0.012,
+        yaw_rate_radps: float = 0.02,
+    ):
+        self.window = max(1, int(round(window_s / tick_s)))
+        self.command_ticks = max(1, int(round(command_hold_s / tick_s)))
+        self.run_ticks = max(1, int(round(run_s / tick_s)))
+        self.speed_mps, self.yaw_rate_radps = speed_mps, yaw_rate_radps
+        self._speeds, self._yaw_rates = [], []
+        self._zero_command = self._run = 0
+
+    def update(self, *, commanded_speed: float, speed: float, yaw_rate: float) -> bool:
+        self._speeds = (self._speeds + [float(speed)])[-self.window :]
+        self._yaw_rates = (self._yaw_rates + [float(yaw_rate)])[-self.window :]
+        self._zero_command = self._zero_command + 1 if commanded_speed == 0.0 else 0
+        quiet = (
+            len(self._speeds) == self.window
+            and abs(sum(self._speeds) / self.window) <= self.speed_mps
+            and abs(sum(self._yaw_rates) / self.window) <= self.yaw_rate_radps
+        )
+        self._run = self._run + 1 if quiet else 0
+        return self._zero_command >= self.command_ticks and self._run >= self.run_ticks
+
+
+class OdometryNoise:
+    """The 9/26 replay's assumed noise, drawn online per sample (plan v3).
+
+    Rear wheel rates sigma 0.2 rad/s and steering sigma 0.005 rad per 120 Hz
+    joint sample, ranges sigma 0.02 m on measured beams clipped to the sensor
+    range; independent streams per sensor from one seed, like
+    forklift_ros.slam_replay. Assumed values, not A2M12 or encoder specs.
+    """
+
+    def __init__(
+        self,
+        *,
+        seed: int,
+        enabled: bool = True,
+        wheel_rate_std_rad_s: float = 0.2,
+        steering_std_rad: float = 0.005,
+        range_std_m: float = 0.02,
+    ):
+        self.enabled = bool(enabled)
+        self.wheel_rate_std_rad_s = wheel_rate_std_rad_s
+        self.steering_std_rad = steering_std_rad
+        self.range_std_m = range_std_m
+        self._ranges = np.random.default_rng([seed, 0])
+        self._wheels = np.random.default_rng([seed, 1])
+        self._steering = np.random.default_rng([seed, 2])
+
+    def wheel_rates(self, rates) -> tuple[float, float]:
+        rates = np.asarray(rates, dtype=float)
+        if self.enabled:
+            rates = rates + self._wheels.normal(0, self.wheel_rate_std_rad_s, 2)
+        return tuple(float(v) for v in rates)
+
+    def steering(self, angles) -> tuple[float, float]:
+        angles = np.asarray(angles, dtype=float)
+        if self.enabled:
+            angles = angles + self._steering.normal(0, self.steering_std_rad, 2)
+        return tuple(float(v) for v in angles)
+
+    def ranges(self, ranges, *, range_min_m: float, range_max_m: float) -> np.ndarray:
+        out = np.asarray(ranges, dtype=float).copy()
+        if not self.enabled:
+            return out
+        measured = np.isfinite(out)
+        out[measured] += self._ranges.normal(0, self.range_std_m, int(measured.sum()))
+        out[measured] = np.clip(out[measured], range_min_m, range_max_m)
+        return out
+
+
 __all__ = [
+    "OdometryNoise",
+    "SlamPoseTracker",
+    "StopDetector",
     "IncrementalWheelOdometry",
     "LocalizationStale",
     "SlamPoseEstimator",

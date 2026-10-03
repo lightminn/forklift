@@ -143,11 +143,31 @@ def arguments() -> argparse.Namespace:
         "frame with the overview video. Requires --video.",
     )
     parser.add_argument("--max-sim-seconds", type=float, default=900)
+    # Online SLAM closed loop (docs/plans/2026-10-04-online-slam-closed-loop.md):
+    # drive on slam_toolbox's estimate over a Unix-socket lockstep bridge.
+    parser.add_argument(
+        "--slam-feedback",
+        type=Path,
+        default=None,
+        metavar="SOCKET",
+        help="Unix socket of forklift_ros isaac_slam_bridge; control then uses "
+        "the SLAM estimate and wheel odometry, ground truth only checks and logs.",
+    )
+    parser.add_argument(
+        "--slam-noise-seed",
+        type=int,
+        default=None,
+        help="With --slam-feedback: add the plan's assumed wheel/steering/range "
+        "noise from this seed (default: no noise).",
+    )
+    parser.add_argument("--slam-reply-timeout", type=float, default=15.0)
     args, unknown = parser.parse_known_args()
     if args.max_sim_seconds <= 0:
         parser.error("--max-sim-seconds must be positive")
     if args.robot_camera and not args.video:
         parser.error("--robot-camera requires --video")
+    if args.slam_noise_seed is not None and args.slam_feedback is None:
+        parser.error("--slam-noise-seed requires --slam-feedback")
     from insertion_geometry import (
         read_carriage_limit_m,
         read_chassis_reference_m,
@@ -522,6 +542,55 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
     encoders = {}
     video_frames = []
     steering_command = np.zeros(2)
+    slam = None
+    if args.slam_feedback is not None:
+        from forklift_core.localization import slam_link
+        from forklift_core.localization.slam_pose import (
+            IncrementalWheelOdometry,
+            LocalizationStale,
+            OdometryNoise,
+            SlamPoseTracker,
+        )
+        from forklift_core.localization.wheel_odometry import AckermannOdometryGeometry
+
+        # The known start: the survey's first rear-axle pose (odom = map = world).
+        start_rear = tuple(float(v) for v in survey.poses[0])
+        slam = {
+            "link": slam_link.SlamLinkClient(
+                str(args.slam_feedback), timeout_s=args.slam_reply_timeout
+            ),
+            "noise": OdometryNoise(
+                seed=args.slam_noise_seed or 0,
+                enabled=args.slam_noise_seed is not None,
+            ),
+            "odometry": IncrementalWheelOdometry(
+                AckermannOdometryGeometry(
+                    drive_geometry.wheelbase_m,
+                    drive_geometry.track_m,
+                    drive_geometry.wheel_radius_m,
+                ),
+                initial_pose=start_rear,
+            ),
+            "tracker": SlamPoseTracker(max_age_s=0.25, hold_limit_m=1.5),
+            "stale": LocalizationStale,
+            "module": slam_link,
+            "odom_rear": start_rear,
+            "odom_speed": 0.0,
+            "scan_id": 0,
+            "records": [],
+            "control": [],
+        }
+        state["slam_feedback"] = {
+            "socket": str(args.slam_feedback),
+            "noise_seed": args.slam_noise_seed,
+            "start_rear": list(start_rear),
+            "max_age_s": 0.25,
+        }
+
+    def odom_base():
+        x, y, yaw = slam["odom_rear"]
+        return (x + rear_offset * math.cos(yaw), y + rear_offset * math.sin(yaw), yaw)
+
     state["phase"] = "survey"
     initial_time = world.current_time
     started_wall = time.monotonic()
@@ -561,7 +630,29 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
             require(t < time_limit, "Survey tracking timeout")
             signed_speed = float(np.dot(robot.get_linear_velocity()[:2], forward))
             requested, curvature = 0.0, 0.0
-            if arrived_at is None:
+            hold_still = False
+            if slam is not None:
+                # Control sees only the estimate and wheel odometry from here.
+                truth_rear = rear
+                try:
+                    est = slam["tracker"].map_from_base(t, odom_base())
+                except slam["stale"] as exc:
+                    require(False, f"localization_stale: {exc}")
+                rear = np.array(
+                    [
+                        est[0] - rear_offset * math.cos(est[2]),
+                        est[1] - rear_offset * math.sin(est[2]),
+                        est[2],
+                    ]
+                )
+                signed_speed = slam["odom_speed"]
+                hold_still = not slam["tracker"].may_drive()
+                slam["control"].append(
+                    [t, *rear.tolist(), *truth_rear.tolist(), slam["tracker"].mode == "holding"]
+                )
+            if hold_still:
+                pass
+            elif arrived_at is None:
                 tracking = tracker.update(rear, signed_speed, dt)
                 require(
                     tracking.status != "failed",
@@ -609,6 +700,11 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
             log["wheel_rates_rad_s"].append(robot.get_joint_velocities()[wheels])
             log["steering_rad"].append(robot.get_joint_positions()[steers])
             log["base_pose_world"].append(np.concatenate((base, q)))
+            if slam is not None:
+                rates = slam["noise"].wheel_rates(robot.get_joint_velocities()[wheels][2:4])
+                angles = slam["noise"].steering(robot.get_joint_positions()[steers])
+                slam["odom_rear"] = slam["odometry"].update(stamp, rates, angles)
+                slam["odom_speed"] = float(np.mean(rates)) * drive_geometry.wheel_radius_m
             if step % scan_every == 0:
                 cast_started = time.monotonic()
                 origin, directions = planar_lidar.laser_rays_world(
@@ -628,6 +724,44 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
                     )
                 log["scan_stamps_s"].append(stamp)
                 log["scan_ranges_m"].append(ranges.astype(np.float32))
+                if slam is not None:
+                    link = slam["module"]
+                    sent = slam["noise"].ranges(
+                        ranges,
+                        range_min_m=pattern.range_min_m,
+                        range_max_m=pattern.range_max_m,
+                    )
+                    scan_id = slam["scan_id"]
+                    try:
+                        reply = slam["link"].exchange(
+                            link.Scan(
+                                scan_id,
+                                float(stamp),
+                                odom_base(),
+                                sent.astype(np.float32),
+                                pattern.angle_min_rad,
+                                pattern.angle_increment_rad,
+                                pattern.range_min_m,
+                                pattern.range_max_m,
+                            )
+                        )
+                    except link.SlamLinkFailure as exc:
+                        require(False, f"slam_link_failed: {exc}")
+                    slam["tracker"].receive(
+                        reply.scan_id, reply.stamp_s, reply.status, reply.map_from_odom
+                    )
+                    slam["records"].append(
+                        {
+                            "scan_id": scan_id,
+                            "stamp_s": float(stamp),
+                            "status": reply.status,
+                            "map_from_odom": list(reply.map_from_odom),
+                            "odom_base": list(odom_base()),
+                            "truth_base": [float(base[0]), float(base[1]), yaw_and_tilt(q)[0]],
+                            "slam_wall_s": reply.slam_wall_s,
+                        }
+                    )
+                    slam["scan_id"] += 1
                 log["laser_pose_world"].append(
                     planar_lidar.laser_pose_2d(base, q, mount)
                 )
@@ -696,9 +830,31 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
                         args.output / "start.png"
                     )
         require(arrived_at is not None, "Survey exceeded the simulation time budget")
+        if slam is not None:
+            # Arrival was judged on the estimate; the truth says where it is.
+            base_now, q_now = robot.get_world_pose()
+            yaw_now, _ = yaw_and_tilt(q_now)
+            goal = survey.poses[-1]
+            truth_rear_x = base_now[0] - rear_offset * math.cos(yaw_now)
+            truth_rear_y = base_now[1] - rear_offset * math.sin(yaw_now)
+            state["truth_arrival_error"] = {
+                "position_m": float(math.hypot(truth_rear_x - goal[0], truth_rear_y - goal[1])),
+                "yaw_rad": float(abs(math.atan2(math.sin(yaw_now - goal[2]), math.cos(yaw_now - goal[2])))),
+            }
         if args.video:
             Image.fromarray(np.asarray(frame, np.uint8)).save(args.output / "end.png")
     finally:
+        if slam is not None:
+            # Kept even when the run fails: the failure is in these records.
+            slam["link"].close()
+            (args.output / "slam_records.json").write_text(
+                record_json(slam["records"]) + "\n"
+            )
+            np.save(
+                args.output / "slam_control.npy",
+                np.asarray(slam["control"], dtype=float).reshape(-1, 8),
+            )
+            state["slam_summary"] = slam_summary(slam)
         for name, encoder in encoders.items():
             encoder.stdin.close()
             require(encoder.wait(timeout=120) == 0, f"{name} video encoding failed")
@@ -790,6 +946,34 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
             "simulation_wall_s": time.monotonic() - started_wall,
         }
     )
+
+
+def slam_summary(slam: dict) -> dict:
+    """Raw (unaligned) error of the pose control actually used, and reply counts."""
+    control = np.asarray(slam["control"], dtype=float).reshape(-1, 8)
+    statuses = [r["status"] for r in slam["records"]]
+    out = {
+        "scans_sent": len(slam["records"]),
+        "replies": {s: statuses.count(s) for s in sorted(set(statuses))},
+        "slam_wall_s_max": max((r["slam_wall_s"] for r in slam["records"]), default=0.0),
+        "slam_wall_s_median": float(np.median([r["slam_wall_s"] for r in slam["records"]]))
+        if slam["records"]
+        else 0.0,
+        "control_samples": int(len(control)),
+    }
+    driving = control[~np.isnan(control[:, 1])] if len(control) else control
+    if len(driving):
+        position = np.hypot(driving[:, 1] - driving[:, 4], driving[:, 2] - driving[:, 5])
+        yaw = np.abs(np.arctan2(np.sin(driving[:, 3] - driving[:, 6]), np.cos(driving[:, 3] - driving[:, 6])))
+        out.update(
+            {
+                "position_rmse_m": float(np.sqrt(np.mean(position**2))),
+                "position_max_m": float(position.max()),
+                "yaw_rmse_rad": float(np.sqrt(np.mean(yaw**2))),
+                "yaw_max_rad": float(yaw.max()),
+            }
+        )
+    return out
 
 
 def main() -> None:
