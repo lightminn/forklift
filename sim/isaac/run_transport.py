@@ -815,6 +815,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     # clearance, at most this many times (third- and fourth-evaluation seeds
     # 3003 and 4007; docs/plans/2026-10-03-transport-stage-fixes.md).
     state["cusp_replans"] = []
+    state["stall_replans"] = []
+    slam_stall_ticks = 0
     max_cusp_replans = 2
     # Stopped = zero command, planar speed and yaw rate under these for this
     # many consecutive ticks (0.1 s), not the forward speed alone (Codex review).
@@ -2190,9 +2192,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     slam is not None
                     and phase in ("approach", "transport", "return_home")
                     and slam["tracker"].mode == "tracking"
-                    and trackers[phase].remaining_to_goal_m() <= 0.5
+                    and trackers[phase].remaining_to_goal_m()
+                    <= 0.5 + signed_speed**2 / (2 * settings["drive_acceleration_mps2"])
                 ):
-                    # A final goal is judged at 8 mm (3 cm for the return):
+                    # The window grows with the braking distance (Codex v3.5 P2:
+                    # a correction at 0.507 m and 0.55 m/s left no room to stop).
+                    # A final goal is judged at 8 mm:
                     # a SLAM correction landing in the last half metre moves
                     # the estimate by centimetres and leaves the truck stopped
                     # outside the tolerance (S2 seed 1 on v3.4, transport).
@@ -2202,6 +2207,55 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     slam["holds"].append(
                         {"phase": phase, "time_s": t, "event": "hold", "error": slam_error()}
                     )
+                stalled = (
+                    slam is not None
+                    and phase in ("transport", "return_home")
+                    and tracking.status == "tracking"
+                    and tracking.speed_mps == 0.0
+                    and trackers[phase].remaining_to_goal_m() <= 1e-6
+                    and slam["stop_now"]
+                )
+                slam_stall_ticks = slam_stall_ticks + 1 if stalled else 0
+                if slam_stall_ticks >= 120 and len(state["stall_replans"]) < 2:
+                    # Stopped at the end of the path but outside the goal
+                    # tolerance (an estimate shift before the hold): plan the
+                    # leg again from here, in the held frame (Codex v3.5 P2).
+                    slam_stall_ticks = 0
+                    start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))
+                    replan_start = time.monotonic()
+                    if phase == "transport":
+                        replanned = plan_transport_leg(
+                            scenario, start, planner_config, geometry=geometry,
+                            travel_config=travel_config,
+                        )
+                    else:
+                        replanned = plan_return_leg(
+                            scenario, start, return_to_pose, planner_config,
+                            geometry=geometry, travel_config=travel_config,
+                        )
+                    state["stall_replans"].append(
+                        {
+                            "phase": phase,
+                            "time_s": t,
+                            "rear_pose": rear.tolist(),
+                            "position_error_m": tracking.position_error_m,
+                            "yaw_error_rad": tracking.yaw_error_rad,
+                            "status": replanned.status,
+                            "planning_wall_s": time.monotonic() - replan_start,
+                        }
+                    )
+                    require(replanned.success, f"stall_replan_failed:{replanned.status}")
+                    paths[phase] = replanned
+                    state["paths"][phase] = path_record(replanned)
+                    trackers[phase] = RearAxlePathTracker(
+                        replanned.poses,
+                        replanned.directions,
+                        replanned.curvatures_inv_m,
+                        trackers[phase].config,
+                    )
+                    phase_started = t
+                    tracking = trackers[phase].update(rear, signed_speed, dt)
+                    last_tracking = tracking
                 if (
                     tracking.status == "failed"
                     and phase == "transport"
