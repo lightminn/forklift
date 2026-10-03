@@ -126,7 +126,12 @@ def prior_offsets(seed: int):
 
 
 def gaps(flags, step=0.01):
-    """Longest run of False and the run ending at the last cell (the target)."""
+    """Longest run of False and the run ending at the last cell (the target).
+
+    ``flags`` covers every cell of the uniform grid down to the target; a cell
+    the rig could not evaluate (penetrating boxes) is passed as False, so it
+    counts as unobserved instead of shortening the distances.
+    """
     longest = run = 0
     for flag in flags:
         run = 0 if flag else run + 1
@@ -146,6 +151,7 @@ def near(chassis: str, z: float, tilt: float) -> dict:
     xs = [round(top - 0.01 * i, 4) for i in range(count)]
     offsets = [prior_offsets(s) for s in range(SEEDS)]
     roof_prior = [None] * SEEDS
+    last_x = None
     cells = []
     for x in xs:
         face_gap = round(x - HALF_DEPTH - tip_x, 4)
@@ -155,6 +161,14 @@ def near(chassis: str, z: float, tilt: float) -> dict:
             continue
         truth = scene_rig.true_pockets(GEOMETRY, x_m=x)
         truth_mid = (truth[0] + truth[1]) / 2
+        # The known advance since the last evaluated cell (1 cm unless cells
+        # were skipped): shift each seed's prior by it before tracking.
+        advance = 0.0 if last_x is None else last_x - x
+        last_x = x
+        for s in range(SEEDS):
+            if roof_prior[s] is not None:
+                (px, py), pyaw = roof_prior[s]
+                roof_prior[s] = ((px - advance, py), pyaw)
         scene = scene_rig.render(
             [*truck, *placed], camera=camera, quantize=True, noise_k=0.0,
             min_range_m=MIN_RANGE_M, intrinsics=k,
@@ -170,13 +184,11 @@ def near(chassis: str, z: float, tilt: float) -> dict:
                 expected, eyaw = np.array([px, py, truth_mid[2]]), eyaw
             r = track_roof(scene, GEOMETRY, expected, eyaw).observation
             fo, ro = front_ok(f, truth), roof_ok(r, truth)
-            if r.status == "valid":
+            if ro:
+                # Only an estimate that met the success rule becomes the prior
+                # (plan v2; Codex review); otherwise the last success stays.
                 mid = (np.array(r.left.center_m) + r.right.center_m) / 2
-                # The next cell is 1 cm closer: shift by the known advance.
-                roof_prior[s] = ((mid[0] - 0.01, mid[1]), r.insertion_yaw_rad)
-            elif roof_prior[s] is not None:
-                (px, py), pyaw = roof_prior[s]
-                roof_prior[s] = ((px - 0.01, py), pyaw)
+                roof_prior[s] = ((mid[0], mid[1]), r.insertion_yaw_rad)
             front.append(fo)
             roof.append(ro)
             both.append(fo and ro and f.status == r.status == "valid" and agree(f, r))
@@ -188,7 +200,10 @@ def near(chassis: str, z: float, tilt: float) -> dict:
         handed = False
         used = []
         first_handoff = None
-        for c in usable:
+        for c in cells:
+            if c.get("penetrating"):
+                used.append(False)
+                continue
             if not handed and c["face_gap"] > 0 and c["handoff"][s]:
                 handed, first_handoff = True, c["face_gap"]
             if handed:
