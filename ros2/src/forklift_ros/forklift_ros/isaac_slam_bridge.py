@@ -7,19 +7,20 @@ slam_toolbox's /pose with exactly that stamp, and answers with the map<-odom it
 implies. base_link->laser is published once on /tf_static before the socket
 opens, and the socket only opens once slam_toolbox subscribes to /scan.
 
-Which scans get a /pose (plan v3.3): slam_toolbox runs with the validated
-replay thresholds, and ``slam_link.ScanGate`` -- slam_toolbox's own
-shouldProcessScan, fed the same stamps and odom poses -- predicts each scan.
-Predicted processed: wait up to ``reply_timeout_s`` for the /pose with that
-stamp, else ``failed``. Predicted skipped: answer ``skipped`` with the last
-correction at once. A /pose for any stamp not predicted is a disagreement with
-slam_toolbox and fails the run, so the prediction is checked on every scan. Every /map is kept with the scan id it arrived after, so a video can
+Which scans slam_toolbox sees (plan v3.4): it runs with its processing
+thresholds at 0, so it answers every scan it receives; ``slam_link.
+KeyframeGate`` decides which scans to send -- the first five at start-up (the
+2nd-4th are dropped by slam_toolbox itself; waited for ``warmup_wait_s`` each),
+then keyframes only (0.5 s and 0.447 m or 0.5 rad since the last answered
+one). A sent scan's /pose is waited for (``reply_timeout_s``, liveness only:
+the simulation is frozen), so no scan is ever in flight unanswered. Other scans
+get /clock and the odom transform but no /scan, and are answered ``skipped``
+with the last correction. A /pose for a stamp not waited for fails the run. Every /map is kept with the scan id it arrived after, so a video can
 show only maps the run had actually received by then.
 
     ros2 run forklift_ros isaac_slam_bridge --ros-args \\
         -p socket_path:=/run/slam.sock -p output_dir:=/out \\
-        -p laser_xyz_yaw:="[-0.12, 0.0, 1.05, 0.0]" \\
-        -p slam_params_file:=/path/slam_toolbox_isaac_replay.yaml
+        -p laser_xyz_yaw:="[-0.12, 0.0, 1.05, 0.0]"
 """
 
 from __future__ import annotations
@@ -33,7 +34,6 @@ from pathlib import Path
 
 import numpy as np
 import rclpy
-import yaml
 from builtin_interfaces.msg import Time
 from geometry_msgs.msg import PoseWithCovarianceStamped, TransformStamped
 from nav_msgs.msg import OccupancyGrid, Odometry
@@ -72,15 +72,12 @@ class IsaacSlamBridge(Node):
         self.declare_parameter("output_dir", "/tmp/slam_bridge")
         self.declare_parameter("laser_xyz_yaw", [-0.12, 0.0, 1.05, 0.0])
         self.declare_parameter("reply_timeout_s", 60.0)
-        self.declare_parameter("slam_params_file", "")
+        self.declare_parameter("warmup_wait_s", 1.0)
         self.socket_path = self.get_parameter("socket_path").value
         self.output_dir = Path(self.get_parameter("output_dir").value)
         self.laser = [float(v) for v in self.get_parameter("laser_xyz_yaw").value]
         self.reply_timeout_s = float(self.get_parameter("reply_timeout_s").value)
-        params_file = self.get_parameter("slam_params_file").value
-        self.slam_params = yaml.safe_load(Path(params_file).read_text())["slam_toolbox"][
-            "ros__parameters"
-        ]
+        self.warmup_wait_s = float(self.get_parameter("warmup_wait_s").value)
         self.clock_pub = self.create_publisher(Clock, "/clock", 10)
         self.tf_pub = self.create_publisher(TFMessage, "/tf", 100)
         static_qos = QoSProfile(
@@ -155,7 +152,7 @@ class IsaacSlamBridge(Node):
         t.transform.rotation.z, t.transform.rotation.w = qz, qw
         self.tf_static_pub.publish(TFMessage(transforms=[t]))
 
-    def publish_scan(self, scan: slam_link.Scan) -> None:
+    def publish_scan(self, scan: slam_link.Scan, *, send_scan: bool = True) -> None:
         stamp = ros_time(scan.stamp_s)
         self.clock_pub.publish(Clock(clock=stamp))
         x, y, yaw = scan.odom_from_base
@@ -172,6 +169,8 @@ class IsaacSlamBridge(Node):
         odom.pose.pose.orientation.x, odom.pose.pose.orientation.y = qx, qy
         odom.pose.pose.orientation.z, odom.pose.pose.orientation.w = qz, qw
         self.odom_pub.publish(odom)
+        if not send_scan:
+            return
         msg = LaserScan()
         msg.header.stamp, msg.header.frame_id = stamp, "laser"
         msg.angle_min = float(scan.angle_min_rad)
@@ -199,7 +198,7 @@ class IsaacSlamBridge(Node):
         server.listen(1)
         (self.output_dir / "bridge_ready").write_text("ready\n")
         conn, _ = server.accept()
-        gate = slam_link.ScanGate.from_params(self.slam_params)
+        gate = slam_link.KeyframeGate()
         map_from_odom = (0.0, 0.0, 0.0)
         version = 0
         with conn:
@@ -211,14 +210,14 @@ class IsaacSlamBridge(Node):
                 self.last_scan_id = scan.scan_id
                 key = int(round(scan.stamp_s * 1e9))
                 start = time.monotonic()
-                self.publish_scan(scan)
-                expected = gate.will_process(scan.stamp_s, scan.odom_from_base)
+                kind = gate.classify(scan.stamp_s, scan.odom_from_base)
+                self.publish_scan(scan, send_scan=kind != "local")
+                expected = kind == "expect_pose"
                 pose, stray = None, []
-                if expected:
+                if kind != "local":
+                    wait = self.reply_timeout_s if expected else self.warmup_wait_s
                     with self.cond:
-                        got = self.cond.wait_for(
-                            lambda: key in self.poses, timeout=self.reply_timeout_s
-                        )
+                        got = self.cond.wait_for(lambda: key in self.poses, timeout=wait)
                         pose = self.poses.pop(key, None) if got else None
                 with self.cond:
                     # Any other /pose is one slam_toolbox made against the gate.
@@ -227,10 +226,11 @@ class IsaacSlamBridge(Node):
                 elapsed = time.monotonic() - start
                 if stray:
                     status = "failed"
-                elif expected and pose is not None:
+                elif pose is not None:
                     map_from_odom = compose(pose, invert(scan.odom_from_base))
                     version += 1
                     status = "processed"
+                    gate.processed(scan.stamp_s, scan.odom_from_base)
                 elif expected:
                     status = "failed"
                 else:
@@ -243,7 +243,7 @@ class IsaacSlamBridge(Node):
                         "scan_id": scan.scan_id,
                         "stamp_s": scan.stamp_s,
                         "status": status,
-                        "predicted_processed": expected,
+                        "sent": kind,
                         "stray_pose_stamps_ns": stray,
                         "map_from_odom": list(map_from_odom),
                         "slam_pose": list(pose) if pose else None,

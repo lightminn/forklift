@@ -4,9 +4,9 @@ Plan: docs/plans/2026-10-04-online-slam-closed-loop.md. The simulator sends
 one ``Scan`` per LiDAR period and does not advance physics until the bridge
 answers with the ``Reply`` for that same scan id: ``processed`` carries the
 map<-odom slam_toolbox's /pose for that scan stamp implies, ``skipped`` the
-previous correction for a scan slam_toolbox does not process (``ScanGate``
-predicts which, exactly as slam_toolbox decides -- plan v3.3), ``failed`` ends
-the run. Framing: a 4-byte big-endian length, then a JSON header line and,
+previous correction for a scan the bridge keeps to itself (not a keyframe,
+``KeyframeGate``) or that slam_toolbox drops at start-up -- plan v3.4,
+``failed`` ends the run. Framing: a 4-byte big-endian length, then a JSON header line and,
 for scans, the float32 ranges. Plain sockets and numpy only (no ROS here).
 """
 
@@ -27,77 +27,64 @@ class SlamLinkFailure(RuntimeError):
     """The bridge did not answer this scan correctly in time."""
 
 
-class ScanGate:
-    """slam_toolbox 2.8.5's SlamToolbox::shouldProcessScan, reproduced.
+class KeyframeGate:
+    """Which scans the bridge sends to slam_toolbox (plan v3.4).
 
-    Plan v3.3: the online run keeps the validated replay thresholds (0.5 m,
-    0.5 rad, 0.5 s) instead of processing every scan, so the bridge must know
-    which scans get a /pose. Same order and arithmetic as the C++ (source
-    src/slam_toolbox_common.cpp, tag 2.8.5): first scan passes; throttle by
-    count; time since the last accepted scan (integer nanoseconds, as
-    rclcpp::Time); the first four scans are dropped; then squared distance of
-    the odom->base poses against 0.8 x minimum_travel_distance^2 (or, in the
-    precise mode, distance and heading both below their minimums). With equal
-    time intervals in the node and Karto's HasMovedEnough, an accepted scan
-    always passes Karto's check too (its time test returns first). The pause
-    service is never used here.
+    slam_toolbox runs with its processing thresholds at 0, so every scan it
+    receives (after its own start-up drop of the 2nd-4th) is processed and
+    answered with a /pose. Sending every 10 Hz scan ruined the map (job 754:
+    replay ATE 0.146 m against 0.062 m with the 0.5 m / 0.5 s replay config),
+    so the bridge sends only keyframes and waits for each one's /pose -- no
+    scan is ever in flight unanswered, and nothing has to guess what
+    slam_toolbox decided.
+
+    Start-up: the first ``startup_scans`` (5) are all sent while the runner
+    holds the drive; slam_toolbox processes the 1st and 5th. After that a scan
+    is a keyframe when at least ``min_interval_s`` has passed since the last
+    keyframe and the odom->base pose has moved at least ``min_distance_m``
+    (0.447 m = sqrt(0.8) x 0.5, the replay config's effective rule) or turned
+    at least ``min_heading_rad`` (0.5; the replay config ignores heading, which
+    left turns on the spot uncorrected). Time in integer nanoseconds.
     """
 
     def __init__(
         self,
         *,
-        minimum_travel_distance: float,
-        minimum_travel_heading: float,
-        minimum_time_interval: float,
-        throttle_scans: int = 1,
-        check_min_dist_and_heading_precisely: bool = False,
+        min_distance_m: float = math.sqrt(0.8) * 0.5,
+        min_heading_rad: float = 0.5,
+        min_interval_s: float = 0.5,
+        startup_scans: int = 5,
     ):
-        self.min_dist2 = float(minimum_travel_distance) * float(minimum_travel_distance)
-        self.min_rotation = float(minimum_travel_heading)
-        self.min_interval_ns = int(round(float(minimum_time_interval) * 1e9))
-        self.throttle = int(throttle_scans)
-        self.precise = bool(check_min_dist_and_heading_precisely)
-        self.scan_ctr = 0
-        self.first = True
-        self.last_pose = None
-        self.last_ns = 0
+        self.min_distance2 = float(min_distance_m) ** 2
+        self.min_heading = float(min_heading_rad)
+        self.min_interval_ns = int(round(float(min_interval_s) * 1e9))
+        self.startup_scans = int(startup_scans)
+        self.sent = 0
+        self.reference = None  # (stamp_ns, pose) of the last processed keyframe
 
-    @classmethod
-    def from_params(cls, params: dict) -> "ScanGate":
-        return cls(
-            minimum_travel_distance=params["minimum_travel_distance"],
-            minimum_travel_heading=params["minimum_travel_heading"],
-            minimum_time_interval=params["minimum_time_interval"],
-            throttle_scans=params.get("throttle_scans", 1),
-            check_min_dist_and_heading_precisely=params.get(
-                "check_min_dist_and_heading_precisely", False
-            ),
-        )
-
-    def will_process(self, stamp_s: float, odom_from_base) -> bool:
+    def classify(self, stamp_s: float, odom_from_base) -> str:
+        """'expect_pose', 'startup_drop' (sent, no /pose expected) or 'local'."""
+        if self.sent < self.startup_scans:
+            self.sent += 1
+            return "expect_pose" if self.sent in (1, self.startup_scans) else "startup_drop"
         stamp_ns = int(round(float(stamp_s) * 1e9))
-        pose = tuple(float(v) for v in odom_from_base)
-        self.scan_ctr += 1
-        if self.first:
-            self.first, self.last_pose, self.last_ns = False, pose, stamp_ns
-            return True
-        if self.scan_ctr % self.throttle != 0:
-            return False
-        if stamp_ns - self.last_ns < self.min_interval_ns:
-            return False
-        if self.scan_ctr < 5:
-            return False
-        dx, dy = pose[0] - self.last_pose[0], pose[1] - self.last_pose[1]
-        dist2 = dx * dx + dy * dy
-        if self.precise:
-            turn = pose[2] - self.last_pose[2]
-            heading = abs(math.atan2(math.sin(turn), math.cos(turn)))
-            if dist2 < self.min_dist2 and heading < self.min_rotation:
-                return False
-        elif dist2 < 0.8 * self.min_dist2:
-            return False
-        self.last_pose, self.last_ns = pose, stamp_ns
-        return True
+        last_ns, last = self.reference
+        if stamp_ns - last_ns < self.min_interval_ns:
+            return "local"
+        dx, dy = float(odom_from_base[0]) - last[0], float(odom_from_base[1]) - last[1]
+        turn = float(odom_from_base[2]) - last[2]
+        heading = abs(math.atan2(math.sin(turn), math.cos(turn)))
+        if dx * dx + dy * dy < self.min_distance2 and heading < self.min_heading:
+            return "local"
+        self.sent += 1
+        return "expect_pose"
+
+    def processed(self, stamp_s: float, odom_from_base) -> None:
+        """The reference for the next keyframe: the last scan with a /pose."""
+        self.reference = (
+            int(round(float(stamp_s) * 1e9)),
+            tuple(float(v) for v in odom_from_base),
+        )
 
 
 @dataclass(frozen=True)
@@ -246,7 +233,7 @@ __all__ = [
     "STATUSES",
     "Scan",
     "SlamLinkClient",
-    "ScanGate",
+    "KeyframeGate",
     "SlamLinkFailure",
     "decode_reply",
     "decode_scan",

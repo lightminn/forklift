@@ -125,14 +125,15 @@ class SlamPoseEstimator:
 
 
 class SlamPoseTracker:
-    """map<-base for control from SLAM replies, in three modes (plan v3.3).
+    """map<-base for control from SLAM replies, in three modes (plan v3.4).
 
     ``received`` is the last ``processed`` correction with the stamp of the
-    last reply that confirmed it (``processed`` or ``skipped`` -- a skipped scan
-    is one slam_toolbox's own thresholds pass over, so SLAM is alive and the
-    correction stands); ``applied`` is the one control uses. warming_up: drive
-    held, until the first ``processed`` reply (the start pose is known, so the
-    first correction is enough). tracking: every processed correction is
+    last reply that confirmed it (``processed``, or ``skipped`` -- a scan the
+    bridge did not send to slam_toolbox, or one slam_toolbox dropped at start-up;
+    the bridge is alive and the correction stands); ``applied`` is the one
+    control uses. warming_up: drive held until a ``processed`` reply for scan id
+    >= 4 (the bridge sends the first five scans; slam_toolbox answers the 1st
+    and 5th). tracking: every processed correction is
     applied; stale when the received stamp is older than ``max_age_s``. holding (docking): new corrections are received but not
     applied; freshness is checked on the received stamp, and dead reckoning
     since the hold must stay within ``hold_limit_m``.
@@ -170,9 +171,12 @@ class SlamPoseTracker:
         pose = tuple(_finite_scalar(v, "map_from_odom") for v in map_from_odom)
         self.received = (pose, stamp, int(scan_id))
         self.version += 1
-        if self.mode in ("warming_up", "tracking"):
+        if self.mode == "warming_up":
             self.applied = self.received
-            self.mode = "tracking"
+            if scan_id >= 4:
+                self.mode = "tracking"
+        elif self.mode == "tracking":
+            self.applied = self.received
 
     def may_drive(self) -> bool:
         return self.mode != "warming_up"

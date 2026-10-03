@@ -83,23 +83,28 @@ from forklift_core.localization.slam_pose import (  # noqa: E402
 )
 
 
-def test_warming_up_holds_the_drive_until_the_first_processed_reply():
+def test_warming_up_holds_the_drive_through_the_five_start_up_scans():
     tracker = SlamPoseTracker(max_age_s=0.25, hold_limit_m=1.5)
     assert tracker.mode == "warming_up" and not tracker.may_drive()
     with pytest.raises(ValueError):
         tracker.receive(0, 0.0, "skipped", (0, 0, 0))  # nothing to confirm yet
     tracker.receive(0, 0.0, "processed", (0, 0, 0))
+    for k in (1, 2, 3):
+        tracker.receive(k, 0.1 * k, "skipped", (0, 0, 0))  # dropped at start-up
+        assert not tracker.may_drive()
+    tracker.receive(4, 0.4, "processed", (0.001, 0, 0))
     assert tracker.mode == "tracking" and tracker.may_drive()
 
 
 def test_skipped_replies_keep_the_correction_and_prove_slam_is_alive():
     tracker = SlamPoseTracker(max_age_s=0.25, hold_limit_m=1.5)
     tracker.receive(0, 0.0, "processed", (0.1, 0, 0))
+    tracker.receive(4, 0.0, "processed", (0.1, 0, 0))
     for k in range(1, 20):
         # The bridge repeats the last correction; the tracker keeps its own.
         tracker.receive(k, 0.1 * k, "skipped", (9.9, 9.9, 9.9))
         np.testing.assert_allclose(tracker.map_from_base(0.1 * k + 0.05, (1, 0, 0)), (1.1, 0, 0))
-    assert tracker.version == 1 and tracker.skipped_replies == 19
+    assert tracker.version == 2 and tracker.skipped_replies == 19
     with pytest.raises(LocalizationStale):
         tracker.map_from_base(1.9 + 0.26, (1, 0, 0))  # no reply at all for 0.26 s
 
