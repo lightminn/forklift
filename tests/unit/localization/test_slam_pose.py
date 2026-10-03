@@ -178,3 +178,11 @@ def test_noise_streams_are_independent_and_reproducible():
     assert np.isinf(noisy[2])
     assert np.all(noisy[np.isfinite(noisy)] <= 12.0)
     assert OdometryNoise(seed=3, enabled=False).wheel_rates((1.0, 1.0)) == pytest.approx((1.0, 1.0))
+
+
+@pytest.mark.parametrize("speed, yaw_rate", [(-0.02, 0.0), (0.02, 0.0), (0.0, 0.03), (0.0, -0.03)])
+def test_stop_detector_rejects_reversing_and_turning_in_either_sign(speed, yaw_rate):
+    detector = StopDetector(tick_s=1 / 120)
+    assert not any(
+        detector.update(commanded_speed=0.0, speed=speed, yaw_rate=yaw_rate) for _ in range(240)
+    )

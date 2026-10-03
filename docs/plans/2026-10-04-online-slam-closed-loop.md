@@ -1,4 +1,4 @@
-# 온라인 SLAM 위치 폐루프 — slam_toolbox 를 Isaac 주행에 붙인다 (5·6순위 선행 실증, 계획 v3)
+# 온라인 SLAM 위치 폐루프 — slam_toolbox 를 Isaac 주행에 붙인다 (5·6순위 선행 실증, 계획 v3.1)
 
 작성일: 2026-10-04 · 상위: [현황과 다음 단계](2026-09-17-project-status-and-next-steps.md) 5·6순위, [로드맵](2026-09-11-development-roadmap.md) M4,
 [공장 홀·Isaac SLAM 기록 초안](2026-09-26-factory-hall-and-isaac-slam.md)(오프라인 재생)
@@ -40,8 +40,10 @@ Isaac 실행기 (ws1 venv, GPU)                          ROS 2 컨테이너 (for
 - **응답 계약(두 검토의 P0 — TF 존재로 락스텝을 풀지 않는다):** slam_toolbox 의 스캔 처리 문턱을 0 으로 둔다(`minimum_time_interval`·`minimum_travel_distance`·
   `minimum_travel_heading`, CHANGED). **사전 측정(ws1 작업 747, 9/26 seed 0 잡음 없는 bag 재생):** 스캔 2,454 개 중 `/pose` 2,451 개, **모두 스캔과 같은 stamp**,
   처리 지연 중앙값 약 14 ms·최대 0.145 s. 빠진 3 개는 **첫 스캔 직후의 2·3·4 번째**(초기 제외)다. 그래서 브리지는:
-  - **준비 조건(Codex v2 P0):** 브리지는 LiDAR 설정(`config/isaac_slam_lidar.yaml` 의 장착)에서 `base_link→laser` 를 **`/tf_static`** 으로 발행하고, 첫 스캔 전에
-    `odom→base_link→laser` 연결이 tf 버퍼에서 조회되는지 확인한 뒤에만 소켓을 연다(9/26 bag 에는 이 변환이 들어 있어 747 재생은 이 누락을 검증하지 못했다).
+  - **준비 순서(Codex v2 P0, v3 P1 — 순환 대기 없이):** ① 브리지가 LiDAR 설정(`config/isaac_slam_lidar.yaml` 의 장착)에서 `base_link→laser` 를 **`/tf_static`**
+    으로 발행한다 ② slam_toolbox 가 `/scan` 을 구독할 때까지 기다린다(lifecycle 활성화) ③ 소켓을 연다 ④ 각 스캔 메시지마다 그 시각·odom 자세로 `/clock`·
+    `odom→base_link` 를 **먼저** 발행하고 그다음 `/scan` 을 발행한다 — 그래서 slam_toolbox 가 스캔을 받는 순간 `odom→base_link→laser` 가 이미 버퍼에 있다(9/26
+    bag 에는 이 변환들이 들어 있어 747 재생은 이 순서를 검증하지 못했다; S0 에서 첫 스캔이 `processed` 인지로 확인한다).
   - 스캔 k 를 보내기 전에 `/clock`·`/tf`(odom→base_link)·`/odom` 을 t_k 로 먼저 발행하고, 스캔을 발행한 뒤 **stamp 가 t_k 인 `/pose`** 를 기다린다. 받으면
     `processed`, map←odom = map←base(/pose) ∘ (odom←base @t_k)⁻¹ 을 회신한다(버전 +1).
   - **워밍업:** 초기 제외는 송신 번호가 아니라 slam_toolbox 가 실제로 받은 스캔 수로 정해진다(Codex v2). 그래서 고정 번호 규칙 대신 상태로 다룬다: 첫 `processed`
@@ -58,7 +60,8 @@ Isaac 실행기 (ws1 venv, GPU)                          ROS 2 컨테이너 (for
 - **도킹 구간과 해제(Codex v2 P1·검토 ③):** 8 mm 도착 판정 근처의 보정 점프가 off_path·overshoot 를 만들지 않도록 다음 단계에서 `holding`:
   - 픽업: `insert`·`lift`·`extract`. 해제는 `extract` 가 끝나 **정지한 상태에서**, `transport` 를 출발하기 전.
   - 하역: `lower`·`withdraw`. 해제는 `withdraw` 가 끝나 정지한 상태에서, `settle`/`return_home` 출발 전.
-  - **해제 규칙:** 정지 상태에서 `applied = received` 로 바꾼다. 바뀐 자세(적용 전후 map←base 차이)가 **2 cm 또는 0.02 rad 이하**면 그대로 출발한다. 넘으면 다음 이동
+  - **해제 규칙:** 정지 상태에서 `applied = received` 로 바꾼다. 바뀐 자세(적용 전후 map←base 차이)가 **‖Δ위치‖ ≤ 0.02 m 그리고 |Δyaw| ≤ 0.02 rad** 이면 그대로
+    출발한다(둘 중 하나라도 넘으면 — Codex v3). 넘으면 다음 이동
     구간(`transport` 또는 `return_home`)을 새 추정 자세에서 다시 계획한다(`plan_transport_leg`·복귀 계획, 같은 clearance). 다시 계획이 실패하면 임무 실패. 적용 전후
     차이·재계획 여부를 기록한다. 루프 폐쇄로 보정이 크게 바뀐 횟수·크기도 기록한다.
 
@@ -83,9 +86,9 @@ Isaac 실행기 (ws1 venv, GPU)                          ROS 2 컨테이너 (for
 ### 잡음 속도의 정지 판정 (Codex v2 P1)
 
 잡음 포함 오도메트리 속도를 기존 게이트(0.012 m/s 이하 12 틱 연속)에 그대로 넣으면 완전 정지에서도 속도 표준편차가 0.135 × 0.2 / √2 = 0.0191 m/s 라 통과 확률이
-12 틱 연속 0.0117 %, 기대 대기 약 134 s 다. 그래서 정지 판정은: **명령 속도 0 이 0.2 s 이상 유지**되고, **0.1 s(12 틱) 이동평균 오도메트리 속도 ≤ 0.012 m/s 와 이동
-평균 yaw rate ≤ 0.02 rad/s 가 연속 0.1 s** 다. 평균 속도의 표준편차는 0.0191/√12 = 0.0055 m/s(문턱의 약 0.46 배). 실제 정지·저속 이동(0.02 m/s)·한쪽 바퀴 미끄러짐
-입력에서 오정지와 지연을 CPU 로 시험한다(S0).
+12 틱 연속 0.0117 %, 기대 대기 약 134 s 다. 그래서 정지 판정은: **명령 속도 0 이 0.2 s 이상 유지**되고, **|0.1 s(12 틱) 이동평균 오도메트리 속도| ≤ 0.012 m/s 그리고
+|이동평균 yaw rate| ≤ 0.02 rad/s 가 연속 0.1 s** 다(절댓값은 평균에 — 부호 있는 속도라 후진 −0.02 m/s 를 정지로 읽지 않게, Codex v3). 평균 속도의 표준편차는 0.0191/√12 = 0.0055 m/s(문턱의 약 0.46 배). 실제 정지·저속 이동(0.02 m/s)·한쪽 바퀴 미끄러짐
+입력과 후진 ±0.02 m/s·양/음 yaw rate 반례에서 오정지와 지연을 CPU 로 시험한다(S0).
 
 ### 공통 물리 스텝 (두 검토의 P0/P1)
 
@@ -169,3 +172,7 @@ S0 에서 스캔당 교환 지연을 잰 뒤 S1·S2 의 벽시계 예산을 그 
 조건); [P1] 워밍업이 신선도와 충돌·고정 번호 규칙의 어긋남(→ 상태와 대기 규칙); [P1] 도킹 고정과 신선도를 함께 구현할 상태가 없다(→ received/applied 분리·추측 항법
 한도); [P1] 고정 해제 경계·점프 처리(→ 단계·정지 상태·2 cm/0.02 rad·재계획); [P1] 잡음 속도와 기존 정지 게이트(완전 정지에서 기대 대기 약 134 s → 이동평균 판정);
 [P2] 캡처 중 영상 프레임, 삽입 최소 간격의 범위, 상쇄 표현의 한정, S3 문구, 자원 고정.
+
+**② Codex 재검토(v3 → v3.1, 판정 보류 → 반영).** v2 지적 중 laser TF·워밍업·received/applied·P2 묶음 해소. 남은 P1 세 건: 소켓 준비 조건의 순환 대기(→ 준비 순서
+①–④, 구현과 같게), 해제 허용 조건의 논리(→ 위치 AND yaw), 이동평균 정지 판정의 부호(→ 절댓값, 후진·음 yaw 반례 시험). slam_toolbox 2.8.5 원문으로 워밍업 규칙과
+stamp 일치 응답이 정합함을 확인받았다.
