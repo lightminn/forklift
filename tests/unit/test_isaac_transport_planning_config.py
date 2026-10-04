@@ -503,3 +503,72 @@ def test_the_extended_ladder_is_a_second_pass_for_the_first_observation_only():
         next(ast.unparse(k.value) for k in c.keywords if k.arg == "extended") for c in calls
     }
     assert extended == {"extended", "False"}
+
+
+# --- perception mount selection (docs/plans/2026-10-03-carriage-mount-adoption.md) ---
+
+
+def _mount_branch():
+    tree = ast.parse(SCRIPT.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If) and ast.unparse(node.test) == "args.perception_mount == 'legacy'":
+            if any("mount_parent" in ast.unparse(t) for t in node.body):
+                return node
+    raise AssertionError("no mount branch")
+
+
+def test_the_legacy_mount_keeps_the_recorded_camera_exactly():
+    branch = _mount_branch()
+    legacy = "\n".join(ast.unparse(n) for n in branch.body)
+    assert "perception_mount = adapter.default_base_from_optical()" in legacy
+    assert "mount_parent = '/World/Forklift/base_link'" in legacy
+    assert "mount_xyzw = rig.OPTICAL_QUATERNION_XYZW" in legacy
+    low = "\n".join(ast.unparse(n) for n in branch.orelse)
+    assert "adapter.mount_base_from_optical(args.perception_mount)" in low
+    assert "mount_parent = '/World/Forklift/fork_carriage'" in low
+    assert "adapter.quaternion_xyzw(perception_mount.rotation)" in low
+
+
+def test_both_cameras_use_the_same_parent_and_orientation():
+    source = SCRIPT.read_text()
+    assert 'prim_path=mount_parent + "/PerceptionCamera"' in source
+    assert 'prim_path=mount_parent + "/PerceptionDisplayCamera"' in source
+    assert source.count("orientation=np.asarray(adapter.xyzw_to_wxyz(mount_xyzw))") == 2
+    assert "OPTICAL_QUATERNION_XYZW))" not in source
+
+
+def test_the_carriage_mount_is_guarded_and_checked():
+    source = SCRIPT.read_text()
+    assert "guard_fn=lift_guard," in source
+    assert 'raise adapter.CaptureFailure("lift_not_zero")' in source
+    assert "abs(float(robot.get_joint_positions()[lift_joint])) > 0.001" in source
+    assert '"Perception camera local pose differs from the planned mount"' in source
+    for rule in (
+        '"--perception-mount carriage_low needs --use-perception"',
+        '"--perception-mount carriage_low needs ros camera axes"',
+        '"--perception-mount carriage_low is defined for dls08_provisional only"',
+    ):
+        assert rule in source
+
+
+def test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount():
+    source = SCRIPT.read_text()
+    # Both detection paths go through the tested helper with the run's setting.
+    assert source.count("adapter.detector_input(") == 2
+    assert "adapter.detector_input(\n                            scene_input, args.depth_quantize_mm\n" in source
+    assert "repeat_input, args.depth_quantize_mm" in source
+    assert "detection = detect_pockets(detector_input, prior, params)" in source
+    assert 'attempt["base_from_optical"] = {' in source
+    assert 'attempt["depth_quantize_mm"] = args.depth_quantize_mm' in source
+    tree = ast.parse(source)
+    defaults = {
+        ast.unparse(call.args[0]): next(
+            (ast.unparse(k.value) for k in call.keywords if k.arg == "default"), None
+        )
+        for call in ast.walk(tree)
+        if isinstance(call, ast.Call)
+        and ast.unparse(call.func) == "parser.add_argument"
+        and call.args
+    }
+    assert defaults["'--perception-mount'"] == "'legacy'"
+    assert defaults["'--depth-quantize-mm'"] == "0"

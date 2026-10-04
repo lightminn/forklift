@@ -205,6 +205,23 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--slam-noise-seed", type=int, default=None)
     parser.add_argument("--slam-reply-timeout", type=float, default=90.0)
     parser.add_argument(
+        "--perception-mount",
+        choices=("legacy", "carriage_low"),
+        default="legacy",
+        help="legacy: base (0.75, 0, 0.50), tilt 0 (every recorded run). "
+        "carriage_low: on fork_carriage at base (0.559, 0, 0.27), tilt 0.10 rad, "
+        "provisional chassis only, captures only at lift 0 "
+        "(docs/plans/2026-10-03-carriage-mount-adoption.md).",
+    )
+    parser.add_argument(
+        "--depth-quantize-mm",
+        type=int,
+        choices=(0, 1),
+        default=0,
+        help="1: round the detector's depth to whole millimetres, as a z16 "
+        "depth stream reports it; saved depth stays raw (adoption plan, B1c).",
+    )
+    parser.add_argument(
         "--planning-target",
         choices=G2.PLANNING_TARGETS,
         default="perception",
@@ -276,6 +293,15 @@ def arguments() -> argparse.Namespace:
             parser.error("--slam-feedback forbids --planning-target oracle_nominal")
     if args.slam_noise_seed is not None and args.slam_feedback is None:
         parser.error("--slam-noise-seed requires --slam-feedback")
+    if args.perception_mount == "carriage_low":
+        if not args.use_perception:
+            parser.error("--perception-mount carriage_low needs --use-perception")
+        if args.perception_camera_axes != "ros":
+            parser.error("--perception-mount carriage_low needs ros camera axes")
+        if "dls08_provisional" not in str(args.forklift_urdf):
+            parser.error(
+                "--perception-mount carriage_low is defined for dls08_provisional only"
+            )
     if args.use_perception:
         if args.pallet_prior is None:
             parser.error("--pallet-prior is required with --use-perception")
@@ -1004,16 +1030,32 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         extra_cameras["chase"] = chase
         state["extra_views"]["chase"] = {"focal_length_mm": 3.0}
     if args.use_perception:
-        perception_mount = adapter.default_base_from_optical()
+        if args.perception_mount == "legacy":
+            perception_mount = adapter.default_base_from_optical()
+            mount_parent = "/World/Forklift/base_link"
+            mount_xyzw = rig.OPTICAL_QUATERNION_XYZW
+        else:
+            # On the carriage, so it rises with the lift like the real camera;
+            # the base<-optical transform below holds only at lift 0.
+            perception_mount = adapter.mount_base_from_optical(args.perception_mount)
+            mount_parent = "/World/Forklift/fork_carriage"
+            mount_xyzw = adapter.quaternion_xyzw(perception_mount.rotation)
+        state["perception_mount"] = {
+            "name": args.perception_mount,
+            "parent": mount_parent,
+            "translation_m": np.asarray(perception_mount.translation_m).tolist(),
+            "rotation": np.asarray(perception_mount.rotation).tolist(),
+            "depth_quantize_mm": args.depth_quantize_mm,
+        }
         perception_calibration = rig.intrinsics()
         perception_camera = Camera(
-            prim_path="/World/Forklift/base_link/PerceptionCamera",
+            prim_path=mount_parent + "/PerceptionCamera",
             frequency=-1,
             resolution=(perception_calibration.width, perception_calibration.height),
         )
         perception_camera.set_local_pose(
             translation=np.asarray(perception_mount.translation_m),
-            orientation=np.asarray(adapter.xyzw_to_wxyz(rig.OPTICAL_QUATERNION_XYZW)),
+            orientation=np.asarray(adapter.xyzw_to_wxyz(mount_xyzw)),
             camera_axes=args.perception_camera_axes,
         )
         perception_camera.set_projection_mode("perspective")
@@ -1052,7 +1094,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         perception_camera.add_distance_to_image_plane_to_frame()
         if "perception" in args.extra_views:
             perception_display = Camera(
-                prim_path="/World/Forklift/base_link/PerceptionDisplayCamera",
+                prim_path=mount_parent + "/PerceptionDisplayCamera",
                 frequency=-1,
                 resolution=(
                     perception_calibration.width,
@@ -1061,9 +1103,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             )
             perception_display.set_local_pose(
                 translation=np.asarray(perception_mount.translation_m),
-                orientation=np.asarray(
-                    adapter.xyzw_to_wxyz(rig.OPTICAL_QUATERNION_XYZW)
-                ),
+                orientation=np.asarray(adapter.xyzw_to_wxyz(mount_xyzw)),
                 camera_axes=args.perception_camera_axes,
             )
             perception_display.set_projection_mode("perspective")
@@ -1094,6 +1134,29 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     adapter.read_isaac_intrinsics(perception_camera).integer_index
                 ),
             }
+        lift_guard = None
+        if args.perception_mount != "legacy":
+            lift_joint = list(robot.dof_names).index("fork_lift")
+
+            def lift_guard():
+                # Every render step of a capture, not only before and after:
+                # a carriage camera's base<-optical holds at lift 0 only.
+                if abs(float(robot.get_joint_positions()[lift_joint])) > 0.001:
+                    raise adapter.CaptureFailure("lift_not_zero")
+
+            # The mount as Isaac holds it must be the planned one.
+            read_xyz, read_wxyz = perception_camera.get_local_pose(
+                camera_axes=args.perception_camera_axes
+            )
+            require(
+                np.allclose(read_xyz, perception_mount.translation_m, atol=1e-6)
+                and min(
+                    np.abs(np.asarray(read_wxyz) - adapter.xyzw_to_wxyz(mount_xyzw)).max(),
+                    np.abs(np.asarray(read_wxyz) + adapter.xyzw_to_wxyz(mount_xyzw)).max(),
+                )
+                <= 1e-6,
+                "Perception camera local pose differs from the planned mount",
+            )
         perception_capture = adapter.SensorCapture(
             perception_camera,
             perception_mount,
@@ -1102,6 +1165,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             step_fn=lambda: stepper["fn"](True),
             physics_time_fn=lambda: world.current_time,
             pose_fn=robot.get_world_pose,
+            guard_fn=lift_guard,
         )
     names = list(robot.dof_names)
     wheels = np.array(
@@ -2452,7 +2516,21 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         prior = args.pallet_prior_loaded
                         params = DetectorParams.derived_for(prior)
                         state["detector_params"] = asdict(params)
-                        detection = detect_pockets(scene_input, prior, params)
+                        # B1c: the detector sees millimetre depth when asked; the
+                        # saved depth above stays raw (G3 applies the same rounding).
+                        detector_input = adapter.detector_input(
+                            scene_input, args.depth_quantize_mm
+                        )
+                        attempt["base_from_optical"] = {
+                            "translation_m": np.asarray(
+                                scene_input.base_from_optical.translation_m
+                            ).tolist(),
+                            "rotation": np.asarray(
+                                scene_input.base_from_optical.rotation
+                            ).tolist(),
+                        }
+                        attempt["depth_quantize_mm"] = args.depth_quantize_mm
+                        detection = detect_pockets(detector_input, prior, params)
                         observation = detection.observation
                         attempt.update(
                             {
@@ -2548,7 +2626,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                         ),
                                         **observed(
                                             detect_pockets(
-                                                repeat_input, prior, params
+                                                adapter.detector_input(
+                                                    repeat_input, args.depth_quantize_mm
+                                                ),
+                                                prior,
+                                                params,
                                             ).observation
                                         ),
                                     }
@@ -3222,7 +3304,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         "overview_video": "transport.mp4",
                         "overview_floor_points": state.get("overview_floor_points"),
                         "robot_camera": {
-                            "mount": "perception camera (synthetic baseline_0p50)",
+                            "mount": (
+                                "perception camera (synthetic baseline_0p50)"
+                                if args.perception_mount == "legacy"
+                                else f"perception camera ({args.perception_mount})"
+                            ),
                             "resolution": [
                                 perception_calibration.width,
                                 perception_calibration.height,

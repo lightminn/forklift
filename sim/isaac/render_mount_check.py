@@ -82,6 +82,16 @@ def arguments() -> argparse.Namespace:
     parser.add_argument(
         "--gaps", default="-0.20:0.70:0.01", help="start:stop:step, both ends included"
     )
+    # The 10/01 run's mount by default; the 2026-10-03 adoption plan (B1a)
+    # renders the chosen low mount (docs/plans/2026-10-03-carriage-mount-adoption.md).
+    parser.add_argument(
+        "--camera",
+        type=lambda text: tuple(float(v) for v in text.split(",")),
+        default=CAMERA_XYZ_M,
+        metavar="X,Y,Z",
+        help="optical centre in base_link at lift 0",
+    )
+    parser.add_argument("--camera-tilt", type=float, default=0.0, help="rad, down")
     args, unknown = parser.parse_known_args()
     args.kit_arguments = unknown
     return args
@@ -259,7 +269,9 @@ def build_stage(app, args, record) -> dict:
 
     # Camera on the carriage: optical (ROS) axes are USD camera axes x (1,-1,-1).
     camera = UsdGeom.Camera.Define(stage, CAMERA)
-    rig_camera = scene_rig.Camera(CAMERA_XYZ_M, 0.0)
+    if len(args.camera) != 3:
+        raise ValueError("--camera needs X,Y,Z")
+    rig_camera = scene_rig.Camera(tuple(args.camera), args.camera_tilt)
     optical = rig_camera.base_from_optical()
     local = np.eye(4)
     local[:3, :3] = np.asarray(optical.rotation) @ np.diag([1.0, -1.0, -1.0])
@@ -641,7 +653,8 @@ def main() -> None:
         "success": False,
         "plan": "docs/plans/2026-10-01-carriage-camera-render-check.md",
         "arguments": {k: str(v) for k, v in vars(args).items()},
-        "camera_xyz_m": CAMERA_XYZ_M,
+        "camera_xyz_m": list(args.camera),
+        "camera_tilt_rad": args.camera_tilt,
         "orchestrator_step": STEP,
         "inputs_sha256": {
             str(p): sha256(p)
