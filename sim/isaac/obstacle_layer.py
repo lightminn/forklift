@@ -111,6 +111,7 @@ class ObstacleLayer:
             sensor_bound_m=self.noise_cut_m, free_r_cap_m=float(g["free_r_cap_m"]),
             free_rho_m=float(g["free_rho_m"]), close_gap_m=float(g.get("close_gap_m", 0.0)),
             free_min_width_m=float(g.get("free_min_width_m", 0.0)),
+            taper_m=float(g.get("taper_m", 0.0)),
         )
         self.grid = ObstacleGrid(self.grid_config)
         p = config["permission"]

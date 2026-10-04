@@ -90,6 +90,7 @@ class GridConfig:
     rho_bands_m: tuple[float, ...] = (1.5, 2.5, 3.25, 4.0)  # free shrink computed per band edge
     close_gap_m: float = 0.0  # fill gaps in the occupied cells narrower than twice this (0: off)
     free_min_width_m: float = 0.0  # FREE only where a disk this wide fits in free space or the truck (0: off)
+    taper_m: float = 0.0  # no FREE within this of an OCCUPIED cell: an object wider below the plane (0: off)
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -412,6 +413,22 @@ class ObstacleGrid:
             disk = _disk_offsets(radius)
             opened = _dilate(_erode(support, radius, offsets=disk), radius) & free
             state[free & ~opened] = UNKNOWN
+        if cfg.taper_m > 0 and (state == OCCUPIED).any():
+            # A plane sees an object at its own height; a cone or a sack is wider
+            # at the floor, and a beam grazing it at the plane clears cells its
+            # foot covers (P0b: traffic cones, 0.103 m radius at 0.10 m, 0.118 m
+            # at 0.03 m). FREE keeps this distance from every OCCUPIED cell.
+            occ = state == OCCUPIED
+            k = int(ceil(cfg.taper_m / res)) + 1
+            near = occ.copy()
+            nx_, ny_ = occ.shape
+            big = np.zeros((nx_ + 2 * k, ny_ + 2 * k), dtype=bool)
+            big[k:k + nx_, k:k + ny_] = occ
+            for di in range(-k, k + 1):
+                for dj in range(-k, k + 1):
+                    if res * np.hypot(max(abs(di) - 1, 0), max(abs(dj) - 1, 0)) <= cfg.taper_m:
+                        near |= big[k + di:k + di + nx_, k + dj:k + dj + ny_]
+            state[(state == FREE) & near] = UNKNOWN
         free_stamp[state != FREE] = np.nan
         return GridSnapshot(
             state, free_stamp, now_s, tuple(float(v) for v in map_from_odom), correction_version, used, newest,

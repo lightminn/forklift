@@ -576,7 +576,7 @@ def evaluate_command(args) -> dict:
             hall["x_min_m"], hall["x_max_m"], hall["y_min_m"], hall["y_max_m"], table,
             free_max_age_s=args.free_age_s, occupied_max_age_s=args.occupied_age_s,
             free_r_cap_m=args.free_r_cap_m, free_rho_m=args.free_rho_m, close_gap_m=args.close_gap_m,
-            free_min_width_m=args.free_min_width_m,
+            free_min_width_m=args.free_min_width_m, taper_m=args.taper_m,
         )
         grid = ObstacleGrid(grid_cfg)
         permission = DrivePermission(pconfig)
@@ -790,6 +790,7 @@ def main() -> None:
     e.add_argument("--close-gap-m", type=float, default=0.0)
     e.add_argument("--free-min-width-m", type=float, default=0.0)
     e.add_argument("--shadow-band-m", type=float, default=0.0)
+    e.add_argument("--taper-m", type=float, default=0.0)
     e.add_argument("--inject-every-m", type=float, default=0.0)
     e.add_argument("--projection-top-m", type=float, default=1.05)
     e.add_argument("--dump-at", type=int, default=None)

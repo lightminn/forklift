@@ -267,3 +267,26 @@ def test_a_free_strip_narrower_than_the_minimum_width_is_not_free():
     snap = narrow.snapshot(0.05, (0.0, 0.0, 0.0))
     assert cell(snap, 3.0, 0.0) != FREE  # inside the tunnel
     assert cell(snap, 1.0, 0.0) == FREE  # open floor before it
+
+
+def test_the_taper_allowance_keeps_free_off_the_cells_around_a_mark():
+    # A post 0.1 m wide at (2, 0) seen at the plane; beams graze its sides.
+    ranges = np.full(len(ANGLES), np.inf)
+    hit = np.abs(np.sin(ANGLES)) * 2.0 < 0.05
+    hit &= np.cos(ANGLES) > 0
+    ranges[hit] = 2.0 / np.cos(ANGLES[hit])
+    plain = ObstacleGrid(config())
+    plain.add_scan(scan(0.0, ranges))
+    tapered = ObstacleGrid(config(taper_m=0.02))
+    tapered.add_scan(scan(0.0, ranges))
+    a, b = plain.snapshot(0.0, (0.0, 0.0, 0.0)), tapered.snapshot(0.0, (0.0, 0.0, 0.0))
+    occ = a.state == OCCUPIED
+    ring = np.zeros_like(occ)
+    ring[1:, :] |= occ[:-1, :]
+    ring[:-1, :] |= occ[1:, :]
+    ring[:, 1:] |= occ[:, :-1]
+    ring[:, :-1] |= occ[:, 1:]
+    ring &= ~occ
+    assert (a.state[ring] == FREE).any()
+    assert not (b.state[ring] == FREE).any()
+    assert (b.state == OCCUPIED).sum() == occ.sum()
