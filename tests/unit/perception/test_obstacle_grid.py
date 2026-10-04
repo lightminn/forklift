@@ -234,3 +234,20 @@ def test_an_l_shaped_group_does_not_fill_its_open_corner():
     occ[10:50, 10:12] = True  # the other
     filled = _line_close(occ, 10)
     assert not filled[25:45, 25:45].any()  # a convex hull would fill this
+
+
+def test_same_instant_sensors_shrink_together_so_each_covers_the_others_shadow():
+    # Sensor A sees only beams pointing to +y (the -y half is its own body);
+    # sensor B the reverse. Alone, each one's shadow shrinks the cells near y = 0.
+    ranges = np.full(len(ANGLES), np.inf)
+    own_a = np.sin(ANGLES) < 0
+    own_b = np.sin(ANGLES) > 0
+    def make(own, name):
+        return ObstacleScan(0.0, name, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), ANGLES, ranges, own, True)
+    alone = ObstacleGrid(config())
+    alone.add_scan(make(own_a, "a"))
+    assert cell(alone.snapshot(0.05, (0.0, 0.0, 0.0)), 2.0, 0.02) != FREE
+    both = ObstacleGrid(config())
+    both.add_scan(make(own_a, "a"))
+    both.add_scan(make(own_b, "b"))
+    assert cell(both.snapshot(0.05, (0.0, 0.0, 0.0)), 2.0, 0.02) == FREE

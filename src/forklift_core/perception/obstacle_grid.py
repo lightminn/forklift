@@ -367,13 +367,23 @@ class ObstacleGrid:
                 old_x.append(marks[0]), old_y.append(marks[1]), old_r.append(marks[2])
         if old_x:
             self._mark_disks(state, np.concatenate(old_x), np.concatenate(old_y), np.concatenate(old_r))
+        # Scans of the same instant share one pose error: their beams are united
+        # before the shrink, so a cell one sensor sees and the other cannot is
+        # not shrunk away by the other's shadow (the first L3b stops: a front
+        # corner both corner LiDARs saw).
+        groups: dict = {}
         for scan, age, geo in fresh:
-            if scan.may_clear:
-                self._clear(scan, age, geo, state, free_stamp)
-            marks = self._marks(scan, age, geo)
-            if marks is not None:
-                self._mark_disks(state, *marks)
-                free_stamp[state == OCCUPIED] = np.nan
+            groups.setdefault(scan.stamp_s, []).append((scan, age, geo))
+        for stamp in sorted(groups):
+            group = groups[stamp]
+            clearing = [g for g in group if g[0].may_clear]
+            if clearing:
+                self._clear_group(clearing, state, free_stamp)
+            for scan, age, geo in group:
+                marks = self._marks(scan, age, geo)
+                if marks is not None:
+                    self._mark_disks(state, *marks)
+                    free_stamp[state == OCCUPIED] = np.nan
         if cfg.close_gap_m > 0:
             # A low plane sees a pallet as blocks with gaps; its deck and load are
             # still there. Along rows, columns and both diagonals, every cell
@@ -426,21 +436,25 @@ class ObstacleGrid:
             return None
         return np.concatenate(xs), np.concatenate(ys), np.concatenate(rs)
 
-    def _clear(self, scan, age, geo, state, free_stamp):
-        """FREE where this fresh scan's beams passed, shrunk by its error radius."""
+    def _clear_group(self, group, state, free_stamp):
+        """FREE where the beams of same-instant scans passed, shrunk once by their error radius."""
         cfg = self.config
         nx, ny = cfg.shape
         res = cfg.resolution_m
-        rear_map, laser, ranges, cos_a, sin_a, usable, limit = geo
-        finite = np.isfinite(ranges)
-        clear_to = np.where(ranges == np.inf, cfg.max_clear_m, np.where(finite, np.minimum(ranges, cfg.max_mark_m), 0.0))
-        clear_to = np.where(usable, np.minimum(np.minimum(clear_to, cfg.max_clear_m), limit), 0.0)
-        # Hit beams stop short of the hit by the range error bound and a cell:
-        # a beam that reads long must not clear the surface it hit.
-        clear_to = np.where(finite & (ranges <= cfg.max_mark_m), clear_to - cfg.sensor_bound_m - res, clear_to)
-        raw = self._ray_mask(laser, cos_a, sin_a, np.maximum(clear_to, 0.0))
+        raw = np.zeros((nx, ny), dtype=bool)
+        for scan, age, geo in group:
+            rear_map, laser, ranges, cos_a, sin_a, usable, limit = geo
+            finite = np.isfinite(ranges)
+            clear_to = np.where(ranges == np.inf, cfg.max_clear_m, np.where(finite, np.minimum(ranges, cfg.max_mark_m), 0.0))
+            clear_to = np.where(usable, np.minimum(np.minimum(clear_to, cfg.max_clear_m), limit), 0.0)
+            # Hit beams stop short of the hit by the range error bound and a
+            # cell: a beam that reads long must not clear the surface it hit.
+            clear_to = np.where(finite & (ranges <= cfg.max_mark_m), clear_to - cfg.sensor_bound_m - res, clear_to)
+            raw |= self._ray_mask(laser, cos_a, sin_a, np.maximum(clear_to, 0.0))
         if not raw.any():
             return
+        scan, age, geo = group[0]
+        rear_map = geo[0]
         # Support for the shrink: every cell the body may touch is not an
         # external obstacle. Withheld from FREE: only cells wholly inside the
         # body (centre inside it shrunk by a half diagonal) -- a subset of the
