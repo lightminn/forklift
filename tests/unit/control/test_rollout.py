@@ -32,3 +32,11 @@ def test_an_aligned_start_arrives_with_no_error():
 def test_a_large_offset_does_not_arrive_cleanly():
     result = bicycle_rollout(*_straight(), CONFIG, (0.0, 0.08, 0.06))
     assert result.status != "arrived" or abs(result.yaw_error_rad) > 0.015
+
+
+def test_the_rollout_reports_the_poses_it_drove_through():
+    result = bicycle_rollout(*_straight(), CONFIG, (0.0, 0.03, 0.0))
+    poses = np.array(result.trajectory)
+    assert len(poses) > 10
+    np.testing.assert_allclose(poses[0], (0.0, 0.03, 0.0))
+    assert poses[-1][0] > 0.7

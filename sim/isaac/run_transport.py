@@ -1755,8 +1755,18 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             delivery_rear=[float(v) for v in full.poses[-1]],
             predelivery_rear=[float(v) for v in prefix.poses[-1]],
         )
+        # A stop to look, not a final goal: judged like an observe stop (3 cm,
+        # 0.05 rad); the docked straight that follows keeps the 8 mm goal.
+        slam.setdefault("transport_config", trackers["transport"].config)
         trackers["transport"] = RearAxlePathTracker(
-            prefix.poses, prefix.directions, prefix.curvatures_inv_m, trackers["transport"].config
+            prefix.poses,
+            prefix.directions,
+            prefix.curvatures_inv_m,
+            replace(
+                slam["transport_config"],
+                position_tolerance_m=0.03,
+                yaw_tolerance_rad=0.05,
+            ),
         )
 
     def dock_at_delivery_straight(t: float) -> None:
@@ -1828,28 +1838,42 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         shift = compose(goal, invert(delivery))  # E: planned -> corrected
         docking["status"] = "done" if result.accepted else "fallback"
         line_start = compose(goal, (-geometry.delivery_straight_m, 0.0, 0.0))
+        # Delivery corrections of ~10 cm are the point of docking (seed 0: 92 mm),
+        # so the box is wider than the insertion one; what makes it safe is the
+        # dry run arriving AND its swept loaded footprint staying clear.
         straight, offsets = straight_from_pose(
             PlanningPose(*estimate),
             PlanningPose(*line_start),
             PlanningPose(*goal),
-            max_lateral_m=0.05,
-            max_yaw_rad=0.05,
+            max_lateral_m=0.12,
+            max_yaw_rad=0.08,
             min_length_m=0.3,
         )
         docking["offsets_to_new_line"] = offsets
         path = None
         if straight is not None:
-            config = trackers["transport"].config
+            config = slam.get("transport_config", trackers["transport"].config)
             dry = bicycle_rollout(
                 straight.poses, straight.directions, straight.curvatures_inv_m, config, rear
             )
-            docking["dry_run"] = asdict(dry)
+            swept_clear = all(
+                collision_free_pose(
+                    np.asarray(pose), obstacles, geometry.loaded_footprint, scenario.bounds
+                )
+                for pose in dry.trajectory
+            )
+            docking["dry_run"] = {
+                **{k: v for k, v in asdict(dry).items() if k != "trajectory"},
+                "trajectory_samples": len(dry.trajectory),
+                "swept_clear": swept_clear,
+            }
             # The tracker stops anywhere inside its own tolerance (Codex v3.8 P2:
             # a clean 0.7 m straight stops at 7.8 mm); require yaw margin only.
             if (
                 dry.status == "arrived"
                 and dry.position_error_m <= config.position_tolerance_m
                 and abs(dry.yaw_error_rad) <= 0.75 * config.yaw_tolerance_rad
+                and swept_clear
             ):
                 path = straight
         corrected = replace(
@@ -1865,18 +1889,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             ),
         )
         slam["transport_scenario"] = corrected
-        if path is None:
-            # Re-align with a collision-checked plan to the corrected drop.
-            replanned = plan_transport_leg(
-                corrected, PlanningPose(*estimate), planner_config, geometry=geometry, travel_config=travel_config
-            )
-            docking["realign_status"] = replanned.status
-            require(replanned.success, f"docking_realign_failed:{replanned.status}")
-            path = replanned
+        # No long held detour: a Hybrid A* re-alignment for a 9 cm correction
+        # drove 13.3 m forward-only on held odometry and drifted 0.5 m (S2 v3.8
+        # seed 0). A straight that cannot be accepted ends the run instead.
+        require(path is not None, f"docking_unaligned:{offsets}:{docking.get('dry_run')}")
         paths["transport"] = path
         state["paths"]["transport"] = path_record(path)
         trackers["transport"] = RearAxlePathTracker(
-            path.poses, path.directions, path.curvatures_inv_m, trackers["transport"].config
+            path.poses, path.directions, path.curvatures_inv_m, slam.get("transport_config", trackers["transport"].config)
         )
         if "withdraw" in paths:
             moved = np.array([compose(shift, tuple(pose)) for pose in paths["withdraw"].poses])
@@ -3209,8 +3229,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 # straight begins, so only that straight (and the
                                 # insert/extract) runs on held odometry. Curved
                                 # approaches drifted 0.02-0.03 rad held (S2 v3.5).
+                                # 0.2 m into the straight: the leg must not end where
+                                # the curve meets it, before the heading settles
+                                # (S2 v3.7/v3.8 seed 1: yaw -0.078 at that junction).
                                 near_leg = final_straight_prefix(
-                                    paths["approach"], geometry.alignment_straight_m
+                                    paths["approach"], geometry.alignment_straight_m - 0.2
                                 )
                                 # Every approach ends in the 0.8 m alignment straight;
                                 # not finding it is a failure, not a skip (Codex v3.6 P1).

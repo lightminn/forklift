@@ -25,6 +25,9 @@ class RolloutResult:
     position_error_m: float
     yaw_error_rad: float
     time_s: float
+    # Rear-axle poses visited, every 10th step: for a swept-footprint check
+    # (an arrival can still cut a corner -- Codex v3.7 P1).
+    trajectory: tuple = ()
 
 
 def bicycle_rollout(
@@ -41,18 +44,26 @@ def bicycle_rollout(
     pose = np.asarray(start_pose, dtype=float).copy()
     speed = 0.0
     steps = int(max_time_s / dt_s)
+    visited = []
     for k in range(steps):
+        if k % 10 == 0:
+            visited.append(tuple(float(v) for v in pose))
         command = tracker.update(pose, speed, dt_s)
         if command.status in ("arrived", "failed"):
+            visited.append(tuple(float(v) for v in pose))
             return RolloutResult(
-                command.status, command.position_error_m, command.yaw_error_rad, k * dt_s
+                command.status,
+                command.position_error_m,
+                command.yaw_error_rad,
+                k * dt_s,
+                tuple(visited),
             )
         speed = command.speed_mps
         change = speed * command.curvature_inv_m * dt_s
         heading = pose[2] + change / 2
         pose[:2] += speed * dt_s * np.array([cos(heading), sin(heading)])
         pose[2] += change
-    return RolloutResult("timeout", float("nan"), float("nan"), max_time_s)
+    return RolloutResult("timeout", float("nan"), float("nan"), max_time_s, tuple(visited))
 
 
 __all__ = ["RolloutResult", "bicycle_rollout"]
