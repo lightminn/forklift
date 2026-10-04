@@ -3887,7 +3887,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         target = PlanningPose(*(float(v) for v in paths["observe"].poses[-1]))
                         replanned = plan_observation_leg(
                             grid_world(scenario), target, planner_config, geometry=geometry,
-                            start_rear=start, pickup_bounds=pickup_bounds, extended=True,
+                            start_rear=start, pickup_bounds=pickup_bounds, extended=False,
                             **grid_kwargs("observe"),
                         )
                     elif phase == "transport":

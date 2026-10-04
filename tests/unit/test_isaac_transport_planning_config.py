@@ -124,6 +124,10 @@ def test_all_runner_planning_calls_use_the_recorded_config(
         # The SLAM observe replan plans to the leg's own target.
         target=scenario.start_rear,
         PlanningPose=Pose2D,
+        # Priority-5 grid planning off: the plan sees what it always saw.
+        grid_world=lambda sc: sc,
+        grid_kwargs=lambda *a, **k: {},
+        start=scenario.start_rear,
     )
     calls = [
         node
@@ -133,8 +137,10 @@ def test_all_runner_planning_calls_use_the_recorded_config(
         and node.func.id in ("plan_observation_leg", "plan_transport")
     ]
     # Third observation leg call: the SLAM observe replan (online SLAM plan
-    # v3.8, same recorded planner_config, earlier ladder).
+    # v3.8, same recorded planner_config, earlier ladder); fourth: the
+    # priority-5 obstacle replan of the same leg.
     assert sorted(node.func.id for node in calls) == [
+        "plan_observation_leg",
         "plan_observation_leg",
         "plan_observation_leg",
         "plan_observation_leg",
@@ -484,7 +490,7 @@ def test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules():
     # Stopped: the transport leg alone, same planner config, from the measured rear pose.
     # Under SLAM after docking the corrected drop (online SLAM plan v3.8).
     assert (
-        "plan_transport_leg(slam.get('transport_scenario', scenario) if slam is not None else scenario, PlanningPose("
+        "plan_transport_leg(grid_world(slam.get('transport_scenario', scenario) if slam is not None else scenario), PlanningPose("
         in branch
     )
     assert "planner_config" in branch and "travel_config=travel_config" in branch
