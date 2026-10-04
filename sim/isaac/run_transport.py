@@ -99,6 +99,13 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--forklift-urdf", type=Path, required=True)
     parser.add_argument("--settings", type=Path, required=True)
     parser.add_argument(
+        "--delivery-straight-m",
+        type=float,
+        default=0.70,
+        help="Length of the final delivery straight (plan v3.8: 1.5 for the "
+        "docking runs and their ground-truth controls; 0.70 is the recorded default).",
+    )
+    parser.add_argument(
         "--insertion-reserve-m",
         type=float,
         default=0.046,
@@ -817,6 +824,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         axle_to_fork_tip_m=args.axle_to_fork_tip_m,
         carriage_limit_m=args.carriage_limit_m,
         insertion_reserve_m=args.insertion_reserve_m,
+        delivery_straight_m=args.delivery_straight_m,
     )
     state["insertion_reserve_m"] = args.insertion_reserve_m
     planner_config = make_transport_planner_config(
@@ -844,6 +852,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     # 3003 and 4007; docs/plans/2026-10-03-transport-stage-fixes.md).
     state["cusp_replans"] = []
     state["stall_replans"] = []
+    state["observe_replans"] = []
     slam_stall_ticks = 0
     max_cusp_replans = 2
     # Stopped = zero command, planar speed and yaw rate under these for this
@@ -2618,6 +2627,52 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             phase_started = t
                             tracking = trackers[phase].update(rear, signed_speed, dt)
                             last_tracking = tracking
+                # Under SLAM, an observe leg judged out of heading at a cusp or
+                # its end (S2 seed 1: -0.078 rad at a cusp of the near leg, three
+                # versions running): brake, then plan the leg again from the
+                # stop to the same target, at most twice per run.
+                observe_miss = (
+                    slam is not None
+                    and phase == "observe"
+                    and tracking.status == "failed"
+                    and tracking.failure == "endpoint_heading"
+                    and not tracking.off_path
+                    and len(state["observe_replans"]) < 2
+                )
+                if observe_miss:
+                    tracking = replace(tracking, status="braking", speed_mps=0.0)
+                    if slam["stop_now"]:
+                        target = PlanningPose(*(float(v) for v in paths["observe"].poses[-1]))
+                        replan_start = time.monotonic()
+                        replanned = plan_observation_leg(
+                            scenario,
+                            target,
+                            planner_config,
+                            geometry=geometry,
+                            start_rear=PlanningPose(float(rear[0]), float(rear[1]), float(rear[2])),
+                            pickup_bounds=pickup_bounds,
+                            extended=False,
+                        )
+                        state["observe_replans"].append(
+                            {
+                                "time_s": t,
+                                "rear_pose": rear.tolist(),
+                                "yaw_error_rad": last_tracking.yaw_error_rad,
+                                "status": replanned.status,
+                                "planning_wall_s": time.monotonic() - replan_start,
+                            }
+                        )
+                        require(replanned.success, f"observe_replan_failed:{replanned.status}")
+                        paths["observe"] = replanned
+                        trackers["observe"] = RearAxlePathTracker(
+                            replanned.poses,
+                            replanned.directions,
+                            replanned.curvatures_inv_m,
+                            trackers["observe"].config,
+                        )
+                        phase_started = t
+                        tracking = trackers["observe"].update(rear, signed_speed, dt)
+                        last_tracking = tracking
                 if tracking.status == "failed":
                     dump_tracking("failed", tracking)
                 require(
@@ -3229,11 +3284,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 # straight begins, so only that straight (and the
                                 # insert/extract) runs on held odometry. Curved
                                 # approaches drifted 0.02-0.03 rad held (S2 v3.5).
-                                # 0.2 m into the straight: the leg must not end where
-                                # the curve meets it, before the heading settles
-                                # (S2 v3.7/v3.8 seed 1: yaw -0.078 at that junction).
                                 near_leg = final_straight_prefix(
-                                    paths["approach"], geometry.alignment_straight_m - 0.2
+                                    paths["approach"], geometry.alignment_straight_m
                                 )
                                 # Every approach ends in the 0.8 m alignment straight;
                                 # not finding it is a failure, not a skip (Codex v3.6 P1).
