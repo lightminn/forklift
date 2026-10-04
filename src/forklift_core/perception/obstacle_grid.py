@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
-from math import ceil, cos, floor, hypot, sin, sqrt
+from math import ceil, cos, sin, sqrt
 
 import numpy as np
 

@@ -365,8 +365,6 @@ def evaluate_command(args) -> dict:
     phases = [x["phase"] for x in samples]
     obstacles = [o for o in meta["obstacles"] if o.get("base_m", 0.0) == 0.0]
     kinds = list(sections["kinds"])
-    owners = list(sections["owners"])
-    pickup = meta["mission"]["pickup_truth"]
     pallet_urdf = run / "pallet_with_synthetic_inertia.urdf"
     pallet_tris = np.concatenate(list(urdf_triangles(pallet_urdf, {}).values()))
     truck_cache: dict = {}
