@@ -238,6 +238,29 @@ def scene_props(scene_usda: Path):
     return out
 
 
+def triangle_cells(tri2d: np.ndarray, res: float) -> np.ndarray:
+    """Cells (i, j) on a world grid of size res (origin 0) whose square overlaps a 2D triangle (separating axes)."""
+    lo = np.floor(tri2d.min(axis=0) / res).astype(int)
+    hi = np.floor(tri2d.max(axis=0) / res).astype(int)
+    ii, jj = np.meshgrid(np.arange(lo[0], hi[0] + 1), np.arange(lo[1], hi[1] + 1), indexing="ij")
+    ii, jj = ii.ravel(), jj.ravel()
+    cx, cy = (ii + 0.5) * res, (jj + 0.5) * res
+    half = res / 2
+    keep = np.ones(len(ii), dtype=bool)
+    for k in range(3):
+        a, b = tri2d[k], tri2d[(k + 1) % 3]
+        n = np.array([b[1] - a[1], a[0] - b[0]])
+        norm = np.hypot(*n)
+        if norm < 1e-12:
+            continue
+        n = n / norm
+        tri_proj = tri2d @ n
+        centre = cx * n[0] + cy * n[1]
+        extent = half * (abs(n[0]) + abs(n[1]))
+        keep &= (centre + extent >= tri_proj.min() - 1e-12) & (centre - extent <= tri_proj.max() + 1e-12)
+    return np.column_stack((ii[keep], jj[keep]))
+
+
 def sections_command(args) -> dict:
     args.assets.mkdir(parents=True, exist_ok=True)
     props = scene_props(args.run / "scene.usda")
@@ -261,6 +284,18 @@ def sections_command(args) -> dict:
             seg_by_h[h].append(segs)
             owner_of[h].append(np.full(len(segs), k))
     payload = {"heights": np.array(heights), "owners": np.array(owners), "kinds": np.array(kinds)}
+    # Floor projection of every collider triangle in the truck's height band
+    # (Codex checkpoint P2): conservative, no gaps between sections.
+    proj = {}
+    for k, (name, xf, path) in enumerate(props):
+        tris = local[name]
+        world = (np.c_[tris.reshape(-1, 3), np.ones(len(tris) * 3)] @ xf)[:, :3].reshape(-1, 3, 3)
+        zlo, zhi = world[:, :, 2].min(axis=1), world[:, :, 2].max(axis=1)
+        for tri in world[(zhi >= 0.0) & (zlo <= args.projection_top_m)]:
+            for c in triangle_cells(tri[:, :2], 0.05):
+                proj[(int(c[0]), int(c[1]))] = k
+    payload["proj_cells"] = np.array(list(proj.keys()), dtype=int).reshape(-1, 2)
+    payload["proj_owner"] = np.array(list(proj.values()), dtype=int)
     for h in heights:
         payload[f"seg_{h:.3f}"] = np.concatenate(seg_by_h[h]) if seg_by_h[h] else np.zeros((0, 2, 2))
         payload[f"own_{h:.3f}"] = np.concatenate(owner_of[h]) if owner_of[h] else np.zeros(0, int)
@@ -463,6 +498,9 @@ def evaluate_command(args) -> dict:
                     proj[(int(a_), int(b_))] = int(owner)
     proj_cells = np.array(list(proj.keys()), dtype=int).reshape(-1, 2)
     proj_owner = np.array(list(proj.values()), dtype=int)
+    if "proj_cells" in sections.files:
+        # The conservative triangle projection, when the sections carry it.
+        proj_cells, proj_owner = sections["proj_cells"], sections["proj_owner"]
     hall = meta["hall"]
     rng = np.random.default_rng(args.noise_seed)
     scan_stamps = log["scan_stamps_s"]
@@ -682,6 +720,7 @@ def main() -> None:
     s.add_argument("--run", type=Path, required=True)
     s.add_argument("--assets", type=Path, required=True)
     s.add_argument("--heights", default="0.03,0.06,0.08,0.10,0.12,0.14,0.18,0.20,0.25,0.35,0.50,0.75,1.00,1.05")
+    s.add_argument("--projection-top-m", type=float, default=1.05)
     s.add_argument("--output", type=Path, required=True)
     e = sub.add_parser("evaluate")
     e.add_argument("--run", type=Path, required=True)

@@ -89,3 +89,13 @@ def test_a_heading_error_at_the_present_swings_the_old_pose():
     err = MODULE.relative_error_at(0, (1.0,), stamps, truth, odom)
     assert math.isclose(err[0, 0], 2 * math.sin(0.05), rel_tol=1e-9)  # about 0.10 m
     assert math.isclose(err[0, 1], 0.1, rel_tol=1e-9)
+
+
+def test_triangle_cells_cover_every_cell_the_triangle_touches():
+    spec = importlib.util.spec_from_file_location("p0b", ROOT / "tools/p0b_sensor_study.py")
+    p0b = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(p0b)
+    tri = np.array([[0.01, 0.01], [0.24, 0.01], [0.01, 0.12]])
+    cells = {tuple(c) for c in p0b.triangle_cells(tri, 0.05)}
+    assert (0, 0) in cells and (4, 0) in cells and (0, 2) in cells
+    assert (4, 2) not in cells  # beyond the hypotenuse
