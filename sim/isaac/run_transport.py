@@ -1367,6 +1367,27 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             out["pickup_obstacle"] = Rectangle(
                 target.x_m, target.y_m, geometry.pallet_depth_m, geometry.pallet_width_m, target.yaw_rad
             )
+            # The docking straights see the grid with the perceived pallet's band
+            # cleared (plan D5): the estimate grown by the bias bound and the
+            # grid's error radius along the insertion axis, by the radius across.
+            band_along = 0.025 + 0.10
+            band_across = 0.10
+            res_g = occupancy.resolution_m
+            nx_g, ny_g = occupancy.occupied.shape
+            gi, gj = np.meshgrid(np.arange(nx_g), np.arange(ny_g), indexing="ij")
+            dx = occupancy.origin_x_m + (gi + 0.5) * res_g - target.x_m
+            dy = occupancy.origin_y_m + (gj + 0.5) * res_g - target.y_m
+            ct, st_ = math.cos(target.yaw_rad), math.sin(target.yaw_rad)
+            band = (np.abs(dx * ct + dy * st_) <= geometry.pallet_depth_m / 2 + band_along) & (
+                np.abs(-dx * st_ + dy * ct) <= geometry.pallet_width_m / 2 + band_across
+            )
+            from forklift_core.planning.grid_collision import OccupancyGrid as _Occ
+
+            out["docking_occupancy"] = _Occ(
+                occupancy.origin_x_m, occupancy.origin_y_m, res_g, occupancy.occupied & ~band,
+                version=occupancy.version,
+            )
+            obstacle["plans"][-1]["docking_band_cells"] = int((occupancy.occupied & band).sum())
         return out
 
     state["phase"] = "planning"
@@ -2448,6 +2469,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 obstacle["applied"] = correction
             layer.add_scans(stamp, raw, odom_rear=odom_rear, loaded=loaded_now)
             obstacle["last_stamp"] = float(stamp)
+            obstacle["last_raw"] = (raw, np.asarray(base, dtype=float), np.asarray(q, dtype=float))
             if phase in trackers:
                 ahead, _ = trackers[phase].leg_ahead()
             else:
@@ -3899,6 +3921,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         requested=requested_speed, truth_speed=truth_speed,
                         correction=np.asarray(obstacle["applied"], dtype=float), version=obstacle["version"],
                         stamp=snap_.stamp_s,
+                        **{
+                            f"raw_{name}_{part}": np.asarray(arr, dtype=float)
+                            for name, values in obstacle.get("last_raw", ({}, None, None))[0].items()
+                            for part, arr in zip(("d", "hit", "own", "limit"), values)
+                        },
+                        raw_base=obstacle.get("last_raw", ({}, np.zeros(3), np.zeros(4)))[1],
+                        raw_q=obstacle.get("last_raw", ({}, np.zeros(3), np.zeros(4)))[2],
                     )
                 ticks = obstacle["ticks"]
                 ticks[phase] = ticks.get(phase, 0) + 1

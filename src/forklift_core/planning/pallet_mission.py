@@ -774,6 +774,7 @@ def plan_transport(
     trace: list | None = None,
     occupancy=None,
     pickup_obstacle: Rectangle | None = None,
+    docking_occupancy=None,
 ) -> MissionPlan:
     """Plan all stages with exact final straight approaches and loaded geometry.
 
@@ -801,7 +802,10 @@ def plan_transport(
     works; the plan returned is the same with or without it.
     occupancy / pickup_obstacle (priority-5 plan): a LiDAR occupancy grid
     checked with every stage, and the perceived pallet rectangle in place of
-    scenario.pickup as the approach obstacle.
+    scenario.pickup as the approach obstacle. docking_occupancy, when given,
+    replaces occupancy for the approach straight, the insertion and the
+    extraction: the same grid with the perceived pallet's front band cleared,
+    since the forks must enter what the LiDAR sees as the pallet (plan D5).
     """
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
     config = config if config is not None else make_transport_planner_config()
@@ -868,7 +872,7 @@ def plan_transport(
             geometry.unloaded_footprint,
             near_bounds,
             approach_config.clearance_m,
-            occupancy,
+            docking_occupancy if docking_occupancy is not None else occupancy,
         ),
     )
     if not approach_tail.success:
@@ -884,7 +888,7 @@ def plan_transport(
             geometry.unloaded_footprint,
             near_bounds,
             config.clearance_m,
-            occupancy,
+            docking_occupancy if docking_occupancy is not None else occupancy,
         ),
     )
     if not insert.success:
@@ -899,7 +903,7 @@ def plan_transport(
             geometry.loaded_footprint,
             near_bounds,
             config.clearance_m,
-            occupancy,
+            docking_occupancy if docking_occupancy is not None else occupancy,
         ),
     )
     if not extract.success:
