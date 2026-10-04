@@ -138,7 +138,8 @@ class ObstacleLayer:
             )
             self.last_scan_s[sensor.name] = float(stamp_s)
 
-    def refresh(self, now_s: float, correction, version: int, *, current_pose, path_ahead, loaded: bool):
+    def refresh(self, now_s: float, correction, version: int, *, current_pose, path_ahead, loaded: bool,
+                direction: int = 0):
         """New local snapshot and path check around the truck."""
         x, y = current_pose[0], current_pose[1]
         w, res = self.window_m, self.grid_config.resolution_m
@@ -150,7 +151,8 @@ class ObstacleLayer:
         finally:
             self.grid.config = self.grid_config
         footprint, own = self.footprints(loaded)
-        return self.permission.update(self.snapshot, path_ahead, footprint, own, current_pose=current_pose)
+        return self.permission.update(self.snapshot, path_ahead, footprint, own, current_pose=current_pose,
+                                      direction=direction)
 
     def limit(self, now_s: float, *, current_pose, curvature_inv_m: float, direction: int, loaded: bool, cap_mps: float):
         footprint, own = self.footprints(loaded)

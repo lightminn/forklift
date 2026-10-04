@@ -2502,12 +2502,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             layer.add_scans(stamp, raw, odom_rear=odom_rear, loaded=loaded_now)
             obstacle["last_stamp"] = float(stamp)
             obstacle["last_raw"] = (raw, np.asarray(base, dtype=float), np.asarray(q, dtype=float))
+            leg_direction = 0
             if phase in trackers:
-                ahead, _ = trackers[phase].leg_ahead()
+                ahead, leg_direction = trackers[phase].leg_ahead()
             else:
                 ahead = np.array([current])
             check = layer.refresh(
-                stamp, correction, obstacle["version"], current_pose=current, path_ahead=ahead, loaded=loaded_now
+                stamp, correction, obstacle["version"], current_pose=current, path_ahead=ahead, loaded=loaded_now,
+                direction=leg_direction,
             )
             obstacle["scans"].append(
                 {
@@ -3928,9 +3930,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     obstacle["version"] += 1
                     obstacle["applied"] = applied_now
                     obstacle["reprojections"] = obstacle.get("reprojections", 0) + 1
+                    leg_now, leg_dir_now = trackers[phase].leg_ahead()
                     obstacle["layer"].refresh(
                         t, applied_now, obstacle["version"], current_pose=tuple(float(v) for v in rear),
-                        path_ahead=trackers[phase].leg_ahead()[0], loaded=loaded,
+                        path_ahead=leg_now, loaded=loaded, direction=leg_dir_now,
                     )
                 if requested_speed != 0.0:
                     direction = 1 if requested_speed > 0 else -1

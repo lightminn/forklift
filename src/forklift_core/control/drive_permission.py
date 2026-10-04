@@ -71,13 +71,21 @@ class Check:
     reached_end: bool
 
 
-def footprint_cells(snapshot: GridSnapshot, pose, footprint: Footprint, margin_m: float):
-    """(cells (k, 2), any outside the grid) whose square the inflated footprint at pose overlaps."""
+def footprint_cells(snapshot: GridSnapshot, pose, footprint: Footprint, margin_m: float, *, direction: int = 0):
+    """(cells (k, 2), any outside the grid) whose square the inflated footprint at pose overlaps.
+
+    direction +1 (forward) leaves the rear edge uninflated, -1 the front edge:
+    no point of the body moves against the direction of travel while the
+    curvature stays below 1 / half width (the corner's along-track speed is
+    v (1 - kappa w) > 0), so the margin is never needed there.
+    """
     x, y, yaw = pose
     c, s = cos(yaw), sin(yaw)
-    offset = (footprint.front_m - footprint.rear_m) / 2
+    front = footprint.front_m + (margin_m if direction >= 0 else 0.0)
+    rear = footprint.rear_m + (margin_m if direction <= 0 else 0.0)
+    offset = (front - rear) / 2
     cx, cy = x + offset * c, y + offset * s
-    hl = (footprint.front_m + footprint.rear_m) / 2 + margin_m
+    hl = (front + rear) / 2
     hw = footprint.half_width_m + margin_m
     ex = abs(c) * hl + abs(s) * hw
     ey = abs(s) * hl + abs(c) * hw
@@ -146,7 +154,33 @@ class DrivePermission:
         self.path_check: Check | None = None
         self._driven_since_m = 0.0
 
-    def _walk(self, snapshot, samples, arc, footprint, own_cells, *, full_path_m=None) -> Check:
+    @staticmethod
+    def _enters(snapshot, cell, own_pose, own_footprint, pose, footprint, margin, direction) -> bool:
+        """Whether the part of a cell outside the truck's present outline lies in
+        the inflated footprint at pose (5 mm sub-samples)."""
+        res = snapshot.resolution_m
+        x0 = snapshot.origin_x_m + cell[0] * res
+        y0 = snapshot.origin_y_m + cell[1] * res
+        g = (np.arange(11) + 0.0) / 10 * res
+        px, py = np.meshgrid(x0 + g, y0 + g, indexing="ij")
+        px, py = px.ravel(), py.ravel()
+        ox, oy, oyaw = own_pose
+        c, s_ = cos(oyaw), sin(oyaw)
+        u = (px - ox) * c + (py - oy) * s_
+        v = -(px - ox) * s_ + (py - oy) * c
+        outside = ~((u >= -own_footprint.rear_m) & (u <= own_footprint.front_m) & (np.abs(v) <= own_footprint.half_width_m))
+        if not outside.any():
+            return False
+        x, y, yaw = pose
+        c, s_ = cos(yaw), sin(yaw)
+        u = (px[outside] - x) * c + (py[outside] - y) * s_
+        v = -(px[outside] - x) * s_ + (py[outside] - y) * c
+        front = footprint.front_m + (margin if direction >= 0 else 0.0)
+        rear = footprint.rear_m + (margin if direction <= 0 else 0.0)
+        return bool(((u >= -rear) & (u <= front) & (np.abs(v) <= footprint.half_width_m + margin)).any())
+
+    def _walk(self, snapshot, samples, arc, footprint, own_cells, *, full_path_m=None, direction=0,
+              own_pose=None, own_footprint=None) -> Check:
         """Walk the samples; between two samples the midpoint is checked with half
         the interval's motion added (translation + farthest corner x rotation), so
         the continuous sweep is covered, not just the samples (Codex L0b P1)."""
@@ -162,13 +196,23 @@ class DrivePermission:
             checks.append((mid, float(arc[i]), motion / 2))
         for pose, s, pad in checks:
             ramp = min(1.0, s / cfg.envelope_ramp_m) if cfg.envelope_ramp_m > 0 else 1.0
-            cells, outside = footprint_cells(snapshot, pose, footprint, cfg.envelope_offset_m * ramp + pad)
+            margin = cfg.envelope_offset_m * ramp + pad
+            cells, outside = footprint_cells(snapshot, pose, footprint, margin, direction=direction)
             if outside:
                 blocked = "edge"
                 break
-            whole, _ = own_cells
-            if whole:
-                keep = np.fromiter(((int(a), int(b)) not in whole for a, b in cells), bool, len(cells))
+            whole, partial = own_cells
+            if whole or partial:
+                keep = np.ones(len(cells), dtype=bool)
+                for k, (a, b) in enumerate(cells):
+                    key = (int(a), int(b))
+                    if key in whole:
+                        keep[k] = False
+                    elif key in partial and own_pose is not None:
+                        # Partly under the truck now: checked only if this
+                        # sample's footprint reaches into its part outside the
+                        # present outline (Codex checkpoint P1).
+                        keep[k] = self._enters(snapshot, key, own_pose, own_footprint, pose, footprint, margin, direction)
                 cells = cells[keep]
             states = snapshot.state[cells[:, 0], cells[:, 1]]
             if (states == OCCUPIED).any():
@@ -218,7 +262,8 @@ class DrivePermission:
             (out if inside else partial).add((int(a), int(b)))
         return out, partial
 
-    def update(self, snapshot: GridSnapshot, path_ahead, footprint: Footprint, own_footprint: Footprint, *, current_pose) -> Check:
+    def update(self, snapshot: GridSnapshot, path_ahead, footprint: Footprint, own_footprint: Footprint, *,
+               current_pose, direction: int = 0) -> Check:
         """New snapshot: the verified distance along path_ahead (rear-axle poses from the truck on)."""
         poses = np.asarray(path_ahead, dtype=float)
         if poses.ndim != 2 or poses.shape[1] != 3 or not len(poses):
@@ -226,7 +271,8 @@ class DrivePermission:
         samples, arc, total = resample_path(poses, self.config.step_m, self.config.lookahead_m)
         own = self._own_cells(snapshot, current_pose, own_footprint)
         self.snapshot = snapshot
-        self.path_check = self._walk(snapshot, samples, arc, footprint, own, full_path_m=total)
+        self.path_check = self._walk(snapshot, samples, arc, footprint, own, full_path_m=total,
+                                     direction=direction, own_pose=current_pose, own_footprint=own_footprint)
         self._driven_since_m = 0.0
         return self.path_check
 
@@ -258,7 +304,8 @@ class DrivePermission:
         length = cfg.stopping.distance_m(speed_cap_mps) + cfg.step_m
         samples, arc = arc_poses(current_pose, curvature_inv_m, 1 if direction >= 0 else -1, length, cfg.step_m)
         own = self._own_cells(snap, current_pose, own_footprint)
-        estop = self._walk(snap, samples, arc, footprint, own)
+        estop = self._walk(snap, samples, arc, footprint, own, direction=1 if direction >= 0 else -1,
+                           own_pose=current_pose, own_footprint=own_footprint)
         path_left = path.verified_m - self._driven_since_m
         if now_s - estop.oldest_free_s > cfg.evidence_max_age_s or now_s - path.oldest_free_s > cfg.evidence_max_age_s:
             return 0.0, "evidence_stale"

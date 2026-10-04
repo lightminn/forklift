@@ -627,7 +627,7 @@ def evaluate_command(args) -> dict:
             ahead = truth_rear[j : j + max(end, 2)]
             fp = loaded if carried else unloaded
             own_now = loaded if carried else body  # the same outline the grid withholds
-            permission.update(snap, ahead, fp, own_now, current_pose=tuple(tr))
+            permission.update(snap, ahead, fp, own_now, current_pose=tuple(tr), direction=-1 if v < 0 else 1)
             # The steering held by an emergency stop gives the stopping arc.
             kappa = float(np.mean([math.tan(a) / (g["wheelbase_m"] + math.tan(a) * side * g["track_m"] / 2)
                                    for a, side in ((st[0], 1), (st[1], -1))]))
