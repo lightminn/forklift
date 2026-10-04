@@ -750,3 +750,16 @@ def test_remaining_to_goal_counts_down_to_zero_at_arrival():
     pose, history = rollout(tracker, route()[0][0])
     assert history[-1].status == "arrived"
     assert tracker.remaining_to_goal_m() <= tracker.config.position_tolerance_m + 1e-3
+
+
+def test_leg_ahead_runs_from_the_progress_to_the_next_cusp():
+    from forklift_core.control.path_tracking import RearAxlePathTracker, TrackerConfig
+
+    poses = np.array([[0.0, 0, 0], [0.5, 0, 0], [1.0, 0, 0], [0.5, 0, 0], [0.0, 0, 0]])
+    directions = np.array([1, 1, 1, -1, -1])
+    tracker = RearAxlePathTracker(poses, directions, np.zeros(5), TrackerConfig(cruise_speed_mps=0.3))
+    ahead, direction = tracker.leg_ahead()
+    assert direction == 1 and np.allclose(ahead[0], [0, 0, 0]) and np.allclose(ahead[-1], [1.0, 0, 0])
+    tracker._progress = 0.75
+    ahead, direction = tracker.leg_ahead()
+    assert np.allclose(ahead[0], [0.75, 0, 0]) and len(ahead) == 2

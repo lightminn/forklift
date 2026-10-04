@@ -208,6 +208,23 @@ class RearAxlePathTracker:
         """Path length still to drive to the final pose, from current progress."""
         return max(0.0, float(self._distance[-1] - self._progress))
 
+    def leg_ahead(self) -> tuple[np.ndarray, int]:
+        """Rear-axle poses from the current progress to the end of the current
+        leg (the next cusp or the goal), and that leg's direction (+1 / -1).
+
+        For the obstacle layer's drive permission (priority-5 plan D4): a cusp
+        is a stop, so the look-ahead ends there.
+        """
+        end = self._leg_ends[self._leg]
+        k = int(np.clip(np.searchsorted(self._distance, self._progress, side="right") - 1, 0, end - 1))
+        along = float(np.clip((self._progress - self._distance[k]) / self._lengths[k], 0.0, 1.0))
+        start = self._poses[k] + along * (self._poses[k + 1] - self._poses[k])
+        start[2] = self._poses[k, 2] + along * float(
+            np.arctan2(np.sin(self._poses[k + 1, 2] - self._poses[k, 2]), np.cos(self._poses[k + 1, 2] - self._poses[k, 2]))
+        )
+        poses = np.vstack((start, self._poses[k + 1 : end + 1]))
+        return poses, int(self._directions[min(k + 1, end)])
+
     def _overshoot_accepted(
         self, pose: np.ndarray, goal: np.ndarray, endpoint: int, tolerance: float
     ) -> bool:

@@ -190,6 +190,20 @@ def arguments() -> argparse.Namespace:
         "the steering held; the stop is recorded from ground truth and the "
         "run carries on. Measurement runs only.",
     )
+    parser.add_argument(
+        "--obstacle-layer",
+        type=Path,
+        default=None,
+        help="Priority-5 obstacle layer config (config/obstacle_layer.yaml): cast "
+        "the obstacle LiDARs every scan tick, keep the rolling grid and the drive "
+        "permission. Alone it only records what the permission would do.",
+    )
+    parser.add_argument(
+        "--obstacle-act",
+        action="store_true",
+        help="With --obstacle-layer: limit the commanded speed by the drive "
+        "permission in the travel phases (not the docking straights).",
+    )
     parser.add_argument("--pallet-prior", type=Path, default=None)
     parser.add_argument(
         "--observation-waypoints",
@@ -351,6 +365,10 @@ def arguments() -> argparse.Namespace:
         parser.error("--repeat-at-attempt requires --repeat-captures")
     if args.obstacles < 1 or args.max_sim_seconds <= 0:
         parser.error("obstacles and max-sim-seconds must be positive")
+    if args.obstacle_layer is not None and not args.record_slam:
+        parser.error("--obstacle-layer needs --record-slam (the scan tick lives there)")
+    if args.obstacle_act and args.obstacle_layer is None:
+        parser.error("--obstacle-act needs --obstacle-layer")
     from insertion_geometry import (
         assert_pallet_urdf_matches_geometry,
         assert_pallet_urdf_matches_named_boxes,
@@ -751,9 +769,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     )
     from forklift_core.planning import (
         Footprint,
+        FootprintCollisionChecker,
         Rectangle,
         collision_free_pose,
     )
+    from forklift_core.control.drive_permission import arc_poses as ARC_POSES
     from forklift_core.control.rollout import bicycle_rollout
     from forklift_core.planning import Pose2D as PlanningPose
     from forklift_core.planning.pallet_mission import (
@@ -1396,6 +1416,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     video_frames = []
     slam_log = None
     slam = None
+    obstacle = None  # the priority-5 obstacle layer, set up with the scan tick
     # step_world replaces this before the main loop; captures call through it.
     stepper = {"fn": lambda render: world.step(render=render), "tick": 0}
     if args.record_slam:
@@ -2255,6 +2276,97 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             if state["frames"] == 1:
                 snapshot("start")
 
+        obstacle = None
+        if args.obstacle_layer is not None:
+            import obstacle_layer as obstacle_module
+
+            from forklift_core.perception.obstacle_grid import AgeErrorTable
+
+            layer_config = obstacle_module.load_layer_config(args.obstacle_layer)
+            age_table = json.loads(Path(layer_config["odometry_age"]).read_text())
+            obstacle = {
+                "layer": obstacle_module.ObstacleLayer(
+                    layer_config,
+                    hall=scenario.bounds,
+                    error_table=AgeErrorTable(
+                        tuple(age_table["ages_s"]),
+                        tuple(age_table["cumulative_position_m"]),
+                        tuple(age_table["cumulative_yaw_rad"]),
+                    ),
+                    unloaded=geometry.unloaded_footprint,
+                    loaded=geometry.loaded_footprint,
+                    body_front_m=geometry.axle_to_fork_tip_m - geometry.carriage_limit_m,
+                    rear_axle_x_in_base_m=-abs(args.rear_axle_offset_m),
+                    noise_seed=args.seed,
+                ),
+                "version": 0,
+                "applied": None,
+                "scans": [],
+                "ticks": {},
+                "slowed": {},
+                "reasons": {},
+                "events": 0,
+                "unpermitted": [],
+                "min_allowed": {},
+            }
+            state["obstacle_layer"] = {
+                "config": str(args.obstacle_layer),
+                "act": bool(args.obstacle_act),
+                "sensors": [
+                    {"name": sn.name, "xyz_m": sn.xyz_m, "yaw_rad": sn.yaw_rad, "may_clear": sn.may_clear}
+                    for sn in obstacle["layer"].sensors
+                ],
+            }
+
+        def obstacle_scan(stamp: float, base, q) -> None:
+            """Cast the obstacle LiDARs, feed the grid, refresh the path check."""
+            layer = obstacle["layer"]
+            loaded_now = phase in ("lift", "extract", "transport", "lower")
+            prefixes = (planar_lidar.SELF_PREFIX,) + (("/World/Pallet",) if loaded_now else ())
+            started = time.monotonic()
+            raw = {}
+            for sensor in layer.sensors:
+                origin, directions = planar_lidar.laser_rays_world(
+                    base, q, planar_lidar.LaserMount(sensor.xyz_m, sensor.yaw_rad), layer.beam_angles
+                )
+                raw[sensor.name] = planar_lidar.cast_scan_flags(
+                    origin, directions, layer.range_max_m, own_prefixes=prefixes
+                )
+            cast_s = time.monotonic() - started
+            yaw_now, _ = yaw_and_tilt(q)
+            off = abs(args.rear_axle_offset_m)
+            truth_now = (float(base[0]) - off * math.cos(yaw_now), float(base[1]) - off * math.sin(yaw_now), yaw_now)
+            if slam is not None:
+                odom_rear = tuple(float(v) for v in slam["odom_rear"])
+                applied = slam["tracker"].applied
+                correction = tuple(float(v) for v in applied[0]) if applied is not None else (0.0, 0.0, 0.0)
+                current = tuple(float(v) for v in slam_rear(stamp))
+            else:
+                odom_rear, correction, current = truth_now, (0.0, 0.0, 0.0), truth_now
+            if correction != obstacle["applied"]:
+                obstacle["version"] += 1
+                obstacle["applied"] = correction
+            layer.add_scans(stamp, raw, odom_rear=odom_rear, loaded=loaded_now)
+            if phase in trackers:
+                ahead, _ = trackers[phase].leg_ahead()
+            else:
+                ahead = np.array([current])
+            check = layer.refresh(
+                stamp, correction, obstacle["version"], current_pose=current, path_ahead=ahead, loaded=loaded_now
+            )
+            obstacle["scans"].append(
+                {
+                    "stamp_s": float(stamp),
+                    "phase": phase,
+                    "verified_m": check.verified_m,
+                    "blocked": check.blocked,
+                    "own_beams": {n: int(np.count_nonzero(r[2])) for n, r in raw.items()},
+                    "cast_wall_s": cast_s,
+                    "total_wall_s": time.monotonic() - started,
+                    "version": obstacle["version"],
+                }
+            )
+
         def step_world(render: bool) -> None:
             """One physics step and everything that must see every step
             (SLAM plan v3.1): encoders, odometry, the 10 Hz scan by physics
@@ -2307,6 +2419,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             slam_log["laser_pose_world"].append(
                 planar_lidar.laser_pose_2d(now_base, now_q, laser_mount)
             )
+            if obstacle is not None and slam is None:
+                obstacle_scan(stamp_now, now_base, now_q)
             if slam is None:
                 return
             link = slam["module"]
@@ -2369,6 +2483,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 }
             )
             slam["scan_id"] += 1
+            if obstacle is not None:
+                # After this scan's reply: the correction control applies now.
+                obstacle_scan(stamp_now, now_base, now_q)
 
         stepper["fn"] = step_world
         if slam is not None:
@@ -3624,6 +3741,49 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 }
                 transition("complete", t)
                 break
+            if obstacle is not None and phase in trackers and requested_speed != 0.0:
+                steer_now = robot.get_joint_positions()[steers]
+                half_track = args.drive_geometry.track_m / 2
+                kappa = float(
+                    np.mean(
+                        [
+                            math.tan(steer_now[0]) / (args.drive_geometry.wheelbase_m + math.tan(steer_now[0]) * half_track),
+                            math.tan(steer_now[1]) / (args.drive_geometry.wheelbase_m - math.tan(steer_now[1]) * half_track),
+                        ]
+                    )
+                )
+                direction = 1 if requested_speed > 0 else -1
+                allowed, why = obstacle["layer"].limit(
+                    t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
+                    direction=direction, loaded=loaded, cap_mps=abs(requested_speed),
+                )
+                ticks = obstacle["ticks"]
+                ticks[phase] = ticks.get(phase, 0) + 1
+                low = obstacle["min_allowed"]
+                low[phase] = min(low.get(phase, float("inf")), allowed)
+                docking_straight = (phase == "approach" and trackers[phase].remaining_to_goal_m() <= geometry.alignment_straight_m) or (
+                    phase == "transport" and trackers[phase].remaining_to_goal_m() <= geometry.delivery_straight_m
+                )
+                acting = phase in ("observe", "approach", "transport", "return_home") and not docking_straight
+                if abs(requested_speed) > allowed + 1e-9:
+                    obstacle["slowed"][phase] = obstacle["slowed"].get(phase, 0) + 1
+                    key = f"{phase}:{why}"
+                    obstacle["reasons"][key] = obstacle["reasons"].get(key, 0) + 1
+                    if args.obstacle_act and acting:
+                        requested_speed = math.copysign(allowed, requested_speed)
+                # Evaluation only (truth): did a ground-truth obstacle sit in the
+                # steering-held stopping volume while the permission allowed this speed?
+                truth_speed = float(np.dot(velocity[:2], forward))
+                if acting and abs(truth_speed) > 0.05:
+                    stop_len = obstacle["layer"].permission.config.stopping.distance_m(truth_speed)
+                    arc = ARC_POSES(tuple(float(v) for v in truth_rear), kappa, 1 if truth_speed > 0 else -1, stop_len, 0.025)[0]
+                    arc_checker = FootprintCollisionChecker(checked_obstacles, footprint, scenario.bounds)
+                    if any(not arc_checker.free(tuple(pose_), 0.0) for pose_ in arc[1:]):
+                        obstacle["events"] += 1
+                        if allowed >= abs(truth_speed) - 1e-9:
+                            obstacle["unpermitted"].append(
+                                {"time_s": t, "phase": phase, "speed_mps": truth_speed, "allowed_mps": allowed, "reason": why}
+                            )
             estop_holding = estop is not None and estop.update(
                 t=t,
                 phase=phase,
@@ -3753,6 +3913,23 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             }
         )
     finally:
+        if state.get("obstacle_layer") is not None and obstacle is not None:
+            scans_rec = obstacle["scans"]
+            walls = [x["total_wall_s"] for x in scans_rec] or [0.0]
+            state["obstacle_layer"].update(
+                {
+                    "scans": len(scans_rec),
+                    "wall_s_per_scan": {"mean": float(np.mean(walls)), "max": float(np.max(walls))},
+                    "control_ticks": obstacle["ticks"],
+                    "slowed_ticks": obstacle["slowed"],
+                    "slowed_reasons": obstacle["reasons"],
+                    "min_allowed_mps": obstacle["min_allowed"],
+                    "truth_events": obstacle["events"],
+                    "unpermitted_entries": len(obstacle["unpermitted"]),
+                    "unpermitted": obstacle["unpermitted"][:50],
+                }
+            )
+            (args.output / "obstacle_scans.json").write_text(record_json(scans_rec) + "\n")
         if slam is not None:
             # First, so a video shutdown failure cannot lose the SLAM record.
             slam["link"].close()
