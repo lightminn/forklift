@@ -121,6 +121,9 @@ def test_all_runner_planning_calls_use_the_recorded_config(
         travel_config=None,
         # The initial observation loop's ladder pass (earlier, then extended).
         extended=True,
+        # The SLAM observe replan plans to the leg's own target.
+        target=scenario.start_rear,
+        PlanningPose=Pose2D,
     )
     calls = [
         node
@@ -129,7 +132,10 @@ def test_all_runner_planning_calls_use_the_recorded_config(
         and isinstance(node.func, ast.Name)
         and node.func.id in ("plan_observation_leg", "plan_transport")
     ]
+    # Third observation leg call: the SLAM observe replan (online SLAM plan
+    # v3.8, same recorded planner_config, earlier ladder).
     assert sorted(node.func.id for node in calls) == [
+        "plan_observation_leg",
         "plan_observation_leg",
         "plan_observation_leg",
         "plan_transport",
@@ -476,7 +482,11 @@ def test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules():
     assert "add_path_display(stage, replanned, 'Transport'" in branch
     assert "state['planning_wall_s'] = " in branch
     # Stopped: the transport leg alone, same planner config, from the measured rear pose.
-    assert "plan_transport_leg(scenario, PlanningPose(" in branch
+    # Under SLAM after docking the corrected drop (online SLAM plan v3.8).
+    assert (
+        "plan_transport_leg(slam.get('transport_scenario', scenario) if slam is not None else scenario, PlanningPose("
+        in branch
+    )
     assert "planner_config" in branch and "travel_config=travel_config" in branch
     # Same tracker configuration as the leg it replaces.
     assert "trackers[phase].config" in branch.split("RearAxlePathTracker(")[1]

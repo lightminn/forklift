@@ -1722,7 +1722,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             # truck-pallet relation survives the release (S3 seed 1 on a351056:
             # invalid_start against the nominal pallet after a docked drop).
             return_scenario = slam.get("transport_scenario", scenario)
-            if slam["docking"].get("status") == "done":
+            if slam["docking"].get("accepted_any"):
                 frame_change = compose(tuple(after), invert(tuple(before)))
                 site = return_scenario.destination
                 moved_site = compose(frame_change, (site.x_m, site.y_m, site.yaw_rad))
@@ -1733,6 +1733,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     ),
                 )
                 event["pallet_frame_change"] = list(frame_change)
+                slam["return_scenario"] = return_scenario  # later return recoveries too
             replanned = plan_return_leg(
                 return_scenario,
                 start,
@@ -1774,7 +1775,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         if docking["status"] not in ("pending", "armed"):
             return
         full = paths["transport"]
-        prefix = final_straight_prefix(full, geometry.delivery_straight_m)
+        # The current round's stop: 1.5 m, then 0.4 m (Codex 5de6c3a P2).
+        prefix = final_straight_prefix(full, docking.get("keep_m", geometry.delivery_straight_m))
         if prefix is None:
             docking["status"] = "no_final_straight"
             return
@@ -1813,7 +1815,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         path_end = docking["delivery_rear"]
         docking["path_end_vs_prior_m"] = float(math.hypot(path_end[0] - delivery[0], path_end[1] - delivery[1]))
         # A: the estimate at the instant of the scan being matched (Codex P3).
-        estimate = tuple(slam["last_scan_estimate_rear"])
+        # Re-expressed with the correction applied now, so a release between
+        # the scan and this match cannot mix frames (Codex 5de6c3a P2).
+        bx, by, byaw = compose(slam["tracker"].applied[0], slam["last_scan_odom_base"])
+        estimate = (
+            bx - abs(args.rear_axle_offset_m) * math.cos(byaw),
+            by - abs(args.rear_axle_offset_m) * math.sin(byaw),
+            byaw,
+        )
         offset = abs(args.rear_axle_offset_m)
         rear_from_laser = (
             offset + float(laser_mount.xyz_m[0]),
@@ -1870,7 +1879,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 ],
             }
         )
-        docking["status"] = "done" if result.accepted else "fallback"
+        if result.accepted:
+            docking["accepted_any"] = True
+        # A refused second round keeps the first round's valid correction
+        # (Codex 5de6c3a P2): still "done", and its world map W is reused.
+        docking["status"] = "done" if docking.get("accepted_any") else "fallback"
         line_start = compose(goal, (-keep_m, 0.0, 0.0))
         # Delivery corrections of ~10 cm are the point of docking (seed 0: 92 mm),
         # so the box is wider than the insertion one; what makes it safe is the
@@ -1896,6 +1909,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             # impl P1). Without a match the estimate is the best world guess.
             if result.accepted:
                 to_world = compose(compose(delivery, result.relative_rear), invert(estimate))
+                docking["to_world"] = list(to_world)  # the held frame keeps it valid
+            elif docking.get("to_world") is not None:
+                to_world = tuple(docking["to_world"])
             else:
                 to_world = (0.0, 0.0, 0.0)
             swept_clear = all(
@@ -2286,6 +2302,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 slam["last_scan_estimate_rear"] = (
                     bx - off * math.cos(byaw), by - off * math.sin(byaw), byaw
                 )
+                slam["last_scan_odom_base"] = tuple(slam_odom_base())
             try:
                 reply = slam["link"].exchange(
                     link.Scan(
@@ -2590,6 +2607,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     slam_stall_ticks = 0
                     start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))
                     replan_start = time.monotonic()
+                    # After a docking match the transport is held relative to the
+                    # station: a Hybrid A* recovery there would drive a held
+                    # detour in a frame mixed with world obstacles (Codex 5de6c3a
+                    # P2) -- end the run instead.
+                    require(
+                        not (phase == "transport" and slam["docking"].get("accepted_any")),
+                        "transport_recovery_after_docking",
+                    )
                     if phase == "transport":
                         # After docking, the corrected drop (v3.8, Codex P1).
                         replanned = plan_transport_leg(
@@ -2598,7 +2623,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         )
                     else:
                         replanned = plan_return_leg(
-                            scenario, start, return_to_pose, planner_config,
+                            slam.get("return_scenario", scenario), start, return_to_pose, planner_config,
                             geometry=geometry, travel_config=travel_config,
                         )
                     state["stall_replans"].append(
@@ -2660,6 +2685,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         tracking = replace(tracking, status="braking")
                     else:
                         cusp_stop_ticks = 0
+                        require(
+                            not (slam is not None and slam["docking"].get("accepted_any")),
+                            "transport_recovery_after_docking",
+                        )
                         replan_start = time.monotonic()
                         replanned = plan_transport_leg(
                             slam.get("transport_scenario", scenario)
@@ -2768,6 +2797,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         )
                         require(replanned.success, f"observe_replan_failed:{replanned.status}")
                         paths["observe"] = replanned
+                        state["paths"]["observe"] = path_record(replanned)
+                        (args.output / "paths.json").write_text(
+                            record_json(state["paths"], indent=2) + "\n"
+                        )
+                        add_path_display(stage, replanned, "Observe", (0.2, 0.8, 0.8))
                         trackers["observe"] = RearAxlePathTracker(
                             replanned.poses,
                             replanned.directions,

@@ -25,8 +25,9 @@ class RolloutResult:
     position_error_m: float
     yaw_error_rad: float
     time_s: float
-    # Rear-axle poses visited, every 10th step: for a swept-footprint check
-    # (an arrival can still cut a corner -- Codex v3.7 P1).
+    # Rear-axle poses visited at every step, for a swept-footprint check (an
+    # arrival can still cut a corner -- Codex v3.7 P1; sampling every 10th
+    # step missed a 0.1 mm overlap three steps long -- Codex 5de6c3a P2).
     trajectory: tuple = ()
 
 
@@ -46,8 +47,7 @@ def bicycle_rollout(
     steps = int(max_time_s / dt_s)
     visited = []
     for k in range(steps):
-        if k % 10 == 0:
-            visited.append(tuple(float(v) for v in pose))
+        visited.append(tuple(float(v) for v in pose))
         command = tracker.update(pose, speed, dt_s)
         if command.status in ("arrived", "failed"):
             visited.append(tuple(float(v) for v in pose))
