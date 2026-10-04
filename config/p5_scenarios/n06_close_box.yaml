@@ -1,0 +1,3 @@
+# N6 (limit experiment): a box inside the stopping distance. Record the time from first hit to the stop command.
+events:
+  - {id: n6, action: spawn, phase: return_home, after_m: 3.0, ahead_m: 1.45, lateral_m: 0.0, size_m: [0.4, 0.4, 0.5]}

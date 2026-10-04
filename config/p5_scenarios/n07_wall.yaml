@@ -1,0 +1,3 @@
+# N7: a wall across the transport path that cannot be bypassed. Expected: retries, then mission failure.
+events:
+  - {id: n7, action: spawn, phase: transport, after_m: 3.0, ahead_m: 2.5, lateral_m: 0.0, size_m: [0.3, 6.0, 0.6]}
