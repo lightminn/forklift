@@ -1473,7 +1473,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         occupancy = obstacle["layer"].planner_grid(stamp, obstacle["applied"] or (0.0, 0.0, 0.0), obstacle["version"])
         obstacle["plans"].append({"kind": kind, "stamp_s": stamp, "occupied_cells": int(occupancy.occupied.sum())})
         out = {"occupancy": occupancy}
-        if obstacle.get("deadline") is not None and kind in ("observe", None):
+        if obstacle.get("deadline") is not None and kind in ("observe", None, "mission"):
             out["deadline"] = obstacle["deadline"]
         if kind == "observe":
             # Before recognition the pallet is somewhere in the pickup zone; once
@@ -4581,6 +4581,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     "replans": obstacle.get("replans", []),
                     "grid_plans": obstacle.get("plans", []),
                     "live_plans": obstacle.get("live_plans", []),
+                    "mission_replans": obstacle.get("mission_replans", []),
                     "shadow_memory": None if obstacle["layer"].shadow is None else {
                         **obstacle["layer"].shadow.stats,
                         "band_m": obstacle["layer"].shadow.band_m,

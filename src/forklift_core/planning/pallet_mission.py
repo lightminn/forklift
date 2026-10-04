@@ -785,6 +785,7 @@ def plan_transport(
     occupancy=None,
     pickup_obstacle: Rectangle | None = None,
     docking_occupancy=None,
+    deadline=None,
 ) -> MissionPlan:
     """Plan all stages with exact final straight approaches and loaded geometry.
 
@@ -870,6 +871,7 @@ def plan_transport(
             near_bounds,
             approach_config,
             occupancy=occupancy,
+            deadline=deadline,
         ),
     )
     if not approach.success:
@@ -930,6 +932,7 @@ def plan_transport(
             scenario.bounds,
             travel_config,
             occupancy=docking_occupancy if docking_occupancy is not None else occupancy,
+            deadline=deadline,
         ),
     )
     if not transport.success:
@@ -986,6 +989,7 @@ def plan_transport(
             scenario.bounds,
             travel_config,
             occupancy=docking_occupancy if docking_occupancy is not None else occupancy,
+            deadline=deadline,
         ),
     )
     if not return_home.success:
