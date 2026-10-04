@@ -556,8 +556,8 @@ def evaluate_command(args) -> dict:
         )
         grid = ObstacleGrid(grid_cfg)
         permission = DrivePermission(pconfig)
-        # Shadow-band memory (D4 delta 2026-10-05). The first evaluated
-        # snapshot is the first moving instant of observe, i.e. start-up.
+        # Shadow-band memory (D4 delta 2026-10-05); its first snapshot, at the
+        # first scan, is start-up.
         shadow = ShadowMemory(args.shadow_band_m, table, evidence_max_age_s=args.free_age_s) if args.shadow_band_m > 0 else None
         stats = {"events": 0, "unpermitted": [], "moving": {}, "permitted": {}, "free_inside": {}, "scans": 0}
         for k, t in enumerate(scan_stamps[: args.max_scans]):
@@ -610,13 +610,13 @@ def evaluate_command(args) -> dict:
                                            beam_angles, ranges, self_hit, h <= args.clear_max_height_m,
                                            (own_fp.front_m, own_fp.rear_m, own_fp.half_width_m)))
             stats["scans"] += 1
-            if phase not in evaluated_phases:
-                continue
-            v = float(signed_speed[j])
-            if abs(v) < args.moving_mps:
-                continue
             # The correction control would use now: truth o odom^-1 (SLAM error is studied separately).
             tr, od = truth_rear[j], odom[j]
+            own_now = loaded if carried else body  # the same outline the grid withholds
+            v = float(signed_speed[j])
+            evaluated = phase in evaluated_phases and abs(v) >= args.moving_mps
+            if not evaluated and shadow is None:
+                continue
             dyaw = tr[2] - od[2]
             cc, ss = math.cos(dyaw), math.sin(dyaw)
             correction = (tr[0] - (cc * od[0] - ss * od[1]), tr[1] - (ss * od[0] + cc * od[1]), dyaw)
@@ -625,15 +625,18 @@ def evaluate_command(args) -> dict:
             grid.config = window
             snap = grid.snapshot(float(t), correction)
             grid.config = grid_cfg
+            if shadow is not None:
+                # The memory sees every scan, as the runner's does; only the
+                # statistics are filtered (Codex P2).
+                snap = shadow.apply(snap, tuple(tr), own_now)
+            if not evaluated:
+                continue
             # Path ahead = what the truck actually drove next (rear axle).
             seg = np.hypot(*np.diff(truth_rear[j:, :2], axis=0).T)
             s_cum = np.concatenate(([0.0], np.cumsum(seg)))
             end = int(np.searchsorted(s_cum, pconfig.lookahead_m)) + 1
             ahead = truth_rear[j : j + max(end, 2)]
             fp = loaded if carried else unloaded
-            own_now = loaded if carried else body  # the same outline the grid withholds
-            if shadow is not None:
-                snap = shadow.apply(snap, tuple(tr), own_now)
             permission.update(snap, ahead, fp, own_now, current_pose=tuple(tr), direction=-1 if v < 0 else 1)
             # The steering held by an emergency stop gives the stopping arc.
             kappa = float(np.mean([math.tan(a) / (g["wheelbase_m"] + math.tan(a) * side * g["track_m"] / 2)

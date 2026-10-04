@@ -4211,7 +4211,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             _, own_ = obstacle["layer"].footprints(loaded)
                             reach = obstacle["layer"].shadow.band_m + 0.05 * math.sqrt(2)
                             grown = Footprint(own_.front_m + reach, own_.rear_m + reach, own_.half_width_m + reach)
-                            if not FootprintCollisionChecker([rect], grown, scenario.bounds).free(tuple(float(v) for v in truth_rear)):
+                            # Geometry only: unbounded hall, so a grown outline past
+                            # the hall edge is not taken for an overlap (Codex P2).
+                            from forklift_core.planning.geometry import Bounds as NBounds
+
+                            open_hall = NBounds(-1e6, 1e6, -1e6, 1e6)
+                            if not FootprintCollisionChecker([rect], grown, open_hall).free(tuple(float(v) for v in truth_rear)):
                                 new_obstacles["band_overlaps"].append({"time_s": t, "event": oid})
                     elif action[0] == "remove":
                         oid = action[1]
