@@ -94,7 +94,9 @@ def test_the_newest_observation_wins_and_old_free_is_not_evidence():
     # A second later the newer scan is too old to count as free: unknown, while
     # its wall stays occupied until occupied_max_age_s.
     snap = grid.snapshot(1.5, (0.0, 0.0, 0.0))
-    assert cell(snap, 2.0, 0.0) == UNKNOWN  # cleared, but no longer evidence
+    # Nothing fresh covers it any more: the old box mark is back (conservative --
+    # older scans only mark), and nothing there is FREE.
+    assert cell(snap, 2.0, 0.0) == OCCUPIED
     assert cell(snap, 1.0, 0.0) == UNKNOWN
     assert cell(snap, 4.0, 0.0) == OCCUPIED
     snap = grid.snapshot(3.6, (0.0, 0.0, 0.0))
@@ -200,22 +202,35 @@ def test_a_tilted_beam_neither_marks_nor_clears_past_its_band_limit():
     assert cell(snap, 2.0, 0.0) == UNKNOWN and cell(snap, 3.0, 0.0) == UNKNOWN
 
 
-def test_hull_closing_fills_a_pocket_end_to_end():
-    from forklift_core.perception.obstacle_grid import _hull_fill
+def test_line_closing_fills_a_pocket_end_to_end():
+    from forklift_core.perception.obstacle_grid import _line_close
 
     occ = np.zeros((40, 40), dtype=bool)
     occ[10:30, 10:12] = True  # two long blocks 0.30 m (6 cells) apart, a pocket between
     occ[10:30, 18:20] = True
-    filled = _hull_fill(occ, 5.0)
+    filled = _line_close(occ, 10)
     assert filled[10:30, 10:20].all()  # every pocket cell, ends included (Codex: 10 cells were left)
-    assert not filled[:, 25:].any()
+    assert not filled[:, 25:].any() and not filled[:8].any()
 
 
-def test_far_apart_objects_are_not_joined():
-    from forklift_core.perception.obstacle_grid import _hull_fill
+def test_far_apart_objects_and_wide_gaps_stay_open():
+    from forklift_core.perception.obstacle_grid import _line_close
 
     occ = np.zeros((60, 60), dtype=bool)
     occ[5:10, 5:10] = True
     occ[5:10, 40:45] = True  # 30 cells (1.5 m) away
-    filled = _hull_fill(occ, 5.0)
+    occ[30:50, 5:7] = True
+    occ[30:50, 19:21] = True  # 12 empty cells (0.6 m) between: a gap wider than 0.5 m
+    filled = _line_close(occ, 10)
     assert not filled[5:10, 15:35].any()
+    assert not filled[30:50, 8:18].any()
+
+
+def test_an_l_shaped_group_does_not_fill_its_open_corner():
+    from forklift_core.perception.obstacle_grid import _line_close
+
+    occ = np.zeros((60, 60), dtype=bool)
+    occ[10:12, 10:50] = True  # one arm
+    occ[10:50, 10:12] = True  # the other
+    filled = _line_close(occ, 10)
+    assert not filled[25:45, 25:45].any()  # a convex hull would fill this

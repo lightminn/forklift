@@ -17,10 +17,10 @@ scan clearing before marking):
             each hit beam instead.
   FREE      a cell a beam crossed, only from scans no older than
             free_max_age_s whose r stays within free_r_cap_m, shrunk by that
-            r at every edge to non-free cells of the same scan. An older scan
-            that saw through a cell still clears older marks there (to
-            UNKNOWN): a removed box does not come back when the scan that saw
-            it gone ages past free_max_age_s.
+            r at every edge to non-free cells of the same scan. Older scans
+            only mark: a box seen gone stays FREE while it is seen, and its
+            old marks return as OCCUPIED (not UNKNOWN) once nothing fresh
+            covers the cell, until they age out.
   UNKNOWN   everything else, including cells only an older scan saw free.
 The planner reads OCCUPIED (unknown is free to it); the drive permission
 needs FREE (plan D4).
@@ -181,6 +181,37 @@ def _reach_offsets(radius_cells: float) -> np.ndarray:
     return np.column_stack((di[keep], dj[keep]))
 
 
+def _fill_rows(occ: np.ndarray, max_gap: int) -> np.ndarray:
+    """Cells lying between two occupied cells of the same row at most max_gap empty cells apart."""
+    n = occ.shape[1]
+    idx = np.arange(n)[None, :]
+    last = np.maximum.accumulate(np.where(occ, idx, -(10**9)), axis=1)
+    nxt = np.minimum.accumulate(np.where(occ, idx, 10**9)[:, ::-1], axis=1)[:, ::-1]
+    return ~occ & (nxt - last - 1 <= max_gap) & (last >= 0) & (nxt < n)
+
+
+def _line_close(occupied: np.ndarray, max_gap: int) -> np.ndarray:
+    """occupied plus every gap of at most max_gap cells along rows, columns and both diagonals."""
+    out = occupied.copy()
+    if not occupied.any() or max_gap <= 0:
+        return out
+    out |= _fill_rows(occupied, max_gap)
+    out |= _fill_rows(occupied.T, max_gap).T
+    nx, ny = occupied.shape
+    for flip in (False, True):
+        a = occupied[:, ::-1] if flip else occupied
+        # Shear so that each diagonal becomes a row: cell (i, j) -> (i + j, i).
+        sheared = np.zeros((nx + ny - 1, nx), dtype=bool)
+        ii, jj = np.nonzero(np.ones_like(a))
+        sheared[ii + jj, ii] = a[ii, jj]
+        valid = np.zeros_like(sheared)
+        valid[ii + jj, ii] = True
+        filled = _fill_rows(sheared, max_gap) & valid
+        back = filled[ii + jj, ii].reshape(a.shape)
+        out |= back[:, ::-1] if flip else back
+    return out
+
+
 def _components(mask: np.ndarray) -> np.ndarray:
     """8-connected component labels of mask (-1 outside), by min propagation."""
     nx, ny = mask.shape
@@ -313,108 +344,129 @@ class ObstacleGrid:
         res = cfg.resolution_m
         newest: dict = {}
         used = 0
+        # Older scans only mark (one vectorised pass); the fresh ones, which alone
+        # give FREE evidence, then clear and mark in time order, so the newest
+        # observation of a cell wins among them and over every older mark. An
+        # older scan no longer clears even older marks: they stay OCCUPIED until
+        # occupied_max_age_s instead of becoming UNKNOWN -- conservative, and the
+        # planner and permission treat both as not free.
+        old_x, old_y, old_r = [], [], []
+        fresh = []
         for scan in self.scans:
             age = now_s - scan.stamp_s
             if age < -1e-9:
                 continue  # measured after the snapshot instant
             used += 1
             newest[scan.sensor] = max(newest.get(scan.sensor, -np.inf), scan.stamp_s)
-            rear_map = compose(map_from_odom, scan.odom_rear)
-            laser = compose(rear_map, scan.laser_in_rear)
-            ranges = np.asarray(scan.ranges_m, dtype=float)
-            angles = np.asarray(scan.angles_rad, dtype=float) + laser[2]
-            usable = ~np.asarray(scan.self_hit, dtype=bool)
-            limit = (
-                np.asarray(scan.limit_m, dtype=float) if scan.limit_m is not None else np.full(len(ranges), np.inf)
-            )
-            cos_a, sin_a = np.cos(angles), np.sin(angles)
-            # -- clearing: a newer scan that saw through a cell removes older
-            # marks there; only a fresh one also makes it FREE evidence.
-            r_free = self.radius_m(age, cfg.free_rho_m)
-            if r_free is not None and scan.may_clear:
-                finite = np.isfinite(ranges)
-                clear_to = np.where(
-                    ranges == np.inf,
-                    cfg.max_clear_m,
-                    np.where(finite, np.minimum(ranges, cfg.max_mark_m), 0.0),
-                )
-                clear_to = np.where(usable, np.minimum(np.minimum(clear_to, cfg.max_clear_m), limit), 0.0)
-                # Hit beams stop short of the hit by the range error bound and a
-                # cell: a beam that reads long must not clear the surface it hit.
-                clear_to = np.where(
-                    finite & (ranges <= cfg.max_mark_m), clear_to - cfg.sensor_bound_m - res, clear_to
-                )
-                raw = self._ray_mask(laser, cos_a, sin_a, np.maximum(clear_to, 0.0))
-                # Support for the shrink: every cell the body may touch is not an
-                # external obstacle. Withheld from FREE: only cells wholly inside
-                # the body (centre inside it shrunk by a half diagonal) -- a subset
-                # of the cells the drive permission exempts (wholly inside), so
-                # nothing it checks is left unknown by this rule (Codex L0b P1).
-                own = self._rect_mask(rear_map, scan.own_footprint, grow_m=cfg.half_diagonal_m) if scan.own_footprint else None
-                inside = self._rect_mask(rear_map, scan.own_footprint, grow_m=-cfg.half_diagonal_m) if scan.own_footprint else None
-                support = raw | own if own is not None else raw
-                # Distance of each cell centre from the rear axle at the scan.
-                gx = cfg.x_min_m + (np.arange(nx) + 0.5) * res
-                gy = cfg.y_min_m + (np.arange(ny) + 0.5) * res
-                rho = np.hypot(gx[:, None] - rear_map[0], gy[None, :] - rear_map[1])
-                lower = 0.0
-                for edge in cfg.rho_bands_m:
-                    band = (rho >= lower) & (rho < edge)
-                    lower = edge
-                    if not (band & raw).any():
-                        continue
-                    # Sized for the oldest age this evidence may still be used
-                    # at (free_max_age_s), so it stays valid while it is used
-                    # between snapshots (Codex L0 P1).
-                    r_band = self.radius_m(max(age, cfg.free_max_age_s), edge, sensor=False)
-                    if r_band is None:
-                        continue
-                    fresh = age <= cfg.free_max_age_s and r_band <= cfg.free_r_cap_m
-                    eroded = _erode(support, r_band / res) & raw & band
-                    if inside is not None:
-                        eroded &= ~inside
-                    if fresh:
-                        state[eroded] = FREE
-                        free_stamp[eroded] = scan.stamp_s
-                    else:
-                        state[eroded & (state == OCCUPIED)] = UNKNOWN
-                # Beyond the last band: clearing of older marks only.
-                beyond = raw & (rho >= lower)
-                state[beyond & (state == OCCUPIED)] = UNKNOWN
-            # -- marking
-            r_occ = self.radius_m(age, 0.0)
-            if r_occ is None:
+            geo = self._geometry(scan, map_from_odom)
+            if age <= cfg.free_max_age_s:
+                fresh.append((scan, age, geo))
                 continue
-            hit = (
-                usable & np.isfinite(ranges) & (ranges >= cfg.range_min_m) & (ranges <= cfg.max_mark_m)
-                & (ranges <= limit)
-            )
-            if hit.any():
-                px = laser[0] + ranges[hit] * cos_a[hit]
-                py = laser[1] + ranges[hit] * sin_a[hit]
-                rho = np.hypot(px - rear_map[0], py - rear_map[1])
-                _, psi = cfg.error.at(age)
-                radii = r_occ + 2 * rho * np.sin(psi / 2)
-                self._mark_disks(state, px, py, radii)
-            free_stamp[state == OCCUPIED] = np.nan
-            near = usable & ((ranges == -np.inf) | (np.isfinite(ranges) & (ranges < cfg.range_min_m)))
-            if near.any():
-                steps = np.linspace(0.0, cfg.range_min_m, max(2, int(ceil(cfg.range_min_m / (res / 2))) + 1))
-                px = (laser[0] + np.outer(cos_a[near], steps)).ravel()
-                py = (laser[1] + np.outer(sin_a[near], steps)).ravel()
-                self._mark_disks(state, px, py, np.full(px.shape, r_occ))
+            marks = self._marks(scan, age, geo)
+            if marks is not None:
+                old_x.append(marks[0]), old_y.append(marks[1]), old_r.append(marks[2])
+        if old_x:
+            self._mark_disks(state, np.concatenate(old_x), np.concatenate(old_y), np.concatenate(old_r))
+        for scan, age, geo in fresh:
+            if scan.may_clear:
+                self._clear(scan, age, geo, state, free_stamp)
+            marks = self._marks(scan, age, geo)
+            if marks is not None:
+                self._mark_disks(state, *marks)
                 free_stamp[state == OCCUPIED] = np.nan
         if cfg.close_gap_m > 0:
             # A low plane sees a pallet as blocks with gaps; its deck and load are
-            # still there. Occupied cells less than 2 * close_gap_m apart form one
-            # object and its convex hull is filled, so neither a pocket nor its
-            # open ends stay FREE (Codex design P1: a disk closing left the ends).
-            state[_hull_fill(state == OCCUPIED, cfg.close_gap_m / res)] = OCCUPIED
+            # still there. Along rows, columns and both diagonals, every cell
+            # between two occupied cells at most 2 * close_gap_m apart is filled:
+            # a pocket is flanked across its width all along, ends included
+            # (Codex design P1: a disk closing left the ends), and unlike a convex
+            # hull no concave open area around a long group is filled.
+            state[_line_close(state == OCCUPIED, int(round(2 * cfg.close_gap_m / res)))] = OCCUPIED
         free_stamp[state != FREE] = np.nan
         return GridSnapshot(
             state, free_stamp, now_s, tuple(float(v) for v in map_from_odom), correction_version, used, newest,
             cfg.x_min_m, cfg.y_min_m, res,
         )
+
+    def _geometry(self, scan, map_from_odom):
+        rear_map = compose(map_from_odom, scan.odom_rear)
+        laser = compose(rear_map, scan.laser_in_rear)
+        ranges = np.asarray(scan.ranges_m, dtype=float)
+        angles = np.asarray(scan.angles_rad, dtype=float) + laser[2]
+        usable = ~np.asarray(scan.self_hit, dtype=bool)
+        limit = np.asarray(scan.limit_m, dtype=float) if scan.limit_m is not None else np.full(len(ranges), np.inf)
+        return rear_map, laser, ranges, np.cos(angles), np.sin(angles), usable, limit
+
+    def _marks(self, scan, age, geo):
+        """(x, y, radius) of every OCCUPIED disk this scan places, or None."""
+        cfg = self.config
+        rear_map, laser, ranges, cos_a, sin_a, usable, limit = geo
+        r_occ = self.radius_m(age, 0.0)
+        if r_occ is None:
+            return None
+        xs, ys, rs = [], [], []
+        hit = (
+            usable & np.isfinite(ranges) & (ranges >= cfg.range_min_m) & (ranges <= cfg.max_mark_m)
+            & (ranges <= limit)
+        )
+        if hit.any():
+            px = laser[0] + ranges[hit] * cos_a[hit]
+            py = laser[1] + ranges[hit] * sin_a[hit]
+            rho = np.hypot(px - rear_map[0], py - rear_map[1])
+            _, psi = cfg.error.at(age)
+            xs.append(px), ys.append(py), rs.append(r_occ + 2 * rho * np.sin(psi / 2))
+        near = usable & ((ranges == -np.inf) | (np.isfinite(ranges) & (ranges < cfg.range_min_m)))
+        if near.any():
+            res = cfg.resolution_m
+            steps = np.linspace(0.0, cfg.range_min_m, max(2, int(ceil(cfg.range_min_m / (res / 2))) + 1))
+            px = (laser[0] + np.outer(cos_a[near], steps)).ravel()
+            py = (laser[1] + np.outer(sin_a[near], steps)).ravel()
+            xs.append(px), ys.append(py), rs.append(np.full(px.shape, r_occ))
+        if not xs:
+            return None
+        return np.concatenate(xs), np.concatenate(ys), np.concatenate(rs)
+
+    def _clear(self, scan, age, geo, state, free_stamp):
+        """FREE where this fresh scan's beams passed, shrunk by its error radius."""
+        cfg = self.config
+        nx, ny = cfg.shape
+        res = cfg.resolution_m
+        rear_map, laser, ranges, cos_a, sin_a, usable, limit = geo
+        finite = np.isfinite(ranges)
+        clear_to = np.where(ranges == np.inf, cfg.max_clear_m, np.where(finite, np.minimum(ranges, cfg.max_mark_m), 0.0))
+        clear_to = np.where(usable, np.minimum(np.minimum(clear_to, cfg.max_clear_m), limit), 0.0)
+        # Hit beams stop short of the hit by the range error bound and a cell:
+        # a beam that reads long must not clear the surface it hit.
+        clear_to = np.where(finite & (ranges <= cfg.max_mark_m), clear_to - cfg.sensor_bound_m - res, clear_to)
+        raw = self._ray_mask(laser, cos_a, sin_a, np.maximum(clear_to, 0.0))
+        if not raw.any():
+            return
+        # Support for the shrink: every cell the body may touch is not an
+        # external obstacle. Withheld from FREE: only cells wholly inside the
+        # body (centre inside it shrunk by a half diagonal) -- a subset of the
+        # cells the drive permission exempts (Codex L0b P1).
+        own = self._rect_mask(rear_map, scan.own_footprint, grow_m=cfg.half_diagonal_m) if scan.own_footprint else None
+        inside = self._rect_mask(rear_map, scan.own_footprint, grow_m=-cfg.half_diagonal_m) if scan.own_footprint else None
+        support = raw | own if own is not None else raw
+        gx = cfg.x_min_m + (np.arange(nx) + 0.5) * res
+        gy = cfg.y_min_m + (np.arange(ny) + 0.5) * res
+        rho = np.hypot(gx[:, None] - rear_map[0], gy[None, :] - rear_map[1])
+        lower = 0.0
+        for edge in cfg.rho_bands_m:
+            band = (rho >= lower) & (rho < edge)
+            lower = edge
+            if not (band & raw).any():
+                continue
+            # Sized for the oldest age this evidence may still be used at
+            # (free_max_age_s), so it stays valid between snapshots (Codex L0 P1).
+            r_band = self.radius_m(max(age, cfg.free_max_age_s), edge, sensor=False)
+            if r_band is None or r_band > cfg.free_r_cap_m:
+                continue
+            eroded = _erode(support, r_band / res) & raw & band
+            if inside is not None:
+                eroded &= ~inside
+            state[eroded] = FREE
+            free_stamp[eroded] = scan.stamp_s
 
     def _rect_mask(self, rear, footprint, *, grow_m: float) -> np.ndarray:
         """Cells whose centre lies inside the footprint rectangle grown by grow_m
