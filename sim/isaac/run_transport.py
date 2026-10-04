@@ -1705,7 +1705,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "replanned": False,
         }
         slam["holds"].append(event)
-        if leg not in trackers or (jump_m <= 0.02 and abs(jump_rad) <= 0.02):
+        # After an accepted docking match the withdraw (and so the return's
+        # start) has moved: the return is replanned whatever the jump (Codex
+        # 8428113 P2: a 0 jump left the old return start 366 mm away).
+        docked_return = leg == "return_home" and slam["docking"].get("accepted_any")
+        if leg not in trackers or (
+            jump_m <= 0.02 and abs(jump_rad) <= 0.02 and not docked_return
+        ):
             if leg == "transport":
                 arm_docking()
             return
