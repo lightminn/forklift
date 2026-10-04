@@ -660,7 +660,7 @@ def evaluate_command(args) -> dict:
             s_cum = np.concatenate(([0.0], np.cumsum(seg)))
             end = int(np.searchsorted(s_cum, pconfig.lookahead_m)) + 1
             ahead = truth_rear[j : j + max(end, 2)]
-            fp = loaded if carried else unloaded_shape
+            fp = loaded if carried else (unloaded_shape if args.shape == "parts" else unloaded)
             permission.update(snap, ahead, fp, own_now, current_pose=tuple(tr), direction=-1 if v < 0 else 1)
             # The steering held by an emergency stop gives the stopping arc.
             kappa = float(np.mean([math.tan(a) / (g["wheelbase_m"] + math.tan(a) * side * g["track_m"] / 2)
@@ -800,6 +800,7 @@ def main() -> None:
     e.add_argument("--free-min-width-m", type=float, default=0.0)
     e.add_argument("--shadow-band-m", type=float, default=0.0)
     e.add_argument("--taper-m", type=float, default=0.0)
+    e.add_argument("--shape", choices=("hull", "parts"), default="hull")
     e.add_argument("--inject-every-m", type=float, default=0.0)
     e.add_argument("--projection-top-m", type=float, default=1.05)
     e.add_argument("--dump-at", type=int, default=None)

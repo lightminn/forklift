@@ -135,7 +135,12 @@ class ObstacleLayer:
         # Unloaded, the permission checks the body and the fork blades (rear-axle
         # frame (x0, x1, y0, y1)), not their hull: an object between the blades
         # is met only by the body's front face, which the body part checks (D4).
-        self.unloaded_shape = unloaded if not blades_rear_m else (
+        # The planner checks the hull; checking the same hull keeps the truck
+        # out of poses the planner cannot start from (L3b v23: an object
+        # beside a blade, inside the hull, made every replan invalid_start).
+        # permission.shape: parts checks the body and blades instead.
+        use_parts = str(p.get("shape", "hull")) == "parts"
+        self.unloaded_shape = unloaded if not (blades_rear_m and use_parts) else (
             [(self.body, 0.0, 0.0)] + [
                 (Footprint((x1 - x0) / 2, (x1 - x0) / 2, (y1 - y0) / 2), (y0 + y1) / 2, (x0 + x1) / 2)
                 for x0, x1, y0, y1 in blades_rear_m
