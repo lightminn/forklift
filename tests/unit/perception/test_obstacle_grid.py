@@ -251,3 +251,19 @@ def test_same_instant_sensors_shrink_together_so_each_covers_the_others_shadow()
     both.add_scan(make(own_a, "a"))
     both.add_scan(make(own_b, "b"))
     assert cell(both.snapshot(0.05, (0.0, 0.0, 0.0)), 2.0, 0.02) == FREE
+
+
+def test_a_free_strip_narrower_than_the_minimum_width_is_not_free():
+    # A 0.3 m tunnel between two long walls, seen straight through.
+    ranges = np.full(len(ANGLES), np.inf)
+    side = np.abs(np.sin(ANGLES)) > 1e-9
+    for y0 in (-0.2, 0.2):
+        with np.errstate(divide="ignore"):
+            dist = np.where(side, y0 / np.where(side, np.sin(ANGLES), 1.0), np.inf)
+        hit = side & (dist > 0) & (np.cos(ANGLES) > 0) & (dist * np.cos(ANGLES) > 2.0) & (dist * np.cos(ANGLES) < 4.0)
+        ranges = np.where(hit, np.minimum(ranges, dist), ranges)
+    narrow = ObstacleGrid(config(free_min_width_m=0.5))
+    narrow.add_scan(scan(0.0, ranges))
+    snap = narrow.snapshot(0.05, (0.0, 0.0, 0.0))
+    assert cell(snap, 3.0, 0.0) != FREE  # inside the tunnel
+    assert cell(snap, 1.0, 0.0) == FREE  # open floor before it

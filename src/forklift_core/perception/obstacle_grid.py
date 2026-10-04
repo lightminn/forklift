@@ -89,6 +89,7 @@ class GridConfig:
     free_rho_m: float = 4.0  # free evidence only within this distance of the rear axle
     rho_bands_m: tuple[float, ...] = (1.5, 2.5, 3.25, 4.0)  # free shrink computed per band edge
     close_gap_m: float = 0.0  # fill gaps in the occupied cells narrower than twice this (0: off)
+    free_min_width_m: float = 0.0  # FREE only where a disk this wide fits in free space or the truck (0: off)
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -372,7 +373,10 @@ class ObstacleGrid:
         # not shrunk away by the other's shadow (the first L3b stops: a front
         # corner both corner LiDARs saw).
         groups: dict = {}
+        latest_own = None
         for scan, age, geo in fresh:
+            if scan.own_footprint is not None:
+                latest_own = (geo[0], scan.own_footprint)
             groups.setdefault(scan.stamp_s, []).append((scan, age, geo))
         for stamp in sorted(groups):
             group = groups[stamp]
@@ -392,6 +396,19 @@ class ObstacleGrid:
             # (Codex design P1: a disk closing left the ends), and unlike a convex
             # hull no concave open area around a long group is filled.
             state[_line_close(state == OCCUPIED, int(round(2 * cfg.close_gap_m / res)))] = OCCUPIED
+        if cfg.free_min_width_m > 0 and (state == FREE).any():
+            # A pocket a beam ran through is a free strip narrower than any truck;
+            # if a flank was hidden, closing could not fill it. FREE survives only
+            # where a disk free_min_width_m wide fits in free space -- the truck's
+            # own outline counts as room, so the strip along its side survives.
+            free = state == FREE
+            support = free.copy()
+            if latest_own is not None:
+                support |= self._rect_mask(latest_own[0], latest_own[1], grow_m=cfg.half_diagonal_m)
+            radius = cfg.free_min_width_m / 2 / res
+            disk = _disk_offsets(radius)
+            opened = _dilate(_erode(support, radius, offsets=disk), radius) & free
+            state[free & ~opened] = UNKNOWN
         free_stamp[state != FREE] = np.nan
         return GridSnapshot(
             state, free_stamp, now_s, tuple(float(v) for v in map_from_odom), correction_version, used, newest,

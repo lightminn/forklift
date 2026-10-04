@@ -24,6 +24,8 @@ grid:
   window_m: 6.0
   # Low planes see storage pallets as blocks: link occupied cells < 0.5 m apart and fill their hull.
   close_gap_m: 0.25
+  # A free strip no 0.5 m disk fits in (a pocket tunnel with a hidden flank) is not FREE.
+  free_min_width_m: 0.5
 permission:
   latency_s: 0.15
   decel_mps2: 1.5

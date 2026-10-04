@@ -83,6 +83,7 @@ class ObstacleLayer:
             free_max_age_s=float(g["free_max_age_s"]), occupied_max_age_s=float(g["occupied_max_age_s"]),
             sensor_bound_m=self.noise_cut_m, free_r_cap_m=float(g["free_r_cap_m"]),
             free_rho_m=float(g["free_rho_m"]), close_gap_m=float(g.get("close_gap_m", 0.0)),
+            free_min_width_m=float(g.get("free_min_width_m", 0.0)),
         )
         self.grid = ObstacleGrid(self.grid_config)
         p = config["permission"]
