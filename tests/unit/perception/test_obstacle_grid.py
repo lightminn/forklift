@@ -169,3 +169,20 @@ def test_cells_beside_the_body_can_be_free_and_under_it_cannot():
     snap = grid.snapshot(0.05, (0.0, 0.0, 0.0))
     assert cell(snap, 0.2, 0.0) == UNKNOWN  # under the body
     assert cell(snap, 0.2, 0.42) == FREE  # just beside it
+
+
+def test_closing_fills_a_pocket_narrower_than_twice_the_gap_and_wins_over_free():
+    # Two blocks 0.3 m apart with free space seen between them (a pallet pocket).
+    ranges = np.full(len(ANGLES), np.inf)
+    for y0 in (-0.35, 0.35):
+        sel = np.abs(np.tan(ANGLES) * 3.0 - y0) < 0.1
+        sel &= np.cos(ANGLES) > 0
+        ranges[sel] = 3.0 / np.cos(ANGLES[sel])
+    open_grid = ObstacleGrid(config())
+    open_grid.add_scan(scan(0.0, ranges))
+    assert cell(open_grid.snapshot(0.05, (0.0, 0.0, 0.0)), 3.0, 0.0) != OCCUPIED
+    closed_grid = ObstacleGrid(config(close_gap_m=0.25))
+    closed_grid.add_scan(scan(0.0, ranges))
+    snap = closed_grid.snapshot(0.05, (0.0, 0.0, 0.0))
+    assert cell(snap, 3.0, 0.0) == OCCUPIED
+    assert cell(snap, 1.5, 0.0) == FREE  # open floor in front stays free

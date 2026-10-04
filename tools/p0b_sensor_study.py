@@ -401,7 +401,7 @@ def evaluate_command(args) -> dict:
         grid_cfg = GridConfig(
             hall["x_min_m"], hall["x_max_m"], hall["y_min_m"], hall["y_max_m"], table,
             free_max_age_s=args.free_age_s, occupied_max_age_s=args.occupied_age_s,
-            free_r_cap_m=args.free_r_cap_m, free_rho_m=args.free_rho_m,
+            free_r_cap_m=args.free_r_cap_m, free_rho_m=args.free_rho_m, close_gap_m=args.close_gap_m,
         )
         grid = ObstacleGrid(grid_cfg)
         permission = DrivePermission(pconfig)
@@ -576,6 +576,7 @@ def main() -> None:
     e.add_argument("--noise-seed", type=int, default=7)
     e.add_argument("--max-scans", type=int, default=None)
     e.add_argument("--clear-max-height-m", type=float, default=0.15)
+    e.add_argument("--close-gap-m", type=float, default=0.0)
     e.add_argument("--dump-at", type=int, default=None)
     e.add_argument("--dump-path", type=Path, default=Path("p0b_dump.npz"))
     e.add_argument("--output", type=Path)

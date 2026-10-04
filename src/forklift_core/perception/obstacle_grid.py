@@ -88,6 +88,7 @@ class GridConfig:
     free_r_cap_m: float = 0.20
     free_rho_m: float = 4.0  # free evidence only within this distance of the rear axle
     rho_bands_m: tuple[float, ...] = (1.5, 2.5, 3.25, 4.0)  # free shrink computed per band edge
+    close_gap_m: float = 0.0  # fill gaps in the occupied cells narrower than twice this (0: off)
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -176,12 +177,26 @@ def _reach_offsets(radius_cells: float) -> np.ndarray:
     return np.column_stack((di[keep], dj[keep]))
 
 
-def _erode(mask: np.ndarray, radius_cells: float) -> np.ndarray:
-    """Cells of mask such that every point within radius_cells of any point of
-    the cell lies in a mask cell."""
+def _dilate(mask: np.ndarray, radius_cells: float) -> np.ndarray:
+    """Cells whose centre is within radius_cells of a mask cell's centre."""
     out = mask.copy()
     nx, ny = mask.shape
-    offsets = _reach_offsets(max(radius_cells, 0.0))
+    offsets = _disk_offsets(radius_cells)
+    span = int(np.abs(offsets).max()) if len(offsets) else 0
+    big = np.zeros((nx + 2 * span, ny + 2 * span), dtype=bool)
+    big[span : span + nx, span : span + ny] = mask
+    for di, dj in offsets:
+        out |= big[span + di : span + di + nx, span + dj : span + dj + ny]
+    return out
+
+
+def _erode(mask: np.ndarray, radius_cells: float, *, offsets=None) -> np.ndarray:
+    """Cells of mask such that every point within radius_cells of any point of
+    the cell lies in a mask cell (or, with offsets, every listed neighbour is in mask)."""
+    out = mask.copy()
+    nx, ny = mask.shape
+    if offsets is None:
+        offsets = _reach_offsets(max(radius_cells, 0.0))
     span = int(np.abs(offsets).max())
     big = np.zeros((nx + 2 * span, ny + 2 * span), dtype=bool)
     big[span : span + nx, span : span + ny] = mask
@@ -312,6 +327,15 @@ class ObstacleGrid:
                 py = (laser[1] + np.outer(sin_a[near], steps)).ravel()
                 self._mark_disks(state, px, py, np.full(px.shape, r_occ))
                 free_stamp[state == OCCUPIED] = np.nan
+        if cfg.close_gap_m > 0:
+            # A low plane sees a pallet or a cart as blocks with gaps; the deck or
+            # load above is still there. Gaps narrower than the truck can use are
+            # closed (dilate, then erode the dilation) and win over FREE.
+            occ = state == OCCUPIED
+            radius = cfg.close_gap_m / res
+            closed = _erode(_dilate(occ, radius), radius, offsets=_disk_offsets(radius))
+            filled = closed & ~occ
+            state[filled] = OCCUPIED
         free_stamp[state != FREE] = np.nan
         return GridSnapshot(
             state, free_stamp, now_s, tuple(float(v) for v in map_from_odom), correction_version, used, newest,
