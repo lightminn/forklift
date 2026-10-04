@@ -128,6 +128,7 @@ def test_all_runner_planning_calls_use_the_recorded_config(
         grid_world=lambda sc: sc,
         grid_kwargs=lambda *a, **k: {},
         start=scenario.start_rear,
+        coordinates=(scenario.start_rear.x_m, scenario.start_rear.y_m, scenario.start_rear.yaw_rad),
     )
     calls = [
         node
@@ -139,8 +140,10 @@ def test_all_runner_planning_calls_use_the_recorded_config(
     # Third observation leg call: the SLAM observe replan (online SLAM plan
     # v3.8, same recorded planner_config, earlier ladder); fourth and fifth:
     # the priority-5 obstacle replan of the same leg, and its zero-clearance
-    # retry from a start inside the clearance.
+    # retry from a start inside the clearance; sixth: the other observation
+    # candidates tried when that leg stays blocked.
     assert sorted(node.func.id for node in calls) == [
+        "plan_observation_leg",
         "plan_observation_leg",
         "plan_observation_leg",
         "plan_observation_leg",
@@ -354,7 +357,8 @@ def test_every_observation_candidate_record_keeps_its_search_attempts():
         ):
             (record,) = call.args
             records.append({key.value for key in record.keys})
-    assert len(records) == 2
+    # Two observation branches plus the priority-5 obstacle-block fallback.
+    assert len(records) == 3
     for keys in records:
         assert {"search_attempts", "start_rear", "status"} <= keys
 

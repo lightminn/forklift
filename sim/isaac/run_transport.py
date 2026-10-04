@@ -3924,7 +3924,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
                     direction=direction, loaded=loaded, cap_mps=max(abs(requested_speed), abs(truth_speed)),
                 )
-                if allowed == 0.0 and why == "unknown" and obstacle.get("dumps", 0) < 3 and t > 5.0:
+                if allowed == 0.0 and why in ("unknown", "occupied") and obstacle.get("dumps", 0) < 4 and t > 5.0:
                     # Diagnostics: the snapshot and the check inputs of the first unknown stops.
                     obstacle["dumps"] = obstacle.get("dumps", 0) + 1
                     snap_ = obstacle["layer"].snapshot
@@ -4035,6 +4035,30 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             )
                         obstacle.setdefault("tight_replans", 0)
                         obstacle["tight_replans"] += 1
+                    if not replanned.success and phase == "observe":
+                        # The way to this observation point is blocked: try the
+                        # remaining observation candidates from here, as an
+                        # unreachable candidate is handled at the first plan.
+                        while next_candidate_index < len(args.observation_waypoints):
+                            candidate_index = next_candidate_index
+                            next_candidate_index += 1
+                            coordinates = args.observation_waypoints[candidate_index]
+                            candidate_plan = plan_observation_leg(
+                                grid_world(scenario), PlanningPose(*(float(v) for v in coordinates)),
+                                planner_config, geometry=geometry, start_rear=start,
+                                pickup_bounds=pickup_bounds, extended=False, **grid_kwargs("observe"),
+                            )
+                            state["observation_candidates"].append(
+                                {"candidate_index": candidate_index, "pose": list(coordinates),
+                                 "start_rear": [float(v) for v in rear], "success": candidate_plan.success,
+                                 "status": candidate_plan.status, "after": "obstacle_block",
+                                 "analytic_expansion_interval": candidate_plan.analytic_expansion_interval,
+                                 "search_attempts": [list(entry) for entry in candidate_plan.search_attempts]}
+                            )
+                            if candidate_plan.success:
+                                replanned = candidate_plan
+                                state["observation_waypoint_selected"] = list(coordinates)
+                                break
                     obstacle["replans"].append(
                         {
                             "phase": phase,
