@@ -1514,21 +1514,19 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             )
             from forklift_core.planning.grid_collision import OccupancyGrid as _Occ, SplitOccupancy
 
-            # Plan D5: the part ahead of the carriage (forks, or the carried
-            # pallet) sees the band cleared; the body, mast and carriage see it
-            # cleared only outside the pallet rectangle -- the face's grid
-            # swelling, which the carriage must come within 46 mm of (D5 body
-            # delta, user approval 2026-10-05; at run time the depth pocket check
-            # gates it). Transport and return are replanned on the live grid when
-            # they start, so no band-cleared map reaches an executed travel leg.
-            inside_rect = (np.abs(dx * ct + dy * st_) <= geometry.pallet_depth_m / 2) & (
-                np.abs(-dx * st_ + dy * ct) <= geometry.pallet_width_m / 2
-            )
+            # Plan D5 with the body delta (user approval 2026-10-05): the whole
+            # truck sees the perceived pallet's band cleared on the docking
+            # straights. The carriage must come within 46 mm of the face, inside
+            # the face's grid swelling, and the insert straight is checked with
+            # the planning clearance; at run time the depth pocket check stands in
+            # for the grid there (its volume stops the body at the face). Transport
+            # and return are replanned on the live grid when they start, so no
+            # band-cleared map reaches an executed travel leg.
+            cleared = _Occ(occupancy.origin_x_m, occupancy.origin_y_m, res_g, occupancy.occupied & ~band,
+                           version=occupancy.version)
             out["docking_occupancy"] = SplitOccupancy(
-                _Occ(occupancy.origin_x_m, occupancy.origin_y_m, res_g, occupancy.occupied & ~(band & ~inside_rect),
-                     version=occupancy.version),
-                _Occ(occupancy.origin_x_m, occupancy.origin_y_m, res_g, occupancy.occupied & ~band,
-                     version=occupancy.version),
+                cleared,
+                cleared,
                 geometry.axle_to_fork_tip_m - geometry.carriage_limit_m,
             )
             obstacle["plans"][-1]["docking_band_cells"] = int((occupancy.occupied & band).sum())
