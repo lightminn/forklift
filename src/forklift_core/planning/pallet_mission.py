@@ -98,7 +98,7 @@ def _retries(config, extended=True):
 
 
 def _search(
-    start, goal, obstacles, footprint, bounds, config, extended=True, occupancy=None
+    start, goal, obstacles, footprint, bounds, config, extended=True, occupancy=None, deadline=None
 ) -> PlanResult:
     """plan_hybrid_astar, retried on a finer lattice, then at denser analytic
     intervals, then (``extended``) on the fine lattice with more budget and a
@@ -112,6 +112,8 @@ def _search(
         attempts_config.append(attempt_config)
         # Without a grid the call is exactly the pre-grid one.
         extra = {} if occupancy is None else {"occupancy": occupancy}
+        if deadline is not None:
+            extra["deadline"] = deadline
         result = plan_hybrid_astar(
             start, goal, obstacles, footprint, bounds, attempt_config, **extra
         )
@@ -140,6 +142,8 @@ def _search(
         config = replace(config, collision_step_m=FALLBACK_BOXED_COLLISION_STEP_M)
         result = attempt(config)
     for retry in _retries(config, extended):
+        if result.status == "timeout":
+            break
         if result.status == "no_path":
             closed.append(replace(attempts_config[-1], max_expansions=1))
         if result.success or result.status not in _RETRIED_STATUSES:
@@ -550,6 +554,7 @@ def plan_observation_leg(
     extended: bool = True,
     occupancy=None,
     pickup_obstacle: Rectangle | None = None,
+    deadline=None,
 ) -> PlanResult:
     """Plan a separate leg to the observation waypoint at full clearance.
 
@@ -584,6 +589,7 @@ def plan_observation_leg(
         config,
         extended,
         occupancy,
+        deadline,
     )
 
 
@@ -684,6 +690,7 @@ def plan_transport_leg(
     geometry: SyntheticMissionGeometry | None = None,
     travel_config: PlannerConfig | None = None,
     occupancy=None,
+    deadline=None,
 ) -> PlanResult:
     """The loaded transport leg alone, from ``start_rear`` to the delivery pose.
 
@@ -705,6 +712,7 @@ def plan_transport_leg(
         scenario.bounds,
         travel_config,
         occupancy=occupancy,
+        deadline=deadline,
     )
     if not search.success:
         return search
@@ -732,6 +740,7 @@ def plan_return_leg(
     geometry: SyntheticMissionGeometry | None = None,
     travel_config: PlannerConfig | None = None,
     occupancy=None,
+    deadline=None,
 ) -> PlanResult:
     """The unloaded return leg alone, as plan_transport's return_home stage.
 
@@ -758,6 +767,7 @@ def plan_return_leg(
         scenario.bounds,
         travel_config,
         occupancy=occupancy,
+        deadline=deadline,
     )
 
 
@@ -803,9 +813,11 @@ def plan_transport(
     occupancy / pickup_obstacle (priority-5 plan): a LiDAR occupancy grid
     checked with every stage, and the perceived pallet rectangle in place of
     scenario.pickup as the approach obstacle. docking_occupancy, when given,
-    replaces occupancy from the approach straight on: the same grid with the
-    perceived pallet's band cleared, since the forks must enter what the LiDAR
-    sees as the pallet (plan D5) and the truck then carries it away.
+    replaces occupancy from the approach straight on -- typically a
+    grid_collision.SplitOccupancy: the body on the full grid, the forks (or
+    the carried pallet) on the grid with the perceived pallet's band cleared,
+    since the forks must enter what the LiDAR sees as the pallet (plan D5).
+    The runner replans the travel legs on the live grid when they start.
     """
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
     config = config if config is not None else make_transport_planner_config()

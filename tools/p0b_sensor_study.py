@@ -341,13 +341,12 @@ def _volume_unobserved(permission, snap, samples, arc, footprint, own_cells, now
         cells, outside = footprint_cells(snap, pose, footprint, cfg.envelope_offset_m + pad)
         if outside:
             return True
-        whole, partial = own_cells
+        whole, _ = own_cells
         cells = np.array([c for c in cells if (int(c[0]), int(c[1])) not in whole]).reshape(-1, 2)
         if not len(cells):
             continue
         st = snap.state[cells[:, 0], cells[:, 1]]
-        under = np.array([(int(c[0]), int(c[1])) in partial for c in cells], dtype=bool)
-        if ((st != FREE) & (st != OCCUPIED) & ~under).any():
+        if ((st != FREE) & (st != OCCUPIED)).any():
             return True
         free = st == FREE
         if free.any():
@@ -606,7 +605,7 @@ def evaluate_command(args) -> dict:
                          blocked=str(permission.path_check.blocked), allowed=allowed, reason=reason,
                          kappa=kappa, v=v, free_stamp=snap.free_stamp, t=float(t), oldest=permission.path_check.oldest_free_s)
             arc_samples, arc_s = arc_poses(tuple(tr), kappa, direction, stopping.distance_m(v) + pconfig.step_m, pconfig.step_m)
-            own_set = permission._own_cells(snap, tuple(tr), own_now, pconfig.envelope_offset_m + pconfig.step_m)
+            own_set = permission._own_cells(snap, tuple(tr), own_now)
             unobserved = _volume_unobserved(permission, snap, arc_samples, arc_s, fp, own_set, float(t), args.free_age_s)
             curve = abs(kappa) > 0.1
             cls = f"{'loaded' if carried else 'unloaded'}_{'reverse' if v < 0 else 'forward'}_{'curve' if curve else 'straight'}"

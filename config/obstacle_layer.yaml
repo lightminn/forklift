@@ -11,8 +11,8 @@ noise_std_m: 0.02
 noise_cut_m: 0.06
 sensors:
   - {name: high, xyz: [-0.12, 0.0, 1.05], yaw_deg: 0}
-  - {name: low_fl, xyz: [0.60, 0.40, 0.10], yaw_deg: 45}
-  - {name: low_rr, xyz: [-0.57, -0.40, 0.10], yaw_deg: -135}
+  - {name: low_fl, xyz: [0.60, 0.355, 0.10], yaw_deg: 45}
+  - {name: low_rr, xyz: [-0.50, -0.355, 0.10], yaw_deg: -135}
 grid:
   resolution_m: 0.05
   max_mark_m: 5.0

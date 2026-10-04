@@ -197,9 +197,53 @@ class CompositeChecker:
         return self.rectangles.free(pose, margin_m) and self.grid.free(pose, margin_m)
 
 
-def make_checker(obstacles: Sequence[Rectangle], footprint: Footprint, bounds: Bounds, occupancy: OccupancyGrid | None):
+@dataclass(frozen=True)
+class SplitOccupancy:
+    """Two grids for one footprint (priority-5 plan D5): the part behind
+    split_front_m (body, mast, carriage) is checked against ``body`` -- the
+    full grid -- and the part ahead of it (forks, or the carried pallet)
+    against ``forks``, the grid with the perceived pallet's band cleared."""
+
+    body: OccupancyGrid
+    forks: OccupancyGrid
+    split_front_m: float
+
+
+class SplitChecker:
+    def __init__(self, rectangles, split: SplitOccupancy, footprint: Footprint, bounds: Bounds):
+        self.rectangles = FootprintCollisionChecker(rectangles, footprint, bounds)
+        front = max(min(split.split_front_m, footprint.front_m), -footprint.rear_m)
+        self.body = GridFootprintChecker(split.body, Footprint(front, footprint.rear_m, footprint.half_width_m), bounds)
+        fork_len = footprint.front_m - front
+        self.forks = (
+            GridFootprintChecker(split.forks, Footprint(footprint.front_m, -front if front < 0 else 0.0, footprint.half_width_m), bounds)
+            if fork_len > 0 else None
+        )
+        self._fork_rear = front
+        self.footprint = footprint
+        self.bounds = bounds
+        self.radius_m = self.rectangles.radius_m
+
+    def free(self, pose, margin_m: float = 0.0) -> bool:
+        if not self.rectangles.free(pose, margin_m) or not self.body.free(pose, margin_m):
+            return False
+        if self.forks is None:
+            return True
+        # The fork part: a rectangle from split_front_m to the front, expressed as
+        # a footprint about a point shifted to split_front_m along the heading.
+        x, y, yaw = pose
+        c, s_ = cos(yaw), sin(yaw)
+        shifted = (x + self._fork_rear * c, y + self._fork_rear * s_, yaw)
+        fp = self.footprint
+        part = GridFootprintChecker(self.forks.grid, Footprint(fp.front_m - self._fork_rear, 0.0, fp.half_width_m), self.bounds)
+        return part.free(shifted, margin_m)
+
+
+def make_checker(obstacles: Sequence[Rectangle], footprint: Footprint, bounds: Bounds, occupancy):
     if occupancy is None:
         return FootprintCollisionChecker(obstacles, footprint, bounds)
+    if isinstance(occupancy, SplitOccupancy):
+        return SplitChecker(obstacles, occupancy, footprint, bounds)
     return CompositeChecker(obstacles, occupancy, footprint, bounds)
 
 
@@ -232,6 +276,8 @@ def rasterize(rectangles: Sequence[Rectangle], bounds: Bounds, resolution_m: flo
 
 
 __all__ = [
+    "SplitChecker",
+    "SplitOccupancy",
     "CompositeChecker",
     "GridFootprintChecker",
     "OccupancyGrid",

@@ -166,7 +166,7 @@ class DrivePermission:
             if outside:
                 blocked = "edge"
                 break
-            whole, partial = own_cells
+            whole, _ = own_cells
             if whole:
                 keep = np.fromiter(((int(a), int(b)) not in whole for a, b in cells), bool, len(cells))
                 cells = cells[keep]
@@ -174,14 +174,12 @@ class DrivePermission:
             if (states == OCCUPIED).any():
                 blocked = "occupied"
                 break
-            under = (
-                np.fromiter(((int(a), int(b)) in partial for a, b in cells), bool, len(cells))
-                if partial else np.zeros(len(cells), dtype=bool)
-            )
-            if ((states != FREE) & ~under).any():
+            # Only cells wholly under the truck are exempt; every other cell the
+            # stop sweeps must be FREE (Codex checkpoint P1: exempting UNKNOWN in
+            # a band around the body let the stop enter unseen space).
+            if (states != FREE).any():
                 blocked = "unknown"
                 break
-            cells = cells[states == FREE]
             if len(cells):
                 oldest = min(oldest, float(np.nanmin(snapshot.free_stamp[cells[:, 0], cells[:, 1]])))
             verified = float(s)
@@ -195,10 +193,9 @@ class DrivePermission:
         A wholly covered cell is exempt. A partly covered cell is mostly under the
         body, where no beam reaches, so UNKNOWN is accepted there -- but an
         OCCUPIED mark still blocks (Codex L0b P1: an obstacle in the part the body
-        does not cover). band_m widens the partly covered set by the stopping
-        envelope: the strip right against the body is seen only at grazing
-        angles, if at all, and the envelope reaches into it even at the present
-        pose. The strip left unverified is thinner than one cell plus band_m.
+        does not cover). The partly covered set is reported but no longer
+        exempt from anything (Codex checkpoint P1): a blind strip against the
+        body is the sensors' problem, not the check's.
         """
         cells, _ = footprint_cells(snapshot, pose, own_footprint, band_m)
         if not len(cells):
@@ -227,7 +224,7 @@ class DrivePermission:
         if poses.ndim != 2 or poses.shape[1] != 3 or not len(poses):
             raise ValueError("path_ahead must be a non-empty (N, 3) array")
         samples, arc, total = resample_path(poses, self.config.step_m, self.config.lookahead_m)
-        own = self._own_cells(snapshot, current_pose, own_footprint, self.config.envelope_offset_m + self.config.step_m)
+        own = self._own_cells(snapshot, current_pose, own_footprint)
         self.snapshot = snapshot
         self.path_check = self._walk(snapshot, samples, arc, footprint, own, full_path_m=total)
         self._driven_since_m = 0.0
@@ -260,7 +257,7 @@ class DrivePermission:
         # Emergency-stop arc at the present curvature and direction.
         length = cfg.stopping.distance_m(speed_cap_mps) + cfg.step_m
         samples, arc = arc_poses(current_pose, curvature_inv_m, 1 if direction >= 0 else -1, length, cfg.step_m)
-        own = self._own_cells(snap, current_pose, own_footprint, cfg.envelope_offset_m + cfg.step_m)
+        own = self._own_cells(snap, current_pose, own_footprint)
         estop = self._walk(snap, samples, arc, footprint, own)
         path_left = path.verified_m - self._driven_since_m
         if now_s - estop.oldest_free_s > cfg.evidence_max_age_s or now_s - path.oldest_free_s > cfg.evidence_max_age_s:

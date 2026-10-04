@@ -73,3 +73,20 @@ def test_the_distance_transform_skips_far_poses_and_answers_the_same_at_its_edge
             for heading in np.linspace(0, 2 * math.pi, 8, endpoint=False):
                 pose = (d * math.cos(heading), d * math.sin(heading), yaw)
                 assert checker.free(pose, 0.2) == reference.free(pose, 0.2)
+
+
+def test_a_split_footprint_checks_the_body_on_the_full_grid_and_the_forks_on_the_cleared_one():
+    from forklift_core.planning.grid_collision import SplitOccupancy, make_checker
+
+    full = np.zeros((160, 160), dtype=bool)
+    # A bar 0.2 m in front of the body front (x = 0.884): only the forks reach it.
+    full[int((1.08 + 4) / 0.05), int((0.0 + 4) / 0.05)] = True
+    cleared = np.zeros_like(full)
+    split = SplitOccupancy(OccupancyGrid(-4, -4, 0.05, full), OccupancyGrid(-4, -4, 0.05, cleared), 0.884)
+    checker = make_checker([], UNLOADED, BOUNDS, split)
+    assert checker.free((0.0, 0.0, 0.0))  # forks on the cleared grid
+    # The same bar against the body: the truck 0.3 m further on, its body reaches x = 1.18.
+    full2 = np.zeros_like(full)
+    full2[int((1.1 + 4) / 0.05), int((0.3 + 4) / 0.05)] = True
+    split2 = SplitOccupancy(OccupancyGrid(-4, -4, 0.05, full2), OccupancyGrid(-4, -4, 0.05, cleared), 0.884)
+    assert not make_checker([], UNLOADED, BOUNDS, split2).free((0.3, 0.0, 0.0))

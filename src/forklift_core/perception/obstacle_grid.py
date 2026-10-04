@@ -198,6 +198,9 @@ def _line_close(occupied: np.ndarray, max_gap: int) -> np.ndarray:
         return out
     out |= _fill_rows(occupied, max_gap)
     out |= _fill_rows(occupied.T, max_gap).T
+    # Along a diagonal a cell step is sqrt(2) cells long: the same physical gap
+    # is fewer cells (Codex checkpoint P2: 10 diagonal cells were 0.707 m).
+    diag_gap = int(np.floor(max_gap / np.sqrt(2)))
     nx, ny = occupied.shape
     for flip in (False, True):
         a = occupied[:, ::-1] if flip else occupied
@@ -207,7 +210,7 @@ def _line_close(occupied: np.ndarray, max_gap: int) -> np.ndarray:
         sheared[ii + jj, ii] = a[ii, jj]
         valid = np.zeros_like(sheared)
         valid[ii + jj, ii] = True
-        filled = _fill_rows(sheared, max_gap) & valid
+        filled = _fill_rows(sheared, diag_gap) & valid
         back = filled[ii + jj, ii].reshape(a.shape)
         out |= back[:, ::-1] if flip else back
     return out

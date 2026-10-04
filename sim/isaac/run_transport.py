@@ -1361,6 +1361,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         occupancy = obstacle["layer"].planner_grid(stamp, obstacle["applied"] or (0.0, 0.0, 0.0), obstacle["version"])
         obstacle["plans"].append({"kind": kind, "stamp_s": stamp, "occupied_cells": int(occupancy.occupied.sum())})
         out = {"occupancy": occupancy}
+        if obstacle.get("deadline") is not None and kind in ("observe", None):
+            out["deadline"] = obstacle["deadline"]
         if kind == "observe":
             # Before recognition the pallet is somewhere in the pickup zone; once
             # it has been recognised (the near-capture leg is still 'observe'),
@@ -1398,16 +1400,23 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             band = (np.abs(dx * ct + dy * st_) <= geometry.pallet_depth_m / 2 + band_along) & (
                 np.abs(-dx * st_ + dy * ct) <= geometry.pallet_width_m / 2 + band_across
             )
-            from forklift_core.planning.grid_collision import OccupancyGrid as _Occ
+            from forklift_core.planning.grid_collision import OccupancyGrid as _Occ, SplitOccupancy
 
-            out["docking_occupancy"] = _Occ(
-                occupancy.origin_x_m, occupancy.origin_y_m, res_g, occupancy.occupied & ~band,
-                version=occupancy.version,
+            # Plan D5 (Codex checkpoint P1): the body, mast and carriage keep the
+            # full grid; only the part ahead of the carriage (forks, or the
+            # carried pallet) sees the band cleared. Transport and return are
+            # replanned on the live grid when they start, so no band-cleared map
+            # reaches an executed travel leg.
+            out["docking_occupancy"] = SplitOccupancy(
+                occupancy,
+                _Occ(occupancy.origin_x_m, occupancy.origin_y_m, res_g, occupancy.occupied & ~band,
+                     version=occupancy.version),
+                geometry.axle_to_fork_tip_m - geometry.carriage_limit_m,
             )
             obstacle["plans"][-1]["docking_band_cells"] = int((occupancy.occupied & band).sum())
             np.savez_compressed(
                 args.output / f"grid_mission_plan_{len(obstacle['plans'])}.npz",
-                occupied=occupancy.occupied, docking=out["docking_occupancy"].occupied,
+                occupied=occupancy.occupied, docking=out["docking_occupancy"].forks.occupied,
                 origin=[occupancy.origin_x_m, occupancy.origin_y_m], res=res_g,
                 target=[target.x_m, target.y_m, target.yaw_rad],
             )
@@ -3998,6 +4007,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     replan_start = time.monotonic()
                     tight = replace(planner_config, clearance_m=0.0)
                     tight_travel = replace(travel_config, clearance_m=0.0) if travel_config is not None else None
+                    # One shared 20 s budget for the whole replan (plan D3):
+                    # retries and other candidates included.
+                    obstacle["deadline"] = time.monotonic() + 20.0
                     if phase == "observe":
                         target = PlanningPose(*(float(v) for v in paths["observe"].poses[-1]))
                         replanned = plan_observation_leg(
@@ -4042,10 +4054,29 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             )
                         obstacle.setdefault("tight_replans", 0)
                         obstacle["tight_replans"] += 1
-                    if not replanned.success and phase == "observe":
-                        # The way to this observation point is blocked: try the
-                        # remaining observation candidates from here, as an
-                        # unreachable candidate is handled at the first plan.
+                    if not replanned.success:
+                        # Diagnostics: the inputs of the failed replan, for a CPU replay.
+                        failed_grid = grid_kwargs("observe" if phase == "observe" else None)
+                        np.savez_compressed(
+                            args.output / f"obstacle_replan_fail_{len(obstacle['replans'])}.npz",
+                            occupied=failed_grid["occupancy"].occupied,
+                            origin=[failed_grid["occupancy"].origin_x_m, failed_grid["occupancy"].origin_y_m],
+                            res=failed_grid["occupancy"].resolution_m,
+                            start=[start.x_m, start.y_m, start.yaw_rad],
+                            target=[target.x_m, target.y_m, target.yaw_rad] if phase == "observe" else [np.nan] * 3,
+                            phase=phase, status=replanned.status,
+                            pickup_obstacle=(
+                                [failed_grid["pickup_obstacle"].x_m, failed_grid["pickup_obstacle"].y_m,
+                                 failed_grid["pickup_obstacle"].length_m, failed_grid["pickup_obstacle"].width_m,
+                                 failed_grid["pickup_obstacle"].yaw_rad] if "pickup_obstacle" in failed_grid else []
+                            ),
+                        )
+                    if not replanned.success and phase == "observe" and obstacle.get("pickup_estimate") is None:
+                        # Before recognition only: the way to this observation point
+                        # is blocked, so try the remaining observation candidates
+                        # from here, as an unreachable candidate is handled at the
+                        # first plan. After recognition the leg goes to the near
+                        # capture and another observation point would be wrong.
                         while next_candidate_index < len(args.observation_waypoints):
                             candidate_index = next_candidate_index
                             next_candidate_index += 1
@@ -4066,6 +4097,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 replanned = candidate_plan
                                 state["observation_waypoint_selected"] = list(coordinates)
                                 break
+                    obstacle["deadline"] = None
                     obstacle["replans"].append(
                         {
                             "phase": phase,
@@ -4104,6 +4136,47 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                     {"time_s": t, "phase": phase, "speed_mps": truth_speed, "allowed_mps": allowed,
                                      "reason": why, "object": oid}
                                 )
+            if (
+                grid_planning
+                and phase in ("transport", "return_home")
+                and phase in trackers
+                and not obstacle.setdefault("live_replanned", {}).get(phase)
+            ):
+                # The mission plan's travel legs saw the pickup pallet's band
+                # cleared for the carried part; the executed leg is planned now,
+                # on the live grid, where the carried pallet is the truck's own.
+                obstacle["live_replanned"][phase] = True
+                start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))
+                obstacle["deadline"] = time.monotonic() + 20.0
+                if phase == "transport":
+                    sc_ = slam.get("transport_scenario", scenario) if slam is not None else scenario
+                    live = plan_transport_leg(grid_world(sc_), start, planner_config, geometry=geometry,
+                                              travel_config=travel_config, **grid_kwargs(None))
+                    if live.status == "invalid_start":
+                        live = plan_transport_leg(grid_world(sc_), start, replace(planner_config, clearance_m=0.0),
+                                                  geometry=geometry,
+                                                  travel_config=replace(travel_config, clearance_m=0.0) if travel_config is not None else None,
+                                                  **grid_kwargs(None))
+                else:
+                    sc_ = scenario if slam is None else slam.get("return_scenario", slam.get("transport_scenario", scenario))
+                    live = plan_return_leg(grid_world(sc_), start, return_to_pose, planner_config, geometry=geometry,
+                                           travel_config=travel_config, **grid_kwargs(None))
+                    if live.status == "invalid_start":
+                        live = plan_return_leg(grid_world(sc_), start, return_to_pose, replace(planner_config, clearance_m=0.0),
+                                               geometry=geometry,
+                                               travel_config=replace(travel_config, clearance_m=0.0) if travel_config is not None else None,
+                                               **grid_kwargs(None))
+                obstacle["deadline"] = None
+                obstacle.setdefault("live_plans", []).append({"phase": phase, "time_s": t, "status": live.status})
+                require(live.success, f"obstacle_live_plan_failed in {phase}: {live.status}")
+                paths[phase] = live
+                state["paths"][phase] = path_record(live)
+                (args.output / "paths.json").write_text(record_json(state["paths"], indent=2) + "\n")
+                trackers[phase] = RearAxlePathTracker(live.poses, live.directions, live.curvatures_inv_m, trackers[phase].config)
+                if phase == "transport" and slam is not None:
+                    arm_docking()
+                phase_started = t
+                requested_speed = 0.0
             if new_obstacles is not None and phase in trackers:
                 leg, _ = trackers[phase].leg_ahead()
                 driven = float(trackers[phase]._distance[-1]) - trackers[phase].remaining_to_goal_m()
@@ -4277,6 +4350,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     "grid_planning": grid_planning,
                     "replans": obstacle.get("replans", []),
                     "grid_plans": obstacle.get("plans", []),
+                    "live_plans": obstacle.get("live_plans", []),
                 }
             )
             (args.output / "obstacle_scans.json").write_text(record_json(scans_rec) + "\n")

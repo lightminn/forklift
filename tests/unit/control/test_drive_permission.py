@@ -155,3 +155,15 @@ def test_the_occupancy_grid_keeps_its_own_copy():
     raw[100, 100] = True  # the caller edits its array afterwards
     checker = GridFootprintChecker(grid, FOOT, Bounds(-5, 5, -5, 5))
     assert checker.free((-0.5, 0.0, 0.0)) and not grid.occupied.flags.writeable
+
+
+def test_an_unknown_cell_beside_the_body_blocks_a_turning_stop():
+    # Codex checkpoint: half width 0.36, kappa 0.6, 0.3 m/s; the side cell
+    # [0.45, 0.50] x [0.35, 0.40] is entered after 7.5 cm of the stop.
+    perm = DrivePermission(CONFIG)
+    snap = snapshot()
+    set_cell(snap, 0.475, 0.375, UNKNOWN)
+    perm.update(snap, STRAIGHT, BODY, BODY, current_pose=(0, 0, 0))
+    speed, why = perm.allowed_speed(0.05, {"low": 0.05}, current_pose=(0, 0, 0), curvature_inv_m=0.6, direction=1,
+                                    footprint=BODY, own_footprint=BODY, speed_cap_mps=0.3)
+    assert why == "unknown" and speed < 0.3

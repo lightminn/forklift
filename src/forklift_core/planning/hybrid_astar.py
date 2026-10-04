@@ -13,6 +13,7 @@ instantaneously; an adapter must account for steering rate and stop at cusps.
 """
 
 import heapq
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import count
@@ -415,12 +416,14 @@ def plan_hybrid_astar(
     config: PlannerConfig | None = None,
     *,
     occupancy=None,
+    deadline=None,
 ) -> PlanResult:
     """Plan bounded, collision-checked forward/reverse motion in a static map.
 
     occupancy optionally adds an OccupancyGrid (forklift_core.planning.
     grid_collision) checked cell by cell alongside the rectangles; unknown
-    cells are free to the planner (priority-5 plan D3).
+    cells are free to the planner (priority-5 plan D3). deadline optionally
+    stops the search at that time.monotonic() value with status "timeout".
 
     Invalid colliding endpoints return invalid_start/invalid_goal. Exhaustion
     returns no_path or expansion_limit; neither proves physical infeasibility.
@@ -472,6 +475,8 @@ def plan_hybrid_astar(
     best = {key(start_pose, 0, 0): 0.0}
     expanded = 0
     while queue and expanded < config.max_expansions:
+        if deadline is not None and expanded % 256 == 0 and time.monotonic() > deadline:
+            return _failure("timeout", expanded)
         _, _, node = heapq.heappop(queue)
         if (
             node.cost

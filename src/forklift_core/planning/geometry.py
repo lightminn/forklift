@@ -220,9 +220,9 @@ def collision_free_path(
     if occupancy is None:
         checker = FootprintCollisionChecker(obstacles, footprint, bounds)
     else:
-        from .grid_collision import CompositeChecker
+        from .grid_collision import make_checker
 
-        checker = CompositeChecker(obstacles, occupancy, footprint, bounds)
+        checker = make_checker(obstacles, footprint, bounds, occupancy)
     if not checker.free(array[-1], margin_m):
         return False
     for a, b in zip(array[:-1], array[1:], strict=True):
