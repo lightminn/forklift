@@ -204,6 +204,13 @@ def arguments() -> argparse.Namespace:
         help="With --obstacle-layer: limit the commanded speed by the drive "
         "permission in the travel phases (not the docking straights).",
     )
+    parser.add_argument(
+        "--grid-planning",
+        action="store_true",
+        help="With --obstacle-act: plan on the LiDAR grid instead of the ground-truth "
+        "props, the unrecognised pallet as the pickup-zone prior and the recognised "
+        "one as its estimate; stop, replan and resume when the path is blocked.",
+    )
     parser.add_argument("--pallet-prior", type=Path, default=None)
     parser.add_argument(
         "--observation-waypoints",
@@ -369,6 +376,8 @@ def arguments() -> argparse.Namespace:
         parser.error("--obstacle-layer needs --record-slam (the scan tick lives there)")
     if args.obstacle_act and args.obstacle_layer is None:
         parser.error("--obstacle-act needs --obstacle-layer")
+    if args.grid_planning and not args.obstacle_act:
+        parser.error("--grid-planning needs --obstacle-act")
     from insertion_geometry import (
         assert_pallet_urdf_matches_geometry,
         assert_pallet_urdf_matches_named_boxes,
@@ -1243,6 +1252,104 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     )
     state["initial_pallet_m"] = initial_pallet.tolist()
     state["velocities_before_planning"] = body_velocities()
+    obstacle = None  # the priority-5 obstacle layer
+    if args.obstacle_layer is not None:
+        import obstacle_layer as obstacle_module
+
+        from forklift_core.perception.obstacle_grid import AgeErrorTable
+
+        layer_config = obstacle_module.load_layer_config(args.obstacle_layer)
+        age_table = json.loads(Path(layer_config["odometry_age"]).read_text())
+        obstacle = {
+            "layer": obstacle_module.ObstacleLayer(
+                layer_config,
+                hall=scenario.bounds,
+                error_table=AgeErrorTable(
+                    tuple(age_table["ages_s"]),
+                    tuple(age_table["cumulative_position_m"]),
+                    tuple(age_table["cumulative_yaw_rad"]),
+                ),
+                unloaded=geometry.unloaded_footprint,
+                loaded=geometry.loaded_footprint,
+                body_front_m=geometry.axle_to_fork_tip_m - geometry.carriage_limit_m,
+                rear_axle_x_in_base_m=-abs(args.rear_axle_offset_m),
+                noise_seed=args.seed,
+            ),
+            "version": 0,
+            "applied": None,
+            "scans": [],
+            "ticks": {},
+            "slowed": {},
+            "reasons": {},
+            "events": 0,
+            "unpermitted": [],
+            "min_allowed": {},
+        }
+        state["obstacle_layer"] = {
+            "config": str(args.obstacle_layer),
+            "act": bool(args.obstacle_act),
+            "sensors": [
+                {"name": sn.name, "xyz_m": sn.xyz_m, "yaw_rad": sn.yaw_rad, "may_clear": sn.may_clear}
+                for sn in obstacle["layer"].sensors
+            ],
+        }
+
+    grid_planning = bool(args.grid_planning)
+    if obstacle is not None:
+        import planar_lidar as obstacle_lidar
+
+        # The first obstacle scan, from the start pose, before any plan: the
+        # grid the first plan sees (priority-5 L3b). Start = map = odom.
+        prime_base, prime_q = robot.get_world_pose()
+        prime_raw = {}
+        for sensor in obstacle["layer"].sensors:
+            origin, directions = obstacle_lidar.laser_rays_world(
+                prime_base, prime_q, obstacle_lidar.LaserMount(sensor.xyz_m, sensor.yaw_rad),
+                obstacle["layer"].beam_angles,
+            )
+            prime_raw[sensor.name] = obstacle_lidar.cast_scan_flags(
+                origin, directions, obstacle["layer"].range_max_m, own_prefixes=(obstacle_lidar.SELF_PREFIX,)
+            )
+        start_pose = (scenario.start_rear.x_m, scenario.start_rear.y_m, scenario.start_rear.yaw_rad)
+        obstacle["layer"].add_scans(0.0, prime_raw, odom_rear=start_pose, loaded=False)
+        obstacle["last_stamp"] = 0.0
+        obstacle["applied"] = (0.0, 0.0, 0.0)
+        obstacle["replans"] = []
+        obstacle["plans"] = []
+    # Pickup-zone prior (plan D0): where the unrecognised pallet may stand --
+    # the layout's placement distribution (BAY_PICKUP_ZONE) grown by the pallet's
+    # half diagonal; never built from scenario.pickup (Codex v4 P3).
+    from forklift_core.planning.observation_viewpoints import BAY_PICKUP_ZONE as _ZONE
+
+    zone_grow = math.hypot(geometry.pallet_depth_m, geometry.pallet_width_m) / 2
+    pickup_zone = Rectangle(
+        (_ZONE.x_min_m + _ZONE.x_max_m) / 2,
+        (_ZONE.y_min_m + _ZONE.y_max_m) / 2,
+        _ZONE.x_max_m - _ZONE.x_min_m + 2 * zone_grow,
+        _ZONE.y_max_m - _ZONE.y_min_m + 2 * zone_grow,
+        0.0,
+    )
+
+    def grid_world(sc):
+        """The scenario a grid plan sees: no ground-truth props (plan audit table)."""
+        return replace(sc, props=()) if grid_planning else sc
+
+    def grid_kwargs(kind=None, target=None) -> dict:
+        """occupancy (and the pallet obstacle the plan may know) for a grid plan."""
+        if not grid_planning:
+            return {}
+        stamp = obstacle.get("last_stamp", 0.0)
+        occupancy = obstacle["layer"].planner_grid(stamp, obstacle["applied"] or (0.0, 0.0, 0.0), obstacle["version"])
+        obstacle["plans"].append({"kind": kind, "stamp_s": stamp, "occupied_cells": int(occupancy.occupied.sum())})
+        out = {"occupancy": occupancy}
+        if kind == "observe":
+            out["pickup_obstacle"] = pickup_zone
+        elif kind == "mission" and target is not None:
+            out["pickup_obstacle"] = Rectangle(
+                target.x_m, target.y_m, geometry.pallet_depth_m, geometry.pallet_width_m, target.yaw_rad
+            )
+        return out
+
     state["phase"] = "planning"
     if args.use_perception:
         planning_start = time.monotonic()
@@ -1303,12 +1410,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             next_candidate_index = candidate_index + 1
             waypoint = Pose2D(*coordinates)
             candidate_plan = plan_observation_leg(
-                scenario,
+                grid_world(scenario),
                 waypoint,
                 planner_config,
                 geometry=geometry,
                 pickup_bounds=pickup_bounds,
                 extended=extended,
+                **grid_kwargs("observe"),
             )
             state["observation_candidates"].append(
                 {
@@ -1364,13 +1472,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         # The per-stage trace survives a later stage's failure; the result does not.
         planning_trace = []
         plans = plan_transport(
-            scenario,
+            grid_world(scenario),
             planner_config,
             geometry=geometry,
             return_to=return_to_pose,
             pickup_bounds=pickup_bounds,
             travel_config=travel_config,
             trace=planning_trace,
+            **grid_kwargs("mission"),
         )
         state.setdefault("planning_traces", []).append(planning_trace)
         state["planning_wall_s"] = time.monotonic() - planning_start
@@ -1416,7 +1525,6 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     video_frames = []
     slam_log = None
     slam = None
-    obstacle = None  # the priority-5 obstacle layer, set up with the scan tick
     # step_world replaces this before the main loop; captures call through it.
     stepper = {"fn": lambda render: world.step(render=render), "tick": 0}
     if args.record_slam:
@@ -1754,7 +1862,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         replan_start = time.monotonic()
         if leg == "transport":
             replanned = plan_transport_leg(
-                scenario, start, planner_config, geometry=geometry, travel_config=travel_config
+                grid_world(scenario), start, planner_config, geometry=geometry, travel_config=travel_config,
+                **grid_kwargs(None),
             )
         else:
             # The delivered pallet sits where docking put it -- right in the
@@ -1776,12 +1885,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 event["pallet_frame_change"] = list(frame_change)
                 slam["return_scenario"] = return_scenario  # later return recoveries too
             replanned = plan_return_leg(
-                return_scenario,
+                grid_world(return_scenario),
                 start,
                 return_to_pose,
                 planner_config,
                 geometry=geometry,
                 travel_config=travel_config,
+                **grid_kwargs(None),
             )
         event.update(
             replaced_path=path_record(paths[leg]),
@@ -1955,15 +2065,25 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 to_world = tuple(docking["to_world"])
             else:
                 to_world = (0.0, 0.0, 0.0)
-            swept_clear = all(
-                collision_free_pose(
-                    np.asarray(compose(to_world, tuple(pose))),
-                    obstacles,
-                    geometry.loaded_footprint,
-                    scenario.bounds,
+            if grid_planning:
+                # The LiDAR grid, not the ground truth (plan audit table): the
+                # dry run is in the estimate frame, which the grid shares.
+                from forklift_core.planning.grid_collision import GridFootprintChecker
+
+                swept_checker = GridFootprintChecker(
+                    grid_kwargs("docking")["occupancy"], geometry.loaded_footprint, scenario.bounds
                 )
-                for pose in dry.trajectory
-            )
+                swept_clear = all(swept_checker.free(tuple(pose)) for pose in dry.trajectory)
+            else:
+                swept_clear = all(
+                    collision_free_pose(
+                        np.asarray(compose(to_world, tuple(pose))),
+                        obstacles,
+                        geometry.loaded_footprint,
+                        scenario.bounds,
+                    )
+                    for pose in dry.trajectory
+                )
             docking["dry_run"] = {
                 **{k: v for k, v in asdict(dry).items() if k != "trajectory"},
                 "trajectory_samples": len(dry.trajectory),
@@ -2276,48 +2396,6 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             if state["frames"] == 1:
                 snapshot("start")
 
-        obstacle = None
-        if args.obstacle_layer is not None:
-            import obstacle_layer as obstacle_module
-
-            from forklift_core.perception.obstacle_grid import AgeErrorTable
-
-            layer_config = obstacle_module.load_layer_config(args.obstacle_layer)
-            age_table = json.loads(Path(layer_config["odometry_age"]).read_text())
-            obstacle = {
-                "layer": obstacle_module.ObstacleLayer(
-                    layer_config,
-                    hall=scenario.bounds,
-                    error_table=AgeErrorTable(
-                        tuple(age_table["ages_s"]),
-                        tuple(age_table["cumulative_position_m"]),
-                        tuple(age_table["cumulative_yaw_rad"]),
-                    ),
-                    unloaded=geometry.unloaded_footprint,
-                    loaded=geometry.loaded_footprint,
-                    body_front_m=geometry.axle_to_fork_tip_m - geometry.carriage_limit_m,
-                    rear_axle_x_in_base_m=-abs(args.rear_axle_offset_m),
-                    noise_seed=args.seed,
-                ),
-                "version": 0,
-                "applied": None,
-                "scans": [],
-                "ticks": {},
-                "slowed": {},
-                "reasons": {},
-                "events": 0,
-                "unpermitted": [],
-                "min_allowed": {},
-            }
-            state["obstacle_layer"] = {
-                "config": str(args.obstacle_layer),
-                "act": bool(args.obstacle_act),
-                "sensors": [
-                    {"name": sn.name, "xyz_m": sn.xyz_m, "yaw_rad": sn.yaw_rad, "may_clear": sn.may_clear}
-                    for sn in obstacle["layer"].sensors
-                ],
-            }
-
         def obstacle_scan(stamp: float, base, q) -> None:
             """Cast the obstacle LiDARs, feed the grid, refresh the path check."""
             layer = obstacle["layer"]
@@ -2347,6 +2425,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 obstacle["version"] += 1
                 obstacle["applied"] = correction
             layer.add_scans(stamp, raw, odom_rear=odom_rear, loaded=loaded_now)
+            obstacle["last_stamp"] = float(stamp)
             if phase in trackers:
                 ahead, _ = trackers[phase].leg_ahead()
             else:
@@ -2755,13 +2834,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     if phase == "transport":
                         # After docking, the corrected drop (v3.8, Codex P1).
                         replanned = plan_transport_leg(
-                            slam.get("transport_scenario", scenario), start, planner_config,
+                            grid_world(slam.get("transport_scenario", scenario)), start, planner_config,
                             geometry=geometry, travel_config=travel_config,
+                            **grid_kwargs(None),
                         )
                     else:
                         replanned = plan_return_leg(
-                            slam.get("return_scenario", scenario), start, return_to_pose, planner_config,
+                            grid_world(slam.get("return_scenario", scenario)), start, return_to_pose, planner_config,
                             geometry=geometry, travel_config=travel_config,
+                            **grid_kwargs(None),
                         )
                     state["stall_replans"].append(
                         {
@@ -2828,13 +2909,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         )
                         replan_start = time.monotonic()
                         replanned = plan_transport_leg(
-                            slam.get("transport_scenario", scenario)
+                            grid_world(slam.get("transport_scenario", scenario)
                             if slam is not None
-                            else scenario,
+                            else scenario),
                             PlanningPose(float(rear[0]), float(rear[1]), float(rear[2])),
                             planner_config,
                             geometry=geometry,
                             travel_config=travel_config,
+                            **grid_kwargs(None),
                         )
                         replan_wall_s = time.monotonic() - replan_start
                         state["planning_wall_s"] = (
@@ -2915,13 +2997,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         target = PlanningPose(*(float(v) for v in paths["observe"].poses[-1]))
                         replan_start = time.monotonic()
                         replanned = plan_observation_leg(
-                            scenario,
+                            grid_world(scenario),
                             target,
                             planner_config,
                             geometry=geometry,
                             start_rear=PlanningPose(float(rear[0]), float(rear[1]), float(rear[2])),
                             pickup_bounds=pickup_bounds,
                             extended=False,
+                            **grid_kwargs("observe"),
                         )
                         state["observe_replans"].append(
                             {
@@ -3236,7 +3319,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 ]
                                 waypoint = Pose2D(*coordinates)
                                 candidate_plan = plan_observation_leg(
-                                    scenario,
+                                    grid_world(scenario),
                                     waypoint,
                                     planner_config,
                                     geometry=geometry,
@@ -3244,6 +3327,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                     pickup_bounds=pickup_bounds,
                                     # Re-observation keeps the earlier ladder.
                                     extended=False,
+                                    **grid_kwargs("observe"),
                                 )
                                 state["observation_candidates"].append(
                                     {
@@ -3444,7 +3528,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             planning_start = time.monotonic()
                             planning_trace = []
                             plans = plan_transport(
-                                scenario,
+                                grid_world(scenario),
                                 planner_config,
                                 geometry=geometry,
                                 target_pickup=planning_pickup,
@@ -3453,6 +3537,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 pickup_bounds=pickup_bounds,
                                 travel_config=travel_config,
                                 trace=planning_trace,
+                                **grid_kwargs("mission", planning_pickup),
                             )
                             state.setdefault("planning_traces", []).append(
                                 planning_trace
@@ -3771,6 +3856,72 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     obstacle["reasons"][key] = obstacle["reasons"].get(key, 0) + 1
                     if args.obstacle_act and acting:
                         requested_speed = math.copysign(allowed, requested_speed)
+                # Stop, replan, resume (plan D4): blocked by an obstacle and standing.
+                stopped_now = slam["stop_now"] if slam is not None else float(np.linalg.norm(velocity[:2])) < 0.01
+                if (
+                    grid_planning
+                    and acting
+                    and phase in ("observe", "transport", "return_home")
+                    and allowed == 0.0
+                    and why == "occupied"
+                    and stopped_now
+                ):
+                    obstacle["blocked_ticks"] = obstacle.get("blocked_ticks", 0) + 1
+                else:
+                    obstacle["blocked_ticks"] = 0
+                progress_left = trackers[phase].remaining_to_goal_m()
+                watch = obstacle.setdefault("progress", {})
+                if watch.get("phase") != phase or not acting or progress_left < watch["best_m"] - 1.0:
+                    watch.update(phase=phase, best_m=progress_left, since_s=t)
+                require(
+                    not (grid_planning and acting and t - watch["since_s"] > 60.0),
+                    f"obstacle_no_progress in {phase}",
+                )
+                if obstacle["blocked_ticks"] >= 120:
+                    obstacle["blocked_ticks"] = 0
+                    recent = [r for r in obstacle["replans"] if r["phase"] == phase and t - r["time_s"] < 30.0]
+                    require(len(recent) < 3, f"obstacle_blocked in {phase}: {len(recent)} replans in 30 s")
+                    start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))
+                    replan_start = time.monotonic()
+                    if phase == "observe":
+                        target = PlanningPose(*(float(v) for v in paths["observe"].poses[-1]))
+                        replanned = plan_observation_leg(
+                            grid_world(scenario), target, planner_config, geometry=geometry,
+                            start_rear=start, pickup_bounds=pickup_bounds, extended=True,
+                            **grid_kwargs("observe"),
+                        )
+                    elif phase == "transport":
+                        replanned = plan_transport_leg(
+                            grid_world(slam.get("transport_scenario", scenario) if slam is not None else scenario),
+                            start, planner_config, geometry=geometry, travel_config=travel_config,
+                            **grid_kwargs(None),
+                        )
+                    else:
+                        back = scenario if slam is None else slam.get("return_scenario", slam.get("transport_scenario", scenario))
+                        replanned = plan_return_leg(
+                            grid_world(back), start, return_to_pose, planner_config, geometry=geometry,
+                            travel_config=travel_config, **grid_kwargs(None),
+                        )
+                    obstacle["replans"].append(
+                        {
+                            "phase": phase,
+                            "time_s": t,
+                            "rear_pose": [float(v) for v in rear],
+                            "status": replanned.status,
+                            "planning_wall_s": time.monotonic() - replan_start,
+                        }
+                    )
+                    require(replanned.success, f"obstacle_replan_failed in {phase}: {replanned.status}")
+                    paths[phase] = replanned
+                    state["paths"][phase] = path_record(replanned)
+                    (args.output / "paths.json").write_text(record_json(state["paths"], indent=2) + "\n")
+                    trackers[phase] = RearAxlePathTracker(
+                        replanned.poses, replanned.directions, replanned.curvatures_inv_m, trackers[phase].config
+                    )
+                    if phase == "transport" and slam is not None:
+                        arm_docking()
+                    phase_started = t
+                    requested_speed = 0.0
                 # Evaluation only (truth): did a ground-truth obstacle sit in the
                 # steering-held stopping volume while the permission allowed this speed?
                 truth_speed = float(np.dot(velocity[:2], forward))
@@ -3927,6 +4078,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     "truth_events": obstacle["events"],
                     "unpermitted_entries": len(obstacle["unpermitted"]),
                     "unpermitted": obstacle["unpermitted"][:50],
+                    "grid_planning": grid_planning,
+                    "replans": obstacle.get("replans", []),
+                    "grid_plans": obstacle.get("plans", []),
                 }
             )
             (args.output / "obstacle_scans.json").write_text(record_json(scans_rec) + "\n")
