@@ -1,33 +1,35 @@
 # Priority-5 P0b candidate obstacle-sensor configurations (docs/plans/2026-10-04-lidar-obstacle-map.md D1).
 # Mounts are in base_link (dls08_provisional): body front corners at about (0.544, +-0.36),
+# low corner sensors protrude 4-6 cm past the body so the strips along its faces are not
+# seen only at grazing angles (the first L3b stops were a front-corner blind spot),
 # rear corners at (-0.51, +-0.36); the SLAM LiDAR is the existing (-0.12, 0, 1.05) mount.
 # Synthetic study geometry, not a purchased or measured installation.
 candidates:
   A_010:
     sensors:
-      - {name: low_fl, xyz: [0.56, 0.38, 0.10], yaw_deg: 45}
+      - {name: low_fl, xyz: [0.60, 0.40, 0.10], yaw_deg: 45}
   B_010:
     sensors:
       - {name: high, xyz: [-0.12, 0.0, 1.05], yaw_deg: 0}
-      - {name: low_fl, xyz: [0.56, 0.38, 0.10], yaw_deg: 45}
+      - {name: low_fl, xyz: [0.60, 0.40, 0.10], yaw_deg: 45}
   D_008:
     sensors:
       - {name: high, xyz: [-0.12, 0.0, 1.05], yaw_deg: 0}
-      - {name: low_fl, xyz: [0.56, 0.38, 0.08], yaw_deg: 45}
-      - {name: low_rr, xyz: [-0.53, -0.38, 0.08], yaw_deg: -135}
+      - {name: low_fl, xyz: [0.60, 0.40, 0.08], yaw_deg: 45}
+      - {name: low_rr, xyz: [-0.57, -0.40, 0.08], yaw_deg: -135}
   D_010:
     sensors:
       - {name: high, xyz: [-0.12, 0.0, 1.05], yaw_deg: 0}
-      - {name: low_fl, xyz: [0.56, 0.38, 0.10], yaw_deg: 45}
-      - {name: low_rr, xyz: [-0.53, -0.38, 0.10], yaw_deg: -135}
+      - {name: low_fl, xyz: [0.60, 0.40, 0.10], yaw_deg: 45}
+      - {name: low_rr, xyz: [-0.57, -0.40, 0.10], yaw_deg: -135}
   D_012:
     sensors:
       - {name: high, xyz: [-0.12, 0.0, 1.05], yaw_deg: 0}
-      - {name: low_fl, xyz: [0.56, 0.38, 0.12], yaw_deg: 45}
-      - {name: low_rr, xyz: [-0.53, -0.38, 0.12], yaw_deg: -135}
+      - {name: low_fl, xyz: [0.60, 0.40, 0.12], yaw_deg: 45}
+      - {name: low_rr, xyz: [-0.57, -0.40, 0.12], yaw_deg: -135}
   D_010_lift05:
     lift_offset_m: 0.05
     sensors:
       - {name: high, xyz: [-0.12, 0.0, 1.05], yaw_deg: 0}
-      - {name: low_fl, xyz: [0.56, 0.38, 0.10], yaw_deg: 45}
-      - {name: low_rr, xyz: [-0.53, -0.38, 0.10], yaw_deg: -135}
+      - {name: low_fl, xyz: [0.60, 0.40, 0.10], yaw_deg: 45}
+      - {name: low_rr, xyz: [-0.57, -0.40, 0.10], yaw_deg: -135}
