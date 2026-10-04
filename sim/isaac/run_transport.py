@@ -1410,7 +1410,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             SlamPoseTracker,
             StopDetector,
             compose,
+            invert,
         )
+        from forklift_core.localization.scan_docking import dock, laser_points
         from forklift_core.localization.wheel_odometry import AckermannOdometryGeometry
 
         # The known start (odom = map = world); the plan's v3 state machine.
@@ -1450,6 +1452,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "control": [],
             "holds": [],
             "pending_release": None,
+            # Plan v3.8: online SLAM + pre-scanned destination docking.
+            "docking": {"status": "pending"},
             "stop_now": False,
             "tracker_speed": 0.0,
             "last_command": 0.0,
@@ -1691,6 +1695,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         }
         slam["holds"].append(event)
         if leg not in trackers or (jump_m <= 0.02 and abs(jump_rad) <= 0.02):
+            if leg == "transport":
+                arm_docking()
             return
         start = PlanningPose(float(after[0]), float(after[1]), float(after[2]))
         replan_start = time.monotonic()
@@ -1731,6 +1737,161 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         )
         if leg == phase:
             phase_started = t
+        if leg == "transport":
+            arm_docking()
+
+    def arm_docking() -> None:
+        """Drive transport only to where its delivery straight begins (v3.8)."""
+        docking = slam["docking"]
+        if docking["status"] not in ("pending", "armed"):
+            return
+        full = paths["transport"]
+        prefix = final_straight_prefix(full, geometry.delivery_straight_m)
+        if prefix is None:
+            docking["status"] = "no_final_straight"
+            return
+        docking.update(
+            status="armed",
+            delivery_rear=[float(v) for v in full.poses[-1]],
+            predelivery_rear=[float(v) for v in prefix.poses[-1]],
+        )
+        trackers["transport"] = RearAxlePathTracker(
+            prefix.poses, prefix.directions, prefix.curvatures_inv_m, trackers["transport"].config
+        )
+
+    def dock_at_delivery_straight(t: float) -> None:
+        """Match the live scan to the delivery reference and re-place the goal.
+
+        Codex v3.8: goal_est = A o R^-1 with R = X o Q o X^-1; the whole rest
+        of the drop (delivery straight, withdraw, any transport replan) is
+        moved by the same correction E = goal_est o D^-1; an accepted match
+        whose straight cannot be redrawn is re-aligned by a collision-checked
+        plan, not dropped; a refused match falls back to the SLAM goal.
+        """
+        nonlocal phase_started
+        docking = slam["docking"]
+        delivery = tuple(docking["delivery_rear"])
+        estimate = tuple(float(v) for v in rear)  # held: the scan's own estimate
+        offset = abs(args.rear_axle_offset_m)
+        rear_from_laser = (
+            offset + float(laser_mount.xyz_m[0]),
+            float(laser_mount.xyz_m[1]),
+            float(laser_mount.yaw_rad),
+        )
+        if "reference_points" not in slam:
+            # The taught station: one scan cast at the delivery pose, the truck
+            # itself left out (it is not standing there). Truth enters here only.
+            yaw_d = delivery[2]
+            base_d = np.array(
+                [delivery[0] + offset * math.cos(yaw_d), delivery[1] + offset * math.sin(yaw_d), float(base[2])]
+            )
+            quat_d = np.array([math.cos(yaw_d / 2), 0.0, 0.0, math.sin(yaw_d / 2)])
+            origin, directions = planar_lidar.laser_rays_world(base_d, quat_d, laser_mount, beam_angles)
+            distances, hits, own = planar_lidar.cast_scan(
+                origin, directions, scan_pattern.range_max_m, ignore_self=True
+            )
+            reference = scan_pattern.ranges_from_hits(distances, hits)
+            slam["reference_points"] = laser_points(reference, beam_angles)
+            docking["reference_beams"] = int(np.isfinite(reference).sum())
+            docking["reference_self_hits_dropped"] = int(own)
+        live = laser_points(slam["last_sent_ranges"], beam_angles)
+        match_start = time.monotonic()
+        result = dock(
+            slam["reference_points"],
+            live,
+            rear_from_laser=rear_from_laser,
+            estimate_rear=estimate,
+            delivery_rear=delivery,
+        )
+        # Evaluation only: where the delivery pose really is in the estimate frame.
+        expected = compose(estimate, compose(invert(tuple(truth_rear)), delivery))
+        docking.update(
+            match_wall_s=time.monotonic() - match_start,
+            live_beams=int(len(live)),
+            accepted=result.accepted,
+            reason=result.reason,
+            correction=result.correction,
+            starts=[[ok, why, list(q)] for ok, why, q in result.starts],
+            goal_error_vs_truth=None
+            if result.goal_estimate is None
+            else [
+                float(result.goal_estimate[0] - expected[0]),
+                float(result.goal_estimate[1] - expected[1]),
+                float(math.atan2(math.sin(result.goal_estimate[2] - expected[2]), math.cos(result.goal_estimate[2] - expected[2]))),
+            ],
+            slam_goal_error_vs_truth=[
+                float(delivery[0] - expected[0]),
+                float(delivery[1] - expected[1]),
+            ],
+        )
+        goal = result.goal_estimate if result.accepted else delivery
+        shift = compose(goal, invert(delivery))  # E: planned -> corrected
+        docking["status"] = "done" if result.accepted else "fallback"
+        line_start = compose(goal, (-geometry.delivery_straight_m, 0.0, 0.0))
+        straight, offsets = straight_from_pose(
+            PlanningPose(*estimate),
+            PlanningPose(*line_start),
+            PlanningPose(*goal),
+            max_lateral_m=0.05,
+            max_yaw_rad=0.05,
+            min_length_m=0.3,
+        )
+        docking["offsets_to_new_line"] = offsets
+        path = None
+        if straight is not None:
+            config = trackers["transport"].config
+            dry = bicycle_rollout(
+                straight.poses, straight.directions, straight.curvatures_inv_m, config, rear
+            )
+            docking["dry_run"] = asdict(dry)
+            # The tracker stops anywhere inside its own tolerance (Codex v3.8 P2:
+            # a clean 0.7 m straight stops at 7.8 mm); require yaw margin only.
+            if (
+                dry.status == "arrived"
+                and dry.position_error_m <= config.position_tolerance_m
+                and abs(dry.yaw_error_rad) <= 0.75 * config.yaw_tolerance_rad
+            ):
+                path = straight
+        corrected = replace(
+            scenario,
+            destination=replace(
+                scenario.destination,
+                **dict(
+                    zip(
+                        ("x_m", "y_m", "yaw_rad"),
+                        compose(shift, (scenario.destination.x_m, scenario.destination.y_m, scenario.destination.yaw_rad)),
+                    )
+                ),
+            ),
+        )
+        slam["transport_scenario"] = corrected
+        if path is None:
+            # Re-align with a collision-checked plan to the corrected drop.
+            replanned = plan_transport_leg(
+                corrected, PlanningPose(*estimate), planner_config, geometry=geometry, travel_config=travel_config
+            )
+            docking["realign_status"] = replanned.status
+            require(replanned.success, f"docking_realign_failed:{replanned.status}")
+            path = replanned
+        paths["transport"] = path
+        state["paths"]["transport"] = path_record(path)
+        trackers["transport"] = RearAxlePathTracker(
+            path.poses, path.directions, path.curvatures_inv_m, trackers["transport"].config
+        )
+        if "withdraw" in paths:
+            moved = np.array([compose(shift, tuple(pose)) for pose in paths["withdraw"].poses])
+            paths["withdraw"] = replace(paths["withdraw"], poses=moved)
+            state["paths"]["withdraw"] = path_record(paths["withdraw"])
+            trackers["withdraw"] = RearAxlePathTracker(
+                moved,
+                paths["withdraw"].directions,
+                paths["withdraw"].curvatures_inv_m,
+                trackers["withdraw"].config,
+            )
+        (args.output / "paths.json").write_text(record_json(state["paths"], indent=2) + "\n")
+        add_path_display(stage, path, "Transport", (1.0, 0.65, 0.04))
+        phase_started = t
+        state["delivery_docking"] = docking
 
     try:
         if args.video:
@@ -2039,6 +2200,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 range_min_m=scan_pattern.range_min_m,
                 range_max_m=scan_pattern.range_max_m,
             )
+            slam["last_sent_ranges"] = sent  # the noisy scan, as docking sees it
             try:
                 reply = slam["link"].exchange(
                     link.Scan(
@@ -2314,9 +2476,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))
                     replan_start = time.monotonic()
                     if phase == "transport":
+                        # After docking, the corrected drop (v3.8, Codex P1).
                         replanned = plan_transport_leg(
-                            scenario, start, planner_config, geometry=geometry,
-                            travel_config=travel_config,
+                            slam.get("transport_scenario", scenario), start, planner_config,
+                            geometry=geometry, travel_config=travel_config,
                         )
                     else:
                         replanned = plan_return_leg(
@@ -2352,6 +2515,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         replanned.curvatures_inv_m,
                         trackers[phase].config,
                     )
+                    if phase == "transport":
+                        arm_docking()  # keep the stop before the delivery straight
                     phase_started = t
                     tracking = trackers[phase].update(rear, signed_speed, dt)
                     last_tracking = tracking
@@ -2382,7 +2547,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         cusp_stop_ticks = 0
                         replan_start = time.monotonic()
                         replanned = plan_transport_leg(
-                            scenario,
+                            slam.get("transport_scenario", scenario)
+                            if slam is not None
+                            else scenario,
                             PlanningPose(float(rear[0]), float(rear[1]), float(rear[2])),
                             planner_config,
                             geometry=geometry,
@@ -2426,6 +2593,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 replanned.curvatures_inv_m,
                                 trackers[phase].config,
                             )
+                            if slam is not None:
+                                arm_docking()
                             phase_started = t
                             tracking = trackers[phase].update(rear, signed_speed, dt)
                             last_tracking = tracking
@@ -3167,7 +3336,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     elif phase == "extract":
                         transition("transport", t)
                     elif phase == "transport":
-                        transition("lower", t)
+                        if slam is not None and slam["docking"]["status"] == "armed":
+                            dock_at_delivery_straight(t)
+                        else:
+                            transition("lower", t)
                     elif phase == "withdraw":
                         transition("settle", t)
                     elif phase == "return_home":

@@ -421,3 +421,12 @@ def test_slam_runs_see_the_pallet_again_before_the_final_straight() -> None:
     assert "final_straight_prefix(\n                                    paths[\"approach\"], geometry.alignment_straight_m" in source
     assert 'f"near_capture_failed:{attempt[\'retry_reason\']}"' in source
     assert 'if slam is not None and "near_capture" not in state:' in source
+
+
+def test_slam_runs_dock_on_a_scan_before_the_delivery_straight() -> None:
+    """Plan v3.8: stop at the straight start, match, move the whole drop."""
+    source = SCRIPT.read_text()
+    assert 'dock_at_delivery_straight(t)' in source
+    assert 'ignore_self=True' in source
+    assert 'moved = np.array([compose(shift, tuple(pose)) for pose in paths["withdraw"].poses])' in source
+    assert source.count('slam.get("transport_scenario", scenario)') == 2
