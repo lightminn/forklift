@@ -340,7 +340,8 @@ def evaluate_command(args) -> dict:
     loaded = Footprint(**geometry["loaded_footprint"])
     body = Footprint(args.body_front_m, unloaded.rear_m, unloaded.half_width_m)
     stopping = StoppingModel(args.stop_latency_s, args.stop_decel_mps2, args.stop_margin_m)
-    pconfig = PermissionConfig(stopping, args.envelope_m, evidence_max_age_s=args.free_age_s)
+    pconfig = PermissionConfig(stopping, args.envelope_m, evidence_max_age_s=args.free_age_s,
+                               envelope_ramp_m=args.envelope_ramp_m)
 
     # 120 Hz truth and wheel odometry (online noise model, fixed draw).
     stamps = log["joint_stamps_s"]
@@ -600,7 +601,8 @@ def main() -> None:
     e.add_argument("--stop-latency-s", type=float, required=True)
     e.add_argument("--stop-decel-mps2", type=float, required=True)
     e.add_argument("--stop-margin-m", type=float, default=0.05)
-    e.add_argument("--envelope-m", type=float, default=0.05)
+    e.add_argument("--envelope-m", type=float, default=0.01)
+    e.add_argument("--envelope-ramp-m", type=float, default=0.0)
     e.add_argument("--body-front-m", type=float, default=0.884)
     e.add_argument("--free-age-s", type=float, default=0.2)
     e.add_argument("--occupied-age-s", type=float, default=3.0)
