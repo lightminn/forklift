@@ -1514,13 +1514,19 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             )
             from forklift_core.planning.grid_collision import OccupancyGrid as _Occ, SplitOccupancy
 
-            # Plan D5 (Codex checkpoint P1): the body, mast and carriage keep the
-            # full grid; only the part ahead of the carriage (forks, or the
-            # carried pallet) sees the band cleared. Transport and return are
-            # replanned on the live grid when they start, so no band-cleared map
-            # reaches an executed travel leg.
+            # Plan D5: the part ahead of the carriage (forks, or the carried
+            # pallet) sees the band cleared; the body, mast and carriage see it
+            # cleared only outside the pallet rectangle -- the face's grid
+            # swelling, which the carriage must come within 46 mm of (D5 body
+            # delta, user approval 2026-10-05; at run time the depth pocket check
+            # gates it). Transport and return are replanned on the live grid when
+            # they start, so no band-cleared map reaches an executed travel leg.
+            inside_rect = (np.abs(dx * ct + dy * st_) <= geometry.pallet_depth_m / 2) & (
+                np.abs(-dx * st_ + dy * ct) <= geometry.pallet_width_m / 2
+            )
             out["docking_occupancy"] = SplitOccupancy(
-                occupancy,
+                _Occ(occupancy.origin_x_m, occupancy.origin_y_m, res_g, occupancy.occupied & ~(band & ~inside_rect),
+                     version=occupancy.version),
                 _Occ(occupancy.origin_x_m, occupancy.origin_y_m, res_g, occupancy.occupied & ~band,
                      version=occupancy.version),
                 geometry.axle_to_fork_tip_m - geometry.carriage_limit_m,

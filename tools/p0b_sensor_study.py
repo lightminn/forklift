@@ -723,9 +723,17 @@ def evaluate_command(args) -> dict:
                 from forklift_core.perception.obstacle_grid import FREE as _FREE
                 bad = ok.copy()
                 bad[ok] = snap.state[li[ok], lj[ok]] == _FREE
-                for owner in proj_owner[bad]:
+                for owner, ci, cj in zip(proj_owner[bad], proj_cells[bad, 0], proj_cells[bad, 1]):
                     kind = str(kinds[owner])
                     stats["free_inside"][kind] = stats["free_inside"].get(kind, 0) + 1
+                    ex = stats.setdefault("free_inside_examples", [])
+                    if len(ex) < 40:
+                        mine = proj_cells[proj_owner == owner]
+                        centre = (mine.mean(axis=0) + 0.5) * res_w
+                        ex.append({"t": float(t), "phase": phase, "owner": int(owner), "kind": kind,
+                                   "cell_m": [float((ci + 0.5) * res_w), float((cj + 0.5) * res_w)],
+                                   "owner_centre_m": centre.tolist(), "owner_cells": int(len(mine)),
+                                   "truck": [float(v_) for v_ in tr]})
         ratio = {c: stats["permitted"][c] / stats["moving"][c] for c in stats["moving"]}
         # Coverage: not stopped for lack of observation (occupied blocks depend on
         # the recorded truth-planned path, which a grid plan would route around).
@@ -739,6 +747,7 @@ def evaluate_command(args) -> dict:
             "injected_boxes": len(injected),
             "injected_event_objects": len([o for o in stats.get("event_objects", {}) if o >= 1000]),
             "event_counts_by_object": {str(k): v for k, v in stats.get("event_objects", {}).items()},
+            "free_inside_examples": stats.get("free_inside_examples", []),
             "moving_by_class": stats["moving"], "permission_ratio": ratio, "coverage_ratio": coverage,
             "free_cells_inside_obstacles": stats["free_inside"],
             "blocked_reasons": stats.get("blocked_reasons", {}),
