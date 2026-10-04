@@ -107,6 +107,8 @@ class ObstacleLayer:
         """raw: sensor name -> (distances, hits, own) from planar_lidar.cast_scan_flags."""
         _, own_outline = self.footprints(loaded)
         for sensor in self.sensors:
+            if sensor.name not in raw:
+                continue  # a silent sensor (L4 N9/N13): its last stamp ages
             distances, hits, own = raw[sensor.name]
             self.grid.add_scan(
                 ObstacleScan(

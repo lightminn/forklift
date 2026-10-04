@@ -211,6 +211,13 @@ def arguments() -> argparse.Namespace:
         "props, the unrecognised pallet as the pickup-zone prior and the recognised "
         "one as its estimate; stop, replan and resume when the path is blocked.",
     )
+    parser.add_argument(
+        "--new-obstacles",
+        type=Path,
+        default=None,
+        help="Priority-5 L4 scenario rules (sim/isaac/new_obstacles.py): boxes that "
+        "appear or disappear along the active path, and obstacle sensors that go silent.",
+    )
     parser.add_argument("--pallet-prior", type=Path, default=None)
     parser.add_argument(
         "--observation-waypoints",
@@ -378,6 +385,8 @@ def arguments() -> argparse.Namespace:
         parser.error("--obstacle-act needs --obstacle-layer")
     if args.grid_planning and not args.obstacle_act:
         parser.error("--grid-planning needs --obstacle-act")
+    if args.new_obstacles is not None and args.obstacle_layer is None:
+        parser.error("--new-obstacles needs --obstacle-layer")
     from insertion_geometry import (
         assert_pallet_urdf_matches_geometry,
         assert_pallet_urdf_matches_named_boxes,
@@ -1295,6 +1304,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         }
 
     grid_planning = bool(args.grid_planning)
+    new_obstacles = None
+    if args.new_obstacles is not None:
+        new_module = load_perception_module(
+            "run_transport_new_obstacles", Path(__file__).with_name("new_obstacles.py")
+        )
+        new_obstacles = {"schedule": new_module.Schedule(new_module.load_events(args.new_obstacles)), "rects": {}}
+        state["new_obstacles"] = {"rules": str(args.new_obstacles), "log": new_obstacles["schedule"].log}
     if obstacle is not None:
         import planar_lidar as obstacle_lidar
 
@@ -2404,6 +2420,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             started = time.monotonic()
             raw = {}
             for sensor in layer.sensors:
+                if new_obstacles is not None and sensor.name in new_obstacles["schedule"].silenced:
+                    continue
                 origin, directions = planar_lidar.laser_rays_world(
                     base, q, planar_lidar.LaserMount(sensor.xyz_m, sensor.yaw_rad), layer.beam_angles
                 )
@@ -3935,6 +3953,31 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             obstacle["unpermitted"].append(
                                 {"time_s": t, "phase": phase, "speed_mps": truth_speed, "allowed_mps": allowed, "reason": why}
                             )
+            if new_obstacles is not None and phase in trackers:
+                leg, _ = trackers[phase].leg_ahead()
+                driven = float(trackers[phase]._distance[-1]) - trackers[phase].remaining_to_goal_m()
+                for action in new_obstacles["schedule"].update(t, phase, driven, leg):
+                    if action[0] == "spawn":
+                        from pxr import Gf as NGf, UsdGeom as NUsdGeom, UsdPhysics as NUsdPhysics
+
+                        _, oid, ox, oy, oyaw, osize = action
+                        path_ = f"/World/NewObstacle_{oid}"
+                        cube = NUsdGeom.Cube.Define(stage, path_)
+                        cube.CreateSizeAttr(1.0)
+                        xf = NUsdGeom.XformCommonAPI(cube)
+                        xf.SetTranslate(NGf.Vec3d(float(ox), float(oy), float(osize[2]) / 2))
+                        xf.SetRotate(NGf.Vec3f(0.0, 0.0, float(math.degrees(oyaw))))
+                        xf.SetScale(NGf.Vec3f(*(float(v) for v in osize)))
+                        NUsdPhysics.CollisionAPI.Apply(cube.GetPrim())
+                        rect = Rectangle(float(ox), float(oy), float(osize[0]), float(osize[1]), float(oyaw))
+                        new_obstacles["rects"][oid] = rect
+                        obstacles.append(rect)  # ground truth for the evaluator only
+                    elif action[0] == "remove":
+                        oid = action[1]
+                        stage.RemovePrim(f"/World/NewObstacle_{oid}")
+                        rect = new_obstacles["rects"].pop(oid, None)
+                        if rect in obstacles:
+                            obstacles.remove(rect)
             estop_holding = estop is not None and estop.update(
                 t=t,
                 phase=phase,
