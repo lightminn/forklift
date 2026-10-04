@@ -137,9 +137,11 @@ def test_all_runner_planning_calls_use_the_recorded_config(
         and node.func.id in ("plan_observation_leg", "plan_transport")
     ]
     # Third observation leg call: the SLAM observe replan (online SLAM plan
-    # v3.8, same recorded planner_config, earlier ladder); fourth: the
-    # priority-5 obstacle replan of the same leg.
+    # v3.8, same recorded planner_config, earlier ladder); fourth and fifth:
+    # the priority-5 obstacle replan of the same leg, and its zero-clearance
+    # retry from a start inside the clearance.
     assert sorted(node.func.id for node in calls) == [
+        "plan_observation_leg",
         "plan_observation_leg",
         "plan_observation_leg",
         "plan_observation_leg",
@@ -147,7 +149,11 @@ def test_all_runner_planning_calls_use_the_recorded_config(
         "plan_transport",
         "plan_transport",
     ]
+    source = SCRIPT.read_text()
+    assert "tight = replace(planner_config, clearance_m=0.0)" in source
     for call in calls:
+        if len(call.args) > 2 and ast.unparse(call.args[2]) == "tight":
+            continue  # the documented zero-clearance retry, built from planner_config
         received.clear()
         namespace["planning_trace"] = []
         result = eval(compile(ast.Expression(call), str(SCRIPT), "eval"), namespace)
@@ -179,6 +185,8 @@ def test_all_runner_planning_calls_use_the_recorded_config(
     travel = replace(config, obstacle_heuristic_resolution_m=0.25)
     namespace.update(pickup_bounds=scenario.bounds, travel_config=travel)
     for call in calls:
+        if len(call.args) > 2 and ast.unparse(call.args[2]) == "tight":
+            continue  # the zero-clearance retry, as above
         received.clear()
         result = eval(compile(ast.Expression(call), str(SCRIPT), "eval"), namespace)
         assert result.success, result.status

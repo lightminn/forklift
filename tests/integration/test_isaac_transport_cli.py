@@ -431,4 +431,5 @@ def test_slam_runs_dock_on_a_scan_before_the_delivery_straight() -> None:
     assert "moved = np.array([compose(step_shift, tuple(pose)) for pose in paths[\"withdraw\"].poses])" in source
     # Three SLAM recoveries, plus the priority-5 obstacle replan of the
     # transport leg and the return leg's fallback to it.
-    assert source.count('slam.get("transport_scenario", scenario)') == 5
+    # (and the zero-clearance retry of that obstacle replan)
+    assert source.count('slam.get("transport_scenario", scenario)') == 6

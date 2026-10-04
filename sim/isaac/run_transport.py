@@ -4008,6 +4008,33 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             grid_world(back), start, return_to_pose, planner_config, geometry=geometry,
                             travel_config=travel_config, **grid_kwargs(None),
                         )
+                    if replanned.status == "invalid_start":
+                        # The truck stopped closer to the obstacle than the planning
+                        # clearance (the stop guards the volume ahead, not the
+                        # sides): replan once with no clearance. The grid's swelling
+                        # already holds the placement error and the permission
+                        # still guards every tick.
+                        tight = replace(planner_config, clearance_m=0.0)
+                        tight_travel = replace(travel_config, clearance_m=0.0) if travel_config is not None else None
+                        if phase == "observe":
+                            replanned = plan_observation_leg(
+                                grid_world(scenario), target, tight, geometry=geometry,
+                                start_rear=start, pickup_bounds=pickup_bounds, extended=False,
+                                **grid_kwargs("observe"),
+                            )
+                        elif phase == "transport":
+                            replanned = plan_transport_leg(
+                                grid_world(slam.get("transport_scenario", scenario) if slam is not None else scenario),
+                                start, tight, geometry=geometry, travel_config=tight_travel,
+                                **grid_kwargs(None),
+                            )
+                        else:
+                            replanned = plan_return_leg(
+                                grid_world(back), start, return_to_pose, tight, geometry=geometry,
+                                travel_config=tight_travel, **grid_kwargs(None),
+                            )
+                        obstacle.setdefault("tight_replans", 0)
+                        obstacle["tight_replans"] += 1
                     obstacle["replans"].append(
                         {
                             "phase": phase,
