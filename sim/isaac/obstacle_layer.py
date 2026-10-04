@@ -50,6 +50,20 @@ def load_layer_config(path: Path) -> dict:
     return {**data, "sensors": sensors}
 
 
+def beam_limits(origin, directions, *, band_top_m: float, floor_margin_m: float = 0.05) -> np.ndarray:
+    """Per beam, the range up to which a tilted planar beam stays between the
+    floor and band_top_m (h_det): rising beams leave the band, sinking ones hit
+    the floor (Codex L0b P1)."""
+    z0 = float(origin[2])
+    dz = np.asarray(directions, dtype=float)[:, 2]
+    out = np.full(len(dz), np.inf)
+    up = dz > 1e-9
+    down = dz < -1e-9
+    out[up] = (band_top_m - z0) / dz[up]
+    out[down] = np.maximum(z0 - floor_margin_m, 0.0) / -dz[down]
+    return np.maximum(out, 0.0)
+
+
 class ObstacleLayer:
     def __init__(self, config: dict, *, hall, error_table: AgeErrorTable, unloaded: Footprint,
                  loaded: Footprint, body_front_m: float, rear_axle_x_in_base_m: float, noise_seed: int):
@@ -60,6 +74,7 @@ class ObstacleLayer:
         self.range_max_m = float(config["range_max_m"])
         self.noise_std_m = float(config["noise_std_m"])
         self.noise_cut_m = float(config["noise_cut_m"])
+        self.band_top_m = float(config["band_top_m"])  # h_det: a beam above it no longer clears
         g = config["grid"]
         self.grid_config = GridConfig(
             hall.x_min_m, hall.x_max_m, hall.y_min_m, hall.y_max_m, error_table,
@@ -109,13 +124,15 @@ class ObstacleLayer:
         for sensor in self.sensors:
             if sensor.name not in raw:
                 continue  # a silent sensor (L4 N9/N13): its last stamp ages
-            distances, hits, own = raw[sensor.name]
+            distances, hits, own, *rest = raw[sensor.name]
+            limit = rest[0] if rest else None
             self.grid.add_scan(
                 ObstacleScan(
                     float(stamp_s), sensor.name, tuple(float(v) for v in odom_rear),
                     (sensor.xyz_m[0] - self.rear_x, sensor.xyz_m[1], sensor.yaw_rad),
                     self.beam_angles, self.ranges(distances, hits), np.asarray(own, dtype=bool),
                     sensor.may_clear, (own_outline.front_m, own_outline.rear_m, own_outline.half_width_m),
+                    None if limit is None else np.asarray(limit, dtype=float),
                 )
             )
             self.last_scan_s[sensor.name] = float(stamp_s)

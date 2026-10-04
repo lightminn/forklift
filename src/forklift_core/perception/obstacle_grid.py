@@ -116,6 +116,9 @@ class ObstacleScan:
     (the SLAM LiDAR) passes over low obstacles and only marks.
     own_footprint: the truck's own outline at measurement; its cells are not
     obstacles, so the free shrink does not eat a ring around the truck.
+    limit_m: per beam, the range past which the tilted beam has left the band
+    it may speak for -- above h_det it passes over low obstacles, below the
+    floor it hits the floor (Codex L0b P1). Nothing past it marks or clears.
     """
 
     stamp_s: float
@@ -127,6 +130,7 @@ class ObstacleScan:
     self_hit: np.ndarray
     may_clear: bool = True
     own_footprint: tuple[float, float, float] | None = None  # front, rear, half width from the rear axle
+    limit_m: np.ndarray | None = None  # per beam: farthest range still in the valid height band
 
 
 def compose(a, b):
@@ -253,6 +257,9 @@ class ObstacleGrid:
             ranges = np.asarray(scan.ranges_m, dtype=float)
             angles = np.asarray(scan.angles_rad, dtype=float) + laser[2]
             usable = ~np.asarray(scan.self_hit, dtype=bool)
+            limit = (
+                np.asarray(scan.limit_m, dtype=float) if scan.limit_m is not None else np.full(len(ranges), np.inf)
+            )
             cos_a, sin_a = np.cos(angles), np.sin(angles)
             # -- clearing: a newer scan that saw through a cell removes older
             # marks there; only a fresh one also makes it FREE evidence.
@@ -264,7 +271,7 @@ class ObstacleGrid:
                     cfg.max_clear_m,
                     np.where(finite, np.minimum(ranges, cfg.max_mark_m), 0.0),
                 )
-                clear_to = np.where(usable, np.minimum(clear_to, cfg.max_clear_m), 0.0)
+                clear_to = np.where(usable, np.minimum(np.minimum(clear_to, cfg.max_clear_m), limit), 0.0)
                 # Hit beams stop short of the hit by the range error bound and a
                 # cell: a beam that reads long must not clear the surface it hit.
                 clear_to = np.where(
@@ -272,12 +279,12 @@ class ObstacleGrid:
                 )
                 raw = self._ray_mask(laser, cos_a, sin_a, np.maximum(clear_to, 0.0))
                 # Support for the shrink: every cell the body may touch is not an
-                # external obstacle. Withheld from FREE: only cells whose centre is
-                # inside the body -- a subset of the cells the drive permission
-                # exempts (those the body overlaps), so nothing it checks is
-                # left unknown by this rule.
+                # external obstacle. Withheld from FREE: only cells wholly inside
+                # the body (centre inside it shrunk by a half diagonal) -- a subset
+                # of the cells the drive permission exempts (wholly inside), so
+                # nothing it checks is left unknown by this rule (Codex L0b P1).
                 own = self._rect_mask(rear_map, scan.own_footprint, grow_m=cfg.half_diagonal_m) if scan.own_footprint else None
-                inside = self._rect_mask(rear_map, scan.own_footprint, grow_m=0.0) if scan.own_footprint else None
+                inside = self._rect_mask(rear_map, scan.own_footprint, grow_m=-cfg.half_diagonal_m) if scan.own_footprint else None
                 support = raw | own if own is not None else raw
                 # Distance of each cell centre from the rear axle at the scan.
                 gx = cfg.x_min_m + (np.arange(nx) + 0.5) * res
@@ -311,7 +318,10 @@ class ObstacleGrid:
             r_occ = self.radius_m(age, 0.0)
             if r_occ is None:
                 continue
-            hit = usable & np.isfinite(ranges) & (ranges >= cfg.range_min_m) & (ranges <= cfg.max_mark_m)
+            hit = (
+                usable & np.isfinite(ranges) & (ranges >= cfg.range_min_m) & (ranges <= cfg.max_mark_m)
+                & (ranges <= limit)
+            )
             if hit.any():
                 px = laser[0] + ranges[hit] * cos_a[hit]
                 py = laser[1] + ranges[hit] * sin_a[hit]

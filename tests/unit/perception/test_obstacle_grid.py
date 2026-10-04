@@ -186,3 +186,15 @@ def test_closing_fills_a_pocket_narrower_than_twice_the_gap_and_wins_over_free()
     snap = closed_grid.snapshot(0.05, (0.0, 0.0, 0.0))
     assert cell(snap, 3.0, 0.0) == OCCUPIED
     assert cell(snap, 1.5, 0.0) == FREE  # open floor in front stays free
+
+
+def test_a_tilted_beam_neither_marks_nor_clears_past_its_band_limit():
+    grid = ObstacleGrid(config())
+    s = scan(0.0, wall_ranges(3.0))
+    limit = np.full(len(ANGLES), 1.0)  # every beam leaves the band at 1 m
+    s = ObstacleScan(s.stamp_s, s.sensor, s.odom_rear, s.laser_in_rear, s.angles_rad, s.ranges_m,
+                     s.self_hit, True, None, limit)
+    grid.add_scan(s)
+    snap = grid.snapshot(0.05, (0.0, 0.0, 0.0))
+    assert cell(snap, 0.5, 0.0) == FREE
+    assert cell(snap, 2.0, 0.0) == UNKNOWN and cell(snap, 3.0, 0.0) == UNKNOWN

@@ -77,3 +77,13 @@ def test_an_open_floor_lets_the_truck_drive_and_a_wall_stops_it():
     occ = lay2.planner_grid(0.2, (0.0, 0.0, 0.0), 0)
     i, j = occ.cell_of(1.8, 0.0)
     assert occ.occupied[i, j]
+
+
+def test_beam_limits_follow_the_tilt():
+    origin = np.array([0.0, 0.0, 0.10])
+    level = np.array([[1.0, 0.0, 0.0]])
+    up = np.array([[math.cos(0.04), 0.0, math.sin(0.04)]])
+    down = np.array([[math.cos(0.04), 0.0, -math.sin(0.04)]])
+    assert np.isinf(MODULE.beam_limits(origin, level, band_top_m=0.17)[0])
+    assert math.isclose(MODULE.beam_limits(origin, up, band_top_m=0.17)[0], 0.07 / math.sin(0.04))
+    assert math.isclose(MODULE.beam_limits(origin, down, band_top_m=0.17)[0], 0.05 / math.sin(0.04))

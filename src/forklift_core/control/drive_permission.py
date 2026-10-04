@@ -147,11 +147,22 @@ class DrivePermission:
         self._driven_since_m = 0.0
 
     def _walk(self, snapshot, samples, arc, footprint, own_cells, *, full_path_m=None) -> Check:
+        """Walk the samples; between two samples the midpoint is checked with half
+        the interval's motion added (translation + farthest corner x rotation), so
+        the continuous sweep is covered, not just the samples (Codex L0b P1)."""
         cfg = self.config
         verified, blocked, oldest = 0.0, None, np.inf
-        for pose, s in zip(samples, arc):
+        radius = float(np.hypot(max(footprint.front_m, footprint.rear_m), footprint.half_width_m))
+        checks = [(samples[0], float(arc[0]), 0.0)]
+        for i in range(1, len(samples)):
+            a, b = samples[i - 1], samples[i]
+            dyaw = float(np.arctan2(np.sin(b[2] - a[2]), np.cos(b[2] - a[2])))
+            motion = float(np.hypot(b[0] - a[0], b[1] - a[1])) + radius * abs(dyaw)
+            mid = np.array([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, a[2] + dyaw / 2])
+            checks.append((mid, float(arc[i]), motion / 2))
+        for pose, s, pad in checks:
             ramp = min(1.0, s / cfg.envelope_ramp_m) if cfg.envelope_ramp_m > 0 else 1.0
-            cells, outside = footprint_cells(snapshot, pose, footprint, cfg.envelope_offset_m * ramp)
+            cells, outside = footprint_cells(snapshot, pose, footprint, cfg.envelope_offset_m * ramp + pad)
             if outside:
                 blocked = "edge"
                 break
@@ -173,8 +184,30 @@ class DrivePermission:
 
     @staticmethod
     def _own_cells(snapshot, pose, own_footprint) -> set:
+        """Cells whose whole square lies inside the truck's own outline (Codex L0b
+        P1): a cell the body only partly covers can still hold an obstacle in its
+        other part, so it is checked like any other."""
         cells, _ = footprint_cells(snapshot, pose, own_footprint, 0.0)
-        return {(int(a), int(b)) for a, b in cells}
+        if not len(cells):
+            return set()
+        x, y, yaw = pose
+        c, s = cos(yaw), sin(yaw)
+        res = snapshot.resolution_m
+        out = set()
+        for a, b in cells:
+            x0 = snapshot.origin_x_m + a * res
+            y0 = snapshot.origin_y_m + b * res
+            inside = True
+            for dx, dy in ((0, 0), (res, 0), (0, res), (res, res)):
+                px, py = x0 + dx - x, y0 + dy - y
+                u = px * c + py * s
+                w = -px * s + py * c
+                if not (-own_footprint.rear_m <= u <= own_footprint.front_m and abs(w) <= own_footprint.half_width_m):
+                    inside = False
+                    break
+            if inside:
+                out.add((int(a), int(b)))
+        return out
 
     def update(self, snapshot: GridSnapshot, path_ahead, footprint: Footprint, own_footprint: Footprint, *, current_pose) -> Check:
         """New snapshot: the verified distance along path_ahead (rear-axle poses from the truck on)."""

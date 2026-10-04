@@ -122,3 +122,36 @@ def test_unknown_ahead_blocks_but_the_cells_under_the_body_do_not():
     set_cell(snap, 2.5, 0.3, UNKNOWN)
     check = perm.update(snap, STRAIGHT, FOOT, BODY, current_pose=(0, 0, 0))
     assert check.blocked == "unknown" and check.verified_m < 1.3
+
+
+def test_a_cell_the_body_only_partly_covers_is_still_checked():
+    # Codex L0b: body end x = 0.763, obstacle at x = 0.780 in the cell [0.75, 0.80].
+    body = Footprint(0.763, 0.17, 0.36)
+    perm = DrivePermission(CONFIG)
+    snap = snapshot()
+    set_cell(snap, 0.78, 0.0, OCCUPIED)
+    perm.update(snap, STRAIGHT, body, body, current_pose=(0, 0, 0))
+    speed, why = perm.allowed_speed(0.05, {"low": 0.05}, current_pose=(0, 0, 0), curvature_inv_m=0.0, direction=1,
+                                    footprint=body, own_footprint=body, speed_cap_mps=0.6)
+    assert speed == 0.0 and why == "occupied"
+
+
+def test_the_sweep_between_samples_is_covered():
+    # Codex L0b: kappa 0.6 from the origin grazes [1.30, 1.35] x [-0.40, -0.35] at s = 8.3 mm.
+    snap = snapshot()
+    set_cell(snap, 1.32, -0.37, OCCUPIED)
+    perm = DrivePermission(CONFIG)
+    perm.update(snap, STRAIGHT[:2] * [0, 0, 0] + STRAIGHT[:2], FOOT, BODY, current_pose=(0, 0, 0))
+    speed, why = allowed(perm, 0.05, curvature=0.6)
+    assert why == "occupied" and speed < 0.6
+
+
+def test_the_occupancy_grid_keeps_its_own_copy():
+    from forklift_core.planning.grid_collision import GridFootprintChecker, OccupancyGrid
+    from forklift_core.planning.geometry import Bounds
+
+    raw = np.zeros((200, 200), dtype=bool)
+    grid = OccupancyGrid(-5.0, -5.0, 0.05, raw)
+    raw[100, 100] = True  # the caller edits its array afterwards
+    checker = GridFootprintChecker(grid, FOOT, Bounds(-5, 5, -5, 5))
+    assert checker.free((-0.5, 0.0, 0.0)) and not grid.occupied.flags.writeable

@@ -1323,8 +1323,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 prime_base, prime_q, obstacle_lidar.LaserMount(sensor.xyz_m, sensor.yaw_rad),
                 obstacle["layer"].beam_angles,
             )
-            prime_raw[sensor.name] = obstacle_lidar.cast_scan_flags(
-                origin, directions, obstacle["layer"].range_max_m, own_prefixes=(obstacle_lidar.SELF_PREFIX,)
+            prime_raw[sensor.name] = (
+                *obstacle_lidar.cast_scan_flags(
+                    origin, directions, obstacle["layer"].range_max_m, own_prefixes=(obstacle_lidar.SELF_PREFIX,)
+                ),
+                obstacle_module.beam_limits(origin, directions, band_top_m=obstacle["layer"].band_top_m),
             )
         start_pose = (scenario.start_rear.x_m, scenario.start_rear.y_m, scenario.start_rear.yaw_rad)
         obstacle["layer"].add_scans(0.0, prime_raw, odom_rear=start_pose, loaded=False)
@@ -2425,8 +2428,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 origin, directions = planar_lidar.laser_rays_world(
                     base, q, planar_lidar.LaserMount(sensor.xyz_m, sensor.yaw_rad), layer.beam_angles
                 )
-                raw[sensor.name] = planar_lidar.cast_scan_flags(
-                    origin, directions, layer.range_max_m, own_prefixes=prefixes
+                raw[sensor.name] = (
+                    *planar_lidar.cast_scan_flags(origin, directions, layer.range_max_m, own_prefixes=prefixes),
+                    obstacle_module.beam_limits(origin, directions, band_top_m=layer.band_top_m),
                 )
             cast_s = time.monotonic() - started
             yaw_now, _ = yaw_and_tilt(q)
@@ -3844,21 +3848,43 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 }
                 transition("complete", t)
                 break
-            if obstacle is not None and phase in trackers and requested_speed != 0.0:
-                steer_now = robot.get_joint_positions()[steers]
-                half_track = args.drive_geometry.track_m / 2
-                kappa = float(
-                    np.mean(
-                        [
-                            math.tan(steer_now[0]) / (args.drive_geometry.wheelbase_m + math.tan(steer_now[0]) * half_track),
-                            math.tan(steer_now[1]) / (args.drive_geometry.wheelbase_m - math.tan(steer_now[1]) * half_track),
-                        ]
-                    )
+            # The curvature the wheels actually hold: an emergency stop keeps it, so
+            # the permission, the stop itself and the probe all use this one.
+            steer_now = robot.get_joint_positions()[steers]
+            half_track = args.drive_geometry.track_m / 2
+            kappa = float(
+                np.mean(
+                    [
+                        math.tan(steer_now[0]) / (args.drive_geometry.wheelbase_m + math.tan(steer_now[0]) * half_track),
+                        math.tan(steer_now[1]) / (args.drive_geometry.wheelbase_m - math.tan(steer_now[1]) * half_track),
+                    ]
                 )
-                direction = 1 if requested_speed > 0 else -1
+            )
+            truth_speed = float(np.dot(velocity[:2], forward))
+            obstacle_hold = False
+            if obstacle is not None and phase in trackers and (requested_speed != 0.0 or abs(truth_speed) > 0.05):
+                if slam is not None and slam["tracker"].applied is not None:
+                    applied_now = tuple(float(v) for v in slam["tracker"].applied[0])
+                else:
+                    applied_now = (0.0, 0.0, 0.0)
+                if applied_now != obstacle["applied"]:
+                    # A correction change since the snapshot (a SLAM release): the
+                    # grid is re-projected now, never mixed with the new pose
+                    # (Codex L0b P1).
+                    obstacle["version"] += 1
+                    obstacle["applied"] = applied_now
+                    obstacle["reprojections"] = obstacle.get("reprojections", 0) + 1
+                    obstacle["layer"].refresh(
+                        t, applied_now, obstacle["version"], current_pose=tuple(float(v) for v in rear),
+                        path_ahead=trackers[phase].leg_ahead()[0], loaded=loaded,
+                    )
+                if requested_speed != 0.0:
+                    direction = 1 if requested_speed > 0 else -1
+                else:
+                    direction = 1 if truth_speed > 0 else -1
                 allowed, why = obstacle["layer"].limit(
                     t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
-                    direction=direction, loaded=loaded, cap_mps=abs(requested_speed),
+                    direction=direction, loaded=loaded, cap_mps=max(abs(requested_speed), abs(truth_speed)),
                 )
                 ticks = obstacle["ticks"]
                 ticks[phase] = ticks.get(phase, 0) + 1
@@ -3874,6 +3900,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     obstacle["reasons"][key] = obstacle["reasons"].get(key, 0) + 1
                     if args.obstacle_act and acting:
                         requested_speed = math.copysign(allowed, requested_speed)
+                        # Zero allowed: the emergency stop the check assumed --
+                        # wheels to zero, steering held (Codex L0b P1).
+                        obstacle_hold = allowed == 0.0
                 # Stop, replan, resume (plan D4): blocked by an obstacle and standing.
                 stopped_now = slam["stop_now"] if slam is not None else float(np.linalg.norm(velocity[:2])) < 0.01
                 if (
@@ -3940,19 +3969,24 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         arm_docking()
                     phase_started = t
                     requested_speed = 0.0
-                # Evaluation only (truth): did a ground-truth obstacle sit in the
-                # steering-held stopping volume while the permission allowed this speed?
-                truth_speed = float(np.dot(velocity[:2], forward))
+                # Evaluation only (truth): every moving tick, each ground-truth
+                # obstacle in the steering-held stopping volume (with the envelope)
+                # while the permission allowed this speed (Codex L0b P2).
                 if acting and abs(truth_speed) > 0.05:
-                    stop_len = obstacle["layer"].permission.config.stopping.distance_m(truth_speed)
+                    pconf = obstacle["layer"].permission.config
+                    stop_len = pconf.stopping.distance_m(truth_speed)
                     arc = ARC_POSES(tuple(float(v) for v in truth_rear), kappa, 1 if truth_speed > 0 else -1, stop_len, 0.025)[0]
-                    arc_checker = FootprintCollisionChecker(checked_obstacles, footprint, scenario.bounds)
-                    if any(not arc_checker.free(tuple(pose_), 0.0) for pose_ in arc[1:]):
-                        obstacle["events"] += 1
-                        if allowed >= abs(truth_speed) - 1e-9:
-                            obstacle["unpermitted"].append(
-                                {"time_s": t, "phase": phase, "speed_mps": truth_speed, "allowed_mps": allowed, "reason": why}
-                            )
+                    for oid, rect in enumerate(checked_obstacles):
+                        arc_checker = FootprintCollisionChecker([rect], footprint, scenario.bounds)
+                        if any(not arc_checker.free(tuple(pose_), pconf.envelope_offset_m) for pose_ in arc[1:]):
+                            obstacle["events"] += 1
+                            per = obstacle.setdefault("event_objects", {})
+                            per[oid] = per.get(oid, 0) + 1
+                            if allowed >= abs(truth_speed) - 1e-9:
+                                obstacle["unpermitted"].append(
+                                    {"time_s": t, "phase": phase, "speed_mps": truth_speed, "allowed_mps": allowed,
+                                     "reason": why, "object": oid}
+                                )
             if new_obstacles is not None and phase in trackers:
                 leg, _ = trackers[phase].leg_ahead()
                 driven = float(trackers[phase]._distance[-1]) - trackers[phase].remaining_to_goal_m()
@@ -3985,7 +4019,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 rear=truth_rear,
                 speed_mps=float(np.dot(velocity[:2], forward)),
                 loaded=loaded,
-                curvature_inv_m=curvature,
+                curvature_inv_m=kappa,
                 extra=[
                     *robot.get_joint_positions()[steers],
                     float(robot.get_joint_positions()[lift_index[0]]),
@@ -3993,12 +4027,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     pallet_yaw,
                 ],
             )
-            if estop_holding:
+            if estop_holding or obstacle_hold:
                 # Zero every wheel target at once, steering held (plan D4).
                 requested_speed = 0.0
             drive = ackermann_command(requested_speed, curvature, drive_geometry)
             target_steering = (
-                steering_command.copy() if estop_holding else np.asarray(drive.steering_rad)
+                steering_command.copy() if (estop_holding or obstacle_hold) else np.asarray(drive.steering_rad)
             )
             actual_steering = robot.get_joint_positions()[steers]
             # Creep while steering catches up; log the measured physical response.
@@ -4121,6 +4155,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     "truth_events": obstacle["events"],
                     "unpermitted_entries": len(obstacle["unpermitted"]),
                     "unpermitted": obstacle["unpermitted"][:50],
+                    "event_objects": len(obstacle.get("event_objects", {})),
+                    "reprojections": obstacle.get("reprojections", 0),
                     "grid_planning": grid_planning,
                     "replans": obstacle.get("replans", []),
                     "grid_plans": obstacle.get("plans", []),
