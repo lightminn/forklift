@@ -735,6 +735,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         Rectangle,
         collision_free_pose,
     )
+    from forklift_core.control.rollout import bicycle_rollout
     from forklift_core.planning import Pose2D as PlanningPose
     from forklift_core.planning.pallet_mission import (
         SyntheticMissionGeometry,
@@ -3062,12 +3063,30 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                         Pose2D(float(rear[0]), float(rear[1]), float(rear[2])),
                                         line_start,
                                         line_end,
-                                        max_lateral_m=0.05,
-                                        max_yaw_rad=0.05,
+                                        max_lateral_m=0.08,
+                                        max_yaw_rad=0.08,
                                         min_length_m=0.3,
                                     )
                                     state["near_capture"]["offsets_to_new_line"] = offsets
                                     require(straight is not None, f"near_capture_misaligned:{offsets}")
+                                    # The box above only bounds the projection; whether
+                                    # the approach tracker converges within this straight
+                                    # is checked by a dry run with margin (v3.7, Codex
+                                    # v3.6 re-review P2).
+                                    dry = bicycle_rollout(
+                                        straight.poses,
+                                        straight.directions,
+                                        straight.curvatures_inv_m,
+                                        trackers["approach"].config,
+                                        rear,
+                                    )
+                                    state["near_capture"]["dry_run"] = asdict(dry)
+                                    require(
+                                        dry.status == "arrived"
+                                        and dry.position_error_m <= 0.006
+                                        and abs(dry.yaw_error_rad) <= 0.015,
+                                        f"near_capture_misaligned:dry_run:{asdict(dry)}",
+                                    )
                                     paths["approach"] = straight
                                     state["paths"]["approach"] = path_record(straight)
                                     (args.output / "paths.json").write_text(

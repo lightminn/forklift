@@ -1363,3 +1363,12 @@ def test_the_final_straight_is_redrawn_from_where_the_truck_stands():
             bad, start, end, max_lateral_m=0.05, max_yaw_rad=0.05, min_length_m=0.3
         )
         assert plan is None
+
+
+def test_an_approach_that_is_all_one_straight_is_cut_where_keep_m_is_left():
+    from forklift_core.planning.pallet_mission import final_straight_prefix
+
+    poses = [(0.1 * k, 0.0, 0.0) for k in range(24)]  # 2.3 m forward straight
+    prefix = final_straight_prefix(_plan(poses, [1] * 24, [0.0] * 24), keep_m=0.8)
+    assert prefix is not None
+    np.testing.assert_allclose(prefix.poses[-1], (1.5, 0.0, 0.0), atol=1e-9)

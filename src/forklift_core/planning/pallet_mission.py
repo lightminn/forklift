@@ -598,11 +598,15 @@ def final_straight_prefix(path: PlanResult, keep_m: float) -> PlanResult | None:
         start -= 1
     remaining = np.concatenate((np.cumsum(steps[::-1])[::-1], [0.0]))
     tolerance = 1e-6
-    if start < 1 or remaining[start] < keep_m - tolerance:
+    if remaining[start] < keep_m - tolerance:
         return None
     cut = start
     while cut + 1 < len(poses) and remaining[cut + 1] >= keep_m - tolerance:
         cut += 1
+    if cut < 1:
+        # A path that is all one forward straight still needs somewhere to
+        # drive before the capture (Codex v3.6 re-review P2); none here.
+        return None
     return replace(
         path,
         poses=poses[: cut + 1],
