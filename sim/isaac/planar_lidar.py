@@ -131,9 +131,45 @@ def cast_scan(
     return distances, hits, self_hits
 
 
+def cast_scan_flags(
+    origin: np.ndarray,
+    directions: np.ndarray,
+    range_max_m: float,
+    *,
+    own_prefixes: tuple = (SELF_PREFIX,),
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """PhysX closest hit per ray with a per-beam own flag (priority-5 plan D2).
+
+    Returns (distances, hit, own): own marks beams whose closest hit is on a
+    prim under any of own_prefixes -- the truck, and the pallet while it is
+    carried. Those beams stay hits (the body blocks them) but the obstacle
+    grid neither marks nor clears with them.
+    """
+    import carb
+    from omni.physx import get_physx_scene_query_interface
+
+    query = get_physx_scene_query_interface()
+    start = carb.Float3(*map(float, origin))
+    distances = np.full(len(directions), np.nan)
+    hits = np.zeros(len(directions), dtype=bool)
+    own = np.zeros(len(directions), dtype=bool)
+    for index, direction in enumerate(directions):
+        result = query.raycast_closest(
+            start, carb.Float3(*map(float, direction)), float(range_max_m), False
+        )
+        if not result.get("hit", False):
+            continue
+        body = str(result.get("rigidBody", "")) + str(result.get("collision", ""))
+        hits[index] = True
+        distances[index] = float(result["distance"])
+        own[index] = any(prefix in body for prefix in own_prefixes)
+    return distances, hits, own
+
+
 __all__ = [
     "LaserMount",
     "cast_scan",
+    "cast_scan_flags",
     "draw_points",
     "laser_pose_2d",
     "laser_rays_world",

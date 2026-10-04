@@ -1,0 +1,31 @@
+# Priority-5 obstacle layer (docs/plans/2026-10-04-lidar-obstacle-map.md), numbers frozen by P0a
+# ("P0a 결과와 고정값"). Sensors: the P0b candidate under test; synthetic study geometry, not an
+# installation. Planes at or below clear_max_height_m may clear cells (plan D0); higher ones only mark.
+clear_max_height_m: 0.15
+beams: 800
+range_min_m: 0.15
+range_max_m: 12.0
+noise_std_m: 0.02
+noise_cut_m: 0.06
+sensors:
+  - {name: high, xyz: [-0.12, 0.0, 1.05], yaw_deg: 0}
+  - {name: low_fl, xyz: [0.56, 0.38, 0.10], yaw_deg: 45}
+  - {name: low_rr, xyz: [-0.53, -0.38, 0.10], yaw_deg: -135}
+grid:
+  resolution_m: 0.05
+  max_mark_m: 5.0
+  max_clear_m: 5.0
+  free_max_age_s: 0.2
+  occupied_max_age_s: 3.0
+  free_r_cap_m: 0.20
+  free_rho_m: 4.0
+  window_m: 6.0
+permission:
+  latency_s: 0.15
+  decel_mps2: 1.5
+  margin_m: 0.05
+  envelope_m: 0.02
+  envelope_ramp_m: 0.2
+  sensor_timeout_s: 0.25
+  lookahead_m: 3.0
+odometry_age: config/obstacle_odometry_age.json
