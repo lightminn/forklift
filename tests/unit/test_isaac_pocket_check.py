@@ -75,18 +75,23 @@ START = FACE - 2.2 - 1.29  # rear axle x at the stand-off
 END = FACE + 0.36 - 1.29  # rear axle x at the insertion end
 
 
-def drive(check, extra=(), step=0.06, speed=0.3):
-    """Frames every 0.1 s at `step` metres per frame; returns the first stop (x, reason) or None."""
+def drive(check, extra=()):
+    """10 Hz frames while driving at the permitted speed: 0.3 m/s on the
+    straight, 0.055 m/s for the last 0.46 m (the insertion). Returns
+    (stop x, reason) or (None, time to the insertion end)."""
     x, t = START, 0.0
     while x < END - 1e-9:
         rear = (x, 0.0, 0.0)
         check.add_frame(t, render(check, rear, extra), rear)
-        allowed, why = check.limit(t + 0.05, rear, 0.0, 1, min(speed, 0.055 if x > END - 0.5 else speed), 0.0)
-        if allowed <= 0.0:
+        cruise = 0.055 if x > END - 0.46 else 0.3
+        allowed, why = check.limit(t + 0.05, rear, 0.0, 1, cruise, 0.0)
+        v = min(cruise, allowed)
+        if v <= 0.0:
             return x, why
-        x = min(END, x + step)
+        x = min(END, x + v * 0.1)
         t += 0.1
-    return None
+        assert t < 60.0
+    return None, t
 
 
 def test_the_volume_fits_the_pockets():
@@ -98,21 +103,34 @@ def test_a_volume_that_meets_the_pallet_is_refused():
     assert check.conflict > 0 and not check.valid
 
 
-def test_a_clean_pallet_lets_the_truck_reach_the_insertion_end():
-    assert drive(make()) is None
+def test_a_clean_pallet_lets_the_truck_reach_the_insertion_end_within_the_lifetime():
+    stop, elapsed = drive(make())
+    assert stop is None
+    # 2.1 m at 0.3 m/s and 0.46 m at 0.055 m/s without acceleration: about
+    # 15 s, inside the 20 s lifetime.
+    assert 14.0 < elapsed < 20.0
+
+
+def test_a_blade_lifted_off_the_certified_band_is_not_contained():
+    check = make()
+    rear = (END - 0.3, 0.0, 0.0)
+    for k, x in enumerate((START, END - 1.0, END - 0.3)):
+        check.add_frame(0.1 * k, render(check, (x, 0.0, 0.0)), (x, 0.0, 0.0))
+    assert check.limit(0.25, rear, 0.0, 1, 0.055, 0.0)[0] > 0
+    assert check.limit(0.25, rear, 0.0, 1, 0.055, 0.03)[0] == 0.0
 
 
 def test_a_bar_in_a_pocket_stops_the_truck_before_the_blade_reaches_it():
     bar = Box((FACE + 0.20, 0.1445, 0.04), (0.01, 0.01, 0.04))
     stop = drive(make(), extra=[bar])
-    assert stop is not None and stop[1] == "pocket_obstacle"
+    assert stop[0] is not None and stop[1] == "pocket_obstacle"
     assert stop[0] + 1.29 < FACE + 0.20 - 0.01  # blade tip short of the bar
 
 
 def test_a_bar_in_front_of_the_face_stops_the_truck_before_the_body_reaches_it():
     bar = Box((FACE - 0.05, 0.0, 0.05), (0.01, 0.01, 0.05))
     stop = drive(make(), extra=[bar])
-    assert stop is not None and stop[1] == "pocket_obstacle"
+    assert stop[0] is not None and stop[1] == "pocket_obstacle"
     assert stop[0] + 0.884 < FACE - 0.06
 
 

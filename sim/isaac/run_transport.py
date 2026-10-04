@@ -400,6 +400,10 @@ def arguments() -> argparse.Namespace:
         parser.error("--obstacle-act needs --obstacle-layer")
     if args.grid_planning and not args.obstacle_act:
         parser.error("--grid-planning needs --obstacle-act")
+    if args.pocket_check and not args.obstacle_act:
+        # Without the layer the check is never asked, without acting a zero
+        # limit never reaches the wheels (Codex L3c P1).
+        parser.error("--pocket-check needs --obstacle-layer and --obstacle-act")
     if args.new_obstacles is not None and args.obstacle_layer is None:
         parser.error("--new-obstacles needs --obstacle-layer")
     from insertion_geometry import (
@@ -895,6 +899,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         alignment_straight_m=args.alignment_straight_m,
     )
     state["insertion_reserve_m"] = args.insertion_reserve_m
+    # The truck unloaded is its body and two fork blades, not their hull (D4).
+    unloaded_shape = [
+        (Footprint(geometry.axle_to_fork_tip_m - geometry.carriage_limit_m, geometry.unloaded_footprint.rear_m,
+                   geometry.unloaded_footprint.half_width_m), 0.0, 0.0)
+    ] + [
+        (Footprint((x1 - x0) / 2, (x1 - x0) / 2, (y1 - y0) / 2), (y0 + y1) / 2, (x0 + x1) / 2 + abs(args.rear_axle_offset_m))
+        for x0, x1, y0, y1 in read_fork_blades_m(args.forklift_urdf)
+    ]
     planner_config = make_transport_planner_config(
         curvature_limit_inv_m=settings["planner_curvature_inv_m"],
         clearance_m=settings["planning_clearance_m"],
@@ -1377,7 +1389,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             return
         frame = perception_camera.get_current_frame()
         rendered = frame.get("rendering_time") if isinstance(frame, dict) else None
-        stamp = (float(rendered) if rendered else world.current_time) - initial_time
+        if not rendered or not math.isfinite(float(rendered)):
+            pocket["frames_without_time"] = pocket.get("frames_without_time", 0) + 1
+            return  # no acquisition time: never a certification (Codex L3c P1)
+        stamp = float(rendered) - initial_time
+        if stamp > world.current_time - initial_time + 1e-6 or stamp <= check.last_new_s:
+            pocket["frames_bad_time"] = pocket.get("frames_bad_time", 0) + 1
+            return
         history = pocket["history"]
         times = np.array([h[0] for h in history])
         k = int(np.clip(np.searchsorted(times, stamp), 1, len(history) - 1)) if len(history) > 1 else 0
@@ -2853,10 +2871,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             # keeps obstacles far enough that a nominal run clears this at
             # margin 0 (docs/plans/2026-09-17-hybrid-astar-transport.md,
             # "계획 여유가 시험으로 고정돼 있지 않다").
+            # The real shape: unloaded, the body and the blades -- an object
+            # between the blades is not a contact (plan D4, Codex L3c P2).
+            truth_shape = footprint if loaded else unloaded_shape
             require(
-                collision_free_pose(
-                    truth_rear, checked_obstacles, footprint, scenario.bounds
-                ),
+                collision_free_pose(truth_rear, [], footprint, scenario.bounds)
+                and not any(SHAPE_MEETS(o, truth_shape, tuple(float(v) for v in truth_rear)) for o in checked_obstacles),
                 f"Actual truck/load footprint overlap in {phase}",
             )
             require(

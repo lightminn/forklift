@@ -31,7 +31,7 @@ from forklift_core.perception.pallet_geometry import pallet_boxes
 from forklift_core.perception.pocket_clearance import DepthCamera
 
 H_DET_M = 0.17  # body band top (D0 detection band)
-BODY_FLOOR_M = 0.02
+BODY_FLOOR_M = 0.018  # the blades with their -0.01 m allowance reach this low in front of the face
 FORK_Z_M = (0.018, 0.072)  # lowered blades 0.028-0.052 +-0.01
 
 
@@ -168,22 +168,25 @@ class PocketCheck:
     # Per tick ----------------------------------------------------------------
     def truck_boxes(self, pose_i, lift_m: float):
         """Body (floor..h_det) and blades at the lift, in the insertion frame,
-        inflated by the estimate error and the envelope (front: envelope)."""
+        inflated sideways by the estimate error and the envelope (along the
+        axis the envelope is part of the stop length)."""
         x, y, yaw = pose_i
         c, s = math.cos(yaw), math.sin(yaw)
         env = self.config.envelope_m
         lat = self.config.estimate_m + env
         boxes = []
-        cx = (self.body_front_m + env - self.body_rear_m) / 2
+        # Along the axis the envelope is already in the stop length (real_stop).
+        cx = (self.body_front_m - self.body_rear_m) / 2
         boxes.append(Box((x + cx * c, y + cx * s, (BODY_FLOOR_M + H_DET_M) / 2),
-                         ((self.body_front_m + env + self.body_rear_m) / 2, self.body_half_width_m + lat,
+                         ((self.body_front_m + self.body_rear_m) / 2, self.body_half_width_m + lat,
                           (H_DET_M - BODY_FLOOR_M) / 2), yaw))
-        z0, z1 = 0.028 + lift_m, 0.052 + lift_m
+        # The same +-0.01 m vertical allowance the columns were built with.
+        z0, z1 = 0.028 + lift_m - 0.01, 0.052 + lift_m + 0.01
         for x0, x1, y0, y1 in self.blades_rear:
-            u = (x0 + x1 + env) / 2
+            u = (x0 + x1) / 2
             v = (y0 + y1) / 2
             boxes.append(Box((x + u * c - v * s, y + u * s + v * c, (z0 + z1) / 2),
-                             ((x1 - x0 + env) / 2, (y1 - y0) / 2 + lat, (z1 - z0) / 2), yaw))
+                             ((x1 - x0) / 2, (y1 - y0) / 2 + lat, (z1 - z0) / 2), yaw))
         return boxes
 
     def limit(self, now_s: float, rear, curvature_inv_m: float, direction: int, speed_mps: float,

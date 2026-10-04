@@ -14,7 +14,9 @@ The user approved (2026-10-05) a static-scope memory confined to that band:
 * the band B is every cell overlapping the own outline grown by band_m that
   is not wholly inside the outline;
 * a FREE cell is remembered with its own observation time, never a later
-  one; a remembered cell that leaves B or turns OCCUPIED is forgotten;
+  one; a cell wholly under the truck is remembered at each snapshot it is
+  covered (the truck itself is there); a remembered cell that leaves B and
+  the outline, or turns OCCUPIED, is forgotten;
 * an UNKNOWN cell of B that is remembered is RETAINED while its age is in the
   odometry error table (10 s) and every cell within its placement error
   e(age) + 2 rho sin(psi / 2) + res / 2 is freshly FREE, wholly inside the
@@ -140,12 +142,20 @@ class ShadowMemory:
                     self.memory[(a + oi, b + oj)] = (now, "startup", rho_of(a, b))
             self.stats["startup_cells"] = len(self.memory)
             self.stats["startup_reach_m"] = self.band_m + res * 2 ** 0.5
-        # Forget what left the band or turned OCCUPIED; record fresh FREE with its own time.
+        # Forget what left the band and the outline or turned OCCUPIED; record
+        # fresh FREE with its own time. A cell wholly under the truck is empty
+        # because the truck is there (static scope): it is recorded at this
+        # snapshot, so a cell the truck backs off from keeps that evidence when
+        # it re-emerges in the band (P0b: reversing stopped on the strip the
+        # carriage had just left).
         keep = {}
         for (ai, aj), value in self.memory.items():
             a, b = ai - oi, aj - oj
             if (a, b) in band and state[a, b] == UNKNOWN:
                 keep[(ai, aj)] = value
+        for a, b in whole:
+            if 0 <= a < nx and 0 <= b < ny and state[a, b] != OCCUPIED:
+                keep[(a + oi, b + oj)] = (now, "covered", rho_of(a, b))
         for a, b in band:
             if state[a, b] == FREE:
                 keep[(a + oi, b + oj)] = (float(snapshot.free_stamp[a, b]), "free", rho_of(a, b) + self.rho_margin_m)

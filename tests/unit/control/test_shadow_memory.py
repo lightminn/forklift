@@ -185,3 +185,20 @@ def test_a_startup_cell_without_fresh_support_nearby_is_not_retained():
     snap = blind_inside(snapshot(0.0, fill=UNKNOWN))
     out = mem.apply(snap, POSE, BODY)
     assert not (out.state == RETAINED).any()
+
+
+def test_a_cell_the_truck_backs_off_from_keeps_the_covered_evidence():
+    mem = ShadowMemory(0.05, ERROR)
+    # Long after start-up the truck has driven 0.10 m further: the cell now
+    # straddling the face was wholly under the carriage a snapshot ago.
+    forward = (0.10, 0.0, 0.0)
+    mem.started = True
+    first = blind_inside(snapshot(20.0))
+    for x in np.arange(-0.05, 0.95, 0.05):
+        for y in np.arange(-0.325, 0.33, 0.05):
+            put(first, x + 0.01, y + 0.01, UNKNOWN)
+    mem.apply(first, forward, BODY)
+    back = blind_inside(snapshot(20.1))
+    put(back, *FACE_CELL, UNKNOWN)
+    out = mem.apply(back, POSE, BODY)
+    assert out.state[cell(*FACE_CELL)] == RETAINED
