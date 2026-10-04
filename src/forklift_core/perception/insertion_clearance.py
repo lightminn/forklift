@@ -129,7 +129,7 @@ class ClearanceMemory:
         return int((hits & self.volume.in_v).sum())
 
     def add_frame(self, stamp_s: float, depth_m: np.ndarray, camera: DepthCamera, optical_from_insertion,
-                  solids: list) -> dict:
+                  solids: list, surface_extra_m: float = 0.0) -> dict:
         """Certify V voxels from one depth frame; latch an obstacle if one is seen.
 
         optical_from_insertion: (R (3, 3), t (3,)) taking insertion-frame points
@@ -161,7 +161,10 @@ class ClearanceMemory:
                  rot @ np.array([[cos(b.yaw), -sin(b.yaw), 0.0], [sin(b.yaw), cos(b.yaw), 0.0], [0.0, 0.0, 1.0]]))
                 for b in solids
             ]
-            pallet = on_surface(ret, solids_optical, surface_tolerance_m(camera, ret))
+            # The surfaces are where the estimate puts them: a return also counts
+            # as on them within the estimate's error (L3c v6: the front
+            # stringer's underside 1.7 cm behind its estimate).
+            pallet = on_surface(ret, solids_optical, surface_tolerance_m(camera, ret) + surface_extra_m)
             obstacle_count = int((~pallet).sum())
             if obstacle_count:
                 self.obstacle = True

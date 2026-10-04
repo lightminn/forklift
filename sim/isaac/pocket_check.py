@@ -158,7 +158,7 @@ class PocketCheck:
         k = self.camera.sigma_k
         depth[finite] = depth[finite] + np.clip(self.rng.normal(0.0, 1.0, int(finite.sum())), -k, k) * sigma
         rec = self.memory.add_frame(stamp_s, depth, self.camera, self.optical_from_insertion(rear_at_stamp),
-                                    self.surfaces)
+                                    self.surfaces, surface_extra_m=self.config.estimate_m)
         rec = {**rec, "new": True, "rear": [float(v) for v in rear_at_stamp]}
         self.records.append(rec)
         return rec

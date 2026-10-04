@@ -143,3 +143,19 @@ def test_stalled_depth_stops_the_truck():
     rec = check.add_frame(0.1, depth, rear)  # the same raw frame again
     assert rec["new"] is False
     assert check.limit(0.25, rear, 0.0, 1, 0.3, 0.0) == (0.0, "depth_stale")
+
+
+def test_a_return_off_the_estimated_surface_by_the_estimate_error_counts_as_pallet():
+    # L3c v6: the front stringer's underside ~2 cm behind its estimated edge,
+    # seen from about 1.1 m: within the noise tolerance it would be an
+    # obstacle; within noise + estimate error it is the pallet.
+    from forklift_core.perception.pocket_clearance import on_surface, surface_tolerance_m
+
+    check = make()
+    rot, trans = check.optical_from_insertion((FACE - 1.1 - 0.899, 0.0, 0.0))
+    point_i = np.array([FACE + 0.145 + 0.019, 0.12, 0.1])  # stringer x0 ends at FACE + 0.145
+    point_o = (point_i @ rot.T + trans)[None, :]
+    solids_o = [(np.asarray(b.center) @ rot.T + trans, np.asarray(b.half), rot) for b in check.solids]
+    noise_only = surface_tolerance_m(CAM, point_o)
+    assert not on_surface(point_o, solids_o, noise_only)[0]
+    assert on_surface(point_o, solids_o, noise_only + check.config.estimate_m)[0]
