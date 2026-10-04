@@ -1371,14 +1371,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             # cleared (plan D5): the estimate grown by the bias bound and the
             # grid's error radius along the insertion axis, by the radius across.
             # Along the insertion axis: the bias bound plus the largest swelling
-            # a pallet face can get in the grid (a 1 s mark at ~3.5 m: about
-            # 0.33 m with the cell quantisation). Across: the pallet width -- the
-            # approach footprint fits inside it. The body stays outside the band
-            # at the approach end (0.5 m from the face); what lies inside it is
-            # for the pocket depth check (plan D5, L3c). Until then the band is
-            # the whole corridor width, wider than the plan's fork-only band.
+            # a pallet face can get in the grid (about 0.33 m for a 1 s mark at
+            # ~3.5 m; 0.19 m at the 0.3 s memory). Across: the pallet sides plus
+            # their swelling -- the truck's body (half width 0.36 m) stays inside
+            # the pallet width (0.40 m), so what the band hides there is only the
+            # planning clearance, not room an outside object could occupy. The
+            # body stays outside the band at the approach end (0.5 m from the
+            # face); what lies in front of the face is for the pocket depth check
+            # (plan D5, L3c). Until then the band is wider than the plan's
+            # fork-only band.
             band_along = 0.025 + 0.40
-            band_across = 0.025
+            band_across = 0.20
             res_g = occupancy.resolution_m
             nx_g, ny_g = occupancy.occupied.shape
             gi, gj = np.meshgrid(np.arange(nx_g), np.arange(ny_g), indexing="ij")
