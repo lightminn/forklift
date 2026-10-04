@@ -168,6 +168,11 @@ class _ObstacleDistance:
             along = np.maximum(np.abs(dx * c + dy * s) - o.length_m / 2, 0)
             across = np.maximum(np.abs(dy * c - dx * s) - o.width_m / 2, 0)
             blocked |= np.hypot(along, across) < reach
+        if occupancy is not None and hasattr(occupancy, "body"):
+            # A split grid (docking, plan D5): the heuristic takes the part
+            # with fewer occupied cells (the band-cleared one) -- blocking less
+            # can only underestimate, never seal a passage the checker allows.
+            occupancy = occupancy.forks
         if occupancy is not None and occupancy.occupied.any():
             # Occupied grid cells (plan D3): mark the heuristic cells holding
             # an occupied centre, then block only where the nearest such

@@ -90,3 +90,19 @@ def test_a_split_footprint_checks_the_body_on_the_full_grid_and_the_forks_on_the
     full2[int((1.1 + 4) / 0.05), int((0.3 + 4) / 0.05)] = True
     split2 = SplitOccupancy(OccupancyGrid(-4, -4, 0.05, full2), OccupancyGrid(-4, -4, 0.05, cleared), 0.884)
     assert not make_checker([], UNLOADED, BOUNDS, split2).free((0.3, 0.0, 0.0))
+
+
+def test_hybrid_astar_accepts_a_split_grid():
+    import numpy as np
+
+    from forklift_core.planning.geometry import Bounds, Footprint, Pose2D
+    from forklift_core.planning.grid_collision import OccupancyGrid, SplitOccupancy
+    from forklift_core.planning.hybrid_astar import PlannerConfig, plan_hybrid_astar
+
+    occ = np.zeros((100, 60), dtype=bool)
+    grid = OccupancyGrid(-1.0, -1.5, 0.05, occ)
+    result = plan_hybrid_astar(
+        Pose2D(0.0, 0.0, 0.0), Pose2D(2.0, 0.0, 0.0), [], Footprint(0.5, 0.2, 0.2), Bounds(-1, 4, -1.5, 1.5),
+        PlannerConfig(obstacle_heuristic_resolution_m=0.1), occupancy=SplitOccupancy(grid, grid, 0.3),
+    )
+    assert result.success
