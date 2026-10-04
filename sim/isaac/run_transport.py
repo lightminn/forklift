@@ -2273,14 +2273,31 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     slam["holds"].append(
                         {"phase": phase, "time_s": t, "event": "hold", "error": slam_error()}
                     )
+                # The final goal judged out of heading tolerance under SLAM:
+                # brake to a stop and replan from there rather than end the
+                # mission (S3 seed 3 failed its return at -0.054 rad vs 0.03).
+                goal_heading_miss = (
+                    slam is not None
+                    and phase in ("transport", "return_home")
+                    and tracking.status == "failed"
+                    and tracking.failure == "endpoint_heading"
+                    and not tracking.at_cusp
+                    and not tracking.off_path
+                    and trackers[phase].remaining_to_goal_m() <= 1e-6
+                    and len(state["stall_replans"]) < 2
+                )
+                if goal_heading_miss and not slam["stop_now"]:
+                    tracking = replace(tracking, status="braking")
                 stalled = (
                     slam is not None
                     and phase in ("transport", "return_home")
-                    and tracking.status == "tracking"
                     and tracking.speed_mps == 0.0
                     and trackers[phase].remaining_to_goal_m() <= 1e-6
                     and slam["stop_now"]
+                    and (tracking.status == "tracking" or goal_heading_miss)
                 )
+                if stalled and goal_heading_miss:
+                    slam_stall_ticks = max(slam_stall_ticks, 119)
                 slam_stall_ticks = slam_stall_ticks + 1 if stalled else 0
                 if slam_stall_ticks >= 120 and len(state["stall_replans"]) < 2:
                     # Stopped at the end of the path but outside the goal
