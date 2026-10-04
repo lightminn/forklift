@@ -143,7 +143,8 @@ class DrivePermission:
             raise ValueError("path_ahead must be a non-empty (N, 3) array")
         samples, arc = _resample(poses, cfg.step_m, cfg.lookahead_m)
         path_total = float(np.hypot(*np.diff(poses[:, :2], axis=0).T).sum()) if len(poses) > 1 else 0.0
-        own, _ = _footprint_cells(snapshot, current_pose, own_footprint, 0.0)
+        # The cells the truck already covers, with the same envelope the samples use.
+        own, _ = _footprint_cells(snapshot, current_pose, own_footprint, cfg.envelope_offset_m)
         own_set = set(map(tuple, own))
         verified = 0.0
         blocked = None

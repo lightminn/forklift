@@ -25,11 +25,11 @@ def config(**overrides):
     return GridConfig(**values)
 
 
-def scan(stamp, ranges, *, odom=(0.0, 0.0, 0.0), self_hit=None, sensor="low"):
+def scan(stamp, ranges, *, odom=(0.0, 0.0, 0.0), self_hit=None, sensor="low", may_clear=True):
     ranges = np.asarray(ranges, dtype=float)
     return ObstacleScan(
         stamp, sensor, odom, (0.0, 0.0, 0.0), ANGLES, ranges,
-        np.zeros(len(ANGLES), bool) if self_hit is None else self_hit,
+        np.zeros(len(ANGLES), bool) if self_hit is None else self_hit, may_clear,
     )
 
 
@@ -139,3 +139,12 @@ def test_scans_out_of_order_are_rejected():
     grid.add_scan(scan(1.0, wall_ranges()))
     with pytest.raises(ValueError):
         grid.add_scan(scan(0.5, wall_ranges()))
+
+
+def test_a_high_plane_marks_but_never_clears_what_a_low_plane_saw():
+    grid = ObstacleGrid(config())
+    grid.add_scan(scan(0.0, wall_ranges(2.0), sensor="low"))  # a low box at 2 m
+    grid.add_scan(scan(0.05, wall_ranges(4.0), sensor="high", may_clear=False))  # beams pass over it
+    snap = grid.snapshot(0.06, (0.0, 0.0, 0.0))
+    assert cell(snap, 2.0, 0.0) == OCCUPIED and cell(snap, 4.0, 0.0) == OCCUPIED
+    assert cell(snap, 3.0, 0.0) == UNKNOWN  # behind the low box nothing low was seen

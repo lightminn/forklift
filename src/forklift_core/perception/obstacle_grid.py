@@ -83,7 +83,8 @@ class GridConfig:
     occupied_max_age_s: float = 3.0
     sensor_bound_m: float = 0.06
     free_r_cap_m: float = 0.20
-    free_rho_m: float = 4.0  # the radius the free shrink is computed at (permission reach)
+    free_rho_m: float = 4.0  # free evidence only within this distance of the rear axle
+    rho_bands_m: tuple[float, ...] = (1.5, 2.5, 3.25, 4.0)  # free shrink computed per band edge
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -105,6 +106,12 @@ class ObstacleScan:
     instant. laser_in_rear: the sensor pose in the rear-axle frame at that
     instant. self_hit: per beam, True when the return is explained by the
     truck itself (body, forks, carried pallet) as posed at measurement.
+    may_clear: whether this sensor's beams may clear cells. A planar beam
+    only says its own plane is empty; only a plane low enough for the plan's
+    floor-standing assumption (D0, below h_det) may clear. A higher plane
+    (the SLAM LiDAR) passes over low obstacles and only marks.
+    own_footprint: the truck's own outline at measurement; its cells are not
+    obstacles, so the free shrink does not eat a ring around the truck.
     """
 
     stamp_s: float
@@ -114,6 +121,8 @@ class ObstacleScan:
     angles_rad: np.ndarray
     ranges_m: np.ndarray
     self_hit: np.ndarray
+    may_clear: bool = True
+    own_footprint: tuple[float, float, float] | None = None  # front, rear, half width from the rear axle
 
 
 def compose(a, b):
@@ -215,8 +224,7 @@ class ObstacleGrid:
             # -- clearing: a newer scan that saw through a cell removes older
             # marks there; only a fresh one also makes it FREE evidence.
             r_free = self.radius_m(age, cfg.free_rho_m)
-            if r_free is not None:
-                fresh = age <= cfg.free_max_age_s and r_free <= cfg.free_r_cap_m
+            if r_free is not None and scan.may_clear:
                 finite = np.isfinite(ranges)
                 clear_to = np.where(
                     ranges == np.inf,
@@ -226,12 +234,31 @@ class ObstacleGrid:
                 clear_to = np.where(usable, np.minimum(clear_to, cfg.max_clear_m), 0.0)
                 # Hit beams: stop short of the hit by a cell so its own cell is not cleared.
                 clear_to = np.where(finite & (ranges <= cfg.max_mark_m), clear_to - res, clear_to)
-                free_mask = self._ray_mask(laser, cos_a, sin_a, np.maximum(clear_to, 0.0))
-                free_mask = _erode(free_mask, (r_free + 2 * cfg.half_diagonal_m) / res)
-                if fresh:
-                    state[free_mask] = FREE
-                else:
-                    state[free_mask & (state == OCCUPIED)] = UNKNOWN
+                raw = self._ray_mask(laser, cos_a, sin_a, np.maximum(clear_to, 0.0))
+                own = self._rect_mask(rear_map, scan.own_footprint) if scan.own_footprint else None
+                support = raw | own if own is not None else raw
+                # Distance of each cell centre from the rear axle at the scan.
+                gx = cfg.x_min_m + (np.arange(nx) + 0.5) * res
+                gy = cfg.y_min_m + (np.arange(ny) + 0.5) * res
+                rho = np.hypot(gx[:, None] - rear_map[0], gy[None, :] - rear_map[1])
+                lower = 0.0
+                for edge in cfg.rho_bands_m:
+                    band = (rho >= lower) & (rho < edge)
+                    lower = edge
+                    if not (band & raw).any():
+                        continue
+                    r_band = self.radius_m(age, edge)
+                    fresh = age <= cfg.free_max_age_s and r_band <= cfg.free_r_cap_m
+                    eroded = _erode(support, (r_band + 2 * cfg.half_diagonal_m) / res) & raw & band
+                    if own is not None:
+                        eroded &= ~own
+                    if fresh:
+                        state[eroded] = FREE
+                    else:
+                        state[eroded & (state == OCCUPIED)] = UNKNOWN
+                # Beyond the last band: clearing of older marks only.
+                beyond = raw & (rho >= lower)
+                state[beyond & (state == OCCUPIED)] = UNKNOWN
             # -- marking
             r_occ = self.radius_m(age, 0.0)
             if r_occ is None:
@@ -254,6 +281,20 @@ class ObstacleGrid:
             state, now_s, tuple(float(v) for v in map_from_odom), correction_version, used, newest,
             cfg.x_min_m, cfg.y_min_m, res,
         )
+
+    def _rect_mask(self, rear, footprint) -> np.ndarray:
+        """Cells whose square touches the footprint rectangle at the rear-axle pose
+        (centre within the rectangle grown by a half diagonal)."""
+        cfg = self.config
+        nx, ny = cfg.shape
+        grow = cfg.half_diagonal_m
+        front, back, half = footprint[0] + grow, footprint[1] + grow, footprint[2] + grow
+        gx = cfg.x_min_m + (np.arange(nx) + 0.5) * cfg.resolution_m - rear[0]
+        gy = cfg.y_min_m + (np.arange(ny) + 0.5) * cfg.resolution_m - rear[1]
+        c, s = cos(rear[2]), sin(rear[2])
+        u = gx[:, None] * c + gy[None, :] * s
+        v = -gx[:, None] * s + gy[None, :] * c
+        return (u <= front) & (u >= -back) & (np.abs(v) <= half)
 
     def _ray_mask(self, laser, cos_a, sin_a, lengths) -> np.ndarray:
         """Cells crossed by each beam from the sensor to its length (half-cell samples, conservative)."""
