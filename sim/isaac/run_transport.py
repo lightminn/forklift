@@ -2255,7 +2255,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 last_tracking = tracking
                 if (
                     slam is not None
-                    and phase in ("approach", "transport", "return_home")
+                    and phase in ("observe", "approach", "transport", "return_home")
                     and slam["tracker"].mode == "tracking"
                     and trackers[phase].remaining_to_goal_m()
                     <= 0.5 + signed_speed**2 / (2 * settings["drive_acceleration_mps2"])
@@ -2493,9 +2493,30 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             ]
                         )
                         if slam is not None:
+                            now_s = world.current_time - initial_time
+                            near_pending = (
+                                state.get("near_capture", {}).get("status") == "pending"
+                            )
+                            if slam["tracker"].mode == "holding" and not near_pending:
+                                # An observe leg ends held (below). Anything but the
+                                # near capture is followed by more driving, so let
+                                # SLAM back in now, while the truck stands still
+                                # for the capture (plan v3.6).
+                                jump_m, jump_rad = slam["tracker"].release(
+                                    odom_from_base=slam_odom_base()
+                                )
+                                slam["holds"].append(
+                                    {
+                                        "phase": phase,
+                                        "time_s": now_s,
+                                        "event": "release_at_capture",
+                                        "jump_m": jump_m,
+                                        "jump_rad": jump_rad,
+                                    }
+                                )
                             # The accepted ground-truth pose only validated the
                             # capture; control takes the estimate at this instant.
-                            rear = slam_rear(world.current_time - initial_time)
+                            rear = slam_rear(now_s)
                             yaw = float(rear[2])
                             forward = np.array([math.cos(yaw), math.sin(yaw)])
                             base = np.array(
