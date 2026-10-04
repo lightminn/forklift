@@ -854,6 +854,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     state["cusp_replans"] = []
     state["stall_replans"] = []
     state["observe_replans"] = []
+    observe_stall_ticks = 0
     slam_stall_ticks = 0
     max_cusp_replans = 2
     # Stopped = zero command, planar speed and yaw rate under these for this
@@ -2699,15 +2700,33 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 # its end (S2 seed 1: -0.078 rad at a cusp of the near leg, three
                 # versions running): brake, then plan the leg again from the
                 # stop to the same target, at most twice per run.
+                # Also a stop at a cusp outside its tolerance (S3 seed 1: 44.5 mm,
+                # command 0, status tracking until the timeout) once it has
+                # stood for a second.
+                observe_stalled = (
+                    slam is not None
+                    and phase == "observe"
+                    and tracking.status == "tracking"
+                    and tracking.at_cusp
+                    and tracking.speed_mps == 0.0
+                    and slam["stop_now"]
+                )
+                observe_stall_ticks = observe_stall_ticks + 1 if observe_stalled else 0
                 observe_miss = (
                     slam is not None
                     and phase == "observe"
-                    and tracking.status == "failed"
-                    and tracking.failure == "endpoint_heading"
-                    and not tracking.off_path
+                    and (
+                        (
+                            tracking.status == "failed"
+                            and tracking.failure == "endpoint_heading"
+                            and not tracking.off_path
+                        )
+                        or observe_stall_ticks >= 120
+                    )
                     and len(state["observe_replans"]) < 2
                 )
                 if observe_miss:
+                    observe_stall_ticks = 0
                     tracking = replace(tracking, status="braking", speed_mps=0.0)
                     if slam["stop_now"]:
                         target = PlanningPose(*(float(v) for v in paths["observe"].poses[-1]))
