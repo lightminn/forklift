@@ -34,4 +34,10 @@ permission:
   envelope_ramp_m: 0.0
   sensor_timeout_s: 0.25
   lookahead_m: 3.0
+  # Shadow-band memory (D4 delta, user approval 2026-10-05): the strip a low
+  # corner LiDAR cannot certify in front of the truck's own faces is up to
+  # 0.77 a deep (a = how far the sensor sits ahead of the face; 43 mm for
+  # low_fl before the carriage). 0.05 m covers it. Remove the key to get the
+  # strict rule back.
+  shadow_band_m: 0.05
 odometry_age: config/obstacle_odometry_age.json

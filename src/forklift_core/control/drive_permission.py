@@ -29,6 +29,8 @@ from math import ceil, cos, floor, sin, sqrt
 import numpy as np
 
 from forklift_core.perception.obstacle_grid import FREE, OCCUPIED, GridSnapshot
+
+RETAINED = 3  # shadow-band memory (control/shadow_memory.py)
 from forklift_core.planning.geometry import Footprint
 
 
@@ -61,6 +63,7 @@ class PermissionConfig:
     step_m: float = 0.02  # sample spacing; the sweep pad between samples is at most about this
     lookahead_m: float = 3.0
     end_creep_mps: float = 0.02
+    shadow_band_m: float = 0.0  # RETAINED passes only inside the outline grown by this (D4 delta)
 
 
 @dataclass
@@ -187,6 +190,7 @@ class DrivePermission:
         cfg = self.config
         verified, blocked, oldest = 0.0, None, np.inf
         radius = float(np.hypot(max(footprint.front_m, footprint.rear_m), footprint.half_width_m))
+        band = None  # cells near the present outline where RETAINED may pass, built on demand
         checks = [(samples[0], float(arc[0]), 0.0)]
         for i in range(1, len(samples)):
             a, b = samples[i - 1], samples[i]
@@ -221,11 +225,31 @@ class DrivePermission:
             # Only cells wholly under the truck are exempt; every other cell the
             # stop sweeps must be FREE (Codex checkpoint P1: exempting UNKNOWN in
             # a band around the body let the stop enter unseen space).
-            if (states != FREE).any():
+            # RETAINED (shadow-band memory, D4 delta 2026-10-05) passes; its
+            # validity was judged at the snapshot, and it never counts as
+            # fresh evidence.
+            retained = states == RETAINED
+            if retained.any():
+                # Only inside the band around where the truck is now: the truck
+                # moves between snapshots and the memory was granted for the
+                # band alone (Codex P1).
+                if band is None:
+                    band = set()
+                    if own_pose is not None and own_footprint is not None and cfg.shadow_band_m > 0:
+                        near, _ = footprint_cells(snapshot, own_pose, own_footprint, cfg.shadow_band_m)
+                        band = {(int(a), int(b)) for a, b in near}
+                outside = [k for k in np.flatnonzero(retained) if (int(cells[k, 0]), int(cells[k, 1])) not in band]
+                if outside:
+                    states = states.copy()
+                    states[outside] = 0
+            if ((states != FREE) & (states != RETAINED)).any():
                 blocked = "unknown"
                 break
-            if len(cells):
-                oldest = min(oldest, float(np.nanmin(snapshot.free_stamp[cells[:, 0], cells[:, 1]])))
+            # A RETAINED cell's stamp is the oldest fresh evidence its support
+            # used, so it ages out under the same limit.
+            seen = (states == FREE) | (states == RETAINED)
+            if seen.any():
+                oldest = min(oldest, float(np.min(snapshot.free_stamp[cells[seen, 0], cells[seen, 1]])))
             verified = float(s)
         reached_end = blocked is None and full_path_m is not None and arc[-1] >= full_path_m - 1e-9
         return Check(verified, blocked, oldest, reached_end)

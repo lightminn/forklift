@@ -360,6 +360,7 @@ def _volume_unobserved(permission, snap, samples, arc, footprint, own_cells, now
     """True when the swept check volume holds an UNKNOWN cell, leaves the grid, or
     relies on expired FREE -- whatever OCCUPIED cells it also holds (Codex design P1)."""
     from forklift_core.control.drive_permission import footprint_cells
+    from forklift_core.control.drive_permission import RETAINED
     from forklift_core.perception.obstacle_grid import FREE, OCCUPIED
 
     cfg = permission.config
@@ -381,7 +382,7 @@ def _volume_unobserved(permission, snap, samples, arc, footprint, own_cells, now
         if not len(cells):
             continue
         st = snap.state[cells[:, 0], cells[:, 1]]
-        if ((st != FREE) & (st != OCCUPIED)).any():
+        if ((st != FREE) & (st != OCCUPIED) & (st != RETAINED)).any():
             return True
         free = st == FREE
         if free.any():
@@ -393,6 +394,7 @@ def evaluate_command(args) -> dict:
     from dataclasses import replace
 
     from forklift_core.control.drive_permission import DrivePermission, PermissionConfig, StoppingModel, arc_poses
+    from forklift_core.control.shadow_memory import ShadowMemory
     from forklift_core.localization.slam_pose import OdometryNoise
     from forklift_core.localization.wheel_odometry import AckermannOdometryGeometry, integrate_wheel_odometry
     from forklift_core.perception.obstacle_grid import AgeErrorTable, GridConfig, ObstacleGrid, ObstacleScan
@@ -414,7 +416,7 @@ def evaluate_command(args) -> dict:
     body = Footprint(args.body_front_m, unloaded.rear_m, unloaded.half_width_m)
     stopping = StoppingModel(args.stop_latency_s, args.stop_decel_mps2, args.stop_margin_m)
     pconfig = PermissionConfig(stopping, args.envelope_m, evidence_max_age_s=args.free_age_s,
-                               envelope_ramp_m=args.envelope_ramp_m)
+                               envelope_ramp_m=args.envelope_ramp_m, shadow_band_m=args.shadow_band_m)
 
     # 120 Hz truth and wheel odometry (online noise model, fixed draw).
     stamps = log["joint_stamps_s"]
@@ -554,6 +556,9 @@ def evaluate_command(args) -> dict:
         )
         grid = ObstacleGrid(grid_cfg)
         permission = DrivePermission(pconfig)
+        # Shadow-band memory (D4 delta 2026-10-05). The first evaluated
+        # snapshot is the first moving instant of observe, i.e. start-up.
+        shadow = ShadowMemory(args.shadow_band_m, table, evidence_max_age_s=args.free_age_s) if args.shadow_band_m > 0 else None
         stats = {"events": 0, "unpermitted": [], "moving": {}, "permitted": {}, "free_inside": {}, "scans": 0}
         for k, t in enumerate(scan_stamps[: args.max_scans]):
             j = int(np.searchsorted(stamps, t))
@@ -627,6 +632,8 @@ def evaluate_command(args) -> dict:
             ahead = truth_rear[j : j + max(end, 2)]
             fp = loaded if carried else unloaded
             own_now = loaded if carried else body  # the same outline the grid withholds
+            if shadow is not None:
+                snap = shadow.apply(snap, tuple(tr), own_now)
             permission.update(snap, ahead, fp, own_now, current_pose=tuple(tr), direction=-1 if v < 0 else 1)
             # The steering held by an emergency stop gives the stopping arc.
             kappa = float(np.mean([math.tan(a) / (g["wheelbase_m"] + math.tan(a) * side * g["track_m"] / 2)
@@ -748,6 +755,7 @@ def main() -> None:
     e.add_argument("--clear-max-height-m", type=float, default=0.15)
     e.add_argument("--close-gap-m", type=float, default=0.0)
     e.add_argument("--free-min-width-m", type=float, default=0.0)
+    e.add_argument("--shadow-band-m", type=float, default=0.0)
     e.add_argument("--inject-every-m", type=float, default=0.0)
     e.add_argument("--projection-top-m", type=float, default=1.05)
     e.add_argument("--dump-at", type=int, default=None)

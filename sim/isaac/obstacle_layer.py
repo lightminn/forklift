@@ -19,6 +19,7 @@ import numpy as np
 import yaml
 
 from forklift_core.control.drive_permission import DrivePermission, PermissionConfig, StoppingModel
+from forklift_core.control.shadow_memory import ShadowMemory
 from forklift_core.perception.obstacle_grid import (
     AgeErrorTable,
     GridConfig,
@@ -95,9 +96,13 @@ class ObstacleLayer:
                 envelope_ramp_m=float(p["envelope_ramp_m"]),
                 sensor_timeout_s=float(p["sensor_timeout_s"]),
                 lookahead_m=float(p["lookahead_m"]),
+                shadow_band_m=float(p.get("shadow_band_m", 0.0)),
             )
         )
         self.window_m = float(g["window_m"])
+        # Shadow-band memory (D4 delta approved 2026-10-05); absent = strict rule.
+        band = p.get("shadow_band_m")
+        self.shadow = None if band is None else ShadowMemory(float(band), error_table, evidence_max_age_s=float(g["free_max_age_s"]))
         self.unloaded, self.loaded = unloaded, loaded
         self.body = Footprint(body_front_m, unloaded.rear_m, unloaded.half_width_m)
         self.rear_x = rear_axle_x_in_base_m
@@ -151,6 +156,8 @@ class ObstacleLayer:
         finally:
             self.grid.config = self.grid_config
         footprint, own = self.footprints(loaded)
+        if self.shadow is not None:
+            self.snapshot = self.shadow.apply(self.snapshot, current_pose, own)
         return self.permission.update(self.snapshot, path_ahead, footprint, own, current_pose=current_pose,
                                       direction=direction)
 

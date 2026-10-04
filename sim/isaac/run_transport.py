@@ -1310,7 +1310,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "run_transport_new_obstacles", Path(__file__).with_name("new_obstacles.py")
         )
         new_obstacles = {"schedule": new_module.Schedule(new_module.load_events(args.new_obstacles)), "rects": {}}
-        state["new_obstacles"] = {"rules": str(args.new_obstacles), "log": new_obstacles["schedule"].log}
+        new_obstacles["band_overlaps"] = []
+        state["new_obstacles"] = {
+            "rules": str(args.new_obstacles),
+            "log": new_obstacles["schedule"].log,
+            # The shadow-band memory's scope excludes objects appearing inside
+            # the band (D4 delta 2026-10-05): a spawn whose collider meets the
+            # band's cells at spawn time is outside the scenario's validity.
+            "band_overlaps": new_obstacles["band_overlaps"],
+        }
     if obstacle is not None:
         import planar_lidar as obstacle_lidar
 
@@ -4199,6 +4207,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         rect = Rectangle(float(ox), float(oy), float(osize[0]), float(osize[1]), float(oyaw))
                         new_obstacles["rects"][oid] = rect
                         obstacles.append(rect)  # ground truth for the evaluator only
+                        if obstacle is not None and obstacle["layer"].shadow is not None:
+                            _, own_ = obstacle["layer"].footprints(loaded)
+                            reach = obstacle["layer"].shadow.band_m + 0.05 * math.sqrt(2)
+                            grown = Footprint(own_.front_m + reach, own_.rear_m + reach, own_.half_width_m + reach)
+                            if not FootprintCollisionChecker([rect], grown, scenario.bounds).free(tuple(float(v) for v in truth_rear)):
+                                new_obstacles["band_overlaps"].append({"time_s": t, "event": oid})
                     elif action[0] == "remove":
                         oid = action[1]
                         stage.RemovePrim(f"/World/NewObstacle_{oid}")
@@ -4354,6 +4368,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     "replans": obstacle.get("replans", []),
                     "grid_plans": obstacle.get("plans", []),
                     "live_plans": obstacle.get("live_plans", []),
+                    "shadow_memory": None if obstacle["layer"].shadow is None else {
+                        **obstacle["layer"].shadow.stats,
+                        "band_m": obstacle["layer"].shadow.band_m,
+                        "premise": "nothing inside the start-up band cells (outline grown by startup_reach_m)",
+                    },
                 }
             )
             (args.output / "obstacle_scans.json").write_text(record_json(scans_rec) + "\n")
