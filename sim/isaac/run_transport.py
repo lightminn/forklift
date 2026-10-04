@@ -3886,6 +3886,20 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
                     direction=direction, loaded=loaded, cap_mps=max(abs(requested_speed), abs(truth_speed)),
                 )
+                if allowed == 0.0 and why == "unknown" and obstacle.get("dumps", 0) < 3 and t > 5.0:
+                    # Diagnostics: the snapshot and the check inputs of the first unknown stops.
+                    obstacle["dumps"] = obstacle.get("dumps", 0) + 1
+                    snap_ = obstacle["layer"].snapshot
+                    np.savez_compressed(
+                        args.output / f"obstacle_dump_{obstacle['dumps']}.npz",
+                        state=snap_.state, free_stamp=snap_.free_stamp,
+                        origin=[snap_.origin_x_m, snap_.origin_y_m], res=snap_.resolution_m,
+                        t=t, rear=np.asarray(rear, dtype=float), truth_rear=np.asarray(truth_rear, dtype=float),
+                        kappa=kappa, direction=direction, loaded=loaded,
+                        requested=requested_speed, truth_speed=truth_speed,
+                        correction=np.asarray(obstacle["applied"], dtype=float), version=obstacle["version"],
+                        stamp=snap_.stamp_s,
+                    )
                 ticks = obstacle["ticks"]
                 ticks[phase] = ticks.get(phase, 0) + 1
                 low = obstacle["min_allowed"]
