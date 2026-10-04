@@ -1832,10 +1832,28 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 float(delivery[1] - expected[1]),
             ],
         )
-        goal = result.goal_estimate if result.accepted else delivery
-        shift = compose(goal, invert(delivery))  # E: planned -> corrected
+        round_number = docking.get("round", 1)
+        keep_m = docking.get("keep_m", geometry.delivery_straight_m)
+        previous_goal = tuple(docking.get("previous_goal", delivery))
+        # A refused match keeps the best goal so far (the SLAM goal in round 1).
+        goal = result.goal_estimate if result.accepted else previous_goal
+        shift = compose(goal, invert(delivery))  # E: planned -> corrected (total)
+        step_shift = compose(goal, invert(previous_goal))  # since the last round
+        docking.setdefault("rounds", []).append(
+            {
+                "round": round_number,
+                "keep_m": keep_m,
+                "accepted": result.accepted,
+                "reason": result.reason,
+                "goal_error_vs_truth": docking["goal_error_vs_truth"],
+                "estimate_vs_truth_at_match": [
+                    float(estimate[0] - truth_rear[0]),
+                    float(estimate[1] - truth_rear[1]),
+                ],
+            }
+        )
         docking["status"] = "done" if result.accepted else "fallback"
-        line_start = compose(goal, (-geometry.delivery_straight_m, 0.0, 0.0))
+        line_start = compose(goal, (-keep_m, 0.0, 0.0))
         # Delivery corrections of ~10 cm are the point of docking (seed 0: 92 mm),
         # so the box is wider than the insertion one; what makes it safe is the
         # dry run arriving AND its swept loaded footprint staying clear.
@@ -1908,7 +1926,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             path.poses, path.directions, path.curvatures_inv_m, slam.get("transport_config", trackers["transport"].config)
         )
         if "withdraw" in paths:
-            moved = np.array([compose(shift, tuple(pose)) for pose in paths["withdraw"].poses])
+            moved = np.array([compose(step_shift, tuple(pose)) for pose in paths["withdraw"].poses])
             paths["withdraw"] = replace(paths["withdraw"], poses=moved)
             state["paths"]["withdraw"] = path_record(paths["withdraw"])
             trackers["withdraw"] = RearAxlePathTracker(
@@ -1920,6 +1938,21 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         (args.output / "paths.json").write_text(record_json(state["paths"], indent=2) + "\n")
         add_path_display(stage, path, "Transport", (1.0, 0.65, 0.04))
         phase_started = t
+        docking["previous_goal"] = list(goal)
+        if round_number == 1 and result.accepted:
+            # Second round: loaded wheels slip (~5 % over the 1.5 m straight,
+            # S2 v3.8c seed 3: 8 cm short), so stop again 0.4 m out and match
+            # once more; the last 0.4 m then carries only that slip.
+            final_keep = 0.4
+            prefix = final_straight_prefix(path, final_keep)
+            if prefix is not None:
+                docking.update(status="armed", round=2, keep_m=final_keep)
+                trackers["transport"] = RearAxlePathTracker(
+                    prefix.poses,
+                    prefix.directions,
+                    prefix.curvatures_inv_m,
+                    replace(slam["transport_config"], position_tolerance_m=0.03, yaw_tolerance_rad=0.05),
+                )
 
     try:
         if args.video:
