@@ -129,6 +129,8 @@ def test_all_runner_planning_calls_use_the_recorded_config(
         grid_kwargs=lambda *a, **k: {},
         start=scenario.start_rear,
         coordinates=(scenario.start_rear.x_m, scenario.start_rear.y_m, scenario.start_rear.yaw_rad),
+        # The priority-5 mission replan after recognition plans to the same pickup.
+        pocket={"planning_pickup": scenario.pickup},
     )
     calls = [
         node
@@ -141,7 +143,9 @@ def test_all_runner_planning_calls_use_the_recorded_config(
     # v3.8, same recorded planner_config, earlier ladder); fourth and fifth:
     # the priority-5 obstacle replan of the same leg, and its zero-clearance
     # retry from a start inside the clearance; sixth: the other observation
-    # candidates tried when that leg stays blocked.
+    # candidates tried when that leg stays blocked. The last two plan_transport
+    # calls: the mission replanned from where the truck stands after recognition
+    # when that leg stays blocked, and its zero-clearance retry.
     assert sorted(node.func.id for node in calls) == [
         "plan_observation_leg",
         "plan_observation_leg",
@@ -151,11 +155,13 @@ def test_all_runner_planning_calls_use_the_recorded_config(
         "plan_observation_leg",
         "plan_transport",
         "plan_transport",
+        "plan_transport",
+        "plan_transport",
     ]
     source = SCRIPT.read_text()
     assert "tight = replace(planner_config, clearance_m=0.0)" in source
     for call in calls:
-        if len(call.args) > 2 and ast.unparse(call.args[2]) == "tight":
+        if any(ast.unparse(a) == "tight" for a in call.args[1:3]):
             continue  # the documented zero-clearance retry, built from planner_config
         received.clear()
         namespace["planning_trace"] = []
@@ -175,7 +181,7 @@ def test_all_runner_planning_calls_use_the_recorded_config(
     # goal is supplied, so the flag cannot reach one runner branch only.
     namespace.update(return_to_pose=scenario.start_rear)
     for call in calls:
-        if call.func.id != "plan_transport":
+        if call.func.id != "plan_transport" or any(ast.unparse(a) == "tight" for a in call.args[1:3]):
             continue
         received.clear()
         result = eval(compile(ast.Expression(call), str(SCRIPT), "eval"), namespace)
@@ -188,7 +194,7 @@ def test_all_runner_planning_calls_use_the_recorded_config(
     travel = replace(config, obstacle_heuristic_resolution_m=0.25)
     namespace.update(pickup_bounds=scenario.bounds, travel_config=travel)
     for call in calls:
-        if len(call.args) > 2 and ast.unparse(call.args[2]) == "tight":
+        if any(ast.unparse(a) == "tight" for a in call.args[1:3]):
             continue  # the zero-clearance retry, as above
         received.clear()
         result = eval(compile(ast.Expression(call), str(SCRIPT), "eval"), namespace)

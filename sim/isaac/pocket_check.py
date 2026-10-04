@@ -159,7 +159,7 @@ class PocketCheck:
         depth[finite] = depth[finite] + np.clip(self.rng.normal(0.0, 1.0, int(finite.sum())), -k, k) * sigma
         rec = self.memory.add_frame(stamp_s, depth, self.camera, self.optical_from_insertion(rear_at_stamp),
                                     self.surfaces)
-        rec = {**rec, "new": True}
+        rec = {**rec, "new": True, "rear": [float(v) for v in rear_at_stamp]}
         self.records.append(rec)
         return rec
 
@@ -222,6 +222,14 @@ class PocketCheck:
         return (self.estimate[0] + cx * c - cy * s, self.estimate[1] + cx * s + cy * c, x1 - x0, y1 - y0,
                 self.axis_yaw)
 
+    def _to_insertion_points(self, entry) -> list:
+        rec = next((r for r in self.records if r.get("time_s") == entry["time_s"] and "rear" in r), None)
+        if rec is None:
+            return []
+        rot, trans = self.optical_from_insertion(rec["rear"])
+        pts = (np.asarray(entry["points"], dtype=float) - trans) @ rot
+        return np.round(pts, 3).tolist()
+
     def summary(self) -> dict:
         new = [r for r in self.records if r.get("new")]
         return {
@@ -230,6 +238,9 @@ class PocketCheck:
             "volume_meets_pallet_voxels": self.conflict,
             "obstacle": self.memory.obstacle,
             "obstacle_points": self.memory.obstacle_points[:5],
+            "obstacle_points_insertion_frame": [
+                {"time_s": e["time_s"], "points": self._to_insertion_points(e)} for e in self.memory.obstacle_points[:5]
+            ],
             "frames": len(self.records),
             "new_frames": len(new),
             "first_frame": new[0] if new else None,

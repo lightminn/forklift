@@ -3728,6 +3728,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                     args.planning_target, target_pickup, scenario.pickup
                                 )
                             )
+                            pocket["planning_pickup"] = planning_pickup
                             planning_start = time.monotonic()
                             planning_trace = []
                             plans = plan_transport(
@@ -4116,6 +4117,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         )
                         if lp < allowed:
                             allowed, why = lp, wp
+                        if wp != "ok" and pocket.get("last_reason") != wp:
+                            # Kept now: a stop that ends the run must leave its evidence.
+                            pocket["last_reason"] = wp
+                            state.setdefault("pocket_check", {}).update(
+                                pocket["check"].summary(), frames_read=pocket["frames_read"], last_reason=wp,
+                                last_reason_s=t, last_reason_rear=[float(v) for v in rear],
+                            )
                     # A docking segment does not replan (plan D4): held at 0 for
                     # 5 s, the check's reason ends the run.
                     if allowed == 0.0:
@@ -4251,6 +4259,52 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 replanned = candidate_plan
                                 state["observation_waypoint_selected"] = list(coordinates)
                                 break
+                    if (
+                        not replanned.success and phase == "observe" and obstacle.get("pickup_estimate") is not None
+                        and pocket.get("planning_pickup") is not None
+                    ):
+                        # After recognition: the near-capture waypoint came from a
+                        # mission plan made on an earlier grid and may now sit
+                        # against an obstacle that has grown in view (L3b v24: valid
+                        # only at zero clearance, no path in 120 000 expansions).
+                        # The pallet, not the waypoint, is the goal: plan the
+                        # mission again from here, and its final straight gives the
+                        # new waypoint. Its own 20 s budget.
+                        obstacle["deadline"] = time.monotonic() + 20.0
+                        planning_trace = []
+                        mission_again = plan_transport(
+                            grid_world(scenario), planner_config, geometry=geometry,
+                            target_pickup=pocket["planning_pickup"], start_rear=start,
+                            return_to=return_to_pose, pickup_bounds=pickup_bounds, travel_config=travel_config,
+                            trace=planning_trace, **grid_kwargs("mission", pocket["planning_pickup"]),
+                        )
+                        if "invalid_start" in mission_again.status:
+                            mission_again = plan_transport(
+                                grid_world(scenario), tight, geometry=geometry,
+                                target_pickup=pocket["planning_pickup"], start_rear=start,
+                                return_to=return_to_pose, pickup_bounds=pickup_bounds, travel_config=tight_travel,
+                                trace=planning_trace, **grid_kwargs("mission", pocket["planning_pickup"]),
+                            )
+                        near_again = (
+                            final_straight_prefix(mission_again.approach, geometry.alignment_straight_m)
+                            if mission_again.success else None
+                        )
+                        obstacle.setdefault("mission_replans", []).append(
+                            {"time_s": t, "status": mission_again.status, "near_found": near_again is not None,
+                             "trace": planning_trace}
+                        )
+                        if near_again is not None:
+                            for name in mission_stages:
+                                paths[name] = getattr(mission_again, name)
+                                trackers[name] = RearAxlePathTracker(
+                                    paths[name].poses, paths[name].directions, paths[name].curvatures_inv_m,
+                                    trackers[name].config,
+                                )
+                                state["paths"][name] = path_record(paths[name])
+                            apply_tracker_profile()
+                            replanned = near_again
+                            state["near_capture"]["waypoint"] = near_again.poses[-1].tolist()
+                            state["observation_waypoint_selected"] = near_again.poses[-1].tolist()
                     obstacle["deadline"] = None
                     obstacle["replans"].append(
                         {
