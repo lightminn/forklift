@@ -20,6 +20,7 @@ setup(
             "scene_capture = forklift_ros.scene_capture:main",
             "synthetic_tf = forklift_ros.synthetic_tf:main",
             "slam_recorder = forklift_ros.slam_recorder:main",
+            "isaac_slam_bridge = forklift_ros.isaac_slam_bridge:main",
         ]
     },
 )

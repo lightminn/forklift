@@ -1279,3 +1279,96 @@ def test_a_short_primitive_leaves_the_fourth_evaluation_seed_4020_start():
     assert leg.success, leg.status
     winning = leg.search_attempts[-1]
     assert winning[1] == "success" and winning[3] == 0.1 and winning[6] == 0.10
+
+
+def test_the_return_leg_alone_matches_the_mission_plan():
+    """plan_return_leg from the withdrawn pose is plan_transport's return_home."""
+    scenario = make_scenario(0, G2_CATALOGUE, 4)
+    mission = plan_transport(scenario, g2_config(), return_to=scenario.start_rear)
+    assert mission.success and mission.return_home is not None
+    leg = pallet_mission.plan_return_leg(
+        scenario, Pose2D(*mission.return_home.poses[0]), scenario.start_rear, g2_config()
+    )
+    assert leg.success
+    np.testing.assert_array_equal(leg.poses, mission.return_home.poses)
+    np.testing.assert_array_equal(leg.directions, mission.return_home.directions)
+
+
+def _plan(poses, directions, curvatures):
+    from forklift_core.planning.hybrid_astar import PlanResult
+
+    poses = np.asarray(poses, dtype=float)
+    length = float(np.hypot(*np.diff(poses[:, :2], axis=0).T).sum())
+    return PlanResult(True, "ok", poses, np.asarray(directions, np.int8),
+                      np.asarray(curvatures, float), length, 0)
+
+
+def test_the_near_capture_point_is_where_the_final_straight_begins():
+    from forklift_core.planning.pallet_mission import final_straight_prefix
+
+    # 1 m arc-ish lead-in (curved), then 1.2 m straight along +x.
+    lead = [(-1.0 + 0.1 * k, 0.1 * (10 - k) ** 2 / 100, 0.0) for k in range(10)]
+    straight = [(0.1 * k, 0.0, 0.0) for k in range(13)]
+    poses = lead + straight
+    curv = [0.5] * len(lead) + [0.0] * len(straight)
+    plan = _plan(poses, [1] * len(poses), curv)
+    prefix = final_straight_prefix(plan, keep_m=0.8)
+    assert prefix is not None
+    np.testing.assert_allclose(prefix.poses[-1], (0.4, 0.0, 0.0), atol=1e-9)
+    assert prefix.length_m == pytest.approx(plan.length_m - 0.8, abs=1e-9)
+    assert len(prefix.poses) == len(prefix.directions) == len(prefix.curvatures_inv_m)
+
+
+def test_no_near_capture_when_the_end_is_not_a_long_enough_forward_straight():
+    from forklift_core.planning.pallet_mission import final_straight_prefix
+
+    straight = [(0.1 * k, 0.0, 0.0) for k in range(6)]  # only 0.5 m
+    assert final_straight_prefix(_plan(straight, [1] * 6, [0.0] * 6), keep_m=0.8) is None
+    curved = [(0.1 * k, 0.0, 0.0) for k in range(13)]
+    assert final_straight_prefix(_plan(curved, [1] * 13, [0.3] * 13), keep_m=0.8) is None
+    reverse = [(-0.1 * k, 0.0, 0.0) for k in range(13)]
+    assert final_straight_prefix(_plan(reverse, [-1] * 13, [0.0] * 13), keep_m=0.8) is None
+
+
+def test_a_final_straight_one_ulp_short_still_counts():
+    """Codex v3.6 P1: arc to (4,0,0) then a straight that sums to 0.7999999."""
+    from forklift_core.planning.pallet_mission import final_straight_prefix
+
+    arc = [(4.0 - 0.1 * (5 - k), 0.01 * (5 - k) ** 2, 0.0) for k in range(6)]
+    xs = np.linspace(4.0, 4.8, 21)
+    straight = [(x, 0.0, 0.0) for x in xs[1:]]
+    poses = arc + straight
+    plan = _plan(poses, [1] * len(poses), [0.5] * len(arc) + [0.0] * len(straight))
+    prefix = final_straight_prefix(plan, keep_m=0.8)
+    assert prefix is not None
+    np.testing.assert_allclose(prefix.poses[-1][:2], (4.0, 0.0), atol=1e-9)
+
+
+def test_the_final_straight_is_redrawn_from_where_the_truck_stands():
+    from forklift_core.planning import Pose2D
+    from forklift_core.planning.pallet_mission import straight_from_pose
+
+    start, end = Pose2D(0.0, 0.0, 0.0), Pose2D(0.8, 0.0, 0.0)
+    plan, record = straight_from_pose(
+        Pose2D(0.02, 0.03, 0.04), start, end, max_lateral_m=0.05, max_yaw_rad=0.05, min_length_m=0.3
+    )
+    assert plan is not None
+    np.testing.assert_allclose(plan.poses[0], (0.02, 0.0, 0.0), atol=1e-12)
+    np.testing.assert_allclose(plan.poses[-1], (0.8, 0.0, 0.0), atol=1e-12)
+    assert plan.length_m == pytest.approx(0.78)
+    assert record["lateral_m"] == pytest.approx(0.03)
+    assert np.all(plan.directions == 1) and np.all(plan.curvatures_inv_m == 0)
+    for bad in (Pose2D(0.0, 0.06, 0.0), Pose2D(0.0, 0.0, 0.06), Pose2D(0.6, 0.0, 0.0)):
+        plan, _ = straight_from_pose(
+            bad, start, end, max_lateral_m=0.05, max_yaw_rad=0.05, min_length_m=0.3
+        )
+        assert plan is None
+
+
+def test_an_approach_that_is_all_one_straight_is_cut_where_keep_m_is_left():
+    from forklift_core.planning.pallet_mission import final_straight_prefix
+
+    poses = [(0.1 * k, 0.0, 0.0) for k in range(24)]  # 2.3 m forward straight
+    prefix = final_straight_prefix(_plan(poses, [1] * 24, [0.0] * 24), keep_m=0.8)
+    assert prefix is not None
+    np.testing.assert_allclose(prefix.poses[-1], (1.5, 0.0, 0.0), atol=1e-9)

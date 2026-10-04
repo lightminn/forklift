@@ -5,6 +5,8 @@ import math
 from dataclasses import asdict, replace
 from pathlib import Path
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -878,3 +880,146 @@ def test_sensor_capture_rejects_future_acquisition_even_after_multiple_steps():
     assert error.value.diagnostics.rejection_counts == {
         "acquisition_outside_capture": 3
     }
+
+
+# --- named mounts, tilt quaternion, depth rounding, capture guard -------------
+# (docs/plans/2026-10-03-carriage-mount-adoption.md, B1b/B1c)
+
+
+def _matrix_from_xyzw(q):
+    x, y, z, w = q
+    return np.array(
+        [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ]
+    )
+
+
+def test_the_legacy_mount_is_the_default_mount_exactly():
+    legacy = MODULE.mount_base_from_optical("legacy")
+    default = MODULE.default_base_from_optical()
+    assert np.array_equal(legacy.rotation, default.rotation)
+    assert np.array_equal(legacy.translation_m, default.translation_m)
+    rig = MODULE._RIG
+    assert MODULE.quaternion_xyzw(legacy.rotation) == pytest.approx(
+        rig.OPTICAL_QUATERNION_XYZW, abs=1e-12
+    )
+
+
+def test_the_carriage_mount_is_lower_further_back_and_tilted_down():
+    mount = MODULE.mount_base_from_optical("carriage_low")
+    np.testing.assert_allclose(mount.translation_m, [0.559, 0.0, 0.27])
+    optical_z_in_base = np.asarray(mount.rotation)[:, 2]  # the viewing direction
+    assert optical_z_in_base[2] == pytest.approx(-np.sin(0.10), abs=1e-12)
+    assert optical_z_in_base[0] == pytest.approx(np.cos(0.10), abs=1e-12)
+
+
+@pytest.mark.parametrize("name", ["legacy", "carriage_low"])
+def test_the_mount_quaternion_round_trips(name):
+    rotation = np.asarray(MODULE.mount_base_from_optical(name).rotation)
+    q = MODULE.quaternion_xyzw(rotation)
+    assert np.linalg.norm(q) == pytest.approx(1.0) and q[3] >= 0
+    np.testing.assert_allclose(_matrix_from_xyzw(q), rotation, atol=1e-12)
+
+
+def test_depth_rounds_to_whole_millimetres_and_keeps_missing_values():
+    depth = np.array([[1.23449, 1.23451, np.nan], [np.inf, 0.0004, 2.0]])
+    rounded = MODULE.quantize_depth_mm(depth)
+    np.testing.assert_array_equal(rounded[0, :2], [1.234, 1.235])
+    assert np.isnan(rounded[0, 2]) and np.isinf(rounded[1, 0])
+    assert rounded[1, 1] == 0.0 and rounded[1, 2] == 2.0
+
+
+def test_the_guard_runs_before_and_after_every_render_step():
+    """A lift that leaves 0 and comes back within one capture is still rejected
+    (Codex counterexample: checking only before and after accepted it)."""
+    lift = iter([0.0, 0.002, 0.0, 0.0, 0.0, 0.0])
+    calls = []
+
+    def guard():
+        value = next(lift)
+        calls.append(value)
+        if abs(value) > 0.001:
+            raise MODULE.CaptureFailure("lift_not_zero")
+
+    camera = SensorCamera()
+    now = [0.0]
+
+    def advance():
+        now[0] += 1.0
+
+    sensor = MODULE.SensorCapture(
+        camera,
+        MODULE.mount_base_from_optical("carriage_low"),
+        step_fn=advance,
+        physics_time_fn=lambda: now[0],
+        pose_fn=lambda: ([0, 0, 0], [1, 0, 0, 0]),
+        guard_fn=guard,
+    )
+    with pytest.raises(MODULE.CaptureFailure) as error:
+        sensor.capture(max_attempts=1)
+    assert error.value.reason == "lift_not_zero"
+    assert calls[:2] == [0.0, 0.002]
+
+
+def test_the_guard_catches_a_lift_that_moves_late_in_a_multi_step_capture():
+    """Three render steps before the frame is accepted; the lift leaves 0 only
+    after the third (Codex: a guard run after the first step alone passed)."""
+    camera = SensorCamera()
+    camera.frame["rendering_time"] = -1.0  # old metadata: the capture retries
+    now = [0.0]
+    steps = [0]
+
+    def advance():
+        now[0] += 1.0
+        steps[0] += 1
+        if steps[0] >= 3:
+            camera.frame["rendering_time"] = now[0]  # becomes acceptable
+
+    def guard():
+        if steps[0] >= 3:
+            raise MODULE.CaptureFailure("lift_not_zero")
+
+    sensor = MODULE.SensorCapture(
+        camera,
+        MODULE.mount_base_from_optical("carriage_low"),
+        step_fn=advance,
+        physics_time_fn=lambda: now[0],
+        pose_fn=lambda: ([0, 0, 0], [1, 0, 0, 0]),
+        render_latency_s=0.0,
+        guard_fn=guard,
+    )
+    with pytest.raises(MODULE.CaptureFailure) as error:
+        sensor.capture(max_attempts=5)
+    assert error.value.reason == "lift_not_zero"
+    assert steps[0] == 3
+
+
+def test_the_detector_input_rounds_only_when_asked_and_never_the_capture():
+    depth = np.full((480, 640), 1.23449)
+    scene = SimpleNamespace(depth_m=depth)
+    assert MODULE.detector_input(scene, 0) is scene
+    rounded = MODULE.detector_input(_scene_with_depth(depth), 1)
+    assert float(rounded.depth_m[0, 0]) == 1.234
+    assert float(depth[0, 0]) == 1.23449  # the caller's (saved) depth is untouched
+    with pytest.raises(ValueError):
+        MODULE.detector_input(scene, 2)
+
+
+def test_without_a_guard_capture_is_unchanged():
+    sensor = sensor_capture(SensorCamera())
+    assert sensor.guard_fn is None
+    _, _, count = sensor.capture(max_attempts=1)
+    assert count == 1
+
+
+def _scene_with_depth(depth):
+    from dataclasses import dataclass
+
+    @dataclass(frozen=True)
+    class Scene:
+        depth_m: object
+
+    return Scene(depth_m=depth)

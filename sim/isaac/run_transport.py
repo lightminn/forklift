@@ -99,6 +99,13 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--forklift-urdf", type=Path, required=True)
     parser.add_argument("--settings", type=Path, required=True)
     parser.add_argument(
+        "--delivery-straight-m",
+        type=float,
+        default=0.70,
+        help="Length of the final delivery straight (plan v3.8: 1.5 for the "
+        "docking runs and their ground-truth controls; 0.70 is the recorded default).",
+    )
+    parser.add_argument(
         "--insertion-reserve-m",
         type=float,
         default=0.046,
@@ -191,6 +198,36 @@ def arguments() -> argparse.Namespace:
         default="ros",
     )
     parser.add_argument("--perception-max-attempts", type=int, default=200)
+    # Online SLAM closed loop (docs/plans/2026-10-04-online-slam-closed-loop.md).
+    parser.add_argument(
+        "--slam-feedback",
+        type=Path,
+        default=None,
+        metavar="SOCKET",
+        help="Unix socket of forklift_ros isaac_slam_bridge: control, planning "
+        "starts and the perception world transform use the SLAM estimate and "
+        "wheel odometry; ground truth only checks, evaluates and renders. "
+        "Requires --record-slam (the LiDAR) and --use-perception.",
+    )
+    parser.add_argument("--slam-noise-seed", type=int, default=None)
+    parser.add_argument("--slam-reply-timeout", type=float, default=90.0)
+    parser.add_argument(
+        "--perception-mount",
+        choices=("legacy", "carriage_low"),
+        default="legacy",
+        help="legacy: base (0.75, 0, 0.50), tilt 0 (every recorded run). "
+        "carriage_low: on fork_carriage at base (0.559, 0, 0.27), tilt 0.10 rad, "
+        "provisional chassis only, captures only at lift 0 "
+        "(docs/plans/2026-10-03-carriage-mount-adoption.md).",
+    )
+    parser.add_argument(
+        "--depth-quantize-mm",
+        type=int,
+        choices=(0, 1),
+        default=0,
+        help="1: round the detector's depth to whole millimetres, as a z16 "
+        "depth stream reports it; saved depth stays raw (adoption plan, B1c).",
+    )
     parser.add_argument(
         "--planning-target",
         choices=G2.PLANNING_TARGETS,
@@ -256,6 +293,22 @@ def arguments() -> argparse.Namespace:
         ]
     if not args.observation_waypoints:
         parser.error("--observation-waypoints requires at least one candidate")
+    if args.slam_feedback is not None:
+        if not (args.record_slam and args.use_perception):
+            parser.error("--slam-feedback needs --record-slam and --use-perception")
+        if args.planning_target == "oracle_nominal":
+            parser.error("--slam-feedback forbids --planning-target oracle_nominal")
+    if args.slam_noise_seed is not None and args.slam_feedback is None:
+        parser.error("--slam-noise-seed requires --slam-feedback")
+    if args.perception_mount == "carriage_low":
+        if not args.use_perception:
+            parser.error("--perception-mount carriage_low needs --use-perception")
+        if args.perception_camera_axes != "ros":
+            parser.error("--perception-mount carriage_low needs ros camera axes")
+        if "dls08_provisional" not in str(args.forklift_urdf):
+            parser.error(
+                "--perception-mount carriage_low is defined for dls08_provisional only"
+            )
     if args.use_perception:
         if args.pallet_prior is None:
             parser.error("--pallet-prior is required with --use-perception")
@@ -689,13 +742,18 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         Rectangle,
         collision_free_pose,
     )
+    from forklift_core.control.rollout import bicycle_rollout
     from forklift_core.planning import Pose2D as PlanningPose
     from forklift_core.planning.pallet_mission import (
         SyntheticMissionGeometry,
         make_scenario,
         make_transport_planner_config,
         plan_transport,
+        final_straight_prefix,
+        straight_from_pose,
+        plan_return_leg,
         plan_transport_leg,
+        site_poses,
     )
 
     if args.use_perception:
@@ -767,6 +825,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         axle_to_fork_tip_m=args.axle_to_fork_tip_m,
         carriage_limit_m=args.carriage_limit_m,
         insertion_reserve_m=args.insertion_reserve_m,
+        delivery_straight_m=args.delivery_straight_m,
     )
     state["insertion_reserve_m"] = args.insertion_reserve_m
     planner_config = make_transport_planner_config(
@@ -793,6 +852,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     # clearance, at most this many times (third- and fourth-evaluation seeds
     # 3003 and 4007; docs/plans/2026-10-03-transport-stage-fixes.md).
     state["cusp_replans"] = []
+    state["stall_replans"] = []
+    state["observe_replans"] = []
+    observe_stall_ticks = 0
+    slam_stall_ticks = 0
     max_cusp_replans = 2
     # Stopped = zero command, planar speed and yaw rate under these for this
     # many consecutive ticks (0.1 s), not the forward speed alone (Codex review).
@@ -979,16 +1042,32 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         extra_cameras["chase"] = chase
         state["extra_views"]["chase"] = {"focal_length_mm": 3.0}
     if args.use_perception:
-        perception_mount = adapter.default_base_from_optical()
+        if args.perception_mount == "legacy":
+            perception_mount = adapter.default_base_from_optical()
+            mount_parent = "/World/Forklift/base_link"
+            mount_xyzw = rig.OPTICAL_QUATERNION_XYZW
+        else:
+            # On the carriage, so it rises with the lift like the real camera;
+            # the base<-optical transform below holds only at lift 0.
+            perception_mount = adapter.mount_base_from_optical(args.perception_mount)
+            mount_parent = "/World/Forklift/fork_carriage"
+            mount_xyzw = adapter.quaternion_xyzw(perception_mount.rotation)
+        state["perception_mount"] = {
+            "name": args.perception_mount,
+            "parent": mount_parent,
+            "translation_m": np.asarray(perception_mount.translation_m).tolist(),
+            "rotation": np.asarray(perception_mount.rotation).tolist(),
+            "depth_quantize_mm": args.depth_quantize_mm,
+        }
         perception_calibration = rig.intrinsics()
         perception_camera = Camera(
-            prim_path="/World/Forklift/base_link/PerceptionCamera",
+            prim_path=mount_parent + "/PerceptionCamera",
             frequency=-1,
             resolution=(perception_calibration.width, perception_calibration.height),
         )
         perception_camera.set_local_pose(
             translation=np.asarray(perception_mount.translation_m),
-            orientation=np.asarray(adapter.xyzw_to_wxyz(rig.OPTICAL_QUATERNION_XYZW)),
+            orientation=np.asarray(adapter.xyzw_to_wxyz(mount_xyzw)),
             camera_axes=args.perception_camera_axes,
         )
         perception_camera.set_projection_mode("perspective")
@@ -1027,7 +1106,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         perception_camera.add_distance_to_image_plane_to_frame()
         if "perception" in args.extra_views:
             perception_display = Camera(
-                prim_path="/World/Forklift/base_link/PerceptionDisplayCamera",
+                prim_path=mount_parent + "/PerceptionDisplayCamera",
                 frequency=-1,
                 resolution=(
                     perception_calibration.width,
@@ -1036,9 +1115,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             )
             perception_display.set_local_pose(
                 translation=np.asarray(perception_mount.translation_m),
-                orientation=np.asarray(
-                    adapter.xyzw_to_wxyz(rig.OPTICAL_QUATERNION_XYZW)
-                ),
+                orientation=np.asarray(adapter.xyzw_to_wxyz(mount_xyzw)),
                 camera_axes=args.perception_camera_axes,
             )
             perception_display.set_projection_mode("perspective")
@@ -1069,12 +1146,38 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     adapter.read_isaac_intrinsics(perception_camera).integer_index
                 ),
             }
+        lift_guard = None
+        if args.perception_mount != "legacy":
+            lift_joint = list(robot.dof_names).index("fork_lift")
+
+            def lift_guard():
+                # Every render step of a capture, not only before and after:
+                # a carriage camera's base<-optical holds at lift 0 only.
+                if abs(float(robot.get_joint_positions()[lift_joint])) > 0.001:
+                    raise adapter.CaptureFailure("lift_not_zero")
+
+            # The mount as Isaac holds it must be the planned one.
+            read_xyz, read_wxyz = perception_camera.get_local_pose(
+                camera_axes=args.perception_camera_axes
+            )
+            require(
+                np.allclose(read_xyz, perception_mount.translation_m, atol=1e-6)
+                and min(
+                    np.abs(np.asarray(read_wxyz) - adapter.xyzw_to_wxyz(mount_xyzw)).max(),
+                    np.abs(np.asarray(read_wxyz) + adapter.xyzw_to_wxyz(mount_xyzw)).max(),
+                )
+                <= 1e-6,
+                "Perception camera local pose differs from the planned mount",
+            )
         perception_capture = adapter.SensorCapture(
             perception_camera,
             perception_mount,
-            step_fn=lambda: world.step(render=True),
+            # Every physics step, capture included, goes through step_world
+            # (SLAM plan: odometry, scans and the lockstep must see them all).
+            step_fn=lambda: stepper["fn"](True),
             physics_time_fn=lambda: world.current_time,
             pose_fn=robot.get_world_pose,
+            guard_fn=lift_guard,
         )
     names = list(robot.dof_names)
     wheels = np.array(
@@ -1278,6 +1381,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     frame_audit = []
     video_frames = []
     slam_log = None
+    slam = None
+    # step_world replaces this before the main loop; captures call through it.
+    stepper = {"fn": lambda render: world.step(render=render), "tick": 0}
     if args.record_slam:
         import planar_lidar
         import yaml
@@ -1306,6 +1412,135 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "laser_pose_world": [],
         }
         state["lidar_synthetic"] = lidar_config
+    if args.slam_feedback is not None:
+        from forklift_core.localization import slam_link
+        from forklift_core.localization.slam_pose import (
+            IncrementalWheelOdometry,
+            LocalizationStale,
+            OdometryNoise,
+            SlamPoseTracker,
+            StopDetector,
+            compose,
+            invert,
+        )
+        from forklift_core.localization.scan_docking import dock, laser_points
+        from forklift_core.localization.wheel_odometry import AckermannOdometryGeometry
+
+        # The known start (odom = map = world); the plan's v3 state machine.
+        slam_start = (
+            scenario.start_rear.x_m,
+            scenario.start_rear.y_m,
+            scenario.start_rear.yaw_rad,
+        )
+        slam = {
+            "link": slam_link.SlamLinkClient(
+                str(args.slam_feedback), timeout_s=args.slam_reply_timeout
+            ),
+            "module": slam_link,
+            "noise": OdometryNoise(
+                seed=args.slam_noise_seed or 0,
+                enabled=args.slam_noise_seed is not None,
+            ),
+            "odometry": IncrementalWheelOdometry(
+                AckermannOdometryGeometry(
+                    args.drive_geometry.wheelbase_m,
+                    args.drive_geometry.track_m,
+                    args.drive_geometry.wheel_radius_m,
+                ),
+                initial_pose=slam_start,
+            ),
+            # Holding now spans approach + insert + extract (up to ~11 m in
+            # the recorded runs): the bound is on odometry since the capture.
+            "tracker": SlamPoseTracker(max_age_s=0.25, hold_limit_m=15.0),
+            "stale": LocalizationStale,
+            "stop": StopDetector(tick_s=1 / 120),
+            "odom_rear": slam_start,
+            "odom_speed": 0.0,
+            "odom_yaw_rate": 0.0,
+            "scan_id": 0,
+            "tick": 0,
+            "records": [],
+            "control": [],
+            "holds": [],
+            "pending_release": None,
+            # Plan v3.8: online SLAM + pre-scanned destination docking.
+            "docking": {"status": "pending"},
+            "stop_now": False,
+            "tracker_speed": 0.0,
+            "last_command": 0.0,
+        }
+        state["slam_feedback"] = {
+            "socket": str(args.slam_feedback),
+            "noise_seed": args.slam_noise_seed,
+            "start_rear": list(slam_start),
+            "max_age_s": 0.25,
+            "hold_limit_m": 15.0,
+            "hold_phases": [
+                "approach (from the accepted capture)",
+                "insert",
+                "lift",
+                "extract",
+                "lower",
+                "withdraw",
+            ],
+            "release_limits": {"position_m": 0.02, "yaw_rad": 0.02},
+        }
+
+    def slam_odom_base():
+        x, y, yaw_o = slam["odom_rear"]
+        offset = abs(args.rear_axle_offset_m)
+        return (x + offset * math.cos(yaw_o), y + offset * math.sin(yaw_o), yaw_o)
+
+    def slam_error():
+        """Estimate minus truth in the true rear-axle frame (along, lateral, yaw)."""
+        truth_base, truth_q = robot.get_world_pose()
+        truth_yaw = yaw_and_tilt(truth_q)[0]
+        offset = abs(args.rear_axle_offset_m)
+        truth = np.array(
+            [
+                truth_base[0] - offset * math.cos(truth_yaw),
+                truth_base[1] - offset * math.sin(truth_yaw),
+            ]
+        )
+        if slam["tracker"].applied is None:
+            x, y, yaw_e = slam["odom_rear"]
+        else:
+            bx, by, yaw_e = compose(slam["tracker"].applied[0], slam_odom_base())
+            x, y = bx - offset * math.cos(yaw_e), by - offset * math.sin(yaw_e)
+        dx, dy = x - truth[0], y - truth[1]
+        c, s_ = math.cos(truth_yaw), math.sin(truth_yaw)
+        return {
+            "along_m": float(c * dx + s_ * dy),
+            "lateral_m": float(-s_ * dx + c * dy),
+            "yaw_rad": float(math.atan2(math.sin(yaw_e - truth_yaw), math.cos(yaw_e - truth_yaw))),
+        }
+
+    def annotation_pose():
+        """World (position, wxyz) for video annotations: the truth, or under
+        SLAM feedback the applied estimate (no freshness check -- drawing only)."""
+        position, orientation = robot.get_world_pose()
+        if slam is None or slam["tracker"].applied is None:
+            return position, orientation
+        x, y, yaw_e = compose(slam["tracker"].applied[0], slam_odom_base())
+        return (
+            np.array([x, y, float(position[2])]),
+            np.array([math.cos(yaw_e / 2), 0.0, 0.0, math.sin(yaw_e / 2)]),
+        )
+
+    def slam_rear(now_s):
+        if slam["tracker"].applied is None:
+            # Before the first scan: odom = map at the known start (plan v3.1);
+            # warming up holds the drive anyway.
+            x, y, yaw_o = slam["odom_rear"]
+            return np.array([x, y, yaw_o])
+        try:
+            est = slam["tracker"].map_from_base(now_s, slam_odom_base())
+        except slam["stale"] as exc:
+            require(False, f"localization_stale: {exc}")
+        offset = abs(args.rear_axle_offset_m)
+        return np.array(
+            [est[0] - offset * math.cos(est[2]), est[1] - offset * math.sin(est[2]), est[2]]
+        )
     if args.robot_camera:
         import video_frames as video_frames_module
     speeds = {
@@ -1431,6 +1666,333 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         snapshot(phase)
         phase, phase_started = next_phase, t
         state["phase"] = phase
+        if slam is None:
+            return
+        # Docking phases freeze the applied correction (plan v3.1); the next
+        # travel leg waits for a stop and the release below.
+        # approach: the pallet estimate was made with the correction applied at
+        # the accepted capture (this same instant -- the truck stands still for
+        # the capture, so no keyframe lands in between). Keep that correction
+        # until extract: the docking then runs on odometry relative to what was
+        # seen, and a later SLAM correction cannot slide the truck against the
+        # pallet estimate (plan v3.5; S2 seed 0 on v3.4 hit a block that way).
+        if phase in ("approach", "insert", "lower") and slam["tracker"].mode == "tracking":
+            slam["tracker"].hold(odom_from_base=slam_odom_base())
+            slam["holds"].append(
+                {"phase": phase, "time_s": t, "event": "hold", "error": slam_error()}
+            )
+        elif phase in ("transport", "settle"):
+            slam["pending_release"] = phase
+            slam["release_wait_from"] = t
+
+    def slam_release(t: float) -> None:
+        """Apply the received correction while stopped; replan the next leg
+        from the new estimate if it moved more than 2 cm or 0.02 rad."""
+        nonlocal phase_started
+        leg = "transport" if slam["pending_release"] == "transport" else "return_home"
+        slam["pending_release"] = None
+        before = slam_rear(t)
+        jump_m, jump_rad = slam["tracker"].release(odom_from_base=slam_odom_base())
+        after = slam_rear(t)
+        event = {
+            "phase": phase,
+            "time_s": t,
+            "event": "release",
+            "jump_m": jump_m,
+            "jump_rad": jump_rad,
+            "rear_before": before.tolist(),
+            "rear_after": after.tolist(),
+            "replanned": False,
+        }
+        slam["holds"].append(event)
+        # After an accepted docking match the withdraw (and so the return's
+        # start) has moved: the return is replanned whatever the jump (Codex
+        # 8428113 P2: a 0 jump left the old return start 366 mm away).
+        docked_return = leg == "return_home" and slam["docking"].get("accepted_any")
+        if leg not in trackers or (
+            jump_m <= 0.02 and abs(jump_rad) <= 0.02 and not docked_return
+        ):
+            if leg == "transport":
+                arm_docking()
+            return
+        start = PlanningPose(float(after[0]), float(after[1]), float(after[2]))
+        replan_start = time.monotonic()
+        if leg == "transport":
+            replanned = plan_transport_leg(
+                scenario, start, planner_config, geometry=geometry, travel_config=travel_config
+            )
+        else:
+            # The delivered pallet sits where docking put it -- right in the
+            # held frame. Carry it into the released frame with the same
+            # change of frame as the truck, T = after o before^-1, so the
+            # truck-pallet relation survives the release (S3 seed 1 on a351056:
+            # invalid_start against the nominal pallet after a docked drop).
+            return_scenario = slam.get("transport_scenario", scenario)
+            if slam["docking"].get("accepted_any"):
+                frame_change = compose(tuple(after), invert(tuple(before)))
+                site = return_scenario.destination
+                moved_site = compose(frame_change, (site.x_m, site.y_m, site.yaw_rad))
+                return_scenario = replace(
+                    return_scenario,
+                    destination=replace(
+                        site, x_m=moved_site[0], y_m=moved_site[1], yaw_rad=moved_site[2]
+                    ),
+                )
+                event["pallet_frame_change"] = list(frame_change)
+                slam["return_scenario"] = return_scenario  # later return recoveries too
+            replanned = plan_return_leg(
+                return_scenario,
+                start,
+                return_to_pose,
+                planner_config,
+                geometry=geometry,
+                travel_config=travel_config,
+            )
+        event.update(
+            replaced_path=path_record(paths[leg]),
+            replanned=True,
+            replan_status=replanned.status,
+            planning_wall_s=time.monotonic() - replan_start,
+        )
+        require(replanned.success, f"slam_release_replan_failed: {replanned.status}")
+        paths[leg] = replanned
+        state["paths"][leg] = path_record(replanned)
+        (args.output / "paths.json").write_text(record_json(state["paths"], indent=2) + "\n")
+        trackers[leg] = RearAxlePathTracker(
+            replanned.poses,
+            replanned.directions,
+            replanned.curvatures_inv_m,
+            trackers[leg].config,
+        )
+        add_path_display(
+            stage,
+            replanned,
+            "Transport" if leg == "transport" else "Return",
+            (1.0, 0.65, 0.04) if leg == "transport" else (0.55, 0.2, 0.85),
+        )
+        if leg == phase:
+            phase_started = t
+        if leg == "transport":
+            arm_docking()
+
+    def arm_docking() -> None:
+        """Drive transport only to where its delivery straight begins (v3.8)."""
+        docking = slam["docking"]
+        if docking["status"] not in ("pending", "armed"):
+            return
+        full = paths["transport"]
+        # The current round's stop: 1.5 m, then 0.4 m (Codex 5de6c3a P2).
+        prefix = final_straight_prefix(full, docking.get("keep_m", geometry.delivery_straight_m))
+        if prefix is None:
+            docking["status"] = "no_final_straight"
+            return
+        docking.update(
+            status="armed",
+            delivery_rear=[float(v) for v in full.poses[-1]],
+            predelivery_rear=[float(v) for v in prefix.poses[-1]],
+        )
+        # A stop to look, not a final goal: judged like an observe stop (3 cm,
+        # 0.05 rad); the docked straight that follows keeps the 8 mm goal.
+        slam.setdefault("transport_config", trackers["transport"].config)
+        trackers["transport"] = RearAxlePathTracker(
+            prefix.poses,
+            prefix.directions,
+            prefix.curvatures_inv_m,
+            replace(
+                slam["transport_config"],
+                position_tolerance_m=0.03,
+                yaw_tolerance_rad=0.05,
+            ),
+        )
+
+    def dock_at_delivery_straight(t: float) -> None:
+        """Match the live scan to the delivery reference and re-place the goal.
+
+        Codex v3.8: goal_est = A o R^-1 with R = X o Q o X^-1; the whole rest
+        of the drop (delivery straight, withdraw, any transport replan) is
+        moved by the same correction E = goal_est o D^-1; an accepted match
+        whose straight cannot be redrawn is re-aligned by a collision-checked
+        plan, not dropped; a refused match falls back to the SLAM goal.
+        """
+        nonlocal phase_started
+        docking = slam["docking"]
+        state["delivery_docking"] = docking  # linked first: kept if a step fails
+        delivery = tuple(docking["delivery_rear_prior"])
+        path_end = docking["delivery_rear"]
+        docking["path_end_vs_prior_m"] = float(math.hypot(path_end[0] - delivery[0], path_end[1] - delivery[1]))
+        # A: the estimate at the instant of the scan being matched (Codex P3).
+        # Re-expressed with the correction applied now, so a release between
+        # the scan and this match cannot mix frames (Codex 5de6c3a P2).
+        bx, by, byaw = compose(slam["tracker"].applied[0], slam["last_scan_odom_base"])
+        estimate = (
+            bx - abs(args.rear_axle_offset_m) * math.cos(byaw),
+            by - abs(args.rear_axle_offset_m) * math.sin(byaw),
+            byaw,
+        )
+        offset = abs(args.rear_axle_offset_m)
+        rear_from_laser = (
+            offset + float(laser_mount.xyz_m[0]),
+            float(laser_mount.xyz_m[1]),
+            float(laser_mount.yaw_rad),
+        )
+        live = laser_points(slam["last_sent_ranges"], beam_angles)
+        match_start = time.monotonic()
+        result = dock(
+            slam["reference_points"],
+            live,
+            rear_from_laser=rear_from_laser,
+            estimate_rear=estimate,
+            delivery_rear=delivery,
+        )
+        # Evaluation only: where the delivery pose really is in the estimate frame.
+        expected = compose(estimate, compose(invert(tuple(truth_rear)), delivery))
+        docking.update(
+            match_wall_s=time.monotonic() - match_start,
+            live_beams=int(len(live)),
+            accepted=result.accepted,
+            reason=result.reason,
+            correction=result.correction,
+            starts=[[ok, why, list(q)] for ok, why, q in result.starts],
+            goal_error_vs_truth=None
+            if result.goal_estimate is None
+            else [
+                float(result.goal_estimate[0] - expected[0]),
+                float(result.goal_estimate[1] - expected[1]),
+                float(math.atan2(math.sin(result.goal_estimate[2] - expected[2]), math.cos(result.goal_estimate[2] - expected[2]))),
+            ],
+            slam_goal_error_vs_truth=[
+                float(delivery[0] - expected[0]),
+                float(delivery[1] - expected[1]),
+            ],
+        )
+        round_number = docking.get("round", 1)
+        keep_m = docking.get("keep_m", geometry.delivery_straight_m)
+        previous_goal = tuple(docking.get("previous_goal", delivery))
+        # A refused match keeps the best goal so far (the SLAM goal in round 1).
+        goal = result.goal_estimate if result.accepted else previous_goal
+        shift = compose(goal, invert(delivery))  # E: planned -> corrected (total)
+        step_shift = compose(goal, invert(previous_goal))  # since the last round
+        docking.setdefault("rounds", []).append(
+            {
+                "round": round_number,
+                "keep_m": keep_m,
+                "accepted": result.accepted,
+                "reason": result.reason,
+                "goal_error_vs_truth": docking["goal_error_vs_truth"],
+                "estimate_vs_truth_at_match": [
+                    float(estimate[0] - truth_rear[0]),
+                    float(estimate[1] - truth_rear[1]),
+                ],
+            }
+        )
+        if result.accepted:
+            docking["accepted_any"] = True
+        # A refused second round keeps the first round's valid correction
+        # (Codex 5de6c3a P2): still "done", and its world map W is reused.
+        docking["status"] = "done" if docking.get("accepted_any") else "fallback"
+        line_start = compose(goal, (-keep_m, 0.0, 0.0))
+        # Delivery corrections of ~10 cm are the point of docking (seed 0: 92 mm),
+        # so the box is wider than the insertion one; what makes it safe is the
+        # dry run arriving AND its swept loaded footprint staying clear.
+        straight, offsets = straight_from_pose(
+            PlanningPose(*estimate),
+            PlanningPose(*line_start),
+            PlanningPose(*goal),
+            max_lateral_m=0.12,
+            max_yaw_rad=0.08,
+            min_length_m=0.3,
+        )
+        docking["offsets_to_new_line"] = offsets
+        path = None
+        if straight is not None:
+            config = slam.get("transport_config", trackers["transport"].config)
+            dry = bicycle_rollout(
+                straight.poses, straight.directions, straight.curvatures_inv_m, config, rear
+            )
+            # The obstacles are in world; the dry run is in the estimate frame.
+            # After an accepted match the truck's world pose is D o R, so
+            # W = (D o R) o A^-1 carries estimate poses into world (Codex v3.8
+            # impl P1). Without a match the estimate is the best world guess.
+            if result.accepted:
+                to_world = compose(compose(delivery, result.relative_rear), invert(estimate))
+                docking["to_world"] = list(to_world)  # the held frame keeps it valid
+            elif docking.get("to_world") is not None:
+                to_world = tuple(docking["to_world"])
+            else:
+                to_world = (0.0, 0.0, 0.0)
+            swept_clear = all(
+                collision_free_pose(
+                    np.asarray(compose(to_world, tuple(pose))),
+                    obstacles,
+                    geometry.loaded_footprint,
+                    scenario.bounds,
+                )
+                for pose in dry.trajectory
+            )
+            docking["dry_run"] = {
+                **{k: v for k, v in asdict(dry).items() if k != "trajectory"},
+                "trajectory_samples": len(dry.trajectory),
+                "swept_clear": swept_clear,
+            }
+            # The tracker stops anywhere inside its own tolerance (Codex v3.8 P2:
+            # a clean 0.7 m straight stops at 7.8 mm); require yaw margin only.
+            if (
+                dry.status == "arrived"
+                and dry.position_error_m <= config.position_tolerance_m
+                and abs(dry.yaw_error_rad) <= 0.75 * config.yaw_tolerance_rad
+                and swept_clear
+            ):
+                path = straight
+        corrected = replace(
+            scenario,
+            destination=replace(
+                scenario.destination,
+                **dict(
+                    zip(
+                        ("x_m", "y_m", "yaw_rad"),
+                        compose(shift, (scenario.destination.x_m, scenario.destination.y_m, scenario.destination.yaw_rad)),
+                    )
+                ),
+            ),
+        )
+        slam["transport_scenario"] = corrected
+        # No long held detour: a Hybrid A* re-alignment for a 9 cm correction
+        # drove 13.3 m forward-only on held odometry and drifted 0.5 m (S2 v3.8
+        # seed 0). A straight that cannot be accepted ends the run instead.
+        require(path is not None, f"docking_unaligned:{offsets}:{docking.get('dry_run')}")
+        paths["transport"] = path
+        state["paths"]["transport"] = path_record(path)
+        trackers["transport"] = RearAxlePathTracker(
+            path.poses, path.directions, path.curvatures_inv_m, slam.get("transport_config", trackers["transport"].config)
+        )
+        if "withdraw" in paths:
+            moved = np.array([compose(step_shift, tuple(pose)) for pose in paths["withdraw"].poses])
+            paths["withdraw"] = replace(paths["withdraw"], poses=moved)
+            state["paths"]["withdraw"] = path_record(paths["withdraw"])
+            trackers["withdraw"] = RearAxlePathTracker(
+                moved,
+                paths["withdraw"].directions,
+                paths["withdraw"].curvatures_inv_m,
+                trackers["withdraw"].config,
+            )
+        (args.output / "paths.json").write_text(record_json(state["paths"], indent=2) + "\n")
+        add_path_display(stage, path, "Transport", (1.0, 0.65, 0.04))
+        phase_started = t
+        docking["previous_goal"] = list(goal)
+        if round_number == 1 and result.accepted:
+            # Second round: loaded wheels slip (~5 % over the 1.5 m straight,
+            # S2 v3.8c seed 3: 8 cm short), so stop again 0.4 m out and match
+            # once more; the last 0.4 m then carries only that slip.
+            final_keep = 0.4
+            prefix = final_straight_prefix(path, final_keep)
+            if prefix is not None:
+                docking.update(status="armed", round=2, keep_m=final_keep)
+                trackers["transport"] = RearAxlePathTracker(
+                    prefix.poses,
+                    prefix.directions,
+                    prefix.curvatures_inv_m,
+                    replace(slam["transport_config"], position_tolerance_m=0.03, yaw_tolerance_rad=0.05),
+                )
 
     try:
         if args.video:
@@ -1558,6 +2120,273 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             )
             state["tracking_failure"] = record
 
+        def write_video_frame(stamp: float) -> None:
+            """One video frame per fps tick of physics, capture steps included
+            (SLAM plan v3.1: frames match the run length)."""
+            frame = camera.get_current_frame()
+            rgba = camera.get_rgba()
+            # get_rgba reads the RGB annotator directly. The SDK's cached
+            # frame metadata can lag; retain it for audit without treating
+            # its timestamp as a control or image-acquisition failure.
+            require(
+                rgba is not None and rgba.shape == (720, 1280, 4),
+                "Camera did not produce RGB",
+            )
+            video_rgb = rgba[:, :, :3]
+            if args.camera_inset:
+                # Pose after this render step, so outline and picture agree;
+                # under SLAM feedback the pose the robot believes.
+                now_base, now_q = annotation_pose()
+                now_yaw, _ = yaw_and_tilt(now_q)
+                live = perception_camera.get_rgba()
+                if live is None or live.ndim != 3 or live.size == 0:
+                    live = None
+                video_rgb = inset.compose_frame(
+                    video_rgb,
+                    inset.render_inset(
+                        live,
+                        phase=phase,
+                        current_pose=(
+                            float(now_base[0]),
+                            float(now_base[1]),
+                            now_yaw,
+                        ),
+                        estimate=inset_estimate,
+                        status=inset_status,
+                        detail=inset_detail,
+                        fork_tip_x_m=args.axle_to_fork_tip_m
+                        - abs(args.rear_axle_offset_m),
+                        font_path=inset_font,
+                    ),
+                )
+            encoder.stdin.write(
+                np.ascontiguousarray(video_rgb, dtype=np.uint8).tobytes()
+            )
+            if args.robot_camera:
+                record_robot_camera_frame(
+                    perception_camera,
+                    perception_calibration,
+                    extra_encoders,
+                    video_frames,
+                    video_frames_module,
+                    inset,
+                    stamp=stamp,
+                    phase=phase,
+                    state=state,
+                    pose=annotation_pose(),
+                    estimate=inset_estimate,
+                    fork_tip_x_m=args.axle_to_fork_tip_m
+                    - abs(args.rear_axle_offset_m),
+                    overview=camera,
+                    bounds=scenario.bounds,
+                )
+                if slam is not None:
+                    # The map panel may show only maps the bridge recorded
+                    # after a scan id below this one (received before it).
+                    video_frames[-1]["slam_last_scan_id"] = slam["scan_id"] - 1
+                    video_frames[-1]["slam_mode"] = slam["tracker"].mode
+            state["frames"] += 1
+            if args.extra_views:
+                for name in args.extra_views:
+                    view_camera = extra_cameras[name]
+                    view_rgba = view_camera.get_rgba()
+                    expected = (
+                        (480, 640, 4) if name == "perception" else (720, 1280, 4)
+                    )
+                    require(
+                        view_rgba is not None and view_rgba.shape == expected,
+                        f"{name} camera did not produce RGB",
+                    )
+                    view_rgb = np.ascontiguousarray(
+                        view_rgba[:, :, :3], dtype=np.uint8
+                    )
+                    if name == "perception":
+                        depth = view_camera.get_depth()
+                        require(
+                            depth is not None and depth.shape[:2] == (480, 640),
+                            "Perception camera did not produce depth",
+                        )
+                        if depth.ndim == 3:
+                            depth = depth[:, :, 0]
+                        view_rgb = np.concatenate(
+                            (view_rgb, MISSION_VIEWS.depth_colormap(depth)),
+                            axis=1,
+                        )
+                    extra_encoders[name].stdin.write(view_rgb.tobytes())
+                frame_base, frame_q = robot.get_world_pose()
+                frame_pallet, frame_pq = pallet.get_world_pose()
+                frame_log.write(
+                    record_json(
+                        {
+                            "frame": state["frames"] - 1,
+                            "simulation_time_s": world.current_time - initial_time,
+                            "phase": phase,
+                            "base_position_m": frame_base,
+                            "base_orientation_wxyz": frame_q,
+                            "pallet_position_m": frame_pallet,
+                            "pallet_orientation_wxyz": frame_pq,
+                            "lift_m": float(
+                                robot.get_joint_positions()[lift_index[0]]
+                            ),
+                        }
+                    )
+                    + "\n"
+                )
+            frame_audit.append(
+                {
+                    "simulation_time_s": world.current_time - initial_time,
+                    "rendering_time": frame.get("rendering_time"),
+                }
+            )
+            if state["frames"] == 1:
+                snapshot("start")
+
+        def step_world(render: bool) -> None:
+            """One physics step and everything that must see every step
+            (SLAM plan v3.1): encoders, odometry, the 10 Hz scan by physics
+            tick (not loop step) and the SLAM lockstep. Capture steps too."""
+            tick = stepper["tick"]
+            stepper["tick"] = tick + 1
+            frame_due = args.video and tick % fps_divisor == 0
+            world.step(render=render or frame_due)
+            stamp_now = world.current_time - initial_time
+            if slam_log is None:
+                if frame_due:
+                    write_video_frame(stamp_now)
+                return
+            now_base, now_q = robot.get_world_pose()
+            rates_true = robot.get_joint_velocities()[wheels]
+            steer_true = robot.get_joint_positions()[steers]
+            slam_log["joint_stamps_s"].append(stamp_now)
+            slam_log["wheel_rates_rad_s"].append(rates_true)
+            slam_log["steering_rad"].append(steer_true)
+            slam_log["base_pose_world"].append(np.concatenate((now_base, now_q)))
+            if slam is not None:
+                rates = slam["noise"].wheel_rates(rates_true[2:4])
+                angles = slam["noise"].steering(steer_true)
+                previous_yaw = slam["odom_rear"][2]
+                slam["odom_rear"] = slam["odometry"].update(stamp_now, rates, angles)
+                slam["odom_speed"] = float(np.mean(rates)) * args.drive_geometry.wheel_radius_m
+                slam["odom_yaw_rate"] = (slam["odom_rear"][2] - previous_yaw) * 120.0
+                slam["stop_now"] = slam["stop"].update(
+                    commanded_speed=slam.get("last_command", 0.0),
+                    speed=slam["odom_speed"],
+                    yaw_rate=slam["odom_yaw_rate"],
+                )
+                # Every tracker in this runner stops at 0.012 m/s; its arrival
+                # and gear-change checks wait for the noise-aware detector.
+                slam["tracker_speed"] = slam["stop"].tracker_speed(0.012)
+            if frame_due:
+                # After this tick's odometry, so the annotation matches the image.
+                write_video_frame(stamp_now)
+            if tick % scan_every:
+                return
+            origin, directions = planar_lidar.laser_rays_world(
+                now_base, now_q, laser_mount, beam_angles
+            )
+            distances, hits, _ = planar_lidar.cast_scan(
+                origin, directions, scan_pattern.range_max_m
+            )
+            ranges = scan_pattern.ranges_from_hits(distances, hits)
+            slam_log["scan_stamps_s"].append(stamp_now)
+            slam_log["scan_ranges_m"].append(ranges.astype(np.float32))
+            slam_log["laser_pose_world"].append(
+                planar_lidar.laser_pose_2d(now_base, now_q, laser_mount)
+            )
+            if slam is None:
+                return
+            link = slam["module"]
+            sent = slam["noise"].ranges(
+                ranges,
+                range_min_m=scan_pattern.range_min_m,
+                range_max_m=scan_pattern.range_max_m,
+            )
+            slam["last_sent_ranges"] = sent  # the noisy scan, as docking sees it
+            if slam["tracker"].applied is not None:
+                bx, by, byaw = compose(slam["tracker"].applied[0], slam_odom_base())
+                off = abs(args.rear_axle_offset_m)
+                slam["last_scan_estimate_rear"] = (
+                    bx - off * math.cos(byaw), by - off * math.sin(byaw), byaw
+                )
+                slam["last_scan_odom_base"] = tuple(slam_odom_base())
+            try:
+                reply = slam["link"].exchange(
+                    link.Scan(
+                        slam["scan_id"],
+                        float(stamp_now),
+                        slam_odom_base(),
+                        sent.astype(np.float32),
+                        scan_pattern.angle_min_rad,
+                        scan_pattern.angle_increment_rad,
+                        scan_pattern.range_min_m,
+                        scan_pattern.range_max_m,
+                    )
+                )
+            except link.SlamLinkFailure as exc:
+                slam["records"].append(
+                    {
+                        "scan_id": slam["scan_id"],
+                        "stamp_s": float(stamp_now),
+                        "phase": phase,
+                        "status": "link_failure",
+                        "error": str(exc),
+                    }
+                )
+                require(False, f"slam_link_failed: {exc}")
+            slam["tracker"].receive(
+                reply.scan_id, reply.stamp_s, reply.status, reply.map_from_odom
+            )
+            truth_yaw, _ = yaw_and_tilt(now_q)
+            slam["records"].append(
+                {
+                    "scan_id": slam["scan_id"],
+                    "stamp_s": float(stamp_now),
+                    "phase": phase,
+                    "status": reply.status,
+                    "mode": slam["tracker"].mode,
+                    "map_from_odom": list(reply.map_from_odom),
+                    # What control uses (holding keeps an older one).
+                    "applied_map_from_odom": list(slam["tracker"].applied[0])
+                    if slam["tracker"].applied is not None
+                    else None,
+                    "odom_base": list(slam_odom_base()),
+                    "truth_base": [float(now_base[0]), float(now_base[1]), truth_yaw],
+                    "slam_wall_s": reply.slam_wall_s,
+                }
+            )
+            slam["scan_id"] += 1
+
+        stepper["fn"] = step_world
+        if slam is not None:
+            # The taught station, fixed before the mission moves (Codex v3.8
+            # impl P2): the planned delivery rear pose, the start's base height,
+            # one ray cast with the truck left out. Truth enters here only.
+            prior = site_poses(scenario.destination, geometry)["delivery"]
+            delivery_d = (prior.x_m, prior.y_m, prior.yaw_rad)
+            offset_d = abs(args.rear_axle_offset_m)
+            start_base, _ = robot.get_world_pose()
+            base_d = np.array(
+                [
+                    delivery_d[0] + offset_d * math.cos(delivery_d[2]),
+                    delivery_d[1] + offset_d * math.sin(delivery_d[2]),
+                    float(start_base[2]),
+                ]
+            )
+            quat_d = np.array([math.cos(delivery_d[2] / 2), 0.0, 0.0, math.sin(delivery_d[2] / 2)])
+            ray_origin, ray_directions = planar_lidar.laser_rays_world(
+                base_d, quat_d, laser_mount, beam_angles
+            )
+            ray_distances, ray_hits, ray_own = planar_lidar.cast_scan(
+                ray_origin, ray_directions, scan_pattern.range_max_m, ignore_self=True
+            )
+            reference_ranges = scan_pattern.ranges_from_hits(ray_distances, ray_hits)
+            slam["reference_points"] = laser_points(reference_ranges, beam_angles)
+            slam["docking"].update(
+                delivery_rear_prior=list(delivery_d),
+                reference_beams=int(np.isfinite(reference_ranges).sum()),
+                reference_self_hits_dropped=int(ray_own),
+                reference_base_z_m=float(start_base[2]),
+            )
         for step in range(int(120 * args.max_sim_seconds)):
             t = world.current_time - initial_time
             base, q = robot.get_world_pose()
@@ -1574,6 +2403,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             )
             velocity = robot.get_linear_velocity()
             signed_speed = float(np.dot(velocity[:2], forward))
+            # Ground truth checks, evaluates and renders; control below uses
+            # `rear`/`signed_speed`, which --slam-feedback replaces.
+            truth_rear = rear
+            if slam is not None:
+                rear = slam_rear(t)
+                signed_speed = slam["tracker_speed"]
+                slam["control"].append([t, *rear.tolist(), *truth_rear.tolist()])
             require(np.isfinite([base, ppos]).all(), "Nonfinite body state")
             if phase == "lift":
                 # Every physics step, so the peak and the aborting state are
@@ -1631,7 +2467,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             # "계획 여유가 시험으로 고정돼 있지 않다").
             require(
                 collision_free_pose(
-                    rear, checked_obstacles, footprint, scenario.bounds
+                    truth_rear, checked_obstacles, footprint, scenario.bounds
                 ),
                 f"Actual truck/load footprint overlap in {phase}",
             )
@@ -1681,9 +2517,35 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     not contacts,
                     f"Forbidden fork/pallet contact in {phase}: {contacts}",
                 )
+            if phase in ["insert", "extract", "withdraw"]:
+                # Smallest sideways gap per blade over every check (SLAM plan
+                # S2 insertion criterion), kept per phase.
+                lateral = insertion_geometry.lateral_clearances(
+                    base,
+                    q,
+                    float(robot.get_joint_positions()[lift_index[0]]),
+                    ppos,
+                    pq,
+                )
+                minima = state.setdefault("lateral_clearance_min_m", {}).setdefault(
+                    phase, {"left": None, "right": None}
+                )
+                for side, gap in lateral.items():
+                    if gap is not None and (minima[side] is None or gap < minima[side]):
+                        minima[side] = gap
             requested_speed, curvature = 0.0, 0.0
             tracking = None
-            if phase in trackers:
+            releasing = slam is not None and slam.get("pending_release") is not None
+            if releasing:
+                waited = t - slam["release_wait_from"]
+                require(waited < 10.0, f"slam_release_no_stop after {waited:.1f} s")
+                if slam["stop_now"]:
+                    slam_release(t)
+                    releasing = False
+                    rear = slam_rear(t)  # the released estimate, this very tick
+                    slam["control"][-1][1:4] = rear.tolist()
+            warming = slam is not None and not slam["tracker"].may_drive()
+            if phase in trackers and not releasing and not warming:
                 # Three times the path time at the tracker's own speed caps
                 # (length / cruise when there are none), plus 10 s.
                 limit = max(30.0, 3 * trackers[phase].nominal_duration_s() + 10)
@@ -1693,6 +2555,118 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 tracking = trackers[phase].update(rear, signed_speed, dt)
                 last_tracking = tracking
                 if (
+                    slam is not None
+                    and phase in ("observe", "approach", "transport", "return_home")
+                    and slam["tracker"].mode == "tracking"
+                    and trackers[phase].remaining_to_goal_m()
+                    <= 0.5 + signed_speed**2 / (2 * settings["drive_acceleration_mps2"])
+                ):
+                    # The window grows with the braking distance (Codex v3.5 P2:
+                    # a correction at 0.507 m and 0.55 m/s left no room to stop).
+                    # A final goal is judged at 8 mm:
+                    # a SLAM correction landing in the last half metre moves
+                    # the estimate by centimetres and leaves the truck stopped
+                    # outside the tolerance (S2 seed 1 on v3.4, transport).
+                    # Freeze it there (plan v3.5; approach already holds from
+                    # the capture). Released at settle as before.
+                    slam["tracker"].hold(odom_from_base=slam_odom_base())
+                    slam["holds"].append(
+                        {"phase": phase, "time_s": t, "event": "hold", "error": slam_error()}
+                    )
+                # The final goal judged out of heading tolerance under SLAM:
+                # brake to a stop and replan from there rather than end the
+                # mission (S3 seed 3 failed its return at -0.054 rad vs 0.03).
+                goal_heading_miss = (
+                    slam is not None
+                    and phase in ("transport", "return_home")
+                    and tracking.status == "failed"
+                    and tracking.failure == "endpoint_heading"
+                    and not tracking.at_cusp
+                    and not tracking.off_path
+                    and len(state["stall_replans"]) < 2
+                )
+                if goal_heading_miss:
+                    # Judged inside the 8 mm brake window, still creeping
+                    # (S3 rerun: 6.6 mm left at -0.008 m/s): command zero and
+                    # wait for the stop detector.
+                    tracking = replace(tracking, status="braking", speed_mps=0.0)
+                stalled = (
+                    slam is not None
+                    and phase in ("transport", "return_home")
+                    and tracking.speed_mps == 0.0
+                    and slam["stop_now"]
+                    and (
+                        goal_heading_miss
+                        or (
+                            tracking.status == "tracking"
+                            and trackers[phase].remaining_to_goal_m() <= 1e-6
+                        )
+                    )
+                )
+                if stalled and goal_heading_miss:
+                    slam_stall_ticks = max(slam_stall_ticks, 119)
+                slam_stall_ticks = slam_stall_ticks + 1 if stalled else 0
+                if slam_stall_ticks >= 120 and len(state["stall_replans"]) < 2:
+                    # Stopped at the end of the path but outside the goal
+                    # tolerance (an estimate shift before the hold): plan the
+                    # leg again from here, in the held frame (Codex v3.5 P2).
+                    slam_stall_ticks = 0
+                    start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))
+                    replan_start = time.monotonic()
+                    # After a docking match the transport is held relative to the
+                    # station: a Hybrid A* recovery there would drive a held
+                    # detour in a frame mixed with world obstacles (Codex 5de6c3a
+                    # P2) -- end the run instead.
+                    require(
+                        not (phase == "transport" and slam["docking"].get("accepted_any")),
+                        "transport_recovery_after_docking",
+                    )
+                    if phase == "transport":
+                        # After docking, the corrected drop (v3.8, Codex P1).
+                        replanned = plan_transport_leg(
+                            slam.get("transport_scenario", scenario), start, planner_config,
+                            geometry=geometry, travel_config=travel_config,
+                        )
+                    else:
+                        replanned = plan_return_leg(
+                            slam.get("return_scenario", scenario), start, return_to_pose, planner_config,
+                            geometry=geometry, travel_config=travel_config,
+                        )
+                    state["stall_replans"].append(
+                        {
+                            "phase": phase,
+                            "time_s": t,
+                            "rear_pose": rear.tolist(),
+                            "position_error_m": tracking.position_error_m,
+                            "yaw_error_rad": tracking.yaw_error_rad,
+                            "status": replanned.status,
+                            "planning_wall_s": time.monotonic() - replan_start,
+                        }
+                    )
+                    require(replanned.success, f"stall_replan_failed:{replanned.status}")
+                    paths[phase] = replanned
+                    state["paths"][phase] = path_record(replanned)
+                    (args.output / "paths.json").write_text(
+                        record_json(state["paths"], indent=2) + "\n"
+                    )
+                    add_path_display(
+                        stage,
+                        replanned,
+                        "Transport" if phase == "transport" else "Return",
+                        (1.0, 0.65, 0.04) if phase == "transport" else (0.55, 0.2, 0.85),
+                    )
+                    trackers[phase] = RearAxlePathTracker(
+                        replanned.poses,
+                        replanned.directions,
+                        replanned.curvatures_inv_m,
+                        trackers[phase].config,
+                    )
+                    if phase == "transport":
+                        arm_docking()  # keep the stop before the delivery straight
+                    phase_started = t
+                    tracking = trackers[phase].update(rear, signed_speed, dt)
+                    last_tracking = tracking
+                if (
                     tracking.status == "failed"
                     and phase == "transport"
                     and tracking.failure == "endpoint_heading"
@@ -1701,11 +2675,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     and len(state["cusp_replans"]) < max_cusp_replans
                 ):
                     stopped = (
-                        tracking.speed_mps == 0.0
-                        and float(np.linalg.norm(velocity[:2]))
-                        <= trackers[phase].config.stop_speed_mps
-                        and abs(float(robot.get_angular_velocity()[2]))
-                        <= cusp_stop_yaw_rate_radps
+                        slam["stop_now"]
+                        if slam is not None
+                        else (
+                            tracking.speed_mps == 0.0
+                            and float(np.linalg.norm(velocity[:2]))
+                            <= trackers[phase].config.stop_speed_mps
+                            and abs(float(robot.get_angular_velocity()[2]))
+                            <= cusp_stop_yaw_rate_radps
+                        )
                     )
                     cusp_stop_ticks = cusp_stop_ticks + 1 if stopped else 0
                     if cusp_stop_ticks < cusp_stop_needed:
@@ -1713,9 +2691,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         tracking = replace(tracking, status="braking")
                     else:
                         cusp_stop_ticks = 0
+                        require(
+                            not (slam is not None and slam["docking"].get("accepted_any")),
+                            "transport_recovery_after_docking",
+                        )
                         replan_start = time.monotonic()
                         replanned = plan_transport_leg(
-                            scenario,
+                            slam.get("transport_scenario", scenario)
+                            if slam is not None
+                            else scenario,
                             PlanningPose(float(rear[0]), float(rear[1]), float(rear[2])),
                             planner_config,
                             geometry=geometry,
@@ -1759,9 +2743,80 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 replanned.curvatures_inv_m,
                                 trackers[phase].config,
                             )
+                            if slam is not None:
+                                arm_docking()
                             phase_started = t
                             tracking = trackers[phase].update(rear, signed_speed, dt)
                             last_tracking = tracking
+                # Under SLAM, an observe leg judged out of heading at a cusp or
+                # its end (S2 seed 1: -0.078 rad at a cusp of the near leg, three
+                # versions running): brake, then plan the leg again from the
+                # stop to the same target, at most twice per run.
+                # Also a stop at a cusp outside its tolerance (S3 seed 1: 44.5 mm,
+                # command 0, status tracking until the timeout) once it has
+                # stood for a second.
+                observe_stalled = (
+                    slam is not None
+                    and phase == "observe"
+                    and tracking.status == "tracking"
+                    and tracking.at_cusp
+                    and tracking.speed_mps == 0.0
+                    and slam["stop_now"]
+                )
+                observe_stall_ticks = observe_stall_ticks + 1 if observe_stalled else 0
+                observe_miss = (
+                    slam is not None
+                    and phase == "observe"
+                    and (
+                        (
+                            tracking.status == "failed"
+                            and tracking.failure == "endpoint_heading"
+                            and not tracking.off_path
+                        )
+                        or observe_stall_ticks >= 120
+                    )
+                    and len(state["observe_replans"]) < 2
+                )
+                if observe_miss:
+                    observe_stall_ticks = 0
+                    tracking = replace(tracking, status="braking", speed_mps=0.0)
+                    if slam["stop_now"]:
+                        target = PlanningPose(*(float(v) for v in paths["observe"].poses[-1]))
+                        replan_start = time.monotonic()
+                        replanned = plan_observation_leg(
+                            scenario,
+                            target,
+                            planner_config,
+                            geometry=geometry,
+                            start_rear=PlanningPose(float(rear[0]), float(rear[1]), float(rear[2])),
+                            pickup_bounds=pickup_bounds,
+                            extended=False,
+                        )
+                        state["observe_replans"].append(
+                            {
+                                "time_s": t,
+                                "rear_pose": rear.tolist(),
+                                "yaw_error_rad": last_tracking.yaw_error_rad,
+                                "status": replanned.status,
+                                "planning_wall_s": time.monotonic() - replan_start,
+                            }
+                        )
+                        require(replanned.success, f"observe_replan_failed:{replanned.status}")
+                        paths["observe"] = replanned
+                        state["paths"]["observe"] = path_record(replanned)
+                        (args.output / "paths.json").write_text(
+                            record_json(state["paths"], indent=2) + "\n"
+                        )
+                        add_path_display(stage, replanned, "Observe", (0.2, 0.8, 0.8))
+                        trackers["observe"] = RearAxlePathTracker(
+                            replanned.poses,
+                            replanned.directions,
+                            replanned.curvatures_inv_m,
+                            trackers["observe"].config,
+                        )
+                        phase_started = t
+                        tracking = trackers["observe"].update(rear, signed_speed, dt)
+                        last_tracking = tracking
                 if tracking.status == "failed":
                     dump_tracking("failed", tracking)
                 require(
@@ -1772,6 +2827,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     tracking.speed_mps,
                     tracking.curvature_inv_m,
                 )
+                if slam is not None and not slam["tracker"].may_drive():
+                    requested_speed = 0.0  # warming up: hold still
                 if tracking.status == "arrived":
                     if args.use_perception and phase == "observe":
                         attempt_number = len(state["observation_attempts"]) + 1
@@ -1848,6 +2905,42 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 yaw,
                             ]
                         )
+                        if slam is not None:
+                            now_s = world.current_time - initial_time
+                            near_pending = (
+                                state.get("near_capture", {}).get("status") == "pending"
+                            )
+                            if slam["tracker"].mode == "holding" and not near_pending:
+                                # An observe leg ends held (below). Anything but the
+                                # near capture is followed by more driving, so let
+                                # SLAM back in now, while the truck stands still
+                                # for the capture (plan v3.6).
+                                jump_m, jump_rad = slam["tracker"].release(
+                                    odom_from_base=slam_odom_base()
+                                )
+                                slam["holds"].append(
+                                    {
+                                        "phase": phase,
+                                        "time_s": now_s,
+                                        "event": "release_at_capture",
+                                        "jump_m": jump_m,
+                                        "jump_rad": jump_rad,
+                                    }
+                                )
+                            # The accepted ground-truth pose only validated the
+                            # capture; control takes the estimate at this instant.
+                            rear = slam_rear(now_s)
+                            yaw = float(rear[2])
+                            forward = np.array([math.cos(yaw), math.sin(yaw)])
+                            base = np.array(
+                                [
+                                    rear[0] + abs(args.rear_axle_offset_m) * forward[0],
+                                    rear[1] + abs(args.rear_axle_offset_m) * forward[1],
+                                    float(base[2]),
+                                ]
+                            )
+                            attempt["control_pose_source"] = "slam_estimate"
+                            attempt["slam_error"] = slam_error()
                         attempt.update(
                             {
                                 "frame_diagnostics": asdict(frame_diagnostics),
@@ -1857,7 +2950,21 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         prior = args.pallet_prior_loaded
                         params = DetectorParams.derived_for(prior)
                         state["detector_params"] = asdict(params)
-                        detection = detect_pockets(scene_input, prior, params)
+                        # B1c: the detector sees millimetre depth when asked; the
+                        # saved depth above stays raw (G3 applies the same rounding).
+                        detector_input = adapter.detector_input(
+                            scene_input, args.depth_quantize_mm
+                        )
+                        attempt["base_from_optical"] = {
+                            "translation_m": np.asarray(
+                                scene_input.base_from_optical.translation_m
+                            ).tolist(),
+                            "rotation": np.asarray(
+                                scene_input.base_from_optical.rotation
+                            ).tolist(),
+                        }
+                        attempt["depth_quantize_mm"] = args.depth_quantize_mm
+                        detection = detect_pockets(detector_input, prior, params)
                         observation = detection.observation
                         attempt.update(
                             {
@@ -1953,7 +3060,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                         ),
                                         **observed(
                                             detect_pockets(
-                                                repeat_input, prior, params
+                                                adapter.detector_input(
+                                                    repeat_input, args.depth_quantize_mm
+                                                ),
+                                                prior,
+                                                params,
                                             ).observation
                                         ),
                                     }
@@ -1973,6 +3084,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             attempt["retry_reason"] = (
                                 f"perception_{observation.status}:{observation.reason}"
                             )
+                            if state.get("near_capture", {}).get("status") == "pending":
+                                # No silent fallback to the far estimate (v3.6).
+                                state["near_capture"]["status"] = "failed"
+                                require(
+                                    False,
+                                    f"near_capture_failed:{attempt['retry_reason']}",
+                                )
                             inset_status = f"인식 실패 #{attempt_number} · 재관측 이동"
                             inset_detail = f"사유: {observation.reason}"
                             planning_start = time.monotonic()
@@ -2304,7 +3422,109 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 ),
                                 flush=True,
                             )
-                            transition("approach", t)
+                            near_leg = None
+                            if slam is not None and "near_capture" not in state:
+                                # Plan v3.6: see the pallet again where the final
+                                # straight begins, so only that straight (and the
+                                # insert/extract) runs on held odometry. Curved
+                                # approaches drifted 0.02-0.03 rad held (S2 v3.5).
+                                near_leg = final_straight_prefix(
+                                    paths["approach"], geometry.alignment_straight_m
+                                )
+                                # Every approach ends in the 0.8 m alignment straight;
+                                # not finding it is a failure, not a skip (Codex v3.6 P1).
+                                require(near_leg is not None, "near_capture_no_final_straight")
+                                state["near_capture"] = {
+                                    "status": "pending",
+                                    "far_attempt": attempt_number,
+                                    "far_estimate_m": state["perception"][
+                                        "perception_pickup_estimate_m"
+                                    ],
+                                    "far_error": state["perception"]["perception_error"],
+                                }
+                            if near_leg is not None:
+                                paths["observe"] = near_leg
+                                trackers["observe"] = RearAxlePathTracker(
+                                    near_leg.poses,
+                                    near_leg.directions,
+                                    near_leg.curvatures_inv_m,
+                                    trackers["observe"].config,
+                                )
+                                state["observation_waypoint_selected"] = (
+                                    near_leg.poses[-1].tolist()
+                                )
+                                state["near_capture"]["waypoint"] = near_leg.poses[-1].tolist()
+                                phase_started = t
+                                inset_status = "근접 재관측 위치로 이동"
+                            else:
+                                if state.get("near_capture", {}).get("status") == "pending":
+                                    # The new estimate moves the straight by a few
+                                    # cm; re-draw it from where the truck stands
+                                    # instead of a Hybrid A* manoeuvre that would
+                                    # run held (Codex v3.6 P2).
+                                    new_prefix = final_straight_prefix(
+                                        paths["approach"], geometry.alignment_straight_m
+                                    )
+                                    require(
+                                        new_prefix is not None,
+                                        "near_capture_no_final_straight",
+                                    )
+                                    line_start = Pose2D(*new_prefix.poses[-1])
+                                    line_end = Pose2D(*paths["approach"].poses[-1])
+                                    straight, offsets = straight_from_pose(
+                                        Pose2D(float(rear[0]), float(rear[1]), float(rear[2])),
+                                        line_start,
+                                        line_end,
+                                        # The box stays at 5 cm / 0.05 rad: the dry run
+                                        # checks arrival only, not the swept footprint,
+                                        # and a wider box admitted a collision (Codex v3.7 P1).
+                                        max_lateral_m=0.05,
+                                        max_yaw_rad=0.05,
+                                        min_length_m=0.3,
+                                    )
+                                    state["near_capture"]["offsets_to_new_line"] = offsets
+                                    require(straight is not None, f"near_capture_misaligned:{offsets}")
+                                    # The box above only bounds the projection; whether
+                                    # the approach tracker converges within this straight
+                                    # is checked by a dry run with margin (v3.7, Codex
+                                    # v3.6 re-review P2).
+                                    dry = bicycle_rollout(
+                                        straight.poses,
+                                        straight.directions,
+                                        straight.curvatures_inv_m,
+                                        trackers["approach"].config,
+                                        rear,
+                                    )
+                                    state["near_capture"]["dry_run"] = asdict(dry)
+                                    require(
+                                        dry.status == "arrived"
+                                        and dry.position_error_m <= 0.006
+                                        and abs(dry.yaw_error_rad) <= 0.015,
+                                        f"near_capture_misaligned:dry_run:{asdict(dry)}",
+                                    )
+                                    paths["approach"] = straight
+                                    state["paths"]["approach"] = path_record(straight)
+                                    (args.output / "paths.json").write_text(
+                                        record_json(state["paths"], indent=2) + "\n"
+                                    )
+                                    add_path_display(
+                                        stage, straight, "Approach", (0.05, 0.45, 1.0)
+                                    )
+                                    trackers["approach"] = RearAxlePathTracker(
+                                        straight.poses,
+                                        straight.directions,
+                                        straight.curvatures_inv_m,
+                                        trackers["approach"].config,
+                                    )
+                                    state["near_capture"].update(
+                                        status="done",
+                                        near_attempt=attempt_number,
+                                        near_estimate_m=state["perception"][
+                                            "perception_pickup_estimate_m"
+                                        ],
+                                        near_error=state["perception"]["perception_error"],
+                                    )
+                                transition("approach", t)
                     elif phase == "approach":
                         transition("insert", t)
                     elif phase == "insert":
@@ -2323,11 +3543,22 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 geometry.pallet_depth_m,
                             )
                         )
+                        # Insertion-axis yaw against the true pallet (fork axis
+                        # along the pallet x axis either way round).
+                        relative_yaw = yaw_and_tilt(q)[0] - yaw_and_tilt(pq)[0]
+                        state["insertion_truth_yaw_rad"] = float(
+                            math.atan2(math.sin(2 * relative_yaw), math.cos(2 * relative_yaw)) / 2
+                        )
+                        if slam is not None:
+                            state["slam_error_insert_end"] = slam_error()
                         transition("lift", t)
                     elif phase == "extract":
                         transition("transport", t)
                     elif phase == "transport":
-                        transition("lower", t)
+                        if slam is not None and slam["docking"]["status"] == "armed":
+                            dock_at_delivery_straight(t)
+                        else:
+                            transition("lower", t)
                     elif phase == "withdraw":
                         transition("settle", t)
                     elif phase == "return_home":
@@ -2366,14 +3597,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 state["return_home_error"] = {
                     "position_m": float(
                         np.hypot(
-                            rear[0] - scenario.start_rear.x_m,
-                            rear[1] - scenario.start_rear.y_m,
+                            truth_rear[0] - scenario.start_rear.x_m,
+                            truth_rear[1] - scenario.start_rear.y_m,
                         )
                     ),
                     "yaw_rad": float(
                         math.atan2(
-                            math.sin(rear[2] - scenario.start_rear.yaw_rad),
-                            math.cos(rear[2] - scenario.start_rear.yaw_rad),
+                            math.sin(truth_rear[2] - scenario.start_rear.yaw_rad),
+                            math.cos(truth_rear[2] - scenario.start_rear.yaw_rad),
                         )
                     ),
                 }
@@ -2423,145 +3654,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     ),
                     camera_axes="usd",
                 )
-            world.step(render=args.video and step % fps_divisor == 0)
-            stamp = world.current_time - initial_time
-            if slam_log is not None:
-                # Encoders and the scan read the state this step produced.
-                now_base, now_q = robot.get_world_pose()
-                slam_log["joint_stamps_s"].append(stamp)
-                slam_log["wheel_rates_rad_s"].append(
-                    robot.get_joint_velocities()[wheels]
-                )
-                slam_log["steering_rad"].append(robot.get_joint_positions()[steers])
-                slam_log["base_pose_world"].append(np.concatenate((now_base, now_q)))
-                if step % scan_every == 0:
-                    origin, directions = planar_lidar.laser_rays_world(
-                        now_base, now_q, laser_mount, beam_angles
-                    )
-                    distances, hits, _ = planar_lidar.cast_scan(
-                        origin, directions, scan_pattern.range_max_m
-                    )
-                    slam_log["scan_stamps_s"].append(stamp)
-                    slam_log["scan_ranges_m"].append(
-                        scan_pattern.ranges_from_hits(distances, hits).astype(
-                            np.float32
-                        )
-                    )
-                    slam_log["laser_pose_world"].append(
-                        planar_lidar.laser_pose_2d(now_base, now_q, laser_mount)
-                    )
-            if args.video and step % fps_divisor == 0:
-                frame = camera.get_current_frame()
-                rgba = camera.get_rgba()
-                # get_rgba reads the RGB annotator directly. The SDK's cached
-                # frame metadata can lag; retain it for audit without treating
-                # its timestamp as a control or image-acquisition failure.
-                require(
-                    rgba is not None and rgba.shape == (720, 1280, 4),
-                    "Camera did not produce RGB",
-                )
-                video_rgb = rgba[:, :, :3]
-                if args.camera_inset:
-                    # Pose after this render step, so outline and picture agree.
-                    now_base, now_q = robot.get_world_pose()
-                    now_yaw, _ = yaw_and_tilt(now_q)
-                    live = perception_camera.get_rgba()
-                    if live is None or live.ndim != 3 or live.size == 0:
-                        live = None
-                    video_rgb = inset.compose_frame(
-                        video_rgb,
-                        inset.render_inset(
-                            live,
-                            phase=phase,
-                            current_pose=(
-                                float(now_base[0]),
-                                float(now_base[1]),
-                                now_yaw,
-                            ),
-                            estimate=inset_estimate,
-                            status=inset_status,
-                            detail=inset_detail,
-                            fork_tip_x_m=args.axle_to_fork_tip_m
-                            - abs(args.rear_axle_offset_m),
-                            font_path=inset_font,
-                        ),
-                    )
-                encoder.stdin.write(
-                    np.ascontiguousarray(video_rgb, dtype=np.uint8).tobytes()
-                )
-                if args.robot_camera:
-                    record_robot_camera_frame(
-                        perception_camera,
-                        perception_calibration,
-                        extra_encoders,
-                        video_frames,
-                        video_frames_module,
-                        inset,
-                        stamp=stamp,
-                        phase=phase,
-                        state=state,
-                        pose=robot.get_world_pose(),
-                        estimate=inset_estimate,
-                        fork_tip_x_m=args.axle_to_fork_tip_m
-                        - abs(args.rear_axle_offset_m),
-                        overview=camera,
-                        bounds=scenario.bounds,
-                    )
-                state["frames"] += 1
-                if args.extra_views:
-                    for name in args.extra_views:
-                        view_camera = extra_cameras[name]
-                        view_rgba = view_camera.get_rgba()
-                        expected = (
-                            (480, 640, 4) if name == "perception" else (720, 1280, 4)
-                        )
-                        require(
-                            view_rgba is not None and view_rgba.shape == expected,
-                            f"{name} camera did not produce RGB",
-                        )
-                        view_rgb = np.ascontiguousarray(
-                            view_rgba[:, :, :3], dtype=np.uint8
-                        )
-                        if name == "perception":
-                            depth = view_camera.get_depth()
-                            require(
-                                depth is not None and depth.shape[:2] == (480, 640),
-                                "Perception camera did not produce depth",
-                            )
-                            if depth.ndim == 3:
-                                depth = depth[:, :, 0]
-                            view_rgb = np.concatenate(
-                                (view_rgb, MISSION_VIEWS.depth_colormap(depth)),
-                                axis=1,
-                            )
-                        extra_encoders[name].stdin.write(view_rgb.tobytes())
-                    frame_base, frame_q = robot.get_world_pose()
-                    frame_pallet, frame_pq = pallet.get_world_pose()
-                    frame_log.write(
-                        record_json(
-                            {
-                                "frame": state["frames"] - 1,
-                                "simulation_time_s": world.current_time - initial_time,
-                                "phase": phase,
-                                "base_position_m": frame_base,
-                                "base_orientation_wxyz": frame_q,
-                                "pallet_position_m": frame_pallet,
-                                "pallet_orientation_wxyz": frame_pq,
-                                "lift_m": float(
-                                    robot.get_joint_positions()[lift_index[0]]
-                                ),
-                            }
-                        )
-                        + "\n"
-                    )
-                frame_audit.append(
-                    {
-                        "simulation_time_s": world.current_time - initial_time,
-                        "rendering_time": frame.get("rendering_time"),
-                    }
-                )
-                if state["frames"] == 1:
-                    snapshot("start")
+            if slam is not None:
+                slam["last_command"] = requested_speed
+            stepper["fn"](False)
             if step % 12 == 0:
                 sample = {
                     "time_s": t,
@@ -2624,15 +3719,37 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             }
         )
     finally:
+        if slam is not None:
+            # First, so a video shutdown failure cannot lose the SLAM record.
+            slam["link"].close()
+            (args.output / "slam_records.json").write_text(
+                record_json(slam["records"]) + "\n"
+            )
+            control = np.asarray(slam["control"], dtype=float).reshape(-1, 7)
+            np.save(args.output / "slam_control.npy", control)
+            error = np.hypot(control[:, 1] - control[:, 4], control[:, 2] - control[:, 5])
+            yaw_error = np.abs(np.angle(np.exp(1j * (control[:, 3] - control[:, 6]))))
+            statuses = [record["status"] for record in slam["records"]]
+            state["slam_summary"] = {
+                "control_samples": int(len(control)),
+                "raw_position_rmse_m": float(np.sqrt(np.mean(error**2)))
+                if len(error)
+                else None,
+                "raw_position_max_m": float(error.max()) if len(error) else None,
+                "raw_yaw_rmse_rad": float(np.sqrt(np.mean(yaw_error**2)))
+                if len(error)
+                else None,
+                "raw_yaw_max_rad": float(yaw_error.max()) if len(error) else None,
+                "scans": len(statuses),
+                "processed": statuses.count("processed"),
+                "skipped": statuses.count("skipped"),
+                "holds": slam["holds"],
+                "link_failures": statuses.count("link_failure"),
+                "pending_release_at_end": slam["pending_release"],
+                "final_mode": slam["tracker"].mode,
+            }
         if frame_log is not None:
             frame_log.close()
-        video_results = []
-        if encoder is not None:
-            encoder.stdin.close()
-            video_results.append(("transport", encoder.wait(timeout=60)))
-        for name, extra_encoder in extra_encoders.items():
-            extra_encoder.stdin.close()
-            video_results.append((name, extra_encoder.wait(timeout=60)))
         (args.output / "frame_audit.json").write_text(
             record_json(frame_audit, indent=2) + "\n"
         )
@@ -2645,7 +3762,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         "overview_video": "transport.mp4",
                         "overview_floor_points": state.get("overview_floor_points"),
                         "robot_camera": {
-                            "mount": "perception camera (synthetic baseline_0p50)",
+                            "mount": (
+                                "perception camera (synthetic baseline_0p50)"
+                                if args.perception_mount == "legacy"
+                                else f"perception camera ({args.perception_mount})"
+                            ),
                             "resolution": [
                                 perception_calibration.width,
                                 perception_calibration.height,
@@ -2661,8 +3782,24 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             )
         if slam_log is not None and slam_log["scan_stamps_s"]:
             write_slam_record(args, state, scenario, factory, slam_log, lidar_config)
-        for name, exit_code in video_results:
-            require(exit_code == 0, f"{name} video encoding failed")
+        # Records first, encoders last: a slow ffmpeg shutdown must neither
+        # lose the records above nor replace the run's own failure reason.
+        failing = sys.exc_info()[0] is not None
+        video_results = []
+        encoders = ([("transport", encoder)] if encoder is not None else []) + list(
+            extra_encoders.items()
+        )
+        for name, process in encoders:
+            try:
+                process.stdin.close()
+                video_results.append((name, process.wait(timeout=60)))
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                process.kill()
+                state.setdefault("video_shutdown_errors", []).append(f"{name}: {exc!r}")
+                video_results.append((name, None))
+        if not failing:
+            for name, exit_code in video_results:
+                require(exit_code == 0, f"{name} video encoding failed")
 
 
 def main() -> None:

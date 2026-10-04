@@ -9,13 +9,13 @@ from tools import observation_viewpoint_eval as tool
 def test_the_next_frozen_evaluation_seeds_are_refused():
     evaluator = design.Evaluator(config=None, reserved=tool.RESERVED_SEEDS)
     with pytest.raises(ValueError, match="reserved"):
-        evaluator.scenario(5000)
+        evaluator.scenario(6000)
     with pytest.raises(SystemExit):
-        tool.main(["--record", "unused.json", "--seeds", "4998:5001"])
+        tool.main(["--record", "unused.json", "--seeds", "5998:6001"])
 
 
 def test_seeds_used_by_earlier_evaluations_can_be_diagnosed():
-    """1028 was a G5 seed; this tool reserves only 5000-5029."""
+    """1028 was a G5 seed; this tool reserves only 6000-6029."""
     evaluator = design.Evaluator(config=None, reserved=tool.RESERVED_SEEDS)
     assert 1028 not in evaluator.reserved and 110 not in evaluator.reserved
     # The G4 design keeps refusing its own reserved seeds.

@@ -94,12 +94,18 @@ def draw_points(
 
 
 def cast_scan(
-    origin: np.ndarray, directions: np.ndarray, range_max_m: float
+    origin: np.ndarray,
+    directions: np.ndarray,
+    range_max_m: float,
+    *,
+    ignore_self: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, int]:
     """PhysX closest-hit distance per ray; returns (distances, hit, self_hits).
 
     A hit on the truck's own colliders is kept as a hit -- a real body blocks
     the beam too -- and counted, so a mount that sees its own truck shows up.
+    ignore_self drops those beams instead (no hit): a reference scan cast from
+    a pose the truck is not at must not contain the truck (plan v3.8).
     """
     import carb
     from omni.physx import get_physx_scene_query_interface
@@ -115,10 +121,13 @@ def cast_scan(
         )
         if not result.get("hit", False):
             continue
+        body = str(result.get("rigidBody", "")) + str(result.get("collision", ""))
+        own = SELF_PREFIX in body
+        self_hits += own
+        if own and ignore_self:
+            continue
         hits[index] = True
         distances[index] = float(result["distance"])
-        body = str(result.get("rigidBody", "")) + str(result.get("collision", ""))
-        self_hits += SELF_PREFIX in body
     return distances, hits, self_hits
 
 

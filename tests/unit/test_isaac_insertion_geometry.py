@@ -354,3 +354,51 @@ def test_carriage_gap_uses_the_whole_box_and_reports_overlap(tmp_path):
     )
     assert into["carriage_face_gap_m"] < 0
     assert into["carriage_overlaps"]
+
+
+def lateral(geometry, base=(-0.89, 0, 0), q=(1, 0, 0, 0), lift=0):
+    return geometry.lateral_clearances(base, q, lift, (0, 0, 0), (1, 0, 0, 0))
+
+
+def test_lateral_clearance_is_symmetric_when_aligned_and_shifts_with_offset(geometry):
+    centred = lateral(geometry)
+    assert centred["left"] == pytest.approx(centred["right"], abs=1e-9)
+    assert 0.03 < centred["left"] < 0.08
+    # The nearest wall of each blade is the centre block column (EPAL 6: 45 mm
+    # each side of it, 127.5 mm to the outer blocks), so a +y shift opens the
+    # left blade's gap and closes the right one's.
+    shifted = lateral(geometry, base=(-0.89, 0.02, 0))
+    assert shifted["left"] == pytest.approx(centred["left"] + 0.02, abs=1e-9)
+    assert shifted["right"] == pytest.approx(centred["right"] - 0.02, abs=1e-9)
+
+
+def test_lateral_clearance_goes_negative_on_a_scrape_and_is_none_outside(geometry):
+    assert min(lateral(geometry, base=(-0.89, 0.05, 0)).values()) < 0
+    assert lateral(geometry, base=(-3.0, 0, 0)) == {"left": None, "right": None}
+
+
+def test_lateral_clearance_shrinks_with_relative_yaw(geometry):
+    angle = 0.04
+    turned = lateral(geometry, q=(np.cos(angle / 2), 0, 0, np.sin(angle / 2)))
+    centred = lateral(geometry)
+    assert min(turned.values()) < min(centred.values())
+
+
+def test_lateral_clearance_ignores_the_boards_and_stringers_over_the_blade(geometry):
+    # Codex counterexample: lifted 50 mm, pitched 0.01 rad, a hair into the
+    # stringer above -- not a side wall; the block columns are still 45 mm away.
+    angle = 0.01
+    q = (np.cos(angle / 2), 0, np.sin(angle / 2), 0)
+    gaps = geometry.lateral_clearances((-0.89, 0, 0.0036), q, 0.05, (0, 0, 0), (1, 0, 0, 0))
+    assert gaps["left"] == pytest.approx(0.045, abs=1e-3)
+    assert gaps["right"] == pytest.approx(0.045, abs=1e-3)
+
+
+def test_a_block_over_the_blade_centreline_still_counts_as_a_wall(geometry):
+    # Codex counterexample: lifted, pallet turned 0.22 rad and offset; the right
+    # blade overlaps block_x0_y1 / block_x1_y1, so its gap must be negative.
+    angle = 0.22
+    pq = (np.cos(angle / 2), 0, 0, np.sin(angle / 2))
+    gaps = geometry.lateral_clearances((-0.89, 0.039, 0), (1, 0, 0, 0), 0.20, (0, 0, 0.152), pq)
+    assert geometry.forbidden_contacts((-0.89, 0.039, 0), (1, 0, 0, 0), 0.20, (0, 0, 0.152), pq)
+    assert gaps["right"] < 0

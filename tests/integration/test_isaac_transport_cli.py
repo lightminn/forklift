@@ -332,3 +332,101 @@ def test_t11_named_boxes_reject_90_degree_swap_before_startup(
     assert "bottom_board_0" in result.stderr
     assert "ModuleNotFoundError" not in result.stderr
     assert not (tmp_path / "run").exists()
+
+
+def test_slam_feedback_options_validate_before_startup(tmp_path) -> None:
+    socket_path = str(tmp_path / "slam.sock")
+    for flags, expected in (
+        (["--slam-feedback", socket_path], "--record-slam and --use-perception"),
+        (["--slam-noise-seed", "3"], "--slam-noise-seed requires --slam-feedback"),
+    ):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--base-scene",
+                "unused.usda",
+                "--pallet-urdf",
+                "unused.urdf",
+                "--forklift-urdf",
+                str(PROVISIONAL_URDF),
+                "--pallet-geometry",
+                "unused.yaml",
+                "--settings",
+                "unused.yaml",
+                "--output",
+                "unused",
+                "--seed",
+                "2",
+                *flags,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 2, flags
+        assert expected in result.stderr
+        assert "ModuleNotFoundError" not in result.stderr
+
+
+def test_every_physics_step_after_start_goes_through_step_world() -> None:
+    """SLAM plan v3.1: odometry, scans and the lockstep see capture steps too."""
+    import ast
+
+    tree = ast.parse(SCRIPT.read_text())
+    step_world = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "step_world"
+    )
+    body = ast.unparse(step_world)
+    for needle in ("world.step(", "slam['odometry'].update(", "slam['link'].exchange(",
+                   "slam['tracker'].receive(", "slam['stop'].update(", "tick % scan_every"):
+        assert needle in body, needle
+    run = next(
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "run"
+    )
+    loop = next(
+        node
+        for node in ast.walk(run)
+        if isinstance(node, ast.For) and "max_sim_seconds" in ast.unparse(node.iter)
+    )
+    loop_source = ast.unparse(loop)
+    assert "world.step(" not in loop_source
+    assert "stepper['fn'](" in loop_source
+    assert "stepper['fn'](True)" in ast.unparse(run)  # the capture path
+
+
+def test_slam_release_replans_both_travel_legs_and_gates_on_a_stop() -> None:
+    import ast
+
+    tree = ast.parse(SCRIPT.read_text())
+    release = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "slam_release"
+    )
+    body = ast.unparse(release)
+    assert "jump_m <= 0.02 and abs(jump_rad) <= 0.02" in body
+    assert "plan_transport_leg(" in body and "plan_return_leg(" in body
+    source = SCRIPT.read_text()
+    assert "if slam[\"stop_now\"]:\n                    slam_release(t)" in source
+    assert "rear = slam_rear(t)  # the released estimate" in source
+    assert "if phase in trackers and not releasing and not warming:" in source
+
+
+def test_slam_runs_see_the_pallet_again_before_the_final_straight() -> None:
+    """Plan v3.6: near capture from final_straight_prefix, no silent fallback."""
+    source = SCRIPT.read_text()
+    assert "final_straight_prefix(\n                                    paths[\"approach\"], geometry.alignment_straight_m" in source
+    assert 'f"near_capture_failed:{attempt[\'retry_reason\']}"' in source
+    assert 'if slam is not None and "near_capture" not in state:' in source
+
+
+def test_slam_runs_dock_on_a_scan_before_the_delivery_straight() -> None:
+    """Plan v3.8: stop at the straight start, match, move the whole drop."""
+    source = SCRIPT.read_text()
+    assert 'dock_at_delivery_straight(t)' in source
+    assert 'ignore_self=True' in source
+    assert "moved = np.array([compose(step_shift, tuple(pose)) for pose in paths[\"withdraw\"].poses])" in source
+    assert source.count('slam.get("transport_scenario", scenario)') == 3
