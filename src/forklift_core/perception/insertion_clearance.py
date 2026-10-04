@@ -129,7 +129,7 @@ class ClearanceMemory:
         return int((hits & self.volume.in_v).sum())
 
     def add_frame(self, stamp_s: float, depth_m: np.ndarray, camera: DepthCamera, optical_from_insertion,
-                  solids: list, surface_extra_m: float = 0.0) -> dict:
+                  solids: list, surface_extra_m: float = 0.0, pose_uncertainty_m: float = 0.0) -> dict:
         """Certify V voxels from one depth frame; latch an obstacle if one is seen.
 
         optical_from_insertion: (R (3, 3), t (3,)) taking insertion-frame points
@@ -147,7 +147,11 @@ class ClearanceMemory:
         wi = np.where(inside, w, 0).astype(np.int64)
         measured = np.where(inside, np.asarray(depth_m, dtype=float)[wi, ui], np.nan)
         valid = inside & np.isfinite(measured) & (measured > 0)
-        margin = camera.margin_m(z)
+        # A frame taken while moving is placed with the pose of its reported
+        # time, but its pixels may be up to a render period older (L3c v7: 3.5
+        # cm at 0.5 m/s): that much more depth before a voxel counts as passed,
+        # and that much more distance from a surface before a return is foreign.
+        margin = camera.margin_m(z) + pose_uncertainty_m
         free = valid & (measured > z + margin)
         front = valid & (measured < z - margin)
         obstacle_count = 0
@@ -164,7 +168,8 @@ class ClearanceMemory:
             # The surfaces are where the estimate puts them: a return also counts
             # as on them within the estimate's error (L3c v6: the front
             # stringer's underside 1.7 cm behind its estimate).
-            pallet = on_surface(ret, solids_optical, surface_tolerance_m(camera, ret) + surface_extra_m)
+            pallet = on_surface(ret, solids_optical,
+                                surface_tolerance_m(camera, ret) + surface_extra_m + pose_uncertainty_m)
             obstacle_count = int((~pallet).sum())
             if obstacle_count:
                 self.obstacle = True

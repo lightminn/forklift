@@ -45,6 +45,7 @@ class PocketConfig:
     band_across_m: float = 0.20
     real_stop_extra_m: float = 0.02  # columns reach insertion depth + the real stop
     frame_max_age_s: float = 0.2
+    frame_lag_s: float = 0.1  # pixels may be this much older than their reported time (one render period)
     envelope_m: float = 0.01
     sample_m: float = 0.01
     body_slack_m: float = 0.05  # the body band is this much wider again: nothing to meet in front of the face, and
@@ -141,7 +142,7 @@ class PocketCheck:
         trans = r_ob @ (r_bc @ t_ci + t_bc) + t_ob
         return rot, trans
 
-    def add_frame(self, stamp_s: float, depth_m: np.ndarray, rear_at_stamp) -> dict:
+    def add_frame(self, stamp_s: float, depth_m: np.ndarray, rear_at_stamp, speed_mps: float = 0.0) -> dict:
         raw = np.ascontiguousarray(np.asarray(depth_m, dtype=np.float32))
         digest = hashlib.sha256(raw.tobytes()).hexdigest()
         if digest == self.last_hash:
@@ -158,7 +159,8 @@ class PocketCheck:
         k = self.camera.sigma_k
         depth[finite] = depth[finite] + np.clip(self.rng.normal(0.0, 1.0, int(finite.sum())), -k, k) * sigma
         rec = self.memory.add_frame(stamp_s, depth, self.camera, self.optical_from_insertion(rear_at_stamp),
-                                    self.surfaces, surface_extra_m=self.config.estimate_m)
+                                    self.surfaces, surface_extra_m=self.config.estimate_m,
+                                    pose_uncertainty_m=abs(speed_mps) * self.config.frame_lag_s)
         rec = {**rec, "new": True, "rear": [float(v) for v in rear_at_stamp]}
         self.records.append(rec)
         return rec

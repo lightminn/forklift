@@ -159,3 +159,39 @@ def test_a_return_off_the_estimated_surface_by_the_estimate_error_counts_as_pall
     noise_only = surface_tolerance_m(CAM, point_o)
     assert not on_surface(point_o, solids_o, noise_only)[0]
     assert on_surface(point_o, solids_o, noise_only + check.config.estimate_m)[0]
+
+
+def test_frames_older_than_their_pose_are_tolerated_with_the_speed():
+    # L3c v7: at 0.5-0.6 m/s the pixels were 3.5 cm behind the pose they were
+    # placed with. Rendered 0.066 s back, placed at the present pose.
+    def run(pass_speed):
+        check = make()
+        x, t, v = START, 0.0, 0.6
+        while x < END - 0.6:
+            check.add_frame(t, render(check, (x - v * 0.066, 0.0, 0.0)), (x, 0.0, 0.0),
+                            speed_mps=v if pass_speed else 0.0)
+            x += v * 0.1
+            t += 0.1
+        return check.memory.obstacle
+
+    assert not run(pass_speed=True)
+
+
+def test_with_lagged_frames_a_bar_in_a_pocket_still_stops_the_truck_before_the_blade():
+    # With the estimate and lag allowances the bar's top (2 cm under the
+    # stringer) may read as pallet; the voxels behind it then never certify,
+    # and the blade stops short of it all the same.
+    check = make()
+    bar = Box((FACE + 0.20, 0.1445, 0.04), (0.01, 0.01, 0.04))
+    x, t = START, 0.0
+    while x < END - 1e-9:
+        v_cmd = 0.3 if x < END - 0.46 else 0.055
+        check.add_frame(t, render(check, (x - v_cmd * 0.066, 0.0, 0.0), [bar]), (x, 0.0, 0.0), speed_mps=v_cmd)
+        allowed, why = check.limit(t + 0.05, (x, 0.0, 0.0), 0.0, 1, v_cmd, 0.0)
+        v = min(v_cmd, allowed)
+        if v <= 0.0:
+            break
+        x = min(END, x + v * 0.1)
+        t += 0.1
+        assert t < 60.0
+    assert x + 1.29 < FACE + 0.19  # stopped with the blade tip short of the bar

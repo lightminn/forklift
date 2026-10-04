@@ -1407,7 +1407,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             rear_at = history[-1][1]
         k_ = pocket["capture"].intrinsics
         depth, _ = adapter.normalize_depth(np.asarray(raw).reshape(k_.height, k_.width))
-        check.add_frame(stamp, depth, rear_at)
+        # The frame's pose uncertainty grows with the speed (pixel lag, L3c v7);
+        # the commanded and odometry speeds, never the truth.
+        speed_now = max(abs(requested_speed), abs(slam["odom_speed"]) if slam is not None else 0.0)
+        check.add_frame(stamp, depth, rear_at, speed_mps=speed_now)
         pocket["frames_read"] += 1
     if args.new_obstacles is not None:
         new_module = load_perception_module(
