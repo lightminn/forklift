@@ -62,6 +62,16 @@ def box_voxels(center, half, rotation=np.eye(3), voxel_m: float = 0.01) -> np.nd
     return g @ np.asarray(rotation).T + np.asarray(center, dtype=float)
 
 
+def surface_tolerance_m(camera: DepthCamera, returns: np.ndarray) -> np.ndarray:
+    """How far a return may lie from the surface it came from: k sigma at the
+    true depth (up to measured + k sigma(measured)), stretched from the optical
+    axis onto the pixel's ray."""
+    r = np.asarray(returns, dtype=float).reshape(-1, 3)
+    z = r[:, 2]
+    stretch = np.linalg.norm(r, axis=1) / np.where(z > 0, z, 1.0)
+    return camera.margin_m(z + camera.margin_m(z)) * stretch
+
+
 def on_surface(points: np.ndarray, boxes, tolerance) -> np.ndarray:
     """True for points within tolerance (per point) of any box surface or inside it."""
     out = np.zeros(len(points), dtype=bool)
@@ -96,11 +106,13 @@ def check_pocket_clearance(
     front = valid & (measured < z - margin)
     # The return in front of the voxel, back in 3D along the same pixel ray.
     ret = np.zeros((len(v), 3))
-    scale = np.where(front, measured / np.where(z > 0, z, 1.0), 0.0)
-    ret[front] = v[front] * scale[front, None]
+    # On the pixel's own ray (not the voxel's): at a grazing face half a pixel
+    # moves the point centimetres.
+    ret[front] = np.column_stack(((u[front] - camera.cx) / camera.fx, (w[front] - camera.cy) / camera.fy,
+                                  np.ones(int(front.sum())))) * measured[front][:, None]
     pallet = np.zeros(len(v), dtype=bool)
     if front.any():
-        pallet[front] = on_surface(ret[front], pallet_boxes_optical, camera.margin_m(measured[front]))
+        pallet[front] = on_surface(ret[front], pallet_boxes_optical, surface_tolerance_m(camera, ret[front]))
     occluded = front & pallet
     obstacle = front & ~pallet
     # A return within the margin of the voxel itself cannot be told apart: unobserved.
@@ -118,4 +130,5 @@ def check_pocket_clearance(
     )
 
 
-__all__ = ["ClearanceResult", "DepthCamera", "box_voxels", "check_pocket_clearance", "on_surface"]
+__all__ = ["ClearanceResult", "DepthCamera", "box_voxels", "check_pocket_clearance", "on_surface",
+           "surface_tolerance_m"]

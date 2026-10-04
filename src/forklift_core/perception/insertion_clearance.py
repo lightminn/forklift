@@ -33,7 +33,7 @@ from math import cos, sin
 
 import numpy as np
 
-from forklift_core.perception.pocket_clearance import DepthCamera, on_surface
+from forklift_core.perception.pocket_clearance import DepthCamera, on_surface, surface_tolerance_m
 
 
 @dataclass(frozen=True)
@@ -152,13 +152,16 @@ class ClearanceMemory:
         front = valid & (measured < z - margin)
         obstacle_count = 0
         if front.any():
-            ret = pts[front] * (measured[front] / z[front])[:, None]
+            # The return lies on the pixel's own ray, not on the voxel's: at a
+            # grazing face half a pixel moves it centimetres.
+            ret = np.column_stack(((ui[front] - camera.cx) / camera.fx, (wi[front] - camera.cy) / camera.fy,
+                                   np.ones(int(front.sum())))) * measured[front][:, None]
             solids_optical = [
                 (np.asarray(b.center) @ rot.T + trans, np.asarray(b.half),
                  rot @ np.array([[cos(b.yaw), -sin(b.yaw), 0.0], [sin(b.yaw), cos(b.yaw), 0.0], [0.0, 0.0, 1.0]]))
                 for b in solids
             ]
-            pallet = on_surface(ret, solids_optical, camera.margin_m(measured[front]))
+            pallet = on_surface(ret, solids_optical, surface_tolerance_m(camera, ret))
             obstacle_count = int((~pallet).sum())
             if obstacle_count:
                 self.obstacle = True
