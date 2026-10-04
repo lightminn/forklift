@@ -1388,6 +1388,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 version=occupancy.version,
             )
             obstacle["plans"][-1]["docking_band_cells"] = int((occupancy.occupied & band).sum())
+            np.savez_compressed(
+                args.output / f"grid_mission_plan_{len(obstacle['plans'])}.npz",
+                occupied=occupancy.occupied, docking=out["docking_occupancy"].occupied,
+                origin=[occupancy.origin_x_m, occupancy.origin_y_m], res=res_g,
+                target=[target.x_m, target.y_m, target.yaw_rad],
+            )
         return out
 
     state["phase"] = "planning"
