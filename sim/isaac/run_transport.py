@@ -4278,7 +4278,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             return_to=return_to_pose, pickup_bounds=pickup_bounds, travel_config=travel_config,
                             trace=planning_trace, **grid_kwargs("mission", pocket["planning_pickup"]),
                         )
-                        if "invalid_start" in mission_again.status:
+                        if "invalid_start" in mission_again.status or "invalid_goal" in mission_again.status:
+                            # The waypoint next to an obstacle that has grown in
+                            # view is valid only without the planning clearance
+                            # (L3b v26); the grid's swelling holds the placement error.
                             mission_again = plan_transport(
                                 grid_world(scenario), tight, geometry=geometry,
                                 target_pickup=pocket["planning_pickup"], start_rear=start,
