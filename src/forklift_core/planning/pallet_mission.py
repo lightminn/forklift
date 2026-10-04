@@ -98,7 +98,7 @@ def _retries(config, extended=True):
 
 
 def _search(
-    start, goal, obstacles, footprint, bounds, config, extended=True
+    start, goal, obstacles, footprint, bounds, config, extended=True, occupancy=None
 ) -> PlanResult:
     """plan_hybrid_astar, retried on a finer lattice, then at denser analytic
     intervals, then (``extended``) on the fine lattice with more budget and a
@@ -110,8 +110,10 @@ def _search(
 
     def attempt(attempt_config):
         attempts_config.append(attempt_config)
+        # Without a grid the call is exactly the pre-grid one.
+        extra = {} if occupancy is None else {"occupancy": occupancy}
         result = plan_hybrid_astar(
-            start, goal, obstacles, footprint, bounds, attempt_config
+            start, goal, obstacles, footprint, bounds, attempt_config, **extra
         )
         attempts.append(
             (
@@ -483,7 +485,7 @@ def make_scenario(
     )
 
 
-def _straight_plan(start, goal, direction, obstacles, footprint, bounds, clearance_m):
+def _straight_plan(start, goal, direction, obstacles, footprint, bounds, clearance_m, occupancy=None):
     distance = float(np.hypot(goal.x_m - start.x_m, goal.y_m - start.y_m))
     count = max(1, ceil(distance / 0.04))
     fractions = np.linspace(0, 1, count + 1)
@@ -495,7 +497,8 @@ def _straight_plan(start, goal, direction, obstacles, footprint, bounds, clearan
         )
     )
     if not collision_free_path(
-        poses, obstacles, footprint, bounds, margin_m=clearance_m, max_step_m=0.04
+        poses, obstacles, footprint, bounds, margin_m=clearance_m, max_step_m=0.04,
+        occupancy=occupancy,
     ):
         return PlanResult(
             False,
@@ -545,8 +548,14 @@ def plan_observation_leg(
     start_rear: Pose2D | None = None,
     pickup_bounds: Bounds | None = None,
     extended: bool = True,
+    occupancy=None,
+    pickup_obstacle: Rectangle | None = None,
 ) -> PlanResult:
     """Plan a separate leg to the observation waypoint at full clearance.
+
+    occupancy / pickup_obstacle (priority-5 plan): a LiDAR occupancy grid and
+    the rectangle that stands for the unrecognised pallet (the pickup zone
+    prior) instead of scenario.pickup; pass a scenario without props then.
 
     Like plan_transport's target/obstacle split, scenario.pickup is an obstacle,
     not the goal of this leg.
@@ -559,7 +568,7 @@ def plan_observation_leg(
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
     config = config if config is not None else make_transport_planner_config()
     props = [prop.rectangle for prop in scenario.props]
-    pallet = Rectangle(
+    pallet = pickup_obstacle if pickup_obstacle is not None else Rectangle(
         scenario.pickup.x_m,
         scenario.pickup.y_m,
         geometry.pallet_depth_m,
@@ -574,6 +583,7 @@ def plan_observation_leg(
         pickup_bounds if pickup_bounds is not None else scenario.bounds,
         config,
         extended,
+        occupancy,
     )
 
 
@@ -673,6 +683,7 @@ def plan_transport_leg(
     *,
     geometry: SyntheticMissionGeometry | None = None,
     travel_config: PlannerConfig | None = None,
+    occupancy=None,
 ) -> PlanResult:
     """The loaded transport leg alone, from ``start_rear`` to the delivery pose.
 
@@ -693,6 +704,7 @@ def plan_transport_leg(
         geometry.loaded_footprint,
         scenario.bounds,
         travel_config,
+        occupancy=occupancy,
     )
     if not search.success:
         return search
@@ -704,6 +716,7 @@ def plan_transport_leg(
         geometry.loaded_footprint,
         scenario.bounds,
         config.clearance_m,
+        occupancy,
     )
     if not tail.success:
         return tail
@@ -718,6 +731,7 @@ def plan_return_leg(
     *,
     geometry: SyntheticMissionGeometry | None = None,
     travel_config: PlannerConfig | None = None,
+    occupancy=None,
 ) -> PlanResult:
     """The unloaded return leg alone, as plan_transport's return_home stage.
 
@@ -743,6 +757,7 @@ def plan_return_leg(
         geometry.unloaded_footprint,
         scenario.bounds,
         travel_config,
+        occupancy=occupancy,
     )
 
 
@@ -757,6 +772,8 @@ def plan_transport(
     pickup_bounds: Bounds | None = None,
     travel_config: PlannerConfig | None = None,
     trace: list | None = None,
+    occupancy=None,
+    pickup_obstacle: Rectangle | None = None,
 ) -> MissionPlan:
     """Plan all stages with exact final straight approaches and loaded geometry.
 
@@ -782,6 +799,9 @@ def plan_transport(
     the step that failed -- search and appended straight parts separately --
     because a failed MissionPlan keeps no paths. Anything with ``append``
     works; the plan returned is the same with or without it.
+    occupancy / pickup_obstacle (priority-5 plan): a LiDAR occupancy grid
+    checked with every stage, and the perceived pallet rectangle in place of
+    scenario.pickup as the approach obstacle.
     """
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
     config = config if config is not None else make_transport_planner_config()
@@ -813,7 +833,7 @@ def plan_transport(
         target_pickup if target_pickup is not None else scenario.pickup, geometry
     )
     destination = site_poses(scenario.destination, geometry)
-    pallet = Rectangle(
+    pallet = pickup_obstacle if pickup_obstacle is not None else Rectangle(
         scenario.pickup.x_m,
         scenario.pickup.y_m,
         geometry.pallet_depth_m,
@@ -833,6 +853,7 @@ def plan_transport(
             geometry.unloaded_footprint,
             near_bounds,
             approach_config,
+            occupancy=occupancy,
         ),
     )
     if not approach.success:
@@ -847,6 +868,7 @@ def plan_transport(
             geometry.unloaded_footprint,
             near_bounds,
             approach_config.clearance_m,
+            occupancy,
         ),
     )
     if not approach_tail.success:
@@ -862,6 +884,7 @@ def plan_transport(
             geometry.unloaded_footprint,
             near_bounds,
             config.clearance_m,
+            occupancy,
         ),
     )
     if not insert.success:
@@ -876,6 +899,7 @@ def plan_transport(
             geometry.loaded_footprint,
             near_bounds,
             config.clearance_m,
+            occupancy,
         ),
     )
     if not extract.success:
@@ -889,6 +913,7 @@ def plan_transport(
             geometry.loaded_footprint,
             scenario.bounds,
             travel_config,
+            occupancy=occupancy,
         ),
     )
     if not transport.success:
@@ -903,6 +928,7 @@ def plan_transport(
             geometry.loaded_footprint,
             scenario.bounds,
             config.clearance_m,
+            occupancy,
         ),
     )
     if not transport_tail.success:
@@ -918,6 +944,7 @@ def plan_transport(
             geometry.unloaded_footprint,
             scenario.bounds,
             config.clearance_m,
+            occupancy,
         ),
     )
     if not withdraw.success:
@@ -942,6 +969,7 @@ def plan_transport(
             geometry.unloaded_footprint,
             scenario.bounds,
             travel_config,
+            occupancy=occupancy,
         ),
     )
     if not return_home.success:

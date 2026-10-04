@@ -24,6 +24,7 @@ from numpy.typing import NDArray
 from forklift_core._validation import _finite_scalar
 
 from .geometry import Bounds, Footprint, FootprintCollisionChecker, Pose2D, Rectangle
+from .grid_collision import make_checker
 
 
 @dataclass(frozen=True)
@@ -137,6 +138,7 @@ class _ObstacleDistance:
         *,
         resolution_m: float,
         clearance_m: float,
+        occupancy=None,
     ) -> None:
         self.bounds, self.resolution_m = bounds, resolution_m
         self.shape = (
@@ -165,6 +167,33 @@ class _ObstacleDistance:
             along = np.maximum(np.abs(dx * c + dy * s) - o.length_m / 2, 0)
             across = np.maximum(np.abs(dy * c - dx * s) - o.width_m / 2, 0)
             blocked |= np.hypot(along, across) < reach
+        if occupancy is not None and occupancy.occupied.any():
+            # Occupied grid cells (plan D3): mark the heuristic cells holding
+            # an occupied centre, then block only where the nearest such
+            # centre is certainly within reach -- a cell centre is at most a
+            # half diagonal from its occupied centre, so a gap is never sealed.
+            ii, jj = np.nonzero(occupancy.occupied)
+            ox = occupancy.origin_x_m + (ii + 0.5) * occupancy.resolution_m
+            oy = occupancy.origin_y_m + (jj + 0.5) * occupancy.resolution_m
+            hi = np.floor((ox - bounds.x_min_m) / resolution_m).astype(int)
+            hj = np.floor((oy - bounds.y_min_m) / resolution_m).astype(int)
+            inside = (hi >= 0) & (hi < self.shape[0]) & (hj >= 0) & (hj < self.shape[1])
+            seeds = np.zeros(self.shape, dtype=bool)
+            seeds[hi[inside], hj[inside]] = True
+            # Heuristic cells whose centre is within reach - half diagonal of
+            # a seed cell's centre (the occupied centre lies inside that cell).
+            span = int(ceil(reach / resolution_m))
+            offsets = [
+                (di, dj)
+                for di in range(-span, span + 1)
+                for dj in range(-span, span + 1)
+                if hypot(di, dj) * resolution_m + resolution_m * sqrt(2) / 2 < reach
+            ]
+            si, sj = np.nonzero(seeds)
+            for di, dj in offsets:
+                ti, tj = si + di, sj + dj
+                ok = (ti >= 0) & (ti < self.shape[0]) & (tj >= 0) & (tj < self.shape[1])
+                blocked[ti[ok], tj[ok]] = True
         self.distance_m = np.full(self.shape, np.inf)
         goal = self._cell(*goal_xy)
         self.distance_m[goal] = 0.0
@@ -384,8 +413,14 @@ def plan_hybrid_astar(
     footprint: Footprint,
     bounds: Bounds,
     config: PlannerConfig | None = None,
+    *,
+    occupancy=None,
 ) -> PlanResult:
     """Plan bounded, collision-checked forward/reverse motion in a static map.
+
+    occupancy optionally adds an OccupancyGrid (forklift_core.planning.
+    grid_collision) checked cell by cell alongside the rectangles; unknown
+    cells are free to the planner (priority-5 plan D3).
 
     Invalid colliding endpoints return invalid_start/invalid_goal. Exhaustion
     returns no_path or expansion_limit; neither proves physical infeasibility.
@@ -394,7 +429,7 @@ def plan_hybrid_astar(
     config = config if config is not None else PlannerConfig()
     start_pose = (start.x_m, start.y_m, _wrap(start.yaw_rad))
     goal_pose = (goal.x_m, goal.y_m, _wrap(goal.yaw_rad))
-    checker = FootprintCollisionChecker(obstacles, footprint, bounds)
+    checker = make_checker(obstacles, footprint, bounds, occupancy)
     if not checker.free(start_pose, config.clearance_m):
         return _failure("invalid_start")
     if not checker.free(goal_pose, config.clearance_m):
@@ -420,6 +455,7 @@ def plan_hybrid_astar(
             (goal.x_m, goal.y_m),
             resolution_m=config.obstacle_heuristic_resolution_m,
             clearance_m=config.clearance_m,
+            occupancy=occupancy,
         )
     )
 

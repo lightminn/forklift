@@ -195,6 +195,7 @@ def collision_free_path(
     *,
     margin_m: float = 0.0,
     max_step_m: float = 0.05,
+    occupancy=None,
 ) -> bool:
     """Conservative collision check of piecewise linear position/yaw samples.
 
@@ -203,6 +204,7 @@ def collision_free_path(
     obstacles cannot hide between samples. This checks geometry, not vehicle
     feasibility; use the planner's controls for the latter. Empty paths are
     rejected. The planner independently checks its true circular arcs.
+    occupancy optionally adds an OccupancyGrid checked cell by cell.
     """
     array = np.asarray(poses, dtype=float)
     if (
@@ -215,7 +217,12 @@ def collision_free_path(
     _finite(margin_m, max_step_m)
     if margin_m < 0 or max_step_m <= 0:
         raise ValueError("margin must be nonnegative and max_step_m positive")
-    checker = FootprintCollisionChecker(obstacles, footprint, bounds)
+    if occupancy is None:
+        checker = FootprintCollisionChecker(obstacles, footprint, bounds)
+    else:
+        from .grid_collision import CompositeChecker
+
+        checker = CompositeChecker(obstacles, occupancy, footprint, bounds)
     if not checker.free(array[-1], margin_m):
         return False
     for a, b in zip(array[:-1], array[1:], strict=True):

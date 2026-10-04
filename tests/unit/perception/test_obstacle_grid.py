@@ -1,0 +1,141 @@
+"""Rolling LiDAR obstacle grid (priority-5 plan D2); synthetic scans only."""
+
+import math
+
+import numpy as np
+import pytest
+
+from forklift_core.perception.obstacle_grid import (
+    FREE,
+    OCCUPIED,
+    UNKNOWN,
+    AgeErrorTable,
+    GridConfig,
+    ObstacleGrid,
+    ObstacleScan,
+)
+
+TABLE = AgeErrorTable((0.1, 0.2, 0.3, 1.0, 3.0), (0.024, 0.030, 0.039, 0.091, 0.141), (0.014, 0.022, 0.026, 0.039, 0.059))
+ANGLES = np.linspace(-math.pi, math.pi, 720, endpoint=False)
+
+
+def config(**overrides):
+    values = dict(x_min_m=-1, x_max_m=6, y_min_m=-3, y_max_m=3, error=TABLE)
+    values.update(overrides)
+    return GridConfig(**values)
+
+
+def scan(stamp, ranges, *, odom=(0.0, 0.0, 0.0), self_hit=None, sensor="low"):
+    ranges = np.asarray(ranges, dtype=float)
+    return ObstacleScan(
+        stamp, sensor, odom, (0.0, 0.0, 0.0), ANGLES, ranges,
+        np.zeros(len(ANGLES), bool) if self_hit is None else self_hit,
+    )
+
+
+def wall_ranges(x_wall=3.0):
+    """Beams within +-40 deg hit a wall at x = x_wall; the rest see nothing."""
+    out = np.full(len(ANGLES), np.inf)
+    front = np.abs(ANGLES) < math.radians(40)
+    out[front] = x_wall / np.cos(ANGLES[front])
+    return out
+
+
+def cell(snap, x, y):
+    i = int(math.floor((x - snap.origin_x_m) / snap.resolution_m))
+    j = int(math.floor((y - snap.origin_y_m) / snap.resolution_m))
+    return snap.state[i, j]
+
+
+def test_the_table_steps_up_to_the_next_listed_age_and_ends():
+    assert TABLE.at(0.05) == (0.024, 0.014)
+    assert TABLE.at(0.1) == (0.024, 0.014)
+    assert TABLE.at(0.15) == (0.030, 0.022)
+    assert TABLE.at(3.5) is None
+    with pytest.raises(ValueError):
+        AgeErrorTable((0.1, 0.2), (0.03, 0.02), (0.01, 0.02))
+
+
+def test_a_fresh_scan_marks_the_wall_clears_the_way_and_leaves_behind_unknown():
+    grid = ObstacleGrid(config())
+    grid.add_scan(scan(0.0, wall_ranges()))
+    snap = grid.snapshot(0.05, (0.0, 0.0, 0.0))
+    assert cell(snap, 3.0, 0.0) == OCCUPIED
+    assert cell(snap, 1.5, 0.0) == FREE
+    assert cell(snap, 4.5, 0.0) == UNKNOWN  # behind the wall
+    # Inflation: r = 0.024 + sensor 0.06 (+ cell quantisation) reaches 0.1 m short of the wall.
+    assert cell(snap, 2.9, 0.0) == OCCUPIED
+    assert cell(snap, 2.6, 0.0) == FREE
+
+
+def test_self_hits_neither_mark_nor_clear():
+    grid = ObstacleGrid(config())
+    own = np.ones(len(ANGLES), bool)
+    grid.add_scan(scan(0.0, wall_ranges(), self_hit=own))
+    snap = grid.snapshot(0.05, (0.0, 0.0, 0.0))
+    assert not snap.occupied.any() and not snap.free.any()
+
+
+def test_an_unexplained_too_close_return_marks_the_near_sector():
+    ranges = np.full(len(ANGLES), np.inf)
+    ranges[0] = -np.inf  # straight behind (angle -pi)
+    grid = ObstacleGrid(config())
+    grid.add_scan(scan(0.0, ranges))
+    snap = grid.snapshot(0.05, (0.0, 0.0, 0.0))
+    assert cell(snap, -0.1, 0.0) == OCCUPIED
+
+
+def test_the_newest_observation_wins_and_old_free_is_not_evidence():
+    grid = ObstacleGrid(config())
+    grid.add_scan(scan(0.0, wall_ranges(2.0)))  # a box at 2 m ...
+    grid.add_scan(scan(0.5, wall_ranges(4.0)))  # ... gone half a second later
+    snap = grid.snapshot(0.55, (0.0, 0.0, 0.0))
+    assert cell(snap, 2.0, 0.0) == FREE
+    # A second later the newer scan is too old to count as free: unknown, while
+    # its wall stays occupied until occupied_max_age_s.
+    snap = grid.snapshot(1.5, (0.0, 0.0, 0.0))
+    assert cell(snap, 2.0, 0.0) == UNKNOWN  # cleared, but no longer evidence
+    assert cell(snap, 1.0, 0.0) == UNKNOWN
+    assert cell(snap, 4.0, 0.0) == OCCUPIED
+    snap = grid.snapshot(3.6, (0.0, 0.0, 0.0))
+    assert cell(snap, 4.0, 0.0) == UNKNOWN and not grid.scans
+
+
+def test_old_hits_grow_with_age_and_range():
+    grid = ObstacleGrid(config())
+    grid.add_scan(scan(0.0, wall_ranges(3.0)))
+    fresh = grid.snapshot(0.05, (0.0, 0.0, 0.0)).occupied.sum()
+    old = grid.snapshot(2.5, (0.0, 0.0, 0.0)).occupied.sum()
+    assert old > 1.5 * fresh
+
+
+def test_the_correction_moves_every_stored_scan_together():
+    grid = ObstacleGrid(config())
+    grid.add_scan(scan(0.0, wall_ranges(3.0)))
+    a = grid.snapshot(0.06, (0.0, 0.0, 0.0))
+    b = grid.snapshot(0.06, (0.0, 1.0, 0.0))  # correction moved the map 1 m in y
+    # The wall spans y +-2.52 at x = 3 from the origin.
+    assert cell(a, 3.0, -2.2) == OCCUPIED and cell(b, 3.0, -1.2) == OCCUPIED
+    assert cell(b, 3.0, -2.2) != OCCUPIED
+
+
+def test_each_scan_is_placed_at_its_own_odometry_pose():
+    grid = ObstacleGrid(config())
+    grid.add_scan(scan(0.0, wall_ranges(2.0), odom=(1.0, 0.0, 0.0)))  # drove 1 m first
+    snap = grid.snapshot(0.05, (0.0, 0.0, 0.0))
+    assert cell(snap, 3.0, 0.0) == OCCUPIED and cell(snap, 2.0, 0.0) == FREE
+
+
+def test_far_hits_clear_only_to_the_mark_limit_and_mark_nothing():
+    grid = ObstacleGrid(config(max_mark_m=2.0, max_clear_m=2.0))
+    grid.add_scan(scan(0.0, wall_ranges(3.0)))
+    snap = grid.snapshot(0.05, (0.0, 0.0, 0.0))
+    assert not snap.occupied.any()
+    assert cell(snap, 1.2, 0.0) == FREE and cell(snap, 2.5, 0.0) == UNKNOWN
+
+
+def test_scans_out_of_order_are_rejected():
+    grid = ObstacleGrid(config())
+    grid.add_scan(scan(1.0, wall_ranges()))
+    with pytest.raises(ValueError):
+        grid.add_scan(scan(0.5, wall_ranges()))
