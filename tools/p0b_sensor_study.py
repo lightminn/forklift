@@ -319,7 +319,7 @@ def _rect_cells_free(snapshot, rect, margin=0.0):
 def evaluate_command(args) -> dict:
     from dataclasses import replace
 
-    from forklift_core.control.drive_permission import DrivePermission, PermissionConfig, StoppingModel
+    from forklift_core.control.drive_permission import DrivePermission, PermissionConfig, StoppingModel, arc_poses
     from forklift_core.localization.slam_pose import OdometryNoise
     from forklift_core.localization.wheel_odometry import AckermannOdometryGeometry, integrate_wheel_odometry
     from forklift_core.perception.obstacle_grid import AgeErrorTable, GridConfig, ObstacleGrid, ObstacleScan
@@ -477,19 +477,22 @@ def evaluate_command(args) -> dict:
             end = int(np.searchsorted(s_cum, pconfig.lookahead_m)) + 1
             ahead = truth_rear[j : j + max(end, 2)]
             fp = loaded if carried else unloaded
-            permission.evaluate(snap, ahead, fp, body, current_pose=tuple(tr))
+            permission.update(snap, ahead, fp, body, current_pose=tuple(tr))
+            # The steering held by an emergency stop gives the stopping arc.
+            kappa = float(np.mean([math.tan(a) / (g["wheelbase_m"] + math.tan(a) * side * g["track_m"] / 2)
+                                   for a, side in ((st[0], 1), (st[1], -1))]))
+            direction = -1 if v < 0 else 1
+            allowed, reason = permission.allowed_speed(
+                float(t), {sd["name"]: float(t) for sd in cand["sensors"]}, current_pose=tuple(tr),
+                curvature_inv_m=kappa, direction=direction, footprint=fp, own_footprint=body,
+                speed_cap_mps=abs(v),
+            )
             if args.dump_at is not None and k == args.dump_at:
-                only = ObstacleGrid(window)
-                for sc in list(grid.scans)[-len(cand["sensors"]):]:
-                    only.add_scan(sc)
-                alone = only.snapshot(float(t), correction)
-                np.savez(str(args.dump_path) + ".alone.npz", state=alone.state,
-                         stamps=[sc.stamp_s for sc in grid.scans], t=float(t))
                 np.savez(args.dump_path, state=snap.state, origin=[snap.origin_x_m, snap.origin_y_m],
-                         res=snap.resolution_m, ahead=ahead, pose=tr, verified=permission.evaluation.verified_m,
-                         blocked=str(permission.evaluation.blocked))
-            allowed, reason = permission.allowed_speed(float(t), {s["name"]: float(t) for s in cand["sensors"]})
-            curve = abs(float(np.tan(st).mean())) > 0.1
+                         res=snap.resolution_m, ahead=ahead, pose=tr, verified=permission.path_check.verified_m,
+                         blocked=str(permission.path_check.blocked), allowed=allowed, reason=reason,
+                         kappa=kappa, v=v, free_stamp=snap.free_stamp, t=float(t), oldest=permission.path_check.oldest_free_s)
+            curve = abs(kappa) > 0.1
             cls = f"{'loaded' if carried else 'unloaded'}_{'reverse' if v < 0 else 'forward'}_{'curve' if curve else 'straight'}"
             stats["moving"][cls] = stats["moving"].get(cls, 0) + 1
             permitted = allowed >= abs(v) - 1e-9
@@ -497,19 +500,21 @@ def evaluate_command(args) -> dict:
             if not permitted:
                 why = stats.setdefault("blocked_reasons", {}).setdefault(cls, {})
                 why[reason] = why.get(reason, 0) + 1
-            # Truth: does any floor obstacle (or the floor pallet) meet the stopping volume?
-            s_stop = stopping.distance_m(v)
-            send = int(np.searchsorted(s_cum, s_stop)) + 1
-            vol = truth_rear[j : j + max(send, 2)]
-            truths = list(obstacle_rects)
+            # Truth: which floor obstacles (or the floor pallet) meet the
+            # steering-held stopping volume at the recorded speed (Codex L0 P1),
+            # one event per obstacle (Codex L0 P2).
+            vol, _ = arc_poses(tuple(tr), kappa, direction, stopping.distance_m(v), 0.025)
+            truths = list(enumerate(obstacle_rects))
             if not carried and phase != "approach":
-                truths.append(Rectangle(ppos[0], ppos[1], geometry["pallet_depth_m"], geometry["pallet_width_m"], pyaw))
-            checker = FootprintCollisionChecker(truths, fp, replace_bounds(hall))
-            hit = any(not checker.free(tuple(p), args.envelope_m) for p in vol[1:])
-            if hit:
-                stats["events"] += 1
-                if permitted:
-                    stats["unpermitted"].append({"t": float(t), "phase": phase, "v": v, "reason": reason})
+                truths.append((-1, Rectangle(ppos[0], ppos[1], geometry["pallet_depth_m"], geometry["pallet_width_m"], pyaw)))
+            for oid, rect in truths:
+                checker = FootprintCollisionChecker([rect], fp, replace_bounds(hall))
+                if any(not checker.free(tuple(p), args.envelope_m) for p in vol[1:]):
+                    stats["events"] += 1
+                    obj = stats.setdefault("event_objects", {})
+                    obj[oid] = obj.get(oid, 0) + 1
+                    if permitted:
+                        stats["unpermitted"].append({"t": float(t), "phase": phase, "v": v, "object": oid, "reason": reason})
             if k % args.free_check_every == 0:
                 for o, kind in zip(obstacles, rect_kind):
                     n = _rect_cells_free(snap, o, margin=0.05)
@@ -525,11 +530,13 @@ def evaluate_command(args) -> dict:
             "sensors": cand["sensors"], "lift_offset_m": cand["lift_offset_m"],
             "scans": stats["scans"], "events": stats["events"],
             "unpermitted_entries": len(stats["unpermitted"]), "unpermitted": stats["unpermitted"][:20],
+            "event_objects": len(stats.get("event_objects", {})),
+            "event_counts_by_object": {str(k): v for k, v in stats.get("event_objects", {}).items()},
             "moving_by_class": stats["moving"], "permission_ratio": ratio, "coverage_ratio": coverage,
             "free_cells_inside_obstacles": stats["free_inside"],
             "blocked_reasons": stats.get("blocked_reasons", {}),
         }
-        print(cname, json.dumps({k: report[cname][k] for k in ("events", "unpermitted_entries", "permission_ratio", "coverage_ratio")}), flush=True)
+        print(cname, json.dumps({k: report[cname][k] for k in ("events", "event_objects", "unpermitted_entries", "permission_ratio", "coverage_ratio")}), flush=True)
     return {"run": str(run), "stopping": vars(stopping), "envelope_m": args.envelope_m, "candidates": report}
 
 

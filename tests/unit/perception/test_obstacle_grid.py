@@ -148,3 +148,24 @@ def test_a_high_plane_marks_but_never_clears_what_a_low_plane_saw():
     snap = grid.snapshot(0.06, (0.0, 0.0, 0.0))
     assert cell(snap, 2.0, 0.0) == OCCUPIED and cell(snap, 4.0, 0.0) == OCCUPIED
     assert cell(snap, 3.0, 0.0) == UNKNOWN  # behind the low box nothing low was seen
+
+
+def test_a_beam_that_reads_long_does_not_clear_the_surface_it_hit():
+    grid = ObstacleGrid(config())
+    ranges = wall_ranges(3.0)
+    ranges[np.isfinite(ranges)] += 0.06  # every hit reads the full range error bound long
+    grid.add_scan(scan(0.0, ranges))
+    snap = grid.snapshot(0.05, (0.0, 0.0, 0.0))
+    for x in (2.98, 3.0, 3.02):
+        assert cell(snap, x, 0.0) == OCCUPIED
+
+
+def test_cells_beside_the_body_can_be_free_and_under_it_cannot():
+    grid = ObstacleGrid(config())
+    s = scan(0.0, wall_ranges(4.0))
+    s = ObstacleScan(s.stamp_s, s.sensor, s.odom_rear, s.laser_in_rear, s.angles_rad, s.ranges_m,
+                     s.self_hit, True, (0.5, 0.2, 0.3))
+    grid.add_scan(s)
+    snap = grid.snapshot(0.05, (0.0, 0.0, 0.0))
+    assert cell(snap, 0.2, 0.0) == UNKNOWN  # under the body
+    assert cell(snap, 0.2, 0.42) == FREE  # just beside it

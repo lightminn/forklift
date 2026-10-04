@@ -67,3 +67,25 @@ def test_windows_end_at_the_age_limit():
         truth, truth.copy(), start_every=100, max_distance_m=12, stamps=stamps, max_age_s=5
     )
     assert d.max() <= 0.5 + 1e-9
+
+
+def test_the_age_table_never_decreases_and_reads_each_age_from_the_start():
+    stamps = np.arange(0, 5, 0.01)
+    truth = np.column_stack((0.5 * stamps, np.zeros_like(stamps), np.zeros_like(stamps)))
+    estimate = truth.copy()
+    estimate[:, 0] *= 1.1  # 10 % odometry overshoot
+    err = MODULE.relative_error_at(0, (0.1, 1.0, 10.0), stamps, truth, estimate)
+    assert math.isclose(err[0, 0], 0.005, abs_tol=1e-9) and math.isclose(err[1, 0], 0.05, abs_tol=1e-9)
+    assert np.isnan(err[2]).all()
+    table = MODULE.cumulative_table(np.array([[0.03, 0.01], [0.02, 0.02], [np.nan, np.nan]]))
+    assert table.tolist() == [[0.03, 0.01], [0.03, 0.02], [0.03, 0.02]]
+
+
+def test_a_heading_error_at_the_present_swings_the_old_pose():
+    # Codex L0 P1: same positions, the odometry heading 0.1 rad off at the end only.
+    stamps = np.array([0.0, 1.0])
+    truth = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+    odom = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.1]])
+    err = MODULE.relative_error_at(0, (1.0,), stamps, truth, odom)
+    assert math.isclose(err[0, 0], 2 * math.sin(0.05), rel_tol=1e-9)  # about 0.10 m
+    assert math.isclose(err[0, 1], 0.1, rel_tol=1e-9)

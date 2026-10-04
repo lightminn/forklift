@@ -12,6 +12,9 @@ scan clearing before marking):
             bound (rho: rear axle at the scan -> point), and then by the cell
             quantisation (every cell whose square can come within r of a point
             anywhere in the hit's cell); kept for occupied_max_age_s.
+            The free shrink uses the pose error alone: the range error only
+            moves a point along its beam, so it shortens the cleared part of
+            each hit beam instead.
   FREE      a cell a beam crossed, only from scans no older than
             free_max_age_s whose r stays within free_r_cap_m, shrunk by that
             r at every edge to non-free cells of the same scan. An older scan
@@ -134,6 +137,7 @@ def compose(a, b):
 @dataclass
 class GridSnapshot:
     state: np.ndarray  # uint8 UNKNOWN / FREE / OCCUPIED
+    free_stamp: np.ndarray  # measurement time of the scan that made each FREE cell (nan elsewhere)
     stamp_s: float
     correction: tuple[float, float, float]
     correction_version: int
@@ -153,24 +157,35 @@ class GridSnapshot:
 
 
 def _disk_offsets(radius_cells: float) -> np.ndarray:
+    """Cell offsets whose centre is within radius_cells of the origin cell's centre."""
     span = int(ceil(radius_cells))
     di, dj = np.meshgrid(np.arange(-span, span + 1), np.arange(-span, span + 1), indexing="ij")
     keep = np.hypot(di, dj) <= radius_cells
     return np.column_stack((di[keep], dj[keep]))
 
 
+def _reach_offsets(radius_cells: float) -> np.ndarray:
+    """Cell offsets whose square comes within radius_cells + a half diagonal of the
+    origin cell's centre: every cell a disk of radius_cells around any point of
+    the origin cell can touch (exact square distance, not centre distance)."""
+    reach = radius_cells + sqrt(2) / 2
+    span = int(ceil(reach + 0.5))
+    di, dj = np.meshgrid(np.arange(-span, span + 1), np.arange(-span, span + 1), indexing="ij")
+    gap = np.hypot(np.maximum(np.abs(di) - 0.5, 0.0), np.maximum(np.abs(dj) - 0.5, 0.0))
+    keep = gap <= reach
+    return np.column_stack((di[keep], dj[keep]))
+
+
 def _erode(mask: np.ndarray, radius_cells: float) -> np.ndarray:
-    """Cells of mask whose whole disk of radius_cells lies inside mask."""
-    if radius_cells <= 0:
-        return mask.copy()
+    """Cells of mask such that every point within radius_cells of any point of
+    the cell lies in a mask cell."""
     out = mask.copy()
     nx, ny = mask.shape
-    padded = np.zeros((nx + 2, ny + 2), dtype=bool)
-    padded[1:-1, 1:-1] = mask
-    span = int(ceil(radius_cells))
+    offsets = _reach_offsets(max(radius_cells, 0.0))
+    span = int(np.abs(offsets).max())
     big = np.zeros((nx + 2 * span, ny + 2 * span), dtype=bool)
     big[span : span + nx, span : span + ny] = mask
-    for di, dj in _disk_offsets(radius_cells):
+    for di, dj in offsets:
         out &= big[span + di : span + di + nx, span + dj : span + dj + ny]
     return out
 
@@ -194,18 +209,21 @@ class ObstacleGrid:
         while self.scans and now_s - self.scans[0].stamp_s > keep:
             self.scans.popleft()
 
-    def radius_m(self, age_s: float, rho_m: float) -> float | None:
+    def radius_m(self, age_s: float, rho_m: float, *, sensor: bool = True) -> float | None:
+        """Placement error of a point: odometry over its age, plus (sensor=True)
+        the range error bound, which only moves points along their beam."""
         bound = self.config.error.at(age_s)
         if bound is None:
             return None
         e, psi = bound
-        return e + 2 * rho_m * sin(psi / 2) + self.config.sensor_bound_m
+        return e + 2 * rho_m * sin(psi / 2) + (self.config.sensor_bound_m if sensor else 0.0)
 
     def snapshot(self, now_s: float, map_from_odom, correction_version: int = 0) -> GridSnapshot:
         cfg = self.config
         self.prune(now_s)
         nx, ny = cfg.shape
         state = np.zeros((nx, ny), dtype=np.uint8)
+        free_stamp = np.full((nx, ny), np.nan)
         res = cfg.resolution_m
         newest: dict = {}
         used = 0
@@ -232,10 +250,19 @@ class ObstacleGrid:
                     np.where(finite, np.minimum(ranges, cfg.max_mark_m), 0.0),
                 )
                 clear_to = np.where(usable, np.minimum(clear_to, cfg.max_clear_m), 0.0)
-                # Hit beams: stop short of the hit by a cell so its own cell is not cleared.
-                clear_to = np.where(finite & (ranges <= cfg.max_mark_m), clear_to - res, clear_to)
+                # Hit beams stop short of the hit by the range error bound and a
+                # cell: a beam that reads long must not clear the surface it hit.
+                clear_to = np.where(
+                    finite & (ranges <= cfg.max_mark_m), clear_to - cfg.sensor_bound_m - res, clear_to
+                )
                 raw = self._ray_mask(laser, cos_a, sin_a, np.maximum(clear_to, 0.0))
-                own = self._rect_mask(rear_map, scan.own_footprint) if scan.own_footprint else None
+                # Support for the shrink: every cell the body may touch is not an
+                # external obstacle. Withheld from FREE: only cells whose centre is
+                # inside the body -- a subset of the cells the drive permission
+                # exempts (those the body overlaps), so nothing it checks is
+                # left unknown by this rule.
+                own = self._rect_mask(rear_map, scan.own_footprint, grow_m=cfg.half_diagonal_m) if scan.own_footprint else None
+                inside = self._rect_mask(rear_map, scan.own_footprint, grow_m=0.0) if scan.own_footprint else None
                 support = raw | own if own is not None else raw
                 # Distance of each cell centre from the rear axle at the scan.
                 gx = cfg.x_min_m + (np.arange(nx) + 0.5) * res
@@ -247,13 +274,19 @@ class ObstacleGrid:
                     lower = edge
                     if not (band & raw).any():
                         continue
-                    r_band = self.radius_m(age, edge)
+                    # Sized for the oldest age this evidence may still be used
+                    # at (free_max_age_s), so it stays valid while it is used
+                    # between snapshots (Codex L0 P1).
+                    r_band = self.radius_m(max(age, cfg.free_max_age_s), edge, sensor=False)
+                    if r_band is None:
+                        continue
                     fresh = age <= cfg.free_max_age_s and r_band <= cfg.free_r_cap_m
-                    eroded = _erode(support, (r_band + 2 * cfg.half_diagonal_m) / res) & raw & band
-                    if own is not None:
-                        eroded &= ~own
+                    eroded = _erode(support, r_band / res) & raw & band
+                    if inside is not None:
+                        eroded &= ~inside
                     if fresh:
                         state[eroded] = FREE
+                        free_stamp[eroded] = scan.stamp_s
                     else:
                         state[eroded & (state == OCCUPIED)] = UNKNOWN
                 # Beyond the last band: clearing of older marks only.
@@ -271,24 +304,26 @@ class ObstacleGrid:
                 _, psi = cfg.error.at(age)
                 radii = r_occ + 2 * rho * np.sin(psi / 2)
                 self._mark_disks(state, px, py, radii)
+            free_stamp[state == OCCUPIED] = np.nan
             near = usable & ((ranges == -np.inf) | (np.isfinite(ranges) & (ranges < cfg.range_min_m)))
             if near.any():
                 steps = np.linspace(0.0, cfg.range_min_m, max(2, int(ceil(cfg.range_min_m / (res / 2))) + 1))
                 px = (laser[0] + np.outer(cos_a[near], steps)).ravel()
                 py = (laser[1] + np.outer(sin_a[near], steps)).ravel()
                 self._mark_disks(state, px, py, np.full(px.shape, r_occ))
+                free_stamp[state == OCCUPIED] = np.nan
+        free_stamp[state != FREE] = np.nan
         return GridSnapshot(
-            state, now_s, tuple(float(v) for v in map_from_odom), correction_version, used, newest,
+            state, free_stamp, now_s, tuple(float(v) for v in map_from_odom), correction_version, used, newest,
             cfg.x_min_m, cfg.y_min_m, res,
         )
 
-    def _rect_mask(self, rear, footprint) -> np.ndarray:
-        """Cells whose square touches the footprint rectangle at the rear-axle pose
-        (centre within the rectangle grown by a half diagonal)."""
+    def _rect_mask(self, rear, footprint, *, grow_m: float) -> np.ndarray:
+        """Cells whose centre lies inside the footprint rectangle grown by grow_m
+        at the rear-axle pose (a half diagonal covers every cell it touches)."""
         cfg = self.config
         nx, ny = cfg.shape
-        grow = cfg.half_diagonal_m
-        front, back, half = footprint[0] + grow, footprint[1] + grow, footprint[2] + grow
+        front, back, half = footprint[0] + grow_m, footprint[1] + grow_m, footprint[2] + grow_m
         gx = cfg.x_min_m + (np.arange(nx) + 0.5) * cfg.resolution_m - rear[0]
         gy = cfg.y_min_m + (np.arange(ny) + 0.5) * cfg.resolution_m - rear[1]
         c, s = cos(rear[2]), sin(rear[2])
@@ -322,12 +357,12 @@ class ObstacleGrid:
         nx, ny = cfg.shape
         ci = np.floor((px - cfg.x_min_m) / res).astype(int)
         cj = np.floor((py - cfg.y_min_m) / res).astype(int)
-        # The point sits anywhere in its cell and each target cell extends a
-        # half diagonal: centre-to-centre within r + 2 half diagonals.
-        levels = np.ceil((radii + 2 * cfg.half_diagonal_m) / (res / 2)) * (res / 2)
+        # The point sits anywhere in its cell: mark every cell whose square a
+        # disk of radius r around any point of that cell can touch.
+        levels = np.ceil(radii / (res / 4)) * (res / 4)
         for level in np.unique(levels):
             sel = levels == level
-            offsets = _disk_offsets(level / res)
+            offsets = _reach_offsets(level / res)
             ti = (ci[sel][:, None] + offsets[None, :, 0]).ravel()
             tj = (cj[sel][:, None] + offsets[None, :, 1]).ravel()
             inside = (ti >= 0) & (ti < nx) & (tj >= 0) & (tj < ny)

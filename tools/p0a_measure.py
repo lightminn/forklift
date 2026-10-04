@@ -1,6 +1,7 @@
 """P0a measurements for the priority-5 plan (docs/plans/2026-10-04-lidar-obstacle-map.md).
 
     python tools/p0a_measure.py odometry --run <run dir> [--run ...] [--draws 10]
+    python tools/p0a_measure.py age --run <run dir> [--run ...] [--draws 5]
     python tools/p0a_measure.py lift --run <run dir> [--run ...]
     python tools/p0a_measure.py standoff [--depth-m 0.36] [--band-m 0.10]
 
@@ -156,6 +157,83 @@ def odometry_command(args) -> dict:
     }
 
 
+AGES_S = (0.1, 0.2, 0.3, 0.5, 1.0, 2.0, 3.0, 5.0, 10.0)
+
+
+def relative_error_at(t0_index, ages_s, stamps, truth, estimate):
+    """(position, |yaw|) error of the pose at t0 re-projected from t0 + each age.
+
+    The grid places an old scan with the correction of the present (Codex L0
+    P1): C = truth(now) o odom(now)^-1, then C o odom(then). This is compared
+    with truth(then) -- not the relative motion seen from the old pose, which
+    hides a heading error that swings the old pose around the present one.
+    NaN past the end of the record.
+    """
+    out = np.full((len(ages_s), 2), np.nan)
+    i = t0_index
+    for k, age in enumerate(ages_s):
+        j = int(np.searchsorted(stamps, stamps[i] + age))
+        if j >= len(stamps):
+            break
+        c_yaw = truth[j, 2] - estimate[j, 2]
+        c, sn = math.cos(c_yaw), math.sin(c_yaw)
+        dx, dy = estimate[i, 0] - estimate[j, 0], estimate[i, 1] - estimate[j, 1]
+        px = truth[j, 0] + c * dx - sn * dy
+        py = truth[j, 1] + sn * dx + c * dy
+        out[k, 0] = math.hypot(px - truth[i, 0], py - truth[i, 1])
+        e_yaw = c_yaw + estimate[i, 2] - truth[i, 2]
+        out[k, 1] = abs(math.atan2(math.sin(e_yaw), math.cos(e_yaw)))
+    return out
+
+
+def cumulative_table(maxima):
+    """Per age, the largest error of any age up to it (a later age bounds an earlier one)."""
+    return np.maximum.accumulate(np.nan_to_num(maxima, nan=0.0), axis=0)
+
+
+def age_command(args) -> dict:
+    """Odometry error by observation age, from every recorded scan stamp (Codex P0a)."""
+    maxima = np.zeros((len(AGES_S), 2))
+    per_run = []
+    for run in args.run:
+        log = np.load(run / "slam_log.npz")
+        meta = json.loads((run / "meta.json").read_text())
+        g = meta["odometry_geometry"]
+        geometry = AckermannOdometryGeometry(g["wheelbase_m"], g["track_m"], g["wheel_radius_m"])
+        truth = rear_truth(log["base_pose_world"].astype(float), float(g["rear_axle_x_in_base_m"]))
+        stamps = log["joint_stamps_s"]
+        starts = np.searchsorted(stamps, log["scan_stamps_s"])
+        starts = starts[starts < len(stamps)]
+        rates = log["wheel_rates_rad_s"].astype(float)[:, 2:4]
+        steering = log["steering_rad"].astype(float)
+        run_max = np.zeros_like(maxima)
+        for draw in range(args.draws):
+            noise = OdometryNoise(seed=20_000 + draw)
+            odom = integrate_wheel_odometry(
+                stamps,
+                rates + noise._wheels.normal(0, noise.wheel_rate_std_rad_s, rates.shape),
+                steering + noise._steering.normal(0, noise.steering_std_rad, steering.shape),
+                geometry,
+                initial_pose=tuple(truth[0]),
+            )
+            for i in starts:
+                run_max = np.fmax(run_max, relative_error_at(i, AGES_S, stamps, truth, odom))
+        maxima = np.fmax(maxima, run_max)
+        per_run.append({"run": str(run), "scan_starts": int(len(starts)), "max": run_max.tolist()})
+    table = cumulative_table(maxima)
+    return {
+        "source": "wheel odometry (rear wheel rates + steering), OdometryNoise model redrawn",
+        "reference": "rear axle centre",
+        "draws": args.draws,
+        "ages_s": list(AGES_S),
+        "position_max_m": maxima[:, 0].tolist(),
+        "yaw_max_rad": maxima[:, 1].tolist(),
+        "cumulative_position_m": table[:, 0].tolist(),
+        "cumulative_yaw_rad": table[:, 1].tolist(),
+        "runs": per_run,
+    }
+
+
 def lift_command(args) -> dict:
     out = []
     for run in args.run:
@@ -230,6 +308,9 @@ def main() -> None:
     o.add_argument("--draws", type=int, default=10)
     o.add_argument("--start-every", type=int, default=60)
     o.add_argument("--max-age-s", type=float, default=10.0)
+    age = sub.add_parser("age")
+    age.add_argument("--run", type=Path, action="append", required=True)
+    age.add_argument("--draws", type=int, default=5)
     lift = sub.add_parser("lift")
     lift.add_argument("--run", type=Path, action="append", required=True)
     s = sub.add_parser("standoff")
@@ -244,10 +325,10 @@ def main() -> None:
     s.add_argument("--depth-m", type=float, default=0.36)
     s.add_argument("--band-m", type=float, default=0.10)
     s.add_argument("--output", type=Path)
-    for p in (o, lift):
+    for p in (o, age, lift):
         p.add_argument("--output", type=Path)
     args = parser.parse_args()
-    result = {"odometry": odometry_command, "lift": lift_command, "standoff": standoff_command}[
+    result = {"odometry": odometry_command, "age": age_command, "lift": lift_command, "standoff": standoff_command}[
         args.command
     ](args)
     text = json.dumps(result, indent=2)

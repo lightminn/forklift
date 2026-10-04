@@ -1,20 +1,24 @@
 """Drive permission from the obstacle grid (priority-5 plan D4).
 
-The global plan may cross cells nobody has seen; the truck may not. Whenever
-a grid snapshot arrives, ``evaluate`` walks the active path from the truck's
-position and finds how far along it every cell the footprint (inflated by
-the measured stopping-envelope offset) would newly cover is observed FREE in
-that snapshot -- cells the truck already stands on are excluded, since its
-own body hides them. That length is the verified distance.
+The global plan may cross cells nobody has seen; the truck may not. Two
+checks bound the speed, and the smaller wins:
 
-Every control tick, independently of scan arrival, ``allowed_speed`` turns
-the verified distance left (minus what the truck has driven since) into the
-fastest speed that can still stop inside it:
-    v * latency + v^2 / (2 decel) + margin <= distance left,
-and returns 0 when the snapshot's evidence has aged past its limit or any
-obstacle sensor has been silent too long. The stopping-distance model is the
-P0a braking measurement; latency covers scan period, processing and the
-command-to-deceleration delay.
+* the emergency-stop arc (every control tick): an emergency stop zeroes the
+  wheels and holds the steering, so the truck stops along the arc of its
+  current curvature, not along the plan (Codex L0 P1). Every cell the
+  footprint newly covers along that arc -- inflated by the measured stopping
+  envelope, which grows from zero at the present pose -- must be FREE, and
+  the speed must stop inside the verified part of the arc;
+* the path ahead (each grid snapshot): how far along the active path the
+  same holds, so the truck slows before a blocked stretch instead of only at
+  the last moment.
+
+Cells the truck's own body covers now are excluded (its body hides them);
+nothing around the body is (Codex L0 P1: an envelope-grown exclusion let an
+obstacle cell in). FREE evidence expires per cell: the oldest FREE cell a
+check relied on must be no older than evidence_max_age_s at the tick, which
+the grid sized its error radius for. No snapshot, an expired one, or any
+obstacle sensor silent for sensor_timeout_s gives 0.
 """
 
 from __future__ import annotations
@@ -44,7 +48,6 @@ class StoppingModel:
         if d <= 0:
             return 0.0
         a, t = self.decel_mps2, self.latency_s
-        # v^2/(2a) + v t - d = 0
         return -a * t + sqrt((a * t) ** 2 + 2 * a * d)
 
 
@@ -53,23 +56,23 @@ class PermissionConfig:
     stopping: StoppingModel
     envelope_offset_m: float
     evidence_max_age_s: float
+    envelope_ramp_m: float = 0.2  # the envelope reaches its full width this far along the stop
     sensor_timeout_s: float = 0.25
     step_m: float = 0.05
     lookahead_m: float = 3.0
-    creep_mps: float = 0.03
+    end_creep_mps: float = 0.02
 
 
 @dataclass
-class Evaluation:
-    stamp_s: float
+class Check:
     verified_m: float
-    blocked: str | None  # "occupied" / "unknown" / None (verified to the lookahead or path end)
-    path_end: bool
-    newest_scan_s: float
+    blocked: str | None  # "occupied" / "unknown" / "edge" / None
+    oldest_free_s: float  # oldest FREE evidence the verified part relied on (inf: none needed)
+    reached_end: bool
 
 
-def _footprint_cells(snapshot: GridSnapshot, pose, footprint: Footprint, margin_m: float) -> np.ndarray:
-    """Indices (k, 2) of cells whose square the inflated footprint at pose overlaps."""
+def footprint_cells(snapshot: GridSnapshot, pose, footprint: Footprint, margin_m: float):
+    """(cells (k, 2), any outside the grid) whose square the inflated footprint at pose overlaps."""
     x, y, yaw = pose
     c, s = cos(yaw), sin(yaw)
     offset = (footprint.front_m - footprint.rear_m) / 2
@@ -102,8 +105,8 @@ def _footprint_cells(snapshot: GridSnapshot, pose, footprint: Footprint, margin_
     return out, bool(outside.any())
 
 
-def _resample(poses: np.ndarray, step_m: float, limit_m: float) -> tuple[np.ndarray, np.ndarray]:
-    """Poses every step_m along a polyline up to limit_m, with their arc length."""
+def resample_path(poses: np.ndarray, step_m: float, limit_m: float):
+    """Poses every step_m along a polyline up to limit_m, their arc length, and the full length."""
     xy = poses[:, :2]
     seg = np.hypot(*np.diff(xy, axis=0).T) if len(poses) > 1 else np.zeros(0)
     s = np.concatenate(([0.0], np.cumsum(seg)))
@@ -114,83 +117,122 @@ def _resample(poses: np.ndarray, step_m: float, limit_m: float) -> tuple[np.ndar
     x = np.interp(targets, s, xy[:, 0])
     y = np.interp(targets, s, xy[:, 1])
     yaw = np.interp(targets, s, np.unwrap(poses[:, 2]))
-    return np.column_stack((x, y, yaw)), targets
+    return np.column_stack((x, y, yaw)), targets, float(s[-1])
+
+
+def arc_poses(pose, curvature_inv_m: float, direction: int, length_m: float, step_m: float):
+    """Rear-axle poses along the arc of fixed curvature (forward or reverse), with arc length."""
+    x0, y0, yaw0 = pose
+    s = np.arange(0.0, length_m + 1e-9, step_m)
+    if not len(s) or s[-1] < length_m - 1e-9:
+        s = np.append(s, length_m)
+    d = direction * s
+    k = curvature_inv_m
+    if abs(k) < 1e-9:
+        xs = x0 + d * cos(yaw0)
+        ys = y0 + d * sin(yaw0)
+        yaws = np.full(len(s), float(yaw0))
+    else:
+        yaws = yaw0 + d * k
+        xs = x0 + (np.sin(yaws) - sin(yaw0)) / k
+        ys = y0 + (cos(yaw0) - np.cos(yaws)) / k
+    return np.column_stack((xs, ys, yaws)), s
 
 
 class DrivePermission:
     def __init__(self, config: PermissionConfig):
         self.config = config
-        self.evaluation: Evaluation | None = None
+        self.snapshot: GridSnapshot | None = None
+        self.path_check: Check | None = None
         self._driven_since_m = 0.0
 
-    def evaluate(
-        self,
-        snapshot: GridSnapshot,
-        path_ahead: np.ndarray,
-        footprint: Footprint,
-        own_footprint: Footprint,
-        *,
-        current_pose,
-    ) -> Evaluation:
-        """Verified distance along path_ahead (rear-axle poses from the truck onwards).
-
-        own_footprint is the part of the truck whose current cells are
-        excluded (the body that hides them); the fork gap is not part of it.
-        """
+    def _walk(self, snapshot, samples, arc, footprint, own_cells, *, full_path_m=None) -> Check:
         cfg = self.config
-        poses = np.asarray(path_ahead, dtype=float)
-        if poses.ndim != 2 or poses.shape[1] != 3 or not len(poses):
-            raise ValueError("path_ahead must be a non-empty (N, 3) array")
-        samples, arc = _resample(poses, cfg.step_m, cfg.lookahead_m)
-        path_total = float(np.hypot(*np.diff(poses[:, :2], axis=0).T).sum()) if len(poses) > 1 else 0.0
-        # The cells the truck already covers, with the same envelope the samples use.
-        own, _ = _footprint_cells(snapshot, current_pose, own_footprint, cfg.envelope_offset_m)
-        own_set = set(map(tuple, own))
-        verified = 0.0
-        blocked = None
+        verified, blocked, oldest = 0.0, None, np.inf
         for pose, s in zip(samples, arc):
-            cells, outside = _footprint_cells(snapshot, pose, footprint, cfg.envelope_offset_m)
+            ramp = min(1.0, s / cfg.envelope_ramp_m) if cfg.envelope_ramp_m > 0 else 1.0
+            cells, outside = footprint_cells(snapshot, pose, footprint, cfg.envelope_offset_m * ramp)
             if outside:
-                blocked = "unknown"
+                blocked = "edge"
                 break
-            keep = np.array([tuple(c) not in own_set for c in cells], dtype=bool) if own_set else np.ones(len(cells), bool)
-            states = snapshot.state[cells[keep, 0], cells[keep, 1]]
+            if own_cells:
+                keep = np.fromiter(((int(a), int(b)) not in own_cells for a, b in cells), bool, len(cells))
+                cells = cells[keep]
+            states = snapshot.state[cells[:, 0], cells[:, 1]]
             if (states == OCCUPIED).any():
                 blocked = "occupied"
                 break
             if (states != FREE).any():
                 blocked = "unknown"
                 break
+            if len(cells):
+                oldest = min(oldest, float(np.nanmin(snapshot.free_stamp[cells[:, 0], cells[:, 1]])))
             verified = float(s)
-        reached_end = blocked is None and arc[-1] >= path_total - 1e-9
-        newest = max(snapshot.newest_scan_s.values()) if snapshot.newest_scan_s else -np.inf
-        self.evaluation = Evaluation(snapshot.stamp_s, verified, blocked, reached_end, newest)
+        reached_end = blocked is None and full_path_m is not None and arc[-1] >= full_path_m - 1e-9
+        return Check(verified, blocked, oldest, reached_end)
+
+    @staticmethod
+    def _own_cells(snapshot, pose, own_footprint) -> set:
+        cells, _ = footprint_cells(snapshot, pose, own_footprint, 0.0)
+        return {(int(a), int(b)) for a, b in cells}
+
+    def update(self, snapshot: GridSnapshot, path_ahead, footprint: Footprint, own_footprint: Footprint, *, current_pose) -> Check:
+        """New snapshot: the verified distance along path_ahead (rear-axle poses from the truck on)."""
+        poses = np.asarray(path_ahead, dtype=float)
+        if poses.ndim != 2 or poses.shape[1] != 3 or not len(poses):
+            raise ValueError("path_ahead must be a non-empty (N, 3) array")
+        samples, arc, total = resample_path(poses, self.config.step_m, self.config.lookahead_m)
+        own = self._own_cells(snapshot, current_pose, own_footprint)
+        self.snapshot = snapshot
+        self.path_check = self._walk(snapshot, samples, arc, footprint, own, full_path_m=total)
         self._driven_since_m = 0.0
-        return self.evaluation
+        return self.path_check
 
     def advance(self, distance_m: float) -> None:
-        """Path length driven since the last evaluation (both directions count)."""
+        """Path length driven since the last snapshot (both directions count)."""
         self._driven_since_m += abs(distance_m)
 
-    def allowed_speed(self, now_s: float, sensors_last_s: dict) -> tuple[float, str]:
+    def allowed_speed(
+        self,
+        now_s: float,
+        sensors_last_s: dict,
+        *,
+        current_pose,
+        curvature_inv_m: float,
+        direction: int,
+        footprint: Footprint,
+        own_footprint: Footprint,
+        speed_cap_mps: float,
+    ) -> tuple[float, str]:
         """(speed limit, reason) for this control tick."""
         cfg = self.config
-        e = self.evaluation
-        if e is None:
-            return 0.0, "no_evaluation"
+        snap, path = self.snapshot, self.path_check
+        if snap is None or path is None:
+            return 0.0, "no_snapshot"
         for name, last in sensors_last_s.items():
             if now_s - last > cfg.sensor_timeout_s:
                 return 0.0, f"sensor_silent:{name}"
-        if now_s - e.newest_scan_s > cfg.evidence_max_age_s:
+        # Emergency-stop arc at the present curvature and direction.
+        length = cfg.stopping.distance_m(speed_cap_mps) + cfg.step_m
+        samples, arc = arc_poses(current_pose, curvature_inv_m, 1 if direction >= 0 else -1, length, cfg.step_m)
+        own = self._own_cells(snap, current_pose, own_footprint)
+        estop = self._walk(snap, samples, arc, footprint, own)
+        path_left = path.verified_m - self._driven_since_m
+        if now_s - estop.oldest_free_s > cfg.evidence_max_age_s or now_s - path.oldest_free_s > cfg.evidence_max_age_s:
             return 0.0, "evidence_stale"
-        left = e.verified_m - self._driven_since_m
-        if e.path_end and e.blocked is None:
-            # Verified to the end of the path: the tracker stops there itself.
-            return float("inf"), "path_end"
-        speed = cfg.stopping.speed_for(left)
-        if speed < cfg.creep_mps:
-            return 0.0, e.blocked or "limit"
-        return speed, e.blocked or "lookahead"
+        arc_limit = cfg.stopping.speed_for(estop.verified_m)
+        if path.reached_end:
+            # Stopping at the goal needs no margin past it; the arc check
+            # still covers the actual stopping volume beyond the end.
+            path_limit = max(
+                cfg.stopping.speed_for(path_left + cfg.stopping.margin_m),
+                cfg.end_creep_mps if path_left > 0 else 0.0,
+            )
+        else:
+            path_limit = cfg.stopping.speed_for(path_left)
+        if arc_limit <= path_limit:
+            return arc_limit, estop.blocked or ("ok" if arc_limit > 0 else "limit")
+        return path_limit, path.blocked or ("ok" if path_limit > 0 else "limit")
 
 
-__all__ = ["DrivePermission", "Evaluation", "PermissionConfig", "StoppingModel"]
+__all__ = ["Check", "DrivePermission", "PermissionConfig", "StoppingModel", "arc_poses", "footprint_cells"]

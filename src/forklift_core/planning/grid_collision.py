@@ -38,7 +38,11 @@ class OccupancyGrid:
     _clear_cells: np.ndarray = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        occupied = np.asarray(self.occupied, dtype=bool)
+        # An independent, read-only copy: the distance cache is computed once,
+        # so a caller editing its array afterwards must not change answers
+        # (Codex L0 P2).
+        occupied = np.array(self.occupied, dtype=bool, copy=True)
+        occupied.setflags(write=False)
         if occupied.ndim != 2 or not occupied.size:
             raise ValueError("occupied must be a non-empty 2D array")
         if not (isfinite(self.resolution_m) and self.resolution_m > 0):
