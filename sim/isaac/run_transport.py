@@ -2283,18 +2283,25 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     and tracking.failure == "endpoint_heading"
                     and not tracking.at_cusp
                     and not tracking.off_path
-                    and trackers[phase].remaining_to_goal_m() <= 1e-6
                     and len(state["stall_replans"]) < 2
                 )
-                if goal_heading_miss and not slam["stop_now"]:
-                    tracking = replace(tracking, status="braking")
+                if goal_heading_miss:
+                    # Judged inside the 8 mm brake window, still creeping
+                    # (S3 rerun: 6.6 mm left at -0.008 m/s): command zero and
+                    # wait for the stop detector.
+                    tracking = replace(tracking, status="braking", speed_mps=0.0)
                 stalled = (
                     slam is not None
                     and phase in ("transport", "return_home")
                     and tracking.speed_mps == 0.0
-                    and trackers[phase].remaining_to_goal_m() <= 1e-6
                     and slam["stop_now"]
-                    and (tracking.status == "tracking" or goal_heading_miss)
+                    and (
+                        goal_heading_miss
+                        or (
+                            tracking.status == "tracking"
+                            and trackers[phase].remaining_to_goal_m() <= 1e-6
+                        )
+                    )
                 )
                 if stalled and goal_heading_miss:
                     slam_stall_ticks = max(slam_stall_ticks, 119)
