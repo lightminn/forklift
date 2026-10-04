@@ -1716,8 +1716,25 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 scenario, start, planner_config, geometry=geometry, travel_config=travel_config
             )
         else:
+            # The delivered pallet sits where docking put it -- right in the
+            # held frame. Carry it into the released frame with the same
+            # change of frame as the truck, T = after o before^-1, so the
+            # truck-pallet relation survives the release (S3 seed 1 on a351056:
+            # invalid_start against the nominal pallet after a docked drop).
+            return_scenario = slam.get("transport_scenario", scenario)
+            if slam["docking"].get("status") == "done":
+                frame_change = compose(tuple(after), invert(tuple(before)))
+                site = return_scenario.destination
+                moved_site = compose(frame_change, (site.x_m, site.y_m, site.yaw_rad))
+                return_scenario = replace(
+                    return_scenario,
+                    destination=replace(
+                        site, x_m=moved_site[0], y_m=moved_site[1], yaw_rad=moved_site[2]
+                    ),
+                )
+                event["pallet_frame_change"] = list(frame_change)
             replanned = plan_return_leg(
-                scenario,
+                return_scenario,
                 start,
                 return_to_pose,
                 planner_config,

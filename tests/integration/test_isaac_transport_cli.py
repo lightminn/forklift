@@ -429,4 +429,4 @@ def test_slam_runs_dock_on_a_scan_before_the_delivery_straight() -> None:
     assert 'dock_at_delivery_straight(t)' in source
     assert 'ignore_self=True' in source
     assert "moved = np.array([compose(step_shift, tuple(pose)) for pose in paths[\"withdraw\"].poses])" in source
-    assert source.count('slam.get("transport_scenario", scenario)') == 2
+    assert source.count('slam.get("transport_scenario", scenario)') == 3
