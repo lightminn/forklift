@@ -140,6 +140,30 @@ def read_carriage_limit_m(forklift_urdf: Path) -> float:
     return tip - max(fronts)
 
 
+def read_fork_blades_m(forklift_urdf: Path) -> tuple:
+    """Base-frame (x0, x1, y0, y1) of each fork blade collision box, lowered.
+
+    The drive permission checks the body and these blades, not their hull: the
+    gap between the blades is not the truck (plan D4).
+    """
+    truck = ET.parse(forklift_urdf).getroot()
+    carriage = _base_position_m(truck, "fork_lift")
+    link = truck.find("link[@name='fork_carriage']")
+    if link is None:
+        raise ValueError("Missing fork_carriage link")
+    blades = tuple(
+        (
+            float(carriage[0] + center[0] - half[0]), float(carriage[0] + center[0] + half[0]),
+            float(carriage[1] + center[1] - half[1]), float(carriage[1] + center[1] + half[1]),
+        )
+        for name, center, half in _boxes(link)
+        if name.endswith("_fork_collision")
+    )
+    if len(blades) != 2:
+        raise ValueError("Expected two *_fork_collision boxes")
+    return blades
+
+
 def _cylinder_radius_m(truck: ET.Element, link_name: str) -> float:
     """Radius of the link's collision cylinder, which must roll about base y."""
     collision = None

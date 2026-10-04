@@ -167,3 +167,47 @@ def test_an_unknown_cell_beside_the_body_blocks_a_turning_stop():
     speed, why = perm.allowed_speed(0.05, {"low": 0.05}, current_pose=(0, 0, 0), curvature_inv_m=0.6, direction=1,
                                     footprint=BODY, own_footprint=BODY, speed_cap_mps=0.3)
     assert why == "unknown" and speed < 0.3
+
+
+# Body + fork blades (D4: the gap between the blades is not the truck). Blades
+# as the provisional model: x 0.870..1.290 from the rear axle, y +-0.1445,
+# half width 0.0275.
+BLADE = Footprint(0.21, 0.21, 0.0275)
+SHAPE = [(BODY, 0.0, 0.0), (BLADE, 0.1445, 1.08), (BLADE, -0.1445, 1.08)]
+
+
+def test_reversing_away_from_an_unseen_fork_gap_is_allowed():
+    snap = snapshot()
+    set_cell(snap, 0.95, 0.0, UNKNOWN)  # between the blades, ahead of the body face (0.75)
+    perm = DrivePermission(CONFIG)
+    back = np.column_stack((np.linspace(0, -0.6, 13), np.zeros(13), np.zeros(13)))  # grid starts at x -1
+    assert perm.update(snap, back, SHAPE, BODY, current_pose=(0.0, 0.0, 0.0), direction=-1).blocked is None
+    # The hull would have refused it.
+    assert perm.update(snap, back, FOOT, BODY, current_pose=(0.0, 0.0, 0.0), direction=-1).blocked == "unknown"
+
+
+def test_driving_forward_into_an_object_between_the_blades_is_refused():
+    snap = snapshot()
+    set_cell(snap, 0.82, 0.0, OCCUPIED)  # in the gap, within the body face's stop
+    perm = DrivePermission(CONFIG)
+    check = perm.update(snap, STRAIGHT, SHAPE, BODY, current_pose=(0.0, 0.0, 0.0), direction=1)
+    assert check.blocked == "occupied" and check.verified_m < 0.1
+
+
+def test_an_unseen_cell_under_a_blade_tip_blocks_forward():
+    snap = snapshot()
+    set_cell(snap, 1.31, 0.1445, UNKNOWN)
+    perm = DrivePermission(CONFIG)
+    check = perm.update(snap, STRAIGHT, SHAPE, BODY, current_pose=(0.0, 0.0, 0.0), direction=1)
+    assert check.blocked == "unknown" and check.verified_m < 0.1
+
+
+def test_shape_meets_uses_the_parts_not_their_hull():
+    from forklift_core.control.drive_permission import shape_meets
+    from forklift_core.planning.geometry import Rectangle
+
+    in_gap = Rectangle(1.1, 0.0, 0.1, 0.1, 0.0)
+    on_blade = Rectangle(1.1, 0.15, 0.04, 0.04, 0.0)
+    assert not shape_meets(in_gap, SHAPE, (0.0, 0.0, 0.0))
+    assert shape_meets(in_gap, FOOT, (0.0, 0.0, 0.0))
+    assert shape_meets(on_blade, SHAPE, (0.0, 0.0, 0.0))

@@ -67,7 +67,8 @@ def beam_limits(origin, directions, *, band_top_m: float, floor_margin_m: float 
 
 class ObstacleLayer:
     def __init__(self, config: dict, *, hall, error_table: AgeErrorTable, unloaded: Footprint,
-                 loaded: Footprint, body_front_m: float, rear_axle_x_in_base_m: float, noise_seed: int):
+                 loaded: Footprint, body_front_m: float, rear_axle_x_in_base_m: float, noise_seed: int,
+                 blades_rear_m: tuple = ()):
         self.config = config
         self.sensors: list[ObstacleSensor] = config["sensors"]
         self.beam_angles = np.linspace(-math.pi, math.pi, int(config["beams"]), endpoint=False)
@@ -105,6 +106,15 @@ class ObstacleLayer:
         self.shadow = None if band is None else ShadowMemory(float(band), error_table, evidence_max_age_s=float(g["free_max_age_s"]))
         self.unloaded, self.loaded = unloaded, loaded
         self.body = Footprint(body_front_m, unloaded.rear_m, unloaded.half_width_m)
+        # Unloaded, the permission checks the body and the fork blades (rear-axle
+        # frame (x0, x1, y0, y1)), not their hull: an object between the blades
+        # is met only by the body's front face, which the body part checks (D4).
+        self.unloaded_shape = unloaded if not blades_rear_m else (
+            [(self.body, 0.0, 0.0)] + [
+                (Footprint((x1 - x0) / 2, (x1 - x0) / 2, (y1 - y0) / 2), (y0 + y1) / 2, (x0 + x1) / 2)
+                for x0, x1, y0, y1 in blades_rear_m
+            ]
+        )
         self.rear_x = rear_axle_x_in_base_m
         self.rng = np.random.default_rng([noise_seed, 7])
         self.last_scan_s: dict = {}
@@ -112,7 +122,7 @@ class ObstacleLayer:
 
     def footprints(self, loaded: bool) -> tuple[Footprint, Footprint]:
         """(footprint checked, own outline excluded): a carried pallet is part of the truck."""
-        return (self.loaded, self.loaded) if loaded else (self.unloaded, self.body)
+        return (self.loaded, self.loaded) if loaded else (self.unloaded_shape, self.body)
 
     def ranges(self, distances, hits) -> np.ndarray:
         """REP-117 ranges with the truncated noise contract."""

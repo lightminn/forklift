@@ -760,7 +760,7 @@ def path_record(path) -> dict:
 def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     """Construct and execute one immutable seeded scenario; state keeps evidence."""
     import omni.usd
-    from insertion_geometry import InsertionGeometry
+    from insertion_geometry import InsertionGeometry, read_fork_blades_m
     from isaacsim.core.api import World
     from isaacsim.core.api.robots import Robot
     from isaacsim.core.utils.extensions import enable_extension
@@ -792,6 +792,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         collision_free_pose,
     )
     from forklift_core.control.drive_permission import arc_poses as ARC_POSES
+    from forklift_core.control.drive_permission import shape_meets as SHAPE_MEETS
     from forklift_core.control.rollout import bicycle_rollout
     from forklift_core.planning import Pose2D as PlanningPose
     from forklift_core.planning.pallet_mission import (
@@ -1283,6 +1284,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 body_front_m=geometry.axle_to_fork_tip_m - geometry.carriage_limit_m,
                 rear_axle_x_in_base_m=-abs(args.rear_axle_offset_m),
                 noise_seed=args.seed,
+                blades_rear_m=tuple(
+                    (x0 + abs(args.rear_axle_offset_m), x1 + abs(args.rear_axle_offset_m), y0, y1)
+                    for x0, x1, y0, y1 in read_fork_blades_m(args.forklift_urdf)
+                ),
             ),
             "version": 0,
             "applied": None,
@@ -4136,9 +4141,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     pconf = obstacle["layer"].permission.config
                     stop_len = pconf.stopping.distance_m(truth_speed)
                     arc = ARC_POSES(tuple(float(v) for v in truth_rear), kappa, 1 if truth_speed > 0 else -1, stop_len, 0.025)[0]
+                    shape_now, _ = obstacle["layer"].footprints(loaded)
                     for oid, rect in enumerate(checked_obstacles):
-                        arc_checker = FootprintCollisionChecker([rect], footprint, scenario.bounds)
-                        if any(not arc_checker.free(tuple(pose_), pconf.envelope_offset_m) for pose_ in arc[1:]):
+                        # The shape the permission checks (body + blades unloaded).
+                        if any(SHAPE_MEETS(rect, shape_now, tuple(pose_), pconf.envelope_offset_m) for pose_ in arc[1:]):
                             obstacle["events"] += 1
                             per = obstacle.setdefault("event_objects", {})
                             per[oid] = per.get(oid, 0) + 1

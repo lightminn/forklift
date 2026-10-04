@@ -31,7 +31,7 @@ import numpy as np
 from forklift_core.perception.obstacle_grid import FREE, OCCUPIED, GridSnapshot
 
 RETAINED = 3  # shadow-band memory (control/shadow_memory.py)
-from forklift_core.planning.geometry import Footprint
+from forklift_core.planning.geometry import Bounds, Footprint, FootprintCollisionChecker
 
 
 @dataclass(frozen=True)
@@ -74,7 +74,43 @@ class Check:
     reached_end: bool
 
 
-def footprint_cells(snapshot: GridSnapshot, pose, footprint: Footprint, margin_m: float, *, direction: int = 0):
+def parts_of(shape) -> list:
+    """A checked shape as (Footprint, lateral, longitudinal offset) parts: a
+    Footprint is one part at the rear axle; a sequence of (Footprint, lateral_m,
+    longitudinal_m) is the truck's union -- e.g. the body and the two fork
+    blades, whose gap is not the truck (D4)."""
+    if isinstance(shape, Footprint):
+        return [(shape, 0.0, 0.0)]
+    return [(fp, float(lat), float(lon)) for fp, lat, lon in shape]
+
+
+def shape_meets(rect, shape, pose, margin_m: float = 0.0) -> bool:
+    """Whether any part of a shape at pose, inflated by margin_m, overlaps a
+    Rectangle (geometry only, no hall bounds) -- the truth side of shape_cells."""
+    x, y, yaw = pose
+    c, s = cos(yaw), sin(yaw)
+    open_hall = Bounds(-1e9, 1e9, -1e9, 1e9)
+    for fp, lat, lon in parts_of(shape):
+        part_pose = (x + lon * c - lat * s, y + lon * s + lat * c, yaw)
+        if not FootprintCollisionChecker([rect], fp, open_hall).free(part_pose, margin_m):
+            return True
+    return False
+
+
+def shape_cells(snapshot: GridSnapshot, pose, shape, margin_m: float, *, direction: int = 0):
+    """footprint_cells over every part of a shape (union, each cell once)."""
+    found, outside = [], False
+    for fp, lat, lon in parts_of(shape):
+        cells, out = footprint_cells(snapshot, pose, fp, margin_m, direction=direction, lateral_m=lat,
+                                     longitudinal_m=lon)
+        found.append(cells)
+        outside |= out
+    cells = np.unique(np.concatenate(found), axis=0) if found else np.zeros((0, 2), dtype=int)
+    return cells, outside
+
+
+def footprint_cells(snapshot: GridSnapshot, pose, footprint: Footprint, margin_m: float, *, direction: int = 0,
+                    lateral_m: float = 0.0, longitudinal_m: float = 0.0):
     """(cells (k, 2), any outside the grid) whose square the inflated footprint at pose overlaps.
 
     direction +1 (forward) leaves the rear edge uninflated, -1 the front edge:
@@ -86,8 +122,8 @@ def footprint_cells(snapshot: GridSnapshot, pose, footprint: Footprint, margin_m
     c, s = cos(yaw), sin(yaw)
     front = footprint.front_m + (margin_m if direction >= 0 else 0.0)
     rear = footprint.rear_m + (margin_m if direction <= 0 else 0.0)
-    offset = (front - rear) / 2
-    cx, cy = x + offset * c, y + offset * s
+    offset = (front - rear) / 2 + longitudinal_m
+    cx, cy = x + offset * c - lateral_m * s, y + offset * s + lateral_m * c
     hl = (front + rear) / 2
     hw = footprint.half_width_m + margin_m
     ex = abs(c) * hl + abs(s) * hw
@@ -178,9 +214,13 @@ class DrivePermission:
         c, s_ = cos(yaw), sin(yaw)
         u = (px[outside] - x) * c + (py[outside] - y) * s_
         v = -(px[outside] - x) * s_ + (py[outside] - y) * c
-        front = footprint.front_m + (margin if direction >= 0 else 0.0)
-        rear = footprint.rear_m + (margin if direction <= 0 else 0.0)
-        return bool(((u >= -rear) & (u <= front) & (np.abs(v) <= footprint.half_width_m + margin)).any())
+        for fp, lat, lon in parts_of(footprint):
+            front = fp.front_m + (margin if direction >= 0 else 0.0)
+            rear = fp.rear_m + (margin if direction <= 0 else 0.0)
+            w = u - lon
+            if ((w >= -rear) & (w <= front) & (np.abs(v - lat) <= fp.half_width_m + margin)).any():
+                return True
+        return False
 
     def _walk(self, snapshot, samples, arc, footprint, own_cells, *, full_path_m=None, direction=0,
               own_pose=None, own_footprint=None) -> Check:
@@ -189,7 +229,8 @@ class DrivePermission:
         the continuous sweep is covered, not just the samples (Codex L0b P1)."""
         cfg = self.config
         verified, blocked, oldest = 0.0, None, np.inf
-        radius = float(np.hypot(max(footprint.front_m, footprint.rear_m), footprint.half_width_m))
+        radius = max(float(np.hypot(abs(lon) + max(fp.front_m, fp.rear_m), abs(lat) + fp.half_width_m))
+                     for fp, lat, lon in parts_of(footprint))
         band = None  # cells near the present outline where RETAINED may pass, built on demand
         checks = [(samples[0], float(arc[0]), 0.0)]
         for i in range(1, len(samples)):
@@ -201,7 +242,7 @@ class DrivePermission:
         for pose, s, pad in checks:
             ramp = min(1.0, s / cfg.envelope_ramp_m) if cfg.envelope_ramp_m > 0 else 1.0
             margin = cfg.envelope_offset_m * ramp + pad
-            cells, outside = footprint_cells(snapshot, pose, footprint, margin, direction=direction)
+            cells, outside = shape_cells(snapshot, pose, footprint, margin, direction=direction)
             if outside:
                 blocked = "edge"
                 break
@@ -348,4 +389,5 @@ class DrivePermission:
         return path_limit, path.blocked or ("ok" if path_limit > 0 else "limit")
 
 
-__all__ = ["Check", "DrivePermission", "PermissionConfig", "StoppingModel", "arc_poses", "footprint_cells"]
+__all__ = ["Check", "DrivePermission", "PermissionConfig", "StoppingModel", "arc_poses", "footprint_cells",
+           "parts_of", "shape_cells", "shape_meets"]

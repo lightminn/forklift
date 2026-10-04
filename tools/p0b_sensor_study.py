@@ -356,15 +356,18 @@ def _rect_cells_free(snapshot, rect, margin=0.0):
     return int((snapshot.state[i0:i1, j0:j1][overlap] == FREE).sum())
 
 
-def _volume_unobserved(permission, snap, samples, arc, footprint, own_cells, now, free_age):
+def _volume_unobserved(permission, snap, samples, arc, footprint, own_cells, now, free_age, *, direction=0,
+                       own_pose=None, own_footprint=None):
     """True when the swept check volume holds an UNKNOWN cell, leaves the grid, or
-    relies on expired FREE -- whatever OCCUPIED cells it also holds (Codex design P1)."""
-    from forklift_core.control.drive_permission import footprint_cells
-    from forklift_core.control.drive_permission import RETAINED
+    relies on expired FREE -- whatever OCCUPIED cells it also holds (Codex design P1).
+    Cells and exemptions as the permission takes them (shape parts, direction,
+    partial own cells only where the stop reaches past the body)."""
+    from forklift_core.control.drive_permission import RETAINED, parts_of, shape_cells
     from forklift_core.perception.obstacle_grid import FREE, OCCUPIED
 
     cfg = permission.config
-    radius = float(np.hypot(max(footprint.front_m, footprint.rear_m), footprint.half_width_m))
+    radius = max(float(np.hypot(abs(lon) + max(fp.front_m, fp.rear_m), abs(lat) + fp.half_width_m))
+                 for fp, lat, lon in parts_of(footprint))
     oldest = np.inf
     for i in range(len(samples)):
         if i == 0:
@@ -374,19 +377,29 @@ def _volume_unobserved(permission, snap, samples, arc, footprint, own_cells, now
             dyaw = float(np.arctan2(np.sin(b_[2] - a_[2]), np.cos(b_[2] - a_[2])))
             pad = (float(np.hypot(b_[0] - a_[0], b_[1] - a_[1])) + radius * abs(dyaw)) / 2
             pose = np.array([(a_[0] + b_[0]) / 2, (a_[1] + b_[1]) / 2, a_[2] + dyaw / 2])
-        cells, outside = footprint_cells(snap, pose, footprint, cfg.envelope_offset_m + pad)
+        margin = cfg.envelope_offset_m + pad
+        cells, outside = shape_cells(snap, pose, footprint, margin, direction=direction)
         if outside:
             return True
-        whole, _ = own_cells
-        cells = np.array([c for c in cells if (int(c[0]), int(c[1])) not in whole]).reshape(-1, 2)
+        whole, partial = own_cells
+        keep = []
+        for c in cells:
+            key = (int(c[0]), int(c[1]))
+            if key in whole:
+                continue
+            if key in partial and own_pose is not None and not permission._enters(
+                    snap, key, own_pose, own_footprint, pose, footprint, margin, direction):
+                continue
+            keep.append(c)
+        cells = np.array(keep).reshape(-1, 2)
         if not len(cells):
             continue
         st = snap.state[cells[:, 0], cells[:, 1]]
         if ((st != FREE) & (st != OCCUPIED) & (st != RETAINED)).any():
             return True
-        free = st == FREE
-        if free.any():
-            oldest = min(oldest, float(np.nanmin(snap.free_stamp[cells[free, 0], cells[free, 1]])))
+        seen = (st == FREE) | (st == RETAINED)
+        if seen.any():
+            oldest = min(oldest, float(np.min(snap.free_stamp[cells[seen, 0], cells[seen, 1]])))
     return now - oldest > free_age
 
 
@@ -394,6 +407,7 @@ def evaluate_command(args) -> dict:
     from dataclasses import replace
 
     from forklift_core.control.drive_permission import DrivePermission, PermissionConfig, StoppingModel, arc_poses
+    from forklift_core.control.drive_permission import shape_meets
     from forklift_core.control.shadow_memory import ShadowMemory
     from forklift_core.localization.slam_pose import OdometryNoise
     from forklift_core.localization.wheel_odometry import AckermannOdometryGeometry, integrate_wheel_odometry
@@ -414,6 +428,16 @@ def evaluate_command(args) -> dict:
     unloaded = Footprint(**geometry["unloaded_footprint"])
     loaded = Footprint(**geometry["loaded_footprint"])
     body = Footprint(args.body_front_m, unloaded.rear_m, unloaded.half_width_m)
+    # Body and fork blades, not their hull, as the runner's permission (D4).
+    import sys as _sys
+
+    _sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "sim" / "isaac"))
+    from insertion_geometry import read_fork_blades_m
+
+    unloaded_shape = [(body, 0.0, 0.0)] + [
+        (Footprint((x1 - x0) / 2, (x1 - x0) / 2, (y1 - y0) / 2), (y0 + y1) / 2, (x0 + x1) / 2 - rear_x)
+        for x0, x1, y0, y1 in read_fork_blades_m(args.forklift_urdf)
+    ]
     stopping = StoppingModel(args.stop_latency_s, args.stop_decel_mps2, args.stop_margin_m)
     pconfig = PermissionConfig(stopping, args.envelope_m, evidence_max_age_s=args.free_age_s,
                                envelope_ramp_m=args.envelope_ramp_m, shadow_band_m=args.shadow_band_m)
@@ -636,7 +660,7 @@ def evaluate_command(args) -> dict:
             s_cum = np.concatenate(([0.0], np.cumsum(seg)))
             end = int(np.searchsorted(s_cum, pconfig.lookahead_m)) + 1
             ahead = truth_rear[j : j + max(end, 2)]
-            fp = loaded if carried else unloaded
+            fp = loaded if carried else unloaded_shape
             permission.update(snap, ahead, fp, own_now, current_pose=tuple(tr), direction=-1 if v < 0 else 1)
             # The steering held by an emergency stop gives the stopping arc.
             kappa = float(np.mean([math.tan(a) / (g["wheelbase_m"] + math.tan(a) * side * g["track_m"] / 2)
@@ -647,14 +671,21 @@ def evaluate_command(args) -> dict:
                 curvature_inv_m=kappa, direction=direction, footprint=fp, own_footprint=own_now,
                 speed_cap_mps=abs(v),
             )
-            if args.dump_at is not None and k == args.dump_at:
+            dump_now = args.dump_at is not None and k == args.dump_at
+            if args.dump_class is not None and not stats.get("dumped") and reason != "ok":
+                cls_now = f"{'loaded' if carried else 'unloaded'}_{'reverse' if v < 0 else 'forward'}"
+                dump_now = cls_now == args.dump_class and stats["scans"] > 50
+                stats["dumped"] = dump_now
+            if dump_now:
                 np.savez(args.dump_path, state=snap.state, origin=[snap.origin_x_m, snap.origin_y_m],
                          res=snap.resolution_m, ahead=ahead, pose=tr, verified=permission.path_check.verified_m,
                          blocked=str(permission.path_check.blocked), allowed=allowed, reason=reason,
-                         kappa=kappa, v=v, free_stamp=snap.free_stamp, t=float(t), oldest=permission.path_check.oldest_free_s)
+                         kappa=kappa, v=v, free_stamp=snap.free_stamp, t=float(t), oldest=permission.path_check.oldest_free_s,
+                         loaded=carried)
             arc_samples, arc_s = arc_poses(tuple(tr), kappa, direction, stopping.distance_m(v) + pconfig.step_m, pconfig.step_m)
             own_set = permission._own_cells(snap, tuple(tr), own_now)
-            unobserved = _volume_unobserved(permission, snap, arc_samples, arc_s, fp, own_set, float(t), args.free_age_s)
+            unobserved = _volume_unobserved(permission, snap, arc_samples, arc_s, fp, own_set, float(t), args.free_age_s,
+                                            direction=direction, own_pose=tuple(tr), own_footprint=own_now)
             curve = abs(kappa) > 0.1
             cls = f"{'loaded' if carried else 'unloaded'}_{'reverse' if v < 0 else 'forward'}_{'curve' if curve else 'straight'}"
             stats["moving"][cls] = stats["moving"].get(cls, 0) + 1
@@ -673,8 +704,8 @@ def evaluate_command(args) -> dict:
             if not carried and phase != "approach":
                 truths.append((-1, Rectangle(ppos[0], ppos[1], geometry["pallet_depth_m"], geometry["pallet_width_m"], pyaw)))
             for oid, rect in truths:
-                checker = FootprintCollisionChecker([rect], fp, replace_bounds(hall))
-                if any(not checker.free(tuple(p), args.envelope_m) for p in vol[1:]):
+                # The real shape (body + blades unloaded), as the permission checks it.
+                if any(shape_meets(rect, fp, tuple(p), args.envelope_m) for p in vol[1:]):
                     stats["events"] += 1
                     obj = stats.setdefault("event_objects", {})
                     obj[oid] = obj.get(oid, 0) + 1
@@ -682,7 +713,7 @@ def evaluate_command(args) -> dict:
                         stats["unpermitted"].append({"t": float(t), "phase": phase, "v": v, "object": oid, "reason": reason})
             if alive:
                 for b_ in list(alive):
-                    if not FootprintCollisionChecker([injected[b_]], fp, replace_bounds(hall)).free(tuple(tr)):
+                    if shape_meets(injected[b_], fp, tuple(tr)):
                         alive.remove(b_)
             if k % args.free_check_every == 0 and len(proj_cells):
                 oi = np.round(snap.origin_x_m / res_w).astype(int)
@@ -763,6 +794,7 @@ def main() -> None:
     e.add_argument("--projection-top-m", type=float, default=1.05)
     e.add_argument("--dump-at", type=int, default=None)
     e.add_argument("--dump-path", type=Path, default=Path("p0b_dump.npz"))
+    e.add_argument("--dump-class", default=None, help="dump the first non-ok instant of e.g. unloaded_reverse")
     e.add_argument("--output", type=Path)
     args = parser.parse_args()
     result = {"sections": sections_command, "evaluate": evaluate_command}[args.command](args)
