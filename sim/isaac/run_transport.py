@@ -40,6 +40,9 @@ MISSION_VIEWS = load_perception_module(
 G2 = load_perception_module(
     "run_transport_g2_records", Path(__file__).with_name("g2_records.py")
 )
+ESTOP = load_perception_module(
+    "run_transport_estop_probe", Path(__file__).with_name("estop_probe.py")
+)
 
 
 def record_json(value: object, *, indent: int | None = None) -> str:
@@ -177,6 +180,15 @@ def arguments() -> argparse.Namespace:
         action="store_true",
         help="After unloading, drive back to the rear-axle pose the mission "
         "started from. The delivered pallet becomes an obstacle for that leg.",
+    )
+    parser.add_argument(
+        "--estop-probe",
+        type=ESTOP.parse_spec,
+        default=None,
+        help="Priority-5 P0a: comma-separated phase@seconds. At each, once the "
+        "truck is moving in that phase, every wheel target goes to zero with "
+        "the steering held; the stop is recorded from ground truth and the "
+        "run carries on. Measurement runs only.",
     )
     parser.add_argument("--pallet-prior", type=Path, default=None)
     parser.add_argument(
@@ -853,6 +865,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     # 3003 and 4007; docs/plans/2026-10-03-transport-stage-fixes.md).
     state["cusp_replans"] = []
     state["stall_replans"] = []
+    estop = ESTOP.EstopProbe(list(args.estop_probe)) if args.estop_probe else None
+    state["estop_probes"] = estop.records if estop is not None else None
     state["observe_replans"] = []
     observe_stall_ticks = 0
     slam_stall_ticks = 0
@@ -3610,8 +3624,22 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 }
                 transition("complete", t)
                 break
+            estop_holding = estop is not None and estop.update(
+                t=t,
+                phase=phase,
+                phase_elapsed_s=t - phase_started,
+                rear=truth_rear,
+                speed_mps=float(np.dot(velocity[:2], forward)),
+                loaded=loaded,
+                curvature_inv_m=curvature,
+            )
+            if estop_holding:
+                # Zero every wheel target at once, steering held (plan D4).
+                requested_speed = 0.0
             drive = ackermann_command(requested_speed, curvature, drive_geometry)
-            target_steering = np.asarray(drive.steering_rad)
+            target_steering = (
+                steering_command.copy() if estop_holding else np.asarray(drive.steering_rad)
+            )
             actual_steering = robot.get_joint_positions()[steers]
             # Creep while steering catches up; log the measured physical response.
             steering_error = float(np.max(np.abs(target_steering - actual_steering)))
