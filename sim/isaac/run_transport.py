@@ -1362,8 +1362,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         obstacle["plans"].append({"kind": kind, "stamp_s": stamp, "occupied_cells": int(occupancy.occupied.sum())})
         out = {"occupancy": occupancy}
         if kind == "observe":
-            out["pickup_obstacle"] = pickup_zone
+            # Before recognition the pallet is somewhere in the pickup zone; once
+            # it has been recognised (the near-capture leg is still 'observe'),
+            # it is where perception put it.
+            known = obstacle.get("pickup_estimate")
+            out["pickup_obstacle"] = pickup_zone if known is None else Rectangle(
+                known.x_m, known.y_m, geometry.pallet_depth_m, geometry.pallet_width_m, known.yaw_rad
+            )
         elif kind == "mission" and target is not None:
+            obstacle["pickup_estimate"] = target
             out["pickup_obstacle"] = Rectangle(
                 target.x_m, target.y_m, geometry.pallet_depth_m, geometry.pallet_width_m, target.yaw_rad
             )
@@ -3989,6 +3996,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     require(len(recent) < 3, f"obstacle_blocked in {phase}: {len(recent)} replans in 30 s")
                     start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))
                     replan_start = time.monotonic()
+                    tight = replace(planner_config, clearance_m=0.0)
+                    tight_travel = replace(travel_config, clearance_m=0.0) if travel_config is not None else None
                     if phase == "observe":
                         target = PlanningPose(*(float(v) for v in paths["observe"].poses[-1]))
                         replanned = plan_observation_leg(
@@ -4014,8 +4023,6 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         # sides): replan once with no clearance. The grid's swelling
                         # already holds the placement error and the permission
                         # still guards every tick.
-                        tight = replace(planner_config, clearance_m=0.0)
-                        tight_travel = replace(travel_config, clearance_m=0.0) if travel_config is not None else None
                         if phase == "observe":
                             replanned = plan_observation_leg(
                                 grid_world(scenario), target, tight, geometry=geometry,
@@ -4045,7 +4052,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             coordinates = args.observation_waypoints[candidate_index]
                             candidate_plan = plan_observation_leg(
                                 grid_world(scenario), PlanningPose(*(float(v) for v in coordinates)),
-                                planner_config, geometry=geometry, start_rear=start,
+                                tight, geometry=geometry, start_rear=start,
                                 pickup_bounds=pickup_bounds, extended=False, **grid_kwargs("observe"),
                             )
                             state["observation_candidates"].append(
