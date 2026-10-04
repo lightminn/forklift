@@ -109,6 +109,21 @@ def arguments() -> argparse.Namespace:
         "docking runs and their ground-truth controls; 0.70 is the recorded default).",
     )
     parser.add_argument(
+        "--alignment-straight-m",
+        type=float,
+        default=0.80,
+        help="Length of the final approach straight; the near capture happens at "
+        "its start (priority-5 D5: 2.1 puts the carriage camera 2.59 m from the "
+        "face, enough for the depth pocket check).",
+    )
+    parser.add_argument(
+        "--pocket-check",
+        action="store_true",
+        help="Priority-5 D5 depth pocket check: the drive permission also acts on "
+        "the approach straight and the insertion, waiving the grid inside the "
+        "estimated pallet's region only where depth certified the truck's stop.",
+    )
+    parser.add_argument(
         "--insertion-reserve-m",
         type=float,
         default=0.046,
@@ -877,6 +892,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         carriage_limit_m=args.carriage_limit_m,
         insertion_reserve_m=args.insertion_reserve_m,
         delivery_straight_m=args.delivery_straight_m,
+        alignment_straight_m=args.alignment_straight_m,
     )
     state["insertion_reserve_m"] = args.insertion_reserve_m
     planner_config = make_transport_planner_config(
@@ -1310,6 +1326,71 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
 
     grid_planning = bool(args.grid_planning)
     new_obstacles = None
+    # Priority-5 D5 depth pocket check: built at the near capture, fed 10 Hz
+    # carriage frames on the approach straight and the insertion.
+    pocket = {"check": None, "history": [], "capture": None, "frames_read": 0}
+
+    def build_pocket_check(axis_yaw: float, rear_now, base_now) -> None:
+        """The D5 pocket check, at the near (stand-off) capture: the final estimate,
+        the approach straight's heading, and that capture as its first frame."""
+        import pocket_check as pocket_module
+        from forklift_core.perception.pocket_clearance import DepthCamera
+
+        scene = pocket["capture"]
+        require(scene is not None, "pocket_check_without_capture")
+        est = state["perception"]["perception_pickup_estimate_m"]
+        k = scene.intrinsics
+        offset = abs(args.rear_axle_offset_m)
+        check = pocket_module.PocketCheck(
+            estimate=(float(est["x_m"]), float(est["y_m"]), float(est["yaw_rad"])),
+            axis_yaw=axis_yaw,
+            pallet_geometry=args.pallet_geometry_loaded,
+            blades_rear=tuple(
+                (x0 + offset, x1 + offset, y0, y1) for x0, x1, y0, y1 in read_fork_blades_m(args.forklift_urdf)
+            ),
+            body_front_m=geometry.axle_to_fork_tip_m - geometry.carriage_limit_m,
+            body_rear_m=geometry.unloaded_footprint.rear_m,
+            body_half_width_m=geometry.unloaded_footprint.half_width_m,
+            insertion_depth_m=geometry.axle_to_fork_tip_m + geometry.pallet_depth_m / 2 - geometry.inserted_offset_m,
+            # base_link height: a fixed chassis dimension, not a pose estimate.
+            base_z_m=float(base_now[2]),
+            base_from_optical=(np.asarray(scene.base_from_optical.rotation, dtype=float),
+                               np.asarray(scene.base_from_optical.translation_m, dtype=float)),
+            rear_axle_offset_m=offset,
+            camera=DepthCamera(k.fx, k.fy, k.cx, k.cy, k.width, k.height),
+            stopping=obstacle["layer"].permission.config.stopping,
+            noise_seed=args.seed,
+        )
+        now_s = world.current_time - initial_time
+        first = check.add_frame(now_s, scene.depth_m, tuple(float(v) for v in rear_now))
+        pocket["check"] = check
+        state["pocket_check"] = {"built_s": now_s, "axis_yaw_rad": axis_yaw, "first_frame": first}
+        require(check.valid, f"pocket_check_refused:{check.invalid_reason}")
+        obstacle["layer"].exempt = check.region_control()
+
+    def read_pocket_frame() -> None:
+        """One 10 Hz carriage depth frame for the pocket check, placed at the
+        control pose of its rendering time (frames lag the step)."""
+        check = pocket["check"]
+        raw = perception_camera.get_depth()
+        if raw is None:
+            return
+        frame = perception_camera.get_current_frame()
+        rendered = frame.get("rendering_time") if isinstance(frame, dict) else None
+        stamp = (float(rendered) if rendered else world.current_time) - initial_time
+        history = pocket["history"]
+        times = np.array([h[0] for h in history])
+        k = int(np.clip(np.searchsorted(times, stamp), 1, len(history) - 1)) if len(history) > 1 else 0
+        if len(history) > 1:
+            (t0, p0), (t1, p1) = history[k - 1], history[k]
+            a = float(np.clip((stamp - t0) / (t1 - t0), 0.0, 1.0)) if t1 > t0 else 1.0
+            rear_at = tuple(p0[i] + a * (p1[i] - p0[i]) for i in range(3))
+        else:
+            rear_at = history[-1][1]
+        k_ = pocket["capture"].intrinsics
+        depth, _ = adapter.normalize_depth(np.asarray(raw).reshape(k_.height, k_.width))
+        check.add_frame(stamp, depth, rear_at)
+        pocket["frames_read"] += 1
     if args.new_obstacles is not None:
         new_module = load_perception_module(
             "run_transport_new_obstacles", Path(__file__).with_name("new_obstacles.py")
@@ -1892,6 +1973,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         state["transitions"].append({"from": phase, "to": next_phase, "time_s": t})
         print("TRANSITION", record_json(state["transitions"][-1]), flush=True)
         snapshot(phase)
+        if phase == "insert" and pocket["check"] is not None:
+            # The insertion is over: the depth check stops answering and the
+            # pallet region is no longer waived in the grid.
+            obstacle["layer"].exempt = None
+            state.setdefault("pocket_check", {}).update(pocket["check"].summary(), frames_read=pocket["frames_read"])
+            pocket["check"] = None
         phase, phase_started = next_phase, t
         state["phase"] = phase
         if slam is None:
@@ -3163,6 +3250,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             attempt["capture_attempts"] = exc.diagnostics.attempts
                             require(False, f"perception_capture_failed:{exc.reason}")
                         attempt["depth_sha256"] = G2.depth_sha256(scene_input.depth_m)
+                        pocket["capture"] = scene_input
                         # Diagnostic dump for offline root-cause analysis; not part
                         # of the perception contract itself.
                         Image.fromarray(scene_input.rgb).save(
@@ -3823,6 +3911,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                         straight.curvatures_inv_m,
                                         trackers["approach"].config,
                                     )
+                                    if args.pocket_check:
+                                        build_pocket_check(float(straight.poses[-1][2]), rear, base)
                                     state["near_capture"].update(
                                         status="done",
                                         near_attempt=attempt_number,
@@ -3931,6 +4021,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             )
             truth_speed = float(np.dot(velocity[:2], forward))
             obstacle_hold = False
+            pocket_phase = False
             if obstacle is not None and phase in trackers and (requested_speed != 0.0 or abs(truth_speed) > 0.05):
                 if slam is not None and slam["tracker"].applied is not None:
                     applied_now = tuple(float(v) for v in slam["tracker"].applied[0])
@@ -3985,6 +4076,29 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     phase == "transport" and trackers[phase].remaining_to_goal_m() <= geometry.delivery_straight_m
                 )
                 acting = phase in ("observe", "approach", "transport", "return_home") and not docking_straight
+                pocket_phase = args.pocket_check and (phase == "insert" or (phase == "approach" and docking_straight))
+                if pocket_phase:
+                    # D5: the approach straight and the insertion run under the
+                    # permission too; inside the pallet region the depth check
+                    # answers (its region is waived in the grid only while set).
+                    acting = True
+                    if pocket["check"] is None:
+                        allowed, why = 0.0, "pocket_missing"
+                    else:
+                        lp, wp = pocket["check"].limit(
+                            t, tuple(float(v) for v in rear), kappa, direction,
+                            max(abs(requested_speed), abs(truth_speed)),
+                            float(robot.get_joint_positions()[lift_index[0]]),
+                        )
+                        if lp < allowed:
+                            allowed, why = lp, wp
+                    # A docking segment does not replan (plan D4): held at 0 for
+                    # 5 s, the check's reason ends the run.
+                    if allowed == 0.0:
+                        pocket.setdefault("zero_since", t)
+                        require(t - pocket["zero_since"] < 5.0, f"pocket_stop in {phase}: {why}")
+                    else:
+                        pocket.pop("zero_since", None)
                 if abs(requested_speed) > allowed + 1e-9:
                     obstacle["slowed"][phase] = obstacle["slowed"].get(phase, 0) + 1
                     key = f"{phase}:{why}"
@@ -4143,6 +4257,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     arc = ARC_POSES(tuple(float(v) for v in truth_rear), kappa, 1 if truth_speed > 0 else -1, stop_len, 0.025)[0]
                     shape_now, _ = obstacle["layer"].footprints(loaded)
                     for oid, rect in enumerate(checked_obstacles):
+                        if pocket_phase and rect is pickup_obstacle:
+                            # Blades in the pockets meet the pallet's 2D outline by
+                            # design; fork/pallet contact is the 3D insertion guard's.
+                            continue
                         # The shape the permission checks (body + blades unloaded).
                         if any(SHAPE_MEETS(rect, shape_now, tuple(pose_), pconf.envelope_offset_m) for pose_ in arc[1:]):
                             obstacle["events"] += 1
@@ -4296,7 +4414,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 )
             if slam is not None:
                 slam["last_command"] = requested_speed
-            stepper["fn"](False)
+            pocket_frames = pocket["check"] is not None and phase in ("approach", "insert")
+            if pocket_frames:
+                pocket["history"].append((t, tuple(float(v) for v in rear)))
+                del pocket["history"][:-120]
+            stepper["fn"](pocket_frames and step % 12 == 0)
+            if pocket_frames and step % 12 == 0:
+                read_pocket_frame()
             if step % 12 == 0:
                 sample = {
                     "time_s": t,

@@ -65,6 +65,31 @@ def beam_limits(origin, directions, *, band_top_m: float, floor_margin_m: float 
     return np.maximum(out, 0.0)
 
 
+def exempt_region(snapshot, region):
+    """Cells wholly inside the rectangle become FREE at the snapshot time: the
+    depth pocket check, not the grid, answers for them (it must gate every
+    control tick while this is set)."""
+    from forklift_core.perception.obstacle_grid import FREE
+
+    cx, cy, length, width, yaw = region
+    res = snapshot.resolution_m
+    nx, ny = snapshot.state.shape
+    c, s = math.cos(yaw), math.sin(yaw)
+    xs = snapshot.origin_x_m + np.arange(nx + 1) * res - cx
+    ys = snapshot.origin_y_m + np.arange(ny + 1) * res - cy
+    u = xs[:, None] * c + ys[None, :] * s
+    v = -xs[:, None] * s + ys[None, :] * c
+    corner_in = (np.abs(u) <= length / 2 + 1e-9) & (np.abs(v) <= width / 2 + 1e-9)
+    inside = corner_in[:-1, :-1] & corner_in[1:, :-1] & corner_in[:-1, 1:] & corner_in[1:, 1:]
+    if not inside.any():
+        return snapshot
+    state = snapshot.state.copy()
+    stamp = snapshot.free_stamp.copy()
+    state[inside] = FREE
+    stamp[inside] = snapshot.stamp_s
+    return replace(snapshot, state=state, free_stamp=stamp)
+
+
 class ObstacleLayer:
     def __init__(self, config: dict, *, hall, error_table: AgeErrorTable, unloaded: Footprint,
                  loaded: Footprint, body_front_m: float, rear_axle_x_in_base_m: float, noise_seed: int,
@@ -119,6 +144,9 @@ class ObstacleLayer:
         self.rng = np.random.default_rng([noise_seed, 7])
         self.last_scan_s: dict = {}
         self.snapshot = None
+        # Docking exemption (plan D5): (x, y, length, width, yaw) in the control
+        # frame; set only while the depth pocket check gates every tick.
+        self.exempt = None
 
     def footprints(self, loaded: bool) -> tuple[Footprint, Footprint]:
         """(footprint checked, own outline excluded): a carried pallet is part of the truck."""
@@ -168,6 +196,8 @@ class ObstacleLayer:
         footprint, own = self.footprints(loaded)
         if self.shadow is not None:
             self.snapshot = self.shadow.apply(self.snapshot, current_pose, own)
+        if self.exempt is not None:
+            self.snapshot = exempt_region(self.snapshot, self.exempt)
         return self.permission.update(self.snapshot, path_ahead, footprint, own, current_pose=current_pose,
                                       direction=direction)
 

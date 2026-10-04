@@ -87,3 +87,19 @@ def test_beam_limits_follow_the_tilt():
     assert np.isinf(MODULE.beam_limits(origin, level, band_top_m=0.17)[0])
     assert math.isclose(MODULE.beam_limits(origin, up, band_top_m=0.17)[0], 0.07 / math.sin(0.04))
     assert math.isclose(MODULE.beam_limits(origin, down, band_top_m=0.17)[0], 0.05 / math.sin(0.04))
+
+
+def test_the_docking_exemption_frees_only_cells_wholly_inside_the_region():
+    import numpy as np
+
+    from forklift_core.perception.obstacle_grid import FREE, OCCUPIED, GridSnapshot
+
+    state = np.full((40, 40), OCCUPIED, dtype=np.uint8)
+    snap = GridSnapshot(state, np.full((40, 40), np.nan), 3.0, (0.0, 0.0, 0.0), 0, 1, {}, 0.0, 0.0, 0.05)
+    out = MODULE.exempt_region(snap, (1.0, 1.0, 0.5, 0.3, 0.0))
+    freed = out.state == FREE
+    assert freed.sum() == 10 * 6  # 0.5 x 0.3 m on a 0.05 m grid, aligned
+    assert np.all(out.free_stamp[freed] == 3.0)
+    assert (snap.state == OCCUPIED).all()  # the input is untouched
+    turned = MODULE.exempt_region(snap, (1.0, 1.0, 0.5, 0.3, 0.3))
+    assert 0 < (turned.state == FREE).sum() < 60
