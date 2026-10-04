@@ -506,14 +506,15 @@ def evaluate_command(args) -> dict:
             end = int(np.searchsorted(s_cum, pconfig.lookahead_m)) + 1
             ahead = truth_rear[j : j + max(end, 2)]
             fp = loaded if carried else unloaded
-            permission.update(snap, ahead, fp, body, current_pose=tuple(tr))
+            own_now = loaded if carried else body  # the same outline the grid withholds
+            permission.update(snap, ahead, fp, own_now, current_pose=tuple(tr))
             # The steering held by an emergency stop gives the stopping arc.
             kappa = float(np.mean([math.tan(a) / (g["wheelbase_m"] + math.tan(a) * side * g["track_m"] / 2)
                                    for a, side in ((st[0], 1), (st[1], -1))]))
             direction = -1 if v < 0 else 1
             allowed, reason = permission.allowed_speed(
                 float(t), {sd["name"]: float(t) for sd in cand["sensors"]}, current_pose=tuple(tr),
-                curvature_inv_m=kappa, direction=direction, footprint=fp, own_footprint=body,
+                curvature_inv_m=kappa, direction=direction, footprint=fp, own_footprint=own_now,
                 speed_cap_mps=abs(v),
             )
             if args.dump_at is not None and k == args.dump_at:
