@@ -422,6 +422,48 @@ def evaluate_command(args) -> dict:
         owners_in = probe_own[inside]
         rect_kind.append(str(kinds[int(np.bincount(owners_in).argmax())]) if len(owners_in) else "none")
     obstacle_rects = [Rectangle(o["x_m"], o["y_m"], o["length_m"], o["width_m"], o["yaw_rad"]) for o in obstacles]
+    # Floor projection of every prop's collider within the truck's height band
+    # (Codex design P1: "3D collision shape floor projection n FREE = 0"): the
+    # union over every section height of the cells inside each closed section
+    # (even-odd) or crossed by a section edge, on a world grid aligned like the
+    # snapshots (origin 0): the cells whose square overlaps the shape.
+    res_w = 0.05
+    proj = {}
+    for key in [k for k in sections.files if k.startswith("seg_")]:
+        if float(key[4:]) > args.projection_top_m:
+            continue
+        segs = sections[key]
+        if not len(segs):
+            continue
+        lo = np.floor(np.minimum(segs[:, 0], segs[:, 1]) / res_w).astype(int)
+        hi = np.floor(np.maximum(segs[:, 0], segs[:, 1]) / res_w).astype(int)
+        own_k = sections[key.replace("seg_", "own_")]
+        for owner in np.unique(own_k):
+            sel = own_k == owner
+            os_ = segs[sel]
+            i0, j0 = lo[sel].min(axis=0)
+            i1, j1 = hi[sel].max(axis=0)
+            ci, cj = np.meshgrid(np.arange(i0, i1 + 1), np.arange(j0, j1 + 1), indexing="ij")
+            cx, cy = (ci + 0.5) * res_w, (cj + 0.5) * res_w
+            ax, ay, bx_, by_ = os_[:, 0, 0], os_[:, 0, 1], os_[:, 1, 0], os_[:, 1, 1]
+            crosses = ((ay[None, None, :] > cy[..., None]) != (by_[None, None, :] > cy[..., None]))
+            with np.errstate(divide="ignore", invalid="ignore"):
+                xint = ax + (cy[..., None] - ay) * (bx_ - ax) / (by_ - ay)
+            inside = (crosses & (cx[..., None] < xint)).sum(axis=-1) % 2 == 1
+            for a_, b_ in zip(ci[inside], cj[inside]):
+                proj[(int(a_), int(b_))] = int(owner)
+            # Plus every cell a section edge passes through (supercover by fine
+            # sampling): with the inside cells, exactly the cells whose square
+            # overlaps the section.
+            n = np.maximum(np.ceil(np.hypot(bx_ - ax, by_ - ay) / (res_w / 10)).astype(int), 1)
+            for k_ in range(len(ax)):
+                t_ = np.linspace(0.0, 1.0, n[k_] + 1)
+                pi = np.floor((ax[k_] + t_ * (bx_[k_] - ax[k_])) / res_w).astype(int)
+                pj = np.floor((ay[k_] + t_ * (by_[k_] - ay[k_])) / res_w).astype(int)
+                for a_, b_ in zip(pi, pj):
+                    proj[(int(a_), int(b_))] = int(owner)
+    proj_cells = np.array(list(proj.keys()), dtype=int).reshape(-1, 2)
+    proj_owner = np.array(list(proj.values()), dtype=int)
     hall = meta["hall"]
     rng = np.random.default_rng(args.noise_seed)
     scan_stamps = log["scan_stamps_s"]
@@ -594,11 +636,17 @@ def evaluate_command(args) -> dict:
                 for b_ in list(alive):
                     if not FootprintCollisionChecker([injected[b_]], fp, replace_bounds(hall)).free(tuple(tr)):
                         alive.remove(b_)
-            if k % args.free_check_every == 0:
-                for o, kind in zip(obstacles, rect_kind):
-                    n = _rect_cells_free(snap, o, margin=0.0)
-                    if n:
-                        stats["free_inside"][kind] = stats["free_inside"].get(kind, 0) + n
+            if k % args.free_check_every == 0 and len(proj_cells):
+                oi = np.round(snap.origin_x_m / res_w).astype(int)
+                oj = np.round(snap.origin_y_m / res_w).astype(int)
+                li, lj = proj_cells[:, 0] - oi, proj_cells[:, 1] - oj
+                ok = (li >= 0) & (li < snap.state.shape[0]) & (lj >= 0) & (lj < snap.state.shape[1])
+                from forklift_core.perception.obstacle_grid import FREE as _FREE
+                bad = ok.copy()
+                bad[ok] = snap.state[li[ok], lj[ok]] == _FREE
+                for owner in proj_owner[bad]:
+                    kind = str(kinds[owner])
+                    stats["free_inside"][kind] = stats["free_inside"].get(kind, 0) + 1
         ratio = {c: stats["permitted"][c] / stats["moving"][c] for c in stats["moving"]}
         # Coverage: not stopped for lack of observation (occupied blocks depend on
         # the recorded truth-planned path, which a grid plan would route around).
@@ -633,7 +681,7 @@ def main() -> None:
     s = sub.add_parser("sections")
     s.add_argument("--run", type=Path, required=True)
     s.add_argument("--assets", type=Path, required=True)
-    s.add_argument("--heights", default="0.08,0.10,0.12,0.14,1.05")
+    s.add_argument("--heights", default="0.03,0.06,0.08,0.10,0.12,0.14,0.18,0.20,0.25,0.35,0.50,0.75,1.00,1.05")
     s.add_argument("--output", type=Path, required=True)
     e = sub.add_parser("evaluate")
     e.add_argument("--run", type=Path, required=True)
@@ -661,6 +709,7 @@ def main() -> None:
     e.add_argument("--clear-max-height-m", type=float, default=0.15)
     e.add_argument("--close-gap-m", type=float, default=0.0)
     e.add_argument("--inject-every-m", type=float, default=0.0)
+    e.add_argument("--projection-top-m", type=float, default=1.05)
     e.add_argument("--dump-at", type=int, default=None)
     e.add_argument("--dump-path", type=Path, default=Path("p0b_dump.npz"))
     e.add_argument("--output", type=Path)
