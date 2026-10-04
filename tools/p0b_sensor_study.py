@@ -395,8 +395,37 @@ def evaluate_command(args) -> dict:
             truck_cache[key] = section_segments(np.concatenate(list(parts.values())), h)
         return truck_cache[key]
 
+    # Synthetic boxes on the recorded path (plan D1 "빈 통과 방지"): the
+    # recorded runs never bring an obstacle into the short stopping volume, so
+    # boxes are placed every inject_every_m of travel-phase path, alternating
+    # lateral offsets, from the start of the run. A box counts until the
+    # truck's footprint first touches it (the replay drives on through it).
+    injected = []
+    if args.inject_every_m > 0:
+        travel = np.array([phases[int(np.clip(np.searchsorted(sample_t, tt), 0, len(samples) - 1))]
+                           in evaluated_phases for tt in stamps])
+        seg_len = np.r_[0.0, np.hypot(*np.diff(truth_rear[:, :2], axis=0).T)]
+        s_travel = np.cumsum(seg_len * travel)
+        offsets = (0.0, 0.25, -0.25)
+        nxt = args.inject_every_m
+        for idx in range(len(stamps)):
+            if travel[idx] and s_travel[idx] >= nxt:
+                x0, y0, yaw0 = truth_rear[idx]
+                ahead = 2.5  # beyond the fork tips at the placing instant
+                lat = offsets[len(injected) % len(offsets)]
+                cx = x0 + ahead * math.cos(yaw0) - lat * math.sin(yaw0)
+                cy = y0 + ahead * math.sin(yaw0) + lat * math.cos(yaw0)
+                injected.append(Rectangle(float(cx), float(cy), 0.4, 0.4, float(yaw0)))
+                nxt += args.inject_every_m
+    def box_segments(rect):
+        c, s_ = math.cos(rect.yaw_rad), math.sin(rect.yaw_rad)
+        hx, hy = rect.length_m / 2, rect.width_m / 2
+        pts = [(rect.x_m + c * u - s_ * v, rect.y_m + s_ * u + c * v) for u, v in ((hx, hy), (-hx, hy), (-hx, -hy), (hx, -hy))]
+        return np.array([[pts[i], pts[(i + 1) % 4]] for i in range(4)])
+
     report = {}
     for cname, cand in candidates.items():
+        alive = list(range(len(injected)))
         grid = None
         grid_cfg = GridConfig(
             hall["x_min_m"], hall["x_max_m"], hall["y_min_m"], hall["y_max_m"], table,
@@ -425,6 +454,8 @@ def evaluate_command(args) -> dict:
                 if key not in sections:
                     raise SystemExit(f"no section at {h} m in {args.sections}")
                 ext = sections[key]
+                if alive:
+                    ext = np.concatenate([ext] + [box_segments(injected[b_]) for b_ in alive])
                 self_local = truck_segments(h, lift + (cand["lift_offset_m"] if carried else 0.0), st)
                 self_world = transform_segments(self_local, bx, by, byaw)
                 pz = ppos[2] + (cand["lift_offset_m"] if carried else 0.0)
@@ -502,7 +533,7 @@ def evaluate_command(args) -> dict:
             # steering-held stopping volume at the recorded speed (Codex L0 P1),
             # one event per obstacle (Codex L0 P2).
             vol, _ = arc_poses(tuple(tr), kappa, direction, stopping.distance_m(v), 0.025)
-            truths = list(enumerate(obstacle_rects))
+            truths = list(enumerate(obstacle_rects)) + [(1000 + b_, injected[b_]) for b_ in alive]
             if not carried and phase != "approach":
                 truths.append((-1, Rectangle(ppos[0], ppos[1], geometry["pallet_depth_m"], geometry["pallet_width_m"], pyaw)))
             for oid, rect in truths:
@@ -513,6 +544,10 @@ def evaluate_command(args) -> dict:
                     obj[oid] = obj.get(oid, 0) + 1
                     if permitted:
                         stats["unpermitted"].append({"t": float(t), "phase": phase, "v": v, "object": oid, "reason": reason})
+            if alive:
+                for b_ in list(alive):
+                    if not FootprintCollisionChecker([injected[b_]], fp, replace_bounds(hall)).free(tuple(tr)):
+                        alive.remove(b_)
             if k % args.free_check_every == 0:
                 for o, kind in zip(obstacles, rect_kind):
                     n = _rect_cells_free(snap, o, margin=0.05)
@@ -529,6 +564,8 @@ def evaluate_command(args) -> dict:
             "scans": stats["scans"], "events": stats["events"],
             "unpermitted_entries": len(stats["unpermitted"]), "unpermitted": stats["unpermitted"][:20],
             "event_objects": len(stats.get("event_objects", {})),
+            "injected_boxes": len(injected),
+            "injected_event_objects": len([o for o in stats.get("event_objects", {}) if o >= 1000]),
             "event_counts_by_object": {str(k): v for k, v in stats.get("event_objects", {}).items()},
             "moving_by_class": stats["moving"], "permission_ratio": ratio, "coverage_ratio": coverage,
             "free_cells_inside_obstacles": stats["free_inside"],
@@ -577,6 +614,7 @@ def main() -> None:
     e.add_argument("--max-scans", type=int, default=None)
     e.add_argument("--clear-max-height-m", type=float, default=0.15)
     e.add_argument("--close-gap-m", type=float, default=0.0)
+    e.add_argument("--inject-every-m", type=float, default=0.0)
     e.add_argument("--dump-at", type=int, default=None)
     e.add_argument("--dump-path", type=Path, default=Path("p0b_dump.npz"))
     e.add_argument("--output", type=Path)
