@@ -4134,6 +4134,18 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         require(t - pocket["zero_since"] < 5.0, f"pocket_stop in {phase}: {why}")
                     else:
                         pocket.pop("zero_since", None)
+                # Plan D4: an occupied cell on the path ahead stops the truck where
+                # it is, so the replan starts with room to manoeuvre -- creeping up
+                # to the obstacle left a 2 m-radius truck boxed in (L3b v24-v27).
+                # 0.3 s of a blocked path first: a passing mark does not stop it.
+                check_now = obstacle["layer"].permission.path_check
+                path_blocked = (
+                    grid_planning and acting and phase in ("observe", "transport", "return_home")
+                    and check_now is not None and check_now.blocked == "occupied"
+                )
+                obstacle["path_blocked_ticks"] = obstacle.get("path_blocked_ticks", 0) + 1 if path_blocked else 0
+                if obstacle["path_blocked_ticks"] >= 36 and allowed > 0.0:
+                    allowed, why = 0.0, "occupied"
                 if abs(requested_speed) > allowed + 1e-9:
                     obstacle["slowed"][phase] = obstacle["slowed"].get(phase, 0) + 1
                     key = f"{phase}:{why}"
