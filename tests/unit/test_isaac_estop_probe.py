@@ -55,6 +55,7 @@ def test_a_probe_triggers_once_records_the_stop_and_releases():
     assert math.isclose(record["stop_time_s"], 0.29, abs_tol=0.03)
     assert record["decel_start_s"] <= 2 * dt
     assert held.index(True) == 120 and not held[-1]
+    assert len(record["trace"][0]) == 5  # dt, speed, rear x, y, yaw
 
 
 def test_a_slow_truck_does_not_trigger():

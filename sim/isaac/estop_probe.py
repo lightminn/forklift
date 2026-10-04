@@ -54,7 +54,7 @@ class EstopProbe:
     def active(self) -> bool:
         return self._active is not None
 
-    def update(self, *, t, phase, phase_elapsed_s, rear, speed_mps, loaded, curvature_inv_m) -> bool:
+    def update(self, *, t, phase, phase_elapsed_s, rear, speed_mps, loaded, curvature_inv_m, extra=None) -> bool:
         """Advance one physics tick; True while the probe holds the truck stopped."""
         if self._active is None:
             for index, (name, delay) in enumerate(self.pending):
@@ -84,7 +84,12 @@ class EstopProbe:
         a["max_arc_offset_m"] = max(
             a["max_arc_offset_m"], arc_offset_m(a["trigger_rear"], a["curvature_inv_m"], rear)
         )
-        a["trace"].append([t - a["trigger_time_s"], float(speed_mps)])
+        # Full rear pose every tick (Codex L0 P1): the stopping volume of the
+        # whole body, forks and load is rebuilt from it, not just the axle.
+        a["trace"].append(
+            [t - a["trigger_time_s"], float(speed_mps), *(float(v) for v in rear)]
+            + ([float(v) for v in extra] if extra is not None else [])
+        )
         if a["decel_start_s"] is None and abs(speed_mps) < 0.98 * abs(a["trigger_speed_mps"]):
             a["decel_start_s"] = t - a["trigger_time_s"]
         if abs(speed_mps) < self.stop_speed_mps:
@@ -94,7 +99,7 @@ class EstopProbe:
                 record = {k: v for k, v in a.items() if not k.startswith("_")}
                 record["stop_time_s"] = a["still_since_s"] - a["trigger_time_s"]
                 record["stop_distance_m"] = a["path_m"]
-                record["trace"] = a["trace"][:: max(1, len(a["trace"]) // 60)]
+                record["trace_columns"] = ["dt_s", "speed_mps", "rear_x_m", "rear_y_m", "rear_yaw_rad", "extra..."]
                 self.records.append(record)
                 self._active = None
                 return False

@@ -3632,6 +3632,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 speed_mps=float(np.dot(velocity[:2], forward)),
                 loaded=loaded,
                 curvature_inv_m=curvature,
+                extra=[
+                    *robot.get_joint_positions()[steers],
+                    float(robot.get_joint_positions()[lift_index[0]]),
+                    *ppos,
+                    pallet_yaw,
+                ],
             )
             if estop_holding:
                 # Zero every wheel target at once, steering held (plan D4).
