@@ -178,6 +178,8 @@ class ClearanceMemory:
         and certified within the lifetime; False once an obstacle was seen."""
         if self.obstacle:
             return False
+        if region is not None and not self._box_meets_region(box, region):
+            return True  # wholly outside the region: the grid's business
         idx, leaves = overlapping_voxels(self.volume, box)
         if region is not None:
             x0, x1, y0, y1 = region
@@ -196,6 +198,21 @@ class ClearanceMemory:
         in_v = self.volume.in_v[idx[:, 0], idx[:, 1], idx[:, 2]]
         fresh = now_s - self.certified_s[idx[:, 0], idx[:, 1], idx[:, 2]] <= self.lifetime_s
         return bool((in_v & fresh).all())
+
+    @staticmethod
+    def _box_meets_region(box: Box, region) -> bool:
+        """Whether the box's xy footprint overlaps the region (2D SAT)."""
+        x0, x1, y0, y1 = region
+        c, s = cos(box.yaw), sin(box.yaw)
+        hx, hy, _ = box.half
+        ex = abs(c) * hx + abs(s) * hy
+        ey = abs(s) * hx + abs(c) * hy
+        if box.center[0] + ex < x0 or box.center[0] - ex > x1 or box.center[1] + ey < y0 or box.center[1] - ey > y1:
+            return False
+        rx, ry = (x1 - x0) / 2, (y1 - y0) / 2
+        dx, dy = box.center[0] - (x0 + x1) / 2, box.center[1] - (y0 + y1) / 2
+        return abs(dx * c + dy * s) <= hx + rx * abs(c) + ry * abs(s) and \
+            abs(-dx * s + dy * c) <= hy + rx * abs(s) + ry * abs(c)
 
     def _box_inside_grid_xy(self, box: Box, region) -> bool:
         """Whether the part of the box inside region stays within the voxel grid."""

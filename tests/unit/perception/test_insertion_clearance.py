@@ -149,3 +149,9 @@ def test_outside_the_region_the_box_is_not_asked():
     mem = ClearanceMemory(volume(), 20.0)
     far = body(FACE - 1.0)
     assert mem.contained(far, 0.0, REGION)  # wholly before the region: the grid's business
+
+
+def test_a_box_beside_the_volume_and_outside_the_region_is_not_asked():
+    mem = ClearanceMemory(volume(), 20.0)
+    wide = Box((FACE - 3.0, -0.03, 0.095), (0.5, 0.39, 0.075))  # pokes past V's y extent, far from the region
+    assert mem.contained(wide, 0.0, REGION)

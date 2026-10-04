@@ -47,6 +47,8 @@ class PocketConfig:
     frame_max_age_s: float = 0.2
     envelope_m: float = 0.01
     sample_m: float = 0.01
+    body_slack_m: float = 0.05  # the body band is this much wider again: nothing to meet in front of the face, and
+    # the truck may still be converging onto the axis when it gets there (L3c v4: 2.2 cm off at the stand-off)
 
 
 @dataclass
@@ -97,7 +99,8 @@ class PocketCheck:
                              ((x_end - x_start) / 2, hw + lat, (FORK_Z_M[1] - FORK_Z_M[0]) / 2)))
         body_x0 = self.face_x - cfg.band_along_m
         parts.append(Box(((body_x0 + self.face_x) / 2, 0.0, (BODY_FLOOR_M + H_DET_M) / 2),
-                         ((self.face_x - body_x0) / 2, self.body_half_width_m + lat, (H_DET_M - BODY_FLOOR_M) / 2)))
+                         ((self.face_x - body_x0) / 2, self.body_half_width_m + lat + cfg.body_slack_m,
+                          (H_DET_M - BODY_FLOOR_M) / 2)))
         self.memory = ClearanceMemory(InsertionVolume(parts), cfg.lifetime_s)
         # Known surfaces a return may lie on: the estimated pallet and the floor.
         self.surfaces = self.solids + [Box((0.0, 0.0, -0.5), (50.0, 50.0, 0.5))]
