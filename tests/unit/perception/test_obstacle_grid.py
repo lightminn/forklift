@@ -198,3 +198,24 @@ def test_a_tilted_beam_neither_marks_nor_clears_past_its_band_limit():
     snap = grid.snapshot(0.05, (0.0, 0.0, 0.0))
     assert cell(snap, 0.5, 0.0) == FREE
     assert cell(snap, 2.0, 0.0) == UNKNOWN and cell(snap, 3.0, 0.0) == UNKNOWN
+
+
+def test_hull_closing_fills_a_pocket_end_to_end():
+    from forklift_core.perception.obstacle_grid import _hull_fill
+
+    occ = np.zeros((40, 40), dtype=bool)
+    occ[10:30, 10:12] = True  # two long blocks 0.30 m (6 cells) apart, a pocket between
+    occ[10:30, 18:20] = True
+    filled = _hull_fill(occ, 5.0)
+    assert filled[10:30, 10:20].all()  # every pocket cell, ends included (Codex: 10 cells were left)
+    assert not filled[:, 25:].any()
+
+
+def test_far_apart_objects_are_not_joined():
+    from forklift_core.perception.obstacle_grid import _hull_fill
+
+    occ = np.zeros((60, 60), dtype=bool)
+    occ[5:10, 5:10] = True
+    occ[5:10, 40:45] = True  # 30 cells (1.5 m) away
+    filled = _hull_fill(occ, 5.0)
+    assert not filled[5:10, 15:35].any()

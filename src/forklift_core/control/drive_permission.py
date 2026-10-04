@@ -166,16 +166,22 @@ class DrivePermission:
             if outside:
                 blocked = "edge"
                 break
-            if own_cells:
-                keep = np.fromiter(((int(a), int(b)) not in own_cells for a, b in cells), bool, len(cells))
+            whole, partial = own_cells
+            if whole:
+                keep = np.fromiter(((int(a), int(b)) not in whole for a, b in cells), bool, len(cells))
                 cells = cells[keep]
             states = snapshot.state[cells[:, 0], cells[:, 1]]
             if (states == OCCUPIED).any():
                 blocked = "occupied"
                 break
-            if (states != FREE).any():
+            under = (
+                np.fromiter(((int(a), int(b)) in partial for a, b in cells), bool, len(cells))
+                if partial else np.zeros(len(cells), dtype=bool)
+            )
+            if ((states != FREE) & ~under).any():
                 blocked = "unknown"
                 break
+            cells = cells[states == FREE]
             if len(cells):
                 oldest = min(oldest, float(np.nanmin(snapshot.free_stamp[cells[:, 0], cells[:, 1]])))
             verified = float(s)
@@ -183,17 +189,21 @@ class DrivePermission:
         return Check(verified, blocked, oldest, reached_end)
 
     @staticmethod
-    def _own_cells(snapshot, pose, own_footprint) -> set:
-        """Cells whose whole square lies inside the truck's own outline (Codex L0b
-        P1): a cell the body only partly covers can still hold an obstacle in its
-        other part, so it is checked like any other."""
+    def _own_cells(snapshot, pose, own_footprint):
+        """(wholly inside, partly covered) cells of the truck's own outline.
+
+        A wholly covered cell is exempt. A partly covered cell is mostly under the
+        body, where no beam reaches, so UNKNOWN is accepted there -- but an
+        OCCUPIED mark still blocks (Codex L0b P1: an obstacle in the part the body
+        does not cover). The band this leaves unverified is thinner than one cell.
+        """
         cells, _ = footprint_cells(snapshot, pose, own_footprint, 0.0)
         if not len(cells):
-            return set()
+            return set(), set()
         x, y, yaw = pose
         c, s = cos(yaw), sin(yaw)
         res = snapshot.resolution_m
-        out = set()
+        out, partial = set(), set()
         for a, b in cells:
             x0 = snapshot.origin_x_m + a * res
             y0 = snapshot.origin_y_m + b * res
@@ -205,9 +215,8 @@ class DrivePermission:
                 if not (-own_footprint.rear_m <= u <= own_footprint.front_m and abs(w) <= own_footprint.half_width_m):
                     inside = False
                     break
-            if inside:
-                out.add((int(a), int(b)))
-        return out
+            (out if inside else partial).add((int(a), int(b)))
+        return out, partial
 
     def update(self, snapshot: GridSnapshot, path_ahead, footprint: Footprint, own_footprint: Footprint, *, current_pose) -> Check:
         """New snapshot: the verified distance along path_ahead (rear-axle poses from the truck on)."""

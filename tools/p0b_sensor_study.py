@@ -293,16 +293,14 @@ def load_candidates(path: Path) -> dict:
 
 
 def _rect_cells_free(snapshot, rect, margin=0.0):
-    """Count FREE cells whose centre lies inside a truth rectangle (shrunk by margin)."""
+    """Count FREE cells whose square overlaps a truth rectangle (exact separating-axis test)."""
     from forklift_core.perception.obstacle_grid import FREE
 
     res = snapshot.resolution_m
     nx, ny = snapshot.state.shape
     c, s = math.cos(rect["yaw_rad"]), math.sin(rect["yaw_rad"])
-    hl, hw = rect["length_m"] / 2 - margin, rect["width_m"] / 2 - margin
-    if hl <= 0 or hw <= 0:
-        return 0
-    r = math.hypot(hl, hw)
+    hl, hw = rect["length_m"] / 2 + margin, rect["width_m"] / 2 + margin
+    r = math.hypot(hl, hw) + res
     i0 = max(int((rect["x_m"] - r - snapshot.origin_x_m) / res), 0)
     i1 = min(int((rect["x_m"] + r - snapshot.origin_x_m) / res) + 1, nx)
     j0 = max(int((rect["y_m"] - r - snapshot.origin_y_m) / res), 0)
@@ -310,10 +308,51 @@ def _rect_cells_free(snapshot, rect, margin=0.0):
     if i0 >= i1 or j0 >= j1:
         return 0
     ii, jj = np.meshgrid(np.arange(i0, i1), np.arange(j0, j1), indexing="ij")
-    x = snapshot.origin_x_m + (ii + 0.5) * res - rect["x_m"]
-    y = snapshot.origin_y_m + (jj + 0.5) * res - rect["y_m"]
-    inside = (np.abs(x * c + y * s) <= hl) & (np.abs(-x * s + y * c) <= hw)
-    return int((snapshot.state[i0:i1, j0:j1][inside] == FREE).sum())
+    dx = snapshot.origin_x_m + (ii + 0.5) * res - rect["x_m"]
+    dy = snapshot.origin_y_m + (jj + 0.5) * res - rect["y_m"]
+    half = res / 2
+    ex = abs(c) * hl + abs(s) * hw
+    ey = abs(s) * hl + abs(c) * hw
+    proj = half * (abs(c) + abs(s))
+    overlap = (
+        (np.abs(dx) <= ex + half) & (np.abs(dy) <= ey + half)
+        & (np.abs(dx * c + dy * s) <= hl + proj) & (np.abs(-dx * s + dy * c) <= hw + proj)
+    )
+    return int((snapshot.state[i0:i1, j0:j1][overlap] == FREE).sum())
+
+
+def _volume_unobserved(permission, snap, samples, arc, footprint, own_cells, now, free_age):
+    """True when the swept check volume holds an UNKNOWN cell, leaves the grid, or
+    relies on expired FREE -- whatever OCCUPIED cells it also holds (Codex design P1)."""
+    from forklift_core.control.drive_permission import footprint_cells
+    from forklift_core.perception.obstacle_grid import FREE, OCCUPIED
+
+    cfg = permission.config
+    radius = float(np.hypot(max(footprint.front_m, footprint.rear_m), footprint.half_width_m))
+    oldest = np.inf
+    for i in range(len(samples)):
+        if i == 0:
+            pose, pad = samples[0], 0.0
+        else:
+            a_, b_ = samples[i - 1], samples[i]
+            dyaw = float(np.arctan2(np.sin(b_[2] - a_[2]), np.cos(b_[2] - a_[2])))
+            pad = (float(np.hypot(b_[0] - a_[0], b_[1] - a_[1])) + radius * abs(dyaw)) / 2
+            pose = np.array([(a_[0] + b_[0]) / 2, (a_[1] + b_[1]) / 2, a_[2] + dyaw / 2])
+        cells, outside = footprint_cells(snap, pose, footprint, cfg.envelope_offset_m + pad)
+        if outside:
+            return True
+        whole, partial = own_cells
+        cells = np.array([c for c in cells if (int(c[0]), int(c[1])) not in whole]).reshape(-1, 2)
+        if not len(cells):
+            continue
+        st = snap.state[cells[:, 0], cells[:, 1]]
+        under = np.array([(int(c[0]), int(c[1])) in partial for c in cells], dtype=bool)
+        if ((st != FREE) & (st != OCCUPIED) & ~under).any():
+            return True
+        free = st == FREE
+        if free.any():
+            oldest = min(oldest, float(np.nanmin(snap.free_stamp[cells[free, 0], cells[free, 1]])))
+    return now - oldest > free_age
 
 
 def evaluate_command(args) -> dict:
@@ -523,9 +562,14 @@ def evaluate_command(args) -> dict:
                          res=snap.resolution_m, ahead=ahead, pose=tr, verified=permission.path_check.verified_m,
                          blocked=str(permission.path_check.blocked), allowed=allowed, reason=reason,
                          kappa=kappa, v=v, free_stamp=snap.free_stamp, t=float(t), oldest=permission.path_check.oldest_free_s)
+            arc_samples, arc_s = arc_poses(tuple(tr), kappa, direction, stopping.distance_m(v) + pconfig.step_m, pconfig.step_m)
+            own_set = permission._own_cells(snap, tuple(tr), own_now)
+            unobserved = _volume_unobserved(permission, snap, arc_samples, arc_s, fp, own_set, float(t), args.free_age_s)
             curve = abs(kappa) > 0.1
             cls = f"{'loaded' if carried else 'unloaded'}_{'reverse' if v < 0 else 'forward'}_{'curve' if curve else 'straight'}"
             stats["moving"][cls] = stats["moving"].get(cls, 0) + 1
+            if not unobserved:
+                stats.setdefault("covered", {})[cls] = stats.setdefault("covered", {}).get(cls, 0) + 1
             permitted = allowed >= abs(v) - 1e-9
             stats["permitted"][cls] = stats["permitted"].get(cls, 0) + int(permitted)
             if not permitted:
@@ -552,14 +596,13 @@ def evaluate_command(args) -> dict:
                         alive.remove(b_)
             if k % args.free_check_every == 0:
                 for o, kind in zip(obstacles, rect_kind):
-                    n = _rect_cells_free(snap, o, margin=0.05)
+                    n = _rect_cells_free(snap, o, margin=0.0)
                     if n:
                         stats["free_inside"][kind] = stats["free_inside"].get(kind, 0) + n
         ratio = {c: stats["permitted"][c] / stats["moving"][c] for c in stats["moving"]}
-        reasons = stats.get("blocked_reasons", {})
         # Coverage: not stopped for lack of observation (occupied blocks depend on
         # the recorded truth-planned path, which a grid plan would route around).
-        coverage = {c: 1 - reasons.get(c, {}).get("unknown", 0) / stats["moving"][c] for c in stats["moving"]}
+        coverage = {c: stats.get("covered", {}).get(c, 0) / stats["moving"][c] for c in stats["moving"]}
         report[cname] = {
             "rect_kinds": {k: rect_kind.count(k) for k in sorted(set(rect_kind))},
             "sensors": cand["sensors"], "lift_offset_m": cand["lift_offset_m"],
@@ -612,7 +655,7 @@ def main() -> None:
     e.add_argument("--cast-m", type=float, default=5.5)
     e.add_argument("--moving-mps", type=float, default=0.05)
     e.add_argument("--phases", default="observe,approach,transport,return_home")
-    e.add_argument("--free-check-every", type=int, default=5)
+    e.add_argument("--free-check-every", type=int, default=1)
     e.add_argument("--noise-seed", type=int, default=7)
     e.add_argument("--max-scans", type=int, default=None)
     e.add_argument("--clear-max-height-m", type=float, default=0.15)

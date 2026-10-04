@@ -181,6 +181,73 @@ def _reach_offsets(radius_cells: float) -> np.ndarray:
     return np.column_stack((di[keep], dj[keep]))
 
 
+def _components(mask: np.ndarray) -> np.ndarray:
+    """8-connected component labels of mask (-1 outside), by min propagation."""
+    nx, ny = mask.shape
+    big = nx * ny
+    labels = np.where(mask, np.arange(big).reshape(nx, ny), big)
+    while True:
+        padded = np.full((nx + 2, ny + 2), big)
+        padded[1:-1, 1:-1] = labels
+        best = labels.copy()
+        for di in (-1, 0, 1):
+            for dj in (-1, 0, 1):
+                if di or dj:
+                    best = np.minimum(best, padded[1 + di : 1 + di + nx, 1 + dj : 1 + dj + ny])
+        best = np.where(mask, best, big)
+        if np.array_equal(best, labels):
+            return np.where(mask, labels, -1)
+        labels = best
+
+
+def _convex_hull(points: np.ndarray) -> np.ndarray:
+    """Counter-clockwise hull of (N, 2) points (monotone chain)."""
+    pts = np.unique(points, axis=0)
+    if len(pts) <= 2:
+        return pts
+    pts = pts[np.lexsort((pts[:, 1], pts[:, 0]))]
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower, upper = [], []
+    for p in pts:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+    for p in pts[::-1]:
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+    return np.array(lower[:-1] + upper[:-1])
+
+
+def _hull_fill(occupied: np.ndarray, link_cells: float) -> np.ndarray:
+    """Cells inside the convex hull of each group of occupied cells linked within 2 * link_cells."""
+    out = occupied.copy()
+    if not occupied.any():
+        return out
+    labels = _components(_dilate(occupied, link_cells))
+    for label in np.unique(labels[occupied]):
+        ii, jj = np.nonzero(occupied & (labels == label))
+        if len(ii) < 2:
+            continue
+        # Corners of every occupied cell, in cell units.
+        corners = np.concatenate([np.column_stack((ii + a, jj + b)) for a in (0, 1) for b in (0, 1)])
+        hull = _convex_hull(corners.astype(float))
+        if len(hull) < 3:
+            continue
+        i0, j0 = ii.min(), jj.min()
+        i1, j1 = ii.max() + 1, jj.max() + 1
+        ci, cj = np.meshgrid(np.arange(i0, i1) + 0.5, np.arange(j0, j1) + 0.5, indexing="ij")
+        inside = np.ones(ci.shape, dtype=bool)
+        for k in range(len(hull)):
+            a, b = hull[k], hull[(k + 1) % len(hull)]
+            inside &= (b[0] - a[0]) * (cj - a[1]) - (b[1] - a[1]) * (ci - a[0]) >= -1e-9
+        out[i0:i1, j0:j1] |= inside
+    return out
+
+
 def _dilate(mask: np.ndarray, radius_cells: float) -> np.ndarray:
     """Cells whose centre is within radius_cells of a mask cell's centre."""
     out = mask.copy()
@@ -338,14 +405,11 @@ class ObstacleGrid:
                 self._mark_disks(state, px, py, np.full(px.shape, r_occ))
                 free_stamp[state == OCCUPIED] = np.nan
         if cfg.close_gap_m > 0:
-            # A low plane sees a pallet or a cart as blocks with gaps; the deck or
-            # load above is still there. Gaps narrower than the truck can use are
-            # closed (dilate, then erode the dilation) and win over FREE.
-            occ = state == OCCUPIED
-            radius = cfg.close_gap_m / res
-            closed = _erode(_dilate(occ, radius), radius, offsets=_disk_offsets(radius))
-            filled = closed & ~occ
-            state[filled] = OCCUPIED
+            # A low plane sees a pallet as blocks with gaps; its deck and load are
+            # still there. Occupied cells less than 2 * close_gap_m apart form one
+            # object and its convex hull is filled, so neither a pocket nor its
+            # open ends stay FREE (Codex design P1: a disk closing left the ends).
+            state[_hull_fill(state == OCCUPIED, cfg.close_gap_m / res)] = OCCUPIED
         free_stamp[state != FREE] = np.nan
         return GridSnapshot(
             state, free_stamp, now_s, tuple(float(v) for v in map_from_odom), correction_version, used, newest,

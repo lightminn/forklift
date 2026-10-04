@@ -22,6 +22,8 @@ grid:
   free_r_cap_m: 0.20
   free_rho_m: 4.0
   window_m: 6.0
+  # Low planes see storage pallets as blocks: link occupied cells < 0.5 m apart and fill their hull.
+  close_gap_m: 0.25
 permission:
   latency_s: 0.15
   decel_mps2: 1.5
