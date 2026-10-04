@@ -59,7 +59,7 @@ def test_an_open_floor_lets_the_truck_drive_and_a_wall_stops_it():
     lay.refresh(0.2, (0.0, 0.0, 0.0), 0, current_pose=pose, path_ahead=path, loaded=False)
     speed, _ = lay.limit(0.2, current_pose=pose, curvature_inv_m=0.0, direction=1, loaded=False, cap_mps=0.6)
     assert speed >= 0.6
-    # A wall 1.8 m ahead of the rear axle, seen by every sensor.
+    # A wall 1.62 m ahead of the rear axle (0.33 m past the fork tips), seen by every sensor.
     lay2 = layer()
     for k in range(3):
         t = 0.1 * k
@@ -67,7 +67,7 @@ def test_an_open_floor_lets_the_truck_drive_and_a_wall_stops_it():
         for s in CONFIG["sensors"]:
             ox = s.xyz_m[0] + 0.34
             ang = lay2.beam_angles + s.yaw_rad
-            d = np.where(np.cos(ang) > 0.05, (1.8 - ox) / np.cos(ang), np.nan)
+            d = np.where(np.cos(ang) > 0.05, (1.62 - ox) / np.cos(ang), np.nan)
             ok = np.isfinite(d) & (np.abs(s.xyz_m[1] + d * np.sin(ang)) < 3) & (d > 0)
             raw[s.name] = (np.where(ok, d, np.nan), ok, np.zeros(len(ang), bool))
         lay2.add_scans(t, raw, odom_rear=pose, loaded=False)
@@ -75,7 +75,7 @@ def test_an_open_floor_lets_the_truck_drive_and_a_wall_stops_it():
     speed, why = lay2.limit(0.2, current_pose=pose, curvature_inv_m=0.0, direction=1, loaded=False, cap_mps=0.6)
     assert why == "occupied" and speed < 0.6
     occ = lay2.planner_grid(0.2, (0.0, 0.0, 0.0), 0)
-    i, j = occ.cell_of(1.8, 0.0)
+    i, j = occ.cell_of(1.62, 0.0)
     assert occ.occupied[i, j]
 
 

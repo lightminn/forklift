@@ -58,7 +58,7 @@ class PermissionConfig:
     evidence_max_age_s: float
     envelope_ramp_m: float = 0.2  # the envelope reaches its full width this far along the stop
     sensor_timeout_s: float = 0.25
-    step_m: float = 0.05
+    step_m: float = 0.02  # sample spacing; the sweep pad between samples is at most about this
     lookahead_m: float = 3.0
     end_creep_mps: float = 0.02
 
@@ -189,15 +189,18 @@ class DrivePermission:
         return Check(verified, blocked, oldest, reached_end)
 
     @staticmethod
-    def _own_cells(snapshot, pose, own_footprint):
+    def _own_cells(snapshot, pose, own_footprint, band_m: float = 0.0):
         """(wholly inside, partly covered) cells of the truck's own outline.
 
         A wholly covered cell is exempt. A partly covered cell is mostly under the
         body, where no beam reaches, so UNKNOWN is accepted there -- but an
         OCCUPIED mark still blocks (Codex L0b P1: an obstacle in the part the body
-        does not cover). The band this leaves unverified is thinner than one cell.
+        does not cover). band_m widens the partly covered set by the stopping
+        envelope: the strip right against the body is seen only at grazing
+        angles, if at all, and the envelope reaches into it even at the present
+        pose. The strip left unverified is thinner than one cell plus band_m.
         """
-        cells, _ = footprint_cells(snapshot, pose, own_footprint, 0.0)
+        cells, _ = footprint_cells(snapshot, pose, own_footprint, band_m)
         if not len(cells):
             return set(), set()
         x, y, yaw = pose
@@ -224,7 +227,7 @@ class DrivePermission:
         if poses.ndim != 2 or poses.shape[1] != 3 or not len(poses):
             raise ValueError("path_ahead must be a non-empty (N, 3) array")
         samples, arc, total = resample_path(poses, self.config.step_m, self.config.lookahead_m)
-        own = self._own_cells(snapshot, current_pose, own_footprint)
+        own = self._own_cells(snapshot, current_pose, own_footprint, self.config.envelope_offset_m + self.config.step_m)
         self.snapshot = snapshot
         self.path_check = self._walk(snapshot, samples, arc, footprint, own, full_path_m=total)
         self._driven_since_m = 0.0
@@ -257,7 +260,7 @@ class DrivePermission:
         # Emergency-stop arc at the present curvature and direction.
         length = cfg.stopping.distance_m(speed_cap_mps) + cfg.step_m
         samples, arc = arc_poses(current_pose, curvature_inv_m, 1 if direction >= 0 else -1, length, cfg.step_m)
-        own = self._own_cells(snap, current_pose, own_footprint)
+        own = self._own_cells(snap, current_pose, own_footprint, cfg.envelope_offset_m + cfg.step_m)
         estop = self._walk(snap, samples, arc, footprint, own)
         path_left = path.verified_m - self._driven_since_m
         if now_s - estop.oldest_free_s > cfg.evidence_max_age_s or now_s - path.oldest_free_s > cfg.evidence_max_age_s:
