@@ -200,10 +200,14 @@ class ObstacleLayer:
         finally:
             self.grid.config = self.grid_config
         footprint, own = self.footprints(loaded)
-        if self.shadow is not None:
-            self.snapshot = self.shadow.apply(self.snapshot, current_pose, own)
+        # The docking exemption first: the depth check answers for its cells
+        # every tick, so the shadow-band memory may lean on them -- the face
+        # cells straddling the region's edge were left UNKNOWN when it could
+        # not (L3c v8, insertion start).
         if self.exempt is not None:
             self.snapshot = exempt_region(self.snapshot, self.exempt)
+        if self.shadow is not None:
+            self.snapshot = self.shadow.apply(self.snapshot, current_pose, own)
         return self.permission.update(self.snapshot, path_ahead, footprint, own, current_pose=current_pose,
                                       direction=direction)
 
