@@ -1370,8 +1370,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             # The docking straights see the grid with the perceived pallet's band
             # cleared (plan D5): the estimate grown by the bias bound and the
             # grid's error radius along the insertion axis, by the radius across.
-            band_along = 0.025 + 0.10
-            band_across = 0.10
+            # The fresh error radius at the observation range plus the cell
+            # quantisation is about 0.2 m (P0a table, 0.2 s, rho 2.5 m).
+            band_along = 0.025 + 0.225
+            band_across = 0.225
             res_g = occupancy.resolution_m
             nx_g, ny_g = occupancy.occupied.shape
             gi, gj = np.meshgrid(np.arange(nx_g), np.arange(ny_g), indexing="ij")

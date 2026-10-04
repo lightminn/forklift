@@ -18,7 +18,7 @@ grid:
   max_mark_m: 5.0
   max_clear_m: 5.0
   free_max_age_s: 0.2
-  occupied_max_age_s: 3.0
+  occupied_max_age_s: 1.0
   free_r_cap_m: 0.20
   free_rho_m: 4.0
   window_m: 6.0

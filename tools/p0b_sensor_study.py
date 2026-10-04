@@ -696,7 +696,7 @@ def main() -> None:
     e.add_argument("--envelope-ramp-m", type=float, default=0.0)
     e.add_argument("--body-front-m", type=float, default=0.884)
     e.add_argument("--free-age-s", type=float, default=0.2)
-    e.add_argument("--occupied-age-s", type=float, default=3.0)
+    e.add_argument("--occupied-age-s", type=float, default=1.0)
     e.add_argument("--free-r-cap-m", type=float, default=0.20)
     e.add_argument("--free-rho-m", type=float, default=4.0)
     e.add_argument("--beams", type=int, default=800)
