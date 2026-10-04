@@ -1370,10 +1370,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             # The docking straights see the grid with the perceived pallet's band
             # cleared (plan D5): the estimate grown by the bias bound and the
             # grid's error radius along the insertion axis, by the radius across.
-            # The fresh error radius at the observation range plus the cell
-            # quantisation is about 0.2 m (P0a table, 0.2 s, rho 2.5 m).
-            band_along = 0.025 + 0.225
-            band_across = 0.225
+            # Along the insertion axis: the bias bound plus the largest swelling
+            # a pallet face can get in the grid (a 1 s mark at ~3.5 m: about
+            # 0.33 m with the cell quantisation). Across: the pallet width -- the
+            # approach footprint fits inside it. The body stays outside the band
+            # at the approach end (0.5 m from the face); what lies inside it is
+            # for the pocket depth check (plan D5, L3c). Until then the band is
+            # the whole corridor width, wider than the plan's fork-only band.
+            band_along = 0.025 + 0.40
+            band_across = 0.025
             res_g = occupancy.resolution_m
             nx_g, ny_g = occupancy.occupied.shape
             gi, gj = np.meshgrid(np.arange(nx_g), np.arange(ny_g), indexing="ij")
