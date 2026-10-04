@@ -32,7 +32,11 @@ class Event:
     lateral_m: float = 0.0
     size_m: tuple[float, float, float] = (0.4, 0.4, 0.5)
     target: str | None = None  # remove: the spawn id; silence: the sensor name
+    beyond_end_m: float | None = None  # spawn past the path end along its last heading
+    after_event: str | None = None  # instead of after_m: delay_s after that event fired
+    delay_s: float = 0.0
     fired: bool = False
+    fired_s: float | None = None
 
 
 def load_events(path: Path) -> list[Event]:
@@ -44,6 +48,8 @@ def load_events(path: Path) -> list[Event]:
                 str(e["id"]), str(e["action"]), str(e["phase"]), float(e["after_m"]),
                 float(e.get("ahead_m", 0.0)), float(e.get("lateral_m", 0.0)),
                 tuple(float(v) for v in e.get("size_m", (0.4, 0.4, 0.5))), e.get("target"),
+                None if e.get("beyond_end_m") is None else float(e["beyond_end_m"]),
+                e.get("after_event"), float(e.get("delay_s", 0.0)),
             )
         )
         if out[-1].action not in ("spawn", "remove", "silence"):
@@ -74,13 +80,26 @@ class Schedule:
     def update(self, t: float, phase: str, driven_m: float, path_ahead: np.ndarray | None) -> list[tuple]:
         """Actions due now: ('spawn', id, x, y, yaw, size) / ('remove', id) / ('silence', sensor)."""
         due = []
+        fired_at = {e.id: e.fired_s for e in self.events if e.fired}
         for e in self.events:
-            if e.fired or e.phase != phase or driven_m < e.after_m:
+            if e.fired:
+                continue
+            if e.after_event is not None:
+                if fired_at.get(e.after_event) is None or t - fired_at[e.after_event] < e.delay_s:
+                    continue
+            elif e.phase != phase or driven_m < e.after_m:
                 continue
             if e.action == "spawn":
                 if path_ahead is None or len(path_ahead) < 2:
                     continue
-                x, y, yaw = pose_along(path_ahead, e.ahead_m, e.lateral_m)
+                if e.beyond_end_m is not None:
+                    ex, ey = path_ahead[-1, 0], path_ahead[-1, 1]
+                    eyaw = math.atan2(path_ahead[-1, 1] - path_ahead[-2, 1], path_ahead[-1, 0] - path_ahead[-2, 0])
+                    x = ex + e.beyond_end_m * math.cos(eyaw) - e.lateral_m * math.sin(eyaw)
+                    y = ey + e.beyond_end_m * math.sin(eyaw) + e.lateral_m * math.cos(eyaw)
+                    yaw = eyaw
+                else:
+                    x, y, yaw = pose_along(path_ahead, e.ahead_m, e.lateral_m)
                 self.spawned[e.id] = (x, y, yaw, e.size_m)
                 due.append(("spawn", e.id, x, y, yaw, e.size_m))
             elif e.action == "remove":
@@ -92,6 +111,7 @@ class Schedule:
                 self.silenced.add(e.target)
                 due.append(("silence", e.target))
             e.fired = True
+            e.fired_s = t
             self.log.append({"time_s": t, "event": e.id, "action": e.action, "phase": phase,
                              "driven_m": driven_m, "detail": list(due[-1][1:])})
         return due

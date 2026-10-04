@@ -37,3 +37,18 @@ def test_events_fire_once_in_their_phase_after_their_distance():
     assert sched.update(0.4, "transport", 5.0, PATH) == [("remove", "n1")]
     assert sched.update(0.5, "return_home", 0.0, None) == [("silence", "low_fl")]
     assert sched.silenced == {"low_fl"} and not sched.spawned and len(sched.log) == 3
+
+
+def test_a_removal_can_follow_a_spawn_by_time_and_a_box_can_sit_past_the_end():
+    events = [
+        MODULE.Event("n10", "spawn", "transport", 1.0, ahead_m=2.0),
+        MODULE.Event("n10_gone", "remove", "transport", 0.0, target="n10", after_event="n10", delay_s=5.0),
+        MODULE.Event("n8", "spawn", "transport", 0.5, beyond_end_m=1.23),
+    ]
+    sched = MODULE.Schedule(events)
+    first = sched.update(0.0, "transport", 1.0, PATH)
+    assert {a[1] for a in first} == {"n10", "n8"}
+    n8 = next(a for a in first if a[1] == "n8")
+    assert math.isclose(n8[2], 4.0 + 1.23)
+    assert sched.update(4.0, "transport", 1.0, PATH) == []  # still standing in front of it
+    assert sched.update(5.5, "transport", 1.0, PATH) == [("remove", "n10")]
