@@ -753,6 +753,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         straight_from_pose,
         plan_return_leg,
         plan_transport_leg,
+        site_poses,
     )
 
     if args.use_perception:
@@ -1789,30 +1790,18 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         """
         nonlocal phase_started
         docking = slam["docking"]
-        delivery = tuple(docking["delivery_rear"])
-        estimate = tuple(float(v) for v in rear)  # held: the scan's own estimate
+        state["delivery_docking"] = docking  # linked first: kept if a step fails
+        delivery = tuple(docking["delivery_rear_prior"])
+        path_end = docking["delivery_rear"]
+        docking["path_end_vs_prior_m"] = float(math.hypot(path_end[0] - delivery[0], path_end[1] - delivery[1]))
+        # A: the estimate at the instant of the scan being matched (Codex P3).
+        estimate = tuple(slam["last_scan_estimate_rear"])
         offset = abs(args.rear_axle_offset_m)
         rear_from_laser = (
             offset + float(laser_mount.xyz_m[0]),
             float(laser_mount.xyz_m[1]),
             float(laser_mount.yaw_rad),
         )
-        if "reference_points" not in slam:
-            # The taught station: one scan cast at the delivery pose, the truck
-            # itself left out (it is not standing there). Truth enters here only.
-            yaw_d = delivery[2]
-            base_d = np.array(
-                [delivery[0] + offset * math.cos(yaw_d), delivery[1] + offset * math.sin(yaw_d), float(base[2])]
-            )
-            quat_d = np.array([math.cos(yaw_d / 2), 0.0, 0.0, math.sin(yaw_d / 2)])
-            origin, directions = planar_lidar.laser_rays_world(base_d, quat_d, laser_mount, beam_angles)
-            distances, hits, own = planar_lidar.cast_scan(
-                origin, directions, scan_pattern.range_max_m, ignore_self=True
-            )
-            reference = scan_pattern.ranges_from_hits(distances, hits)
-            slam["reference_points"] = laser_points(reference, beam_angles)
-            docking["reference_beams"] = int(np.isfinite(reference).sum())
-            docking["reference_self_hits_dropped"] = int(own)
         live = laser_points(slam["last_sent_ranges"], beam_angles)
         match_start = time.monotonic()
         result = dock(
@@ -1865,9 +1854,20 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             dry = bicycle_rollout(
                 straight.poses, straight.directions, straight.curvatures_inv_m, config, rear
             )
+            # The obstacles are in world; the dry run is in the estimate frame.
+            # After an accepted match the truck's world pose is D o R, so
+            # W = (D o R) o A^-1 carries estimate poses into world (Codex v3.8
+            # impl P1). Without a match the estimate is the best world guess.
+            if result.accepted:
+                to_world = compose(compose(delivery, result.relative_rear), invert(estimate))
+            else:
+                to_world = (0.0, 0.0, 0.0)
             swept_clear = all(
                 collision_free_pose(
-                    np.asarray(pose), obstacles, geometry.loaded_footprint, scenario.bounds
+                    np.asarray(compose(to_world, tuple(pose))),
+                    obstacles,
+                    geometry.loaded_footprint,
+                    scenario.bounds,
                 )
                 for pose in dry.trajectory
             )
@@ -1920,7 +1920,6 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         (args.output / "paths.json").write_text(record_json(state["paths"], indent=2) + "\n")
         add_path_display(stage, path, "Transport", (1.0, 0.65, 0.04))
         phase_started = t
-        state["delivery_docking"] = docking
 
     try:
         if args.video:
@@ -2230,6 +2229,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 range_max_m=scan_pattern.range_max_m,
             )
             slam["last_sent_ranges"] = sent  # the noisy scan, as docking sees it
+            if slam["tracker"].applied is not None:
+                bx, by, byaw = compose(slam["tracker"].applied[0], slam_odom_base())
+                off = abs(args.rear_axle_offset_m)
+                slam["last_scan_estimate_rear"] = (
+                    bx - off * math.cos(byaw), by - off * math.sin(byaw), byaw
+                )
             try:
                 reply = slam["link"].exchange(
                     link.Scan(
@@ -2278,6 +2283,36 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             slam["scan_id"] += 1
 
         stepper["fn"] = step_world
+        if slam is not None:
+            # The taught station, fixed before the mission moves (Codex v3.8
+            # impl P2): the planned delivery rear pose, the start's base height,
+            # one ray cast with the truck left out. Truth enters here only.
+            prior = site_poses(scenario.destination, geometry)["delivery"]
+            delivery_d = (prior.x_m, prior.y_m, prior.yaw_rad)
+            offset_d = abs(args.rear_axle_offset_m)
+            start_base, _ = robot.get_world_pose()
+            base_d = np.array(
+                [
+                    delivery_d[0] + offset_d * math.cos(delivery_d[2]),
+                    delivery_d[1] + offset_d * math.sin(delivery_d[2]),
+                    float(start_base[2]),
+                ]
+            )
+            quat_d = np.array([math.cos(delivery_d[2] / 2), 0.0, 0.0, math.sin(delivery_d[2] / 2)])
+            ray_origin, ray_directions = planar_lidar.laser_rays_world(
+                base_d, quat_d, laser_mount, beam_angles
+            )
+            ray_distances, ray_hits, ray_own = planar_lidar.cast_scan(
+                ray_origin, ray_directions, scan_pattern.range_max_m, ignore_self=True
+            )
+            reference_ranges = scan_pattern.ranges_from_hits(ray_distances, ray_hits)
+            slam["reference_points"] = laser_points(reference_ranges, beam_angles)
+            slam["docking"].update(
+                delivery_rear_prior=list(delivery_d),
+                reference_beams=int(np.isfinite(reference_ranges).sum()),
+                reference_self_hits_dropped=int(ray_own),
+                reference_base_z_m=float(start_base[2]),
+            )
         for step in range(int(120 * args.max_sim_seconds)):
             t = world.current_time - initial_time
             base, q = robot.get_world_pose()

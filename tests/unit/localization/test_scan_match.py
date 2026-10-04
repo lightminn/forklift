@@ -52,3 +52,19 @@ def test_transform_points_round_trips():
     p = np.array([[1.0, 2.0], [-0.5, 0.3]])
     pose = (0.2, -0.1, math.pi / 7)
     np.testing.assert_allclose(transform_points(transform_points(p, pose), pose, inverse=True), p, atol=1e-12)
+
+
+def test_empty_or_tiny_inputs_are_refused_not_crashed():
+    rng = np.random.default_rng(3)
+    reference = _walls(rng)
+    assert match_scans(np.empty((0, 2)), reference).reason == "too_few_points"
+    assert match_scans(reference, np.empty((0, 2))).reason == "too_few_points"
+
+
+def test_a_run_that_hits_the_iteration_cap_is_not_accepted():
+    rng = np.random.default_rng(4)
+    reference = _walls(rng)
+    live = transform_points(reference, (0.2, 0.1, 0.05), inverse=True)
+    assert match_scans(reference, live, max_iterations=1).reason == "not_converged"
+    with pytest.raises(ValueError):
+        match_scans(reference, live, max_iterations=0)

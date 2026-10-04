@@ -83,11 +83,17 @@ def match_scans(
     matrix sum(J^T J) with J = [n_x, n_y, n x p] per inlier (yaw scaled per
     radian at the point's lever arm): below it some direction is unobserved.
     """
-    reference = np.asarray(reference, dtype=float)
-    live = np.asarray(live, dtype=float)
-    normals = _normals(reference)
+    if max_iterations < 1:
+        raise ValueError("max_iterations must be at least 1")
+    reference = np.asarray(reference, dtype=float).reshape(-1, 2)
+    live = np.asarray(live, dtype=float).reshape(-1, 2)
     pose = np.array(initial, dtype=float)
+    if len(reference) < 10 or len(live) < 10:
+        # Nothing to match against (Codex v3.8 impl P2): refuse, do not crash.
+        return MatchResult(False, "too_few_points", tuple(pose), 0.0, float("inf"), 0.0, 0)
+    normals = _normals(reference)
     used = 0
+    converged = False
     for used in range(1, max_iterations + 1):
         moved = transform_points(live, pose)
         j, d = _nearest(reference, moved)
@@ -102,6 +108,7 @@ def match_scans(
         pose[:2] += step[:2]
         pose[2] = atan2(sin(pose[2] + step[2]), cos(pose[2] + step[2]))
         if np.abs(step[:2]).max() < 1e-5 and abs(step[2]) < 1e-6:
+            converged = True
             break
     moved = transform_points(live, pose)
     j, d = _nearest(reference, moved)
@@ -113,7 +120,9 @@ def match_scans(
     lever = moved[inliers] - pose[:2]
     jac = np.column_stack((n[:, 0], n[:, 1], n[:, 0] * -lever[:, 1] + n[:, 1] * lever[:, 0]))
     information = float(np.linalg.eigvalsh(jac.T @ jac)[0]) if inliers.sum() >= 3 else 0.0
-    if fraction < min_inlier_fraction:
+    if not converged:
+        reason = "not_converged"
+    elif fraction < min_inlier_fraction:
         reason = "few_inliers"
     elif median > max_median_residual_m:
         reason = "large_residual"
