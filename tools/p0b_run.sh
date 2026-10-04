@@ -7,7 +7,7 @@ mkdir -p "$O"
 export A O LAT DEC ENV GAP INJ WID
 python - <<'PY' > jobs.txt
 import yaml
-c = yaml.safe_load(open("config/p0b_candidates.yaml"))["candidates"]
+c = yaml.safe_load(open(__import__("os").environ.get("CANDS", "config/p0b_candidates.yaml")))["candidates"]
 for s in (1, 3, 5):
     for n in c:
         print(s, n)

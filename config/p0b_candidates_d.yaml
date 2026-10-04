@@ -1,0 +1,41 @@
+candidates:
+  D_008:
+    sensors:
+    - name: high
+      xyz:
+      - -0.12
+      - 0.0
+      - 1.05
+      yaw_deg: 0
+    - name: low_fl
+      xyz:
+      - 0.6
+      - 0.4
+      - 0.08
+      yaw_deg: 45
+    - name: low_rr
+      xyz:
+      - -0.57
+      - -0.4
+      - 0.08
+      yaw_deg: -135
+  D_010:
+    sensors:
+    - name: high
+      xyz:
+      - -0.12
+      - 0.0
+      - 1.05
+      yaw_deg: 0
+    - name: low_fl
+      xyz:
+      - 0.6
+      - 0.4
+      - 0.1
+      yaw_deg: 45
+    - name: low_rr
+      xyz:
+      - -0.57
+      - -0.4
+      - 0.1
+      yaw_deg: -135
