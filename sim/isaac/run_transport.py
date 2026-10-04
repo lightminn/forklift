@@ -3063,8 +3063,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                         Pose2D(float(rear[0]), float(rear[1]), float(rear[2])),
                                         line_start,
                                         line_end,
-                                        max_lateral_m=0.08,
-                                        max_yaw_rad=0.08,
+                                        # The box stays at 5 cm / 0.05 rad: the dry run
+                                        # checks arrival only, not the swept footprint,
+                                        # and a wider box admitted a collision (Codex v3.7 P1).
+                                        max_lateral_m=0.05,
+                                        max_yaw_rad=0.05,
                                         min_length_m=0.3,
                                     )
                                     state["near_capture"]["offsets_to_new_line"] = offsets
