@@ -158,7 +158,7 @@ def test_a_return_off_the_estimated_surface_by_the_estimate_error_counts_as_pall
     solids_o = [(np.asarray(b.center) @ rot.T + trans, np.asarray(b.half), rot) for b in check.solids]
     noise_only = surface_tolerance_m(CAM, point_o)
     assert not on_surface(point_o, solids_o, noise_only)[0]
-    assert on_surface(point_o, solids_o, noise_only + check.config.estimate_m)[0]
+    assert on_surface(point_o, solids_o, noise_only + check.config.surface_estimate_m)[0]
 
 
 def test_frames_older_than_their_pose_are_tolerated_with_the_speed():

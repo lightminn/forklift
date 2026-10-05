@@ -42,7 +42,13 @@ FORK_Z_M = (SCOPE_FLOOR_M, 0.072)  # lowered blades 0.028-0.052 +0.01, from the 
 
 @dataclass
 class PocketConfig:
-    estimate_m: float = 0.02  # relative pocket estimate error (S2 near captures: <= 5.3 mm)
+    # Relative pocket estimate error for the volumes' lateral allowance: about
+    # twice the S2 near captures' worst (5.3 mm). At 0.02 m the blade box's
+    # inner edge at full depth lay in the centre block's shadow and the stop
+    # past the insertion end could never be certified (L3c v33 seed 4).
+    estimate_m: float = 0.01
+    # Surface tolerance's estimate share (D5 delta, user approval 2026-10-05).
+    surface_estimate_m: float = 0.02
     tracking_m: float = 0.006  # path-tracking deviation the columns allow (S2 dry runs: <= 2.2 mm)
     lifetime_s: float = 20.0  # unverified; the run records the drift that would justify it
     band_ahead_m: float = 0.10  # fork columns start this far in front of the face
@@ -180,7 +186,7 @@ class PocketCheck:
         # boxes at the frame's pose.
         surfaces = self.surfaces + self.own_boxes(self.to_insertion(*rear_at_stamp), lift_m)
         rec = self.memory.add_frame(stamp_s, depth, self.camera, self.optical_from_insertion(rear_at_stamp),
-                                    surfaces, surface_extra_m=self.config.estimate_m,
+                                    surfaces, surface_extra_m=self.config.surface_estimate_m,
                                     pose_uncertainty_m=self.pose_uncertainty_m(speed_mps, yaw_rate_rps))
         rec = {**rec, "new": True, "rear": [float(v) for v in rear_at_stamp]}
         self.records.append(rec)
