@@ -4254,7 +4254,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         back = scenario if slam is None else slam.get("return_scenario", slam.get("transport_scenario", scenario))
                         replanned = plan_return_leg(
                             grid_world(back), start, return_to_pose, planner_config, geometry=geometry,
-                            travel_config=travel_config, **grid_kwargs(None),
+                            travel_config=travel_config, **grid_kwargs("return", back.destination),
                         )
                     if replanned.status == "invalid_start":
                         # The truck stopped closer to the obstacle than the planning
@@ -4277,7 +4277,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         else:
                             replanned = plan_return_leg(
                                 grid_world(back), start, return_to_pose, tight, geometry=geometry,
-                                travel_config=tight_travel, **grid_kwargs(None),
+                                travel_config=tight_travel, **grid_kwargs("return", back.destination),
                             )
                         obstacle.setdefault("tight_replans", 0)
                         obstacle["tight_replans"] += 1
