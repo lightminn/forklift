@@ -4750,9 +4750,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 # the held pose lost 1.85 and 2.80 cm). The final wheel speed is
                 # slewed -- braking at the stopping model's deceleration, pulling
                 # away at COMMAND_ACCEL_MPS2 -- and the permission's own limit (a
-                # sensor falling silent included), the e-stop probe and the
-                # steering creep still cut it as a step, the stop their distances
-                # were measured with (Codex checkpoint 6 P1).
+                # sensor falling silent included) and the e-stop probe still cut
+                # it as a step, the stop their distances were measured with
+                # (Codex checkpoint 6 P1). The steering creep is slewed too: as a
+                # step from 0.6 m/s it skidded a rear wheel and the held pose
+                # fell 3 cm behind (L3c v43 seed 1, pocket_obstacle).
                 previous = state.get("command_speed", 0.0)
                 target_speed = wheel_speed
                 if previous * target_speed < 0:
@@ -4760,12 +4762,6 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 rate = (obstacle["layer"].permission.config.stopping.decel_mps2
                         if abs(target_speed) < abs(previous) else COMMAND_ACCEL_MPS2) * dt
                 wheel_speed = previous + float(np.clip(target_speed - previous, -rate, rate))
-                if creeping and abs(wheel_speed) > abs(target_speed):
-                    # The steering-catch-up creep stays a step down, as before
-                    # the slew: braking into it on the slew drove on with the
-                    # steering behind (L3c v41 seed 3: arrival yaw -0.035 rad,
-                    # near_capture_misaligned). Pulling away after it is slewed.
-                    wheel_speed = target_speed
                 cap = obstacle.get("permission_cap")
                 if cap is not None and cap[0] == t and abs(wheel_speed) > cap[1]:
                     wheel_speed = math.copysign(cap[1], wheel_speed)
