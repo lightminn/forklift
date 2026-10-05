@@ -921,7 +921,10 @@ def plan_transport(
             props,
             geometry.loaded_footprint,
             near_bounds,
-            docking_clearance,
+            # The lifted pallet backs out along the footprint it stood on, so its
+            # gap to a neighbour exists by construction; on a grid no clearance
+            # is added to the swelling (L3c seed 4: a prop beside the pallet).
+            0.0 if occupancy is not None else config.clearance_m,
             docking_occupancy if docking_occupancy is not None else occupancy,
         ),
     )
