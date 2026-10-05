@@ -4508,6 +4508,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         }
                     )
                     require(replanned.success, f"obstacle_replan_failed in {phase}: {replanned.status}")
+                    # D4: a replan may rightly be longer (a detour), so the
+                    # no-progress watch restarts on the new path; the
+                    # oscillation it also cut is bounded by a per-leg replan
+                    # count (L3c v34 seed 4: two good detours tripped the 60 s watch).
+                    leg_replans = sum(1 for r in obstacle["replans"] if r["phase"] == phase)
+                    require(leg_replans <= 10, f"obstacle_replan_limit in {phase}: {leg_replans}")
+                    obstacle.setdefault("progress", {}).clear()
                     paths[phase] = replanned
                     state["paths"][phase] = path_record(replanned)
                     (args.output / "paths.json").write_text(record_json(state["paths"], indent=2) + "\n")
