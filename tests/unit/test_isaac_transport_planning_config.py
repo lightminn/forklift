@@ -653,11 +653,24 @@ def test_wheel_target_brakes_at_the_stopping_model_deceleration():
     source = SCRIPT.read_text()
     # The flag is args.obstacle_act: the obstacle dict has no "act" key (L3c v37 never slewed).
     i = source.index("if obstacle is not None and args.obstacle_act:\n                # A step wheel target")
-    block = source[i : source.index("drive = ackermann_command(requested_speed", i)]
+    block = source[i : source.index("drive = ackermann_command(wheel_speed", i)]
     assert "permission.config.stopping.decel_mps2" in block
     assert "COMMAND_ACCEL_MPS2" in block
-    assert "if estop_holding:" in block
+    # The slew acts on the final wheel speed (creep included), the permission's
+    # own limit and the e-stop probe cut it as a step afterwards (Codex checkpoint 6 P1).
+    pre = source[source.rindex("steering_error = ", 0, i) : i]
+    assert "wheel_speed = requested_speed * 0.25" in pre
+    assert block.index("np.clip(target_speed - previous") < block.index('obstacle.get("permission_cap")')
+    assert block.index('obstacle.get("permission_cap")') < block.index("if estop_holding:")
+    j = source.index('obstacle["permission_cap"] = ')
+    assert j < source.index('if obstacle["path_blocked_ticks"] >= 36 and allowed > 0.0:')
     assert 'obstacle.get("act")' not in source and 'obstacle["act"]' not in source
+
+
+def test_the_retry_limit_is_checked_after_the_same_path_test():
+    source = SCRIPT.read_text()
+    same = source.index("if same_path(replanned, paths[phase]")
+    assert source.index('f"obstacle_blocked in {phase}') > same
 
 
 def test_loose_arrival_only_at_observation_waypoints():
@@ -665,3 +678,4 @@ def test_loose_arrival_only_at_observation_waypoints():
     i = source.index("# The tracker stops at a path end it missed sideways")
     head = source[source.rindex("if (", 0, i) : i]
     assert 'phase == "observe"' in head and "OBSERVE_ARRIVAL_M" in head
+    assert 'slam["stop_now"]' in head  # standing, not just a zero command (Codex checkpoint 6 P2)

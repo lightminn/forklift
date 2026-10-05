@@ -81,6 +81,16 @@ def test_the_age_table_never_decreases_and_reads_each_age_from_the_start():
     assert table.tolist() == [[0.03, 0.01], [0.03, 0.02], [0.03, 0.02]]
 
 
+def test_an_error_between_two_listed_ages_bounds_the_later_age():
+    # Codex checkpoint 6: a 0.19 s age beat the 0.2 s value; every tick counts.
+    stamps = np.arange(0, 2, 0.01)
+    truth = np.column_stack((0.5 * stamps, np.zeros_like(stamps), np.zeros_like(stamps)))
+    estimate = truth.copy()
+    estimate[15, 0] += 0.2  # a spike at 0.15 s that is gone again by 0.2 s
+    err = MODULE.relative_error_at(0, (0.1, 0.2, 1.0), stamps, truth, estimate)
+    assert err[0, 0] < 1e-9 and math.isclose(err[1, 0], 0.2, abs_tol=1e-9) and math.isclose(err[2, 0], 0.2, abs_tol=1e-9)
+
+
 def test_a_heading_error_at_the_present_swings_the_old_pose():
     # Codex L0 P1: same positions, the odometry heading 0.1 rad off at the end only.
     stamps = np.array([0.0, 1.0])

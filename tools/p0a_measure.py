@@ -161,28 +161,34 @@ AGES_S = (0.1, 0.2, 0.3, 0.5, 1.0, 2.0, 3.0, 5.0, 10.0)
 
 
 def relative_error_at(t0_index, ages_s, stamps, truth, estimate):
-    """(position, |yaw|) error of the pose at t0 re-projected from t0 + each age.
+    """Largest (position, |yaw|) error of the pose at t0 re-projected from any
+    tick up to each age -- every tick, not only the listed ages, so the bound
+    holds between them (Codex checkpoint 6: a 0.19 s age beat the 0.2 s value).
 
     The grid places an old scan with the correction of the present (Codex L0
     P1): C = truth(now) o odom(now)^-1, then C o odom(then). This is compared
     with truth(then) -- not the relative motion seen from the old pose, which
     hides a heading error that swings the old pose around the present one.
-    NaN past the end of the record.
+    NaN for an age whose end lies past the record.
     """
     out = np.full((len(ages_s), 2), np.nan)
     i = t0_index
-    for k, age in enumerate(ages_s):
-        j = int(np.searchsorted(stamps, stamps[i] + age))
-        if j >= len(stamps):
+    last = int(np.searchsorted(stamps, stamps[i] + ages_s[-1], side="right"))
+    j = np.arange(i, min(last, len(stamps)))
+    c_yaw = truth[j, 2] - estimate[j, 2]
+    c, sn = np.cos(c_yaw), np.sin(c_yaw)
+    dx, dy = estimate[i, 0] - estimate[j, 0], estimate[i, 1] - estimate[j, 1]
+    px = truth[j, 0] + c * dx - sn * dy
+    py = truth[j, 1] + sn * dx + c * dy
+    pos = np.hypot(px - truth[i, 0], py - truth[i, 1])
+    e_yaw = c_yaw + estimate[i, 2] - truth[i, 2]
+    yaw = np.abs(np.arctan2(np.sin(e_yaw), np.cos(e_yaw)))
+    for k, a in enumerate(ages_s):
+        end = int(np.searchsorted(stamps, stamps[i] + a))  # the tick the age reads
+        if end >= len(stamps):
             break
-        c_yaw = truth[j, 2] - estimate[j, 2]
-        c, sn = math.cos(c_yaw), math.sin(c_yaw)
-        dx, dy = estimate[i, 0] - estimate[j, 0], estimate[i, 1] - estimate[j, 1]
-        px = truth[j, 0] + c * dx - sn * dy
-        py = truth[j, 1] + sn * dx + c * dy
-        out[k, 0] = math.hypot(px - truth[i, 0], py - truth[i, 1])
-        e_yaw = c_yaw + estimate[i, 2] - truth[i, 2]
-        out[k, 1] = abs(math.atan2(math.sin(e_yaw), math.cos(e_yaw)))
+        m = j <= end
+        out[k] = (float(np.max(pos[m])), float(np.max(yaw[m])))
     return out
 
 

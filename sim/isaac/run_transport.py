@@ -3429,6 +3429,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 if (
                     phase == "observe" and tracking.status == "tracking"
                     and trackers[phase].remaining_to_goal_m() <= 1e-9 and abs(tracking.speed_mps) < 1e-12
+                    and (slam["stop_now"] if slam is not None else abs(signed_speed) < 0.01)
                     and tracking.position_error_m <= OBSERVE_ARRIVAL_M
                     and abs(tracking.yaw_error_rad) <= OBSERVE_ARRIVAL_YAW_RAD
                 ):
@@ -4372,6 +4373,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     and check_now is not None and check_now.blocked == "occupied"
                 )
                 obstacle["path_blocked_ticks"] = obstacle.get("path_blocked_ticks", 0) + 1 if path_blocked else 0
+                # The permission's own limit, applied to the wheels as a step
+                # (the stop it was measured with); the path-blocked stop below
+                # is a planned one and brakes on the slew.
+                obstacle["permission_cap"] = (t, float(allowed)) if (args.obstacle_act and acting) else None
                 if obstacle["path_blocked_ticks"] >= 36 and allowed > 0.0:
                     allowed, why = 0.0, "occupied"
                 if abs(requested_speed) > allowed + 1e-9:
@@ -4406,9 +4411,6 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 )
                 if obstacle["blocked_ticks"] >= 120:
                     obstacle["blocked_ticks"] = 0
-                    recent = [r for r in obstacle["replans"]
-                              if r["phase"] == phase and t - r["time_s"] < 30.0 and not r.get("same_path")]
-                    require(len(recent) < 3, f"obstacle_blocked in {phase}: {len(recent)} replans in 30 s")
                     start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))
                     replan_start = time.monotonic()
                     tight = replace(planner_config, clearance_m=0.0)
@@ -4579,6 +4581,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         # no-progress watch restarts on the new path; the
                         # oscillation it also cut is bounded by a per-leg replan
                         # count (L3c v34 seed 4: two good detours tripped the 60 s watch).
+                        # Checked once the path is known to differ: a same-path wait
+                        # never counts (Codex checkpoint 6 P2).
+                        recent = [r for r in obstacle["replans"]
+                                  if r["phase"] == phase and t - r["time_s"] < 30.0 and not r.get("same_path")]
+                        require(len(recent) <= 3, f"obstacle_blocked in {phase}: {len(recent)} replans in 30 s")
                         leg_replans = sum(1 for r in obstacle["replans"] if r["phase"] == phase and not r.get("same_path"))
                         require(leg_replans <= 10, f"obstacle_replan_limit in {phase}: {leg_replans}")
                         obstacle.setdefault("progress", {}).clear()
@@ -4710,21 +4717,6 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             if estop_holding or obstacle_hold:
                 # Zero every wheel target at once, steering held (plan D4).
                 requested_speed = 0.0
-            if obstacle is not None and args.obstacle_act:
-                # A step wheel target locked an odometry wheel (L3c v35/v36 seed 4:
-                # the held pose lost 1.85 and 2.80 cm). Brake at the stopping
-                # model's own deceleration, so its distance still holds, and pull
-                # away at COMMAND_ACCEL_MPS2; the scan-silence stop stays a step.
-                previous = state.get("command_speed", 0.0)
-                target_speed = requested_speed
-                if previous * target_speed < 0:
-                    target_speed = 0.0
-                if estop_holding:
-                    previous = target_speed = 0.0
-                rate = (obstacle["layer"].permission.config.stopping.decel_mps2
-                        if abs(target_speed) < abs(previous) else COMMAND_ACCEL_MPS2) * dt
-                requested_speed = previous + float(np.clip(target_speed - previous, -rate, rate))
-                state["command_speed"] = requested_speed
             drive = ackermann_command(requested_speed, curvature, drive_geometry)
             target_steering = (
                 steering_command.copy() if (estop_holding or obstacle_hold) else np.asarray(drive.steering_rad)
@@ -4732,10 +4724,29 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             actual_steering = robot.get_joint_positions()[steers]
             # Creep while steering catches up; log the measured physical response.
             steering_error = float(np.max(np.abs(target_steering - actual_steering)))
-            if steering_error > 0.05:
-                drive = ackermann_command(
-                    requested_speed * 0.25, curvature, drive_geometry
-                )
+            wheel_speed = requested_speed * 0.25 if steering_error > 0.05 else requested_speed
+            if obstacle is not None and args.obstacle_act:
+                # A step wheel target locked an odometry wheel (L3c v35/v36 seed 4:
+                # the held pose lost 1.85 and 2.80 cm). The final wheel speed is
+                # slewed -- braking at the stopping model's deceleration, pulling
+                # away at COMMAND_ACCEL_MPS2 -- and the permission's own limit (a
+                # sensor falling silent included) and the e-stop probe still cut
+                # it as a step, the stop their distances were measured with
+                # (Codex checkpoint 6 P1).
+                previous = state.get("command_speed", 0.0)
+                target_speed = wheel_speed
+                if previous * target_speed < 0:
+                    target_speed = 0.0
+                rate = (obstacle["layer"].permission.config.stopping.decel_mps2
+                        if abs(target_speed) < abs(previous) else COMMAND_ACCEL_MPS2) * dt
+                wheel_speed = previous + float(np.clip(target_speed - previous, -rate, rate))
+                cap = obstacle.get("permission_cap")
+                if cap is not None and cap[0] == t and abs(wheel_speed) > cap[1]:
+                    wheel_speed = math.copysign(cap[1], wheel_speed)
+                if estop_holding:
+                    wheel_speed = 0.0
+                state["command_speed"] = wheel_speed
+            drive = ackermann_command(wheel_speed, curvature, drive_geometry)
             rate = settings["steering_command_rate_rad_s"] * dt
             steering_command += np.clip(target_steering - steering_command, -rate, rate)
             robot.apply_action(
