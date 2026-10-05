@@ -41,8 +41,9 @@ permission:
   # low_fl before the carriage). 0.05 m covers it. Remove the key to get the
   # strict rule back.
   shadow_band_m: 0.05
-  # The unloaded shape the permission checks: hull (the planner's footprint,
-  # forks included) or parts (body + blades). hull keeps the permission and
-  # the planner consistent (L3b v23).
-  shape: hull
+  # The unloaded shape the permission checks: hull_forward (the planner's
+  # hull driving forward, body + blades reversing), hull, or parts. Forward on
+  # the hull keeps the permission and the planner consistent (L3b v23);
+  # reversing on the parts lets the forks leave a pallet's swelling (L3c v19).
+  shape: hull_forward
 odometry_age: config/obstacle_odometry_age.json

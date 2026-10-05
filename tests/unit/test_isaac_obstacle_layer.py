@@ -103,3 +103,17 @@ def test_the_docking_exemption_frees_only_cells_wholly_inside_the_region():
     assert (snap.state == OCCUPIED).all()  # the input is untouched
     turned = MODULE.exempt_region(snap, (1.0, 1.0, 0.5, 0.3, 0.3))
     assert 0 < (turned.state == FREE).sum() < 60
+
+
+def test_the_permission_checks_the_hull_forward_and_the_blades_in_reverse():
+    blades = ((0.87, 1.29, 0.1175, 0.1725), (0.87, 1.29, -0.1725, -0.1175))
+    lay = MODULE.ObstacleLayer(
+        CONFIG, hall=Bounds(-5, 10, -5, 5), error_table=TABLE,
+        unloaded=Footprint(1.29, 0.17, 0.36), loaded=Footprint(1.53, 0.17, 0.40),
+        body_front_m=0.884, rear_axle_x_in_base_m=-0.34, noise_seed=1, blades_rear_m=blades,
+    )
+    forward, _ = lay.footprints(False, 1)
+    reverse, _ = lay.footprints(False, -1)
+    assert forward == Footprint(1.29, 0.17, 0.36)
+    assert isinstance(reverse, list) and len(reverse) == 3
+    assert lay.footprints(True, -1)[0] == Footprint(1.53, 0.17, 0.40)

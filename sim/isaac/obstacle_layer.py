@@ -135,17 +135,23 @@ class ObstacleLayer:
         # Unloaded, the permission checks the body and the fork blades (rear-axle
         # frame (x0, x1, y0, y1)), not their hull: an object between the blades
         # is met only by the body's front face, which the body part checks (D4).
-        # The planner checks the hull; checking the same hull keeps the truck
-        # out of poses the planner cannot start from (L3b v23: an object
-        # beside a blade, inside the hull, made every replan invalid_start).
-        # permission.shape: parts checks the body and blades instead.
-        use_parts = str(p.get("shape", "hull")) == "parts"
-        self.unloaded_shape = unloaded if not (blades_rear_m and use_parts) else (
+        # The planner checks the hull, and driving forward the permission checks
+        # it too, so the truck never enters a pose the planner cannot start
+        # from (L3b v23: an object beside a blade, inside the hull, made every
+        # replan invalid_start). Reversing, the forks leave the hull's front:
+        # the body and blades are checked instead (L3c v19: after the withdraw
+        # the hull's fork end lay in the delivered pallet's grid swelling and
+        # no reverse could start). permission.shape: hull_forward (default),
+        # hull or parts.
+        mode = str(p.get("shape", "hull_forward"))
+        self.parts_shape = None if not blades_rear_m else (
             [(self.body, 0.0, 0.0)] + [
                 (Footprint((x1 - x0) / 2, (x1 - x0) / 2, (y1 - y0) / 2), (y0 + y1) / 2, (x0 + x1) / 2)
                 for x0, x1, y0, y1 in blades_rear_m
             ]
         )
+        self.shape_mode = mode if self.parts_shape is not None else "hull"
+        self.unloaded_shape = self.parts_shape if self.shape_mode == "parts" else unloaded
         self.rear_x = rear_axle_x_in_base_m
         self.rng = np.random.default_rng([noise_seed, 7])
         self.last_scan_s: dict = {}
@@ -155,9 +161,13 @@ class ObstacleLayer:
         self.exempt = None
         self.depth_support = None  # callable(snapshot, now) -> {cell: certification time}, set with exempt
 
-    def footprints(self, loaded: bool) -> tuple[Footprint, Footprint]:
+    def footprints(self, loaded: bool, direction: int = 0) -> tuple[Footprint, Footprint]:
         """(footprint checked, own outline excluded): a carried pallet is part of the truck."""
-        return (self.loaded, self.loaded) if loaded else (self.unloaded_shape, self.body)
+        if loaded:
+            return self.loaded, self.loaded
+        if self.shape_mode == "hull_forward" and direction < 0:
+            return self.parts_shape, self.body
+        return self.unloaded_shape, self.body
 
     def ranges(self, distances, hits) -> np.ndarray:
         """REP-117 ranges with the truncated noise contract."""
@@ -200,7 +210,7 @@ class ObstacleLayer:
             self.snapshot = self.grid.snapshot(now_s, correction, version)
         finally:
             self.grid.config = self.grid_config
-        footprint, own = self.footprints(loaded)
+        footprint, own = self.footprints(loaded, direction)
         # The shadow-band memory may lean on cells the depth pocket check saw
         # free (observation, with its time), never on the exemption itself
         # (Codex checkpoint P1: exempt cells as fresh FREE spread RETAINED past
@@ -215,7 +225,7 @@ class ObstacleLayer:
                                       direction=direction)
 
     def limit(self, now_s: float, *, current_pose, curvature_inv_m: float, direction: int, loaded: bool, cap_mps: float):
-        footprint, own = self.footprints(loaded)
+        footprint, own = self.footprints(loaded, direction)
         return self.permission.allowed_speed(
             now_s, self.last_scan_s, current_pose=current_pose, curvature_inv_m=curvature_inv_m,
             direction=direction, footprint=footprint, own_footprint=own, speed_cap_mps=cap_mps,
