@@ -1479,8 +1479,28 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         occupancy = obstacle["layer"].planner_grid(stamp, obstacle["applied"] or (0.0, 0.0, 0.0), obstacle["version"])
         obstacle["plans"].append({"kind": kind, "stamp_s": stamp, "occupied_cells": int(occupancy.occupied.sum())})
         out = {"occupancy": occupancy}
-        if obstacle.get("deadline") is not None and kind in ("observe", None, "mission"):
+        if obstacle.get("deadline") is not None and kind in ("observe", None, "mission", "return"):
             out["deadline"] = obstacle["deadline"]
+        if kind == "return" and target is not None:
+            # After the drop (plan D5): the delivered pallet is an outside
+            # obstacle by its docked rectangle, which the return plan carries;
+            # its grid swelling around the forks just withdrawn from it is
+            # cleared for the plan (L3c v15: invalid_start 0.19 m from its face).
+            # The permission still checks the full grid every tick.
+            res_r = occupancy.resolution_m
+            nx_r, ny_r = occupancy.occupied.shape
+            gi_r, gj_r = np.meshgrid(np.arange(nx_r), np.arange(ny_r), indexing="ij")
+            dx_r = occupancy.origin_x_m + (gi_r + 0.5) * res_r - target.x_m
+            dy_r = occupancy.origin_y_m + (gj_r + 0.5) * res_r - target.y_m
+            c_r, s_r = math.cos(target.yaw_rad), math.sin(target.yaw_rad)
+            band_r = (np.abs(dx_r * c_r + dy_r * s_r) <= geometry.pallet_depth_m / 2 + 0.425) & (
+                np.abs(-dx_r * s_r + dy_r * c_r) <= geometry.pallet_width_m / 2 + 0.20
+            )
+            from forklift_core.planning.grid_collision import OccupancyGrid as _OccR
+
+            out["occupancy"] = _OccR(occupancy.origin_x_m, occupancy.origin_y_m, res_r, occupancy.occupied & ~band_r,
+                                     version=occupancy.version)
+            return out
         if kind == "observe":
             # Before recognition the pallet is somewhere in the pickup zone; once
             # it has been recognised (the near-capture leg is still 'observe'),
@@ -4418,12 +4438,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 else:
                     sc_ = scenario if slam is None else slam.get("return_scenario", slam.get("transport_scenario", scenario))
                     live = plan_return_leg(grid_world(sc_), start, return_to_pose, planner_config, geometry=geometry,
-                                           travel_config=travel_config, **grid_kwargs(None))
+                                           travel_config=travel_config, **grid_kwargs("return", sc_.destination))
                     if live.status == "invalid_start":
                         live = plan_return_leg(grid_world(sc_), start, return_to_pose, replace(planner_config, clearance_m=0.0),
                                                geometry=geometry,
                                                travel_config=replace(travel_config, clearance_m=0.0) if travel_config is not None else None,
-                                               **grid_kwargs(None))
+                                               **grid_kwargs("return", sc_.destination))
                 obstacle["deadline"] = None
                 obstacle.setdefault("live_plans", []).append({"phase": phase, "time_s": t, "status": live.status})
                 require(live.success, f"obstacle_live_plan_failed in {phase}: {live.status}")
