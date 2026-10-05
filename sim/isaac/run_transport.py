@@ -1167,6 +1167,30 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             perception_calibration.width / perception_calibration.fx,
             maintain_square_pixels=True,
         )
+        if args.pocket_check:
+            # The D5 depth check's own camera: same mount and intrinsics, but the
+            # near clipping plane at the D435i's minimum depth (0.28 m, datasheet,
+            # its highest resolution -- the conservative figure) instead of the
+            # 1.0 m default the recogniser was validated with. At 1.0 m the floor
+            # before the face came back empty and never certified (L3c v31 seed 2:
+            # raw depth min 1.000001 m, the lower third of the image inf).
+            pocket_camera = Camera(
+                prim_path=mount_parent + "/PocketDepthCamera",
+                frequency=-1,
+                resolution=(perception_calibration.width, perception_calibration.height),
+            )
+            pocket_camera.set_local_pose(
+                translation=np.asarray(perception_mount.translation_m),
+                orientation=np.asarray(adapter.xyzw_to_wxyz(mount_xyzw)),
+                camera_axes=args.perception_camera_axes,
+            )
+            pocket_camera.set_projection_mode("perspective")
+            pocket_camera.set_lens_distortion_model("pinhole")
+            pocket_camera.set_focal_length(1.0)
+            pocket_camera.set_horizontal_aperture(
+                perception_calibration.width / perception_calibration.fx,
+                maintain_square_pixels=True,
+            )
     world.reset()
 
     def body_velocities() -> dict:
@@ -1194,6 +1218,21 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         verify_camera_intrinsics(perception_camera, perception_calibration, state)
         # Capture needs axial depth as well as RGBA (see determinism_probe.py).
         perception_camera.add_distance_to_image_plane_to_frame()
+        if args.pocket_check:
+            pocket_camera.initialize()
+            pocket_camera.add_distance_to_image_plane_to_frame()
+            _, pocket_far_m = pocket_camera.get_clipping_range()
+            pocket_camera.set_clipping_range(near_distance=0.28, far_distance=pocket_far_m)
+            k_pocket = adapter.read_isaac_intrinsics(pocket_camera).integer_index
+            k_percep = adapter.read_isaac_intrinsics(perception_camera).integer_index
+            require(
+                all(abs(getattr(k_pocket, n) - getattr(k_percep, n)) <= 1e-6 for n in ("fx", "fy", "cx", "cy", "width", "height")),
+                "pocket camera intrinsics differ from the perception camera's",
+            )
+            state["pocket_camera"] = {
+                "clipping_range_m": list(map(float, pocket_camera.get_clipping_range())),
+                "intrinsics": asdict(k_pocket),
+            }
         if "perception" in args.extra_views:
             perception_display = Camera(
                 prim_path=mount_parent + "/PerceptionDisplayCamera",
@@ -1394,10 +1433,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         """One 10 Hz carriage depth frame for the pocket check, placed at the
         control pose of its rendering time (frames lag the step)."""
         check = pocket["check"]
-        raw = perception_camera.get_depth()
+        raw = pocket_camera.get_depth()
         if raw is None:
             return
-        frame = perception_camera.get_current_frame()
+        frame = pocket_camera.get_current_frame()
         rendered = frame.get("rendering_time") if isinstance(frame, dict) else None
         if not rendered or not math.isfinite(float(rendered)):
             pocket["frames_without_time"] = pocket.get("frames_without_time", 0) + 1
