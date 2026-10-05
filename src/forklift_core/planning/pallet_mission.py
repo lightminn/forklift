@@ -892,6 +892,11 @@ def plan_transport(
     if not approach_tail.success:
         return MissionPlan(False, f"approach:{approach_tail.status}")
     approach = _append_straight(approach, approach_tail)
+    # On a grid (priority-5 D3) the marks are already swollen by the placement
+    # error, so the docking straights keep the approach's clearance instead of
+    # adding the full one on top (L3c seed 4: a prop 0.5 m beside the insert
+    # line failed only at 0.10 m). Without a grid, as before.
+    docking_clearance = approach_config.clearance_m if occupancy is not None else config.clearance_m
     insert = note(
         "insert",
         _straight_plan(
@@ -901,7 +906,7 @@ def plan_transport(
             props,
             geometry.unloaded_footprint,
             near_bounds,
-            config.clearance_m,
+            docking_clearance,
             docking_occupancy if docking_occupancy is not None else occupancy,
         ),
     )
@@ -916,7 +921,7 @@ def plan_transport(
             props,
             geometry.loaded_footprint,
             near_bounds,
-            config.clearance_m,
+            docking_clearance,
             docking_occupancy if docking_occupancy is not None else occupancy,
         ),
     )
