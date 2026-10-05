@@ -688,3 +688,11 @@ def test_a_failed_live_plan_stands_and_retries():
     block = source[i : source.index("waiting to retry the live plan: stand", i)]
     assert "tries < 5" in block and 'obstacle["live_retry_after_s"] = t + 1.0' in block
     assert 'and t >= obstacle.get("live_retry_after_s", 0.0)' in source
+
+
+def test_a_failed_blocked_replan_stands_and_retries():
+    source = SCRIPT.read_text()
+    i = source.index("# Standing, the grid keeps updating: a failed replan is")
+    block = source[i : source.index("elif same_path(replanned", i)]
+    assert "failures < 5" in block and "requested_speed = 0.0" in block
+    assert 'if replanned.status in ("invalid_start", "no_path"):' in source

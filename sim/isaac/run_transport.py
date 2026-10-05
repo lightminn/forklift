@@ -4446,7 +4446,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             grid_world(back), start, return_to_pose, planner_config, geometry=geometry,
                             travel_config=travel_config, **grid_kwargs("return", back.destination),
                         )
-                    if replanned.status == "invalid_start":
+                    if replanned.status in ("invalid_start", "no_path"):
                         # The truck stopped closer to the obstacle than the planning
                         # clearance (the stop guards the volume ahead, not the
                         # sides): replan once with no clearance. The grid's swelling
@@ -4573,8 +4573,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             "planning_wall_s": time.monotonic() - replan_start,
                         }
                     )
-                    require(replanned.success, f"obstacle_replan_failed in {phase}: {replanned.status}")
-                    if same_path(replanned, paths[phase], trackers[phase].remaining_to_goal_m()):
+                    if not replanned.success:
+                        # Standing, the grid keeps updating: a failed replan is
+                        # retried when the blocked count comes round again (1 s),
+                        # five failures per leg at most; the no-progress watch
+                        # bounds the wait too (L3c v45 seed 5: no_path on the way
+                        # home after the delivery).
+                        obstacle["replans"][-1]["failed"] = True
+                        failures = sum(1 for r in obstacle["replans"] if r["phase"] == phase and r.get("failed"))
+                        require(failures < 5, f"obstacle_replan_failed in {phase}: {replanned.status}")
+                        requested_speed = 0.0
+                    elif same_path(replanned, paths[phase], trackers[phase].remaining_to_goal_m()):
                         # D4: the same path again is a wait, not a retry -- it
                         # neither restarts the tracker nor the no-progress watch
                         # and does not count against the retry limits (Codex P2).
@@ -4588,9 +4597,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         # Checked once the path is known to differ: a same-path wait
                         # never counts (Codex checkpoint 6 P2).
                         recent = [r for r in obstacle["replans"]
-                                  if r["phase"] == phase and t - r["time_s"] < 30.0 and not r.get("same_path")]
+                                  if r["phase"] == phase and t - r["time_s"] < 30.0
+                                  and not r.get("same_path") and not r.get("failed")]
                         require(len(recent) <= 3, f"obstacle_blocked in {phase}: {len(recent)} replans in 30 s")
-                        leg_replans = sum(1 for r in obstacle["replans"] if r["phase"] == phase and not r.get("same_path"))
+                        leg_replans = sum(1 for r in obstacle["replans"] if r["phase"] == phase and not r.get("same_path") and not r.get("failed"))
                         require(leg_replans <= 10, f"obstacle_replan_limit in {phase}: {leg_replans}")
                         obstacle.setdefault("progress", {}).clear()
                         paths[phase] = replanned
