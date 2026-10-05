@@ -49,13 +49,16 @@ class Box:
 class InsertionVolume:
     boxes: list  # Box parts of V (axis aligned, yaw 0)
     voxel_m: float = 0.01
+    halo_m: float = 0.0  # evaluated around V (x, y) so a moving frame's certification can be eroded
     lo: np.ndarray = field(init=False)
     shape: tuple = field(init=False)
     in_v: np.ndarray = field(init=False)
+    in_eval: np.ndarray = field(init=False)
 
     def __post_init__(self) -> None:
-        mins = np.min([np.subtract(b.center, b.half) for b in self.boxes], axis=0)
-        maxs = np.max([np.add(b.center, b.half) for b in self.boxes], axis=0)
+        h = np.array([self.halo_m, self.halo_m, 0.0])
+        mins = np.min([np.subtract(b.center, b.half) for b in self.boxes], axis=0) - h
+        maxs = np.max([np.add(b.center, b.half) for b in self.boxes], axis=0) + h
         v = self.voxel_m
         self.lo = np.floor(mins / v) * v
         self.shape = tuple(int(n) for n in np.ceil((maxs - self.lo) / v - 1e-9))
@@ -67,11 +70,26 @@ class InsertionVolume:
             i0 = np.floor((np.subtract(b.center, b.half) - self.lo) / v + 1e-9).astype(int)
             i1 = np.ceil((np.add(b.center, b.half) - self.lo) / v - 1e-9).astype(int)
             self.in_v[i0[0]:i1[0], i0[1]:i1[1], i0[2]:i1[2]] = True
+        k = int(np.ceil(self.halo_m / v - 1e-9))
+        self.in_eval = _box_filter(self.in_v, k, np.max) if k > 0 else self.in_v.copy()
 
-    def centres(self) -> tuple[np.ndarray, np.ndarray]:
-        """(indices (N, 3), centres (N, 3)) of the voxels of V."""
-        idx = np.argwhere(self.in_v)
+    def centres(self, *, evaluated: bool = False) -> tuple[np.ndarray, np.ndarray]:
+        """(indices (N, 3), centres (N, 3)) of the voxels of V (or V and its halo)."""
+        idx = np.argwhere(self.in_eval if evaluated else self.in_v)
         return idx, self.lo + (idx + 0.5) * self.voxel_m
+
+
+def _box_filter(mask: np.ndarray, k: int, op) -> np.ndarray:
+    """max (dilation) or min (erosion) of a boolean grid over a (2k+1)^2 square in x, y."""
+    out = mask.copy()
+    for axis in (0, 1):
+        n = out.shape[axis]
+        pad = [(0, 0)] * out.ndim
+        pad[axis] = (k, k)
+        padded = np.pad(out, pad, constant_values=False)  # outside the grid: neither free nor marked
+        stack = [np.take(padded, range(i, i + n), axis=axis) for i in range(2 * k + 1)]
+        out = np.logical_and.reduce(stack) if op is np.min else np.logical_or.reduce(stack)
+    return out
 
 
 def overlapping_voxels(volume: InsertionVolume, box: Box) -> tuple[np.ndarray, bool]:
@@ -136,7 +154,8 @@ class ClearanceMemory:
         to the camera's optical frame at the frame's measurement time.
         """
         rot, trans = (np.asarray(a, dtype=float) for a in optical_from_insertion)
-        idx, centres = self.volume.centres()
+        idx, centres = self.volume.centres(evaluated=True)
+        in_v = self.volume.in_v[idx[:, 0], idx[:, 1], idx[:, 2]]
         pts = centres @ rot.T + trans
         z = pts[:, 2]
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -153,7 +172,7 @@ class ClearanceMemory:
         # and that much more distance from a surface before a return is foreign.
         margin = camera.margin_m(z) + pose_uncertainty_m
         free = valid & (measured > z + margin)
-        front = valid & (measured < z - margin)
+        front = valid & (measured < z - margin) & in_v
         obstacle_count = 0
         if front.any():
             # The return lies on the pixel's own ray, not on the voxel's: at a
@@ -174,10 +193,20 @@ class ClearanceMemory:
             if obstacle_count:
                 self.obstacle = True
                 self.obstacle_points.append({"time_s": float(stamp_s), "points": ret[~pallet][:20].tolist()})
-        sel = idx[free]
-        self.certified_s[sel[:, 0], sel[:, 1], sel[:, 2]] = float(stamp_s)
-        record = {"time_s": float(stamp_s), "voxels": int(len(idx)), "free": int(free.sum()),
-                  "in_view": int(inside.sum()), "obstacle": obstacle_count}
+        # A moving frame's rays may sit up to the pose uncertainty beside where
+        # they are placed, and an old ray beside an object passes it: a voxel
+        # is certified only when every voxel within that distance (x, y) was
+        # passed too (Codex checkpoint P1) -- the halo around V lets V's own
+        # edge be judged.
+        free_grid = np.zeros(self.volume.shape, dtype=bool)
+        free_grid[idx[free, 0], idx[free, 1], idx[free, 2]] = True
+        k = int(np.ceil(pose_uncertainty_m / self.volume.voxel_m - 1e-9))
+        if k > 0:
+            free_grid = _box_filter(free_grid, k, np.min)
+        certified = free_grid & self.volume.in_v
+        self.certified_s[certified] = float(stamp_s)
+        record = {"time_s": float(stamp_s), "voxels": int(in_v.sum()), "free": int(certified.sum()),
+                  "in_view": int((inside & in_v).sum()), "obstacle": obstacle_count, "erosion_voxels": k}
         self.frames.append(record)
         return record
 

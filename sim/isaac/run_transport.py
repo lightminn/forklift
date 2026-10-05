@@ -1379,6 +1379,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         state["pocket_check"] = {"built_s": now_s, "axis_yaw_rad": axis_yaw, "first_frame": first}
         require(check.valid, f"pocket_check_refused:{check.invalid_reason}")
         obstacle["layer"].exempt = check.region_control()
+        obstacle["layer"].depth_support = check.depth_free_cells
 
     def read_pocket_frame() -> None:
         """One 10 Hz carriage depth frame for the pocket check, placed at the
@@ -2002,6 +2003,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             # The insertion is over: the depth check stops answering and the
             # pallet region is no longer waived in the grid.
             obstacle["layer"].exempt = None
+            obstacle["layer"].depth_support = None
             state.setdefault("pocket_check", {}).update(pocket["check"].summary(), frames_read=pocket["frames_read"])
             pocket["check"] = None
         phase, phase_started = next_phase, t
@@ -4187,6 +4189,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     # One shared 20 s budget for the whole replan (plan D3):
                     # retries and other candidates included.
                     obstacle["deadline"] = time.monotonic() + 20.0
+                    if phase == "observe" and obstacle.get("pickup_estimate") is not None:
+                        # After recognition half the shared budget goes to this leg,
+                        # the rest to the mission replan below if it fails
+                        # (Codex checkpoint P2: one 20 s budget for the whole replan).
+                        obstacle["deadline"] = replan_start + 10.0
                     if phase == "observe":
                         target = PlanningPose(*(float(v) for v in paths["observe"].poses[-1]))
                         replanned = plan_observation_leg(
@@ -4284,8 +4291,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         # only at zero clearance, no path in 120 000 expansions).
                         # The pallet, not the waypoint, is the goal: plan the
                         # mission again from here, and its final straight gives the
-                        # new waypoint. Its own 20 s budget.
-                        obstacle["deadline"] = time.monotonic() + 20.0
+                        # new waypoint. The rest of the shared budget.
+                        obstacle["deadline"] = replan_start + 20.0
                         planning_trace = []
                         mission_again = plan_transport(
                             grid_world(scenario), planner_config, geometry=geometry,

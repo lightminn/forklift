@@ -153,6 +153,7 @@ class ObstacleLayer:
         # Docking exemption (plan D5): (x, y, length, width, yaw) in the control
         # frame; set only while the depth pocket check gates every tick.
         self.exempt = None
+        self.depth_support = None  # callable(snapshot, now) -> {cell: certification time}, set with exempt
 
     def footprints(self, loaded: bool) -> tuple[Footprint, Footprint]:
         """(footprint checked, own outline excluded): a carried pallet is part of the truck."""
@@ -200,14 +201,16 @@ class ObstacleLayer:
         finally:
             self.grid.config = self.grid_config
         footprint, own = self.footprints(loaded)
-        # The docking exemption first: the depth check answers for its cells
-        # every tick, so the shadow-band memory may lean on them -- the face
-        # cells straddling the region's edge were left UNKNOWN when it could
-        # not (L3c v8, insertion start).
+        # The shadow-band memory may lean on cells the depth pocket check saw
+        # free (observation, with its time), never on the exemption itself
+        # (Codex checkpoint P1: exempt cells as fresh FREE spread RETAINED past
+        # the region). The face cells straddling the region's edge need that
+        # evidence (L3c v8, insertion start).
+        if self.shadow is not None:
+            support = self.depth_support(self.snapshot, now_s) if self.depth_support is not None else None
+            self.snapshot = self.shadow.apply(self.snapshot, current_pose, own, extra_support=support)
         if self.exempt is not None:
             self.snapshot = exempt_region(self.snapshot, self.exempt)
-        if self.shadow is not None:
-            self.snapshot = self.shadow.apply(self.snapshot, current_pose, own)
         return self.permission.update(self.snapshot, path_ahead, footprint, own, current_pose=current_pose,
                                       direction=direction)
 

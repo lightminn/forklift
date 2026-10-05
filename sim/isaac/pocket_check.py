@@ -45,7 +45,8 @@ class PocketConfig:
     band_across_m: float = 0.20
     real_stop_extra_m: float = 0.02  # columns reach insertion depth + the real stop
     frame_max_age_s: float = 0.2
-    frame_lag_s: float = 0.1  # pixels may be this much older than their reported time (one render period)
+    frame_lag_s: float = 0.07  # pixels may be this much older than their reported time (render latency 0.0667 s)
+    halo_m: float = 0.06  # V is evaluated this far around itself, so a moving frame can still certify V's edge
     envelope_m: float = 0.01
     sample_m: float = 0.01
     body_slack_m: float = 0.05  # the body band is this much wider again: nothing to meet in front of the face, and
@@ -99,10 +100,13 @@ class PocketCheck:
             parts.append(Box(((x_start + x_end) / 2, yc, sum(FORK_Z_M) / 2),
                              ((x_end - x_start) / 2, hw + lat, (FORK_Z_M[1] - FORK_Z_M[0]) / 2)))
         body_x0 = self.face_x - cfg.band_along_m
+        self.body_band = Box(((body_x0 + self.face_x) / 2, 0.0, (BODY_FLOOR_M + H_DET_M) / 2),
+                             ((self.face_x - body_x0) / 2, self.body_half_width_m + lat + cfg.body_slack_m,
+                              (H_DET_M - BODY_FLOOR_M) / 2))
         parts.append(Box(((body_x0 + self.face_x) / 2, 0.0, (BODY_FLOOR_M + H_DET_M) / 2),
                          ((self.face_x - body_x0) / 2, self.body_half_width_m + lat + cfg.body_slack_m,
                           (H_DET_M - BODY_FLOOR_M) / 2)))
-        self.memory = ClearanceMemory(InsertionVolume(parts), cfg.lifetime_s)
+        self.memory = ClearanceMemory(InsertionVolume(parts, halo_m=cfg.halo_m), cfg.lifetime_s)
         # Known surfaces a return may lie on: the estimated pallet and the floor.
         self.surfaces = self.solids + [Box((0.0, 0.0, -0.5), (50.0, 50.0, 0.5))]
         self.conflict = self.memory.solid_conflict(self.solids)
@@ -200,7 +204,9 @@ class PocketCheck:
             return 0.0, f"pocket_invalid:{self.invalid_reason}"
         if self.memory.obstacle:
             return 0.0, "pocket_obstacle"
-        if now_s - self.last_new_s > self.config.frame_max_age_s:
+        # The newest frame's pixels may be frame_lag_s older than its stamp
+        # (Codex checkpoint P1): the age limit holds for the pixels.
+        if now_s - (self.last_new_s - self.config.frame_lag_s) > self.config.frame_max_age_s:
             return 0.0, "depth_stale"
         length = self.real_stop.distance_m(abs(speed_mps)) + self.config.sample_m
         samples, arc = arc_poses(tuple(rear), curvature_inv_m, 1 if direction >= 0 else -1, length,
@@ -215,6 +221,48 @@ class PocketCheck:
             return math.inf, "ok"
         allowed = self.real_stop.speed_for(verified)
         return allowed, "ok" if allowed > 0 else "pocket_unverified"
+
+    def depth_free_cells(self, snapshot, now_s: float) -> dict:
+        """Grid cells (snapshot indices) whose whole square lies over the body
+        band and whose every body-band voxel column was certified within the
+        lifetime: {cell: oldest certification time}. Evidence for the
+        shadow-band memory around the face (it never waives a cell itself)."""
+        if not self.valid or self.memory.obstacle:
+            return {}
+        vol = self.memory.volume
+        v = vol.voxel_m
+        res = snapshot.resolution_m
+        body = self.body_band
+        x0b, x1b = body.center[0] - body.half[0], body.center[0] + body.half[0]
+        y0b, y1b = body.center[1] - body.half[1], body.center[1] + body.half[1]
+        k0 = int(np.floor((body.center[2] - body.half[2] - vol.lo[2]) / v + 1e-9))
+        k1 = int(np.ceil((body.center[2] + body.half[2] - vol.lo[2]) / v - 1e-9))
+        c, s = math.cos(self.axis_yaw), math.sin(self.axis_yaw)
+        # Control-frame bounding box of the band, then each cell's corners in I.
+        corners = [(self.estimate[0] + x * c - y * s, self.estimate[1] + x * s + y * c)
+                   for x in (x0b, x1b) for y in (y0b, y1b)]
+        xs, ys = [p[0] for p in corners], [p[1] for p in corners]
+        i0 = max(int(np.floor((min(xs) - snapshot.origin_x_m) / res)), 0)
+        i1 = min(int(np.ceil((max(xs) - snapshot.origin_x_m) / res)), snapshot.state.shape[0])
+        j0 = max(int(np.floor((min(ys) - snapshot.origin_y_m) / res)), 0)
+        j1 = min(int(np.ceil((max(ys) - snapshot.origin_y_m) / res)), snapshot.state.shape[1])
+        out = {}
+        for i in range(i0, i1):
+            for j in range(j0, j1):
+                pts = [self.to_insertion(snapshot.origin_x_m + (i + a) * res, snapshot.origin_y_m + (j + b) * res, 0.0)[:2]
+                       for a in (0, 1) for b in (0, 1)]
+                px, py = [p[0] for p in pts], [p[1] for p in pts]
+                if min(px) < x0b or max(px) > x1b or min(py) < y0b or max(py) > y1b:
+                    continue
+                vi0 = int(np.floor((min(px) - vol.lo[0]) / v + 1e-9))
+                vi1 = int(np.ceil((max(px) - vol.lo[0]) / v - 1e-9))
+                vj0 = int(np.floor((min(py) - vol.lo[1]) / v + 1e-9))
+                vj1 = int(np.ceil((max(py) - vol.lo[1]) / v - 1e-9))
+                block = self.memory.certified_s[vi0:vi1, vj0:vj1, k0:k1]
+                inv = vol.in_v[vi0:vi1, vj0:vj1, k0:k1]
+                if block.size and inv.all() and (now_s - block <= self.config.lifetime_s).all():
+                    out[(i, j)] = float(block.min())
+        return out
 
     def region_control(self):
         """The exemption region as (centre x, centre y, length, width, yaw) in the control frame."""

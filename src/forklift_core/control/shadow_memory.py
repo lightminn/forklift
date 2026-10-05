@@ -105,7 +105,8 @@ class ShadowMemory:
         self.memory = moved
         self.stats["moves"] += 1
 
-    def apply(self, snapshot: GridSnapshot, own_pose, own_footprint: Footprint) -> GridSnapshot:
+    def apply(self, snapshot: GridSnapshot, own_pose, own_footprint: Footprint,
+              extra_support: dict | None = None) -> GridSnapshot:
         """The snapshot with the band's supported remembered cells set to RETAINED.
 
         A RETAINED cell carries, as its FREE stamp, the oldest fresh FREE
@@ -173,7 +174,18 @@ class ShadowMemory:
             e, psi = bound
             cand[(a, b)] = e + 2 * rho * sin(psi / 2) + res / 2
         # Greatest supported subset: drop unsupported candidates until none is left to drop.
+        # extra_support: cells observed free by another sensor (the depth pocket
+        # check), with that observation's time -- evidence, never an exemption.
         fresh = state == FREE
+        stamps_fresh = snapshot.free_stamp
+        if extra_support:
+            fresh = fresh.copy()
+            stamps_fresh = stamps_fresh.copy()
+            for (a, b), t_cert in extra_support.items():
+                if 0 <= a < nx and 0 <= b < ny and state[a, b] != OCCUPIED:
+                    fresh[a, b] = True
+                    if not np.isfinite(stamps_fresh[a, b]) or t_cert < stamps_fresh[a, b]:
+                        stamps_fresh[a, b] = t_cert
         changed = True
         while changed and cand:
             changed = False
@@ -187,7 +199,7 @@ class ShadowMemory:
         stamp = {}
         for (a, b), r in cand.items():
             fresh_n, _ = self._support(a, b, r, res, fresh, whole, cand, nx, ny)
-            stamp[(a, b)] = min((float(snapshot.free_stamp[p, q]) for p, q in fresh_n), default=np.inf)
+            stamp[(a, b)] = min((float(stamps_fresh[p, q]) for p, q in fresh_n), default=np.inf)
         changed = True
         while changed:
             changed = False

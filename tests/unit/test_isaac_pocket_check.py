@@ -195,3 +195,34 @@ def test_with_lagged_frames_a_bar_in_a_pocket_still_stops_the_truck_before_the_b
         t += 0.1
         assert t < 60.0
     assert x + 1.29 < FACE + 0.19  # stopped with the blade tip short of the bar
+
+
+def test_a_lagged_frame_does_not_certify_an_object_its_old_rays_passed_beside():
+    # Codex checkpoint P1: 5 cm of lag, a 2 cm bar; the depth threshold alone
+    # let the bar's voxels through.
+    check = make()
+    bar = Box((FACE - 0.20, 0.30, 0.05), (0.01, 0.01, 0.05))  # in the body band
+    x = FACE - 1.2 - 0.884
+    lag = 0.05
+    check.add_frame(0.0, render(check, (x - lag, 0.0, 0.0), [bar]), (x, 0.0, 0.0), speed_mps=lag / check.config.frame_lag_s)
+    vol = check.memory.volume
+    i = int((FACE - 0.20 - vol.lo[0]) / vol.voxel_m)
+    j = int((0.30 - vol.lo[1]) / vol.voxel_m)
+    k = int((0.05 - vol.lo[2]) / vol.voxel_m)
+    assert not np.isfinite(check.memory.certified_s[i - 1:i + 2, j - 1:j + 2, k]).any() or \
+        check.memory.certified_s[i - 1:i + 2, j - 1:j + 2, k].max() < 0.0
+
+
+def test_depth_certified_body_band_cells_are_offered_as_memory_evidence():
+    from forklift_core.perception.obstacle_grid import FREE, GridSnapshot
+
+    check = make()
+    for k, x in enumerate((START, FACE - 1.5 - 0.884, FACE - 1.0 - 0.884, FACE - 0.7 - 0.884)):
+        check.add_frame(0.1 * k, render(check, (x, 0.0, 0.0)), (x, 0.0, 0.0))
+    snap = GridSnapshot(np.full((60, 40), FREE, dtype=np.uint8), np.zeros((60, 40)), 0.4, (0.0, 0.0, 0.0), 0, 1,
+                        {}, -2.0, -1.0, 0.05)
+    cells = check.depth_free_cells(snap, 0.4)
+    assert cells
+    for (i, j) in cells:
+        x = -2.0 + (i + 0.5) * 0.05
+        assert FACE - 0.425 <= x <= FACE  # only over the body band
