@@ -2375,9 +2375,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         docking["previous_goal"] = list(goal)
         if round_number == 1 and result.accepted:
             # Second round: loaded wheels slip (~5 % over the 1.5 m straight,
-            # S2 v3.8c seed 3: 8 cm short), so stop again 0.4 m out and match
-            # once more; the last 0.4 m then carries only that slip.
-            final_keep = 0.4
+            # S2 v3.8c seed 3: 8 cm short), so stop again 0.6 m out and match
+            # once more; the last 0.6 m then carries only that slip (~3 cm).
+            # 0.4 m left the tracker too little straight to settle its yaw: a
+            # 1.1 cm / 6 mrad start failed the 0.015 rad dry-run margin (L3c v15
+            # seed 3: 0.016); 0.6 m settles it to 0.0045 (offline dry run, Codex).
+            final_keep = 0.6
             prefix = final_straight_prefix(path, final_keep)
             if prefix is not None:
                 docking.update(status="armed", round=2, keep_m=final_keep)
