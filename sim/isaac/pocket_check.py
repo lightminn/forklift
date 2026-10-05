@@ -214,7 +214,10 @@ class PocketCheck:
         verified = 0.0
         for pose, s in zip(samples, arc):
             pose_i = self.to_insertion(*pose)
-            if not all(self.memory.contained(b, now_s, self.region) for b in self.truck_boxes(pose_i, lift_m)):
+            boxes = self.truck_boxes(pose_i, lift_m)
+            failing = [k for k, b in enumerate(boxes) if not self.memory.contained(b, now_s, self.region)]
+            if failing:
+                self.last_fail = self._explain(boxes[failing[0]], failing[0], now_s, float(s), pose_i)
                 break
             verified = float(s)
         else:
@@ -276,6 +279,30 @@ class PocketCheck:
         return (self.estimate[0] + cx * c - cy * s, self.estimate[1] + cx * s + cy * c, x1 - x0, y1 - y0,
                 self.axis_yaw)
 
+    def _explain(self, box, index, now_s, s, pose_i) -> dict:
+        """Why a box is not contained: its overlapped voxels outside V, never or long ago certified."""
+        from forklift_core.perception.insertion_clearance import overlapping_voxels
+
+        vol = self.memory.volume
+        idx, leaves = overlapping_voxels(vol, box)
+        x0, x1, y0, y1 = self.region
+        v = vol.voxel_m
+        vx0 = vol.lo[0] + idx[:, 0] * v
+        vy0 = vol.lo[1] + idx[:, 1] * v
+        idx = idx[(vx0 + v > x0) & (vx0 < x1) & (vy0 + v > y0) & (vy0 < y1)]
+        in_v = vol.in_v[idx[:, 0], idx[:, 1], idx[:, 2]]
+        age = now_s - self.memory.certified_s[idx[:, 0], idx[:, 1], idx[:, 2]]
+        bad = idx[~in_v | (age > self.config.lifetime_s)]
+        centres = vol.lo + (bad + 0.5) * v
+        return {
+            "box": ["body", "blade_left", "blade_right"][index] if index < 3 else str(index),
+            "arc_s": s, "pose_insertion": [round(float(c), 4) for c in pose_i], "leaves": bool(leaves),
+            "voxels": int(len(idx)), "outside_v": int((~in_v).sum()),
+            "never_certified": int((~np.isfinite(age) | (age > 1e9)).sum()),
+            "expired": int((np.isfinite(age) & (age > self.config.lifetime_s) & (age < 1e9)).sum()),
+            "examples_insertion": np.round(centres[:12], 3).tolist(),
+        }
+
     def _to_insertion_points(self, entry) -> list:
         rec = next((r for r in self.records if r.get("time_s") == entry["time_s"] and "rear" in r), None)
         if rec is None:
@@ -295,6 +322,7 @@ class PocketCheck:
             "obstacle_points_insertion_frame": [
                 {"time_s": e["time_s"], "points": self._to_insertion_points(e)} for e in self.memory.obstacle_points[:5]
             ],
+            "last_fail": getattr(self, "last_fail", None),
             "frames": len(self.records),
             "new_frames": len(new),
             "first_frame": new[0] if new else None,
