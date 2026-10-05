@@ -1426,6 +1426,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         if pocket.get("await_still_frame") and record.get("new") and speed_now < 0.01:
             pocket["await_still_frame"] = False
             pocket["still_frame_s"] = stamp
+            # Diagnostics: the standing frames as the check saw them.
+            k_still = pocket.setdefault("still_frames", 0) + 1
+            pocket["still_frames"] = k_still
+            np.savez_compressed(
+                args.output / f"pocket_still_{k_still}.npz",
+                depth=np.asarray(depth, dtype=np.float32), raw=np.asarray(raw, dtype=np.float32), stamp=stamp,
+                rear=np.asarray(rear_at, dtype=float), estimate=np.asarray(check.estimate, dtype=float),
+                axis_yaw=check.axis_yaw,
+            )
         pocket["frames_read"] += 1
     if args.new_obstacles is not None:
         new_module = load_perception_module(
