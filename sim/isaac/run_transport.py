@@ -24,6 +24,28 @@ EXIT_CLEARANCE_M = 0.08
 
 # Braking into the mid-approach standing frame (a planned stop).
 MID_STILL_DECEL_MPS2 = 0.8
+# Pull-away limit for the wheel target with the obstacle layer acting.
+COMMAND_ACCEL_MPS2 = 0.8
+
+
+def same_path(new, current, remaining_m: float, tol_m: float = 0.05, yaw_tol_rad: float = 0.1) -> bool:
+    """True when a replan returns the path the truck is already on: every new
+    pose lies within tol_m (and yaw_tol_rad) of the current path's remaining
+    part and the lengths agree within 2 tol_m (plan D4: that is a wait)."""
+    a = np.asarray(new.poses, dtype=float)
+    b = np.asarray(current.poses, dtype=float)
+    if len(a) < 2 or len(b) < 2:
+        return False
+    seg = np.hypot(*np.diff(b[:, :2], axis=0).T)
+    from_end = np.concatenate((np.cumsum(seg[::-1])[::-1], [0.0]))
+    b = b[from_end <= remaining_m + 2 * tol_m]
+    length = float(np.sum(np.hypot(*np.diff(a[:, :2], axis=0).T)))
+    if len(b) < 2 or abs(length - remaining_m) > 2 * tol_m:
+        return False
+    d = np.hypot(a[:, None, 0] - b[None, :, 0], a[:, None, 1] - b[None, :, 1])
+    k = np.argmin(d, axis=1)
+    dyaw = np.abs(np.arctan2(np.sin(a[:, 2] - b[k, 2]), np.cos(a[:, 2] - b[k, 2])))
+    return bool(np.all(d[np.arange(len(a)), k] <= tol_m) and np.all(dyaw <= yaw_tol_rad))
 
 def load_perception_module(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
@@ -4359,7 +4381,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 )
                 if obstacle["blocked_ticks"] >= 120:
                     obstacle["blocked_ticks"] = 0
-                    recent = [r for r in obstacle["replans"] if r["phase"] == phase and t - r["time_s"] < 30.0]
+                    recent = [r for r in obstacle["replans"]
+                              if r["phase"] == phase and t - r["time_s"] < 30.0 and not r.get("same_path")]
                     require(len(recent) < 3, f"obstacle_blocked in {phase}: {len(recent)} replans in 30 s")
                     start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))
                     replan_start = time.monotonic()
@@ -4520,23 +4543,30 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         }
                     )
                     require(replanned.success, f"obstacle_replan_failed in {phase}: {replanned.status}")
-                    # D4: a replan may rightly be longer (a detour), so the
-                    # no-progress watch restarts on the new path; the
-                    # oscillation it also cut is bounded by a per-leg replan
-                    # count (L3c v34 seed 4: two good detours tripped the 60 s watch).
-                    leg_replans = sum(1 for r in obstacle["replans"] if r["phase"] == phase)
-                    require(leg_replans <= 10, f"obstacle_replan_limit in {phase}: {leg_replans}")
-                    obstacle.setdefault("progress", {}).clear()
-                    paths[phase] = replanned
-                    state["paths"][phase] = path_record(replanned)
-                    (args.output / "paths.json").write_text(record_json(state["paths"], indent=2) + "\n")
-                    trackers[phase] = RearAxlePathTracker(
-                        replanned.poses, replanned.directions, replanned.curvatures_inv_m, trackers[phase].config
-                    )
-                    if phase == "transport" and slam is not None:
-                        arm_docking()
-                    phase_started = t
-                    requested_speed = 0.0
+                    if same_path(replanned, paths[phase], trackers[phase].remaining_to_goal_m()):
+                        # D4: the same path again is a wait, not a retry -- it
+                        # neither restarts the tracker nor the no-progress watch
+                        # and does not count against the retry limits (Codex P2).
+                        obstacle["replans"][-1]["same_path"] = True
+                        requested_speed = 0.0
+                    else:
+                        # D4: a replan may rightly be longer (a detour), so the
+                        # no-progress watch restarts on the new path; the
+                        # oscillation it also cut is bounded by a per-leg replan
+                        # count (L3c v34 seed 4: two good detours tripped the 60 s watch).
+                        leg_replans = sum(1 for r in obstacle["replans"] if r["phase"] == phase and not r.get("same_path"))
+                        require(leg_replans <= 10, f"obstacle_replan_limit in {phase}: {leg_replans}")
+                        obstacle.setdefault("progress", {}).clear()
+                        paths[phase] = replanned
+                        state["paths"][phase] = path_record(replanned)
+                        (args.output / "paths.json").write_text(record_json(state["paths"], indent=2) + "\n")
+                        trackers[phase] = RearAxlePathTracker(
+                            replanned.poses, replanned.directions, replanned.curvatures_inv_m, trackers[phase].config
+                        )
+                        if phase == "transport" and slam is not None:
+                            arm_docking()
+                        phase_started = t
+                        requested_speed = 0.0
                 # Evaluation only (truth): every moving tick, each ground-truth
                 # obstacle in the steering-held stopping volume (with the envelope)
                 # while the permission allowed this speed (Codex L0b P2).
@@ -4655,6 +4685,21 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             if estop_holding or obstacle_hold:
                 # Zero every wheel target at once, steering held (plan D4).
                 requested_speed = 0.0
+            if obstacle is not None and obstacle.get("act"):
+                # A step wheel target locked an odometry wheel (L3c v35/v36 seed 4:
+                # the held pose lost 1.85 and 2.80 cm). Brake at the stopping
+                # model's own deceleration, so its distance still holds, and pull
+                # away at COMMAND_ACCEL_MPS2; the scan-silence stop stays a step.
+                previous = state.get("command_speed", 0.0)
+                target_speed = requested_speed
+                if previous * target_speed < 0:
+                    target_speed = 0.0
+                if estop_holding:
+                    previous = target_speed = 0.0
+                rate = (obstacle["layer"].permission.config.stopping.decel_mps2
+                        if abs(target_speed) < abs(previous) else COMMAND_ACCEL_MPS2) * dt
+                requested_speed = previous + float(np.clip(target_speed - previous, -rate, rate))
+                state["command_speed"] = requested_speed
             drive = ackermann_command(requested_speed, curvature, drive_geometry)
             target_steering = (
                 steering_command.copy() if (estop_holding or obstacle_hold) else np.asarray(drive.steering_rad)

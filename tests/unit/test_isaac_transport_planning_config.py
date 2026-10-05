@@ -608,3 +608,51 @@ def test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the
     }
     assert defaults["'--perception-mount'"] == "'legacy'"
     assert defaults["'--depth-quantize-mm'"] == "0"
+
+
+def _runner_function(name):
+    """One top-level function of the Isaac runner, without importing Isaac."""
+    tree = ast.parse(SCRIPT.read_text())
+    node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == name)
+    scope = {"np": np}
+    exec(compile(ast.Module([node], []), str(SCRIPT), "exec"), scope)
+    return scope[name]
+
+
+class _Path:
+    def __init__(self, poses):
+        self.poses = np.asarray(poses, dtype=float)
+
+
+def _straight(x0, x1, y=0.0, yaw=0.0, step=0.025):
+    xs = np.arange(x0, x1 + 1e-9, step)
+    return _Path([[x, y, yaw] for x in xs])
+
+
+def test_same_path_is_the_remaining_part_again():
+    same_path = _runner_function("same_path")
+    current = _straight(0.0, 4.0)
+    # The truck stopped at x = 1.5: the replan from there is the same path.
+    assert same_path(_straight(1.5, 4.0), current, remaining_m=2.5)
+    # 6 cm aside, or a different length, is a different path.
+    assert not same_path(_straight(1.5, 4.0, y=0.06), current, remaining_m=2.5)
+    assert not same_path(_straight(1.5, 4.5), current, remaining_m=2.5)
+    assert not same_path(_straight(1.5, 4.0, yaw=0.2), current, remaining_m=2.5)
+
+
+def test_same_path_waits_do_not_count_as_retries():
+    source = SCRIPT.read_text()
+    assert 'and not r.get("same_path")]' in source
+    assert 'if r["phase"] == phase and not r.get("same_path"))' in source
+    i = source.index("if same_path(replanned, paths[phase]")
+    wait = source[i : source.index("else:", i)]
+    assert "RearAxlePathTracker" not in wait and '"progress"' not in wait
+
+
+def test_wheel_target_brakes_at_the_stopping_model_deceleration():
+    source = SCRIPT.read_text()
+    i = source.index('if obstacle is not None and obstacle.get("act"):')
+    block = source[i : source.index("drive = ackermann_command(requested_speed", i)]
+    assert "permission.config.stopping.decel_mps2" in block
+    assert "COMMAND_ACCEL_MPS2" in block
+    assert "if estop_holding:" in block
