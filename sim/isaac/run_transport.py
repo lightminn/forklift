@@ -4294,6 +4294,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         leg=(trackers[phase].leg_ahead()[0] if phase in trackers else np.zeros((0, 3))),
                         correction=np.asarray(obstacle["applied"], dtype=float), version=obstacle["version"],
                         stamp=snap_.stamp_s,
+                        blocked_cells=np.asarray(
+                            getattr(getattr(obstacle["layer"].permission, "last_estop", None), "blocked_cells", ()),
+                            dtype=np.int64,
+                        ).reshape(-1, 2),
                         **{
                             f"raw_{name}_{part}": np.asarray(arr, dtype=float)
                             for name, values in obstacle.get("last_raw", ({}, None, None))[0].items()

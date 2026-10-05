@@ -72,6 +72,7 @@ class Check:
     blocked: str | None  # "occupied" / "unknown" / "edge" / None
     oldest_free_s: float  # oldest FREE evidence the verified part relied on (inf: none needed)
     reached_end: bool
+    blocked_cells: tuple = ()  # diagnostics: up to 20 (i, j) grid cells that blocked
 
 
 def parts_of(shape) -> list:
@@ -238,6 +239,7 @@ class DrivePermission:
         the continuous sweep is covered, not just the samples (Codex L0b P1)."""
         cfg = self.config
         verified, blocked, oldest = 0.0, None, np.inf
+        blocked_cells = ()
         radius = max(float(np.hypot(abs(lon) + max(fp.front_m, fp.rear_m), abs(lat) + fp.half_width_m))
                      for fp, lat, lon in parts_of(footprint))
         band = None  # cells near the present outline where RETAINED may pass, built on demand
@@ -273,6 +275,7 @@ class DrivePermission:
             states = snapshot.state[cells[:, 0], cells[:, 1]]
             if (states == OCCUPIED).any():
                 blocked = "occupied"
+                blocked_cells = tuple(map(tuple, cells[states == OCCUPIED][:20].tolist()))
                 break
             # Only cells wholly under the truck are exempt; every other cell the
             # stop sweeps must be FREE (Codex checkpoint P1: exempting UNKNOWN in
@@ -296,8 +299,10 @@ class DrivePermission:
                 if outside.any():
                     states = states.copy()
                     states[outside] = 0
-            if ((states != FREE) & (states != RETAINED)).any():
+            bad = (states != FREE) & (states != RETAINED)
+            if bad.any():
                 blocked = "unknown"
+                blocked_cells = tuple(map(tuple, cells[bad][:20].tolist()))
                 break
             # A RETAINED cell's stamp is the oldest fresh evidence its support
             # used, so it ages out under the same limit.
@@ -306,7 +311,7 @@ class DrivePermission:
                 oldest = min(oldest, float(np.min(snapshot.free_stamp[cells[seen, 0], cells[seen, 1]])))
             verified = float(s)
         reached_end = blocked is None and full_path_m is not None and arc[-1] >= full_path_m - 1e-9
-        return Check(verified, blocked, oldest, reached_end)
+        return Check(verified, blocked, oldest, reached_end, blocked_cells)
 
     @staticmethod
     def _own_lookup(snapshot, own_cells, own_pose, own_footprint):
@@ -430,6 +435,7 @@ class DrivePermission:
         own = self._own_cells(snap, current_pose, own_footprint)
         estop = self._walk(snap, samples, arc, footprint, own, direction=1 if direction >= 0 else -1,
                            own_pose=current_pose, own_footprint=own_footprint)
+        self.last_estop = estop
         path_left = path.verified_m - self._driven_since_m
         if now_s - estop.oldest_free_s > cfg.evidence_max_age_s or now_s - path.oldest_free_s > cfg.evidence_max_age_s:
             return 0.0, "evidence_stale"
