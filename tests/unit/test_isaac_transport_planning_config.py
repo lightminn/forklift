@@ -567,7 +567,9 @@ def test_both_cameras_use_the_same_parent_and_orientation():
     source = SCRIPT.read_text()
     assert 'prim_path=mount_parent + "/PerceptionCamera"' in source
     assert 'prim_path=mount_parent + "/PerceptionDisplayCamera"' in source
-    assert source.count("orientation=np.asarray(adapter.xyzw_to_wxyz(mount_xyzw))") == 2
+    # The priority-5 D5 pocket depth camera shares the mount too.
+    assert 'prim_path=mount_parent + "/PocketDepthCamera"' in source
+    assert source.count("orientation=np.asarray(adapter.xyzw_to_wxyz(mount_xyzw))") == 3
     assert "OPTICAL_QUATERNION_XYZW))" not in source
 
 
