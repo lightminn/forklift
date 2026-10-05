@@ -1422,7 +1422,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         # command, which stays up while the permission holds the truck (L3c v11:
         # a standing truck kept eroding the strip against the face).
         speed_now = abs(slam["odom_speed"]) if slam is not None else abs(requested_speed)
-        check.add_frame(stamp, depth, rear_at, speed_mps=speed_now)
+        record = check.add_frame(stamp, depth, rear_at, speed_mps=speed_now)
+        if pocket.get("await_still_frame") and record.get("new") and speed_now < 0.01:
+            pocket["await_still_frame"] = False
+            pocket["still_frame_s"] = stamp
         pocket["frames_read"] += 1
     if args.new_obstacles is not None:
         new_module = load_perception_module(
@@ -2041,6 +2044,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         state["transitions"].append({"from": phase, "to": next_phase, "time_s": t})
         print("TRANSITION", record_json(state["transitions"][-1]), flush=True)
         snapshot(phase)
+        if next_phase == "insert" and pocket["check"] is not None:
+            # D5: one frame taken standing at the approach end before the forks
+            # go in. From there the strip before the face is in view; driving in,
+            # the frames erode by the speed and, close up, the strip leaves the
+            # camera's view (L3c v22 seed 2: four voxels 6.5 cm before the face).
+            pocket["await_still_frame"] = True
         if phase == "insert" and pocket["check"] is not None:
             # The insertion is over: the depth check stops answering and the
             # pallet region is no longer waived in the grid.
@@ -4195,6 +4204,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     acting = True
                     if pocket["check"] is None:
                         allowed, why = 0.0, "pocket_missing"
+                    elif pocket.get("await_still_frame"):
+                        allowed, why = 0.0, "pocket_settle"
                     else:
                         lp, wp = pocket["check"].limit(
                             t, tuple(float(v) for v in rear), kappa, direction,
