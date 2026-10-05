@@ -659,7 +659,8 @@ def test_wheel_target_brakes_at_the_stopping_model_deceleration():
     # The slew acts on the final wheel speed (creep included), the permission's
     # own limit and the e-stop probe cut it as a step afterwards (Codex checkpoint 6 P1).
     pre = source[source.rindex("steering_error = ", 0, i) : i]
-    assert "wheel_speed = requested_speed * 0.25" in pre
+    assert "wheel_speed = requested_speed * 0.25 if creeping" in pre
+    assert block.index("np.clip(target_speed - previous") < block.index("if creeping and abs(wheel_speed) > abs(target_speed):")
     assert block.index("np.clip(target_speed - previous") < block.index('obstacle.get("permission_cap")')
     assert block.index('obstacle.get("permission_cap")') < block.index("if estop_holding:")
     j = source.index('obstacle["permission_cap"] = ')
