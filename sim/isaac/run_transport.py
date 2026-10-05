@@ -4206,6 +4206,18 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         allowed, why = 0.0, "pocket_missing"
                     elif pocket.get("await_still_frame"):
                         allowed, why = 0.0, "pocket_settle"
+                    elif (
+                        phase == "approach" and not pocket.get("mid_still_done")
+                        and trackers[phase].remaining_to_goal_m() <= 0.45
+                    ):
+                        # D5: one standing frame with the camera about 1.2 m from
+                        # the face. Closer, the band's sides before the face
+                        # leave the view; farther, the depth noise is wider than
+                        # their 5 cm to the face; passing at speed, the frame's
+                        # pose uncertainty is (L3c v27 seed 2: 27 voxels never seen).
+                        pocket["mid_still_done"] = True
+                        pocket["await_still_frame"] = True
+                        allowed, why = 0.0, "pocket_settle"
                     else:
                         lp, wp = pocket["check"].limit(
                             t, tuple(float(v) for v in rear), kappa, direction,
