@@ -642,8 +642,8 @@ def test_same_path_is_the_remaining_part_again():
 
 def test_same_path_waits_do_not_count_as_retries():
     source = SCRIPT.read_text()
-    assert 'and not r.get("same_path")]' in source
-    assert 'if r["phase"] == phase and not r.get("same_path"))' in source
+    assert 'and not r.get("same_path") and not r.get("failed")]' in source
+    assert 'if r["phase"] == phase and not r.get("same_path") and not r.get("failed"))' in source
     i = source.index("if same_path(replanned, paths[phase]")
     wait = source[i : source.index("else:", i)]
     assert "RearAxlePathTracker" not in wait and '"progress"' not in wait
