@@ -117,6 +117,14 @@ def arguments() -> argparse.Namespace:
         "face, enough for the depth pocket check).",
     )
     parser.add_argument(
+        "--withdrawal-m",
+        type=float,
+        default=0.55,
+        help="Reverse distance after the drop. Priority-5 L3c uses 0.75: at 0.55 the "
+        "blade tips end 0.19 m from the pallet face, inside its grid swelling, and "
+        "the stop envelope beside them holds every return start.",
+    )
+    parser.add_argument(
         "--pocket-check",
         action="store_true",
         help="Priority-5 D5 depth pocket check: the drive permission also acts on "
@@ -897,6 +905,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         insertion_reserve_m=args.insertion_reserve_m,
         delivery_straight_m=args.delivery_straight_m,
         alignment_straight_m=args.alignment_straight_m,
+        withdrawal_m=args.withdrawal_m,
     )
     state["insertion_reserve_m"] = args.insertion_reserve_m
     # The truck unloaded is its body and two fork blades, not their hull (D4).

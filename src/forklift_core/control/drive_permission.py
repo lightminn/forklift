@@ -84,6 +84,19 @@ def parts_of(shape) -> list:
     return [(fp, float(lat), float(lon)) for fp, lat, lon in shape]
 
 
+def in_shape(px, py, pose, shape) -> np.ndarray:
+    """Whether world points lie inside any part of a shape at pose (closed)."""
+    x, y, yaw = pose
+    c, s = cos(yaw), sin(yaw)
+    u = (np.asarray(px) - x) * c + (np.asarray(py) - y) * s
+    v = -(np.asarray(px) - x) * s + (np.asarray(py) - y) * c
+    out = np.zeros(np.shape(u), dtype=bool)
+    for fp, lat, lon in parts_of(shape):
+        w = u - lon
+        out |= (w >= -fp.rear_m) & (w <= fp.front_m) & (np.abs(v - lat) <= fp.half_width_m)
+    return out
+
+
 def shape_meets(rect, shape, pose, margin_m: float = 0.0) -> bool:
     """Whether any part of a shape at pose, inflated by margin_m, overlaps a
     Rectangle (geometry only, no hall bounds) -- the truth side of shape_cells."""
@@ -203,11 +216,7 @@ class DrivePermission:
         g = (np.arange(11) + 0.0) / 10 * res
         px, py = np.meshgrid(x0 + g, y0 + g, indexing="ij")
         px, py = px.ravel(), py.ravel()
-        ox, oy, oyaw = own_pose
-        c, s_ = cos(oyaw), sin(oyaw)
-        u = (px - ox) * c + (py - oy) * s_
-        v = -(px - ox) * s_ + (py - oy) * c
-        outside = ~((u >= -own_footprint.rear_m) & (u <= own_footprint.front_m) & (np.abs(v) <= own_footprint.half_width_m))
+        outside = ~in_shape(px, py, own_pose, own_footprint)
         if not outside.any():
             return False
         x, y, yaw = pose
@@ -279,7 +288,7 @@ class DrivePermission:
                 if band is None:
                     band = np.zeros(snapshot.state.shape, dtype=bool)
                     if own_pose is not None and own_footprint is not None and cfg.shadow_band_m > 0:
-                        near, _ = footprint_cells(snapshot, own_pose, own_footprint, cfg.shadow_band_m)
+                        near, _ = shape_cells(snapshot, own_pose, own_footprint, cfg.shadow_band_m)
                         nx_, ny_ = band.shape
                         near = near[(near[:, 0] >= 0) & (near[:, 0] < nx_) & (near[:, 1] >= 0) & (near[:, 1] < ny_)]
                         band[near[:, 0], near[:, 1]] = True
@@ -322,11 +331,7 @@ class DrivePermission:
             gx, gy = np.meshgrid(g, g, indexing="ij")
             px = snapshot.origin_x_m + pa[:, 0, None] * res + gx.ravel()[None, :]
             py = snapshot.origin_y_m + pa[:, 1, None] * res + gy.ravel()[None, :]
-            ox, oy, oyaw = own_pose
-            c, s_ = cos(oyaw), sin(oyaw)
-            u = (px - ox) * c + (py - oy) * s_
-            v = -(px - ox) * s_ + (py - oy) * c
-            out = ~((u >= -own_footprint.rear_m) & (u <= own_footprint.front_m) & (np.abs(v) <= own_footprint.half_width_m))
+            out = ~in_shape(px, py, own_pose, own_footprint)
             pts = [np.column_stack((px[k][out[k]], py[k][out[k]])) for k in range(len(pa))]
         return whole_mask, partial_id, pts
 
@@ -362,19 +367,15 @@ class DrivePermission:
         exempt from anything (Codex checkpoint P1): a blind strip against the
         body is the sensors' problem, not the check's.
         """
-        cells, _ = footprint_cells(snapshot, pose, own_footprint, band_m)
+        cells, _ = shape_cells(snapshot, pose, own_footprint, band_m)
         if not len(cells):
             return set(), set()
-        x, y, yaw = pose
-        c, s = cos(yaw), sin(yaw)
         res = snapshot.resolution_m
-        x0 = snapshot.origin_x_m + cells[:, 0] * res - x
-        y0 = snapshot.origin_y_m + cells[:, 1] * res - y
+        x0 = snapshot.origin_x_m + cells[:, 0] * res
+        y0 = snapshot.origin_y_m + cells[:, 1] * res
         inside = np.ones(len(cells), dtype=bool)
         for dx, dy in ((0, 0), (res, 0), (0, res), (res, res)):
-            u = (x0 + dx) * c + (y0 + dy) * s
-            w = -(x0 + dx) * s + (y0 + dy) * c
-            inside &= (u >= -own_footprint.rear_m) & (u <= own_footprint.front_m) & (np.abs(w) <= own_footprint.half_width_m)
+            inside &= in_shape(x0 + dx, y0 + dy, pose, own_footprint)
         out = {(int(a), int(b)) for a, b in cells[inside]}
         partial = {(int(a), int(b)) for a, b in cells[~inside]}
         return out, partial
@@ -442,4 +443,4 @@ class DrivePermission:
 
 
 __all__ = ["Check", "DrivePermission", "PermissionConfig", "StoppingModel", "arc_poses", "footprint_cells",
-           "parts_of", "shape_cells", "shape_meets"]
+           "in_shape", "parts_of", "shape_cells", "shape_meets"]

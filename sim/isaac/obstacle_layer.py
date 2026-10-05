@@ -166,7 +166,11 @@ class ObstacleLayer:
         if loaded:
             return self.loaded, self.loaded
         if self.shape_mode == "hull_forward" and direction < 0:
-            return self.parts_shape, self.body
+            # Reversing, the present body and blades are the truck: a cell the
+            # blade tips cover now is entered only where the reverse sweep
+            # reaches its part outside them (L3c v21: the delivered pallet's
+            # swelling at the tips held every return start).
+            return self.parts_shape, self.parts_shape
         return self.unloaded_shape, self.body
 
     def ranges(self, distances, hits) -> np.ndarray:
@@ -218,7 +222,8 @@ class ObstacleLayer:
         # evidence (L3c v8, insertion start).
         if self.shadow is not None:
             support = self.depth_support(self.snapshot, now_s) if self.depth_support is not None else None
-            self.snapshot = self.shadow.apply(self.snapshot, current_pose, own, extra_support=support)
+            self.snapshot = self.shadow.apply(self.snapshot, current_pose, own if isinstance(own, Footprint) else self.body,
+                                              extra_support=support)
         if self.exempt is not None:
             self.snapshot = exempt_region(self.snapshot, self.exempt)
         return self.permission.update(self.snapshot, path_ahead, footprint, own, current_pose=current_pose,

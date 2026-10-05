@@ -211,3 +211,4 @@ def test_shape_meets_uses_the_parts_not_their_hull():
     assert not shape_meets(in_gap, SHAPE, (0.0, 0.0, 0.0))
     assert shape_meets(in_gap, FOOT, (0.0, 0.0, 0.0))
     assert shape_meets(on_blade, SHAPE, (0.0, 0.0, 0.0))
+
