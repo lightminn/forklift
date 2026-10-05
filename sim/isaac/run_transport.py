@@ -1498,8 +1498,19 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             )
             from forklift_core.planning.grid_collision import OccupancyGrid as _OccR
 
-            out["occupancy"] = _OccR(occupancy.origin_x_m, occupancy.origin_y_m, res_r, occupancy.occupied & ~band_r,
-                                     version=occupancy.version)
+            # Only where the truck stands now (its hull grown by the planning
+            # clearance): clearing the whole band let the plan run through the
+            # swelling the permission still sees, and every replan was blocked
+            # again (L3c v18 seed 1: 3 replans in 30 s on the return).
+            sx, sy, syaw = (float(v) for v in rear)
+            fp_r = geometry.unloaded_footprint
+            grow_r = planner_config.clearance_m + res_r
+            dxs, dys = occupancy.origin_x_m + (gi_r + 0.5) * res_r - sx, occupancy.origin_y_m + (gj_r + 0.5) * res_r - sy
+            cs, ss = math.cos(syaw), math.sin(syaw)
+            us, vs = dxs * cs + dys * ss, -dxs * ss + dys * cs
+            under_r = (us <= fp_r.front_m + grow_r) & (us >= -fp_r.rear_m - grow_r) & (np.abs(vs) <= fp_r.half_width_m + grow_r)
+            out["occupancy"] = _OccR(occupancy.origin_x_m, occupancy.origin_y_m, res_r,
+                                     occupancy.occupied & ~(band_r & under_r), version=occupancy.version)
             return out
         if kind == "observe":
             # Before recognition the pallet is somewhere in the pickup zone; once
