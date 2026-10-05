@@ -1408,9 +1408,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             rear_at = history[-1][1]
         k_ = pocket["capture"].intrinsics
         depth, _ = adapter.normalize_depth(np.asarray(raw).reshape(k_.height, k_.width))
-        # The frame's pose uncertainty grows with the speed (pixel lag, L3c v7);
-        # the commanded and odometry speeds, never the truth.
-        speed_now = max(abs(requested_speed), abs(slam["odom_speed"]) if slam is not None else 0.0)
+        # The frame's pose uncertainty grows with the speed the truck moves at
+        # (pixel lag, L3c v7): the odometry speed, never the truth -- not the
+        # command, which stays up while the permission holds the truck (L3c v11:
+        # a standing truck kept eroding the strip against the face).
+        speed_now = abs(slam["odom_speed"]) if slam is not None else abs(requested_speed)
         check.add_frame(stamp, depth, rear_at, speed_mps=speed_now)
         pocket["frames_read"] += 1
     if args.new_obstacles is not None:
@@ -2092,6 +2094,24 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 travel_config=travel_config,
                 **grid_kwargs(None),
             )
+        if replanned.status == "invalid_start" and grid_planning:
+            # The released pose may sit inside the planning clearance of a grid
+            # mark (L3b seed 3: transport after the extract); as for the obstacle
+            # replans, once more with no clearance -- the grid's swelling holds
+            # the placement error and the permission guards every tick.
+            tight_cfg = replace(planner_config, clearance_m=0.0)
+            tight_travel_cfg = replace(travel_config, clearance_m=0.0) if travel_config is not None else None
+            if leg == "transport":
+                replanned = plan_transport_leg(
+                    grid_world(scenario), start, tight_cfg, geometry=geometry, travel_config=tight_travel_cfg,
+                    **grid_kwargs(None),
+                )
+            else:
+                replanned = plan_return_leg(
+                    grid_world(return_scenario), start, return_to_pose, tight_cfg, geometry=geometry,
+                    travel_config=tight_travel_cfg, **grid_kwargs(None),
+                )
+            event["tight_retry"] = True
         event.update(
             replaced_path=path_record(paths[leg]),
             replanned=True,
