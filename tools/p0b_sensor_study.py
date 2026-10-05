@@ -380,8 +380,10 @@ def _rect_cells_free(snapshot, rect, margin=0.0):
 
 def _volume_unobserved(permission, snap, samples, arc, footprint, own_cells, now, free_age, *, direction=0,
                        own_pose=None, own_footprint=None):
-    """True when the swept check volume holds an UNKNOWN cell, leaves the grid, or
-    relies on expired FREE -- whatever OCCUPIED cells it also holds (Codex design P1).
+    """Why the swept check volume up to its first OCCUPIED sample is unobserved (an
+    UNKNOWN cell, leaving the grid, expired FREE), or None when it is covered.
+    It walks like the permission (user decision 2026-10-06, replacing the Codex
+    design P1 reading that counted past OCCUPIED).
     Cells and exemptions as the permission takes them (shape parts, direction,
     partial own cells only where the stop reaches past the body)."""
     from forklift_core.control.drive_permission import RETAINED, parts_of, shape_cells
@@ -402,7 +404,7 @@ def _volume_unobserved(permission, snap, samples, arc, footprint, own_cells, now
         margin = cfg.envelope_offset_m + pad
         cells, outside = shape_cells(snap, pose, footprint, margin, direction=direction)
         if outside:
-            return True
+            return {"why": "outside", "sample": i}
         whole, partial = own_cells
         keep = []
         for c in cells:
@@ -417,12 +419,23 @@ def _volume_unobserved(permission, snap, samples, arc, footprint, own_cells, now
         if not len(cells):
             continue
         st = snap.state[cells[:, 0], cells[:, 1]]
-        if ((st != FREE) & (st != OCCUPIED) & (st != RETAINED)).any():
-            return True
+        if (st == OCCUPIED).any():
+            # User decision 2026-10-06: coverage walks the stop volume as the
+            # permission does -- it stops at the first sample holding an
+            # OCCUPIED cell, so what lies there and beyond is never entered.
+            break
+        bad = (st != FREE) & (st != OCCUPIED) & (st != RETAINED)
+        if bad.any():
+            c0 = cells[np.argmax(bad)]
+            wx = snap.origin_x_m + (c0[0] + 0.5) * snap.resolution_m
+            wy = snap.origin_y_m + (c0[1] + 0.5) * snap.resolution_m
+            return {"why": "unknown", "sample": i, "cells": int(bad.sum()), "cell_m": [float(wx), float(wy)]}
         seen = (st == FREE) | (st == RETAINED)
         if seen.any():
             oldest = min(oldest, float(np.min(snap.free_stamp[cells[seen, 0], cells[seen, 1]])))
-    return now - oldest > free_age
+    if now - oldest > free_age:
+        return {"why": "expired", "age_s": float(now - oldest)}
+    return None
 
 
 def evaluate_command(args) -> dict:
@@ -721,6 +734,17 @@ def evaluate_command(args) -> dict:
             stats["moving"][cls] = stats["moving"].get(cls, 0) + 1
             if not unobserved:
                 stats.setdefault("covered", {})[cls] = stats.setdefault("covered", {}).get(cls, 0) + 1
+            else:
+                miss = stats.setdefault("uncovered_by_phase", {}).setdefault(cls, {})
+                miss[phase] = miss.get(phase, 0) + 1
+                ex = stats.setdefault("uncovered_examples", [])
+                if len(ex) < 60:
+                    info = dict(unobserved)
+                    if "cell_m" in info:
+                        dx, dy = info["cell_m"][0] - tr[0], info["cell_m"][1] - tr[1]
+                        c_, s_ = math.cos(tr[2]), math.sin(tr[2])
+                        info["cell_truck_m"] = [round(dx * c_ + dy * s_, 3), round(-dx * s_ + dy * c_, 3)]
+                    ex.append({"t": float(t), "phase": phase, "cls": cls, "v": float(v), **info})
             permitted = allowed >= abs(v) - 1e-9
             stats["permitted"][cls] = stats["permitted"].get(cls, 0) + int(permitted)
             if not permitted:
@@ -781,6 +805,8 @@ def evaluate_command(args) -> dict:
             "moving_by_class": stats["moving"], "permission_ratio": ratio, "coverage_ratio": coverage,
             "free_cells_inside_obstacles": stats["free_inside"],
             "blocked_reasons": stats.get("blocked_reasons", {}),
+            "uncovered_by_phase": stats.get("uncovered_by_phase", {}),
+            "uncovered_examples": stats.get("uncovered_examples", []),
         }
         print(cname, json.dumps({k: report[cname][k] for k in ("events", "event_objects", "unpermitted_entries", "permission_ratio", "coverage_ratio")}), flush=True)
     return {"run": str(run), "stopping": vars(stopping), "envelope_m": args.envelope_m, "candidates": report}
