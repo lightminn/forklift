@@ -31,8 +31,13 @@ from forklift_core.perception.pallet_geometry import pallet_boxes
 from forklift_core.perception.pocket_clearance import DepthCamera
 
 H_DET_M = 0.17  # body band top (D0 detection band)
-BODY_FLOOR_M = 0.018  # the blades with their -0.01 m allowance reach this low in front of the face
-FORK_Z_M = (0.018, 0.072)  # lowered blades 0.028-0.052 +-0.01
+# D0 scope (user decision 2026-10-05): protrusions below 0.03 m are out of
+# scope, so every in-scope object rises above it and shows in the voxels from
+# there up. The layer against the floor is not separable from it in depth
+# (L3c v13: five floor-layer voxels before the face stopped the insertion).
+SCOPE_FLOOR_M = 0.03
+BODY_FLOOR_M = SCOPE_FLOOR_M
+FORK_Z_M = (SCOPE_FLOOR_M, 0.072)  # lowered blades 0.028-0.052 +0.01, from the scope floor
 
 
 @dataclass
@@ -194,8 +199,9 @@ class PocketCheck:
         boxes.append(Box((x + cx * c, y + cx * s, (BODY_FLOOR_M + H_DET_M) / 2),
                          ((self.body_front_m + self.body_rear_m) / 2, self.body_half_width_m + lat,
                           (H_DET_M - BODY_FLOOR_M) / 2), yaw))
-        # The same +-0.01 m vertical allowance the columns were built with.
-        z0, z1 = 0.028 + lift_m - 0.01, 0.052 + lift_m + 0.01
+        # The same +0.01 m vertical allowance the columns were built with; from
+        # the scope floor down nothing in scope can be met.
+        z0, z1 = max(0.028 + lift_m - 0.01, SCOPE_FLOOR_M), 0.052 + lift_m + 0.01
         for x0, x1, y0, y1 in self.blades_rear:
             u = (x0 + x1) / 2
             v = (y0 + y1) / 2
