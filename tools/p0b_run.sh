@@ -17,7 +17,7 @@ one() {
   S=$1; N=$2
   python tools/p0b_sensor_study.py evaluate --run $A/20261004_slam_s2/v38f_slam/seed_$S/run \
     --sections $A/20261005_p5_p0b/${SECT:-sections}_s$S.npz --candidates cand_$N.yaml \
-    --odometry-age $A/20261005_p5_p0a/odometry_age_v2.json --stop-latency-s $LAT --stop-decel-mps2 $DEC --envelope-m $ENV --close-gap-m $GAP --inject-every-m $INJ --free-min-width-m $WID --shadow-band-m $SHB --taper-m $TAP \
+    --odometry-age $A/20261005_p5_p0a/odometry_age_v3.json --stop-latency-s $LAT --stop-decel-mps2 $DEC --envelope-m $ENV --close-gap-m $GAP --inject-every-m $INJ --free-min-width-m $WID --shadow-band-m $SHB --taper-m $TAP \
     --output $O/s${S}_$N.json 2>&1 | head -1 | sed "s/^/s$S /"
 }
 export -f one
