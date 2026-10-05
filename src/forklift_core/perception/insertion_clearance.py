@@ -92,8 +92,11 @@ def _box_filter(mask: np.ndarray, k: int, op) -> np.ndarray:
     return out
 
 
-def overlapping_voxels(volume: InsertionVolume, box: Box) -> tuple[np.ndarray, bool]:
-    """(indices (k, 3) of every grid voxel the box overlaps, whether it leaves the grid)."""
+def overlapping_voxels(volume: InsertionVolume, box: Box, region=None) -> tuple[np.ndarray, bool]:
+    """(indices (k, 3) of every grid voxel the box overlaps, whether it leaves the grid).
+
+    region (x0, x1, y0, y1): only voxels overlapping it are enumerated (the
+    rest are not asked); 'leaves' still reports the whole box."""
     v = volume.voxel_m
     c, s = cos(box.yaw), sin(box.yaw)
     hx, hy, hz = box.half
@@ -106,6 +109,11 @@ def overlapping_voxels(volume: InsertionVolume, box: Box) -> tuple[np.ndarray, b
     leaves = bool((i0 < 0).any() or (i1 > np.array(volume.shape)).any())
     i0 = np.maximum(i0, 0)
     i1 = np.minimum(i1, volume.shape)
+    if region is not None:
+        r0 = np.floor((np.array([region[0], region[2]]) - volume.lo[:2]) / v + 1e-9).astype(int)
+        r1 = np.ceil((np.array([region[1], region[3]]) - volume.lo[:2]) / v - 1e-9).astype(int)
+        i0[:2] = np.maximum(i0[:2], r0)
+        i1[:2] = np.minimum(i1[:2], r1)
     if (i1 <= i0).any():
         return np.zeros((0, 3), dtype=int), leaves
     ii, jj, kk = np.meshgrid(*(np.arange(a, b) for a, b in zip(i0, i1)), indexing="ij")
@@ -217,7 +225,7 @@ class ClearanceMemory:
             return False
         if region is not None and not self._box_meets_region(box, region):
             return True  # wholly outside the region: the grid's business
-        idx, leaves = overlapping_voxels(self.volume, box)
+        idx, leaves = overlapping_voxels(self.volume, box, region)
         if region is not None:
             x0, x1, y0, y1 = region
             v = self.volume.voxel_m

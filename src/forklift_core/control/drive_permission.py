@@ -232,6 +232,7 @@ class DrivePermission:
         radius = max(float(np.hypot(abs(lon) + max(fp.front_m, fp.rear_m), abs(lat) + fp.half_width_m))
                      for fp, lat, lon in parts_of(footprint))
         band = None  # cells near the present outline where RETAINED may pass, built on demand
+        own_lookup = None  # (whole mask, partial index grid, outside sub-samples), built on demand
         checks = [(samples[0], float(arc[0]), 0.0)]
         for i in range(1, len(samples)):
             a, b = samples[i - 1], samples[i]
@@ -248,16 +249,17 @@ class DrivePermission:
                 break
             whole, partial = own_cells
             if whole or partial:
-                keep = np.ones(len(cells), dtype=bool)
-                for k, (a, b) in enumerate(cells):
-                    key = (int(a), int(b))
-                    if key in whole:
-                        keep[k] = False
-                    elif key in partial and own_pose is not None:
-                        # Partly under the truck now: checked only if this
-                        # sample's footprint reaches into its part outside the
-                        # present outline (Codex checkpoint P1).
-                        keep[k] = self._enters(snapshot, key, own_pose, own_footprint, pose, footprint, margin, direction)
+                if own_lookup is None:
+                    own_lookup = self._own_lookup(snapshot, own_cells, own_pose, own_footprint)
+                whole_mask, partial_id, part_pts = own_lookup
+                keep = ~whole_mask[cells[:, 0], cells[:, 1]]
+                ids = partial_id[cells[:, 0], cells[:, 1]]
+                touched = keep & (ids >= 0)
+                if touched.any() and own_pose is not None:
+                    # Partly under the truck now: checked only if this sample's
+                    # footprint reaches into its part outside the present
+                    # outline (Codex checkpoint P1) -- all such cells at once.
+                    keep[touched] = self._parts_reach(part_pts, ids[touched], pose, footprint, margin, direction)
                 cells = cells[keep]
             states = snapshot.state[cells[:, 0], cells[:, 1]]
             if (states == OCCUPIED).any():
@@ -275,12 +277,14 @@ class DrivePermission:
                 # moves between snapshots and the memory was granted for the
                 # band alone (Codex P1).
                 if band is None:
-                    band = set()
+                    band = np.zeros(snapshot.state.shape, dtype=bool)
                     if own_pose is not None and own_footprint is not None and cfg.shadow_band_m > 0:
                         near, _ = footprint_cells(snapshot, own_pose, own_footprint, cfg.shadow_band_m)
-                        band = {(int(a), int(b)) for a, b in near}
-                outside = [k for k in np.flatnonzero(retained) if (int(cells[k, 0]), int(cells[k, 1])) not in band]
-                if outside:
+                        nx_, ny_ = band.shape
+                        near = near[(near[:, 0] >= 0) & (near[:, 0] < nx_) & (near[:, 1] >= 0) & (near[:, 1] < ny_)]
+                        band[near[:, 0], near[:, 1]] = True
+                outside = retained & ~band[cells[:, 0], cells[:, 1]]
+                if outside.any():
                     states = states.copy()
                     states[outside] = 0
             if ((states != FREE) & (states != RETAINED)).any():
@@ -294,6 +298,58 @@ class DrivePermission:
             verified = float(s)
         reached_end = blocked is None and full_path_m is not None and arc[-1] >= full_path_m - 1e-9
         return Check(verified, blocked, oldest, reached_end)
+
+    @staticmethod
+    def _own_lookup(snapshot, own_cells, own_pose, own_footprint):
+        """Grid lookups for one walk: wholly-own mask, partial-cell index grid,
+        and each partial cell's 5 mm sub-samples outside the present outline
+        (an array per cell of points, in world coordinates)."""
+        whole, partial = own_cells
+        shape = snapshot.state.shape
+        whole_mask = np.zeros(shape, dtype=bool)
+        if whole:
+            w = np.array(list(whole), dtype=np.int64)
+            w = w[(w[:, 0] >= 0) & (w[:, 0] < shape[0]) & (w[:, 1] >= 0) & (w[:, 1] < shape[1])]
+            whole_mask[w[:, 0], w[:, 1]] = True
+        partial_id = np.full(shape, -1, dtype=np.int64)
+        pts = []
+        if partial and own_pose is not None:
+            pa = np.array(list(partial), dtype=np.int64)
+            pa = pa[(pa[:, 0] >= 0) & (pa[:, 0] < shape[0]) & (pa[:, 1] >= 0) & (pa[:, 1] < shape[1])]
+            partial_id[pa[:, 0], pa[:, 1]] = np.arange(len(pa))
+            res = snapshot.resolution_m
+            g = np.arange(11) / 10 * res
+            gx, gy = np.meshgrid(g, g, indexing="ij")
+            px = snapshot.origin_x_m + pa[:, 0, None] * res + gx.ravel()[None, :]
+            py = snapshot.origin_y_m + pa[:, 1, None] * res + gy.ravel()[None, :]
+            ox, oy, oyaw = own_pose
+            c, s_ = cos(oyaw), sin(oyaw)
+            u = (px - ox) * c + (py - oy) * s_
+            v = -(px - ox) * s_ + (py - oy) * c
+            out = ~((u >= -own_footprint.rear_m) & (u <= own_footprint.front_m) & (np.abs(v) <= own_footprint.half_width_m))
+            pts = [np.column_stack((px[k][out[k]], py[k][out[k]])) for k in range(len(pa))]
+        return whole_mask, partial_id, pts
+
+    @staticmethod
+    def _parts_reach(part_pts, ids, pose, footprint, margin, direction) -> np.ndarray:
+        """For each partial cell id, whether any of its outside sub-samples lies
+        in the inflated shape at pose (the vectorised _enters)."""
+        sizes = np.array([len(part_pts[i]) for i in ids])
+        if not sizes.sum():
+            return np.zeros(len(ids), dtype=bool)
+        allp = np.concatenate([part_pts[i] for i in ids])
+        owner = np.repeat(np.arange(len(ids)), sizes)
+        x, y, yaw = pose
+        c, s_ = cos(yaw), sin(yaw)
+        u = (allp[:, 0] - x) * c + (allp[:, 1] - y) * s_
+        v = -(allp[:, 0] - x) * s_ + (allp[:, 1] - y) * c
+        hit = np.zeros(len(allp), dtype=bool)
+        for fp, lat, lon in parts_of(footprint):
+            front = fp.front_m + (margin if direction >= 0 else 0.0)
+            rear = fp.rear_m + (margin if direction <= 0 else 0.0)
+            w = u - lon
+            hit |= (w >= -rear) & (w <= front) & (np.abs(v - lat) <= fp.half_width_m + margin)
+        return np.bincount(owner[hit], minlength=len(ids)) > 0
 
     @staticmethod
     def _own_cells(snapshot, pose, own_footprint, band_m: float = 0.0):
@@ -312,19 +368,15 @@ class DrivePermission:
         x, y, yaw = pose
         c, s = cos(yaw), sin(yaw)
         res = snapshot.resolution_m
-        out, partial = set(), set()
-        for a, b in cells:
-            x0 = snapshot.origin_x_m + a * res
-            y0 = snapshot.origin_y_m + b * res
-            inside = True
-            for dx, dy in ((0, 0), (res, 0), (0, res), (res, res)):
-                px, py = x0 + dx - x, y0 + dy - y
-                u = px * c + py * s
-                w = -px * s + py * c
-                if not (-own_footprint.rear_m <= u <= own_footprint.front_m and abs(w) <= own_footprint.half_width_m):
-                    inside = False
-                    break
-            (out if inside else partial).add((int(a), int(b)))
+        x0 = snapshot.origin_x_m + cells[:, 0] * res - x
+        y0 = snapshot.origin_y_m + cells[:, 1] * res - y
+        inside = np.ones(len(cells), dtype=bool)
+        for dx, dy in ((0, 0), (res, 0), (0, res), (res, res)):
+            u = (x0 + dx) * c + (y0 + dy) * s
+            w = -(x0 + dx) * s + (y0 + dy) * c
+            inside &= (u >= -own_footprint.rear_m) & (u <= own_footprint.front_m) & (np.abs(w) <= own_footprint.half_width_m)
+        out = {(int(a), int(b)) for a, b in cells[inside]}
+        partial = {(int(a), int(b)) for a, b in cells[~inside]}
         return out, partial
 
     def update(self, snapshot: GridSnapshot, path_ahead, footprint: Footprint, own_footprint: Footprint, *,
