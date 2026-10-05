@@ -242,3 +242,12 @@ def test_depth_support_carries_the_columns_own_observation_time():
     # Long after, with no new frame certifying them, the columns are no support.
     check.last_new_s = 5.0
     assert check.depth_free_cells(snap, 5.0) == {}
+
+
+def test_the_trucks_own_blades_in_view_are_not_an_obstacle():
+    # L3c v32 seed 4: with the 0.28 m near plane the blade tops came into view.
+    check = make()
+    rear = (FACE - 0.1 - 1.29, 0.0, 0.0)
+    blades = check.own_boxes(check.to_insertion(*rear), 0.0)[:2]
+    check.add_frame(0.0, render(check, rear, extra=blades), rear)
+    assert not check.memory.obstacle

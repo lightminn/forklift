@@ -158,7 +158,7 @@ class PocketCheck:
         return rot, trans
 
     def add_frame(self, stamp_s: float, depth_m: np.ndarray, rear_at_stamp, speed_mps: float = 0.0,
-                  yaw_rate_rps: float = 0.0) -> dict:
+                  yaw_rate_rps: float = 0.0, lift_m: float = 0.0) -> dict:
         raw = np.ascontiguousarray(np.asarray(depth_m, dtype=np.float32))
         digest = hashlib.sha256(raw.tobytes()).hexdigest()
         if digest == self.last_hash:
@@ -174,8 +174,13 @@ class PocketCheck:
         # same k sigma the classification tolerates.
         k = self.camera.sigma_k
         depth[finite] = depth[finite] + np.clip(self.rng.normal(0.0, 1.0, int(finite.sum())), -k, k) * sigma
+        # The truck's own blades (and the carriage face they hang from) are in
+        # view from 0.28 m on: a return from them is the truck, not an obstacle
+        # (L3c v32 seed 4: the blade tops latched one). Self-filter by their
+        # boxes at the frame's pose.
+        surfaces = self.surfaces + self.own_boxes(self.to_insertion(*rear_at_stamp), lift_m)
         rec = self.memory.add_frame(stamp_s, depth, self.camera, self.optical_from_insertion(rear_at_stamp),
-                                    self.surfaces, surface_extra_m=self.config.estimate_m,
+                                    surfaces, surface_extra_m=self.config.estimate_m,
                                     pose_uncertainty_m=self.pose_uncertainty_m(speed_mps, yaw_rate_rps))
         rec = {**rec, "new": True, "rear": [float(v) for v in rear_at_stamp]}
         self.records.append(rec)
@@ -193,6 +198,18 @@ class PocketCheck:
             self.invalid_reason = reason
 
     # Per tick ----------------------------------------------------------------
+    def own_boxes(self, pose_i, lift_m: float) -> list:
+        """The blades and the carriage face (0.02 m deep) at a pose, no margins."""
+        x, y, yaw = pose_i
+        c, s = math.cos(yaw), math.sin(yaw)
+        out = []
+        for x0, x1, y0, y1 in self.blades_rear:
+            u, v = (x0 + x1) / 2, (y0 + y1) / 2
+            out.append(Box((x + u * c - v * s, y + u * s + v * c, 0.04 + lift_m), ((x1 - x0) / 2, (y1 - y0) / 2, 0.012), yaw))
+        u = self.body_front_m - 0.01
+        out.append(Box((x + u * c, y + u * s, 0.25 + lift_m), (0.01, 0.235, 0.21), yaw))
+        return out
+
     def truck_boxes(self, pose_i, lift_m: float):
         """Body (floor..h_det) and blades at the lift, in the insertion frame,
         inflated sideways by the estimate error and the envelope (along the

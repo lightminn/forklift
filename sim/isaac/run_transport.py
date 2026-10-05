@@ -1462,7 +1462,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         # a standing truck kept eroding the strip against the face).
         speed_now = abs(slam["odom_speed"]) if slam is not None else abs(requested_speed)
         yaw_rate_now = abs(slam.get("odom_yaw_rate", 0.0)) if slam is not None else 0.0
-        record = check.add_frame(stamp, depth, rear_at, speed_mps=speed_now, yaw_rate_rps=yaw_rate_now)
+        record = check.add_frame(stamp, depth, rear_at, speed_mps=speed_now, yaw_rate_rps=yaw_rate_now,
+                                 lift_m=float(robot.get_joint_positions()[lift_index[0]]))
         if pocket.get("await_still_frame") and record.get("new") and speed_now < 0.01 and yaw_rate_now < 0.01:
             pocket["await_still_frame"] = False
             pocket["still_frame_s"] = stamp
