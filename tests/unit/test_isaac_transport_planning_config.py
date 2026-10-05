@@ -634,8 +634,9 @@ def test_same_path_is_the_remaining_part_again():
     current = _straight(0.0, 4.0)
     # The truck stopped at x = 1.5: the replan from there is the same path.
     assert same_path(_straight(1.5, 4.0), current, remaining_m=2.5)
-    # 6 cm aside, or a different length, is a different path.
-    assert not same_path(_straight(1.5, 4.0, y=0.06), current, remaining_m=2.5)
+    # 2.5 cm aside (a detour that already misses the blocking cells), or a
+    # different length, is a different path (Codex checkpoint 7 P2).
+    assert not same_path(_straight(1.5, 4.0, y=0.025), current, remaining_m=2.5)
     assert not same_path(_straight(1.5, 4.5), current, remaining_m=2.5)
     assert not same_path(_straight(1.5, 4.0, yaw=0.2), current, remaining_m=2.5)
 
@@ -694,5 +695,9 @@ def test_a_failed_blocked_replan_stands_and_retries():
     source = SCRIPT.read_text()
     i = source.index("# Standing, the grid keeps updating: a failed replan is")
     block = source[i : source.index("elif same_path(replanned", i)]
-    assert "failures < 5" in block and "requested_speed = 0.0" in block
+    assert "failures < 5" in block and 'obstacle.setdefault("replan_wait", {})[phase] = True' in block
+    # Held on later ticks too, until a replan succeeds or the path clears (Codex checkpoint 7 P2).
+    j = source.index('if obstacle is not None and obstacle.get("replan_wait", {}).get(phase):')
+    assert j < source.index("drive = ackermann_command(requested_speed")
+    assert 'obstacle.get("path_blocked_ticks", 0) == 0' in source[j : j + 400]
     assert 'if replanned.status in ("invalid_start", "no_path"):' in source

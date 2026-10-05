@@ -31,10 +31,12 @@ OBSERVE_ARRIVAL_M = 0.10
 OBSERVE_ARRIVAL_YAW_RAD = 0.10
 
 
-def same_path(new, current, remaining_m: float, tol_m: float = 0.05, yaw_tol_rad: float = 0.1) -> bool:
+def same_path(new, current, remaining_m: float, tol_m: float = 0.01, yaw_tol_rad: float = 0.02) -> bool:
     """True when a replan returns the path the truck is already on: every new
     pose lies within tol_m (and yaw_tol_rad) of the current path's remaining
-    part and the lengths agree within 2 tol_m (plan D4: that is a wait)."""
+    part and the lengths agree within 2 tol_m (plan D4: that is a wait). Only
+    a near-identical path: a 2.5 cm detour already misses the cells that block
+    the old one (Codex checkpoint 7 P2), so it must not be thrown away."""
     a = np.asarray(new.poses, dtype=float)
     b = np.asarray(current.poses, dtype=float)
     if len(a) < 2 or len(b) < 2:
@@ -4298,6 +4300,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             getattr(getattr(obstacle["layer"].permission, "last_estop", None), "blocked_cells", ()),
                             dtype=np.int64,
                         ).reshape(-1, 2),
+                        path_blocked_cells=np.asarray(
+                            getattr(obstacle["layer"].permission.path_check, "blocked_cells", ()),
+                            dtype=np.int64,
+                        ).reshape(-1, 2),
                         **{
                             f"raw_{name}_{part}": np.asarray(arr, dtype=float)
                             for name, values in obstacle.get("last_raw", ({}, None, None))[0].items()
@@ -4582,12 +4588,16 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         obstacle["replans"][-1]["failed"] = True
                         failures = sum(1 for r in obstacle["replans"] if r["phase"] == phase and r.get("failed"))
                         require(failures < 5, f"obstacle_replan_failed in {phase}: {replanned.status}")
+                        # Held until a replan succeeds (D4: stop, replan, resume
+                        # only on a plan -- Codex checkpoint 7 P2).
+                        obstacle.setdefault("replan_wait", {})[phase] = True
                         requested_speed = 0.0
                     elif same_path(replanned, paths[phase], trackers[phase].remaining_to_goal_m()):
                         # D4: the same path again is a wait, not a retry -- it
                         # neither restarts the tracker nor the no-progress watch
                         # and does not count against the retry limits (Codex P2).
                         obstacle["replans"][-1]["same_path"] = True
+                        obstacle.setdefault("replan_wait", {}).pop(phase, None)
                         requested_speed = 0.0
                     else:
                         # D4: a replan may rightly be longer (a detour), so the
@@ -4603,6 +4613,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         leg_replans = sum(1 for r in obstacle["replans"] if r["phase"] == phase and not r.get("same_path") and not r.get("failed"))
                         require(leg_replans <= 10, f"obstacle_replan_limit in {phase}: {leg_replans}")
                         obstacle.setdefault("progress", {}).clear()
+                        obstacle.setdefault("replan_wait", {}).pop(phase, None)
                         paths[phase] = replanned
                         state["paths"][phase] = path_record(replanned)
                         (args.output / "paths.json").write_text(record_json(state["paths"], indent=2) + "\n")
@@ -4692,6 +4703,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 and not obstacle["live_replanned"].get(phase)
             ):
                 requested_speed = 0.0  # waiting to retry the live plan: stand
+            if obstacle is not None and obstacle.get("replan_wait", {}).get(phase):
+                if obstacle.get("path_blocked_ticks", 0) == 0:
+                    # The path ahead is no longer blocked: the permission has
+                    # verified it again, so the existing path resumes.
+                    obstacle["replan_wait"].pop(phase, None)
+                else:
+                    requested_speed = 0.0  # a blocked-path replan failed: stand until one succeeds
             if new_obstacles is not None and phase in trackers:
                 leg, _ = trackers[phase].leg_ahead()
                 driven = float(trackers[phase]._distance[-1]) - trackers[phase].remaining_to_goal_m()
