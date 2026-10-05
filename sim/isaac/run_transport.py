@@ -3101,6 +3101,19 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         not (phase == "transport" and slam["docking"].get("accepted_any")),
                         "transport_recovery_after_docking",
                     )
+                    if slam["tracker"].mode == "holding":
+                        # No match is held against (the docking fell back): a
+                        # recovery planned now may be a long manoeuvre -- a yaw
+                        # fix at a 2 m radius is a full loop -- and must not run
+                        # on dead reckoning (L3c v22 seed 1: 15 m held). The truck
+                        # stands still: let SLAM back in first, as at a capture.
+                        jump_m, jump_rad = slam["tracker"].release(odom_from_base=slam_odom_base())
+                        slam["holds"].append(
+                            {"phase": phase, "time_s": t, "event": "release_before_stall_replan",
+                             "jump_m": jump_m, "jump_rad": jump_rad}
+                        )
+                        rear_now = slam_rear(world.current_time - initial_time)
+                        start = PlanningPose(float(rear_now[0]), float(rear_now[1]), float(rear_now[2]))
                     if phase == "transport":
                         # After docking, the corrected drop (v3.8, Codex P1).
                         replanned = plan_transport_leg(
