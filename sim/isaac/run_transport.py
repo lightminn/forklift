@@ -4131,7 +4131,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
                     direction=direction, loaded=loaded, cap_mps=max(abs(requested_speed), abs(truth_speed)),
                 )
-                if allowed == 0.0 and why in ("unknown", "occupied") and obstacle.get("dumps", 0) < 4 and t > 5.0:
+                dumped_phases = obstacle.setdefault("dumped_phases", set())
+                if allowed == 0.0 and why in ("unknown", "occupied") and t > 5.0 and (
+                    obstacle.get("dumps", 0) < 4 or phase not in dumped_phases
+                ):
+                    dumped_phases.add(phase)
                     # Diagnostics: the snapshot and the check inputs of the first unknown stops.
                     obstacle["dumps"] = obstacle.get("dumps", 0) + 1
                     snap_ = obstacle["layer"].snapshot
@@ -4141,7 +4145,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         origin=[snap_.origin_x_m, snap_.origin_y_m], res=snap_.resolution_m,
                         t=t, rear=np.asarray(rear, dtype=float), truth_rear=np.asarray(truth_rear, dtype=float),
                         kappa=kappa, direction=direction, loaded=loaded,
-                        requested=requested_speed, truth_speed=truth_speed,
+                        requested=requested_speed, truth_speed=truth_speed, phase=phase, why=why,
+                        leg=(trackers[phase].leg_ahead()[0] if phase in trackers else np.zeros((0, 3))),
                         correction=np.asarray(obstacle["applied"], dtype=float), version=obstacle["version"],
                         stamp=snap_.stamp_s,
                         **{
