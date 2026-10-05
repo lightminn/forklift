@@ -38,9 +38,11 @@ permission:
   # Shadow-band memory (D4 delta, user approval 2026-10-05): the strip a low
   # corner LiDAR cannot certify in front of the truck's own faces is up to
   # 0.77 a deep (a = how far the sensor sits ahead of the face; 43 mm for
-  # low_fl before the carriage). 0.05 m covers it. Remove the key to get the
-  # strict rule back.
-  shadow_band_m: 0.05
+  # low_fl before the carriage). 0.05 m covered it at 0.10 m; with D_008's
+  # 0.08 m planes the carriage's lower cross member and the fork heels shade
+  # more -- UNKNOWN reached 0.116 m before the face on a standing return (L3c
+  # v22 seed 5) -- so 0.15 m. Remove the key to get the strict rule back.
+  shadow_band_m: 0.15
   # The unloaded shape the permission checks: hull_forward (the planner's
   # hull driving forward, body + blades reversing), hull, or parts. Forward on
   # the hull keeps the permission and the planner consistent (L3b v23);
