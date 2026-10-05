@@ -373,9 +373,15 @@ class DrivePermission:
         res = snapshot.resolution_m
         x0 = snapshot.origin_x_m + cells[:, 0] * res
         y0 = snapshot.origin_y_m + cells[:, 1] * res
-        inside = np.ones(len(cells), dtype=bool)
-        for dx, dy in ((0, 0), (res, 0), (0, res), (res, res)):
-            inside &= in_shape(x0 + dx, y0 + dy, pose, own_footprint)
+        # Wholly inside means inside one part: the union of body and blades is
+        # not convex, so four corners in it do not put the square in it (Codex
+        # checkpoint P1: a bar between a blade and the body).
+        inside = np.zeros(len(cells), dtype=bool)
+        for part in parts_of(own_footprint):
+            in_part = np.ones(len(cells), dtype=bool)
+            for dx, dy in ((0, 0), (res, 0), (0, res), (res, res)):
+                in_part &= in_shape(x0 + dx, y0 + dy, pose, [part])
+            inside |= in_part
         out = {(int(a), int(b)) for a, b in cells[inside]}
         partial = {(int(a), int(b)) for a, b in cells[~inside]}
         return out, partial

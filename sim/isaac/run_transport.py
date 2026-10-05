@@ -1461,8 +1461,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         # command, which stays up while the permission holds the truck (L3c v11:
         # a standing truck kept eroding the strip against the face).
         speed_now = abs(slam["odom_speed"]) if slam is not None else abs(requested_speed)
-        record = check.add_frame(stamp, depth, rear_at, speed_mps=speed_now)
-        if pocket.get("await_still_frame") and record.get("new") and speed_now < 0.01:
+        yaw_rate_now = abs(slam.get("odom_yaw_rate", 0.0)) if slam is not None else 0.0
+        record = check.add_frame(stamp, depth, rear_at, speed_mps=speed_now, yaw_rate_rps=yaw_rate_now)
+        if pocket.get("await_still_frame") and record.get("new") and speed_now < 0.01 and yaw_rate_now < 0.01:
             pocket["await_still_frame"] = False
             pocket["still_frame_s"] = stamp
             # Diagnostics: the standing frames as the check saw them.
@@ -3170,6 +3171,19 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                              "jump_m": jump_m, "jump_rad": jump_rad}
                         )
                         rear_now = slam_rear(world.current_time - initial_time)
+                        if obstacle is not None and slam["tracker"].applied is not None:
+                            # The new correction re-projects the grid before any
+                            # plan reads it, and this tick goes on from the new
+                            # pose (Codex checkpoint P1: no mixed frames).
+                            obstacle["applied"] = tuple(float(v) for v in slam["tracker"].applied[0])
+                            obstacle["version"] += 1
+                            obstacle["reprojections"] = obstacle.get("reprojections", 0) + 1
+                            obstacle["layer"].refresh(
+                                t, obstacle["applied"], obstacle["version"],
+                                current_pose=tuple(float(v) for v in rear_now),
+                                path_ahead=np.array([rear_now]), loaded=loaded,
+                            )
+                        rear = np.asarray(rear_now, dtype=float)
                         start = PlanningPose(float(rear_now[0]), float(rear_now[1]), float(rear_now[2]))
                     if phase == "transport":
                         # After docking, the corrected drop (v3.8, Codex P1).

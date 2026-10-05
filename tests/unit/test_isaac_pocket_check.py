@@ -226,3 +226,19 @@ def test_depth_certified_body_band_cells_are_offered_as_memory_evidence():
     for (i, j) in cells:
         x = -2.0 + (i + 0.5) * 0.05
         assert FACE - 0.60 <= x <= FACE  # only over the body band
+
+
+def test_depth_support_carries_the_columns_own_observation_time():
+    # Codex checkpoint P1: a live stream is not a re-observation of a column.
+    from forklift_core.perception.obstacle_grid import FREE, GridSnapshot
+
+    check = make()
+    for k, x in enumerate((START, FACE - 1.5 - 0.884, FACE - 1.0 - 0.884)):
+        check.add_frame(0.1 * k, render(check, (x, 0.0, 0.0)), (x, 0.0, 0.0))
+    snap = GridSnapshot(np.full((60, 40), FREE, dtype=np.uint8), np.zeros((60, 40)), 0.25, (0.0, 0.0, 0.0), 0, 1,
+                        {}, -2.0, -1.0, 0.05)
+    fresh = check.depth_free_cells(snap, 0.25)
+    assert fresh and all(t <= 0.2 for t in fresh.values())
+    # Long after, with no new frame certifying them, the columns are no support.
+    check.last_new_s = 5.0
+    assert check.depth_free_cells(snap, 5.0) == {}

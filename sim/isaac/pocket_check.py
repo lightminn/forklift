@@ -57,6 +57,7 @@ class PocketConfig:
     frame_max_age_s: float = 0.2
     frame_lag_s: float = 0.07  # pixels may be this much older than their reported time (render latency 0.0667 s)
     halo_m: float = 0.06  # V is evaluated this far around itself, so a moving frame can still certify V's edge
+    lever_arm_m: float = 3.0  # rear axle to the farthest voxel of V seen (stand-off 2.2 m + forks + band)
     envelope_m: float = 0.01
     sample_m: float = 0.01
     body_slack_m: float = 0.05  # the body band is this much wider again: nothing to meet in front of the face, and
@@ -156,7 +157,8 @@ class PocketCheck:
         trans = r_ob @ (r_bc @ t_ci + t_bc) + t_ob
         return rot, trans
 
-    def add_frame(self, stamp_s: float, depth_m: np.ndarray, rear_at_stamp, speed_mps: float = 0.0) -> dict:
+    def add_frame(self, stamp_s: float, depth_m: np.ndarray, rear_at_stamp, speed_mps: float = 0.0,
+                  yaw_rate_rps: float = 0.0) -> dict:
         raw = np.ascontiguousarray(np.asarray(depth_m, dtype=np.float32))
         digest = hashlib.sha256(raw.tobytes()).hexdigest()
         if digest == self.last_hash:
@@ -174,10 +176,16 @@ class PocketCheck:
         depth[finite] = depth[finite] + np.clip(self.rng.normal(0.0, 1.0, int(finite.sum())), -k, k) * sigma
         rec = self.memory.add_frame(stamp_s, depth, self.camera, self.optical_from_insertion(rear_at_stamp),
                                     self.surfaces, surface_extra_m=self.config.estimate_m,
-                                    pose_uncertainty_m=abs(speed_mps) * self.config.frame_lag_s)
+                                    pose_uncertainty_m=self.pose_uncertainty_m(speed_mps, yaw_rate_rps))
         rec = {**rec, "new": True, "rear": [float(v) for v in rear_at_stamp]}
         self.records.append(rec)
         return rec
+
+    def pose_uncertainty_m(self, speed_mps: float, yaw_rate_rps: float) -> float:
+        """How far a moving frame's pixels may sit from where they are placed:
+        the lag times the motion of the farthest point of V from the rear axle
+        (translation + yaw rate x lever arm; Codex checkpoint P1)."""
+        return self.config.frame_lag_s * (abs(speed_mps) + abs(yaw_rate_rps) * self.config.lever_arm_m)
 
     def invalidate(self, reason: str) -> None:
         if self.valid:
@@ -239,7 +247,7 @@ class PocketCheck:
     def depth_free_cells(self, snapshot, now_s: float) -> dict:
         """Grid cells (snapshot indices) whose whole square lies over the body
         band and whose every body-band voxel column was certified within the
-        lifetime: {cell: time of the newest frame's pixels}. Evidence for the
+        last frame_max_age_s: {cell: oldest pixel time of the column}. Evidence for the
         shadow-band memory around the face (it never waives a cell itself)."""
         if not self.valid or self.memory.obstacle or now_s - (self.last_new_s - self.config.frame_lag_s) > self.config.frame_max_age_s:
             return {}
@@ -274,12 +282,12 @@ class PocketCheck:
                 vj1 = int(np.ceil((max(py) - vol.lo[1]) / v - 1e-9))
                 block = self.memory.certified_s[vi0:vi1, vj0:vj1, k0:k1]
                 inv = vol.in_v[vi0:vi1, vj0:vj1, k0:k1]
-                if block.size and inv.all() and (now_s - block <= self.config.lifetime_s).all():
-                    # Certified within the lifetime and watched by the live depth
-                    # stream (a new hit there latches an obstacle): as current as
-                    # the newest frame, never older (L3c v10: certification times
-                    # handed on made the grid's 0.2 s freshness fail).
-                    out[(i, j)] = float(self.last_new_s - self.config.frame_lag_s)
+                if block.size and inv.all() and (now_s - (block - self.config.frame_lag_s) <= self.config.frame_max_age_s).all():
+                    # Every voxel of the column certified by a recent frame, with
+                    # that observation's own time (the pixels' worst case): a live
+                    # stream is not a re-observation of a column (Codex
+                    # checkpoint P1).
+                    out[(i, j)] = float(block.min() - self.config.frame_lag_s)
         return out
 
     def region_control(self):

@@ -212,3 +212,21 @@ def test_shape_meets_uses_the_parts_not_their_hull():
     assert shape_meets(in_gap, FOOT, (0.0, 0.0, 0.0))
     assert shape_meets(on_blade, SHAPE, (0.0, 0.0, 0.0))
 
+
+
+def test_a_cell_whose_corners_lie_in_the_union_but_not_in_one_part_is_not_wholly_own():
+    # Codex checkpoint P1: the body + blades union is not convex.
+    from forklift_core.control.drive_permission import DrivePermission
+
+    snap = snapshot()
+    # A cell straddling the body's front corner and the left blade's root: its
+    # corners can lie in the union while its interior pokes out of both.
+    whole, partial = DrivePermission._own_cells(snap, (0.0, 0.0, 0.0), SHAPE)
+    for a, b in whole:
+        x0, y0 = -1.0 + a * 0.05, -3.0 + b * 0.05
+        assert any(
+            (lon - fp.rear_m <= x0 and x0 + 0.05 <= lon + fp.front_m
+             and abs(lat) - fp.half_width_m <= min(abs(y0), abs(y0 + 0.05))
+             and max(abs(y0 - lat), abs(y0 + 0.05 - lat)) <= fp.half_width_m)
+            for fp, lat, lon in SHAPE
+        )
