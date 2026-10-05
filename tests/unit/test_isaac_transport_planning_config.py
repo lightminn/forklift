@@ -679,3 +679,11 @@ def test_loose_arrival_only_at_observation_waypoints():
     head = source[source.rindex("if (", 0, i) : i]
     assert 'phase == "observe"' in head and "OBSERVE_ARRIVAL_M" in head
     assert 'slam["stop_now"]' in head  # standing, not just a zero command (Codex checkpoint 6 P2)
+
+
+def test_a_failed_live_plan_stands_and_retries():
+    source = SCRIPT.read_text()
+    i = source.index("# Standing, the grid keeps updating")
+    block = source[i : source.index("waiting to retry the live plan: stand", i)]
+    assert "tries < 5" in block and 'obstacle["live_retry_after_s"] = t + 1.0' in block
+    assert 'and t >= obstacle.get("live_retry_after_s", 0.0)' in source

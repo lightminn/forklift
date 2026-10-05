@@ -4627,6 +4627,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 and phase in ("transport", "return_home")
                 and phase in trackers
                 and not obstacle.setdefault("live_replanned", {}).get(phase)
+                and t >= obstacle.get("live_retry_after_s", 0.0)
             ):
                 # The mission plan's travel legs saw the pickup pallet's band
                 # cleared for the carried part; the executed leg is planned now,
@@ -4638,7 +4639,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     sc_ = slam.get("transport_scenario", scenario) if slam is not None else scenario
                     live = plan_transport_leg(grid_world(sc_), start, planner_config, geometry=geometry,
                                               travel_config=travel_config, **grid_kwargs(None))
-                    if live.status == "invalid_start":
+                    if live.status in ("invalid_start", "no_path"):
                         live = plan_transport_leg(grid_world(sc_), start, replace(planner_config, clearance_m=0.0),
                                                   geometry=geometry,
                                                   travel_config=replace(travel_config, clearance_m=0.0) if travel_config is not None else None,
@@ -4647,22 +4648,36 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     sc_ = scenario if slam is None else slam.get("return_scenario", slam.get("transport_scenario", scenario))
                     live = plan_return_leg(grid_world(sc_), start, return_to_pose, planner_config, geometry=geometry,
                                            travel_config=travel_config, **grid_kwargs("return", sc_.destination))
-                    if live.status == "invalid_start":
+                    if live.status in ("invalid_start", "no_path"):
                         live = plan_return_leg(grid_world(sc_), start, return_to_pose, replace(planner_config, clearance_m=0.0),
                                                geometry=geometry,
                                                travel_config=replace(travel_config, clearance_m=0.0) if travel_config is not None else None,
                                                **grid_kwargs("return", sc_.destination))
                 obstacle["deadline"] = None
                 obstacle.setdefault("live_plans", []).append({"phase": phase, "time_s": t, "status": live.status})
-                require(live.success, f"obstacle_live_plan_failed in {phase}: {live.status}")
-                paths[phase] = live
-                state["paths"][phase] = path_record(live)
-                (args.output / "paths.json").write_text(record_json(state["paths"], indent=2) + "\n")
-                trackers[phase] = RearAxlePathTracker(live.poses, live.directions, live.curvatures_inv_m, trackers[phase].config)
-                if phase == "transport" and slam is not None:
-                    arm_docking()
-                phase_started = t
+                if not live.success:
+                    # Standing, the grid keeps updating (the cells the carried
+                    # pallet stood on clear once seen again): retry each second,
+                    # five times, before giving up (L3c v41 seed 4: no_path at the
+                    # first transport plan, which v38 planned through).
+                    tries = sum(1 for lp in obstacle["live_plans"] if lp["phase"] == phase)
+                    require(tries < 5, f"obstacle_live_plan_failed in {phase}: {live.status}")
+                    obstacle["live_replanned"][phase] = False
+                    obstacle["live_retry_after_s"] = t + 1.0
+                else:
+                    paths[phase] = live
+                    state["paths"][phase] = path_record(live)
+                    (args.output / "paths.json").write_text(record_json(state["paths"], indent=2) + "\n")
+                    trackers[phase] = RearAxlePathTracker(live.poses, live.directions, live.curvatures_inv_m, trackers[phase].config)
+                    if phase == "transport" and slam is not None:
+                        arm_docking()
+                    phase_started = t
                 requested_speed = 0.0
+            elif (
+                grid_planning and phase in ("transport", "return_home") and phase in trackers
+                and not obstacle["live_replanned"].get(phase)
+            ):
+                requested_speed = 0.0  # waiting to retry the live plan: stand
             if new_obstacles is not None and phase in trackers:
                 leg, _ = trackers[phase].leg_ahead()
                 driven = float(trackers[phase]._distance[-1]) - trackers[phase].remaining_to_goal_m()
