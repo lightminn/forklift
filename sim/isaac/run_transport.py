@@ -22,6 +22,9 @@ import numpy as np
 EXIT_CLEARANCE_M = 0.08
 
 
+# Braking into the mid-approach standing frame (a planned stop).
+MID_STILL_DECEL_MPS2 = 0.8
+
 def load_perception_module(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
@@ -4289,6 +4292,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         )
                         if lp < allowed:
                             allowed, why = lp, wp
+                        if phase == "approach" and not pocket.get("mid_still_done"):
+                            # The standing frame is a planned stop: brake into it at
+                            # MID_STILL_DECEL_MPS2, not as a step (L3c v35 seed 4: a step
+                            # from 0.53 m/s locked an odometry wheel, the held pose fell
+                            # 1.85 cm behind and the face read as an obstacle).
+                            cap = max(0.05, math.sqrt(2.0 * MID_STILL_DECEL_MPS2
+                                                      * max(0.0, trackers[phase].remaining_to_goal_m() - 0.45)))
+                            if cap < allowed:
+                                allowed, why = cap, "pocket_settle_brake"
                         if wp != "ok" and pocket.get("last_reason") != wp:
                             # Kept now: a stop that ends the run must leave its evidence.
                             pocket["last_reason"] = wp
