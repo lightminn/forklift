@@ -144,6 +144,11 @@ class ClearanceMemory:
 
     def __post_init__(self) -> None:
         self.certified_s = np.full(self.volume.shape, -np.inf)
+        # Diagnostics: per voxel, how the latest frame that had it in view saw
+        # it -- 0 never in view, 1 certified, 2 passed but eroded, 3 return in
+        # front on a known surface, 4 return in front off the surfaces,
+        # 5 within the margin / no valid return.
+        self.last_code = np.zeros(self.volume.shape, dtype=np.int8)
 
     def solid_conflict(self, solids: list) -> int:
         """Voxels of V overlapping any estimated pallet solid (a planned collision)."""
@@ -213,6 +218,15 @@ class ClearanceMemory:
             free_grid = _box_filter(free_grid, k, np.min)
         certified = free_grid & self.volume.in_v
         self.certified_s[certified] = float(stamp_s)
+        seen = inside & in_v
+        code = np.full(len(idx), 5, dtype=np.int8)
+        code[free] = 2
+        code[front] = 3
+        if front.any() and obstacle_count:
+            code[np.flatnonzero(front)[~pallet]] = 4
+        si = idx[seen]
+        self.last_code[si[:, 0], si[:, 1], si[:, 2]] = code[seen]
+        self.last_code[certified] = 1
         record = {"time_s": float(stamp_s), "voxels": int(in_v.sum()), "free": int(certified.sum()),
                   "in_view": int((inside & in_v).sum()), "obstacle": obstacle_count, "erosion_voxels": k}
         self.frames.append(record)

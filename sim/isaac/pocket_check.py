@@ -312,6 +312,7 @@ class PocketCheck:
             "never_certified": int((~np.isfinite(age) | (age > 1e9)).sum()),
             "expired": int((np.isfinite(age) & (age > self.config.lifetime_s) & (age < 1e9)).sum()),
             "examples_insertion": np.round(centres[:12], 3).tolist(),
+            "examples_last_code": [int(self.memory.last_code[tuple(b)]) for b in bad[:12]],
         }
 
     def _to_insertion_points(self, entry) -> list:
