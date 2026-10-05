@@ -225,9 +225,9 @@ class PocketCheck:
     def depth_free_cells(self, snapshot, now_s: float) -> dict:
         """Grid cells (snapshot indices) whose whole square lies over the body
         band and whose every body-band voxel column was certified within the
-        lifetime: {cell: oldest certification time}. Evidence for the
+        lifetime: {cell: time of the newest frame's pixels}. Evidence for the
         shadow-band memory around the face (it never waives a cell itself)."""
-        if not self.valid or self.memory.obstacle:
+        if not self.valid or self.memory.obstacle or now_s - (self.last_new_s - self.config.frame_lag_s) > self.config.frame_max_age_s:
             return {}
         vol = self.memory.volume
         v = vol.voxel_m
@@ -261,7 +261,11 @@ class PocketCheck:
                 block = self.memory.certified_s[vi0:vi1, vj0:vj1, k0:k1]
                 inv = vol.in_v[vi0:vi1, vj0:vj1, k0:k1]
                 if block.size and inv.all() and (now_s - block <= self.config.lifetime_s).all():
-                    out[(i, j)] = float(block.min())
+                    # Certified within the lifetime and watched by the live depth
+                    # stream (a new hit there latches an obstacle): as current as
+                    # the newest frame, never older (L3c v10: certification times
+                    # handed on made the grid's 0.2 s freshness fail).
+                    out[(i, j)] = float(self.last_new_s - self.config.frame_lag_s)
         return out
 
     def region_control(self):
