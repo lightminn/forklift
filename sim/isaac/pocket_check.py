@@ -41,7 +41,12 @@ class PocketConfig:
     tracking_m: float = 0.006  # path-tracking deviation the columns allow (S2 dry runs: <= 2.2 mm)
     lifetime_s: float = 20.0  # unverified; the run records the drift that would justify it
     band_ahead_m: float = 0.10  # fork columns start this far in front of the face
-    band_along_m: float = 0.425  # exemption region along the axis past each face (bias + grid swelling)
+    # Exemption region (and body band) along the axis past the face. Past the
+    # carriage face's place at the approach end (face - gap 0.10 - forks 0.406 =
+    # 0.506 m) with room, so the face crosses the region's edge while driving
+    # the straight, never while starting the insertion slowly from a stand
+    # (L3c v8, v12 seed 3: the straddling face cells' memory had aged out).
+    band_along_m: float = 0.60
     band_across_m: float = 0.20
     real_stop_extra_m: float = 0.02  # columns reach insertion depth + the real stop
     frame_max_age_s: float = 0.2

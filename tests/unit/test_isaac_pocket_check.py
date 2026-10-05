@@ -225,4 +225,4 @@ def test_depth_certified_body_band_cells_are_offered_as_memory_evidence():
     assert cells
     for (i, j) in cells:
         x = -2.0 + (i + 0.5) * 0.05
-        assert FACE - 0.425 <= x <= FACE  # only over the body band
+        assert FACE - 0.60 <= x <= FACE  # only over the body band
