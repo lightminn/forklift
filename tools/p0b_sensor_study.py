@@ -238,6 +238,24 @@ def scene_props(scene_usda: Path):
     return out
 
 
+def clip_triangle_z(tri: np.ndarray, z_min: float) -> list:
+    """The part of a 3D triangle with z >= z_min, as 0-2 triangles (Sutherland-Hodgman)."""
+    if z_min <= -np.inf or tri[:, 2].min() >= z_min:
+        return [tri]
+    poly = []
+    for i in range(3):
+        a, b = tri[i], tri[(i + 1) % 3]
+        a_in, b_in = a[2] >= z_min, b[2] >= z_min
+        if a_in:
+            poly.append(a)
+        if a_in != b_in:
+            t = (z_min - a[2]) / (b[2] - a[2])
+            poly.append(a + t * (b - a))
+    if len(poly) < 3:
+        return []
+    return [np.array([poly[0], poly[i], poly[i + 1]]) for i in range(1, len(poly) - 1)]
+
+
 def triangle_cells(tri2d: np.ndarray, res: float) -> np.ndarray:
     """Cells (i, j) on a world grid of size res (origin 0) whose square overlaps a 2D triangle (separating axes)."""
     lo = np.floor(tri2d.min(axis=0) / res).astype(int)
@@ -291,9 +309,13 @@ def sections_command(args) -> dict:
         tris = local[name]
         world = (np.c_[tris.reshape(-1, 3), np.ones(len(tris) * 3)] @ xf)[:, :3].reshape(-1, 3, 3)
         zlo, zhi = world[:, :, 2].min(axis=1), world[:, :, 2].max(axis=1)
-        for tri in world[(zhi >= 0.0) & (zlo <= args.projection_top_m)]:
-            for c in triangle_cells(tri[:, :2], 0.05):
-                proj[(int(c[0]), int(c[1]))] = k
+        for tri in world[(zhi >= args.projection_bottom_m) & (zlo <= args.projection_top_m)]:
+            # Only the part at or above projection_bottom_m: a protrusion lower
+            # than that (a cone's base plate under 0.03 m) is outside the
+            # operating scope (D0, user decision 2026-10-05).
+            for part in clip_triangle_z(tri, args.projection_bottom_m):
+                for c in triangle_cells(part[:, :2], 0.05):
+                    proj[(int(c[0]), int(c[1]))] = k
     payload["proj_cells"] = np.array(list(proj.keys()), dtype=int).reshape(-1, 2)
     payload["proj_owner"] = np.array(list(proj.values()), dtype=int)
     for h in heights:
@@ -771,6 +793,7 @@ def main() -> None:
     s.add_argument("--assets", type=Path, required=True)
     s.add_argument("--heights", default="0.03,0.06,0.08,0.10,0.12,0.14,0.18,0.20,0.25,0.35,0.50,0.75,1.00,1.05")
     s.add_argument("--projection-top-m", type=float, default=1.05)
+    s.add_argument("--projection-bottom-m", type=float, default=0.0)
     s.add_argument("--output", type=Path, required=True)
     e = sub.add_parser("evaluate")
     e.add_argument("--run", type=Path, required=True)
