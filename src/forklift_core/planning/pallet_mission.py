@@ -943,6 +943,24 @@ def plan_transport(
             deadline=deadline,
         ),
     )
+    if transport.status == "invalid_start" and occupancy is not None:
+        # The extracted pose sits where the pallet was: within the travel
+        # clearance of a grid mark beside it (L3c seed 4). As the runner's
+        # replans do, once more with no clearance -- the swelling holds the
+        # placement error and the permission guards every tick.
+        transport = note(
+            "transport_search_tight",
+            _search(
+                pickup["extracted"],
+                destination["predelivery"],
+                props,
+                geometry.loaded_footprint,
+                scenario.bounds,
+                replace(travel_config, clearance_m=0.0),
+                occupancy=docking_occupancy if docking_occupancy is not None else occupancy,
+                deadline=deadline,
+            ),
+        )
     if not transport.success:
         return MissionPlan(False, f"transport:{transport.status}")
     transport_tail = note(
