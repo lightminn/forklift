@@ -651,8 +651,10 @@ def test_same_path_waits_do_not_count_as_retries():
 
 def test_wheel_target_brakes_at_the_stopping_model_deceleration():
     source = SCRIPT.read_text()
-    i = source.index('if obstacle is not None and obstacle.get("act"):')
+    # The flag is args.obstacle_act: the obstacle dict has no "act" key (L3c v37 never slewed).
+    i = source.index("if obstacle is not None and args.obstacle_act:\n                # A step wheel target")
     block = source[i : source.index("drive = ackermann_command(requested_speed", i)]
     assert "permission.config.stopping.decel_mps2" in block
     assert "COMMAND_ACCEL_MPS2" in block
     assert "if estop_holding:" in block
+    assert 'obstacle.get("act")' not in source and 'obstacle["act"]' not in source

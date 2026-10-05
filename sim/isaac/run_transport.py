@@ -4685,7 +4685,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             if estop_holding or obstacle_hold:
                 # Zero every wheel target at once, steering held (plan D4).
                 requested_speed = 0.0
-            if obstacle is not None and obstacle.get("act"):
+            if obstacle is not None and args.obstacle_act:
                 # A step wheel target locked an odometry wheel (L3c v35/v36 seed 4:
                 # the held pose lost 1.85 and 2.80 cm). Brake at the stopping
                 # model's own deceleration, so its distance still holds, and pull
