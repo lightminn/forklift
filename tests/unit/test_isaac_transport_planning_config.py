@@ -658,3 +658,10 @@ def test_wheel_target_brakes_at_the_stopping_model_deceleration():
     assert "COMMAND_ACCEL_MPS2" in block
     assert "if estop_holding:" in block
     assert 'obstacle.get("act")' not in source and 'obstacle["act"]' not in source
+
+
+def test_loose_arrival_only_at_observation_waypoints():
+    source = SCRIPT.read_text()
+    i = source.index("# The tracker stops at a path end it missed sideways")
+    head = source[source.rindex("if (", 0, i) : i]
+    assert 'phase == "observe"' in head and "OBSERVE_ARRIVAL_M" in head

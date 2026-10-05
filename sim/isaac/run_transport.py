@@ -26,6 +26,9 @@ EXIT_CLEARANCE_M = 0.08
 MID_STILL_DECEL_MPS2 = 0.8
 # Pull-away limit for the wheel target with the obstacle layer acting.
 COMMAND_ACCEL_MPS2 = 0.8
+# An observation waypoint missed by at most this much, standing, is arrival.
+OBSERVE_ARRIVAL_M = 0.10
+OBSERVE_ARRIVAL_YAW_RAD = 0.10
 
 
 def same_path(new, current, remaining_m: float, tol_m: float = 0.05, yaw_tol_rad: float = 0.1) -> bool:
@@ -3423,6 +3426,28 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 )
                 if slam is not None and not slam["tracker"].may_drive():
                     requested_speed = 0.0  # warming up: hold still
+                if (
+                    phase == "observe" and tracking.status == "tracking"
+                    and trackers[phase].remaining_to_goal_m() <= 1e-9 and abs(tracking.speed_mps) < 1e-12
+                    and tracking.position_error_m <= OBSERVE_ARRIVAL_M
+                    and abs(tracking.yaw_error_rad) <= OBSERVE_ARRIVAL_YAW_RAD
+                ):
+                    # The tracker stops at a path end it missed sideways and never
+                    # arrives (L3c v38 seed 3: 6.1 cm off an arc's end). An
+                    # observation waypoint is a viewpoint, not a docking pose:
+                    # perception uses the pose the truck stands at. Standing 1 s
+                    # within OBSERVE_ARRIVAL_M is arrival there.
+                    loose = state.setdefault("observe_loose_arrival", {})
+                    loose.setdefault("since_s", t)
+                    if t - loose["since_s"] >= 1.0:
+                        state.setdefault("observe_loose_arrivals", []).append(
+                            {"time_s": t, "position_error_m": tracking.position_error_m,
+                             "yaw_error_rad": tracking.yaw_error_rad}
+                        )
+                        state.pop("observe_loose_arrival", None)
+                        tracking = replace(tracking, status="arrived")
+                else:
+                    state.pop("observe_loose_arrival", None)
                 if tracking.status == "arrived":
                     if args.use_perception and phase == "observe":
                         attempt_number = len(state["observation_attempts"]) + 1
