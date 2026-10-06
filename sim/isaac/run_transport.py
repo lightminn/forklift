@@ -480,6 +480,11 @@ def arguments() -> argparse.Namespace:
         parser.error("--obstacle-act needs --obstacle-layer")
     if args.grid_planning and not args.obstacle_act:
         parser.error("--grid-planning needs --obstacle-act")
+    if args.grid_planning and args.runtime_viewpoints:
+        # The runtime viewpoints count the pickup pallet's true rectangle as
+        # occupied: a ground-truth planning input the grid plan must not have
+        # (plan audit table, 2026-10-06 audit).
+        parser.error("--runtime-viewpoints uses the true pallet rectangle; not with --grid-planning")
     if args.pocket_check and not args.obstacle_act:
         # Without the layer the check is never asked, without acting a zero
         # limit never reaches the wheels (Codex L3c P1).
