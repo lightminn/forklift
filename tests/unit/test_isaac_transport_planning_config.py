@@ -807,3 +807,22 @@ def test_grid_kwargs_never_reads_slam_before_it_exists():
     assert bare == []
     attrs = [n.lineno for n in ast.walk(fn) if isinstance(n, ast.Attribute) and n.attr == "slam_ref"]
     assert attrs == []  # the memory's attribute is .slam (l5_video7: AttributeError)
+
+
+def test_slam_ref_lives_only_inside_grid_kwargs():
+    # L3c l5_video8: the rename to slam_ref also hit `slam = None` and the
+    # link's `slam = {...}`, so the main loop's `slam` was never bound.
+    tree = ast.parse(SCRIPT.read_text())
+    fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "grid_kwargs")
+    inside = {id(n) for n in ast.walk(fn)}
+    stray = [n.lineno for n in ast.walk(tree) if isinstance(n, ast.Name) and n.id == "slam_ref" and id(n) not in inside]
+    assert stray == []
+    run = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "run")
+    bound = [
+        t.id
+        for n in ast.walk(run)
+        if isinstance(n, ast.Assign)
+        for t in n.targets
+        if isinstance(t, ast.Name)
+    ]
+    assert bound.count("slam") >= 2  # slam = None, then the link

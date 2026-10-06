@@ -2028,7 +2028,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     frame_audit = []
     video_frames = []
     slam_log = None
-    slam_ref = None
+    slam = None
     # step_world replaces this before the main loop; captures call through it.
     stepper = {"fn": lambda render: world.step(render=render), "tick": 0}
     if args.record_slam:
@@ -2079,7 +2079,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             scenario.start_rear.y_m,
             scenario.start_rear.yaw_rad,
         )
-        slam_ref = {
+        slam = {
             "link": slam_link.SlamLinkClient(
                 str(args.slam_feedback), timeout_s=args.slam_reply_timeout
             ),
