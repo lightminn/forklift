@@ -4782,10 +4782,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     # pose cannot meet it) -- this evaluator was a sixth of the
                     # wall time (L3c v50 profile).
                     arc_xy = np.asarray(arc, dtype=float)[1:, :2]
+                    # The margin inflates length and width both: it goes inside the hypot.
                     reach_now = max(
-                        math.hypot(abs(lon_) + max(fp_.front_m, fp_.rear_m), abs(lat_) + fp_.half_width_m)
+                        math.hypot(abs(lon_) + max(fp_.front_m, fp_.rear_m) + pconf.envelope_offset_m,
+                                   abs(lat_) + fp_.half_width_m + pconf.envelope_offset_m)
                         for fp_, lat_, lon_ in PARTS_OF(shape_now)
-                    ) + pconf.envelope_offset_m
+                    )
                     for oid, rect in enumerate(checked_obstacles):
                         if len(arc_xy) and float(np.min(np.hypot(arc_xy[:, 0] - rect.x_m, arc_xy[:, 1] - rect.y_m))) > (
                             reach_now + math.hypot(rect.length_m, rect.width_m) / 2 + 1e-6
