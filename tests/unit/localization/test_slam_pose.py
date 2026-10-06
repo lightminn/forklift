@@ -235,3 +235,12 @@ def test_tracker_speed_from_rest_follows_the_command_sign_not_the_noise():
     detector.update(commanded_speed=-0.003, speed=0.002, yaw_rate=0.0)
     assert not detector.stopped
     assert detector.tracker_speed(0.012) < 0
+
+
+def test_spec_range_noise_follows_the_a2m12_maximum_error_row():
+    near = OdometryNoise(seed=4, range_model="a2m12").ranges(np.full(20000, 2.0), range_min_m=0.2, range_max_m=12.0)
+    far = OdometryNoise(seed=4, range_model="a2m12").ranges(np.full(20000, 8.0), range_min_m=0.2, range_max_m=12.0)
+    assert np.std(near - 2.0) == pytest.approx(0.02, rel=0.05)
+    assert np.std(far - 8.0) == pytest.approx(0.20, rel=0.05)
+    with pytest.raises(ValueError):
+        OdometryNoise(seed=0, range_model="other")

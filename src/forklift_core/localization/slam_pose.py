@@ -307,11 +307,18 @@ class OdometryNoise:
         wheel_rate_std_rad_s: float = 0.2,
         steering_std_rad: float = 0.005,
         range_std_m: float = 0.02,
+        range_model: str = "constant",
     ):
         self.enabled = bool(enabled)
         self.wheel_rate_std_rad_s = wheel_rate_std_rad_s
         self.steering_std_rad = steering_std_rad
         self.range_std_m = range_std_m
+        # "constant": range_std_m on every beam. "a2m12": the RPLIDAR A2M12
+        # datasheet maximum error as sigma -- 1 % of range up to 3 m, 2 % to
+        # 5 m, 2.5 % beyond (week-6 spec-noise runs).
+        if range_model not in ("constant", "a2m12"):
+            raise ValueError("range_model must be 'constant' or 'a2m12'")
+        self.range_model = range_model
         self._ranges = np.random.default_rng([seed, 0])
         self._wheels = np.random.default_rng([seed, 1])
         self._steering = np.random.default_rng([seed, 2])
@@ -333,7 +340,12 @@ class OdometryNoise:
         if not self.enabled:
             return out
         measured = np.isfinite(out)
-        out[measured] += self._ranges.normal(0, self.range_std_m, int(measured.sum()))
+        if self.range_model == "a2m12":
+            r = out[measured]
+            sigma = np.where(r <= 3.0, 0.01, np.where(r <= 5.0, 0.02, 0.025)) * r
+            out[measured] += self._ranges.normal(0, 1.0, int(measured.sum())) * sigma
+        else:
+            out[measured] += self._ranges.normal(0, self.range_std_m, int(measured.sum()))
         out[measured] = np.clip(out[measured], range_min_m, range_max_m)
         return out
 
