@@ -154,3 +154,24 @@ def test_an_outside_spawn_takes_the_outer_side_of_the_curve():
     out = sched.update(0.0, "transport", 1.0, left)
     x, y, _ = MODULE.pose_along(left, 1.0, -0.75)  # the outside of a left turn is to the right
     assert math.isclose(out[0][2], x) and math.isclose(out[0][3], y)
+
+
+def test_a_sweep_checked_spawn_takes_the_widest_side_offset_the_turn_meets_and_a_straight_clears():
+    # Codex checkpoint 14: the curvature rule alone placed a box no sweep met.
+    calls = []
+
+    def sweep(box, path):
+        calls.append(box[3] if False else None)
+        lateral = abs(box[1])  # the test path runs along x: |y| is the side offset
+        return lateral <= 0.65, lateral <= 0.55  # the turn reaches 0.65, a straight 0.55
+
+    theta = np.linspace(0, 1.5, 61)
+    left = np.column_stack((2 * np.sin(theta), 2 * (1 - np.cos(theta)), theta))
+    path = np.column_stack((np.linspace(0, 4, 41), np.zeros(41), np.zeros(41)))
+    sched = MODULE.Schedule([MODULE.Event("n3", "spawn", "transport", 0.0, ahead_m=1.0, lateral_m=0.75,
+                                          outside=True, sweep=True)])
+    out = sched.update(0.0, "transport", 1.0, path, sweep_test=lambda b, p: sweep((b[0], b[1]), p))
+    assert out and math.isclose(abs(out[0][3]), 0.65)
+    never = MODULE.Schedule([MODULE.Event("n3", "spawn", "transport", 0.0, ahead_m=1.0, lateral_m=0.75, sweep=True)])
+    assert never.update(0.0, "transport", 1.0, path, sweep_test=lambda b, p: (False, False)) == []
+    assert not never.events[0].fired  # waits for a later tick

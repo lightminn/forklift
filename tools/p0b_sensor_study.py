@@ -718,18 +718,19 @@ def evaluate_command(args) -> dict:
                 # The memory sees every scan, as the runner's does; only the
                 # statistics are filtered (Codex P2).
                 snap = shadow.apply(snap, tuple(tr), own_now)
-            if true_mask is not None and k % args.free_check_every == 0:
+            if k % args.free_check_every == 0:
                 from forklift_core.perception.obstacle_grid import OCCUPIED as _OCC
 
                 occ = np.argwhere(snap.state == _OCC)
                 if len(occ):
                     wx = snap.origin_x_m + (occ[:, 0] + 0.5) * snap.resolution_m
                     wy = snap.origin_y_m + (occ[:, 1] + 0.5) * snap.resolution_m
-                    gi_ = np.floor(wx / res_w).astype(int) - true_mask[1]
-                    gj_ = np.floor(wy / res_w).astype(int) - true_mask[2]
-                    inside_ = (gi_ >= 0) & (gi_ < true_mask[0].shape[0]) & (gj_ >= 0) & (gj_ < true_mask[0].shape[1])
                     true_ = np.zeros(len(occ), dtype=bool)
-                    true_[inside_] = true_mask[0][gi_[inside_], gj_[inside_]]
+                    if true_mask is not None:  # no static projection: pallet and boxes still judged (Codex checkpoint 14)
+                        gi_ = np.floor(wx / res_w).astype(int) - true_mask[1]
+                        gj_ = np.floor(wy / res_w).astype(int) - true_mask[2]
+                        inside_ = (gi_ >= 0) & (gi_ < true_mask[0].shape[0]) & (gj_ >= 0) & (gj_ < true_mask[0].shape[1])
+                        true_[inside_] = true_mask[0][gi_[inside_], gj_[inside_]]
                     pal_rect = Rectangle(ppos[0], ppos[1], geometry["pallet_depth_m"], geometry["pallet_width_m"], pyaw)
                     true_ |= near_rect(wx, wy, pal_rect, false_tol)
                     for b_ in alive:

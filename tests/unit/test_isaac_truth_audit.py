@@ -53,3 +53,9 @@ def test_the_delivery_docking_sweep_uses_the_grid_when_grid_planning():
 
 def test_runtime_viewpoints_cannot_join_grid_planning():
     assert "--runtime-viewpoints uses the true pallet rectangle; not with --grid-planning" in SOURCE
+
+
+def test_grid_planning_plans_on_perception_only():
+    # Codex checkpoint 14: without recognition, or with an oracle target, the
+    # planner reads the pickup pallet's true pose.
+    assert '"--grid-planning needs --use-perception and --planning-target perception"' in SOURCE

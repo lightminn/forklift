@@ -50,6 +50,7 @@ class Event:
     min_curvature_inv_m: float = 0.0  # path frame: wait until the path curves this much there (N3)
     inside: bool = False  # path frame: lateral_m measured to the inside of that curve
     outside: bool = False  # path frame: lateral_m measured to the outside of that curve (N3)
+    sweep: bool = False  # path frame: place only where the path's sweep meets it and a straight's does not
     fired: bool = False
     fired_s: float | None = None
 
@@ -69,7 +70,7 @@ def load_events(path: Path) -> list[Event]:
                 on_reverse=bool(e.get("on_reverse", False)),
                 leg=str(e.get("leg", "reverse" if e.get("on_reverse") else "any")), group=e.get("group"),
                 min_curvature_inv_m=float(e.get("min_curvature_inv_m", 0.0)), inside=bool(e.get("inside", False)),
-                outside=bool(e.get("outside", False)),
+                outside=bool(e.get("outside", False)), sweep=bool(e.get("sweep", False)),
             )
         )
         if out[-1].action not in ("spawn", "remove", "silence"):
@@ -119,7 +120,7 @@ class Schedule:
     log: list = field(default_factory=list)
 
     def update(self, t: float, phase: str, driven_m: float, path_ahead: np.ndarray | None, *,
-               leg_direction: int = 1, pallet_face: tuple | None = None) -> list[tuple]:
+               leg_direction: int = 1, pallet_face: tuple | None = None, sweep_test=None) -> list[tuple]:
         """Actions due now: ('spawn', id, x, y, yaw, size) / ('remove', id) / ('silence', sensor).
 
         ``pallet_face`` is (x, y, insertion yaw) of the approach face centre."""
@@ -166,6 +167,27 @@ class Schedule:
                         elif e.outside:
                             lateral = -math.copysign(abs(e.lateral_m), kappa)
                     x, y, yaw = pose_along(path_ahead, e.ahead_m, lateral)
+                    if e.sweep:
+                        # From lateral_m inward in 0.05 m steps: the widest offset
+                        # the path's own sweep meets while a straight's sweep does
+                        # not; none -> wait (Codex checkpoint 14: a curvature
+                        # threshold alone placed a box no sweep met).
+                        if sweep_test is None:
+                            continue
+                        chosen = None
+                        side = math.copysign(1.0, lateral) if lateral != 0 else 1.0
+                        for k_ in range(int(round(abs(lateral) / 0.05)) + 1):
+                            off = side * (abs(lateral) - 0.05 * k_)
+                            if abs(off) < 0.05:
+                                break
+                            cx, cy, cyaw = pose_along(path_ahead, e.ahead_m, off)
+                            meets_path, meets_straight = sweep_test((cx, cy, cyaw, e.size_m), path_ahead)
+                            if meets_path and not meets_straight:
+                                chosen = (cx, cy, cyaw)
+                                break
+                        if chosen is None:
+                            continue
+                        x, y, yaw = chosen
                 self.spawned[e.id] = (x, y, yaw, e.size_m)
                 due.append(("spawn", e.id, x, y, yaw, e.size_m))
             elif e.action == "remove":

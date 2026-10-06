@@ -756,7 +756,7 @@ def test_pocket_bars_are_judged_against_the_block_columns_not_the_outline():
 def test_a_backoff_offers_no_leg_to_the_rules_and_silence_is_traced():
     source = SCRIPT.read_text()
     i = source.index('for action in new_obstacles["schedule"].update(')
-    assert "leg_direction = 0  # a backoff is not a leg of the phase" in source[i - 300 : i]
+    assert "leg_direction = 0  # a backoff is not a leg of the phase" in source[i - 2500 : i]
     assert 'trace.setdefault("first_zero_s", t)' in source and '"silence_trace": obstacle.get("silence_trace")' in source
     j = source.index('obstacle["permission_cap"] = (t, float(allowed))')
     assert 'trace.setdefault("first_zero_s", t)' in source[j : j + 900]  # at the cap the wheels take (Codex checkpoint 11)

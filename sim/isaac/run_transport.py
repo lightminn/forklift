@@ -480,6 +480,11 @@ def arguments() -> argparse.Namespace:
         parser.error("--obstacle-act needs --obstacle-layer")
     if args.grid_planning and not args.obstacle_act:
         parser.error("--grid-planning needs --obstacle-act")
+    if args.grid_planning and not (args.use_perception and args.planning_target == "perception"):
+        # Without recognition, or with an oracle target, the planner reads the
+        # pickup pallet's true pose (Codex checkpoint 14): grid planning plans
+        # on perception only (plan audit table).
+        parser.error("--grid-planning needs --use-perception and --planning-target perception")
     if args.grid_planning and args.runtime_viewpoints:
         # The runtime viewpoints count the pickup pallet's true rectangle as
         # occupied: a ground-truth planning input the grid plan must not have
@@ -4971,8 +4976,29 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     pallet_face = (float(ppos[0]) - half * math.cos(hy), float(ppos[1]) - half * math.sin(hy), hy)
                 if obstacle is not None and obstacle.get("backoff", {}).get("phase") == phase:
                     leg_direction = 0  # a backoff is not a leg of the phase (Codex checkpoint 9 P1)
+                def n_sweep_test(box, path_, loaded_=loaded):
+                    # N3: does the truck's own sweep along the path ahead (first
+                    # 4 m) meet the box, and would a straight run of that length
+                    # from here meet it? (Codex checkpoint 14)
+                    from forklift_core.planning.geometry import Bounds as SBounds
+
+                    bx_, by_, byaw_, bsize_ = box
+                    rect_ = Rectangle(float(bx_), float(by_), float(bsize_[0]), float(bsize_[1]), float(byaw_))
+                    fp_ = geometry.loaded_footprint if loaded_ else geometry.unloaded_footprint
+                    chk_ = FootprintCollisionChecker([rect_], fp_, SBounds(-1e6, 1e6, -1e6, 1e6))
+                    pts_ = np.asarray(path_, dtype=float)
+                    seg_ = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(pts_[:, :2], axis=0).T))))
+                    pts_ = pts_[seg_ <= 4.0]
+                    meets_path_ = any(not chk_.free(tuple(p_)) for p_ in pts_)
+                    x0_, y0_, h0_ = (float(v) for v in pts_[0])
+                    line_ = [(x0_ + d_ * math.cos(h0_), y0_ + d_ * math.sin(h0_), h0_)
+                             for d_ in np.arange(0.0, min(4.0, seg_[-1]) + 1e-9, 0.025)]
+                    meets_line_ = any(not chk_.free(p_) for p_ in line_)
+                    return meets_path_, meets_line_
+
                 for action in new_obstacles["schedule"].update(
-                    t, phase, driven, leg, leg_direction=int(leg_direction), pallet_face=pallet_face
+                    t, phase, driven, leg, leg_direction=int(leg_direction), pallet_face=pallet_face,
+                    sweep_test=n_sweep_test,
                 ):
                     if action[0] == "spawn":
                         from pxr import Gf as NGf, UsdGeom as NUsdGeom, UsdPhysics as NUsdPhysics

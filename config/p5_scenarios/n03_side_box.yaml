@@ -1,10 +1,11 @@
 # N3 (plan D6): a box in the region the truck's long end sweeps through a turn.
 # With the loaded outline (1.53 m ahead of the axle, 0.17 m behind, 0.40 m half
-# width) the swing is the fork/load end going OUTSIDE the curve. Placed only
-# where the path ahead curves at least 0.3 1/m, 2.5 m ahead, 0.75 m to the
-# outside: its inner face 0.55 m from the path, 0.15 m clear of a straight pass,
-# but met by the turn's sweep (checked on R = 2 m and 3 m arcs, 2026-10-06).
-# Codex checkpoint 10: the earlier inside-0.70 m box met nothing. Expected: stop
-# or avoid, overlap 0. Fixed before any run (revised 2026-10-06).
+# width) the swing is the fork/load end going OUTSIDE the curve. Where the path
+# ahead curves at least 0.3 1/m, 2.5 m ahead, to the outside: the widest offset
+# from 0.75 m inward (0.05 m steps) that the truck's own sweep along the path
+# ahead (first 4 m) meets while a straight run of that length does not --
+# checked at spawn by the runner (Codex checkpoint 14: a curvature threshold
+# alone placed a box no sweep met). None -> it waits. Expected: stop or avoid,
+# overlap 0. Fixed before any run (revised 2026-10-06).
 events:
-  - {id: n3, action: spawn, phase: transport, after_m: 1.0, ahead_m: 2.5, lateral_m: 0.75, min_curvature_inv_m: 0.3, outside: true, size_m: [0.4, 0.4, 0.5]}
+  - {id: n3, action: spawn, phase: transport, after_m: 1.0, ahead_m: 2.5, lateral_m: 0.75, min_curvature_inv_m: 0.3, outside: true, sweep: true, size_m: [0.4, 0.4, 0.5]}
