@@ -142,3 +142,16 @@ def test_an_endpoint_just_outside_the_retraction_stays_even_when_its_cell_centre
     assert gone == 1
     assert m.occupied()[m.cell(1.592, 1.0)] and m.endpoint[m.cell(1.592, 1.0)] == 0.0
     assert not np.isfinite(m.endpoint[m.cell(1.5, 1.0)])
+
+
+def test_a_map_at_another_resolution_dates_every_square_anew():
+    # Codex re-review 4 P1: square [10, 10] at 0.05 m and at 0.10 m share a key
+    # value but are different squares; the second must not inherit t=10.
+    m = PlanningMemory(0.0, 0.0, 3.0, 3.0, 0.05, hit_radius_m=0.0)
+    data = np.full((20, 20), -1, dtype=np.int8)
+    data[10, 10] = SLAM_OCCUPIED
+    m.set_slam(data, (0.0, 0.0), 0.05, stamp_s=10.0, index=1)
+    m.add_clears(np.array([1.05]), np.array([1.05]), np.array([12.0]))
+    m.set_slam(data, (0.0, 0.0), 0.10, stamp_s=20.0, index=2)
+    i, j = m.cell(1.05, 1.05)
+    assert m.slam_since[i, j] == 20.0 and m.occupied()[i, j]

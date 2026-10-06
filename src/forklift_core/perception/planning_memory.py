@@ -80,6 +80,7 @@ class PlanningMemory:
     fine_stamp: np.ndarray = field(init=False)  # their newest endpoint time
     slam_src_key: np.ndarray = field(init=False)  # sorted occupied source squares of the latest map
     slam_src_since: np.ndarray = field(init=False)  # their dates
+    slam_src_res: float | None = field(init=False, default=None)  # the resolution their keys were made at
     last_scan_stamp: float = field(init=False, default=-math.inf)
 
     def __post_init__(self) -> None:
@@ -176,7 +177,10 @@ class PlanningMemory:
             src_key = _key(np.round((origin_xy[0] + u * c - v * s) / half),
                            np.round((origin_xy[1] + u * s + v * c) / half))
             src_since = np.full(len(src_key), float(stamp_s))
-            if len(self.slam_src_key):
+            # A key is a centre at res/2: under another resolution the same key
+            # is another square, so none is known (Codex re-review 4 P1).
+            same_res = self.slam_src_res is not None and abs(self.slam_src_res - resolution_m) < 1e-12
+            if len(self.slam_src_key) and same_res:
                 pos = np.minimum(np.searchsorted(self.slam_src_key, src_key), len(self.slam_src_key) - 1)
                 known = self.slam_src_key[pos] == src_key
                 src_since[known] = self.slam_src_since[pos[known]]
@@ -196,6 +200,7 @@ class PlanningMemory:
                     np.maximum(raw_since[a0:a1, b0:b1], since, out=raw_since[a0:a1, b0:b1])
         order = np.argsort(src_key, kind="stable")
         self.slam_src_key, self.slam_src_since = src_key[order], src_since[order]
+        self.slam_src_res = float(resolution_m)
         mask = np.isfinite(raw_since)
         self.slam_since = np.where(mask, raw_since, np.inf)
         self.slam = mask

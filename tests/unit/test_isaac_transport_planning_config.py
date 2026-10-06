@@ -826,3 +826,13 @@ def test_slam_ref_lives_only_inside_grid_kwargs():
         if isinstance(t, ast.Name)
     ]
     assert bound.count("slam") >= 2  # slam = None, then the link
+
+
+def test_the_pickup_retraction_covers_the_estimate_and_the_range_noise():
+    # Codex re-review 4 P2: a pallet endpoint at -0.059 m noise outlived a
+    # 0.05 m retraction and blocked the loaded start.
+    source = SCRIPT.read_text()
+    i = source.index("retract_endpoints(est_.x_m")
+    block = source[i - 900 : i + 200]
+    assert 'grow_ = 0.05 + obstacle["layer"].noise_cut_m' in block
+    assert "est_.yaw_rad, grow_)" in block

@@ -2336,11 +2336,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             # the loaded start blocked). By the estimate, never the truth.
             est_ = obstacle["pickup_estimate"]
             mem_ = obstacle["layer"].memory
-            # Endpoints only, within the estimate's error: an obstacle beside the
-            # pallet keeps its own (Codex review P1).
+            # Endpoints only, within the estimate's error (0.05 m) and the range
+            # noise bound (noise_cut_m): every endpoint the pallet can have goes
+            # (Codex re-review 4 P2: a -0.059 m noisy one stayed and blocked the
+            # loaded start); a box beyond the 0.12 m placement margin loses only
+            # its endpoints with noise below -0.01 m and keeps the rest (Codex
+            # review P1).
+            grow_ = 0.05 + obstacle["layer"].noise_cut_m
             gone_ = mem_.retract_endpoints(est_.x_m, est_.y_m, geometry.pallet_depth_m, geometry.pallet_width_m,
-                                           est_.yaw_rad, 0.05)
-            obstacle.setdefault("memory_events", []).append({"time_s": t, "event": "retract_pickup", "cells": gone_})
+                                           est_.yaw_rad, grow_)
+            obstacle.setdefault("memory_events", []).append({"time_s": t, "event": "retract_pickup", "cells": gone_,
+                                                                      "grow_m": grow_})
         phase, phase_started = next_phase, t
         state["phase"] = phase
         if slam is None:
