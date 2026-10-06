@@ -603,6 +603,35 @@ def evaluate_command(args) -> dict:
         pts = [(rect.x_m + c * u - s_ * v, rect.y_m + s_ * u + c * v) for u, v in ((hx, hy), (-hx, hy), (-hx, -hy), (hx, -hy))]
         return np.array([[pts[i], pts[(i + 1) % 4]] for i in range(4)])
 
+    # L2 (plan): false occupancy -- an OCCUPIED cell farther than the tolerance
+    # from every true obstacle (the floor projection above, the pallet and the
+    # injected boxes). Tolerance: half the cell diagonal twice (cell to cell),
+    # the odometry bound over the occupied memory's age, and 0.05 m.
+    occ_bound = table.at(args.occupied_age_s)
+    false_tol = res_w * math.sqrt(2) + (occ_bound[0] if occ_bound is not None else 0.3) + 0.05
+    k_tol = int(math.ceil(false_tol / res_w))
+    true_mask = None
+    if len(proj_cells):
+        mi0, mj0 = proj_cells.min(axis=0) - k_tol - 1
+        mi1, mj1 = proj_cells.max(axis=0) + k_tol + 2
+        base_mask = np.zeros((mi1 - mi0, mj1 - mj0), dtype=bool)
+        base_mask[proj_cells[:, 0] - mi0, proj_cells[:, 1] - mj0] = True
+        grown = base_mask.copy()
+        for dx_ in range(-k_tol, k_tol + 1):
+            for dy_ in range(-k_tol, k_tol + 1):
+                if res_w * math.hypot(max(abs(dx_) - 1, 0), max(abs(dy_) - 1, 0)) > false_tol:
+                    continue
+                grown |= np.roll(np.roll(base_mask, dx_, axis=0), dy_, axis=1)
+        true_mask = (grown, mi0, mj0)
+
+    def near_rect(px, py, rect, tol):
+        c_, s_ = math.cos(rect.yaw_rad), math.sin(rect.yaw_rad)
+        u_ = (px - rect.x_m) * c_ + (py - rect.y_m) * s_
+        v_ = -(px - rect.x_m) * s_ + (py - rect.y_m) * c_
+        du = np.maximum(np.abs(u_) - rect.length_m / 2, 0.0)
+        dv = np.maximum(np.abs(v_) - rect.width_m / 2, 0.0)
+        return np.hypot(du, dv) <= tol
+
     report = {}
     for cname, cand in candidates.items():
         alive = list(range(len(injected)))
@@ -618,7 +647,8 @@ def evaluate_command(args) -> dict:
         # Shadow-band memory (D4 delta 2026-10-05); its first snapshot, at the
         # first scan, is start-up.
         shadow = ShadowMemory(args.shadow_band_m, table, evidence_max_age_s=args.free_age_s) if args.shadow_band_m > 0 else None
-        stats = {"events": 0, "unpermitted": [], "moving": {}, "permitted": {}, "free_inside": {}, "scans": 0}
+        stats = {"events": 0, "unpermitted": [], "moving": {}, "permitted": {}, "free_inside": {}, "scans": 0,
+                 "false_occupied": {"scans": 0, "scans_with": 0, "max": 0, "total": 0, "examples": []}}
         for k, t in enumerate(scan_stamps[: args.max_scans]):
             j = int(np.searchsorted(stamps, t))
             if j >= len(stamps):
@@ -688,6 +718,33 @@ def evaluate_command(args) -> dict:
                 # The memory sees every scan, as the runner's does; only the
                 # statistics are filtered (Codex P2).
                 snap = shadow.apply(snap, tuple(tr), own_now)
+            if true_mask is not None and k % args.free_check_every == 0:
+                from forklift_core.perception.obstacle_grid import OCCUPIED as _OCC
+
+                occ = np.argwhere(snap.state == _OCC)
+                if len(occ):
+                    wx = snap.origin_x_m + (occ[:, 0] + 0.5) * snap.resolution_m
+                    wy = snap.origin_y_m + (occ[:, 1] + 0.5) * snap.resolution_m
+                    gi_ = np.floor(wx / res_w).astype(int) - true_mask[1]
+                    gj_ = np.floor(wy / res_w).astype(int) - true_mask[2]
+                    inside_ = (gi_ >= 0) & (gi_ < true_mask[0].shape[0]) & (gj_ >= 0) & (gj_ < true_mask[0].shape[1])
+                    true_ = np.zeros(len(occ), dtype=bool)
+                    true_[inside_] = true_mask[0][gi_[inside_], gj_[inside_]]
+                    pal_rect = Rectangle(ppos[0], ppos[1], geometry["pallet_depth_m"], geometry["pallet_width_m"], pyaw)
+                    true_ |= near_rect(wx, wy, pal_rect, false_tol)
+                    for b_ in alive:
+                        true_ |= near_rect(wx, wy, injected[b_], false_tol)
+                    fo = stats["false_occupied"]
+                    n_false = int((~true_).sum())
+                    fo["scans"] += 1
+                    fo["total"] += n_false
+                    fo["max"] = max(fo["max"], n_false)
+                    if n_false:
+                        fo["scans_with"] += 1
+                        if len(fo["examples"]) < 30:
+                            fo["examples"].append({"t": float(t), "phase": phase, "cells": n_false,
+                                                   "first_m": [float(wx[~true_][0]), float(wy[~true_][0])],
+                                                   "truck": [float(v_) for v_ in tr]})
             if not evaluated:
                 continue
             # Path ahead = what the truck actually drove next (rear axle).
@@ -807,6 +864,7 @@ def evaluate_command(args) -> dict:
             "blocked_reasons": stats.get("blocked_reasons", {}),
             "uncovered_by_phase": stats.get("uncovered_by_phase", {}),
             "uncovered_examples": stats.get("uncovered_examples", []),
+            "false_occupied": {**stats["false_occupied"], "tolerance_m": false_tol},
         }
         print(cname, json.dumps({k: report[cname][k] for k in ("events", "event_objects", "unpermitted_entries", "permission_ratio", "coverage_ratio")}), flush=True)
     return {"run": str(run), "stopping": vars(stopping), "envelope_m": args.envelope_m, "candidates": report}
