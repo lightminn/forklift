@@ -739,3 +739,21 @@ def test_new_obstacle_rules_get_the_leg_direction_the_pallet_face_and_can_silenc
     assert 'phase in ("approach", "insert")' in head and "geometry.pallet_depth_m / 2" in head
     j = source.index("def read_pocket_frame")
     assert '"pocket_camera" in new_obstacles["schedule"].silenced' in source[j : j + 900]
+
+
+def test_pocket_bars_are_judged_against_the_block_columns_not_the_outline():
+    # Codex checkpoint 9 P1: the 0.6 x 0.8 m outline holds the pockets.
+    source = SCRIPT.read_text()
+    assert 'new_obstacles.setdefault("pallet_frame", []).append(rect)' in source
+    i = source.index('f"Measured pallet footprint overlap in {phase}"')
+    head = source[source.rindex("in_outline = []", 0, i) : i]
+    assert "if not any(o is r_ for r_ in in_outline)" in head
+    assert 'f"Measured pallet block overlap in {phase}"' in source[i : i + 1500]
+    assert "BLOCK_COLUMNS.append((_edge + _w / 2, _w / 2))" in source
+
+
+def test_a_backoff_offers_no_leg_to_the_rules_and_silence_is_traced():
+    source = SCRIPT.read_text()
+    i = source.index('for action in new_obstacles["schedule"].update(')
+    assert "leg_direction = 0  # a backoff is not a leg of the phase" in source[i - 300 : i]
+    assert 'trace.setdefault("first_zero_s", t)' in source and '"silence_trace": obstacle.get("silence_trace")' in source

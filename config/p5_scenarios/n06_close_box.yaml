@@ -1,3 +1,9 @@
-# N6 (limit experiment): a box inside the stopping distance. Record the time from first hit to the stop command.
+# N6 (limit experiment -- not a pass condition): a box appears inside the
+# stopping distance on a forward return leg, 0.10 m ahead of the fork tips
+# (rear axle to tip 1.29 m, box half 0.20 m: 1.59 m; the fixed stopping
+# distance at 0.6 m/s is 0.26 m). Codex checkpoint 9 P2: the old 1.45 m met
+# the tips at spawn going forward and was 1.08 m clear going backward. Record
+# the time from the first hit to the stop command and the outcome. Fixed
+# before any run (revised 2026-10-06).
 events:
-  - {id: n6, action: spawn, phase: return_home, after_m: 3.0, ahead_m: 1.45, lateral_m: 0.0, size_m: [0.4, 0.4, 0.5]}
+  - {id: n6, action: spawn, phase: return_home, after_m: 3.0, ahead_m: 1.59, lateral_m: 0.0, leg: forward, size_m: [0.4, 0.4, 0.5]}

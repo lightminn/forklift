@@ -1,3 +1,7 @@
-# N7: a wall across the transport path that cannot be bypassed. Expected: retries, then mission failure.
+# N7 (plan D6): a wall across the transport path, 40 m long, so no detour
+# exists in the hall (Codex checkpoint 9 P2: 6 m did not guarantee it; static
+# colliders crossing racks do not interact). Expected: retries, then mission
+# failure; the final replans must read no_path. Fixed before any run (revised
+# 2026-10-06).
 events:
-  - {id: n7, action: spawn, phase: transport, after_m: 3.0, ahead_m: 2.5, lateral_m: 0.0, size_m: [0.3, 6.0, 0.6]}
+  - {id: n7, action: spawn, phase: transport, after_m: 3.0, ahead_m: 2.5, lateral_m: 0.0, size_m: [0.3, 40.0, 0.6]}

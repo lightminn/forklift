@@ -1,3 +1,9 @@
-# N3: a box beside the transport path, in the swept tail/corner region. Expected: stop or avoid, no overlap.
+# N3 (plan D6): a box inside a curve of the transport path, in the region the
+# truck's corners sweep through a turn. Placed only where the path ahead
+# curves at least 0.3 1/m (radius 3.3 m or less), 0.70 m to the inside of that
+# curve -- its inner face 0.50 m from the path, 0.10 m clear of the 0.40 m
+# loaded half width on a straight, so only the turn's sweep can meet it (Codex
+# checkpoint 9 P2: the old 0.55 m box was met on a straight). Expected: stop or
+# avoid, overlap 0. Fixed before any run (revised 2026-10-06).
 events:
-  - {id: n3, action: spawn, phase: transport, after_m: 4.0, ahead_m: 2.0, lateral_m: 0.55, size_m: [0.4, 0.4, 0.5]}
+  - {id: n3, action: spawn, phase: transport, after_m: 1.0, ahead_m: 1.5, lateral_m: 0.70, min_curvature_inv_m: 0.3, inside: true, size_m: [0.4, 0.4, 0.5]}

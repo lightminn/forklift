@@ -44,8 +44,11 @@ class Event:
     delay_s: float = 0.0
     frame: str = "path"  # path / pallet
     along_m: float = 0.0  # pallet frame: from the approach face, inward positive
-    on_reverse: bool = False  # wait for a reverse leg of the phase (N4)
+    on_reverse: bool = False  # wait for a reverse leg of the phase (N4); same as leg="reverse"
+    leg: str = "any"  # any / forward / reverse: the direction of the leg it waits for
     group: str | None = None  # events sharing a group fire once between them
+    min_curvature_inv_m: float = 0.0  # path frame: wait until the path curves this much there (N3)
+    inside: bool = False  # path frame: lateral_m measured to the inside of that curve
     fired: bool = False
     fired_s: float | None = None
 
@@ -61,15 +64,36 @@ def load_events(path: Path) -> list[Event]:
                 tuple(float(v) for v in e.get("size_m", (0.4, 0.4, 0.5))), e.get("target"),
                 None if e.get("beyond_end_m") is None else float(e["beyond_end_m"]),
                 e.get("after_event"), float(e.get("delay_s", 0.0)),
-                str(e.get("frame", "path")), float(e.get("along_m", 0.0)), bool(e.get("on_reverse", False)),
-                e.get("group"),
+                frame=str(e.get("frame", "path")), along_m=float(e.get("along_m", 0.0)),
+                on_reverse=bool(e.get("on_reverse", False)),
+                leg=str(e.get("leg", "reverse" if e.get("on_reverse") else "any")), group=e.get("group"),
+                min_curvature_inv_m=float(e.get("min_curvature_inv_m", 0.0)), inside=bool(e.get("inside", False)),
             )
         )
         if out[-1].action not in ("spawn", "remove", "silence"):
             raise ValueError(f"unknown action {out[-1].action!r}")
+        if out[-1].on_reverse:
+            out[-1].leg = "reverse"
+        if out[-1].leg not in ("any", "forward", "reverse"):
+            raise ValueError(f"unknown leg {out[-1].leg!r}")
         if out[-1].frame not in ("path", "pallet"):
             raise ValueError(f"unknown frame {out[-1].frame!r}")
     return out
+
+
+def _length(poses: np.ndarray) -> float:
+    return float(np.sum(np.hypot(*np.diff(poses[:, :2], axis=0).T)))
+
+
+def _curvature_at(poses: np.ndarray, distance_m: float, window_m: float = 0.3) -> float:
+    """Signed curvature (left positive) of the polyline around distance_m."""
+    a = pose_along(poses, max(distance_m - window_m, 0.0), 0.0)
+    b = pose_along(poses, distance_m + window_m, 0.0)
+    xy = poses[:, :2]
+    s = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(xy, axis=0).T))))
+    span = min(distance_m + window_m, s[-1]) - max(distance_m - window_m, 0.0)
+    dyaw = math.atan2(math.sin(b[2] - a[2]), math.cos(b[2] - a[2]))
+    return float(dyaw / span) if span > 1e-9 else 0.0
 
 
 def pose_along(poses: np.ndarray, distance_m: float, lateral_m: float):
@@ -103,8 +127,9 @@ class Schedule:
         for e in self.events:
             if e.fired or (e.group is not None and e.group in groups):
                 continue
-            if e.on_reverse and leg_direction >= 0:
-                continue
+            leg = "reverse" if e.on_reverse else e.leg
+            if (leg == "reverse" and leg_direction >= 0) or (leg == "forward" and leg_direction <= 0):
+                continue  # leg_direction 0: no leg of the phase (a backoff)
             if e.after_event is not None:
                 if fired_at.get(e.after_event) is None or t - fired_at[e.after_event] < e.delay_s:
                     continue
@@ -120,6 +145,8 @@ class Schedule:
                     yaw = fyaw
                 elif path_ahead is None or len(path_ahead) < 2:
                     continue
+                elif leg != "any" and e.beyond_end_m is None and _length(path_ahead) < e.ahead_m + 0.5:
+                    continue  # a leg too short would clamp the box to its end (Codex checkpoint 9 P1)
                 elif e.beyond_end_m is not None:
                     ex, ey = path_ahead[-1, 0], path_ahead[-1, 1]
                     eyaw = math.atan2(path_ahead[-1, 1] - path_ahead[-2, 1], path_ahead[-1, 0] - path_ahead[-2, 0])
@@ -127,7 +154,14 @@ class Schedule:
                     y = ey + e.beyond_end_m * math.sin(eyaw) + e.lateral_m * math.cos(eyaw)
                     yaw = eyaw
                 else:
-                    x, y, yaw = pose_along(path_ahead, e.ahead_m, e.lateral_m)
+                    lateral = e.lateral_m
+                    if e.min_curvature_inv_m > 0 or e.inside:
+                        kappa = _curvature_at(path_ahead, e.ahead_m)
+                        if abs(kappa) < e.min_curvature_inv_m:
+                            continue  # not in a curve there yet
+                        if e.inside:
+                            lateral = math.copysign(abs(e.lateral_m), kappa)
+                    x, y, yaw = pose_along(path_ahead, e.ahead_m, lateral)
                 self.spawned[e.id] = (x, y, yaw, e.size_m)
                 due.append(("spawn", e.id, x, y, yaw, e.size_m))
             elif e.action == "remove":
@@ -142,8 +176,11 @@ class Schedule:
             e.fired_s = t
             if e.group is not None:
                 groups.add(e.group)
-            self.log.append({"time_s": t, "event": e.id, "action": e.action, "phase": phase,
-                             "driven_m": driven_m, "detail": list(due[-1][1:])})
+            record = {"time_s": t, "event": e.id, "action": e.action, "phase": phase,
+                      "driven_m": driven_m, "detail": list(due[-1][1:])}
+            if e.action == "spawn" and e.frame == "path" and path_ahead is not None and len(path_ahead) >= 3:
+                record["curvature_inv_m"] = _curvature_at(path_ahead, e.ahead_m)
+            self.log.append(record)
         return due
 
 

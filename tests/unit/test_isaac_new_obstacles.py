@@ -104,3 +104,43 @@ def test_the_rules_load_the_new_fields():
     a, b, c = MODULE.load_events(Path(f.name))
     assert a.frame == "pallet" and a.along_m == 0.3 and a.lateral_m == -0.145
     assert b.on_reverse and b.group == "g" and c.target == "pocket_camera"
+
+
+def test_a_leg_conditioned_spawn_waits_for_a_leg_long_enough():
+    # Codex checkpoint 9 P1: a short reverse leg (a 0.30 m backoff) clamped the
+    # box to its end, inside the truck. A leg-conditioned spawn needs the leg to
+    # reach ahead_m + 0.5 m; a shorter leg leaves the event (and its group) unfired.
+    sched = MODULE.Schedule([MODULE.Event("n4", "spawn", "transport", 0.0, ahead_m=1.5, leg="reverse", group="g")])
+    short = np.column_stack((np.linspace(0, -0.3, 4), np.zeros(4), np.zeros(4)))
+    assert sched.update(0.0, "transport", 1.0, short, leg_direction=-1) == []
+    long_ = np.column_stack((np.linspace(0, -3.0, 31), np.zeros(31), np.zeros(31)))
+    out = sched.update(0.1, "transport", 1.0, long_, leg_direction=-1)
+    assert out and math.isclose(out[0][2], -1.5)
+
+
+def test_a_forward_only_spawn_and_no_leg_during_a_backoff():
+    sched = MODULE.Schedule([MODULE.Event("n6", "spawn", "return_home", 0.0, ahead_m=1.59, leg="forward")])
+    assert sched.update(0.0, "return_home", 1.0, PATH, leg_direction=-1) == []
+    assert sched.update(0.0, "return_home", 1.0, PATH, leg_direction=0) == []  # backoff: no leg
+    assert sched.update(0.1, "return_home", 1.0, PATH, leg_direction=1)[0][1] == "n6"
+
+
+def test_a_spawn_logs_the_path_curvature_there():
+    # N3 is judged afterwards: was the box inside a curve?
+    theta = np.linspace(0, 1.5, 61)
+    arc = np.column_stack((2 * np.sin(theta), 2 * (1 - np.cos(theta)), theta))  # radius 2, left turn
+    sched = MODULE.Schedule([MODULE.Event("n3", "spawn", "transport", 0.0, ahead_m=1.0, lateral_m=0.55)])
+    sched.update(0.0, "transport", 1.0, arc)
+    assert math.isclose(sched.log[-1]["curvature_inv_m"], 0.5, rel_tol=0.05)
+
+
+def test_a_curve_conditioned_spawn_waits_for_a_curve_and_takes_its_inside():
+    # N3 (Codex checkpoint 9 P2): only inside a curve, on the inner side.
+    theta = np.linspace(0, -1.5, 61)
+    right = np.column_stack((2 * np.sin(-theta), -2 * (1 - np.cos(theta)), theta))  # radius 2, right turn
+    sched = MODULE.Schedule([MODULE.Event("n3", "spawn", "transport", 0.0, ahead_m=1.0, lateral_m=0.7,
+                                          min_curvature_inv_m=0.3, inside=True)])
+    assert sched.update(0.0, "transport", 1.0, PATH) == []  # a straight: wait
+    out = sched.update(0.1, "transport", 1.0, right)
+    x, y, yaw = MODULE.pose_along(right, 1.0, -0.7)  # the inside of a right turn is to the right
+    assert math.isclose(out[0][2], x) and math.isclose(out[0][3], y)
