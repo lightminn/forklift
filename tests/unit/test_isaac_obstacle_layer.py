@@ -169,3 +169,56 @@ def test_remembered_cells_under_the_truck_are_left_out_of_the_plan_copy_only():
     assert not occ.occupied[i, j]
     a, b = lay.memory.cell(0.3, 0.0)
     assert lay.memory.occupied()[a, b]  # the memory itself keeps it
+
+
+def _grid_kwargs_harness(tmp_path, slam=None, with_map=False, **outer):
+    """Run the runner's grid_kwargs (AST) against a real obstacle layer."""
+    import ast
+    import math as _math
+    import time as _time
+    from types import SimpleNamespace
+
+    from forklift_core.perception.planning_memory import SLAM_OCCUPIED
+    from forklift_core.planning.geometry import Rectangle
+
+    script = ROOT / "sim/isaac/run_transport.py"
+    fn = next(n for n in ast.walk(ast.parse(script.read_text()))
+              if isinstance(n, ast.FunctionDef) and n.name == "grid_kwargs")
+    lay = layer()
+    obstacle = {"layer": lay, "applied": (0.0, 0.0, 0.0), "version": 0, "plans": [], "last_stamp": 1.0,
+                "run_wall_start": _time.time() - 5}
+    if with_map:
+        data = np.full((40, 40), -1, dtype=np.int8)
+        data[20, 20] = SLAM_OCCUPIED
+        np.savez(tmp_path / "latest_map.npz", data=data, origin=np.array([0.0, 0.0, 0.0]), resolution_m=0.05,
+                 index=1, after_scan_id=0, stamp_ns=int(0.5e9))
+    scope = {
+        "np": np, "math": _math, "Rectangle": Rectangle, "grid_planning": True, "obstacle": obstacle,
+        "args": SimpleNamespace(slam_map_dir=tmp_path if with_map else None),
+        "geometry": SimpleNamespace(pallet_depth_m=0.6, pallet_width_m=0.8, loaded_footprint=Footprint(1.53, 0.17, 0.40),
+                                    unloaded_footprint=Footprint(1.29, 0.17, 0.36)),
+        "planner_config": SimpleNamespace(clearance_m=0.1),
+        "pickup_zone": Rectangle(3.0, 0.0, 1.0, 1.0, 0.0),
+        **outer,
+    }
+    if slam is not None:
+        scope["slam"] = slam
+    exec(compile(ast.Module([fn], []), str(script), "exec"), scope)
+    return scope["grid_kwargs"], obstacle
+
+
+def test_grid_kwargs_runs_before_the_drive_loop_and_with_a_slam_map(tmp_path):
+    # l5_video5/7: grid_kwargs crashed at the first plan (a free 'slam', a renamed attribute).
+    from types import SimpleNamespace
+
+    gk, obstacle = _grid_kwargs_harness(tmp_path)
+    out = gk("observe")
+    assert "occupancy" in out and obstacle["plans"][-1]["memory"] is True
+    tracker = SimpleNamespace(applied=((0.0, 0.0, 0.0),), mode="tracking")
+    gk, obstacle = _grid_kwargs_harness(tmp_path, slam={"tracker": tracker, "scan_id": 5}, with_map=True,
+                                        rear=np.array([-2.0, 0.0, 0.0]), loaded=False)
+    out = gk(None)
+    assert obstacle["plans"][-1]["slam_used"] is True and obstacle["plans"][-1]["slam_map"]["index"] == 1
+    assert out["occupancy"].occupied[out["occupancy"].cell_of(1.025, 1.025)]
+    gk(None)  # the same instant: the cached bundle
+    assert len(obstacle["plans"]) == 2 and obstacle["plans"][0]["memory_revision"] == obstacle["plans"][1]["memory_revision"]

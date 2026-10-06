@@ -1747,7 +1747,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             bundle = {
                 "memory": layer_.memory is not None,
                 "memory_revision": layer_.memory.revision if layer_.memory is not None else None,
-                "slam_used": use_slam and layer_.memory is not None and layer_.memory.slam_ref is not None,
+                "slam_used": use_slam and layer_.memory is not None and layer_.memory.slam is not None,
                 "slam_map": (layer_.memory.slam_info if layer_.memory is not None else None),
                 "slam_map_note": map_note,
                 "last_replied_scan_id": (slam_ref["scan_id"] - 1) if slam_ref is not None else None,

@@ -805,3 +805,5 @@ def test_grid_kwargs_never_reads_slam_before_it_exists():
     inside = {id(n) for n in ast.walk(guarded)}
     bare = [n.lineno for n in ast.walk(fn) if isinstance(n, ast.Name) and n.id == "slam" and id(n) not in inside]
     assert bare == []
+    attrs = [n.lineno for n in ast.walk(fn) if isinstance(n, ast.Attribute) and n.attr == "slam_ref"]
+    assert attrs == []  # the memory's attribute is .slam (l5_video7: AttributeError)
