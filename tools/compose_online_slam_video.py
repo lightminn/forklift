@@ -74,6 +74,40 @@ def scan_estimates(records: list[dict]) -> dict:
     }
 
 
+PLAN = (255, 214, 0)  # the path the truck is following now
+PLAN_OLD = (150, 150, 160)  # the path it was given before a replan
+GRID = (255, 130, 30)  # the LiDAR obstacle grid's OCCUPIED cells
+PREVIOUS_S = 4.0  # how long the replaced path stays drawn
+BANNER_S = 3.0  # how long a replan / new-obstacle banner stays up
+
+
+def overlay_at(t: float, plans: list[dict], spawns: list[dict]) -> dict:
+    """What the overlay draws at t: the plan given by then, the one it replaced
+    (for PREVIOUS_S after a replan), and a banner for a fresh replan or a new
+    obstacle (display only; plans come from run_transport's plan_history)."""
+    given = [p for p in plans if p["time_s"] <= t]
+    current = given[-1] if given else None
+    previous = None
+    banner = None
+    if len(given) >= 2 and t - current["time_s"] <= PREVIOUS_S and current["why"] in ("replan", "backoff"):
+        previous = given[-2]
+    if current is not None and t - current["time_s"] <= BANNER_S:
+        if current["why"] == "replan":
+            banner = "장애물 감지 → 경로 재계획"
+        elif current["why"] == "backoff":
+            banner = "경로 막힘 → 짧게 후진 후 재계획"
+    fresh = [s for s in spawns if s.get("action") == "spawn" and 0.0 <= t - s["time_s"] <= BANNER_S]
+    if fresh and banner is None:
+        banner = "새 장애물 출현 → LiDAR 로 감지 중"
+    return {"current": current, "previous": previous, "banner": banner}
+
+
+def grid_index(times: np.ndarray, t: float) -> int:
+    """Index of the latest recorded obstacle grid at or before t, or -1."""
+    ok = np.flatnonzero(times <= t)
+    return int(ok[-1]) if ok.size else -1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", type=Path, required=True)
@@ -107,6 +141,12 @@ def main(argv: list[str] | None = None) -> int:
     slam_error = np.hypot(*(scans["estimate"][:, :2] - scans["truth"][:, :2]).T)
     odom_error = np.hypot(*(scans["odom"][:, :2] - scans["truth"][:, :2]).T)
 
+    plan_file = args.run / "plan_history.json"
+    plan_data = json.loads(plan_file.read_text()) if plan_file.exists() else {"plans": [], "new_obstacles": []}
+    plans = plan_data.get("plans", [])
+    spawns = plan_data.get("new_obstacles", [])
+    grid_file = args.run / "obstacle_grid_frames.npz"
+    grid_frames = dict(np.load(grid_file)) if grid_file.exists() else None
     maps = json.loads((args.bridge / "maps.json").read_text())
     after_ids = np.array([m["after_scan_id"] for m in maps])
     grids = np.load(args.bridge / "maps.npz")
@@ -128,6 +168,12 @@ def main(argv: list[str] | None = None) -> int:
     corners = affine @ np.array([[x0, x0 + side], [y0 + side, y0], [1, 1]])
     crop = tuple(int(round(v)) for v in (corners[0, 0], corners[1, 0], corners[0, 1], corners[1, 1]))
     SQUARE = base.SQUARE
+
+    def to_overview(points_xy: np.ndarray) -> list[tuple[float, float]]:
+        uv = (affine @ np.column_stack((points_xy, np.ones(len(points_xy)))).T).T
+        sx = SQUARE / (crop[2] - crop[0])
+        sy = SQUARE / (crop[3] - crop[1])
+        return list(zip(((uv[:, 0] - crop[0]) * sx).tolist(), ((uv[:, 1] - crop[1]) * sy).tolist(), strict=True))
     centres = (np.arange(SQUARE) + 0.5) / SQUARE * side
     grid_x, grid_y = np.meshgrid(x0 + centres, y0 + side - centres)
     world_xy = np.column_stack((grid_x.ravel(), grid_y.ravel()))
@@ -174,7 +220,14 @@ def main(argv: list[str] | None = None) -> int:
             font=title,
             fill=(235, 235, 235),
         )
-        canvas.paste(Image.fromarray(overview).crop(crop).resize((SQUARE, SQUARE)), (20, 70))
+        over = overlay_at(t, plans, spawns)
+        view = Image.fromarray(overview).crop(crop).resize((SQUARE, SQUARE))
+        if over["current"] is not None:
+            vpen = ImageDraw.Draw(view)
+            if over["previous"] is not None:
+                vpen.line(to_overview(np.asarray(over["previous"]["poses"], float)), fill=PLAN_OLD, width=4)
+            vpen.line(to_overview(np.asarray(over["current"]["poses"], float)), fill=PLAN, width=4)
+        canvas.paste(view, (20, 70))
 
         index = eligible_map(after_ids, last_id)
         used.append({"time_s": t, "slam_last_scan_id": last_id, "map_index": index})
@@ -194,6 +247,20 @@ def main(argv: list[str] | None = None) -> int:
             cached_index = index
         panel = cached_map.copy()
         pen = ImageDraw.Draw(panel)
+        if grid_frames is not None and len(grid_frames["times"]):
+            gi = grid_index(grid_frames["times"], t)
+            if gi >= 0:
+                cells = grid_frames["cells"][grid_frames["offsets"][gi] : grid_frames["offsets"][gi + 1]]
+                res = float(grid_frames["resolution"][gi])
+                ox, oy = grid_frames["origins"][gi]
+                xy = np.column_stack((ox + (cells[:, 0] + 0.5) * res, oy + (cells[:, 1] + 0.5) * res))
+                inside = (xy[:, 0] > x0) & (xy[:, 0] < x0 + side) & (xy[:, 1] > y0) & (xy[:, 1] < y0 + side)
+                for u, v in to_panel(xy[inside]):
+                    pen.rectangle((u - 1, v - 1, u + 1, v + 1), fill=GRID)
+        if over["previous"] is not None:
+            pen.line(to_panel(np.asarray(over["previous"]["poses"], float)), fill=PLAN_OLD, width=3)
+        if over["current"] is not None:
+            pen.line(to_panel(np.asarray(over["current"]["poses"], float)), fill=PLAN, width=3)
         k = base.latest_index(joint_t, t)
         if k > 0:
             pen.line(to_panel(truth[: k + 1 : 12, :2]), fill=base.TRUTH, width=5)
@@ -240,6 +307,12 @@ def main(argv: list[str] | None = None) -> int:
             draw.rectangle((box[0] - 6, box[1] - 4, box[2] + 6, box[3] + 4), fill=(0, 0, 0))
             draw.text((px + 8, py + 6), name, font=label, fill=(255, 255, 255))
 
+        if over["banner"] is not None:
+            box = draw.textbbox((0, 0), over["banner"], font=title)
+            bw = box[2] - box[0]
+            bx = 20 + (SQUARE * 2 + 10 - bw) // 2
+            draw.rectangle((bx - 16, 620, bx + bw + 16, 670), fill=(200, 40, 40))
+            draw.text((bx, 626), over["banner"], font=title, fill=(255, 255, 255))
         now = samples[max(base.latest_index(sample_t, t), 0)] if samples else {}
         phase = base.phase_at(transitions, t)
         speed = abs(now.get("signed_speed_mps", 0.0))
@@ -262,7 +335,7 @@ def main(argv: list[str] | None = None) -> int:
             draw.text((660, 704 + 36 * row), line, font=text, fill=(230, 230, 230))
         draw.text(
             (660, 814),
-            "파랑 = 실제 경로   빨강 = SLAM 추정(제어가 쓴 값)   초록 = 현재 스캔",
+            "파랑 실제 · 빨강 SLAM 추정 · 초록 스캔 · 노랑 계획 경로 · 회색 직전 경로 · 주황 LiDAR 장애물",
             font=small,
             fill=(200, 200, 200),
         )

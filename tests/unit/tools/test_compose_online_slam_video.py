@@ -38,3 +38,25 @@ def test_the_estimate_is_the_applied_correction_on_odometry():
     assert len(scans["stamps"]) == 2
     np.testing.assert_allclose(scans["estimate"][1], (0.1, 1.0, math.pi / 2), atol=1e-12)
     assert scans["processed"].tolist() == [True, False]
+
+
+def test_the_overlay_shows_the_plan_given_by_then_and_flags_a_fresh_replan():
+    plans = [
+        {"time_s": 10.0, "phase": "transport", "why": "live", "poses": [[0, 0], [1, 0]]},
+        {"time_s": 50.0, "phase": "transport", "why": "replan", "poses": [[1, 0], [1, 1]]},
+    ]
+    spawns = [{"time_s": 47.0, "action": "spawn"}]
+    early = MODULE.overlay_at(20.0, plans, spawns)
+    assert early["current"]["why"] == "live" and early["previous"] is None and early["banner"] is None
+    fresh = MODULE.overlay_at(51.0, plans, spawns)
+    assert fresh["current"]["why"] == "replan" and fresh["previous"]["why"] == "live"
+    assert "재계획" in fresh["banner"]
+    assert "새 장애물" in MODULE.overlay_at(48.0, plans, spawns)["banner"]
+    later = MODULE.overlay_at(60.0, plans, spawns)
+    assert later["previous"] is None and later["banner"] is None
+    assert MODULE.overlay_at(5.0, plans, spawns)["current"] is None
+
+
+def test_the_grid_frame_is_the_latest_recorded_by_then():
+    times = np.array([0.0, 0.5, 1.0])
+    assert MODULE.grid_index(times, 0.7) == 1 and MODULE.grid_index(times, -1.0) == -1
