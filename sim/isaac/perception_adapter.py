@@ -72,6 +72,9 @@ def default_base_from_optical() -> RigidTransform:
 PERCEPTION_MOUNTS = {
     "legacy": (tuple(_RIG.DEFAULT_CAMERA_XYZ_M), 0.0),
     "carriage_low": ((0.559, 0.0, 0.27), 0.10),
+    # The same mount on dls08_measured: the camera body sits on the carriage
+    # front face, 0.06 m further forward on the measured chassis (study, line 16).
+    "carriage_low_measured": ((0.619, 0.0, 0.27), 0.10),
 }
 
 

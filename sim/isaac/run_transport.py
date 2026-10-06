@@ -356,11 +356,12 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--slam-reply-timeout", type=float, default=90.0)
     parser.add_argument(
         "--perception-mount",
-        choices=("legacy", "carriage_low"),
+        choices=("legacy", "carriage_low", "carriage_low_measured"),
         default="legacy",
         help="legacy: base (0.75, 0, 0.50), tilt 0 (every recorded run). "
         "carriage_low: on fork_carriage at base (0.559, 0, 0.27), tilt 0.10 rad, "
-        "provisional chassis only, captures only at lift 0 "
+        "provisional chassis only, captures only at lift 0; carriage_low_measured: the same "
+        "mount at base x 0.619 for dls08_measured "
         "(docs/plans/2026-10-03-carriage-mount-adoption.md).",
     )
     parser.add_argument(
@@ -443,15 +444,17 @@ def arguments() -> argparse.Namespace:
             parser.error("--slam-feedback forbids --planning-target oracle_nominal")
     if args.slam_noise_seed is not None and args.slam_feedback is None:
         parser.error("--slam-noise-seed requires --slam-feedback")
-    if args.perception_mount == "carriage_low":
+    if args.perception_mount in ("carriage_low", "carriage_low_measured"):
         if not args.use_perception:
             parser.error("--perception-mount carriage_low needs --use-perception")
         if args.perception_camera_axes != "ros":
             parser.error("--perception-mount carriage_low needs ros camera axes")
-        if "dls08_provisional" not in str(args.forklift_urdf):
+        if args.perception_mount == "carriage_low" and "dls08_provisional" not in str(args.forklift_urdf):
             parser.error(
                 "--perception-mount carriage_low is defined for dls08_provisional only"
             )
+        if args.perception_mount == "carriage_low_measured" and "dls08_measured" not in str(args.forklift_urdf):
+            parser.error("--perception-mount carriage_low_measured is defined for dls08_measured only")
     if args.use_perception:
         if args.pallet_prior is None:
             parser.error("--pallet-prior is required with --use-perception")
