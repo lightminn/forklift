@@ -794,3 +794,14 @@ def test_the_n3_straight_follows_the_leg_direction():
     block = source[i : i + 2500]
     assert "sgn_ = -1.0 if leg_direction < 0 else 1.0" in block
     assert "x0_ + sgn_ * d_ * math.cos(h0_)" in block
+
+
+def test_grid_kwargs_never_reads_slam_before_it_exists():
+    # L3c l5_video5: the first plans run before the SLAM link exists; a bare
+    # `slam` in grid_kwargs raised "cannot access free variable 'slam'".
+    tree = ast.parse(SCRIPT.read_text())
+    fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "grid_kwargs")
+    guarded = next(n for n in ast.walk(fn) if isinstance(n, ast.Try))
+    inside = {id(n) for n in ast.walk(guarded)}
+    bare = [n.lineno for n in ast.walk(fn) if isinstance(n, ast.Name) and n.id == "slam" and id(n) not in inside]
+    assert bare == []

@@ -1680,13 +1680,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         """occupancy (and the pallet obstacle the plan may know) for a grid plan."""
         if not grid_planning:
             return {}
+        try:  # the first plans run before the SLAM link exists
+            slam_ref = slam
+        except NameError:
+            slam_ref = None
         stamp = obstacle.get("last_stamp", 0.0)
         layer_ = obstacle["layer"]
         # The correction control applies now (a release changes it before the
         # obstacle block re-projects -- Codex review P1), the pose it plans from
         # (own, or this tick's), and the load.
-        if slam is not None and slam["tracker"].applied is not None:
-            applied_ = tuple(float(v) for v in slam["tracker"].applied[0])
+        if slam_ref is not None and slam_ref["tracker"].applied is not None:
+            applied_ = tuple(float(v) for v in slam_ref["tracker"].applied[0])
         else:
             applied_ = obstacle["applied"] or (0.0, 0.0, 0.0)
         try:
@@ -1694,7 +1698,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             loaded_now_ = bool(loaded)
         except NameError:  # the first plans, before the drive loop: nothing remembered under the truck
             own_now_, loaded_now_ = None, False
-        mode_ = slam["tracker"].mode if slam is not None else None
+        mode_ = slam_ref["tracker"].mode if slam_ref is not None else None
         key_ = (stamp, obstacle["version"], applied_, mode_, loaded_now_,
                 None if own_now_ is None else tuple(round(v, 4) for v in own_now_))
         cache_ = obstacle.get("plan_cache")
@@ -1712,7 +1716,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         index_ = int(m_["index"])
                         after_ = int(m_["after_scan_id"])
                         map_stamp_ = int(m_["stamp_ns"]) / 1e9
-                        replied_ = (slam["scan_id"] - 1) if slam is not None else None
+                        replied_ = (slam_ref["scan_id"] - 1) if slam_ref is not None else None
                         loaded_index_ = (layer_.memory.slam_info or {}).get("index", -1)
                         why_not_ = None
                         if latest.stat().st_mtime < obstacle["run_wall_start"]:
@@ -1743,10 +1747,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             bundle = {
                 "memory": layer_.memory is not None,
                 "memory_revision": layer_.memory.revision if layer_.memory is not None else None,
-                "slam_used": use_slam and layer_.memory is not None and layer_.memory.slam is not None,
+                "slam_used": use_slam and layer_.memory is not None and layer_.memory.slam_ref is not None,
                 "slam_map": (layer_.memory.slam_info if layer_.memory is not None else None),
                 "slam_map_note": map_note,
-                "last_replied_scan_id": (slam["scan_id"] - 1) if slam is not None else None,
+                "last_replied_scan_id": (slam_ref["scan_id"] - 1) if slam_ref is not None else None,
                 "applied": list(applied_),
                 "mode": mode_,
             }
@@ -2024,7 +2028,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     frame_audit = []
     video_frames = []
     slam_log = None
-    slam = None
+    slam_ref = None
     # step_world replaces this before the main loop; captures call through it.
     stepper = {"fn": lambda render: world.step(render=render), "tick": 0}
     if args.record_slam:
@@ -2075,7 +2079,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             scenario.start_rear.y_m,
             scenario.start_rear.yaw_rad,
         )
-        slam = {
+        slam_ref = {
             "link": slam_link.SlamLinkClient(
                 str(args.slam_feedback), timeout_s=args.slam_reply_timeout
             ),
