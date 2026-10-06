@@ -251,7 +251,9 @@ def main(argv: list[str] | None = None) -> int:
             pts = to_overview(corners)
             vpen.polygon(pts, outline=(255, 40, 40), width=4)
             u_ = max(p[0] for p in pts) + 6
-            v_ = min(p[1] for p in pts) - 4
+            if u_ + 92 > SQUARE:  # near the right edge: put the tag on the left
+                u_ = min(p[0] for p in pts) - 96
+            v_ = max(min(p[1] for p in pts) - 4, 4)
             vpen.rectangle((u_ - 3, v_ - 3, u_ + 86, v_ + 24), fill=(200, 40, 40))
             vpen.text((u_, v_), "새 장애물", font=label, fill=(255, 255, 255))
         canvas.paste(view, (20, 70))
