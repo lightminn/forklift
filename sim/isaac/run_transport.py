@@ -26,6 +26,11 @@ EXIT_CLEARANCE_M = 0.08
 MID_STILL_DECEL_MPS2 = 0.8
 # Pull-away limit for the wheel target with the obstacle layer acting.
 COMMAND_ACCEL_MPS2 = 0.8
+# Plan D4 delta (2026-10-06, user decision): a leg whose blocked-path replan
+# fails backs off this far, this slowly, at most this many times, then replans.
+BACKOFF_M = 0.30
+BACKOFF_SPEED_MPS = 0.15
+BACKOFF_PER_LEG = 2
 # An observation waypoint missed by at most this much, standing, is arrival.
 OBSERVE_ARRIVAL_M = 0.10
 OBSERVE_ARRIVAL_YAW_RAD = 0.10
@@ -845,6 +850,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     from forklift_core.planning import (
         Footprint,
         FootprintCollisionChecker,
+        PlanResult,
         Rectangle,
         collision_free_pose,
     )
@@ -3451,6 +3457,25 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         tracking = replace(tracking, status="arrived")
                 else:
                     state.pop("observe_loose_arrival", None)
+                if (
+                    tracking.status == "arrived" and obstacle is not None
+                    and obstacle.get("backoff", {}).get("phase") == phase
+                ):
+                    # The end of a backoff is not the leg's arrival: stand and
+                    # replan the leg from here, each second until a replan is
+                    # accepted (D4 delta).
+                    back_ = obstacle["backoff"]
+                    if "end_s" not in back_:
+                        back_["end_s"] = t
+                        obstacle.setdefault("backoff_records", []).append(
+                            {"phase": phase, "start_s": back_["time_s"], "end_s": t,
+                             "rear": [float(v) for v in rear]}
+                        )
+                    if t - back_.get("forced_s", -1e9) >= 1.0:
+                        back_["forced_s"] = t
+                        obstacle["force_replan"] = phase
+                    tracking = replace(tracking, status="tracking", speed_mps=0.0)
+                    requested_speed = 0.0
                 if tracking.status == "arrived":
                     if args.use_perception and phase == "observe":
                         attempt_number = len(state["observation_attempts"]) + 1
@@ -4419,7 +4444,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     not (grid_planning and acting and t - watch["since_s"] > 60.0),
                     f"obstacle_no_progress in {phase}",
                 )
-                if obstacle["blocked_ticks"] >= 120:
+                if obstacle["blocked_ticks"] >= 120 or obstacle.pop("force_replan", None) == phase:
                     obstacle["blocked_ticks"] = 0
                     start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))
                     replan_start = time.monotonic()
@@ -4592,6 +4617,37 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         # only on a plan -- Codex checkpoint 7 P2).
                         obstacle.setdefault("replan_wait", {})[phase] = True
                         requested_speed = 0.0
+                        backs = obstacle.setdefault("backoffs", {})
+                        if phase in ("transport", "return_home") and backs.get(phase, 0) < BACKOFF_PER_LEG:
+                            # D4 delta: stood with the outline already on the
+                            # blocking cells, no forward plan starts (L3c v46 seed
+                            # 5). Back off straight, against the leg's direction,
+                            # under the permission every tick (the stop volume of
+                            # the reverse is checked; unobserved space stops it),
+                            # then replan from there.
+                            backs[phase] = backs.get(phase, 0) + 1
+                            leg_dir = trackers[phase].leg_ahead()[1]
+                            d = -1 if (leg_dir or 1) >= 0 else 1
+                            n_ = max(1, int(math.ceil(BACKOFF_M / 0.04)))
+                            fr = np.linspace(0.0, 1.0, n_ + 1)
+                            yaw0 = float(rear[2])
+                            back = PlanResult(
+                                True, "backoff",
+                                np.column_stack((float(rear[0]) + fr * d * BACKOFF_M * math.cos(yaw0),
+                                                 float(rear[1]) + fr * d * BACKOFF_M * math.sin(yaw0),
+                                                 np.full(n_ + 1, yaw0))),
+                                np.full(n_ + 1, d, dtype=np.int8), np.zeros(n_ + 1), BACKOFF_M, 0,
+                            )
+                            # The leg's own tracker config survives repeated backoffs.
+                            config0 = obstacle.get("backoff", {}).get("config", trackers[phase].config)
+                            obstacle["backoff"] = {"phase": phase, "config": config0, "time_s": t}
+                            obstacle["replans"][-1]["backoff"] = True
+                            obstacle["replan_wait"].pop(phase, None)
+                            paths[phase] = back
+                            trackers[phase] = RearAxlePathTracker(
+                                back.poses, back.directions, back.curvatures_inv_m,
+                                replace(config0, cruise_speed_mps=BACKOFF_SPEED_MPS),
+                            )
                     elif same_path(replanned, paths[phase], trackers[phase].remaining_to_goal_m()):
                         # D4: the same path again is a wait, not a retry -- it
                         # neither restarts the tracker nor the no-progress watch
@@ -4617,8 +4673,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         paths[phase] = replanned
                         state["paths"][phase] = path_record(replanned)
                         (args.output / "paths.json").write_text(record_json(state["paths"], indent=2) + "\n")
+                        config_ = trackers[phase].config
+                        if obstacle.get("backoff", {}).get("phase") == phase:
+                            config_ = obstacle.pop("backoff")["config"]
                         trackers[phase] = RearAxlePathTracker(
-                            replanned.poses, replanned.directions, replanned.curvatures_inv_m, trackers[phase].config
+                            replanned.poses, replanned.directions, replanned.curvatures_inv_m, config_
                         )
                         if phase == "transport" and slam is not None:
                             arm_docking()
