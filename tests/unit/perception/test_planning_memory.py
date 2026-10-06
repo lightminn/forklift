@@ -155,3 +155,24 @@ def test_a_map_at_another_resolution_dates_every_square_anew():
     m.set_slam(data, (0.0, 0.0), 0.10, stamp_s=20.0, index=2)
     i, j = m.cell(1.05, 1.05)
     assert m.slam_since[i, j] == 20.0 and m.occupied()[i, j]
+
+
+def test_an_origin_moved_by_less_than_a_square_names_other_squares():
+    # Codex re-review 5 P1: origin (0, 0) -> (0.01, 0) at 0.05 m shared keys.
+    m = memory()
+    data = np.full((40, 40), -1, dtype=np.int8)
+    data[20, 20] = SLAM_OCCUPIED
+    m.set_slam(data, (0.0, 0.0), 0.05, stamp_s=10.0, index=1)
+    x, y = 0.01 + 20.5 * 0.05, 20.5 * 0.05
+    m.add_clears(np.array([x]), np.array([y]), np.array([12.0]))
+    m.set_slam(data, (0.01, 0.0), 0.05, stamp_s=20.0, index=2)
+    assert m.occupied()[m.cell(x, y)]
+
+
+def test_every_endpoint_within_the_grown_rectangle_is_retracted_whatever_its_record_cell():
+    # Codex re-review 5 P2: an endpoint at 1.644 inside the 1.645 edge, its
+    # record cell [1.64, 1.65] straddling it, survived.
+    m = PlanningMemory(0.0, 0.0, 2.0, 2.0, 0.05, hit_radius_m=0.1)
+    m.add_hits(np.array([1.644]), np.array([1.0]), 0.0)
+    assert m.retract_endpoints(1.235, 1.0, 0.6, 0.8, 0.0, 0.11) == 1
+    assert not m.occupied().any()

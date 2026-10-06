@@ -42,6 +42,7 @@ import numpy as np
 
 SLAM_OCCUPIED = 100  # nav_msgs/OccupancyGrid as slam_toolbox publishes it
 FINE_M = 0.01  # the endpoint record a retraction is judged on
+SRC_KEY_M = 1e-4  # a SLAM source square is known by its map-frame centre to this
 _KEY_OFF = 1 << 30
 
 
@@ -81,6 +82,7 @@ class PlanningMemory:
     slam_src_key: np.ndarray = field(init=False)  # sorted occupied source squares of the latest map
     slam_src_since: np.ndarray = field(init=False)  # their dates
     slam_src_res: float | None = field(init=False, default=None)  # the resolution their keys were made at
+    slam_src_yaw: float = field(init=False, default=0.0)  # and the map's heading
     last_scan_stamp: float = field(init=False, default=-math.inf)
 
     def __post_init__(self) -> None:
@@ -115,12 +117,6 @@ class PlanningMemory:
     def cell(self, x, y):
         return (np.floor((np.asarray(x) - self.ox) / self.resolution_m).astype(int),
                 np.floor((np.asarray(y) - self.oy) / self.resolution_m).astype(int))
-
-    def _centres(self):
-        nx, ny = self.shape
-        cx = self.ox + (np.arange(nx) + 0.5) * self.resolution_m
-        cy = self.oy + (np.arange(ny) + 0.5) * self.resolution_m
-        return np.meshgrid(cx, cy, indexing="ij")
 
     def add_hits(self, xs, ys, stamp_s: float) -> None:
         """Beam endpoints (map frame) of one scan measured at stamp_s."""
@@ -173,13 +169,15 @@ class PlanningMemory:
             # A source square is the same square in the next map by its
             # map-frame centre (the map grows, its origin moves).
             u, v = (cols + 0.5) * resolution_m, (rows + 0.5) * resolution_m
-            half = resolution_m / 2
-            src_key = _key(np.round((origin_xy[0] + u * c - v * s) / half),
-                           np.round((origin_xy[1] + u * s + v * c) / half))
+            # Keyed by the centre itself (0.1 mm): an origin moved by less than
+            # a square names other squares (Codex re-review 5 P1).
+            src_key = _key(np.round((origin_xy[0] + u * c - v * s) / SRC_KEY_M),
+                           np.round((origin_xy[1] + u * s + v * c) / SRC_KEY_M))
             src_since = np.full(len(src_key), float(stamp_s))
-            # A key is a centre at res/2: under another resolution the same key
-            # is another square, so none is known (Codex re-review 4 P1).
-            same_res = self.slam_src_res is not None and abs(self.slam_src_res - resolution_m) < 1e-12
+            # Under another resolution or heading a square at the same centre is
+            # another square: none is known (Codex re-review 4 P1).
+            same_res = self.slam_src_res is not None and abs(self.slam_src_res - resolution_m) < 1e-12 \
+                and abs(self.slam_src_yaw - yaw_rad) < 1e-9
             if len(self.slam_src_key) and same_res:
                 pos = np.minimum(np.searchsorted(self.slam_src_key, src_key), len(self.slam_src_key) - 1)
                 known = self.slam_src_key[pos] == src_key
@@ -201,6 +199,7 @@ class PlanningMemory:
         order = np.argsort(src_key, kind="stable")
         self.slam_src_key, self.slam_src_since = src_key[order], src_since[order]
         self.slam_src_res = float(resolution_m)
+        self.slam_src_yaw = float(yaw_rad)
         mask = np.isfinite(raw_since)
         self.slam_since = np.where(mask, raw_since, np.inf)
         self.slam = mask
@@ -210,21 +209,22 @@ class PlanningMemory:
     def retract_endpoints(self, x: float, y: float, length: float, width: float, yaw: float, grow_m: float) -> int:
         """Forget the endpoints inside a rectangle grown by grow_m (the pallet
         just lifted: it is the truck's now, by the recognised estimate). Only
-        endpoints go, and only those whose whole 1 cm record cell lies inside:
-        an endpoint outside the rectangle is never retracted, so an obstacle
-        beside the pallet keeps its own (Codex review P1). Returns the number of
-        1 cm endpoint cells retracted."""
+        endpoints go -- an obstacle beside the pallet keeps its spread and every
+        endpoint more than one record cell outside (Codex review P1) -- and every
+        1 cm record cell the rectangle touches goes, so no endpoint within grow_m
+        survives quantisation (Codex re-review 5 P2). This is a one-time removal:
+        whatever is seen after it is recorded again. Returns the number of 1 cm
+        endpoint cells retracted."""
         self._compact()
         if len(self.fine_key) == 0:
             return 0
         fi, fj = _unkey(self.fine_key)
         c, s = math.cos(yaw), math.sin(yaw)
-        inside = np.ones(len(fi), dtype=bool)
-        for di in (0, 1):
-            for dj in (0, 1):
-                dx, dy = (fi + di) * FINE_M - x, (fj + dj) * FINE_M - y
-                inside &= (np.abs(dx * c + dy * s) <= length / 2 + grow_m) & \
-                    (np.abs(-dx * s + dy * c) <= width / 2 + grow_m)
+        # A cell touches the rectangle when its centre lies within the rectangle
+        # grown by the cell's half diagonal (a superset, never a subset).
+        reach = grow_m + FINE_M * math.sqrt(0.5)
+        dx, dy = (fi + 0.5) * FINE_M - x, (fj + 0.5) * FINE_M - y
+        inside = (np.abs(dx * c + dy * s) <= length / 2 + reach) & (np.abs(-dx * s + dy * c) <= width / 2 + reach)
         keep = ~inside
         self.fine_key, self.fine_stamp = self.fine_key[keep], self.fine_stamp[keep]
         # The planning cells re-derived from what stays.
