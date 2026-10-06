@@ -1476,6 +1476,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "scans": [],
             "ticks": {},
             "slowed": {},
+            "run_wall_start": time.time(),
             "reasons": {},
             "events": 0,
             "unpermitted": [],
@@ -1710,15 +1711,28 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     with np.load(latest) as m_:
                         index_ = int(m_["index"])
                         after_ = int(m_["after_scan_id"])
+                        map_stamp_ = int(m_["stamp_ns"]) / 1e9
                         replied_ = (slam["scan_id"] - 1) if slam is not None else None
-                        if replied_ is not None and after_ > replied_:
-                            # A map from scans this run has not sent: another
-                            # run's file, or a wrong directory -- never used.
-                            map_note = {"rejected_index": index_, "after_scan_id": after_, "replied": replied_}
-                        elif (layer_.memory.slam_info or {}).get("index") != index_:
+                        loaded_index_ = (layer_.memory.slam_info or {}).get("index", -1)
+                        why_not_ = None
+                        if latest.stat().st_mtime < obstacle["run_wall_start"]:
+                            why_not_ = "file_before_run"  # another run's file (Codex review P2)
+                        elif replied_ is not None and after_ > replied_:
+                            why_not_ = "unsent_scans"
+                        elif map_stamp_ > stamp + 1e-6:
+                            why_not_ = "stamp_ahead"
+                        elif index_ < loaded_index_:
+                            why_not_ = "older_than_loaded"
+                        if why_not_ is not None:
+                            # Never used; recorded.
+                            map_note = {"rejected_index": index_, "why": why_not_, "after_scan_id": after_,
+                                        "map_stamp_s": map_stamp_, "replied": replied_}
+                        elif index_ != loaded_index_:
+                            # Dated by the map's own stamp, never by when this
+                            # plan read it (Codex review P1).
                             layer_.memory.set_slam(
                                 m_["data"], tuple(m_["origin"][:2]), float(m_["resolution_m"]),
-                                float(m_["origin"][2]), received_s=float(stamp), index=index_,
+                                float(m_["origin"][2]), stamp_s=map_stamp_, index=index_,
                                 after_scan_id=after_, stamp_ns=int(m_["stamp_ns"]),
                             )
                 # The map is in SLAM's frame: only while control applies SLAM's
@@ -2315,8 +2329,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             # the loaded start blocked). By the estimate, never the truth.
             est_ = obstacle["pickup_estimate"]
             mem_ = obstacle["layer"].memory
-            gone_ = mem_.retract_rect(est_.x_m, est_.y_m, geometry.pallet_depth_m, geometry.pallet_width_m,
-                                      est_.yaw_rad, mem_.hit_radius_m + 0.10)
+            # Endpoints only, within the estimate's error: an obstacle beside the
+            # pallet keeps its own (Codex review P1).
+            gone_ = mem_.retract_endpoints(est_.x_m, est_.y_m, geometry.pallet_depth_m, geometry.pallet_width_m,
+                                           est_.yaw_rad, 0.05)
             obstacle.setdefault("memory_events", []).append({"time_s": t, "event": "retract_pickup", "cells": gone_})
         phase, phase_started = next_phase, t
         state["phase"] = phase
