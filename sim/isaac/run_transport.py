@@ -867,6 +867,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         collision_free_pose,
     )
     from forklift_core.control.drive_permission import arc_poses as ARC_POSES
+    from forklift_core.control.drive_permission import parts_of as PARTS_OF
     from forklift_core.control.drive_permission import shape_meets as SHAPE_MEETS
     from forklift_core.control.rollout import bicycle_rollout
     from forklift_core.planning import Pose2D as PlanningPose
@@ -4726,7 +4727,20 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     stop_len = pconf.stopping.distance_m(truth_speed)
                     arc = ARC_POSES(tuple(float(v) for v in truth_rear), kappa, 1 if truth_speed > 0 else -1, stop_len, 0.025)[0]
                     shape_now, _ = obstacle["layer"].footprints(loaded)
+                    # A bounding-circle prefilter (exact: a rectangle farther than
+                    # the shape's reach plus its own half diagonal from every
+                    # pose cannot meet it) -- this evaluator was a sixth of the
+                    # wall time (L3c v50 profile).
+                    arc_xy = np.asarray(arc, dtype=float)[1:, :2]
+                    reach_now = max(
+                        math.hypot(abs(lon_) + max(fp_.front_m, fp_.rear_m), abs(lat_) + fp_.half_width_m)
+                        for fp_, lat_, lon_ in PARTS_OF(shape_now)
+                    ) + pconf.envelope_offset_m
                     for oid, rect in enumerate(checked_obstacles):
+                        if len(arc_xy) and float(np.min(np.hypot(arc_xy[:, 0] - rect.x_m, arc_xy[:, 1] - rect.y_m))) > (
+                            reach_now + math.hypot(rect.length_m, rect.width_m) / 2 + 1e-6
+                        ):
+                            continue
                         if pocket_phase and rect is pickup_obstacle:
                             # Blades in the pockets meet the pallet's 2D outline by
                             # design; fork/pallet contact is the 3D insertion guard's.

@@ -202,3 +202,44 @@ def test_a_cell_the_truck_backs_off_from_keeps_the_covered_evidence():
     put(back, *FACE_CELL, UNKNOWN)
     out = mem.apply(back, POSE, BODY)
     assert out.state[cell(*FACE_CELL)] == RETAINED
+
+
+def _reference_stamps(cand, res, fresh, stamps, whole, nx, ny):
+    """The original repeated-scan rule, kept as the reference for the array version."""
+    cand = dict(cand)
+    changed = True
+    while changed and cand:
+        changed = False
+        for (a, b), r in list(cand.items()):
+            if ShadowMemory._support(a, b, r, res, fresh, whole, cand, nx, ny) is None:
+                del cand[(a, b)]
+                changed = True
+    stamp = {}
+    for (a, b), r in cand.items():
+        fresh_n, _ = ShadowMemory._support(a, b, r, res, fresh, whole, cand, nx, ny)
+        stamp[(a, b)] = min((float(stamps[p, q]) for p, q in fresh_n), default=np.inf)
+    changed = True
+    while changed:
+        changed = False
+        for (a, b), r in cand.items():
+            _, ret_n = ShadowMemory._support(a, b, r, res, fresh, whole, cand, nx, ny)
+            low = min([stamp[(a, b)]] + [stamp[n] for n in ret_n])
+            if low < stamp[(a, b)]:
+                stamp[(a, b)] = low
+                changed = True
+    return stamp
+
+
+def test_the_array_support_matches_the_repeated_scan_on_random_grids():
+    rng = np.random.default_rng(7)
+    for _ in range(300):
+        nx = ny = 14
+        fresh = rng.random((nx, ny)) < rng.uniform(0.3, 0.9)
+        stamps = rng.uniform(0.0, 1.0, (nx, ny))
+        whole = {(int(a), int(b)) for a, b in rng.integers(0, nx, (rng.integers(0, 30), 2))}
+        cand = {}
+        for a, b in rng.integers(0, nx, (rng.integers(1, 25), 2)):
+            if (int(a), int(b)) not in whole and not fresh[a, b]:
+                cand[(int(a), int(b))] = float(rng.uniform(0.02, 0.2))
+        got = ShadowMemory._retained_stamps(cand, 0.05, fresh, stamps, whole, nx, ny)
+        assert got == _reference_stamps(cand, 0.05, fresh, stamps, whole, nx, ny)

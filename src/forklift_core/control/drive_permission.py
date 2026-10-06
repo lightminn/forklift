@@ -119,8 +119,16 @@ def shape_cells(snapshot: GridSnapshot, pose, shape, margin_m: float, *, directi
                                      longitudinal_m=lon)
         found.append(cells)
         outside |= out
-    cells = np.unique(np.concatenate(found), axis=0) if found else np.zeros((0, 2), dtype=int)
-    return cells, outside
+    if not found:
+        return np.zeros((0, 2), dtype=int), outside
+    if len(found) == 1:
+        return found[0], outside  # one part: already unique, in (i, j) order
+    # The union, in the same (i, j) order as a row-wise unique, keyed in one
+    # integer (the 2-D unique was a tenth of a mission's wall time).
+    cells = np.concatenate(found).astype(np.int64)
+    off, span = 1 << 20, 1 << 21  # cell indices stay far inside +-2^20
+    keys = np.unique((cells[:, 0] + off) * span + (cells[:, 1] + off))
+    return np.column_stack((keys // span - off, keys % span - off)), outside
 
 
 def footprint_cells(snapshot: GridSnapshot, pose, footprint: Footprint, margin_m: float, *, direction: int = 0,

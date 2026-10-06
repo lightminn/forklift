@@ -230,3 +230,25 @@ def test_a_cell_whose_corners_lie_in_the_union_but_not_in_one_part_is_not_wholly
              and max(abs(y0 - lat), abs(y0 + 0.05 - lat)) <= fp.half_width_m)
             for fp, lat, lon in SHAPE
         )
+
+
+def test_shape_cells_union_matches_a_row_wise_unique():
+    from forklift_core.control.drive_permission import footprint_cells, shape_cells
+    from forklift_core.perception.obstacle_grid import GridSnapshot
+
+    rng = np.random.default_rng(3)
+    for _ in range(50):
+        snap = _snap_for_shape_test(rng)
+        pose = (float(rng.uniform(-1, 1)), float(rng.uniform(-1, 1)), float(rng.uniform(-3, 3)))
+        shape = ((Footprint(0.6, 0.5, 0.36), 0.0, 0.0), (Footprint(0.21, 0.21, 0.0275), 0.145, 0.74),
+                 (Footprint(0.21, 0.21, 0.0275), -0.145, 0.74))
+        got, _ = shape_cells(snap, pose, shape, 0.01, direction=1)
+        parts = [footprint_cells(snap, pose, fp, 0.01, direction=1, lateral_m=lat, longitudinal_m=lon)[0]
+                 for fp, lat, lon in shape]
+        assert np.array_equal(got, np.unique(np.concatenate(parts), axis=0))
+
+
+def _snap_for_shape_test(rng):
+    state = np.full((120, 120), FREE, dtype=np.int8)
+    free_stamp = np.zeros((120, 120))
+    return GridSnapshot(state, free_stamp, 0.0, (0.0, 0.0, 0.0), 0, 1, {"low": 0.0}, -3.0, -3.0, 0.05)

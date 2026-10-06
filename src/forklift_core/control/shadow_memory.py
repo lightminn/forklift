@@ -186,29 +186,9 @@ class ShadowMemory:
                     fresh[a, b] = True
                     if not np.isfinite(stamps_fresh[a, b]) or t_cert < stamps_fresh[a, b]:
                         stamps_fresh[a, b] = t_cert
-        changed = True
-        while changed and cand:
-            changed = False
-            for (a, b), r in list(cand.items()):
-                if self._support(a, b, r, res, fresh, whole, cand, nx, ny) is None:
-                    del cand[(a, b)]
-                    changed = True
-        if not cand:
+        stamp = self._retained_stamps(cand, res, fresh, stamps_fresh, whole, nx, ny)
+        if not stamp:
             return snapshot
-        # Each RETAINED cell inherits the oldest fresh FREE stamp along its support.
-        stamp = {}
-        for (a, b), r in cand.items():
-            fresh_n, _ = self._support(a, b, r, res, fresh, whole, cand, nx, ny)
-            stamp[(a, b)] = min((float(stamps_fresh[p, q]) for p, q in fresh_n), default=np.inf)
-        changed = True
-        while changed:
-            changed = False
-            for (a, b), r in cand.items():
-                _, ret_n = self._support(a, b, r, res, fresh, whole, cand, nx, ny)
-                low = min([stamp[(a, b)]] + [stamp[n] for n in ret_n])
-                if low < stamp[(a, b)]:
-                    stamp[(a, b)] = low
-                    changed = True
         out = state.copy()
         free_stamp = snapshot.free_stamp.copy()
         for (a, b), t in stamp.items():
@@ -218,6 +198,76 @@ class ShadowMemory:
             free_stamp[a, b] = t
         self.stats["retained_max"] = max(self.stats["retained_max"], int((out == RETAINED).sum()))
         return replace(snapshot, state=out, free_stamp=free_stamp)
+
+    @staticmethod
+    def _retained_stamps(cand, res, fresh, stamps_fresh, whole, nx, ny) -> dict:
+        """The greatest supported subset of the candidates and each one's stamp.
+
+        The same rule as repeated ``_support`` calls -- every cell within reach
+        is fresh FREE, a still-supported candidate or wholly inside the outline,
+        and a candidate takes the oldest fresh stamp along its support chain --
+        computed once per cell with arrays and a removal queue (the repeated
+        Python scan was 27 % of a mission's wall time, L3c v50 profile).
+        """
+        if not cand:
+            return {}
+        keys = list(cand)
+        index = {key: n for n, key in enumerate(keys)}
+        cand_id = np.full((nx, ny), -1, dtype=np.int64)
+        for n, (a, b) in enumerate(keys):
+            cand_id[a, b] = n
+        whole_mask = np.zeros((nx, ny), dtype=bool)
+        if whole:
+            w = np.array([c for c in whole if 0 <= c[0] < nx and 0 <= c[1] < ny], dtype=np.int64).reshape(-1, 2)
+            whole_mask[w[:, 0], w[:, 1]] = True
+        k = int(np.ceil(max(cand.values()) / res)) + 1
+        di, dj = np.meshgrid(np.arange(-k, k + 1), np.arange(-k, k + 1), indexing="ij")
+        di, dj = di.ravel(), dj.ravel()
+        centre = (di == 0) & (dj == 0)
+        di, dj = di[~centre], dj[~centre]
+        gap = res * np.hypot(np.maximum(np.abs(di) - 1, 0), np.maximum(np.abs(dj) - 1, 0))
+        alive = np.ones(len(keys), dtype=bool)
+        deps = [None] * len(keys)  # candidate neighbours a cell relies on
+        first = np.full(len(keys), np.inf)  # oldest fresh stamp in reach
+        users = [[] for _ in keys]  # who relies on each candidate
+        for n, (a, b) in enumerate(keys):
+            m = gap <= cand[(a, b)]
+            p, q = a + di[m], b + dj[m]
+            if ((p < 0) | (p >= nx) | (q < 0) | (q >= ny)).any():
+                alive[n] = False
+                continue
+            fr = fresh[p, q]
+            cid = cand_id[p, q]
+            ret = ~fr & (cid >= 0)
+            if (~fr & ~ret & ~whole_mask[p, q]).any():
+                alive[n] = False
+                continue
+            if fr.any():
+                first[n] = float(np.min(stamps_fresh[p[fr], q[fr]]))
+            deps[n] = cid[ret]
+            for d in deps[n]:
+                users[d].append(n)
+        # Removing a candidate withdraws the support of every cell relying on it
+        # (a candidate lies in the band, never wholly inside the outline).
+        queue = [n for n in range(len(keys)) if not alive[n]]
+        while queue:
+            gone = queue.pop()
+            for u in users[gone]:
+                if alive[u]:
+                    alive[u] = False
+                    queue.append(u)
+        stamp = first.copy()
+        changed = True
+        while changed:
+            changed = False
+            for n in range(len(keys)):
+                if not alive[n] or deps[n] is None or not len(deps[n]):
+                    continue
+                low = min(stamp[n], float(np.min(stamp[deps[n]])))
+                if low < stamp[n]:
+                    stamp[n] = low
+                    changed = True
+        return {keys[n]: float(stamp[n]) for n in range(len(keys)) if alive[n]}
 
     @staticmethod
     def _support(a, b, r, res, fresh, whole, cand, nx, ny):
