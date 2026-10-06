@@ -193,7 +193,7 @@ def _grid_kwargs_harness(tmp_path, slam=None, with_map=False, **outer):
         np.savez(tmp_path / "latest_map.npz", data=data, origin=np.array([0.0, 0.0, 0.0]), resolution_m=0.05,
                  index=1, after_scan_id=0, stamp_ns=int(0.5e9))
     scope = {
-        "np": np, "math": _math, "Rectangle": Rectangle, "grid_planning": True, "obstacle": obstacle,
+        "np": np, "math": _math, "os": __import__("os"), "Rectangle": Rectangle, "grid_planning": True, "obstacle": obstacle,
         "args": SimpleNamespace(slam_map_dir=tmp_path if with_map else None),
         "geometry": SimpleNamespace(pallet_depth_m=0.6, pallet_width_m=0.8, loaded_footprint=Footprint(1.53, 0.17, 0.40),
                                     unloaded_footprint=Footprint(1.29, 0.17, 0.36)),
@@ -222,3 +222,34 @@ def test_grid_kwargs_runs_before_the_drive_loop_and_with_a_slam_map(tmp_path):
     assert out["occupancy"].occupied[out["occupancy"].cell_of(1.025, 1.025)]
     gk(None)  # the same instant: the cached bundle
     assert len(obstacle["plans"]) == 2 and obstacle["plans"][0]["memory_revision"] == obstacle["plans"][1]["memory_revision"]
+
+
+def test_a_map_swapped_after_it_was_opened_is_judged_by_the_file_read(tmp_path):
+    # Codex re-review 3 P2: the path was stat()ed after it had been opened; a
+    # bridge swap between the two gave an older file the newer file's mtime.
+    import os
+    import time as _time
+    from types import SimpleNamespace
+
+    tracker = SimpleNamespace(applied=((0.0, 0.0, 0.0),), mode="tracking")
+    gk, obstacle = _grid_kwargs_harness(tmp_path, slam={"tracker": tracker, "scan_id": 5}, with_map=True,
+                                        rear=np.array([-2.0, 0.0, 0.0]), loaded=False)
+    path = tmp_path / "latest_map.npz"
+    old = _time.time() - 60
+    os.utime(path, (old, old))  # another run's file
+    fresh = tmp_path / "fresh.npz"
+    with np.load(path) as m:
+        np.savez(fresh, **{k: m[k] for k in m.files})
+    real_load = np.load
+
+    def load_then_swap(f, *a, **k):
+        out = real_load(f, *a, **k)
+        os.replace(fresh, path)  # the bridge writes a new file now
+        return out
+
+    gk.__globals__["np"] = SimpleNamespace(**{n: getattr(np, n) for n in dir(np) if not n.startswith("__")})
+    gk.__globals__["np"].load = load_then_swap
+    gk(None)
+    note = obstacle["plans"][-1]["slam_map_note"]
+    assert note is not None and note["why"] == "file_before_run"
+    assert obstacle["plans"][-1]["slam_map"] is None

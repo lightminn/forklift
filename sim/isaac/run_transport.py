@@ -10,6 +10,7 @@ import hashlib
 import importlib.util
 import json
 import math
+import os
 import subprocess
 import sys
 import time
@@ -1712,14 +1713,16 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             if layer_.memory is not None and args.slam_map_dir is not None:
                 latest = args.slam_map_dir / "latest_map.npz"
                 if latest.exists():
-                    with np.load(latest) as m_:
+                    # One open file: its fstat and its contents go together (the
+                    # bridge may swap the path between -- Codex review P2).
+                    with open(latest, "rb") as fh_, np.load(fh_) as m_:
                         index_ = int(m_["index"])
                         after_ = int(m_["after_scan_id"])
                         map_stamp_ = int(m_["stamp_ns"]) / 1e9
                         replied_ = (slam_ref["scan_id"] - 1) if slam_ref is not None else None
                         loaded_index_ = (layer_.memory.slam_info or {}).get("index", -1)
                         why_not_ = None
-                        if latest.stat().st_mtime < obstacle["run_wall_start"]:
+                        if os.fstat(fh_.fileno()).st_mtime < obstacle["run_wall_start"]:
                             why_not_ = "file_before_run"  # another run's file (Codex review P2)
                         elif replied_ is not None and after_ > replied_:
                             why_not_ = "unsent_scans"
