@@ -45,6 +45,7 @@ class PlanningMemory:
     last_hit: np.ndarray = field(init=False)
     last_clear: np.ndarray = field(init=False)
     slam: np.ndarray | None = field(init=False, default=None)
+    slam_since: np.ndarray = field(init=False)
     slam_info: dict | None = field(init=False, default=None)
     revision: int = field(init=False, default=0)
     last_scan_stamp: float = field(init=False, default=-math.inf)
@@ -56,6 +57,7 @@ class PlanningMemory:
         ny = int(math.ceil((self.y_max_m - self.oy) / self.resolution_m))
         self.last_hit = np.full((nx, ny), -np.inf)
         self.last_clear = np.full((nx, ny), -np.inf)
+        self.slam_since = np.full((nx, ny), np.inf)
         r = self.hit_radius_m / self.resolution_m
         k = int(math.ceil(r))
         self._disk = [(i, j) for i in range(-k, k + 1) for j in range(-k, k + 1) if math.hypot(i, j) <= r + 1e-9]
@@ -90,9 +92,12 @@ class PlanningMemory:
         np.maximum.at(self.last_clear, (ci[ok], cj[ok]), np.asarray(stamps, dtype=float)[ok])
         self.revision += 1
 
-    def set_slam(self, data: np.ndarray, origin_xy, resolution_m: float, yaw_rad: float = 0.0, **info) -> None:
+    def set_slam(self, data: np.ndarray, origin_xy, resolution_m: float, yaw_rad: float = 0.0, *,
+                 received_s: float = 0.0, **info) -> None:
         """slam_toolbox map data (height, width) -> occupied planning cells: every
-        planning cell an occupied source square overlaps, grown by one cell."""
+        planning cell an occupied source square overlaps, grown by one cell. A
+        cell that turns occupied in this map dates from received_s; one already
+        occupied keeps its date, so a republished old map is no new evidence."""
         mask = np.zeros(self.shape, dtype=bool)
         rows, cols = np.nonzero(np.asarray(data) == SLAM_OCCUPIED)
         if len(rows):
@@ -108,17 +113,40 @@ class PlanningMemory:
             i1, j1 = self.cell(cx.max(axis=0) - 1e-9, cy.max(axis=0) - 1e-9)
             nx, ny = self.shape
             for a0, a1, b0, b1 in zip(i0 - 1, i1 + 1, j0 - 1, j1 + 1):  # grown by one cell
-                mask[max(a0, 0):min(a1 + 1, nx), max(b0, 0):min(b1 + 1, ny)] = True
+                a0, a1, b0, b1 = max(int(a0), 0), min(int(a1) + 1, nx), max(int(b0), 0), min(int(b1) + 1, ny)
+                if a0 < a1 and b0 < b1:  # a square wholly outside the hall marks nothing (Codex review P1)
+                    mask[a0:a1, b0:b1] = True
+        previous = self.slam if self.slam is not None else np.zeros(self.shape, dtype=bool)
+        self.slam_since[mask & ~previous] = float(received_s)
+        self.slam_since[~mask] = np.inf
         self.slam = mask
-        self.slam_info = dict(info)
+        self.slam_info = {**info, "received_s": float(received_s)}
         self.revision += 1
+
+    def retract_rect(self, x: float, y: float, length: float, width: float, yaw: float, grow_m: float) -> int:
+        """Forget the hits inside a rectangle grown by grow_m (the pallet just
+        lifted: it is the truck's now, by the recognised estimate -- Codex review
+        P1: its old hits around the loaded outline kept the start blocked)."""
+        nx, ny = self.shape
+        cx = self.ox + (np.arange(nx) + 0.5) * self.resolution_m
+        cy = self.oy + (np.arange(ny) + 0.5) * self.resolution_m
+        gx, gy = np.meshgrid(cx, cy, indexing="ij")
+        c, s = math.cos(yaw), math.sin(yaw)
+        u = (gx - x) * c + (gy - y) * s
+        v = -(gx - x) * s + (gy - y) * c
+        inside = (np.abs(u) <= length / 2 + grow_m) & (np.abs(v) <= width / 2 + grow_m) & np.isfinite(self.last_hit)
+        self.last_hit[inside] = -np.inf
+        self.revision += 1
+        return int(inside.sum())
 
     def occupied(self, *, use_slam: bool = True) -> np.ndarray:
         """Observation memory (last hit newer than last clear), plus the SLAM layer
         where the live evidence's latest word is not a clear."""
         out = self.last_hit > self.last_clear
         if use_slam and self.slam is not None:
-            out |= self.slam & ~(self.last_clear > self.last_hit)
+            # Refuted only by a clear seen after the cell turned occupied in the
+            # map: an old clear never hides a new tall obstacle (Codex review P1).
+            out |= self.slam & ~(self.last_clear > self.slam_since)
         return out
 
 

@@ -1675,47 +1675,68 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         """The scenario a grid plan sees: no ground-truth props (plan audit table)."""
         return replace(sc, props=()) if grid_planning else sc
 
-    def grid_kwargs(kind=None, target=None) -> dict:
+    def grid_kwargs(kind=None, target=None, own=None) -> dict:
         """occupancy (and the pallet obstacle the plan may know) for a grid plan."""
         if not grid_planning:
             return {}
         stamp = obstacle.get("last_stamp", 0.0)
         layer_ = obstacle["layer"]
+        # The correction control applies now (a release changes it before the
+        # obstacle block re-projects -- Codex review P1), the pose it plans from
+        # (own, or this tick's), and the load.
+        if slam is not None and slam["tracker"].applied is not None:
+            applied_ = tuple(float(v) for v in slam["tracker"].applied[0])
+        else:
+            applied_ = obstacle["applied"] or (0.0, 0.0, 0.0)
+        try:
+            own_now_ = tuple(float(v) for v in (own if own is not None else rear))
+            loaded_now_ = bool(loaded)
+        except NameError:  # the first plans, before the drive loop: nothing remembered under the truck
+            own_now_, loaded_now_ = None, False
+        mode_ = slam["tracker"].mode if slam is not None else None
+        key_ = (stamp, obstacle["version"], applied_, mode_, loaded_now_,
+                None if own_now_ is None else tuple(round(v, 4) for v in own_now_))
         cache_ = obstacle.get("plan_cache")
-        if cache_ is not None and cache_[0] == (stamp, obstacle["version"]):
-            # One bundle per planning instant: retries and fallbacks of the same
-            # replan see the same map and memory (Codex design review P1).
+        if cache_ is not None and cache_[0] == key_:
+            # One bundle per planning instant and state: retries and fallbacks
+            # see the same map and memory (Codex design review P1).
             occupancy, bundle = cache_[1], cache_[2]
         else:
             use_slam = False
+            map_note = None
             if layer_.memory is not None and args.slam_map_dir is not None:
                 latest = args.slam_map_dir / "latest_map.npz"
                 if latest.exists():
                     with np.load(latest) as m_:
                         index_ = int(m_["index"])
-                        if (layer_.memory.slam_info or {}).get("index") != index_:
+                        after_ = int(m_["after_scan_id"])
+                        replied_ = (slam["scan_id"] - 1) if slam is not None else None
+                        if replied_ is not None and after_ > replied_:
+                            # A map from scans this run has not sent: another
+                            # run's file, or a wrong directory -- never used.
+                            map_note = {"rejected_index": index_, "after_scan_id": after_, "replied": replied_}
+                        elif (layer_.memory.slam_info or {}).get("index") != index_:
                             layer_.memory.set_slam(
                                 m_["data"], tuple(m_["origin"][:2]), float(m_["resolution_m"]),
-                                float(m_["origin"][2]), index=index_, after_scan_id=int(m_["after_scan_id"]),
-                                stamp_ns=int(m_["stamp_ns"]),
+                                float(m_["origin"][2]), received_s=float(stamp), index=index_,
+                                after_scan_id=after_, stamp_ns=int(m_["stamp_ns"]),
                             )
                 # The map is in SLAM's frame: only while control applies SLAM's
                 # correction (not holding) do the two frames agree.
-                use_slam = slam is None or slam["tracker"].mode != "holding"
-            try:
-                own_now_, loaded_now_ = tuple(float(v) for v in rear), bool(loaded)
-            except NameError:  # the first plans, before the drive loop: nothing remembered under the truck
-                own_now_, loaded_now_ = None, False
-            occupancy = layer_.planner_grid(stamp, obstacle["applied"] or (0.0, 0.0, 0.0), obstacle["version"],
-                                            use_slam=use_slam, own_pose=own_now_, loaded=loaded_now_)
+                use_slam = mode_ != "holding"
+            occupancy = layer_.planner_grid(stamp, applied_, obstacle["version"], use_slam=use_slam,
+                                            own_pose=own_now_, loaded=loaded_now_)
             bundle = {
                 "memory": layer_.memory is not None,
                 "memory_revision": layer_.memory.revision if layer_.memory is not None else None,
                 "slam_used": use_slam and layer_.memory is not None and layer_.memory.slam is not None,
                 "slam_map": (layer_.memory.slam_info if layer_.memory is not None else None),
+                "slam_map_note": map_note,
                 "last_replied_scan_id": (slam["scan_id"] - 1) if slam is not None else None,
+                "applied": list(applied_),
+                "mode": mode_,
             }
-            obstacle["plan_cache"] = ((stamp, obstacle["version"]), occupancy, bundle)
+            obstacle["plan_cache"] = (key_, occupancy, bundle)
         obstacle["plans"].append({"kind": kind, "stamp_s": stamp, "occupied_cells": int(occupancy.occupied.sum()),
                                   **bundle})
         out = {"occupancy": occupancy}
@@ -2285,6 +2306,18 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             obstacle["layer"].depth_support = None
             state.setdefault("pocket_check", {}).update(pocket["check"].summary(), frames_read=pocket["frames_read"])
             pocket["check"] = None
+        if (
+            next_phase == "extract" and obstacle is not None and obstacle["layer"].memory is not None
+            and obstacle.get("pickup_estimate") is not None
+        ):
+            # The pallet is the truck's now: its remembered hits around the
+            # recognised estimate go (D2/D3 delta; Codex review P1 -- they kept
+            # the loaded start blocked). By the estimate, never the truth.
+            est_ = obstacle["pickup_estimate"]
+            mem_ = obstacle["layer"].memory
+            gone_ = mem_.retract_rect(est_.x_m, est_.y_m, geometry.pallet_depth_m, geometry.pallet_width_m,
+                                      est_.yaw_rad, mem_.hit_radius_m + 0.10)
+            obstacle.setdefault("memory_events", []).append({"time_s": t, "event": "retract_pickup", "cells": gone_})
         phase, phase_started = next_phase, t
         state["phase"] = phase
         if slam is None:
@@ -2341,7 +2374,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         if leg == "transport":
             replanned = plan_transport_leg(
                 grid_world(scenario), start, planner_config, geometry=geometry, travel_config=travel_config,
-                **grid_kwargs(None),
+                **grid_kwargs(None, own=after),
             )
         else:
             # The delivered pallet sits where docking put it -- right in the
@@ -2369,7 +2402,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 planner_config,
                 geometry=geometry,
                 travel_config=travel_config,
-                **grid_kwargs(None),
+                **grid_kwargs(None, own=after),
             )
         if replanned.status == "invalid_start" and grid_planning:
             # The released pose may sit inside the planning clearance of a grid
@@ -2381,12 +2414,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             if leg == "transport":
                 replanned = plan_transport_leg(
                     grid_world(scenario), start, tight_cfg, geometry=geometry, travel_config=tight_travel_cfg,
-                    **grid_kwargs(None),
+                    **grid_kwargs(None, own=after),
                 )
             else:
                 replanned = plan_return_leg(
                     grid_world(return_scenario), start, return_to_pose, tight_cfg, geometry=geometry,
-                    travel_config=tight_travel_cfg, **grid_kwargs(None),
+                    travel_config=tight_travel_cfg, **grid_kwargs(None, own=after),
                 )
             event["tight_retry"] = True
         event.update(
