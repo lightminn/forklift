@@ -748,8 +748,8 @@ def test_pocket_bars_are_judged_against_the_block_columns_not_the_outline():
     i = source.index('f"Measured pallet footprint overlap in {phase}"')
     head = source[source.rindex("in_outline = []", 0, i) : i]
     assert "if not any(o is r_ for r_ in in_outline)" in head
-    assert 'f"Measured pallet block overlap in {phase}"' in source[i : i + 1500]
-    assert "BLOCK_COLUMNS.append((_edge + _w / 2, _w / 2))" in source
+    assert 'f"Measured pallet solid overlap in {phase}: {box_.name}"' in source[i : i + 2500]
+    assert "PALLET_BOXES = PALLET_BOXES_OF(args.pallet_geometry_loaded)" in source  # the canonical solids
 
 
 def test_a_backoff_offers_no_leg_to_the_rules_and_silence_is_traced():

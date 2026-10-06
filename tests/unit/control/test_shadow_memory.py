@@ -243,3 +243,40 @@ def test_the_array_support_matches_the_repeated_scan_on_random_grids():
                 cand[(int(a), int(b))] = float(rng.uniform(0.02, 0.2))
         got = ShadowMemory._retained_stamps(cand, 0.05, fresh, stamps, whole, nx, ny)
         assert got == _reference_stamps(cand, 0.05, fresh, stamps, whole, nx, ny)
+
+
+def test_a_dropped_candidate_inside_the_outline_still_supports():
+    # Codex checkpoint 10 P1 counterexample.
+    fresh = np.ones((3, 3), dtype=bool)
+    fresh[0, 1] = fresh[1, 1] = False
+    stamps = np.ones((3, 3))
+    whole = {(0, 1)}
+    cand = {(1, 1): 0.025, (0, 1): 0.025}
+    got = ShadowMemory._retained_stamps(cand, 0.05, fresh, stamps, whole, 3, 3)
+    assert got == _reference_stamps(cand, 0.05, fresh, stamps, whole, 3, 3) == {(1, 1): 1.0}
+
+
+def test_the_reach_edge_is_judged_like_the_repeated_scan():
+    # Codex checkpoint 10 P2: np.hypot and math.hypot differ in the last bit.
+    import math as m
+
+    res = 0.005
+    fresh = np.ones((65, 65), dtype=bool)
+    fresh[32, 32] = fresh[50, 60] = False
+    stamps = np.ones((65, 65))
+    cand = {(32, 32): res * m.hypot(17, 27)}
+    got = ShadowMemory._retained_stamps(cand, res, fresh, stamps, set(), 65, 65)
+    assert got == _reference_stamps(cand, res, fresh, stamps, set(), 65, 65)
+
+
+def test_random_grids_with_candidates_inside_the_outline_match_too():
+    rng = np.random.default_rng(11)
+    for _ in range(300):
+        nx = ny = 12
+        fresh = rng.random((nx, ny)) < rng.uniform(0.3, 0.9)
+        stamps = rng.uniform(0.0, 1.0, (nx, ny))
+        whole = {(int(a), int(b)) for a, b in rng.integers(0, nx, (rng.integers(0, 30), 2))}
+        cand = {(int(a), int(b)): float(rng.uniform(0.02, 0.2))
+                for a, b in rng.integers(0, nx, (rng.integers(1, 25), 2)) if not fresh[a, b]}
+        got = ShadowMemory._retained_stamps(cand, 0.05, fresh, stamps, whole, nx, ny)
+        assert got == _reference_stamps(cand, 0.05, fresh, stamps, whole, nx, ny)

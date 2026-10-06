@@ -221,15 +221,16 @@ class ShadowMemory:
             w = np.array([c for c in whole if 0 <= c[0] < nx and 0 <= c[1] < ny], dtype=np.int64).reshape(-1, 2)
             whole_mask[w[:, 0], w[:, 1]] = True
         k = int(np.ceil(max(cand.values()) / res)) + 1
-        di, dj = np.meshgrid(np.arange(-k, k + 1), np.arange(-k, k + 1), indexing="ij")
-        di, dj = di.ravel(), dj.ravel()
-        centre = (di == 0) & (dj == 0)
-        di, dj = di[~centre], dj[~centre]
-        gap = res * np.hypot(np.maximum(np.abs(di) - 1, 0), np.maximum(np.abs(dj) - 1, 0))
+        offsets = [(i, j) for i in range(-k, k + 1) for j in range(-k, k + 1) if (i, j) != (0, 0)]
+        di = np.array([o[0] for o in offsets])
+        dj = np.array([o[1] for o in offsets])
+        # The same float as _support (math.hypot), so a cell at the reach edge
+        # is judged alike (Codex checkpoint 10 P2: np.hypot differed in the last bit).
+        gap = np.array([res * hypot(max(abs(i) - 1, 0), max(abs(j) - 1, 0)) for i, j in offsets])
         alive = np.ones(len(keys), dtype=bool)
-        deps = [None] * len(keys)  # candidate neighbours a cell relies on
+        deps = [None] * len(keys)  # candidate neighbours a cell takes its stamp from
         first = np.full(len(keys), np.inf)  # oldest fresh stamp in reach
-        users = [[] for _ in keys]  # who relies on each candidate
+        users = [[] for _ in keys]  # who loses its support when a candidate goes
         for n, (a, b) in enumerate(keys):
             m = gap <= cand[(a, b)]
             p, q = a + di[m], b + dj[m]
@@ -245,10 +246,13 @@ class ShadowMemory:
             if fr.any():
                 first[n] = float(np.min(stamps_fresh[p[fr], q[fr]]))
             deps[n] = cid[ret]
-            for d in deps[n]:
+            # A candidate wholly inside the outline still supports when it is
+            # dropped (_support accepts whole cells): only the others withdraw
+            # support (Codex checkpoint 10 P1).
+            for d in cid[ret & ~whole_mask[p, q]]:
                 users[d].append(n)
-        # Removing a candidate withdraws the support of every cell relying on it
-        # (a candidate lies in the band, never wholly inside the outline).
+        # Removing a candidate withdraws the support of every cell relying on it,
+        # unless that candidate is also wholly inside the outline.
         queue = [n for n in range(len(keys)) if not alive[n]]
         while queue:
             gone = queue.pop()
@@ -263,7 +267,10 @@ class ShadowMemory:
             for n in range(len(keys)):
                 if not alive[n] or deps[n] is None or not len(deps[n]):
                     continue
-                low = min(stamp[n], float(np.min(stamp[deps[n]])))
+                live = deps[n][alive[deps[n]]]  # a dropped whole candidate gives no stamp
+                if not len(live):
+                    continue
+                low = min(stamp[n], float(np.min(stamp[live])))
                 if low < stamp[n]:
                     stamp[n] = low
                     changed = True

@@ -870,16 +870,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     from forklift_core.control.drive_permission import parts_of as PARTS_OF
     from forklift_core.planning.geometry import Bounds
 
-    # The pallet's block columns across the approach face (lateral centre, half
-    # width), from its geometry: each runs the full depth (blocks and the bottom
-    # board under them).
-    _pg = args.pallet_geometry_loaded
-    _gap = (_pg.overall_width_m - sum(_pg.block_widths_m)) / 2
-    BLOCK_COLUMNS = []
-    _edge = -_pg.overall_width_m / 2
-    for _w in _pg.block_widths_m:
-        BLOCK_COLUMNS.append((_edge + _w / 2, _w / 2))
-        _edge += _w + _gap
+    # The pallet's solids (the canonical assembly: boards, blocks, stringers) a
+    # bar in a pocket is judged against (Codex checkpoint 10 P2: a column model
+    # missed the stringers and asymmetric blocks).
+    from forklift_core.perception.pallet_geometry import pallet_boxes as PALLET_BOXES_OF
+
+    PALLET_BOXES = PALLET_BOXES_OF(args.pallet_geometry_loaded)
     from forklift_core.control.drive_permission import shape_meets as SHAPE_MEETS
     from forklift_core.control.rollout import bicycle_rollout
     from forklift_core.planning import Pose2D as PlanningPose
@@ -3146,15 +3142,20 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             )
             if in_outline:
                 cp, sp = math.cos(pallet_yaw), math.sin(pallet_yaw)
-                for lat_, half_ in BLOCK_COLUMNS:
-                    col_pose = (float(ppos[0]) - lat_ * sp, float(ppos[1]) + lat_ * cp, float(pallet_yaw))
+                base_z = float(ppos[2])
+                for box_ in PALLET_BOXES:
+                    bx, by, bz = box_.centre_m
+                    lx, ly, lz = box_.size_m
+                    box_pose = (float(ppos[0]) + bx * cp - by * sp, float(ppos[1]) + bx * sp + by * cp, float(pallet_yaw))
+                    tall = [r_ for r_ in in_outline
+                            if new_obstacles["heights"].get(id(r_), 0.0) > base_z + bz - lz / 2]
+                    if not tall:
+                        continue  # every bar stays below this solid
                     require(
                         collision_free_pose(
-                            col_pose, in_outline,
-                            Footprint(geometry.pallet_depth_m / 2, geometry.pallet_depth_m / 2, half_),
-                            Bounds(-1e9, 1e9, -1e9, 1e9),
+                            box_pose, tall, Footprint(lx / 2, lx / 2, ly / 2), Bounds(-1e9, 1e9, -1e9, 1e9),
                         ),
-                        f"Measured pallet block overlap in {phase}",
+                        f"Measured pallet solid overlap in {phase}: {box_.name}",
                     )
             relative = ppos[:2] - base[:2]
             if phase in ["extract", "transport"]:
@@ -4407,17 +4408,6 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
                     direction=direction, loaded=loaded, cap_mps=max(abs(requested_speed), abs(truth_speed)),
                 )
-                if why.startswith("sensor_silent"):
-                    # N9 deadlines: the first zero command after a sensor fell
-                    # silent and the stop it ends in (plan D6).
-                    trace = obstacle.setdefault("silence_trace", {})
-                    trace.setdefault("first_zero_s", t)
-                    trace.setdefault("reason", why)
-                    trace.setdefault("speed_at_zero_mps", abs(truth_speed))
-                    trace.setdefault("rear_at_zero", [float(v) for v in truth_rear])
-                    if abs(truth_speed) < 0.01 and "stopped_s" not in trace:
-                        trace["stopped_s"] = t
-                        trace["rear_stopped"] = [float(v) for v in truth_rear]
                 dumped_phases = obstacle.setdefault("dumped_phases", set())
                 if allowed == 0.0 and why in ("unknown", "occupied") and t > 5.0 and (
                     obstacle.get("dumps", 0) < 4 or phase not in dumped_phases
@@ -4543,6 +4533,18 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         # Zero allowed: the emergency stop the check assumed --
                         # wheels to zero, steering held (Codex L0b P1).
                         obstacle_hold = allowed == 0.0
+                        if why.startswith("sensor_silent") and allowed == 0.0:
+                            # N9 deadlines: the first zero command after a sensor fell
+                            # silent -- recorded only where the zero is applied (Codex
+                            # checkpoint 10 P2) -- and the stop it ends in (plan D6).
+                            trace = obstacle.setdefault("silence_trace", {})
+                            trace.setdefault("first_zero_s", t)
+                            trace.setdefault("reason", why)
+                            trace.setdefault("speed_at_zero_mps", abs(truth_speed))
+                            trace.setdefault("rear_at_zero", [float(v) for v in truth_rear])
+                            if abs(truth_speed) < 0.01 and "stopped_s" not in trace:
+                                trace["stopped_s"] = t
+                                trace["rear_stopped"] = [float(v) for v in truth_rear]
                 # Stop, replan, resume (plan D4): blocked by an obstacle and standing.
                 stopped_now = slam["stop_now"] if slam is not None else float(np.linalg.norm(velocity[:2])) < 0.01
                 if (
@@ -4951,6 +4953,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             # Judged against the pallet's solids, not its outline
                             # (Codex checkpoint 9 P1).
                             new_obstacles.setdefault("pallet_frame", []).append(rect)
+                            new_obstacles.setdefault("heights", {})[id(rect)] = float(osize[2])
                         if obstacle is not None and obstacle["layer"].shadow is not None:
                             _, own_ = obstacle["layer"].footprints(loaded)
                             reach = obstacle["layer"].shadow.band_m + 0.05 * math.sqrt(2)

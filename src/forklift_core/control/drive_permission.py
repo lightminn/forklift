@@ -126,7 +126,9 @@ def shape_cells(snapshot: GridSnapshot, pose, shape, margin_m: float, *, directi
     # The union, in the same (i, j) order as a row-wise unique, keyed in one
     # integer (the 2-D unique was a tenth of a mission's wall time).
     cells = np.concatenate(found).astype(np.int64)
-    off, span = 1 << 20, 1 << 21  # cell indices stay far inside +-2^20
+    off, span = 1 << 20, 1 << 21
+    if np.abs(cells).max() >= off:  # outside the key's range: the row-wise unique (Codex checkpoint 10 P2)
+        return np.unique(cells, axis=0), outside
     keys = np.unique((cells[:, 0] + off) * span + (cells[:, 1] + off))
     return np.column_stack((keys // span - off, keys % span - off)), outside
 
