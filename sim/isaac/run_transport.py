@@ -38,8 +38,10 @@ OBSERVE_ARRIVAL_YAW_RAD = 0.10
 
 def same_path(new, current, remaining_m: float, tol_m: float = 0.01, yaw_tol_rad: float = 0.02) -> bool:
     """True when a replan returns the path the truck is already on: every new
-    pose lies within tol_m (and yaw_tol_rad) of the current path's remaining
-    part and the lengths agree within 2 tol_m (plan D4: that is a wait). Only
+    pose lies within tol_m of the current path's remaining part, measured to
+    its segments, not its samples (Codex checkpoint 8: the same straight
+    sampled from another start read as different), with the heading within
+    yaw_tol_rad and the lengths within 2 tol_m (plan D4: that is a wait). Only
     a near-identical path: a 2.5 cm detour already misses the cells that block
     the old one (Codex checkpoint 7 P2), so it must not be thrown away."""
     a = np.asarray(new.poses, dtype=float)
@@ -48,14 +50,24 @@ def same_path(new, current, remaining_m: float, tol_m: float = 0.01, yaw_tol_rad
         return False
     seg = np.hypot(*np.diff(b[:, :2], axis=0).T)
     from_end = np.concatenate((np.cumsum(seg[::-1])[::-1], [0.0]))
-    b = b[from_end <= remaining_m + 2 * tol_m]
+    keep = from_end <= remaining_m + 2 * tol_m
+    first = max(int(np.argmax(keep)) - 1, 0)  # the segment the truck is on
+    b = b[first:]
     length = float(np.sum(np.hypot(*np.diff(a[:, :2], axis=0).T)))
     if len(b) < 2 or abs(length - remaining_m) > 2 * tol_m:
         return False
-    d = np.hypot(a[:, None, 0] - b[None, :, 0], a[:, None, 1] - b[None, :, 1])
+    p0, p1 = b[:-1, :2], b[1:, :2]
+    v = p1 - p0
+    vv = np.maximum(np.sum(v * v, axis=1), 1e-12)
+    rel = a[:, None, :2] - p0[None]
+    u = np.clip(np.sum(rel * v[None], axis=2) / vv[None], 0.0, 1.0)
+    near = p0[None] + u[..., None] * v[None]
+    d = np.hypot(*(a[:, None, :2] - near).transpose(2, 0, 1))
     k = np.argmin(d, axis=1)
-    dyaw = np.abs(np.arctan2(np.sin(a[:, 2] - b[k, 2]), np.cos(a[:, 2] - b[k, 2])))
+    yaw_b = b[:-1, 2][k]
+    dyaw = np.abs(np.arctan2(np.sin(a[:, 2] - yaw_b), np.cos(a[:, 2] - yaw_b)))
     return bool(np.all(d[np.arange(len(a)), k] <= tol_m) and np.all(dyaw <= yaw_tol_rad))
+
 
 def load_perception_module(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
@@ -3258,11 +3270,16 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         "Transport" if phase == "transport" else "Return",
                         (1.0, 0.65, 0.04) if phase == "transport" else (0.55, 0.2, 0.85),
                     )
+                    stall_config = trackers[phase].config
+                    if obstacle is not None and obstacle.get("backoff", {}).get("phase") == phase:
+                        # A replan accepted here ends a backoff too (Codex checkpoint 8 P2).
+                        stall_config = obstacle.pop("backoff")["config"]
+                        obstacle.setdefault("replan_wait", {}).pop(phase, None)
                     trackers[phase] = RearAxlePathTracker(
                         replanned.poses,
                         replanned.directions,
                         replanned.curvatures_inv_m,
-                        trackers[phase].config,
+                        stall_config,
                     )
                     if phase == "transport":
                         arm_docking()  # keep the stop before the delivery straight
@@ -4278,7 +4295,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             truth_speed = float(np.dot(velocity[:2], forward))
             obstacle_hold = False
             pocket_phase = False
-            if obstacle is not None and phase in trackers and (requested_speed != 0.0 or abs(truth_speed) > 0.05):
+            if obstacle is not None and phase in trackers and (
+                requested_speed != 0.0 or abs(truth_speed) > 0.05 or obstacle.get("force_replan") == phase
+            ):
                 if slam is not None and slam["tracker"].applied is not None:
                     applied_now = tuple(float(v) for v in slam["tracker"].applied[0])
                 else:
@@ -4344,6 +4363,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 docking_straight = (phase == "approach" and trackers[phase].remaining_to_goal_m() <= geometry.alignment_straight_m) or (
                     phase == "transport" and trackers[phase].remaining_to_goal_m() <= geometry.delivery_straight_m
                 )
+                if obstacle.get("backoff", {}).get("phase") == phase:
+                    # A backoff is never the delivery straight, whatever its
+                    # remaining length: the permission acts on it (Codex
+                    # checkpoint 8 P1).
+                    docking_straight = False
                 acting = phase in ("observe", "approach", "transport", "return_home") and not docking_straight
                 pocket_phase = args.pocket_check and (phase == "insert" or (phase == "approach" and docking_straight))
                 if pocket_phase:
@@ -4626,8 +4650,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             # the reverse is checked; unobserved space stops it),
                             # then replan from there.
                             backs[phase] = backs.get(phase, 0) + 1
-                            leg_dir = trackers[phase].leg_ahead()[1]
-                            d = -1 if (leg_dir or 1) >= 0 else 1
+                            # The blocked leg's direction, kept across repeated
+                            # backoffs (a second one must not undo the first,
+                            # Codex checkpoint 8 P2).
+                            leg_dir = obstacle.get("backoff", {}).get("leg_dir")
+                            if leg_dir is None:
+                                leg_dir = trackers[phase].leg_ahead()[1] or 1
+                            d = -1 if leg_dir >= 0 else 1
                             n_ = max(1, int(math.ceil(BACKOFF_M / 0.04)))
                             fr = np.linspace(0.0, 1.0, n_ + 1)
                             yaw0 = float(rear[2])
@@ -4640,7 +4669,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             )
                             # The leg's own tracker config survives repeated backoffs.
                             config0 = obstacle.get("backoff", {}).get("config", trackers[phase].config)
-                            obstacle["backoff"] = {"phase": phase, "config": config0, "time_s": t}
+                            obstacle["backoff"] = {"phase": phase, "config": config0, "time_s": t, "leg_dir": leg_dir}
                             obstacle["replans"][-1]["backoff"] = True
                             obstacle["replan_wait"].pop(phase, None)
                             paths[phase] = back
@@ -4648,6 +4677,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 back.poses, back.directions, back.curvatures_inv_m,
                                 replace(config0, cruise_speed_mps=BACKOFF_SPEED_MPS),
                             )
+                            phase_started = t  # the backoff's own tracking timeout
                     elif same_path(replanned, paths[phase], trackers[phase].remaining_to_goal_m()):
                         # D4: the same path again is a wait, not a retry -- it
                         # neither restarts the tracker nor the no-progress watch
@@ -4763,9 +4793,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             ):
                 requested_speed = 0.0  # waiting to retry the live plan: stand
             if obstacle is not None and obstacle.get("replan_wait", {}).get(phase):
-                if obstacle.get("path_blocked_ticks", 0) == 0:
-                    # The path ahead is no longer blocked: the permission has
-                    # verified it again, so the existing path resumes.
+                check_ = obstacle["layer"].permission.path_check
+                if (
+                    obstacle.get("backoff", {}).get("phase") != phase
+                    and check_ is not None and check_.blocked is None
+                ):
+                    # The path ahead verified again -- no OCCUPIED and no UNKNOWN
+                    # cell (a zero blocked count is not that, Codex checkpoint 8
+                    # P2): the existing path resumes.
                     obstacle["replan_wait"].pop(phase, None)
                 else:
                     requested_speed = 0.0  # a blocked-path replan failed: stand until one succeeds

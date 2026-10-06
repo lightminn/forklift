@@ -639,6 +639,11 @@ def test_same_path_is_the_remaining_part_again():
     assert not same_path(_straight(1.5, 4.0, y=0.025), current, remaining_m=2.5)
     assert not same_path(_straight(1.5, 4.5), current, remaining_m=2.5)
     assert not same_path(_straight(1.5, 4.0, yaw=0.2), current, remaining_m=2.5)
+    # The same straight sampled from another start is still the same path
+    # (Codex checkpoint 8: samples compared to samples read it as different).
+    coarse = _straight(0.0, 4.0, step=0.05)
+    shifted = _Path(np.column_stack((np.r_[np.arange(1.525, 4.0, 0.05), 4.0], np.zeros(51), np.zeros(51))))
+    assert same_path(shifted, coarse, remaining_m=2.475)
 
 
 def test_same_path_waits_do_not_count_as_retries():
@@ -699,7 +704,7 @@ def test_a_failed_blocked_replan_stands_and_retries():
     # Held on later ticks too, until a replan succeeds or the path clears (Codex checkpoint 7 P2).
     j = source.index('if obstacle is not None and obstacle.get("replan_wait", {}).get(phase):')
     assert j < source.index("drive = ackermann_command(requested_speed")
-    assert 'obstacle.get("path_blocked_ticks", 0) == 0' in source[j : j + 400]
+    assert "check_.blocked is None" in source[j : j + 600]  # a verified path, not a zero count
     assert 'if replanned.status in ("invalid_start", "no_path"):' in source
 
 
@@ -709,9 +714,17 @@ def test_a_failed_replan_backs_off_a_bounded_distance_then_replans():
     i = source.index("# D4 delta: stood with the outline already on the")
     block = source[source.rindex("if phase in", 0, i) : i + 2500]
     assert 'phase in ("transport", "return_home")' in block and "backs.get(phase, 0) < BACKOFF_PER_LEG" in block
-    assert "d = -1 if (leg_dir or 1) >= 0 else 1" in block  # against the leg's direction
+    assert "d = -1 if leg_dir >= 0 else 1" in block  # against the leg's direction
     # The end of a backoff is never the leg's arrival; it forces a replan.
     j = source.index("# The end of a backoff is not the leg's arrival")
     assert j < source.index('if tracking.status == "arrived":\n                    if args.use_perception and phase == "observe":')
     assert 'obstacle["force_replan"] = phase' in source[j : j + 900]
     assert 'obstacle.pop("force_replan", None) == phase' in source
+    # Codex checkpoint 8: a backoff always acts under the permission, a forced
+    # replan opens the obstacle block while standing, the leg direction is kept,
+    # and the stall replan ends a backoff too.
+    k = source.index('acting = phase in ("observe", "approach", "transport", "return_home") and not docking_straight')
+    assert 'obstacle.get("backoff", {}).get("phase") == phase' in source[k - 500 : k]
+    assert 'or obstacle.get("force_replan") == phase' in source
+    assert 'leg_dir = obstacle.get("backoff", {}).get("leg_dir")' in source
+    assert 'stall_config = obstacle.pop("backoff")["config"]' in source
