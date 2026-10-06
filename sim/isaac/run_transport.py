@@ -2475,7 +2475,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         )
         require(replanned.success, f"slam_release_replan_failed: {replanned.status}")
         paths[leg] = replanned
-        state["paths"][leg] = path_record(replanned)
+        state.setdefault("paths", {})[leg] = path_record(replanned)
         (args.output / "paths.json").write_text(record_json(state["paths"], indent=2) + "\n")
         trackers[leg] = RearAxlePathTracker(
             replanned.poses,
@@ -3512,7 +3512,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     )
                     require(replanned.success, f"stall_replan_failed:{replanned.status}")
                     paths[phase] = replanned
-                    state["paths"][phase] = path_record(replanned)
+                    state.setdefault("paths", {})[phase] = path_record(replanned)
                     (args.output / "paths.json").write_text(
                         record_json(state["paths"], indent=2) + "\n"
                     )
@@ -3603,7 +3603,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         if replanned.success:
                             paths[phase] = replanned
                             # The active plan everywhere: record, file, display.
-                            state["paths"][phase] = path_record(replanned)
+                            state.setdefault("paths", {})[phase] = path_record(replanned)
                             (args.output / "paths.json").write_text(
                                 record_json(state["paths"], indent=2) + "\n"
                             )
@@ -3677,7 +3677,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         )
                         require(replanned.success, f"observe_replan_failed:{replanned.status}")
                         paths["observe"] = replanned
-                        state["paths"]["observe"] = path_record(replanned)
+                        state.setdefault("paths", {})["observe"] = path_record(replanned)
                         (args.output / "paths.json").write_text(
                             record_json(state["paths"], indent=2) + "\n"
                         )
@@ -4965,7 +4965,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         obstacle.setdefault("progress", {}).clear()
                         obstacle.setdefault("replan_wait", {}).pop(phase, None)
                         paths[phase] = replanned
-                        state["paths"][phase] = path_record(replanned)
+                        state.setdefault("paths", {})[phase] = path_record(replanned)
                         (args.output / "paths.json").write_text(record_json(state["paths"], indent=2) + "\n")
                         config_ = trackers[phase].config
                         if obstacle.get("backoff", {}).get("phase") == phase:

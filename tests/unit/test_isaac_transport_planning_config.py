@@ -502,7 +502,7 @@ def test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules():
     assert "cusp_stop_ticks < cusp_stop_needed" in branch
     assert "replace(tracking, status='braking')" in branch
     # The replan is the active plan everywhere afterwards.
-    assert "state['paths'][phase] = path_record(replanned)" in branch
+    assert "state.setdefault('paths', {})[phase] = path_record(replanned)" in branch
     assert "add_path_display(stage, replanned, 'Transport'" in branch
     assert "state['planning_wall_s'] = " in branch
     # Stopped: the transport leg alone, same planner config, from the measured rear pose.
@@ -852,3 +852,12 @@ def test_plans_project_with_the_grids_correction_and_a_release_passes_its_own():
     rel_src = ast.get_source_segment(source, rel)
     assert rel_src.count("grid_kwargs(None, own=after, applied=released_)") == 4
     assert "grid_kwargs(None)" not in rel_src
+
+
+def test_replans_record_their_path_before_the_mission_plan_exists():
+    # l6_spec_mission seed 1: an observe replan under SLAM ran before the
+    # perception branch created state["paths"] -> KeyError.
+    source = SCRIPT.read_text()
+    assert 'state["paths"]["observe"] = path_record(replanned)' not in source
+    assert 'state["paths"][phase] = path_record(replanned)' not in source
+    assert 'state.setdefault("paths", {})["observe"] = path_record(replanned)' in source
