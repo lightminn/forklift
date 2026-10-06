@@ -4991,7 +4991,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     pts_ = pts_[seg_ <= 4.0]
                     meets_path_ = any(not chk_.free(tuple(p_)) for p_ in pts_)
                     x0_, y0_, h0_ = (float(v) for v in pts_[0])
-                    line_ = [(x0_ + d_ * math.cos(h0_), y0_ + d_ * math.sin(h0_), h0_)
+                    # The straight runs the way the leg drives: backwards on a
+                    # reverse leg (Codex checkpoint 15).
+                    sgn_ = -1.0 if leg_direction < 0 else 1.0
+                    line_ = [(x0_ + sgn_ * d_ * math.cos(h0_), y0_ + sgn_ * d_ * math.sin(h0_), h0_)
                              for d_ in np.arange(0.0, min(4.0, seg_[-1]) + 1e-9, 0.025)]
                     meets_line_ = any(not chk_.free(p_) for p_ in line_)
                     return meets_path_, meets_line_

@@ -786,3 +786,11 @@ def test_pocket_bars_meet_the_pallet_solids_exactly():
     assert "stringer_1" in _bar_meets_pallet((0, 0, 0.0), 0.0, (0, 0.145), (0.03, 0.03, 0.100))
     # The fixed N11 bar in its pocket, level pallet: clear.
     assert _bar_meets_pallet((0, 0, 0.0), 0.0, (0.25, 0.145), (0.03, 0.03, 0.09)) == []
+
+
+def test_the_n3_straight_follows_the_leg_direction():
+    source = SCRIPT.read_text()
+    i = source.index("def n_sweep_test(")
+    block = source[i : i + 2500]
+    assert "sgn_ = -1.0 if leg_direction < 0 else 1.0" in block
+    assert "x0_ + sgn_ * d_ * math.cos(h0_)" in block
