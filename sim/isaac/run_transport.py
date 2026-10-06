@@ -69,6 +69,31 @@ def same_path(new, current, remaining_m: float, tol_m: float = 0.01, yaw_tol_rad
     return bool(np.all(d[np.arange(len(a)), k] <= tol_m) and np.all(dyaw <= yaw_tol_rad))
 
 
+def box_meets_obb(box_centre, box_half, obb_centre, obb_axes, obb_half) -> bool:
+    """Closed overlap of an axis-aligned box and an oriented box (15-axis SAT):
+    touching counts. obb_axes holds the oriented box's unit axes as columns."""
+    a_half = np.asarray(box_half, dtype=float)
+    b_half = np.asarray(obb_half, dtype=float)
+    rot = np.asarray(obb_axes, dtype=float)  # A <- B
+    t = np.asarray(obb_centre, dtype=float) - np.asarray(box_centre, dtype=float)
+    abs_rot = np.abs(rot) + 1e-12
+    for i in range(3):  # the box's axes
+        if abs(t[i]) > a_half[i] + abs_rot[i] @ b_half:
+            return False
+    for j in range(3):  # the oriented box's axes
+        if abs(t @ rot[:, j]) > a_half @ abs_rot[:, j] + b_half[j]:
+            return False
+    for i in range(3):  # cross products of the two
+        for j in range(3):
+            i1, i2 = (i + 1) % 3, (i + 2) % 3
+            j1, j2 = (j + 1) % 3, (j + 2) % 3
+            ra = a_half[i1] * abs_rot[i2, j] + a_half[i2] * abs_rot[i1, j]
+            rb = b_half[j1] * abs_rot[i, j2] + b_half[j2] * abs_rot[i, j1]
+            if abs(t[i2] * rot[i1, j] - t[i1] * rot[i2, j]) > ra + rb:
+                return False
+    return True
+
+
 def load_perception_module(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
@@ -3152,20 +3177,19 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 ])
                 for r_ in in_outline:
                     h_ = new_obstacles["heights"].get(id(r_), 0.0)
-                    cb, sb = math.cos(r_.yaw_rad), math.sin(r_.yaw_rad)
-                    corners_ = np.array([
-                        [r_.x_m + du * cb - dv * sb, r_.y_m + du * sb + dv * cb, dz]
-                        for du in (-r_.length_m / 2, r_.length_m / 2)
-                        for dv in (-r_.width_m / 2, r_.width_m / 2)
-                        for dz in (0.0, h_)
-                    ])
-                    local_ = (corners_ - np.asarray(ppos, dtype=float)) @ rot_
-                    lo_, hi_ = local_.min(axis=0), local_.max(axis=0)
+                    # The bar as an oriented box in the pallet's frame; an AABB of
+                    # its corners there reported a 2.9 mm gap as contact (Codex
+                    # checkpoint 12), so the exact SAT decides.
+                    centre_w = np.array([r_.x_m, r_.y_m, h_ / 2])
+                    axes_w = np.array([[math.cos(r_.yaw_rad), -math.sin(r_.yaw_rad), 0.0],
+                                       [math.sin(r_.yaw_rad), math.cos(r_.yaw_rad), 0.0],
+                                       [0.0, 0.0, 1.0]])
+                    centre_p = (centre_w - np.asarray(ppos, dtype=float)) @ rot_
+                    axes_p = rot_.T @ axes_w
                     for box_ in PALLET_BOXES:
-                        c_ = np.asarray(box_.centre_m)
-                        half_ = np.asarray(box_.size_m) / 2
                         require(
-                            not bool(np.all(lo_ <= c_ + half_) and np.all(hi_ >= c_ - half_)),
+                            not box_meets_obb(box_.centre_m, np.asarray(box_.size_m) / 2, centre_p, axes_p,
+                                              (r_.length_m / 2, r_.width_m / 2, h_ / 2)),
                             f"Measured pallet solid overlap in {phase}: {box_.name}",
                         )
             relative = ppos[:2] - base[:2]

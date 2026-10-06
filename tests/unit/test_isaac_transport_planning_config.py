@@ -749,7 +749,7 @@ def test_pocket_bars_are_judged_against_the_block_columns_not_the_outline():
     head = source[source.rindex("in_outline = []", 0, i) : i]
     assert "if not any(o is r_ for r_ in in_outline)" in head
     assert 'f"Measured pallet solid overlap in {phase}: {box_.name}"' in source[i : i + 3500]
-    assert "local_ = (corners_ - np.asarray(ppos, dtype=float)) @ rot_" in source  # full pose, tilt included
+    assert "centre_p = (centre_w - np.asarray(ppos, dtype=float)) @ rot_" in source  # full pose, exact SAT
     assert "PALLET_BOXES = PALLET_BOXES_OF(args.pallet_geometry_loaded)" in source  # the canonical solids
 
 
@@ -760,3 +760,29 @@ def test_a_backoff_offers_no_leg_to_the_rules_and_silence_is_traced():
     assert 'trace.setdefault("first_zero_s", t)' in source and '"silence_trace": obstacle.get("silence_trace")' in source
     j = source.index('obstacle["permission_cap"] = (t, float(allowed))')
     assert 'trace.setdefault("first_zero_s", t)' in source[j : j + 900]  # at the cap the wheels take (Codex checkpoint 11)
+
+
+def _bar_meets_pallet(pallet_xyz, roll, bar_xy, size):
+    """The runner's pocket-bar check, rebuilt from its pieces for the counterexamples."""
+    import math as m
+
+    from forklift_core.perception.pallet_geometry import load_pallet_geometry, pallet_boxes
+
+    meets = _runner_function("box_meets_obb")
+    boxes = pallet_boxes(load_pallet_geometry(Path(__file__).resolve().parents[2] / "config/pallet_geometry_epal6.yaml"))
+    c, s = m.cos(roll), m.sin(roll)
+    rot = np.array([[1, 0, 0], [0, c, -s], [0, s, c]])  # roll about x: pallet -> world
+    centre_p = (np.array([bar_xy[0], bar_xy[1], size[2] / 2]) - np.asarray(pallet_xyz)) @ rot
+    axes_p = rot.T @ np.eye(3)
+    return [b.name for b in boxes if meets(b.centre_m, np.asarray(b.size_m) / 2, centre_p, axes_p, np.asarray(size) / 2)]
+
+
+def test_pocket_bars_meet_the_pallet_solids_exactly():
+    # Codex checkpoint 12: a 2.9 mm gap under a 0.1 rad roll is no contact.
+    assert _bar_meets_pallet((0, 0, 0.04), 0.1, (0, 0.09), (0.03, 0.03, 0.09)) == []
+    # Codex checkpoint 11: a -0.05 rad roll puts a 0.12 m bar 3 mm into stringer_1.
+    assert "stringer_1" in _bar_meets_pallet((0, 0, 0.021), -0.05, (0, 0.145), (0.03, 0.03, 0.12))
+    # Touching the stringer's underside (0.100 m) counts.
+    assert "stringer_1" in _bar_meets_pallet((0, 0, 0.0), 0.0, (0, 0.145), (0.03, 0.03, 0.100))
+    # The fixed N11 bar in its pocket, level pallet: clear.
+    assert _bar_meets_pallet((0, 0, 0.0), 0.0, (0.25, 0.145), (0.03, 0.03, 0.09)) == []
