@@ -102,6 +102,25 @@ def overlay_at(t: float, plans: list[dict], spawns: list[dict]) -> dict:
     return {"current": current, "previous": previous, "banner": banner}
 
 
+def boxes_at(t: float, log: list[dict]) -> list[np.ndarray]:
+    """Corner arrays (4, 2) of the new obstacles standing at t (spawned, not removed)."""
+    alive = {}
+    for item in log:
+        if item["time_s"] > t:
+            break
+        if item.get("action") == "spawn":
+            _, x, y, yaw, size = item["detail"][:5]
+            alive[item["detail"][0]] = (float(x), float(y), float(yaw), float(size[0]), float(size[1]))
+        elif item.get("action") == "remove":
+            alive.pop(item["detail"][0], None)
+    out = []
+    for x, y, yaw, length, width in alive.values():
+        c, s = math.cos(yaw), math.sin(yaw)
+        local = np.array([[1, 1], [1, -1], [-1, -1], [-1, 1]]) * [length / 2, width / 2]
+        out.append(np.column_stack((x + local[:, 0] * c - local[:, 1] * s, y + local[:, 0] * s + local[:, 1] * c)))
+    return out
+
+
 def grid_index(times: np.ndarray, t: float) -> int:
     """Index of the latest recorded obstacle grid at or before t, or -1."""
     ok = np.flatnonzero(times <= t)
@@ -227,6 +246,14 @@ def main(argv: list[str] | None = None) -> int:
             if over["previous"] is not None:
                 vpen.line(to_overview(np.asarray(over["previous"]["poses"], float)), fill=PLAN_OLD, width=4)
             vpen.line(to_overview(np.asarray(over["current"]["poses"], float)), fill=PLAN, width=4)
+        for corners in boxes_at(t, spawns):
+            vpen = ImageDraw.Draw(view)
+            pts = to_overview(corners)
+            vpen.polygon(pts, outline=(255, 40, 40), width=4)
+            u_ = max(p[0] for p in pts) + 6
+            v_ = min(p[1] for p in pts) - 4
+            vpen.rectangle((u_ - 3, v_ - 3, u_ + 86, v_ + 24), fill=(200, 40, 40))
+            vpen.text((u_, v_), "새 장애물", font=label, fill=(255, 255, 255))
         canvas.paste(view, (20, 70))
 
         index = eligible_map(after_ids, last_id)
@@ -261,6 +288,8 @@ def main(argv: list[str] | None = None) -> int:
             pen.line(to_panel(np.asarray(over["previous"]["poses"], float)), fill=PLAN_OLD, width=3)
         if over["current"] is not None:
             pen.line(to_panel(np.asarray(over["current"]["poses"], float)), fill=PLAN, width=3)
+        for corners in boxes_at(t, spawns):
+            pen.polygon(to_panel(corners), outline=(255, 40, 40), width=3)
         k = base.latest_index(joint_t, t)
         if k > 0:
             pen.line(to_panel(truth[: k + 1 : 12, :2]), fill=base.TRUTH, width=5)

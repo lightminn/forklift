@@ -60,3 +60,14 @@ def test_the_overlay_shows_the_plan_given_by_then_and_flags_a_fresh_replan():
 def test_the_grid_frame_is_the_latest_recorded_by_then():
     times = np.array([0.0, 0.5, 1.0])
     assert MODULE.grid_index(times, 0.7) == 1 and MODULE.grid_index(times, -1.0) == -1
+
+
+def test_a_spawned_box_is_drawn_from_its_spawn_until_removed():
+    log = [
+        {"time_s": 10.0, "action": "spawn", "detail": ["b", 1.0, 2.0, 0.0, [0.4, 0.4, 0.5]]},
+        {"time_s": 30.0, "action": "remove", "detail": ["b"]},
+    ]
+    assert MODULE.boxes_at(5.0, log) == []
+    corners = MODULE.boxes_at(20.0, log)[0]
+    np.testing.assert_allclose(np.sort(corners[:, 0]), [0.8, 0.8, 1.2, 1.2])
+    assert MODULE.boxes_at(31.0, log) == []
