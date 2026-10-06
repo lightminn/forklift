@@ -1,0 +1,9 @@
+# N4 (plan D6): a box on a reverse leg after a cusp, 1.5 m behind the rear axle
+# along that leg -- placed on the first reverse leg of observe, transport or
+# return_home (one box in all). Expected: stop if the reverse volume is observed;
+# with no observation the reverse is not entered and the run fails (recorded,
+# with the "reverse observation" column of plan L4). Fixed before any run.
+events:
+  - {id: n4_observe, action: spawn, phase: observe, after_m: 0.0, ahead_m: 1.5, on_reverse: true, group: n4, size_m: [0.4, 0.4, 0.5]}
+  - {id: n4_transport, action: spawn, phase: transport, after_m: 0.0, ahead_m: 1.5, on_reverse: true, group: n4, size_m: [0.4, 0.4, 0.5]}
+  - {id: n4_return, action: spawn, phase: return_home, after_m: 0.0, ahead_m: 1.5, on_reverse: true, group: n4, size_m: [0.4, 0.4, 0.5]}

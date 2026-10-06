@@ -1,0 +1,4 @@
+# N11 (plan D6), middle: the same bar 0.30 m inside the face (the inserted tip
+# reaches 0.36 m). Expected: insertion refused, contact 0. Fixed before any run.
+events:
+  - {id: n11b, action: spawn, phase: approach, after_m: 0.5, frame: pallet, along_m: 0.30, lateral_m: 0.145, size_m: [0.03, 0.03, 0.09]}

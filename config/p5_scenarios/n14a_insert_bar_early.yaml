@@ -1,0 +1,6 @@
+# N14 (plan D6, limit experiment -- not a pass condition): a bar appears in the
+# left blade's pocket 0.10 m ahead of the fork tip early in the insertion
+# (0.05 m in: the tip, 0.10 m before the face at the start, is at -0.05 m).
+# Recorded only. Fixed before any run.
+events:
+  - {id: n14a, action: spawn, phase: insert, after_m: 0.05, frame: pallet, along_m: 0.05, lateral_m: 0.145, size_m: [0.03, 0.03, 0.09]}

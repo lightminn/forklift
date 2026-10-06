@@ -728,3 +728,14 @@ def test_a_failed_replan_backs_off_a_bounded_distance_then_replans():
     assert 'or obstacle.get("force_replan") == phase' in source
     assert 'leg_dir = obstacle.get("backoff", {}).get("leg_dir")' in source
     assert 'stall_config = obstacle.pop("backoff")["config"]' in source
+
+
+def test_new_obstacle_rules_get_the_leg_direction_the_pallet_face_and_can_silence_the_depth_camera():
+    source = SCRIPT.read_text()
+    i = source.index('for action in new_obstacles["schedule"].update(')
+    call = source[i : i + 200]
+    assert "leg_direction=int(leg_direction)" in call and "pallet_face=pallet_face" in call
+    head = source[source.rindex("pallet_face = None", 0, i) : i]
+    assert 'phase in ("approach", "insert")' in head and "geometry.pallet_depth_m / 2" in head
+    j = source.index("def read_pocket_frame")
+    assert '"pocket_camera" in new_obstacles["schedule"].silenced' in source[j : j + 900]

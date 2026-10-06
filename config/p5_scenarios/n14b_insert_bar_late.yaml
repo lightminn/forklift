@@ -1,0 +1,5 @@
+# N14 (plan D6, limit experiment -- not a pass condition): late in the
+# insertion (0.25 m in, tip at +0.15 m), the bar appears 0.10 m ahead of the
+# tip, out of the camera's view of the pocket. Recorded only. Fixed before any run.
+events:
+  - {id: n14b, action: spawn, phase: insert, after_m: 0.25, frame: pallet, along_m: 0.25, lateral_m: 0.145, size_m: [0.03, 0.03, 0.09]}

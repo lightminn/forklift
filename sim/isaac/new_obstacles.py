@@ -9,7 +9,14 @@ active path of ``phase``, an action happens --
   with the path; it joins the ground-truth obstacle list of the evaluator,
   never the planner;
 * remove: an earlier spawned box disappears;
-* silence: an obstacle sensor stops delivering scans (N9, N13).
+* silence: an obstacle sensor -- or ``pocket_camera``, the depth check's
+  camera -- stops delivering (N9, N13).
+
+A spawn may instead sit in the pallet frame (``frame: pallet``, N11/N12/N14):
+``along_m`` from the approach face along the insertion direction (inward
+positive) and ``lateral_m`` to its left; it waits until the runner knows the
+face. ``on_reverse`` holds a spawn until the phase drives a reverse leg (N4),
+and events sharing a ``group`` fire only once between them.
 """
 
 from __future__ import annotations
@@ -35,6 +42,10 @@ class Event:
     beyond_end_m: float | None = None  # spawn past the path end along its last heading
     after_event: str | None = None  # instead of after_m: delay_s after that event fired
     delay_s: float = 0.0
+    frame: str = "path"  # path / pallet
+    along_m: float = 0.0  # pallet frame: from the approach face, inward positive
+    on_reverse: bool = False  # wait for a reverse leg of the phase (N4)
+    group: str | None = None  # events sharing a group fire once between them
     fired: bool = False
     fired_s: float | None = None
 
@@ -50,10 +61,14 @@ def load_events(path: Path) -> list[Event]:
                 tuple(float(v) for v in e.get("size_m", (0.4, 0.4, 0.5))), e.get("target"),
                 None if e.get("beyond_end_m") is None else float(e["beyond_end_m"]),
                 e.get("after_event"), float(e.get("delay_s", 0.0)),
+                str(e.get("frame", "path")), float(e.get("along_m", 0.0)), bool(e.get("on_reverse", False)),
+                e.get("group"),
             )
         )
         if out[-1].action not in ("spawn", "remove", "silence"):
             raise ValueError(f"unknown action {out[-1].action!r}")
+        if out[-1].frame not in ("path", "pallet"):
+            raise ValueError(f"unknown frame {out[-1].frame!r}")
     return out
 
 
@@ -77,12 +92,18 @@ class Schedule:
     silenced: set = field(default_factory=set)
     log: list = field(default_factory=list)
 
-    def update(self, t: float, phase: str, driven_m: float, path_ahead: np.ndarray | None) -> list[tuple]:
-        """Actions due now: ('spawn', id, x, y, yaw, size) / ('remove', id) / ('silence', sensor)."""
+    def update(self, t: float, phase: str, driven_m: float, path_ahead: np.ndarray | None, *,
+               leg_direction: int = 1, pallet_face: tuple | None = None) -> list[tuple]:
+        """Actions due now: ('spawn', id, x, y, yaw, size) / ('remove', id) / ('silence', sensor).
+
+        ``pallet_face`` is (x, y, insertion yaw) of the approach face centre."""
         due = []
         fired_at = {e.id: e.fired_s for e in self.events if e.fired}
+        groups = {e.group for e in self.events if e.fired and e.group is not None}
         for e in self.events:
-            if e.fired:
+            if e.fired or (e.group is not None and e.group in groups):
+                continue
+            if e.on_reverse and leg_direction >= 0:
                 continue
             if e.after_event is not None:
                 if fired_at.get(e.after_event) is None or t - fired_at[e.after_event] < e.delay_s:
@@ -90,9 +111,16 @@ class Schedule:
             elif e.phase != phase or driven_m < e.after_m:
                 continue
             if e.action == "spawn":
-                if path_ahead is None or len(path_ahead) < 2:
+                if e.frame == "pallet":
+                    if pallet_face is None:
+                        continue
+                    fx, fy, fyaw = pallet_face
+                    x = fx + e.along_m * math.cos(fyaw) - e.lateral_m * math.sin(fyaw)
+                    y = fy + e.along_m * math.sin(fyaw) + e.lateral_m * math.cos(fyaw)
+                    yaw = fyaw
+                elif path_ahead is None or len(path_ahead) < 2:
                     continue
-                if e.beyond_end_m is not None:
+                elif e.beyond_end_m is not None:
                     ex, ey = path_ahead[-1, 0], path_ahead[-1, 1]
                     eyaw = math.atan2(path_ahead[-1, 1] - path_ahead[-2, 1], path_ahead[-1, 0] - path_ahead[-2, 0])
                     x = ex + e.beyond_end_m * math.cos(eyaw) - e.lateral_m * math.sin(eyaw)
@@ -112,6 +140,8 @@ class Schedule:
                 due.append(("silence", e.target))
             e.fired = True
             e.fired_s = t
+            if e.group is not None:
+                groups.add(e.group)
             self.log.append({"time_s": t, "event": e.id, "action": e.action, "phase": phase,
                              "driven_m": driven_m, "detail": list(due[-1][1:])})
         return due

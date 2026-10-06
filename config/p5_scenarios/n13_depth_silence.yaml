@@ -1,0 +1,5 @@
+# N13 (plan D6): during the insertion only the pocket depth camera falls silent
+# (LiDAR alive), 0.05 m in. Expected: its 0.2 s freshness runs out, the grid
+# waiver is cancelled and the truck brakes; contact 0. Fixed before any run.
+events:
+  - {id: n13, action: silence, phase: insert, after_m: 0.05, target: pocket_camera}

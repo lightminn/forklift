@@ -1,0 +1,5 @@
+# N12 (plan D6): a bar 0.10 m before the approach face on the centreline,
+# 0.30 m tall (above h_det), 0.5 m into the approach. Expected: stop or
+# insertion refused by the fork/body checks, contact 0. Fixed before any run.
+events:
+  - {id: n12, action: spawn, phase: approach, after_m: 0.5, frame: pallet, along_m: -0.10, lateral_m: 0.0, size_m: [0.04, 0.04, 0.30]}

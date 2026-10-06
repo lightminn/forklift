@@ -1481,6 +1481,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         """One 10 Hz carriage depth frame for the pocket check, placed at the
         control pose of its rendering time (frames lag the step)."""
         check = pocket["check"]
+        if new_obstacles is not None and "pocket_camera" in new_obstacles["schedule"].silenced:
+            # N13: the depth camera falls silent; the check's 0.2 s freshness
+            # runs out on its own (plan D6).
+            pocket["silenced_frames"] = pocket.get("silenced_frames", 0) + 1
+            return
         raw = pocket_camera.get_depth()
         if raw is None:
             return
@@ -4805,9 +4810,20 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 else:
                     requested_speed = 0.0  # a blocked-path replan failed: stand until one succeeds
             if new_obstacles is not None and phase in trackers:
-                leg, _ = trackers[phase].leg_ahead()
+                leg, leg_direction = trackers[phase].leg_ahead()
                 driven = float(trackers[phase]._distance[-1]) - trackers[phase].remaining_to_goal_m()
-                for action in new_obstacles["schedule"].update(t, phase, driven, leg):
+                pallet_face = None
+                if "approach" in paths and phase in ("approach", "insert"):
+                    # N11/N12/N14 place bars in the pallet frame: the approach
+                    # face centre of the real pallet, the insertion heading of
+                    # the approach's end (a scenario placement, never a planner
+                    # input -- plan D6).
+                    hy = float(paths["approach"].poses[-1][2])
+                    half = geometry.pallet_depth_m / 2
+                    pallet_face = (float(ppos[0]) - half * math.cos(hy), float(ppos[1]) - half * math.sin(hy), hy)
+                for action in new_obstacles["schedule"].update(
+                    t, phase, driven, leg, leg_direction=int(leg_direction), pallet_face=pallet_face
+                ):
                     if action[0] == "spawn":
                         from pxr import Gf as NGf, UsdGeom as NUsdGeom, UsdPhysics as NUsdPhysics
 

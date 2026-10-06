@@ -1,0 +1,7 @@
+# N11 (plan D6), entrance: a bar in the left blade's pocket, 0.05 m inside the
+# approach face (EPAL 6 pocket 0.0725-0.300 m left of centre, blade centre
+# 0.145 m; 0.09 m tall, under the 0.100 m stringer). It appears 0.5 m into the
+# approach. Expected: insertion refused (the pocket is not certified free),
+# contact 0. Fixed before any run.
+events:
+  - {id: n11a, action: spawn, phase: approach, after_m: 0.5, frame: pallet, along_m: 0.05, lateral_m: 0.145, size_m: [0.03, 0.03, 0.09]}
