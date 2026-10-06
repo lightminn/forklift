@@ -144,3 +144,13 @@ def test_a_curve_conditioned_spawn_waits_for_a_curve_and_takes_its_inside():
     out = sched.update(0.1, "transport", 1.0, right)
     x, y, yaw = MODULE.pose_along(right, 1.0, -0.7)  # the inside of a right turn is to the right
     assert math.isclose(out[0][2], x) and math.isclose(out[0][3], y)
+
+
+def test_an_outside_spawn_takes_the_outer_side_of_the_curve():
+    theta = np.linspace(0, 1.5, 61)
+    left = np.column_stack((2 * np.sin(theta), 2 * (1 - np.cos(theta)), theta))  # left turn
+    sched = MODULE.Schedule([MODULE.Event("n3", "spawn", "transport", 0.0, ahead_m=1.0, lateral_m=0.75,
+                                          min_curvature_inv_m=0.3, outside=True)])
+    out = sched.update(0.0, "transport", 1.0, left)
+    x, y, _ = MODULE.pose_along(left, 1.0, -0.75)  # the outside of a left turn is to the right
+    assert math.isclose(out[0][2], x) and math.isclose(out[0][3], y)

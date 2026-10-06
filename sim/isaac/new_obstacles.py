@@ -49,6 +49,7 @@ class Event:
     group: str | None = None  # events sharing a group fire once between them
     min_curvature_inv_m: float = 0.0  # path frame: wait until the path curves this much there (N3)
     inside: bool = False  # path frame: lateral_m measured to the inside of that curve
+    outside: bool = False  # path frame: lateral_m measured to the outside of that curve (N3)
     fired: bool = False
     fired_s: float | None = None
 
@@ -68,6 +69,7 @@ def load_events(path: Path) -> list[Event]:
                 on_reverse=bool(e.get("on_reverse", False)),
                 leg=str(e.get("leg", "reverse" if e.get("on_reverse") else "any")), group=e.get("group"),
                 min_curvature_inv_m=float(e.get("min_curvature_inv_m", 0.0)), inside=bool(e.get("inside", False)),
+                outside=bool(e.get("outside", False)),
             )
         )
         if out[-1].action not in ("spawn", "remove", "silence"):
@@ -155,12 +157,14 @@ class Schedule:
                     yaw = eyaw
                 else:
                     lateral = e.lateral_m
-                    if e.min_curvature_inv_m > 0 or e.inside:
+                    if e.min_curvature_inv_m > 0 or e.inside or e.outside:
                         kappa = _curvature_at(path_ahead, e.ahead_m)
                         if abs(kappa) < e.min_curvature_inv_m:
                             continue  # not in a curve there yet
                         if e.inside:
                             lateral = math.copysign(abs(e.lateral_m), kappa)
+                        elif e.outside:
+                            lateral = -math.copysign(abs(e.lateral_m), kappa)
                     x, y, yaw = pose_along(path_ahead, e.ahead_m, lateral)
                 self.spawned[e.id] = (x, y, yaw, e.size_m)
                 due.append(("spawn", e.id, x, y, yaw, e.size_m))
