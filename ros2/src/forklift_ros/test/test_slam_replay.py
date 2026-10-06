@@ -106,6 +106,22 @@ def test_noise_is_seeded_and_never_turns_a_miss_into_a_distance(tmp_path):
     assert first[:, 3].max() <= 12.0  # clipped to the configured maximum
 
 
+def test_a2m12_noise_grows_with_range_like_the_accuracy_row(tmp_path):
+    np.testing.assert_allclose(replay.a2m12_range_std_m(np.array([2.0, 4.0, 8.0])), [0.02, 0.08, 0.2])
+    write_record(tmp_path)
+    log, meta = replay.load_slam_log(tmp_path)
+    noise = replay.ReplayNoise(seed=7, range_model="a2m12")
+    out = replay.noisy_ranges(log["scan_ranges_m"], meta, noise)
+    assert np.isposinf(out[:, 1]).all() and np.isneginf(out[:, 2]).all()
+    assert not np.array_equal(out[:, 0], log["scan_ranges_m"][:, 0])
+    # The constant model with the same seed draws the same standard normals.
+    const = replay.noisy_ranges(log["scan_ranges_m"], meta, replay.ReplayNoise(range_std_m=0.05, seed=7))
+    finite = np.isfinite(log["scan_ranges_m"]) & (const > 0.2) & (const < 12.0) & (out > 0.2) & (out < 12.0)
+    z_const = (const - log["scan_ranges_m"])[finite] / 0.05
+    z_spec = (out - log["scan_ranges_m"])[finite] / replay.a2m12_range_std_m(log["scan_ranges_m"][finite])
+    np.testing.assert_allclose(z_const, z_spec, atol=1e-3)
+
+
 def test_zero_noise_leaves_the_record_untouched(tmp_path):
     write_record(tmp_path)
     log, meta = replay.load_slam_log(tmp_path)
