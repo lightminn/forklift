@@ -1294,7 +1294,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 "clipping_range_m": list(map(float, pocket_camera.get_clipping_range())),
                 "intrinsics": asdict(k_pocket),
             }
-        if "perception" in args.extra_views:
+        perception_display = None
+        if "perception" in args.extra_views or args.robot_camera:
+            # The display camera: the same mount and intrinsics with a 0.05 m
+            # near plane, so the picture is not cut open when the pallet comes
+            # closer than the recogniser's 1.0 m (the robot-camera video showed
+            # the pallet's inside, 2026-10-06 user report). Never a sensor.
             perception_display = Camera(
                 prim_path=mount_parent + "/PerceptionDisplayCamera",
                 frequency=-1,
@@ -1324,7 +1329,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 np.isclose(display_clip[0], 0.05) and display_clip[1] == display_far_m,
                 "Perception display clipping range did not preserve the far plane",
             )
-            extra_cameras["perception"] = perception_display
+            if "perception" in args.extra_views:
+                extra_cameras["perception"] = perception_display
+            state.setdefault("extra_views", {})
             state["extra_views"]["perception_display"] = {
                 "clipping_range_m": display_clip,
                 "min_depth_m": MISSION_VIEWS.DISPLAY_MIN_DEPTH_M,
@@ -1446,6 +1453,37 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         }
 
     grid_planning = bool(args.grid_planning)
+
+    # Video overlay record (display only): every path the truck was given, with
+    # why, and the obstacle grid's OCCUPIED cells every 0.5 s -- so the video
+    # can show the first plan and each replan on the live grid.
+    overlay = {"plan_id": None, "plan_history": [], "grid_t": -1e9, "grids": []}
+
+    def record_video_overlay(t_now: float) -> None:
+        from forklift_core.perception.obstacle_grid import OCCUPIED as GRID_OCCUPIED
+
+        current = paths.get(phase)
+        if current is not None and id(current) != overlay["plan_id"]:
+            overlay["plan_id"] = id(current)
+            why = "plan"
+            if obstacle.get("backoff", {}).get("phase") == phase:
+                why = "backoff"
+            elif obstacle.get("replans") and abs(obstacle["replans"][-1]["time_s"] - t_now) < 0.6:
+                why = "replan"
+            elif obstacle.get("live_plans") and abs(obstacle["live_plans"][-1]["time_s"] - t_now) < 0.6:
+                why = "live"
+            poses = np.asarray(current.poses, dtype=float)
+            step_ = max(1, len(poses) // 400)
+            overlay["plan_history"].append(
+                {"time_s": float(t_now), "phase": phase, "why": why,
+                 "poses": np.round(poses[::step_, :2], 3).tolist() + [np.round(poses[-1, :2], 3).tolist()]}
+            )
+        snap_ = obstacle["layer"].snapshot
+        if snap_ is not None and t_now - overlay["grid_t"] >= 0.5:
+            overlay["grid_t"] = t_now
+            cells_ = np.argwhere(snap_.state == GRID_OCCUPIED).astype(np.int32)
+            overlay["grids"].append((float(t_now), float(snap_.origin_x_m), float(snap_.origin_y_m),
+                                     float(snap_.resolution_m), cells_))
     new_obstacles = None
     # Priority-5 D5 depth pocket check: built at the near capture, fed 10 Hz
     # carriage frames on the approach straight and the insertion.
@@ -2706,7 +2744,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             )
             if args.robot_camera:
                 record_robot_camera_frame(
-                    perception_camera,
+                    perception_display if perception_display is not None else perception_camera,
                     perception_calibration,
                     extra_encoders,
                     video_frames,
@@ -2727,6 +2765,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     # after a scan id below this one (received before it).
                     video_frames[-1]["slam_last_scan_id"] = slam["scan_id"] - 1
                     video_frames[-1]["slam_mode"] = slam["tracker"].mode
+            if obstacle is not None:
+                record_video_overlay(t)
             state["frames"] += 1
             if args.extra_views:
                 for name in args.extra_views:
@@ -5116,6 +5156,20 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 }
             )
             (args.output / "obstacle_scans.json").write_text(record_json(scans_rec) + "\n")
+            if overlay["plan_history"] or overlay["grids"]:
+                (args.output / "plan_history.json").write_text(
+                    record_json({"plans": overlay["plan_history"], "replans": obstacle.get("replans", []),
+                                 "new_obstacles": new_obstacles["schedule"].log if new_obstacles is not None else []})
+                    + "\n"
+                )
+                g_ = overlay["grids"]
+                np.savez_compressed(
+                    args.output / "obstacle_grid_frames.npz",
+                    times=np.array([x[0] for x in g_]), origins=np.array([[x[1], x[2]] for x in g_]).reshape(-1, 2),
+                    resolution=np.array([x[3] for x in g_]),
+                    offsets=np.cumsum([0] + [len(x[4]) for x in g_]),
+                    cells=np.concatenate([x[4] for x in g_]).reshape(-1, 2) if g_ else np.zeros((0, 2), np.int32),
+                )
         if slam is not None:
             # First, so a video shutdown failure cannot lose the SLAM record.
             slam["link"].close()
