@@ -307,6 +307,13 @@ def arguments() -> argparse.Namespace:
         "one as its estimate; stop, replan and resume when the path is blocked.",
     )
     parser.add_argument(
+        "--slam-map-dir",
+        type=Path,
+        default=None,
+        help="Priority-5 D3 delta: the SLAM bridge's output directory; its latest_map.npz "
+        "joins the planning grid as a static layer (planning only, never the permission).",
+    )
+    parser.add_argument(
         "--new-obstacles",
         type=Path,
         default=None,
@@ -1673,8 +1680,44 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         if not grid_planning:
             return {}
         stamp = obstacle.get("last_stamp", 0.0)
-        occupancy = obstacle["layer"].planner_grid(stamp, obstacle["applied"] or (0.0, 0.0, 0.0), obstacle["version"])
-        obstacle["plans"].append({"kind": kind, "stamp_s": stamp, "occupied_cells": int(occupancy.occupied.sum())})
+        layer_ = obstacle["layer"]
+        cache_ = obstacle.get("plan_cache")
+        if cache_ is not None and cache_[0] == (stamp, obstacle["version"]):
+            # One bundle per planning instant: retries and fallbacks of the same
+            # replan see the same map and memory (Codex design review P1).
+            occupancy, bundle = cache_[1], cache_[2]
+        else:
+            use_slam = False
+            if layer_.memory is not None and args.slam_map_dir is not None:
+                latest = args.slam_map_dir / "latest_map.npz"
+                if latest.exists():
+                    with np.load(latest) as m_:
+                        index_ = int(m_["index"])
+                        if (layer_.memory.slam_info or {}).get("index") != index_:
+                            layer_.memory.set_slam(
+                                m_["data"], tuple(m_["origin"][:2]), float(m_["resolution_m"]),
+                                float(m_["origin"][2]), index=index_, after_scan_id=int(m_["after_scan_id"]),
+                                stamp_ns=int(m_["stamp_ns"]),
+                            )
+                # The map is in SLAM's frame: only while control applies SLAM's
+                # correction (not holding) do the two frames agree.
+                use_slam = slam is None or slam["tracker"].mode != "holding"
+            try:
+                own_now_, loaded_now_ = tuple(float(v) for v in rear), bool(loaded)
+            except NameError:  # the first plans, before the drive loop: nothing remembered under the truck
+                own_now_, loaded_now_ = None, False
+            occupancy = layer_.planner_grid(stamp, obstacle["applied"] or (0.0, 0.0, 0.0), obstacle["version"],
+                                            use_slam=use_slam, own_pose=own_now_, loaded=loaded_now_)
+            bundle = {
+                "memory": layer_.memory is not None,
+                "memory_revision": layer_.memory.revision if layer_.memory is not None else None,
+                "slam_used": use_slam and layer_.memory is not None and layer_.memory.slam is not None,
+                "slam_map": (layer_.memory.slam_info if layer_.memory is not None else None),
+                "last_replied_scan_id": (slam["scan_id"] - 1) if slam is not None else None,
+            }
+            obstacle["plan_cache"] = ((stamp, obstacle["version"]), occupancy, bundle)
+        obstacle["plans"].append({"kind": kind, "stamp_s": stamp, "occupied_cells": int(occupancy.occupied.sum()),
+                                  **bundle})
         out = {"occupancy": occupancy}
         if obstacle.get("deadline") is not None and kind in ("observe", None, "mission", "return"):
             out["deadline"] = obstacle["deadline"]

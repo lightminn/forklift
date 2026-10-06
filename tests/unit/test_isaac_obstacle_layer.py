@@ -117,3 +117,55 @@ def test_the_permission_checks_the_hull_forward_and_the_blades_in_reverse():
     assert forward == Footprint(1.29, 0.17, 0.36)
     assert isinstance(reverse, list) and len(reverse) == 3
     assert lay.footprints(True, -1)[0] == Footprint(1.53, 0.17, 0.40)
+
+
+def _wall_raw(lay, wall_x, half=3.0):
+    raw = {}
+    for s in CONFIG["sensors"]:
+        ox = s.xyz_m[0] + 0.34
+        ang = lay.beam_angles + s.yaw_rad
+        d = np.where(np.cos(ang) > 0.05, (wall_x - ox) / np.cos(ang), np.nan)
+        ok = np.isfinite(d) & (np.abs(s.xyz_m[1] + d * np.sin(ang)) < half) & (d > 0)
+        raw[s.name] = (np.where(ok, d, np.nan), ok, np.zeros(len(ang), bool))
+    return raw
+
+
+def _open_raw(lay, reach=4.0):
+    # Every beam ends 4 m out on a far wall (that cell is occupied, everything closer seen free).
+    return {s.name: (np.full(len(lay.beam_angles), reach), np.ones(len(lay.beam_angles), bool),
+                     np.zeros(len(lay.beam_angles), bool)) for s in CONFIG["sensors"]}
+
+
+def test_the_planning_memory_keeps_an_obstacle_out_of_view_and_drops_it_when_seen_free():
+    # D2/D3 delta (2026-10-06): the live grid forgets a hit after 0.3 s; the plan must not.
+    lay = layer()
+    assert lay.memory is not None
+    pose = (0.0, 0.0, 0.0)
+    path = np.column_stack((np.linspace(0, 4, 81), np.zeros(81), np.zeros(81)))
+    for k in range(3):
+        lay.add_scans(0.1 * k, _wall_raw(lay, 1.62), odom_rear=pose, loaded=False)
+    lay.refresh(0.2, (0.0, 0.0, 0.0), 0, current_pose=pose, path_ahead=path, loaded=False)
+    # Nine seconds with no beam through the wall's cells (no-return beams would
+    # say "free to the far end" and rightly clear it): the live grid drops the
+    # 0.3 s old hits.
+    live = lay.grid.snapshot(9.9, (0.0, 0.0, 0.0), 0)
+    occ = lay.planner_grid(9.9, (0.0, 0.0, 0.0), 0)
+    i, j = occ.cell_of(1.62, 0.0)
+    assert occ.occupied[i, j] and not live.occupied[i, j]  # remembered, though no longer live
+    # The wall is gone and the low planes see through: cleared.
+    for k in range(100, 103):
+        lay.add_scans(0.1 * k, _open_raw(lay), odom_rear=pose, loaded=False)
+    lay.refresh(10.2, (0.0, 0.0, 0.0), 0, current_pose=pose, path_ahead=path, loaded=False)
+    occ = lay.planner_grid(10.2, (0.0, 0.0, 0.0), 0)
+    i, j = occ.cell_of(1.62, 0.0)
+    assert not occ.occupied[i, j]
+
+
+def test_remembered_cells_under_the_truck_are_left_out_of_the_plan_copy_only():
+    lay = layer()
+    lay.memory.add_hits(np.array([0.3]), np.array([0.0]), 0.0)  # under the body at (0, 0, 0)
+    occ = lay.planner_grid(0.1, (0.0, 0.0, 0.0), 0, own_pose=(0.0, 0.0, 0.0), loaded=False)
+    i, j = occ.cell_of(0.3, 0.0)
+    assert not occ.occupied[i, j]
+    a, b = lay.memory.cell(0.3, 0.0)
+    assert lay.memory.occupied()[a, b]  # the memory itself keeps it

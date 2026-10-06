@@ -26,6 +26,7 @@ show only maps the run had actually received by then.
 from __future__ import annotations
 
 import json
+import os
 import math
 import socket
 import threading
@@ -149,6 +150,21 @@ class IsaacSlamBridge(Node):
         self.map_arrays[f"map_{index:04d}"] = np.asarray(msg.data, dtype=np.int8).reshape(
             info.height, info.width
         )
+        # The runner's planner reads the newest map while the run goes on (P5 D3
+        # delta, 2026-10-06): written whole, then renamed, so a reader never
+        # sees half a file.
+        meta = self.maps[-1]
+        tmp = self.output_dir / "latest_map.tmp.npz"
+        np.savez(
+            tmp,
+            data=self.map_arrays[f"map_{index:04d}"],
+            origin=np.asarray(meta["origin"], dtype=float),
+            resolution_m=float(meta["resolution_m"]),
+            index=int(index),
+            after_scan_id=int(meta["after_scan_id"]),
+            stamp_ns=int(meta["stamp_ns"]),
+        )
+        os.replace(tmp, self.output_dir / "latest_map.npz")
 
     def publish_static(self) -> None:
         x, y, z, yaw = self.laser

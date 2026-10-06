@@ -21,6 +21,7 @@ import yaml
 from forklift_core.control.drive_permission import DrivePermission, PermissionConfig, StoppingModel
 from forklift_core.control.shadow_memory import ShadowMemory
 from forklift_core.perception.obstacle_grid import (
+    FREE,
     AgeErrorTable,
     GridConfig,
     ObstacleGrid,
@@ -160,6 +161,41 @@ class ObstacleLayer:
         # frame; set only while the depth pocket check gates every tick.
         self.exempt = None
         self.depth_support = None  # callable(snapshot, now) -> {cell: certification time}, set with exempt
+        # Planning-only memory and SLAM static layer (D2/D3 delta 2026-10-06):
+        # never seen by the permission.
+        self.memory = None
+        if g.get("planning_memory", False):
+            from forklift_core.perception.planning_memory import PlanningMemory
+
+            self.memory = PlanningMemory(hall.x_min_m, hall.y_min_m, hall.x_max_m, hall.y_max_m,
+                                         float(g["resolution_m"]),
+                                         hit_radius_m=float(g.get("memory_hit_radius_m", 0.1)))
+
+    def _memory_hits(self, now_s: float, correction) -> None:
+        """Every raw scan not yet taken, once, with its own stamp (never a
+        snapshot's re-raised mark -- Codex design review P1)."""
+        mem = self.memory
+        cfg = self.grid.config
+        for scan in self.grid.scans:
+            if scan.stamp_s <= mem.last_scan_stamp or scan.stamp_s > now_s + 1e-9:
+                continue
+            _, laser, ranges, cos_a, sin_a, usable, limit = self.grid._geometry(scan, correction)
+            hit = (usable & np.isfinite(ranges) & (ranges >= cfg.range_min_m) & (ranges <= cfg.max_mark_m)
+                   & (ranges <= limit))
+            mem.add_hits(laser[0] + ranges[hit] * cos_a[hit], laser[1] + ranges[hit] * sin_a[hit], scan.stamp_s)
+        newest = max((sc.stamp_s for sc in self.grid.scans if sc.stamp_s <= now_s + 1e-9), default=None)
+        if newest is not None:
+            mem.last_scan_stamp = max(mem.last_scan_stamp, newest)
+
+    def _memory_clears(self, snapshot, now_s: float) -> None:
+        """Fresh FREE cells of the raw snapshot (before the shadow memory and the
+        exemption), with their own observation times."""
+        fresh = (snapshot.state == FREE) & (now_s - snapshot.free_stamp <= self.grid_config.free_max_age_s + 1e-9)
+        ii, jj = np.nonzero(fresh)
+        if len(ii):
+            res = snapshot.resolution_m
+            self.memory.add_clears(snapshot.origin_x_m + (ii + 0.5) * res, snapshot.origin_y_m + (jj + 0.5) * res,
+                                   snapshot.free_stamp[ii, jj])
 
     def footprints(self, loaded: bool, direction: int = 0) -> tuple[Footprint, Footprint]:
         """(footprint checked, own outline excluded): a carried pallet is part of the truck."""
@@ -209,11 +245,15 @@ class ObstacleLayer:
         w, res = self.window_m, self.grid_config.resolution_m
         x0 = math.floor((x - w) / res) * res
         y0 = math.floor((y - w) / res) * res
+        if self.memory is not None:
+            self._memory_hits(now_s, correction)
         self.grid.config = replace(self.grid_config, x_min_m=x0, x_max_m=x0 + 2 * w, y_min_m=y0, y_max_m=y0 + 2 * w)
         try:
             self.snapshot = self.grid.snapshot(now_s, correction, version)
         finally:
             self.grid.config = self.grid_config
+        if self.memory is not None:
+            self._memory_clears(self.snapshot, now_s)
         footprint, own = self.footprints(loaded, direction)
         # The shadow-band memory may lean on cells the depth pocket check saw
         # free (observation, with its time), never on the exemption itself
@@ -236,10 +276,45 @@ class ObstacleLayer:
             direction=direction, footprint=footprint, own_footprint=own, speed_cap_mps=cap_mps,
         )
 
-    def planner_grid(self, now_s: float, correction, version: int):
-        """Hall-wide OccupancyGrid of the occupied cells for a (re)plan."""
+    def planner_grid(self, now_s: float, correction, version: int, *, use_slam: bool = True,
+                     own_pose=None, loaded: bool = False):
+        """Hall-wide OccupancyGrid of the occupied cells for a (re)plan: the live
+        grid, and with the planning memory its remembered and SLAM cells."""
+        if self.memory is not None:
+            self._memory_hits(now_s, correction)
         snap = self.grid.snapshot(now_s, correction, version)
-        return snapshot_to_occupancy(snap)
+        if self.memory is None:
+            return snapshot_to_occupancy(snap)
+        self._memory_clears(snap, now_s)
+        occupied = snap.occupied.copy()
+        nx, ny = occupied.shape
+        res = snap.resolution_m
+        ci, cj = self.memory.cell(snap.origin_x_m + (np.arange(nx) + 0.5) * res,
+                                  snap.origin_y_m + (np.arange(ny) + 0.5) * res)
+        mem = self.memory.occupied(use_slam=use_slam)
+        oki = (ci >= 0) & (ci < mem.shape[0])
+        okj = (cj >= 0) & (cj < mem.shape[1])
+        sub = np.zeros_like(occupied)
+        sub[np.ix_(oki, okj)] = mem[np.ix_(ci[oki], cj[okj])]
+        if own_pose is not None:
+            # Where the truck stands nothing else can: the remembered cells wholly
+            # inside its parts (blades and body apart, or the loaded outline) are
+            # left out of this plan's copy only -- the memory keeps them, and a
+            # cell straddling the outline stays (Codex design review P1).
+            from forklift_core.control.drive_permission import parts_of
+            from forklift_core.control.shadow_memory import whole_cells
+
+            shape = self.loaded if loaded else (self.parts_shape or self.unloaded)
+            x, y, yaw = own_pose
+            c, s = math.cos(yaw), math.sin(yaw)
+            for fp, lat, lon in parts_of(shape):
+                part = (x + lon * c - lat * s, y + lon * s + lat * c, yaw)
+                for a, b in whole_cells(snap, part, fp):
+                    if 0 <= a < nx and 0 <= b < ny:
+                        sub[a, b] = False
+        from forklift_core.planning.grid_collision import OccupancyGrid
+
+        return OccupancyGrid(snap.origin_x_m, snap.origin_y_m, res, occupied | sub, version=snap.correction_version)
 
 
 __all__ = ["ObstacleLayer", "ObstacleSensor", "load_layer_config"]

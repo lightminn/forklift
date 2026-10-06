@@ -27,6 +27,11 @@ grid:
   close_gap_m: 0.25
   # A free strip no 0.5 m disk fits in (a pocket tunnel with a hidden flank) is not FREE.
   free_min_width_m: 0.5
+  # Planning-only memory (D2/D3 delta, user decision 2026-10-06): a cell stays
+  # occupied for the planner until it is seen free again; with --slam-map-dir
+  # the SLAM /map joins as a static layer. The permission never sees either.
+  planning_memory: true
+  memory_hit_radius_m: 0.1
 permission:
   latency_s: 0.15
   decel_mps2: 1.5
