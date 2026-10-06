@@ -355,10 +355,13 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--slam-noise-seed", type=int, default=None)
     parser.add_argument(
         "--slam-noise-spec",
-        action="store_true",
-        help="SLAM feedback noise at the sensor datasheets' maximum error: range sigma from the "
-        "RPLIDAR A2M12 row (1 / 2 / 2.5 %% of range), steering sigma 1.5 deg (MT6701 maximum "
-        "error); wheel rates keep 0.2 rad/s (no datasheet value).",
+        nargs="?",
+        const="max",
+        default=None,
+        choices=("max", "3sigma"),
+        help="SLAM feedback noise from the sensor datasheets' maximum error -- RPLIDAR A2M12 range "
+        "row (1 / 2 / 2.5 %% of range) and MT6701 1.5 deg for steering -- read as one sigma "
+        "('max') or as three sigma ('3sigma'); wheel rates keep 0.2 rad/s (no datasheet value).",
     )
     parser.add_argument("--slam-reply-timeout", type=float, default=90.0)
     parser.add_argument(
@@ -2101,7 +2104,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "noise": OdometryNoise(
                 seed=args.slam_noise_seed or 0,
                 enabled=args.slam_noise_seed is not None,
-                **({"steering_std_rad": math.radians(1.5), "range_model": "a2m12"}
+                **({"steering_std_rad": math.radians(1.5) / (3.0 if args.slam_noise_spec == "3sigma" else 1.0),
+                    "range_model": "a2m12",
+                    "range_spec_scale": 1.0 / 3.0 if args.slam_noise_spec == "3sigma" else 1.0}
                    if args.slam_noise_spec else {}),
             ),
             "odometry": IncrementalWheelOdometry(
@@ -2135,7 +2140,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         state["slam_feedback"] = {
             "socket": str(args.slam_feedback),
             "noise_seed": args.slam_noise_seed,
-            "noise_spec": bool(args.slam_noise_spec),
+            "noise_spec": args.slam_noise_spec,
             "start_rear": list(slam_start),
             "max_age_s": 0.25,
             "hold_limit_m": 15.0,

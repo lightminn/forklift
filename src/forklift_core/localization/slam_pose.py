@@ -308,6 +308,7 @@ class OdometryNoise:
         steering_std_rad: float = 0.005,
         range_std_m: float = 0.02,
         range_model: str = "constant",
+        range_spec_scale: float = 1.0,
     ):
         self.enabled = bool(enabled)
         self.wheel_rate_std_rad_s = wheel_rate_std_rad_s
@@ -319,6 +320,11 @@ class OdometryNoise:
         if range_model not in ("constant", "a2m12"):
             raise ValueError("range_model must be 'constant' or 'a2m12'")
         self.range_model = range_model
+        # sigma = scale x the datasheet row: 1.0 reads the maximum error as one
+        # sigma, 1/3 reads it as three sigma.
+        if not (math.isfinite(range_spec_scale) and range_spec_scale > 0):
+            raise ValueError("range_spec_scale must be positive")
+        self.range_spec_scale = float(range_spec_scale)
         self._ranges = np.random.default_rng([seed, 0])
         self._wheels = np.random.default_rng([seed, 1])
         self._steering = np.random.default_rng([seed, 2])
@@ -342,7 +348,7 @@ class OdometryNoise:
         measured = np.isfinite(out)
         if self.range_model == "a2m12":
             r = out[measured]
-            sigma = np.where(r <= 3.0, 0.01, np.where(r <= 5.0, 0.02, 0.025)) * r
+            sigma = np.where(r <= 3.0, 0.01, np.where(r <= 5.0, 0.02, 0.025)) * r * self.range_spec_scale
             out[measured] += self._ranges.normal(0, 1.0, int(measured.sum())) * sigma
         else:
             out[measured] += self._ranges.normal(0, self.range_std_m, int(measured.sum()))

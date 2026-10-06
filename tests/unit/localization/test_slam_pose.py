@@ -244,3 +244,9 @@ def test_spec_range_noise_follows_the_a2m12_maximum_error_row():
     assert np.std(far - 8.0) == pytest.approx(0.20, rel=0.05)
     with pytest.raises(ValueError):
         OdometryNoise(seed=0, range_model="other")
+
+
+def test_spec_range_noise_read_as_three_sigma_is_a_third():
+    noise = OdometryNoise(seed=4, range_model="a2m12", range_spec_scale=1 / 3)
+    far = noise.ranges(np.full(20000, 8.0), range_min_m=0.2, range_max_m=12.0)
+    assert np.std(far - 8.0) == pytest.approx(0.20 / 3, rel=0.05)
