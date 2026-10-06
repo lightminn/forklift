@@ -748,7 +748,8 @@ def test_pocket_bars_are_judged_against_the_block_columns_not_the_outline():
     i = source.index('f"Measured pallet footprint overlap in {phase}"')
     head = source[source.rindex("in_outline = []", 0, i) : i]
     assert "if not any(o is r_ for r_ in in_outline)" in head
-    assert 'f"Measured pallet solid overlap in {phase}: {box_.name}"' in source[i : i + 2500]
+    assert 'f"Measured pallet solid overlap in {phase}: {box_.name}"' in source[i : i + 3500]
+    assert "local_ = (corners_ - np.asarray(ppos, dtype=float)) @ rot_" in source  # full pose, tilt included
     assert "PALLET_BOXES = PALLET_BOXES_OF(args.pallet_geometry_loaded)" in source  # the canonical solids
 
 
@@ -757,3 +758,5 @@ def test_a_backoff_offers_no_leg_to_the_rules_and_silence_is_traced():
     i = source.index('for action in new_obstacles["schedule"].update(')
     assert "leg_direction = 0  # a backoff is not a leg of the phase" in source[i - 300 : i]
     assert 'trace.setdefault("first_zero_s", t)' in source and '"silence_trace": obstacle.get("silence_trace")' in source
+    j = source.index('obstacle["permission_cap"] = (t, float(allowed))')
+    assert 'trace.setdefault("first_zero_s", t)' in source[j : j + 900]  # at the cap the wheels take (Codex checkpoint 11)

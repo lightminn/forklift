@@ -3141,22 +3141,33 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 f"Measured pallet footprint overlap in {phase}",
             )
             if in_outline:
-                cp, sp = math.cos(pallet_yaw), math.sin(pallet_yaw)
-                base_z = float(ppos[2])
-                for box_ in PALLET_BOXES:
-                    bx, by, bz = box_.centre_m
-                    lx, ly, lz = box_.size_m
-                    box_pose = (float(ppos[0]) + bx * cp - by * sp, float(ppos[1]) + bx * sp + by * cp, float(pallet_yaw))
-                    tall = [r_ for r_ in in_outline
-                            if new_obstacles["heights"].get(id(r_), 0.0) > base_z + bz - lz / 2]
-                    if not tall:
-                        continue  # every bar stays below this solid
-                    require(
-                        collision_free_pose(
-                            box_pose, tall, Footprint(lx / 2, lx / 2, ly / 2), Bounds(-1e9, 1e9, -1e9, 1e9),
-                        ),
-                        f"Measured pallet solid overlap in {phase}: {box_.name}",
-                    )
+                # Each bar's eight corners in the pallet's frame from its full
+                # pose (tilt included), boxed there and met against the canonical
+                # solids as closed intervals -- touching counts (Codex checkpoint 11).
+                qw_, qx_, qy_, qz_ = (float(v) for v in pq)
+                rot_ = np.array([
+                    [1 - 2 * (qy_ * qy_ + qz_ * qz_), 2 * (qx_ * qy_ - qz_ * qw_), 2 * (qx_ * qz_ + qy_ * qw_)],
+                    [2 * (qx_ * qy_ + qz_ * qw_), 1 - 2 * (qx_ * qx_ + qz_ * qz_), 2 * (qy_ * qz_ - qx_ * qw_)],
+                    [2 * (qx_ * qz_ - qy_ * qw_), 2 * (qy_ * qz_ + qx_ * qw_), 1 - 2 * (qx_ * qx_ + qy_ * qy_)],
+                ])
+                for r_ in in_outline:
+                    h_ = new_obstacles["heights"].get(id(r_), 0.0)
+                    cb, sb = math.cos(r_.yaw_rad), math.sin(r_.yaw_rad)
+                    corners_ = np.array([
+                        [r_.x_m + du * cb - dv * sb, r_.y_m + du * sb + dv * cb, dz]
+                        for du in (-r_.length_m / 2, r_.length_m / 2)
+                        for dv in (-r_.width_m / 2, r_.width_m / 2)
+                        for dz in (0.0, h_)
+                    ])
+                    local_ = (corners_ - np.asarray(ppos, dtype=float)) @ rot_
+                    lo_, hi_ = local_.min(axis=0), local_.max(axis=0)
+                    for box_ in PALLET_BOXES:
+                        c_ = np.asarray(box_.centre_m)
+                        half_ = np.asarray(box_.size_m) / 2
+                        require(
+                            not bool(np.all(lo_ <= c_ + half_) and np.all(hi_ >= c_ - half_)),
+                            f"Measured pallet solid overlap in {phase}: {box_.name}",
+                        )
             relative = ppos[:2] - base[:2]
             if phase in ["extract", "transport"]:
                 require(ppos[2] > 0.04, "Pallet dropped during transport")
@@ -4522,6 +4533,18 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 # (the stop it was measured with); the path-blocked stop below
                 # is a planned one and brakes on the slew.
                 obstacle["permission_cap"] = (t, float(allowed)) if (args.obstacle_act and acting) else None
+                if obstacle["permission_cap"] is not None and allowed == 0.0 and why.startswith("sensor_silent"):
+                    # N9 deadlines: the permission's zero reaches the wheels as a
+                    # step through the final cap whatever the tracker asks (Codex
+                    # checkpoint 11): the first such tick, and the stop it ends in.
+                    trace = obstacle.setdefault("silence_trace", {})
+                    trace.setdefault("first_zero_s", t)
+                    trace.setdefault("reason", why)
+                    trace.setdefault("speed_at_zero_mps", abs(truth_speed))
+                    trace.setdefault("rear_at_zero", [float(v) for v in truth_rear])
+                    if abs(truth_speed) < 0.01 and "stopped_s" not in trace:
+                        trace["stopped_s"] = t
+                        trace["rear_stopped"] = [float(v) for v in truth_rear]
                 if obstacle["path_blocked_ticks"] >= 36 and allowed > 0.0:
                     allowed, why = 0.0, "occupied"
                 if abs(requested_speed) > allowed + 1e-9:
@@ -4533,18 +4556,6 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         # Zero allowed: the emergency stop the check assumed --
                         # wheels to zero, steering held (Codex L0b P1).
                         obstacle_hold = allowed == 0.0
-                        if why.startswith("sensor_silent") and allowed == 0.0:
-                            # N9 deadlines: the first zero command after a sensor fell
-                            # silent -- recorded only where the zero is applied (Codex
-                            # checkpoint 10 P2) -- and the stop it ends in (plan D6).
-                            trace = obstacle.setdefault("silence_trace", {})
-                            trace.setdefault("first_zero_s", t)
-                            trace.setdefault("reason", why)
-                            trace.setdefault("speed_at_zero_mps", abs(truth_speed))
-                            trace.setdefault("rear_at_zero", [float(v) for v in truth_rear])
-                            if abs(truth_speed) < 0.01 and "stopped_s" not in trace:
-                                trace["stopped_s"] = t
-                                trace["rear_stopped"] = [float(v) for v in truth_rear]
                 # Stop, replan, resume (plan D4): blocked by an obstacle and standing.
                 stopped_now = slam["stop_now"] if slam is not None else float(np.linalg.norm(velocity[:2])) < 0.01
                 if (
