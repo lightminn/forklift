@@ -836,3 +836,19 @@ def test_the_pickup_retraction_covers_the_estimate_and_the_range_noise():
     block = source[i - 900 : i + 200]
     assert 'grow_ = 0.05 + obstacle["layer"].noise_cut_m' in block
     assert "est_.yaw_rad, grow_)" in block
+
+
+def test_plans_project_with_the_grids_correction_and_a_release_passes_its_own():
+    # l5_exp_A/B (2026-10-06): the tracker's applied correction moves between
+    # scans; planning on it shifted the grid from the permission's. A release
+    # passes the released correction explicitly (Codex review P1).
+    source = SCRIPT.read_text()
+    tree = ast.parse(source)
+    fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "grid_kwargs")
+    body = ast.get_source_segment(source, fn)
+    assert '["tracker"].applied' not in body
+    assert 'obstacle["applied"]' in body
+    rel = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "slam_release")
+    rel_src = ast.get_source_segment(source, rel)
+    assert rel_src.count("grid_kwargs(None, own=after, applied=released_)") == 4
+    assert "grid_kwargs(None)" not in rel_src

@@ -1677,7 +1677,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         """The scenario a grid plan sees: no ground-truth props (plan audit table)."""
         return replace(sc, props=()) if grid_planning else sc
 
-    def grid_kwargs(kind=None, target=None, own=None) -> dict:
+    def grid_kwargs(kind=None, target=None, own=None, applied=None) -> dict:
         """occupancy (and the pallet obstacle the plan may know) for a grid plan."""
         if not grid_planning:
             return {}
@@ -1687,13 +1687,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             slam_ref = None
         stamp = obstacle.get("last_stamp", 0.0)
         layer_ = obstacle["layer"]
-        # The correction control applies now (a release changes it before the
-        # obstacle block re-projects -- Codex review P1), the pose it plans from
-        # (own, or this tick's), and the load.
-        if slam_ref is not None and slam_ref["tracker"].applied is not None:
-            applied_ = tuple(float(v) for v in slam_ref["tracker"].applied[0])
-        else:
-            applied_ = obstacle["applied"] or (0.0, 0.0, 0.0)
+        # The correction the obstacle grid is projected with -- the one the
+        # permission's grid shares -- unless the caller passes another: a
+        # release plans with the released correction before the obstacle block
+        # re-projects (Codex review P1). The tracker's own value moves between
+        # scans; planning on it shifted the grid from the permission's and
+        # flipped seed 1's insertion (l5_exp_A/B, 2026-10-06).
+        applied_ = tuple(float(v) for v in applied) if applied is not None else (
+            obstacle["applied"] or (0.0, 0.0, 0.0))
         try:
             own_now_ = tuple(float(v) for v in (own if own is not None else rear))
             loaded_now_ = bool(loaded)
@@ -2399,11 +2400,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 arm_docking()
             return
         start = PlanningPose(float(after[0]), float(after[1]), float(after[2]))
+        released_ = (tuple(float(v) for v in slam["tracker"].applied[0])
+                     if slam["tracker"].applied is not None else None)
         replan_start = time.monotonic()
         if leg == "transport":
             replanned = plan_transport_leg(
                 grid_world(scenario), start, planner_config, geometry=geometry, travel_config=travel_config,
-                **grid_kwargs(None, own=after),
+                **grid_kwargs(None, own=after, applied=released_),
             )
         else:
             # The delivered pallet sits where docking put it -- right in the
@@ -2431,7 +2434,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 planner_config,
                 geometry=geometry,
                 travel_config=travel_config,
-                **grid_kwargs(None, own=after),
+                **grid_kwargs(None, own=after, applied=released_),
             )
         if replanned.status == "invalid_start" and grid_planning:
             # The released pose may sit inside the planning clearance of a grid
@@ -2443,12 +2446,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             if leg == "transport":
                 replanned = plan_transport_leg(
                     grid_world(scenario), start, tight_cfg, geometry=geometry, travel_config=tight_travel_cfg,
-                    **grid_kwargs(None, own=after),
+                    **grid_kwargs(None, own=after, applied=released_),
                 )
             else:
                 replanned = plan_return_leg(
                     grid_world(return_scenario), start, return_to_pose, tight_cfg, geometry=geometry,
-                    travel_config=tight_travel_cfg, **grid_kwargs(None, own=after),
+                    travel_config=tight_travel_cfg, **grid_kwargs(None, own=after, applied=released_),
                 )
             event["tight_retry"] = True
         event.update(
