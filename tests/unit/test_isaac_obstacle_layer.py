@@ -297,7 +297,9 @@ def open_scans(lay, until_s, pose=(0.0, 0.0, 0.0)):
 def test_the_single_layer_marks_a_delivered_pallet_the_plane_cannot_see():
     from forklift_core.perception.known_obstacles import KnownRect
 
-    lay = single_layer()
+    # The committed single layer keeps known pallets off until D8 (user, 2026-10-08).
+    assert not single_layer().known_enabled
+    lay = single_layer(enabled=True)
     assert lay.known_enabled and lay.shared_with_slam and lay.band_bottom_m == 1.044
     path = np.column_stack((np.linspace(0, 4, 81), np.zeros(81), np.zeros(81)))
     open_scans(lay, 0.2)
@@ -317,7 +319,7 @@ def test_a_withdrawal_needs_its_certificate_and_then_starts():
     gaps = fork_pocket_gaps(0.0, 0.0, blade_centre_m=0.145, blade_half_width_m=0.0275, blade_length_m=0.30,
                             pocket_inner_m=0.0725, pocket_outer_m=0.300)
     # Unmeasured b_w / e_w: refused, and the delivered pallet holds the truck.
-    lay = single_layer(b_w_m=None, e_w_m=None)
+    lay = single_layer(b_w_m=None, e_w_m=None, enabled=True)
     open_scans(lay, 0.2)
     lay.known = [pallet]
     assert not lay.certify_withdrawal(back, lay.parts_shape, 0.48, gaps)
@@ -325,7 +327,7 @@ def test_a_withdrawal_needs_its_certificate_and_then_starts():
     held, _ = lay.limit(0.2, current_pose=pose, curvature_inv_m=0.0, direction=-1, loaded=False, cap_mps=0.12)
     assert held == 0.0
     # Measured and within the 0.0265 m budget: certified, the corridor starts the truck.
-    lay = single_layer(b_w_m=0.010, e_w_m=0.010)
+    lay = single_layer(b_w_m=0.010, e_w_m=0.010, enabled=True)
     open_scans(lay, 0.2)
     lay.known = [pallet]
     assert lay.certify_withdrawal(back, lay.parts_shape, 0.48, gaps)
@@ -347,12 +349,12 @@ def test_codex_stage1_a_certified_withdrawal_hands_the_return_a_fresh_pallet():
     gaps = fork_pocket_gaps(0.0, 0.0, blade_centre_m=0.145, blade_half_width_m=0.0275, blade_length_m=0.30,
                             pocket_inner_m=0.0725, pocket_outer_m=0.300)
     # Without the full drift bound the certified stop does not re-fix (Codex stage-1 2nd P1-2).
-    lat_only = single_layer(b_w_m=0.010, e_w_m=0.010, e_w_full_m=None)
+    lat_only = single_layer(b_w_m=0.010, e_w_m=0.010, e_w_full_m=None, enabled=True)
     lat_only.known = [pallet]
     assert lat_only.certify_withdrawal(back, lat_only.parts_shape, 0.48, gaps)
     lat_only.end_withdrawal(now_s=4.6)
     assert lat_only.known[0].fix_stamp_s == 0.0
-    lay = single_layer(b_w_m=0.010, e_w_m=0.010, e_w_full_m=0.010)
+    lay = single_layer(b_w_m=0.010, e_w_m=0.010, e_w_full_m=0.010, enabled=True)
     lay.known = [pallet]
     assert lay.certify_withdrawal(back, lay.parts_shape, 0.48, gaps)
     pose = (-0.55, 0.0, 0.0)

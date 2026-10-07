@@ -77,7 +77,15 @@ odometry_age: config/obstacle_odometry_age.json
 # empirical bound past the age table stay null until measured -- null refuses
 # the withdrawal certificate (the truck stops and the run reports it).
 known_pallets:
-  enabled: true
+  # Off until D8 (user, 2026-10-08). r_k reads the odometry table by age alone (not by
+  # distance driven) times the current rho, so about 0.3 s after recognition (rho ~2.8 m)
+  # it passes the 0.20 m cap and the pallet's surroundings turn unknown; the truck stood
+  # before it, short of the next observation point where it would re-fix, until the
+  # observe timeout (both d992388 smoke runs; seed 1 completed with this off). Fixing it in
+  # the SLAM map does not keep it under the cap either (0.26 m at 0.5 s in the l8_measured
+  # SLAM logs). It returns once the carriage camera re-observes the pallet often enough.
+  # Values below stay as measured.
+  enabled: false
   # Measured-chassis gate (2026-10-08, ws1 artifacts/20261008_gate_measured, seeds 1/3/5,
   # truth-controlled, tools/gate_measure.py): sample maxima plus a margin, not bounds.
   r_fix_pickup_m: 0.010   # recognition corner error, max 1.9 mm
