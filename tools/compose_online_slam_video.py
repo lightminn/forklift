@@ -133,6 +133,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bridge", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--max-frames", type=int, default=None)
+    parser.add_argument(
+        "--draw-odometry",
+        action="store_true",
+        help="also draw the wheel-odometry-only path (odom<-base, orange) on the map panel",
+    )
     args = parser.parse_args(argv)
     if args.output.exists():
         parser.error(f"{args.output} exists; choose a new file")
@@ -298,6 +303,8 @@ def main(argv: list[str] | None = None) -> int:
         s = base.latest_index(scans["stamps"], t)
         if s >= 0:
             if s > 0:
+                if args.draw_odometry:
+                    pen.line(to_panel(scans["odom"][: s + 1, :2]), fill=base.ODOMETRY, width=3)
                 pen.line(to_panel(scans["estimate"][: s + 1, :2]), fill=base.ESTIMATE, width=2)
             pose = scans["estimate"][s]
             j = base.latest_index(scan_t, scans["stamps"][s])
