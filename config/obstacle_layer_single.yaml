@@ -1,0 +1,60 @@
+# Single obstacle LiDAR (user, 2026-10-07): the brief's one 2D LiDAR (RPLIDAR A2M12,
+# the SLAM mount at 1.05 m) is also the only obstacle sensor -- no added low planes.
+# Operating assumption: nothing lower than its plane stands on the floor; runs use
+# --min-obstacle-height-m 1.15 to take such props out of the scene (storage stacks top
+# at 0.96 m or 1.21 m and above, so 1.05 and 1.15 remove the same props). Under that
+# assumption the 1.05 m plane may clear cells, and a beam stays valid up to band_top_m.
+# Everything else is config/obstacle_layer.yaml (D_008) unchanged.
+# Priority-5 obstacle layer (docs/plans/2026-10-04-lidar-obstacle-map.md), numbers frozen by P0a
+# ("P0a 결과와 고정값"). Sensors: the brief's single LiDAR only. Planes at or below clear_max_height_m may clear cells (plan D0); higher ones only mark.
+clear_max_height_m: 1.10
+# h_det under the single-LiDAR assumption: the lowest kept obstacle top is 1.21 m; 1.15 m leaves
+# 0.10 m above the 1.05 m plane for body tilt. A tilted beam past this height stops speaking.
+band_top_m: 1.15
+beams: 1600
+range_min_m: 0.2
+range_max_m: 12.0
+noise_std_m: 0.02
+noise_cut_m: 0.06
+sensors:
+  - {name: high, xyz: [-0.12, 0.0, 1.05], yaw_deg: 0}
+grid:
+  resolution_m: 0.05
+  max_mark_m: 5.0
+  max_clear_m: 5.0
+  free_max_age_s: 0.2
+  occupied_max_age_s: 0.3
+  free_r_cap_m: 0.20
+  free_rho_m: 4.0
+  window_m: 6.0
+  # Low planes see storage pallets as blocks: link occupied cells < 0.5 m apart and fill their hull.
+  close_gap_m: 0.25
+  # A free strip no 0.5 m disk fits in (a pocket tunnel with a hidden flank) is not FREE.
+  free_min_width_m: 0.5
+  # Planning-only memory (D2/D3 delta, user decision 2026-10-06): a cell stays
+  # occupied for the planner until it is seen free again; with --slam-map-dir
+  # the SLAM /map joins as a static layer. The permission never sees either.
+  planning_memory: true
+  memory_hit_radius_m: 0.1
+permission:
+  latency_s: 0.15
+  decel_mps2: 1.5
+  margin_m: 0.05
+  envelope_m: 0.01
+  envelope_ramp_m: 0.0
+  sensor_timeout_s: 0.25
+  lookahead_m: 3.0
+  # Shadow-band memory (D4 delta, user approval 2026-10-05): the strip a low
+  # corner LiDAR cannot certify in front of the truck's own faces is up to
+  # 0.77 a deep (a = how far the sensor sits ahead of the face; 43 mm for
+  # low_fl before the carriage). 0.05 m covered it at 0.10 m; with D_008's
+  # 0.08 m planes the carriage's lower cross member and the fork heels shade
+  # more -- UNKNOWN reached 0.116 m before the face on a standing return (L3c
+  # v22 seed 5) -- so 0.15 m. Remove the key to get the strict rule back.
+  shadow_band_m: 0.15
+  # The unloaded shape the permission checks: hull_forward (the planner's
+  # hull driving forward, body + blades reversing), hull, or parts. Forward on
+  # the hull keeps the permission and the planner consistent (L3b v23);
+  # reversing on the parts lets the forks leave a pallet's swelling (L3c v19).
+  shape: hull_forward
+odometry_age: config/obstacle_odometry_age.json

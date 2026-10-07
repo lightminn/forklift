@@ -9,7 +9,7 @@ Placement guarantees geometric separation only, never that a route exists.
 """
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import cos, floor, pi, sin
 from pathlib import Path
 
@@ -542,3 +542,46 @@ def plan_survey_route(
         sum(leg.length_m for leg in legs),
         sum(leg.expanded_nodes for leg in legs),
     )
+
+
+def _inside(point_rect: Rectangle, rect: Rectangle) -> bool:
+    """Whether point_rect's centre lies within rect (closed)."""
+    c, s = cos(rect.yaw_rad), sin(rect.yaw_rad)
+    dx, dy = point_rect.x_m - rect.x_m, point_rect.y_m - rect.y_m
+    u, v = c * dx + s * dy, -s * dx + c * dy
+    return abs(u) <= rect.length_m / 2 + 1e-9 and abs(v) <= rect.width_m / 2 + 1e-9
+
+
+def obstacle_top_m(prop: PlacedProp, loads: Sequence[StackedProp] = ()) -> float:
+    """Top of a floor prop above the floor: its own height, or the highest load resting on it."""
+    top = prop.asset.height_m
+    for load in loads:
+        if _inside(load.rectangle, prop.rectangle):
+            top = max(top, load.base_height_m + load.asset.height_m)
+    return top
+
+
+def drop_low_obstacles(
+    scenario: TransportScenario, factory: FactoryScenario | None, min_top_m: float
+) -> tuple[TransportScenario, FactoryScenario | None, int]:
+    """Remove every floor prop whose top is below min_top_m.
+
+    The operating assumption of a single obstacle LiDAR (user, 2026-10-07):
+    nothing lower than its scan plane stands on the floor. A pallet's loads go
+    with it; the kept props keep their places, so the seed's layout is the same
+    minus the removed props. Returns the scenario, the factory (None stays
+    None) and how many props were removed.
+    """
+    min_top_m = _finite_scalar(min_top_m, "min_top_m")
+    loads = factory.loads if factory is not None else ()
+    kept = tuple(p for p in scenario.props if obstacle_top_m(p, loads) >= min_top_m)
+    removed = len(scenario.props) - len(kept)
+    scenario = replace(scenario, props=kept)
+    if factory is None:
+        return scenario, None, removed
+    items = tuple(p for p in factory.work_items if obstacle_top_m(p, loads) >= min_top_m)
+    kept_loads = tuple(
+        load for load in loads if any(_inside(load.rectangle, p.rectangle) for p in items)
+    )
+    return scenario, replace(factory, transport=scenario, work_items=items, loads=kept_loads), removed
+

@@ -17,8 +17,10 @@ from forklift_core.planning import (
 from forklift_core.planning.factory_layout import (
     FactoryAssets,
     Region,
+    drop_low_obstacles,
     load_factory_layout,
     make_factory_scenario,
+    obstacle_top_m,
 )
 from forklift_core.planning.pallet_mission import (
     AssetSpec,
@@ -292,3 +294,42 @@ def test_survey_route_reports_the_leg_that_failed(layout):
     assert not result.success
     assert result.status == "leg0:invalid_goal"
     assert len(result.poses) == 0
+
+
+def test_drop_low_obstacles_keeps_only_tall_props_in_place(layout):
+    factory = build(1, layout)
+    scenario, kept, removed = drop_low_obstacles(factory.transport, factory, 1.15)
+    tops = [obstacle_top_m(p, factory.loads) for p in factory.transport.props]
+    assert removed == sum(t < 1.15 for t in tops) > 0
+    assert all(obstacle_top_m(p, factory.loads) >= 1.15 for p in scenario.props)
+    # Kept props are the same objects at the same places, in the same order.
+    assert list(scenario.props) == [
+        p for p, t in zip(factory.transport.props, tops, strict=True) if t >= 1.15
+    ]
+    assert kept.transport is scenario
+    assert set(kept.work_items) <= set(factory.work_items)
+    # Every kept load sits on a kept pallet; a removed pallet takes its loads.
+    assert kept.loads and len(kept.loads) < len(factory.loads)
+    pallets = [p.rectangle for p in kept.work_items]
+    for load in kept.loads:
+        assert any(
+            abs(load.rectangle.x_m - r.x_m) < r.length_m and abs(load.rectangle.y_m - r.y_m) < r.length_m
+            for r in pallets
+        )
+    # The run_transport bay/work-item split still holds.
+    assert scenario.props[len(scenario.props) - len(kept.work_items):] == kept.work_items
+
+
+def test_drop_low_obstacles_stack_top_counts_its_loads():
+    pallet = PALLET
+    rect = Rectangle(0.0, 0.0, pallet.length_m, pallet.width_m, 0.3)
+    from forklift_core.planning.factory_layout import StackedProp
+    from forklift_core.planning.pallet_mission import PlacedProp
+
+    prop = PlacedProp(pallet, rect)
+    load = StackedProp(LOADS[0], Rectangle(0.1, 0.05, 0.797, 0.637, 0.3), 0.21 + 0.503)
+    assert obstacle_top_m(prop) == pytest.approx(0.21)
+    assert obstacle_top_m(prop, [load]) == pytest.approx(0.21 + 2 * 0.503)
+    far = StackedProp(LOADS[0], Rectangle(5.0, 5.0, 0.797, 0.637, 0.3), 0.21)
+    assert obstacle_top_m(prop, [far]) == pytest.approx(0.21)
+

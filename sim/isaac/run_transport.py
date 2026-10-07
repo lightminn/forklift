@@ -215,6 +215,14 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--obstacles", type=int, default=4)
     parser.add_argument(
+        "--min-obstacle-height-m",
+        type=float,
+        default=None,
+        help="Single-LiDAR operating assumption (user, 2026-10-07): remove every "
+        "floor prop (bay props, storage pallets with their loads, clutter) whose "
+        "top is below this height. The kept props keep their places.",
+    )
+    parser.add_argument(
         "--layout",
         choices=("bay", "factory"),
         default="bay",
@@ -1117,6 +1125,20 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         scenario = make_scenario(
             args.seed, catalogue, args.obstacles, geometry=geometry
         )
+    if args.min_obstacle_height_m is not None:
+        from forklift_core.planning.factory_layout import drop_low_obstacles
+
+        kept_before = len(scenario.props)
+        scenario, factory, removed = drop_low_obstacles(
+            scenario, factory, args.min_obstacle_height_m
+        )
+        state["low_obstacles_removed"] = {
+            "min_top_m": args.min_obstacle_height_m,
+            "props_before": kept_before,
+            "props_removed": removed,
+            "props_kept": len(scenario.props),
+            "loads_kept": None if factory is None else len(factory.loads),
+        }
     # The pose the mission began at, or None when no return leg was requested.
     return_to_pose = scenario.start_rear if args.return_home else None
     state["scenario"] = asdict(scenario)
