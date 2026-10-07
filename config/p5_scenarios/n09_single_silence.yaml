@@ -1,0 +1,7 @@
+# Plan v10 D6 (2026-10-08): N9 for the brief's single LiDAR. The v9 files
+# silence low_fl / low_rr (D_008, withdrawn), which the single layer does not
+# have. The one LiDAR ("high") goes quiet; with the shared raw scan the SLAM
+# input stops too. Expected: stop command 0.25 s after the last scan, stopped
+# within the measured braking distance and time.
+events:
+  - {id: n9, action: silence, phase: transport, after_m: 3.0, target: high}

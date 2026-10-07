@@ -214,7 +214,8 @@ def test_mount_marks_penetrating_cells_and_summarises(capsys):
     out = capsys.readouterr().out
     assert "penetrating" in out
     # 90 mm T11 face sits below a camera body whose bottom is at 0.1475 m.
-    assert "camera_blocks_insertion=False target=0.300 common_target=0.300" in out
+    # Reserve 16 mm since 2026-10-08 (ADR 0004 D3 amendment): the measured target is 0.330 m.
+    assert "camera_blocks_insertion=False target=0.330 common_target=0.330" in out
     assert "#   first non-zero:" in out and "#   simultaneous:" in out
     assert "#   dead runs (ok=0):" in out
 
@@ -229,7 +230,7 @@ def test_mount_smoke_prints_tip_columns(capsys):
     )
     # The 144 mm EPAL face reaches the camera body (bottom 0.1375 m) at z 0.15.
     assert "camera_limit=0.330" in out
-    assert "camera_blocks_insertion=True target=0.284 common_target=0.300" in out
+    assert "camera_blocks_insertion=True target=0.314 common_target=0.330" in out  # camera limit - 16 mm
 
 
 def test_pocket_error_is_m2_left_to_left_in_3d():
@@ -331,8 +332,8 @@ def test_default_range_reaches_each_poses_own_target(capsys, monkeypatch):
     monkeypatch.setattr(mpe, "detect_pockets", lambda *a, **k: missing)
     monkeypatch.setattr(mpe, "tip_visibility", lambda *a, **k: 0.0)
     monkeypatch.setattr(mpe.scene_rig, "render", lambda *a, **k: None)
-    # Lateral -0.04 clears a camera at y 0.44, so that pose targets 0.300 m while
-    # the aligned pose (blocked) would target 0.144 m; the range must start at 0.95.
+    # Lateral -0.04 clears a camera at y 0.44, so that pose targets 0.330 m (16 mm
+    # reserve) while the aligned pose (blocked) would target less; the range starts at 0.92.
     assert (
         main(
             [
@@ -353,6 +354,6 @@ def test_default_range_reaches_each_poses_own_target(capsys, monkeypatch):
         for line in capsys.readouterr().out.splitlines()
         if line[:1] == " " and line.split()[0] != "x_m"
     ]
-    assert float(rows[0][0]) == pytest.approx(0.95)
-    assert float(rows[0][1]) == pytest.approx(-0.30)
+    assert float(rows[0][0]) == pytest.approx(0.92)
+    assert float(rows[0][1]) == pytest.approx(-0.33)
     assert float(rows[-1][1]) >= 2.0

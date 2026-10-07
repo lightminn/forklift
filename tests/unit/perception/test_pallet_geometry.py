@@ -16,7 +16,10 @@ EPAL6 = REPO_ROOT / "config" / "pallet_geometry_epal6.yaml"
 
 def test_target_insertion_depth_rule_both_branches():
     assert pallet_geometry.target_insertion_depth_m(0.50) == 0.30
-    assert pallet_geometry.target_insertion_depth_m(0.66) == pytest.approx(0.36)
+    # 2026-10-08 (ADR 0004 D3 amendment): reserve 46 -> 16 mm; T11 x0.6 on the
+    # provisional limit is now held by the carriage at 0.406 - 0.016 = 0.390.
+    assert pallet_geometry.target_insertion_depth_m(0.66) == pytest.approx(0.39)
+    assert pallet_geometry.target_insertion_depth_m(0.60) == pytest.approx(0.36)
 
 
 def test_target_insertion_depth_takes_the_model_carriage_limit():
@@ -24,13 +27,13 @@ def test_target_insertion_depth_takes_the_model_carriage_limit():
     for depth in (0.60, 0.66):
         assert pallet_geometry.target_insertion_depth_m(
             depth, carriage_limit_m=0.346
-        ) == pytest.approx(0.300)
+        ) == pytest.approx(0.330)
     assert pallet_geometry.target_insertion_depth_m(
         0.60, carriage_limit_m=pallet_geometry.CARRIAGE_INSERTION_LIMIT_M
     ) == pallet_geometry.target_insertion_depth_m(0.60)
 
 
-@pytest.mark.parametrize("limit", [math.nan, math.inf, 0.046, 0.0, -0.1])
+@pytest.mark.parametrize("limit", [math.nan, math.inf, 0.016, 0.0, -0.1])  # 0.016: equal to the reserve
 def test_target_insertion_depth_rejects_a_limit_inside_the_reserve(limit):
     with pytest.raises(ValueError):
         pallet_geometry.target_insertion_depth_m(0.60, carriage_limit_m=limit)

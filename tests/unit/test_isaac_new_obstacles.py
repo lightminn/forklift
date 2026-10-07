@@ -175,3 +175,35 @@ def test_a_sweep_checked_spawn_takes_the_widest_side_offset_the_turn_meets_and_a
     never = MODULE.Schedule([MODULE.Event("n3", "spawn", "transport", 0.0, ahead_m=1.0, lateral_m=0.75, sweep=True)])
     assert never.update(0.0, "transport", 1.0, path, sweep_test=lambda b, p: (False, False)) == []
     assert not never.events[0].fired  # waits for a later tick
+
+
+def test_a_cusp_is_not_read_as_a_sharp_curve():
+    # Plan v10 D6 (independent review P1-6): the heading came from point differences, so a
+    # gear change flipped it by pi and read |kappa| ~ 5 1/m; D7 adds cusps, so N3 could
+    # spawn at a cusp. Near a cusp the curvature is 0 (the event waits).
+    forward = np.column_stack((np.linspace(0, 1, 11), np.zeros(11), np.zeros(11)))
+    back = np.column_stack((np.linspace(0.9, 0.0, 10), np.zeros(10), np.zeros(10)))
+    path = np.vstack((forward, back))
+    assert MODULE._curvature_at(path, 1.0) == 0.0
+    arc = np.array([(2 * math.sin(t), 2 * (1 - math.cos(t)), t) for t in np.linspace(0, 1, 41)])
+    assert math.isclose(MODULE._curvature_at(arc, 1.0), 0.5, rel_tol=0.02)
+
+
+def test_the_tall_and_single_lidar_scenario_files_keep_their_shapes():
+    # Plan v10 D6: same footprint, place and timing as the v9 files, 1.3 m tall; N3 fires at
+    # 0.25 1/m (the measured chassis plans at 0.29); N9 silences the one LiDAR.
+    base = ROOT / "config/p5_scenarios"
+    pairs = {"n03_side_box": 0.25, "n04_reverse_box": None, "n06_close_box": None, "n07_wall": None,
+             "n08_destination_box": None, "n10_removed_box": None}
+    for name, curvature in pairs.items():
+        old = MODULE.load_events(base / f"{name}.yaml")
+        new = MODULE.load_events(base / f"{name}_tall.yaml")
+        assert len(old) == len(new)
+        for a, b in zip(old, new):
+            if a.action == "spawn":
+                assert tuple(b.size_m[:2]) == tuple(a.size_m[:2]) and b.size_m[2] == 1.3
+                assert (b.phase, b.after_m, b.ahead_m, b.lateral_m) == (a.phase, a.after_m, a.ahead_m, a.lateral_m)
+                if curvature is not None:
+                    assert b.min_curvature_inv_m == curvature
+    silence = MODULE.load_events(base / "n09_single_silence.yaml")
+    assert [(e.action, e.target) for e in silence] == [("silence", "high")]

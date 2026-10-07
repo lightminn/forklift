@@ -561,6 +561,20 @@ def obstacle_top_m(prop: PlacedProp, loads: Sequence[StackedProp] = ()) -> float
     return top
 
 
+def prism_columns(scenario, factory: FactoryScenario | None):
+    """(floor rectangle, top height) of every kept floor prop, for prism colliders.
+
+    Plan v10 D0 (Codex v10 3rd P1-1): under the single-LiDAR operating
+    assumption each kept prop collides as one vertical prism of its floor
+    rectangle up to its top (the highest load on it), so the 1.05 m plane
+    meets the whole footprint at every height: a storage pallet wider than
+    the box on it, or a cover above open supports, no longer hides floor
+    area the beam would certify FREE. The scene keeps the visible meshes.
+    """
+    loads = factory.loads if factory is not None else ()
+    return [(prop.rectangle, obstacle_top_m(prop, loads)) for prop in scenario.props]
+
+
 def drop_low_obstacles(
     scenario: TransportScenario, factory: FactoryScenario | None, min_top_m: float
 ) -> tuple[TransportScenario, FactoryScenario | None, int]:

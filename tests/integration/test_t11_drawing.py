@@ -74,8 +74,9 @@ def test_both_hypotheses_export_dimensions_fit_and_real_svg(
         assert report["prior"]["opening_width"]["outside_by_m"] == pytest.approx(0.049)
         assert report["prior"]["centre_spacer"]["outside_by_m"] == pytest.approx(0.031)
     assert report["insertion"]["depth_fraction_candidate_m"] == pytest.approx(0.396)
-    assert report["insertion"]["target_m"] == pytest.approx(0.360)
-    assert report["insertion"]["remaining_to_carriage_m"] == pytest.approx(0.046)
+    # Reserve 16 mm since 2026-10-08 (ADR 0004 D3 amendment): the carriage limit now holds T11 at 0.390 m.
+    assert report["insertion"]["target_m"] == pytest.approx(0.390)
+    assert report["insertion"]["remaining_to_carriage_m"] == pytest.approx(0.016)
     assert report["sources"]["geometry_sha256"] == hashlib.sha256(original).hexdigest()
     assert GEOMETRY.read_bytes() == original
     assert all(row["source"] for row in report["dimensions"])

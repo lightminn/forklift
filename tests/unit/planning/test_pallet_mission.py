@@ -373,27 +373,28 @@ def test_approach_clearance_adapts_to_a_smaller_stopping_gap():
 
 def test_t11_derived_geometry_and_serialization():
     geometry = SyntheticMissionGeometry(pallet_depth_m=0.66, pallet_width_m=0.66)
+    # Reserve 16 mm since 2026-10-08 (ADR 0004 D3 amendment): T11 inserts 0.39 m.
     expected = {
-        "inserted_offset_m": 1.26,
+        "inserted_offset_m": 1.23,
         "approach_offset_m": 1.72,
         "prealign_offset_m": 2.52,
-        "predelivery_offset_m": 1.96,
+        "predelivery_offset_m": 1.93,
     }
     serialized = asdict(geometry)
     for name, value in expected.items():
         assert getattr(geometry, name) == pytest.approx(value)
         assert name in serialized
         assert serialized[name] == pytest.approx(value)
-    assert geometry.loaded_footprint.front_m == pytest.approx(1.59)
+    assert geometry.loaded_footprint.front_m == pytest.approx(1.56)
     assert geometry.loaded_footprint.half_width_m == 0.36
     assert serialized["loaded_footprint"] == pytest.approx(
-        {"front_m": 1.59, "rear_m": 0.17, "half_width_m": 0.36}
+        {"front_m": 1.56, "rear_m": 0.17, "half_width_m": 0.36}
     )
 
 
 def test_t11_loaded_envelope_collision_counterexample():
     pose = Pose2D(0, 0, 0)
-    obstacles = [Rectangle(1.57, 0, 0.010, 0.010)]
+    obstacles = [Rectangle(1.545, 0, 0.010, 0.010)]  # between EPAL's 1.53 m and T11's 1.56 m loaded front
     bounds = Bounds(-3, 4.7, -1.75, 3.05)
     epal = SyntheticMissionGeometry()
     t11 = SyntheticMissionGeometry(pallet_depth_m=0.66, pallet_width_m=0.66)
@@ -808,10 +809,10 @@ def test_travel_config_changes_only_the_travel_legs():
 def test_mission_geometry_uses_its_own_carriage_limit():
     provisional = SyntheticMissionGeometry()
     measured = SyntheticMissionGeometry(carriage_limit_m=0.346)
-    # 0.60 m pallet: min(0.36, 0.346 - 0.046) = 0.300; axle 1.29 + 0.30 - 0.30
+    # 0.60 m pallet: min(0.36, 0.346 - 0.016) = 0.330 (reserve 16 mm since 2026-10-08)
     assert provisional.inserted_offset_m == pytest.approx(1.29 + 0.30 - 0.36)
-    assert measured.inserted_offset_m == pytest.approx(1.29)
-    assert measured.loaded_footprint.front_m == pytest.approx(1.59)
+    assert measured.inserted_offset_m == pytest.approx(1.29 + 0.30 - 0.33)
+    assert measured.loaded_footprint.front_m == pytest.approx(1.56)
 
 
 def test_trace_records_every_stage_without_changing_the_plan():
@@ -1363,6 +1364,23 @@ def test_the_final_straight_is_redrawn_from_where_the_truck_stands():
             bad, start, end, max_lateral_m=0.05, max_yaw_rad=0.05, min_length_m=0.3
         )
         assert plan is None
+
+
+def test_a_truck_behind_the_line_start_gets_a_straight_from_its_own_projection():
+    # Plan v10 D7c (Codex v10 2nd P1-4): a negative along was cut to 0, so the path
+    # began ahead of the truck and the tracker failed on its first tick (cross_track).
+    from forklift_core.planning import Pose2D
+    from forklift_core.planning.pallet_mission import straight_from_pose
+
+    start, end = Pose2D(0.0, 0.0, 0.0), Pose2D(1.5, 0.0, 0.0)
+    plan, record = straight_from_pose(
+        Pose2D(-1.0, 0.02, 0.0), start, end, max_lateral_m=0.05, max_yaw_rad=0.05, min_length_m=0.3
+    )
+    assert plan is not None
+    np.testing.assert_allclose(plan.poses[0], (-1.0, 0.0, 0.0), atol=1e-12)
+    np.testing.assert_allclose(plan.poses[-1], (1.5, 0.0, 0.0), atol=1e-12)
+    assert plan.length_m == pytest.approx(2.5) and record["length_left_m"] == pytest.approx(2.5)
+    assert record["along_m"] == pytest.approx(-1.0)
 
 
 def test_an_approach_that_is_all_one_straight_is_cut_where_keep_m_is_left():

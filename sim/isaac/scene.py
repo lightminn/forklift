@@ -72,8 +72,12 @@ def expand_instances(prim: Usd.Prim) -> None:
     raise RuntimeError("Unexpected nested instance depth")
 
 
-def add_props(stage: Usd.Stage, app, props, offsets: dict) -> list[dict]:
-    """Place actual factory assets as static collision objects, without rescaling."""
+def add_props(stage: Usd.Stage, app, props, offsets: dict, *, mesh_collision: bool = True) -> list[dict]:
+    """Place actual factory assets as static collision objects, without rescaling.
+
+    mesh_collision False (plan v10 prism colliders): the meshes stay visible
+    but do not collide; add_prism_colliders gives each prop its column.
+    """
     records = []
     for index, placed in enumerate(props):
         rect = placed.rectangle
@@ -103,9 +107,12 @@ def add_props(stage: Usd.Stage, app, props, offsets: dict) -> list[dict]:
             if child.HasAPI(UsdPhysics.ArticulationRootAPI):
                 child.RemoveAPI(UsdPhysics.ArticulationRootAPI)
             if child.IsA(UsdGeom.Mesh):
-                UsdPhysics.CollisionAPI.Apply(child).CreateCollisionEnabledAttr(True)
-                UsdPhysics.MeshCollisionAPI.Apply(child).CreateApproximationAttr("none")
+                UsdPhysics.CollisionAPI.Apply(child).CreateCollisionEnabledAttr(mesh_collision)
+                if mesh_collision:
+                    UsdPhysics.MeshCollisionAPI.Apply(child).CreateApproximationAttr("none")
                 count += 1
+            elif not mesh_collision and child.HasAPI(UsdPhysics.CollisionAPI):
+                UsdPhysics.CollisionAPI(child).CreateCollisionEnabledAttr(False)
         if not count:
             raise RuntimeError(
                 f"Factory prop has no collision mesh: {placed.asset.uri}"
@@ -123,7 +130,8 @@ def add_props(stage: Usd.Stage, app, props, offsets: dict) -> list[dict]:
     return records
 
 
-def add_factory_items(stage: Usd.Stage, app, work_items, loads, offsets: dict) -> dict:
+def add_factory_items(stage: Usd.Stage, app, work_items, loads, offsets: dict, *,
+                      mesh_collision: bool = True) -> dict:
     """Place factory work items and their stacked loads as static colliders.
 
     The same per-prop handling as add_props -- measured origin offsets, no
@@ -166,9 +174,12 @@ def add_factory_items(stage: Usd.Stage, app, work_items, loads, offsets: dict) -
             if child.HasAPI(UsdPhysics.ArticulationRootAPI):
                 child.RemoveAPI(UsdPhysics.ArticulationRootAPI)
             if child.IsA(UsdGeom.Mesh):
-                UsdPhysics.CollisionAPI.Apply(child).CreateCollisionEnabledAttr(True)
-                UsdPhysics.MeshCollisionAPI.Apply(child).CreateApproximationAttr("none")
+                UsdPhysics.CollisionAPI.Apply(child).CreateCollisionEnabledAttr(mesh_collision)
+                if mesh_collision:
+                    UsdPhysics.MeshCollisionAPI.Apply(child).CreateApproximationAttr("none")
                 count += 1
+            elif not mesh_collision and child.HasAPI(UsdPhysics.CollisionAPI):
+                UsdPhysics.CollisionAPI(child).CreateCollisionEnabledAttr(False)
         if not count:
             raise RuntimeError(
                 f"Factory item has no collision mesh: {placed.asset.uri}"
@@ -180,6 +191,29 @@ def add_factory_items(stage: Usd.Stage, app, work_items, loads, offsets: dict) -
         "loads": len(loads),
         "collision_meshes": meshes,
     }
+
+
+def add_prism_colliders(stage: Usd.Stage, columns, root: str = "/World/PrismColliders") -> dict:
+    """One invisible box collider per kept prop: its floor rectangle up to its top.
+
+    Plan v10 D0 (Codex v10 3rd P1-1): with the meshes' collision off, the
+    LiDAR raycast, the SLAM scans, the docking reference scan and PhysX
+    contact all meet the column, so the operating assumption (no part of an
+    obstacle below the 1.05 m plane reaches past its section there) holds by
+    construction. The evaluator already judges the same floor rectangles.
+    """
+    count = 0
+    for index, (rect, top_m) in enumerate(columns):
+        cube = UsdGeom.Cube.Define(stage, f"{root}/Column_{index}")
+        cube.CreateSizeAttr(1.0)
+        xf = UsdGeom.XformCommonAPI(cube)
+        xf.SetTranslate(Gf.Vec3d(float(rect.x_m), float(rect.y_m), float(top_m) / 2))
+        xf.SetRotate(Gf.Vec3f(0.0, 0.0, float(math.degrees(rect.yaw_rad))))
+        xf.SetScale(Gf.Vec3f(float(rect.length_m), float(rect.width_m), float(top_m)))
+        UsdPhysics.CollisionAPI.Apply(cube.GetPrim()).CreateCollisionEnabledAttr(True)
+        UsdGeom.Imageable(cube.GetPrim()).MakeInvisible()
+        count += 1
+    return {"root": root, "columns": count}
 
 
 def hide_overhead(stage: Usd.Stage, root: str = "/World/Environment") -> list[str]:

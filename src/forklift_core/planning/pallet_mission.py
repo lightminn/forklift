@@ -659,11 +659,14 @@ def straight_from_pose(
     lateral = float(offset @ normal)
     yaw = float(np.arctan2(np.sin(current.yaw_rad - line_start.yaw_rad), np.cos(current.yaw_rad - line_start.yaw_rad)))
     total = float(np.hypot(line_end.x_m - line_start.x_m, line_end.y_m - line_start.y_m))
-    left = total - max(along, 0.0)
+    # Behind the line start the straight begins at the truck's own projection,
+    # not at the start: cutting a negative along to 0 began the path ahead of
+    # the truck (plan v10 D7c, Codex v10 2nd P1-4).
+    left = total - along
     record = {"along_m": along, "lateral_m": lateral, "yaw_rad": yaw, "length_left_m": left}
     if abs(lateral) > max_lateral_m or abs(yaw) > max_yaw_rad or left < min_length_m:
         return None, record
-    begin = np.array([line_start.x_m, line_start.y_m]) + max(along, 0.0) * heading
+    begin = np.array([line_start.x_m, line_start.y_m]) + along * heading
     count = max(1, ceil(left / step_m))
     fractions = np.linspace(0.0, 1.0, count + 1)
     xy = begin + fractions[:, None] * (np.array([line_end.x_m, line_end.y_m]) - begin)

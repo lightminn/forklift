@@ -1,0 +1,8 @@
+# Plan v10 D6 tall variant (2026-10-08): the v9 file's footprint, place and
+# timing with the box raised to 1.3 m, so it stands above the single LiDAR's
+# 1.05 m plane (operating assumption: no floor object lower than the LiDAR).
+# v9 description:
+# N10a: a box appears, the truck stops, the box is removed in view. Expected: re-observe and resume.
+events:
+  - {id: n10, action: spawn, phase: return_home, after_m: 3.0, ahead_m: 3.0, lateral_m: 0.0, size_m: [0.4, 0.4, 1.3]}
+  - {id: n10_gone, action: remove, phase: return_home, after_m: 0.0, target: n10, after_event: n10, delay_s: 8.0}

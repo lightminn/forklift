@@ -223,7 +223,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--settings", type=Path, required=True)
     parser.add_argument("--forklift-urdf", type=Path, required=True)
-    parser.add_argument("--insertion-reserve-m", type=float, default=0.046)
+    from forklift_core.perception.pallet_geometry import INSERTION_RESERVE_M
+
+    # The policy default (16 mm since 2026-10-08); the 0.046 below reproduces the 2026-10-01 R1 scenes.
+    parser.add_argument("--insertion-reserve-m", type=float, default=INSERTION_RESERVE_M)
     parser.add_argument(
         "--pallet-geometry",
         type=Path,

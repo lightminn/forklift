@@ -250,7 +250,7 @@ def check_fork_fit(
 
 
 CARRIAGE_INSERTION_LIMIT_M = 0.406  # Provisional carriage front (ADR 0003 §1).
-INSERTION_RESERVE_M = 0.046  # Policy anchor, not safety-derived (ADR 0004 D3).
+INSERTION_RESERVE_M = 0.016  # Policy anchor, not safety-derived (ADR 0004 D3, 46 -> 16 mm on 2026-10-08).
 INSERTION_DEPTH_FRACTION = 0.6  # ADR 0004 D3 rule coefficient.
 
 

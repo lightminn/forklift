@@ -52,17 +52,22 @@ def load_layer_config(path: Path) -> dict:
     return {**data, "sensors": sensors}
 
 
-def beam_limits(origin, directions, *, band_top_m: float, floor_margin_m: float = 0.05) -> np.ndarray:
+def beam_limits(origin, directions, *, band_top_m: float, floor_margin_m: float = 0.05,
+                band_bottom_m: float | None = None) -> np.ndarray:
     """Per beam, the range up to which a tilted planar beam stays between the
     floor and band_top_m (h_det): rising beams leave the band, sinking ones hit
-    the floor (Codex L0b P1)."""
+    the floor (Codex L0b P1). With band_bottom_m (h_lo, plan v10 D0) a sinking
+    beam stops speaking where it drops below h_lo instead of at the floor: the
+    single-plane operating assumption covers only [h_lo, h_det], and below it a
+    beam could pass under a cover between supports (Codex v10 2nd P1-3)."""
     z0 = float(origin[2])
     dz = np.asarray(directions, dtype=float)[:, 2]
     out = np.full(len(dz), np.inf)
     up = dz > 1e-9
     down = dz < -1e-9
     out[up] = (band_top_m - z0) / dz[up]
-    out[down] = np.maximum(z0 - floor_margin_m, 0.0) / -dz[down]
+    floor = floor_margin_m if band_bottom_m is None else max(float(band_bottom_m), floor_margin_m)
+    out[down] = np.maximum(z0 - floor, 0.0) / -dz[down]
     return np.maximum(out, 0.0)
 
 
@@ -103,6 +108,10 @@ class ObstacleLayer:
         self.noise_std_m = float(config["noise_std_m"])
         self.noise_cut_m = float(config["noise_cut_m"])
         self.band_top_m = float(config["band_top_m"])  # h_det: a beam above it no longer clears
+        # Plan v10: the brief's one LiDAR feeds SLAM and this layer from one raw scan.
+        self.shared_with_slam = bool(config.get("shared_with_slam", False))
+        # h_lo (plan v10 D0): a sinking beam below it no longer clears; absent = the floor margin.
+        self.band_bottom_m = float(config["band_bottom_m"]) if config.get("band_bottom_m") is not None else None
         g = config["grid"]
         self.grid_config = GridConfig(
             hall.x_min_m, hall.x_max_m, hall.y_min_m, hall.y_max_m, error_table,
@@ -115,6 +124,15 @@ class ObstacleLayer:
             taper_m=float(g.get("taper_m", 0.0)),
         )
         self.grid = ObstacleGrid(self.grid_config)
+        self.error_table = error_table
+        # Known pallets (plan v10 D5): the 1.05 m plane never sees an EPAL 6, so the
+        # pickup zone, the recognised pallet and the delivered pallet reach the
+        # permission as rectangles (forklift_core.perception.known_obstacles).
+        kp = config.get("known_pallets") or {}
+        self.known_enabled = bool(kp.get("enabled", False))
+        self.known_config = kp
+        self.known: list = []
+        self.corridor = None  # (path, shape, until_m) while a withdrawal is certified
         p = config["permission"]
         self.permission = DrivePermission(
             PermissionConfig(
@@ -219,6 +237,19 @@ class ObstacleLayer:
         out[finite & (out < self.range_min_m)] = -np.inf
         return out
 
+    def beam_noise(self, count: int) -> np.ndarray:
+        """One truncated noise draw per beam, for a scan shared with SLAM (plan v10, one raw scan)."""
+        return np.clip(self.rng.normal(0, self.noise_std_m, int(count)), -self.noise_cut_m, self.noise_cut_m)
+
+    def ranges_from(self, distances, hits, noise) -> np.ndarray:
+        """REP-117 ranges from a given per-beam noise draw (the shared scan's)."""
+        out = np.where(hits, np.asarray(distances, dtype=float), np.inf)
+        finite = np.isfinite(out)
+        out[finite] = out[finite] + np.asarray(noise, dtype=float)[finite]
+        out[finite & (out > self.range_max_m)] = np.inf
+        out[finite & (out < self.range_min_m)] = -np.inf
+        return out
+
     def add_scans(self, stamp_s: float, raw: dict, *, odom_rear, loaded: bool) -> None:
         """raw: sensor name -> (distances, hits, own) from planar_lidar.cast_scan_flags."""
         _, own_outline = self.footprints(loaded)
@@ -227,11 +258,13 @@ class ObstacleLayer:
                 continue  # a silent sensor (L4 N9/N13): its last stamp ages
             distances, hits, own, *rest = raw[sensor.name]
             limit = rest[0] if rest else None
+            given = rest[1] if len(rest) > 1 else None  # ranges already drawn for the shared scan
             self.grid.add_scan(
                 ObstacleScan(
                     float(stamp_s), sensor.name, tuple(float(v) for v in odom_rear),
                     (sensor.xyz_m[0] - self.rear_x, sensor.xyz_m[1], sensor.yaw_rad),
-                    self.beam_angles, self.ranges(distances, hits), np.asarray(own, dtype=bool),
+                    self.beam_angles, self.ranges(distances, hits) if given is None else np.asarray(given, dtype=float),
+                    np.asarray(own, dtype=bool),
                     sensor.may_clear, (own_outline.front_m, own_outline.rear_m, own_outline.half_width_m),
                     None if limit is None else np.asarray(limit, dtype=float),
                 )
@@ -264,10 +297,61 @@ class ObstacleLayer:
             support = self.depth_support(self.snapshot, now_s) if self.depth_support is not None else None
             self.snapshot = self.shadow.apply(self.snapshot, current_pose, own if isinstance(own, Footprint) else self.body,
                                               extra_support=support)
+        if self.known:
+            from forklift_core.perception.known_obstacles import apply_known, corridor_mask
+
+            mask = None
+            if self.corridor is not None:
+                c_path, c_shape, c_until = self.corridor
+                mask = corridor_mask(self.snapshot, c_path, c_shape, self.permission.config, direction=-1,
+                                     until_m=c_until, tracking_m=float(self.known_config.get("tracking_m", 0.006)))
+            self.snapshot = apply_known(
+                self.snapshot, self.known, now_s, exclude=mask, table=self.error_table, current_pose=current_pose,
+                cap_m=float(self.grid_config.free_r_cap_m),
+                horizon_s=float(self.permission.config.evidence_max_age_s),
+                empirical_m=self.known_config.get("empirical_m"),
+                empirical_max_age_s=self.known_config.get("empirical_max_age_s"),
+            )
         if self.exempt is not None:
             self.snapshot = exempt_region(self.snapshot, self.exempt)
         return self.permission.update(self.snapshot, path_ahead, footprint, own, current_pose=current_pose,
                                       direction=direction)
+
+    def certify_withdrawal(self, path, shape, until_m: float, gaps_m) -> bool:
+        """Plan v10 D5 withdrawal corridor: certified only when the smallest of the
+        four blade-to-pocket gaps covers the checker's side width plus b_w and e_w
+        (both measured at the gate; unmeasured -> refused). While certified the
+        permission samples every withdraw_step_m and the delivered pallet is not
+        applied inside the checker's own corridor."""
+        from forklift_core.perception.known_obstacles import withdraw_certified
+
+        kp = self.known_config
+        step = float(kp.get("withdraw_step_m", 0.005))
+        side = float(self.permission.config.envelope_offset_m) + step / 2 + float(kp.get("tracking_m", 0.006))
+        ok = withdraw_certified(gaps_m, b_w=kp.get("b_w_m"), e_w=kp.get("e_w_m"), side_m=side)
+        if ok:
+            self._normal_config = self.permission.config
+            self.permission.config = replace(self.permission.config, step_m=step)
+            self.corridor = (np.asarray(path, dtype=float), shape, float(until_m))
+        return ok
+
+    def end_withdrawal(self, now_s: float | None = None) -> None:
+        """End the corridor. A certified withdrawal re-fixes the delivered pallet: at the
+        stop its relative pose is known to b_w + e_w (release error plus the measured
+        drift to the stop), so its age restarts there instead of growing from the
+        release -- otherwise it turns unknown around the truck that just left it
+        (Codex stage-1 P1-6, plan v10 D5)."""
+        if self.corridor is not None:
+            self.permission.config = self._normal_config
+            self.corridor = None
+            kp = self.known_config
+            # e_w is the lateral drift the certificate needs; the re-fix needs the full
+            # relative error at the stop (all four corners, along the pallet too), measured
+            # separately -- without it the pallet keeps ageing from the release (Codex
+            # stage-1 2nd P1-2: a 0.163 m longitudinal drift left a pallet cell FREE).
+            if now_s is not None and self.known and kp.get("b_w_m") is not None and kp.get("e_w_full_m") is not None:
+                self.known = [replace(k, fix_stamp_s=float(now_s), r_fix_m=float(kp["b_w_m"]) + float(kp["e_w_full_m"]))
+                              if k.kind == "pallet" else k for k in self.known]
 
     def limit(self, now_s: float, *, current_pose, curvature_inv_m: float, direction: int, loaded: bool, cap_mps: float):
         footprint, own = self.footprints(loaded, direction)

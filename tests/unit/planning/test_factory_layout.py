@@ -21,6 +21,7 @@ from forklift_core.planning.factory_layout import (
     load_factory_layout,
     make_factory_scenario,
     obstacle_top_m,
+    prism_columns,
 )
 from forklift_core.planning.pallet_mission import (
     AssetSpec,
@@ -333,3 +334,19 @@ def test_drop_low_obstacles_stack_top_counts_its_loads():
     far = StackedProp(LOADS[0], Rectangle(5.0, 5.0, 0.797, 0.637, 0.3), 0.21)
     assert obstacle_top_m(prop, [far]) == pytest.approx(0.21)
 
+
+def test_prism_columns_raise_each_kept_footprint_to_its_top(layout):
+    # Plan v10 D0 (Codex v10 3rd P1-1): every kept prop collides as one vertical
+    # prism of its floor rectangle up to its top, so the 1.05 m plane meets its full
+    # footprint at every height -- no base wider than the load, no gap between supports.
+    factory = build(1, layout)
+    scenario, kept, _ = drop_low_obstacles(factory.transport, factory, 1.15)
+    columns = prism_columns(scenario, kept)
+    assert len(columns) == len(scenario.props)
+    for (rect, top), prop in zip(columns, scenario.props, strict=True):
+        assert rect == prop.rectangle
+        assert top == obstacle_top_m(prop, kept.loads) >= 1.15
+    # A storage pallet carrying a smaller box keeps the pallet's footprint, not the box's.
+    stacked = [c for c, p in zip(columns, scenario.props) if p.asset.uri.endswith("SM_PaletteA_01.usd")]
+    assert stacked and all(math.isclose(r.length_m * r.width_m, 1.21 * 1.00) for r, _ in stacked)
+    assert prism_columns(scenario, None) == [(p.rectangle, p.asset.height_m) for p in scenario.props]

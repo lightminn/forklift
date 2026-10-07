@@ -89,12 +89,27 @@ def _length(poses: np.ndarray) -> float:
 
 
 def _curvature_at(poses: np.ndarray, distance_m: float, window_m: float = 0.3) -> float:
-    """Signed curvature (left positive) of the polyline around distance_m."""
-    a = pose_along(poses, max(distance_m - window_m, 0.0), 0.0)
-    b = pose_along(poses, distance_m + window_m, 0.0)
+    """Signed curvature (left positive) of the polyline around distance_m.
+
+    0 when a gear change lies in the window: the heading comes from point
+    differences and flips by pi at a cusp, which would read as |kappa| of
+    several 1/m (plan v10 D6) -- a cusp is not a curve to put N3 beside.
+    """
     xy = poses[:, :2]
-    s = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(xy, axis=0).T))))
-    span = min(distance_m + window_m, s[-1]) - max(distance_m - window_m, 0.0)
+    d = np.diff(xy, axis=0)
+    seg = np.hypot(*d.T)
+    s = np.concatenate(([0.0], np.cumsum(seg)))
+    lo, hi = max(distance_m - window_m, 0.0), min(distance_m + window_m, s[-1])
+    moving = seg > 1e-9
+    k = np.flatnonzero(moving)
+    if len(k) > 1:
+        reverse = np.einsum("ij,ij->i", d[k[1:]], d[k[:-1]]) < 0
+        cusp_s = s[k[1:]][reverse]
+        if np.any((cusp_s >= lo - 1e-9) & (cusp_s <= hi + 1e-9)):
+            return 0.0
+    a = pose_along(poses, lo, 0.0)
+    b = pose_along(poses, distance_m + window_m, 0.0)
+    span = hi - lo
     dyaw = math.atan2(math.sin(b[2] - a[2]), math.cos(b[2] - a[2]))
     return float(dyaw / span) if span > 1e-9 else 0.0
 

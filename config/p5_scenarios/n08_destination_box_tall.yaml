@@ -1,0 +1,8 @@
+# Plan v10 D6 tall variant (2026-10-08): the v9 file's footprint, place and
+# timing with the box raised to 1.3 m, so it stands above the single LiDAR's
+# 1.05 m plane (operating assumption: no floor object lower than the LiDAR).
+# v9 description:
+# N8: a box on the drop site, placed past the transport path end by the inserted offset.
+# Expected: stop before the delivery straight is entered (no drop on it).
+events:
+  - {id: n8, action: spawn, phase: transport, after_m: 2.0, beyond_end_m: 1.23, lateral_m: 0.0, size_m: [0.5, 0.5, 1.3]}

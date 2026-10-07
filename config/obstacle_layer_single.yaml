@@ -11,6 +11,13 @@ clear_max_height_m: 1.10
 # h_det under the single-LiDAR assumption: the lowest kept obstacle top is 1.21 m; 1.15 m leaves
 # 0.10 m above the 1.05 m plane for body tilt. A tilted beam past this height stops speaking.
 band_top_m: 1.15
+# h_lo (plan v10 D0, Codex v10 2nd P1-3): a beam tilted down stops clearing below
+# this height, so free evidence only comes from [h_lo, h_det], the band the
+# operating assumption (and the prism colliders) cover. 1.05 - 5 m x tan(max tilt):
+# the measured-chassis gate (2026-10-08) saw at most 0.070 deg over every physics
+# tick of the three runs, braking included, so h_lo = 1.044 m (the 1 deg candidate
+# gave 0.963 m).
+band_bottom_m: 1.044
 beams: 1600
 range_min_m: 0.2
 range_max_m: 12.0
@@ -18,6 +25,10 @@ noise_std_m: 0.02
 noise_cut_m: 0.06
 sensors:
   - {name: high, xyz: [-0.12, 0.0, 1.05], yaw_deg: 0}
+# Plan v10 (Codex v10 P2-8): the one LiDAR is one sensor -- SLAM and this layer
+# take the same raw scan (stamp, scan id, one noise draw cut at +-0.06 m), and a
+# silenced "high" stops both. Needs config/isaac_slam_lidar.yaml's mount and beams.
+shared_with_slam: true
 grid:
   resolution_m: 0.05
   max_mark_m: 5.0
@@ -58,3 +69,27 @@ permission:
   # reversing on the parts lets the forks leave a pallet's swelling (L3c v19).
   shape: hull_forward
 odometry_age: config/obstacle_odometry_age.json
+# Known pallets in the permission (plan v10 D5): the 1.05 m plane never sees the
+# 0.144 m pallet, so the pickup zone (unknown before recognition), the recognised
+# pallet and the delivered pallet are marked from their rectangles, grown by
+# r_fix + e(age) + 2 rho sin(psi(age)/2). r_fix_pickup_m is a candidate until the
+# measured-chassis gate fixes it; b_w_m / e_w_m (withdrawal certificate) and the
+# empirical bound past the age table stay null until measured -- null refuses
+# the withdrawal certificate (the truck stops and the run reports it).
+known_pallets:
+  enabled: true
+  # Measured-chassis gate (2026-10-08, ws1 artifacts/20261008_gate_measured, seeds 1/3/5,
+  # truth-controlled, tools/gate_measure.py): sample maxima plus a margin, not bounds.
+  r_fix_pickup_m: 0.010   # recognition corner error, max 1.9 mm
+  b_w_m: 0.015            # release relative error (four corners), max 12.9 mm
+  e_w_m: 0.010            # release -> stop lateral drift at the blades, max 8.4 mm
+  e_w_full_m: 0.015       # release -> stop four-corner drift, max 12.9 mm
+  empirical_m: null
+  empirical_max_age_s: null
+  # The certificate needs min gap >= 18.5 mm + b_w + e_w (~40 mm); the smallest measured
+  # gap was 35.6 mm, so it cannot hold yet. Interim (user, 2026-10-08): the withdrawal
+  # runs uncertified as before v10 and the delivered pallet joins the permission where it
+  # stops. "certified" returns once D8 re-observes the pallet at the release.
+  withdraw_mode: uncertified
+  withdraw_step_m: 0.005
+  tracking_m: 0.006

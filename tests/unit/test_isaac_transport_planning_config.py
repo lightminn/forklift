@@ -723,8 +723,13 @@ def test_a_failed_replan_backs_off_a_bounded_distance_then_replans():
     # Codex checkpoint 8: a backoff always acts under the permission, a forced
     # replan opens the obstacle block while standing, the leg direction is kept,
     # and the stall replan ends a backoff too.
-    k = source.index('acting = phase in ("observe", "approach", "transport", "return_home") and not docking_straight')
-    assert 'obstacle.get("backoff", {}).get("phase") == phase' in source[k - 500 : k]
+    k = source.index('acting = (\n                    phase in ("observe", "approach", "transport", "return_home")')
+    # Plan v10 D5: the withdrawal acts under the permission too when known pallets are on.
+    assert '(phase == "withdraw" and obstacle["layer"].known_enabled' in source[k : k + 400]
+    assert 'known_config.get("withdraw_mode", "certified") == "certified"' in source[k : k + 400]
+    assert ') and not docking_straight' in source[k : k + 500]
+    # (the plan v10 withdraw tracking check now sits between them, hence the wider window)
+    assert 'obstacle.get("backoff", {}).get("phase") == phase' in source[k - 2000 : k]
     assert 'or obstacle.get("force_replan") == phase' in source
     assert 'leg_dir = obstacle.get("backoff", {}).get("leg_dir")' in source
     assert 'stall_config = obstacle.pop("backoff")["config"]' in source

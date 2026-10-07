@@ -15,14 +15,14 @@
   ],
   "cumulative_position_m": [
     0.024127454946306245,
-    0.03069986047887247,
+    0.03154050388981921,
     0.042073498037983145,
     0.05858382163605211,
     0.0915203383921065,
     0.11401136844608778,
     0.13977025375788116,
     0.16363399501687817,
-    0.31437097342419584
+    0.4483619613620488
   ],
   "cumulative_yaw_rad": [
     0.014372055832039932,
@@ -33,7 +33,7 @@
     0.055386581211799076,
     0.07654215848519998,
     0.09972746617085804,
-    0.15264186544570757
+    0.15543189475764893
   ],
-  "provenance": "P0a re-measured 2026-10-06 with every tick up to each age (Codex checkpoint 6), ws1 artifacts/20261005_p5_p0a/odometry_age_v4.json: per-age maximum over S2 v3.8f seeds 1/3/5 and thirteen P5 L3c runs (v38-v49, seeds 1/3/4/5)"
+  "provenance": "P0a re-measured 2026-10-06 with every tick up to each age (Codex checkpoint 6), ws1 artifacts/20261005_p5_p0a/odometry_age_v4.json: per-age maximum over S2 v3.8f seeds 1/3/5 and thirteen P5 L3c runs (v38-v49, seeds 1/3/4/5); 2026-10-08 measured-chassis gate (plan v10 P0a v10): per age the larger of that table and ws1 artifacts/20261008_gate_measured/odometry_age_measured.json (dls08_measured: three truth-controlled gate runs and the five l8_measured SLAM runs, five redraws) -- the measured chassis was worse at 0.2 s (0.0315 m) and 10 s (0.448 m, 0.155 rad). Trajectories with D7 back-and-forth cycles are not in it yet."
 }

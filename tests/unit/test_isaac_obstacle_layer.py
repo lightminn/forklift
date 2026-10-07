@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from forklift_core.perception.obstacle_grid import AgeErrorTable
 from forklift_core.planning.geometry import Bounds, Footprint
@@ -87,6 +88,22 @@ def test_beam_limits_follow_the_tilt():
     assert np.isinf(MODULE.beam_limits(origin, level, band_top_m=0.17)[0])
     assert math.isclose(MODULE.beam_limits(origin, up, band_top_m=0.17)[0], 0.07 / math.sin(0.04))
     assert math.isclose(MODULE.beam_limits(origin, down, band_top_m=0.17)[0], 0.05 / math.sin(0.04))
+
+
+def test_a_sinking_beam_stops_clearing_at_the_band_bottom():
+    # Plan v10 D0 (Codex v10 2nd P1-3): with only the 1.05 m plane, a beam tilted down
+    # must stop speaking at h_lo, not at the floor, or it slips under a cover between
+    # supports. h_lo = 1.05 - 5 m x tan(1 deg) leaves the 5 m clearing reach at 1 deg.
+    origin = np.array([0.0, 0.0, 1.05])
+    down = np.array([[math.cos(0.04), 0.0, -math.sin(0.04)]])
+    assert math.isclose(MODULE.beam_limits(origin, down, band_top_m=1.15, band_bottom_m=0.963)[0], 0.087 / math.sin(0.04))
+    assert math.isclose(MODULE.beam_limits(origin, down, band_top_m=1.15)[0], 1.0 / math.sin(0.04))  # floor margin
+    one_deg = np.array([[math.cos(math.radians(1)), 0.0, -math.sin(math.radians(1))]])
+    h_lo = 1.05 - 5.0 * math.tan(math.radians(1))
+    assert MODULE.beam_limits(origin, one_deg, band_top_m=1.15, band_bottom_m=h_lo)[0] >= 5.0 - 1e-9
+    cfg = MODULE.load_layer_config(ROOT / "config/obstacle_layer_single.yaml")
+    measured = 1.05 - 5.0 * math.tan(math.radians(0.0697))  # the measured-chassis gate's largest tilt, every tick
+    assert math.isclose(cfg["band_bottom_m"], measured, abs_tol=5e-4)
 
 
 def test_the_docking_exemption_frees_only_cells_wholly_inside_the_region():
@@ -253,3 +270,96 @@ def test_a_map_swapped_after_it_was_opened_is_judged_by_the_file_read(tmp_path):
     note = obstacle["plans"][-1]["slam_map_note"]
     assert note is not None and note["why"] == "file_before_run"
     assert obstacle["plans"][-1]["slam_map"] is None
+
+
+SINGLE = MODULE.load_layer_config(ROOT / "config/obstacle_layer_single.yaml")
+
+
+def single_layer(**known):
+    cfg = dict(SINGLE)
+    if known:
+        cfg["known_pallets"] = {**SINGLE["known_pallets"], **known}
+    blades = ((0.944, 1.29, 0.1175, 0.1725), (0.944, 1.29, -0.1725, -0.1175))
+    return MODULE.ObstacleLayer(
+        cfg, hall=Bounds(-5, 10, -5, 5), error_table=TABLE,
+        unloaded=Footprint(1.29, 0.17, 0.36), loaded=Footprint(1.53, 0.17, 0.40),
+        body_front_m=0.944, rear_axle_x_in_base_m=-0.34, noise_seed=1, blades_rear_m=blades,
+    )
+
+
+def open_scans(lay, until_s, pose=(0.0, 0.0, 0.0)):
+    n = len(lay.beam_angles)
+    for k in range(int(round(until_s / 0.1)) + 1):
+        raw = {s.name: (np.full(n, np.nan), np.zeros(n, bool), np.zeros(n, bool)) for s in lay.sensors}
+        lay.add_scans(0.1 * k, raw, odom_rear=pose, loaded=False)
+
+
+def test_the_single_layer_marks_a_delivered_pallet_the_plane_cannot_see():
+    from forklift_core.perception.known_obstacles import KnownRect
+
+    lay = single_layer()
+    assert lay.known_enabled and lay.shared_with_slam and lay.band_bottom_m == 1.044
+    path = np.column_stack((np.linspace(0, 4, 81), np.zeros(81), np.zeros(81)))
+    open_scans(lay, 0.2)
+    lay.known = [KnownRect((1.29 + 0.2 + 0.3, 0.0, 0.6, 0.8, 0.0), fix_stamp_s=0.0, r_fix_m=0.05, rho_m=None,
+                           frame_correction=(0.0, 0.0, 0.0))]
+    lay.refresh(0.2, (0.0, 0.0, 0.0), 0, current_pose=(0.0, 0.0, 0.0), path_ahead=path, loaded=False, direction=1)
+    speed, why = lay.limit(0.2, current_pose=(0.0, 0.0, 0.0), curvature_inv_m=0.0, direction=1, loaded=False, cap_mps=0.6)
+    assert speed < 0.6 and why in ("occupied", "unknown")
+
+
+def test_a_withdrawal_needs_its_certificate_and_then_starts():
+    from forklift_core.perception.known_obstacles import KnownRect, fork_pocket_gaps
+
+    pose = (0.0, 0.0, 0.0)
+    back = np.column_stack((np.linspace(0, -0.6, 121), np.zeros(121), np.zeros(121)))
+    pallet = KnownRect((1.29, 0.0, 0.6, 0.8, 0.0), fix_stamp_s=0.0, r_fix_m=0.01, rho_m=None, frame_correction=(0, 0, 0))
+    gaps = fork_pocket_gaps(0.0, 0.0, blade_centre_m=0.145, blade_half_width_m=0.0275, blade_length_m=0.30,
+                            pocket_inner_m=0.0725, pocket_outer_m=0.300)
+    # Unmeasured b_w / e_w: refused, and the delivered pallet holds the truck.
+    lay = single_layer(b_w_m=None, e_w_m=None)
+    open_scans(lay, 0.2)
+    lay.known = [pallet]
+    assert not lay.certify_withdrawal(back, lay.parts_shape, 0.48, gaps)
+    lay.refresh(0.2, (0.0, 0.0, 0.0), 0, current_pose=pose, path_ahead=back, loaded=False, direction=-1)
+    held, _ = lay.limit(0.2, current_pose=pose, curvature_inv_m=0.0, direction=-1, loaded=False, cap_mps=0.12)
+    assert held == 0.0
+    # Measured and within the 0.0265 m budget: certified, the corridor starts the truck.
+    lay = single_layer(b_w_m=0.010, e_w_m=0.010)
+    open_scans(lay, 0.2)
+    lay.known = [pallet]
+    assert lay.certify_withdrawal(back, lay.parts_shape, 0.48, gaps)
+    assert lay.permission.config.step_m == 0.005
+    lay.refresh(0.2, (0.0, 0.0, 0.0), 0, current_pose=pose, path_ahead=back, loaded=False, direction=-1)
+    speed, _ = lay.limit(0.2, current_pose=pose, curvature_inv_m=0.0, direction=-1, loaded=False, cap_mps=0.12)
+    assert speed >= 0.12
+    lay.end_withdrawal()
+    assert lay.permission.config.step_m == 0.02 and lay.corridor is None
+
+
+def test_codex_stage1_a_certified_withdrawal_hands_the_return_a_fresh_pallet():
+    # Codex stage-1 P1-6: after 0.55 m / 4.6 s the delivered pallet had grown to 0.39 m and
+    # turned unknown the moment the corridor ended. The certified stop re-fixes it at b_w + e_w.
+    from forklift_core.perception.known_obstacles import KnownRect, fork_pocket_gaps
+
+    back = np.column_stack((np.linspace(0, -0.6, 121), np.zeros(121), np.zeros(121)))
+    pallet = KnownRect((1.29, 0.0, 0.6, 0.8, 0.0), fix_stamp_s=0.0, r_fix_m=0.01, rho_m=None, frame_correction=(0, 0, 0))
+    gaps = fork_pocket_gaps(0.0, 0.0, blade_centre_m=0.145, blade_half_width_m=0.0275, blade_length_m=0.30,
+                            pocket_inner_m=0.0725, pocket_outer_m=0.300)
+    # Without the full drift bound the certified stop does not re-fix (Codex stage-1 2nd P1-2).
+    lat_only = single_layer(b_w_m=0.010, e_w_m=0.010, e_w_full_m=None)
+    lat_only.known = [pallet]
+    assert lat_only.certify_withdrawal(back, lat_only.parts_shape, 0.48, gaps)
+    lat_only.end_withdrawal(now_s=4.6)
+    assert lat_only.known[0].fix_stamp_s == 0.0
+    lay = single_layer(b_w_m=0.010, e_w_m=0.010, e_w_full_m=0.010)
+    lay.known = [pallet]
+    assert lay.certify_withdrawal(back, lay.parts_shape, 0.48, gaps)
+    pose = (-0.55, 0.0, 0.0)
+    onward = np.column_stack((np.linspace(-0.55, -2.5, 81), np.zeros(81), np.zeros(81)))
+    open_scans(lay, 4.6, pose=pose)
+    lay.end_withdrawal(now_s=4.6)
+    assert lay.known[0].fix_stamp_s == 4.6 and lay.known[0].r_fix_m == pytest.approx(0.020)
+    lay.refresh(4.6, (0.0, 0.0, 0.0), 0, current_pose=pose, path_ahead=onward, loaded=False, direction=-1)
+    speed, why = lay.limit(4.6, current_pose=pose, curvature_inv_m=0.0, direction=-1, loaded=False, cap_mps=0.3)
+    assert speed > 0.0, why

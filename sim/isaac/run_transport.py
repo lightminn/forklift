@@ -207,9 +207,9 @@ def arguments() -> argparse.Namespace:
     parser.add_argument(
         "--insertion-reserve-m",
         type=float,
-        default=0.046,
+        default=0.016,
         help="Insertion reserve behind the carriage limit (ADR 0004 D3 policy "
-        "0.046). Other values are for diagnostic sweeps and are recorded.",
+        "0.016 since 2026-10-08, ADR 0004 D3 amendment). Other values are for diagnostic sweeps and are recorded.",
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--seed", type=int, required=True)
@@ -221,6 +221,13 @@ def arguments() -> argparse.Namespace:
         help="Single-LiDAR operating assumption (user, 2026-10-07): remove every "
         "floor prop (bay props, storage pallets with their loads, clutter) whose "
         "top is below this height. The kept props keep their places.",
+    )
+    parser.add_argument(
+        "--prism-colliders",
+        action="store_true",
+        help="Plan v10 D0: each kept floor prop collides as one invisible box of its "
+        "floor rectangle up to its top (meshes stay visible, their collision off), "
+        "so the single 1.05 m LiDAR meets the whole footprint at every height.",
     )
     parser.add_argument(
         "--layout",
@@ -910,6 +917,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         add_destination,
         add_factory_items,
         add_path_display,
+        add_prism_colliders,
         add_props,
         configure_drives,
         create_pallet,
@@ -1151,14 +1159,20 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     (args.output / "scenario.json").write_text(
         record_json(state["scenario"], indent=2) + "\n"
     )
+    mesh_collision = not args.prism_colliders
     if factory is None:
-        state["props"] = add_props(stage, app, scenario.props, offsets)
+        state["props"] = add_props(stage, app, scenario.props, offsets, mesh_collision=mesh_collision)
     else:
         bay_props = scenario.props[: len(scenario.props) - len(factory.work_items)]
-        state["props"] = add_props(stage, app, bay_props, offsets)
+        state["props"] = add_props(stage, app, bay_props, offsets, mesh_collision=mesh_collision)
         state["factory_items"] = add_factory_items(
-            stage, app, factory.work_items, factory.loads, offsets
+            stage, app, factory.work_items, factory.loads, offsets, mesh_collision=mesh_collision
         )
+    if args.prism_colliders:
+        # Plan v10 D0: every kept prop collides as its floor rectangle raised to its top.
+        from forklift_core.planning.factory_layout import prism_columns
+
+        state["prism_colliders"] = add_prism_colliders(stage, prism_columns(scenario, factory))
         # The overview has to see the whole hall from above the roof line.
         state["hidden_overhead_prims"] = len(hide_overhead(stage))
     state["destination_marker"] = add_destination(
@@ -1528,6 +1542,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         }
 
     grid_planning = bool(args.grid_planning)
+    if obstacle is not None and obstacle["layer"].known_enabled and not grid_planning:
+        # The recognised pallet reaches the layer through the grid plan's pickup
+        # (Codex stage-1 P1-5); without it the permission would lose the pallet.
+        raise SystemExit("known_pallets needs --grid-planning")
 
     # Video overlay record (display only): every path the truck was given, with
     # why, and the obstacle grid's OCCUPIED cells every 0.5 s -- so the video
@@ -1686,7 +1704,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 *obstacle_lidar.cast_scan_flags(
                     origin, directions, obstacle["layer"].range_max_m, own_prefixes=(obstacle_lidar.SELF_PREFIX,)
                 ),
-                obstacle_module.beam_limits(origin, directions, band_top_m=obstacle["layer"].band_top_m),
+                obstacle_module.beam_limits(origin, directions, band_top_m=obstacle["layer"].band_top_m,
+                                             band_bottom_m=obstacle["layer"].band_bottom_m),
             )
         start_pose = (scenario.start_rear.x_m, scenario.start_rear.y_m, scenario.start_rear.yaw_rad)
         obstacle["layer"].add_scans(0.0, prime_raw, odom_rear=start_pose, loaded=False)
@@ -1707,6 +1726,44 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         _ZONE.y_max_m - _ZONE.y_min_m + 2 * zone_grow,
         0.0,
     )
+
+    if obstacle is not None and obstacle["layer"].known_enabled:
+        # Plan v10 D5: the 1.05 m plane cannot see the pallet; before recognition
+        # its possible area is unknown to the permission too (prior, not truth).
+        from forklift_core.perception.known_obstacles import KnownRect
+
+        obstacle["layer"].known = [KnownRect(
+            (pickup_zone.x_m, pickup_zone.y_m, pickup_zone.length_m, pickup_zone.width_m, pickup_zone.yaw_rad),
+            fix_stamp_s=0.0, r_fix_m=0.0, rho_m=0.0, frame_correction=(0.0, 0.0, 0.0), kind="zone")]
+        state["known_pallets"] = [{"event": "pickup_zone", "time_s": 0.0}]
+
+    def control_correction():
+        """The correction control applies now (the one an estimate made now is expressed in)."""
+        try:
+            slam_ref_ = slam
+        except NameError:
+            slam_ref_ = None
+        if slam_ref_ is not None and slam_ref_["tracker"].applied is not None:
+            return tuple(float(v) for v in slam_ref_["tracker"].applied[0])
+        return (0.0, 0.0, 0.0)
+
+    def known_pallet(rect_xyyaw, r_fix_m: float, event: str) -> None:
+        """Replace the known pallet with a fresh fix (plan v10 D5: the age restarts).
+
+        Stored with the correction control applies at this instant -- the one the
+        estimate is in -- not the layer's last-scan copy, which lags a capture's
+        release (Codex stage-1 2nd P1-1: 0.30 m shown 0.30 m off).
+        """
+        from forklift_core.perception.known_obstacles import KnownRect
+
+        stamp_ = float(obstacle.get("last_stamp", 0.0))
+        applied_ = control_correction()
+        obstacle["layer"].known = [KnownRect(
+            (float(rect_xyyaw[0]), float(rect_xyyaw[1]), geometry.pallet_depth_m, geometry.pallet_width_m,
+             float(rect_xyyaw[2])),
+            fix_stamp_s=stamp_, r_fix_m=float(r_fix_m), rho_m=None, frame_correction=tuple(applied_))]
+        state.setdefault("known_pallets", []).append(
+            {"event": event, "time_s": stamp_, "rect": [float(v) for v in rect_xyyaw], "r_fix_m": float(r_fix_m)})
 
     def grid_world(sc):
         """The scenario a grid plan sees: no ground-truth props (plan audit table)."""
@@ -2068,6 +2125,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     video_frames = []
     slam_log = None
     slam = None
+    shared_scan = False  # plan v10: set with --record-slam when the layer shares the SLAM LiDAR
     # step_world replaces this before the main loop; captures call through it.
     stepper = {"fn": lambda render: world.step(render=render), "tick": 0}
     if args.record_slam:
@@ -2088,7 +2146,28 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         )
         beam_angles = scan_pattern.beam_angles_rad()
         scan_every = 120 // int(lidar_config["rate_hz"])
+        # Plan v10: with a single obstacle LiDAR that is the SLAM LiDAR, one raw
+        # scan feeds both (same mount, beams, stamp and noise draw).
+        shared_scan = obstacle is not None and obstacle["layer"].shared_with_slam
+        if shared_scan:
+            layer_ = obstacle["layer"]
+            if len(layer_.sensors) != 1:
+                raise SystemExit("shared_with_slam needs exactly one obstacle sensor")
+            sensor_ = layer_.sensors[0]
+            if not (
+                np.allclose(sensor_.xyz_m, laser_mount.xyz_m, atol=1e-9)
+                and math.isclose(sensor_.yaw_rad, laser_mount.yaw_rad, abs_tol=1e-9)
+                and len(layer_.beam_angles) == len(beam_angles)
+                and np.allclose(layer_.beam_angles, beam_angles, atol=1e-9)
+                and math.isclose(layer_.range_min_m, scan_pattern.range_min_m, abs_tol=1e-9)
+                and math.isclose(layer_.range_max_m, scan_pattern.range_max_m, abs_tol=1e-9)
+            ):
+                raise SystemExit("shared_with_slam: the obstacle sensor is not the SLAM LiDAR (mount, beams or range differ)")
+            if args.slam_noise_spec:
+                raise SystemExit("shared_with_slam draws one truncated noise for both; --slam-noise-spec would differ")
+        state["shared_lidar_scan"] = bool(shared_scan)
         slam_log = {
+            "silenced_scan_stamps_s": [],
             "joint_stamps_s": [],
             "wheel_rates_rad_s": [],
             "steering_rad": [],
@@ -2227,7 +2306,18 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         try:
             est = slam["tracker"].map_from_base(now_s, slam_odom_base())
         except slam["stale"] as exc:
-            require(False, f"localization_stale: {exc}")
+            # N9 with the shared LiDAR (Codex stage-1 P1-1): the silence that stops
+            # the permission also starves SLAM. Keep driving the stop on odometry
+            # under the last applied correction until the truck stands; the
+            # silence trace ends the run. Any other staleness still fails.
+            silent_ = (
+                shared_scan and new_obstacles is not None
+                and obstacle["layer"].sensors[0].name in new_obstacles["schedule"].silenced
+            )
+            if not silent_:
+                require(False, f"localization_stale: {exc}")
+            slam.setdefault("silence_dead_reckoning_s", float(now_s))
+            est = compose(slam["tracker"].applied[0], slam_odom_base())
         offset = abs(args.rear_axle_offset_m)
         return np.array(
             [est[0] - offset * math.cos(est[2]), est[1] - offset * math.sin(est[2]), est[2]]
@@ -2350,9 +2440,102 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     args.output / f"{label}.png"
                 )
 
+    def known_transition(from_phase: str, next_phase: str, t: float) -> None:
+        """Known pallets across the mission (plan v10 D5)."""
+        from forklift_core.perception.known_obstacles import fork_pocket_gaps, invert_pose
+        from forklift_core.perception.obstacle_grid import compose as grid_compose
+
+        layer_ = obstacle["layer"]
+        rear_ = obstacle.get("control_rear")
+        if next_phase == "lift":
+            # The pallet is on the forks now (the loaded outline covers it). Keep
+            # where perception put it relative to the truck: at the drop that is
+            # the delivered pallet's pose (fork geometry, no new observation).
+            est_ = obstacle.get("pickup_estimate")
+            if est_ is not None and rear_ is not None:
+                obstacle["pallet_rel"] = grid_compose(invert_pose(rear_), (est_.x_m, est_.y_m, est_.yaw_rad))
+            layer_.known = []
+            state.setdefault("known_pallets", []).append({"event": "lifted", "time_s": t})
+        if next_phase == "withdraw" and layer_.known_config.get("withdraw_mode", "certified") != "certified":
+            # Interim (user, 2026-10-08): the gate's b_w 12.9 mm + e_w 8.4 mm + the checker's
+            # 18.5 mm side width exceed the 35.6 mm smallest blade-to-pocket gap measured, so
+            # the certificate cannot hold. The withdrawal runs as before v10 (no permission,
+            # the planned straight); the delivered pallet joins the permission where the
+            # withdrawal stops, re-fixed at b_w + e_w_full (the measured release error and
+            # four-corner drift to the stop).
+            if obstacle.get("pallet_rel") is not None and rear_ is not None:
+                obstacle["delivered_pending"] = (grid_compose(rear_, obstacle["pallet_rel"]), control_correction(),
+                                                 float(obstacle.get("last_stamp", t)))
+            state.setdefault("known_pallets", []).append({"event": "withdraw_uncertified", "time_s": t})
+        elif next_phase == "withdraw":
+            # No recognised pallet or control pose: nothing to certify against -- refuse
+            # rather than back out uncertified (Codex stage-1 P1-5).
+            require(obstacle.get("pallet_rel") is not None and rear_ is not None,
+                    "withdraw_not_certified:no_pallet_estimate")
+            rel_ = obstacle["pallet_rel"]
+            kp_ = layer_.known_config
+            r_fix_ = kp_.get("b_w_m") if kp_.get("b_w_m") is not None else kp_.get("r_fix_pickup_m", 0.05)
+            known_pallet(grid_compose(rear_, rel_), r_fix_, "delivered")
+            blades_ = read_fork_blades_m(args.forklift_urdf)
+            pg_ = args.pallet_geometry_loaded
+            centre_ = sum(abs(y0 + y1) / 2 for _, _, y0, y1 in blades_) / len(blades_)
+            half_ = sum((y1 - y0) / 2 for _, _, y0, y1 in blades_) / len(blades_)
+            depth_ = geometry.axle_to_fork_tip_m + geometry.pallet_depth_m / 2 - geometry.inserted_offset_m
+            gaps_ = fork_pocket_gaps(
+                float(rel_[1]), float(rel_[2]), blade_centre_m=centre_, blade_half_width_m=half_,
+                blade_length_m=depth_, pocket_inner_m=pg_.block_widths_m[1] / 2,
+                pocket_outer_m=pg_.overall_width_m / 2 - pg_.block_widths_m[0],
+            )
+            until_ = depth_ + 0.10 + layer_.permission.config.stopping.distance_m(settings["withdraw_speed_mps"])
+            # The certified straight starts where the truck stands, back along its own
+            # heading: measured from the planned line, the insertion's few-mm end error
+            # would already break the 6 mm tracking bound (plan v10 D5 (4)).
+            length_ = float(paths["withdraw"].length_m)
+            count_ = max(2, int(math.ceil(length_ / 0.02)) + 1)
+            s_ = np.linspace(0.0, length_, count_)
+            straight_ = np.column_stack((rear_[0] - s_ * math.cos(rear_[2]), rear_[1] - s_ * math.sin(rear_[2]),
+                                         np.full(count_, rear_[2])))
+            paths["withdraw"] = replace(paths["withdraw"], poses=straight_,
+                                        directions=np.full(count_, -1, dtype=np.int8),
+                                        curvatures_inv_m=np.zeros(count_))
+            trackers["withdraw"] = RearAxlePathTracker(
+                straight_, paths["withdraw"].directions, paths["withdraw"].curvatures_inv_m, trackers["withdraw"].config
+            )
+            obstacle["withdraw_line"] = (tuple(rear_), length_)
+            ok_ = layer_.certify_withdrawal(paths["withdraw"].poses, layer_.parts_shape, until_, gaps_)
+            state["withdraw_certificate"] = {
+                "time_s": t, "gaps_m": [float(g) for g in gaps_], "b_w_m": kp_.get("b_w_m"), "e_w_m": kp_.get("e_w_m"),
+                "corridor_until_m": until_, "certified": ok_,
+            }
+            # Uncertified: the truck does not back out of the pallet (plan v10 D5 (3)).
+            require(ok_, f"withdraw_not_certified:{state['withdraw_certificate']}")
+        if from_phase == "withdraw":
+            layer_.end_withdrawal(now_s=float(obstacle.get("last_stamp", t)))
+            pending_ = obstacle.pop("delivered_pending", None)
+            if pending_ is not None:
+                from forklift_core.perception.known_obstacles import KnownRect
+
+                kp_ = layer_.known_config
+                (dx_, dy_, dyaw_), corr_, released_s_ = pending_
+                if kp_.get("b_w_m") is not None and kp_.get("e_w_full_m") is not None:
+                    # Re-fixed where the withdrawal stops: release error + measured four-corner drift.
+                    full_ = float(kp_["b_w_m"]) + float(kp_["e_w_full_m"])
+                    stamp_ = float(obstacle.get("last_stamp", t))
+                else:
+                    # Either bound missing (Codex stage-1 3rd P1): no re-fix -- the pallet keeps
+                    # ageing from the release, with the release error alone.
+                    full_ = float(kp_["b_w_m"]) if kp_.get("b_w_m") is not None else float(kp_.get("r_fix_pickup_m", 0.05))
+                    stamp_ = released_s_
+                layer_.known = [KnownRect((dx_, dy_, geometry.pallet_depth_m, geometry.pallet_width_m, dyaw_),
+                                          fix_stamp_s=stamp_, r_fix_m=full_, rho_m=None, frame_correction=corr_)]
+                state.setdefault("known_pallets", []).append(
+                    {"event": "delivered_after_withdraw", "time_s": stamp_, "rect": [dx_, dy_, dyaw_], "r_fix_m": full_})
+
     def transition(next_phase: str, t: float) -> None:
         nonlocal phase, phase_started
         state["transitions"].append({"from": phase, "to": next_phase, "time_s": t})
+        if obstacle is not None and obstacle["layer"].known_enabled:
+            known_transition(phase, next_phase, t)
         print("TRANSITION", record_json(state["transitions"][-1]), flush=True)
         snapshot(phase)
         if next_phase == "insert" and pocket["check"] is not None:
@@ -3002,14 +3185,18 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             if state["frames"] == 1:
                 snapshot("start")
 
-        def obstacle_scan(stamp: float, base, q) -> None:
-            """Cast the obstacle LiDARs, feed the grid, refresh the path check."""
+        def obstacle_scan(stamp: float, base, q, shared_raw: dict | None = None) -> None:
+            """Cast the obstacle LiDARs, feed the grid, refresh the path check.
+
+            shared_raw: the shared scan's rays and noisy ranges (plan v10, one
+            LiDAR feeding SLAM and the layer) -- no second cast, no second draw.
+            """
             layer = obstacle["layer"]
             loaded_now = phase in ("lift", "extract", "transport", "lower")
             prefixes = (planar_lidar.SELF_PREFIX,) + (("/World/Pallet",) if loaded_now else ())
             started = time.monotonic()
-            raw = {}
-            for sensor in layer.sensors:
+            raw = {} if shared_raw is None else dict(shared_raw)
+            for sensor in (layer.sensors if shared_raw is None else ()):
                 if new_obstacles is not None and sensor.name in new_obstacles["schedule"].silenced:
                     continue
                 origin, directions = planar_lidar.laser_rays_world(
@@ -3017,7 +3204,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 )
                 raw[sensor.name] = (
                     *planar_lidar.cast_scan_flags(origin, directions, layer.range_max_m, own_prefixes=prefixes),
-                    obstacle_module.beam_limits(origin, directions, band_top_m=layer.band_top_m),
+                    obstacle_module.beam_limits(origin, directions, band_top_m=layer.band_top_m,
+                                                band_bottom_m=layer.band_bottom_m),
                 )
             cast_s = time.monotonic() - started
             yaw_now, _ = yaw_and_tilt(q)
@@ -3101,9 +3289,35 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             origin, directions = planar_lidar.laser_rays_world(
                 now_base, now_q, laser_mount, beam_angles
             )
-            distances, hits, _ = planar_lidar.cast_scan(
-                origin, directions, scan_pattern.range_max_m
-            )
+            shared_raw = None
+            if shared_scan:
+                # Plan v10 (Codex v10 P2-8): one LiDAR, one raw scan. Cast once with
+                # the self flags the layer needs, draw one truncated noise vector,
+                # and give SLAM and the layer the same stamp, rays and noise. A
+                # silenced "high" (N9) stops both inputs.
+                layer_ = obstacle["layer"]
+                sensor_ = layer_.sensors[0]
+                if new_obstacles is not None and sensor_.name in new_obstacles["schedule"].silenced:
+                    slam_log["silenced_scan_stamps_s"].append(stamp_now)
+                    return
+                loaded_scan = phase in ("lift", "extract", "transport", "lower")
+                prefixes_ = (planar_lidar.SELF_PREFIX,) + (("/World/Pallet",) if loaded_scan else ())
+                distances, hits, own_ = planar_lidar.cast_scan_flags(
+                    origin, directions, scan_pattern.range_max_m, own_prefixes=prefixes_
+                )
+                noise_ = layer_.beam_noise(len(distances))
+                shared_raw = {
+                    sensor_.name: (
+                        distances, hits, own_,
+                        obstacle_module.beam_limits(origin, directions, band_top_m=layer_.band_top_m,
+                                                    band_bottom_m=layer_.band_bottom_m),
+                        layer_.ranges_from(distances, hits, noise_),
+                    )
+                }
+            else:
+                distances, hits, _ = planar_lidar.cast_scan(
+                    origin, directions, scan_pattern.range_max_m
+                )
             ranges = scan_pattern.ranges_from_hits(distances, hits)
             slam_log["scan_stamps_s"].append(stamp_now)
             slam_log["scan_ranges_m"].append(ranges.astype(np.float32))
@@ -3111,15 +3325,21 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 planar_lidar.laser_pose_2d(now_base, now_q, laser_mount)
             )
             if obstacle is not None and slam is None:
-                obstacle_scan(stamp_now, now_base, now_q)
+                obstacle_scan(stamp_now, now_base, now_q, shared_raw)
             if slam is None:
                 return
             link = slam["module"]
-            sent = slam["noise"].ranges(
-                ranges,
-                range_min_m=scan_pattern.range_min_m,
-                range_max_m=scan_pattern.range_max_m,
-            )
+            if shared_scan:
+                sent = ranges.astype(float).copy()
+                measured_ = np.isfinite(sent)
+                sent[measured_] = np.clip(sent[measured_] + noise_[measured_],
+                                          scan_pattern.range_min_m, scan_pattern.range_max_m)
+            else:
+                sent = slam["noise"].ranges(
+                    ranges,
+                    range_min_m=scan_pattern.range_min_m,
+                    range_max_m=scan_pattern.range_max_m,
+                )
             slam["last_sent_ranges"] = sent  # the noisy scan, as docking sees it
             if slam["tracker"].applied is not None:
                 bx, by, byaw = compose(slam["tracker"].applied[0], slam_odom_base())
@@ -3176,7 +3396,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             slam["scan_id"] += 1
             if obstacle is not None:
                 # After this scan's reply: the correction control applies now.
-                obstacle_scan(stamp_now, now_base, now_q)
+                obstacle_scan(stamp_now, now_base, now_q, shared_raw)
 
         stepper["fn"] = step_world
         if slam is not None:
@@ -3232,6 +3452,21 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 rear = slam_rear(t)
                 signed_speed = slam["tracker_speed"]
                 slam["control"].append([t, *rear.tolist(), *truth_rear.tolist()])
+            if obstacle is not None:
+                obstacle["control_rear"] = tuple(float(v) for v in rear)  # known pallets fix against it
+                if phase == "withdraw" and obstacle["layer"].corridor is not None and obstacle.get("withdraw_line"):
+                    # Plan v10 D5 (4) (Codex stage-1 P1-2, 2nd P2-3): every tick, standing or
+                    # arriving included, the certificate holds only while the truck stays on its
+                    # straight -- lateral offset plus the yaw swing at the fork tips within the
+                    # tracking bound; past it the truck stops.
+                    (wx_, wy_, wyaw_), _ = obstacle["withdraw_line"]
+                    lat_ = -(rear[0] - wx_) * math.sin(wyaw_) + (rear[1] - wy_) * math.cos(wyaw_)
+                    dyaw_ = math.atan2(math.sin(rear[2] - wyaw_), math.cos(rear[2] - wyaw_))
+                    dev_ = abs(lat_) + geometry.axle_to_fork_tip_m * abs(math.sin(dyaw_))
+                    wt_ = state.setdefault("withdraw_tracking", {"max_deviation_m": 0.0})
+                    wt_["max_deviation_m"] = max(wt_["max_deviation_m"], float(dev_))
+                    require(dev_ <= float(obstacle["layer"].known_config.get("tracking_m", 0.006)),
+                            f"withdraw_tracking_exceeded:{dev_:.4f}")
             require(np.isfinite([base, ppos]).all(), "Nonfinite body state")
             if phase == "lift":
                 # Every physics step, so the peak and the aborting state are
@@ -4256,6 +4491,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 )
                             )
                             pocket["planning_pickup"] = planning_pickup
+                            if obstacle is not None and obstacle["layer"].known_enabled:
+                                # Each detection is a new relative fix: the age restarts
+                                # even for the same value (Codex stage-1 P2-8).
+                                known_pallet((planning_pickup.x_m, planning_pickup.y_m, planning_pickup.yaw_rad),
+                                             obstacle["layer"].known_config.get("r_fix_pickup_m", 0.05),
+                                             f"recognised:attempt{len(state.get('observation_attempts', []))}")
                             planning_start = time.monotonic()
                             planning_trace = []
                             plans = plan_transport(
@@ -4647,7 +4888,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     # remaining length: the permission acts on it (Codex
                     # checkpoint 8 P1).
                     docking_straight = False
-                acting = phase in ("observe", "approach", "transport", "return_home") and not docking_straight
+                acting = (
+                    phase in ("observe", "approach", "transport", "return_home")
+                    or (phase == "withdraw" and obstacle["layer"].known_enabled
+                        and obstacle["layer"].known_config.get("withdraw_mode", "certified") == "certified")  # D5 corridor
+                ) and not docking_straight
                 pocket_phase = args.pocket_check and (phase == "insert" or (phase == "approach" and docking_straight))
                 if pocket_phase:
                     # D5: the approach straight and the insertion run under the
@@ -4724,9 +4969,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     trace.setdefault("reason", why)
                     trace.setdefault("speed_at_zero_mps", abs(truth_speed))
                     trace.setdefault("rear_at_zero", [float(v) for v in truth_rear])
-                    if abs(truth_speed) < 0.01 and "stopped_s" not in trace:
-                        trace["stopped_s"] = t
-                        trace["rear_stopped"] = [float(v) for v in truth_rear]
+                    # The stop is the start of the final standing: a slow instant followed by
+                    # motion is not it (Codex stage-1 3rd P2), so moving again clears it.
+                    if abs(truth_speed) < 0.01:
+                        if "stopped_s" not in trace:
+                            trace["stopped_s"] = t
+                            trace["rear_stopped"] = [float(v) for v in truth_rear]
+                    elif "stopped_s" in trace:
+                        trace.setdefault("interrupted_stops_s", []).append(trace.pop("stopped_s"))
+                        trace.pop("rear_stopped", None)
+                    # The N9 outcome: stopped and standing 1 s (Codex stage-1 P1-1, 2nd P2-4) ends the run.
+                    require(not ("stopped_s" in trace and t - trace["stopped_s"] >= 1.0), "sensor_silence_stopped")
                 if obstacle["path_blocked_ticks"] >= 36 and allowed > 0.0:
                     allowed, why = 0.0, "occupied"
                 if abs(requested_speed) > allowed + 1e-9:
@@ -5502,7 +5755,10 @@ def main() -> None:
         # is an environment failure under the G2 rerun rule.
         "phase": "startup",
         "seed": args.seed,
-        "feedback": "simulator_ground_truth",
+        # The pose the controller drives on (plan v10 audit table): the SLAM
+        # estimate when --slam-feedback is given, else the simulator's pose.
+        # Ground truth is still used for the evaluator and safety stops only.
+        "feedback": "slam_estimate" if args.slam_feedback is not None else "simulator_ground_truth",
         "physical_wheel_drive": True,
         "pallet_fixed_attachment": False,
         "pose_teleportation_after_reset": False,
