@@ -19,7 +19,8 @@ SCRIPT = ROOT / "tools/benchmark_transport_planning.py"
     "shape, depth, width, offset",
     [
         ("epal6", 0.60, 0.80, 1.23),
-        ("t11_06", 0.66, 0.66, 1.26),
+        # Provisional chassis, reserve 16 mm (2026-10-08): min(0.66 x 0.6, 0.406 - 0.016) = 0.390 m in.
+        ("t11_06", 0.66, 0.66, 1.23),
     ],
 )
 def test_benchmark_uses_and_snapshots_pallet_yaml(

@@ -871,6 +871,864 @@ def evaluate_command(args) -> dict:
     return {"run": str(run), "stopping": vars(stopping), "envelope_m": args.envelope_m, "candidates": report}
 
 
+# ---------------------------------------------------------------- L1′: the single configuration
+
+ROOT = Path(__file__).resolve().parents[1]
+# The code a single verdict depends on; merge refuses parts computed by different versions.
+CODE_FILES = ("tools/p0b_sensor_study.py", "sim/isaac/obstacle_layer.py", "sim/isaac/planar_lidar.py",
+              "sim/isaac/insertion_geometry.py", "src/forklift_core/control/drive_permission.py",
+              "src/forklift_core/control/shadow_memory.py", "src/forklift_core/perception/obstacle_grid.py",
+              "src/forklift_core/planning/geometry.py", "src/forklift_core/planning/factory_layout.py")
+def code_hashes() -> dict:
+    """sha256 of every file in CODE_FILES."""
+    import hashlib
+
+    return {rel: hashlib.sha256((ROOT / rel).read_bytes()).hexdigest() for rel in CODE_FILES}
+
+
+MOTION_CLASSES = tuple(f"{l}_{d}_{c}" for l in ("unloaded", "loaded") for d in ("forward", "reverse")
+                       for c in ("curve", "straight"))
+
+
+def rect_segments(rect) -> np.ndarray:
+    """The four edges of a Rectangle as (4, 2, 2) segments."""
+    c, s_ = math.cos(rect.yaw_rad), math.sin(rect.yaw_rad)
+    hx, hy = rect.length_m / 2, rect.width_m / 2
+    pts = [(rect.x_m + c * u - s_ * v, rect.y_m + s_ * u + c * v) for u, v in ((hx, hy), (-hx, hy), (-hx, -hy), (hx, -hy))]
+    return np.array([[pts[i], pts[(i + 1) % 4]] for i in range(4)])
+
+
+def run_prisms(result: dict, meta: dict) -> list:
+    """(Rectangle, top) of a run's prism colliders (plan v10 D0): every kept floor prop of the
+    recorded scenario up to its highest load -- factory_layout.prism_columns rebuilt from the
+    record, checked against the column count the runner wrote."""
+    from forklift_core.planning.factory_layout import _inside
+    from forklift_core.planning.geometry import Rectangle
+
+    record = result.get("prism_colliders")
+    if not record:
+        raise SystemExit("L1′ replays prism-collider runs only (--prism-colliders, plan v10 D0)")
+    loads = [(Rectangle(o["x_m"], o["y_m"], o["length_m"], o["width_m"], o["yaw_rad"]), o["base_m"] + o["height_m"])
+             for o in meta["obstacles"] if o.get("base_m", 0.0) > 0.0]
+    out = []
+    for prop in result["scenario"]["props"]:
+        rect = Rectangle(**prop["rectangle"])
+        top = float(prop["asset"]["height_m"])
+        for load, load_top in loads:
+            if _inside(load, rect):
+                top = max(top, float(load_top))
+        out.append((rect, top))
+    if len(out) != int(record["columns"]):
+        raise SystemExit(f"{len(out)} recorded props but {record['columns']} prism columns")
+    return out
+
+
+def run_new_obstacles(result: dict) -> list:
+    """(id, Rectangle, height, spawned at, removed at or inf) of every box the run spawned (L4 events)."""
+    from forklift_core.planning.geometry import Rectangle
+
+    boxes = {}
+    for e in (result.get("new_obstacles") or {}).get("log") or []:
+        if e["action"] == "spawn":
+            oid, x, y, yaw, size = e["detail"]
+            boxes[oid] = [oid, Rectangle(float(x), float(y), float(size[0]), float(size[1]), float(yaw)),
+                          float(size[2]), float(e["time_s"]), math.inf]
+        elif e["action"] == "remove":
+            if e["detail"][0] in boxes:
+                boxes[e["detail"][0]][4] = float(e["time_s"])
+        else:
+            # N9 silences the one LiDAR: no scans to cover with (a separate safety case).
+            raise SystemExit(f"{e['action']} event: not a coverage trajectory")
+    return [tuple(b) for b in boxes.values()]
+
+
+def face_unobserved_m(snapshot, pose, outline, now_s: float, free_age_s: float, *, depth_m: float = 0.5,
+                      step_m: float = 0.005) -> dict:
+    """Per face of the own outline (a Footprint at the rear-axle pose): the thickest band,
+    over probe lines step_m apart along the face, between the face and the first observed
+    cell outward (OCCUPIED, or FREE within free_age_s) -- what a stopped truck cannot see in
+    front of its own faces and the shadow memory has to bridge (plan v10 D4). Sampled, not
+    exact: probes start 1 mm off the face and step step_m outward, so a sliver of a cell
+    narrower than step_m along the face can be missed. Cells past the first observed one
+    (an obstacle's inside) do not count. None: unobserved all the way to depth_m."""
+    from forklift_core.perception.obstacle_grid import FREE, OCCUPIED
+
+    x0, y0, yaw = pose
+    c, s = math.cos(yaw), math.sin(yaw)
+    res = snapshot.resolution_m
+    nx, ny = snapshot.state.shape
+    f, r, w = outline.front_m, outline.rear_m, outline.half_width_m
+    offsets = np.append(np.arange(0.0, depth_m, step_m) + 1e-3, depth_m)
+    along = {"front": np.arange(-w, w + 1e-9, step_m), "rear": np.arange(-w, w + 1e-9, step_m),
+             "left": np.arange(-r, f + 1e-9, step_m), "right": np.arange(-r, f + 1e-9, step_m)}
+    out = {}
+    for face, t in along.items():
+        d, a = np.meshgrid(offsets, t, indexing="ij")  # (offset, point along the face)
+        if face == "front":
+            u, v = f + d, a
+        elif face == "rear":
+            u, v = -r - d, a
+        elif face == "left":
+            u, v = a, w + d
+        else:
+            u, v = a, -w - d
+        i = np.floor((x0 + c * u - s * v - snapshot.origin_x_m) / res).astype(int)
+        j = np.floor((y0 + s * u + c * v - snapshot.origin_y_m) / res).astype(int)
+        inside = (i >= 0) & (i < nx) & (j >= 0) & (j < ny)
+        observed = np.zeros(i.shape, dtype=bool)
+        ii, jj = i[inside], j[inside]
+        st = snapshot.state[ii, jj]
+        observed[inside] = (st == OCCUPIED) | ((st == FREE) & (now_s - snapshot.free_stamp[ii, jj] <= free_age_s + 1e-9))
+        if not observed.any(axis=0).all():
+            out[face] = None
+            continue
+        first = observed.argmax(axis=0).max()
+        out[face] = 0.0 if first == 0 else float(offsets[first])
+    return out
+
+
+def _raw_snapshot(layer, now_s: float, correction, version: int, pose):
+    """The layer's grid snapshot before the shadow memory, on the window refresh() uses."""
+    from dataclasses import replace
+
+    w, res = layer.window_m, layer.grid_config.resolution_m
+    x0 = math.floor((pose[0] - w) / res) * res
+    y0 = math.floor((pose[1] - w) / res) * res
+    layer.grid.config = replace(layer.grid_config, x_min_m=x0, x_max_m=x0 + 2 * w, y_min_m=y0, y_max_m=y0 + 2 * w)
+    try:
+        return layer.grid.snapshot(now_s, correction, version)
+    finally:
+        layer.grid.config = layer.grid_config
+
+
+def injection_poses(stamps, truth_rear, signed_speed, travel, every_m: float, *, ahead_m=(2.5, 1.75, 1.0),
+                    lead_m: tuple = (1.29, 0.17), loaded_lead_m: tuple | None = None, loaded=None,
+                    offsets=(0.0, 0.25, -0.25), min_leg_m: float = 0.5):
+    """Synthetic boxes (x, y, yaw, index placed at) every every_m of evaluated travel, on the
+    path the truck is about to drive: ahead_m of recorded arc on (cycling through the given
+    distances, so short straights -- a docking approach ends at the pallet -- meet boxes too),
+    or the rest of the leg if it reverses or ends sooner, then past the leading face there
+    (lead_m = (front, rear) from the rear axle, loaded_lead_m where loaded[idx] -- the outline
+    the truck has when the box is placed; from the
+    rear axle, plus 0.25 m) and shifted by the next lateral offset. A box exists from the
+    tick it is placed at (an obstacle that appears ahead, like L4's), never before -- placed
+    from the start, a box on the return path sat on the truck at the first scan. Curves and
+    reverse legs meet their boxes too (plan v10 L1′: 30 objects per motion class; this stands
+    in for the plan's synthetic trajectories moved toward obstacles). A leg shorter than
+    min_leg_m from there gets none. The distance to the truck is not bounded here (an arc
+    is not a distance); single drops any box within 0.5 m of the outline at placement."""
+    out = []
+    if every_m <= 0:
+        return out
+    seg_len = np.r_[0.0, np.hypot(*np.diff(truth_rear[:, :2], axis=0).T)]
+    s_travel = np.cumsum(seg_len * travel)
+    nxt = every_m
+    for idx in range(len(stamps)):
+        if not (travel[idx] and s_travel[idx] >= nxt):
+            continue
+        nxt += every_m
+        ahead = ahead_m[len(out) % len(ahead_m)] if isinstance(ahead_m, (tuple, list)) else ahead_m
+        leg, direction = leg_ahead(truth_rear, signed_speed, idx, ahead)
+        length = float(np.sum(np.hypot(*np.diff(leg[:, :2], axis=0).T)))
+        if direction == 0 or length < min_leg_m:
+            continue
+        x0, y0, yaw0 = leg[-1]
+        faces = loaded_lead_m if (loaded is not None and loaded_lead_m is not None and loaded[idx]) else lead_m
+        lead = (faces[0] if direction > 0 else faces[1]) + 0.25
+        lat = offsets[len(out) % len(offsets)]
+        out.append((float(x0 + direction * lead * math.cos(yaw0) - lat * math.sin(yaw0)),
+                    float(y0 + direction * lead * math.sin(yaw0) + lat * math.cos(yaw0)), float(yaw0), idx))
+    return out
+
+
+def phase_at(transitions: list, t: float, first: str = "observe") -> str:
+    """The phase at t from the recorded transitions (exact times, never a later sample's)."""
+    phase = transitions[0]["from"] if transitions else first
+    for tr in transitions:
+        if tr["time_s"] <= t + 1e-9:
+            phase = tr["to"]
+        else:
+            break
+    return phase
+
+
+def leg_ahead(rear: np.ndarray, speed: np.ndarray, j: int, lookahead_m: float, *, still_mps: float = 0.02):
+    """(path, direction) the truck drove from tick j until it reverses or lookahead_m is
+    covered -- the recorded counterpart of the tracker's leg_ahead (a cusp ends the leg)."""
+    sgn = np.where(np.abs(speed[j:]) > still_mps, np.sign(speed[j:]), 0.0)
+    moving = np.flatnonzero(sgn)
+    direction = int(sgn[moving[0]]) if len(moving) else 0
+    stop = len(sgn)
+    if direction:
+        flips = np.flatnonzero(sgn == -direction)
+        if len(flips):
+            stop = int(flips[0])
+    leg = rear[j : j + max(stop, 2)]
+    s_cum = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(leg[:, :2], axis=0).T))))
+    end = int(np.searchsorted(s_cum, lookahead_m)) + 1
+    return leg[: max(end, 2)], direction
+
+
+TILT_BINS_DEG = (0.0, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 180.0)
+
+
+def sweep_meets(rect, shape, samples, margin_m: float, direction: int) -> bool:
+    """Whether the continuous sweep of shape along the sample poses, grown by margin_m as the
+    permission grows it, may meet rect. The permission (footprint_cells) grows the leading
+    face and the sides, never the trailing face: below curvature 1 / half width no body point
+    moves against the travel. So each step a -> b is covered by the shape at a grown, on the
+    leading face, by margin + the step's arc + the turning reach (radius |dyaw|) and, on the
+    sides, by margin + the turning reach + the chord's sideways part -- conservative between
+    samples (Codex L1′ 4th P1) without the trailing growth that counted posts the truck was
+    leaving (5th P2-1)."""
+    from forklift_core.control.drive_permission import parts_of, shape_meets
+    from forklift_core.planning.geometry import Footprint
+
+    parts = parts_of(shape)
+    radius = max(float(np.hypot(abs(lon) + max(fp.front_m, fp.rear_m), abs(lat) + fp.half_width_m))
+                 for fp, lat, lon in parts)
+    for a, b in zip(samples[:-1], samples[1:]):
+        dyaw = abs(float(np.arctan2(np.sin(b[2] - a[2]), np.cos(b[2] - a[2]))))
+        step = float(np.hypot(b[0] - a[0], b[1] - a[1]))
+        lead = margin_m + step + radius * dyaw
+        side = margin_m + radius * dyaw + step * dyaw / 2
+        grown = [(Footprint(fp.front_m + (lead if direction >= 0 else 0.0), fp.rear_m + (lead if direction <= 0 else 0.0),
+                            fp.half_width_m + side), lat, lon) for fp, lat, lon in parts]
+        if shape_meets(rect, grown, tuple(a), 0.0):
+            return True
+    return False
+
+
+def judge_classes(classes: dict, *, coverage_min: float, objects_min: int) -> dict:
+    """Plan v10 L1′ per motion class: coverage >= coverage_min, at least objects_min event
+    objects (a class with none does not pass on 'no unpermitted entry'), no unpermitted entry.
+    A class fails on coverage or an unpermitted entry; one that only lacks event objects is
+    'insufficient' (not enough evidence, not a failure), one without motion 'absent'.
+    Status: 'fail' if any class fails, else 'incomplete' if any is insufficient or absent,
+    else 'pass' (all eight present and passing)."""
+    out = {}
+    for cls in MOTION_CLASSES:
+        c = classes.get(cls)
+        if not c or not c["moving"]:
+            out[cls] = {"moving": 0, "verdict": "absent"}
+            continue
+        coverage = c["covered"] / c["moving"]
+        row = {"moving": c["moving"], "coverage": coverage, "event_objects": c["event_objects"],
+               "unpermitted": c["unpermitted"], "coverage_ok": coverage >= coverage_min,
+               "events_ok": c["event_objects"] >= objects_min, "unpermitted_ok": c["unpermitted"] == 0}
+        if not (row["coverage_ok"] and row["unpermitted_ok"]):
+            row["verdict"] = "fail"
+        else:
+            row["verdict"] = "pass" if row["events_ok"] else "insufficient"
+        out[cls] = row
+    verdicts = {r["verdict"] for r in out.values()}
+    status = "fail" if "fail" in verdicts else ("incomplete" if verdicts & {"absent", "insufficient"} else "pass")
+    return {"classes": out, "status": status, "pass": status == "pass",
+            "absent": [c for c, r in out.items() if r["verdict"] == "absent"],
+            "insufficient": [c for c, r in out.items() if r["verdict"] == "insufficient"],
+            "coverage_min": coverage_min, "objects_min": objects_min}
+
+
+def _rect_dict(rect) -> dict:
+    return {"x_m": rect.x_m, "y_m": rect.y_m, "length_m": rect.length_m, "width_m": rect.width_m, "yaw_rad": rect.yaw_rad}
+
+
+def single_command(args) -> dict:
+    """L1′ (plan v10): the brief's one LiDAR through the runner's own ObstacleLayer.
+
+    Sensor, grid and permission values come from the layer config, the chassis from the
+    URDF the run used (hash-checked, measured chassis only), the scene from the run's prism
+    colliders and spawned boxes. Scans go into the layer at their 10 Hz stamps (add_scans,
+    then refresh on the leg ahead, as the runner's scan callback); the permission and the
+    truth are judged every control tick between them (limit with the last snapshot, so
+    sensor timeout and evidence age are exercised, as the runner's loop).
+
+    Pose inputs are the run's own: at each scan the odometry and the applied correction
+    the runner fed its layer (slam_records.json -- applied o odom equals the recorded
+    control pose), at every tick the recorded control pose (slam_control.npy). A SLAM
+    release between scans re-refreshes at its tick (as run_transport's loop) with the
+    correction the tracker applies there -- the last estimate received before it, i.e. the
+    map_from_odom of the latest scan record at or before the release (SlamPoseTracker.
+    release); each such value is checked against the next scan's applied correction and
+    the matches are reported. A truth-fed run uses the truth pose and no correction. Not
+    replayed: the range noise (the layer's own draw, independent of the run's -- a cell
+    edge can fall differently) and the tracker's planned leg (the runner's path_ahead):
+    the path check gets the recorded leg, so the verdict judges the stopping-arc check
+    alone (permitted = the arc's own limit >= |v|), which the runner's allowed speed never
+    exceeds -- stricter than the runner, never laxer.
+    Pallets are outside the 1.05 m plane's reach and
+    known pallets are off (plan 2026-10-08): pallet events are counted apart, by phase.
+    Objects lower than h_det are outside the operating assumption: a run with one is refused.
+    """
+    import atexit
+    import hashlib
+    import shutil
+    import sys as _sys
+    import tempfile
+
+    _sys.path.insert(0, str(ROOT / "sim" / "isaac"))
+    import obstacle_layer as OL
+    import planar_lidar
+    from insertion_geometry import read_fork_blades_m
+
+    from forklift_core.control.drive_permission import arc_poses, shape_meets
+    from forklift_core.perception.known_obstacles import invert_pose
+    from forklift_core.perception.obstacle_grid import FREE, AgeErrorTable, compose
+    from forklift_core.planning.geometry import Bounds, Footprint, Rectangle
+
+    code = code_hashes()  # before anything runs; checked again at the end
+    # The config and the odometry table are hashed as read and checked again at the end,
+    # like the code (Codex L1′ 11th P2): the result names the inputs it used.
+    config_bytes = Path(args.layer_config).read_bytes()
+    config_sha = hashlib.sha256(config_bytes).hexdigest()
+    with tempfile.TemporaryDirectory(prefix="l1p_config_") as tmp:
+        (Path(tmp) / "layer.yaml").write_bytes(config_bytes)
+        config = OL.load_layer_config(Path(tmp) / "layer.yaml")
+    if (config.get("known_pallets") or {}).get("enabled"):
+        raise SystemExit("known pallets are off until D8 (plan 2026-10-08); L1′ counts pallets apart")
+    # The planning memory feeds the planner only; the permission never sees it.
+    config = {**config, "grid": {**config["grid"], "planning_memory": False}}
+    if len(config["sensors"]) != 1:
+        raise SystemExit("L1′ is the single configuration: one sensor")
+    sensor = config["sensors"][0]
+    age_path = Path(config["odometry_age"])
+    age_path = age_path if age_path.is_absolute() else ROOT / age_path
+    age_bytes = age_path.read_bytes()
+    age_sha = hashlib.sha256(age_bytes).hexdigest()
+    age = json.loads(age_bytes)
+    table = AgeErrorTable(tuple(age["ages_s"]), tuple(age["cumulative_position_m"]), tuple(age["cumulative_yaw_rad"]))
+    evaluated_phases = set(args.phases.split(","))
+    loaded_phases = ("lift", "extract", "transport", "lower")  # the runner's loaded state
+    classes = {cls: {"moving": 0, "covered": 0, "permitted": 0, "event_objects": 0, "unpermitted": 0}
+               for cls in MOTION_CLASSES}
+    runs, seen = [], set()
+    for run in args.run:
+        # Every input of this run is read once as bytes, hashed, and parsed from a private
+        # copy of those bytes: what the result is computed from is what it names, whatever
+        # happens to the originals meanwhile (Codex L1′ 12th/13th P2 -- the URDF is parsed
+        # per lift and steering state, long after the start).
+        snap = Path(tempfile.mkdtemp(prefix="l1p_inputs_"))
+        atexit.register(shutil.rmtree, snap, True)  # also when the run is refused part way
+        result_bytes = (run / "result.json").read_bytes()
+        result_sha = hashlib.sha256(result_bytes).hexdigest()
+        result = json.loads(result_bytes)
+        recorded = result["arguments"]
+        sources = {"forklift.urdf": ROOT / recorded["forklift_urdf"], "meta.json": run / "meta.json",
+                   "slam_log.npz": run / "slam_log.npz", "pallet.urdf": run / "pallet_with_synthetic_inertia.urdf"}
+        sources.update({n: run / n for n in ("slam_records.json", "slam_control.npy") if (run / n).exists()})
+        inputs_sha = {str(run / "result.json"): result_sha}
+        for name, src in sources.items():
+            data = src.read_bytes()
+            inputs_sha[str(src)] = hashlib.sha256(data).hexdigest()
+            (snap / name).write_bytes(data)
+        urdf = snap / "forklift.urdf"
+        log = np.load(snap / "slam_log.npz")
+        # The run's identity is its recorded motion (the 120 Hz stamps and base poses), not the
+        # bytes of a file: a copy of a run with other whitespace is still the same run (Codex
+        # L1′ 14th P2).
+        run_id = hashlib.sha256(np.ascontiguousarray(log["joint_stamps_s"], dtype=np.float64).tobytes()
+                                + np.ascontiguousarray(log["base_pose_world"], dtype=np.float64).tobytes()).hexdigest()
+        if run_id in seen:
+            raise SystemExit(f"{run}: the same run twice")
+        seen.add(run_id)
+        meta = json.loads((snap / "meta.json").read_bytes())
+        if inputs_sha[str(sources["forklift.urdf"])] != result["forklift_urdf_sha256"]:
+            raise SystemExit(f"{sources['forklift.urdf']} differs from the URDF {run} ran with")
+        if "dls08_measured" not in str((result.get("chassis_model") or {}).get("forklift_urdf", "")) or \
+                result.get("scene_chassis_matches_urdf") is False:
+            raise SystemExit(f"{run}: not the measured chassis (plan v10: every judgement on dls08_measured)")
+        laser = meta["laser"]
+        if config.get("shared_with_slam") and (
+                tuple(float(v) for v in laser["mount_xyz_m"]) != tuple(sensor.xyz_m)
+                or int(laser["beam_count"]) != int(config["beams"])
+                or float(laser["range_min_m"]) != float(config["range_min_m"])
+                or float(laser["range_max_m"]) != float(config["range_max_m"])):
+            raise SystemExit("the layer's sensor is not the run's recorded LiDAR")
+        if "silenced_scan_stamps_s" in log.files and len(log["silenced_scan_stamps_s"]):
+            raise SystemExit(f"{run}: silenced scans -- not a coverage trajectory")
+        rear_off = abs(float(recorded["rear_axle_offset_m"]))
+        geometry = result["geometry"]
+        unloaded = Footprint(**geometry["unloaded_footprint"])
+        loaded = Footprint(**geometry["loaded_footprint"])
+        b = result["scenario"]["bounds"]
+        noise_seed = args.noise_seed if args.noise_seed is not None else int(result["seed"])  # the runner's layer seed
+        layer = OL.ObstacleLayer(
+            config, hall=Bounds(b["x_min_m"], b["x_max_m"], b["y_min_m"], b["y_max_m"]), error_table=table,
+            unloaded=unloaded, loaded=loaded,
+            body_front_m=geometry["axle_to_fork_tip_m"] - geometry["carriage_limit_m"],
+            rear_axle_x_in_base_m=-rear_off, noise_seed=noise_seed,
+            blades_rear_m=tuple((x0 + rear_off, x1 + rear_off, y0, y1) for x0, x1, y0, y1 in read_fork_blades_m(urdf)),
+        )
+        stopping = layer.permission.config.stopping
+        step = layer.permission.config.step_m
+        free_age = layer.grid_config.free_max_age_s
+        envelope = layer.permission.config.envelope_offset_m
+        lookahead = layer.permission.config.lookahead_m
+        h = float(sensor.xyz_m[2])
+        mount = planar_lidar.LaserMount(tuple(sensor.xyz_m), float(sensor.yaw_rad))
+
+        # Operating assumption A (plan v10 D0): every kept object reaches h_det. A lower one
+        # (N5) is a limit experiment, not coverage evidence.
+        prisms = run_prisms(result, meta)
+        low = [round(top, 3) for _, top in prisms if top < layer.band_top_m]
+        spawned = run_new_obstacles(result)
+        low += [round(height, 3) for _, _, height, _, _ in spawned if height < layer.band_top_m]
+        if low:
+            raise SystemExit(f"{run}: objects below h_det {layer.band_top_m} m ({low[:5]}) -- outside D0 A")
+        static = [rect for rect, _ in prisms]
+        static_segs = np.concatenate([rect_segments(r) for r in static]) if static else np.zeros((0, 2, 2))
+        static_centres = np.array([[r.x_m, r.y_m, math.hypot(r.length_m, r.width_m) / 2] for r in static]).reshape(-1, 3)
+
+        # 120 Hz truth; the runner's own pose inputs (see the docstring).
+        stamps = log["joint_stamps_s"]
+        base = log["base_pose_world"].astype(float)
+        yaw = np.unwrap(_yaw(base[:, 3:7]))
+        g = meta["odometry_geometry"]
+        rear_x = float(g["rear_axle_x_in_base_m"])
+        truth_rear = np.column_stack((base[:, 0] + rear_x * np.cos(yaw), base[:, 1] + rear_x * np.sin(yaw), yaw))
+        steer = log["steering_rad"].astype(float)
+        feedback = result.get("feedback")
+        if feedback == "slam_estimate":
+            recs = json.loads((snap / "slam_records.json").read_bytes())
+            rec_by_stamp = {round(float(x["stamp_s"]), 6): x for x in recs}
+            control = np.load(snap / "slam_control.npy")  # t, control rear (x, y, yaw), truth rear
+            releases = sorted(float(e["time_s"]) for e in (result.get("slam_summary") or {}).get("holds", ())
+                              if e["event"] != "hold")
+        elif feedback == "simulator_ground_truth":
+            recs, rec_by_stamp, control, releases = None, None, None, []
+        else:
+            raise SystemExit(f"{run}: feedback {feedback!r} has no recorded pose inputs")
+
+        def scan_inputs(ts, js):
+            """(odom rear, applied correction) the runner fed its layer at this scan."""
+            if recs is None:
+                return tuple(truth_rear[js]), (0.0, 0.0, 0.0)
+            rec = rec_by_stamp.get(round(float(ts), 6))
+            if rec is None:
+                raise SystemExit(f"{run}: no SLAM record for the scan at {ts}")
+            return (compose(tuple(rec["odom_base"]), (rear_x, 0.0, 0.0)),
+                    tuple(float(v) for v in rec["applied_map_from_odom"]))
+
+        rec_stamps = np.array([float(x["stamp_s"]) for x in recs]) if recs is not None else np.zeros(0)
+
+        def release_correction(t):
+            """(applied after a release at t, the next scan's applied or None): the tracker
+            applies the last estimate it received, the latest record's map_from_odom."""
+            k = int(np.searchsorted(rec_stamps, t + 1e-9, side="right") - 1)
+            if k < 0:
+                return None, None
+            nxt = recs[k + 1]["applied_map_from_odom"] if k + 1 < len(recs) else None
+            return (tuple(float(v) for v in recs[k]["map_from_odom"]),
+                    None if nxt is None else tuple(float(v) for v in nxt))
+
+        def control_pose(j, t):
+            if control is None:
+                return tuple(truth_rear[j])
+            k = int(np.clip(np.searchsorted(control[:, 0], t + 1e-9, side="right") - 1, 0, len(control) - 1))
+            return tuple(float(v) for v in control[k, 1:4])
+        velocity = np.gradient(base[:, :2], stamps, axis=0)
+        signed_speed = velocity[:, 0] * np.cos(yaw) + velocity[:, 1] * np.sin(yaw)
+        transitions = result.get("transitions") or []
+        phases = [phase_at(transitions, float(tt)) for tt in stamps]
+        samples = result["samples"]
+        sample_t = np.array([x["time_s"] for x in samples])
+
+        def sample_before(t):
+            return samples[int(np.clip(np.searchsorted(sample_t, t, side="right") - 1, 0, len(samples) - 1))]
+
+        travel = np.array([ph in evaluated_phases for ph in phases])
+        injected, placed_s = [], []
+        loaded_mask = np.array([ph in loaded_phases for ph in phases])
+        for x, y, yy, idx in injection_poses(stamps, truth_rear, signed_speed, travel, args.inject_every_m,
+                                             lead_m=(unloaded.front_m, unloaded.rear_m),
+                                             loaded_lead_m=(loaded.front_m, loaded.rear_m), loaded=loaded_mask):
+            box = Rectangle(x, y, 0.4, 0.4, yy)
+            if shape_meets(box, loaded if loaded_mask[idx] else unloaded, tuple(truth_rear[idx]), 0.5):
+                # Never closer than 0.5 m to the outline at placement: about 1.9 stopping
+                # distances at 0.6 m/s (Codex L1′ 10th P3 -- the arc did not bound it).
+                continue
+            injected.append(box)
+            placed_s.append(float(stamps[idx]))
+        alive = set(range(len(injected)))  # not yet touched
+        active: set = set()  # placed, and not dropped as a duplicate
+        alias: dict = {}  # a spawn's object id -> the object it shares a collision shape with
+        seen_spawns: list = []  # spawn ids in order of appearance
+        spawn_rect: dict = {}
+
+        def present_keys(t):
+            return {f"new:{oid}" for oid, _ in boxes_at(t)}
+        pending = list(range(len(injected)))  # in placement order
+
+        def boxes_present(t):
+            """Boxes present at t. A box whose placement comes due on a spot already taken
+            -- by a present box, a prism or a spawned obstacle there at that time, within
+            0.05 m -- is dropped: one collision shape must not count as two objects (Codex
+            L1′ 5th P2-2, 6th P2-1)."""
+            while pending and placed_s[pending[0]] <= t + 1e-9:
+                b_ = pending.pop(0)
+                box = injected[b_]
+                as_shape = Footprint(box.length_m / 2, box.length_m / 2, box.width_m / 2)
+                taken = ([injected[o] for o in active & alive] + static + [r for _, r in boxes_at(t)])
+                if any(shape_meets(r, as_shape, (box.x_m, box.y_m, box.yaw_rad), 0.05) for r in taken):
+                    alive.discard(b_)
+                    st["injected_duplicates"] = st.get("injected_duplicates", 0) + 1
+                else:
+                    active.add(b_)
+            # One collision shape is one object (Codex L1′ 9th P2): a spawn appearing on a
+            # prism or on an earlier spawn present then counts under that one's object.
+            for oid, r in boxes_at(t):
+                key = f"new:{oid}"
+                if key in seen_spawns:
+                    continue
+                as_shape = Footprint(r.length_m / 2, r.length_m / 2, r.width_m / 2)
+                pose_r = (r.x_m, r.y_m, r.yaw_rad)
+                for i_, pr in enumerate(static):
+                    if shape_meets(pr, as_shape, pose_r, 0.05):
+                        alias[key] = f"prism{i_}"
+                        break
+                else:
+                    for k2 in seen_spawns:
+                        r2 = spawn_rect[k2]
+                        if k2 in present_keys(t) and shape_meets(r2, as_shape, pose_r, 0.05):
+                            alias[key] = k2
+                            break
+                seen_spawns.append(key)
+                spawn_rect[key] = r
+            # A spawned obstacle appearing on present boxes replaces every one of them: they
+            # go, and the spawn's events count under the first one's object (Codex L1′ 7th
+            # P2-1, 8th P2: a spawn covering two boxes).
+            for oid, r in boxes_at(t):
+                key = f"new:{oid}"
+                for b_ in sorted(active & alive):
+                    box = injected[b_]
+                    as_shape = Footprint(box.length_m / 2, box.length_m / 2, box.width_m / 2)
+                    if shape_meets(r, as_shape, (box.x_m, box.y_m, box.yaw_rad), 0.05):
+                        alive.discard(b_)
+                        alias.setdefault(key, f"box{b_}")
+                        st["injected_duplicates"] = st.get("injected_duplicates", 0) + 1
+            return sorted(active & alive)
+        pallet_tris = np.concatenate(list(urdf_triangles(snap / "pallet.urdf", {}).values()))
+        truck_cache: dict = {}
+
+        def truck_segments(lift, steering):
+            key = (round(lift, 2), round(steering[0], 2), round(steering[1], 2))
+            if key not in truck_cache:
+                parts = urdf_triangles(urdf, {"fork_lift": lift, "left_steer": steering[0], "right_steer": steering[1]})
+                truck_cache[key] = section_segments(np.concatenate(list(parts.values())), h)
+            return truck_cache[key]
+
+        st = {"scans": 0, "ticks": 0, "self_hit_beams_max": 0, "self_hit_scans": 0, "max_tilt_rad": 0.0,
+              "tilt_bins": {}, "agreement": {"beams": 0, "within": 0, "missing_in_hall": 0, "missing_outside_hall": 0,
+                                             "extra": 0, "abs_m": []},
+              "face_moving": {}, "face_stopped": {}, "free_cells_overlapping_prisms": 0,
+              "free_centres_in_prisms": 0, "free_in_prism_examples": [], "pallet_by_phase": {},
+              "uncovered_examples": [], "unpermitted": [], "blocked_reasons": {},
+              "classes": {cls: {"moving": 0, "covered": 0, "permitted": 0, "events": 0, "objects": set(),
+                                "unpermitted": 0} for cls in MOTION_CLASSES}}
+        scan_stamps = log["scan_stamps_s"][: args.max_scans]
+        rec_ranges = log["scan_ranges_m"] if "scan_ranges_m" in log.files else None
+        rec_pose = log["laser_pose_world"] if "laser_pose_world" in log.files else None
+        last = {"correction": None, "scan": -1, "version": 0, "release": 0}
+
+        def to_control(x, y, truth_pose, ctrl_pose):
+            """A world point where the truck at truth_pose sees it, in the frame where it is at ctrl_pose."""
+            rel = compose(invert_pose(truth_pose), (x, y, 0.0))
+            out = compose(ctrl_pose, rel)
+            return out[0], out[1]
+
+        def leg_in_frame(leg, truth_pose, ctrl_pose):
+            """The recorded leg (truth) as the control frame sees it from the truck."""
+            off = compose(ctrl_pose, invert_pose(truth_pose))
+            return np.array([compose(off, tuple(p)) for p in leg])
+
+        def boxes_at(t):
+            return [(oid, rect) for oid, rect, height, t0, t1 in spawned if t0 <= t < t1]
+
+        def take_scan(k, ts):
+            """The runner's scan callback: cast, add_scans, refresh on the leg ahead."""
+            js = min(int(np.searchsorted(stamps, ts)), len(stamps) - 1)
+            phase = phases[js]
+            carried = phase in loaded_phases
+            sample = sample_before(ts)
+            lift, ppos, pyaw = float(sample["lift_m"]), sample["pallet_position_m"], float(sample["pallet_yaw_rad"])
+            origin, directions = planar_lidar.laser_rays_world(base[js, :3], base[js, 3:7], mount, layer.beam_angles)
+            angles = np.arctan2(directions[:, 1], directions[:, 0])
+            o2 = origin[:2]
+            boxes_now = boxes_at(ts)
+            segs = np.concatenate([static_segs] + [rect_segments(r) for _, r in boxes_now]) if boxes_now else static_segs
+            d_static, _ = cast_rays_2d(o2, angles, segs, layer.range_max_m)
+            present = boxes_present(ts)
+            d_inj = (cast_rays_2d(o2, angles, np.concatenate([rect_segments(injected[b_]) for b_ in present]),
+                                  layer.range_max_m)[0] if present else np.full(len(angles), np.inf))
+            self_world = transform_segments(truck_segments(lift, steer[js]), base[js, 0], base[js, 1], yaw[js])
+            d_self, _ = cast_rays_2d(o2, angles, self_world, layer.range_max_m)
+            pal = section_segments(pallet_tris + [0, 0, ppos[2]], h)
+            d_pal = (cast_rays_2d(o2, angles, transform_segments(pal, ppos[0], ppos[1], pyaw), layer.range_max_m)[0]
+                     if len(pal) else np.full(len(angles), np.inf))
+            if carried:
+                d_self = np.minimum(d_self, d_pal)
+                d_scene = d_static
+            else:
+                d_scene = np.minimum(d_static, d_pal)
+            d_ext = np.minimum(d_scene, d_inj)
+            dist = np.minimum(d_ext, d_self)
+            hits = np.isfinite(dist)
+            own = d_self < d_ext
+            limit = OL.beam_limits(origin, directions, band_top_m=layer.band_top_m, band_bottom_m=layer.band_bottom_m)
+            ranges = layer.ranges_from(dist, hits, layer.beam_noise(len(dist)))
+            odom_rear, correction = scan_inputs(ts, js)
+            layer.add_scans(float(ts), {sensor.name: (dist, hits, own, limit, ranges)}, odom_rear=odom_rear,
+                            loaded=carried)
+            st["scans"] += 1
+            n_self = int(own.sum())
+            st["self_hit_beams_max"] = max(st["self_hit_beams_max"], n_self)
+            st["self_hit_scans"] += int(n_self > 0)
+            w_, x_, y_, z_ = base[js, 3:7]
+            tilt = float(math.acos(min(1.0, abs(1 - 2 * (x_ * x_ + y_ * y_)))))
+            st["max_tilt_rad"] = max(st["max_tilt_rad"], tilt)
+            k_bin = int(np.searchsorted(TILT_BINS_DEG, math.degrees(tilt), side="right") - 1)
+            label = f"{TILT_BINS_DEG[k_bin]}-{TILT_BINS_DEG[k_bin + 1]}deg"
+            row_t = st["tilt_bins"].setdefault(label, {"scans": 0, "min_valid_range_m": layer.range_max_m})
+            row_t["scans"] += 1
+            row_t["min_valid_range_m"] = min(row_t["min_valid_range_m"], float(min(np.min(limit), layer.range_max_m)))
+            if rec_ranges is not None and k < len(rec_ranges) and k % args.free_check_every == 0:
+                # Isaac's recorded raycast (pre-noise distances) against this cast, without
+                # the synthetic boxes: the sections reproduce the scene to the millimetre.
+                rec = rec_ranges[k].astype(float)
+                cmp_ = np.minimum(d_scene, d_self)
+                ag = st["agreement"]
+                both = np.isfinite(rec) & np.isfinite(cmp_) & (cmp_ <= 5.0)
+                diff = np.abs(rec[both] - cmp_[both])
+                ag["beams"] += int(both.sum())
+                ag["within"] += int((diff <= 0.005).sum())
+                ag["abs_m"].append(diff)
+                missing = np.isfinite(rec) & (rec > 0) & (rec <= 5.0) & (cmp_ > rec + 0.005)
+                if missing.any():
+                    # Hits the scene here does not hold: the hall walls lie outside the
+                    # scenario bounds (the planner never goes there); anything inside them is
+                    # geometry this replay lacks.
+                    lp = rec_pose[k] if rec_pose is not None else (o2[0], o2[1], float(angles[0] - layer.beam_angles[0]))
+                    a_ = lp[2] + layer.beam_angles[missing]
+                    hx, hy = lp[0] + rec[missing] * np.cos(a_), lp[1] + rec[missing] * np.sin(a_)
+                    in_hall = (hx >= b["x_min_m"]) & (hx <= b["x_max_m"]) & (hy >= b["y_min_m"]) & (hy <= b["y_max_m"])
+                    ag["missing_in_hall"] += int(in_hall.sum())
+                    ag["missing_outside_hall"] += int((~in_hall).sum())
+                ag["extra"] += int(((cmp_ <= 5.0) & ((rec > cmp_ + 0.005) | (rec == np.inf))).sum())
+            tr = truth_rear[js]
+            if correction != last["correction"]:
+                last["version"] += 1
+            ctrl = compose(correction, odom_rear)
+            ahead, leg_dir = leg_ahead(truth_rear, signed_speed, js, lookahead)
+            layer.refresh(float(ts), correction, last["version"], current_pose=ctrl,
+                          path_ahead=leg_in_frame(ahead, tr, ctrl), loaded=carried, direction=leg_dir)
+            last["correction"], last["scan"] = correction, k
+            if phase in evaluated_phases and k % args.free_check_every == 0:
+                moving = abs(float(signed_speed[js])) >= args.moving_mps
+                outline = loaded if carried else layer.body
+                faces = face_unobserved_m(_raw_snapshot(layer, float(ts), correction, last["version"], ctrl), ctrl,
+                                          outline, float(ts), free_age)
+                bucket = st["face_moving" if moving else "face_stopped"]
+                for face, d in faces.items():
+                    prev = bucket.get(face, 0.0)
+                    bucket[face] = None if (d is None or prev is None) else max(prev, d)
+                snap = layer.snapshot
+                for i_, rect in enumerate(static):
+                    if math.hypot(rect.x_m - tr[0], rect.y_m - tr[1]) > layer.window_m + 2.0:
+                        continue
+                    # The grid is in the control frame: the prism as the truck sees it there.
+                    rect = Rectangle(*to_control(rect.x_m, rect.y_m, tr, ctrl), rect.length_m, rect.width_m,
+                                     rect.yaw_rad + (ctrl[2] - tr[2]))
+                    n_overlap = _rect_cells_free(snap, _rect_dict(rect))
+                    if not n_overlap:
+                        continue
+                    st["free_cells_overlapping_prisms"] += n_overlap
+                    ii, jj = np.nonzero(snap.state == FREE)
+                    cx = snap.origin_x_m + (ii + 0.5) * snap.resolution_m
+                    cy = snap.origin_y_m + (jj + 0.5) * snap.resolution_m
+                    c_, s_ = math.cos(rect.yaw_rad), math.sin(rect.yaw_rad)
+                    u_ = (cx - rect.x_m) * c_ + (cy - rect.y_m) * s_
+                    v_ = -(cx - rect.x_m) * s_ + (cy - rect.y_m) * c_
+                    n_in = int(((np.abs(u_) < rect.length_m / 2) & (np.abs(v_) < rect.width_m / 2)).sum())
+                    st["free_centres_in_prisms"] += n_in
+                    if len(st["free_in_prism_examples"]) < 20:
+                        st["free_in_prism_examples"].append({"t": float(ts), "prism": i_, "overlapping": n_overlap,
+                                                             "centres_inside": n_in, "truck": [float(q) for q in tr]})
+
+        k_next = 0
+        st["releases"] = {"count": len(releases), "matched_next_scan": 0}
+        # Every tick of the control record, from the first: before the first scan there is
+        # no snapshot (moving there is uncovered and never permitted), after the last the
+        # sensor timeout acts (Codex L1′ 2nd P1-2, 3rd P1-2).
+        for j in range(0, len(stamps), args.tick_every):
+            t = float(stamps[j])
+            while k_next < len(scan_stamps) and scan_stamps[k_next] <= t + 1e-9:
+                take_scan(k_next, float(scan_stamps[k_next]))
+                k_next += 1
+            while last["correction"] is not None and last["release"] < len(releases) \
+                    and releases[last["release"]] <= t + 1e-9:
+                # A SLAM release between scans: the runner bumps the version and refreshes
+                # at that tick with the new applied correction (run_transport.py loop).
+                last["release"] += 1
+                new, then = release_correction(t)
+                st["releases"]["matched_next_scan"] += int(new is not None and then == new)
+                if new is not None and new != last["correction"]:
+                    last["version"] += 1
+                    last["correction"] = new
+                    phase_r = phases[j]
+                    ctrl_r = control_pose(j, t)
+                    ahead_r, dir_r = leg_ahead(truth_rear, signed_speed, j, lookahead)
+                    layer.refresh(t, new, last["version"], current_pose=ctrl_r,
+                                  path_ahead=leg_in_frame(ahead_r, truth_rear[j], ctrl_r),
+                                  loaded=phase_r in loaded_phases, direction=dir_r)
+                    st["release_refreshes"] = st.get("release_refreshes", 0) + 1
+            phase = phases[j]
+            v = float(signed_speed[j])
+            if phase not in evaluated_phases or abs(v) < args.moving_mps:
+                continue
+            st["ticks"] += 1
+            carried = phase in loaded_phases
+            tr = truth_rear[j]
+            ctrl = control_pose(j, t)  # the runner's control pose at this tick
+            direction = -1 if v < 0 else 1
+            kappa = float(np.mean([math.tan(a) / (g["wheelbase_m"] + math.tan(a) * side * g["track_m"] / 2)
+                                   for a, side in ((steer[j][0], 1), (steer[j][1], -1))]))
+            layer.permission.last_estop = None
+            allowed, reason = layer.limit(t, current_pose=tuple(ctrl), curvature_inv_m=kappa, direction=direction,
+                                          loaded=carried, cap_mps=abs(v))
+            estop = layer.permission.last_estop
+            fp, own_now = layer.footprints(carried, direction)
+            cls = f"{'loaded' if carried else 'unloaded'}_{'reverse' if v < 0 else 'forward'}_{'curve' if abs(kappa) > 0.1 else 'straight'}"
+            row = st["classes"][cls]
+            row["moving"] += 1
+            # Coverage (user decision 2026-10-06) read off the permission's own stopping-arc
+            # walk: it stops at the first OCCUPIED sample; UNKNOWN (RETAINED outside the
+            # present band included), leaving the grid, stale evidence or no scan at all
+            # leave it uncovered (Codex L1′ 2nd P2-4).
+            if estop is None:
+                unobserved = {"why": reason}
+            elif estop.blocked in ("unknown", "edge"):
+                unobserved = {"why": estop.blocked, "verified_m": estop.verified_m}
+            elif t - estop.oldest_free_s > free_age:
+                unobserved = {"why": "expired", "age_s": t - estop.oldest_free_s}
+            else:
+                unobserved = None
+            if not unobserved:
+                row["covered"] += 1
+            elif len(st["uncovered_examples"]) < 40:
+                st["uncovered_examples"].append({"t": t, "phase": phase, "cls": cls, "v": v, **unobserved})
+            # The verdict judges the stopping-arc check alone (its own limit, as allowed_speed
+            # computes it): the runner's allowed speed is at most this, and the path check
+            # would get the recorded leg, not the tracker's plan (Codex L1′ 3rd P1-1).
+            if estop is None or t - estop.oldest_free_s > layer.permission.config.evidence_max_age_s:
+                arc_allowed = 0.0
+            else:
+                arc_allowed = stopping.speed_for(estop.verified_m)
+            permitted = arc_allowed >= abs(v) - 1e-9
+            row["permitted"] += int(permitted)
+            row["permitted_with_path"] = row.get("permitted_with_path", 0) + int(allowed >= abs(v) - 1e-9)
+            if not permitted:
+                why = st["blocked_reasons"].setdefault(cls, {})
+                why[reason] = why.get(reason, 0) + 1
+            # Truth at this tick: what the steering-held stopping volume (world, truth pose) meets.
+            dist_stop = stopping.distance_m(v)
+            vol, _ = arc_poses(tuple(tr), kappa, direction, dist_stop, 0.025)
+            reach = dist_stop + 2.0
+            near = np.flatnonzero(np.hypot(static_centres[:, 0] - tr[0], static_centres[:, 1] - tr[1])
+                                  <= reach + static_centres[:, 2]) if len(static_centres) else []
+            present = boxes_present(t)
+            truths = ([(f"prism{i}", static[i]) for i in near] + [(f"new:{oid}", r) for oid, r in boxes_at(t)]
+                      + [(f"box{b_}", injected[b_]) for b_ in present])
+            for oid, rect in truths:
+                if sweep_meets(rect, fp, vol, envelope, direction):
+                    while oid in alias:  # to the end of the chain (Codex L1′ 10th P2)
+                        oid = alias[oid]
+                    row["events"] += 1
+                    row["objects"].add(oid)
+                    if permitted:
+                        row["unpermitted"] += 1
+                        if len(st["unpermitted"]) < 40:
+                            st["unpermitted"].append({"t": t, "phase": phase, "cls": cls, "v": v,
+                                                      "object": oid, "reason": reason})
+            if not carried:
+                sample = sample_before(t)
+                ppos, pyaw = sample["pallet_position_m"], float(sample["pallet_yaw_rad"])
+                pal_rect = Rectangle(ppos[0], ppos[1], geometry["pallet_depth_m"], geometry["pallet_width_m"], pyaw)
+                if sweep_meets(pal_rect, fp, vol, envelope, direction):
+                    pb = st["pallet_by_phase"].setdefault(phase, {"events": 0, "unpermitted": 0})
+                    pb["events"] += 1
+                    pb["unpermitted"] += int(permitted)
+            for b_ in present:
+                if shape_meets(injected[b_], fp, tuple(tr)):
+                    alive.discard(b_)
+        ag = st["agreement"]
+        diffs = np.concatenate(ag.pop("abs_m")) if ag["abs_m"] else np.zeros(0)
+        ag["within_share"] = ag["within"] / ag["beams"] if ag["beams"] else None
+        ag["abs_m"] = ({"p50": float(np.median(diffs)), "p99": float(np.percentile(diffs, 99)), "max": float(diffs.max())}
+                       if len(diffs) else None)
+        for cls, row in st["classes"].items():
+            agg = classes[cls]
+            for key in ("moving", "covered", "permitted", "unpermitted"):
+                agg[key] += row[key]
+            agg["event_objects"] += len(row["objects"])
+            row["objects"] = len(row["objects"])
+        st["injected_boxes"] = len(injected)
+        st["new_obstacles"] = [oid for oid, *_ in spawned]
+        st["prisms"] = {"columns": len(prisms), "min_top_m": min((top for _, top in prisms), default=None)}
+        shutil.rmtree(snap, ignore_errors=True)
+        runs.append({"run": str(run), "run_id": run_id, "result_sha256": result_sha, "inputs_sha256": inputs_sha,
+                     "run_success": result.get("success"),
+                     "run_failure": result.get("failure_reason"),
+                     "evaluated_s": [float(stamps[0]), float(stamps[-1])] if len(stamps) else None,
+                     "noise_seed": noise_seed, **st})
+        print(run, json.dumps({c: (r["moving"], r["covered"], r["objects"], r["unpermitted"])
+                               for c, r in st["classes"].items() if r["moving"]}), flush=True)
+    verdict = judge_classes(classes, coverage_min=args.coverage_min, objects_min=args.min_event_objects)
+    if code_hashes() != code:
+        # The code changed while this ran: the result cannot name the code that made it
+        # (Codex L1′ 6th P2-2). ws1 jobs run from their own copy of the tree. The config,
+        # the odometry table and the run inputs were parsed from the bytes they are named by.
+        raise SystemExit("the code changed during the run -- result discarded")
+    if args.tick_every != 1 or args.max_scans is not None:
+        # Skipped ticks or a cut record can hide events (Codex L1′ 2nd P1-1/P1-2): a diagnostic.
+        verdict = {**verdict, "status": "diagnostic", "pass": False}
+    return {"layer_config": str(args.layer_config),
+            "layer_config_sha256": config_sha,
+            "odometry_age_sha256": age_sha,
+            "code_sha256": code,
+            "settings": {"inject_every_m": args.inject_every_m, "phases": sorted(evaluated_phases),
+                         "moving_mps": args.moving_mps, "tick_every": args.tick_every, "max_scans": args.max_scans,
+                         "free_check_every": args.free_check_every},
+            "verdict": verdict, "totals": classes, "runs": runs}
+
+
+def merge_command(args) -> dict:
+    """The L1′ verdict over several single outputs (one per run, run in parallel)."""
+    classes = {cls: {"moving": 0, "covered": 0, "permitted": 0, "event_objects": 0, "unpermitted": 0}
+               for cls in MOTION_CLASSES}
+    runs, same = [], set()
+    for path in args.inputs:
+        part = json.loads(Path(path).read_text())
+        if "code_sha256" not in part:
+            raise SystemExit(f"{path}: no code version -- rerun it with the current tool")
+        same.add(json.dumps([part["layer_config_sha256"], part["odometry_age_sha256"], part["settings"],
+                             part["code_sha256"]], sort_keys=True))
+        runs += part["runs"]
+        for cls, row in part["totals"].items():
+            for key in classes[cls]:
+                classes[cls][key] += row[key]
+    if len(same) != 1:
+        raise SystemExit("the parts ran different layer configs, odometry tables, settings or code")
+    verdict = judge_classes(classes, coverage_min=args.coverage_min, objects_min=args.min_event_objects)
+    settings = json.loads(same.copy().pop())[2]
+    if settings.get("tick_every", 1) != 1 or settings.get("max_scans") is not None:
+        verdict = {**verdict, "status": "diagnostic", "pass": False}
+    ids = [r.get("run_id") for r in runs]
+    if None in ids or len(ids) != len(set(ids)):
+        raise SystemExit("a run appears twice (or a part has no run_id)")
+    return {"parts": [str(p) for p in args.inputs], "same": json.loads(same.pop()), "verdict": verdict,
+            "totals": classes, "runs": runs}
+
+
 def replace_bounds(hall):
     from forklift_core.planning.geometry import Bounds
 
@@ -923,10 +1781,30 @@ def main() -> None:
     e.add_argument("--dump-path", type=Path, default=Path("p0b_dump.npz"))
     e.add_argument("--dump-class", default=None, help="dump the first non-ok instant of e.g. unloaded_reverse")
     e.add_argument("--output", type=Path)
+    # L1′ (plan v10): the single configuration through the runner's ObstacleLayer.
+    q = sub.add_parser("single")
+    q.add_argument("--run", type=Path, action="append", required=True, help="a prism-collider run dir (repeat)")
+    q.add_argument("--layer-config", type=Path, default=ROOT / "config/obstacle_layer_single.yaml")
+    q.add_argument("--phases", default="observe,approach,transport,return_home")
+    q.add_argument("--moving-mps", type=float, default=0.05)
+    q.add_argument("--inject-every-m", type=float, default=0.5)
+    q.add_argument("--free-check-every", type=int, default=1)
+    q.add_argument("--noise-seed", type=int, default=None, help="default: the run's seed")
+    q.add_argument("--max-scans", type=int, default=None)
+    q.add_argument("--tick-every", type=int, default=1, help="judge every n-th 120 Hz control tick")
+    q.add_argument("--coverage-min", type=float, default=0.80)
+    q.add_argument("--min-event-objects", type=int, default=30)
+    q.add_argument("--output", type=Path)
+    m = sub.add_parser("merge")
+    m.add_argument("inputs", type=Path, nargs="+")
+    m.add_argument("--coverage-min", type=float, default=0.80)
+    m.add_argument("--min-event-objects", type=int, default=30)
+    m.add_argument("--output", type=Path)
     args = parser.parse_args()
-    result = {"sections": sections_command, "evaluate": evaluate_command}[args.command](args)
+    result = {"sections": sections_command, "evaluate": evaluate_command, "single": single_command,
+              "merge": merge_command}[args.command](args)
     text = json.dumps(result, indent=2)
-    if getattr(args, "output", None) and args.command == "evaluate":
+    if getattr(args, "output", None) and args.command in ("evaluate", "single", "merge"):
         args.output.write_text(text + "\n")
     print(text if args.command == "sections" else "done")
 
