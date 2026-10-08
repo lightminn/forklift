@@ -8,6 +8,7 @@ import ast
 import json
 from dataclasses import asdict, replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -22,12 +23,13 @@ from forklift_core.planning.pallet_mission import (
 SCRIPT = Path(__file__).resolve().parents[2] / "sim/isaac/run_transport.py"
 
 
+@pytest.mark.parametrize("d7", [False, True])
 @pytest.mark.parametrize(
     "gap,clearance,approach_clearance",
     [(0.10, 0.12, 0.05), (0.04, 0.12, 0.02), (0.10, 0.01, 0.01)],
 )
 def test_all_runner_planning_calls_use_the_recorded_config(
-    monkeypatch, gap, clearance, approach_clearance
+    monkeypatch, gap, clearance, approach_clearance, d7
 ):
     tree = ast.parse(SCRIPT.read_text())
     run = next(
@@ -75,6 +77,8 @@ def test_all_runner_planning_calls_use_the_recorded_config(
     namespace = dict(vars(pallet_mission))
     namespace.update(
         settings={"planner_curvature_inv_m": 0.45, "planning_clearance_m": clearance},
+        # --d7-planner: the 'D7 on' arm applies the judged options (plan D7).
+        args=SimpleNamespace(d7_planner=d7),
         geometry=geometry,
         state=state,
         asdict=asdict,
@@ -95,7 +99,11 @@ def test_all_runner_planning_calls_use_the_recorded_config(
             curvature_limit_inv_m=0.45,
             xy_resolution_m=0.13,
             reverse_penalty=1.6,
+            **(pallet_mission.D7_PLANNER_OPTIONS if d7 else {}),
         )
+    )
+    assert (record["planner_config"]["goal_connection"], record["planner_config"]["shot_cap_m"]) == (
+        ("reeds_shepp", 4.0) if d7 else ("dubins", None)
     )
     assert record["approach_clearance_m"] == approach_clearance
 
@@ -866,3 +874,17 @@ def test_replans_record_their_path_before_the_mission_plan_exists():
     assert 'state["paths"]["observe"] = path_record(replanned)' not in source
     assert 'state["paths"][phase] = path_record(replanned)' not in source
     assert 'state.setdefault("paths", {})["observe"] = path_record(replanned)' in source
+
+
+def test_every_path_replacement_restarts_the_no_progress_baseline():
+    # Plan D7d (l8_measured seed 1 + N1): a stall replan's 23 m loop was judged against the
+    # old path's near-zero remainder. Obstacle, stall and cusp replans that replace the phase
+    # path all clear the watch after arm_docking, so it restarts on the path being driven.
+    source = SCRIPT.read_text()
+    stall = source.index('require(replanned.success, f"stall_replan_failed:{replanned.status}")')
+    window = source[stall : stall + 2500]
+    assert window.index("arm_docking()") < window.index('obstacle.setdefault("progress", {}).clear()')
+    cusp = source.index('"replaced_path": path_record(paths[phase]),')
+    window = source[cusp : cusp + 1500]
+    assert window.index("arm_docking()") < window.index('obstacle.setdefault("progress", {}).clear()')
+    assert source.count('obstacle.setdefault("progress", {}).clear()') == 3

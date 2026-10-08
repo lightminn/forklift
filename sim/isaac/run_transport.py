@@ -287,6 +287,13 @@ def arguments() -> argparse.Namespace:
         / "config/isaac_slam_lidar.yaml",
     )
     parser.add_argument(
+        "--d7-planner",
+        action="store_true",
+        help="Plan with the D7 CPU judgement's adopted options (Reeds-Shepp goal "
+        "connection, 4 m connection cap; pallet_mission.D7_PLANNER_OPTIONS) -- the "
+        "'D7 on' arm of the Isaac D7 off/on comparison.",
+    )
+    parser.add_argument(
         "--return-home",
         action="store_true",
         help="After unloading, drive back to the rear-axle pose the mission "
@@ -450,16 +457,9 @@ def arguments() -> argparse.Namespace:
         # Chosen by tools/observation_candidate_design.py on design seeds
         # 200-399 for pallets high in the bay, hidden from the far candidates
         # (docs/plans/2026-10-02-g4-observation-candidates.md).
-        args.observation_waypoints = [
-            [-0.10, 0.90, 0.0],
-            [-1.20, 0.30, 0.0],
-            [-0.10, -0.60, 0.0],
-            [-1.50, -0.60, 0.0],
-            [-2.00, -0.30, 0.0],
-            [0.00, 2.10, -0.25],
-            [0.40, 1.20, 0.0],
-            [-0.60, 1.80, -0.25],
-        ]
+        from forklift_core.planning.observation_viewpoints import DEFAULT_OBSERVATION_WAYPOINTS
+
+        args.observation_waypoints = [list(w) for w in DEFAULT_OBSERVATION_WAYPOINTS]
     if not args.observation_waypoints:
         parser.error("--observation-waypoints requires at least one candidate")
     if args.slam_feedback is not None:
@@ -902,6 +902,18 @@ def path_record(path) -> dict:
     }
 
 
+def plan_stats(path) -> dict:
+    """Diagnostics of a (re)plan for the priority-5 D7d record: its length, the gear
+    changes on it, and every search the ladder ran (status, expansions, pruned and
+    superseded nodes)."""
+    directions = np.asarray(getattr(path, "directions", ()), dtype=int)
+    return {
+        "length_m": float(getattr(path, "length_m", 0.0)) if getattr(path, "success", False) else None,
+        "gear_changes": int(np.count_nonzero(np.diff(directions))) if len(directions) > 1 else 0,
+        "search_attempts": [list(entry) for entry in getattr(path, "search_attempts", ())],
+    }
+
+
 def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     """Construct and execute one immutable seeded scenario; state keeps evidence."""
     import omni.usd
@@ -954,6 +966,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     from forklift_core.planning.pallet_mission import (
         SyntheticMissionGeometry,
         make_scenario,
+        D7_PLANNER_OPTIONS,
         make_transport_planner_config,
         plan_transport,
         final_straight_prefix,
@@ -1049,6 +1062,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         curvature_limit_inv_m=settings["planner_curvature_inv_m"],
         clearance_m=settings["planning_clearance_m"],
         max_expansions=30000,
+        **(D7_PLANNER_OPTIONS if args.d7_planner else {}),
     )
     mission_stages = ["approach", "insert", "extract", "transport", "withdraw"]
     if args.return_home:
@@ -3770,6 +3784,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             "yaw_error_rad": tracking.yaw_error_rad,
                             "status": replanned.status,
                             "planning_wall_s": time.monotonic() - replan_start,
+                            **plan_stats(replanned),
                         }
                     )
                     require(replanned.success, f"stall_replan_failed:{replanned.status}")
@@ -3797,6 +3812,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     )
                     if phase == "transport":
                         arm_docking()  # keep the stop before the delivery straight
+                    if obstacle is not None:
+                        # The no-progress watch compares remaining lengths on one path:
+                        # a replaced path starts its own baseline next tick, after
+                        # arm_docking, as obstacle replans already do (plan D7d -- a
+                        # stall replan's 23 m loop was judged against the old path's
+                        # near-zero remainder, l8_measured seed 1 + N1).
+                        obstacle.setdefault("progress", {}).clear()
                     phase_started = t
                     tracking = trackers[phase].update(rear, signed_speed, dt)
                     last_tracking = tracking
@@ -3880,6 +3902,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             )
                             if slam is not None:
                                 arm_docking()
+                            if obstacle is not None:
+                                obstacle.setdefault("progress", {}).clear()  # plan D7d, as above
                             phase_started = t
                             tracking = trackers[phase].update(rear, signed_speed, dt)
                             last_tracking = tracking
@@ -5170,6 +5194,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             "rear_pose": [float(v) for v in rear],
                             "status": replanned.status,
                             "planning_wall_s": time.monotonic() - replan_start,
+                            **plan_stats(replanned),
                         }
                     )
                     if not replanned.success:

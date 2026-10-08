@@ -14,6 +14,18 @@ replaced or dropped.
         --settings config/isaac_transport_measured.yaml \\
         --forklift-urdf sim/models/dls08_measured/forklift.urdf \\
         --insertion-reserve-m 0.016 --return-home --output artifacts/<run>
+
+``--layout factory`` (priority-5 plan D7, CPU baseline B_M) plans what run_transport
+plans on the factory hall with truth rectangles: the scene the runner assembles
+(make_factory_scenario on the run's geometry, props below --min-obstacle-height-m
+removed), the observation leg to the first of the runner's fixed candidates that plans
+(every candidate on the earlier ladder, then every one on the extended ladder), then the
+whole mission from that leg's end with the travel config and the way home. Each search
+ladder gets --search-budget-s of its own (SearchBudget); a ladder that runs out fails.
+
+    python tools/bay_planning_sweep.py --layout factory --seeds 0-199 \\
+        --settings config/isaac_transport_measured.yaml \\
+        --forklift-urdf sim/models/dls08_measured/forklift.urdf --output artifacts/<run>
 """
 
 from __future__ import annotations
@@ -26,7 +38,7 @@ import multiprocessing
 import os
 import sys
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import yaml
@@ -71,9 +83,10 @@ def _seeds(text: str) -> list[int]:
 
 
 def mission_geometry(
-    forklift_urdf: Path, pallet_geometry, reserve_m: float
+    forklift_urdf: Path, pallet_geometry, reserve_m: float, **straights: float
 ) -> SyntheticMissionGeometry:
-    """The geometry run_transport builds from its URDF and pallet geometry."""
+    """The geometry run_transport builds from its URDF and pallet geometry; straights
+    (alignment_straight_m, delivery_straight_m, withdrawal_m) as the run passes them."""
     sys.path.insert(0, str(ROOT / "sim/isaac"))
     insertion = _load("insertion_geometry", ROOT / "sim/isaac/insertion_geometry.py")
     axle_to_tip, _ = insertion.read_chassis_reference_m(forklift_urdf)
@@ -84,7 +97,118 @@ def mission_geometry(
         axle_to_fork_tip_m=axle_to_tip,
         carriage_limit_m=insertion.read_carriage_limit_m(forklift_urdf),
         insertion_reserve_m=reserve_m,
+        **{k: float(v) for k, v in straights.items() if v is not None},
     )
+
+
+def factory_scene(job: dict):
+    """(scenario, factory, geometry, props removed) as run_transport assembles the factory
+    hall for this job (seed, URDF, reserve, straights, obstacles, layout, min_top_m)."""
+    from forklift_core.planning.factory_layout import (
+        drop_low_obstacles,
+        load_factory_layout,
+        make_factory_scenario,
+    )
+
+    assets = _load("factory_assets", ROOT / "sim/isaac/factory_assets.py")
+    specs = assets.offline_specs(ASSET_ROOT)
+    pallet_geometry = load_pallet_geometry(Path(job["pallet_geometry"]))
+    straights = {k: job[k] for k in ("alignment_straight_m", "delivery_straight_m", "withdrawal_m")}
+    geometry = mission_geometry(Path(job["forklift_urdf"]), pallet_geometry, job["reserve_m"], **straights)
+    factory = make_factory_scenario(
+        job["seed"], load_factory_layout(Path(job["factory_layout"])), [specs[name] for name in BAY_ASSETS],
+        assets.factory_assets(specs), job["obstacles"], geometry=geometry,
+    )
+    scenario, removed = factory.transport, 0
+    if job["min_top_m"] is not None:
+        scenario, factory, removed = drop_low_obstacles(scenario, factory, job["min_top_m"])
+    return scenario, factory, geometry, removed
+
+
+def scene_sha256(scenario, geometry, min_top_m) -> str:
+    scene = json.dumps({"scenario": asdict(scenario), "geometry": asdict(geometry),
+                        "colliders": "truth floor rectangles", "min_top_m": min_top_m},
+                       sort_keys=True, default=str)
+    return hashlib.sha256(scene.encode()).hexdigest()
+
+
+def plan_factory_mission(scenario, factory, geometry, config, travel, budget, trace, return_home=True):
+    """The observation leg to the first fixed candidate that plans (every candidate on the
+    earlier ladder, then every one on the extended ladder), then plan_transport from its
+    end -- run_transport's order. Returns (mission plan or None, chosen candidate or None)."""
+    from forklift_core.planning import Pose2D
+    from forklift_core.planning.observation_viewpoints import DEFAULT_OBSERVATION_WAYPOINTS
+    from forklift_core.planning.pallet_mission import plan_observation_leg
+
+    observe, chosen = None, None
+    for extended in (False, True):
+        for index, waypoint in enumerate(DEFAULT_OBSERVATION_WAYPOINTS):
+            leg = plan_observation_leg(scenario, Pose2D(*waypoint), config, geometry=geometry,
+                                       pickup_bounds=factory.pickup_bounds, extended=extended, deadline=budget)
+            trace.append({"stage": "observe_candidate", "candidate_index": index, "extended": extended,
+                          **_plan_entry(leg)})
+            if leg.success:
+                observe, chosen = leg, {"candidate_index": index, "extended": extended}
+                break
+        if observe is not None:
+            break
+    if observe is None:
+        return None, None
+    end = observe.poses[-1]
+    plan = plan_transport(
+        scenario, config, geometry=geometry, target_pickup=scenario.pickup,
+        start_rear=Pose2D(float(end[0]), float(end[1]), float(end[2])),
+        return_to=scenario.start_rear if return_home else None,
+        pickup_bounds=factory.pickup_bounds, travel_config=travel, trace=trace, deadline=budget,
+    )
+    return plan, chosen
+
+
+def _plan_factory(job: dict, attempt: Path, record: dict) -> None:
+    """Child process, factory hall: scene, observation leg, whole mission (see the docstring)."""
+    from forklift_core.planning.pallet_mission import SearchBudget
+
+    try:
+        scenario, factory, geometry, removed = factory_scene(job)
+    except ValueError as exc:
+        record.update(outcome="scene_failure", reason=str(exc))
+        _write_atomic(attempt.with_suffix(".json"), record)
+        return
+    record.update(scenario_sha256=scene_sha256(scenario, geometry, job["min_top_m"]), geometry=asdict(geometry),
+                  props_removed=removed, props_kept=len(scenario.props))
+    _write_atomic(attempt.with_suffix(".scene.json"), record)
+    config = make_transport_planner_config(
+        curvature_limit_inv_m=job["curvature"], clearance_m=job["clearance"], max_expansions=job["max_expansions"],
+    )
+    travel = replace(config, obstacle_heuristic_resolution_m=0.25)
+    budget = SearchBudget(job["search_budget_s"])
+    trace = _TraceFile(attempt.with_suffix(".trace.jsonl"))
+    started = time.monotonic()
+    plan, chosen = plan_factory_mission(scenario, factory, geometry, config, travel, budget, trace, job["return_home"])
+    if plan is None:
+        record.update(outcome="planning_failure", status="observe_no_candidate",
+                      wall_s=round(time.monotonic() - started, 3), trace=list(trace),
+                      ladder_wall_s=[round(v, 3) for v in budget.spent_s])
+        _write_atomic(attempt.with_suffix(".json"), record)
+        return
+    record.update(
+        outcome="success" if plan.success else "planning_failure",
+        status=plan.status, observation=chosen, wall_s=round(time.monotonic() - started, 3), trace=list(trace),
+        ladder_wall_s=[round(v, 3) for v in budget.spent_s],
+    )
+    _write_atomic(attempt.with_suffix(".json"), record)
+
+
+def _plan_entry(leg) -> dict:
+    """Status, length, gear changes and the ladder of one planned leg (plan D7d record)."""
+    directions = leg.directions
+    return {
+        "status": leg.status,
+        "length_m": float(leg.length_m) if leg.success else None,
+        "expansions": int(leg.expanded_nodes),
+        "gear_changes": int((directions[1:] != directions[:-1]).sum()) if len(directions) > 1 else 0,
+        "search_attempts": [list(e) for e in leg.search_attempts],
+    }
 
 
 class _TraceFile(list):
@@ -117,6 +241,9 @@ def _read(path: Path) -> dict | None:
 
 def _plan_one(job: dict) -> None:
     """Child process: plan one seed into this attempt's own files."""
+    if job.get("layout") == "factory":
+        _plan_factory(job, Path(job["attempt_stem"]), {"seed": job["seed"], "input_sha256": job["input_sha256"]})
+        return
     assets = _load("factory_assets", ROOT / "sim/isaac/factory_assets.py")
     specs = assets.offline_specs(ASSET_ROOT)
     catalogue = [specs[name] for name in BAY_ASSETS]
@@ -255,7 +382,22 @@ def main(argv: list[str] | None = None) -> int:
         help="Plan an expansion_limit failure once more with this budget; 0 = off",
     )
     parser.add_argument("--timeout-s", type=float, default=600.0)
+    # Factory hall (priority-5 plan D7 CPU baseline): defaults are the recorded v10 runs'.
+    parser.add_argument("--layout", choices=("bay", "factory"), default="bay")
+    parser.add_argument("--factory-layout", type=Path, default=ROOT / "config/factory_south_hall.yaml")
+    parser.add_argument("--min-obstacle-height-m", type=float, default=1.15)
+    parser.add_argument("--alignment-straight-m", type=float, default=2.1)
+    parser.add_argument("--delivery-straight-m", type=float, default=1.5)
+    parser.add_argument("--withdrawal-m", type=float, default=0.55)
+    parser.add_argument("--search-budget-s", type=float, default=20.0)
     args = parser.parse_args(argv)
+    if args.layout == "factory" and args.scene_from != "self":
+        # The factory scene follows the planning geometry (Codex D7 3rd P3): a fixed
+        # provisional scene is not implemented here.
+        parser.error("--layout factory builds its scene from --forklift-urdf: --scene-from self only")
+    if args.layout == "factory":
+        args.return_home = True  # the whole mission: observe, approach, transport, home
+        args.retry_expansions = 0  # every ladder already has its own budget
     args.output.mkdir(parents=True, exist_ok=True)
     settings = yaml.safe_load(args.settings.read_text(encoding="utf-8"))
     curvature = (
@@ -297,6 +439,19 @@ def main(argv: list[str] | None = None) -> int:
         "obstacles": args.obstacles,
         "return_home": args.return_home,
     }
+    if args.layout == "factory":
+        inputs.update(
+            layout="factory",
+            factory_layout_sha256=hashlib.sha256(args.factory_layout.read_bytes()).hexdigest(),
+            min_top_m=args.min_obstacle_height_m, alignment_straight_m=args.alignment_straight_m,
+            delivery_straight_m=args.delivery_straight_m, withdrawal_m=args.withdrawal_m,
+            search_budget_s=args.search_budget_s,
+        )
+        inputs["sources_sha256"].update({
+            str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in [ROOT / "src/forklift_core/planning/factory_layout.py",
+                         ROOT / "src/forklift_core/planning/observation_viewpoints.py"]
+        })
     run_hash = hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
     (args.output / "inputs.json").write_text(
         json.dumps({**inputs, "run_sha256": run_hash, "argv": sys.argv}, indent=2)
@@ -311,6 +466,7 @@ def main(argv: list[str] | None = None) -> int:
             "forklift_urdf": str(args.forklift_urdf),
             "scene_urdf": str(scene_urdf),
             "pallet_geometry": str(args.pallet_geometry),
+            "factory_layout": str(args.factory_layout),
         }
         path = args.output / f"seed_{seed}.json"
         record = _read(path)

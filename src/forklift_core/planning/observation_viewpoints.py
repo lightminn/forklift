@@ -18,6 +18,21 @@ from dataclasses import dataclass
 from .geometry import Bounds, Footprint, Pose2D, Rectangle, collision_free_pose
 
 
+# The runner's fixed observation waypoints (rear axle x, y, yaw), tried in this order
+# before any generated one; run_transport.py documents why each is where it is.
+# Shared so CPU baselines plan from the same candidates (priority-5 plan D7).
+DEFAULT_OBSERVATION_WAYPOINTS = (
+    (-0.10, 0.90, 0.0),
+    (-1.20, 0.30, 0.0),
+    (-0.10, -0.60, 0.0),
+    (-1.50, -0.60, 0.0),
+    (-2.00, -0.30, 0.0),
+    (0.00, 2.10, -0.25),
+    (0.40, 1.20, 0.0),
+    (-0.60, 1.80, -0.25),
+)
+
+
 @dataclass(frozen=True)
 class PickupZone:
     """Where a pallet centre may be, and its heading range (task constants)."""

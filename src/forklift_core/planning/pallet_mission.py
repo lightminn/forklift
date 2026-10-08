@@ -6,6 +6,7 @@ load handling. The simulation adapter supplies real asset bounds and executes
 the distinct insertion, loading, transport, unloading, and withdrawal stages.
 """
 
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from math import ceil, cos, pi, sin
@@ -66,6 +67,19 @@ _RETRIED_STATUSES = ("expansion_limit", "no_path")
 DEFAULT_TRANSPORT_PRIMITIVE_LENGTH_M = 0.25
 
 
+@dataclass
+class SearchBudget:
+    """A wall-clock budget for every search ladder on its own (priority-5 plan D7 CPU
+    baseline: "재계획 시간 상한 20 s 는 사다리 전체에 적용한다"). Passed where a deadline
+    goes, each _search turns it into a deadline from its own start, so one slow leg does
+    not eat the next leg's time, and a ladder that ends after it -- even with a goal
+    connection found past the last 256-expansion check -- fails as "timeout" (Codex D7
+    3rd P2). ``spent_s`` collects every ladder's own wall time, in call order."""
+
+    seconds: float
+    spent_s: list = field(default_factory=list)
+
+
 def _retries(config, extended=True):
     """The configs _search tries, in order, after config itself runs out."""
     fine = None
@@ -103,6 +117,10 @@ def _search(
     """plan_hybrid_astar, retried on a finer lattice, then at denser analytic
     intervals, then (``extended``) on the fine lattice with more budget and a
     shorter primitive, if it runs out."""
+    budget = deadline if isinstance(deadline, SearchBudget) else None
+    if budget is not None:
+        started = time.monotonic()
+        deadline = started + float(budget.seconds)
     attempts = []
     closed = []  # configs whose queue closed (no_path), budget aside
 
@@ -127,6 +145,8 @@ def _search(
                 attempt_config.collision_step_m,
                 attempt_config.primitive_length_m,
                 attempt_config.max_expansions,
+                int(getattr(result, "pruned_children", 0)),
+                int(getattr(result, "superseded_pops", 0)),
             )
         )
         return result
@@ -153,9 +173,29 @@ def _search(
             continue
         result = attempt(retry)
         interval = retry.analytic_expansion_interval
+    if budget is not None:
+        ended = time.monotonic()
+        budget.spent_s.append(ended - started)
+        if ended > deadline and result.status != "timeout":
+            result = _timed_out(result)
     return replace(
         result, analytic_expansion_interval=interval, search_attempts=tuple(attempts)
     )
+
+
+def _timed_out(result: PlanResult) -> PlanResult:
+    """A result that came back after its budget: a timeout, its path dropped."""
+    return replace(
+        result, success=False, status="timeout", poses=np.empty((0, 3)),
+        directions=np.empty(0, dtype=np.int8), curvatures_inv_m=np.empty(0), length_m=0.0,
+    )
+
+
+# Plan D7 CPU judgement (2026-10-08, judge_rerun.json, combination 3): the goal connection
+# tries Reeds-Shepp words as well as Dubins, and a connection longer than the straight-line
+# distance + 4 m waits for the search instead of being taken at once. Penalties and D7b
+# stay at their defaults. Applied by the runner's --d7-planner (Isaac D7 off/on).
+D7_PLANNER_OPTIONS = {"goal_connection": "reeds_shepp", "shot_cap_m": 4.0}
 
 
 def make_transport_planner_config(**overrides: float | int) -> PlannerConfig:
@@ -540,6 +580,14 @@ def _append_straight(first, second):
         first.expanded_nodes + second.expanded_nodes,
         analytic_expansion_interval=first.analytic_expansion_interval,
         search_attempts=first.search_attempts,
+        pruned_children=first.pruned_children + second.pruned_children,
+        superseded_pops=first.superseded_pops + second.superseded_pops,
+        cycles_queued=first.cycles_queued + second.cycles_queued,
+        cycles_in_path=first.cycles_in_path + second.cycles_in_path,
+        shots_capped=first.shots_capped + second.shots_capped,
+        shot_fallback=first.shot_fallback or second.shot_fallback,
+        root_shot=first.root_shot,
+        cycles_generated=first.cycles_generated + second.cycles_generated,
     )
 
 
