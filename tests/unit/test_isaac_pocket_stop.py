@@ -17,6 +17,7 @@ import pytest
 
 from forklift_core.geometry import RigidTransform
 from forklift_core.perception import pocket_detector
+from forklift_core.perception.pallet_geometry import load_pallet_geometry
 from forklift_core.perception.pocket_detector import (
     DetectionDiagnostics,
     DetectionResult,
@@ -234,6 +235,10 @@ def execute(
         args,
         reference_target=reference_target(),
         pallet_geometry=pallet_geometry,
+        # Plan D8a: the provisional model's frame (drive geometry, fork tip 0.95).
+        frame=load_module("pocket_stop_insertion_geometry", ROOT / "sim/isaac/insertion_geometry.py").tracking_frame(
+            args.forklift_urdf, load_pallet_geometry(ROOT / "config/pallet_geometry_epal6.yaml")
+        ),
     )
 
 
@@ -606,7 +611,7 @@ def test_qualified_roof_survives_front_loss_then_its_own_loss_brakes(
         world,
         robot,
         tmp_path,
-        tracking={"roof_tracking": {}},
+        tracking={"roof_tracking": {"start_front_x_m": 1.4}},  # the required gate (plan D8a)
         pallet_geometry=object(),
     )
     rows = json.loads((tmp_path / "pocket_observations.json").read_text())
@@ -635,3 +640,23 @@ def test_handoff_geometry_reproduces_the_pr2_positions():
     for outside in (1.50, 1.59, 2.49):
         with pytest.raises(ValueError):
             module.handoff_geometry(outside)
+
+
+def test_the_runner_hands_the_models_target_to_the_controller(runner):
+    # Codex D8a implementation review P3-4: run() injects tracking_frame's target front x; the
+    # follow_pockets tests above call past run() and would not notice it missing.
+    import yaml
+
+    from forklift_core.control.pocket_insertion import PocketInsertionConfig
+
+    module = runner
+    geometry = load_module("pocket_stop_insertion_geometry", ROOT / "sim/isaac/insertion_geometry.py")
+    pallet = load_pallet_geometry(ROOT / "config/pallet_geometry_epal6.yaml")
+    settings = yaml.safe_load((ROOT / "config/isaac_pocket_insertion.yaml").read_text())
+    assert "target_front_x_m" not in settings["controller"]
+    for model, target in (("dls08_measured", 0.62), ("dls08_provisional", 0.59)):
+        frame = geometry.tracking_frame(ROOT / f"sim/models/{model}/forklift.urdf", pallet)
+        controller = module.with_frame_target(settings, frame)["controller"]
+        assert PocketInsertionConfig(**controller).target_front_x_m == pytest.approx(target)
+    source = (ROOT / "sim/isaac/run_pocket_insertion.py").read_text()
+    assert "tracking_settings = with_frame_target(tracking_settings, frame)" in source

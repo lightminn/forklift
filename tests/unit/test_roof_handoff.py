@@ -49,7 +49,7 @@ def obs(stamp, x=1.32, *, lost=False, provenance="synthetic"):
 
 
 def test_three_current_agreements_are_required_before_roof_drives():
-    handoff = module.RoofHandoff()
+    handoff = module.RoofHandoff(start_front_x_m=1.4)
     for stamp in [100, 200]:
         result = handoff.select(obs(stamp), obs(stamp, x=1.33))
         assert result.mode == "front_pockets"
@@ -61,7 +61,7 @@ def test_three_current_agreements_are_required_before_roof_drives():
 
 
 def test_loss_after_handoff_never_falls_back_to_front_or_cached_roof():
-    handoff = module.RoofHandoff()
+    handoff = module.RoofHandoff(start_front_x_m=1.4)
     for stamp in [100, 200, 300]:
         handoff.select(obs(stamp), obs(stamp))
     result = handoff.select(obs(400), obs(400, lost=True))
@@ -73,7 +73,7 @@ def test_loss_after_handoff_never_falls_back_to_front_or_cached_roof():
     "bad", ["duplicate", "wrong_stamp", "mismatch", "loss", "ground_truth", "far"]
 )
 def test_broken_agreement_resets_confirmation(bad):
-    handoff = module.RoofHandoff()
+    handoff = module.RoofHandoff(start_front_x_m=1.4)
     handoff.select(obs(100), obs(100))
     front, roof = obs(200), obs(200)
     if bad == "duplicate":
@@ -95,14 +95,14 @@ def test_broken_agreement_resets_confirmation(bad):
 
 
 def test_unqualified_roof_cannot_rescue_lost_front():
-    result = module.RoofHandoff().select(obs(100, lost=True), obs(100))
+    result = module.RoofHandoff(start_front_x_m=1.4).select(obs(100, lost=True), obs(100))
     assert result.observation.status == "invalid"
     assert result.mode == "front_pockets"
 
 
 @pytest.mark.parametrize("change", ["symmetric_centers", "width", "height"])
 def test_matching_midpoint_does_not_hide_pocket_shape_disagreement(change):
-    handoff = module.RoofHandoff()
+    handoff = module.RoofHandoff(start_front_x_m=1.4)
     for stamp in [100, 200, 300]:
         front, roof = obs(stamp), obs(stamp)
         if change == "symmetric_centers":

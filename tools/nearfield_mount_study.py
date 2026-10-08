@@ -34,6 +34,7 @@ from pathlib import Path
 import numpy as np
 
 from forklift_core.perception.pallet_geometry import (
+    INSERTION_RESERVE_M,
     load_pallet_geometry,
     target_insertion_depth_m,
 )
@@ -139,12 +140,13 @@ def gaps(flags, step=0.01):
     return round(longest * step, 3), round(run * step, 3)
 
 
-def near(chassis: str, z: float, tilt: float) -> dict:
+def near(chassis: str, z: float, tilt: float, min_range_m: float = MIN_RANGE_M,
+         reserve_m: float = INSERTION_RESERVE_M) -> dict:
     truck, tip_x, carriage_front = truck_frame(chassis)
     camera_x = round(carriage_front + CAMERA_BACK_TO_OPTICAL_M, 4)
     camera = scene_rig.Camera((camera_x, 0.0, z), tilt)
     k = isaac_intrinsics()
-    target = target_insertion_depth_m(GEOMETRY.overall_depth_m, tip_x - carriage_front)
+    target = target_insertion_depth_m(GEOMETRY.overall_depth_m, tip_x - carriage_front, reserve_m)
     # Pallet centre x for face_gap +1.20 m down to -target, 1 cm (descending).
     top = tip_x + HALF_DEPTH + 1.20
     count = int(round((1.20 + target) / 0.01)) + 1
@@ -171,7 +173,7 @@ def near(chassis: str, z: float, tilt: float) -> dict:
                 roof_prior[s] = ((px - advance, py), pyaw)
         scene = scene_rig.render(
             [*truck, *placed], camera=camera, quantize=True, noise_k=0.0,
-            min_range_m=MIN_RANGE_M, intrinsics=k,
+            min_range_m=min_range_m, intrinsics=k,
         )
         front, roof, both = [], [], []
         for s in range(SEEDS):
@@ -215,7 +217,7 @@ def near(chassis: str, z: float, tilt: float) -> dict:
     post = [c for c in usable if c["face_gap"] <= 0]
     return {
         "chassis": chassis, "camera": [camera_x, 0.0, z, tilt], "tip_x": tip_x,
-        "carriage_front": carriage_front, "target_m": target,
+        "carriage_front": carriage_front, "target_m": target, "min_range_m": min_range_m, "reserve_m": reserve_m,
         "handoff_cells": sum(any(c["handoff"]) for c in usable),
         "worst_max_gap_m": max(p["max_gap_m"] for p in per_seed),
         "worst_terminal_gap_m": max(p["terminal_gap_m"] for p in per_seed),
@@ -225,7 +227,7 @@ def near(chassis: str, z: float, tilt: float) -> dict:
     }
 
 
-def far(chassis: str, camera_xyz_tilt) -> dict:
+def far(chassis: str, camera_xyz_tilt, min_range_m: float = MIN_RANGE_M) -> dict:
     x0, y0, z0, tilt = camera_xyz_tilt
     camera = scene_rig.Camera((x0, y0, z0), tilt)
     k = isaac_intrinsics()
@@ -236,13 +238,13 @@ def far(chassis: str, camera_xyz_tilt) -> dict:
                 placed = scene_rig.place(PALLET, x_m=x, y_m=y, yaw_rad=yaw)
                 truth = scene_rig.true_pockets(GEOMETRY, x_m=x, y_m=y, yaw_rad=yaw)
                 scene = scene_rig.render(placed, camera=camera, quantize=True, noise_k=0.0,
-                                         min_range_m=MIN_RANGE_M, intrinsics=k)
+                                         min_range_m=min_range_m, intrinsics=k)
                 ok = 0
                 for s in range(SEEDS):
                     o = detect_pockets(scene, PRIOR, dataclasses.replace(FAR_PARAMS, seed=s)).observation
                     ok += o.status == "valid" and pocket_error_m(o, truth) <= TAU_M and yaw_error(o, yaw) <= YAW_TAU
                 out[f"{x},{y},{round(yaw, 4)}"] = ok
-    return {"chassis": chassis, "camera": list(camera_xyz_tilt), "far": out}
+    return {"chassis": chassis, "camera": list(camera_xyz_tilt), "min_range_m": min_range_m, "far": out}
 
 
 def _job(job):
@@ -253,17 +255,67 @@ def _job(job):
     return result
 
 
-def jobs():
+def jobs(chassis_names=tuple(CHASSIS), near_only=False, min_range_m=MIN_RANGE_M, reserve_m=INSERTION_RESERVE_M):
+    """Every (kind, args...) job; the defaults are the 2026-10-03 study's grid (with the
+    reserve and minimum range now passed explicitly -- plan D8a reruns)."""
     out = []
-    for chassis in CHASSIS:
+    for chassis in chassis_names:
         _, _, front = truck_frame(chassis)
         x = round(front + CAMERA_BACK_TO_OPTICAL_M, 4)
-        out.append(("far", chassis, CURRENT))
+        if not near_only:
+            out.append(("far", chassis, CURRENT, min_range_m))
         for z in HEIGHTS:
             for tilt in TILTS:
-                out.append(("near", chassis, z, tilt))
-                out.append(("far", chassis, (x, 0.0, z, tilt)))
+                out.append(("near", chassis, z, tilt, min_range_m, reserve_m))
+                if not near_only:
+                    out.append(("far", chassis, (x, 0.0, z, tilt), min_range_m))
     return out
+
+
+def planned_jobs(args) -> list:
+    """The jobs main runs. --smoke keeps the conditions asked for (Codex D8a P2-1): one near job
+    (the 0.27 m, 0.10 rad mount) and, unless near-only, the current-mount far job, of the
+    first chassis given."""
+    if not args.smoke:
+        return jobs(tuple(args.chassis), args.near_only, args.min_range_m, args.reserve_m)
+    chassis = args.chassis[0]
+    todo = [("near", chassis, 0.27, 0.10, args.min_range_m, args.reserve_m)]
+    if not args.near_only:
+        todo.append(("far", chassis, CURRENT, args.min_range_m))
+    return todo
+
+
+def run_meta(args) -> dict:
+    import hashlib
+    import platform
+    import subprocess
+
+    def sha(path):
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+    # Every core source (the detector's back-projection, geometry and sensor modules included --
+    # Codex D8a P2-2), not a hand-picked list.
+    sources = [Path(__file__), ROOT / "tools/scene_rig.py", ROOT / "tools/measure_pocket_evidence.py",
+               *sorted((ROOT / "src/forklift_core").rglob("*.py"))]
+    inputs = [*CHASSIS.values(), ROOT / "config/pallet_geometry_epal6.yaml", ROOT / "config/pallet_prior_epal6.yaml"]
+    try:
+        commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True,
+                                check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        commit = None
+    try:
+        blas = np.show_config(mode="dicts").get("Build Dependencies", {})
+    except (TypeError, AttributeError):
+        blas = None
+    return {
+        "blas": blas,
+        "argv": sys.argv[1:], "chassis": args.chassis, "near_only": args.near_only,
+        "min_range_m": args.min_range_m, "reserve_m": args.reserve_m, "smoke": args.smoke,
+        "python": platform.python_version(), "numpy": np.__version__, "machine": platform.node(),
+        "git_commit": commit,
+        "sources_sha256": {str(Path(p).relative_to(ROOT)): sha(p) for p in sources},
+        "inputs_sha256": {str(Path(p).relative_to(ROOT)): sha(p) for p in inputs},
+    }
 
 
 def main(argv=None) -> int:
@@ -271,16 +323,22 @@ def main(argv=None) -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--smoke", action="store_true", help="one near and one far job")
+    parser.add_argument("--chassis", nargs="+", choices=sorted(CHASSIS), default=list(CHASSIS))
+    parser.add_argument("--near-only", action="store_true", help="skip the far regression grid")
+    parser.add_argument("--min-range-m", type=float, default=MIN_RANGE_M,
+                        help="depth clip of the rig camera (0.175 = the 2026-10-03 study; 0.28 = D435i)")
+    parser.add_argument("--reserve-m", type=float, default=INSERTION_RESERVE_M,
+                        help="insertion reserve of the target rule (0.046 = the 2026-10-03 study)")
     args = parser.parse_args(argv)
-    todo = jobs()
-    if args.smoke:
-        todo = [("near", "provisional", 0.27, 0.10), ("far", "provisional", CURRENT)]
+    todo = planned_jobs(args)
     if args.workers > 1:
         with Pool(args.workers) as pool:
             results = pool.map(_job, todo, chunksize=1)
     else:
         results = [_job(j) for j in todo]
     args.out.write_text(json.dumps(results))
+    # Plan D8a: what produced these numbers, beside them (the old JSON layout is kept).
+    args.out.with_suffix(".meta.json").write_text(json.dumps(run_meta(args), indent=2))
     for r in results:
         if r["kind"] == "near":
             print(r["chassis"], r["camera"], "handoff_cells", r["handoff_cells"],

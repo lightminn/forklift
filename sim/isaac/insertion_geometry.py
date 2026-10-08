@@ -7,6 +7,7 @@ continuous swept clearance between updates.
 """
 
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -14,7 +15,12 @@ from numpy.typing import ArrayLike
 
 from forklift_core.control.path_tracking import AckermannGeometry
 from forklift_core.geometry import rotation_matrix_from_quaternion_xyzw
-from forklift_core.perception.pallet_geometry import PalletGeometry, pallet_boxes
+from forklift_core.perception.pallet_geometry import (
+    INSERTION_RESERVE_M,
+    PalletGeometry,
+    pallet_boxes,
+    target_insertion_depth_m,
+)
 
 
 def _vector(value: ArrayLike) -> np.ndarray:
@@ -138,6 +144,44 @@ def read_carriage_limit_m(forklift_urdf: Path) -> float:
     if not fronts:
         raise ValueError("Missing carriage_cross collision boxes")
     return tip - max(fronts)
+
+
+@dataclass(frozen=True)
+class TrackingFrame:
+    """Base-frame x of the fork tip and carriage front, the insertion target and the
+    pallet front-face x at that target, and the drive geometry -- one chassis model,
+    one insertion rule (plan D8a: the near-field tracking reads these, not constants)."""
+
+    fork_tip_x_m: float
+    carriage_front_x_m: float
+    carriage_limit_m: float
+    reserve_m: float
+    insertion_target_m: float
+    target_front_x_m: float
+    drive: AckermannGeometry
+
+
+def tracking_frame(
+    forklift_urdf: Path,
+    pallet_geometry: PalletGeometry,
+    reserve_m: float = INSERTION_RESERVE_M,
+    max_wheel_rate_rad_s: float = 8.0,
+) -> TrackingFrame:
+    """Plan D8a: the near-field tracking frame of a chassis model under the insertion
+    rule min(depth x 0.6, carriage limit - reserve) (ADR 0004 D3)."""
+    axle_to_tip, rear = read_chassis_reference_m(forklift_urdf)
+    tip = axle_to_tip + rear
+    limit = read_carriage_limit_m(forklift_urdf)
+    target = target_insertion_depth_m(pallet_geometry.overall_depth_m, limit, reserve_m)
+    return TrackingFrame(
+        fork_tip_x_m=tip,
+        carriage_front_x_m=tip - limit,
+        carriage_limit_m=limit,
+        reserve_m=float(reserve_m),
+        insertion_target_m=target,
+        target_front_x_m=tip - target,
+        drive=read_drive_geometry_m(forklift_urdf, max_wheel_rate_rad_s),
+    )
 
 
 def read_fork_blades_m(forklift_urdf: Path) -> tuple:
