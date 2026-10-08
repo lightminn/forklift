@@ -11,10 +11,12 @@ cancel SLAM and stop the truck where odometry says the line is (Codex D7c review
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 import numpy as np
+from forklift_core.control.rollout import bicycle_rollout
 from forklift_core.localization.slam_pose import compose, invert
+from forklift_core.planning.pallet_mission import final_straight_prefix
 
 
 def line_start(goal, keep_m: float) -> tuple[float, float, float]:
@@ -51,3 +53,21 @@ def destination_with_prior_error(site, error_m: float):
     is wrong by δ while the reference scan and the evaluation keep the true site)."""
     x, y, yaw = compose((site.x_m, site.y_m, site.yaw_rad), (0.0, float(error_m), 0.0))
     return replace(site, x_m=x, y_m=y, yaw_rad=yaw)
+
+
+def round_two_stop_check(straight, start, stop_config, keep_m: float, *, clear=None) -> tuple[bool, dict | None]:
+    """The straight as it is driven after an accepted first docking round: cut keep_m before
+    the goal (the round-2 stop) and judged at the stop's tolerance. Dry-run that path and
+    sweep it with ``clear(pose)`` (Codex D7 Isaac review P1 and its re-review P1: the whole
+    straight can pass both while the stop path fails either). (True, None) when the straight
+    has no such stop (no round 2 is armed then)."""
+    prefix = final_straight_prefix(straight, keep_m)
+    if prefix is None:
+        return True, None
+    roll = bicycle_rollout(prefix.poses, prefix.directions, prefix.curvatures_inv_m, stop_config, start)
+    swept = True if clear is None else all(clear(tuple(float(v) for v in pose)) for pose in roll.trajectory)
+    record = {**{k: v for k, v in asdict(roll).items() if k != "trajectory"},
+              "trajectory_samples": len(roll.trajectory), "swept_clear": swept, "length_m": float(prefix.length_m)}
+    ok = (roll.status == "arrived" and roll.position_error_m <= stop_config.position_tolerance_m
+          and abs(roll.yaw_error_rad) <= stop_config.yaw_tolerance_rad and swept)
+    return ok, record

@@ -32,6 +32,8 @@ COMMAND_ACCEL_MPS2 = 0.8
 BACKOFF_M = 0.30
 BACKOFF_SPEED_MPS = 0.15
 BACKOFF_PER_LEG = 2
+# The second docking round stops this far before the goal (dock_at_delivery_straight).
+ROUND2_KEEP_M = 0.6
 # An observation waypoint missed by at most this much, standing, is arrival.
 OBSERVE_ARRIVAL_M = 0.10
 OBSERVE_ARRIVAL_YAW_RAD = 0.10
@@ -2944,17 +2946,19 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 swept_checker = GridFootprintChecker(
                     grid_kwargs("docking")["occupancy"], geometry.loaded_footprint, scenario.bounds
                 )
-                swept_clear = all(swept_checker.free(tuple(pose)) for pose in dry.trajectory)
+
+                def pose_clear(pose):
+                    return swept_checker.free(tuple(pose))
             else:
-                swept_clear = all(
-                    collision_free_pose(
+
+                def pose_clear(pose):
+                    return collision_free_pose(
                         np.asarray(compose(to_world, tuple(pose))),
                         obstacles,
                         geometry.loaded_footprint,
                         scenario.bounds,
                     )
-                    for pose in dry.trajectory
-                )
+            swept_clear = all(pose_clear(pose) for pose in dry.trajectory)
             docking["dry_run"] = {
                 **{k: v for k, v in asdict(dry).items() if k != "trajectory"},
                 "trajectory_samples": len(dry.trajectory),
@@ -2969,6 +2973,16 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 and swept_clear
             ):
                 path = straight
+                if args.d7_docking and round_number == 1 and result.accepted:
+                    # Plan D7c: what is driven after an accepted first round is the
+                    # straight cut at the round-2 stop, judged at the stop's tolerance
+                    # -- dry-run that, not only the whole straight (Codex D7 Isaac review
+                    # P1: seed 1, whole straight 0.0145 rad, the 0.90 m stop path 0.086).
+                    stop_ok, docking["prefix_dry_run"] = DOCKING_RETRY.round_two_stop_check(
+                        straight, rear, docking_stop_config(), ROUND2_KEEP_M, clear=pose_clear
+                    )
+                    if not stop_ok:
+                        path = None
         corrected = replace(
             scenario,
             destination=replace(
@@ -3009,7 +3023,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             # 0.4 m left the tracker too little straight to settle its yaw: a
             # 1.1 cm / 6 mrad start failed the 0.015 rad dry-run margin (L3c v15
             # seed 3: 0.016); 0.6 m settles it to 0.0045 (offline dry run, Codex).
-            final_keep = 0.6
+            final_keep = ROUND2_KEEP_M
             prefix = final_straight_prefix(path, final_keep)
             if prefix is not None:
                 docking.update(status="armed", round=2, keep_m=final_keep)
