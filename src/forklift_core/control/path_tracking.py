@@ -208,6 +208,17 @@ class RearAxlePathTracker:
         """Path length still to drive to the final pose, from current progress."""
         return max(0.0, float(self._distance[-1] - self._progress))
 
+    def restart_speed_slew(self, speed_mps: float = 0.0) -> None:
+        """Restart the requested-speed slew from ``speed_mps``.
+
+        For a stop imposed outside the tracker (plan D8b calibration dwells): the
+        slew kept its own command meanwhile, so without this the first command
+        after the stop would jump back to it instead of accelerating.
+        """
+        if not np.isfinite(speed_mps):
+            raise ValueError("speed_mps must be finite")
+        self._command_speed = float(speed_mps)
+
     def leg_ahead(self) -> tuple[np.ndarray, int]:
         """Rear-axle poses from the current progress to the end of the current
         leg (the next cusp or the goal), and that leg's direction (+1 / -1).

@@ -763,3 +763,26 @@ def test_leg_ahead_runs_from_the_progress_to_the_next_cusp():
     tracker._progress = 0.75
     ahead, direction = tracker.leg_ahead()
     assert np.allclose(ahead[0], [0.75, 0, 0]) and len(ahead) == 2
+
+
+def test_a_restarted_slew_accelerates_from_the_stop_instead_of_jumping_back():
+    # Plan D8b dwells hold the truck outside the tracker; the slew kept its cruise
+    # command meanwhile.
+    n = 101
+    poses = np.column_stack((np.linspace(0.0, 2.0, n), np.zeros(n), np.zeros(n)))
+    config = TrackerConfig(cruise_speed_mps=0.3, max_curvature_inv_m=0.5, max_acceleration_mps2=0.3)
+    tracker = RearAxlePathTracker(poses, np.ones(n), np.zeros(n), config)
+    pose = np.zeros(3)
+    for _ in range(300):
+        command = tracker.update(pose, 0.0, 0.01)
+    assert command.speed_mps == pytest.approx(0.3)  # held at zero, the slew reached cruise
+    tracker.restart_speed_slew(0.0)
+    assert tracker.update(pose, 0.0, 0.01).speed_mps == pytest.approx(0.003)
+
+
+def test_a_restarted_slew_needs_a_finite_speed():
+    n = 11
+    poses = np.column_stack((np.linspace(0.0, 1.0, n), np.zeros(n), np.zeros(n)))
+    tracker = RearAxlePathTracker(poses, np.ones(n), np.zeros(n), TrackerConfig())
+    with pytest.raises(ValueError):
+        tracker.restart_speed_slew(np.nan)

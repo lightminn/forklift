@@ -438,3 +438,70 @@ def test_slam_runs_dock_on_a_scan_before_the_delivery_straight() -> None:
     # Plan D7c: the two obstacle replans of the transport now share transport_replan
     # (one lookup), and the docking retry's release and re-approach plan add three.
     assert source.count('slam.get("transport_scenario", scenario)') == 10
+
+
+def test_d8b_recording_options_validate_before_startup(tmp_path) -> None:
+    socket_path = str(tmp_path / "slam.sock")
+    for flags, expected in (
+        (["--record-pocket-frames"], "--record-pocket-frames needs --slam-feedback"),
+        (["--record-dwell-gaps", "1.0,0.5"], "--record-dwell-gaps needs --record-pocket-frames"),
+        (["--record-dwell-gaps", "0.5,1.0"], "--record-dwell-gaps"),
+        (["--approach-straight-speed-mps", "0"], "(0, 1] m/s"),
+        (["--approach-straight-speed-mps", "1.5"], "(0, 1] m/s"),
+        (["--record-pocket-frames", "--slam-feedback", socket_path], "--record-slam and --use-perception"),
+    ):
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--base-scene", "unused.usda", "--pallet-urdf", "unused.urdf",
+             "--forklift-urdf", str(PROVISIONAL_URDF), "--pallet-geometry", "unused.yaml", "--settings",
+             "unused.yaml", "--output", "unused", "--seed", "2", *flags],
+            capture_output=True, text=True, check=False,
+        )
+        assert result.returncode == 2, flags
+        assert expected in result.stderr, (flags, result.stderr)
+        assert "ModuleNotFoundError" not in result.stderr
+
+
+def test_d8b_every_read_is_recorded_before_the_d5_check_can_drop_it() -> None:
+    """Plan D8b: standing, timeless and out-of-order frames are kept and labelled."""
+    import ast
+
+    tree = ast.parse(SCRIPT.read_text())
+    functions = {node.name: ast.unparse(node) for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    read = functions["read_pocket_frame"]
+    assert read.index("record_pocket_read(raw)") < read.index("if raw is None:") < read.index("frames_without_time")
+    assert "if check is None:" in read
+    # Without the recorder the D5 path keeps its order: time checks before the reshape and
+    # the joint read (Codex D8b impl P2).
+    assert read.index("frames_bad_time") < read.index("normalize_depth(") < read.index("get_joint_positions")
+    assert "recorder.record_read(" in functions["record_pocket_read"]
+    # The truth of every tick, capture steps included, comes from step_world, after its
+    # encoders and odometry.
+    step = functions["step_world"]
+    assert step.index("slam['stop_now'] = ") < step.index("record_truth_tick(") < step.index("tick % scan_every")
+    assert "recorder.tick_error = " in functions["record_truth_tick"]
+    source = SCRIPT.read_text()
+    # The dwells restart the tracker's slew and hold the switch to the insertion.
+    assert "trackers[\"approach\"].restart_speed_slew(0.0)" in source
+    assert "tracking = replace(tracking, status=\"tracking\", speed_mps=0.0)" in source
+    # The recorder is written first in the finally block, guarded.
+    finally_at = source.index("    finally:\n        if recorder is not None:")
+    assert finally_at < source.index("state[\"pocket_recording\"] = recorder.close(") < source.index(
+        "state[\"pocket_recording_close_error\"] = repr(exc)") < source.index("write_slam_record(args, state, replace(scenario")
+    # A failed close fails the run without replacing an earlier failure reason.
+    assert "state.setdefault(\"failure_reason\", f\"pocket_recording_close_failed: {exc!r}\")" in source
+    # The control pose read with a frame carries the time it was taken at (a capture in the
+    # same loop iteration moves it past the loop's t).
+    assert "rear = slam_rear(now_s)\n                            rear_stamp = now_s" in source
+    assert "pocket[\"control_stamped\"] = (rear_stamp," in source
+
+
+def test_d8b_custom_cruise_drives_the_straight_but_not_the_acceptance_dry_run() -> None:
+    """The near capture's go/no-go stays the baseline's (smoke run: a 0.30 m/s dry run
+    arrives 7.76 mm short, past the 6 mm acceptance); the custom-cruise one is recorded."""
+    source = SCRIPT.read_text()
+    acceptance = source.index("acceptance_config = replace(acceptance_config,\n")
+    assert "cruise_speed_mps=speeds[\"approach\"])" in source[acceptance:acceptance + 200]
+    dry = source.index("acceptance_config,\n                                        rear,\n")
+    driven = source.index("state[\"near_capture\"][\"dry_run_driven\"] = asdict(bicycle_rollout(")
+    tracker = source.index("approach_config,\n                                    )\n")
+    assert acceptance < dry < driven < tracker

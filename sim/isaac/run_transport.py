@@ -108,6 +108,9 @@ def load_perception_module(name: str, path: Path):
 DOCKING_RETRY = load_perception_module(
     "run_transport_docking_retry", Path(__file__).with_name("docking_retry.py")
 )
+pocket_recorder = load_perception_module(
+    "run_transport_pocket_frame_recorder", Path(__file__).with_name("pocket_frame_recorder.py")
+)
 CAMERA_CALIBRATION = load_perception_module(
     "run_transport_camera_calibration",
     Path(__file__).with_name("camera_calibration.py"),
@@ -208,6 +211,31 @@ def arguments() -> argparse.Namespace:
         help="Priority-5 D5 depth pocket check: the drive permission also acts on "
         "the approach straight and the insertion, waiving the grid inside the "
         "estimated pallet's region only where depth certified the truck's stop.",
+    )
+    parser.add_argument(
+        "--record-pocket-frames",
+        action="store_true",
+        help="Plan D8b: create the near-field depth camera (also without --pocket-check), "
+        "read it on the D5 cadence after the near capture and keep every read (float32 "
+        "depth, stamp, fabric frame, read time, label) with the truth of every physics "
+        "tick, in <output>/pocket_frames. Needs --slam-feedback.",
+    )
+    parser.add_argument(
+        "--record-dwell-gaps",
+        type=pocket_recorder.parse_gaps,
+        default=None,
+        metavar="D1,D2,...",
+        help="Plan D8b calibration dwells: stand 2 s at the start of the approach "
+        "straight, at each of these control-estimated camera-face distances (m, "
+        "decreasing) and after the approach arrives. Needs --record-pocket-frames.",
+    )
+    parser.add_argument(
+        "--approach-straight-speed-mps",
+        type=float,
+        default=None,
+        help="Plan D8b: cruise speed of the approach straight after the near capture; "
+        "the near capture's acceptance dry run keeps the baseline cruise (that one at "
+        "this speed is recorded only) and the insertion keeps insert_speed_mps.",
     )
     parser.add_argument(
         "--insertion-reserve-m",
@@ -555,6 +583,15 @@ def arguments() -> argparse.Namespace:
         parser.error("--new-obstacles needs --obstacle-layer")
     if args.d7_docking and args.slam_feedback is None:
         parser.error("--d7-docking retries the SLAM docking match; it needs --slam-feedback")
+    if args.record_pocket_frames and args.slam_feedback is None:
+        # The frames start after the near capture, which only SLAM runs make.
+        parser.error("--record-pocket-frames needs --slam-feedback")
+    if args.record_dwell_gaps is not None and not args.record_pocket_frames:
+        parser.error("--record-dwell-gaps needs --record-pocket-frames")
+    if args.approach_straight_speed_mps is not None and not (
+        math.isfinite(args.approach_straight_speed_mps) and 0.0 < args.approach_straight_speed_mps <= 1.0
+    ):
+        parser.error("--approach-straight-speed-mps must be in (0, 1] m/s")
     from insertion_geometry import (
         assert_pallet_urdf_matches_geometry,
         assert_pallet_urdf_matches_named_boxes,
@@ -1373,7 +1410,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             perception_calibration.width / perception_calibration.fx,
             maintain_square_pixels=True,
         )
-        if args.pocket_check:
+        if args.pocket_check or args.record_pocket_frames:
             # The D5 depth check's own camera: same mount and intrinsics, but the
             # near clipping plane at the D435i's minimum depth (0.28 m, datasheet,
             # its highest resolution -- the conservative figure) instead of the
@@ -1424,7 +1461,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         verify_camera_intrinsics(perception_camera, perception_calibration, state)
         # Capture needs axial depth as well as RGBA (see determinism_probe.py).
         perception_camera.add_distance_to_image_plane_to_frame()
-        if args.pocket_check:
+        if args.pocket_check or args.record_pocket_frames:
             pocket_camera.initialize()
             pocket_camera.add_distance_to_image_plane_to_frame()
             _, pocket_far_m = pocket_camera.get_clipping_range()
@@ -1638,6 +1675,16 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     # Priority-5 D5 depth pocket check: built at the near capture, fed 10 Hz
     # carriage frames on the approach straight and the insertion.
     pocket = {"check": None, "history": [], "capture": None, "frames_read": 0}
+    # Plan D8b: every near-field read and the truth of every tick, for the offline
+    # delay and error calibration (tools/d8b_calibration.py).
+    recorder = pocket_recorder.PocketFrameRecorder(args.output) if args.record_pocket_frames else None
+    dwells = pocket_recorder.DwellSchedule(args.record_dwell_gaps) if args.record_dwell_gaps is not None else None
+    # Camera-face distance at the approach goal: the stand-off gap ahead of the fork
+    # tips, less the camera's distance behind them (0.431 m on the measured chassis).
+    dwell_d_end_m = (
+        geometry.approach_gap_m + geometry.axle_to_fork_tip_m
+        - (float(perception_mount.translation_m[0]) + abs(args.rear_axle_offset_m))
+    ) if args.record_pocket_frames else None
 
     def build_pocket_check(axis_yaw: float, rear_now, base_now) -> None:
         """The D5 pocket check, at the near (stand-off) capture: the final estimate,
@@ -1678,6 +1725,38 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         obstacle["layer"].exempt = check.region_control()
         obstacle["layer"].depth_support = check.depth_free_cells
 
+    def record_pocket_read(raw) -> None:
+        """Plan D8b: one near-field read for the recorder -- its time, fabric frame and the
+        control pose of the loop tick it was read after, kept whether or not depth came
+        back (no_depth) or normalises (bad_depth)."""
+        frame = pocket_camera.get_current_frame()
+        rendered = frame.get("rendering_time") if isinstance(frame, dict) else None
+        try:
+            stamp_r = float(rendered) - initial_time if rendered is not None else None
+        except (TypeError, ValueError):
+            stamp_r = None
+        depth_r, error_r = None, None
+        if raw is not None:
+            try:
+                k_r = pocket["capture"].intrinsics
+                depth_r, _ = adapter.normalize_depth(np.asarray(raw).reshape(k_r.height, k_r.width))
+            except (ValueError, TypeError) as exc:
+                error_r = repr(exc)
+        control_ = pocket.get("control_stamped")
+        row = recorder.record_read(
+            read_s=world.current_time - initial_time,
+            stamp_s=stamp_r if stamp_r is not None and math.isfinite(stamp_r) else None,
+            rendering_frame=frame.get("rendering_frame") if isinstance(frame, dict) else None,
+            depth_m=depth_r, lift_m=float(robot.get_joint_positions()[lift_index[0]]),
+            control_rear=None if control_ is None else control_[1],
+            control_stamp_s=None if control_ is None else control_[0],
+            odom_speed_mps=slam["odom_speed"] if slam is not None else None,
+            odom_yaw_rate_rps=slam.get("odom_yaw_rate") if slam is not None else None,
+            no_depth=raw is None, error=error_r,
+        )
+        if row["result"] == "bad_depth":
+            state.setdefault("pocket_recording_errors", []).append(error_r)
+
     def read_pocket_frame() -> None:
         """One 10 Hz carriage depth frame for the pocket check, placed at the
         control pose of its rendering time (frames lag the step)."""
@@ -1688,7 +1767,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             pocket["silenced_frames"] = pocket.get("silenced_frames", 0) + 1
             return
         raw = pocket_camera.get_depth()
+        if recorder is not None:
+            # Plan D8b: every read, labelled, before anything below can drop it; its
+            # own processing, so the D5 path below keeps its order (Codex D8b impl P2).
+            record_pocket_read(raw)
         if raw is None:
+            return
+        if check is None:
+            pocket["frames_read"] += 1
             return
         frame = pocket_camera.get_current_frame()
         rendered = frame.get("rendering_time") if isinstance(frame, dict) else None
@@ -3503,6 +3589,29 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 }
             )
 
+        def record_truth_tick(stamp_now: float, rendered: bool, now_base, now_q) -> None:
+            """Plan D8b: the physics truth of one tick. A pallet read that fails is
+            recorded as the reason and raised; the camera prim pose is diagnosis only."""
+            try:
+                pallet_pos_, pallet_q_ = pallet.get_world_pose()
+            except Exception as exc:
+                recorder.tick_error = f"pallet pose at {stamp_now:.4f} s: {exc!r}"
+                raise
+            try:  # what the renderer may read; never the truth
+                camera_pos_, camera_q_ = pocket_camera.get_world_pose(camera_axes="world")
+                camera_pose_ = pocket_recorder.pose7(camera_pos_, camera_q_)
+            except Exception as exc:  # noqa: BLE001
+                recorder.camera_pose_failed(exc)
+                camera_pose_ = None
+            recorder.record_tick(
+                stamp_s=stamp_now, rendered=rendered, base_pose=pocket_recorder.pose7(now_base, now_q),
+                lift_m=float(robot.get_joint_positions()[lift_index[0]]),
+                pallet_pose=pocket_recorder.pose7(pallet_pos_, pallet_q_), camera_prim_pose=camera_pose_,
+                stop_now=slam["stop_now"] if slam is not None else None,
+                odom_speed_mps=slam["odom_speed"] if slam is not None else None,
+                odom_yaw_rate_rps=slam.get("odom_yaw_rate") if slam is not None else None,
+            )
+
         def step_world(render: bool) -> None:
             """One physics step and everything that must see every step
             (SLAM plan v3.1): encoders, odometry, the 10 Hz scan by physics
@@ -3538,6 +3647,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 # Every tracker in this runner stops at 0.012 m/s; its arrival
                 # and gear-change checks wait for the noise-aware detector.
                 slam["tracker_speed"] = slam["stop"].tracker_speed(0.012)
+            if recorder is not None:
+                # Plan D8b truth, after this tick's encoders and odometry so a failure
+                # here cannot drop them (Codex D8b impl P2).
+                record_truth_tick(stamp_now, bool(render or frame_due), now_base, now_q)
             if frame_due:
                 # After this tick's odometry, so the annotation matches the image.
                 write_video_frame(stamp_now)
@@ -3694,6 +3807,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             )
         for step in range(int(120 * args.max_sim_seconds)):
             t = world.current_time - initial_time
+            rear_stamp = t  # the time of the control pose `rear` (a capture moves it on)
             base, q = robot.get_world_pose()
             ppos, pq = pallet.get_world_pose()
             yaw, tilt = yaw_and_tilt(q)
@@ -3913,6 +4027,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 # Three times the path time at the tracker's own speed caps
                 # (length / cruise when there are none), plus 10 s.
                 limit = max(30.0, 3 * trackers[phase].nominal_duration_s() + 10)
+                if dwells is not None and phase == "approach":
+                    limit += dwells.held_s(t)  # plan D8b: standing by design is not slowness
                 if t - phase_started >= limit:
                     dump_tracking("timeout", last_tracking)
                 require(t - phase_started < limit, f"Tracking timeout in {phase}")
@@ -4306,6 +4422,24 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 if slam is not None and not slam["tracker"].may_drive():
                     requested_speed = 0.0  # warming up: hold still
                 if (
+                    dwells is not None and phase == "approach"
+                    and state.get("near_capture", {}).get("status") == "done"
+                ):
+                    # Plan D8b calibration dwells (recording runs only): stand at the
+                    # straight's start, at each camera-face gap and after arriving.
+                    hold_, released_ = dwells.update(
+                        t, d_est_m=trackers["approach"].remaining_to_goal_m() + dwell_d_end_m,
+                        still=bool(slam["stop_now"]), arrived=tracking.status == "arrived",
+                    )
+                    if hold_:
+                        requested_speed = 0.0
+                        if tracking.status == "arrived":
+                            tracking = replace(tracking, status="tracking", speed_mps=0.0)
+                    elif released_:
+                        # Accelerate from the stop, not from the slew's held cruise.
+                        trackers["approach"].restart_speed_slew(0.0)
+                        requested_speed = 0.0
+                if (
                     phase == "observe" and tracking.status == "tracking"
                     and trackers[phase].remaining_to_goal_m() <= 1e-9 and abs(tracking.speed_mps) < 1e-12
                     and (slam["stop_now"] if slam is not None else abs(signed_speed) < 0.01)
@@ -4449,6 +4583,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             # The accepted ground-truth pose only validated the
                             # capture; control takes the estimate at this instant.
                             rear = slam_rear(now_s)
+                            rear_stamp = now_s
                             yaw = float(rear[2])
                             forward = np.array([math.cos(yaw), math.sin(yaw)])
                             base = np.array(
@@ -5016,11 +5151,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                     # the approach tracker converges within this straight
                                     # is checked by a dry run with margin (v3.7, Codex
                                     # v3.6 re-review P2).
+                                    acceptance_config = trackers["approach"].config
+                                    if args.approach_straight_speed_mps is not None:
+                                        # Plan D8b: the baseline cruise, also when an earlier
+                                        # near capture left a custom-cruise tracker here.
+                                        acceptance_config = replace(acceptance_config,
+                                                                    cruise_speed_mps=speeds["approach"])
                                     dry = bicycle_rollout(
                                         straight.poses,
                                         straight.directions,
                                         straight.curvatures_inv_m,
-                                        trackers["approach"].config,
+                                        acceptance_config,
                                         rear,
                                     )
                                     state["near_capture"]["dry_run"] = asdict(dry)
@@ -5030,6 +5171,19 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                         and abs(dry.yaw_error_rad) <= 0.015,
                                         f"near_capture_misaligned:dry_run:{asdict(dry)}",
                                     )
+                                    approach_config = acceptance_config
+                                    if args.approach_straight_speed_mps is not None:
+                                        # Plan D8b: only the driven cruise changes. The acceptance
+                                        # above stays the baseline's: at a slow cruise the tracker
+                                        # arrives where 1.5 x remaining meets the 0.012 m/s stop
+                                        # speed, ~8 mm short, past the 6 mm acceptance (smoke run
+                                        # seed 1 at 0.30: 7.76 mm). That dry run is kept as a record.
+                                        approach_config = replace(approach_config,
+                                                                  cruise_speed_mps=args.approach_straight_speed_mps)
+                                        state["near_capture"]["dry_run_driven"] = asdict(bicycle_rollout(
+                                            straight.poses, straight.directions, straight.curvatures_inv_m,
+                                            approach_config, rear,
+                                        ))
                                     paths["approach"] = straight
                                     state["paths"]["approach"] = path_record(straight)
                                     (args.output / "paths.json").write_text(
@@ -5042,8 +5196,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                         straight.poses,
                                         straight.directions,
                                         straight.curvatures_inv_m,
-                                        trackers["approach"].config,
+                                        approach_config,
                                     )
+                                    if args.approach_straight_speed_mps is not None:
+                                        record_tracker_configs()  # the straight's own cruise
                                     if args.pocket_check:
                                         build_pocket_check(float(straight.poses[-1][2]), rear, base)
                                     state["near_capture"].update(
@@ -5878,10 +6034,16 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 )
             if slam is not None:
                 slam["last_command"] = requested_speed
-            pocket_frames = pocket["check"] is not None and phase in ("approach", "insert")
+            near_done = state.get("near_capture", {}).get("status") == "done"
+            if recorder is not None:
+                recorder.phase = phase if phase in pocket_recorder.PHASES else "other"
+            pocket_frames = (pocket["check"] is not None or (recorder is not None and near_done)) and phase in (
+                "approach", "insert")
             if pocket_frames:
                 pocket["history"].append((t, tuple(float(v) for v in rear)))
                 del pocket["history"][:-120]
+                # Plan D8b: the pose with its own time (D5 keeps its history as it was).
+                pocket["control_stamped"] = (rear_stamp, tuple(float(v) for v in rear))
             stepper["fn"](pocket_frames and step % 12 == 0)
             if pocket_frames and step % 12 == 0:
                 read_pocket_frame()
@@ -5947,6 +6109,42 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             }
         )
     finally:
+        if recorder is not None:
+            # Plan D8b: first in the finally block, so neither an earlier record nor the
+            # encoders can stop it, and guarded, so a failed write never replaces the
+            # run's own failure (Codex D8b impl P1).
+            try:
+                state["pocket_recording"] = recorder.close(
+                    {
+                        "plan": "D8b (docs/plans/2026-10-04-lidar-obstacle-map.md)",
+                        "camera": state.get("pocket_camera"),
+                        "mount": state.get("perception_mount"),
+                        "lift_joint": "fork_lift",
+                        "forklift_urdf": str(args.forklift_urdf),
+                        "pallet_geometry": str(args.pallet_geometry),
+                        "rear_axle_offset_m": args.rear_axle_offset_m,
+                        "approach_straight_speed_mps": args.approach_straight_speed_mps,
+                        "dwell_gaps_m": None if args.record_dwell_gaps is None else list(args.record_dwell_gaps),
+                        "dwell_hold_s": None if dwells is None else dwells.hold_s,
+                        "dwell_d_end_m": dwell_d_end_m,
+                        "pocket_check": args.pocket_check,
+                        "video": args.video,
+                        "fps": args.fps,
+                        "depth": "normalised optical-axis metres, float32, invalid NaN (adapter.normalize_depth)",
+                        "truth": "base_pose/pallet_pose: physics position + quaternion wxyz per tick; "
+                        "camera_prim_pose: Camera.get_world_pose(camera_axes='world'), diagnosis only",
+                        "near_capture": state.get("near_capture"),
+                        "approach_path": state.get("paths", {}).get("approach"),
+                    },
+                    [] if dwells is None else dwells.records,
+                )
+            except Exception as exc:  # noqa: BLE001
+                state["pocket_recording_close_error"] = repr(exc)
+                traceback.print_exc()
+                # A recording run without its records measured nothing: fail it, never
+                # replacing a failure already raised (main() records that one).
+                state["success"] = False
+                state.setdefault("failure_reason", f"pocket_recording_close_failed: {exc!r}")
         if state.get("obstacle_layer") is not None and obstacle is not None:
             scans_rec = obstacle["scans"]
             walls = [x["total_wall_s"] for x in scans_rec] or [0.0]
