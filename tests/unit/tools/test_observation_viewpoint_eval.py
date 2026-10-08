@@ -32,12 +32,14 @@ def test_the_fixed_list_matches_the_runner_default():
     import ast
     from pathlib import Path
 
+    from forklift_core.planning.observation_viewpoints import DEFAULT_OBSERVATION_WAYPOINTS
+
     script = Path(design.ROOT / "sim/isaac/run_transport.py").read_text()
-    (assign,) = [
-        node
+    assigns = [
+        ast.unparse(node.value)
         for node in ast.walk(ast.parse(script))
         if isinstance(node, ast.Assign)
         and ast.unparse(node.targets[0]) == "args.observation_waypoints"
-        and isinstance(node.value, ast.List)
     ]
-    assert [tuple(ast.literal_eval(e)) for e in assign.value.elts] == list(tool.FIXED)
+    assert "[list(w) for w in DEFAULT_OBSERVATION_WAYPOINTS]" in assigns
+    assert [tuple(w) for w in DEFAULT_OBSERVATION_WAYPOINTS] == list(tool.FIXED)

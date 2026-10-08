@@ -782,6 +782,63 @@ def plan_transport_leg(
     return _append_straight(search, tail)
 
 
+def plan_docking_reapproach(
+    scenario: TransportScenario,
+    start_rear: Pose2D,
+    line_start: Pose2D,
+    config: PlannerConfig | None = None,
+    *,
+    geometry: SyntheticMissionGeometry | None = None,
+    keep_m: float,
+    occupancy=None,
+    deadline=None,
+    behind_m: float = 4.0,
+    lateral_m: float = 1.5,
+    ahead_margin_m: float = 0.2,
+    max_length_m: float = 6.0,
+) -> tuple[PlanResult | None, dict]:
+    """Back to the docking line's start from where the truck stands (plan D7c ③).
+
+    A loaded search to ``line_start``, accepted only when every rear-axle pose
+    stays in the line-start frame box -- along [-behind_m, keep_m + ahead_margin_m]
+    (the docking goal is keep_m ahead; the margin is for a start at the goal),
+    lateral within +-lateral_m -- and the path is at most max_length_m. None with
+    the reason in the record ("no_path", "leaves_box", "too_long") otherwise.
+    """
+    geometry = geometry if geometry is not None else SyntheticMissionGeometry()
+    config = config if config is not None else make_transport_planner_config()
+    props = [prop.rectangle for prop in scenario.props]
+    result = _search(
+        start_rear,
+        line_start,
+        props,
+        geometry.loaded_footprint,
+        scenario.bounds,
+        config,
+        occupancy=occupancy,
+        deadline=deadline,
+    )
+    directions = np.asarray(result.directions)
+    record = {"status": result.status, "refused": None, "length_m": None, "along_min_m": None,
+              "along_max_m": None, "lateral_max_m": None, "expansions": int(result.expanded_nodes),
+              "search_attempts": [list(a) for a in (result.search_attempts or ())],
+              "gear_changes": int((directions[1:] != directions[:-1]).sum()) if len(directions) > 1 else 0}
+    if not result.success:
+        record["refused"] = "no_path"
+        return None, record
+    heading = np.array([cos(line_start.yaw_rad), sin(line_start.yaw_rad)])
+    offsets = np.asarray(result.poses, dtype=float)[:, :2] - np.array([line_start.x_m, line_start.y_m])
+    along = offsets @ heading
+    lateral = offsets @ np.array([-heading[1], heading[0]])
+    record.update(length_m=float(result.length_m), along_min_m=float(along.min()), along_max_m=float(along.max()),
+                  lateral_max_m=float(np.abs(lateral).max()))
+    if along.min() < -behind_m or along.max() > keep_m + ahead_margin_m or np.abs(lateral).max() > lateral_m:
+        record["refused"] = "leaves_box"
+    elif result.length_m > max_length_m:
+        record["refused"] = "too_long"
+    return (None if record["refused"] else result), record
+
+
 def plan_return_leg(
     scenario: TransportScenario,
     start_rear: Pose2D,

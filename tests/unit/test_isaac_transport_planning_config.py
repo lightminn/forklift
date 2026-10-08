@@ -496,7 +496,9 @@ def test_only_a_transport_heading_failure_at_a_cusp_is_replanned():
         "tracking.failure == 'endpoint_heading'",
         "tracking.at_cusp",
         "not tracking.off_path",
-        "len(state['cusp_replans']) < max_cusp_replans",
+        # Plan D7c: after a docked straight or inside a re-approach the cusp is a
+        # docking retry, outside the cusp budget (only with --d7-docking).
+        "len(state['cusp_replans']) < max_cusp_replans or d7_owned",
     }
 
 
@@ -887,4 +889,46 @@ def test_every_path_replacement_restarts_the_no_progress_baseline():
     cusp = source.index('"replaced_path": path_record(paths[phase]),')
     window = source[cusp : cusp + 1500]
     assert window.index("arm_docking()") < window.index('obstacle.setdefault("progress", {}).clear()')
-    assert source.count('obstacle.setdefault("progress", {}).clear()') == 3
+    # ... and a D7c re-approach installed in place of the transport path (plan D7c ④).
+    install = source.index("    def install_reapproach(")
+    assert 'obstacle.setdefault("progress", {}).clear()' in source[install : install + 1500]
+    assert source.count('obstacle.setdefault("progress", {}).clear()') == 4
+
+
+def test_d7c_docking_branches_are_inert_without_the_flag():
+    # Plan D7c: flag-off runs drive and record as before.
+    source = SCRIPT.read_text()
+    assert 'd7_docking_ = slam["docking"] if (args.d7_docking and slam is not None) else {}' in source
+    assert "        if args.d7_docking and result.accepted:\n" in source  # the early goal commit
+    assert "        if path is None and args.d7_docking:\n" in source  # (b) instead of docking_unaligned
+    # Without the flag the stall and cusp branches are the old ones (d7_owned is False).
+    assert "d7_owned = phase == \"transport\" and bool(" in source
+
+
+def test_d7c_reapproach_is_under_the_permission_and_kept_by_obstacle_replans():
+    source = SCRIPT.read_text()
+    straight = source.index("docking_straight = (phase == \"approach\"")
+    window = source[straight : straight + 1500]
+    assert 'if slam is not None and slam["docking"].get("reapproach"):\n' in window
+    assert window.index("reapproach") < window.index("acting = (")
+    # Both obstacle replans of the transport go through the dispatch, and a
+    # re-approach is never re-armed into a docking straight.
+    assert source.count("replanned = transport_replan(") == 2
+    assert 'and not slam["docking"].get("reapproach"):\n                            arm_docking()' in source
+
+
+def test_a_destination_prior_error_moves_planning_only():
+    # Plan D7c δ runs: the reference scan and the evaluation keep the true destination.
+    source = SCRIPT.read_text()
+    assert 'taught = site_poses(truth_destination, geometry)["delivery"]' in source
+    assert "destination = np.array([truth_destination.x_m, truth_destination.y_m])" in source
+    assert "math.cos(truth_destination.yaw_rad)" in source
+    marker = source.index('state["destination_marker"] = add_destination(')
+    assert source.index("truth_destination = scenario.destination") > marker
+    assert source.index('(args.output / "scenario.json").write_text(') < marker
+
+
+def test_d7c_docking_needs_slam():
+    source = SCRIPT.read_text()
+    assert ('if args.d7_docking and args.slam_feedback is None:\n'
+            '        parser.error("--d7-docking retries the SLAM docking match; it needs --slam-feedback")') in source

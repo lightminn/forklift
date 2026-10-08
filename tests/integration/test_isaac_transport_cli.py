@@ -428,9 +428,13 @@ def test_slam_runs_dock_on_a_scan_before_the_delivery_straight() -> None:
     source = SCRIPT.read_text()
     assert 'dock_at_delivery_straight(t)' in source
     assert 'ignore_self=True' in source
-    assert "moved = np.array([compose(step_shift, tuple(pose)) for pose in paths[\"withdraw\"].poses])" in source
+    # The withdraw follows every goal change (plan D7c factored it into move_withdraw).
+    assert "set_withdraw(np.array([compose(tuple(frame_change), tuple(pose)) for pose in paths[\"withdraw\"].poses]))" in source
+    assert source.count("move_withdraw(step_shift)") == 2
     # Three SLAM recoveries, plus the priority-5 obstacle replan of the
     # transport leg and the return leg's fallback to it.
     # (and the zero-clearance retry of that obstacle replan), plus the live
     # replans of the transport and return legs when they start.
-    assert source.count('slam.get("transport_scenario", scenario)') == 8
+    # Plan D7c: the two obstacle replans of the transport now share transport_replan
+    # (one lookup), and the docking retry's release and re-approach plan add three.
+    assert source.count('slam.get("transport_scenario", scenario)') == 10
