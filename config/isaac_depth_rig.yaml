@@ -1,0 +1,35 @@
+# Synthetic RGB-D rig for the visual SLAM comparison. Not measured hardware.
+# Plan: docs/plans/2026-10-07-visual-slam-and-fusion.md (user decision
+# 2026-10-07: four cameras front/rear/left/right).
+#
+# D435i-class: 640 x 480 with fx = fy = 465.74 px is the perception camera's K
+# (tools/scene_rig.py), a 69.0 deg horizontal field of view like the D435i RGB
+# sensor's 69 deg (Intel D435 series product brief); 4:3 makes the vertical
+# 54.5 deg, wider than its 42 deg. Depth is z-depth registered to the colour
+# grid (what the RealSense depth-to-colour alignment produces). The 0.28 m near
+# limit is the brief's minimum depth; the 8 m far limit is an assumption.
+rate_hz: 10
+width: 640
+height: 480
+fx_px: 465.741156
+depth_range_m: [0.28, 8.0]
+# Render clipping. Must start below the 0.28 m depth floor: the USD camera
+# default near plane is 1 m, which hid everything closer (first rig records,
+# 2026-10-07; the perception camera sets [0.03, 100]).
+clipping_range_m: [0.05, 100.0]
+# sigma_z = c * z^2 (m): z^2 * 0.08 px / (447 px * 0.05 m), i.e. a 50 mm
+# baseline, 848 px over 87 deg and 0.08 px subpixel error -- 14 mm at 2 m.
+# Assumed, not a measured D435i figure.
+depth_noise_coefficient_per_m: 0.0036
+# world.render() calls with physics frozen before each capture: the render
+# pipeline trails physics by 2-4 frames (docs/validation/2026-09-20-capture-freshness.md),
+# and perception_camera.acquire_frozen_snapshot uses the same 8.
+frozen_renders: 8
+# On the roof (top 1.01 m), looking outward 15 deg below the horizon. The
+# mast top (x 0.48, z 0.67) is 49 deg below the front camera, outside its
+# 42.3 deg lower edge; the side cameras sit outside the body's 0.3125 m.
+cameras:
+  front: {xyz_m: [0.17, 0.0, 1.03], yaw_deg: 0.0, pitch_down_deg: 15.0}
+  rear: {xyz_m: [-0.42, 0.0, 1.03], yaw_deg: 180.0, pitch_down_deg: 15.0}
+  left: {xyz_m: [-0.12, 0.32, 1.03], yaw_deg: 90.0, pitch_down_deg: 15.0}
+  right: {xyz_m: [-0.12, -0.32, 1.03], yaw_deg: -90.0, pitch_down_deg: 15.0}

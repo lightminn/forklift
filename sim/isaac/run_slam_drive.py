@@ -161,6 +161,39 @@ def arguments() -> argparse.Namespace:
         "noise from this seed (default: no noise).",
     )
     parser.add_argument("--slam-reply-timeout", type=float, default=90.0)
+    # Visual SLAM comparison (docs/plans/2026-10-07-visual-slam-and-fusion.md).
+    parser.add_argument(
+        "--depth-rig",
+        type=Path,
+        default=None,
+        help="Record the RGB-D rig (config/isaac_depth_rig.yaml) at every scan: "
+        "frozen-render captures saved under rig/, freshness-checked.",
+    )
+    parser.add_argument(
+        "--chase-video",
+        action="store_true",
+        help="Render a third-person camera following the truck to chase.mp4 "
+        "(display only; the ceiling stays visible).",
+    )
+    parser.add_argument(
+        "--survey-speed-mps",
+        type=float,
+        default=None,
+        help="Override the LiDAR config's survey cruise speed (fast condition).",
+    )
+    parser.add_argument(
+        "--slam-backend",
+        choices=("slam_toolbox", "rig"),
+        default="slam_toolbox",
+        help="With --slam-feedback: send scans to isaac_slam_bridge "
+        "(slam_toolbox), or rig frames (scan + cameras) to rig_slam_bridge.",
+    )
+    parser.add_argument(
+        "--slam-condition",
+        default="nominal",
+        help="With --slam-feedback: a forklift_core sensor_conditions name "
+        "applied to what is sent (and to the odometry for wheel_slip).",
+    )
     args, unknown = parser.parse_known_args()
     if args.max_sim_seconds <= 0:
         parser.error("--max-sim-seconds must be positive")
@@ -168,6 +201,24 @@ def arguments() -> argparse.Namespace:
         parser.error("--robot-camera requires --video")
     if args.slam_noise_seed is not None and args.slam_feedback is None:
         parser.error("--slam-noise-seed requires --slam-feedback")
+    if args.slam_backend == "rig" and (args.slam_feedback is None or args.depth_rig is None):
+        parser.error("--slam-backend rig requires --slam-feedback and --depth-rig")
+    if args.slam_condition != "nominal" and args.slam_feedback is None:
+        parser.error("--slam-condition requires --slam-feedback")
+    if args.survey_speed_mps is not None and not args.survey_speed_mps > 0:
+        parser.error("--survey-speed-mps must be positive")
+    from forklift_core.localization.sensor_conditions import condition
+
+    try:
+        args.condition = condition(args.slam_condition)
+    except ValueError as exc:
+        parser.error(str(exc))
+    if args.slam_backend == "slam_toolbox" and (
+        args.condition.lidar_blackout_s or args.condition.camera_blackout_s
+    ):
+        # isaac_slam_bridge answers every scan; a scan that never comes has no
+        # reply contract there (plan 2026-10-07 D5).
+        parser.error("blackout conditions need --slam-backend rig")
     from insertion_geometry import (
         read_carriage_limit_m,
         read_chassis_reference_m,
@@ -438,12 +489,42 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
             "timing": "video only: the frame read after each render step, "
             "not a freshness-checked perception capture",
         }
+    rig = rig_cameras = chase = chase_camera = None
+    if args.depth_rig is not None:
+        import depth_rig
+
+        rig, rig_config, rig_sha = depth_rig.load_rig(args.depth_rig)
+        require(
+            120 // int(lidar_config["rate_hz"]) == 120 // rig.rate_hz,
+            "The rig must capture at the LiDAR rate (plan 2026-10-07: one frame per scan)",
+        )
+        rig_cameras = depth_rig.create_cameras(Camera, rig)
+    if args.chase_video:
+        import depth_rig
+
+        chase = depth_rig.ChaseView()
+        chase_camera = Camera(
+            prim_path="/World/ChaseCamera", frequency=-1, resolution=(1280, 720)
+        )
+        chase_camera.set_focal_length(1.4)
+        chase_camera.set_clipping_range(0.05, 200.0)
+        state["chase_camera"] = {**asdict(chase), "fps": args.fps, "use": "display only"}
     world.reset()
     if camera is not None:
         camera.initialize()
+    if chase_camera is not None:
+        chase_camera.initialize()
     if robot_camera is not None:
         robot_camera.initialize()
         robot_camera.add_distance_to_image_plane_to_frame()
+    if rig_cameras is not None:
+        from perception_adapter import read_isaac_intrinsics
+
+        for rig_camera in rig_cameras.values():
+            rig_camera.initialize()
+            rig_camera.add_distance_to_image_plane_to_frame()
+        sdk_intrinsics = depth_rig.verify_intrinsics(read_isaac_intrinsics, rig_cameras, rig)
+        state["depth_rig"] = depth_rig.rig_record(rig, rig_config, rig_sha, sdk_intrinsics)
     names = list(robot.dof_names)
     wheels = np.array(
         [
@@ -494,7 +575,11 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
         )
         + "\n"
     )
-    add_path_display(stage, survey, "Survey", (0.1, 0.55, 1.0))
+    if args.depth_rig is None:
+        # The rig cameras would see this floor line: a feature no real truck has
+        # (plan 2026-10-07 D1), so rig recordings leave it out.
+        add_path_display(stage, survey, "Survey", (0.1, 0.55, 1.0))
+    state["path_display"] = args.depth_rig is None
     stage.GetRootLayer().Export(str(args.output / "scene.usda"))
 
     obstacles = [prop.rectangle for prop in transport.props] + [
@@ -506,7 +591,12 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
             transport.pickup.yaw_rad,
         )
     ]
-    speed = float(lidar_config["survey_speed_mps"])
+    speed = float(
+        args.survey_speed_mps
+        if args.survey_speed_mps is not None
+        else lidar_config["survey_speed_mps"]
+    )
+    state["survey_speed_mps"] = speed
     tracker = RearAxlePathTracker(
         survey.poses,
         survey.directions,
@@ -589,6 +679,29 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
             "noise_seed": args.slam_noise_seed,
             "start_rear": list(start_rear),
             "max_age_s": 0.25,
+            "backend": args.slam_backend,
+            "condition": args.condition.name,
+        }
+        if rig is not None:
+            from forklift_core.sensors.camera_rig import DepthNoise
+
+            # Keyed by (seed, camera, frame): the offline player draws the same.
+            slam["depth_noise"] = DepthNoise(
+                coefficient_per_m=rig.depth_noise_coefficient_per_m,
+                range_m=rig.depth_range_m,
+                seed=args.slam_noise_seed or 0,
+                enabled=args.slam_noise_seed is not None,
+            )
+    chase_frames = []
+    rig_state = None
+    if rig is not None:
+        rig_state = {
+            "writer": depth_rig.FrameWriter(args.output / "rig", rig.names),
+            "history": depth_rig.PoseHistory(),
+            "frames": [],
+            "checks": [],
+            "capture_wall_s": 0.0,
+            "check_every": 20,
         }
 
     def odom_base():
@@ -612,6 +725,8 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
             encoders["depth"] = open_encoder(
                 args.output / "camera_depth.mp4", *size, args.fps
             )
+        if chase_camera is not None:
+            encoders["chase"] = open_encoder(args.output / "chase.mp4", 1280, 720, args.fps)
         dt = 1 / 120
         for step in range(int(120 * args.max_sim_seconds)):
             t = world.current_time - initial_time
@@ -703,7 +818,19 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
             )
             if slam is not None:
                 slam["last_command"] = requested if not hold_still else 0.0
-            render = args.video and step % frame_every == 0
+            render = (args.video or chase_camera is not None) and step % frame_every == 0
+            if render and chase_camera is not None:
+                # Placed from the pose before this step: display only.
+                eye, target = chase.eye_and_target(base, yaw)
+                look = Gf.Matrix4d().SetLookAt(
+                    Gf.Vec3d(*eye), Gf.Vec3d(*target), Gf.Vec3d(0, 0, 1)
+                )
+                chase_q = look.GetInverse().ExtractRotationQuat()
+                chase_camera.set_world_pose(
+                    position=eye,
+                    orientation=np.array([chase_q.GetReal(), *chase_q.GetImaginary()]),
+                    camera_axes="usd",
+                )
             world.step(render=render)
             # Encoders and the scan both read the state this step produced.
             stamp = world.current_time - initial_time
@@ -712,8 +839,12 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
             log["wheel_rates_rad_s"].append(robot.get_joint_velocities()[wheels])
             log["steering_rad"].append(robot.get_joint_positions()[steers])
             log["base_pose_world"].append(np.concatenate((base, q)))
+            if rig_state is not None:
+                rig_state["history"].push(base, q)
             if slam is not None:
                 rates = slam["noise"].wheel_rates(robot.get_joint_velocities()[wheels][2:4])
+                # wheel_slip: the encoders report more travel than happened.
+                rates = tuple(args.condition.wheel_rates(rates))
                 angles = slam["noise"].steering(robot.get_joint_positions()[steers])
                 slam["odom_rear"] = slam["odometry"].update(stamp, rates, angles)
                 previous_yaw = slam["odom_yaw"]
@@ -743,27 +874,83 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
                     )
                 log["scan_stamps_s"].append(stamp)
                 log["scan_ranges_m"].append(ranges.astype(np.float32))
+                rig_frames = None
+                if rig_state is not None:
+                    frame_index = len(log["scan_stamps_s"]) - 1
+                    capture_started = time.monotonic()
+                    rig_frames = depth_rig.capture(world, robot, rig_cameras, rig)
+                    rig_state["capture_wall_s"] += time.monotonic() - capture_started
+                    for name, (rgb, depth) in rig_frames.items():
+                        rig_state["writer"].put(
+                            name,
+                            frame_index,
+                            rgb,
+                            depth_rig.clean_depth_mm(depth, *rig.depth_range_m),
+                        )
+                    entry = {"index": frame_index, "stamp_s": float(stamp), "scan_index": frame_index}
+                    if frame_index % rig_state["check_every"] == 0:
+                        check = {
+                            "index": frame_index,
+                            "stamp_s": float(stamp),
+                            "cameras": depth_rig.freshness_check(
+                                planar_lidar.cast_scan, rig, rig_frames, rig_state["history"]
+                            ),
+                        }
+                        rig_state["checks"].append(check)
+                        entry["checked"] = {
+                            name: (c["fresh"], c["judged"])
+                            for name, c in check["cameras"].items()
+                        }
+                    rig_state["frames"].append(entry)
                 if slam is not None:
                     link = slam["module"]
-                    sent = slam["noise"].ranges(
-                        ranges,
-                        range_min_m=pattern.range_min_m,
-                        range_max_m=pattern.range_max_m,
+                    sent = args.condition.ranges(
+                        slam["noise"].ranges(
+                            ranges,
+                            range_min_m=pattern.range_min_m,
+                            range_max_m=pattern.range_max_m,
+                        )
                     )
                     scan_id = slam["scan_id"]
-                    try:
-                        reply = slam["link"].exchange(
-                            link.Scan(
-                                scan_id,
-                                float(stamp),
-                                odom_base(),
-                                sent.astype(np.float32),
-                                pattern.angle_min_rad,
-                                pattern.angle_increment_rad,
-                                pattern.range_min_m,
-                                pattern.range_max_m,
+                    if args.slam_backend == "rig":
+                        images = ()
+                        if args.condition.cameras_available(float(stamp)):
+                            images = tuple(
+                                link.RigImage(
+                                    name,
+                                    rig_frames[name][0],
+                                    slam["depth_noise"].depth_mm(
+                                        rig_frames[name][1], index, scan_id
+                                    ),
+                                )
+                                for index, name in enumerate(rig.names)
                             )
+                        message = link.Frame(
+                            scan_id,
+                            float(stamp),
+                            odom_base(),
+                            sent.astype(np.float32)
+                            if args.condition.lidar_available(float(stamp))
+                            else None,
+                            pattern.angle_min_rad,
+                            pattern.angle_increment_rad,
+                            pattern.range_min_m,
+                            pattern.range_max_m,
+                            images,
                         )
+                    else:
+                        message = link.Scan(
+                            scan_id,
+                            float(stamp),
+                            odom_base(),
+                            sent.astype(np.float32),
+                            pattern.angle_min_rad,
+                            pattern.angle_increment_rad,
+                            pattern.range_min_m,
+                            pattern.range_max_m,
+                        )
+                    try:
+                        reply = slam["link"].exchange(message)
                     except link.SlamLinkFailure as exc:
                         slam["records"].append(
                             {
@@ -795,7 +982,15 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
                 latest_points = planar_lidar.scan_points_world(
                     origin, directions, ranges
                 )
-            if render:
+            if render and chase_camera is not None:
+                chase_rgba = chase_camera.get_rgba()
+                ready = chase_rgba is not None and np.shape(chase_rgba)[:2] == (720, 1280)
+                chase_rgb = (
+                    np.asarray(chase_rgba)[:, :, :3] if ready else np.zeros((720, 1280, 3), np.uint8)
+                )
+                encoders["chase"].stdin.write(np.ascontiguousarray(chase_rgb, np.uint8).tobytes())
+                chase_frames.append({"time_s": stamp, "ready": bool(ready)})
+            if render and camera is not None:
                 rgba = camera.get_rgba()
                 require(
                     rgba is not None and rgba.shape == (720, 1280, 4),
@@ -871,6 +1066,27 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
         if args.video:
             Image.fromarray(np.asarray(frame, np.uint8)).save(args.output / "end.png")
     finally:
+        if rig_state is not None:
+            # Frames and checks are kept even when the run fails.
+            rig_state["writer"].close()
+            freshness = depth_rig.summarise_freshness(rig_state["checks"])
+            state["rig_freshness"] = freshness
+            state["rig_capture_wall_s"] = rig_state["capture_wall_s"]
+            depth_rig.write_frames_index(
+                args.output / "rig_frames.json",
+                rig_state["frames"],
+                {
+                    "clock": "Isaac simulation time since the first recorded step",
+                    "capture": f"{rig.frozen_renders} frozen renders after the scan's physics step",
+                    "cameras": list(rig.names),
+                    "freshness_checks": rig_state["checks"],
+                    "freshness_summary": freshness,
+                },
+            )
+        if chase_frames:
+            (args.output / "chase_frames.json").write_text(
+                record_json({"fps": args.fps, "frames": chase_frames}) + "\n"
+            )
         if slam is not None:
             # Kept even when the run fails: the failure is in these records.
             slam["link"].close()
@@ -959,7 +1175,17 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
         ],
         "hall": asdict(hall),
     }
+    if rig is not None:
+        meta["depth_rig"] = state["depth_rig"]
+        meta["rig_frames"] = "rig_frames.json: one rig frame per scan, same index"
     (args.output / "meta.json").write_text(record_json(meta, indent=2) + "\n")
+    if rig is not None:
+        freshness = depth_rig.summarise_freshness(rig_state["checks"])
+        require(
+            freshness["camera_checks_judged"] > 0 and not freshness["failures"],
+            f"Rig frames failed the freshness check: {freshness}",
+        )
+        require(freshness["self_hits"] == 0, f"Rig cameras see the truck: {freshness}")
     state.update(
         {
             "success": True,
@@ -1025,8 +1251,9 @@ def main() -> None:
                 else v
             )
             for k, v in vars(args).items()
-            if k != "pallet_geometry_loaded"
+            if k not in ("pallet_geometry_loaded", "condition")
         },
+        "slam_condition": asdict(args.condition),
     }
     started = time.monotonic()
     app = None
