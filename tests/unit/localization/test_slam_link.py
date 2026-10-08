@@ -138,3 +138,56 @@ def test_a_silent_bridge_times_out(tmp_path):
         client.exchange(_scan())
     client.close()
     server.close()
+
+
+def _rig_frame(with_scan=True, cameras=("front", "rear")):
+    rng = np.random.default_rng(0)
+    images = tuple(
+        slam_link.RigImage(
+            name,
+            rng.integers(0, 256, (6, 8, 3), dtype=np.uint8),
+            rng.integers(0, 9000, (6, 8), dtype=np.uint16),
+        )
+        for name in cameras
+    )
+    return slam_link.Frame(
+        scan_id=3,
+        stamp_s=0.3,
+        odom_from_base=(0.5, 0.0, 0.1),
+        ranges_m=_scan().ranges_m if with_scan else None,
+        angle_min_rad=-np.pi,
+        angle_increment_rad=2 * np.pi / 1600,
+        range_min_m=0.2,
+        range_max_m=12.0,
+        images=images,
+    )
+
+
+def test_a_rig_frame_round_trips_bit_for_bit():
+    frame = _rig_frame()
+    back = slam_link.decode_frame(slam_link.encode_frame(frame)[4:])
+    assert (back.scan_id, back.stamp_s, back.odom_from_base) == (3, 0.3, (0.5, 0.0, 0.1))
+    np.testing.assert_array_equal(back.ranges_m, frame.ranges_m)
+    assert [image.camera for image in back.images] == ["front", "rear"]
+    for sent, got in zip(frame.images, back.images, strict=True):
+        np.testing.assert_array_equal(got.rgb, sent.rgb)
+        np.testing.assert_array_equal(got.depth_mm, sent.depth_mm)
+        assert got.depth_mm.dtype == np.uint16
+
+
+def test_a_frame_without_scan_or_images_says_so():
+    back = slam_link.decode_frame(
+        slam_link.encode_frame(_rig_frame(with_scan=False, cameras=()))[4:]
+    )
+    assert back.ranges_m is None and back.images == ()
+
+
+def test_a_truncated_frame_is_refused():
+    body = slam_link.encode_frame(_rig_frame())[4:]
+    with pytest.raises(ValueError, match="shorter"):
+        slam_link.decode_frame(body[:-1])
+
+
+def test_rig_image_shapes_are_checked():
+    with pytest.raises(ValueError, match="uint16"):
+        slam_link.RigImage("front", np.zeros((6, 8, 3), np.uint8), np.zeros((6, 8), np.float32))

@@ -8,6 +8,11 @@ previous correction for a scan the bridge keeps to itself (not a keyframe,
 ``KeyframeGate``) or that slam_toolbox drops at start-up -- plan v3.4,
 ``failed`` ends the run. Framing: a 4-byte big-endian length, then a JSON header line and,
 for scans, the float32 ranges. Plain sockets and numpy only (no ROS here).
+
+A ``Frame`` (docs/plans/2026-10-07-visual-slam-and-fusion.md) is the RGB-D
+rig's version of a scan: the same id, stamp and odometry, the scan when the
+LiDAR delivered one, and one RGB + millimetre depth pair per camera that
+delivered. It is answered with the same ``Reply``.
 """
 
 from __future__ import annotations
@@ -105,6 +110,37 @@ class Scan:
 
 
 @dataclass(frozen=True)
+class RigImage:
+    """One camera's frame: (H, W, 3) uint8 RGB and (H, W) uint16 depth, mm, 0 = none."""
+
+    camera: str
+    rgb: np.ndarray
+    depth_mm: np.ndarray
+
+    def __post_init__(self) -> None:
+        rgb, depth = np.asarray(self.rgb), np.asarray(self.depth_mm)
+        if rgb.dtype != np.uint8 or rgb.ndim != 3 or rgb.shape[2] != 3:
+            raise ValueError("rgb must be (H, W, 3) uint8")
+        if depth.dtype != np.uint16 or depth.shape != rgb.shape[:2]:
+            raise ValueError("depth_mm must be uint16 on the RGB grid")
+
+
+@dataclass(frozen=True)
+class Frame:
+    """A rig frame; ``ranges_m`` None and empty ``images`` mean "delivered nothing"."""
+
+    scan_id: int
+    stamp_s: float
+    odom_from_base: tuple
+    ranges_m: np.ndarray | None
+    angle_min_rad: float
+    angle_increment_rad: float
+    range_min_m: float
+    range_max_m: float
+    images: tuple = ()
+
+
+@dataclass(frozen=True)
 class Reply:
     scan_id: int
     stamp_s: float
@@ -159,6 +195,72 @@ def decode_scan(body: bytes) -> Scan:
     )
 
 
+def encode_frame(frame: Frame) -> bytes:
+    parts, images = [], []
+    count = None
+    if frame.ranges_m is not None:
+        ranges = np.ascontiguousarray(frame.ranges_m, dtype=np.float32)
+        count = int(ranges.size)
+        parts.append(ranges.tobytes())
+    for image in frame.images:
+        height, width = image.depth_mm.shape
+        images.append({"camera": image.camera, "height": height, "width": width})
+        parts.append(np.ascontiguousarray(image.rgb, dtype=np.uint8).tobytes())
+        parts.append(np.ascontiguousarray(image.depth_mm, dtype=np.uint16).tobytes())
+    header = {
+        "type": "frame",
+        "scan_id": int(frame.scan_id),
+        "stamp_s": float(frame.stamp_s),
+        "odom_from_base": [float(v) for v in frame.odom_from_base],
+        "angle_min_rad": float(frame.angle_min_rad),
+        "angle_increment_rad": float(frame.angle_increment_rad),
+        "range_min_m": float(frame.range_min_m),
+        "range_max_m": float(frame.range_max_m),
+        "count": count,
+        "images": images,
+    }
+    return _frame(header, b"".join(parts))
+
+
+def decode_frame(body: bytes) -> Frame:
+    line, _, payload = body.partition(b"\n")
+    header = json.loads(line)
+    if header.get("type") != "frame":
+        raise ValueError("not a frame message")
+    view, offset = memoryview(payload), 0
+
+    def take(size: int) -> memoryview:
+        nonlocal offset
+        if offset + size > len(view):
+            raise ValueError("frame payload shorter than its header")
+        chunk = view[offset : offset + size]
+        offset += size
+        return chunk
+
+    ranges = None
+    if header["count"] is not None:
+        ranges = np.frombuffer(take(4 * header["count"]), dtype=np.float32).copy()
+    images = []
+    for item in header["images"]:
+        h, w = item["height"], item["width"]
+        rgb = np.frombuffer(take(h * w * 3), dtype=np.uint8).reshape(h, w, 3).copy()
+        depth = np.frombuffer(take(h * w * 2), dtype=np.uint16).reshape(h, w).copy()
+        images.append(RigImage(item["camera"], rgb, depth))
+    if offset != len(view):
+        raise ValueError("frame payload longer than its header")
+    return Frame(
+        header["scan_id"],
+        header["stamp_s"],
+        tuple(header["odom_from_base"]),
+        ranges,
+        header["angle_min_rad"],
+        header["angle_increment_rad"],
+        header["range_min_m"],
+        header["range_max_m"],
+        tuple(images),
+    )
+
+
 def encode_reply(reply: Reply) -> bytes:
     return _frame(
         {
@@ -207,6 +309,10 @@ def recv_scan(sock: socket.socket) -> Scan:
     return decode_scan(recv_body(sock))
 
 
+def recv_frame(sock: socket.socket) -> Frame:
+    return decode_frame(recv_body(sock))
+
+
 class SlamLinkClient:
     """The simulator side: one blocking exchange per scan."""
 
@@ -215,9 +321,10 @@ class SlamLinkClient:
         self.sock.settimeout(timeout_s)
         self.sock.connect(path)
 
-    def exchange(self, scan: Scan) -> Reply:
+    def exchange(self, scan: Scan | Frame) -> Reply:
+        """Send a scan (slam_toolbox bridge) or a rig frame (rig bridge), await its reply."""
         try:
-            self.sock.sendall(encode_scan(scan))
+            self.sock.sendall(encode_frame(scan) if isinstance(scan, Frame) else encode_scan(scan))
             reply = decode_reply(recv_body(self.sock))
         except (OSError, ConnectionError, ValueError) as exc:
             raise SlamLinkFailure(f"scan {scan.scan_id}: {exc}") from exc
@@ -234,16 +341,21 @@ class SlamLinkClient:
 
 
 __all__ = [
+    "Frame",
     "Reply",
+    "RigImage",
     "STATUSES",
     "Scan",
     "SlamLinkClient",
     "KeyframeGate",
     "SlamLinkFailure",
+    "decode_frame",
     "decode_reply",
     "decode_scan",
+    "encode_frame",
     "encode_reply",
     "encode_scan",
     "recv_body",
+    "recv_frame",
     "recv_scan",
 ]
