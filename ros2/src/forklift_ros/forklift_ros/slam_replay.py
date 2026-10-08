@@ -161,9 +161,18 @@ def _quaternion_xyzw(yaw: float) -> tuple[float, float, float, float]:
 
 
 def write_bag(
-    record: Path, bag: Path, noise: ReplayNoise, storage_id: str = "mcap"
+    record: Path,
+    bag: Path,
+    noise: ReplayNoise,
+    storage_id: str = "mcap",
+    condition=None,
 ) -> dict:
-    """Write the bag and odometry.csv next to it; return a small manifest."""
+    """Write the bag and odometry.csv next to it; return a small manifest.
+
+    ``condition`` (forklift_core sensor_conditions, plan 2026-10-07 D5) scales
+    the wheel rates the odometry integrates, clips ranges and leaves out the
+    scans of a LiDAR blackout; None is the nominal record.
+    """
     import rosbag2_py
     from geometry_msgs.msg import PoseStamped, TransformStamped
     from nav_msgs.msg import Odometry
@@ -171,9 +180,17 @@ def write_bag(
     from sensor_msgs.msg import LaserScan
     from tf2_msgs.msg import TFMessage
 
+    from forklift_core.localization.sensor_conditions import condition as named
+
+    condition = condition if condition is not None else named("nominal")
     log, meta = load_slam_log(record)
     laser = meta["laser"]
-    odometry = odometry_base_poses(log, meta, noise)
+    scaled = dict(log)
+    scaled["wheel_rates_rad_s"] = log["wheel_rates_rad_s"].astype(float).copy()
+    scaled["wheel_rates_rad_s"][:, 2:4] = condition.wheel_rates(
+        scaled["wheel_rates_rad_s"][:, 2:4]
+    )
+    odometry = odometry_base_poses(scaled, meta, noise)
     truth = ground_truth_base_poses(log)
     ranges = noisy_ranges(log["scan_ranges_m"], meta, noise)
     stamps = log["joint_stamps_s"]
@@ -259,7 +276,7 @@ def write_bag(
         counts["/ground_truth/base_pose"] += 1
 
         row = scan_rows.get(float(stamp))
-        if row is not None:
+        if row is not None and condition.lidar_available(float(stamp)):
             scan = LaserScan()
             header(scan, stamp, "laser")
             scan.angle_min = float(laser["angle_min_rad"])
@@ -272,7 +289,7 @@ def write_bag(
             scan.scan_time = 1.0 / laser["rate_hz"]
             scan.range_min = float(laser["range_min_m"])
             scan.range_max = float(laser["range_max_m"])
-            scan.ranges = ranges[row].astype(np.float32).tolist()
+            scan.ranges = condition.ranges(ranges[row]).astype(np.float32).tolist()
             writer.write("/scan", serialize_message(scan), when)
             counts["/scan"] += 1
     del writer
@@ -292,6 +309,7 @@ def write_bag(
         "storage_id": storage_id,
         "clock_offset_s": CLOCK_OFFSET_S,
         "noise": asdict(noise),
+        "condition": asdict(condition),
         "messages": counts,
     }
 
@@ -305,7 +323,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--wheel-rate-noise-std-rad-s", type=float, default=0.0)
     parser.add_argument("--steering-noise-std-rad", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--condition",
+        default="nominal",
+        help="forklift_core sensor_conditions name (plan 2026-10-07 D5)",
+    )
     args = parser.parse_args(argv)
+    from forklift_core.localization.sensor_conditions import condition
+
     args.output.mkdir(parents=True, exist_ok=False)
     noise = ReplayNoise(
         args.range_noise_std_m,
@@ -313,7 +338,9 @@ def main(argv: list[str] | None = None) -> int:
         args.steering_noise_std_rad,
         args.seed,
     )
-    manifest = write_bag(args.record, args.output / "bag", noise, args.storage)
+    manifest = write_bag(
+        args.record, args.output / "bag", noise, args.storage, condition(args.condition)
+    )
     (args.output / "replay_manifest.json").write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
     )
