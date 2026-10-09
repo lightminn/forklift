@@ -320,3 +320,46 @@ def test_the_correspondence_counts_across_lost_reads_and_fails_missing_cpu_rows(
     assert out["longest_disagreement"] == 1 and out["checks"]["complete"]
     short = OBS.correspondence(isaac, cpu[:1], [])
     assert short["checks"]["complete"] is False and not short["pass"]
+
+
+def test_results_with_numpy_counts_serialise():
+    rows = [row(0.1, True, distance=1.05), row(0.2, False, distance=1.04)]
+    rows[0]["standing"] = np.bool_(True)
+    summary = OBS.bin_summary(rows, (0.0, 0.3, 0.0, 0.3, 1.05, 1.04))
+    assert json.loads(json.dumps(summary, default=OBS.json_default))[0]["standing"] == 1
+
+
+def test_the_matrix_margin_takes_each_maximum_over_all_runs(tmp_path):
+    # Codex D8b ③⑤ consult: 10.60 mm spatial in one run and 6.72 mrad in another give
+    # 10.60 + 6.72 x 0.6 = 14.64 mm, not the larger per-run sum.
+    calibration = {"L_s": 0.09, "inputs": {"/a/run": {}, "/b/run": {}}, "verdict": {"complete": True, "pass": True}}
+    for key, (spatial, yaw) in (("/a/run", (0.0106, 0.001)), ("/b/run", (0.002, 0.00672))):
+        corr = {"spatial_m_max": spatial, "yaw_rad_max": yaw, "margin_m": spatial + yaw * 0.6, "pass": False,
+                "checks": {"geometry": False}}
+        (tmp_path / f"{OBS.run_name(key)}.json").write_text(json.dumps(
+            {"key": key, "calibration_sha256": "c", "L_s": 0.09, "bins": [], "losses": {}, "correspondence": corr}))
+    summary = OBS.collect(calibration, "c", tmp_path)
+    assert summary["margin_m"] == pytest.approx(0.0106 + 0.00672 * 0.6)
+    assert summary["transfer_to_isaac"] is False and summary["check_failures"]["geometry"] == 2
+
+
+def test_disagreements_are_listed_for_diagnosis():
+    a = [row(0.1, True, front={"errors": None, "refused": None}, roof=None)]
+    b = [row(0.1, False, front={"errors": None, "refused": "step"}, roof=None)]
+    out = OBS.correspondence(a, b, [{"index": 1, "depth_p95_m": 0.012, "validity_mismatch": 0.0, "common": 9,
+                                     "region": 10}])
+    assert out["disagreements"][0]["index"] == a[0]["index"] and out["disagreements"][0]["refused"]["cpu"][0] == "step"
+    assert out["worst_depth"]["depth_p95_m"] == 0.012
+
+
+def test_no_transfer_without_the_whole_observed_matrix_and_a_passed_calibration(tmp_path):
+    corr = {"spatial_m_max": 0.001, "yaw_rad_max": 0.001, "margin_m": 0.0016, "pass": True, "checks": {}}
+    calibration = {"L_s": 0.09, "inputs": {"/a/run": {}, "/b/run": {}}, "verdict": {"complete": True, "pass": True}}
+    (tmp_path / f"{OBS.run_name('/a/run')}.json").write_text(json.dumps(
+        {"key": "/a/run", "calibration_sha256": "c", "L_s": 0.09, "bins": [], "losses": {}, "correspondence": corr}))
+    assert OBS.collect(calibration, "c", tmp_path)["transfer_to_isaac"] is False  # /b/run missing
+    (tmp_path / f"{OBS.run_name('/b/run')}.json").write_text(json.dumps(
+        {"key": "/b/run", "calibration_sha256": "c", "L_s": 0.09, "bins": [], "losses": {}, "correspondence": corr}))
+    assert OBS.collect(calibration, "c", tmp_path)["transfer_to_isaac"] is True
+    failed = {**calibration, "verdict": {"complete": True, "pass": False}}
+    assert OBS.collect(failed, "c", tmp_path)["transfer_to_isaac"] is False

@@ -65,6 +65,15 @@ def wrap(a: float) -> float:
     return math.atan2(math.sin(a), math.cos(a))
 
 
+def json_default(value):
+    """numpy scalars and arrays in the results (counts of numpy booleans are numpy ints)."""
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    raise TypeError(f"{type(value).__name__} is not JSON serialisable")
+
+
 def run_name(key: str) -> str:
     """A file name unique per run directory (Codex D8b impl P1: parents can repeat)."""
     return f"{Path(key).parent.name}_{hashlib.sha1(key.encode()).hexdigest()[:8]}"
@@ -567,7 +576,17 @@ def correspondence(isaac_rows: list[dict], cpu_rows: list[dict], depth_rows: lis
         "geometry": None if spatial is None else spatial <= TOL["geometry_m"],
         "yaw": None if yaw is None else yaw <= TOL["yaw_rad"],
     }
+    # Where they disagree and the worst depth frame, to diagnose from the stored rows.
+    disagreements = [{"index": a["index"], "aligned_s": a.get("aligned_s"), "distance_m": a.get("distance_m"),
+                      "isaac": state(a) if "skipped" not in a and "loss" not in a else a.get("skipped", a.get("loss")),
+                      "cpu": None if b is None else (state(b) if "skipped" not in b and "loss" not in b
+                                                     else b.get("skipped", b.get("loss"))),
+                      "refused": {"isaac": [(a.get(x) or {}).get("refused") for x in ("front", "roof")],
+                                  "cpu": None if b is None else [(b.get(x) or {}).get("refused") for x in ("front", "roof")]}}
+                     for (a, b), ok in zip(sequence, same) if not ok]
+    worst_depth = max((d for d in depth_rows if d["depth_p95_m"] is not None), key=lambda d: d["depth_p95_m"], default=None)
     return {
+        "disagreements": disagreements, "worst_depth": worst_depth,
         "reads": len(sequence), "frames": len(pairs), "depth_frames": len(depth_rows),
         "depth_p95_m_max": max(p95, default=None), "validity_mismatch_max": max(mism, default=None),
         "frames_without_depth_comparison": sum(1 for d in depth_rows if d["depth_p95_m"] is None),
@@ -667,17 +686,36 @@ def collect(calibration: dict, calibration_sha: str, output: Path) -> dict:
         data = json.loads(path.read_text())
         if data.get("key") != key or data.get("calibration_sha256") != calibration_sha or data.get("L_s") != calibration["L_s"]:
             raise ValueError(f"{path} is not {key} under this calibration")
+        if "correspondence_rows" in data:
+            # Recomputed from the stored rows, so the summary follows this tool's rules.
+            data["correspondence"] = {**correspondence(data["rows"], data["correspondence_rows"]["cpu"],
+                                                       data["correspondence_rows"]["depth"]),
+                                      "depth_every": data.get("correspondence_every")}
         runs[key] = {k: data[k] for k in ("bins", "losses", "correspondence", "noisy_reference", "timing_s", "frames")
                      if k in data}
         runs[key]["file"] = str(path)
     corr = [r["correspondence"] for r in runs.values() if "correspondence" in r]
     matrix_complete = bool(calibration["verdict"].get("complete"))
+    # A transfer needs every calibrated run observed, the calibration itself passed and every
+    # correspondence passed (Codex record review P2).
+    passed = (bool(corr) and not missing and len(corr) == len(runs) and all(c["pass"] for c in corr)
+              and matrix_complete and bool(calibration["verdict"].get("pass")))
+    spatial = max((c["spatial_m_max"] for c in corr if c["spatial_m_max"] is not None), default=None)
+    yaw = max((c["yaw_rad_max"] for c in corr if c["yaw_rad_max"] is not None), default=None)
     return {"L_s": calibration["L_s"], "calibration_sha256": calibration_sha,
             "complete": not missing and matrix_complete, "missing": missing,
             "calibration_matrix_complete": matrix_complete, "calibration_pass": bool(calibration["verdict"].get("pass")),
-            "correspondence_pass": bool(corr) and len(corr) == len(runs) and all(c["pass"] for c in corr),
-            "margin_m": max((c["margin_m"] for c in corr if c["margin_m"] is not None), default=None),
-            "provenance": "front width = observed gap; roof width, height and spacing = pallet model",
+            "correspondence_pass": passed,
+            # A failed correspondence withholds the transfer; the margin is then a measurement
+            # only. Across the matrix it is the largest spatial plus the largest yaw x lever,
+            # each over every run (Codex D8b ③⑤ consult: not the largest per-run sum).
+            "transfer_to_isaac": passed,
+            "spatial_m_max": spatial, "yaw_rad_max": yaw,
+            "margin_m": None if spatial is None else spatial + (yaw or 0.0) * LEVER_M,
+            "check_failures": {k: sum(1 for c in corr if c["checks"].get(k) is False) for k in
+                               ("complete", "depth_p95", "mismatch", "agreement", "disagree_run", "geometry", "yaw")},
+            "provenance": "front: width = observed gap, centre and pocket height from the prior; roof: width, "
+                          "height and spacing from the pallet model -- their zero error is not an independent measurement",
             "runs": runs}
 
 
@@ -717,9 +755,9 @@ def main(argv=None) -> int:
             result.update(front_params=dataclasses.asdict(front_params), calibration_sha256=calibration_sha,
                           L_s=calibration["L_s"], noise_seed=args.noise_seed,
                           correspondence_every=None if args.skip_correspondence else args.correspondence_every)
-            (args.output / f"{run_name(key)}.json").write_text(json.dumps(result) + "\n")
+            (args.output / f"{run_name(key)}.json").write_text(json.dumps(result, default=json_default) + "\n")
     summary = collect(calibration, calibration_sha, args.output)
-    (args.output / "d8b_observations.json").write_text(json.dumps(summary, indent=1) + "\n")
+    (args.output / "d8b_observations.json").write_text(json.dumps(summary, indent=1, default=json_default) + "\n")
     print(json.dumps({k: summary[k] for k in ("complete", "missing", "correspondence_pass", "margin_m")}, indent=1))
     return 0
 
