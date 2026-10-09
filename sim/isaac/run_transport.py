@@ -3808,6 +3808,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         for step in range(int(120 * args.max_sim_seconds)):
             t = world.current_time - initial_time
             rear_stamp = t  # the time of the control pose `rear` (a capture moves it on)
+            dwell_hold = False
             base, q = robot.get_world_pose()
             ppos, pq = pallet.get_world_pose()
             yaw, tilt = yaw_and_tilt(q)
@@ -4433,6 +4434,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     )
                     if hold_:
                         requested_speed = 0.0
+                        # Steering held too: turning at standstill shifted the body
+                        # 20 um per 0.1 s through a whole stand (matrix 1883 seed 3,
+                        # 0.18-0.25 rad of steering in every start dwell).
+                        dwell_hold = True
                         if tracking.status == "arrived":
                             tracking = replace(tracking, status="tracking", speed_mps=0.0)
                     elif released_:
@@ -5961,12 +5966,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     pallet_yaw,
                 ],
             )
-            if estop_holding or obstacle_hold:
-                # Zero every wheel target at once, steering held (plan D4).
+            if estop_holding or obstacle_hold or dwell_hold:
+                # Zero every wheel target at once, steering held (plan D4; D8b dwells).
                 requested_speed = 0.0
-            drive = ackermann_command(requested_speed, curvature, drive_geometry)
+            # A dwell's braking keeps the wheels on the curvature the held steering holds,
+            # not the tracker's, so the wheel speeds agree with the steering (Codex D8b
+            # confirmation review P2) -- here and in the applied command below.
+            wheel_curvature = kappa if dwell_hold else curvature
+            drive = ackermann_command(requested_speed, wheel_curvature, drive_geometry)
             target_steering = (
-                steering_command.copy() if (estop_holding or obstacle_hold) else np.asarray(drive.steering_rad)
+                steering_command.copy() if (estop_holding or obstacle_hold or dwell_hold)
+                else np.asarray(drive.steering_rad)
             )
             actual_steering = robot.get_joint_positions()[steers]
             # Creep while steering catches up; log the measured physical response.
@@ -5996,7 +6006,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 if estop_holding:
                     wheel_speed = 0.0
                 state["command_speed"] = wheel_speed
-            drive = ackermann_command(wheel_speed, curvature, drive_geometry)
+            drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)
             rate = settings["steering_command_rate_rad_s"] * dt
             steering_command += np.clip(target_steering - steering_command, -rate, rate)
             robot.apply_action(

@@ -505,3 +505,17 @@ def test_d8b_custom_cruise_drives_the_straight_but_not_the_acceptance_dry_run() 
     driven = source.index("state[\"near_capture\"][\"dry_run_driven\"] = asdict(bicycle_rollout(")
     tracker = source.index("approach_config,\n                                    )\n")
     assert acceptance < dry < driven < tracker
+
+
+def test_d8b_dwells_hold_the_steering_as_well_as_the_wheels() -> None:
+    """Matrix 1883: steering turned 0.18-0.25 rad in every start dwell and the body crept."""
+    source = SCRIPT.read_text()
+    block = source[source.index("hold_, released_ = dwells.update("):source.index("elif released_:")]
+    assert "dwell_hold = True" in block
+    assert "if estop_holding or obstacle_hold or dwell_hold:" in source
+    assert "steering_command.copy() if (estop_holding or obstacle_hold or dwell_hold)" in source
+    # The wheels brake on the held steering's curvature, in the command actually applied.
+    assert "wheel_curvature = kappa if dwell_hold else curvature" in source
+    assert "drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)" in source
+    assert "ackermann_command(wheel_speed, curvature," not in source
+    assert source.index("dwell_hold = False") < source.index("hold_, released_ = dwells.update(")

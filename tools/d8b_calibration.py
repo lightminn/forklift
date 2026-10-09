@@ -36,7 +36,15 @@ sys.path.insert(0, str(ROOT))
 from tools import scene_rig  # noqa: E402
 
 TICK_S = 1.0 / 120.0
-TAUS = -0.1 + np.arange(133) * TICK_S  # fixed search, -0.1 .. 1.0 s (Codex D8b 4th P2)
+# Every eligible frame's residual is evaluated over the fixed -0.1 .. 1.0 s (Codex D8b 4th
+# P2: never widened per frame), but a frame is eligible on the motion of [s - 0.4, s + 0.1]
+# and the delay band is the part up to IN_RANGE_S: any piece beyond it fails the
+# calibration (confirmation review P1 -- a shrunk search alone let a 0.6 s delay alias
+# into a valid piece at 0.3 s). Matrix 1883 used the 1.1 s motion history: every piece of
+# its 2,436 eligible frames lay in 84-99 ms, and that history left the first dwell bin
+# 6-7 fast frames.
+TAUS = -0.1 + np.arange(133) * TICK_S
+IN_RANGE_S = 0.4
 EPS_M = 0.2e-3
 M_U_M = 0.1e-3  # unverified between-dwell allowance (D8b 5th review)
 ERODE_PX = 3
@@ -472,7 +480,7 @@ def face_distance(truth: Truth, t: float, model: PalletModel) -> float:
 
 @dataclass(frozen=True)
 class Motion:
-    """Camera-in-pallet motion over the fixed window [s - 1.0, s + 0.1]."""
+    """Camera-in-pallet motion over the eligibility window [s - IN_RANGE_S, s - TAUS[0]]."""
 
     min_speed_mps: float  # approach speed along the face normal, the slowest step
     speed_at_s_mps: float
@@ -481,20 +489,21 @@ class Motion:
     distance_range_m: tuple[float, float]  # camera-face distances the window spans
 
 
-def window_times(truth: Truth, s: float) -> np.ndarray | None:
-    """The ticks inside [s - 1.0, s + 0.1] with both ends exactly, or None when the record
-    does not hold the whole window (no tick of slack: every tau must render, impl P2)."""
-    lo, hi = s - TAUS[-1], s - TAUS[0]
+def window_times(truth: Truth, s: float, back_s: float = IN_RANGE_S) -> np.ndarray | None:
+    """The ticks inside [s - back_s, s - TAUS[0]] with both ends exactly, or None when the record
+    does not hold the whole window (no tick of slack, impl P2)."""
+    lo, hi = s - back_s, s - TAUS[0]
     if truth.t[0] > lo + 1e-9 or truth.t[-1] < hi - 1e-9:
         return None
     inner = truth.t[(truth.t > lo + 1e-9) & (truth.t < hi - 1e-9)]
     return np.r_[max(lo, truth.t[0]), inner, min(hi, truth.t[-1])]
 
 
-def motion_window(truth: Truth, s: float, model: PalletModel) -> Motion | None:
+def motion_window(truth: Truth, s: float, model: PalletModel, back_s: float = IN_RANGE_S) -> Motion | None:
     """The window's motion from the truth alone, so whether a frame is used never depends
-    on its delay (Codex D8b 3rd P1)."""
-    times = window_times(truth, s)
+    on its delay (Codex D8b 3rd P1). ``back_s``: IN_RANGE_S for eligibility; a static
+    frame is judged over the whole evaluated range (TAUS[-1])."""
+    times = window_times(truth, s, back_s)
     if times is None:
         return None
     poses = [truth.camera_in_pallet(t) for t in times]
@@ -550,18 +559,28 @@ def analyse_dwells(run: Run, model: PalletModel) -> list[dict]:
     the whole window, so r does not depend on the delay."""
     out = []
     for dwell in run.dwells:
-        rows = []
+        rows, windows = [], []
         for read in run.reads:
             if not usable(read) or not (dwell["trigger_s"] <= read["stamp_s"] <= dwell["end_s"]):
                 continue
-            motion = motion_window(run.truth, read["stamp_s"], model)
+            # Static over the whole evaluated range [s - 1.0, s + 0.1], as planned: a
+            # shorter window would pass a creeping stand (confirmation review P2).
+            motion = motion_window(run.truth, read["stamp_s"], model, TAUS[-1])
+            if motion is not None:
+                windows.append((motion.max_shift_m, motion.max_turn_rad))
             if motion is None or motion.max_shift_m > STATIC_POS_M or motion.max_turn_rad > STATIC_ROT_RAD:
                 continue
             r0 = frame_residuals(run, read, model, taus=np.array([0.0]))[0]
             if math.isfinite(r0):
                 rows.append((read["index"], r0, face_distance(run.truth, read["stamp_s"], model), motion.max_shift_m))
         record = {"kind": dwell["kind"], "trigger_s": dwell["trigger_s"], "end_s": dwell["end_s"],
-                  "static_frames": len(rows)}
+                  "static_frames": len(rows), "frames": len(windows),
+                  # Each frame window's camera shift and turn against the pallet, so a dwell
+                  # short of static frames shows how far it moved (confirmation review P3).
+                  "window_shift_m": None if not windows else {"min": min(w[0] for w in windows),
+                                                              "median": float(np.median([w[0] for w in windows]))},
+                  "window_turn_rad": None if not windows else {"min": min(w[1] for w in windows),
+                                                               "median": float(np.median([w[1] for w in windows]))}}
         if rows:
             r = np.array([x[1] for x in rows])
             b = float(np.median(r))
@@ -587,13 +606,22 @@ def analyse_frames(run: Run, model: PalletModel, dwell_biases: list[tuple[float,
             row["reason"] = "window_outside_record"
             rows.append(row)
             continue
-        bound = bias_bound(*motion.distance_range_m, dwell_biases)
+        # B over every distance the whole evaluated range [s - 1.0, s + 0.1] spans, so a
+        # piece beyond IN_RANGE_S is looked for at its own distance's bound too.
+        evaluated = window_times(run.truth, s, TAUS[-1])
+        span = None
+        if evaluated is not None:
+            d_eval = [face_distance(run.truth, t, model) for t in evaluated]
+            span = (min(min(d_eval), motion.distance_range_m[0]), max(max(d_eval), motion.distance_range_m[1]))
+        bound = None if span is None else bias_bound(*span, dwell_biases)
         row.update(speed_mps=motion.speed_at_s_mps, min_window_speed_mps=motion.min_speed_mps,
-                   window_distance_m=list(motion.distance_range_m))
+                   window_distance_m=list(motion.distance_range_m), evaluated_distance_m=None if span is None else list(span))
         if row["phase"] != "approach":
             row["reason"] = f"phase:{row['phase']}"
         elif motion.min_speed_mps < V_MIN_MPS:
             row["reason"] = "slow_window"
+        elif span is None:
+            row["reason"] = "record_short"
         elif bound is None:
             row["reason"] = "outside_dwells"
         else:
@@ -601,7 +629,11 @@ def analyse_frames(run: Run, model: PalletModel, dwell_biases: list[tuple[float,
             tol = EPS_M + bound
             r = frame_residuals(run, read, model)
             found = pieces(r, tol)
-            row.update(tol_m=tol, pieces=found, residual_m=[None if not math.isfinite(x) else x for x in r],
+            # The band is the part up to IN_RANGE_S; anything beyond is a failure, never
+            # cut off (confirmation review P1).
+            inside = [(lo, hi) for lo, hi in found if hi <= IN_RANGE_S + 1e-9]
+            row.update(tol_m=tol, pieces=inside, residual_m=[None if not math.isfinite(x) else x for x in r],
+                       out_of_range=[(lo, hi) for lo, hi in found if hi > IN_RANGE_S + 1e-9],
                        edge=any(lo <= TAUS[0] + 1e-9 or hi >= TAUS[-1] - 1e-9 for lo, hi in found))
         rows.append(row)
     return rows
@@ -620,7 +652,9 @@ def summarise_run(rows: list[dict]) -> dict:
     return {
         "frames": len(rows), "eligible": len(eligible), "single_piece": len(single),
         "multi_piece": sum(1 for r in eligible if len(r["pieces"]) > 1),
-        "mismatch": sum(1 for r in eligible if not r["pieces"]), "edge": sum(1 for r in eligible if r["edge"]),
+        "mismatch": sum(1 for r in eligible if not r["pieces"] and not r["out_of_range"]),
+        "out_of_range": sum(1 for r in eligible if r["out_of_range"]),
+        "edge": sum(1 for r in eligible if r["edge"]),
         "not_eligible": reasons,
         "L_run_s": float(np.median(mids)) if mids else None,
         "band_s": [min(lows), max(highs)] if lows else None,
@@ -668,6 +702,8 @@ def verdict(dwells: dict, runs: dict, cells: dict, missing: list[str], l_s: floa
             failures.append(f"(ii) {name}: {s['eligible']} eligible, {s['single_piece']} single")
         if s["mismatch"]:
             failures.append(f"(ii) {name}: {s['mismatch']} mismatch")
+        if s["out_of_range"]:
+            failures.append(f"(ii) {name}: {s['out_of_range']} frames with a piece beyond {IN_RANGE_S} s")
         if s["edge"]:
             failures.append(f"(ii) {name}: {s['edge']} at the search edge")
         if s["L_run_s"] is not None:

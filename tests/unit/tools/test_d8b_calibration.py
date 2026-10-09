@@ -188,8 +188,8 @@ def test_a_known_delay_lies_in_every_piece_of_a_synthetic_run(tmp_path):
     summary = CAL.summarise_run(rows)
     assert summary["mismatch"] == 0 and summary["edge"] == 0
     assert summary["L_run_s"] == pytest.approx(0.075, abs=CAL.TICK_S / 2)
-    # The first second after the start is never eligible: the window holds the stand.
-    assert all(r["stamp_s"] >= 1.0 for r in eligible)
+    # The window's history after the start is never eligible: it holds the stand.
+    assert all(r["stamp_s"] >= CAL.TAUS[-1] - 1e-9 for r in eligible)
 
 
 def test_a_standing_frame_measures_the_bias_and_not_the_delay(tmp_path):
@@ -307,7 +307,8 @@ def test_a_window_past_the_record_is_not_eligible(tmp_path):
     last = run.truth.t[-1]
     assert CAL.window_times(run.truth, last - 0.1) is not None
     assert CAL.window_times(run.truth, last - 0.1 + CAL.TICK_S / 2) is None
-    assert CAL.window_times(run.truth, 0.99) is None
+    assert CAL.window_times(run.truth, CAL.TAUS[-1] - CAL.TICK_S / 2, CAL.TAUS[-1]) is None  # before the record
+    assert CAL.window_times(run.truth, CAL.IN_RANGE_S + CAL.TICK_S) is not None  # eligibility needs only 0.4 s
 
 
 def test_parallel_rays_and_a_camera_past_the_face_give_no_front_pixels():
@@ -455,3 +456,31 @@ def test_missing_control_at_either_end_of_the_span_is_reported(tmp_path, monkeyp
     np.save(run.directory / "slam_control.npy", control[keep])
     result, _ = CAL.analyse([(1, [run.directory])], MODEL, geometry_sha256=GEOMETRY_SHA)
     assert any("④ control covers" in m for m in result["analysis_missing"]), result["analysis_missing"]
+
+
+def test_a_delay_beyond_the_band_range_fails_instead_of_aliasing(tmp_path):
+    # Confirmation review P1: with only a shrunk search, a 0.6 s delay could alias into a
+    # piece inside it; the whole -0.1 .. 1.0 s range is evaluated and a piece past 0.4 s
+    # fails the calibration.
+    run = write_run(tmp_path, speed=0.30, delay_s=0.6, start_d=1.9, end_d=0.7)
+    rows = CAL.analyse_frames(run, MODEL, [(1.9, 0.0), (0.6, 0.0)])
+    eligible = [r for r in rows if r["eligible"]]
+    assert eligible
+    assert all(r["out_of_range"] for r in eligible)
+    assert all(lo - 1e-9 <= 0.6 <= hi + 1e-9 for r in eligible for lo, hi in r["out_of_range"])
+    summary = CAL.summarise_run(rows)
+    assert summary["out_of_range"] == len(eligible) and summary["L_run_s"] is None
+
+
+def test_a_creeping_stand_is_judged_over_the_whole_evaluated_range(tmp_path):
+    # Confirmation review P2: 0.2 mm/s of creep moves 0.08 mm in a 0.4 s window but
+    # 0.22 mm in the 1.1 s one; only the latter is the static rule.
+    run = write_run(tmp_path, speed=0.30, delay_s=0.075, dwell=("start", 3.0), start_d=1.1, end_d=0.7)
+    times = run.truth.t
+    creep = np.where(times < 3.0, 0.0002 * times, 0.0)
+    run.truth.base[:, 0] += creep
+    records = CAL.analyse_dwells(run, MODEL)
+    assert records[0]["static_frames"] == 0
+    assert records[0]["window_shift_m"]["min"] > CAL.STATIC_POS_M
+    narrow = CAL.motion_window(run.truth, 2.0, MODEL)
+    assert narrow.max_shift_m < CAL.STATIC_POS_M  # the 0.4 s window alone would have passed it
