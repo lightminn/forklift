@@ -212,8 +212,11 @@ def test_bias_bound_is_the_larger_neighbour_plus_the_allowance():
     biases = [(2.0, 0.1e-3), (1.5, -0.2e-3), (1.0, 0.05e-3)]
     assert CAL.bias_bound(1.7, 1.7, biases) == pytest.approx(0.2e-3 + CAL.M_U_M)
     assert CAL.bias_bound(1.2, 1.2, biases) == pytest.approx(0.2e-3 + CAL.M_U_M)
-    assert CAL.bias_bound(2.05, 2.1, biases) is None
-    assert CAL.bias_bound(0.99, 1.2, biases) is None
+    assert CAL.bias_bound(2.0 + CAL.OUTER_MARGIN_M + 0.001, 2.1, biases) is None
+    assert CAL.bias_bound(0.98, 1.2, biases) is None
+    # Within the margin beyond the outer dwells: their own bias plus the allowance.
+    assert CAL.bias_bound(2.005, 2.008, biases) == pytest.approx(0.1e-3 + CAL.M_U_M)
+    assert CAL.bias_bound(0.995, 0.999, biases) == pytest.approx(0.05e-3 + CAL.M_U_M)
 
 
 def test_the_bias_bound_covers_the_whole_window_not_the_stamp_distance():
@@ -221,7 +224,7 @@ def test_the_bias_bound_covers_the_whole_window_not_the_stamp_distance():
     # 1.74 m whose pixels may be from 1.7625 m must carry the 0.25 mm bin's bound.
     biases = [(2.0, 0.25e-3), (1.75, 0.0), (1.5, 0.0)]
     assert CAL.bias_bound(1.74, 1.74, biases) == pytest.approx(CAL.M_U_M)
-    assert CAL.bias_bound(1.71, 2.04, biases) is None  # leaves the dwells: no bound
+    assert CAL.bias_bound(1.71, 2.04, biases) is None  # leaves the dwells and the margin: no bound
     assert CAL.bias_bound(1.71, 1.95, biases) == pytest.approx(0.25e-3 + CAL.M_U_M)
 
 
@@ -270,7 +273,8 @@ def test_the_cli_reports_a_partial_set_without_passing_it(tmp_path, monkeypatch,
     verdict = result["verdict"]
     # Two runs of one seed are not the plan's matrix: reported, never passed.
     assert not verdict["complete"] and not verdict["pass"] and verdict["missing"]
-    assert [f for f in verdict["failures"] if not f.startswith("(i) seed 1: 2 dwells")] == []
+    assert [f for f in verdict["failures"]
+            if not f.startswith(("(i) seed 1: 2 dwells", "(iv) seed 1: 1 bins"))] == []
     assert verdict["analysis_complete"]
     errors = result["extra"][str(fast.directory)]["control_error"]
     assert errors["all"]["position_m"]["max"] == pytest.approx(0.0, abs=1e-12)
@@ -484,3 +488,19 @@ def test_a_creeping_stand_is_judged_over_the_whole_evaluated_range(tmp_path):
     assert records[0]["window_shift_m"]["min"] > CAL.STATIC_POS_M
     narrow = CAL.motion_window(run.truth, 2.0, MODEL)
     assert narrow.max_shift_m < CAL.STATIC_POS_M  # the 0.4 s window alone would have passed it
+
+
+def test_a_dwell_without_a_bias_leaves_its_intervals_unbounded_and_its_bins_failing():
+    # Confirmation verdict: dropping the unmeasured 1.75 m dwell merged 2.0-1.5 m under the
+    # neighbours' bound and hid a bin.
+    dwells = [(2.0, 0.1e-3, 2.0, 2.0), (1.75, None, 1.75, 1.75), (1.5, 0.2e-3, 1.5, 1.5)]
+    assert CAL.bias_bound(1.8, 1.9, dwells) is None and CAL.bias_bound(1.6, 1.7, dwells) is None
+    cells = CAL.consistency_cells([], dwells)
+    assert len(cells) == 2 and all(c["no_bias"] and not c["ok"] for c in cells)
+
+
+def test_the_outer_dwells_cover_their_stand_and_the_margin_beyond():
+    # 1968 seed 5: the 0.30 / 0.60 runs began 0.3 mm outside the dwell run's start stand.
+    dwells = [(2.49968, 0.01e-3, 2.49968, 2.49968), (2.25, 0.02e-3, 2.25, 2.25)]
+    assert CAL.bias_bound(2.3, 2.49998, dwells) == pytest.approx(0.02e-3 + CAL.M_U_M)
+    assert CAL.bias_bound(2.3, 2.49968 + CAL.OUTER_MARGIN_M + 0.001, dwells) is None

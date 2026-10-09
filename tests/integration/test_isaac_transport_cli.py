@@ -518,4 +518,16 @@ def test_d8b_dwells_hold_the_steering_as_well_as_the_wheels() -> None:
     assert "wheel_curvature = kappa if dwell_hold else curvature" in source
     assert "drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)" in source
     assert "ackermann_command(wheel_speed, curvature," not in source
-    assert source.index("dwell_hold = False") < source.index("hold_, released_ = dwells.update(")
+    assert source.index("dwell_hold = dwell_standing = False") < source.index("hold_, released_ = dwells.update(")
+
+
+def test_d8b_dwells_lock_the_wheels_and_give_their_gains_back() -> None:
+    """Confirmation 1968: the velocity drives let a standing truck roll 0.1-0.15 mm/s."""
+    source = SCRIPT.read_text()
+    lock = source[source.index('if dwell_standing and wheel_lock["q"] is None:'):source.index("joint_positions=steering_command, joint_indices=steers")]
+    assert "locked_kps[wheels] = DWELL_WHEEL_KP" in lock and "controller_.set_gains(kps=locked_kps, kds=kds_)" in lock
+    assert 'elif not dwell_standing and wheel_lock["q"] is not None:' in lock
+    # Locked once standing, never while braking (diagnostic 1984).
+    assert 'dwell_standing = dwells.active is not None and dwells.active["still_since_s"] is not None' in source
+    assert 'set_gains(kps=wheel_lock["gains"][0], kds=wheel_lock["gains"][1])' in lock
+    assert 'joint_positions=wheel_lock["q"],' in lock

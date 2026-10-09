@@ -32,6 +32,11 @@ COMMAND_ACCEL_MPS2 = 0.8
 BACKOFF_M = 0.30
 BACKOFF_SPEED_MPS = 0.15
 BACKOFF_PER_LEG = 2
+# Plan D8b dwells: the wheel drives are velocity drives (stiffness 0, damping 20), which
+# let a standing truck roll on (confirmation matrix 1968 seed 5: 0.1-0.15 mm/s through a
+# 2 s stand); during a dwell they get this stiffness (N m/rad) around the angle they
+# stopped at, under the same torque limit, and their own gains back on release.
+DWELL_WHEEL_KP = 2000.0
 # The second docking round stops this far before the goal (dock_at_delivery_straight).
 ROUND2_KEEP_M = 0.6
 # An observation waypoint missed by at most this much, standing, is arrival.
@@ -1679,6 +1684,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     # delay and error calibration (tools/d8b_calibration.py).
     recorder = pocket_recorder.PocketFrameRecorder(args.output) if args.record_pocket_frames else None
     dwells = pocket_recorder.DwellSchedule(args.record_dwell_gaps) if args.record_dwell_gaps is not None else None
+    wheel_lock = {"q": None, "gains": None, "events": []}
     # Camera-face distance at the approach goal: the stand-off gap ahead of the fork
     # tips, less the camera's distance behind them (0.431 m on the measured chassis).
     dwell_d_end_m = (
@@ -3808,7 +3814,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         for step in range(int(120 * args.max_sim_seconds)):
             t = world.current_time - initial_time
             rear_stamp = t  # the time of the control pose `rear` (a capture moves it on)
-            dwell_hold = False
+            dwell_hold = dwell_standing = False
             base, q = robot.get_world_pose()
             ppos, pq = pallet.get_world_pose()
             yaw, tilt = yaw_and_tilt(q)
@@ -4438,6 +4444,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         # 20 um per 0.1 s through a whole stand (matrix 1883 seed 3,
                         # 0.18-0.25 rad of steering in every start dwell).
                         dwell_hold = True
+                        # The wheels lock only once the truck has stopped: locked at the
+                        # trigger, while still braking, they sprang the body back ~0.8 mm
+                        # (diagnostic 1984).
+                        dwell_standing = dwells.active is not None and dwells.active["still_since_s"] is not None
                         if tracking.status == "arrived":
                             tracking = replace(tracking, status="tracking", speed_mps=0.0)
                     elif released_:
@@ -6009,9 +6019,23 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)
             rate = settings["steering_command_rate_rad_s"] * dt
             steering_command += np.clip(target_steering - steering_command, -rate, rate)
+            if dwell_standing and wheel_lock["q"] is None:
+                # Plan D8b: hold the wheels where they stand for the dwell (DWELL_WHEEL_KP).
+                controller_ = robot.get_articulation_controller()
+                kps_, kds_ = (np.asarray(g, dtype=float).copy() for g in controller_.get_gains())
+                wheel_lock.update(q=np.asarray(robot.get_joint_positions()[wheels], dtype=float).copy(), gains=(kps_, kds_))
+                locked_kps = kps_.copy()
+                locked_kps[wheels] = DWELL_WHEEL_KP
+                controller_.set_gains(kps=locked_kps, kds=kds_)
+                wheel_lock["events"].append({"lock_s": float(t), "q": wheel_lock["q"].tolist()})
+            elif not dwell_standing and wheel_lock["q"] is not None:
+                robot.get_articulation_controller().set_gains(kps=wheel_lock["gains"][0], kds=wheel_lock["gains"][1])
+                wheel_lock["events"][-1]["release_s"] = float(t)
+                wheel_lock["q"] = None
             robot.apply_action(
                 ArticulationAction(
                     joint_velocities=np.asarray(drive.wheel_rates_rad_s),
+                    joint_positions=wheel_lock["q"],
                     joint_indices=wheels,
                 )
             )
@@ -6136,6 +6160,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         "approach_straight_speed_mps": args.approach_straight_speed_mps,
                         "dwell_gaps_m": None if args.record_dwell_gaps is None else list(args.record_dwell_gaps),
                         "dwell_hold_s": None if dwells is None else dwells.hold_s,
+                    "dwell_wheel_kp": DWELL_WHEEL_KP if dwells is not None else None,
+                    "dwell_wheel_locks": wheel_lock["events"],
                         "dwell_d_end_m": dwell_d_end_m,
                         "pocket_check": args.pocket_check,
                         "video": args.video,

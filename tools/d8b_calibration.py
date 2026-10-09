@@ -47,6 +47,11 @@ TAUS = -0.1 + np.arange(133) * TICK_S
 IN_RANGE_S = 0.4
 EPS_M = 0.2e-3
 M_U_M = 0.1e-3  # unverified between-dwell allowance (D8b 5th review)
+# The outermost and innermost dwells also cover this far beyond themselves, under the same
+# smoothness assumption and allowance as between dwells (0.25-0.31 m apart): each run
+# starts its approach from its own near capture, mm from the dwell run's start stand
+# (1968: the 0.30 / 0.60 runs of seed 5 began 0.3 mm outside it).
+OUTER_MARGIN_M = 0.01
 ERODE_PX = 3
 MIN_PIXELS = 300
 # The tau render must explain nearly all of its front pixels: at the true delay the smoke
@@ -537,19 +542,41 @@ def usable(read: dict) -> bool:
     return read["result"] == "ok" and read["file"] is not None and read["stamp_s"] is not None
 
 
-def bias_bound(d_lo: float, d_hi: float, dwell_biases: list[tuple[float, float]]) -> float | None:
-    """B over the camera-face distances [d_lo, d_hi] a frame's window spans: the largest
-    neighbouring-dwell |b| among the dwell intervals it touches, plus the allowance; None
-    when part of it lies outside the dwells (no bound there). Taken over the whole window
-    because the pixels were taken at s - tau, not at s (Codex D8b impl P1)."""
-    ordered = sorted(dwell_biases, reverse=True)
-    if not ordered or d_hi > ordered[0][0] + 1e-9 or d_lo < ordered[-1][0] - 1e-9:
+def dwell_entries(dwell_biases) -> list[tuple]:
+    """(distance, |bound| or None, range_lo, range_hi) per dwell, outermost first. A bare
+    (distance, bias) pair stands for a dwell that covers its own distance only. A dwell
+    whose bias could not be measured stays in the list with None (Codex D8b confirmation
+    verdict: dropping it merged two intervals under the neighbours' bound)."""
+    out = []
+    for item in dwell_biases:
+        d, b = float(item[0]), item[1]
+        lo, hi = (d, d) if len(item) == 2 else (float(item[2]), float(item[3]))
+        out.append((d, None if b is None else abs(float(b)), min(lo, d), max(hi, d)))
+    return sorted(out, key=lambda e: -e[0])
+
+
+def bias_bound(d_lo: float, d_hi: float, dwell_biases) -> float | None:
+    """B over the camera-face distances [d_lo, d_hi] a frame's evaluated range spans: the
+    largest |b| among the dwells bounding the intervals it touches, plus the allowance; None
+    when part of it lies outside the dwells or touches an interval with an unmeasured end.
+    The outermost and innermost dwells also cover their stand's own distance range and
+    OUTER_MARGIN_M beyond themselves (other runs start from their own positions)."""
+    ordered = dwell_entries(dwell_biases)
+    if len(ordered) < 2:
         return None
+    top = max(ordered[0][3], ordered[0][0] + OUTER_MARGIN_M)
+    bottom = min(ordered[-1][2], ordered[-1][0] - OUTER_MARGIN_M)
+    if d_hi > top + 1e-9 or d_lo < bottom - 1e-9:
+        return None
+    segments = [(ordered[0][0], top, (ordered[0][1],))]
+    segments += [(low[0], high[0], (high[1], low[1])) for high, low in zip(ordered, ordered[1:])]
+    segments.append((bottom, ordered[-1][0], (ordered[-1][1],)))
     worst = None
-    for (d_top, b_top), (d_bottom, b_bottom) in zip(ordered, ordered[1:]):
-        if d_bottom - 1e-9 <= d_hi and d_lo <= d_top + 1e-9:
-            value = max(abs(b_top), abs(b_bottom))
-            worst = value if worst is None else max(worst, value)
+    for lo, hi, bounds in segments:
+        if lo - 1e-9 <= d_hi and d_lo <= hi + 1e-9:
+            if any(b is None for b in bounds):
+                return None
+            worst = max(bounds) if worst is None else max(worst, max(bounds))
     return None if worst is None else worst + M_U_M
 
 
@@ -573,8 +600,13 @@ def analyse_dwells(run: Run, model: PalletModel) -> list[dict]:
             r0 = frame_residuals(run, read, model, taus=np.array([0.0]))[0]
             if math.isfinite(r0):
                 rows.append((read["index"], r0, face_distance(run.truth, read["stamp_s"], model), motion.max_shift_m))
+        ticks = run.truth.t[(run.truth.t >= dwell["trigger_s"]) & (run.truth.t <= dwell["end_s"])]
+        stand = [face_distance(run.truth, t, model) for t in ticks[ticks >= (dwell.get("still_since_s") or dwell["trigger_s"])]]
         record = {"kind": dwell["kind"], "trigger_s": dwell["trigger_s"], "end_s": dwell["end_s"],
                   "static_frames": len(rows), "frames": len(windows),
+                  # Where the truck stood, with or without a measured bias (kept either way).
+                  "stand_distance_m": float(np.median(stand)) if stand else None,
+                  "distance_range_m": [float(min(stand)), float(max(stand))] if stand else None,
                   # Each frame window's camera shift and turn against the pallet, so a dwell
                   # short of static frames shows how far it moved (confirmation review P3).
                   "window_shift_m": None if not windows else {"min": min(w[0] for w in windows),
@@ -661,12 +693,14 @@ def summarise_run(rows: list[dict]) -> dict:
     }
 
 
-def consistency_cells(rows: list[dict], dwell_biases: list[tuple[float, float]]) -> list[dict]:
+def consistency_cells(rows: list[dict], dwell_biases) -> list[dict]:
     """(iv): per bin between neighbouring dwells, single-piece midpoints by actual speed
-    (a consistency check, about 0.7 mm of systematic bias at 0.055 vs 0.15 m/s)."""
-    edges = sorted((d for d, _ in dwell_biases), reverse=True)
+    (a consistency check, about 0.7 mm of systematic bias at 0.055 vs 0.15 m/s). Every bin
+    is kept; one next to a dwell without a bias fails."""
+    entries = dwell_entries(dwell_biases)
     cells = []
-    for d_hi, d_lo in zip(edges, edges[1:]):
+    for high, low in zip(entries, entries[1:]):
+        d_hi, d_lo = high[0], low[0]
         slow, fast = [], []
         for r in rows:
             if not r["eligible"] or len(r["pieces"]) != 1 or not (d_lo - 1e-9 <= r["distance_m"] <= d_hi + 1e-9):
@@ -677,9 +711,12 @@ def consistency_cells(rows: list[dict], dwell_biases: list[tuple[float, float]])
             elif r["speed_mps"] >= FAST_MPS:
                 fast.append(mid)
         cell = {"bin_m": [d_hi, d_lo], "slow": len(slow), "fast": len(fast)}
+        if high[1] is None or low[1] is None:
+            cell["no_bias"] = True
         if slow and fast:
             cell["median_gap_s"] = abs(float(np.median(slow)) - float(np.median(fast)))
-        cell["ok"] = len(slow) >= CELL_MIN and len(fast) >= CELL_MIN and cell.get("median_gap_s", 1.0) <= TICK_S + 1e-12
+        cell["ok"] = (not cell.get("no_bias") and len(slow) >= CELL_MIN and len(fast) >= CELL_MIN
+                      and cell.get("median_gap_s", 1.0) <= TICK_S + 1e-12)
         cells.append(cell)
     return cells
 
@@ -711,6 +748,8 @@ def verdict(dwells: dict, runs: dict, cells: dict, missing: list[str], l_s: floa
     if l_runs and max(l_runs) - min(l_runs) > TICK_S + 1e-12:
         failures.append(f"(iii) L_run spread {max(l_runs) - min(l_runs):.4f} s")
     for seed, seed_cells in cells.items():
+        if len(seed_cells) != len(REQUIRED_DWELLS) - 1:
+            failures.append(f"(iv) seed {seed}: {len(seed_cells)} bins, need {len(REQUIRED_DWELLS) - 1}")
         for cell in seed_cells:
             if not cell["ok"]:
                 failures.append(f"(iv) seed {seed} bin {cell['bin_m']}: {cell}")
@@ -804,7 +843,7 @@ def control_error(control: np.ndarray, frames: list[dict], l_s: float, dwell_bia
     estimate moves ~0.8 mm across them, smoke 1857): it is counted as before_anchor."""
     t = control[:, 0]
     yaw_c, yaw_g = np.unwrap(control[:, 3]), np.unwrap(control[:, 6])
-    edges = sorted((d for d, _ in dwell_biases), reverse=True)
+    edges = [e[0] for e in dwell_entries(dwell_biases)]
     groups: dict[str, list] = {}
     outside, before = 0, 0
     for f in frames:
@@ -866,9 +905,16 @@ def analyse(seed_runs: list[tuple[int, list[Path]]], model: PalletModel,
         if len(with_dwells) != 1:
             raise ValueError(f"seed {seed}: exactly one run must carry the dwells, found {len(with_dwells)}")
         dwell_out[seed] = analyse_dwells(with_dwells[0], model)
-        # |b_k| plus the creep its static frames allowed (a bound, so the sign is dropped).
-        biases = [(rec["distance_m"], abs(rec["bias_m"]) + rec["max_shift_m"]) for rec in dwell_out[seed]
-                  if "bias_m" in rec]
+        # |b_k| plus the creep its static frames allowed (a bound, so the sign is dropped);
+        # a dwell without a bias stays with None, so its intervals have no bound.
+        biases = []
+        for rec in dwell_out[seed]:
+            distance = rec.get("distance_m", rec["stand_distance_m"])
+            if distance is None:
+                continue
+            bound = abs(rec["bias_m"]) + rec["max_shift_m"] if "bias_m" in rec else None
+            low, high = rec["distance_range_m"] or (distance, distance)
+            biases.append((distance, bound, low, high))
         biases_by_seed[seed] = biases
         seed_rows = []
         for run in runs:
