@@ -110,6 +110,27 @@ def test_public_reusable_checker_rejects_nonfinite_or_negative_margin():
         checker.free((0, 0, 0), margin_m=-0.1)
 
 
+def test_bucketed_checker_answers_as_the_full_scan():
+    rng = np.random.default_rng(4)
+    bounds = Bounds(-1.0, 41.0, -3.0, 29.0)
+    obstacles = [
+        Rectangle(*rng.uniform([10, -2], [40, 28]), *rng.uniform(0.05, 2.0, 2), rng.uniform(-3, 3))
+        for _ in range(150)
+    ]
+    # Exactly touching boxes on bucket edges, and one far longer than a bucket.
+    obstacles += [Rectangle(4.0, 1.0, 4.0, 2.0), Rectangle(20.0, 14.0, 39.0, 0.2, 0.01)]
+    bucketed = FootprintCollisionChecker(obstacles, FOOTPRINT, bounds)
+    full = FootprintCollisionChecker(obstacles, FOOTPRINT, bounds)
+    full._buckets = None
+    assert bucketed._buckets is not None
+    poses = np.column_stack((rng.uniform(-1, 41, 20000), rng.uniform(-3, 29, 20000), rng.uniform(-4, 4, 20000)))
+    edge = [(6.0 + 0.2, 1.0, 0.0), (2.0 - 0.55, 1.0, 0.0), (6.0 + 0.2 + 1e-9, 1.0, 0.0)]
+    for pose in [*map(tuple, poses), *edge]:
+        for margin in (0.0, 0.3):
+            assert bucketed.free(pose, margin) == full.free(pose, margin), (pose, margin)
+    assert not bucketed.free(edge[0]) and not bucketed.free(edge[1]) and bucketed.free(edge[2])
+
+
 def test_detours_obstacle_with_full_footprint():
     obstacle = Rectangle(0, 0, 1.0, 1.8)
     goal = Pose2D(3, 0, 0)

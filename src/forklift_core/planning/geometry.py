@@ -2,7 +2,7 @@
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from math import ceil, cos, hypot, isfinite, pi, sin
+from math import ceil, cos, floor, hypot, isfinite, pi, sin
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -80,6 +80,16 @@ class Bounds:
             raise ValueError("bounds minima must be less than maxima")
 
 
+# With this many obstacles or more, free() looks only at the obstacles filed in
+# a grid of _BUCKET_M squares under the footprint's bounding box. The answer is
+# the same: each obstacle is filed under every square its bounding box (padded
+# by _BUCKET_PAD_M) touches, and any obstacle that passes the world-axis broad
+# phase has a bounding box that meets the footprint's.
+_BUCKET_MIN_OBSTACLES = 24
+_BUCKET_M = 2.0
+_BUCKET_PAD_M = 1e-6
+
+
 class FootprintCollisionChecker:
     """Precompute obstacle axes and apply the rectangle separating-axis test."""
 
@@ -102,6 +112,24 @@ class FootprintCollisionChecker:
             )
             for o in obstacles
         ]
+        self._buckets = None
+        if len(self.obstacles) >= _BUCKET_MIN_OBSTACLES:
+            self._buckets = {}
+            lo_i, hi_i = floor(bounds.x_min_m / _BUCKET_M), floor(bounds.x_max_m / _BUCKET_M)
+            lo_j, hi_j = floor(bounds.y_min_m / _BUCKET_M), floor(bounds.y_max_m / _BUCKET_M)
+            for o in self.obstacles:
+                ox, oy, ol, ow, oc, os = o
+                ax = abs(oc) * ol + abs(os) * ow + _BUCKET_PAD_M
+                ay = abs(os) * ol + abs(oc) * ow + _BUCKET_PAD_M
+                for i in range(
+                    max(floor((ox - ax) / _BUCKET_M), lo_i),
+                    min(floor((ox + ax) / _BUCKET_M), hi_i) + 1,
+                ):
+                    for j in range(
+                        max(floor((oy - ay) / _BUCKET_M), lo_j),
+                        min(floor((oy + ay) / _BUCKET_M), hi_j) + 1,
+                    ):
+                        self._buckets.setdefault((i, j), []).append(o)
 
     def free(self, pose: Sequence[float], margin_m: float = 0.0) -> bool:
         """Check a finite (x, y, yaw) triple against precomputed obstacles.
@@ -128,7 +156,18 @@ class FootprintCollisionChecker:
             or cy + ey > b.y_max_m
         ):
             return False
-        for ox, oy, ol, ow, oc, os in self.obstacles:
+        candidates = self.obstacles
+        if self._buckets is not None:
+            i0, i1 = floor((cx - ex) / _BUCKET_M), floor((cx + ex) / _BUCKET_M)
+            j0, j1 = floor((cy - ey) / _BUCKET_M), floor((cy + ey) / _BUCKET_M)
+            buckets = self._buckets
+            candidates = [
+                o
+                for i in range(i0, i1 + 1)
+                for j in range(j0, j1 + 1)
+                for o in buckets.get((i, j), ())
+            ]
+        for ox, oy, ol, ow, oc, os in candidates:
             dx, dy = ox - cx, oy - cy
             # Cheap world-axis broad phase before the four exact SAT axes.
             if abs(dx) > ex + abs(oc) * ol + abs(os) * ow:
