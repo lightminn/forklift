@@ -260,8 +260,16 @@ def create_pallet(
     output: Path,
     site,
     mass_kg: float,
+    *,
+    prim_path: str = "/World/Pallet",
+    name: str = "pallet",
 ) -> SingleRigidPrim:
-    """Import original pallet boxes with explicitly synthetic uniform-volume inertia."""
+    """Import original pallet boxes with explicitly synthetic uniform-volume inertia.
+
+    A second pallet in the same output directory references the pallet.usd the
+    first one imported (the fleet runner places several; prim_path and name
+    tell them apart).
+    """
     # Assign synthetic mass using the exact 22 source boxes and parallel-axis theorem.
     tree = ET.parse(urdf_path)
     link = tree.getroot().find("link")
@@ -304,34 +312,35 @@ def create_pallet(
             ]
         },
     )
-    runtime_urdf = output / "pallet_with_synthetic_inertia.urdf"
-    tree.write(runtime_urdf, encoding="utf-8", xml_declaration=True)
-    ok, config = omni.kit.commands.execute("URDFCreateImportConfig")
-    assert ok
-    config.fix_base = False
-    config.make_default_prim = True
-    config.import_inertia_tensor = True
-    config.create_physics_scene = False
-    config.collision_from_visuals = False
-    ok, imported = omni.kit.commands.execute(
-        "URDFParseAndImportFile",
-        urdf_path=str(runtime_urdf),
-        import_config=config,
-        dest_path=str(output / "pallet.usd"),
-    )
-    assert ok, "Pallet import failed"
-    stage.DefinePrim("/World/Pallet", "Xform").GetReferences().AddReference(
+    if not (output / "pallet.usd").exists():
+        runtime_urdf = output / "pallet_with_synthetic_inertia.urdf"
+        tree.write(runtime_urdf, encoding="utf-8", xml_declaration=True)
+        ok, config = omni.kit.commands.execute("URDFCreateImportConfig")
+        assert ok
+        config.fix_base = False
+        config.make_default_prim = True
+        config.import_inertia_tensor = True
+        config.create_physics_scene = False
+        config.collision_from_visuals = False
+        ok, imported = omni.kit.commands.execute(
+            "URDFParseAndImportFile",
+            urdf_path=str(runtime_urdf),
+            import_config=config,
+            dest_path=str(output / "pallet.usd"),
+        )
+        assert ok, "Pallet import failed"
+    stage.DefinePrim(prim_path, "Xform").GetReferences().AddReference(
         str(output / "pallet.usd")
     )
     for _ in range(10):
         app.update()
     rigid = [
         p
-        for p in Usd.PrimRange(stage.GetPrimAtPath("/World/Pallet"))
+        for p in Usd.PrimRange(stage.GetPrimAtPath(prim_path))
         if p.HasAPI(UsdPhysics.RigidBodyAPI)
     ]
     assert len(rigid) == 1, [str(p.GetPath()) for p in rigid]
-    for p in Usd.PrimRange(stage.GetPrimAtPath("/World/Pallet")):
+    for p in Usd.PrimRange(stage.GetPrimAtPath(prim_path)):
         assert not p.IsA(UsdPhysics.Joint), (
             "Pallet must be free, without a fixed attachment"
         )
@@ -340,7 +349,7 @@ def create_pallet(
     pallet = world.scene.add(
         SingleRigidPrim(
             prim_path=str(rigid[0].GetPath()),
-            name="pallet",
+            name=name,
             position=np.array([site.x_m, site.y_m, 0.015]),
             orientation=np.array(
                 [math.cos(site.yaw_rad / 2), 0, 0, math.sin(site.yaw_rad / 2)]
@@ -355,19 +364,22 @@ def configure_drives(
     settings: dict,
     *,
     expected_pallet_box_count: int | None,
+    forklift_roots: tuple[str, ...] = ("/World/Forklift",),
+    pallet_roots: tuple[str, ...] = ("/World/Pallet",),
 ) -> dict:
     """Set documented synthetic dynamics on the execution scene only.
 
     expected_pallet_box_count=None means the scene holds no pallet to lift.
+    The roots name the trucks and pallets to configure (several in a fleet).
     """
     physics_material = UsdShade.Material.Define(stage, "/World/ContactMaterial")
     material_api = UsdPhysics.MaterialAPI.Apply(physics_material.GetPrim())
     material_api.CreateStaticFrictionAttr(settings["static_friction"])
     material_api.CreateDynamicFrictionAttr(settings["dynamic_friction"])
     material_api.CreateRestitutionAttr(0.0)
-    roots = ["/World/Forklift"]
+    roots = list(forklift_roots)
     if expected_pallet_box_count is not None:
-        roots.append("/World/Pallet")
+        roots.extend(pallet_roots)
     # Importer stores collision groups as instances; edit the stage copy only.
     for root_path in roots:
         instances = [
@@ -435,8 +447,9 @@ def configure_drives(
     # is not a dimension or layout check (that is
     # assert_pallet_urdf_matches_named_boxes, run before spawn).
     if expected_pallet_box_count is not None:
-        assert collision_counts["/World/Pallet"] == expected_pallet_box_count, (
-            collision_counts
-        )
+        for pallet_root in pallet_roots:
+            assert collision_counts[pallet_root] == expected_pallet_box_count, (
+                collision_counts
+            )
 
     return collision_counts

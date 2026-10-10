@@ -99,6 +99,7 @@ def cast_scan(
     range_max_m: float,
     *,
     ignore_self: bool = False,
+    self_prefix: str = SELF_PREFIX,
 ) -> tuple[np.ndarray, np.ndarray, int]:
     """PhysX closest-hit distance per ray; returns (distances, hit, self_hits).
 
@@ -106,6 +107,8 @@ def cast_scan(
     the beam too -- and counted, so a mount that sees its own truck shows up.
     ignore_self drops those beams instead (no hit): a reference scan cast from
     a pose the truck is not at must not contain the truck (plan v3.8).
+    self_prefix names the truck's prims; in a fleet it ends with "/" so that
+    /World/Fleet/Truck_1/ does not also match Truck_10.
     """
     import carb
     from omni.physx import get_physx_scene_query_interface
@@ -122,7 +125,7 @@ def cast_scan(
         if not result.get("hit", False):
             continue
         body = str(result.get("rigidBody", "")) + str(result.get("collision", ""))
-        own = SELF_PREFIX in body
+        own = self_prefix in body
         self_hits += own
         if own and ignore_self:
             continue
