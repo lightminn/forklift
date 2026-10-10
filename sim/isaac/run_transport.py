@@ -116,6 +116,9 @@ DOCKING_RETRY = load_perception_module(
 pocket_recorder = load_perception_module(
     "run_transport_pocket_frame_recorder", Path(__file__).with_name("pocket_frame_recorder.py")
 )
+near_tracking = load_perception_module(
+    "run_transport_near_tracking", Path(__file__).with_name("near_tracking.py")
+)
 CAMERA_CALIBRATION = load_perception_module(
     "run_transport_camera_calibration",
     Path(__file__).with_name("camera_calibration.py"),
@@ -233,6 +236,44 @@ def arguments() -> argparse.Namespace:
         help="Plan D8b calibration dwells: stand 2 s at the start of the approach "
         "straight, at each of these control-estimated camera-face distances (m, "
         "decreasing) and after the approach arrives. Needs --record-pocket-frames.",
+    )
+    parser.add_argument(
+        "--measure-safety-stops-m",
+        type=pocket_recorder.parse_gaps,
+        default=None,
+        metavar="D1,D2,...",
+        help="Plan D8 S4a-1 ⓪: scheduled safety stops on the approach straight -- command "
+        "zero at once, steering held, no wheel lock, released 0.5 s after the stop detector "
+        "first sees the truck stand, then a slewed restart -- at each of these "
+        "control-estimated camera-face distances (m, decreasing). Needs "
+        "--record-pocket-frames; not with --record-dwell-gaps.",
+    )
+    parser.add_argument(
+        "--near-tracking",
+        action="store_true",
+        help="Plan D8 S4a: track the pockets from the near capture with the D8c 3판 tracker "
+        "and stop on its events and the travel budget (stops before phase transitions, "
+        "terminal stops end the run once standing). Needs --slam-feedback, the measured "
+        "bounds' conditions (refused as near_field_contract otherwise) and "
+        "--near-drive-terms. Off: the run is unchanged.",
+    )
+    parser.add_argument(
+        "--near-tracking-stop-at",
+        choices=("insert",),
+        default=None,
+        help="Plan D8 S4a-1: end the run where the approach arrives (before the insertion).",
+    )
+    parser.add_argument(
+        "--near-bounds",
+        type=Path,
+        default=Path(__file__).resolve().parents[2] / "config/near_field_bounds_measured.json",
+        help="Plan D8c 3판 measured bounds (tools/export_near_field_bounds.py).",
+    )
+    parser.add_argument(
+        "--near-drive-terms",
+        type=Path,
+        default=None,
+        help="Plan D8 S4a-1 ⓪: the confirmed drive terms (tools/s4_drive_terms.py).",
     )
     parser.add_argument(
         "--approach-straight-speed-mps",
@@ -593,10 +634,24 @@ def arguments() -> argparse.Namespace:
         parser.error("--record-pocket-frames needs --slam-feedback")
     if args.record_dwell_gaps is not None and not args.record_pocket_frames:
         parser.error("--record-dwell-gaps needs --record-pocket-frames")
+    if args.measure_safety_stops_m is not None and (not args.record_pocket_frames or args.record_dwell_gaps is not None):
+        parser.error("--measure-safety-stops-m needs --record-pocket-frames and excludes --record-dwell-gaps")
     if args.approach_straight_speed_mps is not None and not (
         math.isfinite(args.approach_straight_speed_mps) and 0.0 < args.approach_straight_speed_mps <= 1.0
     ):
         parser.error("--approach-straight-speed-mps must be in (0, 1] m/s")
+    if args.near_tracking and (args.slam_feedback is None or not args.use_perception
+                               or args.near_drive_terms is None or args.approach_straight_speed_mps is None):
+        parser.error("--near-tracking needs --slam-feedback, --use-perception, --near-drive-terms and "
+                     "--approach-straight-speed-mps (the near-field cruise)")
+    if args.near_tracking and (args.measure_safety_stops_m is not None or args.record_dwell_gaps is not None):
+        parser.error("--near-tracking excludes the scheduled stops and dwells of the measurement runs")
+    if args.near_tracking_stop_at is not None and not args.near_tracking:
+        parser.error("--near-tracking-stop-at needs --near-tracking")
+    if args.near_tracking and args.near_tracking_stop_at != "insert":
+        # Plan D8 S4: no insertion or lift on the tracker before S4a-2's protection (the
+        # pocket-wall gap watch and the carriage corner rule) exists (Codex S4a-1 P1).
+        parser.error("--near-tracking needs --near-tracking-stop-at insert until S4a-2")
     from insertion_geometry import (
         assert_pallet_urdf_matches_geometry,
         assert_pallet_urdf_matches_named_boxes,
@@ -1415,7 +1470,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             perception_calibration.width / perception_calibration.fx,
             maintain_square_pixels=True,
         )
-        if args.pocket_check or args.record_pocket_frames:
+        if args.pocket_check or args.record_pocket_frames or args.near_tracking:
             # The D5 depth check's own camera: same mount and intrinsics, but the
             # near clipping plane at the D435i's minimum depth (0.28 m, datasheet,
             # its highest resolution -- the conservative figure) instead of the
@@ -1466,7 +1521,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         verify_camera_intrinsics(perception_camera, perception_calibration, state)
         # Capture needs axial depth as well as RGBA (see determinism_probe.py).
         perception_camera.add_distance_to_image_plane_to_frame()
-        if args.pocket_check or args.record_pocket_frames:
+        if args.pocket_check or args.record_pocket_frames or args.near_tracking:
             pocket_camera.initialize()
             pocket_camera.add_distance_to_image_plane_to_frame()
             _, pocket_far_m = pocket_camera.get_clipping_range()
@@ -1684,6 +1739,39 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     # delay and error calibration (tools/d8b_calibration.py).
     recorder = pocket_recorder.PocketFrameRecorder(args.output) if args.record_pocket_frames else None
     dwells = pocket_recorder.DwellSchedule(args.record_dwell_gaps) if args.record_dwell_gaps is not None else None
+    safety_stops = (pocket_recorder.SafetyStopSchedule(args.measure_safety_stops_m)
+                    if args.measure_safety_stops_m is not None else None)
+    # Plan D8 S4a: near-field pocket tracking. The contract with the measured bounds and
+    # drive terms is checked before the first tick (check_near_contract); the tracker is
+    # built after the near capture's hold.
+    near = None
+    if args.near_tracking:
+        from forklift_core.perception.near_field_bounds import NearFieldBounds
+
+        near_bounds_data = json.loads(args.near_bounds.read_text())
+        near_bounds_sha = hashlib.sha256(args.near_bounds.read_bytes()).hexdigest()
+        state["near_tracking"] = {
+            "bounds": str(args.near_bounds),
+            "bounds_sha256": near_bounds_sha,
+            "drive_terms": str(args.near_drive_terms),
+            "drive_terms_sha256": hashlib.sha256(args.near_drive_terms.read_bytes()).hexdigest(),
+            "stop_at": args.near_tracking_stop_at,
+        }
+        near = {
+            "bounds": NearFieldBounds.from_dict(near_bounds_data),
+            "bounds_data": near_bounds_data,
+            "terms": None,
+            "tracker": None,
+            "start": None,  # the near capture's observation, pose and times, until the hold
+            "episode": 0,  # SLAM hold count: the tracker's frame_version
+            "history": near_tracking.RearHistory(args.rear_axle_offset_m),
+            "commands": near_tracking.CommandWindow(),
+            "last_stamp": None,  # the last frame stamp received (tau)
+            "stop": None,  # the active stop: {"reason", "terminal", "since_s"}
+            "frames": [],
+            "ticks": [],
+            "events": [],
+        }
     wheel_lock = {"q": None, "gains": None, "events": []}
     # Camera-face distance at the approach goal: the stand-off gap ahead of the fork
     # tips, less the camera's distance behind them (0.431 m on the measured chassis).
@@ -1763,6 +1851,276 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         if row["result"] == "bad_depth":
             state.setdefault("pocket_recording_errors", []).append(error_r)
 
+    def check_near_contract() -> None:
+        """Plan D8 S4a 적용 계약, before the first tick: the bounds file's condition (camera,
+        mount with 1 mm, cadence, assets, SLAM noise seed), the drive terms tied to that
+        bounds file, the approach cruise within the measured one, and the measurement
+        runs' arguments, settings (drive, followers via their settings and profile,
+        planners, LiDAR, chassis), detector and input files by content (Codex S4a-1
+        review P1). Any difference refuses the start: near_field_contract."""
+        from forklift_core.perception.pocket_detector import DetectorParams
+
+        observed_ = {
+            "video": args.video,
+            "fps": args.fps,
+            "mount": state.get("perception_mount"),
+            "camera": state.get("pocket_camera"),
+            "pallet_geometry": str(args.pallet_geometry),
+            "forklift_urdf": str(args.forklift_urdf),
+            "rear_axle_offset_m": args.rear_axle_offset_m,
+            "slam_feedback": args.slam_feedback is not None,
+            "seed": args.seed,
+            "slam_noise_seed": args.slam_noise_seed,
+            **{
+                key_: hashlib.sha256(path_.read_bytes()).hexdigest()
+                for key_, path_ in (
+                    ("pallet_geometry_sha256", args.pallet_geometry),
+                    ("forklift_urdf_sha256", args.forklift_urdf),
+                    ("pallet_urdf_sha256", args.pallet_urdf),
+                )
+            },
+        }
+        problems_ = near_tracking.contract_problems(near["bounds_data"]["condition"], observed_)
+        try:
+            near["terms"] = near_tracking.DriveTerms.from_dict(
+                json.loads(args.near_drive_terms.read_text()),
+                state["near_tracking"]["bounds_sha256"],
+                near["bounds_data"]["latency"],
+            )
+        except (ValueError, KeyError, TypeError) as exc:
+            problems_.append(f"drive terms: {exc}")
+        if near["terms"] is not None:
+            if args.approach_straight_speed_mps > near["terms"].cruise_mps + 1e-12:
+                problems_.append(
+                    f"the approach straight speed {args.approach_straight_speed_mps} is above the "
+                    f"measured cruise {near['terms'].cruise_mps}"
+                )
+            run_ = json.loads(record_json({
+                "arguments": state["arguments"],
+                **{name_: state.get(name_) for name_ in near_tracking.CONDITION_FIELDS},
+            }))
+            run_["detector_params"] = json.loads(record_json(asdict(DetectorParams.derived_for(args.pallet_prior_loaded))))
+            observed_condition = near_tracking.run_condition(run_, Path.cwd())
+            problems_ += near_tracking.condition_problems(
+                near["terms"].condition, observed_condition, skip=("tracker_configs",)
+            )
+        state["near_tracking"]["contract_problems"] = problems_
+        require(not problems_, "near_field_contract:" + "; ".join(problems_))
+
+    def hold_count() -> int:
+        """SLAM hold episodes so far: the near-field tracker's frame_version."""
+        return sum(1 for h in slam["holds"] if h.get("event") == "hold") if slam is not None else 0
+
+    def build_near_tracker(now_s: float) -> None:
+        """Plan D8 S4a ①: the D8c 3판 tracker from the near capture, in the SLAM hold that
+        follows it -- the capture's observation, the control base it was placed with and
+        t_before_capture_s, the ⑥ detectors (front: near-field derived_for, roof:
+        track_roof) and NearFieldConfig from the chassis and pallet geometry."""
+        from insertion_geometry import tracking_frame
+
+        from forklift_core.perception.near_field_tracking import (
+            NearFieldConfig,
+            NearFieldTracker,
+        )
+        from forklift_core.perception.pocket_detector import (
+            DetectorParams,
+            detect_pockets,
+        )
+        from forklift_core.perception.roof_tracking import track_roof
+
+        start = near["start"]
+        require(start is not None, "near_field_without_capture")
+        require(slam is not None and slam["tracker"].mode == "holding", "near_field_without_hold")
+        pallet_geo = args.pallet_geometry_loaded
+        frame_geo = tracking_frame(args.forklift_urdf, pallet_geo)  # as ⑥ (tools/d8c_replay.py)
+        prior_ = args.pallet_prior_loaded
+        front_params = DetectorParams.derived_for(prior_, range_min_m=0.1)
+        config = NearFieldConfig(
+            handoff_start_front_x_m=frame_geo.fork_tip_x_m + 0.6 - 0.03,
+            camera_xy_m=tuple(float(v) for v in np.asarray(perception_mount.translation_m)[:2]),
+            rear_axle_x_m=-abs(args.rear_axle_offset_m),
+            opening_width_m=pallet_geo.opening_width_m,
+            pocket_spacing_m=2 * pallet_geo.opening_centre_offset_m,
+        )
+
+        def front_fn(scene_):
+            return detect_pockets(scene_, prior_, front_params).observation
+
+        def roof_fn(scene_, xy_, yaw_):
+            return track_roof(scene_, pallet_geo, (xy_[0], xy_[1], pallet_geo.opening_centre_height_m),
+                              yaw_).observation
+
+        # The followers as the measurement runs drove them (Codex S4a-1 2nd review P2):
+        # their configs exist only once the mission is planned, so they are checked here,
+        # standing at the near capture, before any near-field driving.
+        tracker_problems = near_tracking.tracker_config_problems(
+            near["terms"].condition.get("tracker_configs"), json.loads(record_json(state.get("tracker_configs")))
+        )
+        state["near_tracking"]["tracker_config_problems"] = tracker_problems
+        require(not tracker_problems, "near_field_contract:" + "; ".join(tracker_problems))
+        episode = hold_count()
+        near["tracker"] = NearFieldTracker(
+            config, near["bounds"], start["observation"], start["pose"], start["aligned_s"],
+            front_fn=front_fn, roof_fn=roof_fn, frame_version=episode,
+        )
+        near.update(episode=episode, fork_tip_x_m=frame_geo.fork_tip_x_m,
+                    last_stamp=start["capture_stamp_s"], last_fed_stamp=None)
+        near["history"].clear()
+        state["near_tracking"]["start"] = {
+            "built_s": now_s,
+            "attempt": start["attempt"],
+            "pose": list(start["pose"]),
+            "aligned_s": start["aligned_s"],
+            "capture_stamp_s": start["capture_stamp_s"],
+            "episode": episode,
+            "gate_front_x_m": config.handoff_start_front_x_m,
+            "fork_tip_x_m": frame_geo.fork_tip_x_m,
+            "observation": asdict(start["observation"]),
+        }
+        near["events"].append({"time_s": now_s, "event": "tracker_built", "episode": episode})
+
+    def feed_near_frame(raw) -> str | None:
+        """Plan D8 S4a ③: one carriage frame to the tracker -- the raw frame D5 reads,
+        1 mm, placed at the control base of stamp - L in this hold, delivered at the read
+        time. A frame whose depth does not normalise ("bad_depth", also withheld from
+        D5), without a time, from the future, not newer than the last one, or not
+        covered by the history is recorded and left out."""
+        from forklift_core.perception.scene_dataset import SceneInput
+
+        tracker_ = near["tracker"]
+        now_s = world.current_time - initial_time
+        row = {"read_s": now_s}
+        k_ = pocket["capture"].intrinsics
+        try:
+            depth_, _ = adapter.normalize_depth(np.asarray(raw).reshape(k_.height, k_.width))
+        except (ValueError, TypeError) as exc:
+            # Left out as a frame without a result: tau moves on and the budget or the
+            # loss stops the truck; checked first, whatever its time, so the caller
+            # never hands it to D5 (Codex S4a-1 reviews P2).
+            row.update(skipped="bad_depth", error=repr(exc))
+            near["frames"].append(row)
+            return "bad_depth"
+        frame = pocket_camera.get_current_frame()
+        rendered = frame.get("rendering_time") if isinstance(frame, dict) else None
+        try:
+            stamp = float(rendered) - initial_time if rendered is not None else None
+        except (TypeError, ValueError):
+            stamp = None
+        if stamp is None or not math.isfinite(stamp):
+            row["skipped"] = "no_time"
+        elif stamp > now_s + 1e-6:
+            row["skipped"] = "future"
+        elif near["last_fed_stamp"] is not None and stamp <= near["last_fed_stamp"]:
+            row["skipped"] = "not_new"
+        if "skipped" in row:
+            near["frames"].append(row)
+            return
+        aligned = stamp - near["bounds"].align_latency_s
+        pose = near["history"].base_at(aligned, near["episode"])
+        row.update(stamp_s=stamp, aligned_s=aligned)
+        if pose is None:
+            row["skipped"] = "uncovered"
+            near["frames"].append(row)
+            return None
+        lift_ = float(robot.get_joint_positions()[lift_index[0]])
+        scene_ = SceneInput(
+            rgb=np.zeros((k_.height, k_.width, 3), dtype=np.uint8),
+            depth_m=near_tracking.quantize_depth_mm(depth_),
+            intrinsics=k_,
+            base_from_optical=replace(
+                perception_mount,
+                translation_m=np.asarray(perception_mount.translation_m, dtype=float) + np.array([0.0, 0.0, lift_]),
+            ),
+            stamp_ns=int(round(stamp * 1e9)),
+            clock_domain="ros_sim",
+            source_provenance="synthetic",
+        )
+        result_ = tracker_.on_frame(scene_, stamp, pose, now_s, near["episode"])
+        near["last_fed_stamp"] = near["last_stamp"] = stamp
+        latest_ = tracker_.latest
+        row.update(
+            pose=list(pose), pose_rows=near["history"].bracket_times(aligned, near["episode"]), lift_m=lift_,
+            **asdict(result_), latest_source=latest_.source, latest_stamp_s=latest_.stamp_s,
+            latest_aligned_s=latest_.aligned_s, latest_pose=list(latest_.pose),
+            latest_held={k: list(v) if isinstance(v, tuple) else v for k, v in latest_.held.items()},
+            latest_widths_m=[latest_.observation.left.width_m, latest_.observation.right.width_m],
+            latest_bound=dict(latest_.bound), latest_frame_version=latest_.frame_version,
+        )
+        near["frames"].append(row)
+        if result_.mismatch and not near.get("mismatch"):
+            near["mismatch"] = True  # terminal in S4a (no retry before S4c)
+            near["events"].append({"time_s": now_s, "event": "mismatch", "stamp_s": stamp})
+        if result_.unbounded and not near.get("unbounded"):
+            near["unbounded"] = True
+            near["events"].append({"time_s": now_s, "event": "unbounded", "stamp_s": stamp})
+
+    def near_tick(now_s: float, rear_stamp_: float, rear_now, requested_mps: float) -> tuple[bool, bool]:
+        """Plan D8 S4a ④⑤: one approach/insert tick of the near-field stop, decided before
+        the tick's arrival. Returns (hold, released): hold -- command zero, steering held,
+        arrival deferred; released -- a stop just ended standing (restart the slew).
+
+        Terminal reasons (failed, mismatch, unbounded) end the run once the stop detector
+        sees the truck stand; in the section (armed) a lost track or a travel budget that
+        does not hold stops it until a new result lets it go, and only standing."""
+        tracker_ = near["tracker"]
+        require(slam["tracker"].mode == "holding" and hold_count() == near["episode"],
+                "near_field_frame_released")  # S4a: the near-capture hold lasts through insert
+        episode = near["episode"]
+        near["history"].add(rear_stamp_, rear_now, episode)
+        base_now = near["history"].base_at(rear_stamp_, episode)
+        bounds_, terms_ = near["bounds"], near["terms"]
+        latest_ = tracker_.latest
+        if not tracker_.armed:
+            face_x = near_tracking.face_min_x_m(
+                latest_.held, (latest_.observation.left.width_m, latest_.observation.right.width_m), base_now
+            )
+            if near_tracking.section_entered(face_x, near["fork_tip_x_m"]):
+                tracker_.arm(now_s)
+                near["events"].append({"time_s": now_s, "event": "armed", "face_x_m": face_x,
+                                       "lost": tracker_.status(now_s).lost})
+        status_ = tracker_.status(now_s)
+        pixel_s = latest_.stamp_s - bounds_.max_latency_s
+        age = now_s - pixel_s
+        path = near["history"].path_length_since(pixel_s, episode)
+        tau = near_tracking.result_wait_s(now_s, near["last_stamp"], bounds_.render_period_s, bounds_.read_delay_s)
+        vbar = near["commands"].vbar(now_s, terms_.delta_v_mps, pending_mps=requested_mps)
+        budget = near_tracking.travel_budget(path, age, tau, vbar, terms_)
+        terminal = ("lost" if status_.failed else "mismatch" if near.get("mismatch")
+                    else "unbounded" if near.get("unbounded") else None)
+        reason = terminal
+        if reason is None and tracker_.armed:
+            reason = "lost_wait" if status_.lost else None if budget.ok else f"budget:{budget.reason}"
+        standing = bool(slam["stop_now"])
+        stop = near["stop"]
+        hold, released = False, False
+        if reason is not None:
+            if stop is None or (terminal is not None and not stop["terminal"]):
+                near["stop"] = stop = {"reason": reason, "since_s": now_s, "terminal": terminal is not None}
+                near["events"].append({"time_s": now_s, "event": "stop", "reason": reason})
+            hold = True
+            if stop["terminal"] and standing:
+                near["events"].append({"time_s": now_s, "event": "terminal_standing", "reason": stop["reason"]})
+                state["near_tracking"]["outcome"] = f"near_field_{stop['reason']}"
+                require(False, f"near_field_{stop['reason']}")
+        elif stop is not None:
+            if standing:
+                near["events"].append({"time_s": now_s, "event": "release", "reason": stop["reason"],
+                                       "stopped_s": now_s - stop["since_s"]})
+                near["stop"] = None
+                released = True
+            else:
+                hold = True  # brake to a standstill before any restart (2차 P1)
+        near["ticks"].append({
+            "t": now_s, "rear_stamp_s": rear_stamp_, "base": list(base_now), "armed": tracker_.armed,
+            "age_s": age, "lost": status_.lost, "failed": status_.failed, "pixel_s": pixel_s,
+            "path_m": path, "len_term_m": budget.len_term_m, "d_m": budget.d_m, "tau_s": tau,
+            "horizon_s": budget.horizon_s, "vbar_mps": vbar, "s_term_m": budget.s_term_m,
+            "travel_m": budget.travel_m, "total_m": budget.total_m, "budget_reason": budget.reason,
+            "reason": reason, "standing": standing, "hold": hold, "released": released, "mode": tracker_.mode,
+            "latest_stamp_s": latest_.stamp_s, "last_received_stamp_s": near["last_stamp"],
+        })
+        return hold, released
+
     def read_pocket_frame() -> None:
         """One 10 Hz carriage depth frame for the pocket check, placed at the
         control pose of its rendering time (frames lag the step)."""
@@ -1779,6 +2137,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             record_pocket_read(raw)
         if raw is None:
             return
+        if near is not None and near["tracker"] is not None:
+            # Plan D8 S4a: the same raw frame, before D5 reads it; a frame that does not
+            # normalise is not given to D5 either -- its freshness runs out and it stops
+            # the truck (Codex S4a-1 2nd review P2).
+            if feed_near_frame(raw) == "bad_depth":
+                return
         if check is None:
             pocket["frames_read"] += 1
             return
@@ -3616,6 +3980,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 stop_now=slam["stop_now"] if slam is not None else None,
                 odom_speed_mps=slam["odom_speed"] if slam is not None else None,
                 odom_yaw_rate_rps=slam.get("odom_yaw_rate") if slam is not None else None,
+                applied_speed_mps=state.get("applied_command", (None, None))[0],
+                applied_steering_rad=state.get("applied_command", (None, None))[1],
             )
 
         def step_world(render: bool) -> None:
@@ -3811,10 +4177,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 reference_self_hits_dropped=int(ray_own),
                 reference_base_z_m=float(start_base[2]),
             )
+        if near is not None:
+            check_near_contract()
         for step in range(int(120 * args.max_sim_seconds)):
             t = world.current_time - initial_time
             rear_stamp = t  # the time of the control pose `rear` (a capture moves it on)
             dwell_hold = dwell_standing = False
+            safety_hold = False  # plan D8 S4: a safety stop -- the final wheel command steps to zero
             base, q = robot.get_world_pose()
             ppos, pq = pallet.get_world_pose()
             yaw, tilt = yaw_and_tilt(q)
@@ -4036,6 +4405,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 limit = max(30.0, 3 * trackers[phase].nominal_duration_s() + 10)
                 if dwells is not None and phase == "approach":
                     limit += dwells.held_s(t)  # plan D8b: standing by design is not slowness
+                if safety_stops is not None and phase == "approach":
+                    limit += safety_stops.held_s(t)  # plan D8 S4a-1 ⓪: the scheduled stops
                 if t - phase_started >= limit:
                     dump_tracking("timeout", last_tracking)
                 require(t - phase_started < limit, f"Tracking timeout in {phase}")
@@ -4453,6 +4824,42 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     elif released_:
                         # Accelerate from the stop, not from the slew's held cruise.
                         trackers["approach"].restart_speed_slew(0.0)
+                        requested_speed = 0.0
+                if (
+                    safety_stops is not None and phase == "approach"
+                    and state.get("near_capture", {}).get("status") == "done"
+                ):
+                    # Plan D8 S4a-1 ⓪: the near-field tracker's safety stop, scheduled --
+                    # zero command, steering held (the dwell path), no wheel lock.
+                    hold_, released_ = safety_stops.update(
+                        t, d_est_m=trackers["approach"].remaining_to_goal_m() + dwell_d_end_m,
+                        still=bool(slam["stop_now"]),
+                    )
+                    if hold_:
+                        requested_speed = 0.0
+                        dwell_hold = True
+                        # A safety stop is a step to zero at the wheels, as the permission's
+                        # cap and the e-stop are (the stop the stopping model measured), not
+                        # the slewed braking of a dwell (Codex S4a-1 ⓪ review P1).
+                        safety_hold = True
+                        if tracking.status == "arrived":
+                            tracking = replace(tracking, status="tracking", speed_mps=0.0)
+                    elif released_:
+                        trackers["approach"].restart_speed_slew(0.0)
+                        requested_speed = 0.0
+                if near is not None and near["tracker"] is not None and phase in ("approach", "insert"):
+                    # Plan D8 S4a ④: the near-field stop, before this tick's arrival --
+                    # zero command, steering held (the safety stop the drive terms were
+                    # measured with), arrival deferred; a restart only from standing.
+                    hold_, released_ = near_tick(t, rear_stamp, rear, requested_speed)
+                    if hold_:
+                        requested_speed = 0.0
+                        dwell_hold = True
+                        safety_hold = True
+                        if tracking.status == "arrived":
+                            tracking = replace(tracking, status="tracking", speed_mps=0.0)
+                    elif released_:
+                        trackers[phase].restart_speed_slew(0.0)
                         requested_speed = 0.0
                 if (
                     phase == "observe" and tracking.status == "tracking"
@@ -4892,6 +5299,18 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 (base[0], base[1]),
                                 yaw,
                             )
+                            if near is not None and state.get("near_capture", {}).get("status") == "pending":
+                                # Plan D8 S4a ①: the near capture's observation, the control
+                                # base it was placed with (this map estimate) and its time.
+                                near["start"] = {
+                                    "observation": observation,
+                                    "pose": (float(base[0]), float(base[1]), float(yaw)),
+                                    "aligned_s": float(attempt["t_before_capture_s"]),
+                                    # The capture's own acquisition stamp: tau's reference
+                                    # before the first frame (Codex S4a-1 review P3).
+                                    "capture_stamp_s": scene_input.stamp_ns * 1e-9 - initial_time,
+                                    "attempt": attempt_number,
+                                }
                             start_rear_pose = Pose2D(rear[0], rear[1], rear[2])
                             if args.camera_inset or args.robot_camera:
                                 inset_estimate = inset.InsetEstimate(
@@ -5226,7 +5645,19 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                         near_error=state["perception"]["perception_error"],
                                     )
                                 transition("approach", t)
+                                if near is not None and state.get("near_capture", {}).get("status") == "done":
+                                    build_near_tracker(t)  # in the hold the transition began
                     elif phase == "approach":
+                        if near is not None and args.near_tracking_stop_at == "insert":
+                            # Plan D8 S4a-1: approach only -- end where the insertion would start.
+                            state["near_tracking"]["outcome"] = "stopped_at_insert"
+                            state["near_tracking"]["arrival"] = {
+                                "time_s": t,
+                                "position_error_m": tracking.position_error_m,
+                                "yaw_error_rad": tracking.yaw_error_rad,
+                            }
+                            transition("near_tracking_stopped", t)
+                            break
                         transition("insert", t)
                     elif phase == "insert":
                         state["insertion_error"] = {
@@ -6013,12 +6444,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 cap = obstacle.get("permission_cap")
                 if cap is not None and cap[0] == t and abs(wheel_speed) > cap[1]:
                     wheel_speed = math.copysign(cap[1], wheel_speed)
-                if estop_holding:
+                if estop_holding or safety_hold:
                     wheel_speed = 0.0
                 state["command_speed"] = wheel_speed
             drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)
             rate = settings["steering_command_rate_rad_s"] * dt
             steering_command += np.clip(target_steering - steering_command, -rate, rate)
+            # Plan D8 S4a-1 ⓪: what the wheels and steering run this tick, for the recorder --
+            # the speed after the Ackermann wheel-rate limit (Codex review P3).
+            state["applied_command"] = (float(drive.speed_mps), [float(v) for v in steering_command])
+            if near is not None and near["tracker"] is not None:
+                near["commands"].add(t + dt, drive.speed_mps)  # the interval [t, t + dt]
             if dwell_standing and wheel_lock["q"] is None:
                 # Plan D8b: hold the wheels where they stand for the dwell (DWELL_WHEEL_KP).
                 controller_ = robot.get_articulation_controller()
@@ -6071,8 +6507,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             near_done = state.get("near_capture", {}).get("status") == "done"
             if recorder is not None:
                 recorder.phase = phase if phase in pocket_recorder.PHASES else "other"
-            pocket_frames = (pocket["check"] is not None or (recorder is not None and near_done)) and phase in (
-                "approach", "insert")
+            pocket_frames = (
+                pocket["check"] is not None
+                or (recorder is not None and near_done)
+                or (near is not None and near["tracker"] is not None)
+            ) and phase in ("approach", "insert")
             if pocket_frames:
                 pocket["history"].append((t, tuple(float(v) for v in rear)))
                 del pocket["history"][:-120]
@@ -6103,7 +6542,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 state["samples"].append(sample)
                 if step % 240 == 0:
                     print("SAMPLE", record_json(sample), flush=True)
-        if phase in ("repeat_capture_done", "repeat_target_not_reached"):
+        if phase in ("repeat_capture_done", "repeat_target_not_reached", "near_tracking_stopped"):
             return
         require(phase == "complete", "Mission exceeded simulation time budget")
         final_pallet, _ = pallet.get_world_pose()
@@ -6163,6 +6602,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     "dwell_wheel_kp": DWELL_WHEEL_KP if dwells is not None else None,
                     "dwell_wheel_locks": wheel_lock["events"],
                         "dwell_d_end_m": dwell_d_end_m,
+                        "safety_stop_gaps_m": (None if args.measure_safety_stops_m is None
+                                               else list(args.measure_safety_stops_m)),
+                        "safety_stops": [] if safety_stops is None else safety_stops.records,
                         "pocket_check": args.pocket_check,
                         "video": args.video,
                         "fps": args.fps,
@@ -6181,6 +6623,36 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 # replacing a failure already raised (main() records that one).
                 state["success"] = False
                 state.setdefault("failure_reason", f"pocket_recording_close_failed: {exc!r}")
+        if near is not None:
+            # Plan D8 S4a ⑥: every frame, tick and event of the near-field tracking; the
+            # summary in result.json. Guarded: a failed write never replaces the run's own
+            # failure.
+            try:
+                (args.output / "near_tracking.json").write_text(
+                    record_json({"frames": near["frames"], "ticks": near["ticks"], "events": near["events"]}) + "\n"
+                )
+                fed_ = [f for f in near["frames"] if "skipped" not in f]
+                state["near_tracking"].update(
+                    frames_fed=len(fed_),
+                    frames_skipped={
+                        k_: sum(1 for f in near["frames"] if f.get("skipped") == k_)
+                        for k_ in ("no_time", "future", "not_new", "uncovered", "bad_depth")
+                    },
+                    accepted=sum(1 for f in fed_ if f.get("accepted")),
+                    rejected=sum(1 for f in fed_ if f.get("rejected")),
+                    handoff_s=next((f["read_s"] for f in fed_ if f.get("mode") == "roof"), None),
+                    armed_s=next((e["time_s"] for e in near["events"] if e["event"] == "armed"), None),
+                    stops=[e for e in near["events"] if e["event"] in ("stop", "release", "terminal_standing")],
+                    mismatch=bool(near.get("mismatch")),
+                    unbounded=bool(near.get("unbounded")),
+                )
+            except Exception as exc:  # noqa: BLE001
+                state["near_tracking_write_error"] = repr(exc)
+                traceback.print_exc()
+                # A tracking run without its record shows nothing: fail it, never replacing
+                # a failure already raised (Codex S4a-1 review P2).
+                state["success"] = False
+                state.setdefault("failure_reason", f"near_tracking_record_failed: {exc!r}")
         if state.get("obstacle_layer") is not None and obstacle is not None:
             scans_rec = obstacle["scans"]
             walls = [x["total_wall_s"] for x in scans_rec] or [0.0]

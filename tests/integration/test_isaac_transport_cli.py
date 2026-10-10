@@ -449,6 +449,8 @@ def test_d8b_recording_options_validate_before_startup(tmp_path) -> None:
         (["--approach-straight-speed-mps", "0"], "(0, 1] m/s"),
         (["--approach-straight-speed-mps", "1.5"], "(0, 1] m/s"),
         (["--record-pocket-frames", "--slam-feedback", socket_path], "--record-slam and --use-perception"),
+        (["--measure-safety-stops-m", "1.0,0.5"], "--measure-safety-stops-m needs --record-pocket-frames"),
+        (["--measure-safety-stops-m", "0.5,1.0"], "--measure-safety-stops-m"),
     ):
         result = subprocess.run(
             [sys.executable, str(SCRIPT), "--base-scene", "unused.usda", "--pallet-urdf", "unused.urdf",
@@ -531,3 +533,97 @@ def test_d8b_dwells_lock_the_wheels_and_give_their_gains_back() -> None:
     assert 'dwell_standing = dwells.active is not None and dwells.active["still_since_s"] is not None' in source
     assert 'set_gains(kps=wheel_lock["gains"][0], kds=wheel_lock["gains"][1])' in lock
     assert 'joint_positions=wheel_lock["q"],' in lock
+
+
+def test_s4_safety_stops_take_the_dwell_path_without_the_wheel_lock_and_record_the_command() -> None:
+    """Plan D8 S4a-1 ⓪: a scheduled safety stop zeroes the command and holds the steering
+    (dwell_hold) but never sets dwell_standing (the wheel lock); the final wheel command
+    steps to zero after the obstacle slew, as the e-stop's does (Codex S4a-1 ⓪ review P1);
+    the applied command of every tick -- the Ackermann-limited speed (P3) -- reaches the
+    truth record."""
+    import ast
+
+    source = SCRIPT.read_text()
+    block = source[source.index("safety_stops.update("):source.index("phase == \"observe\" and tracking.status")]
+    assert "dwell_hold = True" in block and "dwell_standing" not in block
+    assert "safety_hold = True" in block
+    assert "restart_speed_slew(0.0)" in block
+    # Reset every loop tick, before the stop block can set it.
+    assert source.index("safety_hold = False") < source.index("safety_stops.update(")
+    # The zero comes after the slew and the permission cap, last before the drive command.
+    slew = source.index("wheel_speed = previous + float(np.clip(target_speed - previous, -rate, rate))")
+    zero = source.index("if estop_holding or safety_hold:\n                    wheel_speed = 0.0")
+    assert slew < source.index("cap = obstacle.get(\"permission_cap\")") < zero
+    assert zero < source.index("drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)")
+    tree = ast.parse(source)
+    functions = {node.name: ast.unparse(node) for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    assert "applied_speed_mps=state.get('applied_command'" in functions["record_truth_tick"]
+    recorded = source.index("state[\"applied_command\"] = (float(drive.speed_mps)")
+    assert source.index("drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)") < recorded
+    assert recorded < source.index("joint_velocities=np.asarray(drive.wheel_rates_rad_s)")
+
+
+def test_s4_near_tracking_options_validate_before_startup() -> None:
+    for flags, expected in (
+        (["--near-tracking"], "--near-tracking needs --slam-feedback"),
+        (["--near-tracking-stop-at", "insert"], "--near-tracking-stop-at needs --near-tracking"),
+    ):
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--base-scene", "unused.usda", "--pallet-urdf", "unused.urdf",
+             "--forklift-urdf", str(PROVISIONAL_URDF), "--pallet-geometry", "unused.yaml", "--settings",
+             "unused.yaml", "--output", "unused", "--seed", "2", *flags],
+            capture_output=True, text=True, check=False,
+        )
+        assert result.returncode == 2, flags
+        assert expected in result.stderr, (flags, result.stderr)
+
+
+def test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival() -> None:
+    """Plan D8 S4a: with --near-tracking off the run is unchanged -- every call into the
+    near-field path sits under a `near is not None` test -- and the stop is decided before
+    the tick's arrival transition, takes the safety-stop path and defers the arrival."""
+    import ast
+
+    source = SCRIPT.read_text()
+    tree = ast.parse(source)
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    guarded_calls = ("build_near_tracker", "feed_near_frame", "near_tick")
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and getattr(n.func, "id", None) in guarded_calls]
+    assert {c.func.id for c in calls} == set(guarded_calls)
+    for call in calls:
+        node, guarded = call, False
+        while node in parents:
+            node = parents[node]
+            if isinstance(node, ast.If) and "near is not None" in ast.unparse(node.test):
+                guarded = True
+                break
+        assert guarded, ast.unparse(call)
+    assert source.count("near = None\n") == 1
+    # The contract is checked before the first tick; no insertion before S4a-2.
+    assert source.index("            check_near_contract()\n        for step in range(") > 0
+    assert "--near-tracking needs --near-tracking-stop-at insert until S4a-2" in source
+    # Decided after the scheduled safety stops and before the arrival transitions.
+    tick = source.index("hold_, released_ = near_tick(t, rear_stamp, rear, requested_speed)")
+    assert source.index("safety_stops.update(") < tick < source.index("elif phase == \"approach\":\n")
+    block = source[tick:source.index("phase == \"observe\" and tracking.status", tick)]
+    for line in ("requested_speed = 0.0", "dwell_hold = True", "safety_hold = True",
+                 "tracking = replace(tracking, status=\"tracking\", speed_mps=0.0)",
+                 "trackers[phase].restart_speed_slew(0.0)"):
+        assert line in block, line
+    # Built in the hold the approach transition begins; fed the raw frame before D5 reads it.
+    build = source.index("build_near_tracker(t)  # in the hold the transition began")
+    assert source.rindex("transition(\"approach\", t)", 0, build) > build - 300
+    feed = source.index("if feed_near_frame(raw) == \"bad_depth\":\n                return")
+    assert source.index("record_pocket_read(raw)\n        if raw is None:") < feed < source.index(
+        "        if check is None:\n            pocket[\"frames_read\"] += 1")
+    # S4a-1 ends at the approach's arrival, and the loop end lets that phase return.
+    assert "transition(\"near_tracking_stopped\", t)\n                            break" in source
+    assert "\"repeat_target_not_reached\", \"near_tracking_stopped\"):\n            return" in source
+    # Terminal stops end the run only once the stop detector sees the truck stand.
+    functions = {n.name: ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    feed_fn = functions["feed_near_frame"]
+    assert feed_fn.index("skipped='bad_depth'") < feed_fn.index("get_current_frame()") < feed_fn.index(
+        "row['skipped'] = 'uncovered'")
+    tick_fn = functions["near_tick"]
+    assert "if stop['terminal'] and standing:" in tick_fn
+    assert "standing = bool(slam['stop_now'])" in tick_fn

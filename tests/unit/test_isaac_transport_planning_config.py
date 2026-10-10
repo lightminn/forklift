@@ -678,7 +678,8 @@ def test_wheel_target_brakes_at_the_stopping_model_deceleration():
     assert "wheel_speed = requested_speed * 0.25 if creeping" in pre
     assert "if creeping and" not in block  # the creep is slewed (L3c v43 seed 1)
     assert block.index("np.clip(target_speed - previous") < block.index('obstacle.get("permission_cap")')
-    assert block.index('obstacle.get("permission_cap")') < block.index("if estop_holding:")
+    # The e-stop and the plan D8 S4 safety stop (scheduled or near-field) cut it last.
+    assert block.index('obstacle.get("permission_cap")') < block.index("if estop_holding or safety_hold:")
     j = source.index('obstacle["permission_cap"] = ')
     assert j < source.index('if obstacle["path_blocked_ticks"] >= 36 and allowed > 0.0:')
     assert 'obstacle.get("act")' not in source and 'obstacle["act"]' not in source

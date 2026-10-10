@@ -167,3 +167,39 @@ def test_camera_pose_failures_are_counted_with_the_first_cause(tmp_path):
     recorder.camera_pose_failed(RuntimeError("again"))
     counts = recorder.counts()
     assert counts["camera_pose_errors"] == 2 and "prim gone" in counts["camera_pose_first_error"]
+
+
+def test_safety_stops_hold_from_their_gap_until_after_the_first_stand():
+    SafetyStopSchedule = MODULE.SafetyStopSchedule
+
+    s = SafetyStopSchedule((1.5, 1.0), hold_s=0.5)
+    assert s.update(0.0, d_est_m=2.0, still=False) == (False, False)
+    assert s.update(1.0, d_est_m=1.49, still=False) == (True, False)  # fires, braking
+    assert s.update(1.2, d_est_m=1.48, still=True) == (True, False)  # first stand at 1.2 s
+    assert s.update(1.5, d_est_m=1.48, still=False) == (True, False)  # a flicker does not restart it
+    assert s.update(1.71, d_est_m=1.48, still=True) == (False, True)  # 0.51 s after the stand
+    assert s.update(1.8, d_est_m=1.4, still=False) == (False, False)
+    assert s.update(3.0, d_est_m=0.99, still=False) == (True, False)
+    assert [r["gap_m"] for r in s.records] == [1.5]
+    assert s.held_s(3.0) == pytest.approx(0.71)
+
+
+def test_safety_stop_gaps_must_decrease():
+    SafetyStopSchedule = MODULE.SafetyStopSchedule
+
+    with pytest.raises(ValueError):
+        SafetyStopSchedule((1.0, 1.5))
+    with pytest.raises(ValueError):
+        SafetyStopSchedule(())
+
+
+def test_the_applied_command_is_kept_per_tick(tmp_path):
+    rec = MODULE.PocketFrameRecorder(tmp_path)
+    pose = [0.0] * 7
+    rec.record_tick(stamp_s=0.0, rendered=False, base_pose=pose, lift_m=0.0, pallet_pose=pose,
+                    applied_speed_mps=0.055, applied_steering_rad=(0.01, -0.01))
+    rec.record_tick(stamp_s=1 / 120, rendered=False, base_pose=pose, lift_m=0.0, pallet_pose=pose)
+    rec.close({}, [])
+    truth = np.load(tmp_path / "pocket_frames/truth.npz")
+    assert truth["applied_speed_mps"][0] == pytest.approx(0.055) and np.isnan(truth["applied_speed_mps"][1])
+    assert truth["applied_steering_rad"].shape == (2, 2)
