@@ -7,7 +7,9 @@ The bag (forklift_ros slam_replay) carries /scan, /tf and /odom stamped in
 simulation time; `ros2 bag play --clock` turns that into /clock. slam_toolbox
 runs its stock synchronous launch with this package's parameters. When the
 bag ends, a short grace period lets the last map update land, then everything
-shuts down and slam_recorder writes its files.
+shuts down and slam_recorder writes its files. With serialize:=<path> the pose
+graph is first saved there (``<path>.posegraph``/``.data``) for a later
+localization replay (docs/plans/2026-10-08-slam-operating-conditions.md O1).
 """
 
 import os
@@ -19,6 +21,7 @@ from launch.actions import (
     EmitEvent,
     ExecuteProcess,
     IncludeLaunchDescription,
+    OpaqueFunction,
     RegisterEventHandler,
     TimerAction,
 )
@@ -27,6 +30,36 @@ from launch.events import Shutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+
+def _after_bag(context):
+    """Grace period, then (optionally) serialize the pose graph, then shut down."""
+    target = LaunchConfiguration("serialize").perform(context)
+    shutdown = EmitEvent(event=Shutdown())
+    if not target:
+        return [TimerAction(period=8.0, actions=[shutdown])]
+    save = ExecuteProcess(
+        cmd=[
+            "ros2",
+            "service",
+            "call",
+            "/slam_toolbox/serialize_map",
+            "slam_toolbox/srv/SerializePoseGraph",
+            f"{{filename: '{target}'}}",
+        ],
+        output="screen",
+    )
+    return [
+        TimerAction(
+            period=8.0,
+            actions=[
+                save,
+                RegisterEventHandler(
+                    OnProcessExit(target_action=save, on_exit=[shutdown])
+                ),
+            ],
+        )
+    ]
 
 
 def generate_launch_description():
@@ -59,6 +92,7 @@ def generate_launch_description():
             DeclareLaunchArgument("output"),
             DeclareLaunchArgument("rate", default_value="1.0"),
             DeclareLaunchArgument("map_history", default_value="false"),
+            DeclareLaunchArgument("serialize", default_value=""),
             DeclareLaunchArgument(
                 "params",
                 default_value=os.path.join(
@@ -91,9 +125,7 @@ def generate_launch_description():
             RegisterEventHandler(
                 OnProcessExit(
                     target_action=play,
-                    on_exit=[
-                        TimerAction(period=8.0, actions=[EmitEvent(event=Shutdown())])
-                    ],
+                    on_exit=[OpaqueFunction(function=_after_bag)],
                 )
             ),
         ]
