@@ -5,10 +5,10 @@ import pytest
 
 from forklift_core.planning.fleet_traffic import (
     TrafficManager,
-    overlap_matrix,
-    oriented_rects,
     arc_lengths,
     footprint_rectangle,
+    oriented_rects,
+    overlap_matrix,
     pose_at,
     rectangles_overlap,
     tile_rects,

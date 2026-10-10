@@ -24,9 +24,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-from forklift_core.planning.fleet_traffic import overlap_matrix
+from forklift_core.planning.fleet_traffic import oriented_rects, overlap_matrix
 from forklift_core.planning.geometry import Footprint
-from forklift_core.planning.fleet_traffic import oriented_rects
 
 W, H = 1920, 1080
 MAP_W = 1240

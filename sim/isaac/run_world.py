@@ -279,7 +279,11 @@ class Truck:
 def run(app, args, settings, state) -> None:
     import omni.usd
     import planar_lidar
-    from chassis_contract import chassis_record, require_scene_matches_model, stage_chassis
+    from chassis_contract import (
+        chassis_record,
+        require_scene_matches_model,
+        stage_chassis,
+    )
     from insertion_geometry import (
         InsertionGeometry,
         read_carriage_limit_m,
@@ -309,7 +313,13 @@ def run(app, args, settings, state) -> None:
         SyntheticMissionGeometry,
         make_transport_planner_config,
     )
-    from forklift_core.planning.world_gen import PALLET_KEEP_M, Box, make_world, pallet_box, world_record
+    from forklift_core.planning.world_gen import (
+        PALLET_KEEP_M,
+        Box,
+        make_world,
+        pallet_box,
+        world_record,
+    )
     from forklift_core.planning.world_mission import (
         LOADED_STAGES,
         STAGES,

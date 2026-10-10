@@ -71,10 +71,10 @@ class Box:
             (self.x0 + self.x1) / 2, (self.y0 + self.y1) / 2, self.w, self.h, 0.0
         )
 
-    def grow(self, d: float) -> "Box":
+    def grow(self, d: float) -> Box:
         return Box(self.x0 - d, self.y0 - d, self.x1 + d, self.y1 + d)
 
-    def overlaps(self, other: "Box") -> bool:
+    def overlaps(self, other: Box) -> bool:
         return (
             self.x0 < other.x1
             and other.x0 < self.x1
@@ -82,7 +82,7 @@ class Box:
             and other.y0 < self.y1
         )
 
-    def inside(self, other: "Box") -> bool:
+    def inside(self, other: Box) -> bool:
         return (
             other.x0 <= self.x0
             and self.x1 <= other.x1
@@ -620,8 +620,8 @@ def _complement(world: Box, holes: list[Box]) -> list[Box]:
     xs = sorted({world.x0, world.x1, *[h.x0 for h in holes], *[h.x1 for h in holes]})
     ys = sorted({world.y0, world.y1, *[h.y0 for h in holes], *[h.y1 for h in holes]})
     out = []
-    for x0, x1 in zip(xs[:-1], xs[1:]):
-        for y0, y1 in zip(ys[:-1], ys[1:]):
+    for x0, x1 in zip(xs[:-1], xs[1:], strict=True):
+        for y0, y1 in zip(ys[:-1], ys[1:], strict=True):
             cell = Box(x0, y0, x1, y1)
             if cell.w < 1e-6 or cell.h < 1e-6:
                 continue

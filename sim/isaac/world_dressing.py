@@ -194,7 +194,7 @@ def dress_world(stage, app, world, geometry, scene_info: dict, rng, root: str = 
         length, depth = (sx, sy) if along_x else (sy, sx)
         lo_along = box.x0 if along_x else box.y0
 
-        def at(a0, a1, c0=None, c1=None):
+        def at(a0, a1, c0=None, c1=None, box=box, along_x=along_x):
             c0 = (box.y0 if along_x else box.x0) if c0 is None else c0
             c1 = (box.y1 if along_x else box.x1) if c1 is None else c1
             if along_x:
@@ -297,7 +297,7 @@ def dress_spill(dresser: Dresser, stage, path: str, box) -> None:
     _hide(stage.GetPrimAtPath(path))
     cx, cy = (box.x0 + box.x1) / 2, (box.y0 + box.y1) / 2
     w, h = box.x1 - box.x0, box.y1 - box.y0
-    for k, (dx, dy, yaw) in enumerate(((-0.25, -0.2, 0.4), (0.2, 0.15, -0.7), (0.05, -0.3, 1.2))):
+    for dx, dy, yaw in ((-0.25, -0.2, 0.4), (0.2, 0.15, -0.7), (0.05, -0.3, 1.2)):
         dresser.place(path + "_look", PROPS["box"], (cx + dx * w, cy + dy * h), (0.5, 0.5), 0.0, 0.25, yaw=yaw)
     dresser.place(path + "_look", PROPS["wet_sign"], (cx + 0.3 * w, cy + 0.3 * h), (0.3, 0.3), 0.0, None, yaw=0.0, scale=False)
 
