@@ -599,17 +599,21 @@ def test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival() -> 
                 break
         assert guarded, ast.unparse(call)
     assert source.count("near = None\n") == 1
-    # The contract is checked before the first tick; no insertion before S4a-2.
+    # The contract is checked before the first tick; S4a-2 opens the insertion.
     assert source.index("            check_near_contract()\n        for step in range(") > 0
-    assert "--near-tracking needs --near-tracking-stop-at insert until S4a-2" in source
+    assert "until S4a-2" not in source
     # Decided after the scheduled safety stops and before the arrival transitions.
-    tick = source.index("hold_, released_ = near_tick(t, rear_stamp, rear, requested_speed)")
+    tick = source.index("hold_, released_, arrive_ = near_tick(t, rear_stamp, rear, requested_speed, phase, curvature)")
     assert source.index("safety_stops.update(") < tick < source.index("elif phase == \"approach\":\n")
     block = source[tick:source.index("phase == \"observe\" and tracking.status", tick)]
     for line in ("requested_speed = 0.0", "dwell_hold = True", "safety_hold = True",
                  "tracking = replace(tracking, status=\"tracking\", speed_mps=0.0)",
                  "trackers[phase].restart_speed_slew(0.0)"):
         assert line in block, line
+    # S4a-2: the carriage-corner insertion end becomes the insertion's arrival, standing.
+    arrive = block.index("if arrive_:")
+    assert arrive < block.index("tracking = replace(tracking, status=\"arrived\", speed_mps=0.0)") < block.index("elif hold_:")
+    assert "state[\"near_tracking\"][\"insert_arrival\"]" in source
     # Built in the hold the approach transition begins; fed the raw frame before D5 reads it.
     build = source.index("build_near_tracker(t)  # in the hold the transition began")
     assert source.rindex("transition(\"approach\", t)", 0, build) > build - 300
@@ -625,5 +629,19 @@ def test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival() -> 
     assert feed_fn.index("skipped='bad_depth'") < feed_fn.index("get_current_frame()") < feed_fn.index(
         "row['skipped'] = 'uncovered'")
     tick_fn = functions["near_tick"]
-    assert "if stop['terminal'] and standing:" in tick_fn
+    assert "near_tracking.decide_stop(" in tick_fn and "if action['end']:" in tick_fn
     assert "standing = bool(slam['stop_now'])" in tick_fn
+    # A gap shortfall ends the run only on a fresh observation; otherwise it waits.
+    tick_src = source[source.index("    def near_tick("):source.index("    def read_pocket_frame(")]
+    fresh_branch = tick_src[tick_src.index("if margins_[worst_] < 0:"):tick_src.index("ghat = ")]
+    assert fresh_branch.index("if fresh:") < fresh_branch.index('terminal = terminal or "stuck"') < fresh_branch.index(
+        'stale_now.add("gap_wait")')
+    assert "stale_now.add('gap_wait')" in tick_fn and "stale_now.add('carriage_uncertain')" in tick_fn
+    assert "if phase_ == 'insert' and min(" in tick_fn  # the insertion end only in the insertion
+    # Codex S4a-2 code review: latched only on a fresh, certain observation; old-evidence
+    # waits hold until a new accepted observation; the held steering command bounds kappa.
+    assert "if fresh and certain:" in tick_fn and "stale_now.add('insert_end_unconfirmed')" in tick_fn
+    assert "st_ >= latest_.stamp_s" in tick_fn
+    assert "steering_command" in tick_fn
+    unbounded = tick_src.index('terminal = terminal or "unbounded"  # no bound: not a measured shortfall')
+    assert unbounded < tick_src.index("elif face_distance - along_e <= k_tip * sweep:")

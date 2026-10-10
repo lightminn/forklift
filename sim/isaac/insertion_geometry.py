@@ -146,6 +146,26 @@ def read_carriage_limit_m(forklift_urdf: Path) -> float:
     return tip - max(fronts)
 
 
+def read_carriage_front_corners_m(forklift_urdf: Path) -> tuple:
+    """Plan D8 S4a-2: the base-frame front corners ((x, +y), (x, -y)) of the carriage
+    without its blades -- the frontmost x and the widest y of every non-blade carriage box
+    (cross members, sides, heels, grille), so the two corners cover its whole outline."""
+    truck = ET.parse(forklift_urdf).getroot()
+    carriage = _base_position_m(truck, "fork_lift")
+    link = truck.find("link[@name='fork_carriage']")
+    if link is None:
+        raise ValueError("Missing fork_carriage link")
+    boxes = [
+        (carriage[0] + center[0] + half[0], carriage[1] + center[1] - half[1], carriage[1] + center[1] + half[1])
+        for name, center, half in _boxes(link)
+        if not name.endswith("_fork_collision")
+    ]
+    if not boxes:
+        raise ValueError("Missing carriage collision boxes")
+    front = float(max(b[0] for b in boxes))
+    return ((front, float(max(b[2] for b in boxes))), (front, float(min(b[1] for b in boxes))))
+
+
 @dataclass(frozen=True)
 class TrackingFrame:
     """Base-frame x of the fork tip and carriage front, the insertion target and the

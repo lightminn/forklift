@@ -261,7 +261,8 @@ def arguments() -> argparse.Namespace:
         "--near-tracking-stop-at",
         choices=("insert",),
         default=None,
-        help="Plan D8 S4a-1: end the run where the approach arrives (before the insertion).",
+        help="Plan D8 S4a-1: end the run where the approach arrives (before the insertion); "
+        "without it the mission runs on with S4a-2's protection.",
     )
     parser.add_argument(
         "--near-bounds",
@@ -648,10 +649,6 @@ def arguments() -> argparse.Namespace:
         parser.error("--near-tracking excludes the scheduled stops and dwells of the measurement runs")
     if args.near_tracking_stop_at is not None and not args.near_tracking:
         parser.error("--near-tracking-stop-at needs --near-tracking")
-    if args.near_tracking and args.near_tracking_stop_at != "insert":
-        # Plan D8 S4: no insertion or lift on the tracker before S4a-2's protection (the
-        # pocket-wall gap watch and the carriage corner rule) exists (Codex S4a-1 P1).
-        parser.error("--near-tracking needs --near-tracking-stop-at insert until S4a-2")
     from insertion_geometry import (
         assert_pallet_urdf_matches_geometry,
         assert_pallet_urdf_matches_named_boxes,
@@ -1767,7 +1764,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "history": near_tracking.RearHistory(args.rear_axle_offset_m),
             "commands": near_tracking.CommandWindow(),
             "last_stamp": None,  # the last frame stamp received (tau)
-            "stop": None,  # the active stop: {"reason", "terminal", "since_s"}
+            "stop_state": None,  # near_tracking.StopState once the tracker is built
             "frames": [],
             "ticks": [],
             "events": [],
@@ -1963,8 +1960,18 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             config, near["bounds"], start["observation"], start["pose"], start["aligned_s"],
             front_fn=front_fn, roof_fn=roof_fn, frame_version=episode,
         )
+        from insertion_geometry import read_carriage_front_corners_m
+
+        blades_ = read_fork_blades_m(args.forklift_urdf)
         near.update(episode=episode, fork_tip_x_m=frame_geo.fork_tip_x_m,
-                    last_stamp=start["capture_stamp_s"], last_fed_stamp=None)
+                    last_stamp=start["capture_stamp_s"], last_fed_stamp=None,
+                    # Plan D8 S4a-2: the blades, the carriage front corners and the depth
+                    # past which the carriage meets the face first.
+                    blades=blades_, blade_y_max_m=max(max(abs(b_[2]), abs(b_[3])) for b_ in blades_),
+                    corners=read_carriage_front_corners_m(args.forklift_urdf),
+                    carriage_limit_m=frame_geo.carriage_limit_m,
+                    protect=None, stop_state=near_tracking.StopState(), stop_events=[], arrival=None,
+                    stale_waits={})
         near["history"].clear()
         state["near_tracking"]["start"] = {
             "built_s": now_s,
@@ -2054,14 +2061,18 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             near["unbounded"] = True
             near["events"].append({"time_s": now_s, "event": "unbounded", "stamp_s": stamp})
 
-    def near_tick(now_s: float, rear_stamp_: float, rear_now, requested_mps: float) -> tuple[bool, bool]:
-        """Plan D8 S4a ④⑤: one approach/insert tick of the near-field stop, decided before
-        the tick's arrival. Returns (hold, released): hold -- command zero, steering held,
-        arrival deferred; released -- a stop just ended standing (restart the slew).
+    def near_tick(now_s: float, rear_stamp_: float, rear_now, requested_mps: float, phase_: str,
+                  curvature_cmd: float) -> tuple[bool, bool, bool]:
+        """Plan D8 S4a ④⑤ and S4a-2: one approach/insert tick of the near-field stop, decided
+        before the tick's arrival. Returns (hold, released, arrive): hold -- command zero,
+        steering held, arrival deferred; released -- a stop just ended standing (restart the
+        slew); arrive -- the carriage-corner insertion end, standing with nothing waiting:
+        the caller turns it into the insertion's arrival.
 
-        Terminal reasons (failed, mismatch, unbounded) end the run once the stop detector
-        sees the truck stand; in the section (armed) a lost track or a travel budget that
-        does not hold stops it until a new result lets it go, and only standing."""
+        Reasons by priority (near_tracking.decide_stop): terminal (failed, mismatch,
+        unbounded, stuck -- latched, ending the run once the stop detector sees the truck
+        stand) > the insertion end (latched) > waiting (lost, budget, gap_wait,
+        carriage_uncertain -- released only standing, once none is left)."""
         tracker_ = near["tracker"]
         require(slam["tracker"].mode == "holding" and hold_count() == near["episode"],
                 "near_field_frame_released")  # S4a: the near-capture hold lasts through insert
@@ -2070,10 +2081,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         base_now = near["history"].base_at(rear_stamp_, episode)
         bounds_, terms_ = near["bounds"], near["terms"]
         latest_ = tracker_.latest
+        widths_ = (latest_.observation.left.width_m, latest_.observation.right.width_m)
         if not tracker_.armed:
-            face_x = near_tracking.face_min_x_m(
-                latest_.held, (latest_.observation.left.width_m, latest_.observation.right.width_m), base_now
-            )
+            face_x = near_tracking.face_min_x_m(latest_.held, widths_, base_now)
             if near_tracking.section_entered(face_x, near["fork_tip_x_m"]):
                 tracker_.arm(now_s)
                 near["events"].append({"time_s": now_s, "event": "armed", "face_x_m": face_x,
@@ -2087,39 +2097,126 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         budget = near_tracking.travel_budget(path, age, tau, vbar, terms_)
         terminal = ("lost" if status_.failed else "mismatch" if near.get("mismatch")
                     else "unbounded" if near.get("unbounded") else None)
-        reason = terminal
-        if reason is None and tracker_.armed:
-            reason = "lost_wait" if status_.lost else None if budget.ok else f"budget:{budget.reason}"
-        standing = bool(slam["stop_now"])
-        stop = near["stop"]
-        hold, released = False, False
-        if reason is not None:
-            if stop is None or (terminal is not None and not stop["terminal"]):
-                near["stop"] = stop = {"reason": reason, "since_s": now_s, "terminal": terminal is not None}
-                near["events"].append({"time_s": now_s, "event": "stop", "reason": reason})
-            hold = True
-            if stop["terminal"] and standing:
-                near["events"].append({"time_s": now_s, "event": "terminal_standing", "reason": stop["reason"]})
-                state["near_tracking"]["outcome"] = f"near_field_{stop['reason']}"
-                require(False, f"near_field_{stop['reason']}")
-        elif stop is not None:
-            if standing:
-                near["events"].append({"time_s": now_s, "event": "release", "reason": stop["reason"],
-                                       "stopped_s": now_s - stop["since_s"]})
-                near["stop"] = None
-                released = True
+        waits = []
+        if tracker_.armed:
+            if status_.lost:
+                waits.append("lost_wait")
+            if not budget.ok:
+                waits.append(f"budget:{budget.reason}")
+        # Plan D8 S4a-2: the blade-wall gaps and the carriage corners, from the protection's
+        # start (within W of the estimated face, or the insertion) on.
+        face = near_tracking.carried_face(latest_.held, widths_, base_now)
+        tip_x, rear_x = near["fork_tip_x_m"], -abs(args.rear_axle_offset_m)
+        face_distance = min(face[s_][w_][0] for s_ in ("left", "right") for w_ in ("outer", "inner")) - tip_x
+        wb_, ht_ = args.drive_geometry.wheelbase_m, args.drive_geometry.track_m / 2
+        # Each front wheel's curvature, measured and as the held steering command (a stop
+        # keeps steering_command -- Codex S4a-2 code review P2), and this tick's request.
+        kappa_b = abs(curvature_cmd)
+        for steer_ in (robot.get_joint_positions()[steers], steering_command):
+            kappa_b = max(kappa_b, abs(math.tan(steer_[0]) / (wb_ + math.tan(steer_[0]) * ht_)),
+                          abs(math.tan(steer_[1]) / (wb_ - math.tan(steer_[1]) * ht_)))
+        s_term = terms_.at(terms_.delta_s_m, near_tracking.STOP_LATENCY_S)
+        sweep = near_tracking.stop_distance_m(vbar) + (s_term if s_term is not None else math.inf)
+        odometry_ = bounds_.odometry(age)
+        eps_yaw = latest_.bound["yaw_rad"]
+        protection = {}
+        insert_end_now = False
+        if near["protect"] is None and (phase_ == "insert" or face_distance <= near_tracking.PROTECT_W_M):
+            rho_face = max(math.hypot(face[s_][w_][0] - rear_x, face[s_][w_][1])
+                           for s_ in ("left", "right") for w_ in ("outer", "inner"))
+            along_e = (latest_.bound["along_m"] + odometry_[0] + rho_face * odometry_[1]
+                       if odometry_ is not None else math.inf)
+            k_tip = near_tracking.corner_sweep_factor((tip_x, near["blade_y_max_m"]), face, eps_yaw, kappa_b, rear_x)
+            near["protect"] = {"time_s": now_s, "phase": phase_, "face_distance_m": face_distance,
+                               "along_error_m": along_e, "tip_sweep_m": k_tip * sweep, "kappa_b": kappa_b}
+            near["events"].append({"time_s": now_s, "event": "protect", **near["protect"]})
+            if odometry_ is None or not math.isfinite(sweep):
+                terminal = terminal or "unbounded"  # no bound: not a measured shortfall
+            elif face_distance - along_e <= k_tip * sweep:
+                terminal = terminal or "stuck"
+        if near["protect"] is not None:
+            if odometry_ is None or not math.isfinite(sweep):
+                terminal = terminal or "unbounded"
             else:
-                hold = True  # brake to a standstill before any restart (2차 P1)
+                gaps_ = near_tracking.blade_gaps(face, near["blades"], (0.0, near["carriage_limit_m"]), rear_x)
+                lat_sweep = near_tracking.lateral_sweep_m(kappa_b, sweep, tip_x - rear_x, near["blade_y_max_m"])
+                margins_ = [p_["gap_m"] - near_tracking.gap_threshold_m(p_, latest_.bound, odometry_, gaps_["rho_m"],
+                                                                     face, lat_sweep) for p_ in gaps_["points"]]
+                worst_ = int(np.argmin(margins_))
+                fresh = age <= bounds_.max_latency_s + bounds_.read_delay_s + near_tracking.TICK_S + 1e-9
+                stale_now = set()  # waits raised on an observation that is not fresh
+                if margins_[worst_] < 0:
+                    if fresh:
+                        terminal = terminal or "stuck"  # confirmed on a new observation
+                    else:
+                        stale_now.add("gap_wait")
+                ghat = near_tracking.carriage_gaps(face, near["corners"])
+                ks = [near_tracking.corner_sweep_factor(c_, face, eps_yaw, kappa_b, rear_x) for c_ in near["corners"]]
+                sigmas = [near_tracking.carriage_uncertainty_m(latest_.bound, odometry_, c_, face, rear_x, vbar)
+                          for c_ in near["corners"]]
+                inside = near_tracking.entered(face, tip_x)
+                certain = max(sigmas) < near_tracking.INSERT_RESERVE_M
+                if phase_ == "insert" and min(g_ - k_ * sweep for g_, k_ in zip(ghat, ks, strict=True)) <= (
+                        near_tracking.INSERT_RESERVE_M):
+                    if fresh and certain:
+                        insert_end_now = True  # latched only on a fresh, certain observation
+                    else:
+                        stale_now.add("insert_end_unconfirmed")  # stand; the next result decides
+                if inside and not certain:
+                    stale_now.add("carriage_uncertain")
+                # A wait raised on old evidence holds until a new accepted observation, which
+                # then decides it afresh (Codex S4a-2 code review P2).
+                held_waits = {r_: st_ for r_, st_ in near["stale_waits"].items() if st_ >= latest_.stamp_s}
+                held_waits.update({r_: latest_.stamp_s for r_ in stale_now})
+                near["stale_waits"] = held_waits
+                waits += sorted(held_waits)
+                protection = {
+                    "inside": inside, "fresh": fresh, "min_margin_m": margins_[worst_],
+                    "worst": {k_: v_ for k_, v_ in gaps_["points"][worst_].items()}, "rho_m": gaps_["rho_m"],
+                    "lateral_sweep_m": lat_sweep, "corner_gaps_m": ghat, "corner_sweep_k": ks,
+                    "corner_sigma_m": sigmas, "face_distance_m": face_distance,
+                }
+        standing = bool(slam["stop_now"])
+        previous = near["stop_state"]
+        near["stop_state"], action = near_tracking.decide_stop(
+            previous, now_s, terminal=terminal, insert_end=insert_end_now, waits=tuple(waits), standing=standing
+        )
+        current = near["stop_state"]
+        if action["changed"] and current.reason is not None:
+            near["events"].append({"time_s": now_s, "event": "stop", "reason": current.reason})
+            if previous.reason is None:  # a new stop: what the stopping model was given (judgement (vii))
+                near["stop_events"].append({
+                    "start_s": now_s, "reason": current.reason, "vbar_mps": vbar,
+                    "d_stop_m": near_tracking.stop_distance_m(vbar), "sweep_m": sweep, "kappa_b": kappa_b,
+                    "corner_sweep_k": protection.get("corner_sweep_k"), "lateral_sweep_m": protection.get("lateral_sweep_m"),
+                    "standing_s": None,
+                })
+        if ((current.reason is not None or action["released"]) and standing and near["stop_events"]
+                and near["stop_events"][-1]["standing_s"] is None):
+            near["stop_events"][-1]["standing_s"] = now_s  # also when this tick releases it
+        if action["released"]:
+            near["events"].append({"time_s": now_s, "event": "release", "reason": previous.reason,
+                                   "stopped_s": now_s - previous.since_s})
+        if action["arrive"]:
+            near["arrival"] = {"reason": "insert_end", "time_s": now_s, **protection}
+            near["events"].append({"time_s": now_s, "event": "insert_end_arrival"})
         near["ticks"].append({
             "t": now_s, "rear_stamp_s": rear_stamp_, "base": list(base_now), "armed": tracker_.armed,
             "age_s": age, "lost": status_.lost, "failed": status_.failed, "pixel_s": pixel_s,
             "path_m": path, "len_term_m": budget.len_term_m, "d_m": budget.d_m, "tau_s": tau,
             "horizon_s": budget.horizon_s, "vbar_mps": vbar, "s_term_m": budget.s_term_m,
             "travel_m": budget.travel_m, "total_m": budget.total_m, "budget_reason": budget.reason,
-            "reason": reason, "standing": standing, "hold": hold, "released": released, "mode": tracker_.mode,
-            "latest_stamp_s": latest_.stamp_s, "last_received_stamp_s": near["last_stamp"],
+            "terminal": terminal, "waits": list(waits), "insert_end": current.insert_end, "reason": current.reason,
+            "standing": standing, "hold": action["hold"], "released": action["released"], "arrive": action["arrive"],
+            "mode": tracker_.mode, "latest_stamp_s": latest_.stamp_s, "last_received_stamp_s": near["last_stamp"],
+            "kappa_b": kappa_b, "sweep_m": sweep if math.isfinite(sweep) else None,
+            "protect": near["protect"] is not None, **({"protection": protection} if protection else {}),
         })
-        return hold, released
+        if action["end"]:
+            near["events"].append({"time_s": now_s, "event": "terminal_standing", "reason": current.reason})
+            state["near_tracking"]["outcome"] = f"near_field_{current.reason}"
+            require(False, f"near_field_{current.reason}")
+        return action["hold"], action["released"], action["arrive"]
 
     def read_pocket_frame() -> None:
         """One 10 Hz carriage depth frame for the pocket check, placed at the
@@ -4851,8 +4948,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     # Plan D8 S4a ④: the near-field stop, before this tick's arrival --
                     # zero command, steering held (the safety stop the drive terms were
                     # measured with), arrival deferred; a restart only from standing.
-                    hold_, released_ = near_tick(t, rear_stamp, rear, requested_speed)
-                    if hold_:
+                    hold_, released_, arrive_ = near_tick(t, rear_stamp, rear, requested_speed, phase, curvature)
+                    if arrive_:
+                        # Plan D8 S4a-2 ③: the carriage-corner insertion end, standing: the
+                        # insertion's own arrival processing (insert -> lift) follows.
+                        requested_speed = 0.0
+                        dwell_hold = True
+                        safety_hold = True
+                        tracking = replace(tracking, status="arrived", speed_mps=0.0)
+                    elif hold_:
                         requested_speed = 0.0
                         dwell_hold = True
                         safety_hold = True
@@ -5675,6 +5779,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 geometry.pallet_depth_m,
                             )
                         )
+                        if near is not None:
+                            # Plan D8 S4a-2 ⑤: why the insertion ended; insertion_error keeps its
+                            # meaning (the follower against the path end).
+                            arrival_ = near.get("arrival") or {"reason": "path", "time_s": t}
+                            state["near_tracking"]["insert_arrival"] = {
+                                **arrival_,
+                                "last_tick": near["ticks"][-1] if near["ticks"] else None,
+                                "insertion_measured": state["insertion_measured"],
+                            }
                         # Insertion-axis yaw against the true pallet (fork axis
                         # along the pallet x axis either way round).
                         relative_yaw = yaw_and_tilt(q)[0] - yaw_and_tilt(pq)[0]
@@ -6629,7 +6742,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             # failure.
             try:
                 (args.output / "near_tracking.json").write_text(
-                    record_json({"frames": near["frames"], "ticks": near["ticks"], "events": near["events"]}) + "\n"
+                    record_json({"frames": near["frames"], "ticks": near["ticks"], "events": near["events"],
+                                 "stop_events": near.get("stop_events") or [], "protect": near.get("protect")}) + "\n"
                 )
                 fed_ = [f for f in near["frames"] if "skipped" not in f]
                 state["near_tracking"].update(
@@ -6642,7 +6756,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     rejected=sum(1 for f in fed_ if f.get("rejected")),
                     handoff_s=next((f["read_s"] for f in fed_ if f.get("mode") == "roof"), None),
                     armed_s=next((e["time_s"] for e in near["events"] if e["event"] == "armed"), None),
-                    stops=[e for e in near["events"] if e["event"] in ("stop", "release", "terminal_standing")],
+                    stops=[e for e in near["events"]
+                           if e["event"] in ("stop", "release", "terminal_standing", "insert_end_arrival")],
+                    protect=near.get("protect"),
+                    stop_events=near.get("stop_events") or [],
                     mismatch=bool(near.get("mismatch")),
                     unbounded=bool(near.get("unbounded")),
                 )

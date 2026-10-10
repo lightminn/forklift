@@ -445,3 +445,24 @@ def test_the_tracking_frame_agrees_with_the_mount_studys_rig(model):
     _, tip_x, carriage_front = study.truck_frame(model)
     assert frame.fork_tip_x_m == pytest.approx(tip_x, abs=1e-9)
     assert frame.carriage_front_x_m == pytest.approx(carriage_front, abs=1e-9)
+
+
+def test_the_carriage_front_corners_cover_every_non_blade_carriage_box():
+    """Plan D8 S4a-2: the measured chassis' carriage front corners (cross members at x 0.604
+    m, the widest boxes at +-0.235 m) and, for both chassis, no non-blade box beyond them."""
+    import xml.etree.ElementTree as ET
+
+    for urdf in ("dls08_measured", "dls08_provisional"):
+        path = ROOT / f"sim/models/{urdf}/forklift.urdf"
+        (x, y_plus), (x2, y_minus) = MODULE.read_carriage_front_corners_m(path)
+        assert x == x2 and y_minus < 0 < y_plus
+        truck = ET.parse(path).getroot()
+        carriage = MODULE._base_position_m(truck, "fork_lift")
+        for name, center, half in MODULE._boxes(truck.find("link[@name='fork_carriage']")):
+            if name.endswith("_fork_collision"):
+                continue
+            assert carriage[0] + center[0] + half[0] <= x + 1e-12
+            assert y_minus - 1e-12 <= carriage[1] + center[1] - half[1]
+            assert carriage[1] + center[1] + half[1] <= y_plus + 1e-12
+    corners = MODULE.read_carriage_front_corners_m(ROOT / "sim/models/dls08_measured/forklift.urdf")
+    assert [v for c in corners for v in c] == pytest.approx([0.604, 0.235, 0.604, -0.235])

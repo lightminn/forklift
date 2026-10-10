@@ -320,6 +320,241 @@ def section_entered(front_min_x_m: float, fork_tip_x_m: float) -> bool:
     return front_min_x_m - fork_tip_x_m <= SECTION_M + 1e-12
 
 
+# Plan D8 S4a-2: after the fork tips pass the estimated face ---------------------------
+GAP_MARGIN_M = 0.006 + 0.005  # the follower bound plus the margin (plan D8d)
+PROTECT_W_M = 0.15  # the protection starts this far before the estimated face (S4a-2 ①)
+PALLET_TERM_M = 0.00005
+INSERT_RESERVE_M = 0.016
+
+
+def carried_face(held: dict, widths: tuple, base_now) -> dict:
+    """An accepted observation placed in the held frame, seen from the control base now:
+    the insertion axis and its lateral (+90 degrees), each pocket's face centre and its
+    two face wall points (centre +- observed width / 2 across the axis; left = +y)."""
+    yaw = _wrap(held["yaw"] - base_now[2])
+    axis = np.array([math.cos(yaw), math.sin(yaw)])
+    lateral = np.array([-axis[1], axis[0]])
+    c, s = math.cos(base_now[2]), math.sin(base_now[2])
+    out = {"yaw": yaw, "axis": axis, "lateral": lateral}
+    for side, width, sign in zip(("left", "right"), widths, (1.0, -1.0), strict=True):
+        dx, dy = held[side][0] - base_now[0], held[side][1] - base_now[1]
+        centre = np.array([c * dx + s * dy, -s * dx + c * dy])
+        out[side] = {
+            "centre": centre,
+            "outer": centre + sign * width / 2 * lateral,
+            "inner": centre - sign * width / 2 * lateral,
+        }
+    out["mid"] = (out["left"]["centre"] + out["right"]["centre"]) / 2
+    return out
+
+
+def entered(face: dict, fork_tip_x_m: float) -> bool:
+    """The fork tips have passed the estimated face (its four wall points)."""
+    xs = [face[s][w][0] for s in ("left", "right") for w in ("outer", "inner")]
+    return min(xs) <= fork_tip_x_m + 1e-12
+
+
+def blade_gaps(face: dict, blades: tuple, depths: tuple, rear_x_m: float) -> dict:
+    """The four signed blade-wall gaps (base y; negative = overlap) at each depth along
+    the walls, and rho -- the rear axle to the farthest wall point checked. blades are
+    the base-frame (x0, x1, y0, y1) boxes; the +y one is the left blade."""
+    left = max(blades, key=lambda b: b[2])
+    right = min(blades, key=lambda b: b[2])
+    edges = {  # gap = sign * (wall y - blade edge y)
+        ("left", "outer"): (left[3], 1.0),
+        ("left", "inner"): (left[2], -1.0),
+        ("right", "outer"): (right[2], -1.0),
+        ("right", "inner"): (right[3], 1.0),
+    }
+    points = []
+    for (side, wall), (edge_y, sign) in edges.items():
+        for depth in depths:
+            p = face[side][wall] + depth * face["axis"]
+            points.append(
+                {
+                    "side": side,
+                    "wall": wall,
+                    "depth_m": float(depth),
+                    "point": (float(p[0]), float(p[1])),
+                    "gap_m": float(sign * (p[1] - edge_y)),
+                }
+            )
+    rho = max(math.hypot(p["point"][0] - rear_x_m, p["point"][1]) for p in points)
+    return {"points": points, "rho_m": rho}
+
+
+def stop_distance_m(speed_mps: float) -> float:
+    """The stopping model: v (0.15 + 1/120) + v^2 / (2 x 1.5)."""
+    v = abs(speed_mps)
+    return v * STOP_LATENCY_S + v * v / (2 * DECEL_MPS2)
+
+
+def carriage_gaps(face: dict, corners: tuple) -> list:
+    """The axial gap from each carriage front corner (base x, y) to the estimated face
+    line through the face midpoint across the axis (positive: the face is ahead)."""
+    return [
+        float(np.dot(face["mid"] - np.asarray(c, dtype=float), face["axis"]))
+        for c in corners
+    ]
+
+
+def carriage_uncertainty_m(
+    bound: dict, odometry: tuple, corner, face: dict, rear_x_m: float, speed_mps: float
+) -> float:
+    """Plan D8d: the bound on a corner gap -- the observation's along and yaw errors (at the
+    corner's lateral offset from the face midpoint), the carried odometry (e, and psi about
+    the rear axle: the corner's lateral offset plus its rear-axle lever turned by the
+    relative yaw, and the second-order term over the diagonal), the pallet term and one
+    tick's travel past the threshold."""
+    e, psi = odometry
+    lever = corner[0] - rear_x_m
+    diagonal = math.hypot(lever, corner[1])
+    return (
+        bound["along_m"]
+        + abs(corner[1] - face["mid"][1]) * bound["yaw_rad"]
+        + e
+        + psi * (abs(corner[1]) + lever * math.sin(abs(face["yaw"]) + bound["yaw_rad"]))
+        + diagonal * psi * psi / 2
+        + PALLET_TERM_M
+        + abs(speed_mps) * TICK_S
+    )
+
+
+def corner_sweep_factor(
+    corner, face: dict, yaw_bound_rad: float, kappa_rad_m: float, rear_x_m: float
+) -> float:
+    """How far a carriage corner can travel along the insertion axis per metre of rear-axle
+    travel with the steering held at curvature kappa: the axial part of the rigid-body point
+    velocity v (1 - kappa y, kappa lx), 1 + kappa (|y| cos theta + lx sin(|theta| + eps))."""
+    lever = corner[0] - rear_x_m
+    theta = abs(face["yaw"])
+    return 1.0 + abs(kappa_rad_m) * (
+        abs(corner[1]) * math.cos(theta) + lever * math.sin(theta + yaw_bound_rad)
+    )
+
+
+def lateral_sweep_m(
+    kappa_rad_m: float, rear_travel_m: float, lever_m: float, y_abs_m: float
+) -> float:
+    """How far a point (lever_m ahead of the rear axle, |y| = y_abs_m) moves sideways while
+    the rear axle travels rear_travel_m on a constant-curvature arc, the worse turning
+    direction: lever sin(phi) + (1/kappa + |y|)(1 - cos(phi)), phi = kappa s."""
+    kappa = abs(kappa_rad_m)
+    if kappa < 1e-12:
+        return 0.0
+    phi = kappa * rear_travel_m
+    return (
+        lever_m * math.sin(phi) + (1.0 / kappa + y_abs_m) * 2.0 * math.sin(phi / 2) ** 2
+    )
+
+
+def gap_threshold_m(
+    point: dict, bound: dict, odometry: tuple, rho_m: float, face: dict, sweep_m: float
+) -> float:
+    """The smallest allowed blade-wall gap at one wall point: b_t (the pallet-lateral wall
+    error, ``wall_erosion_m``), the point's along error mixing into base y, the blade's
+    sideways sweep while it stops (``lateral_sweep_m``), the follower bound and margin."""
+    from forklift_core.perception.near_field_tracking import wall_erosion_m
+
+    e, psi = odometry
+    along = bound["along_m"] + e + rho_m * psi
+    return (
+        wall_erosion_m(bound, odometry, point["depth_m"], rho_m, PALLET_TERM_M)
+        + along * math.sin(abs(face["yaw"]) + bound["yaw_rad"])
+        + sweep_m
+        + GAP_MARGIN_M
+    )
+
+
+@dataclass(frozen=True)
+class StopState:
+    """The near-field stop between ticks: its leading reason, whether it is terminal, when
+    it began and whether the insertion end is latched."""
+
+    reason: str | None = None
+    terminal: bool = False
+    since_s: float | None = None
+    insert_end: bool = False
+
+
+def decide_stop(
+    state: StopState,
+    now_s: float,
+    *,
+    terminal: str | None,
+    insert_end: bool,
+    waits: tuple,
+    standing: bool,
+) -> tuple[StopState, dict]:
+    """Plan D8 S4a-2 ④: this tick's stop from all its reasons, by priority -- terminal
+    (latched; ends the run once standing) > the insertion end (latched; arrives once
+    standing with no waiting reason this tick) > waiting reasons (lost, budget, corner
+    uncertainty). A stop with no reason left releases only standing. Returns the new state
+    and {"hold", "released", "arrive", "end", "changed"}."""
+    latched = state.insert_end or insert_end
+    if state.terminal or terminal is not None:
+        reason = state.reason if state.terminal else terminal
+        new = StopState(
+            reason, True, state.since_s if state.terminal else now_s, latched
+        )
+        return new, {
+            "hold": True,
+            "released": False,
+            "arrive": False,
+            "end": standing,
+            "changed": not state.terminal,
+        }
+    if latched:
+        new = StopState(
+            "insert_end",
+            False,
+            state.since_s if state.reason == "insert_end" else now_s,
+            True,
+        )
+        return new, {
+            "hold": True,
+            "released": False,
+            "arrive": standing and not waits,
+            "end": False,
+            "changed": state.reason != "insert_end",
+        }
+    if waits:
+        reason = state.reason if state.reason in waits else waits[0]
+        new = StopState(
+            reason, False, state.since_s if state.reason is not None else now_s, False
+        )
+        return new, {
+            "hold": True,
+            "released": False,
+            "arrive": False,
+            "end": False,
+            "changed": state.reason is None,
+        }
+    if state.reason is not None:
+        if standing:
+            return StopState(), {
+                "hold": False,
+                "released": True,
+                "arrive": False,
+                "end": False,
+                "changed": True,
+            }
+        return state, {
+            "hold": True,
+            "released": False,
+            "arrive": False,
+            "end": False,
+            "changed": False,
+        }
+    return state, {
+        "hold": False,
+        "released": False,
+        "arrive": False,
+        "end": False,
+        "changed": False,
+    }
+
+
 # Input files and arguments, by content (shared with tools/s4_drive_terms.py).
 def snapshot_relative(value):
     """An argument path inside a snapshot, from the snapshot root (runs from different
@@ -623,8 +858,19 @@ __all__ = [
     "CommandWindow",
     "DriveTerms",
     "RearHistory",
+    "blade_gaps",
+    "carriage_gaps",
+    "carriage_uncertainty_m",
+    "carried_face",
+    "StopState",
     "condition_problems",
     "contract_arguments",
+    "corner_sweep_factor",
+    "decide_stop",
+    "gap_threshold_m",
+    "lateral_sweep_m",
+    "entered",
+    "stop_distance_m",
     "tracker_config_problems",
     "contract_problems",
     "face_min_x_m",

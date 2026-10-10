@@ -317,3 +317,215 @@ def test_the_contract_names_every_difference_from_the_bounds_condition():
         "pallet_urdf" in p for p in problems
     )
     assert any("noise seed" in p for p in problems)
+
+
+# Plan D8 S4a-2 -------------------------------------------------------------------------
+BLADES = ((0.59, 0.95, 0.1175, 0.1725), (0.59, 0.95, -0.1725, -0.1175))
+CORNERS = ((0.604, 0.235), (0.604, -0.235))
+WIDTHS = (0.2275, 0.2275)
+
+
+def held_pallet(face_x, lateral=0.0, yaw=0.0):
+    """EPAL 6 pockets (centres +-0.18625 m) with the face at face_x in a held frame equal
+    to the base at the origin, shifted sideways and turned about the face midpoint."""
+    c, s = math.cos(yaw), math.sin(yaw)
+    mid = (face_x, lateral)
+    return {
+        "left": (mid[0] - s * 0.18625, mid[1] + c * 0.18625, 0.061),
+        "right": (mid[0] + s * 0.18625, mid[1] - c * 0.18625, 0.061),
+        "yaw": yaw,
+    }
+
+
+def test_the_tips_enter_when_they_pass_the_nearest_face_wall_point():
+    assert not NT.entered(NT.carried_face(held_pallet(0.96), WIDTHS, (0, 0, 0)), 0.95)
+    assert NT.entered(NT.carried_face(held_pallet(0.95), WIDTHS, (0, 0, 0)), 0.95)
+    # Turned, one wall point comes nearer first.
+    turned = NT.carried_face(held_pallet(0.96, yaw=0.1), WIDTHS, (0, 0, 0))
+    assert NT.entered(turned, 0.95)
+
+
+def test_centred_blades_leave_45_mm_inside_and_127_5_mm_outside():
+    gaps = NT.blade_gaps(
+        NT.carried_face(held_pallet(0.95), WIDTHS, (0, 0, 0)),
+        BLADES,
+        (0.0, 0.33),
+        -0.34,
+    )
+    by = {(p["side"], p["wall"], p["depth_m"]): p["gap_m"] for p in gaps["points"]}
+    for side in ("left", "right"):
+        for depth in (0.0, 0.33):
+            assert by[(side, "inner", depth)] == pytest.approx(0.045)
+            assert by[(side, "outer", depth)] == pytest.approx(0.1275)
+    assert gaps["rho_m"] == pytest.approx(math.hypot(0.95 + 0.33 + 0.34, 0.30))
+
+
+def test_a_sideways_shift_closes_one_side_of_each_blade_and_a_yaw_closes_with_depth():
+    shifted = NT.blade_gaps(
+        NT.carried_face(held_pallet(0.95, lateral=0.02), WIDTHS, (0, 0, 0)),
+        BLADES,
+        (0.0,),
+        -0.34,
+    )
+    by = {(p["side"], p["wall"]): p["gap_m"] for p in shifted["points"]}
+    assert by[("left", "inner")] == pytest.approx(0.025) and by[
+        ("right", "inner")
+    ] == pytest.approx(0.065)
+    assert by[("left", "outer")] == pytest.approx(0.1475) and by[
+        ("right", "outer")
+    ] == pytest.approx(0.1075)
+    turned = NT.blade_gaps(
+        NT.carried_face(held_pallet(0.95, yaw=0.05), WIDTHS, (0, 0, 0)),
+        BLADES,
+        (0.0, 0.33),
+        -0.34,
+    )
+    left_inner = {
+        p["depth_m"]: p["gap_m"]
+        for p in turned["points"]
+        if (p["side"], p["wall"]) == ("left", "inner")
+    }
+    assert (
+        left_inner[0.33] < left_inner[0.0]
+    )  # the walls lean +y with depth: the left inner gap closes
+    assert left_inner[0.33] - left_inner[0.0] == pytest.approx(
+        -0.33 * math.sin(0.05), abs=1e-9
+    )
+
+
+def test_the_corner_gap_is_the_axial_distance_to_the_face_line():
+    face = NT.carried_face(held_pallet(0.95), WIDTHS, (0, 0, 0))
+    assert NT.carriage_gaps(face, CORNERS) == pytest.approx([0.346, 0.346])
+    turned = NT.carried_face(held_pallet(0.95, yaw=0.02), WIDTHS, (0, 0, 0))
+    plus, minus = NT.carriage_gaps(turned, CORNERS)
+    # A turned face is nearer the +y corner: (mid - c) . a with a = (cos, sin).
+    assert plus == pytest.approx(0.346 * math.cos(0.02) - 0.235 * math.sin(0.02))
+    assert minus == pytest.approx(0.346 * math.cos(0.02) + 0.235 * math.sin(0.02))
+
+
+def test_the_stopping_model_and_the_corner_uncertainty_follow_the_plan():
+    assert NT.stop_distance_m(0.055) == pytest.approx(
+        0.055 * (0.15 + TICK) + 0.055**2 / 3
+    )
+    face = NT.carried_face(held_pallet(0.95, yaw=0.02), WIDTHS, (0, 0, 0))
+    bound = {"along_m": 0.004, "yaw_rad": 0.00026}
+    sigma = NT.carriage_uncertainty_m(
+        bound, (0.00616, 0.00495), CORNERS[0], face, -0.34, 0.055
+    )
+    expected = (
+        0.004
+        + abs(0.235 - face["mid"][1]) * 0.00026
+        + 0.00616
+        + 0.00495 * (0.235 + 0.944 * math.sin(0.02 + 0.00026))
+        + math.hypot(0.944, 0.235) * 0.00495**2 / 2
+        + 0.00005
+        + 0.055 * TICK
+    )
+    assert sigma == pytest.approx(expected)
+
+
+def test_the_corner_sweep_grows_with_the_held_curvature_and_the_relative_yaw():
+    face = NT.carried_face(held_pallet(0.95, yaw=0.02), WIDTHS, (0, 0, 0))
+    k = NT.corner_sweep_factor(CORNERS[0], face, 0.0, 0.36, -0.34)
+    # Codex S4a-2 review: 10.36 mm of rear-axle travel moves the corner 11.30 mm.
+    assert NT.stop_distance_m(0.0582864) * k == pytest.approx(0.011308, abs=2e-6)
+    assert NT.corner_sweep_factor(CORNERS[0], face, 0.0, 0.0, -0.34) == 1.0
+
+
+def test_the_lateral_sweep_is_the_exact_constant_curvature_arc():
+    # Codex S4a-2 2nd review: kappa 0.36, S 11.4755 mm, lever 1.29 m -> 5.354 mm (not 5.329).
+    assert NT.lateral_sweep_m(0.36, 0.0114751, 1.29, 0.1725) == pytest.approx(
+        0.0053542, abs=2e-7
+    )
+    assert NT.lateral_sweep_m(0.0, 0.0115, 1.29, 0.1725) == 0.0
+    assert NT.lateral_sweep_m(-0.36, 0.0114751, 1.29, 0.1725) == NT.lateral_sweep_m(
+        0.36, 0.0114751, 1.29, 0.1725
+    )
+
+
+def test_the_gap_threshold_adds_the_along_mixing_and_the_sweep_to_b_t():
+    from forklift_core.perception.near_field_tracking import wall_erosion_m
+
+    face = NT.carried_face(held_pallet(0.95, yaw=0.02), WIDTHS, (0, 0, 0))
+    bound = {"wall_m": 0.0001, "yaw_rad": 0.00026, "along_m": 0.0079}
+    got = NT.gap_threshold_m(
+        {"depth_m": 0.346}, bound, (0.00616, 0.00495), 1.7, face, 0.0003
+    )
+    expected = (
+        wall_erosion_m(bound, (0.00616, 0.00495), 0.346, 1.7, 0.00005)
+        + (0.0079 + 0.00616 + 1.7 * 0.00495) * math.sin(0.02 + 0.00026)
+        + 0.0003
+        + 0.011
+    )
+    assert got == pytest.approx(expected)
+
+
+def run_stops(steps, state=None):
+    state = state or NT.StopState()
+    out = []
+    for k, kw in enumerate(steps):
+        state, action = NT.decide_stop(state, float(k), **kw)
+        out.append((state, action))
+    return out
+
+
+def tick(terminal=None, insert_end=False, waits=(), standing=False):
+    return {
+        "terminal": terminal,
+        "insert_end": insert_end,
+        "waits": tuple(waits),
+        "standing": standing,
+    }
+
+
+def test_the_insertion_end_latches_and_arrives_only_standing():
+    out = run_stops([tick(insert_end=True), tick(), tick(standing=True)])
+    assert [a["hold"] for _, a in out] == [True, True, True]
+    assert [a["arrive"] for _, a in out] == [
+        False,
+        False,
+        True,
+    ]  # the condition went false: still latched
+    assert out[-1][0].reason == "insert_end"
+
+
+def test_a_waiting_reason_holds_the_insertion_end_arrival_until_it_clears():
+    out = run_stops(
+        [
+            tick(insert_end=True),
+            tick(waits=["budget"], standing=True),
+            tick(waits=["lost_wait"], standing=True),
+            tick(standing=True),
+        ]
+    )
+    assert [a["arrive"] for _, a in out] == [False, False, False, True]
+    assert not any(a["released"] for _, a in out)  # never a restart
+
+
+def test_a_terminal_reason_overrides_the_insertion_end_and_ends_standing():
+    out = run_stops(
+        [tick(insert_end=True), tick(terminal="stuck"), tick(), tick(standing=True)]
+    )
+    assert out[1][0].terminal and out[1][0].reason == "stuck" and out[1][1]["changed"]
+    assert [a["end"] for _, a in out] == [False, False, False, True]
+    assert not any(a["arrive"] for _, a in out)
+
+
+def test_a_waiting_stop_releases_only_standing_and_keeps_its_first_reason():
+    out = run_stops(
+        [
+            tick(waits=["budget"]),
+            tick(waits=["lost_wait", "budget"]),
+            tick(),
+            tick(standing=True),
+            tick(),
+        ]
+    )
+    assert out[1][0].reason == "budget"
+    assert [a["hold"] for _, a in out] == [True, True, True, False, False]
+    assert [a["released"] for _, a in out] == [False, False, False, True, False]
+
+
+def test_no_reason_no_stop():
+    state, action = NT.decide_stop(NT.StopState(), 0.0, **tick(standing=True))
+    assert state == NT.StopState() and not any(action.values())
