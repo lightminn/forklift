@@ -822,3 +822,19 @@ def test_the_correction_heading_box_covers_the_followers_transient_after_the_fir
     )
     last = np.asarray(run.trajectory[-1])
     assert run.status == "arrived" and abs(last[1]) <= 0.006 and abs(last[2]) <= 0.015
+
+
+# Plan D8 S4c-2: the pickup retry ------------------------------------------------------------
+def test_a_retry_needs_a_mismatch_or_refusal_before_the_protection_far_enough_and_once():
+    assert NT.retry_allowed("mismatch", 0, False, 2.2)
+    assert NT.retry_allowed("replan_rejected", 0, False, 0.59)
+    for reason in ("lost", "unbounded", "stuck", "correction_missed", None):
+        assert not NT.retry_allowed(reason, 0, False, 2.2), reason
+    assert not NT.retry_allowed("mismatch", 1, False, 2.2)  # at most one per pickup
+    assert not NT.retry_allowed("mismatch", 0, True, 2.2)  # the protection had started
+    assert not NT.retry_allowed(
+        "mismatch", 0, False, 0.5499
+    )  # too close to see it again
+    assert not NT.retry_allowed("mismatch", 0, False, float("nan"))
+    # 0.55 m leaves the camera beyond the far detector's 0.8 m minimum (0.331 m behind the tips).
+    assert NT.RETRY_MIN_FACE_M + 0.331 > 0.8 + 0.05

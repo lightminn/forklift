@@ -168,7 +168,7 @@ def tick_index(t: np.ndarray, time_s, what: str) -> int:
     return i
 
 
-def record_problems(truth: dict) -> list[str]:
+def record_problems(truth: dict, retry_spans=(), open_retry: bool = False) -> list[str]:
     """Why the truth record cannot carry the judgement over the approach and insertion."""
     problems = []
     keys = (
@@ -195,7 +195,9 @@ def record_problems(truth: dict) -> list[str]:
     # One tick past the last, when recorded: the command given at the last tick. A run
     # that ends on a near-field terminal stop or at the S4a-1 approach end records nothing
     # after it (its zero command simply holds to the end).
-    span = slice(int(ticks[0]), min(int(ticks[-1]) + 2, n))
+    # open_retry (plan D8 S4c-2, X_RULES v2): the run ended inside its retry -- the record is
+    # checked to its end, where (x) and (v) judge it (Codex S4c-2 results review P2).
+    span = slice(int(ticks[0]), n if open_retry else min(int(ticks[-1]) + 2, n))
     if np.any(np.abs(np.diff(t[span]) - TICK_S) > 0.05 * TICK_S):
         problems.append(
             "the truth ticks are not contiguous at 120 Hz over the approach and insertion"
@@ -203,11 +205,17 @@ def record_problems(truth: dict) -> list[str]:
     for key in ("base_pose", "pallet_pose", "lift_m", "applied_speed_mps"):
         if not np.all(np.isfinite(np.asarray(truth[key], dtype=float)[span])):
             problems.append(f"non-finite {key} over the approach and insertion")
-    phase = np.asarray(truth["phase"])[int(ticks[0]) : int(ticks[-1]) + 1]
     phases = [str(p) for p in truth["phases"]]
-    if np.any(
-        ~np.isin(phase, [phases.index(p) for p in PHASES_CHECKED if p in phases])
-    ):
+    codes = [phases.index(p) for p in PHASES_CHECKED if p in phases]
+    other = [
+        int(i)
+        for i in range(int(ticks[0]), int(ticks[-1]) + 1)
+        if int(truth["phase"][i]) not in codes
+    ]
+    # Plan D8 S4c-2: between a retried pickup's episodes the truck stands, re-observes and
+    # drives again; other phases are allowed there and only there (the ticks stay checked
+    # contiguous and finite above, across the retry).
+    if any(not any(lo < i < hi for lo, hi in retry_spans) for i in other):
         problems.append("another phase interrupts the approach and insertion ticks")
     return problems
 
@@ -658,7 +666,13 @@ WARMUP_STAND_M = (
 WARMUP_STAND_RAD = 0.001
 
 
-def mismatch_section(truth: dict, near: dict, rear_offset_m: float) -> tuple[int, int]:
+def mismatch_section(
+    truth: dict,
+    near: dict,
+    rear_offset_m: float,
+    end_index: int | None = None,
+    begin_index: int | None = None,
+) -> tuple[int, int]:
     """Plan D8 S4c-1: a mismatch run's section -- from the first near-field tick (the anchor
     episode ends before any armed section) to the last approach or insert tick. The ticks of
     the approach before that first row (the SLAM hold's warm-up) must not have driven: a
@@ -669,7 +683,8 @@ def mismatch_section(truth: dict, near: dict, rear_offset_m: float) -> tuple[int
     t = np.asarray(truth["stamp_s"], dtype=float)
     first_row = tick_index(t, ticks[0]["t"], "the first near-field tick")
     checked = checked_ticks(truth)
-    first_approach = int(checked[0])
+    # begin_index: a later episode's first approach tick (plan D8 S4c-2).
+    first_approach = int(checked[0]) if begin_index is None else int(begin_index)
     applied = np.asarray(truth["applied_speed_mps"], dtype=float)
     if first_row < first_approach or np.any(
         applied[first_approach : first_row + 1] != 0.0
@@ -686,12 +701,14 @@ def mismatch_section(truth: dict, near: dict, rear_offset_m: float) -> tuple[int
         raise Unverified(
             f"the truck moved {1e3 * path:.2f} mm before the first near-field tick"
         )
-    return first_row, int(checked[-1])
+    return first_row, int(checked[-1]) if end_index is None else int(end_index)
 
 
-def near_section(truth: dict, near: dict) -> tuple[int, int]:
+def near_section(
+    truth: dict, near: dict, end_index: int | None = None
+) -> tuple[int, int]:
     """Truth indices of the near-field section: the armed tick to the last approach or
-    insert tick."""
+    insert tick (or, for an episode of a retried pickup, end_index -- its last tick)."""
     armed = next(
         (e["time_s"] for e in near.get("events") or [] if e.get("event") == "armed"),
         None,
@@ -700,7 +717,7 @@ def near_section(truth: dict, near: dict) -> tuple[int, int]:
         raise Unverified("the near-field section was never entered (no armed event)")
     t = np.asarray(truth["stamp_s"], dtype=float)
     first = tick_index(t, armed, "the armed event")
-    last = int(checked_ticks(truth)[-1])
+    last = int(checked_ticks(truth)[-1]) if end_index is None else int(end_index)
     if first > last:
         raise Unverified("the armed event is after the approach and insertion")
     return first, last
@@ -953,7 +970,7 @@ def check_ii(run, near: dict, states: list[dict], bounds, section: tuple) -> dic
     return {"ticks": checked, "worst": worst, "passed": passed}
 
 
-def check_iii(run, bounds_data: dict, calibration: dict, model) -> dict:
+def check_iii(run, bounds_data: dict, calibration: dict, model, spans=None) -> dict:
     """(iii): every read of the approach and insertion 12 ticks after the previous one and one
     tick after its stamp, and the run's L (the calibration's method ①, single-piece frames,
     with the calibration's largest dwell bias bound for every distance it covers) within the
@@ -972,7 +989,28 @@ def check_iii(run, bounds_data: dict, calibration: dict, model) -> dict:
         raise Unverified("fewer than two timed reads")
     require_finite("the read times", [(r["read_s"], r["stamp_s"]) for r in reads])
     delays = [r["read_s"] - r["stamp_s"] for r in reads]
-    gaps = [b["stamp_s"] - a["stamp_s"] for a, b in zip(reads, reads[1:], strict=False)]
+    if spans is None:
+        gaps = [
+            b["stamp_s"] - a["stamp_s"] for a, b in zip(reads, reads[1:], strict=False)
+        ]
+    else:
+        # Plan D8 S4c-2: the cadence within each episode -- no read is made between them.
+        if any(
+            not any(
+                lo - TIME_TOL_S <= r["read_s"] <= hi + TIME_TOL_S for lo, hi in spans
+            )
+            for r in reads
+        ):
+            raise Unverified("a read outside every episode")
+        gaps = []
+        for lo, hi in spans:
+            inside = [
+                r for r in reads if lo - TIME_TOL_S <= r["read_s"] <= hi + TIME_TOL_S
+            ]
+            gaps += [
+                b["stamp_s"] - a["stamp_s"]
+                for a, b in zip(inside, inside[1:], strict=False)
+            ]
     latency = bounds_data["latency"]
     a_s, period = require_finite(
         "the read delay and render period",
@@ -1123,6 +1161,7 @@ def check_viii(
     states: list[dict],
     bounds,
     rear_offset_m: float,
+    ended: str | None = None,
 ) -> dict:
     """(viii), plan D8 S4b: both correction points accepted once, in order; each opened on
     the first approach tick before entry whose estimate (rebuilt from the accepted
@@ -1206,12 +1245,27 @@ def check_viii(
             raise Unverified(f"{what}: its record is incomplete ({exc!r})") from exc
     points = [c.get("point_m") for c in corrections]
     accepted = [c.get("accepted") for c in corrections]
-    if points != list(NT.CORRECTION_POINTS_M) or accepted != [True] * len(
-        NT.CORRECTION_POINTS_M
-    ):
-        failures.append(
-            f"corrections {points} accepted {accepted}: not every point once, accepted"
-        )
+    if ended is None:
+        if points != list(NT.CORRECTION_POINTS_M) or accepted != [True] * len(
+            NT.CORRECTION_POINTS_M
+        ):
+            failures.append(
+                f"corrections {points} accepted {accepted}: not every point once, accepted"
+            )
+    else:
+        # Plan D8 S4c-2: an episode that ended in a retry -- the points in order up to where it
+        # ended; after a refusal the last one refused, after a mismatch none open.
+        want = [True] * len(points)
+        if ended == "replan_rejected" and want:
+            want[-1] = False
+        if (
+            points != list(NT.CORRECTION_POINTS_M[: len(points)])
+            or accepted != want
+            or (ended == "replan_rejected" and not points)
+        ):
+            failures.append(
+                f"corrections {points} accepted {accepted}: not the points in order up to the {ended}"
+            )
     if [r["revision"] for r in revisions] != list(range(1, len(revisions) + 1)):
         raise Unverified("path revisions are not numbered 1, 2, ...")
     previous_closed = None
@@ -1407,7 +1461,7 @@ def check_viii(
                 f"the tick at {t[i]:.4f} s followed revision {row['path_revision']}, not {expected}"
             )
             break
-    if revisions:
+    if revisions and ended is None:  # the final paths.json is the final episode's
         last = revisions[-1]["paths"]
         for name in names:
             final = need_path(f"paths.json {name}", paths_record.get(name) or {})
@@ -1510,7 +1564,13 @@ def _observation_numbers(obs: dict) -> np.ndarray:
     )
 
 
-def check_ix(result: dict, near: dict, truth: dict) -> dict:
+def check_ix(
+    result: dict,
+    near: dict,
+    truth: dict,
+    retry: dict | None = None,
+    start: dict | None = None,
+) -> dict:
     """(ix), plan D8 S4c-1: the injection the run asked for went in exactly (common
     precondition), then by type -- correction: the near capture accepted, a correction
     accepted and the bias taken off by the last revision (|lateral| or |yaw| difference from
@@ -1643,7 +1703,9 @@ def check_ix(result: dict, near: dict, truth: dict) -> dict:
                     failures.append(
                         f"capture {c['attempt']}: the observation is not the {kind} injection's"
                     )
-            start_obs = nt["start"]["observation"]
+            # A retried run's record keeps the last episode's start; the injection's
+            # tracker is the first episode's (Codex S4c-2 implementation review P2).
+            start_obs = (start if start is not None else nt["start"])["observation"]
             if not _same_observation(
                 start_obs,
                 captures[-1]["observation"],
@@ -1655,13 +1717,18 @@ def check_ix(result: dict, near: dict, truth: dict) -> dict:
         except (KeyError, TypeError, ValueError, IndexError) as exc:
             raise Unverified(f"the injection record is incomplete ({exc!r})") from exc
     if kind == "correction":
-        if (result.get("near_capture") or {}).get("status") != "done":
+        first_near = (
+            result.get("near_capture_history") or [result.get("near_capture") or {}]
+        )[0]
+        if (first_near or {}).get("status") != "done":
             return done(
                 "not_run"
             )  # the first acceptance refused: an injection design error
         accepted = [c for c in near.get("corrections") or [] if c.get("accepted")]
         revisions = near.get("path_revisions") or []
-        if not accepted or not revisions:
+        if retry is not None and not accepted:
+            pass  # Plan D8 S4c-2: refused at the first point -- (x) judges the retry instead
+        elif not accepted or not revisions:
             failures.append("no correction accepted")
         else:
             # The bias was taken off: the first correction's target is the one its own front
@@ -1809,7 +1876,15 @@ def check_ix(result: dict, near: dict, truth: dict) -> dict:
                     "the mismatch was not before the fork tips reached the face"
                 )
         terminal = [e for e in events if e.get("event") == "terminal_standing"]
-        if (
+        if retry is not None:
+            # Plan D8 S4c-2: the mismatch ended the episode in a retry, standing.
+            if retry.get("reason") != "mismatch":
+                failures.append(
+                    f"the episode ended in a {retry.get('reason')} retry, not on the mismatch"
+                )
+            else:
+                report.update(terminal_s=float(retry["time_s"]))
+        elif (
             outcome != "near_field_mismatch"
             or not terminal
             or terminal[-1].get("reason") != "mismatch"
@@ -1912,6 +1987,15 @@ def s4c_outcome(
         return {"group": group, "status": "not_run"}
     no_contact = contacts == [] and bool(vi) and vi["contact"]["passed"]
     ok = verdict == "pass" and ix["status"] == "pass" and no_contact
+    if "x" in checks:
+        # Plan D8 S4c-2: a retried pickup -- the retry, every episode and the mission complete.
+        ok = (
+            ok
+            and checks["x"]["passed"]
+            and checks["episodes"]["passed"]
+            and result.get("success") is True
+            and result.get("phase") == "complete"
+        )
     if ix["kind"] != "mismatch":
         # Correction and lost runs need both correction points judged (Codex S4c-1 review P2).
         ok = ok and bool((checks.get("viii") or {}).get("passed"))
@@ -1933,6 +2017,502 @@ def s4c_outcome(
     if ix["kind"] == "correction":
         ok = ok and result.get("success") is True and result.get("phase") == "complete"
     return {"group": group, "status": "pass" if ok else "fail"}
+
+
+# Plan D8 S4c-2 (x): v1 fixed before the first retry run; v2 after the first smoke (seed 1,
+# mismatch yaw -0.05 ended near_capture_misaligned inside its retry and v1 called it
+# unverified) -- a run that ends inside its retry span is judged, and fails (x).
+X_RULES = "v2"
+
+
+def split_episodes(near: dict, nt: dict) -> list[dict]:
+    """Plan D8 S4c-2: a retried pickup's near-field record by episode (SLAM hold) -- each with
+    its start, tick rows, frames, events, stop records, corrections, revisions and protection,
+    and the retry that ended it."""
+    starts = nt.get("starts") or []
+    retries = sorted(
+        (e for e in near.get("events") or [] if e.get("event") == "retry_start"),
+        key=lambda e: float(e["time_s"]),
+    )
+    # One more start than retries, or as many when the run ended inside its last retry.
+    if len(starts) not in (len(retries), len(retries) + 1) or not starts:
+        raise Unverified(f"{len(starts)} episode starts for {len(retries)} retries")
+    views = []
+    for k, st in enumerate(starts):
+        try:
+            e = st["episode"]
+            t0 = float(require_shape("an episode's build time", st["built_s"], ()))
+            t1 = float(retries[k]["time_s"]) if k < len(retries) else math.inf
+        except (KeyError, TypeError) as exc:
+            raise Unverified(f"episode start {k} is incomplete ({exc!r})") from exc
+        if k < len(retries) and retries[k].get("episode") != e:
+            raise Unverified(f"the retry at {t1} does not end episode {e}")
+        rows = [r for r in near.get("ticks") or [] if r.get("episode") == e]
+        if not rows or any(
+            not t0 - TIME_TOL_S <= float(r["t"]) <= t1 + TIME_TOL_S for r in rows
+        ):
+            raise Unverified(f"episode {e}'s tick rows are missing or outside it")
+
+        def inside(at, t0=t0, t1=t1):
+            return t0 - TIME_TOL_S <= float(at) <= t1 + TIME_TOL_S
+
+        events = [ev for ev in near.get("events") or [] if inside(ev["time_s"])]
+        frames = [f for f in near.get("frames") or [] if f.get("episode") == e]
+        for f in frames:
+            if not inside(f["read_s"]):
+                raise Unverified(f"a frame of episode {e} read outside it")
+            if (
+                "skipped" not in f
+                and f.get("accepted")
+                and f.get("latest_frame_version") != e
+            ):
+                raise Unverified(
+                    f"an accepted frame of episode {e} holds another episode's observation"
+                )
+        view = {
+            "ticks": rows,
+            "frames": frames,
+            "events": events,
+            "stop_events": [
+                x for x in near.get("stop_events") or [] if x.get("episode") == e
+            ],
+            "corrections": [
+                c for c in near.get("corrections") or [] if c.get("episode") == e
+            ],
+            "path_revisions": [
+                r for r in near.get("path_revisions") or [] if r.get("episode") == e
+            ],
+            "protect": next(
+                (ev for ev in events if ev.get("event") == "protect"), None
+            ),
+        }
+        views.append(
+            {
+                "episode": e,
+                "start": st,
+                "near": view,
+                "retry": retries[k] if k < len(retries) else None,
+            }
+        )
+    # Nothing outside the episodes: every frame and event belongs to one (Codex S4c-2
+    # implementation review P2 -- a record between them must not vanish).
+    episodes_ = {v["episode"] for v in views}
+    if any(f.get("episode") not in episodes_ for f in near.get("frames") or []):
+        raise Unverified("a frame outside every episode")
+    placed = sum(len(v["near"]["events"]) for v in views)
+    if placed != len(near.get("events") or []):
+        raise Unverified("an event outside every episode")
+    return views
+
+
+def check_x(result: dict, near: dict, truth: dict, views: list[dict], geometry) -> dict:
+    """(x), plan D8 S4c-2: exactly one retry, for a mismatch or a refused correction, ending
+    an episode that never started its protection and stood at least RETRY_MIN_FACE_M from
+    the estimated face; the release recorded; the re-observation valid and never biased; over
+    the retry span (the retry tick to the next episode's first tick) no truck box -- blades,
+    heels or carriage -- shares volume with the pallet and no unpermitted entry was
+    recorded."""
+    import near_tracking as NT
+
+    t = np.asarray(truth["stamp_s"], dtype=float)
+    failures, report = [], {"rules": X_RULES}
+    if (
+        not views
+        or views[0]["retry"] is None
+        or len(views) > 2
+        or any(v["retry"] is not None for v in views[1:])
+    ):
+        failures.append(f"{len(views)} episodes, not one retry")
+        return {"applicable": True, "failures": failures, "passed": False, **report}
+    first = views[0]
+    last = views[1] if len(views) == 2 else None  # None: the run ended inside the retry
+    retry = first["retry"]
+    record = (result.get("near_tracking") or {}).get("retry") or {}
+    if last is None:
+        failures.append(
+            f"the retry never reached a new episode (the run ended {result.get('failure_reason')})"
+        )
+    try:
+        reason = retry["reason"]
+        at = float(require_shape("the retry time", retry["time_s"], ()))
+        attempt = (
+            require_count("the re-observation attempt", record["capture_attempt"])
+            if last is not None or "capture_attempt" in record
+            else None
+        )
+        jump = require_finite(
+            "the release jump", (record["jump_m"], record["jump_rad"]), size=2
+        )
+        require_shape("the release frame change", record["frame_change"], (3,))
+    except (KeyError, TypeError) as exc:
+        raise Unverified(f"the retry record is incomplete ({exc!r})") from exc
+    if reason not in NT.RETRY_REASONS or record.get("reason") != reason:
+        failures.append(f"a retry for {reason}")
+    rows = first["near"]["ticks"]
+    distances = [
+        float(require_shape("an episode distance", r.get("face_distance_m"), ()))
+        for r in rows
+    ]
+    if first["near"]["protect"] is not None or min(distances) <= NT.PROTECT_W_M:
+        failures.append("the retried episode had started its protection")
+    i_retry = tick_index(t, at, "the retry")
+    end_row = max(rows, key=lambda r: float(r["t"]))
+    if tick_index(t, end_row["t"], "the episode's last tick") != i_retry:
+        failures.append("the retry is not the episode's last tick")
+    elif not float(end_row["face_distance_m"]) >= NT.RETRY_MIN_FACE_M:
+        failures.append(f"retried at an estimate of {end_row['face_distance_m']:.3f} m")
+    attempts = result.get("observation_attempts") or []
+    seen_valid = False
+    if attempt is None:
+        failures.append("the run ended before the re-observation")
+    else:
+        if not 1 <= attempt <= len(attempts):
+            raise Unverified(f"the re-observation attempt {attempt} is not recorded")
+        seen_valid = (attempts[attempt - 1].get("pocket_observation") or {}).get(
+            "status"
+        ) == "valid" and record.get("capture_status") == "valid"
+        if not seen_valid:
+            failures.append("the re-observation did not see the pallet")
+        inj = (result.get("near_tracking") or {}).get("injection") or {}
+        if any(int(c.get("attempt", 0)) >= attempt for c in inj.get("captures") or []):
+            failures.append("a capture at or after the re-observation was biased")
+    # The retry span: to the next episode's first tick, or to the record's end.
+    i_next = (
+        tick_index(
+            t,
+            min(float(r["t"]) for r in last["near"]["ticks"]),
+            "the next episode's first tick",
+        )
+        if last is not None
+        else len(t) - 1
+    )
+    base = np.asarray(truth["base_pose"], dtype=float)
+    pallet = np.asarray(truth["pallet_pose"], dtype=float)
+    lift = np.asarray(truth["lift_m"], dtype=float)
+    boxes = tuple(geometry.fork_boxes) + tuple(geometry.carriage_boxes)
+    if not all(
+        np.all(np.isfinite(a[i_retry : i_next + 1])) for a in (base, pallet, lift)
+    ):
+        raise Unverified("non-finite truth over the retry")
+    touching = [
+        float(t[i])
+        for i in range(i_retry, i_next + 1)
+        if geometry.forbidden_contacts(
+            base[i, :3],
+            base[i, 3:],
+            float(lift[i]),
+            pallet[i, :3],
+            pallet[i, 3:],
+            clearance_m=0.0,
+            boxes=boxes,
+        )
+    ]
+    if touching:
+        failures.append(
+            f"the truck touched the pallet during the retry ({len(touching)} ticks)"
+        )
+    layer = result.get("obstacle_layer")
+    if (
+        layer is None
+        or "unpermitted" not in layer
+        or "unpermitted_entries" not in layer
+    ):
+        raise Unverified("no permission record to judge the retry by")
+    listed = layer["unpermitted"]
+    total = require_count("the unpermitted entries", layer["unpermitted_entries"])
+    # Every kept entry placed in time before any is filtered out (Codex S4c-2 implementation
+    # review 2 P2: a missing or NaN time dropped the entry silently).
+    times = [
+        float(require_shape("an unpermitted entry's time", u.get("time_s"), ()))
+        for u in listed
+    ]
+    t_end = float(t[i_next]) + TIME_TOL_S
+    # The runner keeps the first 50 entries: complete over the retry only when nothing was cut
+    # or the last kept one is after it (Codex S4c-2 implementation review P2).
+    if total < len(listed) or (
+        total > len(listed) and not (times and times[-1] > t_end)
+    ):
+        raise Unverified(
+            f"the permission record is cut ({len(listed)} of {total}) before the retry ends"
+        )
+    unpermitted = [
+        u
+        for u, at_ in zip(listed, times, strict=True)
+        if float(t[i_retry]) - TIME_TOL_S <= at_ <= t_end
+    ]
+    if unpermitted:
+        failures.append(f"{len(unpermitted)} unpermitted entries during the retry")
+    # The release and the re-projection as the plan asks (Codex S4c-2 implementation review
+    # P2): the hold record's release at the retry with the same jump, the frame change the
+    # one between the recorded estimates, its turn the yaw jump, and the grid re-projected.
+    from forklift_core.localization.slam_pose import compose, invert
+
+    try:
+        before = tuple(
+            require_finite("the estimate before", record["rear_before"], size=3)
+        )
+        after = tuple(
+            require_finite("the estimate after", record["rear_after"], size=3)
+        )
+        change = tuple(
+            require_finite("the frame change", record["frame_change"], size=3)
+        )
+        holds = (result.get("slam_summary") or {})["holds"]
+    except (KeyError, TypeError) as exc:
+        raise Unverified(f"the release record is incomplete ({exc!r})") from exc
+    releases = [h for h in holds if h.get("event") == "release_pickup_retry"]
+    if (
+        len(releases) != 1
+        or not _same(releases[0].get("time_s"), at, TIME_TOL_S)
+        or not _same(
+            [releases[0].get("jump_m"), releases[0].get("jump_rad")], list(jump), 0.0
+        )
+    ):
+        failures.append("the SLAM record has no release at the retry with its jump")
+    if not _same(change, compose(after, invert(before)), 1e-9) or not _same(
+        abs(math.atan2(math.sin(change[2]), math.cos(change[2]))), float(jump[1]), 1e-9
+    ):
+        failures.append("the frame change is not the released estimates' change")
+    # The grid re-projected with the released correction: applied_new = T o applied_old, as
+    # every estimate moves by T (Codex S4c-2 implementation review 2 P2).
+    reproj = record.get("reprojected")
+    try:
+        applied_before = require_finite(
+            "the correction before the release", record["applied_before"], size=3
+        )
+    except (KeyError, TypeError) as exc:
+        raise Unverified(f"the release record is incomplete ({exc!r})") from exc
+    if not isinstance(reproj, dict):
+        failures.append("the grid was not re-projected at the release")
+    else:
+        try:
+            version = require_count("the grid version", reproj["version"])
+            count = require_count("the re-projections", reproj["reprojections"])
+            applied = require_finite("the grid's correction", reproj["applied"], size=3)
+            run_count = require_count(
+                "the run's re-projections", layer["reprojections"]
+            )
+        except (KeyError, TypeError) as exc:
+            raise Unverified(
+                f"the re-projection record is incomplete ({exc!r})"
+            ) from exc
+        if (
+            version < 1
+            or not 1 <= count <= run_count
+            or not _same(applied, compose(change, tuple(applied_before)), 1e-9)
+        ):
+            failures.append(
+                "the grid was not re-projected with the released correction"
+            )
+    # The re-observation as placed gives the target the planner used (a valid one only).
+    if seen_valid:
+        try:
+            obs = record["observation"]
+            cbase = tuple(
+                require_finite(
+                    "the re-observation base", record["capture_base"], size=3
+                )
+            )
+            target = require_finite(
+                "the re-observation target", record["target"], size=3
+            )
+            planned = require_finite(
+                "the target planned", record["planned_target"], size=3
+            )
+            depth = float(result["geometry"]["pallet_depth_m"])
+        except (KeyError, TypeError) as exc:
+            raise Unverified(
+                f"the re-observation record is incomplete ({exc!r})"
+            ) from exc
+        seen = attempts[attempt - 1].get("pocket_observation") or {}
+        if (
+            not _same_observation(obs, seen, tol=0.0)
+            or not _same(target, _site_from_observation(obs, cbase, depth))
+            or not _same(planned, target)
+        ):
+            failures.append(
+                "the plan after the retry is not the re-observation's own target"
+            )
+    rear = rear_axle(
+        base, float((result.get("arguments") or {}).get("rear_axle_offset_m", -0.34))
+    )
+    report.update(
+        reason=reason,
+        retry_s=at,
+        span_s=float(t[i_next] - t[i_retry]),
+        travel_m=float(
+            np.sum(np.hypot(*np.diff(rear[i_retry : i_next + 1], axis=0).T))
+        ),
+        jump_m=float(jump[0]),
+        jump_rad=float(jump[1]),
+        re_observation_attempt=attempt,
+    )
+    return {"applicable": True, "failures": failures, "passed": not failures, **report}
+
+
+def judge_retried(
+    truth,
+    near,
+    nt,
+    result,
+    raw,
+    terms_bytes,
+    geometry,
+    pallet_geo,
+    corners,
+    blades,
+    carriage_limit,
+    end,
+    data_root,
+    directory,
+    checks,
+    provenance_extra,
+) -> dict:
+    """Plan D8 S4c-2 (x): a retried pickup judged by episode -- the first episode by its own
+    section (a mismatch group's biased anchor by the (ix) mismatch contract and (vii); a
+    refused correction by (i)-(v), (vii) and (viii) up to the refusal), the retry by (x), the
+    last episode by (i)-(v), (vii) and (viii); (iii)'s cadence within the episodes, (v) on one
+    anchor from the first near capture to the insertion end. Returns the combined (vii) and
+    fills checks (the last episode's (i)-(v) and (viii), "episodes", "ix", "x")."""
+    from forklift_core.perception.near_field_bounds import NearFieldBounds
+    from tools import d8b_calibration as CAL
+
+    sys.path.insert(0, str(ROOT / "sim" / "isaac"))
+    from near_tracking import snapshot_relative
+
+    args = result.get("arguments") or {}
+    rear_offset = float(args["rear_axle_offset_m"])
+    t = np.asarray(truth["stamp_s"], dtype=float)
+    views = split_episodes(near, nt)
+    bounds_bytes = (ROOT / snapshot_relative(str(nt.get("bounds")))).read_bytes()
+    if sha256_bytes(bounds_bytes) != nt.get("bounds_sha256"):
+        raise Unverified("the bounds file is not the one the run used")
+    bounds_data = json.loads(bounds_bytes)
+    bounds = NearFieldBounds.from_dict(bounds_data)
+    cal_ref = bounds_data["provenance"]["calibration"]
+    cal_path = data_root / cal_ref["path"]
+    cal_bytes = cal_path.read_bytes() if cal_path.exists() else None
+    if cal_bytes is None or sha256_bytes(cal_bytes) != cal_ref["sha256"]:
+        raise Unverified("the calibration the bounds came from is missing or changed")
+    calibration = json.loads(cal_bytes)
+    provenance_extra.update(
+        bounds_sha256=sha256_bytes(bounds_bytes),
+        calibration={"path": str(cal_path), "sha256": cal_ref["sha256"]},
+    )
+    if "paths.json" not in raw:
+        raise Unverified("no paths.json")
+    paths_record = json.loads(raw["paths.json"])
+    terms = json.loads(terms_bytes)
+    run = CAL.Run.load(directory)
+    kind = (nt.get("injection") or {}).get("kind")
+    checked = checked_ticks(truth)
+    episodes, stops, spans = [], [], []
+    for k, view in enumerate(views):
+        view_near, start = view["near"], view["start"]
+        last_row = tick_index(
+            t, max(float(r["t"]) for r in view_near["ticks"]), "an episode's last tick"
+        )
+        # (iii)'s span from the build: the tracker is built in the tick the approach begins and
+        # that tick's frame is read after it, a tick before the first near-field row.
+        spans.append((float(start["built_s"]), float(t[last_row])))
+        ended = view["retry"]["reason"] if view["retry"] is not None else None
+        biased = k == 0 and kind == "mismatch"
+        out = {"episode": view["episode"], "ended": ended}
+        armed = any(e.get("event") == "armed" for e in view_near["events"])
+        if biased or not armed:
+            # The biased anchor, or an episode that ended before its armed section: from its
+            # first near tick, its approach before that standing (plan v4, Codex S4c-2
+            # implementation review P2).
+            begin = (
+                None
+                if k == 0
+                else int(min(i for i in checked if i > episodes[-1]["last_row"]))
+            )
+            section = mismatch_section(
+                truth, view_near, rear_offset, end_index=last_row, begin_index=begin
+            )
+        else:
+            section = near_section(truth, view_near, end_index=last_row)
+        out.update(section=[int(section[0]), int(section[1])], last_row=last_row)
+        out["vii"] = check_vii(
+            truth, view_near, terms, section, rear_offset, corners, blades
+        )
+        stops += out["vii"]["stops"]
+        if not biased:
+            states = accepted_states(view_near, start, bounds)
+            out["i"] = check_i(
+                run,
+                view_near,
+                states,
+                bounds,
+                pallet_geo,
+                section,
+                carriage_limit,
+                -abs(rear_offset),
+            )
+            out["ii"] = check_ii(run, view_near, states, bounds, section)
+            out["iv"] = check_iv(truth, states, section, bounds, rear_offset)
+            out["viii"] = check_viii(
+                truth,
+                view_near,
+                start,
+                paths_record,
+                states,
+                bounds,
+                rear_offset,
+                ended=ended,
+            )
+        episodes.append(out)
+    # (iii) applies with (i)-(v): a run whose only episode is the biased anchor (it ended
+    # inside its retry, X_RULES v2) has none to apply it to, as an unretried mismatch run.
+    checks["iii"] = (
+        check_iii(
+            run,
+            bounds_data,
+            calibration,
+            CAL.PalletModel.from_geometry(pallet_geo),
+            spans=spans,
+        )
+        if any("i" in e for e in episodes)
+        else {"applicable": False}
+    )
+    # (v) on one anchor to the insertion end -- or, when the run ended inside its retry, to the
+    # record's end, over the whole retry (Codex S4c-2 results review).
+    checks["v"] = check_v(
+        truth,
+        float(views[0]["start"]["aligned_s"]),
+        len(t) - 1
+        if views[-1]["retry"] is not None
+        else (end if end is not None else int(checked_ticks(truth)[-1])),
+    )
+    for key in ("i", "ii", "iv", "viii"):
+        # The last episode's -- or, when the run ended inside its retry, the latest that has one.
+        checks[key] = next(
+            (e[key] for e in reversed(episodes) if key in e), {"applicable": False}
+        )
+    checks["episodes"] = {
+        "applicable": True,
+        "passed": all(
+            all(
+                e[key]["passed"] for key in ("vii", "i", "ii", "iv", "viii") if key in e
+            )
+            for e in episodes
+        ),
+        "list": episodes,
+    }
+    checks["ix"] = check_ix(
+        result,
+        views[0]["near"],
+        truth,
+        retry=views[0]["retry"],
+        start=views[0]["start"],
+    )
+    checks["x"] = check_x(result, near, truth, views, geometry)
+    return {
+        "passed": all(e["vii"]["passed"] for e in episodes),
+        "stops": stops,
+        "episodes": len(episodes),
+    }
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -2018,7 +2598,6 @@ def judge_run(directory: Path, data_root: Path = ROOT) -> dict:
     checks, provenance_extra = {}, {}
     data = np.load(io.BytesIO(raw["pocket_frames/truth.npz"]))
     truth = {k: data[k] for k in data.files}
-    problems += record_problems(truth)
     recorded = (result.get("pocket_recording") or {}).get("ticks")
     if recorded != len(truth.get("stamp_s", [])):
         problems.append(
@@ -2029,6 +2608,30 @@ def judge_run(directory: Path, data_root: Path = ROOT) -> dict:
     )
     if near is None:
         problems.append("no near_tracking.json")
+    retried = near is not None and any(
+        e.get("event") == "retry_start" for e in near.get("events") or []
+    )
+    retry_spans, open_retry = [], False
+    if retried and len(truth.get("stamp_s", [])):
+        # Plan D8 S4c-2: the spans between a retried pickup's episodes may hold other phases.
+        t_all = np.asarray(truth["stamp_s"], dtype=float)
+        try:
+            views_ = split_episodes(near, nt)
+            for a_, b_ in zip(views_, views_[1:], strict=False):
+                retry_spans.append(
+                    (
+                        tick_index(t_all, a_["retry"]["time_s"], "a retry"),
+                        tick_index(
+                            t_all,
+                            min(float(r["t"]) for r in b_["near"]["ticks"]),
+                            "an episode start",
+                        ),
+                    )
+                )
+            open_retry = views_[-1]["retry"] is not None
+        except Unverified as exc:
+            problems.append(str(exc))
+    problems += record_problems(truth, retry_spans, open_retry)
     terms_bytes = (
         ROOT / str(nt.get("drive_terms") or "config/near_field_drive_terms.json")
     ).read_bytes()
@@ -2052,6 +2655,26 @@ def judge_run(directory: Path, data_root: Path = ROOT) -> dict:
         try:
             end = insert_end_index(truth, result)
             vi = check_vi(truth, geometry, pallet_geo.overall_depth_m, end)
+            if retried:
+                vii = judge_retried(
+                    truth,
+                    near,
+                    nt,
+                    result,
+                    raw,
+                    terms_bytes,
+                    geometry,
+                    pallet_geo,
+                    corners,
+                    blades,
+                    carriage_limit,
+                    end,
+                    data_root,
+                    directory,
+                    checks,
+                    provenance_extra,
+                )
+                raise _SkipEpisode
             early = (nt.get("injection") or {}).get("kind") == "mismatch"
             if early:
                 # Plan D8 S4c-1 (ix): a mismatch run's biased anchor episode -- its stops from
@@ -2178,6 +2801,8 @@ def judge_run(directory: Path, data_root: Path = ROOT) -> dict:
             and result.get("phase") == "complete"
         ),
         "ix": checks.get("ix") or {"applicable": False},
+        "episodes": checks.get("episodes") or {"applicable": False},  # plan D8 S4c-2
+        "x": checks.get("x") or {"applicable": False},
         "forbidden_pocket_contacts": contacts,
         "s4c": s4c_outcome(verdict, checks, result, vi, contacts, vii),
         "inputs_sha256": {name: sha256_bytes(data_) for name, data_ in raw.items()},

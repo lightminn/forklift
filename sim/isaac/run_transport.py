@@ -1830,6 +1830,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "path_revision": 0,
             "path_revisions": [],
             "first_target": None,  # the near capture's mission target (its band, B0)
+            "retries": 0,  # Plan D8 S4c-2: pickup retries so far (at most one)
+            "retry_stand": False,
         }
     wheel_lock = {"q": None, "gains": None, "events": []}
     # Camera-face distance at the approach goal: the stand-off gap ahead of the fork
@@ -2040,10 +2042,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     blades=blades_, blade_y_max_m=max(max(abs(b_[2]), abs(b_[3])) for b_ in blades_),
                     corners=read_carriage_front_corners_m(args.forklift_urdf),
                     carriage_limit_m=frame_geo.carriage_limit_m,
-                    protect=None, stop_state=near_tracking.StopState(), stop_events=[], arrival=None,
+                    protect=None, stop_state=near_tracking.StopState(), arrival=None,
                     stale_waits={},
                     # Plan D8 S4b: the correction points, from the mission the near capture planned.
-                    correction=near_tracking.CorrectionState(), first_target=pocket["planning_pickup"])
+                    correction=near_tracking.CorrectionState(), first_target=pocket["planning_pickup"],
+                    # Plan D8 S4c-2: an episode's execution latches start clean; its records
+                    # (stop records, events, corrections, revisions, tick rows) accumulate.
+                    mismatch=False, unbounded=False, path_revision=0)
+        near.setdefault("stop_events", [])
+        near.pop("terminal_standing_since", None)
         near["history"].clear()
         state["near_tracking"]["start"] = {
             "built_s": now_s,
@@ -2056,6 +2063,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "fork_tip_x_m": frame_geo.fork_tip_x_m,
             "observation": asdict(start["observation"]),
         }
+        state["near_tracking"].setdefault("starts", []).append(state["near_tracking"]["start"])
         near["events"].append({"time_s": now_s, "event": "tracker_built", "episode": episode})
 
     def feed_near_frame(raw) -> str | None:
@@ -2068,7 +2076,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
 
         tracker_ = near["tracker"]
         now_s = world.current_time - initial_time
-        row = {"read_s": now_s}
+        row = {"read_s": now_s, "episode": near["episode"]}  # Plan D8 S4c-2: the hold it was read in
         if near.get("drop_latch") is not None:
             # Plan D8 S4c-1: an injected loss -- the frame is recorded (the recorder kept the raw
             # read) but never reaches the tracker, and tau's reference stays the last received.
@@ -2277,7 +2285,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 frame_version=latest_.frame_version, episode=episode,
             )
         if corr_act["event"] == "trigger":
-            near["corrections"].append({"point_m": corr.point_m, "trigger_s": now_s, "face_distance_m": face_distance,
+            near["corrections"].append({"point_m": corr.point_m, "episode": episode, "trigger_s": now_s,
+                                        "face_distance_m": face_distance,
                                         "standing_s": [], "moved_s": [], "accepted": None})
             near["events"].append({"time_s": now_s, "event": "correction_trigger", "point_m": corr.point_m,
                                    "face_distance_m": face_distance})
@@ -2317,7 +2326,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             near["events"].append({"time_s": now_s, "event": "stop", "reason": current.reason})
             if previous.reason is None:  # a new stop: what the stopping model was given (judgement (vii))
                 near["stop_events"].append({
-                    "start_s": now_s, "reason": current.reason, "vbar_mps": vbar,
+                    "start_s": now_s, "episode": episode, "reason": current.reason, "vbar_mps": vbar,
                     "d_stop_m": near_tracking.stop_distance_m(vbar), "sweep_m": sweep, "kappa_b": kappa_b,
                     "corner_sweep_k": protection.get("corner_sweep_k"), "lateral_sweep_m": protection.get("lateral_sweep_m"),
                     "standing_s": None,
@@ -2346,6 +2355,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "kappa_b": kappa_b, "sweep_m": sweep if math.isfinite(sweep) else None,
             "protect": near["protect"] is not None, **({"protection": protection} if protection else {}),
             "path_revision": revision_used,
+            "episode": episode,
             "face_distance_m": face_distance,
             "correction": None if corr.point_m is None else {
                 "point_m": corr.point_m, "standing_s": corr.standing_s, "installed_s": corr.installed_s},
@@ -2359,6 +2369,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 return action["hold"], action["released"], action["arrive"]
         else:
             near.pop("terminal_standing_since", None)
+        if action["end"] and near_tracking.retry_allowed(
+                current.reason, near.get("retries", 0), near["protect"] is not None, face_distance):
+            # Plan D8 S4c-2: a mismatch or a refused correction before the protection, far
+            # enough to see the pallet again -- release, re-observe here, plan again.
+            start_pickup_retry(now_s, current.reason, face_distance, episode)
+            return True, False, False
         if action["end"]:
             near["events"].append({"time_s": now_s, "event": "terminal_standing", "reason": current.reason})
             state["near_tracking"]["outcome"] = f"near_field_{current.reason}"
@@ -2779,7 +2795,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         nonlocal phase_started
         revision_ = near["path_revision"] + 1
         previous_ = pocket["planning_pickup"]
-        entry_ = {"revision": revision_, "time_s": now_s, "point_m": point_m,
+        entry_ = {"revision": revision_, "episode": near["episode"], "time_s": now_s, "point_m": point_m,
                   "target": [target_.x_m, target_.y_m, target_.yaw_rad],
                   "previous_target": [previous_.x_m, previous_.y_m, previous_.yaw_rad], "paths": {}, "trackers": {}}
         for name_ in ("approach", "insert", "extract"):
@@ -2812,6 +2828,67 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         near["path_revisions"].append(entry_)
         near["events"].append({"time_s": now_s, "event": "path_revision", "revision": revision_, "point_m": point_m})
         return entry_
+
+    def start_pickup_retry(now_s: float, reason: str, face_distance_m: float, episode_: int) -> None:
+        """Plan D8 S4c-2: end the episode, release the SLAM hold and re-project the grid,
+        carry the old pickup estimate and target into the released frame, forget the near
+        capture (the next valid capture is a far one), and stand in observe to re-observe
+        here -- the observe leg's hold and its follower are bypassed until that capture."""
+        from forklift_core.localization.slam_pose import compose as pose_compose
+        from forklift_core.localization.slam_pose import invert as pose_invert
+        from forklift_core.planning.hybrid_astar import PlanResult as _PlanResult
+
+        retry_ = {"time_s": now_s, "reason": reason, "episode": episode_, "face_distance_m": face_distance_m,
+                  "min_face_distance_m": min((r["face_distance_m"] for r in near["ticks"]
+                                              if r.get("episode") == episode_), default=None)}
+        near["events"].append({"time_s": now_s, "event": "retry_start", "reason": reason, "episode": episode_})
+        near["retries"] = near.get("retries", 0) + 1
+        near["tracker"] = None  # frames stop reaching it and near_tick stops
+        near["mismatch"] = near["unbounded"] = False
+        near["stale_waits"], near["protect"], near["arrival"] = {}, None, None
+        near["stop_state"] = near_tracking.StopState()
+        near.pop("terminal_standing_since", None)
+        before_ = slam_rear(now_s)
+        applied_before_ = [float(v) for v in slam["tracker"].applied[0]]
+        jump_m, jump_rad = slam["tracker"].release(odom_from_base=slam_odom_base())
+        after_ = slam_rear(now_s)
+        frame_change = pose_compose(tuple(float(v) for v in after_), pose_invert(tuple(float(v) for v in before_)))
+        slam["holds"].append({"phase": phase, "time_s": now_s, "event": "release_pickup_retry", "jump_m": jump_m,
+                              "jump_rad": jump_rad})
+        reprojected_ = None
+        if obstacle is not None and slam["tracker"].applied is not None:
+            # As a D7c release: the grid re-projected with the released correction before any
+            # plan reads it.
+            obstacle["applied"] = tuple(float(v) for v in slam["tracker"].applied[0])
+            obstacle["version"] += 1
+            obstacle["reprojections"] = obstacle.get("reprojections", 0) + 1
+            obstacle["layer"].refresh(now_s, obstacle["applied"], obstacle["version"],
+                                      current_pose=tuple(float(v) for v in after_),
+                                      path_ahead=np.array([after_]), loaded=loaded)
+            reprojected_ = {"version": obstacle["version"], "applied": list(obstacle["applied"]),
+                            "reprojections": obstacle["reprojections"]}
+
+        def carried(site_):
+            x_, y_, yaw_ = pose_compose(frame_change, (site_.x_m, site_.y_m, site_.yaw_rad))
+            return replace(site_, x_m=x_, y_m=y_, yaw_rad=yaw_)
+
+        if obstacle is not None and obstacle.get("pickup_estimate") is not None:
+            obstacle["pickup_estimate"] = carried(obstacle["pickup_estimate"])
+        if pocket.get("planning_pickup") is not None:
+            pocket["planning_pickup"] = carried(pocket["planning_pickup"])
+        state.setdefault("near_capture_history", []).append(state.pop("near_capture"))
+        heading_ = np.array([math.cos(float(after_[2])), math.sin(float(after_[2]))])
+        stand_ = np.array([[*(np.asarray(after_[:2], dtype=float) - near_tracking.RETRY_STAND_M * heading_),
+                            float(after_[2])], [float(after_[0]), float(after_[1]), float(after_[2])]])
+        paths["observe"] = _PlanResult(True, "success", stand_, np.ones(2, dtype=np.int8), np.zeros(2),
+                                       near_tracking.RETRY_STAND_M, 0)
+        trackers["observe"] = RearAxlePathTracker(stand_, np.ones(2), np.zeros(2), trackers["observe"].config)
+        near["retry_stand"] = True
+        retry_.update(jump_m=jump_m, jump_rad=jump_rad, frame_change=list(frame_change),
+                      rear_before=[float(v) for v in before_], rear_after=[float(v) for v in after_],
+                      applied_before=applied_before_, reprojected=reprojected_)
+        state["near_tracking"]["retry"] = retry_
+        transition("observe", now_s)
 
     state["phase"] = "planning"
     if args.use_perception:
@@ -4761,9 +4838,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     dump_tracking("timeout", last_tracking)
                 require(t - phase_started < limit, f"Tracking timeout in {phase}")
                 tracking = trackers[phase].update(rear, signed_speed, dt)
+                retry_stand_ = near is not None and near.get("retry_stand") and phase == "observe"
+                if retry_stand_:
+                    # Plan D8 S4c-2: standing to re-observe -- no follower command, no hold and no
+                    # observe recovery: the capture follows at once.
+                    tracking = replace(tracking, status="arrived", speed_mps=0.0)
                 last_tracking = tracking
                 if (
                     slam is not None
+                    and not retry_stand_
                     and phase in ("observe", "approach", "transport", "return_home")
                     and slam["tracker"].mode == "tracking"
                     and trackers[phase].remaining_to_goal_m()
@@ -5400,6 +5483,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         attempt["depth_quantize_mm"] = args.depth_quantize_mm
                         detection = detect_pockets(detector_input, prior, params)
                         observation = detection.observation
+                        if near is not None and near.get("retry_stand"):
+                            # Plan D8 S4c-2: the re-observation must see the pallet; no candidate
+                            # moves on old estimates.
+                            near["retry_stand"] = False
+                            state["near_tracking"]["retry"].update(
+                                capture_attempt=attempt_number, capture_status=observation.status)
+                            if observation.status != "valid":
+                                state["near_tracking"]["outcome"] = "near_field_retry_no_detection"
+                                require(False, "near_field_retry_no_detection")
                         attempt.update(
                             {
                                 "pocket_observation": asdict(observation),
@@ -5684,6 +5776,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                     "raw_observation": asdict(raw_observation),
                                     "observation": asdict(observation),
                                 })
+                            retry_capture_ = (near is not None and (state["near_tracking"].get("retry") or {})
+                                              .get("capture_attempt") == attempt_number)
+                            if retry_capture_:
+                                # Plan D8 S4c-2: the re-observation as placed and the target it gives.
+                                state["near_tracking"]["retry"].update(
+                                    capture_base=[float(base[0]), float(base[1]), float(yaw)],
+                                    observation=asdict(observation),
+                                    target=[target_pickup.x_m, target_pickup.y_m, target_pickup.yaw_rad])
                             if near is not None and state.get("near_capture", {}).get("status") == "pending":
                                 # Plan D8 S4a ①: the near capture's observation, the control
                                 # base it was placed with (this map estimate) and its time.
@@ -5787,6 +5887,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             pocket["planning_pickup"] = planning_pickup
                             if inject_:
                                 state["near_tracking"]["injection"]["captures"][-1]["planned_target"] = [
+                                    planning_pickup.x_m, planning_pickup.y_m, planning_pickup.yaw_rad]
+                            if retry_capture_:
+                                state["near_tracking"]["retry"]["planned_target"] = [
                                     planning_pickup.x_m, planning_pickup.y_m, planning_pickup.yaw_rad]
                             if obstacle is not None and obstacle["layer"].known_enabled:
                                 # Each detection is a new relative fix: the age restarts

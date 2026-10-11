@@ -685,6 +685,51 @@ def test_s4c1_injections_bias_only_the_captures_before_the_tracker_and_drop_befo
         assert f'    "{name}",\n' in near_tracking[near_tracking.index("RUN_SPECIFIC_ARGUMENTS = ("):], name
 
 
+def test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture() -> None:
+    """Plan D8 S4c-2: after the terminal hold a mismatch or refused correction before the
+    protection becomes one retry -- execution latches reset and records kept, the SLAM hold
+    released and the grid re-projected, the old estimate carried, the near capture forgotten,
+    and a stand in observe whose follower, hold and recoveries are bypassed until the
+    re-observation, which must be valid."""
+    import ast
+
+    source = SCRIPT.read_text()
+    tree = ast.parse(source)
+    functions = {n.name: ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    tick_fn = functions["near_tick"]
+    retry = tick_fn.index("near_tracking.retry_allowed(")
+    assert tick_fn.index("near.setdefault('terminal_standing_since', now_s)") < retry
+    assert retry < tick_fn.index("start_pickup_retry(now_s, current.reason, face_distance, episode)")
+    assert retry < tick_fn.index("'event': 'terminal_standing'")
+    retry_fn = functions["start_pickup_retry"]
+    order = ["near['retries'] = near.get('retries', 0) + 1", "near['tracker'] = None",
+             "slam['tracker'].release(", "obstacle['layer'].refresh(", "carried(obstacle['pickup_estimate'])",
+             "state.pop('near_capture')", "near['retry_stand'] = True", "transition('observe', now_s)"]
+    positions = [retry_fn.index(o) for o in order]
+    assert positions == sorted(positions), order
+    assert "near['mismatch'] = near['unbounded'] = False" in retry_fn
+    build_fn = functions["build_near_tracker"]
+    assert "mismatch=False, unbounded=False, path_revision=0" in build_fn
+    assert "near.setdefault('stop_events', [])" in build_fn and "stop_events=[]" not in build_fn
+    stand = source.index("retry_stand_ = near is not None and near.get('retry_stand') and phase == 'observe'".replace("'", '"'))
+    window = source[stand : stand + 900]
+    assert 'tracking = replace(tracking, status="arrived", speed_mps=0.0)' in window
+    assert "and not retry_stand_" in window
+    seen = source.index("Plan D8 S4c-2: the re-observation must see the pallet")
+    assert 'require(False, "near_field_retry_no_detection")' in source[seen : seen + 700]
+    assert source.index("detection = detect_pockets(detector_input, prior, params)") < seen
+    # What (x) judges by: each frame's hold, the re-projection, and the re-observation as
+    # placed with the target the planner used.
+    assert "'episode': near['episode']" in functions["feed_near_frame"]
+    assert "reprojected=reprojected_" in retry_fn and "reprojected_ = {" in retry_fn
+    assert retry_fn.index("applied_before_ = [") < retry_fn.index("slam['tracker'].release(")
+    placed = source.index("Plan D8 S4c-2: the re-observation as placed and the target it gives.")
+    assert "capture_base=" in source[placed : placed + 500] and "target=[target_pickup.x_m" in source[placed : placed + 500]
+    assert source.index('state["near_tracking"]["retry"]["planned_target"] = [') > source.index(
+        "planning_pickup, state[\"planning_target_source\"] = ("
+    )
+
+
 def test_s4b_correction_points_are_decided_before_the_stop_and_install_at_once() -> None:
     """Plan D8 S4b: the correction points join the stop decision as a waiting reason, are
     decided on the tracker's latest observation standing, refuse D5 alongside, check the

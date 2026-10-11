@@ -663,6 +663,29 @@ def path_digest(poses, directions, curvatures) -> str:
     return digest.hexdigest()
 
 
+# Plan D8 S4c-2: the pickup retry -----------------------------------------------------------
+RETRY_REASONS = ("mismatch", "replan_rejected")
+# The estimated fork tip to face at the episode's end must leave the camera beyond the
+# re-observation detector's 0.8 m minimum: camera-face = fork tip-face + 0.331 m on the
+# measured chassis, so 0.55 m gives 0.88 m, a few centimetres of estimate error to spare.
+RETRY_MIN_FACE_M = 0.55
+RETRY_STAND_M = 0.05  # the stand path's length behind the truck (two distinct poses)
+
+
+def retry_allowed(reason, retries: int, protected: bool, face_distance_m: float) -> bool:
+    """Plan D8 S4c-2: a terminal stop becomes a pickup retry when it is a mismatch or a
+    refused correction, the episode never started its protection (every tick's estimate
+    beyond 0.15 m and no insertion -- a conservative not-entered), the estimate at its end
+    is at least RETRY_MIN_FACE_M, and the pickup has not retried yet."""
+    return (
+        reason in RETRY_REASONS
+        and retries < 1
+        and not protected
+        and math.isfinite(face_distance_m)
+        and face_distance_m >= RETRY_MIN_FACE_M
+    )
+
+
 # Plan D8 S4c-1: injections -----------------------------------------------------------------
 def biased_site(site, lateral_m: float, yaw_rad: float):
     """A pallet site moved in its own frame: the centre lateral_m along the insertion axis's
@@ -1022,6 +1045,10 @@ def contract_problems(condition: dict, observed: dict) -> list[str]:
 
 __all__ = [
     "BUDGET_M",
+    "RETRY_MIN_FACE_M",
+    "RETRY_REASONS",
+    "RETRY_STAND_M",
+    "retry_allowed",
     "CORRECTION_MAX_YAW_RAD",
     "CORRECTION_POINTS_M",
     "Budget",
