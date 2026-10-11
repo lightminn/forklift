@@ -1,3 +1,4 @@
+import copy
 import math
 import sys
 from pathlib import Path
@@ -1238,3 +1239,498 @@ def test_viii_incomplete_records_are_unverified(bounds):
             }
         with pytest.raises(J.Unverified):
             viii((truth, record, start, final, states), bounds)
+
+
+# (ix) -- plan D8 S4c-1 injections -------------------------------------------------------
+def pocket_observation(x=1.6, y=0.05, psi=0.03, spacing=0.3725):
+    from forklift_core.perception.pocket_observation import Pocket, PocketObservation
+
+    axis = np.array([math.cos(psi), math.sin(psi)])
+    normal = np.array([-axis[1], axis[0]])
+    mid = np.array([x, y])
+    pockets = [
+        Pocket((*(mid + sign * spacing / 2 * normal), 0.061), 0.2275, 0.09)
+        for sign in (1, -1)
+    ]
+    return PocketObservation(
+        5,
+        "synthetic",
+        "base_link",
+        "synthetic",
+        "valid",
+        *pockets,
+        psi,
+        0.001,
+        0.001,
+        None,
+    )
+
+
+def injection_case(kind="correction", lateral=0.02, yaw=0.0, drop=None):
+    """A result and near record of an injected run: a far and a near capture, each biased as
+    the runner does it."""
+    from dataclasses import asdict
+
+    sys.path.insert(0, str(ROOT / "sim" / "isaac"))
+    import near_tracking as NT
+
+    captures = []
+    for attempt, phase, base in (
+        (1, "far", (-3.0, 1.0, 0.1)),
+        (2, "near", (-1.2, 0.4, 0.02)),
+    ):
+        raw = pocket_observation(x=3.0 if phase == "far" else 1.6)
+        obs = (
+            NT.biased_observation(raw, 0.6, lateral, yaw) if kind == "mismatch" else raw
+        )
+        raw_target = J._site_from_observation(asdict(raw), base, 0.6)
+        target = J._biased_site(raw_target, lateral, yaw) if kind else raw_target
+        captures.append(
+            {
+                "attempt": attempt,
+                "phase": phase,
+                "time_s": 10.0 + attempt,
+                "capture_base": list(base),
+                "raw_target": raw_target.tolist(),
+                "target": target.tolist(),
+                "planned_target": target.tolist(),
+                "raw_observation": asdict(raw),
+                "observation": asdict(obs),
+            }
+        )
+    result = {
+        "arguments": {
+            "near_inject": kind,
+            "near_inject_lateral_m": lateral,
+            "near_inject_yaw_rad": yaw,
+            "near_drop_frames_from_m": drop,
+        },
+        "geometry": {"pallet_depth_m": 0.6},
+        "near_capture": {"status": "done"},
+        "near_tracking": {
+            "injection": {
+                "kind": kind,
+                "lateral_m": lateral,
+                "yaw_rad": yaw,
+                "drop_from_m": drop,
+                "captures": captures if kind else [],
+            },
+            "start": {"observation": copy.deepcopy(captures[-1]["observation"])},
+            "outcome": None,
+        },
+    }
+    # The first correction's front observation (held pockets) and the revision it made:
+    # the raw target plus a natural few millimetres, the bias gone.
+    seen = np.asarray(captures[-1]["raw_target"]) + [0.001, -0.002, 0.0005]
+    axis = np.array([math.cos(seen[2]), math.sin(seen[2])])
+    normal = np.array([-axis[1], axis[0]])
+    mid = seen[:2] - 0.3 * axis
+    held = {
+        "left": [*(mid + 0.18625 * normal), 0.061],
+        "right": [*(mid - 0.18625 * normal), 0.061],
+        "yaw": float(seen[2]),
+    }
+    near_ = {
+        "events": [],
+        "frames": [
+            {
+                "read_s": 20.1,
+                "accepted": True,
+                "latest_source": "front",
+                "latest_stamp_s": 20.0,
+                "latest_held": held,
+            }
+        ],
+        "ticks": [],
+        "corrections": [
+            {
+                "accepted": True,
+                "revision": 1,
+                "decision_s": 20.2,
+                "observation": {"stamp_s": 20.0},
+            },
+            {
+                "accepted": True,
+                "revision": 2,
+                "decision_s": 21.2,
+                "observation": {"stamp_s": 21.0},
+            },
+        ],
+        "path_revisions": [{"target": seen.tolist()}, {"target": seen.tolist()}],
+    }
+    return result, near_
+
+
+def ix(result, near_, n=200):
+    return J.check_ix(result, near_, truth_from(np.linspace(-2.0, -1.5, n)))
+
+
+def test_ix_a_correction_run_with_the_bias_taken_off_passes():
+    for lateral, yaw in ((0.02, 0.0), (0.0, -0.015)):
+        out = ix(*injection_case("correction", lateral, yaw))
+        assert out["status"] == "pass", out["failures"]
+    assert J.check_ix({"near_tracking": {}}, {}, {})["applicable"] is False
+
+
+@pytest.mark.parametrize(
+    "breaks",
+    [
+        "arguments",
+        "target_raw",
+        "planner_raw",
+        "start_biased",
+        "observation_biased",
+        "not_taken_off",
+        "no_correction",
+        "near_missing",
+    ],
+)
+def test_ix_a_correction_run_fails_each_broken_condition(breaks):
+    result, near_ = injection_case("correction", 0.0, 0.015)
+    inj = result["near_tracking"]["injection"]
+    caps = inj["captures"]
+    if breaks == "arguments":
+        result["arguments"]["near_inject_yaw_rad"] = -0.015
+    elif breaks == "target_raw":
+        caps[0]["target"] = caps[0]["raw_target"]
+    elif breaks == "planner_raw":
+        caps[1]["planned_target"] = caps[1]["raw_target"]
+    elif breaks == "start_biased":
+        from dataclasses import asdict
+
+        sys.path.insert(0, str(ROOT / "sim" / "isaac"))
+        import near_tracking as NT
+
+        biased = asdict(NT.biased_observation(pocket_observation(), 0.6, 0.0, 0.015))
+        result["near_tracking"]["start"]["observation"] = biased
+    elif breaks == "observation_biased":
+        caps[1]["observation"]["insertion_yaw_rad"] += 0.015
+    elif breaks == "not_taken_off":  # the first correction kept the biased plan
+        near_["path_revisions"][0]["target"] = caps[1]["target"]
+    elif breaks == "no_correction":
+        near_["corrections"] = []
+    else:
+        inj["captures"] = caps[:1]
+    assert ix(result, near_)["status"] == "fail", breaks
+
+
+def test_ix_a_refused_first_acceptance_is_not_run():
+    result, near_ = injection_case("correction", 0.02, 0.0)
+    result["near_capture"]["status"] = "pending"
+    assert ix(result, near_)["status"] == "not_run"
+
+
+def mismatch_events(frames, outcome="mismatch"):
+    return [
+        {
+            "event": "mismatch",
+            "stamp_s": frames[2]["stamp_s"],
+            "time_s": frames[2]["read_s"],
+        },
+        {"event": "terminal_standing", "reason": outcome, "time_s": 10.9},
+    ]
+
+
+def mismatch_frames(
+    reasons=("left_lateral", "left_lateral", "anchor_left_lateral"), counts=(1, 2, 3)
+):
+    frames = [
+        {
+            "read_s": 10.3 + 0.1 * i,
+            "stamp_s": 10.29 + 0.1 * i,
+            "rejected": True,
+            "consecutive_rejects": c,
+            "reason": r,
+            "mismatch": i == 2,
+        }
+        for i, (r, c) in enumerate(zip(reasons, counts, strict=True))
+    ]
+    ticks = [
+        {"t": 10.0 + TICK * i, "face_distance_m": 2.2 - 0.0005 * i}
+        for i in range(1, 120)
+    ]
+    return frames, ticks
+
+
+def test_ix_a_mismatch_run_with_three_rejections_and_the_terminal_passes():
+    result, near_ = injection_case("mismatch", 0.06, 0.0)
+    near_["frames"], near_["ticks"] = mismatch_frames()
+    near_["events"] = mismatch_events(near_["frames"])
+    result["near_tracking"]["outcome"] = "near_field_mismatch"
+    out = ix(result, near_)
+    assert out["status"] == "pass", out["failures"]
+
+
+@pytest.mark.parametrize(
+    "breaks",
+    [
+        "swapped_bias",
+        "counts",
+        "model_reason",
+        "after_entry",
+        "ended_lost",
+        "no_event",
+        "start_invalid",
+    ],
+)
+def test_ix_a_mismatch_run_fails_each_broken_condition(breaks):
+    if breaks == "swapped_bias":
+        # Codex S4c-1 review P2: a yaw bias went in where a lateral one was asked for.
+        result, near_ = injection_case("mismatch", 0.0, 0.05)
+        inj = result["near_tracking"]["injection"]
+        inj["lateral_m"], inj["yaw_rad"] = 0.06, 0.0
+        (
+            result["arguments"]["near_inject_lateral_m"],
+            result["arguments"]["near_inject_yaw_rad"],
+        ) = 0.06, 0.0
+    else:
+        result, near_ = injection_case("mismatch", 0.06, 0.0)
+    near_["frames"], near_["ticks"] = mismatch_frames()
+    near_["events"] = mismatch_events(near_["frames"])
+    result["near_tracking"]["outcome"] = "near_field_mismatch"
+    if breaks == "counts":
+        near_["frames"], _ = mismatch_frames(counts=(1, 1, 2))
+    elif breaks == "model_reason":
+        near_["frames"], _ = mismatch_frames(
+            reasons=("left_width", "left_lateral", "yaw")
+        )
+    elif breaks == "after_entry":
+        for row in near_["ticks"]:
+            row["face_distance_m"] = -0.01
+    elif breaks == "ended_lost":
+        result["near_tracking"]["outcome"] = "near_field_lost"
+        near_["events"][-1]["reason"] = "lost"
+    elif breaks == "no_event":  # Codex S4c-1 review P2: the event was not required
+        near_["events"] = near_["events"][1:]
+    elif breaks == "start_invalid":  # ... nor the observation's non-geometric fields
+        result["near_tracking"]["start"]["observation"]["position_sigma_m"] = 1000.0
+    assert ix(result, near_)["status"] == "fail", breaks
+
+
+def lost_case(latch_i=60, drop=0.3):
+    result, near_ = injection_case(None, 0.0, 0.0, drop)
+    t = truth_from(np.linspace(-2.0, -1.5, 200))["stamp_s"]
+    near_["ticks"] = [
+        {
+            "t": float(t[i]),
+            "face_distance_m": 0.3 + 0.0005 * (latch_i - i) - 1e-6,
+            "waits": [],
+        }
+        for i in range(1, 199)
+    ]
+    near_["ticks"][latch_i + 40 - 1]["waits"] = ["lost_wait"]
+    near_["events"] = [
+        {"event": "drop_latch", "time_s": float(t[latch_i])},
+        {"event": "terminal_standing", "reason": "lost", "time_s": float(t[190])},
+    ]
+    near_["frames"] = [
+        {"read_s": float(t[i]), "accepted": True} for i in range(5, latch_i, 12)
+    ] + [
+        {"read_s": float(t[i]), "skipped": "dropped"}
+        for i in range(latch_i + 2, 190, 12)
+    ]
+    result["near_tracking"]["outcome"] = "near_field_lost"
+    return result, near_
+
+
+def test_ix_a_lost_run_latched_on_the_first_tick_within_d_passes():
+    out = ix(*lost_case())
+    assert out["status"] == "pass", out["failures"]
+    assert out["dropped"] > 0
+
+
+@pytest.mark.parametrize(
+    "breaks",
+    [
+        "late_latch",
+        "fed_after",
+        "no_wait",
+        "ended_mismatch",
+        "not_reached",
+        "earlier_dip",
+    ],
+)
+def test_ix_a_lost_run_fails_each_broken_condition(breaks):
+    result, near_ = lost_case()
+    if breaks == "late_latch":
+        near_["ticks"][59 - 1]["face_distance_m"] = (
+            0.29  # the tick before was within D already
+        )
+    elif breaks == "fed_after":
+        near_["frames"].append(
+            {"read_s": near_["events"][0]["time_s"] + 0.2, "accepted": True}
+        )
+    elif breaks == "no_wait":
+        for row in near_["ticks"]:
+            row["waits"] = []
+    elif breaks == "ended_mismatch":
+        result["near_tracking"]["outcome"] = "near_field_mismatch"
+    elif breaks == "earlier_dip":  # Codex S4c-1 review P2: within D earlier, out again
+        near_["ticks"][20]["face_distance_m"] = 0.29
+    else:
+        near_["events"] = near_["events"][1:]
+        assert ix(result, near_)["status"] == "not_run"
+        return
+    assert ix(result, near_)["status"] == "fail", breaks
+
+
+def test_ix_an_incomplete_injection_record_is_unverified():
+    result, near_ = injection_case("correction", 0.02, 0.0)
+    del result["near_tracking"]["injection"]["captures"][0]["raw_observation"]
+    with pytest.raises(J.Unverified):
+        ix(result, near_)
+
+
+def test_ix_a_frame_read_at_the_latch_time_was_fed_before_it():
+    # Codex S4c-1 review P2: frames are read after the step and the next tick latches.
+    result, near_ = lost_case()
+    near_["frames"].append({"read_s": near_["events"][0]["time_s"], "accepted": True})
+    assert ix(result, near_)["status"] == "pass"
+
+
+def test_ix_an_asked_injection_must_be_recorded_with_all_its_arguments():
+    result, near_ = injection_case("correction", 0.02, 0.0)
+    del result["near_tracking"]["injection"]
+    with pytest.raises(J.Unverified, match="did not record"):
+        ix(result, near_)
+    result, near_ = injection_case("correction", 0.02, 0.0)
+    del result["arguments"]["near_inject_yaw_rad"]
+    with pytest.raises(J.Unverified, match="lack"):
+        ix(result, near_)
+
+
+def test_s4c_lost_and_correction_need_the_correction_points_judged():
+    contact_ok = {"contact": {"passed": True}}
+    checks = {"ix": {"applicable": True, "kind": None, "status": "pass"}}
+    assert J.s4c_outcome("pass", checks, {}, contact_ok, [])["status"] == "fail"
+    checks["viii"] = {"passed": True}
+    assert J.s4c_outcome("pass", checks, {}, contact_ok, [])["status"] == "pass"
+    assert (
+        J.s4c_outcome("pass", checks, {}, contact_ok, [{"pair": 1}])["status"] == "fail"
+    )
+
+
+def test_s4c_a_mismatch_terminal_needs_a_judged_stop_that_ends_standing():
+    # Codex S4c-1 2nd review P2: with no stop at all (vii) passed vacuously.
+    contact_ok = {"contact": {"passed": True}}
+    mismatch = {
+        "ix": {
+            "applicable": True,
+            "kind": "mismatch",
+            "status": "pass",
+            "terminal_s": 12.0,
+        }
+    }
+    stop = {
+        "source": "near_stop",
+        "command_t": 11.0,
+        "end_t": 12.5,
+        "standing_at_end": True,
+        "passed": True,
+    }
+    assert (
+        J.s4c_outcome("pass", mismatch, {}, contact_ok, [], {"stops": [stop]})["status"]
+        == "pass"
+    )
+    assert (
+        J.s4c_outcome("pass", mismatch, {}, contact_ok, [], {"stops": []})["status"]
+        == "fail"
+    )
+    for bad in (
+        {"standing_at_end": False},
+        {"passed": False},
+        {"end_t": 11.5},
+        {"source": "zero_step"},
+    ):
+        out = J.s4c_outcome(
+            "pass", mismatch, {}, contact_ok, [], {"stops": [{**stop, **bad}]}
+        )
+        assert out["status"] == "fail", bad
+
+
+def test_a_mismatch_section_must_start_with_the_approach_standing():
+    truth = truth_from(
+        np.linspace(-2.0, -1.9, 60), phase="approach", speed=np.zeros(60)
+    )
+    truth["base_pose"][:, 0] = -2.0  # standing through the warm-up
+    t = truth["stamp_s"]
+    near_ = {"ticks": [{"t": float(t[i])} for i in range(12, 59)]}
+    assert J.mismatch_section(truth, near_, -0.34) == (12, 59)
+    moved = {k: np.array(v, copy=True) for k, v in truth.items() if k != "phases"} | {
+        "phases": truth["phases"]
+    }
+    moved["applied_speed_mps"][5] = 0.02  # a command before the first row
+    with pytest.raises(J.Unverified, match="does not start"):
+        J.mismatch_section(moved, near_, -0.34)
+    # Codex S4c-1 2nd review P2: zero commands, yet the truck rolled 40 mm before the first row.
+    rolled = {k: np.array(v, copy=True) for k, v in truth.items() if k != "phases"} | {
+        "phases": truth["phases"]
+    }
+    rolled["base_pose"][:12, 0] = np.linspace(-2.04, -2.0, 12)
+    with pytest.raises(J.Unverified, match="moved"):
+        J.mismatch_section(rolled, near_, -0.34)
+
+
+def test_ix_an_injection_record_missing_a_key_or_a_stamp_is_unverified():
+    result, near_ = injection_case("correction", 0.02, 0.0)
+    del result["near_tracking"]["injection"]["yaw_rad"]
+    with pytest.raises(J.Unverified, match="lacks"):
+        ix(result, near_)
+    result, near_ = injection_case("mismatch", 0.06, 0.0)
+    near_["frames"], near_["ticks"] = mismatch_frames()
+    near_["events"] = mismatch_events(near_["frames"])
+    result["near_tracking"]["outcome"] = "near_field_mismatch"
+    del near_["frames"][2]["stamp_s"]
+    del near_["events"][0]["stamp_s"]
+    with pytest.raises(J.Unverified, match="stamp"):
+        ix(result, near_)
+
+
+def test_ix_the_correction_effect_uses_the_observation_the_decision_had():
+    # Codex S4c-1 review P2: a frame read after the decision with the same stamp and pockets
+    # fitted to the biased plan made a correction that kept the bias pass.
+    result, near_ = injection_case("correction", 0.02, 0.0)
+    caps = result["near_tracking"]["injection"]["captures"]
+    near_["path_revisions"][0]["target"] = caps[1]["target"]
+    biased = np.asarray(caps[1]["target"])
+    axis = np.array([math.cos(biased[2]), math.sin(biased[2])])
+    normal = np.array([-axis[1], axis[0]])
+    mid = biased[:2] - 0.3 * axis
+    fitted = {
+        "left": [*(mid + 0.18625 * normal), 0.061],
+        "right": [*(mid - 0.18625 * normal), 0.061],
+        "yaw": float(biased[2]),
+    }
+    near_["frames"].append(
+        {
+            "read_s": 22.8,
+            "accepted": True,
+            "latest_source": "front",
+            "latest_stamp_s": 20.0,
+            "latest_held": fitted,
+        }
+    )
+    assert ix(result, near_)["status"] == "fail"
+
+
+def test_ix_broken_held_pockets_of_the_first_correction_are_unverified():
+    result, near_ = injection_case("correction", 0.02, 0.0)
+    del near_["frames"][0]["latest_held"]["left"]
+    with pytest.raises(J.Unverified, match="held"):
+        ix(result, near_)
+    result, near_ = injection_case("correction", 0.02, 0.0)
+    near_["frames"][0]["read_s"] = (
+        20.5  # read after the decision: not the decision's observation
+    )
+    with pytest.raises(J.Unverified, match="latest accepted front frame"):
+        ix(result, near_)
+
+
+def test_ix_a_skipped_row_cannot_stand_in_for_the_decisions_observation():
+    # Codex S4c-1 review P2: an accepted-and-skipped row read before the decision.
+    result, near_ = injection_case("correction", 0.02, 0.0)
+    near_["frames"].append(
+        {**near_["frames"][0], "read_s": 20.15, "skipped": "uncovered"}
+    )
+    with pytest.raises(J.Unverified, match="both accepted and skipped"):
+        ix(result, near_)

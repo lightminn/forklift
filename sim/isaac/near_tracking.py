@@ -12,7 +12,7 @@ from __future__ import annotations
 import math
 import re
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -22,6 +22,7 @@ HISTORY_S = 1.0  # the control pose history the frames are placed with
 MAX_ROW_GAP_S = 1.5 * TICK_S  # no interpolation across a gap (Codex D8b impl P2)
 SECTION_M = 1.5  # fork tip to face: the near-field section (plan D8e)
 STOP_LATENCY_S = 0.15 + TICK_S  # the drive's reaction plus the tick that notices
+TERMINAL_HOLD_S = 0.5  # a terminal stop ends the run this long after the detector stands
 DECEL_MPS2 = 1.5
 BUDGET_M = 0.03
 RECENT_S = 0.3  # the applied-command maximum the speed bound looks back over
@@ -557,6 +558,9 @@ def decide_stop(
 
 # Plan D8 S4b: the correction points ------------------------------------------------------
 CORRECTION_POINTS_M = (1.0, 0.6)  # estimated fork tip to face (plan D8d)
+# The correction straight's heading box: the follower's transient after the 1.0 m correction
+# reaches 110.3 mrad from a start inside the 0.05 m / 0.05 rad box (plan D8 S4b revision).
+CORRECTION_MAX_YAW_RAD = 0.12
 
 
 @dataclass(frozen=True)
@@ -599,7 +603,10 @@ def correction_update(
         if now_s <= state.installed_s:
             action["wait"] = f"correction:{state.point_m}"
             return state, action
-        return CorrectionState(next_index=state.next_index), {**action, "event": "closed"}
+        return CorrectionState(next_index=state.next_index), {
+            **action,
+            "event": "closed",
+        }
     if state.point_m is None:
         if (
             phase != "approach"
@@ -609,15 +616,21 @@ def correction_update(
         ):
             return state, action
         point = CORRECTION_POINTS_M[state.next_index]
-        state = CorrectionState(state.next_index, point, now_s, now_s if standing else None)
+        state = CorrectionState(
+            state.next_index, point, now_s, now_s if standing else None
+        )
         return state, {**action, "wait": f"correction:{point}", "event": "trigger"}
     action["wait"] = f"correction:{state.point_m}"
     if not standing:
         if state.standing_s is not None:
-            state = CorrectionState(state.next_index, state.point_m, state.trigger_s, None)
+            state = CorrectionState(
+                state.next_index, state.point_m, state.trigger_s, None
+            )
         return state, action
     if state.standing_s is None:
-        return CorrectionState(state.next_index, state.point_m, state.trigger_s, now_s), action
+        return CorrectionState(
+            state.next_index, state.point_m, state.trigger_s, now_s
+        ), action
     if not pixel_s >= state.standing_s:
         return state, action
     if source != "front":
@@ -629,7 +642,9 @@ def correction_update(
 
 def correction_installed(state: CorrectionState, now_s: float) -> CorrectionState:
     """The open point's paths were installed this tick: it closes on the next one."""
-    return CorrectionState(state.next_index + 1, state.point_m, state.trigger_s, state.standing_s, now_s)
+    return CorrectionState(
+        state.next_index + 1, state.point_m, state.trigger_s, state.standing_s, now_s
+    )
 
 
 def corrections_missed(state: CorrectionState) -> bool:
@@ -646,6 +661,61 @@ def path_digest(poses, directions, curvatures) -> str:
         a = np.ascontiguousarray(np.asarray(array, dtype=np.float64))
         digest.update(repr(a.shape).encode() + a.tobytes())
     return digest.hexdigest()
+
+
+# Plan D8 S4c-1: injections -----------------------------------------------------------------
+def biased_site(site, lateral_m: float, yaw_rad: float):
+    """A pallet site moved in its own frame: the centre lateral_m along the insertion axis's
+    left normal (-sin yaw, cos yaw), the heading turned by yaw_rad about the centre."""
+    c, s = math.cos(site.yaw_rad), math.sin(site.yaw_rad)
+    yaw = _wrap(site.yaw_rad + yaw_rad)
+    return replace(
+        site,
+        x_m=site.x_m - lateral_m * s,
+        y_m=site.y_m + lateral_m * c,
+        yaw_rad=math.pi if yaw == -math.pi else yaw,
+    )
+
+
+def biased_observation(
+    observation, pallet_depth_m: float, lateral_m: float, yaw_rad: float
+):
+    """The same rigid move applied to a valid base_link pocket observation about its own
+    estimated pallet centre (front midpoint + depth / 2 along the insertion axis): both
+    pocket centres turned by yaw_rad about it and moved lateral_m along the axis's left
+    normal, the insertion yaw turned; sizes, sigmas, stamp and source kept. The target made
+    from it (estimate_pallet_center_m, estimate_world_pallet_site) is biased_site of the
+    original's target."""
+    from forklift_core.perception.pocket_observation import Pocket
+
+    if observation.status != "valid":
+        raise ValueError("only a valid observation can be biased")
+    psi = observation.insertion_yaw_rad
+    axis = np.array([math.cos(psi), math.sin(psi)])
+    normal = np.array([-axis[1], axis[0]])
+    left, right = (
+        np.asarray(p.center_m, dtype=float)
+        for p in (observation.left, observation.right)
+    )
+    centre = (left[:2] + right[:2]) / 2 + pallet_depth_m / 2 * axis
+    c, s = math.cos(yaw_rad), math.sin(yaw_rad)
+    turn = np.array([[c, -s], [s, c]])
+
+    def move(pocket, point):
+        xy = centre + turn @ (point[:2] - centre) + lateral_m * normal
+        return Pocket(
+            (float(xy[0]), float(xy[1]), float(point[2])),
+            pocket.width_m,
+            pocket.height_m,
+        )
+
+    yaw = _wrap(psi + yaw_rad)
+    return replace(
+        observation,
+        left=move(observation.left, left),
+        right=move(observation.right, right),
+        insertion_yaw_rad=math.pi if yaw == -math.pi else yaw,
+    )
 
 
 # Input files and arguments, by content (shared with tools/s4_drive_terms.py).
@@ -803,6 +873,11 @@ RUN_SPECIFIC_ARGUMENTS = (
     "near_tracking_stop_at",
     "near_bounds",
     "near_drive_terms",
+    # Plan D8 S4c-1: the injections are checked on their own, not against the measurement.
+    "near_inject",
+    "near_inject_lateral_m",
+    "near_inject_yaw_rad",
+    "near_drop_frames_from_m",
 )
 CONDITION_FIELDS = (
     "settings_synthetic",
@@ -947,10 +1022,13 @@ def contract_problems(condition: dict, observed: dict) -> list[str]:
 
 __all__ = [
     "BUDGET_M",
+    "CORRECTION_MAX_YAW_RAD",
     "CORRECTION_POINTS_M",
     "Budget",
     "CommandWindow",
     "CorrectionState",
+    "biased_observation",
+    "biased_site",
     "correction_installed",
     "correction_update",
     "corrections_missed",

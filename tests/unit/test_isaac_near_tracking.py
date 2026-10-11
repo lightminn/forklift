@@ -532,10 +532,31 @@ def test_no_reason_no_stop():
 
 
 # Plan D8 S4b: the correction points ---------------------------------------------------------
-def corr(state, now, *, phase="approach", entered=False, d=2.0, standing=False, pixel=0.0, source="front",
-         version=1, episode=1):
-    return NT.correction_update(state, now, phase=phase, entered=entered, face_distance_m=d, standing=standing,
-                                pixel_s=pixel, source=source, frame_version=version, episode=episode)
+def corr(
+    state,
+    now,
+    *,
+    phase="approach",
+    entered=False,
+    d=2.0,
+    standing=False,
+    pixel=0.0,
+    source="front",
+    version=1,
+    episode=1,
+):
+    return NT.correction_update(
+        state,
+        now,
+        phase=phase,
+        entered=entered,
+        face_distance_m=d,
+        standing=standing,
+        pixel_s=pixel,
+        source=source,
+        frame_version=version,
+        episode=episode,
+    )
 
 
 def test_a_correction_point_opens_once_the_estimate_passes_it_and_waits():
@@ -545,15 +566,28 @@ def test_a_correction_point_opens_once_the_estimate_passes_it_and_waits():
     for bad in ({"phase": "insert"}, {"entered": True}):
         assert corr(NT.CorrectionState(), 1.0, d=0.9, **bad)[0].point_m is None
     state, act = corr(state, 2.0, d=0.9995)
-    assert state.point_m == 1.0 and state.trigger_s == 2.0 and act == {
-        "wait": "correction:1.0", "decide": False, "refuse": None, "event": "trigger"}
+    assert (
+        state.point_m == 1.0
+        and state.trigger_s == 2.0
+        and act
+        == {
+            "wait": "correction:1.0",
+            "decide": False,
+            "refuse": None,
+            "event": "trigger",
+        }
+    )
     assert state.standing_s is None
 
 
 def test_a_point_decides_only_standing_on_an_observation_after_the_stop():
     state, _ = corr(NT.CorrectionState(), 2.0, d=0.99)
     state, act = corr(state, 2.2, d=0.98, standing=True, pixel=2.1)
-    assert state.standing_s == 2.2 and not act["decide"] and act["wait"] == "correction:1.0"
+    assert (
+        state.standing_s == 2.2
+        and not act["decide"]
+        and act["wait"] == "correction:1.0"
+    )
     state, act = corr(state, 2.3, d=0.98, standing=True, pixel=2.15)  # taken before t_s
     assert not act["decide"]
     # The stop detector sees motion again: t_s restarts.
@@ -561,7 +595,9 @@ def test_a_point_decides_only_standing_on_an_observation_after_the_stop():
     assert moved.standing_s is None and not act["decide"]
     again, _ = corr(moved, 2.4, d=0.98, standing=True, pixel=2.25)
     assert again.standing_s == 2.4
-    assert not corr(again, 2.5, standing=True, pixel=2.3)[1]["decide"]  # before the new t_s
+    assert not corr(again, 2.5, standing=True, pixel=2.3)[1][
+        "decide"
+    ]  # before the new t_s
     state, act = corr(again, 2.6, standing=True, pixel=2.4)
     assert act["decide"] and act["wait"] == "correction:1.0"
     # Not standing at the decision tick: wait.
@@ -571,8 +607,14 @@ def test_a_point_decides_only_standing_on_an_observation_after_the_stop():
 def test_a_point_refuses_an_observation_not_from_the_front_or_another_hold():
     state, _ = corr(NT.CorrectionState(), 2.0, d=0.59)
     state, _ = corr(state, 2.1, standing=True)
-    assert corr(state, 2.5, standing=True, pixel=2.2, source="roof")[1]["refuse"] == "source:roof"
-    assert corr(state, 2.5, standing=True, pixel=2.2, version=2)[1]["refuse"] == "frame:2!=1"
+    assert (
+        corr(state, 2.5, standing=True, pixel=2.2, source="roof")[1]["refuse"]
+        == "source:roof"
+    )
+    assert (
+        corr(state, 2.5, standing=True, pixel=2.2, version=2)[1]["refuse"]
+        == "frame:2!=1"
+    )
 
 
 def test_an_installed_point_holds_its_tick_closes_the_next_and_opens_the_next_point_later():
@@ -584,7 +626,11 @@ def test_an_installed_point_holds_its_tick_closes_the_next_and_opens_the_next_po
     assert state.next_index == 1 and state.installed_s == 2.5
     assert corr(state, 2.5, standing=True)[1]["wait"] == "correction:1.0"
     state, act = corr(state, 2.5 + TICK, d=0.59, standing=True)
-    assert state == NT.CorrectionState(next_index=1) and act["wait"] is None and act["event"] == "closed"
+    assert (
+        state == NT.CorrectionState(next_index=1)
+        and act["wait"] is None
+        and act["event"] == "closed"
+    )
     assert not NT.corrections_missed(NT.CorrectionState(next_index=1, point_m=0.6))
     assert NT.corrections_missed(state)
     state, act = corr(state, 3.0, d=0.599)
@@ -600,7 +646,9 @@ def test_the_path_digest_is_the_paths_content_and_the_follower_keeps_the_same_co
     directions = np.ones(3, dtype=np.int8)
     curvatures = np.zeros(3)
     digest = NT.path_digest(poses, directions, curvatures)
-    assert digest == NT.path_digest(poses.tolist(), directions.astype(float), curvatures)
+    assert digest == NT.path_digest(
+        poses.tolist(), directions.astype(float), curvatures
+    )
     moved = poses.copy()
     moved[2, 1] = 1e-12
     assert NT.path_digest(moved, directions, curvatures) != digest
@@ -609,3 +657,168 @@ def test_the_path_digest_is_the_paths_content_and_the_follower_keeps_the_same_co
     assert NT.path_digest(*copies) == digest
     copies[0][0, 0] = 5.0  # a copy: the follower's own path does not change
     assert NT.path_digest(*tracker.path_arrays()) == digest
+
+
+# Plan D8 S4c-1: injections ------------------------------------------------------------------
+def adapter_module():
+    spec = importlib.util.spec_from_file_location(
+        "perception_adapter_for_bias", ROOT / "sim/isaac/perception_adapter.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def pocket_pair(x=1.6, y=0.05, psi=0.03, depth=0.6, spacing=0.3725):
+    from forklift_core.perception.pocket_observation import Pocket, PocketObservation
+
+    axis = np.array([math.cos(psi), math.sin(psi)])
+    normal = np.array([-axis[1], axis[0]])
+    mid = np.array([x, y])
+    pockets = [
+        Pocket((*(mid + sign * spacing / 2 * normal), 0.061), 0.2275, 0.09)
+        for sign in (1, -1)
+    ]
+    return PocketObservation(
+        5,
+        "synthetic",
+        "base_link",
+        "synthetic",
+        "valid",
+        *pockets,
+        psi,
+        0.001,
+        0.001,
+        None,
+    )
+
+
+@pytest.mark.parametrize(
+    "lateral, yaw",
+    [(0.02, 0.0), (-0.06, 0.0), (0.0, 0.015), (0.0, -0.05), (0.01, 0.01)],
+)
+def test_a_biased_observation_gives_the_biased_target(lateral, yaw):
+    """S4c-1: the observation moved about its own pallet centre yields the target moved in the
+    pallet frame -- the two injection routes agree."""
+    from forklift_core.planning.pallet_mission import PalletSite
+
+    adapter = adapter_module()
+    obs = pocket_pair()
+    base = ((2.0, -1.0), 0.4)
+
+    def target(o):
+        xy = adapter.estimate_pallet_center_m(o, 0.6)
+        return adapter.estimate_world_pallet_site(xy, o.insertion_yaw_rad, *base)
+
+    raw = target(obs)
+    moved = target(NT.biased_observation(obs, 0.6, lateral, yaw))
+    expected = NT.biased_site(PalletSite(raw.x_m, raw.y_m, raw.yaw_rad), lateral, yaw)
+    assert (moved.x_m, moved.y_m, moved.yaw_rad) == pytest.approx(
+        (expected.x_m, expected.y_m, expected.yaw_rad), abs=1e-12
+    )
+    # The site moves by lateral along its left normal and turns by yaw.
+    c, s = math.cos(raw.yaw_rad), math.sin(raw.yaw_rad)
+    d = np.array([expected.x_m - raw.x_m, expected.y_m - raw.y_m])
+    assert float(d @ (-s, c)) == pytest.approx(lateral, abs=1e-12) and float(
+        d @ (c, s)
+    ) == pytest.approx(0, abs=1e-12)
+    assert NT._wrap(expected.yaw_rad - raw.yaw_rad) == pytest.approx(yaw, abs=1e-12)
+
+
+def test_a_biased_observation_keeps_sizes_spacing_stamp_and_sigmas():
+    obs = pocket_pair()
+    moved = NT.biased_observation(obs, 0.6, 0.06, 0.05)
+    for a, b in ((obs.left, moved.left), (obs.right, moved.right)):
+        assert (a.width_m, a.height_m, a.center_m[2]) == (
+            b.width_m,
+            b.height_m,
+            b.center_m[2],
+        )
+    spacing = lambda o: math.dist(o.left.center_m[:2], o.right.center_m[:2])  # noqa: E731
+    assert spacing(moved) == pytest.approx(spacing(obs), abs=1e-12)
+    assert (moved.stamp_ns, moved.position_sigma_m, moved.yaw_sigma_rad) == (
+        5,
+        0.001,
+        0.001,
+    )
+    assert (
+        obs.left.center_m == pocket_pair().left.center_m
+    )  # the original is not touched
+    with pytest.raises(ValueError):
+        NT.biased_observation(
+            type(obs)(
+                5,
+                "synthetic",
+                "base_link",
+                "synthetic",
+                "invalid",
+                None,
+                None,
+                None,
+                None,
+                None,
+                "x",
+            ),
+            0.6,
+            0.02,
+            0.0,
+        )
+
+
+def test_the_correction_heading_box_covers_the_followers_transient_after_the_first_correction():
+    """Plan D8 S4b revision (S4c-1 smoke): from any start inside the 1.0 m box the ideal
+    follower's heading stays within the correction box, and a start the old 0.05 rad box
+    refused (the smoke's 0.6 m pose) still arrives within the dry-run criteria."""
+    from forklift_core.control.path_tracking import TrackerConfig
+    from forklift_core.control.rollout import bicycle_rollout
+    from forklift_core.planning.geometry import Pose2D
+    from forklift_core.planning.pallet_mission import straight_from_pose
+
+    cfg = TrackerConfig(
+        cruise_speed_mps=0.055,
+        max_curvature_inv_m=0.36,
+        max_acceleration_mps2=0.3,
+        lookahead_m=0.28,
+        position_tolerance_m=0.008,
+        yaw_tolerance_rad=0.02,
+        stop_speed_mps=0.012,
+        max_cross_track_error_m=0.35,
+        overshoot_tolerance_m=0.03,
+    )
+    worst = 0.0
+    for lat in (-0.05, 0.0, 0.05):
+        for yaw in (-0.05, 0.0, 0.05):
+            st, _ = straight_from_pose(
+                Pose2D(0.0, lat, yaw),
+                Pose2D(-1.0, 0.0, 0.0),
+                Pose2D(0.9, 0.0, 0.0),
+                max_lateral_m=0.05,
+                max_yaw_rad=0.05,
+                min_length_m=0.3,
+            )
+            run = bicycle_rollout(
+                st.poses,
+                st.directions,
+                st.curvatures_inv_m,
+                cfg,
+                np.array([0.0, lat, yaw]),
+            )
+            worst = max(worst, float(np.abs(np.asarray(run.trajectory)[:, 2]).max()))
+    assert 0.05 < worst <= NT.CORRECTION_MAX_YAW_RAD
+    st, _ = straight_from_pose(
+        Pose2D(0.0, 0.0122, -0.0875),
+        Pose2D(-1.0, 0.0, 0.0),
+        Pose2D(0.5312, 0.0, 0.0),
+        max_lateral_m=0.05,
+        max_yaw_rad=NT.CORRECTION_MAX_YAW_RAD,
+        min_length_m=0.3,
+    )
+    run = bicycle_rollout(
+        st.poses,
+        st.directions,
+        st.curvatures_inv_m,
+        cfg,
+        np.array([0.0, 0.0122, -0.0875]),
+    )
+    last = np.asarray(run.trajectory[-1])
+    assert run.status == "arrived" and abs(last[1]) <= 0.006 and abs(last[2]) <= 0.015

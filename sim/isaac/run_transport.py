@@ -265,6 +265,35 @@ def arguments() -> argparse.Namespace:
         "without it the mission runs on with S4a-2's protection.",
     )
     parser.add_argument(
+        "--near-inject",
+        choices=("correction", "mismatch"),
+        default=None,
+        help="Plan D8 S4c-1: bias the far and near captures before the tracker is built -- "
+        "correction: their planning targets only (the tracker starts from the raw "
+        "observation); mismatch: the observations too. Needs --near-tracking and exactly one "
+        "of --near-inject-lateral-m / --near-inject-yaw-rad.",
+    )
+    parser.add_argument(
+        "--near-inject-lateral-m",
+        type=float,
+        default=0.0,
+        help="Plan D8 S4c-1: the bias across the pallet's insertion axis (left +), m.",
+    )
+    parser.add_argument(
+        "--near-inject-yaw-rad",
+        type=float,
+        default=0.0,
+        help="Plan D8 S4c-1: the bias turning the pallet about its centre, rad.",
+    )
+    parser.add_argument(
+        "--near-drop-frames-from-m",
+        type=float,
+        default=None,
+        help="Plan D8 S4c-1: from the first tick the estimated fork tip to face is within this "
+        "(m, -0.3 < D <= 0.5; negative = inside the pocket), no frame reaches the tracker "
+        "(recorded as dropped). Needs --near-tracking.",
+    )
+    parser.add_argument(
         "--near-bounds",
         type=Path,
         default=Path(__file__).resolve().parents[2] / "config/near_field_bounds_measured.json",
@@ -649,6 +678,23 @@ def arguments() -> argparse.Namespace:
         parser.error("--near-tracking excludes the scheduled stops and dwells of the measurement runs")
     if args.near_tracking_stop_at is not None and not args.near_tracking:
         parser.error("--near-tracking-stop-at needs --near-tracking")
+    inject_sizes = (args.near_inject_lateral_m, args.near_inject_yaw_rad)
+    if not all(math.isfinite(v) for v in inject_sizes):
+        parser.error("--near-inject-lateral-m and --near-inject-yaw-rad must be finite")
+    if args.near_inject is not None:
+        if not args.near_tracking:
+            parser.error("--near-inject needs --near-tracking")
+        if sum(1 for v in inject_sizes if v != 0.0) != 1:
+            # Plan D8 S4c-1: a lateral and a yaw bias together leave the 1.0 m correction box.
+            parser.error("--near-inject needs exactly one of --near-inject-lateral-m and --near-inject-yaw-rad")
+    elif any(v != 0.0 for v in inject_sizes):
+        parser.error("--near-inject-lateral-m / --near-inject-yaw-rad need --near-inject")
+    if args.near_drop_frames_from_m is not None:
+        if not args.near_tracking:
+            parser.error("--near-drop-frames-from-m needs --near-tracking")
+        if not (math.isfinite(args.near_drop_frames_from_m) and -0.3 < args.near_drop_frames_from_m <= 0.5):
+            # At most 0.5 m: the 0.6 m correction point has closed, so no correction is open.
+            parser.error("--near-drop-frames-from-m must be in (-0.3, 0.5] m")
     from insertion_geometry import (
         assert_pallet_urdf_matches_geometry,
         assert_pallet_urdf_matches_named_boxes,
@@ -1755,6 +1801,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "drive_terms_sha256": hashlib.sha256(args.near_drive_terms.read_bytes()).hexdigest(),
             "stop_at": args.near_tracking_stop_at,
         }
+        if args.near_inject is not None or args.near_drop_frames_from_m is not None:
+            # Plan D8 S4c-1: what was injected, capture by capture (the judgement's (ix) reads it).
+            state["near_tracking"]["injection"] = {
+                "kind": args.near_inject,
+                "lateral_m": args.near_inject_lateral_m,
+                "yaw_rad": args.near_inject_yaw_rad,
+                "drop_from_m": args.near_drop_frames_from_m,
+                "captures": [],
+            }
         near = {
             "bounds": NearFieldBounds.from_dict(near_bounds_data),
             "bounds_data": near_bounds_data,
@@ -1889,6 +1944,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             # Plan D8 S4b: the pocket check copies the estimate, axis and certified volume when
             # it is built and would not follow a correction's paths -- until D5 v11.
             problems_.append("pocket_check: D5 with near tracking waits for D5 v11")
+        if args.near_inject is not None and obstacle is not None and obstacle["layer"].known_enabled:
+            # Plan D8 S4c-1: the known pallet's r_fix (10 mm) does not cover a 20-60 mm bias.
+            problems_.append("near_inject: the known pallet would carry the injected bias")
         try:
             near["terms"] = near_tracking.DriveTerms.from_dict(
                 json.loads(args.near_drive_terms.read_text()),
@@ -1967,6 +2025,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         state["near_tracking"]["tracker_config_problems"] = tracker_problems
         require(not tracker_problems, "near_field_contract:" + "; ".join(tracker_problems))
         episode = hold_count()
+        near["injection_closed"] = True  # Plan D8 S4c-1: no capture after this one is biased
         near["tracker"] = NearFieldTracker(
             config, near["bounds"], start["observation"], start["pose"], start["aligned_s"],
             front_fn=front_fn, roof_fn=roof_fn, frame_version=episode,
@@ -2010,6 +2069,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         tracker_ = near["tracker"]
         now_s = world.current_time - initial_time
         row = {"read_s": now_s}
+        if near.get("drop_latch") is not None:
+            # Plan D8 S4c-1: an injected loss -- the frame is recorded (the recorder kept the raw
+            # read) but never reaches the tracker, and tau's reference stays the last received.
+            row.update(skipped="dropped", latch_s=near["drop_latch"]["time_s"])
+            near["frames"].append(row)
+            return "dropped"
         k_ = pocket["capture"].intrinsics
         try:
             depth_, _ = adapter.normalize_depth(np.asarray(raw).reshape(k_.height, k_.width))
@@ -2123,6 +2188,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         face = near_tracking.carried_face(latest_.held, widths_, base_now)
         tip_x, rear_x = near["fork_tip_x_m"], -abs(args.rear_axle_offset_m)
         face_distance = min(face[s_][w_][0] for s_ in ("left", "right") for w_ in ("outer", "inner")) - tip_x
+        if (args.near_drop_frames_from_m is not None and near.get("drop_latch") is None
+                and face_distance <= args.near_drop_frames_from_m):
+            # Plan D8 S4c-1: from here no frame reaches the tracker (feed_near_frame).
+            near["drop_latch"] = {"time_s": now_s, "face_distance_m": face_distance, "latest_stamp_s": latest_.stamp_s}
+            near["events"].append({"time_s": now_s, "event": "drop_latch", **near["drop_latch"]})
         wb_, ht_ = args.drive_geometry.wheelbase_m, args.drive_geometry.track_m / 2
         # Each front wheel's curvature, measured and as the held steering command (a stop
         # keeps steering_command -- Codex S4a-2 code review P2), and this tick's request.
@@ -2195,11 +2265,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         # Plan D8 S4b: the correction points (approach, before entry), a waiting reason while
         # open; decided standing on an observation whose pixel time is after t_s.
         corr_prev = near["correction"]
-        corr, corr_act = near_tracking.correction_update(
-            corr_prev, now_s, phase=phase_, entered=near_tracking.entered(face, tip_x),
-            face_distance_m=face_distance, standing=standing, pixel_s=pixel_s, source=latest_.source,
-            frame_version=latest_.frame_version, episode=episode,
-        )
+        if near["stop_state"].terminal:
+            # A latched terminal stop only stands and records until it ends the run: no correction
+            # is decided, recorded or installed meanwhile (Codex S4c-1 review P2 -- the terminal
+            # hold would otherwise re-decide a refused correction).
+            corr, corr_act = corr_prev, {"wait": None, "decide": False, "refuse": None, "event": None}
+        else:
+            corr, corr_act = near_tracking.correction_update(
+                corr_prev, now_s, phase=phase_, entered=near_tracking.entered(face, tip_x),
+                face_distance_m=face_distance, standing=standing, pixel_s=pixel_s, source=latest_.source,
+                frame_version=latest_.frame_version, episode=episode,
+            )
         if corr_act["event"] == "trigger":
             near["corrections"].append({"point_m": corr.point_m, "trigger_s": now_s, "face_distance_m": face_distance,
                                         "standing_s": [], "moved_s": [], "accepted": None})
@@ -2230,7 +2306,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         near["correction"] = corr
         if corr_act["wait"] is not None:
             waits.append(corr_act["wait"])
-        if phase_ == "approach" and arrived_ and near_tracking.corrections_missed(corr):
+        if phase_ == "approach" and arrived_ and near_tracking.corrections_missed(corr) and not near["stop_state"].terminal:
             terminal = terminal or "correction_missed"
         previous = near["stop_state"]
         near["stop_state"], action = near_tracking.decide_stop(
@@ -2270,9 +2346,19 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "kappa_b": kappa_b, "sweep_m": sweep if math.isfinite(sweep) else None,
             "protect": near["protect"] is not None, **({"protection": protection} if protection else {}),
             "path_revision": revision_used,
+            "face_distance_m": face_distance,
             "correction": None if corr.point_m is None else {
                 "point_m": corr.point_m, "standing_s": corr.standing_s, "installed_s": corr.installed_s},
         })
+        if action["end"]:
+            # A terminal stop ends the run only after the stop detector has seen the truck stand
+            # for TERMINAL_HOLD_S: its 12 mm/s mean stands while the truck still creeps, and the
+            # record must show the standstill (judgement (vii); S4c-1 mismatch smoke).
+            since_ = near.setdefault("terminal_standing_since", now_s)
+            if now_s - since_ < near_tracking.TERMINAL_HOLD_S - 1e-9:
+                return action["hold"], action["released"], action["arrive"]
+        else:
+            near.pop("terminal_standing_since", None)
         if action["end"]:
             near["events"].append({"time_s": now_s, "event": "terminal_standing", "reason": current.reason})
             state["near_tracking"]["outcome"] = f"near_field_{current.reason}"
@@ -2670,6 +2756,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         plans_, record_ = redraw_docking(
             grid_world(scenario), PlanningPose(*(float(v) for v in rear_now)), target_, planner_config,
             geometry=geometry, pickup_bounds=pickup_bounds, dry_runs=(dry(acceptance_), dry(driven_)),
+            # The heading box covers the follower's own S-curve after the 1.0 m correction (up to
+            # 110.3 mrad from a start inside the box); the dry runs' end and swept checks guard
+            # it (plan D8 S4b revision, S4c-1 smoke). The near capture keeps 0.05 rad.
+            max_yaw_rad=near_tracking.CORRECTION_MAX_YAW_RAD,
             **correction_grid(near["first_target"], target_, rear_now),
         )
         previous_ = pocket["planning_pickup"]
@@ -5558,6 +5648,16 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                     world.current_time - initial_time
                                 )
                             state["perception"] = attempt.copy()
+                            # Plan D8 S4c-1: a capture before the first tracker is biased once --
+                            # correction: its target only; mismatch: its observation (so its target
+                            # and the tracker's start observation too).
+                            inject_ = (near is not None and args.near_inject is not None
+                                       and not near.get("injection_closed"))
+                            raw_observation = observation
+                            if inject_ and args.near_inject == "mismatch":
+                                observation = near_tracking.biased_observation(
+                                    observation, geometry.pallet_depth_m,
+                                    args.near_inject_lateral_m, args.near_inject_yaw_rad)
                             base_xy = adapter.estimate_pallet_center_m(
                                 observation, geometry.pallet_depth_m
                             )
@@ -5567,6 +5667,23 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 (base[0], base[1]),
                                 yaw,
                             )
+                            if inject_:
+                                raw_target = adapter.estimate_world_pallet_site(
+                                    adapter.estimate_pallet_center_m(raw_observation, geometry.pallet_depth_m),
+                                    raw_observation.insertion_yaw_rad, (base[0], base[1]), yaw)
+                                if args.near_inject == "correction":
+                                    target_pickup = near_tracking.biased_site(
+                                        target_pickup, args.near_inject_lateral_m, args.near_inject_yaw_rad)
+                                state["near_tracking"]["injection"]["captures"].append({
+                                    "attempt": attempt_number,
+                                    "phase": "near" if state.get("near_capture", {}).get("status") == "pending" else "far",
+                                    "time_s": t,
+                                    "capture_base": [float(base[0]), float(base[1]), float(yaw)],
+                                    "raw_target": [raw_target.x_m, raw_target.y_m, raw_target.yaw_rad],
+                                    "target": [target_pickup.x_m, target_pickup.y_m, target_pickup.yaw_rad],
+                                    "raw_observation": asdict(raw_observation),
+                                    "observation": asdict(observation),
+                                })
                             if near is not None and state.get("near_capture", {}).get("status") == "pending":
                                 # Plan D8 S4a ①: the near capture's observation, the control
                                 # base it was placed with (this map estimate) and its time.
@@ -5668,6 +5785,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 )
                             )
                             pocket["planning_pickup"] = planning_pickup
+                            if inject_:
+                                state["near_tracking"]["injection"]["captures"][-1]["planned_target"] = [
+                                    planning_pickup.x_m, planning_pickup.y_m, planning_pickup.yaw_rad]
                             if obstacle is not None and obstacle["layer"].known_enabled:
                                 # Each detection is a new relative fix: the age restarts
                                 # even for the same value (Codex stage-1 P2-8).
@@ -6916,11 +7036,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     frames_skipped={
                         k_: sum(1 for f in near["frames"] if f.get("skipped") == k_)
                         for k_ in ("no_time", "future", "not_new", "uncovered", "bad_depth")
+                        + (("dropped",) if args.near_drop_frames_from_m is not None else ())
                     },
                     accepted=sum(1 for f in fed_ if f.get("accepted")),
                     rejected=sum(1 for f in fed_ if f.get("rejected")),
                     handoff_s=next((f["read_s"] for f in fed_ if f.get("mode") == "roof"), None),
                     armed_s=next((e["time_s"] for e in near["events"] if e["event"] == "armed"), None),
+                    **({"drop_latch": near.get("drop_latch")} if args.near_drop_frames_from_m is not None else {}),
                     stops=[e for e in near["events"]
                            if e["event"] in ("stop", "release", "terminal_standing", "insert_end_arrival")],
                     protect=near.get("protect"),

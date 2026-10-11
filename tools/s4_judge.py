@@ -94,6 +94,10 @@ STAND_YAW_RATE_RPS = 0.001  # ... and its mean yaw rate
 STAND_WINDOW_S = 0.1
 
 
+class _SkipEpisode(Exception):
+    """A mismatch run: the anchor episode's (i)-(v) and (viii) are not applied."""
+
+
 class Unverified(Exception):
     """The records cannot carry the judgement."""
 
@@ -646,6 +650,43 @@ def insert_end_index(truth: dict, result: dict) -> int | None:
             "the insertion end does not match the last recorded insert tick"
         )
     return k
+
+
+WARMUP_STAND_M = (
+    0.001  # (ix): the truth travel allowed before a mismatch run's first row
+)
+WARMUP_STAND_RAD = 0.001
+
+
+def mismatch_section(truth: dict, near: dict, rear_offset_m: float) -> tuple[int, int]:
+    """Plan D8 S4c-1: a mismatch run's section -- from the first near-field tick (the anchor
+    episode ends before any armed section) to the last approach or insert tick. The ticks of
+    the approach before that first row (the SLAM hold's warm-up) must not have driven: a
+    record missing its start is unverified (Codex S4c-1 review P2)."""
+    ticks = near.get("ticks") or []
+    if not ticks:
+        raise Unverified("no near-field tick record")
+    t = np.asarray(truth["stamp_s"], dtype=float)
+    first_row = tick_index(t, ticks[0]["t"], "the first near-field tick")
+    checked = checked_ticks(truth)
+    first_approach = int(checked[0])
+    applied = np.asarray(truth["applied_speed_mps"], dtype=float)
+    if first_row < first_approach or np.any(
+        applied[first_approach : first_row + 1] != 0.0
+    ):
+        raise Unverified("the near-field record does not start with the approach")
+    # A zero command is not a standstill: the truck must truly stand over that warm-up, so a
+    # record cut at its front cannot hide a stop's travel (Codex S4c-1 2nd review P2).
+    base = np.asarray(truth["base_pose"], dtype=float)
+    rear = rear_axle(base, rear_offset_m)[first_approach : first_row + 1]
+    path = float(np.sum(np.hypot(*np.diff(rear, axis=0).T))) if len(rear) > 1 else 0.0
+    yaws = np.unwrap([yaw_of(base[j]) for j in range(first_approach, first_row + 1)])
+    turn = float(np.sum(np.abs(np.diff(yaws)))) if len(yaws) > 1 else 0.0
+    if path > WARMUP_STAND_M or turn > WARMUP_STAND_RAD:
+        raise Unverified(
+            f"the truck moved {1e3 * path:.2f} mm before the first near-field tick"
+        )
+    return first_row, int(checked[-1])
 
 
 def near_section(truth: dict, near: dict) -> tuple[int, int]:
@@ -1387,6 +1428,513 @@ def check_viii(
     }
 
 
+IX_RULES = "v1"  # plan D8 S4c-1 (ix), fixed before the first S4c run
+COMPARE_REASONS = ("left_lateral", "right_lateral", "left_along", "right_along", "yaw")
+
+
+def _site_from_observation(obs: dict, base: tuple, depth_m: float) -> np.ndarray:
+    """estimate_pallet_center_m then estimate_world_pallet_site, from a recorded observation."""
+    psi = float(obs["insertion_yaw_rad"])
+    left, right = (
+        np.asarray(obs[k]["center_m"], dtype=float) for k in ("left", "right")
+    )
+    centre = (left[:2] + right[:2]) / 2 + depth_m / 2 * np.array(
+        [math.cos(psi), math.sin(psi)]
+    )
+    c, s_ = math.cos(base[2]), math.sin(base[2])
+    yaw = math.atan2(math.sin(base[2] + psi), math.cos(base[2] + psi))
+    return np.array(
+        [
+            base[0] + c * centre[0] - s_ * centre[1],
+            base[1] + s_ * centre[0] + c * centre[1],
+            math.pi if yaw == -math.pi else yaw,
+        ]
+    )
+
+
+def _biased_site(site, lateral: float, yaw: float) -> np.ndarray:
+    c, s_ = math.cos(site[2]), math.sin(site[2])
+    y = math.atan2(math.sin(site[2] + yaw), math.cos(site[2] + yaw))
+    return np.array(
+        [site[0] - lateral * s_, site[1] + lateral * c, math.pi if y == -math.pi else y]
+    )
+
+
+def _same(a, b, tol=1e-9) -> bool:
+    """Equal within tol; a site's yaw difference is wrapped."""
+    a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    if a.shape != b.shape:
+        return False
+    d = a - b
+    if d.shape == (3,):
+        d = d.copy()
+        d[2] = math.atan2(math.sin(d[2]), math.cos(d[2]))
+    return bool(np.all(np.abs(d) <= tol))
+
+
+OBSERVATION_FIELDS = (
+    "stamp_ns",
+    "clock_domain",
+    "frame_id",
+    "source_provenance",
+    "status",
+    "position_sigma_m",
+    "yaw_sigma_rad",
+    "reason",
+)
+
+
+def _same_observation(a: dict, b: dict, numbers_b=None, tol=1e-9) -> bool:
+    """Two recorded observations alike: valid, every non-geometric field equal, the
+    geometry (or numbers_b in its place) within tol."""
+    if a.get("status") != "valid" or any(
+        a.get(k) != b.get(k) for k in OBSERVATION_FIELDS
+    ):
+        return False
+    want = _observation_numbers(b) if numbers_b is None else numbers_b
+    return _same(_observation_numbers(a), want, tol)
+
+
+def _observation_numbers(obs: dict) -> np.ndarray:
+    return np.array(
+        [
+            *obs["left"]["center_m"],
+            obs["left"]["width_m"],
+            obs["left"]["height_m"],
+            *obs["right"]["center_m"],
+            obs["right"]["width_m"],
+            obs["right"]["height_m"],
+            obs["insertion_yaw_rad"],
+        ],
+        dtype=float,
+    )
+
+
+def check_ix(result: dict, near: dict, truth: dict) -> dict:
+    """(ix), plan D8 S4c-1: the injection the run asked for went in exactly (common
+    precondition), then by type -- correction: the near capture accepted, a correction
+    accepted and the bias taken off by the last revision (|lateral| or |yaw| difference from
+    the raw near-capture target within half the bias); mismatch: three consecutive
+    association rejections before entry and the mismatch terminal; lost: the drop latched
+    on the first tick within D, no frame fed after it, lost_wait before the terminal lost.
+    Returns status pass / fail / not_run with the failures."""
+    sys.path.insert(0, str(ROOT / "sim" / "isaac"))
+    import near_tracking as NT
+
+    from forklift_core.perception.pocket_observation import Pocket, PocketObservation
+
+    nt = result.get("near_tracking") or {}
+    inj = nt.get("injection")
+    args = result.get("arguments") or {}
+    if inj is None:
+        if (
+            args.get("near_inject") is not None
+            or args.get("near_drop_frames_from_m") is not None
+        ):
+            raise Unverified("the run asked for an injection it did not record")
+        return {"applicable": False}
+    for key in (
+        "near_inject",
+        "near_inject_lateral_m",
+        "near_inject_yaw_rad",
+        "near_drop_frames_from_m",
+    ):
+        if key not in args:
+            raise Unverified(f"the run's arguments lack {key}")
+    try:
+        kind, drop = inj["kind"], inj["drop_from_m"]
+        lateral, yaw = (
+            float(require_shape(f"injection {k}", inj[k], ()))
+            for k in ("lateral_m", "yaw_rad")
+        )
+    except (KeyError, TypeError) as exc:
+        raise Unverified(f"the injection record lacks {exc!r}") from exc
+    failures = []
+    report = {"kind": kind, "lateral_m": lateral, "yaw_rad": yaw, "drop_from_m": drop}
+    t = np.asarray(truth["stamp_s"], dtype=float)
+    events = near.get("events") or []
+    outcome = nt.get("outcome")
+
+    def done(status):
+        return {
+            "applicable": True,
+            "rules": IX_RULES,
+            "status": status,
+            "failures": failures,
+            **report,
+        }
+
+    asked = (
+        args["near_inject"],
+        float(args["near_inject_lateral_m"]),
+        float(args["near_inject_yaw_rad"]),
+        args["near_drop_frames_from_m"],
+    )
+    if asked != (kind, lateral, yaw, drop):
+        failures.append("the run's arguments are not the recorded injection")
+    if kind is not None:
+        try:
+            depth = float(result["geometry"]["pallet_depth_m"])
+            captures = inj["captures"]
+            phases = [c["phase"] for c in captures]
+            if phases.count("near") != 1 or phases[-1] != "near" or "far" not in phases:
+                failures.append(
+                    f"captures {phases}: not far captures then one near capture"
+                )
+            for c in captures:
+                base = tuple(require_shape("capture base", c["capture_base"], (3,)))
+                raw_target = _site_from_observation(c["raw_observation"], base, depth)
+                if not _same(raw_target, c["raw_target"]):
+                    failures.append(
+                        f"capture {c['attempt']}: the raw target is not its raw observation's"
+                    )
+                if not _same(c["target"], _biased_site(raw_target, lateral, yaw)):
+                    failures.append(
+                        f"capture {c['attempt']}: the target is not the raw target biased by L, Y"
+                    )
+                if not _same(c.get("planned_target", [math.nan] * 3), c["target"]):
+                    failures.append(
+                        f"capture {c['attempt']}: the planner did not use the injected target"
+                    )
+                ro = c["raw_observation"]
+                if kind == "correction":
+                    want = _observation_numbers(ro)
+                else:
+                    pockets = [
+                        Pocket(
+                            tuple(ro[k]["center_m"]),
+                            ro[k]["width_m"],
+                            ro[k]["height_m"],
+                        )
+                        for k in ("left", "right")
+                    ]
+                    raw = PocketObservation(
+                        ro["stamp_ns"],
+                        ro["clock_domain"],
+                        ro["frame_id"],
+                        ro["source_provenance"],
+                        ro["status"],
+                        *pockets,
+                        ro["insertion_yaw_rad"],
+                        ro["position_sigma_m"],
+                        ro["yaw_sigma_rad"],
+                        ro["reason"],
+                    )
+                    b = NT.biased_observation(raw, depth, lateral, yaw)
+                    want = np.array(
+                        [
+                            *b.left.center_m,
+                            b.left.width_m,
+                            b.left.height_m,
+                            *b.right.center_m,
+                            b.right.width_m,
+                            b.right.height_m,
+                            b.insertion_yaw_rad,
+                        ]
+                    )
+                    if not _same(
+                        _site_from_observation(c["observation"], base, depth),
+                        c["target"],
+                    ):
+                        failures.append(
+                            f"capture {c['attempt']}: the target is not its biased observation's"
+                        )
+                if not _same_observation(c["observation"], ro, want):
+                    failures.append(
+                        f"capture {c['attempt']}: the observation is not the {kind} injection's"
+                    )
+            start_obs = nt["start"]["observation"]
+            if not _same_observation(
+                start_obs,
+                captures[-1]["observation"],
+                tol=1e-12,
+            ):
+                failures.append(
+                    "the tracker did not start from the near capture's observation"
+                )
+        except (KeyError, TypeError, ValueError, IndexError) as exc:
+            raise Unverified(f"the injection record is incomplete ({exc!r})") from exc
+    if kind == "correction":
+        if (result.get("near_capture") or {}).get("status") != "done":
+            return done(
+                "not_run"
+            )  # the first acceptance refused: an injection design error
+        accepted = [c for c in near.get("corrections") or [] if c.get("accepted")]
+        revisions = near.get("path_revisions") or []
+        if not accepted or not revisions:
+            failures.append("no correction accepted")
+        else:
+            # The bias was taken off: the first correction's target is the one its own front
+            # observation gives (the tracker sees the raw frames), not the biased plan. A
+            # threshold on the remaining difference from the raw near target cannot judge it:
+            # the near capture's own lateral error reached 14.9 mm without a bias (S4b dev9
+            # seed 4), past half a 20 mm bias.
+            first = accepted[0]
+            try:
+                stamp = float(
+                    require_shape(
+                        "the correction's observation stamp",
+                        first["observation"]["stamp_s"],
+                        (),
+                    )
+                )
+                decided = float(
+                    require_shape(
+                        "the correction's decision time", first["decision_s"], ()
+                    )
+                )
+                number = require_count(
+                    "the first correction's revision", first["revision"]
+                )
+                revision = revisions[number - 1]
+            except (KeyError, TypeError, ValueError, IndexError) as exc:
+                raise Unverified(
+                    f"the first correction's record is incomplete ({exc!r})"
+                ) from exc
+            # The observation the decision had: the last accepted frame read by the decision
+            # tick -- a later frame with the same stamp must not stand in (Codex S4c-1 review).
+            frames_ = near.get("frames") or []
+            if any(f.get("accepted") and "skipped" in f for f in frames_):
+                raise Unverified("a frame is both accepted and skipped")
+            before = [
+                f
+                for f in frames_
+                if f.get("accepted")
+                and "skipped" not in f
+                and float(f["read_s"]) <= decided + TIME_TOL_S
+            ]
+            if (
+                not before
+                or before[-1].get("latest_source") != "front"
+                or before[-1].get("latest_stamp_s") != stamp
+            ):
+                raise Unverified(
+                    "the first correction's observation is not the latest accepted front frame at its decision"
+                )
+            try:
+                held_ = before[-1]["latest_held"]
+                held = {
+                    "left": require_shape("held left pocket", held_["left"], (3,)),
+                    "right": require_shape("held right pocket", held_["right"], (3,)),
+                    "yaw": float(require_shape("held yaw", held_["yaw"], ())),
+                }
+            except (KeyError, TypeError) as exc:
+                raise Unverified(
+                    f"the first correction's held pockets are incomplete ({exc!r})"
+                ) from exc
+            depth = float(result["geometry"]["pallet_depth_m"])
+            mid = (
+                np.asarray(held["left"][:2], dtype=float)
+                + np.asarray(held["right"][:2], dtype=float)
+            ) / 2
+            psi = float(held["yaw"])
+            observed = np.array(
+                [*(mid + depth / 2 * np.array([math.cos(psi), math.sin(psi)])), psi]
+            )
+            if not _same(
+                require_shape("the first revision's target", revision["target"], (3,)),
+                observed,
+            ):
+                failures.append(
+                    "the first correction's target is not its observation's (the bias was carried on)"
+                )
+            planned = require_shape(
+                "the near capture's planned target",
+                inj["captures"][-1]["planned_target"],
+                (3,),
+            )
+            raw = require_shape(
+                "the raw near target", inj["captures"][-1]["raw_target"], (3,)
+            )
+            final = require_shape(
+                "the last revision target", revisions[-1]["target"], (3,)
+            )
+            n = np.array([-math.sin(raw[2]), math.cos(raw[2])])
+
+            def wrap(a):
+                return math.atan2(math.sin(a), math.cos(a))
+
+            report.update(
+                first_change_lateral_m=float(
+                    (np.asarray(revision["target"][:2]) - planned[:2]) @ n
+                ),
+                first_change_yaw_rad=wrap(float(revision["target"][2]) - planned[2]),
+                left_lateral_m=float((final[:2] - raw[:2]) @ n),
+                left_yaw_rad=wrap(final[2] - raw[2]),
+            )
+    elif kind == "mismatch":
+        frames = [f for f in near.get("frames") or [] if "skipped" not in f]
+        k = next((i for i, f in enumerate(frames) if f.get("mismatch")), None)
+        if k is None or k < 2:
+            failures.append(
+                "no mismatch after three rejected frames (the expected branch was not taken)"
+            )
+        else:
+            three = frames[k - 2 : k + 1]
+            counts = [f.get("consecutive_rejects") for f in three]
+            reasons = [str(f.get("reason") or "") for f in three]
+            report.update(
+                rejections=[
+                    {"read_s": f["read_s"], "reason": r}
+                    for f, r in zip(three, reasons, strict=True)
+                ]
+            )
+            if counts != [1, 2, 3] or not all(f.get("rejected") for f in three):
+                failures.append(
+                    f"the mismatch did not follow three consecutive rejections ({counts})"
+                )
+            if not all(r.removeprefix("anchor_") in COMPARE_REASONS for r in reasons):
+                failures.append(f"rejections {reasons} are not association comparisons")
+            marks = [e for e in events if e.get("event") == "mismatch"]
+            stamp3 = float(
+                require_shape(
+                    "the third rejected frame's stamp", three[-1].get("stamp_s"), ()
+                )
+            )
+            if not marks or not _same(
+                require_shape(
+                    "the mismatch event's stamp", marks[0].get("stamp_s"), ()
+                ),
+                stamp3,
+                0.0,
+            ):
+                failures.append("no mismatch event on the third rejected frame")
+            before = [
+                r
+                for r in near.get("ticks") or []
+                if float(r["t"]) <= float(three[-1]["read_s"]) + TIME_TOL_S
+            ]
+            if not before or not float(before[-1].get("face_distance_m", -1.0)) > 0.0:
+                failures.append(
+                    "the mismatch was not before the fork tips reached the face"
+                )
+        terminal = [e for e in events if e.get("event") == "terminal_standing"]
+        if (
+            outcome != "near_field_mismatch"
+            or not terminal
+            or terminal[-1].get("reason") != "mismatch"
+        ):
+            failures.append(f"the run ended {outcome}, not standing on the mismatch")
+        else:
+            report.update(terminal_s=float(terminal[-1]["time_s"]))
+    if drop is not None:
+        latch = next((e for e in events if e.get("event") == "drop_latch"), None)
+        if latch is None:
+            return done("not_run")  # ended before the injection point
+        rows = dict(
+            sorted(
+                (tick_index(t, r.get("t"), "a near-field tick record"), r)
+                for r in near.get("ticks") or []
+            )
+        )
+        i_latch = tick_index(t, latch["time_s"], "the drop latch")
+        try:
+            d_latch = float(
+                require_shape(
+                    "the latch distance", rows[i_latch]["face_distance_m"], ()
+                )
+            )
+            d_before = float(
+                require_shape(
+                    "the distance before the latch",
+                    rows[i_latch - 1]["face_distance_m"],
+                    (),
+                )
+            )
+        except KeyError as exc:
+            raise Unverified(
+                "the latch tick or the one before has no tick record"
+            ) from exc
+        report.update(latch_s=float(latch["time_s"]), latch_distance_m=d_latch)
+        earlier = [
+            float(r.get("face_distance_m", math.nan))
+            for i, r in rows.items()
+            if i < i_latch
+        ]
+        if not (
+            d_latch <= drop + 1e-12
+            and d_before > drop
+            and all(d > drop for d in earlier)
+        ):
+            failures.append(
+                f"latched at {d_latch:.4f} m after {d_before:.4f} m: not the first tick within {drop}"
+            )
+        after = [
+            f
+            for f in near.get("frames") or []
+            # A frame read at the latch's own time was fed before that tick latched (frames
+            # are read after the step, the next tick decides) -- only later reads count.
+            if float(f["read_s"]) > float(latch["time_s"]) + TIME_TOL_S
+        ]
+        fed = [f for f in after if f.get("skipped") != "dropped"]
+        report.update(dropped=len(after) - len(fed))
+        if fed or not after:
+            failures.append(
+                f"{len(fed)} frames reached the tracker after the latch, {len(after) - len(fed)} dropped"
+            )
+        terminal = [e for e in events if e.get("event") == "terminal_standing"]
+        end_t = float(terminal[-1]["time_s"]) if terminal else math.inf
+        waited = [
+            r
+            for i, r in rows.items()
+            if i >= i_latch
+            and float(r["t"]) < end_t - TIME_TOL_S
+            and "lost_wait" in (r.get("waits") or [])
+        ]
+        if not waited:
+            failures.append("no lost_wait between the latch and the terminal")
+        if (
+            outcome != "near_field_lost"
+            or not terminal
+            or terminal[-1].get("reason") != "lost"
+        ):
+            failures.append(f"the run ended {outcome}, not standing on the loss")
+    return done("fail" if failures else "pass")
+
+
+def s4c_outcome(
+    verdict: str,
+    checks: dict,
+    result: dict,
+    vi: dict | None,
+    contacts,
+    vii: dict | None = None,
+) -> dict | None:
+    """Plan D8 S4c-1: the run's result for its group -- correction: (i)-(ix) and the mission
+    complete; mismatch: (vi) contact, (vii) and (ix) on the anchor episode; lost: (i)-(v),
+    (vii), (viii), (ix) and (vi) contact; every group also needs no forbidden pocket
+    contact. A run that never reached its injection point is not_run."""
+    ix = checks.get("ix")
+    if not ix or not ix.get("applicable"):
+        return None
+    group = ix["kind"] or "lost"
+    if ix["status"] == "not_run":
+        return {"group": group, "status": "not_run"}
+    no_contact = contacts == [] and bool(vi) and vi["contact"]["passed"]
+    ok = verdict == "pass" and ix["status"] == "pass" and no_contact
+    if ix["kind"] != "mismatch":
+        # Correction and lost runs need both correction points judged (Codex S4c-1 review P2).
+        ok = ok and bool((checks.get("viii") or {}).get("passed"))
+    else:
+        # The terminal must lie in a judged near-field stop that passed and ended standing --
+        # an empty stop list passes (vii) vacuously (Codex S4c-1 2nd review P2).
+        end = ix.get("terminal_s")
+        ok = (
+            ok
+            and end is not None
+            and any(
+                str(st.get("source", "")).startswith("near_stop")
+                and st["command_t"] <= end + TIME_TOL_S <= st["end_t"] + 2 * TIME_TOL_S
+                and st.get("standing_at_end")
+                and st.get("passed")
+                for st in (vii or {}).get("stops") or []
+            )
+        )
+    if ix["kind"] == "correction":
+        ok = ok and result.get("success") is True and result.get("phase") == "complete"
+    return {"group": group, "status": "pass" if ok else "fail"}
+
+
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -1504,15 +2052,26 @@ def judge_run(directory: Path, data_root: Path = ROOT) -> dict:
         try:
             end = insert_end_index(truth, result)
             vi = check_vi(truth, geometry, pallet_geo.overall_depth_m, end)
+            early = (nt.get("injection") or {}).get("kind") == "mismatch"
+            if early:
+                # Plan D8 S4c-1 (ix): a mismatch run's biased anchor episode -- its stops from
+                # the first real near-field tick, before any armed section; (i)-(v) and (viii)
+                # do not apply to an anchor that is wrong by design.
+                section_ = mismatch_section(
+                    truth, near, float(args["rear_axle_offset_m"])
+                )
+            else:
+                section_ = near_section(truth, near)
             vii = check_vii(
                 truth,
                 near,
                 json.loads(terms_bytes),
-                near_section(truth, near),
+                section_,
                 float(args["rear_axle_offset_m"]),
                 corners,
                 blades,
             )
+            checks["ix"] = check_ix(result, near, truth)
             # (i)-(v): the measured bounds and the calibration they came from, by content.
             bounds_bytes = (
                 ROOT / snapshot_relative(str(nt.get("bounds")))
@@ -1535,6 +2094,10 @@ def judge_run(directory: Path, data_root: Path = ROOT) -> dict:
                 bounds_sha256=sha256_bytes(bounds_bytes),
                 calibration={"path": str(cal_path), "sha256": cal_ref["sha256"]},
             )
+            if early:
+                raise _SkipEpisode  # after the bounds' provenance (Codex S4c-1 review P2)
+            if nt.get("injection") is not None and "corrections" not in near:
+                raise Unverified("an S4c run without its correction records")
             run = CAL.Run.load(directory)
             section = near_section(truth, near)
             states = accepted_states(near, nt["start"], bounds)
@@ -1573,15 +2136,22 @@ def judge_run(directory: Path, data_root: Path = ROOT) -> dict:
                     bounds,
                     rear_offset,
                 )
+        except _SkipEpisode:
+            pass
         except Unverified as exc:
             problems.append(str(exc))
     if run_files_digest(directory) != before:  # judged on the files the digest names
         problems.append("the run's files changed during the judgement")
+    contacts = result.get("forbidden_pocket_contacts")
     passed = (
         not problems
         and vi["passed"]
         and vii["passed"]
-        and all(c["passed"] for c in checks.values())
+        and all(
+            c.get("passed", c.get("status") == "pass")
+            for c in checks.values()
+            if c.get("applicable", True)
+        )
     )
     verdict = "unverified" if problems else ("pass" if passed else "fail")
     return {
@@ -1607,6 +2177,9 @@ def judge_run(directory: Path, data_root: Path = ROOT) -> dict:
             and result.get("success") is True
             and result.get("phase") == "complete"
         ),
+        "ix": checks.get("ix") or {"applicable": False},
+        "forbidden_pocket_contacts": contacts,
+        "s4c": s4c_outcome(verdict, checks, result, vi, contacts, vii),
         "inputs_sha256": {name: sha256_bytes(data_) for name, data_ in raw.items()},
         "run_files_digest": before,
         **provenance_extra,
@@ -1655,6 +2228,8 @@ def main(argv=None) -> int:
                         k: (r[k] or {}).get("passed")
                         for k in ("i", "ii", "iii", "iv", "v", "viii")
                     },
+                    "ix": (r.get("ix") or {}).get("status"),
+                    "s4c": r.get("s4c"),
                 },
                 default=json_value,
             )

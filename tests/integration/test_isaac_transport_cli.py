@@ -567,6 +567,11 @@ def test_s4_near_tracking_options_validate_before_startup() -> None:
     for flags, expected in (
         (["--near-tracking"], "--near-tracking needs --slam-feedback"),
         (["--near-tracking-stop-at", "insert"], "--near-tracking-stop-at needs --near-tracking"),
+        # Plan D8 S4c-1: the injections need the tracker and one size.
+        (["--near-inject", "correction", "--near-inject-lateral-m", "0.02"], "--near-inject needs --near-tracking"),
+        (["--near-inject-yaw-rad", "0.015"], "need --near-inject"),
+        (["--near-inject-lateral-m", "nan"], "must be finite"),
+        (["--near-drop-frames-from-m", "0.3"], "--near-drop-frames-from-m needs --near-tracking"),
     ):
         result = subprocess.run(
             [sys.executable, str(SCRIPT), "--base-scene", "unused.usda", "--pallet-urdf", "unused.urdf",
@@ -631,6 +636,12 @@ def test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival() -> 
     tick_fn = functions["near_tick"]
     assert "near_tracking.decide_stop(" in tick_fn and "if action['end']:" in tick_fn
     assert "standing = bool(slam['stop_now'])" in tick_fn
+    # S4c-1: a terminal end waits TERMINAL_HOLD_S standing before ending the run.
+    hold = tick_fn.index("near.setdefault('terminal_standing_since', now_s)")
+    assert hold < tick_fn.index("near_tracking.TERMINAL_HOLD_S") < tick_fn.index("'event': 'terminal_standing'")
+    assert "near.pop('terminal_standing_since', None)" in tick_fn
+    latched = tick_fn.index("if near['stop_state'].terminal:")
+    assert latched < tick_fn.index("near_tracking.correction_update(") < tick_fn.index("near_redraw(latest_, rear_now)")
     # A gap shortfall ends the run only on a fresh observation; otherwise it waits.
     tick_src = source[source.index("    def near_tick("):source.index("    def read_pocket_frame(")]
     fresh_branch = tick_src[tick_src.index("if margins_[worst_] < 0:"):tick_src.index("ghat = ")]
@@ -645,6 +656,33 @@ def test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival() -> 
     assert "steering_command" in tick_fn
     unbounded = tick_src.index('terminal = terminal or "unbounded"  # no bound: not a measured shortfall')
     assert unbounded < tick_src.index("elif face_distance - along_e <= k_tip * sweep:")
+
+
+def test_s4c1_injections_bias_only_the_captures_before_the_tracker_and_drop_before_it() -> None:
+    """Plan D8 S4c-1: a capture is biased once and only until the tracker is built (no retry
+    capture); correction biases the target after it is made, mismatch the observation before;
+    the loss latches on a near-field tick and drops a frame before anything reads it, leaving
+    tau's reference alone; the injection arguments are run-specific, the known pallet refused."""
+    import ast
+
+    source = SCRIPT.read_text()
+    tree = ast.parse(source)
+    functions = {n.name: ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    assert "near['injection_closed'] = True" in functions["build_near_tracker"]
+    inject = source.index("inject_ = (near is not None and args.near_inject is not None")
+    window = source[inject : inject + 4000]
+    assert 'not near.get("injection_closed"))' in window
+    assert window.index("near_tracking.biased_observation(") < window.index("base_xy = adapter.estimate_pallet_center_m(")
+    assert window.index("target_pickup = adapter.estimate_world_pallet_site(") < window.index("near_tracking.biased_site(")
+    feed_fn = functions["feed_near_frame"]
+    assert feed_fn.index("row.update(skipped='dropped'") < feed_fn.index("adapter.normalize_depth(")
+    assert feed_fn.index("return 'dropped'") < feed_fn.index("near['last_stamp'] = stamp")
+    tick_fn = functions["near_tick"]
+    assert "face_distance <= args.near_drop_frames_from_m" in tick_fn and "'face_distance_m': face_distance" in tick_fn
+    assert "known pallet would carry the injected bias" in functions["check_near_contract"]
+    near_tracking = (ROOT / "sim/isaac/near_tracking.py").read_text()
+    for name in ("near_inject", "near_inject_lateral_m", "near_inject_yaw_rad", "near_drop_frames_from_m"):
+        assert f'    "{name}",\n' in near_tracking[near_tracking.index("RUN_SPECIFIC_ARGUMENTS = ("):], name
 
 
 def test_s4b_correction_points_are_decided_before_the_stop_and_install_at_once() -> None:
@@ -667,6 +705,7 @@ def test_s4b_correction_points_are_decided_before_the_stop_and_install_at_once()
     assert "docking_band(occupancy_, first_target) & docking_band(occupancy_, target)" in grid_fn
     redraw_fn = functions["near_redraw"]
     assert "near['first_target']" in redraw_fn and "dry(acceptance_), dry(driven_)" in redraw_fn
+    assert "max_yaw_rad=near_tracking.CORRECTION_MAX_YAW_RAD" in redraw_fn  # S4b revision: 0.12 rad
     install_fn = functions["near_install"]
     for line in ("nonlocal phase_started", "phase_started = now_s", "pocket['planning_pickup'] = target_",
                  "obstacle['pickup_estimate'] = target_", "obstacle['layer'].refresh(", "trackers[name_] = RearAxlePathTracker(",
