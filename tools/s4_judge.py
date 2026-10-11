@@ -1,4 +1,4 @@
-"""Plan D8 S4 development judgement: the consumed-bound checks (vi) and (vii) from a run's
+"""Plan D8 S4 development judgement: the consumed-bound checks (i)-(vii) from a run's
 physics truth (no Isaac).
 
 docs/plans/2026-10-04-lidar-obstacle-map.md, 판정 변경 ③ and "S4a-2 구현 설계" ⑤. A run
@@ -25,6 +25,22 @@ stop with what the stopping model was given, and when the S4a-2 protection start
         is at most 1 mm/s and its mean yaw rate at most 1 mrad/s. The contract is the
         near-field stop's own record, else the tick record at the command, else (before
         the protection only) the contract recomputed from the drive terms.
+
+  (i)   every tick of the section (from the armed tick on): the carried estimate's true
+        wall error (across
+        the true pallet axis) at the gap watch's points -- each pocket's two walls at depths 0
+        and the carriage limit -- within b_t of that tick (its latest accepted observation's
+        bound, the odometry at its age, rho to the farthest point);
+  (ii)  every tick of the section: the control-truth relative rear-axle odometry from the
+        tick's pixel time to now within the measured table at that age;
+  (iii) every timed read 12 ticks after the previous and one tick after its stamp, and the
+        run's L (method 1 of the calibration, single-piece frames, the calibration's largest
+        dwell bias bound for every distance it covers) within the measured band;
+  (iv)  for every accepted observation that is the latest at some tick of the section, the
+        true rear-axle travel from its conservative pixel time (stamp - L_hi) to the next
+        accepted arrival (or the section's end) within 0.03 m;
+  (v)   the pallet's true pose from the near capture to the insertion end (or the last
+        approach or insert tick) within 0.01 mm and 0.01 mrad of its pose at the capture.
 
 Rule version v2 (2026-10-10, after the first results -- plan ③(vii)): a zero command
 the near-field stop did not give (its tick record shows no hold, reason or terminal) is the
@@ -641,6 +657,397 @@ def near_section(truth: dict, near: dict) -> tuple[int, int]:
     return first, last
 
 
+# (i)-(v) ---------------------------------------------------------------------------------
+INVARIANT_M = (
+    0.03  # D8e: travel from a result's conservative pixel time to the next result
+)
+PALLET_POS_M = 1e-5  # (v): the pallet's true motion against the anchor, 0.01 mm
+PALLET_ROT_RAD = 1e-5  # ... and 0.01 mrad
+PALLET_TERM_M = (
+    0.00005  # b_t's pallet term (plan D8d), as the runner's gap watch uses it
+)
+
+
+def accepted_states(near: dict, start: dict, bounds) -> list[dict]:
+    """The tracker's latest accepted observation over time: the near capture (the anchor,
+    from the tracker's start record) then every fed frame that accepted, each with the time
+    it became the latest (the frame's read time), its stamp, held pockets, widths and bound."""
+    from forklift_core.perception.near_field_tracking import held_pockets
+    from tools.d8c_replay import observation_from_dict
+
+    observation = observation_from_dict(start["observation"])
+    held = held_pockets(observation, tuple(start["pose"]))
+    states = [
+        {
+            "since_s": float(start["built_s"]),
+            "stamp_s": float(start["aligned_s"]) + bounds.align_latency_s,
+            "held": held,
+            "widths": (observation.left.width_m, observation.right.width_m),
+            "bound": dict(bounds.near_capture),
+            "source": "near_capture",
+        }
+    ]
+    for row in near.get("frames") or []:
+        if "skipped" in row or not row.get("accepted"):
+            continue
+        states.append(
+            {
+                "since_s": float(row["read_s"]),
+                "stamp_s": float(row["latest_stamp_s"]),
+                "held": row["latest_held"],
+                "widths": tuple(row["latest_widths_m"]),
+                "bound": dict(row["latest_bound"]),
+                "source": row.get("latest_source"),
+            }
+        )
+    for st in states:
+        what = f"the accepted observation ({st['source']}) at {st['since_s']}"
+        require_finite(f"{what}: times", (st["since_s"], st["stamp_s"]))
+        try:
+            held = [*st["held"]["left"], *st["held"]["right"], st["held"]["yaw"]]
+            bound = [st["bound"]["wall_m"], st["bound"]["yaw_rad"]]
+        except (KeyError, TypeError) as exc:
+            raise Unverified(f"{what}: held pockets or bound incomplete") from exc
+        require_finite(f"{what}: held pockets", held, size=7)
+        require_finite(f"{what}: bound", [*bound, *st["bound"].values()])
+        widths = require_finite(f"{what}: widths", st["widths"], size=2)
+        if np.any(widths <= 0.0):
+            raise Unverified(f"{what}: widths are not positive")
+    if any(
+        b["since_s"] < a["since_s"] for a, b in zip(states, states[1:], strict=False)
+    ):
+        raise Unverified("accepted observations out of time order")
+    return states
+
+
+def require_finite(what: str, values, size: int | None = None) -> np.ndarray:
+    """The values as a float array, or Unverified when any is missing or not finite."""
+    try:
+        arr = np.asarray(values, dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise Unverified(f"{what} is not numeric") from exc
+    if (size is not None and arr.size != size) or not np.all(np.isfinite(arr)):
+        raise Unverified(f"{what} is missing or not finite")
+    return arr
+
+
+def state_at(states: list[dict], t: float) -> dict:
+    """The latest accepted observation at time t (results are delivered before the tick)."""
+    out = None
+    for st in states:
+        if st["since_s"] <= t + TIME_TOL_S:
+            out = st
+        else:
+            break
+    if out is None:
+        raise Unverified(f"no accepted observation at {t:.4f} s")
+    return out
+
+
+def check_i(
+    run,
+    near: dict,
+    states: list[dict],
+    bounds,
+    geometry,
+    section: tuple,
+    carriage_limit_m: float,
+    rear_x_m: float,
+) -> dict:
+    """(i): every tick of the section (from the armed tick on -- the plan's "after entry"),
+    the carried estimate's true wall error at the gap watch's points (depths 0 and the
+    carriage limit) within that tick's b_t."""
+    import near_tracking as NT
+
+    from forklift_core.perception.near_field_tracking import wall_erosion_m
+    from tools import d8b_observations as OBS
+
+    t = run.truth.t
+    first, last = section
+    worst = {"ratio": 0.0}
+    checked = 0
+    for row in near.get("ticks") or []:
+        i = tick_index(t, row.get("t"), "a near-field tick record")
+        if not first <= i <= last:
+            continue
+        st = state_at(states, float(row["t"]))
+        base = require_finite("near-field tick base", row.get("base"), size=3)
+        age = float(row["t"]) - (float(st["stamp_s"]) - bounds.max_latency_s)
+        require_finite("observation age", age)
+        odometry = bounds.odometry(age)
+        if odometry is None:
+            return {
+                "ticks": checked,
+                "passed": False,
+                "reason": f"age {age:.3f} s past the odometry table",
+            }
+        face = NT.carried_face(st["held"], st["widths"], tuple(base))
+        points = [
+            (side, wall, depth, face[side][wall] + depth * face["axis"])
+            for side in ("left", "right")
+            for wall in ("outer", "inner")
+            for depth in (0.0, carriage_limit_m)
+        ]
+        require_finite("carried wall points", [p for *_, p in points])
+        rho = max(math.hypot(p[0] - rear_x_m, p[1]) for *_, p in points)
+        truth = OBS.truth_in_base(run, float(row["t"]), geometry)
+        require_finite("true pallet yaw", truth["yaw"])
+        axis = np.array([math.cos(truth["yaw"]), math.sin(truth["yaw"])])
+        lateral = np.array([-axis[1], axis[0]])
+        for side, wall, depth, p in points:
+            true_p = np.asarray(truth[f"{side}_walls"][wall][:2]) + depth * axis
+            error = abs(float(np.dot(p - true_p, lateral)))
+            allowed = wall_erosion_m(st["bound"], odometry, depth, rho, PALLET_TERM_M)
+            require_finite("wall error and b_t", (error, allowed))
+            if allowed <= 0.0:
+                raise Unverified(f"b_t {allowed:.6g} m is not positive at {row['t']} s")
+            if error / allowed > worst["ratio"]:
+                worst = {
+                    "ratio": error / allowed,
+                    "t": float(row["t"]),
+                    "side": side,
+                    "wall": wall,
+                    "depth_m": depth,
+                    "error_m": error,
+                    "allowed_m": allowed,
+                    "age_s": age,
+                }
+        checked += 1
+    return {"ticks": checked, "worst": worst, "passed": worst["ratio"] <= 1.0 + 1e-12}
+
+
+def check_ii(run, near: dict, states: list[dict], bounds, section: tuple) -> dict:
+    """(ii): every tick of the section, the control-truth relative rear-axle odometry over the
+    age it used (its latest result's conservative pixel time to now) within the table."""
+    from tools import d8b_calibration as CAL
+
+    if run.control is None:
+        raise Unverified("no slam_control.npy")
+    c = run.control
+    ct = c[:, 0]
+    t = run.truth.t
+    first, last = section
+
+    def pose(cols, at):
+        k = int(np.searchsorted(ct, at))
+        exact = k < len(ct) and abs(ct[k] - at) <= TIME_TOL_S
+        if not exact and not (0 < k < len(ct) and ct[k] - ct[k - 1] <= 1.5 * TICK_S):
+            raise Unverified(f"the control record does not cover {at:.4f} s")
+        yaw = np.unwrap(c[:, cols[2]])
+        return np.array(
+            [
+                np.interp(at, ct, c[:, cols[0]]),
+                np.interp(at, ct, c[:, cols[1]]),
+                np.interp(at, ct, yaw),
+            ]
+        )
+
+    worst = {"e_ratio": 0.0, "psi_ratio": 0.0}
+    checked = 0
+    for row in near.get("ticks") or []:
+        i = tick_index(t, row.get("t"), "a near-field tick record")
+        if not first <= i <= last:
+            continue
+        now = float(row["t"])
+        pixel = float(
+            require_finite("the tick's pixel time", row.get("pixel_s"), size=1)
+        )
+        # The recorded pixel time must be the reconstructed latest observation's (Codex
+        # judge review P2: a forged pixel time would zero the age).
+        expected = state_at(states, now)["stamp_s"] - bounds.max_latency_s
+        if abs(pixel - expected) > TIME_TOL_S:
+            raise Unverified(
+                f"the tick at {now:.4f} s records pixel time {pixel:.6f}, the latest result gives "
+                f"{expected:.6f}"
+            )
+        age = now - pixel
+        bound = bounds.odometry(age)
+        if bound is None:
+            return {
+                "ticks": checked,
+                "passed": False,
+                "reason": f"age {age:.3f} s past the odometry table",
+            }
+        d = CAL.relative(pose((1, 2, 3), pixel), pose((1, 2, 3), now)) - CAL.relative(
+            pose((4, 5, 6), pixel), pose((4, 5, 6), now)
+        )
+        require_finite("the control and truth poses over the age", d, size=3)
+        require_finite("the odometry bound", bound, size=2)
+        e, psi = math.hypot(d[0], d[1]), abs(float(CAL.wrap(d[2])))
+        for key, value, limit in (("e", e, bound[0]), ("psi", psi, bound[1])):
+            ratio = value / limit if limit > 0 else (math.inf if value > 0 else 0.0)
+            if ratio > worst[f"{key}_ratio"]:
+                worst[f"{key}_ratio"] = ratio
+                worst[f"{key}_at"] = {
+                    "t": now,
+                    "age_s": age,
+                    "value": value,
+                    "bound": limit,
+                }
+        checked += 1
+    passed = worst["e_ratio"] <= 1.0 + 1e-12 and worst["psi_ratio"] <= 1.0 + 1e-12
+    return {"ticks": checked, "worst": worst, "passed": passed}
+
+
+def check_iii(run, bounds_data: dict, calibration: dict, model) -> dict:
+    """(iii): every read of the approach and insertion 12 ticks after the previous one and one
+    tick after its stamp, and the run's L (the calibration's method ①, single-piece frames,
+    with the calibration's largest dwell bias bound for every distance it covers) within the
+    measured band."""
+    from tools import d8b_calibration as CAL
+
+    reads = sorted(
+        (
+            r
+            for r in run.reads
+            if r.get("time_label", r["result"]) == "ok" and r["stamp_s"] is not None
+        ),
+        key=lambda r: r["read_s"],
+    )
+    if len(reads) < 2:
+        raise Unverified("fewer than two timed reads")
+    require_finite("the read times", [(r["read_s"], r["stamp_s"]) for r in reads])
+    delays = [r["read_s"] - r["stamp_s"] for r in reads]
+    gaps = [b["stamp_s"] - a["stamp_s"] for a, b in zip(reads, reads[1:], strict=False)]
+    latency = bounds_data["latency"]
+    a_s, period = require_finite(
+        "the read delay and render period",
+        (latency["read_delay_s"], latency["render_period_s"]),
+        size=2,
+    )
+    cadence_ok = all(abs(d - a_s) <= 0.25 * TICK_S for d in delays) and all(
+        abs(g - period) <= 0.25 * TICK_S for g in gaps
+    )
+    entries = []
+    for dwells in calibration["dwells"].values():
+        for rec in dwells:
+            if "bias_m" not in rec or rec.get("distance_m") is None:
+                continue
+            low, high = rec.get("distance_range_m") or (
+                rec["distance_m"],
+                rec["distance_m"],
+            )
+            entries.append(
+                (rec["distance_m"], abs(rec["bias_m"]) + rec["max_shift_m"], low, high)
+            )
+    if len(entries) < 2:
+        raise Unverified("the calibration holds fewer than two measured dwells")
+    require_finite("the calibration dwells", entries)
+    global_bound = max(e[1] for e in entries)  # seed-independent: the largest measured
+    entries = [(d, global_bound, lo, hi) for d, _, lo, hi in entries]
+    rows = CAL.analyse_frames(run, model, entries)
+    summary = CAL.summarise_run(rows)
+    band = require_finite("the latency band", latency["band_s"], size=2).tolist()
+    l_run = summary["L_run_s"]
+    l_ok = l_run is not None and band[0] - 1e-12 <= l_run <= band[1] + 1e-12
+    # The calibration's own failure conditions for a run (tools/d8b_calibration.py verdict):
+    # enough eligible and single-piece frames, no mismatch, no piece past IN_RANGE_S, none at
+    # the search edge (Codex judge review P1).
+    frame_failures = []
+    if (
+        summary["eligible"] < CAL.MIN_ELIGIBLE
+        or summary["single_piece"] < CAL.MIN_SINGLE
+    ):
+        frame_failures.append(
+            f"{summary['eligible']} eligible, {summary['single_piece']} single-piece frames"
+        )
+    for key in ("mismatch", "out_of_range", "edge"):
+        if summary[key]:
+            frame_failures.append(f"{summary[key]} {key} frames")
+    return {
+        "reads": len(reads),
+        "cadence_ok": cadence_ok,
+        "max_delay_error_s": max(abs(d - a_s) for d in delays),
+        "max_gap_error_s": max(abs(g - period) for g in gaps) if gaps else 0.0,
+        "L_run_s": l_run,
+        "band_s": band,
+        "frames": {k: v for k, v in summary.items() if k != "L_run_s"},
+        "global_bias_bound_m": global_bound,
+        "frame_failures": frame_failures,
+        "passed": bool(cadence_ok and l_ok and not frame_failures),
+    }
+
+
+def rear_at_time(t: np.ndarray, rear: np.ndarray, at: float) -> np.ndarray:
+    """The true rear axle at a time between ticks (linear)."""
+    k = int(np.clip(np.searchsorted(t, at), 1, len(t) - 1))
+    a = float(np.clip((at - t[k - 1]) / (t[k] - t[k - 1]), 0.0, 1.0))
+    return rear[k - 1] + a * (rear[k] - rear[k - 1])
+
+
+def window_travel(t: np.ndarray, rear: np.ndarray, start: float, end: float) -> float:
+    """The true rear-axle path length over [start, end], its ends interpolated between ticks."""
+    inner = np.flatnonzero((t > start + TIME_TOL_S) & (t < end - TIME_TOL_S))
+    points = [rear_at_time(t, rear, start), *rear[inner], rear_at_time(t, rear, end)]
+    return float(np.sum(np.hypot(*np.diff(np.asarray(points), axis=0).T)))
+
+
+def check_iv(
+    truth: dict, states: list[dict], section: tuple, bounds, rear_offset_m: float
+) -> dict:
+    """(iv): for every accepted observation that is the latest at some tick of the section,
+    the true rear-axle travel from its conservative pixel time (stamp - L_hi) to the next
+    accepted arrival (or the section's end) within 0.03 m -- the whole window, also past a
+    standstill (stricter than the plan's "or a stop"); the window's ends interpolated."""
+    t = np.asarray(truth["stamp_s"], dtype=float)
+    rear = rear_axle(np.asarray(truth["base_pose"], dtype=float), rear_offset_m)
+    first, last = section
+    t_last = float(t[last])
+    used = {id(state_at(states, float(t[i]))) for i in range(first, last + 1)}
+    worst = {"travel_m": 0.0}
+    checked = 0
+    for k, st in enumerate(states):
+        if id(st) not in used:
+            continue
+        start = st["stamp_s"] - bounds.max_latency_s
+        end = min(states[k + 1]["since_s"] if k + 1 < len(states) else t_last, t_last)
+        require_finite("the window's ends", (start, end), size=2)
+        if start < t[0] - TIME_TOL_S:
+            raise Unverified(f"the pixel time {start:.4f} s is before the record")
+        if end < start - TIME_TOL_S:
+            raise Unverified(f"the window {start:.4f}-{end:.4f} s runs backwards")
+        travel = window_travel(t, rear, start, end)
+        require_finite(f"the travel from {start:.4f} s", travel, size=1)
+        checked += 1
+        if travel > worst["travel_m"]:
+            worst = {
+                "travel_m": travel,
+                "from_s": start,
+                "to_s": end,
+                "source": st["source"],
+            }
+    return {
+        "observations": checked,
+        "worst": worst,
+        "limit_m": INVARIANT_M,
+        "passed": worst["travel_m"] <= INVARIANT_M + 1e-12,
+    }
+
+
+def check_v(truth: dict, anchor_t: float, end_index: int) -> dict:
+    """(v): the pallet's true pose from the near capture to the insertion end (or the last
+    approach or insert tick) against its pose at the near capture."""
+    t = np.asarray(truth["stamp_s"], dtype=float)
+    pallet = np.asarray(truth["pallet_pose"], dtype=float)
+    i0 = tick_index(t, anchor_t, "the near capture")
+    if end_index < i0:
+        raise Unverified("the insertion end is before the near capture")
+    require_finite("the pallet pose from the near capture", pallet[i0 : end_index + 1])
+    r0, p0 = quat_matrix(pallet[i0, 3:]), pallet[i0, :3]
+    pos, rot = 0.0, 0.0
+    for i in range(i0, end_index + 1):
+        pos = max(pos, float(np.linalg.norm(pallet[i, :3] - p0)))
+        r = r0.T @ quat_matrix(pallet[i, 3:])
+        rot = max(rot, math.acos(max(-1.0, min(1.0, (float(np.trace(r)) - 1.0) / 2.0))))
+    return {
+        "from_t": float(t[i0]),
+        "to_t": float(t[end_index]),
+        "max_translation_m": pos,
+        "max_rotation_rad": rot,
+        "passed": pos <= PALLET_POS_M + 1e-15 and rot <= PALLET_ROT_RAD + 1e-15,
+    }
+
+
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -658,11 +1065,41 @@ def loaded_sources() -> dict:
     return dict(sorted(out.items()))
 
 
-def judge_run(directory: Path) -> dict:
+def run_files_digest(directory: Path) -> str:
+    """One hash over every run file the judgement reads (the depth frames included), taken
+    before and after: the CPU tools (i)-(iii) reuse read them on their own."""
+    names = [
+        "result.json",
+        "near_tracking.json",
+        "slam_control.npy",
+        "pocket_frames/index.json",
+        "pocket_frames/truth.npz",
+    ]
+    names += sorted(
+        p.relative_to(directory).as_posix()
+        for p in (directory / "pocket_frames").glob("frame_*.npz")
+    )
+    digest = hashlib.sha256()
+    for name in names:
+        path = directory / name
+        digest.update(
+            name.encode()
+            + b"\0"
+            + (sha256_bytes(path.read_bytes()) if path.exists() else "-").encode()
+        )
+    return digest.hexdigest()
+
+
+def judge_run(directory: Path, data_root: Path = ROOT) -> dict:
     sys.path.insert(0, str(ROOT / "sim" / "isaac"))
     import insertion_geometry as IG
+    from near_tracking import snapshot_relative
 
+    from forklift_core.perception.near_field_bounds import NearFieldBounds
     from forklift_core.perception.pallet_geometry import load_pallet_geometry
+    from tools import d8b_calibration as CAL
+
+    before = run_files_digest(directory)
 
     raw = {
         name: (directory / name).read_bytes()
@@ -685,6 +1122,7 @@ def judge_run(directory: Path) -> dict:
             raise SystemExit(f"{directory}: {key} is not the file the run used")
         models[key] = data_
     problems, vi, vii = [], None, None
+    checks, provenance_extra = {}, {}
     data = np.load(io.BytesIO(raw["pocket_frames/truth.npz"]))
     truth = {k: data[k] for k in data.files}
     problems += record_problems(truth)
@@ -717,6 +1155,7 @@ def judge_run(directory: Path) -> dict:
             pallet_geo = load_pallet_geometry(paths["pallet_geometry"])
             corners = IG.read_carriage_front_corners_m(paths["forklift_urdf"])
             blades = IG.read_fork_blades_m(paths["forklift_urdf"])
+            carriage_limit = float(IG.read_carriage_limit_m(paths["forklift_urdf"]))
         try:
             end = insert_end_index(truth, result)
             vi = check_vi(truth, geometry, pallet_geo.overall_depth_m, end)
@@ -729,13 +1168,63 @@ def judge_run(directory: Path) -> dict:
                 corners,
                 blades,
             )
+            # (i)-(v): the measured bounds and the calibration they came from, by content.
+            bounds_bytes = (
+                ROOT / snapshot_relative(str(nt.get("bounds")))
+            ).read_bytes()
+            if sha256_bytes(bounds_bytes) != nt.get("bounds_sha256"):
+                raise Unverified("the bounds file is not the one the run used")
+            bounds_data = json.loads(bounds_bytes)
+            bounds = NearFieldBounds.from_dict(bounds_data)
+            cal_ref = bounds_data["provenance"]["calibration"]
+            cal_path = data_root / cal_ref["path"]  # relative paths: from the data root
+            cal_bytes = cal_path.read_bytes() if cal_path.exists() else None
+            if cal_bytes is None or sha256_bytes(cal_bytes) != cal_ref["sha256"]:
+                raise Unverified(
+                    "the calibration the bounds came from is missing or changed"
+                )
+            calibration = json.loads(
+                cal_bytes
+            )  # parsed from the bytes that were hashed
+            provenance_extra.update(
+                bounds_sha256=sha256_bytes(bounds_bytes),
+                calibration={"path": str(cal_path), "sha256": cal_ref["sha256"]},
+            )
+            run = CAL.Run.load(directory)
+            section = near_section(truth, near)
+            states = accepted_states(near, nt["start"], bounds)
+            rear_offset = float(args["rear_axle_offset_m"])
+            checks["i"] = check_i(
+                run,
+                near,
+                states,
+                bounds,
+                pallet_geo,
+                section,
+                carriage_limit,
+                -abs(rear_offset),
+            )
+            checks["ii"] = check_ii(run, near, states, bounds, section)
+            checks["iii"] = check_iii(
+                run, bounds_data, calibration, CAL.PalletModel.from_geometry(pallet_geo)
+            )
+            checks["iv"] = check_iv(truth, states, section, bounds, rear_offset)
+            checks["v"] = check_v(
+                truth,
+                float(nt["start"]["aligned_s"]),
+                end if end is not None else section[1],
+            )
         except Unverified as exc:
             problems.append(str(exc))
-    verdict = (
-        "unverified"
-        if problems
-        else ("pass" if vi["passed"] and vii["passed"] else "fail")
+    if run_files_digest(directory) != before:  # judged on the files the digest names
+        problems.append("the run's files changed during the judgement")
+    passed = (
+        not problems
+        and vi["passed"]
+        and vii["passed"]
+        and all(c["passed"] for c in checks.values())
     )
+    verdict = "unverified" if problems else ("pass" if passed else "fail")
     return {
         "run": str(directory),
         "rules": RULES,
@@ -745,9 +1234,16 @@ def judge_run(directory: Path) -> dict:
         "phase": result.get("phase"),
         "failure_reason": result.get("failure_reason"),
         "arrival_reason": (nt.get("insert_arrival") or {}).get("reason"),
+        "i": checks.get("i"),
+        "ii": checks.get("ii"),
+        "iii": checks.get("iii"),
+        "iv": checks.get("iv"),
+        "v": checks.get("v"),
         "vi": vi,
         "vii": vii,
         "inputs_sha256": {name: sha256_bytes(data_) for name, data_ in raw.items()},
+        "run_files_digest": before,
+        **provenance_extra,
         "models_sha256": {key: sha256_bytes(data_) for key, data_ in models.items()}
         | {"drive_terms": terms_sha},
         "sources_sha256": loaded_sources(),
@@ -765,8 +1261,14 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--runs", nargs="+", required=True, type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--data-root",
+        type=Path,
+        default=ROOT,
+        help="where the bounds file's provenance paths are relative to",
+    )
     args = parser.parse_args(argv)
-    runs = [judge_run(d) for d in args.runs]
+    runs = [judge_run(d, args.data_root) for d in args.runs]
     args.output.write_text(
         json.dumps({"runs": runs}, indent=1, default=json_value) + "\n"
     )
@@ -783,6 +1285,10 @@ def main(argv=None) -> int:
                     "depth": vi.get("depth"),
                     "stops": len(vii.get("stops") or []),
                     "vii": vii.get("passed"),
+                    **{
+                        k: (r[k] or {}).get("passed")
+                        for k in ("i", "ii", "iii", "iv", "v")
+                    },
                 },
                 default=json_value,
             )

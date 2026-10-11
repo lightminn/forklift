@@ -590,3 +590,337 @@ def test_missing_tick_rows_in_the_section_are_unverified():
         J.check_vii(
             truth, record, TERMS, (1, len(truth["stamp_s"]) - 2), -0.34, CORNERS, BLADES
         )
+
+
+# (i)-(v) --------------------------------------------------------------------------------
+@pytest.fixture(scope="module")
+def bounds():
+    from forklift_core.perception.near_field_bounds import NearFieldBounds
+
+    return NearFieldBounds.load(ROOT / "config/near_field_bounds_measured.json")
+
+
+def test_v_a_still_pallet_passes_and_a_nudge_of_two_hundredths_of_a_millimetre_fails():
+    truth = truth_from(np.linspace(-1.5, -1.2, 40))
+    assert J.check_v(truth, float(truth["stamp_s"][2]), 39)["passed"]
+    truth["pallet_pose"][20:, 0] += 2e-5
+    out = J.check_v(truth, float(truth["stamp_s"][2]), 39)
+    assert not out["passed"] and out["max_translation_m"] == pytest.approx(2e-5)
+    turned = truth_from(np.linspace(-1.5, -1.2, 40))
+    turned["pallet_pose"][20:, 3:] = yaw_quat(2e-5)
+    assert not J.check_v(turned, float(turned["stamp_s"][2]), 39)["passed"]
+
+
+def test_v_a_non_finite_pallet_or_an_empty_span_is_unverified():
+    truth = truth_from(np.linspace(-1.5, -1.2, 40))
+    with pytest.raises(J.Unverified, match="before the near capture"):
+        J.check_v(truth, float(truth["stamp_s"][20]), 10)
+    truth["pallet_pose"][25, 0] = np.nan  # max() would drop it
+    with pytest.raises(J.Unverified, match="pallet pose"):
+        J.check_v(truth, float(truth["stamp_s"][2]), 39)
+
+
+def states_every(truth, period_ticks, delay_ticks=1, latency=0.0917):
+    """A result per period: stamped at its tick, read delay_ticks later."""
+    t = truth["stamp_s"]
+    return [
+        {
+            "since_s": float(t[i + delay_ticks]),
+            "stamp_s": float(t[i]),
+            "source": "front",
+        }
+        for i in range(0, len(t) - delay_ticks, period_ticks)
+    ]
+
+
+def test_iv_the_travel_from_a_pixel_time_to_the_next_result_is_bounded(bounds):
+    # 0.055 m/s with a result every 12 ticks: about (0.0989 + 0.1083) x 0.055 = 11.4 mm.
+    xs = -3.0 + 0.055 * TICK * np.arange(240)
+    truth = truth_from(xs, phase="approach")
+    states = states_every(truth, 12)
+    out = J.check_iv(truth, states, (20, 230), bounds, -0.34)
+    assert out["passed"] and out["worst"]["travel_m"] == pytest.approx(
+        0.055 * (bounds.max_latency_s + 12 * TICK + TICK), abs=0.0012
+    )
+    # Results stop coming: the travel from the last one runs past 0.03 m.
+    out = J.check_iv(truth, states[:5], (20, 230), bounds, -0.34)
+    assert not out["passed"]
+    # Codex review: a NaN arrival after the section made the travel NaN, which the
+    # maximum dropped -- the same starved window then passed.
+    nan_end = [*states[:5], {**states[5], "since_s": float("nan")}]
+    with pytest.raises(J.Unverified, match="window's ends"):
+        J.check_iv(truth, nan_end, (20, 230), bounds, -0.34)
+
+
+def start_and_frames(truth, read_s):
+    """A near-capture start record and one accepted frame read at read_s."""
+    t = truth["stamp_s"]
+    pocket = {"width_m": 0.2275, "height_m": 0.09}
+    observation = {
+        "stamp_ns": 1,
+        "clock_domain": "synthetic",
+        "frame_id": "base_link",
+        "source_provenance": "synthetic",
+        "status": "valid",
+        "left": {**pocket, "center_m": [1.0, 0.18625, 0.061]},
+        "right": {**pocket, "center_m": [1.0, -0.18625, 0.061]},
+        "insertion_yaw_rad": 0.0,
+        "position_sigma_m": 0.001,
+        "yaw_sigma_rad": 0.001,
+        "reason": None,
+    }
+    start = {
+        "built_s": float(t[2]),
+        "aligned_s": float(t[1]),
+        "pose": [0.0, 0.0, 0.0],
+        "observation": observation,
+    }
+    frame = {
+        "accepted": True,
+        "read_s": read_s,
+        "latest_stamp_s": float(t[10]),
+        "latest_held": {
+            "left": (1.0, 0.18625, 0.061),
+            "right": (1.0, -0.18625, 0.061),
+            "yaw": 0.0,
+        },
+        "latest_widths_m": [0.2275, 0.2275],
+        "latest_bound": {"wall_m": 0.0005, "yaw_rad": 0.0003},
+        "latest_source": "front",
+    }
+    return start, {"frames": [frame]}
+
+
+def test_accepted_states_refuse_non_finite_or_incomplete_observations(bounds):
+    truth = truth_from(np.linspace(-1.5, -1.2, 40))
+    start, near_ = start_and_frames(truth, float(truth["stamp_s"][11]))
+    states = J.accepted_states(near_, start, bounds)
+    assert [st["source"] for st in states] == ["near_capture", "front"]
+    bad = [
+        ("read_s", float("nan"), "times"),
+        ("latest_stamp_s", float("inf"), "times"),
+        ("latest_widths_m", [0.2275, float("nan")], "widths"),
+        ("latest_widths_m", [0.2275, 0.0], "not positive"),
+        ("latest_bound", {"wall_m": float("nan"), "yaw_rad": 0.0003}, "bound"),
+        ("latest_bound", {"yaw_rad": 0.0003}, "incomplete"),
+        (
+            "latest_held",
+            {"left": (1.0, float("nan"), 0.061), "right": (1.0, -0.1, 0.06), "yaw": 0},
+            "held pockets",
+        ),
+    ]
+    for key, value, message in bad:
+        _, broken = start_and_frames(truth, float(truth["stamp_s"][11]))
+        broken["frames"][0][key] = value
+        with pytest.raises(J.Unverified, match=message):
+            J.accepted_states(broken, start, bounds)
+
+
+def odometry_case(bounds, scale=1.0):
+    from types import SimpleNamespace
+
+    n = 200
+    t = 10.0 + TICK * np.arange(n)
+    x = -3.0 + 0.055 * TICK * np.arange(n)
+    control = np.column_stack(
+        (t, x * scale, np.zeros(n), np.zeros(n), x, np.zeros(n), np.zeros(n))
+    )
+    run = SimpleNamespace(control=control, truth=SimpleNamespace(t=t))
+    # A result every tick whose pixel time is 0.2 s before it: age 0.2 s throughout.
+    states = [
+        {
+            "since_s": float(t[i]),
+            "stamp_s": float(t[i]) - 0.2 + bounds.max_latency_s,
+            "source": "roof",
+        }
+        for i in range(n)
+    ]
+    ticks = [{"t": float(t[i]), "pixel_s": float(t[i]) - 0.2} for i in range(40, 190)]
+    return run, states, ticks
+
+
+def test_ii_exact_odometry_passes_and_a_drift_past_the_table_fails(bounds):
+    run, states, ticks = odometry_case(bounds)
+    out = J.check_ii(run, {"ticks": ticks}, states, bounds, (40, 189))
+    assert out["passed"] and out["worst"]["e_ratio"] == pytest.approx(0.0, abs=1e-9)
+    run, states, ticks = odometry_case(bounds, scale=1.5)  # the control reads 50 % long
+    assert not J.check_ii(run, {"ticks": ticks}, states, bounds, (40, 189))["passed"]
+
+
+def test_ii_a_pixel_time_that_is_not_the_latest_results_is_unverified(bounds):
+    # Codex review: a forged pixel time (= now) would zero the age and pass.
+    run, states, ticks = odometry_case(bounds, scale=1.5)
+    forged = [{**row, "pixel_s": row["t"]} for row in ticks]
+    with pytest.raises(J.Unverified, match="records pixel time"):
+        J.check_ii(run, {"ticks": forged}, states, bounds, (40, 189))
+    missing = [{**row, "pixel_s": float("nan")} for row in ticks]
+    with pytest.raises(J.Unverified, match="pixel time"):
+        J.check_ii(run, {"ticks": missing}, states, bounds, (40, 189))
+
+
+def test_ii_a_non_finite_control_record_is_unverified(bounds):
+    run, states, ticks = odometry_case(bounds, scale=1.5)
+    run.control[60:, 1] = np.nan  # the drift would otherwise vanish in the ratio
+    with pytest.raises(J.Unverified, match="poses over the age"):
+        J.check_ii(run, {"ticks": ticks}, states, bounds, (40, 189))
+
+
+def test_i_an_estimate_on_the_true_walls_passes_and_one_off_by_three_centimetres_fails(
+    bounds,
+):
+    from types import SimpleNamespace
+
+    from forklift_core.perception.pallet_geometry import load_pallet_geometry
+    from tools import d8b_calibration as CAL
+
+    geometry = load_pallet_geometry(ROOT / "config/pallet_geometry_epal6.yaml")
+    truth_d = truth_from(np.full(30, -1.10))  # tips 0.15 m before the face at x = -0.3
+    truth = CAL.Truth(truth_d, None)
+    run = SimpleNamespace(truth=truth)
+    true_held = {
+        "left": (-0.3, 0.18625, 0.061),
+        "right": (-0.3, -0.18625, 0.061),
+        "yaw": 0.0,
+    }
+    base = (-1.10, 0.0, 0.0)
+    state = {
+        "since_s": 9.0,
+        "stamp_s": float(truth_d["stamp_s"][0]) + 0.1,
+        "held": true_held,
+        "widths": (geometry.opening_width_m, geometry.opening_width_m),
+        "bound": {
+            "wall_m": 0.0005,
+            "yaw_rad": 0.0003,
+            "along_m": 0.006,
+            "lateral_m": 0.0005,
+        },
+        "source": "roof",
+    }
+    ticks = [
+        {"t": float(truth_d["stamp_s"][i]), "protect": True, "base": list(base)}
+        for i in range(5, 25)
+    ]
+    out = J.check_i(
+        run, {"ticks": ticks}, [state], bounds, geometry, (5, 24), 0.346, -0.34
+    )
+    assert out["passed"] and out["worst"]["ratio"] == pytest.approx(0.0, abs=1e-9)
+    off = {
+        **state,
+        "held": {
+            **true_held,
+            "left": (-0.3, 0.21625, 0.061),
+            "right": (-0.3, -0.15625, 0.061),
+        },
+    }
+    assert not J.check_i(
+        run, {"ticks": ticks}, [off], bounds, geometry, (5, 24), 0.346, -0.34
+    )["passed"]
+    # a NaN in the record must not vanish in the ratio comparison
+    nan_base = [dict(row) for row in ticks]
+    nan_base[3]["base"] = [-1.10, float("nan"), 0.0]
+    with pytest.raises(J.Unverified):
+        J.check_i(
+            run, {"ticks": nan_base}, [state], bounds, geometry, (5, 24), 0.346, -0.34
+        )
+    nan_bound = {**state, "bound": {**state["bound"], "wall_m": float("nan")}}
+    with pytest.raises(J.Unverified):
+        J.check_i(
+            run, {"ticks": ticks}, [nan_bound], bounds, geometry, (5, 24), 0.346, -0.34
+        )
+    no_bound = {**state, "bound": {**state["bound"], "wall_m": -1.0}}
+    with pytest.raises(J.Unverified):
+        J.check_i(
+            run, {"ticks": ticks}, [no_bound], bounds, geometry, (5, 24), 0.346, -0.34
+        )
+
+
+def test_iii_checks_the_read_cadence_the_run_delay_and_the_frames(monkeypatch):
+    from types import SimpleNamespace
+
+    from tools import d8b_calibration as CAL
+
+    data = {
+        "latency": {
+            "read_delay_s": TICK,
+            "render_period_s": 0.1,
+            "band_s": [0.0844, 0.0989],
+        }
+    }
+    calibration = {
+        "dwells": {
+            "1": [
+                {
+                    "bias_m": 1e-6,
+                    "max_shift_m": 1e-5,
+                    "distance_m": 2.5,
+                    "distance_range_m": [2.5, 2.5],
+                },
+                {
+                    "bias_m": 2e-6,
+                    "max_shift_m": 1e-5,
+                    "distance_m": 0.5,
+                    "distance_range_m": [0.5, 0.5],
+                },
+            ]
+        }
+    }
+    reads = [
+        {"read_s": 10.0 + 0.1 * k + TICK, "stamp_s": 10.0 + 0.1 * k, "result": "ok"}
+        for k in range(20)
+    ]
+    run = SimpleNamespace(reads=reads)
+    good = {
+        "L_run_s": 0.0917,
+        "frames": 200,
+        "eligible": 150,
+        "single_piece": 140,
+        "multi_piece": 10,
+        "mismatch": 0,
+        "out_of_range": 0,
+        "edge": 0,
+        "not_eligible": {},
+        "band_s": [0.088, 0.096],
+    }
+    seen = {}
+    monkeypatch.setattr(
+        CAL,
+        "analyse_frames",
+        lambda run_, model, entries: seen.setdefault("entries", entries),
+    )
+    monkeypatch.setattr(CAL, "summarise_run", lambda rows: dict(good))
+    out = J.check_iii(run, data, calibration, None)
+    assert out["passed"] and out["cadence_ok"] and not out["frame_failures"]
+    assert all(
+        e[1] == pytest.approx(2e-6 + 1e-5) for e in seen["entries"]
+    )  # the largest, everywhere
+    late = [dict(r) for r in reads]
+    late[7]["read_s"] += TICK
+    assert not J.check_iii(SimpleNamespace(reads=late), data, calibration, None)[
+        "passed"
+    ]
+    for change in (
+        {"L_run_s": 0.12},
+        {"out_of_range": 19},
+        {"mismatch": 1},
+        {"edge": 2},
+        {"single_piece": 3},
+    ):
+        monkeypatch.setattr(CAL, "summarise_run", lambda rows, c=change: {**good, **c})
+        assert not J.check_iii(run, data, calibration, None)["passed"], change
+
+
+def test_iv_the_window_ends_are_interpolated_and_a_result_replaced_before_the_section_is_skipped(
+    bounds,
+):
+    xs = -3.0 + 0.055 * TICK * np.arange(240)
+    truth = truth_from(xs, phase="approach")
+    t = truth["stamp_s"]
+    stamp = float(t[20]) + 0.3 * TICK  # its pixel time falls between ticks
+    states = [
+        {"since_s": float(t[0]), "stamp_s": float(t[0]), "source": "old"},
+        {"since_s": float(t[20]), "stamp_s": stamp, "source": "front"},
+    ]
+    out = J.check_iv(truth, states, (20, 30), bounds, -0.34)
+    assert out["observations"] == 1  # the old one is never the latest at a section tick
+    expected = 0.055 * (float(t[30]) - (stamp - bounds.max_latency_s))
+    assert out["worst"]["travel_m"] == pytest.approx(expected, rel=1e-9)
