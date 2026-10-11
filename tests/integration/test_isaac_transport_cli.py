@@ -503,7 +503,7 @@ def test_d8b_custom_cruise_drives_the_straight_but_not_the_acceptance_dry_run() 
     source = SCRIPT.read_text()
     acceptance = source.index("acceptance_config = replace(acceptance_config,\n")
     assert "cruise_speed_mps=speeds[\"approach\"])" in source[acceptance:acceptance + 200]
-    dry = source.index("acceptance_config,\n                                        rear,\n")
+    dry = source.index("acceptance_config,\n                                            rear,\n")
     driven = source.index("state[\"near_capture\"][\"dry_run_driven\"] = asdict(bicycle_rollout(")
     tracker = source.index("approach_config,\n                                    )\n")
     assert acceptance < dry < driven < tracker
@@ -572,6 +572,8 @@ def test_s4_near_tracking_options_validate_before_startup() -> None:
         (["--near-inject-yaw-rad", "0.015"], "need --near-inject"),
         (["--near-inject-lateral-m", "nan"], "must be finite"),
         (["--near-drop-frames-from-m", "0.3"], "--near-drop-frames-from-m needs --near-tracking"),
+        # Plan D8 S4c-3: the test-only near-capture heading box, narrower only.
+        (["--near-capture-box-yaw-rad", "0.01"], "--near-capture-box-yaw-rad needs --near-tracking"),
     ):
         result = subprocess.run(
             [sys.executable, str(SCRIPT), "--base-scene", "unused.usda", "--pallet-urdf", "unused.urdf",
@@ -761,3 +763,66 @@ def test_s4b_correction_points_are_decided_before_the_stop_and_install_at_once()
     assert "first_target=pocket['planning_pickup']" in functions["build_near_tracker"]
     # The mission's own docking band is the same computation as before (extracted only).
     assert "band = docking_band(occupancy, target)" in functions["grid_kwargs"]
+
+
+def test_s4c3_stage_one_redraws_a_refused_near_capture_before_ending() -> None:
+    """Plan D8 S4c-3 stage 1: a near capture the box or its dry run refuses is tried with the
+    S4b re-draw (heading box 0.12 rad, both dry runs, the grid with this target's band, the
+    correction points) before the run ends, near-tracking runs only; an acceptance installs
+    the approach, insertion and extraction and records them by content and by the
+    followers' copies, and the tracker's start records the paths it starts on."""
+    import ast
+
+    source = SCRIPT.read_text()
+    tree = ast.parse(source)
+    functions = {
+        n.name: ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
+    }
+    redraw_fn = functions["near_capture_redraw"]
+    for needed in (
+        "redraw_docking(",
+        "max_yaw_rad=near_tracking.CORRECTION_MAX_YAW_RAD",
+        "correction_grid(target_, target_, rear_now)",
+        "record_['refused'] = 'correction_point'",
+        "'raw_target':",
+        "'line':",
+        "held_pockets(observation_,",
+        "near_tracking.rollout_face_distance(held_, widths_, tip_x_, args.rear_axle_offset_m)",
+        "near_tracking.correction_points_check(",
+        "'fork_tip_x_m': tip_x_",
+    ):
+        assert needed in redraw_fn, needed
+    # (x) v3: the capture's own control sample, taken with its SLAM error at the same instant.
+    sample = source.index('attempt["capture_control"] = {')
+    assert source.index('attempt["slam_error"] = slam_error()') < sample
+    assert source.index("truth_rear_capture = [float(v) for v in rear]") < source.index(
+        "rear = slam_rear(now_s)", source.index("truth_rear_capture")
+    )
+    # The correction trigger and the check measure the same distance.
+    assert (
+        "face_distance = near_tracking.face_distance_m(face, tip_x)"
+        in functions["near_tick"]
+    )
+    branch = source.index(
+        "Plan D8 S4c-3 stage 1: the S4b re-draw acceptance at the near"
+    )
+    window = source[branch - 2500 : branch + 3500]
+    assert window.index(
+        'refusal = f"near_capture_misaligned:{offsets}"'
+    ) < window.index("if straight is None and near is not None:")
+    assert 'refusal = f"near_capture_misaligned:dry_run:{asdict(dry)}"' in window
+    assert window.index("near_capture_redraw(") < window.index(
+        "require(straight is not None, refusal)"
+    )
+    assert (
+        'state["near_capture"].setdefault("recoveries", []).append(redraw_entry)'
+        in window
+    )
+    installed = source.index('redraw_entry["installed"] = {')
+    assert (
+        source.index('trackers["approach"] = RearAxlePathTracker(', branch) < installed
+    )
+    assert (
+        '"paths0": {name_: near_tracking.path_digest(*trackers[name_].path_arrays())'
+        in source
+    )

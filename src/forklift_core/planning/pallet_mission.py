@@ -733,6 +733,49 @@ def straight_from_pose(
     )
 
 
+def correction_point_offsets(
+    trajectory,
+    line_start: Pose2D,
+    *,
+    face_distance,
+    points_m: Sequence[float],
+) -> list[dict]:
+    """Where a rolled-out approach crosses the near-field correction points (plan D8 S4c-3).
+
+    face_distance(pose) is the estimated fork tip to pallet face at a trajectory pose (rear
+    axle x, y, yaw) as the runner's correction trigger measures it. For each point d, the
+    first pose whose distance is within d, the pose before it (None when the first pose
+    already is) and the offsets of the crossing pose to the line from line_start (along,
+    lateral, heading -- as straight_from_pose records them); pose and offsets are None when
+    the trajectory never comes that close.
+    """
+    heading = np.array([cos(line_start.yaw_rad), sin(line_start.yaw_rad)])
+    normal = np.array([-heading[1], heading[0]])
+    origin = np.array([line_start.x_m, line_start.y_m])
+    poses = np.asarray(trajectory, dtype=float).reshape(-1, 3)
+    distances = [float(face_distance(pose)) for pose in poses]
+    out = []
+    for point in points_m:
+        entry = {"point_m": float(point), "pose": None, "offsets": None}
+        for i, (pose, distance) in enumerate(zip(poses, distances, strict=True)):
+            if distance <= point + 1e-12:
+                offset = pose[:2] - origin
+                entry.update(
+                    pose=[float(v) for v in pose],
+                    face_distance_m=distance,
+                    previous_pose=[float(v) for v in poses[i - 1]] if i else None,
+                    previous_face_distance_m=distances[i - 1] if i else None,
+                    offsets={
+                        "along_m": float(offset @ heading),
+                        "lateral_m": float(offset @ normal),
+                        "yaw_rad": float(np.arctan2(np.sin(pose[2] - line_start.yaw_rad), np.cos(pose[2] - line_start.yaw_rad))),
+                    },
+                )
+                break
+        out.append(entry)
+    return out
+
+
 def plan_transport_leg(
     scenario: TransportScenario,
     start_rear: Pose2D,

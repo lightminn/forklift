@@ -838,3 +838,61 @@ def test_a_retry_needs_a_mismatch_or_refusal_before_the_protection_far_enough_an
     assert not NT.retry_allowed("mismatch", 0, False, float("nan"))
     # 0.55 m leaves the camera beyond the far detector's 0.8 m minimum (0.331 m behind the tips).
     assert NT.RETRY_MIN_FACE_M + 0.331 > 0.8 + 0.05
+
+
+def test_s4c3_the_correction_points_of_both_dry_runs_by_the_trigger_distance():
+    """Plan D8 S4c-3 stage 1: the rolled-out distance is the trigger's (the observation held at
+    its capture, seen from each pose's control base), and every run's crossings must lie in
+    the S4b correction box -- the second run included (Codex S4c-3 review 2: a name reused in
+    the loop broke the second run)."""
+    from forklift_core.perception.near_field_tracking import held_pockets
+    from forklift_core.perception.pocket_observation import Pocket, PocketObservation
+    from forklift_core.planning import Pose2D
+
+    # The face 2.6 m ahead of a base at the origin, pockets across +-0.18625 m.
+    observation = PocketObservation(
+        5,
+        "synthetic",
+        "base_link",
+        "synthetic",
+        "valid",
+        Pocket((2.6, 0.18625, 0.061), 0.2275, 0.09),
+        Pocket((2.6, -0.18625, 0.061), 0.2275, 0.09),
+        0.0,
+        0.001,
+        0.001,
+        None,
+    )
+    held = held_pockets(observation, (0.0, 0.0, 0.0))
+    widths = (0.2275, 0.2275)
+    distance = NT.rollout_face_distance(held, widths, 0.95, -0.34)
+    # The rear axle 0.34 m behind the base: the fork tips (base x 0.95) 1.65 m from the face.
+    assert distance((-0.34, 0.0, 0.0)) == pytest.approx(2.6 - 0.95)
+    face = NT.carried_face(held, widths, (0.0, 0.0, 0.0))
+    assert NT.face_distance_m(face, 0.95) == pytest.approx(2.6 - 0.95)
+    line = Pose2D(-0.34, 0.0, 0.0)
+
+    def run(lateral, yaw):
+        return [[x, lateral, yaw] for x in [-0.34 + 0.01 * i for i in range(200)]]
+
+    points, inside = NT.correction_points_check(
+        [run(0.0, 0.0), run(0.01, 0.02)], line, distance
+    )
+    assert inside and [(p["dry_run"], p["point_m"]) for p in points] == [
+        (0, 1.0),
+        (0, 0.6),
+        (1, 1.0),
+        (1, 0.6),
+    ]
+    assert points[2]["offsets"]["lateral_m"] == pytest.approx(0.01)
+    # Outside the box on the second run only, then a run that never comes close.
+    _, inside = NT.correction_points_check(
+        [run(0.0, 0.0), run(0.06, 0.0)], line, distance
+    )
+    assert not inside
+    _, inside = NT.correction_points_check(
+        [run(0.0, 0.0), run(0.0, 0.13)], line, distance
+    )
+    assert not inside
+    points, inside = NT.correction_points_check([run(0.0, 0.0)[:20]], line, distance)
+    assert not inside and points[0]["offsets"] is None

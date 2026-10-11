@@ -2021,8 +2021,14 @@ def s4c_outcome(
 
 # Plan D8 S4c-2 (x): v1 fixed before the first retry run; v2 after the first smoke (seed 1,
 # mismatch yaw -0.05 ended near_capture_misaligned inside its retry and v1 called it
-# unverified) -- a run that ends inside its retry span is judged, and fails (x).
-X_RULES = "v2"
+# unverified) -- a run that ends inside its retry span is judged, and fails (x); v3 (plan
+# D8 S4c-3, a strengthening found by the stage-2 design review) -- the re-observation
+# stood in place and its recorded capture pose is the estimate at that capture.
+X_RULES = "v3"
+STAND_M = (
+    0.001  # (x) v3: the truth travel allowed from the release to the re-observation
+)
+STAND_RAD = 0.001
 
 
 def split_episodes(near: dict, nt: dict) -> list[dict]:
@@ -2105,7 +2111,14 @@ def split_episodes(near: dict, nt: dict) -> list[dict]:
     return views
 
 
-def check_x(result: dict, near: dict, truth: dict, views: list[dict], geometry) -> dict:
+def check_x(
+    result: dict,
+    near: dict,
+    truth: dict,
+    views: list[dict],
+    geometry,
+    control=None,
+) -> dict:
     """(x), plan D8 S4c-2: exactly one retry, for a mismatch or a refused correction, ending
     an episode that never started its protection and stood at least RETRY_MIN_FACE_M from
     the estimated face; the release recorded; the re-observation valid and never biased; over
@@ -2333,6 +2346,156 @@ def check_x(result: dict, near: dict, truth: dict, views: list[dict], geometry) 
             failures.append(
                 "the plan after the retry is not the re-observation's own target"
             )
+    # In place (X_RULES v3, Codex S4c-3 stage-2 reviews): the re-observation's control sample
+    # (capture_control: its end time, the control estimate and the truth then) binds the
+    # capture to the truth record -- no command from the retry to the capture's end, the truck
+    # still from the retry to the tick before the command first rises after it (the record's
+    # end when it never does), the accepted truth pose and the sample's truth the truth at
+    # that tick, the capture pose and the SLAM error the sample's, and, when the control record
+    # has a row of that very instant, the sample's estimate that row. With no re-observation
+    # the stand runs to the record's end. (No bound between the rows around the instant: the
+    # odometry noise moves a standing estimate out and back between them -- Codex x-v3
+    # review 4 -- and the capture has no control rows to bound it by.)
+    off_x = abs(float((result.get("arguments") or {}).get("rear_axle_offset_m", -0.34)))
+    applied_ = np.asarray(truth["applied_speed_mps"], dtype=float)
+    cc = None
+    if attempt is not None:
+        try:
+            t_cap0 = float(
+                require_shape(
+                    "the re-observation's start",
+                    attempts[attempt - 1]["t_before_capture_s"],
+                    (),
+                )
+            )
+            cc = attempts[attempt - 1]["capture_control"]
+            t_ce = float(require_shape("the re-observation's end", cc["time_s"], ()))
+            cc_est = require_finite(
+                "the re-observation's estimate", cc["control_rear"], size=3
+            )
+            cc_truth = require_finite(
+                "the re-observation's truth", cc["truth_rear"], size=3
+            )
+        except (KeyError, TypeError) as exc:
+            raise Unverified(
+                f"the re-observation's control sample is not recorded ({exc!r})"
+            ) from exc
+        i_ce = tick_index(t, t_ce, "the re-observation's end")
+        if not (t[i_retry] - TIME_TOL_S <= t_cap0 <= t_ce + TIME_TOL_S):
+            raise Unverified(
+                "the re-observation is not after the retry in the truth record"
+            )
+        # The sample's time is the capture's own end: the capture's elapsed physics time on
+        # the same clock (Codex S4c-3 x-v3 review 3 P2-1: a sample dated inside the capture
+        # cut the stand short).
+        try:
+            diag = attempts[attempt - 1]["capture_diagnostics"]
+            elapsed = float(
+                require_shape("the capture's end", diag["physics_time_after_s"], ())
+            ) - float(
+                require_shape("the capture's start", diag["capture_start_time_s"], ())
+            )
+        except (KeyError, TypeError) as exc:
+            raise Unverified(f"the capture's times are not recorded ({exc!r})") from exc
+        if abs(t_ce - (t_cap0 + elapsed)) > 1e-6:
+            failures.append(
+                "the re-observation's control sample is not at the capture's end"
+            )
+    else:
+        i_ce = len(t) - 1
+    if np.any(applied_[i_retry : i_ce + 1] != 0.0):
+        failures.append(
+            "a command was given between the retry and the re-observation's end"
+        )
+    moving = np.nonzero(applied_[i_ce + 1 :] != 0.0)[0]
+    i_stand = i_ce + int(moving[0]) if len(moving) else len(t) - 1
+    rear_s = rear_axle(base[i_retry : i_stand + 1], off_x)
+    yaws_s = np.unwrap([yaw_of(base[j]) for j in range(i_retry, i_stand + 1)])
+    travel_s = (
+        float(np.sum(np.hypot(*np.diff(rear_s, axis=0).T))) if len(rear_s) > 1 else 0.0
+    )
+    turn_s = float(np.sum(np.abs(np.diff(yaws_s)))) if len(yaws_s) > 1 else 0.0
+    if travel_s > STAND_M or turn_s > STAND_RAD:
+        failures.append(
+            f"the re-observation was not taken in place ({1e3 * travel_s:.2f} mm, "
+            f"{1e3 * turn_s:.2f} mrad over the stand)"
+        )
+    report.update(stand_travel_m=travel_s, stand_turn_rad=turn_s)
+    if cc is not None:
+        try:
+            accepted = attempts[attempt - 1]["accepted_pose"]
+            pos = require_finite(
+                "the re-observation's accepted position", accepted[0], size=3
+            )
+            quat = require_finite(
+                "the re-observation's accepted orientation", accepted[1], size=4
+            )
+            err = attempts[attempt - 1]["slam_error"]
+            err_v = require_finite(
+                "the re-observation's SLAM error",
+                [err["along_m"], err["lateral_m"], err["yaw_rad"]],
+                size=3,
+            )
+        except (KeyError, TypeError, IndexError) as exc:
+            raise Unverified(
+                f"the re-observation's pose is not recorded ({exc!r})"
+            ) from exc
+
+        def wrapped(a):
+            return math.atan2(math.sin(a), math.cos(a))
+
+        truth_yaw = yaw_of(np.concatenate((pos, quat)))
+        # The runner's rear axle: the base less the offset along the heading (yaw only -- a
+        # pitched pose is not rotated, Codex S4c-3 x-v3 review 3 P2-3).
+        tick_yaw = yaw_of(base[i_ce])
+        tick_rear = base[i_ce, :2] - off_x * np.array(
+            [math.cos(tick_yaw), math.sin(tick_yaw)]
+        )
+        if not (
+            _same(pos[:2], base[i_ce, :2], 1e-6)
+            and abs(wrapped(truth_yaw - yaw_of(base[i_ce]))) <= 1e-6
+            and _same(cc_truth[:2], tick_rear, 1e-6)
+            and abs(wrapped(cc_truth[2] - yaw_of(base[i_ce]))) <= 1e-6
+        ):
+            failures.append("the re-observation's truth is not the truth at its end")
+        c_, s_ = math.cos(cc_truth[2]), math.sin(cc_truth[2])
+        d_ = cc_est[:2] - cc_truth[:2]
+        own_err = [
+            c_ * d_[0] + s_ * d_[1],
+            -s_ * d_[0] + c_ * d_[1],
+            wrapped(cc_est[2] - cc_truth[2]),
+        ]
+        own_base = [
+            cc_est[0] + off_x * math.cos(cc_est[2]),
+            cc_est[1] + off_x * math.sin(cc_est[2]),
+            cc_est[2],
+        ]
+        # 1e-6: the runner's error comes from the float32 truth quaternion by its own operation
+        # order (the first real run differed by 1.8e-9 rad from the rebuilt value).
+        if not _same(err_v, own_err, 1e-6) or (
+            seen_valid and not _same(cbase, own_base, 1e-9)
+        ):
+            failures.append(
+                "the re-observation's capture pose or SLAM error is not its control sample"
+            )
+        if control is None:
+            raise Unverified(
+                "no control record to bind the re-observation's estimate to"
+            )
+        rows = np.asarray(control, dtype=float)
+        require_finite("the control record", rows)
+        same_time = rows[np.abs(rows[:, 0] - t_ce) <= TIME_TOL_S]
+        if len(same_time):
+            # A control row of that very instant: the sample must be it (Codex S4c-3 x-v3
+            # review 3 P2-2 -- a later correction widened the bracket).
+            r0 = same_time[-1]
+            if not (
+                _same(cc_est[:2], r0[1:3], 1e-9)
+                and abs(wrapped(cc_est[2] - r0[3])) <= 1e-9
+            ):
+                failures.append(
+                    "the re-observation's estimate is not the control row of its instant"
+                )
     rear = rear_axle(
         base, float((result.get("arguments") or {}).get("rear_axle_offset_m", -0.34))
     )
@@ -2507,12 +2670,470 @@ def judge_retried(
         retry=views[0]["retry"],
         start=views[0]["start"],
     )
-    checks["x"] = check_x(result, near, truth, views, geometry)
+    control_path = Path(directory) / "slam_control.npy"
+    checks["x"] = check_x(
+        result,
+        near,
+        truth,
+        views,
+        geometry,
+        control=np.load(control_path) if control_path.exists() else None,
+    )
     return {
         "passed": all(e["vii"]["passed"] for e in episodes),
         "stops": stops,
         "episodes": len(episodes),
     }
+
+
+REDRAW_RULES = "v1"  # plan D8 S4c-3 stage 1, fixed before the first stage-1 run
+
+
+def mission_geometry(record: dict):
+    """The run's SyntheticMissionGeometry from its result's geometry record."""
+    from forklift_core.planning.geometry import Footprint
+    from forklift_core.planning.pallet_mission import SyntheticMissionGeometry
+
+    def footprint(d):
+        return Footprint(d["front_m"], d["rear_m"], d["half_width_m"])
+
+    geo = SyntheticMissionGeometry(
+        unloaded_footprint=footprint(record["unloaded_footprint"]),
+        **{
+            k: record[k]
+            for k in (
+                "pallet_depth_m",
+                "pallet_width_m",
+                "axle_to_fork_tip_m",
+                "approach_gap_m",
+                "alignment_straight_m",
+                "delivery_straight_m",
+                "extraction_m",
+                "withdrawal_m",
+                "spawn_clearance_m",
+                "carriage_limit_m",
+                "insertion_reserve_m",
+            )
+        },
+    )
+    for k in ("prealign_offset_m", "approach_offset_m", "inserted_offset_m"):
+        if not _same(getattr(geo, k), record[k], 1e-12):
+            raise Unverified(f"the geometry record's {k} is not its own derivation")
+    return geo
+
+
+def check_near_redraw(result: dict, nt: dict) -> dict:
+    """Plan D8 S4c-3 stage 1: the S4b re-draw at the near capture. A near capture accepted
+    after its box or dry run refused must have an accepted re-draw entry, and only such a
+    capture may (Codex S4c-3 implementation review P2: a deleted or relabelled entry must
+    not pass); a refused entry installs nothing and starts no tracker. Each accepted entry:
+    its record (the box 0.05 m / 0.12 rad, both dry runs at the baseline and driven cruise
+    arrived within +6 mm, 6 mm and 15 mrad with their swept footprints clear, both
+    correction points of both runs inside the box -- each point's pose the first within it
+    by the correction trigger's own distance, recomputed with the pose before it) and its
+    chain, bound to the tracker's start of that attempt: the start's pose and observation
+    are the entry's, the observation placed at it is the raw target, the planning target
+    that raw target (moved by the correction injection when this attempt was injected),
+    the line its prealign and approach, the installed approach the straight from the
+    recorded rear, every installed insert and extract pose on that target's straight with
+    its direction and no curvature, the installed contents their digests and the
+    followers' copies, and the tracker started on them (paths0)."""
+    sys.path.insert(0, str(ROOT / "sim" / "isaac"))
+    from dataclasses import asdict
+
+    import near_tracking as NT
+
+    from forklift_core.control.path_tracking import TrackerConfig
+    from forklift_core.control.rollout import bicycle_rollout
+    from forklift_core.perception.near_field_tracking import held_pockets
+    from forklift_core.planning.geometry import Pose2D
+    from forklift_core.planning.pallet_mission import (
+        PalletSite,
+        site_poses,
+        straight_from_pose,
+    )
+    from tools.d8c_replay import observation_from_dict
+
+    caps = list(result.get("near_capture_history") or [])
+    if result.get("near_capture"):
+        caps.append(result["near_capture"])
+    entries = [
+        e for c in caps for e in c.get("recoveries") or [] if e.get("stage") == "redraw"
+    ]
+
+    box_yaw = float(
+        (result.get("arguments") or {}).get("near_capture_box_yaw_rad", 0.05)
+    )
+    if not 0.0 < box_yaw <= 0.05:
+        raise Unverified(
+            f"the near capture's heading box {box_yaw} is not in (0, 0.05]"
+        )
+
+    def refused_first(cap) -> bool:
+        """The near capture's own acceptance refused it (box or dry run) -- with the run's
+        heading box (a smoke may narrow it, plan D8 S4c-3), which the capture records."""
+        try:
+            off = cap["offsets_to_new_line"]
+            lat, yaw, left = (
+                float(require_shape(f"near capture {k}", off[k], ()))
+                for k in ("lateral_m", "yaw_rad", "length_left_m")
+            )
+            box = cap.get("box", {"lateral_m": 0.05, "yaw_rad": 0.05, "length_m": 0.3})
+        except (KeyError, TypeError) as exc:
+            raise Unverified(
+                f"a near capture's offsets are not recorded ({exc!r})"
+            ) from exc
+        if box != {"lateral_m": 0.05, "yaw_rad": box_yaw, "length_m": 0.3}:
+            raise Unverified(f"a near capture's box {box} is not the run's")
+        if abs(lat) > 0.05 or abs(yaw) > box_yaw or left < 0.3:
+            return True
+        dry = cap.get("dry_run")
+        if dry is None:
+            raise Unverified("a near capture inside the box has no dry run")
+        return not (
+            dry.get("status") == "arrived"
+            and float(require_shape("dry run error", dry["position_error_m"], ()))
+            <= 0.006
+            and abs(float(require_shape("dry run yaw", dry["yaw_error_rad"], ())))
+            <= 0.015
+        )
+
+    done = [c for c in caps if c.get("status") == "done"]
+    needed = {c.get("near_attempt") for c in done if refused_first(c)}
+    if not entries and not needed:
+        return {"applicable": False}
+    failures, report = [], {"rules": REDRAW_RULES, "entries": []}
+    args = result.get("arguments") or {}
+    try:
+        geo = mission_geometry(result["geometry"])
+        depth = float(result["geometry"]["pallet_depth_m"])
+        baseline = float(result["settings_synthetic"]["approach_speed_mps"])
+        offset = abs(float(args["rear_axle_offset_m"]))
+    except (KeyError, TypeError) as exc:
+        raise Unverified(
+            f"the run's geometry or speeds are not recorded ({exc!r})"
+        ) from exc
+    driven = args.get("approach_straight_speed_mps")
+    driven = baseline if driven is None else float(driven)
+    starts = nt.get("starts") or ([nt["start"]] if nt.get("start") else [])
+    inj = nt.get("injection") or {}
+    injected = {c.get("attempt") for c in inj.get("captures") or []}
+    accepted_attempts = {e.get("attempt") for e in entries if e.get("accepted") is True}
+    done_attempts = {c.get("near_attempt") for c in done}
+    for attempt in needed - accepted_attempts:
+        failures.append(
+            f"the near capture at attempt {attempt} was refused yet has no accepted re-draw"
+        )
+    for attempt in accepted_attempts - needed:
+        failures.append(
+            f"the re-draw at attempt {attempt} ran for a capture its acceptance did not refuse"
+        )
+    for e in entries:
+        what = f"the re-draw at attempt {e.get('attempt')}"
+        try:
+            rec = e["record"]
+            accepted = e["accepted"]
+            if accepted not in (True, False):
+                raise TypeError(f"accepted {accepted!r}")
+            off = rec["offsets"]
+            off_v = require_finite(
+                f"{what}: box offsets",
+                [off["lateral_m"], off["yaw_rad"], off["length_left_m"]],
+                size=3,
+            )
+            dries = rec["dry_runs"]
+            points = e["correction_points"]
+            speeds = require_finite(
+                f"{what}: dry-run cruises", e["dry_run_cruise_mps"], size=2
+            )
+            base = tuple(
+                require_finite(f"{what}: capture base", e["capture_base"], size=3)
+            )
+            rear = tuple(require_finite(f"{what}: rear", e["rear"], size=3))
+            raw = require_finite(f"{what}: raw target", e["raw_target"], size=3)
+            target = require_finite(f"{what}: target", e["target"], size=3)
+            line = require_finite(f"{what}: line", e["line"], size=6).reshape(2, 3)
+            tip_x = float(require_shape(f"{what}: fork tip x", e["fork_tip_x_m"], ()))
+            obs = e["observation"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise Unverified(f"{what}: the record is incomplete ({exc!r})") from exc
+        report["entries"].append(
+            {
+                "attempt": e.get("attempt"),
+                "accepted": accepted,
+                "refused": rec.get("refused"),
+            }
+        )
+        start = next(
+            (st for st in starts if st.get("attempt") == e.get("attempt")), None
+        )
+        if not accepted:
+            # Nothing installed and no tracker started on this attempt.
+            if (
+                "installed" in e
+                or start is not None
+                or e.get("attempt") in done_attempts
+            ):
+                failures.append(
+                    f"{what}: refused, yet it installed paths or started a tracker"
+                )
+            continue
+        if (
+            rec.get("refused") is not None
+            or abs(off_v[0]) > NT.REDRAW_MAX_LATERAL_M
+            or abs(off_v[1]) > NT.CORRECTION_MAX_YAW_RAD
+            or off_v[2] < 0.3
+        ):
+            failures.append(f"{what}: accepted outside the box ({off})")
+        if not _same(speeds, [baseline, driven], 1e-12) or len(dries) != 2:
+            failures.append(
+                f"{what}: dry runs {speeds} are not the baseline and driven cruise"
+            )
+        for d in dries:
+            try:
+                end_v = require_finite(
+                    f"{what}: dry-run end",
+                    [d["end_ahead_m"], d["end_lateral_m"], d["end_yaw_rad"]],
+                    size=3,
+                )
+            except (KeyError, TypeError) as exc:
+                raise Unverified(f"{what}: a dry run is incomplete ({exc!r})") from exc
+            if not (
+                d.get("status") == "arrived"
+                and end_v[0] <= 0.006
+                and abs(end_v[1]) <= 0.006
+                and abs(end_v[2]) <= 0.015
+                and d.get("swept_clear") is True
+            ):
+                failures.append(f"{what}: a dry run did not arrive clear ({d})")
+        # The rear the straight starts from is the capture base's own rear axle (the runner
+        # derives both from one pose at the capture -- Codex S4c-3 implementation review 2 P2).
+        if not _same(
+            rear,
+            [
+                base[0] - offset * math.cos(base[2]),
+                base[1] - offset * math.sin(base[2]),
+                base[2],
+            ],
+            1e-9,
+        ):
+            failures.append(f"{what}: the rear is not the capture base's rear axle")
+        # The tracker's start of this attempt is this capture: the chain's input.
+        if start is None:
+            failures.append(f"{what}: no tracker started on this capture")
+        elif not (
+            _same(start.get("pose", [math.nan] * 3), base, 0.0)
+            and _same_observation(start.get("observation") or {}, obs, tol=0.0)
+            and _same(start.get("fork_tip_x_m", math.nan), tip_x, 0.0)
+        ):
+            failures.append(f"{what}: not the capture the tracker started from")
+        held = held_pockets(observation_from_dict(obs), base)
+        widths = (float(obs["left"]["width_m"]), float(obs["right"]["width_m"]))
+        # The chain: observation -> raw target -> planning target -> line -> installed paths.
+        if not _same(_site_from_observation(obs, base, depth), raw):
+            failures.append(f"{what}: the raw target is not its observation's")
+        want = raw
+        if inj.get("kind") == "correction" and e.get("attempt") in injected:
+            want = _biased_site(raw, float(inj["lateral_m"]), float(inj["yaw_rad"]))
+        if not _same(target, want):
+            failures.append(
+                f"{what}: the target is not the raw target (with its injection)"
+            )
+        sites = site_poses(PalletSite(*(float(v) for v in target)), geo)
+
+        def site(k, sites=sites):
+            return [sites[k].x_m, sites[k].y_m, sites[k].yaw_rad]
+
+        if not (_same(line[0], site("prealign")) and _same(line[1], site("approach"))):
+            failures.append(
+                f"{what}: the line is not the target's prealign and approach"
+            )
+        straight, _ = straight_from_pose(
+            Pose2D(*rear),
+            sites["prealign"],
+            sites["approach"],
+            max_lateral_m=NT.REDRAW_MAX_LATERAL_M,
+            max_yaw_rad=NT.CORRECTION_MAX_YAW_RAD,
+            min_length_m=0.3,
+        )
+        try:
+            installed = e["installed"]
+            arrays = {
+                name: tuple(
+                    np.asarray(installed[name][k], dtype=float)
+                    for k in ("poses", "directions", "curvatures_inv_m")
+                )
+                for name in ("approach", "insert", "extract")
+            }
+            for name, (poses, dirs, curvs) in arrays.items():
+                require_finite(f"{what}: installed {name}", poses)
+                if (
+                    poses.ndim != 2
+                    or poses.shape[1] != 3
+                    or len(dirs) != len(poses)
+                    or len(curvs) != len(poses)
+                ):
+                    raise ValueError(f"installed {name} shapes")
+        except (KeyError, TypeError, ValueError) as exc:
+            raise Unverified(
+                f"{what}: the installed paths are not recorded ({exc!r})"
+            ) from exc
+        if straight is None or not (
+            arrays["approach"][0].shape == np.asarray(straight.poses).shape
+            and np.allclose(arrays["approach"][0], straight.poses, rtol=0.0, atol=1e-9)
+            and np.array_equal(
+                arrays["approach"][1], np.asarray(straight.directions, dtype=float)
+            )
+            and np.array_equal(
+                arrays["approach"][2],
+                np.asarray(straight.curvatures_inv_m, dtype=float),
+            )
+        ):
+            failures.append(
+                f"{what}: the installed approach is not the straight from the recorded rear"
+            )
+        # Both dry runs rolled out again from the recorded rear on that straight with their
+        # recorded settings: their ends and their correction-point crossings must be the
+        # record's (Codex S4c-3 implementation review 3 P2: points taken from elsewhere).
+        try:
+            configs = [TrackerConfig(**c) for c in e["dry_run_configs"]]
+            approach_cfg = dict(result["tracker_configs"]["approach"])
+        except (KeyError, TypeError) as exc:
+            raise Unverified(
+                f"{what}: the dry runs' settings are not recorded ({exc!r})"
+            ) from exc
+        # The driven dry run is the run's own approach follower; the baseline one the same at
+        # the baseline cruise (Codex S4c-3 implementation review 4 P2: settings changed in the
+        # record only, e.g. curvature 0.40 for 0.36, passed the 1.0 m point at 46.6 mm).
+        if len(configs) != 2 or not (
+            asdict(configs[1]) == approach_cfg
+            and asdict(configs[0]) == {**approach_cfg, "cruise_speed_mps": baseline}
+        ):
+            failures.append(
+                f"{what}: the dry runs' settings are not the run's approach follower"
+            )
+        if (
+            len(configs) != 2
+            or not _same(
+                [c.cruise_speed_mps for c in configs], [baseline, driven], 1e-12
+            )
+            or {k: v for k, v in asdict(configs[0]).items() if k != "cruise_speed_mps"}
+            != {k: v for k, v in asdict(configs[1]).items() if k != "cruise_speed_mps"}
+        ):
+            failures.append(
+                f"{what}: the dry runs' settings are not the baseline and driven cruise of one follower"
+            )
+        if straight is not None and len(configs) == 2 and len(dries) == 2:
+            end = sites["approach"]
+            u_end = np.array([math.cos(end.yaw_rad), math.sin(end.yaw_rad)])
+            rollouts = [
+                bicycle_rollout(
+                    straight.poses,
+                    straight.directions,
+                    straight.curvatures_inv_m,
+                    c,
+                    np.asarray(rear, dtype=float),
+                )
+                for c in configs
+            ]
+            for d, ro in zip(dries, rollouts, strict=True):
+                last = np.asarray(ro.trajectory[-1], dtype=float)
+                rel = last[:2] - np.array([end.x_m, end.y_m])
+                own = [
+                    float(rel @ u_end),
+                    float(rel @ np.array([-u_end[1], u_end[0]])),
+                    math.atan2(
+                        math.sin(last[2] - end.yaw_rad), math.cos(last[2] - end.yaw_rad)
+                    ),
+                ]
+                if d.get("status") != ro.status or not _same(
+                    [d["end_ahead_m"], d["end_lateral_m"], d["end_yaw_rad"]], own, 1e-9
+                ):
+                    failures.append(
+                        f"{what}: a dry run's record is not its own roll-out"
+                    )
+            regenerated, inside = NT.correction_points_check(
+                [ro.trajectory for ro in rollouts],
+                sites["prealign"],
+                NT.rollout_face_distance(held, widths, tip_x, offset),
+            )
+
+            def key(pt):
+                return (int(pt.get("dry_run", -1)), float(pt.get("point_m", math.nan)))
+
+            def numbers(pt):
+                return [
+                    *pt["pose"],
+                    *pt["previous_pose"],
+                    pt["face_distance_m"],
+                    pt["previous_face_distance_m"],
+                    pt["offsets"]["lateral_m"],
+                    pt["offsets"]["yaw_rad"],
+                ]
+
+            try:
+                for pt in points:  # a NaN in the record is unverified, not a mismatch
+                    require_finite(
+                        f"{what}: correction-point offsets", numbers(pt), size=10
+                    )
+                recorded = sorted(points, key=key)
+                regenerated = sorted(regenerated, key=key)
+                same = len(recorded) == len(regenerated) and all(
+                    key(a) == key(b) and _same(numbers(a), numbers(b), 1e-9)
+                    for a, b in zip(recorded, regenerated, strict=False)
+                )
+            except (KeyError, TypeError) as exc:
+                same = False
+                failures.append(f"{what}: a correction point is incomplete ({exc!r})")
+            if not (same and inside):
+                failures.append(
+                    f"{what}: the correction points are not both roll-outs' crossings inside the box"
+                )
+        for name, a, b, direction in (
+            ("insert", "approach", "inserted", 1.0),
+            ("extract", "inserted", "extracted", -1.0),
+        ):
+            poses, dirs, curvs = arrays[name]
+            start_, end_ = np.asarray(site(a)), np.asarray(site(b))
+            axis = end_[:2] - start_[:2]
+            length = float(np.hypot(*axis))
+            u = axis / length if length > 0 else np.array([math.nan, math.nan])
+            rel = poses[:, :2] - start_[:2]
+            along = rel @ u
+            across = rel @ np.array([-u[1], u[0]])
+            heading = np.abs(
+                np.arctan2(
+                    np.sin(poses[:, 2] - start_[2]), np.cos(poses[:, 2] - start_[2])
+                )
+            )
+            if not (
+                len(poses) >= 2
+                and _same(poses[0], start_)
+                and _same(poses[-1], end_)
+                and np.all(np.abs(across) <= 1e-9)
+                and np.all(heading <= 1e-9)
+                and np.all(np.diff(along) >= -1e-12)
+                and np.all(dirs == direction)
+                and np.all(curvs == 0.0)
+            ):
+                failures.append(
+                    f"{what}: the installed {name} is not the target's straight"
+                )
+        for name, (poses, dirs, curvs) in arrays.items():
+            digest = NT.path_digest(poses, dirs, curvs)
+            if (
+                not digest
+                == installed[name].get("sha256")
+                == installed[name].get("tracker_sha256")
+            ):
+                failures.append(f"{what}: the installed {name} and its follower differ")
+        if start is not None and any(
+            (start.get("paths0") or {}).get(name)
+            != installed[name].get("tracker_sha256")
+            for name in ("approach", "insert", "extract")
+        ):
+            failures.append(f"{what}: the tracker did not start on the installed paths")
+    return {"applicable": True, "failures": failures, "passed": not failures, **report}
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -2655,6 +3276,7 @@ def judge_run(directory: Path, data_root: Path = ROOT) -> dict:
         try:
             end = insert_end_index(truth, result)
             vi = check_vi(truth, geometry, pallet_geo.overall_depth_m, end)
+            checks["redraw"] = check_near_redraw(result, nt)  # plan D8 S4c-3 stage 1
             if retried:
                 vii = judge_retried(
                     truth,
@@ -2803,6 +3425,7 @@ def judge_run(directory: Path, data_root: Path = ROOT) -> dict:
         "ix": checks.get("ix") or {"applicable": False},
         "episodes": checks.get("episodes") or {"applicable": False},  # plan D8 S4c-2
         "x": checks.get("x") or {"applicable": False},
+        "redraw": checks.get("redraw") or {"applicable": False},  # plan D8 S4c-3
         "forbidden_pocket_contacts": contacts,
         "s4c": s4c_outcome(verdict, checks, result, vi, contacts, vii),
         "inputs_sha256": {name: sha256_bytes(data_) for name, data_ in raw.items()},

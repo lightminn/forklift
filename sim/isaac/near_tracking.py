@@ -349,6 +349,48 @@ def carried_face(held: dict, widths: tuple, base_now) -> dict:
     return out
 
 
+def face_distance_m(face: dict, fork_tip_x_m: float) -> float:
+    """The estimated fork tip to face: the smallest base x of the four wall points of a
+    carried face less the fork tip x -- the correction trigger's distance (plan D8 S4b) and
+    the S4c-3 correction-point check's."""
+    return min(face[s][w][0] for s in ("left", "right") for w in ("outer", "inner")) - fork_tip_x_m
+
+
+def rollout_face_distance(held: dict, widths: tuple, fork_tip_x_m: float, rear_axle_offset_m: float):
+    """Plan D8 S4c-3: the correction trigger's distance at a rolled-out rear-axle pose -- the
+    observation held at its capture (held_pockets), seen from that pose's control base (the
+    rear axle plus |rear_axle_offset_m| along its heading)."""
+    offset = abs(rear_axle_offset_m)
+
+    def distance(pose) -> float:
+        base = (pose[0] + offset * math.cos(pose[2]), pose[1] + offset * math.sin(pose[2]), pose[2])
+        return face_distance_m(carried_face(held, widths, base), fork_tip_x_m)
+
+    return distance
+
+
+def correction_points_check(trajectories, line_start, face_distance) -> tuple[list, bool]:
+    """Plan D8 S4c-3 stage 1: each dry run's crossings of CORRECTION_POINTS_M (the first pose
+    within each by face_distance) and whether all of them lie inside the S4b correction box
+    (lateral REDRAW_MAX_LATERAL_M, heading CORRECTION_MAX_YAW_RAD) of the line."""
+    from forklift_core.planning.pallet_mission import correction_point_offsets
+
+    points, inside = [], True
+    for k, trajectory in enumerate(trajectories):
+        for entry in correction_point_offsets(
+            trajectory, line_start, face_distance=face_distance, points_m=CORRECTION_POINTS_M
+        ):
+            points.append({**entry, "dry_run": k})
+            offsets = entry["offsets"]
+            if (
+                offsets is None
+                or abs(offsets["lateral_m"]) > REDRAW_MAX_LATERAL_M
+                or abs(offsets["yaw_rad"]) > CORRECTION_MAX_YAW_RAD
+            ):
+                inside = False
+    return points, inside
+
+
 def entered(face: dict, fork_tip_x_m: float) -> bool:
     """The fork tips have passed the estimated face (its four wall points)."""
     xs = [face[s][w][0] for s in ("left", "right") for w in ("outer", "inner")]
@@ -561,6 +603,7 @@ CORRECTION_POINTS_M = (1.0, 0.6)  # estimated fork tip to face (plan D8d)
 # The correction straight's heading box: the follower's transient after the 1.0 m correction
 # reaches 110.3 mrad from a start inside the 0.05 m / 0.05 rad box (plan D8 S4b revision).
 CORRECTION_MAX_YAW_RAD = 0.12
+REDRAW_MAX_LATERAL_M = 0.05  # plan D8 S4b/S4c-3: redraw_docking's lateral box (its default)
 
 
 @dataclass(frozen=True)
@@ -901,6 +944,8 @@ RUN_SPECIFIC_ARGUMENTS = (
     "near_inject_lateral_m",
     "near_inject_yaw_rad",
     "near_drop_frames_from_m",
+    # Plan D8 S4c-3: the test-only near-capture heading box.
+    "near_capture_box_yaw_rad",
 )
 CONDITION_FIELDS = (
     "settings_synthetic",

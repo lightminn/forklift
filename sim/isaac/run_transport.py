@@ -286,6 +286,14 @@ def arguments() -> argparse.Namespace:
         help="Plan D8 S4c-1: the bias turning the pallet about its centre, rad.",
     )
     parser.add_argument(
+        "--near-capture-box-yaw-rad",
+        type=float,
+        default=0.05,
+        help="Plan D8 S4c-3 (test only): the near capture's own heading box, narrower than the "
+        "0.05 rad default to send near captures to the stage-1 re-draw in a smoke. (0, 0.05]. "
+        "Needs --near-tracking.",
+    )
+    parser.add_argument(
         "--near-drop-frames-from-m",
         type=float,
         default=None,
@@ -689,6 +697,12 @@ def arguments() -> argparse.Namespace:
             parser.error("--near-inject needs exactly one of --near-inject-lateral-m and --near-inject-yaw-rad")
     elif any(v != 0.0 for v in inject_sizes):
         parser.error("--near-inject-lateral-m / --near-inject-yaw-rad need --near-inject")
+    if args.near_capture_box_yaw_rad != 0.05:
+        if not args.near_tracking:
+            parser.error("--near-capture-box-yaw-rad needs --near-tracking")
+        if not (math.isfinite(args.near_capture_box_yaw_rad) and 0.0 < args.near_capture_box_yaw_rad <= 0.05):
+            # Narrower only: the default box is the one the v3.7 collision finding fixed.
+            parser.error("--near-capture-box-yaw-rad must be in (0, 0.05] rad")
     if args.near_drop_frames_from_m is not None:
         if not args.near_tracking:
             parser.error("--near-drop-frames-from-m needs --near-tracking")
@@ -2062,6 +2076,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "gate_front_x_m": config.handoff_start_front_x_m,
             "fork_tip_x_m": frame_geo.fork_tip_x_m,
             "observation": asdict(start["observation"]),
+            # Plan D8 S4c-3: the paths the tracker starts on (path revision 0), by the followers'
+            # own copies.
+            "paths0": {name_: near_tracking.path_digest(*trackers[name_].path_arrays())
+                       for name_ in ("approach", "insert", "extract")},
         }
         state["near_tracking"].setdefault("starts", []).append(state["near_tracking"]["start"])
         near["events"].append({"time_s": now_s, "event": "tracker_built", "episode": episode})
@@ -2195,7 +2213,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         # start (within W of the estimated face, or the insertion) on.
         face = near_tracking.carried_face(latest_.held, widths_, base_now)
         tip_x, rear_x = near["fork_tip_x_m"], -abs(args.rear_axle_offset_m)
-        face_distance = min(face[s_][w_][0] for s_ in ("left", "right") for w_ in ("outer", "inner")) - tip_x
+        face_distance = near_tracking.face_distance_m(face, tip_x)
         if (args.near_drop_frames_from_m is not None and near.get("drop_latch") is None
                 and face_distance <= args.near_drop_frames_from_m):
             # Plan D8 S4c-1: from here no frame reaches the tracker (feed_near_frame).
@@ -2785,6 +2803,70 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             dry_run_cruise_mps=[acceptance_.cruise_speed_mps, driven_.cruise_speed_mps],
         )
         return plans_, record_, target_
+
+    def near_capture_redraw(rear_now, capture_base, observation_, attempt_, acceptance_, driven_, now_s):
+        """Plan D8 S4c-3 stage 1: the near capture's docking straights re-drawn as at an S4b
+        correction point, before any tracker exists -- redraw_docking for the planning target
+        this capture made (its correction injection included), the heading box 0.12 rad, the
+        baseline- and driven-cruise dry runs, on the grid with only this target's band cleared,
+        and both dry runs' first poses within 1.0 and 0.6 m of the face (estimated fork tip to
+        face along the new line) inside the S4b correction box. Returns (plans or None, the
+        recovery entry)."""
+        from insertion_geometry import tracking_frame
+
+        from forklift_core.perception.near_field_tracking import held_pockets
+        from forklift_core.planning.pallet_mission import site_poses
+
+        target_ = pocket["planning_pickup"]
+        base_xy_ = adapter.estimate_pallet_center_m(observation_, geometry.pallet_depth_m)
+        raw_ = adapter.estimate_world_pallet_site(base_xy_, observation_.insertion_yaw_rad,
+                                                 (capture_base[0], capture_base[1]), capture_base[2])
+        start_ = np.asarray(rear_now, dtype=float)
+        rollouts_ = []
+
+        def dry(config_):
+            def run_(st_):
+                result_ = bicycle_rollout(st_.poses, st_.directions, st_.curvatures_inv_m, config_, start_)
+                rollouts_.append(result_)
+                return result_
+            return run_
+
+        plans_, record_ = redraw_docking(
+            grid_world(scenario), PlanningPose(*(float(v) for v in rear_now)), target_, planner_config,
+            geometry=geometry, pickup_bounds=pickup_bounds, dry_runs=(dry(acceptance_), dry(driven_)),
+            max_yaw_rad=near_tracking.CORRECTION_MAX_YAW_RAD,
+            **correction_grid(target_, target_, rear_now),
+        )
+        sites_ = site_poses(target_, geometry)
+        # The correction trigger's own distance: this observation placed at the capture base
+        # (the tracker's anchor), its four wall points seen from the base at each rolled-out
+        # pose, less the fork tip x (Codex S4c-3 implementation review P2: measured along the
+        # line it checked later poses than the run would).
+        held_ = held_pockets(observation_, tuple(float(v) for v in capture_base))
+        widths_ = (observation_.left.width_m, observation_.right.width_m)
+        tip_x_ = tracking_frame(args.forklift_urdf, args.pallet_geometry_loaded).fork_tip_x_m
+        face_distance_ = near_tracking.rollout_face_distance(held_, widths_, tip_x_, args.rear_axle_offset_m)
+        points_ = []
+        if plans_ is not None:
+            points_, inside_ = near_tracking.correction_points_check(
+                [rollout_.trajectory for rollout_ in rollouts_], sites_["prealign"], face_distance_)
+            if not inside_:
+                record_["refused"] = "correction_point"
+                plans_ = None
+        entry = {
+            "stage": "redraw", "attempt": attempt_, "time_s": now_s,
+            "capture_base": [float(v) for v in capture_base], "rear": [float(v) for v in rear_now],
+            "observation": asdict(observation_),
+            "raw_target": [raw_.x_m, raw_.y_m, raw_.yaw_rad],
+            "target": [target_.x_m, target_.y_m, target_.yaw_rad],
+            "line": [[float(v) for v in (p_.x_m, p_.y_m, p_.yaw_rad)] for p_ in (sites_["prealign"], sites_["approach"])],
+            "dry_run_cruise_mps": [acceptance_.cruise_speed_mps, driven_.cruise_speed_mps],
+            # The dry runs' full follower settings: the judge rolls them out again.
+            "dry_run_configs": [asdict(acceptance_), asdict(driven_)],
+            "fork_tip_x_m": tip_x_,
+            "record": record_, "correction_points": points_, "accepted": plans_ is not None,
+        }
+        return plans_, entry
 
     def near_install(now_s: float, plans_: dict, target_, point_m: float, rear_now) -> dict:
         """Plan D8 S4b: install an accepted correction at once -- the approach, insertion and
@@ -5445,6 +5527,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 )
                             # The accepted ground-truth pose only validated the
                             # capture; control takes the estimate at this instant.
+                            truth_rear_capture = [float(v) for v in rear]
                             rear = slam_rear(now_s)
                             rear_stamp = now_s
                             yaw = float(rear[2])
@@ -5458,6 +5541,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             )
                             attempt["control_pose_source"] = "slam_estimate"
                             attempt["slam_error"] = slam_error()
+                            # Plan D8 S4c-2 (x) v3: the control sample of this instant (the
+                            # control record has none -- the capture ends between loop ticks).
+                            attempt["capture_control"] = {
+                                "time_s": now_s,
+                                "control_rear": [float(v) for v in rear],
+                                "truth_rear": truth_rear_capture,
+                            }
                         attempt.update(
                             {
                                 "frame_diagnostics": asdict(frame_diagnostics),
@@ -6066,12 +6156,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                         # The box stays at 5 cm / 0.05 rad: the dry run
                                         # checks arrival only, not the swept footprint,
                                         # and a wider box admitted a collision (Codex v3.7 P1).
+                                        # A smoke may narrow the heading (plan D8 S4c-3).
                                         max_lateral_m=0.05,
-                                        max_yaw_rad=0.05,
+                                        max_yaw_rad=args.near_capture_box_yaw_rad,
                                         min_length_m=0.3,
                                     )
                                     state["near_capture"]["offsets_to_new_line"] = offsets
-                                    require(straight is not None, f"near_capture_misaligned:{offsets}")
+                                    state["near_capture"]["box"] = {
+                                        "lateral_m": 0.05, "yaw_rad": args.near_capture_box_yaw_rad, "length_m": 0.3}
                                     # The box above only bounds the projection; whether
                                     # the approach tracker converges within this straight
                                     # is checked by a dry run with margin (v3.7, Codex
@@ -6082,20 +6174,45 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                         # near capture left a custom-cruise tracker here.
                                         acceptance_config = replace(acceptance_config,
                                                                     cruise_speed_mps=speeds["approach"])
-                                    dry = bicycle_rollout(
-                                        straight.poses,
-                                        straight.directions,
-                                        straight.curvatures_inv_m,
-                                        acceptance_config,
-                                        rear,
-                                    )
-                                    state["near_capture"]["dry_run"] = asdict(dry)
-                                    require(
-                                        dry.status == "arrived"
-                                        and dry.position_error_m <= 0.006
-                                        and abs(dry.yaw_error_rad) <= 0.015,
-                                        f"near_capture_misaligned:dry_run:{asdict(dry)}",
-                                    )
+                                    refusal = f"near_capture_misaligned:{offsets}"
+                                    if straight is not None:
+                                        dry = bicycle_rollout(
+                                            straight.poses,
+                                            straight.directions,
+                                            straight.curvatures_inv_m,
+                                            acceptance_config,
+                                            rear,
+                                        )
+                                        state["near_capture"]["dry_run"] = asdict(dry)
+                                        if not (
+                                            dry.status == "arrived"
+                                            and dry.position_error_m <= 0.006
+                                            and abs(dry.yaw_error_rad) <= 0.015
+                                        ):
+                                            refusal = f"near_capture_misaligned:dry_run:{asdict(dry)}"
+                                            straight = None
+                                    redraw_entry = None
+                                    if straight is None and near is not None:
+                                        # Plan D8 S4c-3 stage 1: the S4b re-draw acceptance at the near
+                                        # capture -- the heading box 0.12 rad with both dry runs' ends,
+                                        # their swept footprints and the correction points checked.
+                                        driven_config = acceptance_config
+                                        if args.approach_straight_speed_mps is not None:
+                                            driven_config = replace(acceptance_config,
+                                                                    cruise_speed_mps=args.approach_straight_speed_mps)
+                                        redraw_plans, redraw_entry = near_capture_redraw(
+                                            rear, (float(base[0]), float(base[1]), float(yaw)), observation,
+                                            attempt_number, acceptance_config, driven_config, t)
+                                        if redraw_plans is not None:
+                                            straight = redraw_plans["approach"]
+                                            for name_ in ("insert", "extract"):
+                                                paths[name_] = redraw_plans[name_]
+                                                state["paths"][name_] = path_record(redraw_plans[name_])
+                                                trackers[name_] = RearAxlePathTracker(
+                                                    redraw_plans[name_].poses, redraw_plans[name_].directions,
+                                                    redraw_plans[name_].curvatures_inv_m, trackers[name_].config)
+                                        state["near_capture"].setdefault("recoveries", []).append(redraw_entry)
+                                    require(straight is not None, refusal)
                                     approach_config = acceptance_config
                                     if args.approach_straight_speed_mps is not None:
                                         # Plan D8b: only the driven cruise changes. The acceptance
@@ -6125,6 +6242,22 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                     )
                                     if args.approach_straight_speed_mps is not None:
                                         record_tracker_configs()  # the straight's own cruise
+                                    if redraw_entry is not None:
+                                        # Plan D8 S4c-3: what was installed, by content and by the
+                                        # followers' own copies.
+                                        redraw_entry["installed"] = {
+                                            name_: {
+                                                "sha256": near_tracking.path_digest(
+                                                    paths[name_].poses, paths[name_].directions,
+                                                    paths[name_].curvatures_inv_m),
+                                                "tracker_sha256": near_tracking.path_digest(
+                                                    *trackers[name_].path_arrays()),
+                                                "poses": np.asarray(paths[name_].poses).tolist(),
+                                                "directions": np.asarray(paths[name_].directions).tolist(),
+                                                "curvatures_inv_m": np.asarray(paths[name_].curvatures_inv_m).tolist(),
+                                            }
+                                            for name_ in ("approach", "insert", "extract")
+                                        }
                                     if args.pocket_check:
                                         build_pocket_check(float(straight.poses[-1][2]), rear, base)
                                     state["near_capture"].update(
