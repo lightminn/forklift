@@ -40,7 +40,15 @@ stop with what the stopping model was given, and when the S4a-2 protection start
         true rear-axle travel from its conservative pixel time (stamp - L_hi) to the next
         accepted arrival (or the section's end) within 0.03 m;
   (v)   the pallet's true pose from the near capture to the insertion end (or the last
-        approach or insert tick) within 0.01 mm and 0.01 mrad of its pose at the capture.
+        approach or insert tick) within 0.01 mm and 0.01 mrad of its pose at the capture;
+  (viii) S4b runs (a record with correction points): both points (1.0, 0.6 m) accepted once,
+        in order, each opened on the first approach tick before entry whose estimate is
+        within it, decided standing (unbroken from t_s) on the latest front observation of
+        this hold taken at or after t_s, zero commands on the install and release ticks
+        (their t + dt rows), every revision's paths equal to their content and to the
+        followers' copies, every near-field tick on the revision installed before it, the
+        final paths.json the last revision. An S4b smoke passes on (i)-(viii), success and
+        phase "complete" ("s4b_pass").
 
 Rule version v2 (2026-10-10, after the first results -- plan ③(vii)): a zero command
 the near-field stop did not give (its tick record shows no hold, reason or terminal) is the
@@ -731,6 +739,21 @@ def require_finite(what: str, values, size: int | None = None) -> np.ndarray:
     return arr
 
 
+def require_shape(what: str, value, shape: tuple) -> np.ndarray:
+    """require_finite with an exact array shape (a scalar is shape ())."""
+    arr = require_finite(what, value)
+    if arr.shape != shape:
+        raise Unverified(f"{what} has shape {arr.shape}, not {shape}")
+    return arr
+
+
+def require_count(what: str, value) -> int:
+    """A record's integer (a JSON int, not a bool or a float) -- else unverified."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise Unverified(f"{what} {value!r} is not an integer")
+    return value
+
+
 def state_at(states: list[dict], t: float) -> dict:
     """The latest accepted observation at time t (results are delivered before the tick)."""
     out = None
@@ -1048,6 +1071,322 @@ def check_v(truth: dict, anchor_t: float, end_index: int) -> dict:
     }
 
 
+VIII_RULES = "v1"  # plan D8 S4b (viii), fixed before the first S4b run
+
+
+def check_viii(
+    truth: dict,
+    near: dict,
+    start: dict,
+    paths_record: dict,
+    states: list[dict],
+    bounds,
+    rear_offset_m: float,
+) -> dict:
+    """(viii), plan D8 S4b: both correction points accepted once, in order; each opened on
+    the first approach tick before entry whose estimate (rebuilt from the accepted
+    observations) is within it; decided standing (the stop detector unbroken from t_s) on
+    the front observation of this hold that was the latest, its pixel time at or after
+    t_s; the install and release ticks' commands zero (the t + dt rows); every revision's
+    paths equal to their recorded content and to the followers' own copies; every
+    near-field tick's follower on the revision installed before it; the final paths.json
+    the last revision. Reports the true rear-axle travel from the observation's pixel
+    time to the decision, the target changes and the stop times."""
+    import near_tracking as NT
+
+    t = np.asarray(truth["stamp_s"], dtype=float)
+    phases = [str(p) for p in truth["phases"]]
+    applied = np.asarray(truth["applied_speed_mps"], dtype=float)
+    rear = rear_axle(np.asarray(truth["base_pose"], dtype=float), rear_offset_m)
+    corrections, revisions = near["corrections"], near["path_revisions"]
+    tip_x, episode = float(start["fork_tip_x_m"]), start["episode"]
+    rows = {
+        tick_index(t, r.get("t"), "a near-field tick record"): r
+        for r in near.get("ticks") or []
+    }
+    failures, report = [], []
+
+    def row_at(time_s, what):
+        i = tick_index(t, time_s, what)
+        if i not in rows:
+            raise Unverified(f"{what} at {time_s} has no near-field tick record")
+        return i, rows[i]
+
+    def distance_at(i):
+        st = state_at(states, float(t[i]))
+        face = NT.carried_face(
+            st["held"],
+            st["widths"],
+            tuple(require_finite("tick base", rows[i]["base"], size=3)),
+        )
+        d = (
+            min(
+                face[s_][w_][0] for s_ in ("left", "right") for w_ in ("outer", "inner")
+            )
+            - tip_x
+        )
+        return d, NT.entered(face, tip_x)
+
+    names = ("approach", "insert", "extract")
+
+    def need_path(what, rec):
+        """A recorded path's three arrays, (N, 3), (N,), (N,) and finite -- else unverified."""
+        try:
+            poses = require_finite(f"{what} poses", rec["poses"])
+            dirs = require_finite(f"{what} directions", rec["directions"])
+            curv = require_finite(f"{what} curvatures", rec["curvatures_inv_m"])
+        except (KeyError, TypeError) as exc:
+            raise Unverified(f"{what}: {exc!r} missing") from exc
+        if (
+            poses.ndim != 2
+            or poses.shape[1:] != (3,)
+            or len(poses) < 2
+            or dirs.shape != (len(poses),)
+            or curv.shape != (len(poses),)
+        ):
+            raise Unverified(f"{what}: the arrays are not (N, 3), (N,), (N,)")
+        return poses, dirs, curv
+
+    for r in revisions:
+        what = f"revision {r.get('revision')}"
+        try:
+            require_count(f"{what} number", r["revision"])
+            for key in ("time_s", "point_m"):
+                require_shape(f"{what} {key}", r[key], ())
+            for key in ("target", "previous_target"):
+                require_shape(f"{what} {key}", r[key], (3,))
+            for name in names:
+                need_path(f"{what} {name}", r["paths"][name])
+                if not isinstance(
+                    r["paths"][name].get("sha256"), str
+                ) or not isinstance(r["trackers"].get(name), str):
+                    raise Unverified(f"{what} {name}: no path or follower digest")
+        except (KeyError, TypeError, ValueError) as exc:
+            raise Unverified(f"{what}: its record is incomplete ({exc!r})") from exc
+    points = [c.get("point_m") for c in corrections]
+    accepted = [c.get("accepted") for c in corrections]
+    if points != list(NT.CORRECTION_POINTS_M) or accepted != [True] * len(
+        NT.CORRECTION_POINTS_M
+    ):
+        failures.append(
+            f"corrections {points} accepted {accepted}: not every point once, accepted"
+        )
+    if [r["revision"] for r in revisions] != list(range(1, len(revisions) + 1)):
+        raise Unverified("path revisions are not numbered 1, 2, ...")
+    previous_closed = None
+    for c in corrections:
+        if not c.get("accepted"):
+            continue
+        try:
+            keys = (
+                "point_m",
+                "trigger_s",
+                "decision_s",
+                "release_s",
+                "closed_s",
+                "face_distance_m",
+            )
+            point, trigger, decision, release, closed, recorded_d = (
+                float(require_shape(f"correction {c.get('point_m')} {k}", c[k], ()))
+                for k in keys
+            )
+            standing_ = require_finite(
+                f"correction {point} standing_s", c["standing_s"]
+            )
+            if standing_.ndim != 1 or not standing_.size:
+                raise Unverified(f"correction {point}: no t_s")
+            t_s = float(standing_[-1])
+            obs = c["observation"]
+            obs_stamp, obs_pixel = (
+                float(require_shape(f"correction {point} observation {k}", obs[k], ()))
+                for k in ("stamp_s", "pixel_s")
+            )
+            number = require_count(f"correction {point} revision", c["revision"])
+            if not 1 <= number <= len(revisions):
+                raise Unverified(
+                    f"correction {point}: revision {number} is not recorded"
+                )
+            revision = revisions[number - 1]
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            raise Unverified(
+                f"correction {c.get('point_m')}: its record is incomplete ({exc!r})"
+            ) from exc
+        i_trig, _ = row_at(trigger, "the trigger")
+        if phases[int(truth["phase"][i_trig])] != "approach":
+            failures.append(
+                f"correction {point}: triggered in {phases[int(truth['phase'][i_trig])]}"
+            )
+        d, inside = distance_at(i_trig)
+        if abs(d - recorded_d) > 1e-6:
+            raise Unverified(
+                f"correction {point}: the recorded distance {recorded_d} is not the rebuilt {d}"
+            )
+        if not d <= point + 1e-12 or inside:
+            failures.append(
+                f"correction {point}: opened at an estimate of {d:.4f} m (entered {inside})"
+            )
+        # The first crossing: no earlier applicable tick (from the first near-field tick, or
+        # from the previous point's close) had the estimate within the point.
+        first = (
+            min(rows)
+            if previous_closed is None
+            else tick_index(t, previous_closed, "the previous point's close")
+        )
+        for i in range(first, i_trig):
+            if phases[int(truth["phase"][i])] != "approach":
+                continue
+            if i not in rows:
+                raise Unverified(
+                    f"correction {point}: no tick record at {t[i]:.4f} s before its trigger"
+                )
+            d_i, _ = distance_at(i)
+            if d_i <= point - 1e-12:
+                failures.append(
+                    f"correction {point}: the estimate was already {d_i:.4f} m at {t[i]:.4f} s"
+                )
+                break
+        if previous_closed is not None and trigger <= previous_closed:
+            failures.append(
+                f"correction {point}: opened before the previous point closed"
+            )
+        if not trigger - TIME_TOL_S <= t_s <= decision + TIME_TOL_S:
+            failures.append(
+                f"correction {point}: t_s {t_s} outside its trigger and decision"
+            )
+        i_ts, i_dec = tick_index(t, t_s, "t_s"), tick_index(t, decision, "the decision")
+        for i in range(i_ts, i_dec + 1):
+            if i not in rows:
+                raise Unverified(
+                    f"correction {point}: no tick record at {t[i]:.4f} s between t_s and the decision"
+                )
+            if not rows[i].get("standing"):
+                failures.append(
+                    f"correction {point}: not standing at {t[i]:.4f} s after t_s"
+                )
+                break
+        if i_ts > i_trig and rows.get(i_ts - 1, {}).get("standing"):
+            failures.append(
+                f"correction {point}: the stop detector already stood before the recorded t_s"
+            )
+        pixel = obs_stamp - bounds.max_latency_s
+        if obs.get("source") != "front" or obs.get("frame_version") != episode:
+            failures.append(
+                f"correction {point}: observation {obs.get('source')} in hold {obs.get('frame_version')}"
+            )
+        if abs(pixel - obs_pixel) > 1e-9 or not pixel >= t_s - TIME_TOL_S:
+            failures.append(
+                f"correction {point}: pixel time {pixel:.4f} s against t_s {t_s:.4f} s"
+            )
+        latest = state_at(states, decision)
+        if latest["source"] != "front" or abs(latest["stamp_s"] - obs_stamp) > 1e-9:
+            failures.append(
+                f"correction {point}: the observation used was not the latest accepted at the decision"
+            )
+        i_rel, row_rel = row_at(release, "the release")
+        if abs(closed - float(t[min(i_dec + 1, len(t) - 1)])) > TIME_TOL_S:
+            failures.append(
+                f"correction {point}: closed at {closed:.4f} s, not the tick after its decision"
+            )
+        released_at = [
+            i for i in range(i_dec + 1, i_rel + 1) if rows.get(i, {}).get("released")
+        ]
+        release_events = [
+            e
+            for e in near.get("events") or []
+            if e.get("event") == "release"
+            and abs(float(e.get("time_s", math.nan)) - release) <= TIME_TOL_S
+        ]
+        if (
+            not release > decision + TIME_TOL_S
+            or released_at != [i_rel]
+            or not release_events
+        ):
+            failures.append(
+                f"correction {point}: release_s {release:.4f} s is not the first release after its decision"
+            )
+        for name, i in (("install", i_dec), ("release", i_rel)):
+            if i + 1 >= len(t):
+                raise Unverified(f"correction {point}: no record after its {name} tick")
+            if applied[i + 1] != 0.0:
+                failures.append(
+                    f"correction {point}: {name} tick command {applied[i + 1]} m/s"
+                )
+        if (
+            abs(float(revision["time_s"]) - decision) > TIME_TOL_S
+            or revision.get("point_m") != point
+        ):
+            failures.append(
+                f"correction {point}: its revision {revision.get('revision')} is not this decision's"
+            )
+        for name in names:
+            rec = revision["paths"][name]
+            digest = NT.path_digest(
+                *need_path(f"revision {revision['revision']} {name}", rec)
+            )
+            if not digest == rec["sha256"] == revision["trackers"][name]:
+                failures.append(
+                    f"revision {revision['revision']} {name}: path and follower contents differ"
+                )
+        prev_target = np.asarray(revision["previous_target"], dtype=float)
+        new_target = np.asarray(revision["target"], dtype=float)
+        c_, s_ = math.cos(prev_target[2]), math.sin(prev_target[2])
+        delta = new_target[:2] - prev_target[:2]
+        report.append(
+            {
+                "point_m": point,
+                "stop_s": release - trigger,
+                "wait_after_standing_s": decision - t_s,
+                "observation_to_decision_travel_m": window_travel(
+                    t, rear, pixel, decision
+                )
+                if pixel >= t[0]
+                else None,
+                "target_change": {
+                    "along_m": float(delta @ (c_, s_)),
+                    "lateral_m": float(delta @ (-s_, c_)),
+                    "yaw_rad": float(
+                        math.atan2(
+                            math.sin(new_target[2] - prev_target[2]),
+                            math.cos(new_target[2] - prev_target[2]),
+                        )
+                    ),
+                },
+            }
+        )
+        previous_closed = closed
+    installs = [float(r["time_s"]) for r in revisions]
+    for i, row in sorted(rows.items()):
+        if "path_revision" not in row:
+            raise Unverified(
+                f"the tick at {t[i]:.4f} s does not record its path revision"
+            )
+        expected = sum(1 for at in installs if at < float(t[i]) - TIME_TOL_S)
+        if row["path_revision"] != expected:
+            failures.append(
+                f"the tick at {t[i]:.4f} s followed revision {row['path_revision']}, not {expected}"
+            )
+            break
+    if revisions:
+        last = revisions[-1]["paths"]
+        for name in names:
+            final = need_path(f"paths.json {name}", paths_record.get(name) or {})
+            same = all(
+                np.array_equal(a, b)
+                for a, b in zip(
+                    final, need_path(f"last revision {name}", last[name]), strict=True
+                )
+            )
+            if not same:
+                failures.append(f"paths.json {name} is not the last revision")
+    return {
+        "applicable": True,
+        "rules": VIII_RULES,
+        "corrections": report,
+        "failures": failures,
+        "passed": not failures,
+    }
+
+
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -1071,6 +1410,7 @@ def run_files_digest(directory: Path) -> str:
     names = [
         "result.json",
         "near_tracking.json",
+        "paths.json",
         "slam_control.npy",
         "pocket_frames/index.json",
         "pocket_frames/truth.npz",
@@ -1103,7 +1443,12 @@ def judge_run(directory: Path, data_root: Path = ROOT) -> dict:
 
     raw = {
         name: (directory / name).read_bytes()
-        for name in ("result.json", "pocket_frames/truth.npz", "near_tracking.json")
+        for name in (
+            "result.json",
+            "pocket_frames/truth.npz",
+            "near_tracking.json",
+            "paths.json",
+        )
         if (directory / name).exists()
     }
     if "result.json" not in raw or "pocket_frames/truth.npz" not in raw:
@@ -1214,6 +1559,20 @@ def judge_run(directory: Path, data_root: Path = ROOT) -> dict:
                 float(nt["start"]["aligned_s"]),
                 end if end is not None else section[1],
             )
+            if (
+                "corrections" in near
+            ):  # an S4b record; earlier runs have no correction points
+                if "paths.json" not in raw:
+                    raise Unverified("no paths.json")
+                checks["viii"] = check_viii(
+                    truth,
+                    near,
+                    nt["start"],
+                    json.loads(raw["paths.json"]),
+                    states,
+                    bounds,
+                    rear_offset,
+                )
         except Unverified as exc:
             problems.append(str(exc))
     if run_files_digest(directory) != before:  # judged on the files the digest names
@@ -1241,6 +1600,13 @@ def judge_run(directory: Path, data_root: Path = ROOT) -> dict:
         "v": checks.get("v"),
         "vi": vi,
         "vii": vii,
+        "viii": checks.get("viii") or {"applicable": False},
+        "s4b_pass": (
+            verdict == "pass"
+            and "viii" in checks
+            and result.get("success") is True
+            and result.get("phase") == "complete"
+        ),
         "inputs_sha256": {name: sha256_bytes(data_) for name, data_ in raw.items()},
         "run_files_digest": before,
         **provenance_extra,
@@ -1287,7 +1653,7 @@ def main(argv=None) -> int:
                     "vii": vii.get("passed"),
                     **{
                         k: (r[k] or {}).get("passed")
-                        for k in ("i", "ii", "iii", "iv", "v")
+                        for k in ("i", "ii", "iii", "iv", "v", "viii")
                     },
                 },
                 default=json_value,

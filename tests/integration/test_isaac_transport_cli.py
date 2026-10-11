@@ -603,7 +603,7 @@ def test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival() -> 
     assert source.index("            check_near_contract()\n        for step in range(") > 0
     assert "until S4a-2" not in source
     # Decided after the scheduled safety stops and before the arrival transitions.
-    tick = source.index("hold_, released_, arrive_ = near_tick(t, rear_stamp, rear, requested_speed, phase, curvature)")
+    tick = source.index("hold_, released_, arrive_ = near_tick(t, rear_stamp, rear, requested_speed, phase, curvature,")
     assert source.index("safety_stops.update(") < tick < source.index("elif phase == \"approach\":\n")
     block = source[tick:source.index("phase == \"observe\" and tracking.status", tick)]
     for line in ("requested_speed = 0.0", "dwell_hold = True", "safety_hold = True",
@@ -645,3 +645,35 @@ def test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival() -> 
     assert "steering_command" in tick_fn
     unbounded = tick_src.index('terminal = terminal or "unbounded"  # no bound: not a measured shortfall')
     assert unbounded < tick_src.index("elif face_distance - along_e <= k_tip * sweep:")
+
+
+def test_s4b_correction_points_are_decided_before_the_stop_and_install_at_once() -> None:
+    """Plan D8 S4b: the correction points join the stop decision as a waiting reason, are
+    decided on the tracker's latest observation standing, refuse D5 alongside, check the
+    docking straights on the grid with only B0 and the new band cleared, and install the
+    paths, followers, pickup target, phase start and permission path together."""
+    import ast
+
+    source = SCRIPT.read_text()
+    tree = ast.parse(source)
+    functions = {n.name: ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    tick_fn = functions["near_tick"]
+    assert tick_fn.index("near_tracking.correction_update(") < tick_fn.index("near_tracking.decide_stop(")
+    assert tick_fn.index("near_redraw(latest_, rear_now)") < tick_fn.index("near_install(")
+    assert "terminal = terminal or 'correction_missed'" in tick_fn and "terminal = 'replan_rejected'" in tick_fn
+    assert "revision_used = near['path_revision']" in tick_fn and "'path_revision': revision_used" in tick_fn
+    assert 'tracking.status == "arrived")' in source[source.index("arrive_ = near_tick("):][:200]
+    grid_fn = functions["correction_grid"]
+    assert "docking_band(occupancy_, first_target) & docking_band(occupancy_, target)" in grid_fn
+    redraw_fn = functions["near_redraw"]
+    assert "near['first_target']" in redraw_fn and "dry(acceptance_), dry(driven_)" in redraw_fn
+    install_fn = functions["near_install"]
+    for line in ("nonlocal phase_started", "phase_started = now_s", "pocket['planning_pickup'] = target_",
+                 "obstacle['pickup_estimate'] = target_", "obstacle['layer'].refresh(", "trackers[name_] = RearAxlePathTracker(",
+                 "trackers[name_].path_arrays()", "near['path_revision'] = revision_"):
+        assert line in install_fn, line
+    contract_fn = functions["check_near_contract"]
+    assert "if args.pocket_check:" in contract_fn and "waits for D5 v11" in contract_fn
+    assert "first_target=pocket['planning_pickup']" in functions["build_near_tracker"]
+    # The mission's own docking band is the same computation as before (extracted only).
+    assert "band = docking_band(occupancy, target)" in functions["grid_kwargs"]

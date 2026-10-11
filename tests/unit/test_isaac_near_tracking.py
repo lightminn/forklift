@@ -529,3 +529,83 @@ def test_a_waiting_stop_releases_only_standing_and_keeps_its_first_reason():
 def test_no_reason_no_stop():
     state, action = NT.decide_stop(NT.StopState(), 0.0, **tick(standing=True))
     assert state == NT.StopState() and not any(action.values())
+
+
+# Plan D8 S4b: the correction points ---------------------------------------------------------
+def corr(state, now, *, phase="approach", entered=False, d=2.0, standing=False, pixel=0.0, source="front",
+         version=1, episode=1):
+    return NT.correction_update(state, now, phase=phase, entered=entered, face_distance_m=d, standing=standing,
+                                pixel_s=pixel, source=source, frame_version=version, episode=episode)
+
+
+def test_a_correction_point_opens_once_the_estimate_passes_it_and_waits():
+    state = NT.CorrectionState()
+    state, act = corr(state, 1.0, d=1.0001)
+    assert state.point_m is None and act["wait"] is None
+    for bad in ({"phase": "insert"}, {"entered": True}):
+        assert corr(NT.CorrectionState(), 1.0, d=0.9, **bad)[0].point_m is None
+    state, act = corr(state, 2.0, d=0.9995)
+    assert state.point_m == 1.0 and state.trigger_s == 2.0 and act == {
+        "wait": "correction:1.0", "decide": False, "refuse": None, "event": "trigger"}
+    assert state.standing_s is None
+
+
+def test_a_point_decides_only_standing_on_an_observation_after_the_stop():
+    state, _ = corr(NT.CorrectionState(), 2.0, d=0.99)
+    state, act = corr(state, 2.2, d=0.98, standing=True, pixel=2.1)
+    assert state.standing_s == 2.2 and not act["decide"] and act["wait"] == "correction:1.0"
+    state, act = corr(state, 2.3, d=0.98, standing=True, pixel=2.15)  # taken before t_s
+    assert not act["decide"]
+    # The stop detector sees motion again: t_s restarts.
+    moved, act = corr(state, 2.35, d=0.98, standing=False, pixel=2.25)
+    assert moved.standing_s is None and not act["decide"]
+    again, _ = corr(moved, 2.4, d=0.98, standing=True, pixel=2.25)
+    assert again.standing_s == 2.4
+    assert not corr(again, 2.5, standing=True, pixel=2.3)[1]["decide"]  # before the new t_s
+    state, act = corr(again, 2.6, standing=True, pixel=2.4)
+    assert act["decide"] and act["wait"] == "correction:1.0"
+    # Not standing at the decision tick: wait.
+    assert not corr(again, 2.6, standing=False, pixel=2.4)[1]["decide"]
+
+
+def test_a_point_refuses_an_observation_not_from_the_front_or_another_hold():
+    state, _ = corr(NT.CorrectionState(), 2.0, d=0.59)
+    state, _ = corr(state, 2.1, standing=True)
+    assert corr(state, 2.5, standing=True, pixel=2.2, source="roof")[1]["refuse"] == "source:roof"
+    assert corr(state, 2.5, standing=True, pixel=2.2, version=2)[1]["refuse"] == "frame:2!=1"
+
+
+def test_an_installed_point_holds_its_tick_closes_the_next_and_opens_the_next_point_later():
+    state, _ = corr(NT.CorrectionState(), 2.0, d=0.99)
+    state, _ = corr(state, 2.1, standing=True)
+    state, act = corr(state, 2.5, standing=True, pixel=2.2)
+    assert act["decide"]
+    state = NT.correction_installed(state, 2.5)
+    assert state.next_index == 1 and state.installed_s == 2.5
+    assert corr(state, 2.5, standing=True)[1]["wait"] == "correction:1.0"
+    state, act = corr(state, 2.5 + TICK, d=0.59, standing=True)
+    assert state == NT.CorrectionState(next_index=1) and act["wait"] is None and act["event"] == "closed"
+    assert not NT.corrections_missed(NT.CorrectionState(next_index=1, point_m=0.6))
+    assert NT.corrections_missed(state)
+    state, act = corr(state, 3.0, d=0.599)
+    assert state.point_m == 0.6 and act["event"] == "trigger"
+    done = NT.CorrectionState(next_index=2)
+    assert corr(done, 4.0, d=0.1)[0] == done and not NT.corrections_missed(done)
+
+
+def test_the_path_digest_is_the_paths_content_and_the_follower_keeps_the_same_copy():
+    from forklift_core.control.path_tracking import RearAxlePathTracker
+
+    poses = np.array([[0.0, 0.0, 0.0], [0.04, 0.0, 0.0], [0.08, 0.0, 0.0]])
+    directions = np.ones(3, dtype=np.int8)
+    curvatures = np.zeros(3)
+    digest = NT.path_digest(poses, directions, curvatures)
+    assert digest == NT.path_digest(poses.tolist(), directions.astype(float), curvatures)
+    moved = poses.copy()
+    moved[2, 1] = 1e-12
+    assert NT.path_digest(moved, directions, curvatures) != digest
+    tracker = RearAxlePathTracker(poses, directions, curvatures)
+    copies = tracker.path_arrays()
+    assert NT.path_digest(*copies) == digest
+    copies[0][0, 0] = 5.0  # a copy: the follower's own path does not change
+    assert NT.path_digest(*tracker.path_arrays()) == digest

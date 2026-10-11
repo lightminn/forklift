@@ -219,6 +219,14 @@ class RearAxlePathTracker:
             raise ValueError("speed_mps must be finite")
         self._command_speed = float(speed_mps)
 
+    def path_arrays(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Copies of the path this tracker follows (poses, directions, curvatures).
+
+        The tracker copied them when it was built; a runner that replaces a path
+        records these to show which path was actually followed (plan D8 S4b).
+        """
+        return self._poses.copy(), self._directions.copy(), self._curvatures.copy()
+
     def leg_ahead(self) -> tuple[np.ndarray, int]:
         """Rear-axle poses from the current progress to the end of the current
         leg (the next cusp or the goal), and that leg's direction (+1 / -1).

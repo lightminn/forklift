@@ -1,7 +1,7 @@
 """Synthetic mission orchestration; physical handling is an adapter test."""
 
 import math
-from dataclasses import asdict, replace
+from dataclasses import asdict, astuple, replace
 
 import numpy as np
 import pytest
@@ -1390,3 +1390,180 @@ def test_an_approach_that_is_all_one_straight_is_cut_where_keep_m_is_left():
     prefix = final_straight_prefix(_plan(poses, [1] * 24, [0.0] * 24), keep_m=0.8)
     assert prefix is not None
     np.testing.assert_allclose(prefix.poses[-1], (1.5, 0.0, 0.0), atol=1e-9)
+
+
+# Plan D8 S4b: the docking straights re-drawn at a correction point -----------------------
+REDRAW_SCENARIO = TransportScenario(
+    0,
+    Pose2D(-2.34, 0, 0),
+    PalletSite(3.4, 0, 0),
+    PalletSite(0.2, 1, 0),
+    (),
+    Bounds(-3, 4.7, -1.75, 3.05),
+)
+
+
+def _redraw_start(target, back_m, lateral_m=0.0, yaw_rad=0.0):
+    """A rear-axle pose back_m before the approach end, off the line by lateral_m."""
+    end = site_poses(target)["approach"]
+    c, s = math.cos(end.yaw_rad), math.sin(end.yaw_rad)
+    return Pose2D(
+        end.x_m - back_m * c - lateral_m * s,
+        end.y_m - back_m * s + lateral_m * c,
+        end.yaw_rad + yaw_rad,
+    )
+
+
+def _dry(end, ahead=0.0, lateral=0.0, yaw=0.0, status="arrived", through=None):
+    """A stand-in dry run: from the straight's start to a last pose off its end."""
+    from types import SimpleNamespace
+
+    def run(straight):
+        c, s = math.cos(end.yaw_rad), math.sin(end.yaw_rad)
+        last = (
+            end.x_m + ahead * c - lateral * s,
+            end.y_m + ahead * s + lateral * c,
+            end.yaw_rad + yaw,
+        )
+        poses = (
+            [tuple(straight.poses[0])]
+            + ([through] if through is not None else [])
+            + [last]
+        )
+        return SimpleNamespace(
+            status=status,
+            position_error_m=math.hypot(ahead, lateral),
+            yaw_error_rad=-yaw,
+            time_s=1.0,
+            trajectory=tuple(poses),
+        )
+
+    return run
+
+
+def test_redraw_for_the_mission_target_gives_the_missions_insert_and_extract():
+    target = PalletSite(3.4, 0.0, 0.0)
+    mission = plan_transport(REDRAW_SCENARIO, target_pickup=target)
+    assert mission.success, mission.status
+    plans, record = pallet_mission.redraw_docking(
+        REDRAW_SCENARIO, _redraw_start(target, 0.5, 0.004, 0.003), target
+    )
+    assert record["refused"] is None and plans is not None
+    for name in ("insert", "extract"):
+        np.testing.assert_array_equal(plans[name].poses, getattr(mission, name).poses)
+        np.testing.assert_array_equal(
+            plans[name].directions, getattr(mission, name).directions
+        )
+    np.testing.assert_allclose(
+        plans["approach"].poses[-1], mission.approach.poses[-1], atol=1e-12
+    )
+    assert plans["approach"].length_m == pytest.approx(0.5)
+    assert record["offsets"]["lateral_m"] == pytest.approx(0.004)
+
+
+def test_redraw_follows_a_moved_target():
+    target = PalletSite(3.41, 0.012, 0.004)
+    plans, record = pallet_mission.redraw_docking(
+        REDRAW_SCENARIO, _redraw_start(PalletSite(3.4, 0.0, 0.0), 0.9), target
+    )
+    assert record["refused"] is None
+    poses = site_poses(target)
+    np.testing.assert_allclose(
+        plans["approach"].poses[-1], astuple(poses["approach"]), atol=1e-12
+    )
+    np.testing.assert_allclose(
+        plans["insert"].poses[-1], astuple(poses["inserted"]), atol=1e-12
+    )
+    np.testing.assert_allclose(
+        plans["extract"].poses[-1], astuple(poses["extracted"]), atol=1e-12
+    )
+
+
+def test_redraw_refuses_a_truck_outside_the_box_or_too_close():
+    target = PalletSite(3.4, 0.0, 0.0)
+    for start in (
+        _redraw_start(target, 0.5, 0.06),
+        _redraw_start(target, 0.5, 0.0, 0.06),
+        _redraw_start(target, 0.25),
+    ):
+        plans, record = pallet_mission.redraw_docking(REDRAW_SCENARIO, start, target)
+        assert plans is None and record["refused"] == "box"
+
+
+def test_redraw_checks_the_approach_straight_at_the_approach_clearance():
+    target = PalletSite(3.4, 0.0, 0.0)
+    start = _redraw_start(target, 0.9)
+    # Beside the straight, 0.03 m outside the unloaded half width: inside the 0.05 m clearance.
+    prop = PlacedProp(
+        ASSETS[1], Rectangle(start.x_m + 0.4, 0.36 + 0.03 + 0.1, 0.2, 0.2, 0.0)
+    )
+    plans, record = pallet_mission.redraw_docking(
+        replace(REDRAW_SCENARIO, props=(prop,)), start, target
+    )
+    assert plans is None and record["refused"] == "approach_collision"
+
+
+def test_redraw_judges_the_dry_run_end_across_the_line_and_only_past_the_goal():
+    target = PalletSite(3.4, 0.0, 0.0)
+    end = site_poses(target)["approach"]
+    start = _redraw_start(target, 0.5)
+    # The tracker's own stop, ~8 mm short and on the line: accepted (S4a-2 offline check).
+    plans, record = pallet_mission.redraw_docking(
+        REDRAW_SCENARIO,
+        start,
+        target,
+        dry_runs=(_dry(end, -0.0077, 0.0007, 0.005), _dry(end, 0.002)),
+    )
+    assert plans is not None and len(record["dry_runs"]) == 2
+    assert record["dry_runs"][0]["end_ahead_m"] == pytest.approx(-0.0077)
+    for bad in (
+        _dry(end, 0.007),
+        _dry(end, 0.0, 0.007),
+        _dry(end, 0.0, -0.007),
+        _dry(end, 0.0, 0.0, 0.016),
+        _dry(end, status="failed"),
+    ):
+        plans, record = pallet_mission.redraw_docking(
+            REDRAW_SCENARIO, start, target, dry_runs=(_dry(end), bad)
+        )
+        assert plans is None and record["refused"] == "dry_run"
+
+
+def test_redraw_checks_each_dry_run_trajectory_like_the_approach_straight():
+    target = PalletSite(3.4, 0.0, 0.0)
+    end = site_poses(target)["approach"]
+    start = _redraw_start(target, 0.5)
+    pallet = Rectangle(3.4, 0.0, 0.6, 0.8, 0.0)
+    # A swerve whose footprint meets the props-free bounds' edge: the straight is clear, the trajectory is not.
+    swerve = (start.x_m + 0.25, REDRAW_SCENARIO.bounds.y_max_m - 0.3, 0.0)
+    plans, record = pallet_mission.redraw_docking(
+        REDRAW_SCENARIO,
+        start,
+        target,
+        pickup_obstacle=pallet,
+        dry_runs=(_dry(end, through=swerve),),
+    )
+    assert plans is None and record["refused"] == "dry_run_collision"
+    assert record["dry_runs"][0]["swept_clear"] is False
+
+
+def test_redraw_uses_the_docking_grid_when_given():
+    from forklift_core.planning.grid_collision import OccupancyGrid
+
+    target = PalletSite(3.4, 0.0, 0.0)
+    start = _redraw_start(target, 0.9)
+    res = 0.05
+    occupied = np.zeros((200, 120), dtype=bool)
+    i = int((start.x_m + 0.4 + 5.0) / res)
+    j = int((0.36 + 0.02 + 3.0) / res)
+    occupied[i, j] = True  # one cell beside the approach straight, inside the clearance
+    blocked = OccupancyGrid(-5.0, -3.0, res, occupied)
+    clear = OccupancyGrid(-5.0, -3.0, res, np.zeros_like(occupied))
+    plans, record = pallet_mission.redraw_docking(
+        REDRAW_SCENARIO, start, target, occupancy=blocked
+    )
+    assert plans is None and record["refused"] == "approach_collision"
+    plans, record = pallet_mission.redraw_docking(
+        REDRAW_SCENARIO, start, target, occupancy=blocked, docking_occupancy=clear
+    )
+    assert plans is not None, record

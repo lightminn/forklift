@@ -1154,6 +1154,87 @@ N5(0.08 m)는 한계 실험 그대로. N9 는 센서가 한 대라 "전부 단�
     검사 — D5 끔이면 도킹 직선에서 주행 허가가 작동하지 않는다) — 셋 다 통과해야 한다. 통과하면 픽업에 묶인 상태를 한 번에 바꾼다: 픽업 목표(`planning_pickup`·`pickup_estimate`),
     접근·삽입·extract 경로와 **각 추종기**(추종기는 생성 때 경로를 복사한다), 경로 버전 사건(D5 v11 이 소비); transport 는 실제 extract 끝 자세에서 다시 잇는다(구체 방식은 S4b
     설계에서 실행기 흐름을 확인해 정한다). 거부면 정지 → 종료 `near_field_replan_rejected`(S4c 에서 재시도).
+  - **S4b 구현 설계(2026-10-11, 3판 — 1판에 대한 Codex 적대 검토 A·독립 전제 검토 B, 2판에 대한 A 재검토 반영, 3판 수렴):**
+    - **지점:** approach 단계에서 추정의 포크 끝–면(최신 수락 관측을 지금 base 로 옮긴 앞면 벽 점 최소 x − 포크 끝 x — 구간 입구·S4a-2 보호와 같은 양)이 1.0 m, 0.6 m 이하가
+      처음 되는 tick 에 그 지점의 보정을 연다(0.6 m 는 1.0 m 보정이 끝난 뒤에만). approach 도착 때 남은 지점이 있으면 종료 `correction_missed`. 0.6 m 에서 핸드오프 관문
+      (앞면 중점 x ≤ 포크 끝 x + 0.57 m)까지의 여유: 트리거 때 중점 x − 포크 끝 ≥ 0.6 − 벽 최소 x 와 중점 차(0.19 m × sin|yaw|, 5 mrad 면 1 mm) − 정지 이동(0.055 m/s
+      계약 S ≈ 11.5 mm) ≈ 0.587 m → 약 17 mm(B P3). 서 있는 동안 roof 로 넘어가면 아래 '관측' 에서 거부된다.
+    - **정지:** 대기 사유 `correction:<지점>` 을 S4a ④ 정지 상태 기계에 넣는다(0 명령·조향 유지·도착 연기, 우선순위 terminal > insert_end > 대기). 정지 기록(정지 모형 입력)을
+      다른 근접 정지와 같이 남기므로 판정 (vii) 이 그대로 적용된다(판정 도구에는 사유 목록이 없다 — A 가 `correction:0.6` 합성 정지로 확인).
+    - **관측(A P2·B P1 — '서서 찍은 관측' 이라고 주장하지 않는다):** 트리거 뒤 정지 판정기(`StopDetector`, 0.1 s 평균 12 mm/s·20 mrad/s)가 선 것으로 본 첫 tick t_s 를 남기고,
+      보수적 픽셀 시각(표기 − L_hi)이 t_s 이후인 수락 관측을 기다린다 — '정지 판정 뒤 관측' 이다(정지 판정기는 잔류 속도 ≤ 12 mm/s 를 정지로 본다; 관측은 늘 그렇듯 자기
+      자세에 놓이고 측정 상한이 그 오차를 덮는다). t_s 뒤 판정기가 다시 움직임으로 보면 t_s 를 지우고 다시 기다리며, 결정 tick 에도 정지 판정이 서 있어야 한다. 기다리는 동안
+      추적기의 소실(0.3 s 대기·3 s 실패)·불일치·unbounded 가 그대로 작동한다. 관측 출처는 front, 그 관측의 고정 회차 = 추적기 회차 = 지금 `hold_count()`, SLAM 이 holding
+      이어야 한다(B P2); 아니면 거부. 승강은 approach 내내 0 이다(프레임은 읽는 순간의 승강을 쓴다 — B P1 의 지적, approach 에서는 같다).
+    - **새 목표:** 그 관측(`Accepted.observation`)과 그 관측의 자세(`Accepted.pose`, 같은 고정 회차 프레임 — 경로도 이 프레임이다)로 `estimate_pallet_center_m` →
+      `estimate_world_pallet_site` → `G2.planning_target`(근접 캡처와 같은 경로). 근접 추적기(앵커·이력·연관 상태)는 그대로 둔다 — 경로만 바꾼다(B P2).
+    - **수용(셋 다, 순수 함수 `pallet_mission.redraw_docking` — dry run 은 호출자가 넘기는 함수):** ① `straight_from_pose`(지금 뒤축 자세 → 새 prealign–approach 선, 0.05 m·
+      0.05 rad·최소 0.3 m); ② dry run 두 개 — 근접 캡처의 수용 설정(순항 기준 0.60 m/s)과 실제 순항(0.055 m/s) — 가 모두 도착(`arrived`)하고, 끝 자세의 새 선 기준
+      **진행 ≤ +0.006 m, |가로| ≤ 0.006 m, |방향| ≤ 0.015 rad**(계획의 '도착 위치 ≤ 0.006 m' 에서 바꿈: 남은 0.5 m 에서는 추종기가 정지 속도 0.012 m/s 규칙으로 약 8 mm
+      앞에 서서 두 기록 모두 거부된다 — S4a-1 스모크의 실제 접근 끝 7.42 mm 와 같은 현상. 진행 부족은 `arrived` 의 위치 허용 0.008 m 가 막고, 넘침은 추종기 설정이 0.03 m
+      까지 `arrived` 로 보므로(A P3) +0.006 m 를 따로 둔다); ③ 새 접근 직선과 두 dry run 궤적은 임무 생성의 접근 직선 검사(`collision_free_path` — props + 새 인지 팔레트
+      직사각형, 무부하 외곽, 픽업 경계, 여유 min(clearance, approach_gap/2)), 새 삽입·빼내기 직선은 임무 생성과 같은 직선 검사(`_straight_plan`, 같은 외곽·여유) — 격자는
+      **근접 캡처 임무 목표의 띠 B₀ 와 새 목표 띠 Bₙ 의 교집합만 지운** 도킹 격자(B P1: 새 띠만 지우면 임무 생성이 지우지 않은 칸을 지울 수 있다; A 2차 P2: 직전 목표와의
+      교집합 B₁∩B₂ 는 B₀ 밖을 지울 수 있다 — 띠 종방향 반폭 0.725 m, 목표가 0 → −10 → −20 mm 면 x = −0.730 m 칸 — 그래서 B₀ 를 고정한다; 그러면 같은 지금 격자·외곽·여유에서
+      지움 때문에 검사가 임무 생성보다 약해지지 않는다). 지운 띠는 검증된 자유 공간이 아니다 — 띠 안 이물질은 S4 개발 판정의 범위 밖('증명하지 않는 것')이고 개발 장면에는
+      새 장애물이 없다. 수용 검사는 아래 '기존 문제' 의 적재 외곽 한계를 그대로 이어받는다.
+    - **교체(수용한 tick 에 한 번에):** `planning_pickup`, `pickup_estimate`(승강의 `pallet_rel`, extract 의 기억 제거가 쓴다), known pallet(켜진 경우만, 근접 캡처와 같은 r_fix),
+      approach·insert·extract 경로와 추종기(설정은 지금 각 추종기의 것 — approach 는 S4 순항), `state.paths`·`paths.json`, **`phase_started = t`와 진행 감시 초기화**(A·B
+      P2: 안 하면 짧아진 새 경로의 시간 제한 3×예정+10 s 를 원래 approach 시작부터 재서 0.6 m 보정 뒤 정상 실행이 timeout — 두 기록 모두 남은 허용 6.2–6.8 s < 필요
+      9.6 s), 장애물 층 refresh(새 경로의 `leg_ahead`, 재투영 분기와 같은 호출 — 다음 스캔 전까지 옛 경로로 판정하지 않게), 경로 개정 사건(`path_revision` — SLAM 버전·
+      고정 회차와 다른 번호, 옛·새 목표, 개정별 경로 배열과 해시, 새 추종기가 복사해 든 배열의 해시 — `RearAxlePathTracker.path_arrays()`). `state.perception`·`scenario.pickup`·근접 추적기 시작 관측은 바꾸지 않는다(역사·정답). 교체한 tick 은 계속 서 있고(그 tick 의
+      명령은 옛 추종기가 계산했다), 해제는 상태 기계 규칙대로(다른 대기 사유가 없고 정지 판정이 선 tick) — 해제 tick 도 명령 0 과 `restart_speed_slew`, 가속은 그 다음
+      update 부터(B P2). transport·return_home 은 단계 시작의 실시간 재계획(`--grid-planning` — 적용 계약 인자에 이미 있다)이 실제 자세에서 다시 잇는다.
+    - **D5:** `--near-tracking` 은 `--pocket-check` 와 같이 쓰지 못한다(시작 거부 `near_field_contract`) — `PocketCheck` 의 추정·축·인증 부피는 생성 때 복사되어 경로 교체를
+      따라가지 않는다(A·B). D5 v11 이 이 거부를 푼다.
+    - **거부:** 종료 `replan_rejected`(서 있으므로 그 tick 에 종료 → `near_field_replan_rejected`), 거부 근거 기록. 그때 `pickup_estimate` 등은 바꾸지 않은 채다. S4c 가 재시도로
+      바꾼다.
+    - **기록:** `near_tracking.json` 의 `corrections` — 지점, 트리거·t_s·관측·결정·해제 시각, 정지 판정 이력, 관측 표기·출처·회차, 옛/새 목표와 그 차, 오프셋, dry run 둘(끝
+      진행·가로·방향), 검사 결과, 수용 여부, 경로 개정 번호, 개정의 approach·insert·extract 배열과 해시, 새 추종기 배열의 해시; 근접 tick 행마다 그 tick 의 추종기 update 가
+      쓴 경로 개정 번호(교체는 update 뒤 near_tick 에서 일어나므로 교체 tick 은 옛 개정).
+    - **판정 (viii) — S4b 보정(결과 보기 전 고정, (i)–(vii) 과 별도 — A·B P2):** 두 지점이 순서대로 한 번씩 수용; 각 지점에서 트리거가 approach 단계·진입 전이고 그 tick 의
+      추정 거리 ≤ 지점; 쓴 관측이 front·수락·같은 회차이고 픽셀 시각 ≥ t_s ≥ 트리거, t_s 부터 결정까지 tick 기록의 정지 판정이 끊기지 않음, 결정 tick 정지; 교체 tick 과
+      해제 tick 의 적용 명령이 정답 기록에서 0(t 에 계산한 명령은 [t, t+dt] 에 실려 t+dt 행에 기록된다 — 그 행을 본다); 개정 경로 해시 = 그 개정 배열의 해시 = 새 추종기
+      배열 해시, 첫 교체 다음 tick → 둘째 교체 tick, 둘째 교체 다음 tick → approach 끝의 tick 행이 각각 개정 1·2 를 썼고, 마지막 개정의 insert 배열 해시 = 삽입 추종기
+      해시, 최종 `paths.json` 의 approach·insert·extract = 마지막 개정; 근접 tick 행이 빠지거나 기록이 모자라면 미검증; 보고 — 쓴 관측의 픽셀 시각부터 결정까지 정답 뒤축
+      이동, 목표 변화, 보정 정지 시간. S4b 스모크 합격 = (i)–(viii) 모두 + `success` + `phase = complete`.
+    - **기존 문제(S4b 가 만들지 않음, 따로 기록 — B P1):** 적재 외곽은 명목 삽입 깊이(330 mm)로 한 번 만든다(`pallet_mission.py` 293행) — S4a-2 의 캐리지 모서리 삽입 끝은
+      318–319 mm 에서 서므로 팔레트 앞이 외곽보다 약 12 mm(판정 하한 300 mm 면 30 mm) 앞으로 나온다. extract·transport 계획과 주행 허가가 그만큼 여유를 잃는다. 삽입
+      끝을 S4a-2 에서 정한 뒤부터 있는 문제라 S4b 범위 밖이며, D8 완료 전에 실측 삽입 깊이로 적재 외곽을 정하는 일로 따로 다룬다.
+    - **오프라인 점검(S4a-2 smoke·smoke2 기록, 서지 않은 채 그 tick 의 최신 관측으로 근사, 각 지점을 근접 캡처 목표 기준으로 따로 — 1.0 m 교체를 적용한 연속 보정이 아니다,
+      격자 검사 없음):** 1.0 m — 목표 변화 진행 4.7–5.8 mm·가로 8.3–10.5 mm·방향 1.9–2.8 mrad, 선 오프셋 가로 3.1–3.5 mm·방향 4.6–5.5 mrad, dry run 끝 진행 +2.2 mm·
+      가로 0.1 mm; 0.6 m — 근접 캡처 목표 대비 진행 3.5–6.0 mm·가로 8.2–12.4 mm·방향 3.0–3.9 mrad(1.0 m 목표 대비 가로 +1.9·−0.1 mm — A), 선 오프셋 1.8–4.0 mm·2.1–3.1
+      mrad, dry run 끝 진행 −7.7 mm·가로 0.3–0.7 mm·방향 2.6–5.4 mrad(0.055 m/s 도 같다).
+    - **시험:** `redraw_docking` 단위 시험(수용, 상자 거부, 직선 충돌 거부, dry run 진행·가로·방향 거부, dry run 궤적 충돌 거부, 같은 목표면 임무 생성과 같은 insert·extract),
+      교집합 띠 격자, 보정 상태 기계의 순수 부분(트리거, t_s·재설정, 픽셀 시각, roof·회차 거부, 교체 tick 유지, 누락), 판정 (viii) 시험, 실행기 정적 검사(플래그 끈 실행
+      불변), D5 동시 사용 거부. Isaac 스모크 seed 1·0.055 임무 전체 → 판정 (i)–(viii).
+    - **검토 기록(S4b 설계):** 원자료 재계산(오프라인 점검 — 1판의 dry run 기준이 0.6 m 를 모두 거부함을 찾음); Codex 적대 검토 A(1판) — P2 3(timeout, 정지 관측 전제,
+      판정 공백)·P3 2(넘침 허용, 오프라인 수치가 연속 보정이 아님), 포크·캐리지 접촉 P1 반례 없음; 독립 전제 검토 B(1판, A 와 결론을 보지 않은 새 스레드) — P1 3(적재 외곽
+      깊이, 지운 띠, 정지 판정의 정지성)·P2 5(회차·앵커, 이상적 dry run, 교체·해제 tick, timeout, 판정 공백)·P3 1(관문 여유)과 목표 복사본 표. 반영: 위 2판의 각 항목(적재
+      외곽은 기존 문제로 분리, 이상적 dry run 은 실제 순항 dry run 을 더하고 실제 궤적은 판정 (i)·(vi)·(vii) 로 본다). A 2판 재검토 — P2 2(직전 목표와의 띠 교집합,
+      끝점만으로는 경로 소비 판정 불가) → B₀ 고정·tick 별 개정 번호와 배열 해시; 적재 외곽 분리는 타당하나 S4b 수용 검사가 그 한계를 이어받는다고 명시; (viii) 명령 0 은
+      t+dt 행.
+    - **구현(2026-10-11, 3판 그대로, Codex 수렴):** `pallet_mission.redraw_docking`(① `straight_from_pose` ② `dry_runs` 각각 `arrived`·끝 자세 진행 ≤ +0.006 m·
+      |가로| ≤ 0.006 m·|방향| ≤ 0.015 rad ③ 접근 직선·dry run 궤적은 접근 검사, 삽입·빼내기는 `_straight_plan`), `RearAxlePathTracker.path_arrays()`,
+      `near_tracking.CorrectionState`·`correction_update`·`correction_installed`·`corrections_missed`·`path_digest`, 실행기 `docking_band`(임무 생성의 같은 계산을
+      떼어 냄 — Codex 가 HEAD 계산과 64/64 같음을 확인)·`correction_grid`(B₀∩Bₙ)·`near_redraw`·`near_install`, `near_tick` 의 보정(정지 결정 전, 교체 tick 유지,
+      tick 별 `path_revision`, `correction_missed`·`replan_rejected`), `--pocket-check` 동시 사용 거부, `near_tracking.json` 의 `corrections`·`path_revisions`;
+      판정 도구 `check_viii`(규칙 v1) — 보정·개정·최종 경로 기록의 필수 키·정확한 형태·유한성·정수 번호(아니면 미검증), 첫 통과는 첫 근접 tick(다음 지점은 이전 지점
+      닫힘)부터 트리거 직전까지 모든 approach tick, 해제는 결정 뒤 첫 `released` tick 과 같은 시각의 release 사건, 명령 0 은 t+dt 행. 시험: redraw 7, 상태 기계·digest 5,
+      정적 1, (viii) 실패 18·미검증 13. 로컬(ws1 이 관리 drain 중) 관련 시험 파일 전체 408 passed; Codex 구현 검토 3회(1차 P2 3 — 해제 시각을 해제 tick·사건과 잇지 않음,
+      직전 tick 만 보는 첫 통과, 비유한·누락 기록; 2차 P2 1 — 차원·정수 검증; 3차 수렴, 실행기 쪽 P1/P2 없음).  전체 CPU 시험(ws1 2298): 2617 passed,
+      17 skipped, 11 failed — 1 건은 진행 감시 초기화 개수를 세는 정적 시험(near_install 이 다섯 번째 경로 교체라 4 → 5 로 고침), 10 건은 HEAD 에서도 같이 실패(ws1 HEAD 재실행).
+    - **Isaac 스모크(2026-10-11, ws1 2297, seed 1·0.055 m/s·임무 전체, `artifacts/20261011_s4b/smoke`):** 임무 완주(`success`, `phase = complete`, 319.2 s — S4a-2
+      smoke2 에서 실패했던 return_home 도 이번에는 통과, 한 실행). 보정 두 번 모두 수용: 1.0 m — 트리거 54.033 s, t_s 54.233 s, 결정 54.392 s(t_s 뒤 0.158 s, 쓴 관측의
+      픽셀 시각부터 결정까지 정답 뒤축 이동 4.1 µm), 해제 54.400 s; 목표 변화(근접 캡처 목표 대비) 진행 +4.49 mm·가로 +8.42 mm·방향 +1.93 mrad, 선 오프셋 가로 −3.4 mm·
+      방향 −4.6 mrad, dry run 끝 진행 +2.16/−7.73 mm(0.60/0.055 m/s)·가로 0.15 mm. 0.6 m — 트리거 61.733 s, 결정 62.092 s(t_s 뒤 0.158 s, 이동 12.2 µm), 해제 62.100 s;
+      목표 변화(1.0 m 목표 대비) 진행 −1.09 mm·가로 −8.25 mm·방향 −2.70 mrad(최종 목표는 근접 캡처 목표 대비 진행 +3.41 mm·가로 +0.17 mm·
+      방향 −0.77 mrad — 1.0 m 의 가로 변화를 거의 되돌렸다), 선 오프셋 가로 +1.4 mm·방향 +10.7 mrad, dry run 끝 진행
+      −7.71/−7.75 mm·가로 0.68 mm·방향 −3.8 mrad. 보정 정지는 각각 트리거부터 해제까지 0.367 s, approach 는 42.3 s(S4a-2 smoke2 41.0 s). 판정
+      (`s4_judge_smoke.json`, 규칙 v2 + (i)–(v) + (viii) v1, 결과 보기 전 고정): (i)–(viii) 모두 통과, `s4b_pass` — (i) 4392 tick 최악 비 0.440(7.58/17.21 mm), (ii) 위치 비
+      0.530·방향 비 0.102, (iii) L_run 91.68 ms(84.43–98.94), 자격·조각 하나 프레임 355, (iv) 최대 이동 11.92 mm, (v) 0.65 µm·1.7 µrad, (vi) 캐리지 겹침 0·삽입 끝 깊이
+      323.5/322.2 mm·캐리지 면 간격 22.1 mm(삽입 끝은 캐리지 모서리 규칙 `insert_end`), (vii) 0 명령 10 회 모두 계약 통과 — 근접 정지 7 회(예산 3·보정 2·
+      insert_end_unconfirmed 1·insert_end 1) 정지 완료, 추종기 0 계단 3 회는 중단(규칙 v2), 보정 정지 이동 0.53·0.56 mm, (viii) 실패 없음. 한 seed·속도라 여유는 이 조건의 값이다.
   - **S4c 픽업 재시도·주입(1차 검토 P2):** `straight_from_pose` 는 후진 경로를 만들지 않는다(음수 종방향은 전진선 연장). 재시도(최대 1 회, 포크 진입 전 mismatch·재생성 거부만)는
     D7c 하역 재접근 골격을 쓴다 — 정지 → 해제(좌표 변화를 저장한 자리에 적용) → 근접 캡처 자리(그 고정 회차에서 저장, 해제 변화로 옮김)로 계획기(D7c ② 의 상자·길이 제한) 경로와
     주행 허가 → 근접 재관측 → 고정 → 새 추적기·새 이력. 재시도 캡처에는 주입을 넣지 않는다. 주입 `--near-inject {correction,mismatch}`(크기 인자, 판정 변경 ①–②), 소실

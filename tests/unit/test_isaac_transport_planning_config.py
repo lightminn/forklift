@@ -893,7 +893,10 @@ def test_every_path_replacement_restarts_the_no_progress_baseline():
     # ... and a D7c re-approach installed in place of the transport path (plan D7c ④).
     install = source.index("    def install_reapproach(")
     assert 'obstacle.setdefault("progress", {}).clear()' in source[install : install + 1500]
-    assert source.count('obstacle.setdefault("progress", {}).clear()') == 4
+    # ... and a plan D8 S4b correction point's re-drawn docking straights.
+    near_install = source.index("    def near_install(")
+    assert 'obstacle.setdefault("progress", {}).clear()' in source[near_install : near_install + 3000]
+    assert source.count('obstacle.setdefault("progress", {}).clear()') == 5
 
 
 def test_d7c_docking_branches_are_inert_without_the_flag():

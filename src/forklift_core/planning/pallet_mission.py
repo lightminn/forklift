@@ -839,6 +839,155 @@ def plan_docking_reapproach(
     return (None if record["refused"] else result), record
 
 
+def redraw_docking(
+    scenario: TransportScenario,
+    current_rear: Pose2D,
+    target_pickup: PalletSite,
+    config: PlannerConfig | None = None,
+    *,
+    geometry: SyntheticMissionGeometry | None = None,
+    pickup_bounds: Bounds | None = None,
+    occupancy=None,
+    pickup_obstacle: Rectangle | None = None,
+    docking_occupancy=None,
+    dry_runs: Sequence = (),
+    max_lateral_m: float = 0.05,
+    max_yaw_rad: float = 0.05,
+    min_length_m: float = 0.3,
+    dry_ahead_m: float = 0.006,
+    dry_lateral_m: float = 0.006,
+    dry_yaw_rad: float = 0.015,
+) -> tuple[dict | None, dict]:
+    """The docking straights re-drawn for a new pallet estimate from where the truck
+    stands (plan D8 S4b, a correction point).
+
+    The approach is the rest of the new prealign-approach line (straight_from_pose,
+    the near capture's box); the insertion and the extraction are plan_transport's,
+    with its checks: the approach straight against the props and the perceived pallet
+    at the approach clearance, the insertion and extraction straights against the props
+    -- on docking_occupancy when given, else occupancy. Each of dry_runs (callables
+    taking the approach straight and returning a RolloutResult) must arrive with its
+    last pose within dry_ahead_m past the goal, dry_lateral_m across the new line and
+    dry_yaw_rad of its heading (the tracker's own stop leaves it up to its position
+    tolerance short, which "arrived" bounds), and its trajectory must pass the
+    approach straight's check. Returns ({"approach", "insert", "extract"}, record) or
+    (None, record) with the first refusal in record["refused"].
+    """
+    geometry = geometry if geometry is not None else SyntheticMissionGeometry()
+    config = config if config is not None else make_transport_planner_config()
+    props = [prop.rectangle for prop in scenario.props]
+    pickup = site_poses(target_pickup, geometry)
+    pallet = (
+        pickup_obstacle
+        if pickup_obstacle is not None
+        else Rectangle(
+            target_pickup.x_m,
+            target_pickup.y_m,
+            geometry.pallet_depth_m,
+            geometry.pallet_width_m,
+            target_pickup.yaw_rad,
+        )
+    )
+    near_bounds = pickup_bounds if pickup_bounds is not None else scenario.bounds
+    approach_clearance = min(config.clearance_m, geometry.approach_gap_m / 2)
+    docking_clearance = (
+        approach_clearance if occupancy is not None else config.clearance_m
+    )
+    grid = docking_occupancy if docking_occupancy is not None else occupancy
+    straight, offsets = straight_from_pose(
+        current_rear,
+        pickup["prealign"],
+        pickup["approach"],
+        max_lateral_m=max_lateral_m,
+        max_yaw_rad=max_yaw_rad,
+        min_length_m=min_length_m,
+    )
+    record = {
+        "offsets": offsets,
+        "refused": None,
+        "dry_runs": [],
+        "target": [target_pickup.x_m, target_pickup.y_m, target_pickup.yaw_rad],
+    }
+
+    def approach_clear(poses) -> bool:
+        return collision_free_path(
+            poses,
+            props + [pallet],
+            geometry.unloaded_footprint,
+            near_bounds,
+            margin_m=approach_clearance,
+            max_step_m=0.04,
+            occupancy=grid,
+        )
+
+    if straight is None:
+        record["refused"] = "box"
+        return None, record
+    if not approach_clear(straight.poses):
+        record["refused"] = "approach_collision"
+        return None, record
+    end = pickup["approach"]
+    heading = np.array([cos(end.yaw_rad), sin(end.yaw_rad)])
+    for dry_run in dry_runs:
+        dry = dry_run(straight)
+        last = np.asarray(
+            dry.trajectory[-1] if dry.trajectory else (np.nan,) * 3, dtype=float
+        )
+        offset = last[:2] - np.array([end.x_m, end.y_m])
+        entry = {
+            "status": dry.status,
+            "position_error_m": float(dry.position_error_m),
+            "yaw_error_rad": float(dry.yaw_error_rad),
+            "time_s": float(dry.time_s),
+            "end_ahead_m": float(offset @ heading),
+            "end_lateral_m": float(offset @ np.array([-heading[1], heading[0]])),
+            "end_yaw_rad": float(
+                np.arctan2(np.sin(last[2] - end.yaw_rad), np.cos(last[2] - end.yaw_rad))
+            ),
+            "trajectory_samples": len(dry.trajectory),
+        }
+        record["dry_runs"].append(entry)
+        if not (
+            dry.status == "arrived"
+            and entry["end_ahead_m"] <= dry_ahead_m
+            and abs(entry["end_lateral_m"]) <= dry_lateral_m
+            and abs(entry["end_yaw_rad"]) <= dry_yaw_rad
+        ):
+            record["refused"] = "dry_run"
+            return None, record
+        entry["swept_clear"] = approach_clear(np.asarray(dry.trajectory, dtype=float))
+        if not entry["swept_clear"]:
+            record["refused"] = "dry_run_collision"
+            return None, record
+    insert = _straight_plan(
+        pickup["approach"],
+        pickup["inserted"],
+        1,
+        props,
+        geometry.unloaded_footprint,
+        near_bounds,
+        docking_clearance,
+        grid,
+    )
+    if not insert.success:
+        record["refused"] = f"insert:{insert.status}"
+        return None, record
+    extract = _straight_plan(
+        pickup["inserted"],
+        pickup["extracted"],
+        -1,
+        props,
+        geometry.loaded_footprint,
+        near_bounds,
+        0.0 if occupancy is not None else config.clearance_m,
+        grid,
+    )
+    if not extract.success:
+        record["refused"] = f"extract:{extract.status}"
+        return None, record
+    return {"approach": straight, "insert": insert, "extract": extract}, record
+
+
 def plan_return_leg(
     scenario: TransportScenario,
     start_rear: Pose2D,

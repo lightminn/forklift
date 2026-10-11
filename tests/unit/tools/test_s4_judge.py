@@ -924,3 +924,317 @@ def test_iv_the_window_ends_are_interpolated_and_a_result_replaced_before_the_se
     assert out["observations"] == 1  # the old one is never the latest at a section tick
     expected = 0.055 * (float(t[30]) - (stamp - bounds.max_latency_s))
     assert out["worst"]["travel_m"] == pytest.approx(expected, rel=1e-9)
+
+
+# (viii) -- plan D8 S4b correction points ------------------------------------------------
+def s4b_case(bounds):
+    """A synthetic S4b record: the estimate passes 1.0 m at tick 10 and 0.6 m at tick 100
+    (pallet at the origin, face x = -0.3, blade tips 0.95 m ahead of base_link); each point
+    stands from t_s (ticks 20 and 110), is decided on the first tick a front observation
+    taken after t_s is the latest, installs a revision there and releases two ticks later
+    with zero commands."""
+    sys.path.insert(0, str(ROOT / "sim" / "isaac"))
+    import near_tracking as NT
+
+    n = 220
+    t = np.arange(n) * TICK + 10.0
+    L = bounds.max_latency_s
+    obs_stamps = (float(t[20]) + L + 0.01, float(t[110]) + L + 0.01)
+    reads = tuple(stamp + 0.1 for stamp in obs_stamps)
+    decisions = tuple(int(np.searchsorted(t, r - 1e-9)) for r in reads)
+    xs = np.empty(n)
+    xs[:10] = np.linspace(-2.262, -2.2505, 10)
+    xs[10 : decisions[0] + 3] = -2.2495
+    xs[decisions[0] + 3 : 100] = np.linspace(-2.2490, -1.851, 100 - decisions[0] - 3)
+    xs[100 : decisions[1] + 3] = -1.8495
+    xs[decisions[1] + 3 :] = np.linspace(-1.8490, -1.5, n - decisions[1] - 3)
+    speed = np.full(n, 0.05)
+    speed[11 : decisions[0] + 4] = 0.0
+    speed[101 : decisions[1] + 4] = 0.0
+    truth = truth_from(xs, phase="approach", speed=speed)
+    held = {
+        "left": (-0.3, 0.18625, 0.061),
+        "right": (-0.3, -0.18625, 0.061),
+        "yaw": 0.0,
+    }
+    widths = (0.2275, 0.2275)
+    bound = {"wall_m": 0.0005, "yaw_rad": 0.0003, "along_m": 0.006, "lateral_m": 0.0005}
+    states = [
+        {
+            "since_s": 9.0,
+            "stamp_s": 9.0,
+            "held": held,
+            "widths": widths,
+            "bound": bound,
+            "source": "near_capture",
+        }
+    ]
+    regular = [float(t[i]) for i in range(0, n - 20, 12)]
+    # No other result arrives between an observation's read and its decision tick.
+    regular = [
+        s_
+        for s_ in regular
+        if not any(
+            r - 0.1 < s_ + 0.1 <= t[d] + 1e-9
+            for r, d in zip(reads, decisions, strict=True)
+        )
+    ]
+    for stamp in sorted({*regular, *obs_stamps}):
+        states.append(
+            {
+                "since_s": stamp + 0.1,
+                "stamp_s": stamp,
+                "held": held,
+                "widths": widths,
+                "bound": bound,
+                "source": "front",
+            }
+        )
+    standing = np.zeros(n, dtype=bool)
+    standing[20 : decisions[0] + 3] = True
+    standing[110 : decisions[1] + 3] = True
+
+    def path(x0):
+        poses = np.array([[x0, 0.0, 0.0], [x0 + 0.04, 0.0, 0.0], [x0 + 0.08, 0.0, 0.0]])
+        return poses, np.ones(3), np.zeros(3)
+
+    revisions, corrections = [], []
+    for k, (point, trig, ts, dec) in enumerate(
+        ((1.0, 10, 20, decisions[0]), (0.6, 100, 110, decisions[1]))
+    ):
+        paths_ = {}
+        for j, name in enumerate(("approach", "insert", "extract")):
+            poses, dirs, curv = path(-2.0 + 0.3 * j + 0.001 * k)
+            paths_[name] = {
+                "sha256": NT.path_digest(poses, dirs, curv),
+                "poses": poses.tolist(),
+                "directions": dirs.tolist(),
+                "curvatures_inv_m": curv.tolist(),
+            }
+        revisions.append(
+            {
+                "revision": k + 1,
+                "time_s": float(t[dec]),
+                "point_m": point,
+                "target": [0.002 * (k + 1), 0.003 * (k + 1), 0.001],
+                "previous_target": [0.0, 0.0, 0.0],
+                "paths": paths_,
+                "trackers": {name: p["sha256"] for name, p in paths_.items()},
+            }
+        )
+        corrections.append(
+            {
+                "point_m": point,
+                "trigger_s": float(t[trig]),
+                "face_distance_m": (-0.3 - xs[trig]) - 0.95,
+                "standing_s": [float(t[ts])],
+                "moved_s": [],
+                "accepted": True,
+                "decision_s": float(t[dec]),
+                "observation": {
+                    "stamp_s": obs_stamps[k],
+                    "pixel_s": obs_stamps[k] - L,
+                    "source": "front",
+                    "frame_version": 1,
+                },
+                "revision": k + 1,
+                "closed_s": float(t[dec + 1]),
+                "release_s": float(t[dec + 2]),
+            }
+        )
+    ticks = [
+        {
+            "t": float(t[i]),
+            "base": [float(xs[i]), 0.0, 0.0],
+            "standing": bool(standing[i]),
+            "path_revision": sum(1 for d in decisions if d < i),
+        }
+        for i in range(1, n - 1)
+    ]
+    for d in decisions:  # the release, two ticks after the decision
+        ticks[d + 2 - 1]["released"] = True
+    events = [{"event": "release", "time_s": float(t[d + 2])} for d in decisions]
+    record = {
+        "ticks": ticks,
+        "corrections": corrections,
+        "path_revisions": revisions,
+        "events": events,
+    }
+    final = {
+        name: {
+            key: revisions[-1]["paths"][name][key]
+            for key in ("poses", "directions", "curvatures_inv_m")
+        }
+        for name in ("approach", "insert", "extract")
+    }
+    return truth, record, {"fork_tip_x_m": 0.95, "episode": 1}, final, states
+
+
+def viii(case, bounds):
+    truth, record, start, final, states = case
+    return J.check_viii(truth, record, start, final, states, bounds, -0.34)
+
+
+def test_viii_two_corrections_decided_standing_and_followed_pass(bounds):
+    out = viii(s4b_case(bounds), bounds)
+    assert out["passed"], out["failures"]
+    assert [c["point_m"] for c in out["corrections"]] == [1.0, 0.6]
+    assert out["corrections"][0]["observation_to_decision_travel_m"] == pytest.approx(
+        0.0, abs=1e-12
+    )
+    assert out["corrections"][1]["target_change"]["lateral_m"] == pytest.approx(0.006)
+
+
+@pytest.mark.parametrize(
+    "breaks",
+    [
+        "one_point",
+        "refused",
+        "pixel_before_t_s",
+        "roof",
+        "other_hold",
+        "not_latest",
+        "moving_after_t_s",
+        "stood_before_t_s",
+        "install_command",
+        "release_command",
+        "revision_row",
+        "follower_copy",
+        "final_paths",
+        "late_trigger",
+        "insert_phase",
+        "release_moved",
+        "dip_before_trigger",
+        "release_not_first",
+    ],
+)
+def test_viii_fails_each_broken_condition(bounds, breaks):
+    truth, record, start, final, states = s4b_case(bounds)
+    c0, c1 = record["corrections"]
+    t = truth["stamp_s"]
+    if breaks == "one_point":
+        record["corrections"] = [c0]
+    elif breaks == "refused":
+        c1["accepted"] = False
+    elif breaks == "pixel_before_t_s":
+        late = float(t[int(np.searchsorted(t, c0["observation"]["pixel_s"] + 0.02))])
+        c0["standing_s"] = [late]
+        for row in record["ticks"]:
+            if float(t[20]) <= row["t"] < late - 1e-9:
+                row["standing"] = False
+    elif breaks == "roof":
+        c0["observation"]["source"] = "roof"
+    elif breaks == "other_hold":
+        c1["observation"]["frame_version"] = 2
+    elif breaks == "not_latest":
+        states.append(
+            {
+                **states[-1],
+                "since_s": c0["decision_s"] - 0.001,
+                "stamp_s": c0["decision_s"] - 0.1,
+            }
+        )
+        states.sort(key=lambda s_: s_["since_s"])
+    elif breaks == "moving_after_t_s":
+        record["ticks"][39]["standing"] = False  # tick 40
+    elif breaks == "stood_before_t_s":
+        record["ticks"][18]["standing"] = True  # tick 19, before t_s at 20
+    elif breaks == "install_command":
+        truth["applied_speed_mps"][
+            int(np.searchsorted(t, c0["decision_s"] - 1e-9)) + 1
+        ] = 0.01
+    elif breaks == "release_command":
+        truth["applied_speed_mps"][
+            int(np.searchsorted(t, c1["release_s"] - 1e-9)) + 1
+        ] = 0.01
+    elif breaks == "revision_row":
+        record["ticks"][70]["path_revision"] = 0
+    elif breaks == "follower_copy":
+        record["path_revisions"][1]["trackers"]["insert"] = "0" * 64
+    elif breaks == "final_paths":
+        final["insert"] = {
+            k: record["path_revisions"][0]["paths"]["insert"][k]
+            for k in ("poses", "directions", "curvatures_inv_m")
+        }
+    elif breaks == "late_trigger":
+        # Opened one tick late: the tick before already had the estimate within 1.0 m.
+        truth["base_pose"][9, 0] = -2.2496
+        record["ticks"][8]["base"][0] = -2.2496
+    elif breaks == "insert_phase":
+        truth["phase"][100] = list(PHASES).index("insert")
+    elif breaks == "release_moved":
+        # Codex S4b review P2: release_s one tick early, the real release row and event kept.
+        c0["release_s"] -= TICK
+    elif breaks == "dip_before_trigger":
+        # Codex S4b review P2: the estimate dips inside 1.0 m at tick 7, out again, and the
+        # point opens only at tick 10.
+        dips = (1.00433, 0.9995, 1.00178, 1.0005, 0.9995)
+        for i, d in zip(range(6, 11), dips, strict=True):
+            truth["base_pose"][i, 0] = -1.25 - d
+            record["ticks"][i - 1]["base"][0] = -1.25 - d
+    elif breaks == "release_not_first":
+        i_dec = int(np.searchsorted(t, c1["decision_s"] - 1e-9))
+        record["ticks"][i_dec]["released"] = True  # tick i_dec + 1 released already
+    out = viii((truth, record, start, final, states), bounds)
+    assert not out["passed"], breaks
+
+
+def test_viii_incomplete_records_are_unverified(bounds):
+    cases = (
+        "missing_row",
+        "distance",
+        "no_release",
+        "nan_distance",
+        "nan_pixel",
+        "nan_target",
+        "no_directions",
+        "revision_zero",
+        "final_short",
+        "wrapped_target",
+        "wrapped_stamp",
+        "revision_float",
+        "revision_inf",
+    )
+    for breaks in cases:
+        truth, record, start, final, states = s4b_case(bounds)
+        c0, c1 = record["corrections"]
+        if breaks == "missing_row":
+            del record["ticks"][44]  # tick 45, between t_s and the decision
+        elif breaks == "distance":
+            c0["face_distance_m"] += 0.001
+        elif breaks == "no_release":
+            del c1["release_s"]
+        elif breaks == "nan_distance":  # Codex S4b review P2: NaN passed
+            c0["face_distance_m"] = float("nan")
+        elif breaks == "nan_pixel":
+            c1["observation"]["pixel_s"] = float("nan")
+        elif breaks == "nan_target":
+            record["path_revisions"][0]["target"][0] = float("nan")
+        elif breaks == "no_directions":  # a KeyError, not unverified, before
+            del record["path_revisions"][1]["paths"]["insert"]["directions"]
+        elif breaks == "revision_zero":
+            c0["revision"] = 0
+        elif (
+            breaks == "wrapped_target"
+        ):  # Codex S4b review P2: [[x, y, yaw]] passed the count
+            record["path_revisions"][0]["target"] = [
+                record["path_revisions"][0]["target"]
+            ]
+            record["path_revisions"][0]["previous_target"] = [
+                record["path_revisions"][0]["previous_target"]
+            ]
+        elif breaks == "wrapped_stamp":
+            c0["observation"]["stamp_s"] = [c0["observation"]["stamp_s"]]
+            c0["observation"]["pixel_s"] = [c0["observation"]["pixel_s"]]
+        elif breaks == "revision_float":  # int(1.9) was revision 1
+            c0["revision"] = 1.9
+        elif breaks == "revision_inf":
+            c0["revision"] = float("inf")
+        else:
+            final["approach"] = {
+                "poses": final["approach"]["poses"][:1],
+                "directions": [1.0],
+                "curvatures_inv_m": [0.0],
+            }
+        with pytest.raises(J.Unverified):
+            viii((truth, record, start, final, states), bounds)

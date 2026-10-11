@@ -555,6 +555,99 @@ def decide_stop(
     }
 
 
+# Plan D8 S4b: the correction points ------------------------------------------------------
+CORRECTION_POINTS_M = (1.0, 0.6)  # estimated fork tip to face (plan D8d)
+
+
+@dataclass(frozen=True)
+class CorrectionState:
+    """The correction points between ticks: the next point, the one open (if any), when it
+    triggered, since when the stop detector has seen the truck stand (t_s, cleared when it
+    moves again) and when its re-drawn paths were installed (that tick still stands)."""
+
+    next_index: int = 0
+    point_m: float | None = None
+    trigger_s: float | None = None
+    standing_s: float | None = None
+    installed_s: float | None = None
+
+
+def correction_update(
+    state: CorrectionState,
+    now_s: float,
+    *,
+    phase: str,
+    entered: bool,
+    face_distance_m: float,
+    standing: bool,
+    pixel_s: float,
+    source: str,
+    frame_version,
+    episode,
+) -> tuple[CorrectionState, dict]:
+    """Plan D8 S4b: one tick of the correction points, before the stop decision. A point
+    opens on the first approach tick, before entry, whose estimated fork tip to face is
+    within it (the next point only after the previous one is done); while open it is a
+    waiting reason. It decides once the stop detector stands and the latest accepted
+    observation's conservative pixel time (stamp - L_hi) is at or after t_s; t_s restarts
+    when the detector sees motion again. That observation must come from the front
+    detector and be placed in this hold (else the correction is refused). The tick after
+    the paths were installed closes the point. Returns the new state and {"wait": reason
+    or None, "decide": bool, "refuse": reason or None, "event": name or None}."""
+    action = {"wait": None, "decide": False, "refuse": None, "event": None}
+    if state.installed_s is not None:
+        if now_s <= state.installed_s:
+            action["wait"] = f"correction:{state.point_m}"
+            return state, action
+        return CorrectionState(next_index=state.next_index), {**action, "event": "closed"}
+    if state.point_m is None:
+        if (
+            phase != "approach"
+            or entered
+            or state.next_index >= len(CORRECTION_POINTS_M)
+            or not face_distance_m <= CORRECTION_POINTS_M[state.next_index]
+        ):
+            return state, action
+        point = CORRECTION_POINTS_M[state.next_index]
+        state = CorrectionState(state.next_index, point, now_s, now_s if standing else None)
+        return state, {**action, "wait": f"correction:{point}", "event": "trigger"}
+    action["wait"] = f"correction:{state.point_m}"
+    if not standing:
+        if state.standing_s is not None:
+            state = CorrectionState(state.next_index, state.point_m, state.trigger_s, None)
+        return state, action
+    if state.standing_s is None:
+        return CorrectionState(state.next_index, state.point_m, state.trigger_s, now_s), action
+    if not pixel_s >= state.standing_s:
+        return state, action
+    if source != "front":
+        return state, {**action, "refuse": f"source:{source}"}
+    if frame_version != episode:
+        return state, {**action, "refuse": f"frame:{frame_version}!={episode}"}
+    return state, {**action, "decide": True}
+
+
+def correction_installed(state: CorrectionState, now_s: float) -> CorrectionState:
+    """The open point's paths were installed this tick: it closes on the next one."""
+    return CorrectionState(state.next_index + 1, state.point_m, state.trigger_s, state.standing_s, now_s)
+
+
+def corrections_missed(state: CorrectionState) -> bool:
+    """A point the approach arrived without opening (an open point holds the arrival)."""
+    return state.point_m is None and state.next_index < len(CORRECTION_POINTS_M)
+
+
+def path_digest(poses, directions, curvatures) -> str:
+    """A path by content: its three arrays as float64, with their shapes."""
+    import hashlib
+
+    digest = hashlib.sha256()
+    for array in (poses, directions, curvatures):
+        a = np.ascontiguousarray(np.asarray(array, dtype=np.float64))
+        digest.update(repr(a.shape).encode() + a.tobytes())
+    return digest.hexdigest()
+
+
 # Input files and arguments, by content (shared with tools/s4_drive_terms.py).
 def snapshot_relative(value):
     """An argument path inside a snapshot, from the snapshot root (runs from different
@@ -854,8 +947,14 @@ def contract_problems(condition: dict, observed: dict) -> list[str]:
 
 __all__ = [
     "BUDGET_M",
+    "CORRECTION_POINTS_M",
     "Budget",
     "CommandWindow",
+    "CorrectionState",
+    "correction_installed",
+    "correction_update",
+    "corrections_missed",
+    "path_digest",
     "DriveTerms",
     "RearHistory",
     "blade_gaps",

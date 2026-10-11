@@ -1089,6 +1089,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         plan_docking_reapproach,
         plan_transport,
         final_straight_prefix,
+        redraw_docking,
         straight_from_pose,
         plan_return_leg,
         plan_transport_leg,
@@ -1768,6 +1769,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "frames": [],
             "ticks": [],
             "events": [],
+            # Plan D8 S4b: the correction points and the path revisions they installed.
+            "correction": None,
+            "corrections": [],
+            "path_revision": 0,
+            "path_revisions": [],
+            "first_target": None,  # the near capture's mission target (its band, B0)
         }
     wheel_lock = {"q": None, "gains": None, "events": []}
     # Camera-face distance at the approach goal: the stand-off gap ahead of the fork
@@ -1878,6 +1885,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             },
         }
         problems_ = near_tracking.contract_problems(near["bounds_data"]["condition"], observed_)
+        if args.pocket_check:
+            # Plan D8 S4b: the pocket check copies the estimate, axis and certified volume when
+            # it is built and would not follow a correction's paths -- until D5 v11.
+            problems_.append("pocket_check: D5 with near tracking waits for D5 v11")
         try:
             near["terms"] = near_tracking.DriveTerms.from_dict(
                 json.loads(args.near_drive_terms.read_text()),
@@ -1971,7 +1982,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     corners=read_carriage_front_corners_m(args.forklift_urdf),
                     carriage_limit_m=frame_geo.carriage_limit_m,
                     protect=None, stop_state=near_tracking.StopState(), stop_events=[], arrival=None,
-                    stale_waits={})
+                    stale_waits={},
+                    # Plan D8 S4b: the correction points, from the mission the near capture planned.
+                    correction=near_tracking.CorrectionState(), first_target=pocket["planning_pickup"])
         near["history"].clear()
         state["near_tracking"]["start"] = {
             "built_s": now_s,
@@ -2062,7 +2075,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             near["events"].append({"time_s": now_s, "event": "unbounded", "stamp_s": stamp})
 
     def near_tick(now_s: float, rear_stamp_: float, rear_now, requested_mps: float, phase_: str,
-                  curvature_cmd: float) -> tuple[bool, bool, bool]:
+                  curvature_cmd: float, arrived_: bool = False) -> tuple[bool, bool, bool]:
         """Plan D8 S4a ④⑤ and S4a-2: one approach/insert tick of the near-field stop, decided
         before the tick's arrival. Returns (hold, released, arrive): hold -- command zero,
         steering held, arrival deferred; released -- a stop just ended standing (restart the
@@ -2072,8 +2085,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         Reasons by priority (near_tracking.decide_stop): terminal (failed, mismatch,
         unbounded, stuck -- latched, ending the run once the stop detector sees the truck
         stand) > the insertion end (latched) > waiting (lost, budget, gap_wait,
-        carriage_uncertain -- released only standing, once none is left)."""
+        carriage_uncertain, an open correction point -- released only standing, once none
+        is left). S4b: a correction point re-draws the docking straights once standing."""
         tracker_ = near["tracker"]
+        revision_used = near["path_revision"]  # this tick's follower update ran before
         require(slam["tracker"].mode == "holding" and hold_count() == near["episode"],
                 "near_field_frame_released")  # S4a: the near-capture hold lasts through insert
         episode = near["episode"]
@@ -2177,6 +2192,46 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     "corner_sigma_m": sigmas, "face_distance_m": face_distance,
                 }
         standing = bool(slam["stop_now"])
+        # Plan D8 S4b: the correction points (approach, before entry), a waiting reason while
+        # open; decided standing on an observation whose pixel time is after t_s.
+        corr_prev = near["correction"]
+        corr, corr_act = near_tracking.correction_update(
+            corr_prev, now_s, phase=phase_, entered=near_tracking.entered(face, tip_x),
+            face_distance_m=face_distance, standing=standing, pixel_s=pixel_s, source=latest_.source,
+            frame_version=latest_.frame_version, episode=episode,
+        )
+        if corr_act["event"] == "trigger":
+            near["corrections"].append({"point_m": corr.point_m, "trigger_s": now_s, "face_distance_m": face_distance,
+                                        "standing_s": [], "moved_s": [], "accepted": None})
+            near["events"].append({"time_s": now_s, "event": "correction_trigger", "point_m": corr.point_m,
+                                   "face_distance_m": face_distance})
+        corr_record = near["corrections"][-1] if near["corrections"] else None
+        if corr.standing_s is not None and corr.standing_s != corr_prev.standing_s and corr_act["event"] != "closed":
+            corr_record["standing_s"].append(now_s)
+        if corr_prev.standing_s is not None and corr.standing_s is None and corr_prev.installed_s is None:
+            corr_record["moved_s"].append(now_s)  # the stop detector saw motion again: t_s restarts
+        if corr_act["refuse"] is not None:
+            corr_record.update(accepted=False, decision_s=now_s, refused=corr_act["refuse"])
+            terminal = terminal or "replan_rejected"
+        elif corr_act["decide"] and terminal is None:
+            plans_, record_, target_ = near_redraw(latest_, rear_now)
+            corr_record.update(
+                decision_s=now_s, observation={"stamp_s": latest_.stamp_s, "pixel_s": pixel_s, "source": latest_.source,
+                                               "frame_version": latest_.frame_version, "aligned_s": latest_.aligned_s},
+                redraw=record_, accepted=plans_ is not None,
+            )
+            if plans_ is None:
+                terminal = "replan_rejected"
+            else:
+                corr_record["revision"] = near_install(now_s, plans_, target_, corr.point_m, rear_now)["revision"]
+                corr = near_tracking.correction_installed(corr, now_s)
+        if corr_act["event"] == "closed" and corr_record is not None:
+            corr_record["closed_s"] = now_s
+        near["correction"] = corr
+        if corr_act["wait"] is not None:
+            waits.append(corr_act["wait"])
+        if phase_ == "approach" and arrived_ and near_tracking.corrections_missed(corr):
+            terminal = terminal or "correction_missed"
         previous = near["stop_state"]
         near["stop_state"], action = near_tracking.decide_stop(
             previous, now_s, terminal=terminal, insert_end=insert_end_now, waits=tuple(waits), standing=standing
@@ -2197,6 +2252,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         if action["released"]:
             near["events"].append({"time_s": now_s, "event": "release", "reason": previous.reason,
                                    "stopped_s": now_s - previous.since_s})
+            last_corr = near["corrections"][-1] if near["corrections"] else None
+            if last_corr is not None and last_corr.get("revision") is not None and "release_s" not in last_corr:
+                last_corr["release_s"] = now_s  # the stop the correction held ends here
         if action["arrive"]:
             near["arrival"] = {"reason": "insert_end", "time_s": now_s, **protection}
             near["events"].append({"time_s": now_s, "event": "insert_end_arrival"})
@@ -2211,6 +2269,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "mode": tracker_.mode, "latest_stamp_s": latest_.stamp_s, "last_received_stamp_s": near["last_stamp"],
             "kappa_b": kappa_b, "sweep_m": sweep if math.isfinite(sweep) else None,
             "protect": near["protect"] is not None, **({"protection": protection} if protection else {}),
+            "path_revision": revision_used,
+            "correction": None if corr.point_m is None else {
+                "point_m": corr.point_m, "standing_s": corr.standing_s, "installed_s": corr.installed_s},
         })
         if action["end"]:
             near["events"].append({"time_s": now_s, "event": "terminal_standing", "reason": current.reason})
@@ -2379,6 +2440,21 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         """The scenario a grid plan sees: no ground-truth props (plan audit table)."""
         return replace(sc, props=()) if grid_planning else sc
 
+    def docking_band(occupancy, target):
+        """The perceived pallet's band a docking plan clears from the grid (plan D5): the
+        estimate grown by 0.425 m along the insertion axis and 0.20 m across."""
+        band_along = 0.025 + 0.40
+        band_across = 0.20
+        res_g = occupancy.resolution_m
+        nx_g, ny_g = occupancy.occupied.shape
+        gi, gj = np.meshgrid(np.arange(nx_g), np.arange(ny_g), indexing="ij")
+        dx = occupancy.origin_x_m + (gi + 0.5) * res_g - target.x_m
+        dy = occupancy.origin_y_m + (gj + 0.5) * res_g - target.y_m
+        ct, st_ = math.cos(target.yaw_rad), math.sin(target.yaw_rad)
+        return (np.abs(dx * ct + dy * st_) <= geometry.pallet_depth_m / 2 + band_along) & (
+            np.abs(-dx * st_ + dy * ct) <= geometry.pallet_width_m / 2 + band_across
+        )
+
     def grid_kwargs(kind=None, target=None, own=None, applied=None) -> dict:
         """occupancy (and the pallet obstacle the plan may know) for a grid plan."""
         if not grid_planning:
@@ -2523,17 +2599,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             # face); what lies in front of the face is for the pocket depth check
             # (plan D5, L3c). Until then the band is wider than the plan's
             # fork-only band.
-            band_along = 0.025 + 0.40
-            band_across = 0.20
             res_g = occupancy.resolution_m
-            nx_g, ny_g = occupancy.occupied.shape
-            gi, gj = np.meshgrid(np.arange(nx_g), np.arange(ny_g), indexing="ij")
-            dx = occupancy.origin_x_m + (gi + 0.5) * res_g - target.x_m
-            dy = occupancy.origin_y_m + (gj + 0.5) * res_g - target.y_m
-            ct, st_ = math.cos(target.yaw_rad), math.sin(target.yaw_rad)
-            band = (np.abs(dx * ct + dy * st_) <= geometry.pallet_depth_m / 2 + band_along) & (
-                np.abs(-dx * st_ + dy * ct) <= geometry.pallet_width_m / 2 + band_across
-            )
+            band = docking_band(occupancy, target)
             from forklift_core.planning.grid_collision import OccupancyGrid as _Occ, SplitOccupancy
 
             # Plan D5 with the body delta (user approval 2026-10-05): the whole
@@ -2559,6 +2626,102 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 target=[target.x_m, target.y_m, target.yaw_rad],
             )
         return out
+
+    def correction_grid(first_target, target, rear_now) -> dict:
+        """Plan D8 S4b ③: the grid a correction point's docking straights are checked on --
+        the live grid, and for the docking straights that grid with only the band of the
+        near capture's mission target B0 AND the new target's band cleared, so a correction
+        never clears a cell the mission plan's check kept (Codex S4b design reviews)."""
+        out_ = {"pickup_obstacle": Rectangle(target.x_m, target.y_m, geometry.pallet_depth_m,
+                                             geometry.pallet_width_m, target.yaw_rad)}
+        if not grid_planning:
+            return out_
+        from forklift_core.planning.grid_collision import OccupancyGrid as _OccC
+        from forklift_core.planning.grid_collision import SplitOccupancy as _SplitC
+
+        occupancy_ = grid_kwargs("correction", own=tuple(float(v) for v in rear_now))["occupancy"]
+        both_ = docking_band(occupancy_, first_target) & docking_band(occupancy_, target)
+        cleared_ = _OccC(occupancy_.origin_x_m, occupancy_.origin_y_m, occupancy_.resolution_m,
+                         occupancy_.occupied & ~both_, version=occupancy_.version)
+        obstacle["plans"][-1]["docking_band_cells"] = int((occupancy_.occupied & both_).sum())
+        out_.update(occupancy=occupancy_, docking_occupancy=_SplitC(
+            cleared_, cleared_, geometry.axle_to_fork_tip_m - geometry.carriage_limit_m))
+        return out_
+
+    def near_redraw(latest_, rear_now):
+        """Plan D8 S4b: the docking straights re-drawn from the tracker's latest accepted
+        observation, placed with its own pose (the near capture's path to a target), from
+        where the truck stands: redraw_docking with the near capture's acceptance dry run
+        (baseline cruise) and one at the driven cruise. Returns (plans or None, record,
+        target)."""
+        obs_, pose_ = latest_.observation, latest_.pose
+        base_xy_ = adapter.estimate_pallet_center_m(obs_, geometry.pallet_depth_m)
+        site_ = adapter.estimate_world_pallet_site(base_xy_, obs_.insertion_yaw_rad, (pose_[0], pose_[1]), pose_[2])
+        target_, _ = G2.planning_target(args.planning_target, site_, scenario.pickup)
+        driven_ = trackers["approach"].config
+        acceptance_ = driven_
+        if args.approach_straight_speed_mps is not None:
+            acceptance_ = replace(driven_, cruise_speed_mps=speeds["approach"])  # as the near capture
+        start_ = np.asarray(rear_now, dtype=float)
+
+        def dry(config_):
+            return lambda st_: bicycle_rollout(st_.poses, st_.directions, st_.curvatures_inv_m, config_, start_)
+
+        plans_, record_ = redraw_docking(
+            grid_world(scenario), PlanningPose(*(float(v) for v in rear_now)), target_, planner_config,
+            geometry=geometry, pickup_bounds=pickup_bounds, dry_runs=(dry(acceptance_), dry(driven_)),
+            **correction_grid(near["first_target"], target_, rear_now),
+        )
+        previous_ = pocket["planning_pickup"]
+        record_.update(
+            site=[site_.x_m, site_.y_m, site_.yaw_rad],
+            previous_target=[previous_.x_m, previous_.y_m, previous_.yaw_rad],
+            dry_run_cruise_mps=[acceptance_.cruise_speed_mps, driven_.cruise_speed_mps],
+        )
+        return plans_, record_, target_
+
+    def near_install(now_s: float, plans_: dict, target_, point_m: float, rear_now) -> dict:
+        """Plan D8 S4b: install an accepted correction at once -- the approach, insertion and
+        extraction paths and their followers (each keeps its config), the pickup target the
+        lift and the extraction read, the phase's start time (the timeout is measured on
+        the new, shorter path), the obstacle permission's path, and a path revision with
+        the paths and the followers' own copies by content."""
+        nonlocal phase_started
+        revision_ = near["path_revision"] + 1
+        previous_ = pocket["planning_pickup"]
+        entry_ = {"revision": revision_, "time_s": now_s, "point_m": point_m,
+                  "target": [target_.x_m, target_.y_m, target_.yaw_rad],
+                  "previous_target": [previous_.x_m, previous_.y_m, previous_.yaw_rad], "paths": {}, "trackers": {}}
+        for name_ in ("approach", "insert", "extract"):
+            path_ = plans_[name_]
+            paths[name_] = path_
+            trackers[name_] = RearAxlePathTracker(path_.poses, path_.directions, path_.curvatures_inv_m,
+                                                  trackers[name_].config)
+            state["paths"][name_] = path_record(path_)
+            entry_["paths"][name_] = {
+                "sha256": near_tracking.path_digest(path_.poses, path_.directions, path_.curvatures_inv_m),
+                "poses": path_.poses.tolist(), "directions": path_.directions.tolist(),
+                "curvatures_inv_m": path_.curvatures_inv_m.tolist(),
+            }
+            entry_["trackers"][name_] = near_tracking.path_digest(*trackers[name_].path_arrays())
+        (args.output / "paths.json").write_text(record_json(state["paths"], indent=2) + "\n")
+        add_path_display(stage, plans_["approach"], "Approach", (0.05, 0.45, 1.0))
+        pocket["planning_pickup"] = target_
+        if obstacle is not None:
+            obstacle["pickup_estimate"] = target_
+            if obstacle["layer"].known_enabled:
+                known_pallet((target_.x_m, target_.y_m, target_.yaw_rad),
+                             obstacle["layer"].known_config.get("r_fix_pickup_m", 0.05), f"correction:{point_m}")
+            obstacle.setdefault("progress", {}).clear()
+            leg_, dir_ = trackers["approach"].leg_ahead()
+            obstacle["layer"].refresh(now_s, obstacle["applied"], obstacle["version"],
+                                      current_pose=tuple(float(v) for v in rear_now), path_ahead=leg_, loaded=loaded,
+                                      direction=dir_)
+        phase_started = now_s
+        near["path_revision"] = revision_
+        near["path_revisions"].append(entry_)
+        near["events"].append({"time_s": now_s, "event": "path_revision", "revision": revision_, "point_m": point_m})
+        return entry_
 
     state["phase"] = "planning"
     if args.use_perception:
@@ -4948,7 +5111,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     # Plan D8 S4a ④: the near-field stop, before this tick's arrival --
                     # zero command, steering held (the safety stop the drive terms were
                     # measured with), arrival deferred; a restart only from standing.
-                    hold_, released_, arrive_ = near_tick(t, rear_stamp, rear, requested_speed, phase, curvature)
+                    hold_, released_, arrive_ = near_tick(t, rear_stamp, rear, requested_speed, phase, curvature,
+                                                          tracking.status == "arrived")
                     if arrive_:
                         # Plan D8 S4a-2 ③: the carriage-corner insertion end, standing: the
                         # insertion's own arrival processing (insert -> lift) follows.
@@ -6743,7 +6907,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             try:
                 (args.output / "near_tracking.json").write_text(
                     record_json({"frames": near["frames"], "ticks": near["ticks"], "events": near["events"],
-                                 "stop_events": near.get("stop_events") or [], "protect": near.get("protect")}) + "\n"
+                                 "stop_events": near.get("stop_events") or [], "protect": near.get("protect"),
+                                 "corrections": near["corrections"], "path_revisions": near["path_revisions"]}) + "\n"
                 )
                 fed_ = [f for f in near["frames"] if "skipped" not in f]
                 state["near_tracking"].update(
