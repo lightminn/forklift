@@ -318,13 +318,38 @@ class ObstacleLayer:
                                       direction=direction)
 
     def check_candidate(self, path_ahead, *, current_pose, direction: int, loaded: bool, extra_margin_m: float = 0.0,
-                        extra_ramp_m: float | None = None, unknown_passes: bool = False):
+                        extra_ramp_m: float | None = None, unknown_passes: bool = False,
+                        lookahead_m: float | None = None):
         """Obstacle recovery v4 D1: a candidate path checked on the snapshot the permission uses
-        (shadow memory, known pallets and exemptions applied), leaving the permission as it is."""
+        (shadow memory, known pallets and exemptions applied), leaving the permission as it is.
+        lookahead_m: DrivePermission.check_path's walk length for this check (None: the config's)."""
         footprint, own = self.footprints(loaded, direction)
         return self.permission.check_path(self.snapshot, path_ahead, footprint, own, current_pose=current_pose,
                                           direction=direction, extra_margin_m=extra_margin_m,
-                                          extra_ramp_m=extra_ramp_m, unknown_passes=unknown_passes)
+                                          extra_ramp_m=extra_ramp_m, unknown_passes=unknown_passes,
+                                          lookahead_m=lookahead_m)
+
+    def check_turnaround_arc(self, poses, *, current_pose) -> str | None:
+        """Return turnaround (docs/plans/2026-10-12-return-forward-turnaround.md): None when the unloaded
+        reverse arc ``poses`` (rear-axle samples from current_pose) meets the spatial conditions for a
+        turnaround candidate to be compared, else why not. It does not decide the start itself: evidence
+        age, a silent sensor and the stop arc at the present steering stay allowed_speed's.
+        What a start needs -- the permission's own walk ahead -- must be verified as for any path, and no
+        cell known occupied may lie anywhere on the arc (a walk past unknown cells). The rest is verified
+        by the permission on the way, as for every path: the grid clears cells only within max_clear_m
+        of the sensor and its last rho band (4 m from the rear axle by default), so an arc whose body
+        sweeps farther cannot be verified whole from its start (the
+        cusp position-stall prefix check of plan design v7 has the same two parts)."""
+        poses = np.asarray(poses, dtype=float)
+        arc_m = float(np.hypot(*np.diff(poses[:, :2], axis=0).T).sum())
+        near = self.check_candidate(poses, current_pose=current_pose, direction=-1, loaded=False)
+        if near.blocked is not None:
+            return near.blocked
+        if not near.reached_end and near.verified_m < min(arc_m, self.permission.config.lookahead_m) - 1e-6:
+            return "short"
+        whole = self.check_candidate(poses, current_pose=current_pose, direction=-1, loaded=False,
+                                     unknown_passes=True, lookahead_m=arc_m + 0.05)
+        return "occupied_ahead" if whole.blocked == "occupied" else None
 
     def check_arc_candidate(self, *, current_pose, curvature_inv_m: float, direction: int, loaded: bool,
                             cap_mps: float):

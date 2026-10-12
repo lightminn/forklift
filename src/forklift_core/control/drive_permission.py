@@ -421,13 +421,17 @@ class DrivePermission:
 
     def check_path(self, snapshot: GridSnapshot, path_ahead, footprint: Footprint, own_footprint: Footprint, *,
                    current_pose, direction: int = 0, extra_margin_m: float = 0.0,
-                   extra_ramp_m: float | None = None, unknown_passes: bool = False) -> Check:
+                   extra_ramp_m: float | None = None, unknown_passes: bool = False,
+                   lookahead_m: float | None = None) -> Check:
         """The verified distance along path_ahead on snapshot, leaving this permission as it is
-        (obstacle recovery v4 D1: a candidate is checked before it is installed)."""
+        (obstacle recovery v4 D1: a candidate is checked before it is installed). lookahead_m
+        replaces the config's walk length for this check (the return turnaround checks a whole
+        reverse arc longer than it); None keeps it."""
         poses = np.asarray(path_ahead, dtype=float)
         if poses.ndim != 2 or poses.shape[1] != 3 or not len(poses):
             raise ValueError("path_ahead must be a non-empty (N, 3) array")
-        samples, arc, total = resample_path(poses, self.config.step_m, self.config.lookahead_m)
+        limit = self.config.lookahead_m if lookahead_m is None else float(lookahead_m)
+        samples, arc, total = resample_path(poses, self.config.step_m, limit)
         own = self._own_cells(snapshot, current_pose, own_footprint)
         return self._walk(snapshot, samples, arc, footprint, own, full_path_m=total, direction=direction,
                           own_pose=current_pose, own_footprint=own_footprint, extra_margin_m=extra_margin_m,
