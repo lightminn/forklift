@@ -70,13 +70,18 @@ def bicycle_rollout(
 class PrefixResult:
     """A dry run of the next leg's first part (cusp position stall, plan design v7)."""
 
-    status: str  # "prefix" (went prefix_m), "leg_end" (the tracker accepted the leg end), "arrived", "failed", "timeout"
+    # "prefix" (went prefix_m), "leg_end" (the tracker accepted the leg end), "arrived", "failed",
+    # "goal_stall" (standing at the final goal outside its tolerance: the runner's stall rule's state), "timeout"
+    status: str
     progress_m: float  # tracker progress along the leg from its start
     lateral_m: float  # signed offset from the path at that progress (left positive)
     heading_rad: float  # yaw minus the path's interpolated yaw there
     failure: str | None
     leg_end_is_goal: bool
     trajectory: tuple = ()
+
+
+GOAL_STALL_REMAINING_M = 1e-4  # a goal stall is judged only with this little of the leg left
 
 
 def leg_prefix_rollout(
@@ -122,7 +127,12 @@ def leg_prefix_rollout(
     visited = [tuple(float(v) for v in pose)]
     status, failure = "timeout", None
     previous = None  # (progress, pose) at the last check
-    for _ in range(int((3.0 * prefix_m / config.cruise_speed_mps + 10.0) / dt_s)):
+    # The budget at the leg's own speed cap: a reverse leg under max_reverse_speed_mps runs slower than the
+    # cruise (Codex review of the cusp amendment).
+    speed_cap = config.cruise_speed_mps
+    if config.max_reverse_speed_mps is not None and int(np.asarray(directions)[min(leg_end, len(path) - 1)]) < 0:
+        speed_cap = min(speed_cap, config.max_reverse_speed_mps)
+    for _ in range(int((3.0 * prefix_m / speed_cap + 10.0) / dt_s)):
         command = tracker.update(pose, speed, dt_s)
         if command.status in ("arrived", "failed"):
             status, failure = command.status, command.failure
@@ -149,9 +159,22 @@ def leg_prefix_rollout(
         pose[:2] += speed * dt_s * np.array([cos(heading), sin(heading)])
         pose[2] += change
         visited.append(tuple(float(v) for v in pose))
+    if status == "timeout" and goal and command.status == "tracking":
+        # The final goal missed in position: the whole budget spent inside the goal's brake window, never
+        # arriving, farther across the goal than the position tolerance (it may still shrink while the
+        # remaining length decays, so this is judged only at the end -- Codex review of the amendment). In
+        # the runner the control pose's noise or a braking overshoot locks the remaining length at zero,
+        # which its final-goal stall rule takes (cusp design amendment).
+        # Only once the remaining length has run out (it bounds how far the offset across can still move),
+        # never while the truck is still approaching (Codex review of the cusp amendment).
+        goal_pose = path[leg_end]
+        across = abs(-sin(goal_pose[2]) * (pose[0] - goal_pose[0]) + cos(goal_pose[2]) * (pose[1] - goal_pose[1]))
+        remaining = tracker.remaining_to_goal_m()
+        if remaining <= GOAL_STALL_REMAINING_M and across > config.position_tolerance_m + remaining:
+            status = "goal_stall"
     progress = float(tracker._progress)
     lateral, heading_error = offset_at(progress, pose)
     return PrefixResult(status, progress - start, lateral, heading_error, failure, goal, tuple(visited))
 
 
-__all__ = ["PrefixResult", "RolloutResult", "bicycle_rollout", "leg_prefix_rollout"]
+__all__ = ["GOAL_STALL_REMAINING_M", "PrefixResult", "RolloutResult", "bicycle_rollout", "leg_prefix_rollout"]

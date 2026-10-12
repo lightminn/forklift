@@ -74,7 +74,7 @@ def run(
                 pose,
                 raw,
                 latch.cache,
-                heading_recovered=lambda goal: False,
+                end_recovered=lambda goal: False,
                 sweep_free=lambda trajectory: sweep,
                 sensors=sensors,
                 stall=monitor.stall,
@@ -458,7 +458,7 @@ def test_a_short_next_leg_ending_at_the_goal_in_a_heading_miss_follows_the_budge
         pose,
         raw,
         {},
-        heading_recovered=lambda goal: seen.append(goal) or True,
+        end_recovered=lambda goal: seen.append(goal) or True,
         sweep_free=lambda trajectory: True,
         sensors=None,
     )
@@ -472,7 +472,7 @@ def test_a_short_next_leg_ending_at_the_goal_in_a_heading_miss_follows_the_budge
         pose,
         raw,
         {},
-        heading_recovered=lambda goal: False,
+        end_recovered=lambda goal: False,
         sweep_free=lambda trajectory: True,
         sensors=None,
     )
@@ -627,3 +627,14 @@ def test_a_stop_confirmed_again_does_not_count_the_same_scan_twice():
         r.force_replan for r in results
     )
     assert monitor.latch.mode in ("brake", "judge")
+
+
+def test_a_goal_stall_counts_only_within_an_existing_rules_budget():
+    # Cusp design amendment: a short next leg that stalls at the final goal is the stall replan's.
+    ref = PrefixResult("arrived", 1.6, 0.0, 0.0, None, True)
+    stall = PrefixResult("goal_stall", 1.6, -0.068, 0.032, None, True)
+    assert prefix_converged(stall, ref, lambda goal: goal)
+    assert not prefix_converged(stall, ref, lambda goal: False)
+    assert not prefix_converged(
+        PrefixResult("timeout", 1.6, -0.068, 0.032, None, True), ref, lambda goal: True
+    )

@@ -89,13 +89,14 @@ def _wrap(angle: float) -> float:
 def prefix_converged(
     run: PrefixResult,
     reference: PrefixResult,
-    heading_recovered: Callable[[bool], bool],
+    end_recovered: Callable[[bool], bool],
     stall: StallConfig = DEFAULT_STALL,
 ) -> bool:
     """Whether the next leg's prefix from the measured pose converges: it went prefix_m and matches the
     reference run (from the stalled leg end's path pose) within match_m / match_rad at equal progress;
     or the leg is shorter and the tracker itself accepted its end; or that end is an endpoint_heading
-    failure an existing rule recovers within its budget (heading_recovered(the end is the goal))."""
+    failure, or a stall at the final goal (cusp design amendment), an existing rule recovers within its
+    budget (end_recovered(the end is the goal))."""
     if run.status == "prefix":
         return (
             reference.status == "prefix"
@@ -105,7 +106,9 @@ def prefix_converged(
     if run.status in ("leg_end", "arrived"):
         return True
     if run.status == "failed" and run.failure == "endpoint_heading":
-        return bool(heading_recovered(run.leg_end_is_goal))
+        return bool(end_recovered(run.leg_end_is_goal))
+    if run.status == "goal_stall":
+        return bool(end_recovered(True))
     return False
 
 
@@ -146,7 +149,7 @@ def judge(
     raw: TrackingCommand,
     cache: dict,
     *,
-    heading_recovered: Callable[[bool], bool],
+    end_recovered: Callable[[bool], bool],
     sweep_free: Callable[[np.ndarray], bool],
     sensors: Callable[[np.ndarray, int], tuple[bool, bool, dict | None]] | None,
     stall: StallConfig = DEFAULT_STALL,
@@ -192,7 +195,7 @@ def judge(
         start_leg=next_leg,
         prefix_m=stall.prefix_m,
     )
-    converged = prefix_converged(run, reference, heading_recovered, stall)
+    converged = prefix_converged(run, reference, end_recovered, stall)
     trajectory = thin(run.trajectory, stall.step_m)
     swept = bool(sweep_free(trajectory))
     record.update(

@@ -1,6 +1,7 @@
 """Kinematic dry run used to accept a near-capture start (plan v3.7)."""
 
 import numpy as np
+import pytest
 
 from forklift_core.control import TrackerConfig
 from forklift_core.control.rollout import bicycle_rollout
@@ -114,3 +115,55 @@ def test_the_prefix_offsets_are_interpolated_to_the_prefix_on_a_curve():
     assert reference.status == fine.status == "prefix" and reference.progress_m == 3.0
     # Interpolated, the reading does not depend on where the tick fell (to the model's own dt error).
     assert abs(reference.lateral_m - fine.lateral_m) < 1e-3 and abs(reference.heading_rad - fine.heading_rad) < 2e-3
+
+
+def test_a_short_last_leg_missed_at_the_goal_ends_in_a_goal_stall():
+    # Cusp design amendment, on the recorded case (S4 dev rerun, seed 4 return): from the stall at the
+    # end of leg 1 the last leg (1.6 m) ends standing at the goal 68 mm off -- inside the goal's brake
+    # window it neither arrives nor fails; at the end of the budget the dry run reports the stall the
+    # runner's final-goal stall rule takes (the ideal rollout's remaining length only decays).
+    import json
+    from pathlib import Path
+
+    case = json.loads((Path(__file__).resolve().parents[2] / "fixtures/cusp_goal_stall/seed4_return.json").read_text())
+    path = tuple(np.asarray(case["path"][k], dtype=float) for k in ("poses", "directions", "curvatures_inv_m"))
+    stall = leg_prefix_rollout(*path, TrackerConfig(**case["config"]), case["rear"], start_leg=2, prefix_m=3.0)
+    assert stall.status == "goal_stall" and stall.leg_end_is_goal
+    assert stall.lateral_m == pytest.approx(-0.068, abs=0.001)
+
+
+def test_a_late_arrival_just_inside_the_tolerance_is_not_a_goal_stall():
+    # Codex review of the amendment: the offset across the goal can still shrink while the remaining
+    # length decays -- 8.04 mm early on, then an arrival at 7.9999 mm; judged only at the budget's end
+    # it stays an arrival.
+    import json
+    from pathlib import Path
+
+    case = json.loads((Path(__file__).resolve().parents[2] / "fixtures/cusp_goal_stall/seed4_return.json").read_text())
+    config = TrackerConfig(**case["config"])
+    xs = np.linspace(0.0, 1.0, 26)
+    back = np.array([1.0, 0.99, 0.98])[1:]
+    x = np.r_[xs, back]
+    path = (np.column_stack((x, np.zeros(len(x)), np.zeros(len(x)))),
+            np.r_[np.ones(len(xs)), -np.ones(len(back))].astype(np.int8), np.zeros(len(x)))
+    late = leg_prefix_rollout(*path, config, (1.04, 0.0093, 0.02), start_leg=1, prefix_m=3.0)
+    assert late.status == "arrived"
+
+
+def test_a_slow_reverse_leg_still_approaching_at_the_budgets_end_is_not_a_goal_stall():
+    # Codex review of the amendment: under max_reverse_speed_mps 0.07 the cruise-based budget ended with
+    # 2 mm still to go and the truck arriving 1.8 s later; the budget now follows the leg's own speed cap
+    # and a stall needs the remaining length all but gone.
+    import json
+    from dataclasses import replace
+    from pathlib import Path
+
+    from forklift_core.control.rollout import GOAL_STALL_REMAINING_M
+
+    case = json.loads((Path(__file__).resolve().parents[2] / "fixtures/cusp_goal_stall/seed4_return.json").read_text())
+    path = tuple(np.asarray(case["path"][k], dtype=float) for k in ("poses", "directions", "curvatures_inv_m"))
+    slow = replace(TrackerConfig(**case["config"]), max_reverse_speed_mps=0.07)
+    start = (-0.7719976411860825, 0.4086998744060603, 0.44737152281226444)
+    out = leg_prefix_rollout(*path, slow, start, start_leg=2, prefix_m=3.0)
+    assert out.status == "arrived"
+    assert GOAL_STALL_REMAINING_M == 1e-4

@@ -1058,13 +1058,13 @@ def test_cusp_position_stall_v7_is_wired_into_the_runner():
     # The prefix's sensor checks: the plain walk within the stopping distance, the walk past unknown
     # for occupied, the evidence age, sensors alive.
     sens = source[source.index("    def cusp_sensors(") :]
-    sens = sens[: sens.index("    def cusp_heading_recovered(")]
+    sens = sens[: sens.index("    def cusp_end_recovered(")]
     assert "unknown_passes=True" in sens and 'plain_.blocked in ("unknown", "edge")' in sens
     assert "age_ <= pconf_.evidence_max_age_s" in sens and "sensor_timeout_s" in sens
     # Every FREE cell either walk relied on (Codex implementation review P1).
     assert "age_ = now_s - min(plain_.oldest_free_s, passes_.oldest_free_s)" in sens
     # A short next leg's heading miss only within the existing rules' budgets.
-    rec = source[source.index("    def cusp_heading_recovered(") :]
+    rec = source[source.index("    def cusp_end_recovered(") :]
     rec = rec[: rec.index("    def cusp_tick(")]
     assert 'len(state["cusp_replans"]) < max_cusp_replans' in rec
     assert 'goal and slam is not None' in rec and 'len(state["stall_replans"]) < 2' in rec

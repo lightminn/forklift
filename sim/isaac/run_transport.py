@@ -4507,10 +4507,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "evidence_age_s": age_ if math.isfinite(age_) else None, "silent": silent_,
         }
 
-    def cusp_heading_recovered(goal: bool) -> bool:
-        """A short next leg's end missed in heading that an existing rule recovers within its budget:
-        a transport cusp by the cusp replan, a transport or return goal by the heading-miss stall replan
-        (SLAM only); a return cusp and the observe leg are refused."""
+    def cusp_end_recovered(goal: bool) -> bool:
+        """A short next leg's end missed (in heading, or a stall at the final goal -- cusp design
+        amendment) that an existing rule recovers within its budget: a transport cusp by the cusp
+        replan, a transport or return goal by the stall replan (SLAM only); a return cusp and the
+        observe leg are refused."""
         if phase == "transport" and not goal:
             return len(state["cusp_replans"]) < max_cusp_replans
         if phase in ("transport", "return_home") and goal and slam is not None:
@@ -4527,7 +4528,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
 
         def judge_now(latch_):
             return CUSP_STALL.judge(
-                tracker_, rear_now, raw_, latch_.cache, heading_recovered=cusp_heading_recovered,
+                tracker_, rear_now, raw_, latch_.cache, end_recovered=cusp_end_recovered,
                 sweep_free=lambda trajectory_: esc.rectangles_sweep_free(cusp_leg_checker(), trajectory_),
                 sensors=(lambda trajectory_, direction_: cusp_sensors(now_s, rear_now, trajectory_, direction_))
                 if obstacle is not None else None,
