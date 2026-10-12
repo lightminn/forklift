@@ -1050,6 +1050,10 @@ RUN_SPECIFIC_ARGUMENTS = (
     "near_capture_box_yaw_rad",
     "near_capture_redraw",
 )
+# Arguments added after the measurement runs, each at the value that reproduces them: a run
+# holding that value matches measurement records that predate the argument, any other value
+# is a difference (2026-10-13: --return-turnaround, off unless given).
+POST_MEASUREMENT_ARGUMENTS = {"return_turnaround": False}
 CONDITION_FIELDS = (
     "settings_synthetic",
     "detector_params",
@@ -1144,6 +1148,13 @@ def condition_problems(expected: dict, observed: dict, skip=()) -> list[str]:
             and isinstance(have, dict)
         ):
             for key in sorted(set(want) | set(have)):
+                if (
+                    name == "arguments"
+                    and key not in want
+                    and key in POST_MEASUREMENT_ARGUMENTS
+                    and have.get(key) == POST_MEASUREMENT_ARGUMENTS[key]
+                ):
+                    continue
                 if want.get(key) != have.get(key) or (
                     name == "input_files" and have.get(key) is None
                 ):

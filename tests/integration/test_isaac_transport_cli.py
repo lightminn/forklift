@@ -423,6 +423,21 @@ def test_slam_runs_see_the_pallet_again_before_the_final_straight() -> None:
     assert 'if slam is not None and "near_capture" not in state:' in source
 
 
+def test_the_delivery_match_inputs_are_recorded_without_stopping_the_match() -> None:
+    """2026-10-13: every delivery match round's inputs go to delivery_match_N.npz for
+    offline replay; a failed write is noted and the round is still recorded (Codex P2)."""
+    source = SCRIPT.read_text()
+    start = source.index("    def dock_at_delivery_straight(t: float) -> None:")
+    body = source[start : source.index("\n    def ", start + 10)]
+    save = body.index("f\"delivery_match_{len(docking.get('rounds', [])) + 1}.npz\"")
+    guard = body.rindex("try:", 0, save)
+    handler = body.index("except OSError as exc:", save)
+    assert body.index("result = dock(") < guard
+    assert body.index('docking.setdefault("match_input_errors", []).append(', handler) < body.index(
+        'docking.setdefault("rounds", []).append('
+    )
+
+
 def test_slam_runs_dock_on_a_scan_before_the_delivery_straight() -> None:
     """Plan v3.8: stop at the straight start, match, move the whole drop."""
     source = SCRIPT.read_text()

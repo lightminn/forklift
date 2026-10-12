@@ -3987,6 +3987,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 float(delivery[1] - expected[1]),
             ],
         )
+        # The match inputs, so a refused match can be replayed offline (2026-10-13:
+        # every not_converged refusal so far had all starts within 0.11 mm). Record
+        # only: a failed write is noted and the match goes on (Codex P2).
+        try:
+            np.savez_compressed(
+                args.output / f"delivery_match_{len(docking.get('rounds', [])) + 1}.npz",
+                reference=slam["reference_points"], live=live, rear_from_laser=rear_from_laser,
+                estimate=estimate, seed=seed, reference_rear=reference, truth_rear=tuple(truth_rear),
+            )
+        except OSError as exc:
+            docking.setdefault("match_input_errors", []).append(f"{type(exc).__name__}: {exc}")
         if args.d7_docking:
             docking["match_seed"] = "latest_goal" if seeded else "prior"
         retry_match = docking.pop("await_retry_match", False)

@@ -234,6 +234,53 @@ def test_the_condition_names_every_argument_setting_and_input_that_differs(tmp_p
     )
 
 
+def test_an_argument_newer_than_the_measurement_matches_only_at_its_reproducing_value(
+    tmp_path,
+):
+    """2026-10-13: --return-turnaround came after the measurement runs; off, a run is the
+    measured one, on (or any other argument they lack) it is a difference."""
+
+    def argument_problems(arguments):
+        observed = NT.run_condition({"arguments": arguments}, tmp_path)
+        return [
+            p
+            for p in NT.condition_problems(expected, observed)
+            if p.startswith("arguments")
+        ]
+
+    expected = NT.run_condition({"arguments": {"fps": 60}}, tmp_path)
+    assert argument_problems({"fps": 60, "return_turnaround": False}) == []
+    assert argument_problems({"fps": 60, "return_turnaround": True}) == [
+        "arguments return_turnaround differs from the measurement runs"
+    ]
+    assert argument_problems({"fps": 60, "new_flag": False}) == [
+        "arguments new_flag differs from the measurement runs"
+    ]
+    assert argument_problems({"fps": 30, "return_turnaround": False}) == [
+        "arguments fps differs from the measurement runs"
+    ]
+    # A measurement that records the argument is matched by its own value only.
+    differs = ["arguments return_turnaround differs from the measurement runs"]
+    for measured in (None, False, True):
+        expected = NT.run_condition(
+            {
+                "arguments": {"fps": 60}
+                if measured is None
+                else {"fps": 60, "return_turnaround": measured}
+            },
+            tmp_path,
+        )
+        for run in (None, False, True):
+            arguments = (
+                {"fps": 60} if run is None else {"fps": 60, "return_turnaround": run}
+            )
+            same = run is measured or (measured is None and run is False)
+            assert argument_problems(arguments) == ([] if same else differs), (
+                measured,
+                run,
+            )
+
+
 def test_the_budget_adds_the_measured_terms_and_stops_past_them():
     t = terms(
         delta_len_m=[0.001 * k for k in range(60)],
