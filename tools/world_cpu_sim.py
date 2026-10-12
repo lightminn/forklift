@@ -7,7 +7,14 @@ Plan: docs/plans/2026-10-09-fleet-random-worlds.md (W1-W5). The floor comes
 from world_gen, jobs from world_mission's Dispatcher, traffic from
 fleet_traffic (ranks = the order jobs were given: a new job goes to the back, a
 re-plan keeps its rank; safe stops) with TA/RA resolution on top
-(docs/plans/2026-10-10-fleet-ta-ra.md, world_resolution). Trucks follow
+(docs/plans/2026-10-10-fleet-ta-ra.md, world_resolution); ``--traffic
+windows`` swaps ranks and safe stops for time-window tokens at route crossings
+(docs/plans/2026-10-11-fleet-time-windows.md): a new job whose route would
+leave no lock-free order waits at its holding place (retried every 5 s, given
+up after HOLD_MAX_S), and a TA or RA path that would is turned down. A truck
+its protective field has held for ``--yield-s`` backs straight away from it by up
+to ``--yield-back-m`` and comes back, so that a person it stopped for can get out
+(plan 2026-10-11 (h); both traffic modes). Trucks follow
 their paths perfectly (0.1 s steps, a stop at each gear change, 4.5 s to lift
 and to lower); what they believe and where they are differ only under pose
 noise. Conditions (the plan's table):
@@ -65,6 +72,7 @@ from forklift_core.planning.world_people import (
     protective_block_m,
 )
 from forklift_core.planning.world_resolution import (
+    make_room,
     own_pallets_keepout,
     rectangles,
     resolution_counts,
@@ -76,6 +84,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DT_S = 0.1
 LIFT_S = 4.5
 IDLE_RANK = 10**9
+HOLD_MAX_S = 60.0  # windows: a job held back this long is given back
 CONDITIONS = {
     "C0": {},
     "C1": {"faults": True},
@@ -159,10 +168,12 @@ class Truck:
         self.error = np.zeros(3)  # truth - believed (pose noise)
         self.stopped_until = 0.0  # temporary breakdown
         self.pending_replan = False
+        self.held = None  # windows: (job, plan, since) waiting for a lock-free order
         self.jobs_done = 0
         self.job_started = 0.0
         self.waiting_s = 0.0
         self.person_stops_s = 0.0
+        self.field_s = 0.0  # how long in a row its protective field has held it
 
     # -- poses -------------------------------------------------------------------
     def truth(self) -> np.ndarray:
@@ -182,37 +193,42 @@ class Truck:
         return LOG_STAGES.index("broken" if broken else self.stage)
 
     # -- jobs --------------------------------------------------------------------
+    @staticmethod
+    def job_items(plan) -> list:
+        items = []
+        for stage in STAGES:
+            items.append(("path", stage, plan.stages[stage]))
+            if stage == "insert":
+                items.append(("wait", "lift", LIFT_S))
+            if stage == "to_drop":
+                items.append(("wait", "lower", LIFT_S))
+        return items
+
     def start_job(self, job, plan, now, manager, rank):
         self.job, self.state, self.job_started = job, "job", now
-        self.items = []
-        for stage in STAGES:
-            self.items.append(("path", stage, plan.stages[stage]))
-            if stage == "insert":
-                self.items.append(("wait", "lift", LIFT_S))
-            if stage == "to_drop":
-                self.items.append(("wait", "lower", LIFT_S))
+        self.items = self.job_items(plan)
         self.item = -1
         self.set_route(manager, 0, rank=rank)
         self.next_item(now, manager, None)
 
-    def set_route(self, manager, first_item, rank=None):
+    def chunks(self, items, first_item) -> tuple[list, list]:
+        """Traffic chunks (poses, footprint, speed, stop before) of items'
+        paths from first_item, and those paths as (stage, result)."""
         g = self.geometry
-        paths = [
-            (stage, result)
-            for kind, stage, result in self.items[first_item:]
-            if kind == "path"
-        ]
-        offsets = manager.set_route(
-            self.name,
-            [
-                (
-                    np.asarray(result.poses),
-                    g.loaded_footprint if stage in LOADED_STAGES else g.unloaded_footprint,
-                )
-                for stage, result in paths
-            ],
-            rank=rank,
-        )
+        paths, out, pause = [], [], 0.0
+        for kind, stage, payload in items[first_item:]:
+            if kind == "wait":
+                pause += payload
+                continue
+            footprint = g.loaded_footprint if stage in LOADED_STAGES else g.unloaded_footprint
+            out.append((np.asarray(payload.poses), footprint, self.speeds[stage], pause))
+            paths.append((stage, payload))
+            pause = 0.0
+        return out, paths
+
+    def set_route(self, manager, first_item, rank=None):
+        chunks, paths = self.chunks(self.items, first_item)
+        offsets = manager.set_route(self.name, chunks, rank=rank)
         self.offsets = dict(zip((s for s, _ in paths), offsets, strict=True))
         self.route_end_m = offsets[-1] + float(arc_lengths(paths[-1][1].poses)[-1])
         self.granted_m = 0.0
@@ -264,10 +280,11 @@ class Truck:
     def step(self, now, manager, dispatcher, person_block_m):
         """Advance by DT_S inside the grant; returns 'done' when the job ends."""
         if self.state != "job" or now < self.stopped_until:
-            self.v = 0.0
+            self.v, self.field_s = 0.0, 0.0
             return None
         kind, stage, payload = self.items[self.item]
         if kind == "wait":
+            self.field_s = 0.0
             self.wait_left -= DT_S
             if self.wait_left <= 1e-9:
                 return self.next_item(now, manager, dispatcher)
@@ -276,6 +293,7 @@ class Truck:
         s = arc_lengths(poses)
         remaining = s[-1] - self.progress
         allowed = max(self.granted_m - self.route_progress(), 0.0)
+        field = person_block_m is not None and max(person_block_m, 0.0) < allowed
         if person_block_m is not None:
             allowed = min(allowed, max(person_block_m, 0.0))
         room = min(remaining, allowed)
@@ -292,6 +310,7 @@ class Truck:
             self.waiting_s += DT_S
             if person_block_m is not None:
                 self.person_stops_s += DT_S
+        self.field_s = self.field_s + DT_S if advance <= 1e-6 and field else 0.0
         self.progress += max(advance, 0.0)
         self.pose = pose_at(poses, s, self.progress)
         if self.progress >= s[-1] - 1e-6:
@@ -351,6 +370,14 @@ def run(structure, seed, trucks_n, condition, args, settings, geometry, configs,
         ta_s=args.ta_s if args.ta_s > 0 else None,
         ra_s=args.ra_s if args.ra_s > 0 else None,
         cooldown_s=args.cooldown_s,
+        mode=args.traffic,
+        issue_s=args.issue_s,
+        slack_s=args.slack_s,
+        window_period_s=args.window_period_s,
+        window_evals=args.window_evals,
+        age_s=args.age_s,
+        park_s=args.park_s,
+        accel_mps2=settings["drive_acceleration_mps2"],
     )
     trucks = [Truck(k, p, world, geometry, settings) for k, p in enumerate(places)]
     named = {t.name: t for t in trucks}
@@ -414,7 +441,10 @@ def run(structure, seed, trucks_n, condition, args, settings, geometry, configs,
         return result
 
     def preconditions(t, after):
-        """Record no-lock precondition breaks that involve t's new route."""
+        """Record no-lock precondition breaks that involve t's new route
+        (windows: no lock-free crossing order for it)."""
+        if manager.windows is not None and not manager.windows.last_feasible:
+            events.append({"t_s": round(now, 1), "kind": "precondition", "after": after, "truck": t.name, "why": "order_lock"})
         for c in manager.route_conflicts():
             if t.name in (c["truck"], c["route_of"]):
                 events.append({"t_s": round(now, 1), "kind": "precondition", "after": after, **c})
@@ -436,9 +466,9 @@ def run(structure, seed, trucks_n, condition, args, settings, geometry, configs,
             keep = t.item + 1  # lift is followed by extract, lower by withdraw
             first = t.items[keep][1]
             start = Pose2D(*map(float, t.pose))
-        # Round where the lower-ranked trucks may stop (plan 2026-10-10); with
-        # no way round them, as before.
-        stops = rectangles(manager.stop_keepout(t.name, config.clearance_m + 0.05))
+        # Round where the lower-ranked trucks may stop (plan 2026-10-10; windows:
+        # round the other trucks); with no way round them, as before.
+        stops = rectangles(manager.replan_keepout(t.name, config.clearance_m + 0.05))
         own = own_pallets_keepout(manager, t.name, t.job, stage, dispatcher.occupied, geometry, config.clearance_m + 0.05)
         result = plan(t.job, first, start, stops + own)
         kept = result.success or not stops
@@ -489,6 +519,13 @@ def run(structure, seed, trucks_n, condition, args, settings, geometry, configs,
         )
         for what, status, wall_s in res.plans:
             plans.append({"job": t.job.number, "truck": t.k, "from": f"{what}:{stage}", "status": status, "wall_s": wall_s})
+        if res.path is not None and manager.windows is not None:
+            items = list(t.items)
+            items[t.item] = ("path", stage, res.path)
+            if not manager.trial_route(t.name, t.chunks(items, t.item)[0]):
+                events.append({**record, "how": "failed", "note": "order_lock"})
+                manager.failed(advice)
+                return
         events.append({**record, **res.record()})
         if res.path is None:
             if res.how == "failed":
@@ -501,6 +538,31 @@ def run(structure, seed, trucks_n, condition, args, settings, geometry, configs,
         preconditions(t, advice.kind)
         if advice.kind == "ra":
             manager.resolved(t.name, advice.other)
+
+    def make_way(t):
+        """(h) Back t off along its stage so that a person its protective field
+        has stopped it for can get out; its rank kept."""
+        kind, stage, path = t.items[t.item]
+        record = {"t_s": round(now, 1), "kind": "yield", "truck": t.name, "stage": stage}
+        if t.name in dead or kind != "path" or stage not in TRAVEL_STAGES:
+            events.append({**record, "how": "skipped"})
+            return
+        floor = np.vstack((static, slot_rects, _box_rects([b for _, b in extra_boxes])))
+        res = make_room(manager, t.name, path, t.segments[t.segment][2] + t.progress, t.segments[t.segment][1], args.yield_back_m, floor)
+        if res.path is not None and manager.windows is not None:
+            items = list(t.items)
+            items[t.item] = ("path", stage, res.path)
+            if not manager.trial_route(t.name, t.chunks(items, t.item)[0]):
+                events.append({**record, "how": "failed", "note": "order_lock"})
+                return
+        events.append({**record, **res.record()})
+        if res.path is None:
+            return
+        t.items[t.item] = ("path", stage, res.path)
+        t.segments = _segments(res.path)
+        t.segment, t.progress, t.v = 0, 0.0, 0.0
+        t.set_route(manager, t.item)
+        preconditions(t, "yield")
 
     def immobilise(t, event, box_kind):
         """t stops for good and becomes an obstacle; its job is given up and the
@@ -555,16 +617,32 @@ def run(structure, seed, trucks_n, condition, args, settings, geometry, configs,
         # -- idle trucks ask for work ----------------------------------------
         for t in trucks:
             if t.state == "idle" and now >= t.idle_until and t.name not in dead:
-                job = dispatcher.next_job(t.k, t.place)
-                if job is None:
+                if t.held is not None:
+                    job, result, since = t.held
+                else:
+                    job = dispatcher.next_job(t.k, t.place)
+                    if job is None:
+                        t.idle_until = now + 5.0
+                        continue
+                    result = plan(job)
+                    if not result.success:
+                        dispatcher.abandon(job, reached_pickup=False, unreachable=True)
+                        t.idle_until = now + 5.0
+                        job_log.append({"job": job.number, "truck": t.k, "status": "plan_failed", "why": result.status, "t_s": round(now, 1)})
+                        continue
+                    since = now
+                if manager.windows is not None and not manager.trial_route(t.name, t.chunks(t.job_items(result), 0)[0]):
                     t.idle_until = now + 5.0
+                    if now - since >= HOLD_MAX_S:
+                        dispatcher.abandon(job, reached_pickup=False, unreachable=False)
+                        t.held = None
+                        job_log.append({"job": job.number, "truck": t.k, "status": "held_out", "t_s": round(now, 1)})
+                    else:
+                        if t.held is None:
+                            events.append({"t_s": round(now, 1), "kind": "job_held", "truck": t.name, "job": job.number})
+                        t.held = (job, result, since)
                     continue
-                result = plan(job)
-                if not result.success:
-                    dispatcher.abandon(job, reached_pickup=False, unreachable=True)
-                    t.idle_until = now + 5.0
-                    job_log.append({"job": job.number, "truck": t.k, "status": "plan_failed", "why": result.status, "t_s": round(now, 1)})
-                    continue
+                t.held = None
                 t.place = job.home
                 t.start_job(job, result, now, manager, dispatcher.next_rank())
                 preconditions(t, "job")
@@ -617,6 +695,11 @@ def run(structure, seed, trucks_n, condition, args, settings, geometry, configs,
                 job_log.append({"job": t.job.number, "truck": t.k, "status": "done", "t_s": round(now, 1), "took_s": round(now - t.job_started, 1)})
                 t.place = t.job.home
                 t.go_idle(now, manager, rng)
+        if args.yield_s > 0:
+            for t in trucks:
+                if t.field_s >= args.yield_s:
+                    t.field_s = 0.0
+                    make_way(t)
         # -- pose noise ------------------------------------------------------
         if flags.get("noise"):
             for t in trucks:
@@ -705,13 +788,19 @@ def run(structure, seed, trucks_n, condition, args, settings, geometry, configs,
         "replans": sum(e["kind"] == "replan" for e in events),
         "replan_failed": sum(e["kind"] == "replan" and e["status"] != "success" for e in events),
         "resolution": resolution_counts(events),
+        "yields": {h: sum(e["kind"] == "yield" and e["how"] == h for e in events) for h in ("back", "failed", "skipped")},
         "waits": wait_stats(np.array([[row[5] for row in step[:-1]] for step in trajectory], dtype=int).reshape(len(trajectory), len(trucks))),
         "stranded": sum(e["kind"] == "stranded" for e in events),
         "fills_held": len(dispatcher.held_back),
+        "traffic": args.traffic,
+        "windows": manager.windows.summary() if manager.windows is not None else None,
+        "jobs_held": sum(e["kind"] == "job_held" for e in events),
+        "jobs_held_out": sum(j["status"] == "held_out" for j in job_log),
         "waiting_share": round(sum(t.waiting_s for t in trucks) / max(now * len(trucks), 1e-9), 3),
         "person_stop_s": round(sum(t.person_stops_s for t in trucks), 1),
         "people_walked_m": round(people.walked_m, 1),
         "events": events[:400],
+        "window_events": manager.windows.events[:300] if manager.windows is not None else [],
         "jobs": job_log,
         "plans": plans,
     }
@@ -793,6 +882,17 @@ def main(argv=None) -> int:
     parser.add_argument("--cooldown-s", type=float, default=60.0)
     parser.add_argument("--wall-m", type=float, default=20.0)
     parser.add_argument("--retreat-max-m", type=float, default=20.0)
+    # Making room for a person (plan 2026-10-11 (h)); a non-positive time turns it off.
+    parser.add_argument("--yield-s", type=float, default=20.0)
+    parser.add_argument("--yield-back-m", type=float, default=2.5)
+    # Time-window tokens (plan 2026-10-11).
+    parser.add_argument("--traffic", default="rank", choices=("rank", "windows"))
+    parser.add_argument("--issue-s", type=float, default=30.0)
+    parser.add_argument("--slack-s", type=float, default=10.0)
+    parser.add_argument("--window-period-s", type=float, default=1.0)
+    parser.add_argument("--window-evals", type=int, default=30)
+    parser.add_argument("--age-s", type=float, default=120.0)
+    parser.add_argument("--park-s", type=float, default=10.0)
     parser.add_argument("--sim-s", type=float, default=1800.0)
     args = parser.parse_args(argv)
     fleet = _fleet_tool()
@@ -808,7 +908,7 @@ def main(argv=None) -> int:
         out = args.output / f"{args.structure}_{seed}_{args.condition}_{args.trucks}"
         start = time.perf_counter()
         result = run(args.structure, seed, args.trucks, args.condition, args, settings, geometry, (config, travel), out)
-        line = {k: result[k] for k in ("structure", "seed", "trucks", "condition", "status", "sim_s", "jobs_done", "jobs_per_hour", "plan_failed", "contacts", "cycles", "stalls", "preconditions", "replans", "waiting_share", "resolution", "waits")}
+        line = {k: result[k] for k in ("structure", "seed", "trucks", "condition", "traffic", "status", "sim_s", "jobs_done", "jobs_per_hour", "plan_failed", "contacts", "cycles", "stalls", "preconditions", "replans", "waiting_share", "resolution", "waits")}
         line["wall_s"] = round(time.perf_counter() - start, 1)
         print(json.dumps(line, ensure_ascii=False), flush=True)
     return 0

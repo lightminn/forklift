@@ -10,7 +10,11 @@ sim/isaac/run_world.py. Points are projected with the recorded pinhole camera.
 person, the latest events), legend below. Pallet places and holding places
 are outlined from world.json. Runs with TA/RA (plan 2026-10-10, log "alert")
 show a TA as an amber ring, an RA as a red ring with the higher-ranked route
-it treats as a wall, and a CC as a green ring.
+it treats as a wall, and a CC as a green ring. Runs with time-window tokens
+(plan 2026-10-11, windows.json) show each crossing whose token is out as a
+diamond in the colour of the truck that goes first (hollow: issued, filled:
+its grant is in) and a magenta ring for a while on a truck whose token expired;
+the rank badges are left out (no ranks).
 """
 
 from __future__ import annotations
@@ -54,6 +58,7 @@ def why_ko(why: str) -> str:
 STRUCTURE_KO = {"rack": "① 랙 창고", "shop": "② 공정 공장", "multi": "③ 복합동"}
 PERSON_STOP_M = 0.3  # protective field allows less than this: shown as stopped for a person
 TA_COLOUR, RA_COLOUR, CC_COLOUR = (255, 185, 40), (255, 60, 60), (80, 225, 120)
+EXPIRED_COLOUR = (230, 70, 230)
 WALL_M, CC_SHOW_S = 20.0, 4.0  # run_world's default --wall-m; how long a CC ring stays
 WHY_KO = {"cycle": "서로 기다림", "long_wait": "오래 기다림", "in_the_way": "길 막음", "stall": "선 트럭"}
 HOW_KO = {"detour": "우회", "retreat": "후진해 비킴", "failed": "길 없음", "skipped": "지금은 못 함", "stale": "그새 풀림"}
@@ -201,6 +206,11 @@ def event_lines(events: list, jobs: list) -> list[tuple[float, str]]:
             out.append((t, f"{name} {kind.upper()}({WHY_KO.get(e.get('why'), e.get('why'))}) {what}: {HOW_KO.get(e.get('how'), e.get('how'))}"))
         elif kind == "cc":
             out.append((t, f"{name} CC — T{e.get('other', '')[6:]} 경로에서 비킴"))
+        elif kind == "window_expired":
+            other = f"T{e.get('other', '')[6:]}"
+            out.append((t, f"{name} 통표 만료 → " + (f"{other} 먼저" if e.get("turned") else "다시 발급")))
+        elif kind == "job_held":
+            out.append((t, f"{name} 작업 시작 보류(순서 고리)"))
     for j in jobs:
         if j["status"] == "done":
             out.append((j["t_s"], f"T{j['truck']} 작업 {j['job']} 완료 ({j['took_s']:.0f} s)"))
@@ -257,6 +267,10 @@ def main(argv=None) -> int:
     alert = log["alert"].astype(int) if "alert" in log else None
     real = log["pallets"] if "pallets" in log else None  # each truck's real pallet
     tablets = Tablets(args.run, log) if (args.run / "routes.npz").exists() and "granted" in log else None
+    windows = None
+    if (args.run / "windows.json").exists():
+        snapshots = json.loads((args.run / "windows.json").read_text())
+        windows = (np.array([w[0] for w in snapshots]), [w[1] for w in snapshots])
     jobs, people = log["jobs"], log["people"]
     project = Projector(camera)
     width, height = camera["resolution"]
@@ -282,6 +296,7 @@ def main(argv=None) -> int:
     ticker = event_lines(events, result.get("jobs", []))
     in_ra = ra_spans(events)
     clears = [(e["t_s"], int(e["truck"][6:])) for e in events if e.get("kind") == "cc"]
+    expiries = [(e["t_s"], int(e["truck"][6:])) for e in events if e.get("kind") == "window_expired"]
     depth, width_p = world["footprints"]["pallet"]
     places = []  # (polygon, colour): pallet places by role, then holding places
     for _, role, x, y, yaw, _ in world["slots"]:
@@ -316,7 +331,7 @@ def main(argv=None) -> int:
                 if x0b <= x <= x1b and y0b <= y <= y1b:  # the rest wait outside the floor
                     poly = project(corners((x, y, yaw), (depth / 2, depth / 2, width_p / 2)))
                     draw.polygon([tuple(q) for q in poly], fill=(225, 185, 120, 230), outline=(90, 60, 30, 255))
-        order = tablets.order(row) if tablets is not None else {}
+        order = tablets.order(row) if tablets is not None and windows is None else {}
         if tablets is not None:
             for k in range(n):
                 colour = COLOURS[k % len(COLOURS)]
@@ -331,6 +346,20 @@ def main(argv=None) -> int:
                 wall = wall[np.hypot(*(wall[:, :2] - truth[row, k, :2]).T) <= WALL_M][::3]
                 paint_union(canvas, [project(rect_corners(r)) for r in wall], RA_COLOUR, 60)
         cleared = {k for when, k in clears if 0.0 <= t - when < CC_SHOW_S}
+        expired = {k for when, k in expiries if 0.0 <= t - when < CC_SHOW_S}
+        if windows is not None:
+            at = int(np.searchsorted(windows[0], t, side="right")) - 1
+            for first_name, second_name, wx, wy, state in windows[1][at] if at >= 0 else ():
+                if state == 0:
+                    continue
+                f_k, s_k = int(first_name[6:]), int(second_name[6:])
+                cx, cy = project([[wx, wy]])[0]
+                diamond = [(cx, cy - 11), (cx + 11, cy), (cx, cy + 11), (cx - 11, cy)]
+                colour = COLOURS[f_k % len(COLOURS)]
+                draw.polygon(diamond, fill=(*colour, 230) if state == 2 else None, outline=(*colour, 255), width=3)
+                if blocked[row, s_k] == f_k:
+                    there = project(truth[row, s_k, :2])[0]
+                    draw.line([(cx, cy), tuple(there)], fill=(*colour, 140), width=2)
         first = int(np.searchsorted(t_log, t - args.trail_s))
         for k in range(n):
             colour = COLOURS[k % len(COLOURS)]
@@ -358,6 +387,8 @@ def main(argv=None) -> int:
                 draw.ellipse([here[0] - 16, here[1] - 16, here[0] + 16, here[1] + 16], outline=(255, 80, 140), width=3)
             if k in cleared:
                 draw.ellipse([here[0] - 23, here[1] - 23, here[0] + 23, here[1] + 23], outline=CC_COLOUR, width=4)
+            if k in expired:
+                draw.ellipse([here[0] - 27, here[1] - 27, here[0] + 27, here[1] + 27], outline=EXPIRED_COLOUR, width=4)
         if people.ndim == 3 and people.shape[1]:
             for p in project(people[row]):
                 draw.ellipse([p[0] - 6, p[1] - 6, p[0] + 6, p[1] + 6], fill=(255, 80, 140, 255), outline=(255, 255, 255))
@@ -376,6 +407,8 @@ def main(argv=None) -> int:
                 status = f"{'TA · ' if alert is not None else ''}교통 대기 → T{blocked[row, k]}"
             elif k in cleared:
                 status = "CC"
+            elif k in expired:
+                status = "통표 만료"
             elif 0.0 <= field[row, k] < PERSON_STOP_M:
                 status = "사람 앞 정지"
             else:
@@ -390,7 +423,10 @@ def main(argv=None) -> int:
         recent = [line for line in ticker if line[0] <= t][-EVENT_ROWS:]
         for i, (when, text) in enumerate(recent):
             draw.text((x0, events_top + 30 + 28 * i), f"{when:5.0f} s  {text}", font=small, fill=(200, 205, 215))
-        if tablets is not None and alert is not None:
+        if windows is not None:
+            draw.text((24, VIEW_H + TOP + 12), "색 띠: 점유 구간(그 트럭만 들어가 달릴 수 있는 곳) · 마름모: 교차 통표(색 = 먼저 지나갈 트럭, 빈 = 발급, 채움 = 들어감) · 점: 남은 경로", font=small, fill=(225, 228, 235))
+            draw.text((24, VIEW_H + TOP + 40), "주황 고리·선: 대기 — 누구 때문에 · 자홍 고리: 통표 만료(창 안에 못 들어감) · 빨간 고리·띠: RA · 초록 고리: CC", font=small, fill=(225, 228, 235))
+        elif tablets is not None and alert is not None:
             draw.text((24, VIEW_H + TOP + 12), "색 띠: 통표(그 트럭만 들어가 달릴 수 있는 구간) · 점: 남은 경로 · 동그라미 숫자: 순번(1 이 먼저)", font=small, fill=(225, 228, 235))
             draw.text((24, VIEW_H + TOP + 40), "주황 고리·선: TA — 누구 때문에 대기 · 빨간 고리·띠: RA — 후순위가 선순위 경로(빨간 띠)를 벽으로 보고 비킴 · 초록 고리: CC — 풀림", font=small, fill=(225, 228, 235))
         elif tablets is not None:

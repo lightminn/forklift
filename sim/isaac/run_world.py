@@ -24,6 +24,13 @@ tracker; poses are the simulator's (no SLAM: cost, and the plan's choice).
   round a standing truck, an RA clears a higher-ranked route (detour round it
   as a wall, or back off along the stage driven so far). --ta-s/--ra-s 0
   turn them off.
+- --traffic windows (docs/plans/2026-10-11-fleet-time-windows.md): time-window
+  tokens at route crossings instead of ranks and safe stops, as in
+  world_cpu_sim; windows.json keeps the open crossings once a second (first
+  and second truck, where, token state) for the video.
+- Making room (plan 2026-10-11 (h)), as in world_cpu_sim: a truck its
+  protective field has held for --yield-s (0: off) backs straight away from
+  it by up to --yield-back-m once it stands still, comes back and drives on.
 
 Safety is judged on the truth every 0.1 s (truck-truck, truck-floor,
 truck-standing pallet, truck-person) and recorded; nothing is stopped by it.
@@ -56,6 +63,7 @@ from run_fleet import native, require
 ROOT = Path(__file__).resolve().parents[2]
 IDLE_RANK = 10**9
 LIFT_TIMEOUT_S = 30.0
+HOLD_MAX_S = 60.0  # windows: a job held back this long is given back
 
 
 def arguments() -> argparse.Namespace:
@@ -90,6 +98,16 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--cooldown-s", type=float, default=60.0)
     parser.add_argument("--wall-m", type=float, default=20.0)
     parser.add_argument("--retreat-max-m", type=float, default=20.0)
+    # Making room for a person (plan 2026-10-11 (h)); a non-positive time turns it off.
+    parser.add_argument("--yield-s", type=float, default=20.0)
+    parser.add_argument("--yield-back-m", type=float, default=2.5)
+    parser.add_argument("--traffic", default="rank", choices=("rank", "windows"))
+    parser.add_argument("--issue-s", type=float, default=30.0)
+    parser.add_argument("--slack-s", type=float, default=10.0)
+    parser.add_argument("--window-period-s", type=float, default=1.0)
+    parser.add_argument("--window-evals", type=int, default=30)
+    parser.add_argument("--age-s", type=float, default=120.0)
+    parser.add_argument("--park-s", type=float, default=10.0)
     parser.add_argument("--video", action="store_true")
     parser.add_argument(
         "--dress", action="store_true", help="NVIDIA props over the (hidden) collider boxes; looks only"
@@ -152,6 +170,9 @@ class Truck:
         self.abandoned = False
         self.route_id = -1  # index into routes.npz; -1 before the first route
         self.advice = None  # TA/RA waiting for the truck to stand still
+        self.field_s = 0.0  # how long in a row its protective field has held it
+        self.make_way = False  # (h) back off once it stands still
+        self.held = None  # windows: (job, plan, since) waiting for a lock-free order
 
     @property
     def kind(self):
@@ -169,39 +190,44 @@ class Truck:
         stages = self.ctx["log_stages"]
         return stages.index("broken" if self.failed else self.stage)
 
-    def start_job(self, job, plan, now, rank):
+    @staticmethod
+    def job_items(plan) -> list:
         from forklift_core.planning.world_mission import STAGES
 
-        self.job, self.state, self.job_started = job, "job", now
-        self.items = []
+        items = []
         for stage in STAGES:
-            self.items.append(("path", stage, plan.stages[stage]))
+            items.append(("path", stage, plan.stages[stage]))
             if stage == "insert":
-                self.items.append(("lift", "lift", None))
+                items.append(("lift", "lift", None))
             if stage == "to_drop":
-                self.items.append(("lower", "lower", None))
+                items.append(("lower", "lower", None))
+        return items
+
+    def start_job(self, job, plan, now, rank):
+        self.job, self.state, self.job_started = job, "job", now
+        self.items = self.job_items(plan)
         self.item = -1
         self.set_route(0, rank=rank)
         self.next_item(now)
 
-    def set_route(self, first_item, rank=None):
+    def chunks(self, items, first_item) -> tuple[list, list]:
+        """Traffic chunks (poses, footprint, speed, stop before) of items'
+        paths from first_item, and those paths as (stage, result)."""
         g, loaded = self.ctx["geometry"], self.ctx["loaded_stages"]
-        paths = [
-            (stage, result)
-            for kind, stage, result in self.items[first_item:]
-            if kind == "path"
-        ]
-        offsets = self.ctx["traffic"].set_route(
-            self.name,
-            [
-                (
-                    np.asarray(result.poses),
-                    g.loaded_footprint if stage in loaded else g.unloaded_footprint,
-                )
-                for stage, result in paths
-            ],
-            rank=rank,
-        )
+        paths, out, pause = [], [], 0.0
+        for kind, stage, result in items[first_item:]:
+            if kind != "path":
+                pause += self.ctx["lift_s"]
+                continue
+            footprint = g.loaded_footprint if stage in loaded else g.unloaded_footprint
+            out.append((np.asarray(result.poses), footprint, self.ctx["stage_speed"](stage), pause))
+            paths.append((stage, result))
+            pause = 0.0
+        return out, paths
+
+    def set_route(self, first_item, rank=None):
+        chunks, paths = self.chunks(self.items, first_item)
+        offsets = self.ctx["traffic"].set_route(self.name, chunks, rank=rank)
         self.offsets = dict(zip((s for s, _ in paths), offsets, strict=True))
         self.record_route()
 
@@ -333,6 +359,7 @@ def run(app, args, settings, state) -> None:
         protective_block_m,
     )
     from forklift_core.planning.world_resolution import (
+        make_room,
         own_pallets_keepout,
         rectangles,
         resolution_counts,
@@ -528,16 +555,17 @@ def run(app, args, settings, state) -> None:
 
     sync_stands()
 
+    speeds = {
+        "leave": "withdraw_speed_mps",
+        "to_pickup": "approach_speed_mps",
+        "insert": "insert_speed_mps",
+        "extract": "extract_speed_mps",
+        "to_drop": "transport_speed_mps",
+        "withdraw": "withdraw_speed_mps",
+        "to_holding": "approach_speed_mps",
+    }
+
     def tracker_config(stage_name):
-        speeds = {
-            "leave": "withdraw_speed_mps",
-            "to_pickup": "approach_speed_mps",
-            "insert": "insert_speed_mps",
-            "extract": "extract_speed_mps",
-            "to_drop": "transport_speed_mps",
-            "withdraw": "withdraw_speed_mps",
-            "to_holding": "approach_speed_mps",
-        }
         travel_leg = stage_name in TRAVEL_STAGES
         return TrackerConfig(
             cruise_speed_mps=settings[speeds[stage_name]],
@@ -563,11 +591,22 @@ def run(app, args, settings, state) -> None:
         ta_s=args.ta_s if args.ta_s > 0 else None,
         ra_s=args.ra_s if args.ra_s > 0 else None,
         cooldown_s=args.cooldown_s,
+        mode=args.traffic,
+        issue_s=args.issue_s,
+        slack_s=args.slack_s,
+        window_period_s=args.window_period_s,
+        window_evals=args.window_evals,
+        age_s=args.age_s,
+        park_s=args.park_s,
+        accel_mps2=settings["drive_acceleration_mps2"],
     )
     log_stages = ("idle", *STAGES, "lift", "lower", "broken")
     ctx = {
         "geometry": geometry,
         "traffic": traffic,
+        "stage_speed": lambda stage_name: settings[speeds[stage_name]],
+        # Lift or lower: the fork's travel at its rate, and the 1 s settle after a lower.
+        "lift_s": settings["lift_target_m"] / settings["lift_rate_mps"] + 1.0,
         "tracker_config": tracker_config,
         "loaded_stages": LOADED_STAGES,
         "log_stages": log_stages,
@@ -653,6 +692,7 @@ def run(app, args, settings, state) -> None:
         )
     }
     events, contacts, plans, job_log = [], [], [], []
+    windows_log = []  # windows: (t_s, [[first, second, x, y, state], ...]) once a second
     reported = set()
     frames, tick = 0, 0
     initial_time = world.current_time
@@ -693,10 +733,10 @@ def run(app, args, settings, state) -> None:
         else:
             keep = t.item + 1
             first = t.items[keep][1]
-        # Round where the lower-ranked trucks may stop (plan 2026-10-10); with
-        # no way round them, as before.
+        # Round where the lower-ranked trucks may stop (plan 2026-10-10; windows:
+        # round the other trucks); with no way round them, as before.
         start = Pose2D(*map(float, rear))
-        stops = rectangles(traffic.stop_keepout(t.name, config.clearance_m + 0.05))
+        stops = rectangles(traffic.replan_keepout(t.name, config.clearance_m + 0.05))
         own = own_pallets_keepout(traffic, t.name, t.job, stage_name, dispatcher.occupied, geometry, config.clearance_m + 0.05)
         result = plan(t.job, first, start, stops + own)
         kept = result.success or not stops
@@ -758,12 +798,43 @@ def run(app, args, settings, state) -> None:
             if res.how == "failed":
                 traffic.failed(advice)
             return
+        if traffic.windows is not None:
+            items = list(t.items)
+            items[t.item] = ("path", stage_name, res.path)
+            if not traffic.trial_route(t.name, t.chunks(items, t.item)[0]):
+                events[-1].update(how="failed", note="order_lock")
+                traffic.failed(advice)
+                return
         t.items[t.item] = ("path", stage_name, res.path)
         t.load_path(res.path)
         t.stage_started = now
         t.set_route(t.item)
         if advice.kind == "ra":
             traffic.resolved(t.name, advice.other)
+
+    def give_way(t, rear):
+        """(h) Back t off so that a person its protective field stopped it for
+        can get out; its rank kept."""
+        record = {"t_s": round(now, 2), "kind": "yield", "truck": t.name, "stage": t.stage}
+        if t.kind != "path" or t.stage not in TRAVEL_STAGES or t.last_command is None:
+            events.append({**record, "how": "skipped"})
+            return
+        stage_name = t.stage
+        floor = np.vstack((static_rects, slot_rects, box_rects(extra_boxes)))
+        res = make_room(traffic, t.name, t.items[t.item][2], t.last_command.progress_m, t.direction(), args.yield_back_m, floor)
+        if res.path is not None and traffic.windows is not None:
+            items = list(t.items)
+            items[t.item] = ("path", stage_name, res.path)
+            if not traffic.trial_route(t.name, t.chunks(items, t.item)[0]):
+                events.append({**record, "how": "failed", "note": "order_lock"})
+                return
+        events.append({**record, **res.record()})
+        if res.path is None:
+            return
+        t.items[t.item] = ("path", stage_name, res.path)
+        t.load_path(res.path)
+        t.stage_started = now
+        t.set_route(t.item)
 
     def affected(t, box):
         if t.state != "job":
@@ -823,21 +894,39 @@ def run(app, args, settings, state) -> None:
             # -- idle trucks ask for work ------------------------------------
             for t in trucks:
                 if t.state == "idle" and now >= t.idle_until and not t.failed:
-                    job = dispatcher.next_job(t.k, t.place)
-                    if job is None:
+                    if t.held is not None:
+                        job, result, since = t.held
+                    else:
+                        job = dispatcher.next_job(t.k, t.place)
+                        if job is None:
+                            t.idle_until = now + 5.0
+                            continue
+                        result = plan(job)
+                        if not result.success:
+                            dispatcher.abandon(job, reached_pickup=False, unreachable=True)
+                            t.idle_until = now + 5.0
+                            job_log.append({"job": job.number, "truck": t.k, "status": "plan_failed", "why": result.status, "t_s": round(now, 1)})
+                            continue
+                        since = now
+                    if traffic.windows is not None and not traffic.trial_route(t.name, t.chunks(t.job_items(result), 0)[0]):
                         t.idle_until = now + 5.0
+                        if now - since >= HOLD_MAX_S:
+                            dispatcher.abandon(job, reached_pickup=False, unreachable=False)
+                            t.held = None
+                            job_log.append({"job": job.number, "truck": t.k, "status": "held_out", "t_s": round(now, 1)})
+                        else:
+                            if t.held is None:
+                                events.append({"t_s": round(now, 2), "kind": "job_held", "truck": t.name, "job": job.number})
+                            t.held = (job, result, since)
                         continue
-                    result = plan(job)
-                    if not result.success:
-                        dispatcher.abandon(job, reached_pickup=False, unreachable=True)
-                        t.idle_until = now + 5.0
-                        job_log.append({"job": job.number, "truck": t.k, "status": "plan_failed", "why": result.status, "t_s": round(now, 1)})
-                        continue
+                    t.held = None
                     put_pallet(t.k, job.source.site)
                     handled[job.source.name] = t.k
                     sync_stands()
                     t.place = job.home
                     t.start_job(job, result, now, dispatcher.next_rank())
+                    if traffic.windows is not None and not traffic.windows.last_feasible:
+                        events.append({"t_s": round(now, 2), "kind": "precondition", "after": "job", "truck": t.name, "why": "order_lock"})
                     for c in traffic.route_conflicts():
                         if t.name in (c["truck"], c["route_of"]):
                             events.append({"t_s": round(now, 2), "kind": "precondition", **c})
@@ -917,6 +1006,8 @@ def run(app, args, settings, state) -> None:
             ])
             log["people"].append(people.pos.copy() if len(people.pos) else np.zeros((0, 2)))
             log["jobs"].append([t.jobs_done for t in trucks])
+            if traffic.windows is not None and (not windows_log or now - windows_log[-1][0] >= 1.0 - 1e-6):
+                windows_log.append((round(now, 2), traffic.window_state()))
             moved = [float(np.hypot(*(truths[t.name][0][:2] - last_seen.get(t.name, truths[t.name][0])[:2]))) for t in trucks]
             if any(m > 0.01 for m in moved) or not any(t.state == "job" for t in trucks):
                 last_motion_s = now
@@ -946,6 +1037,9 @@ def run(app, args, settings, state) -> None:
             elif t.advice is not None and abs(speed) < 0.02:
                 advice, t.advice = t.advice, None
                 carry_out(t, advice, rear)
+            elif t.make_way and abs(speed) < 0.02:
+                t.make_way = False
+                give_way(t, rear)
             elif t.kind == "path":
                 command = t.tracker.update(rear, speed, dt)
                 t.last_command = command
@@ -980,11 +1074,16 @@ def run(app, args, settings, state) -> None:
                             requested = math.copysign(cap, requested)
                             t.waited_s += dt if cap < 0.02 else 0.0
                     block = blocks.get(t.name)
+                    held = False
                     if block is not None:
                         cap = math.sqrt(2 * settings["drive_acceleration_mps2"] * max(block - 0.02, 0.0))
                         if abs(requested) > cap:
                             requested = math.copysign(cap, requested)
                             t.person_stop_s += dt if cap < 0.02 else 0.0
+                            held = cap < 0.02
+                    t.field_s = t.field_s + dt if held else 0.0
+                    if args.yield_s > 0 and t.field_s >= args.yield_s:
+                        t.field_s, t.make_way = 0.0, True
                 if now - t.stage_started > 3 * max(t.tracker.nominal_duration_s(), 10.0) + t.waited_s + t.person_stop_s + 120:
                     t.failed = t.failed or f"timeout in {t.stage}"
             elif t.kind == "lift":
@@ -1050,7 +1149,11 @@ def run(app, args, settings, state) -> None:
         preconditions=sum(e["kind"] == "precondition" for e in events),
         replans=sum(e["kind"] == "replan" for e in events),
         fills_held=len(dispatcher.held_back),
+        traffic=args.traffic,
+        windows=traffic.windows.summary() if traffic.windows is not None else None,
+        jobs_held=sum(e["kind"] == "job_held" for e in events),
         resolution=resolution_counts(events),
+        yields={h: sum(e["kind"] == "yield" and e["how"] == h for e in events) for h in ("back", "failed", "skipped")},
         waits=wait_stats(_per_second(log["t_s"], log["blocked"], len(trucks))),
         trucks=[
             {"truck": t.name, "jobs_done": t.jobs_done, "failed": t.failed, "stage": t.stage,
@@ -1061,6 +1164,9 @@ def run(app, args, settings, state) -> None:
         plans=plans,
     )
     state["success"] = not contacts and not any(t.failed for t in trucks) and state["cycles"] == 0
+    if traffic.windows is not None:
+        events = sorted(events + traffic.windows.events, key=lambda e: e["t_s"])
+        (args.output / "windows.json").write_text(json.dumps(windows_log, default=native) + "\n")
     (args.output / "events.json").write_text(json.dumps(events, default=native, indent=1, ensure_ascii=False) + "\n")
     (args.output / "world.json").write_text(json.dumps(world_record(wm, geometry, extra_boxes), ensure_ascii=False) + "\n")
     routes = ctx["routes"]

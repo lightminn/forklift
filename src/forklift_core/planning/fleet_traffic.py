@@ -45,6 +45,18 @@ A new route of a truck must keep clear of where the lower-ranked trucks may
 stop on what they already hold (``lower_stops``, ``path_conflicts``), or it
 breaks the precondition above for them.
 
+``mode="windows"`` (plan 2026-10-11) keeps the claims and replaces the ranks
+and safe stops with time-window tokens at route crossings (fleet_windows):
+a truck waits only where a crossing's order puts it second, and may stop
+anywhere else. Ranks then only break ties and order the grant updates; the
+rank-only helpers (``lower_stops``, ``route_conflicts``) give nothing.
+In this mode a truck that is not waiting for a truck, not at its route's end
+and has not got on ``sample_m`` for ``stall_s`` counts as standing (held by
+something the manager does not see: a person, a pause, a lost permit), so a
+truck held by its body gets a TA; and from ``slack_s`` of standing the
+windows' times count it as standing as long again (``held_s``), and a truck
+held by such a truck's body as late as it (fleet_windows).
+
 Poses are what each truck believes (SLAM estimates). Rear-axle x, y, yaw in
 metres and radians; arc lengths along the truck's route.
 """
@@ -56,6 +68,7 @@ from math import cos, hypot, sin
 
 import numpy as np
 
+from .fleet_windows import Windows, time_profile, touch_groups
 from .geometry import Bounds, Footprint, FootprintCollisionChecker, Pose2D, Rectangle
 
 _HUGE = Bounds(-1e6, 1e6, -1e6, 1e6)
@@ -232,6 +245,8 @@ class _Truck:
     g: np.ndarray  # arc length of each route sample
     rects: np.ndarray  # (n, 6) the route samples' footprints, grown
     rest: np.ndarray  # (n, 6) the same, moving_m back along the route
+    span: np.ndarray | None = None  # (n, 6) covering both (windows mode)
+    eta: np.ndarray | None = None  # free-flow time from the route's start
     progress_m: float = 0.0
     granted_m: float = 0.0
     pose: tuple = (0.0, 0.0, 0.0)
@@ -240,6 +255,9 @@ class _Truck:
     held_by_body: bool = False  # waiting_on's body or claim is on the way
     moving: bool = True
     claim: np.ndarray = field(default_factory=lambda: np.zeros((0, 6)))
+    best_m: float = 0.0  # furthest progress on this route (windows mode)
+    best_s: float = 0.0  # when best_m last moved on by sample_m
+    held_s: float = 0.0  # how much later than free flow it is taken to start (windows mode)
 
     @property
     def key(self):
@@ -262,7 +280,18 @@ class TrafficManager:
         ta_s: float | None = None,
         ra_s: float | None = None,
         cooldown_s: float = 60.0,
+        mode: str = "rank",
+        issue_s: float = 30.0,
+        slack_s: float = 10.0,
+        window_period_s: float = 1.0,
+        window_evals: int = 30,
+        age_s: float = 120.0,
+        park_s: float = 10.0,
+        accel_mps2: float = 0.3,
+        speed_mps: float = 0.5,
     ) -> None:
+        if mode not in ("rank", "windows"):
+            raise ValueError("mode is rank or windows")
         if min(lookahead_m, sample_m, moving_m, scan_m) <= 0 or margin_m < 0:
             raise ValueError("lookahead, sample, moving and scan lengths must be positive")
         if scan_m < lookahead_m:
@@ -277,6 +306,25 @@ class TrafficManager:
         self.ta_s = ta_s
         self.ra_s = ra_s
         self.cooldown_s = cooldown_s
+        self.mode = mode
+        self.accel_mps2 = accel_mps2
+        self.speed_mps = speed_mps  # for a chunk given without its own speed
+        self.now = 0.0
+        self.windows = (
+            Windows(
+                sample_m=sample_m,
+                lookahead_m=lookahead_m,
+                issue_s=issue_s,
+                slack_s=slack_s,
+                period_s=window_period_s,
+                evals=window_evals,
+                age_s=age_s,
+                park_s=park_s,
+                moving_m=moving_m,
+            )
+            if mode == "windows"
+            else None
+        )
         self.ra_against: dict[str, str] = {}  # truck in RA -> the truck it cleared
         self._advised: dict = {}  # (kind, actor, other, why) -> the wait it was for
         self._last_advice: dict[str, float] = {}
@@ -290,22 +338,28 @@ class TrafficManager:
     def add(self, name: str, rank: int, pose, footprint: Footprint) -> None:
         """A truck standing at pose, with no route yet (it stays there)."""
         pose = np.asarray(pose, dtype=float).reshape(1, 3)
+        rects = oriented_rects(pose, footprint, self.margin_m)
         self.trucks[name] = _Truck(
             name,
             rank,
             footprint,
             np.zeros(1),
-            oriented_rects(pose, footprint, self.margin_m),
-            oriented_rects(pose, footprint, self.margin_m),
+            rects,
+            rects.copy(),
+            span=rects.copy(),
+            eta=np.zeros(1),
             pose=tuple(pose[0]),
         )
-        self._refresh_cover(name)
+        if self.windows is None:
+            self._refresh_cover(name)
 
     def set_route(self, name: str, chunks, rank: int | None = None) -> list[float]:
         """The truck's whole route from where it is, as (poses, footprint) per
         stage in driving order; its old claim is released. ``rank`` replaces
         the truck's rank (a fleet that keeps giving out jobs ranks them in
-        the order it gave them).
+        the order it gave them). A chunk may add (speed_mps, pause_s): its
+        cruise speed and a stop before it (a lift or lower), for the windows'
+        free-flow times.
 
         Returns each chunk's starting arc length on the route; progress passed
         to ``update`` is measured the same way (chunk start + distance along
@@ -314,9 +368,24 @@ class TrafficManager:
         truck = self.trucks[name]
         if rank is not None:
             truck.rank = rank
-        offsets, g, poses, rests, footprints = [], [], [], [], []
-        start = 0.0
-        for chunk, footprint in chunks:
+        offsets, route = self._build(chunks)
+        truck.g, truck.rects, truck.rest, truck.span, truck.eta = route
+        truck.progress_m = truck.granted_m = 0.0
+        truck.waiting_on = truck.waiting_since_s = None
+        truck.best_m, truck.best_s, truck.held_s = 0.0, self.now, 0.0
+        if self.windows is None:
+            self._refresh_cover(name)
+        else:
+            ok = self.windows.replace(name, self._groups(truck, self.trucks), self.trucks, self.now)
+            if not ok:
+                self.windows.counts["route_lock"] += 1
+                self.windows.events.append({"t_s": round(self.now, 1), "kind": "order_lock", "truck": name})
+        return offsets
+
+    def _build(self, chunks):
+        offsets, g, poses, rests, footprints, eta = [], [], [], [], [], []
+        start, clock = 0.0, 0.0
+        for chunk, footprint, *timing in chunks:
             chunk = np.asarray(chunk, dtype=float).reshape(-1, 3)
             s = arc_lengths(chunk)
             marks = np.arange(0.0, s[-1], self.sample_m)
@@ -326,14 +395,62 @@ class TrafficManager:
             poses.extend(pose_at(chunk, s, d) for d in marks)
             rests.extend(pose_at(chunk, s, max(d - self.moving_m, 0.0)) for d in marks)
             footprints.extend([footprint] * len(marks))
+            speed = timing[0] if timing else self.speed_mps
+            clock += timing[1] if len(timing) > 1 else 0.0
+            times = clock + time_profile(marks, chunk, speed, self.accel_mps2)
+            eta.extend(times)
+            clock = float(times[-1])
             start += float(s[-1])
-        truck.g = np.asarray(g)
-        truck.rects = oriented_rects(np.asarray(poses), footprints, self.margin_m)
-        truck.rest = oriented_rects(np.asarray(rests), footprints, self.margin_m)
-        truck.progress_m = truck.granted_m = 0.0
-        truck.waiting_on = truck.waiting_since_s = None
-        self._refresh_cover(name)
-        return offsets
+        poses, rests = np.asarray(poses), np.asarray(rests)
+        rects = oriented_rects(poses, footprints, self.margin_m)
+        # One rect over a sample and the place moving_m back of it (where a
+        # truck held there may rest), 1 cm extra for the turn between them.
+        mid = (poses + rests) / 2
+        mid[:, 2] = poses[:, 2]
+        span = oriented_rects(mid, footprints, self.margin_m)
+        span[:, 2] += np.hypot(*(poses[:, :2] - rests[:, :2]).T) / 2 + 0.01
+        route = (
+            np.asarray(g),
+            rects,
+            oriented_rects(rests, footprints, self.margin_m),
+            span,
+            np.asarray(eta),
+        )
+        return offsets, route
+
+    def _groups(self, truck: _Truck, trucks: dict) -> dict:
+        """truck's crossings with every other moving truck's remaining route."""
+        if len(truck.g) < 2:
+            return {}
+        out = {}
+        for other in trucks.values():
+            if other.name == truck.name or len(other.g) < 2:
+                continue
+            lo = int(np.searchsorted(other.g, self._remaining(other), side="left"))
+            theirs = other.span[lo:]
+            rows = _near(truck.span, theirs)
+            cols = _near(theirs, truck.span[rows])
+            if not len(rows) or not len(cols):
+                continue
+            touch = np.zeros((len(truck.span), len(theirs)), dtype=bool)
+            touch[np.ix_(rows, cols)] = overlap_matrix(truck.span[rows], theirs[cols])
+            found = touch_groups(touch, truck.g, other.g[lo:])
+            if found:
+                out[other.name] = [
+                    (ia, (j0 + lo, j1 + lo), need_a, need_b) for ia, (j0, j1), need_a, need_b in found
+                ]
+        return out
+
+    def trial_route(self, name: str, chunks) -> bool:
+        """Windows mode: could name take this route (as set_route would give
+        it) with crossing orders that do not lock? Nothing changes."""
+        if self.windows is None:
+            return True
+        _, route = self._build(chunks)
+        truck = self.trucks[name]
+        trial = _Truck(name, truck.rank, truck.footprint, route[0], route[1], route[2], span=route[3], eta=route[4], pose=truck.pose)
+        trucks = {**self.trucks, name: trial}
+        return self.windows.replace(name, self._groups(trial, trucks), trucks, self.now, dry=True)
 
     def set_footprint(self, name: str, footprint: Footprint) -> None:
         """The body the truck has now (loaded or not)."""
@@ -423,17 +540,53 @@ class TrafficManager:
             return others[int(owner[np.nonzero(touch[free])[0][0]])].name, True
         return self._route_owner(truck, first + (0 if end is None else end + 1)), False
 
+    def _extend_windows(self, truck: _Truck) -> tuple[str | None, bool]:
+        """Windows mode: move the grant on as far as the claims and the
+        crossing orders allow, up to lookahead_m."""
+        target = min(truck.g[-1], truck.progress_m + self.lookahead_m)
+        if truck.granted_m >= target - 1e-9:
+            return None, False
+        first = int(np.searchsorted(truck.g, truck.granted_m + 1e-9, side="left"))
+        last = int(np.searchsorted(truck.g, target + 1e-9, side="right"))
+        others = [o for o in self.trucks.values() if o is not truck]
+        obstacles = np.vstack([np.zeros((0, 6))] + [o.claim for o in others])
+        owner = np.concatenate(
+            [np.zeros(0, dtype=int)] + [np.full(len(o.claim), k) for k, o in enumerate(others)]
+        )
+        ahead = truck.rects[first:last]
+        nearby = _near(obstacles, ahead)
+        obstacles, owner = obstacles[nearby], owner[nearby]
+        touch = overlap_matrix(ahead, obstacles)
+        hit_rows = np.nonzero(touch.any(axis=1))[0]
+        free = first + (int(hit_rows[0]) if len(hit_rows) else last - first)
+        stop, waits_for = self.windows.limit(truck, first, free, self.trucks)
+        if stop > first:
+            truck.granted_m = max(truck.granted_m, float(truck.g[stop - 1]))
+        if truck.granted_m >= target - 1e-9:
+            return None, False
+        if waits_for is not None and stop < free:
+            return waits_for, False
+        if len(hit_rows):
+            return others[int(owner[np.nonzero(touch[hit_rows[0]])[0][0]])].name, True
+        return None, False
+
     def update(self, now_s: float, poses: dict, progress: dict) -> dict[str, Permit]:
         """Trucks' believed rear-axle poses and arc lengths along their routes -> permits."""
+        self.now = now_s
         for name, truck in self.trucks.items():
             truck.pose = tuple(float(v) for v in poses[name])
             truck.progress_m = float(np.clip(progress[name], 0.0, truck.g[-1]))
             truck.granted_m = max(truck.granted_m, truck.progress_m)
+            if truck.progress_m >= truck.best_m + self.sample_m:
+                truck.best_m, truck.best_s = truck.progress_m, now_s
         for truck in self.trucks.values():
             truck.claim = self._claim(truck)
+        if self.windows is not None:
+            self.windows.step(now_s, self.trucks)
+        extend = self._extend if self.windows is None else self._extend_windows
         permits = {}
         for truck in sorted(self.trucks.values(), key=lambda t: t.key):
-            blocked_by, by_body = self._extend(truck)
+            blocked_by, by_body = extend(truck)
             truck.claim = self._claim(truck)
             allowed = truck.granted_m - truck.progress_m
             at_end = truck.progress_m >= truck.g[-1] - 1e-9
@@ -444,9 +597,29 @@ class TrafficManager:
                 truck.held_by_body = by_body
             else:
                 truck.waiting_on, truck.waiting_since_s = None, None
-            truck.moving = not waiting and not at_end
+            standing = self.windows is not None and now_s - truck.best_s >= self.stall_s
+            truck.moving = not waiting and not at_end and not standing
             permits[truck.name] = Permit(allowed, truck.granted_m, blocked_by)
+        if self.windows is not None:
+            self._held(now_s)
         return permits
+
+    def _held(self, now_s: float) -> None:
+        """Windows mode: how much later than free flow each truck is taken to
+        start -- standing without a truck to wait for, from slack_s on: as long
+        again; waiting for a truck's body: as late as that truck."""
+        own = {}
+        for name, t in self.trucks.items():
+            stood = now_s - t.best_s
+            free = t.waiting_on is None and t.progress_m < t.g[-1] - 1e-9
+            own[name] = stood if free and stood >= self.windows.slack_s else 0.0
+        for name, t in self.trucks.items():
+            held, seen, at = own[name], {name}, t
+            while at.waiting_on is not None and at.held_by_body and at.waiting_on not in seen:
+                seen.add(at.waiting_on)
+                at = self.trucks[at.waiting_on]
+                held = max(held, own[at.name])
+            t.held_s = held
 
     def deadlocks(self, now_s: float) -> list[tuple[str, str]]:
         """(truck, blocker) pairs: a waiting cycle after cycle_s, or a wait of
@@ -502,7 +675,8 @@ class TrafficManager:
             if cycle:
                 continue
             if self.ra_s is not None and waited >= self.ra_s:
-                if lower is truck:
+                # Windows mode: the waiting truck is the one an order puts second.
+                if lower is truck or self.windows is not None:
                     self._advise(out, now_s, "ra", truck, blocker, "long_wait", since)
                 elif not blocker.moving and self.on_route(blocker.name, truck.name):
                     self._advise(out, now_s, "ra", blocker, truck, "in_the_way", since)
@@ -579,6 +753,8 @@ class TrafficManager:
         precondition broken."""
         truck = self.trucks[name]
         names, rects = [], []
+        if self.windows is not None:
+            return names, np.zeros((0, 6))
         for other in self.trucks.values():
             if other.key <= truck.key:
                 continue
@@ -595,6 +771,21 @@ class TrafficManager:
         once more, in pieces clear of name's own spot."""
         rects = self.lower_stops(name)[1].copy()
         rects[:, 2:4] += self.margin_m
+        return self._keep_clear(rects, name, keep_m, piece_m)
+
+    def replan_keepout(self, name: str, keep_m: float, piece_m: float = 0.6) -> np.ndarray:
+        """Keep-out for name's route planned again round a new obstacle (a
+        fault, a spill): stop_keepout; windows mode: the other trucks' bodies
+        where they are now, grown by the margin twice. A route through where
+        another truck stands, with that truck's route through where name
+        stands, is a lock no order clears (each is already in the other's
+        crossing)."""
+        if self.windows is None:
+            return self.stop_keepout(name, keep_m, piece_m)
+        others = [t for t in self.trucks.values() if t.name != name]
+        if not others:
+            return np.zeros((0, 6))
+        rects = np.vstack([oriented_rects(np.array([t.pose]), t.footprint, 2 * self.margin_m) for t in others])
         return self._keep_clear(rects, name, keep_m, piece_m)
 
     def keepout(self, name: str, rects, keep_m: float, piece_m: float = 0.6) -> np.ndarray:
@@ -623,20 +814,34 @@ class TrafficManager:
             out.append("meets_other")
         return out
 
-    def back_to(self, name: str, lowest_m: float, highest_m: float) -> float | None:
+    def back_to(
+        self, name: str, lowest_m: float, highest_m: float, other: str | None = None
+    ) -> float | None:
         """The furthest-along arc length in [lowest_m, highest_m] of name's
         route where it may stop (clear of every higher-ranked remaining
-        route): where to back off to. None if there is none."""
+        route; windows mode: of other's): where to back off to. None if
+        there is none."""
         truck = self.trucks[name]
-        ok = (~self._unsafe(truck)) & (truck.g >= lowest_m) & (truck.g <= highest_m)
+        within = (truck.g >= lowest_m) & (truck.g <= highest_m)
+        if self.windows is not None:
+            unsafe = np.zeros(len(truck.g), dtype=bool)
+            if other is not None and np.any(within):
+                route = self.trucks[other]
+                ahead = route.rects[route.g >= self._remaining(route)]
+                unsafe[within] = overlap_matrix(truck.span[within], ahead).any(axis=1)
+            ok = ~unsafe & within
+        else:
+            ok = (~self._unsafe(truck)) & within
         found = np.nonzero(ok)[0]
         return float(truck.g[found[-1]]) if len(found) else None
 
     def route_conflicts(self) -> list[dict]:
         """Breaks of the no-lock precondition: a truck's current pose on a
         higher-ranked truck's remaining route, or its final pose on a
-        lower-ranked one's."""
+        lower-ranked one's. Nothing in windows mode (no ranks to keep)."""
         out = []
+        if self.windows is not None:
+            return out
         for truck in self.trucks.values():
             here = oriented_rects(np.array([truck.pose]), truck.footprint, self.margin_m)
             for other in self.trucks.values():
@@ -652,6 +857,18 @@ class TrafficManager:
                     out.append(
                         {"truck": truck.name, "pose": kind, "route_of": other.name}
                     )
+        return out
+
+    def window_state(self) -> list:
+        """Windows mode, for drawing: each crossing as [first, second, x, y,
+        state] -- state 0 no token yet, 1 token issued, 2 a grant in; x, y
+        the middle of the first truck's interval."""
+        out = []
+        for c in self.windows.crossings.values() if self.windows is not None else ():
+            lo, hi = c.interval(c.first)
+            mid = self.trucks[c.first].rects[(lo + hi) // 2]
+            state = 2 if c.entered else 1 if c.issued_s is not None else 0
+            out.append([c.first, c.second, round(float(mid[0]), 2), round(float(mid[1]), 2), state])
         return out
 
     def gap_m(self, a: str, b: str) -> float:

@@ -11,6 +11,10 @@ their plans):
   route, back along the part of this stage it has driven to the nearest place
   it may stop (``TrafficManager.back_to``) and plan the stage again from there,
   as one path with a gear change.
+- Making room (plan 2026-10-11, (h)): a truck that its protective field has
+  held for a while -- a person who cannot get out of its way -- backs straight
+  away from it a little, comes back and drives its stage on (``make_room``;
+  no planner call).
 
 Every new path keeps clear of where the lower-ranked trucks may stop
 (``TrafficManager.stop_keepout``), and a TA or RA detour that would touch the
@@ -27,7 +31,14 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .fleet_traffic import Advisory, TrafficManager, arc_lengths, pose_at
+from .fleet_traffic import (
+    Advisory,
+    TrafficManager,
+    arc_lengths,
+    oriented_rects,
+    overlap_matrix,
+    pose_at,
+)
 from .geometry import Pose2D, Rectangle
 from .hybrid_astar import PlanResult
 from .pallet_mission import _append_straight
@@ -186,7 +197,7 @@ def resolve(
         return Resolution("failed", None, tuple(plans))
     here_m = manager.trucks[advice.truck].progress_m
     lowest = max(stage_start_m, here_m - min(driven_m, retreat_max_m))
-    back = manager.back_to(advice.truck, lowest, here_m - MIN_BACK_M)
+    back = manager.back_to(advice.truck, lowest, here_m - MIN_BACK_M, other=advice.other)
     if back is None:
         return Resolution("failed", None, tuple(plans))
     retreat = reverse_path(path, driven_m, max(driven_m - (here_m - back), 0.0))
@@ -199,6 +210,69 @@ def resolve(
     if onward is None:
         return Resolution("failed", None, tuple(plans))
     return found("retreat", _append_straight(retreat, onward))
+
+
+def rest_of_path(result: PlanResult, from_m: float) -> PlanResult:
+    """result's path from arc length from_m on (0 <= from_m < its length)."""
+    poses = np.asarray(result.poses, dtype=float)
+    s = arc_lengths(poses)
+    if not 0.0 <= from_m < float(s[-1]):
+        raise ValueError("need 0 <= from_m < path length")
+    keep = [i for i in range(len(s)) if s[i] > from_m + 1e-9]
+    directions = np.asarray(result.directions)
+    curvatures = np.asarray(result.curvatures_inv_m, dtype=float)
+    # The piece up to keep[0] lies on the old segment arriving at keep[0].
+    return PlanResult(
+        True,
+        "success",
+        np.vstack([pose_at(poses, s, from_m)] + [poses[i] for i in keep]),
+        np.asarray([directions[keep[0]]] + [directions[i] for i in keep], dtype=np.int8),
+        np.asarray([curvatures[keep[0]]] + [curvatures[i] for i in keep]),
+        float(s[-1] - from_m),
+        0,
+    )
+
+
+def make_room(
+    manager: TrafficManager,
+    name: str,
+    path: PlanResult,
+    driven_m: float,
+    gear: int,
+    back_m: float,
+    static: np.ndarray,
+    step_m: float = 0.5,
+    clear_m: float = 0.05,
+) -> Resolution:
+    """A truck that its protective field holds (a person, say) backs straight
+    away from it -- in the other gear, heading kept -- and comes the same way
+    back to drive on along its stage: the stage's new path, or "failed" if no
+    back-off of at least MIN_BACK_M keeps clear of every other truck's claim
+    (traffic margin) and of ``static`` ((N, 6) rects: floor, pallets, spills,
+    broken trucks; grown by clear_m). The longest back-off up to back_m in
+    step_m steps is taken. gear is the stage's gear where the truck is."""
+    poses = np.asarray(path.poses, dtype=float)
+    here = pose_at(poses, arc_lengths(poses), driven_m)
+    truck = manager.trucks[name]
+    claims = np.vstack([np.zeros((0, 6)), *(t.claim for n, t in manager.trucks.items() if n != name)])
+    static = np.asarray(static, dtype=float).reshape(-1, 6)
+    away = -int(gear) * np.array([np.cos(here[2]), np.sin(here[2]), 0.0])
+    back = back_m
+    while back >= MIN_BACK_M - 1e-9:
+        d = np.append(np.arange(0.0, back, 0.1), back)
+        out = here + d[:, None] * away
+        hit = overlap_matrix(manager._path_rects(name, out), claims).any() or overlap_matrix(
+            oriented_rects(out, truck.footprint, clear_m), static
+        ).any()
+        if not hit:
+            n = len(out)
+            retreat = PlanResult(True, "success", out, np.full(n, -int(gear), dtype=np.int8), np.zeros(n), float(back), 0)
+            again = PlanResult(True, "success", out[::-1].copy(), np.full(n, int(gear), dtype=np.int8), np.zeros(n), float(back), 0)
+            new = _append_straight(_append_straight(retreat, again), rest_of_path(path, driven_m))
+            left = float(arc_lengths(poses)[-1]) - driven_m
+            return Resolution("back", new, (), left, float(new.length_m))
+        back -= step_m
+    return Resolution("failed", None, note="no_room")
 
 
 def wait_stats(blocked: np.ndarray) -> dict:
