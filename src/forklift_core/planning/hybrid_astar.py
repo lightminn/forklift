@@ -161,6 +161,10 @@ class PlanResult:
     # D7b cycles generated (both halves free) before the key check.
     root_shot: str = "none"
     cycles_generated: int = 0
+    # Return-leg turnaround (pallet_mission.plan_return_leg, forward_turnaround): what was
+    # compared and chosen -- the direct plan and each reverse-arc candidate's status and cost
+    # terms. None for every other plan.
+    turnaround: dict | None = None
 
 
 def _wrap(angle):
@@ -287,6 +291,22 @@ class _ObstacleDistance:
     def distance(self, x_m: float, y_m: float) -> float:
         value = self.distance_m[self._cell(x_m, y_m)]
         return max(0.0, value - self._slack_m) if isfinite(value) else 0.0
+
+
+def obstacle_heuristic_field(goal, obstacles, footprint, bounds, config, occupancy=None):
+    """The holonomic-with-obstacles heuristic plan_hybrid_astar builds for this goal (None when
+    config has no obstacle_heuristic_resolution_m)."""
+    if config.obstacle_heuristic_resolution_m is None:
+        return None
+    return _ObstacleDistance(
+        obstacles,
+        footprint,
+        bounds,
+        (goal.x_m, goal.y_m),
+        resolution_m=config.obstacle_heuristic_resolution_m,
+        clearance_m=config.clearance_m,
+        occupancy=occupancy,
+    )
 
 
 def _advance(pose, distance_m, curvature):
@@ -512,6 +532,7 @@ def plan_hybrid_astar(
     *,
     occupancy=None,
     deadline=None,
+    obstacle_field=None,
 ) -> PlanResult:
     """Plan bounded, collision-checked forward/reverse motion in a static map.
 
@@ -519,6 +540,10 @@ def plan_hybrid_astar(
     grid_collision) checked cell by cell alongside the rectangles; unknown
     cells are free to the planner (priority-5 plan D3). deadline optionally
     stops the search at that time.monotonic() value with status "timeout".
+    obstacle_field optionally supplies the holonomic-with-obstacles term already
+    built for this goal, obstacles, footprint, bounds, occupancy and the config's
+    resolution and clearance (obstacle_heuristic_field) -- several searches to one
+    goal share it (pallet_mission's return turnaround); the result is the same.
 
     Invalid colliding endpoints return invalid_start/invalid_goal. Exhaustion
     returns no_path or expansion_limit; neither proves physical infeasibility.
@@ -546,15 +571,9 @@ def plan_hybrid_astar(
     field = (
         None
         if config.obstacle_heuristic_resolution_m is None
-        else _ObstacleDistance(
-            obstacles,
-            footprint,
-            bounds,
-            (goal.x_m, goal.y_m),
-            resolution_m=config.obstacle_heuristic_resolution_m,
-            clearance_m=config.clearance_m,
-            occupancy=occupancy,
-        )
+        else obstacle_field
+        if obstacle_field is not None
+        else obstacle_heuristic_field(goal, obstacles, footprint, bounds, config, occupancy)
     )
 
     def heuristic(pose):

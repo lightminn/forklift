@@ -429,6 +429,16 @@ def arguments() -> argparse.Namespace:
         "again. Needs --slam-feedback.",
     )
     parser.add_argument(
+        "--return-turnaround",
+        action="store_true",
+        help="Return-leg forward preference (docs/plans/2026-10-12-return-forward-turnaround.md): "
+        "the first live return plan on the grid (after the SLAM release, which it waits for, and "
+        "the grid's re-projection) also weighs full-lock reverse arcs, each followed by a search "
+        "home, against the direct plan, reverse length weighted 3.0; each arc's start must be "
+        "verified on the drive permission's snapshot and no known occupied cell may lie on it. "
+        "Later return replans are unchanged.",
+    )
+    parser.add_argument(
         "--destination-prior-error-m",
         type=float,
         default=0.0,
@@ -1088,6 +1098,7 @@ def path_record(path) -> dict:
         "search_attempts": [
             list(entry) for entry in getattr(path, "search_attempts", ())
         ],
+        "turnaround": getattr(path, "turnaround", None),
     }
 
 
@@ -2599,6 +2610,35 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         return (np.abs(dx * ct + dy * st_) <= geometry.pallet_depth_m / 2 + band_along) & (
             np.abs(-dx * st_ + dy * ct) <= geometry.pallet_width_m / 2 + band_across
         )
+
+    def return_turnaround_kwargs() -> dict:
+        """--return-turnaround: the plan_return_leg options for the return path the truck sets off
+        with -- the first live plan on the grid, which runs after the SLAM release and the obstacle
+        block's re-projection, so the arc check's snapshot and the plan's grid share one correction
+        (the release replan itself is replaced by it and passes none; Codex implementation review
+        2026-10-12 P2). Later return replans pass none. Each turnaround arc is checked on the drive
+        permission's snapshot before it is compared: the planner's grid takes UNKNOWN cells as free,
+        the permission does not enter them (Codex design review 2026-10-12)."""
+        if not args.return_turnaround:
+            return {}
+        try:  # as grid_kwargs: the first plans run before the SLAM link exists
+            slam_link_ = slam
+        except NameError:
+            slam_link_ = None
+        if slam_link_ is not None and slam_link_.get("pending_release") is not None:
+            return {}  # not before the release: the snapshot is re-projected after it
+
+        def arc_check(poses):
+            if not grid_planning:
+                return None
+            layer_ = obstacle["layer"]
+            if getattr(layer_, "snapshot", None) is None:
+                return "no_snapshot"
+            # The start part verified as the permission's own walk, no known occupied cell on the whole
+            # arc (ObstacleLayer.check_turnaround_arc; Codex implementation reviews 2026-10-12).
+            return layer_.check_turnaround_arc(poses, current_pose=tuple(float(v) for v in poses[0]))
+
+        return {"forward_turnaround": True, "turnaround_check": arc_check}
 
     def grid_kwargs(kind=None, target=None, own=None, applied=None, band_pose=None, label=None) -> dict:
         """occupancy (and the pallet obstacle the plan may know) for a grid plan. band_pose (default
@@ -7477,11 +7517,32 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 and phase in trackers
                 and not obstacle.setdefault("live_replanned", {}).get(phase)
                 and t >= obstacle.get("live_retry_after_s", 0.0)
+                # --return-turnaround: the first return plan waits for the SLAM release (settle may hand
+                # over to return_home with it still pending), so the turnaround is weighed once, on the
+                # released pose (Codex implementation review 2026-10-12, 2nd).
+                and not (args.return_turnaround and phase == "return_home" and slam is not None
+                         and slam.get("pending_release") is not None)
             ):
                 # The mission plan's travel legs saw the pickup pallet's band
                 # cleared for the carried part; the executed leg is planned now,
                 # on the live grid, where the carried pallet is the truck's own.
                 obstacle["live_replanned"][phase] = True
+                if args.return_turnaround and phase == "return_home" and slam is not None:
+                    # Standing, the obstacle block may not have re-projected the grid after the release:
+                    # do it here as it would, so the plan's grid, the arc check's snapshot and the start
+                    # pose share one correction.
+                    applied_now = (tuple(float(v) for v in slam["tracker"].applied[0])
+                                   if slam["tracker"].applied is not None else (0.0, 0.0, 0.0))
+                    if applied_now != obstacle["applied"]:
+                        obstacle["version"] += 1
+                        obstacle["applied"] = applied_now
+                        obstacle["reprojections"] = obstacle.get("reprojections", 0) + 1
+                        obstacle["return_reprojected_at_s"] = t
+                        leg_now, leg_dir_now = trackers[phase].leg_ahead()
+                        obstacle["layer"].refresh(
+                            t, applied_now, obstacle["version"], current_pose=tuple(float(v) for v in rear),
+                            path_ahead=leg_now, loaded=loaded, direction=leg_dir_now,
+                        )
                 start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))
                 obstacle["deadline"] = time.monotonic() + 20.0
                 if phase == "transport":
@@ -7496,14 +7557,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 else:
                     sc_ = scenario if slam is None else slam.get("return_scenario", slam.get("transport_scenario", scenario))
                     live = plan_return_leg(grid_world(sc_), start, return_to_pose, planner_config, geometry=geometry,
-                                           travel_config=travel_config, **grid_kwargs("return", sc_.destination))
+                                           travel_config=travel_config, **grid_kwargs("return", sc_.destination),
+                                           **return_turnaround_kwargs())
                     if live.status in ("invalid_start", "no_path"):
                         live = plan_return_leg(grid_world(sc_), start, return_to_pose, replace(planner_config, clearance_m=0.0),
                                                geometry=geometry,
                                                travel_config=replace(travel_config, clearance_m=0.0) if travel_config is not None else None,
-                                               **grid_kwargs("return", sc_.destination))
+                                               **grid_kwargs("return", sc_.destination), **return_turnaround_kwargs())
                 obstacle["deadline"] = None
-                obstacle.setdefault("live_plans", []).append({"phase": phase, "time_s": t, "status": live.status})
+                obstacle.setdefault("live_plans", []).append(
+                    {"phase": phase, "time_s": t, "status": live.status,
+                     "turnaround": getattr(live, "turnaround", None)})
                 if not live.success:
                     # Standing, the grid keeps updating (the cells the carried
                     # pallet stood on clear once seen again): retry each second,

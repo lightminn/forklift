@@ -425,3 +425,36 @@ def test_a_candidate_is_checked_on_the_permission_snapshot_without_changing_it()
     speed, why = lay.limit(0.2, current_pose=pose, curvature_inv_m=0.0, direction=1, loaded=False, cap_mps=0.6)
     assert arc == lay.permission.last_estop
     assert lay.snapshot is snap and lay.permission.path_check is installed
+
+
+def test_a_turnaround_arc_needs_its_start_verified_and_no_known_obstacle_further_on():
+    """Return turnaround (docs/plans/2026-10-12-return-forward-turnaround.md): cells clear only within
+    max_clear_m of the sensor, so a 90-degree full-lock reverse arc (5.4 m, the body sweeping farther)
+    starts on what the permission's own walk verifies; a known occupied cell anywhere on it refuses it."""
+    from forklift_core.control.drive_permission import arc_poses
+    from forklift_core.perception.obstacle_grid import FREE, OCCUPIED, UNKNOWN, GridSnapshot
+
+    lay = layer()
+    pose = (0.0, 0.0, 0.0)
+    samples, _ = arc_poses(pose, 0.29, -1, math.pi / 2 / 0.29, 0.05)
+    res, x0, y0 = 0.05, -10.0, -10.0
+    xs = x0 + (np.arange(400) + 0.5) * res
+    near = np.hypot(*np.meshgrid(xs, xs, indexing="ij")) < 4.0  # what the scan has cleared
+
+    def snap(extra=None):
+        state = np.where(near, FREE, UNKNOWN).astype(np.uint8)
+        if extra is not None:
+            i, j = int((extra[0] - x0) / res), int((extra[1] - y0) / res)
+            state[i - 2:i + 3, j - 2:j + 3] = OCCUPIED
+        free = np.where(state == FREE, 1.0, np.nan)
+        return GridSnapshot(state, free, 1.0, (0.0, 0.0, 0.0), 0, 1, {"high": 1.0}, x0, y0, res)
+
+    lay.snapshot = snap()
+    whole = lay.check_candidate(samples, current_pose=pose, direction=-1, loaded=False, lookahead_m=6.0)
+    assert whole.blocked == "unknown"  # the whole arc cannot be verified from its start
+    assert lay.check_turnaround_arc(samples, current_pose=pose) is None
+    end = samples[-1]
+    lay.snapshot = snap(extra=(end[0], end[1]))  # an obstacle seen where the arc ends
+    assert lay.check_turnaround_arc(samples, current_pose=pose) == "occupied_ahead"
+    lay.snapshot = snap(extra=tuple(samples[20][:2]))  # within the start's walk
+    assert lay.check_turnaround_arc(samples, current_pose=pose) == "occupied"

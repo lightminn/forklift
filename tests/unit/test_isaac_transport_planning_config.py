@@ -1120,3 +1120,18 @@ def test_near_protection_prediction_screens_only_the_last_correction():
     for key in ('"rear"', '"approach"', '"tracker_config"', '"held"', '"widths_m"', '"bounds_sha256"',
                 '"drive_terms_sha256"', '"constants"', '"camera_xy_m"', '"carriage_limit_m"', '"fork_tip_x_m"'):
         assert key in fn
+
+
+def test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release():
+    """docs/plans/2026-10-12-return-forward-turnaround.md: the first live return plan waits for a
+    pending SLAM release, re-projects the grid before it weighs the turnaround (a standing truck can
+    skip the obstacle block's re-projection), and the release replans carry no turnaround."""
+    src = SCRIPT.read_text()
+    start = src.index('and not obstacle.setdefault("live_replanned", {}).get(phase)')
+    block = src[start:src.index('obstacle["deadline"] = None', start)]
+    assert 'slam.get("pending_release") is not None' in block.split("):", 1)[0]
+    assert block.index('obstacle["layer"].refresh(') < block.index("**return_turnaround_kwargs()")
+    release = src[src.index("    def slam_release("):]
+    release = release[: release.index("\n    def ", 10)]
+    assert "return_turnaround_kwargs" not in release and "plan_return_leg(" in release
+    assert src.count("**return_turnaround_kwargs()") == 2  # the live return plan and its tight retry

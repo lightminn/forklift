@@ -352,3 +352,19 @@ def test_an_unknown_passing_walk_counts_the_free_evidence_behind_the_unknown():
     passing = perm.check_path(snap, STRAIGHT, FOOT, BODY, unknown_passes=True, **kw)
     assert default.oldest_free_s == 10.0 and passing.oldest_free_s == 9.7
     assert passing.verified_m == default.verified_m
+
+
+def test_one_check_can_walk_farther_than_the_configured_lookahead():
+    """The return turnaround checks a whole reverse arc, longer than the 3 m walk
+    (docs/plans/2026-10-12-return-forward-turnaround.md)."""
+    perm = DrivePermission(CONFIG)
+    snap = snapshot()
+    short = perm.check_path(snap, STRAIGHT, FOOT, BODY, current_pose=(0, 0, 0))
+    assert short.blocked is None and not short.reached_end
+    assert short.verified_m <= CONFIG.lookahead_m + 1e-9
+    whole = perm.check_path(snap, STRAIGHT, FOOT, BODY, current_pose=(0, 0, 0), lookahead_m=6.05)
+    assert whole.blocked is None and whole.reached_end
+    set_cell(snap, 6.5, 0.0, OCCUPIED)  # ahead of the body only beyond the 3 m walk
+    assert perm.check_path(snap, STRAIGHT, FOOT, BODY, current_pose=(0, 0, 0)).blocked is None
+    assert perm.check_path(snap, STRAIGHT, FOOT, BODY, current_pose=(0, 0, 0), lookahead_m=6.05).blocked == "occupied"
+    assert perm.snapshot is None  # a check leaves the permission as it is
