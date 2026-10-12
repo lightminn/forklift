@@ -2849,6 +2849,550 @@ def mission_geometry(record: dict):
     return geo
 
 
+def NT_terms(terms_bytes: bytes, nt: dict, bounds_data: dict):
+    """The drive terms the run used, as near_tracking.DriveTerms (the runner's own parse)."""
+    sys.path.insert(0, str(ROOT / "sim" / "isaac"))
+    import near_tracking as NT
+
+    return NT.DriveTerms.from_dict(
+        json.loads(terms_bytes), nt["bounds_sha256"], bounds_data["latency"]
+    )
+
+
+def _refused_by_prediction(c) -> bool:
+    """A correction whose re-draw the protection prediction refused (a malformed record is not one)."""
+    redraw = c.get("redraw") if isinstance(c, dict) else None
+    return isinstance(redraw, dict) and redraw.get("refused") == "protection_predicted"
+
+
+XII_RULES = "v1"  # plan D8 S4 near field, protection prediction screening (design v4), fixed before any run
+XII_TOL = 1e-6  # the runner (Isaac's Python) and this judge (the project venv) recompute apart
+XII_PREDICTION_KEYS = (
+    "rules",
+    "rear",
+    "reached",
+    "dry_status",
+    "face_distance_m",
+    "camera_distance_m",
+    "bound",
+    "age_s",
+    "sweep_m",
+    "kappa_inv_m",
+    "relative_yaw_rad",
+    "margin_m",
+    "loss_m",
+    "margin_phys_m",
+    "retry_allowed",
+    "lost_injection",
+    "disposition",
+    "inputs",
+)
+XII_INPUT_KEYS = (
+    "rear",
+    "face_distance_m",
+    "retries",
+    "protected",
+    "approach",
+    "tracker_config",
+    "held",
+    "widths_m",
+    "observation_stamp_s",
+    "camera_xy_m",
+    "carriage_limit_m",
+    "fork_tip_x_m",
+    "bounds_sha256",
+    "drive_terms_sha256",
+    "constants",
+)
+
+
+def _close(a, b, tol) -> bool:
+    """Equal within tol, element by element (no angle wrapping -- held centres carry a height)."""
+    a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    return a.shape == b.shape and bool(np.all(np.abs(a - b) <= tol))
+
+
+def _xii_record(what: str, pred) -> None:
+    """A screened decision's prediction record is complete and well formed, or the run is unverified."""
+    if not isinstance(pred, dict) or any(k not in pred for k in XII_PREDICTION_KEYS):
+        raise Unverified(f"{what}: the prediction record is incomplete")
+    inputs = pred["inputs"]
+    if not isinstance(inputs, dict) or any(k not in inputs for k in XII_INPUT_KEYS):
+        raise Unverified(f"{what}: the prediction inputs are incomplete")
+    try:
+        require_finite(f"{what} rear", pred["rear"], size=3)
+        require_finite(f"{what} input rear", inputs["rear"], size=3)
+        for key in (
+            "face_distance_m",
+            "camera_distance_m",
+            "age_s",
+            "sweep_m",
+            "kappa_inv_m",
+            "relative_yaw_rad",
+        ):
+            require_shape(f"{what} {key}", pred[key], ())
+        for key in (
+            "face_distance_m",
+            "observation_stamp_s",
+            "carriage_limit_m",
+            "fork_tip_x_m",
+        ):
+            require_shape(f"{what} input {key}", inputs[key], ())
+        require_count(f"{what} input retries", inputs["retries"])
+        require_finite(f"{what} input widths", inputs["widths_m"], size=2)
+        require_finite(f"{what} input camera", inputs["camera_xy_m"], size=2)
+        held = inputs["held"]
+        require_finite(f"{what} held left", held["left"], size=3)
+        require_finite(f"{what} held right", held["right"], size=3)
+        require_shape(f"{what} held yaw", held["yaw"], ())
+        approach = inputs["approach"]
+        poses = require_finite(f"{what} approach", approach["poses"])
+        if (
+            poses.ndim != 2
+            or poses.shape[1] != 3
+            or len(approach["directions"]) != len(poses)
+            or len(approach["curvatures_inv_m"]) != len(poses)
+            or not isinstance(approach.get("sha256"), str)
+        ):
+            raise ValueError("approach shapes")
+        if not all(
+            isinstance(pred[k], bool)
+            for k in ("reached", "retry_allowed", "lost_injection")
+        ) or not isinstance(inputs["protected"], bool):
+            raise ValueError("flags")
+        if not isinstance(pred["dry_status"], str) or not isinstance(
+            pred["disposition"], str
+        ):
+            raise ValueError("status strings")
+        if not isinstance(inputs["tracker_config"], dict) or not isinstance(
+            inputs["constants"], dict
+        ):
+            raise ValueError("settings")
+        if pred["bound"] is not None:
+            if not isinstance(pred["bound"], dict):
+                raise ValueError("bound")
+            for key, value in pred["bound"].items():
+                require_shape(f"{what} bound {key}", value, ())
+        for key in ("margin_m", "loss_m", "margin_phys_m"):
+            if pred[key] is not None:
+                require_shape(f"{what} {key}", pred[key], ())
+    except (KeyError, TypeError, ValueError) as exc:
+        raise Unverified(
+            f"{what}: the prediction record is malformed ({exc!r})"
+        ) from exc
+
+
+def check_xii(
+    result: dict, nt: dict, near: dict, bounds, terms, blades, carriage_limit: float
+) -> dict:
+    """(xii), plan D8 S4 near field (protection prediction screening, design v4): applies to a run
+    carrying the rule marker. Every 0.6 m decision redraw_docking accepted (the correction accepted, or
+    its redraw refused protection_predicted) has a complete prediction record and no other correction has
+    one; its inputs are the run's -- the held pockets and widths of the episode's latest accepted
+    observation at the decision (the correction's own), the rear axle of the decision tick, the approach
+    straight rebuilt from the re-drawn target from that rear (and the episode's installed revision when
+    accepted), the run's approach follower, the bounds and drive terms the run used, this rule's
+    constants, the retry permission recomputed from the episode's earlier retries, its protection before
+    the decision and the decision tick's face distance, the lost injection from the arguments; the same
+    function gives every recorded output within XII_TOL; the disposition is the exclusive rule's (either
+    side within XII_TOL of zero) and the correction's outcome follows it; a refused one was decided
+    standing, on its front observation after t_s, every tick from t_s to the decision recorded, and the
+    episode ended in a retry."""
+    sys.path.insert(0, str(ROOT / "sim" / "isaac"))
+    import near_tracking as NT
+
+    from forklift_core.control.path_tracking import TrackerConfig
+    from forklift_core.planning.geometry import Pose2D
+    from forklift_core.planning.pallet_mission import (
+        PalletSite,
+        site_poses,
+        straight_from_pose,
+    )
+
+    corrections = list((near or {}).get("corrections") or [])
+    marker = nt.get("protection_prediction_rules")
+    refused_pred = [c for c in corrections if _refused_by_prediction(c)]
+    if marker is None:
+        if refused_pred:
+            return {
+                "applicable": True,
+                "passed": False,
+                "rules": XII_RULES,
+                "failures": [
+                    "a protection_predicted refusal in a run without the rule marker"
+                ],
+            }
+        return {"applicable": False}
+    if marker != XII_RULES or NT.PREDICT_RULES != XII_RULES:
+        raise Unverified(
+            f"the protection prediction rules {marker!r} are not {XII_RULES}"
+        )
+    failures, decisions = [], []
+    try:
+        args = result["arguments"]
+        offset = float(args["rear_axle_offset_m"])
+        lost = args.get("near_drop_frames_from_m") is not None
+        approach_cfg = dict(result["tracker_configs"]["approach"])
+        geo = mission_geometry(result["geometry"])
+        camera_xy = [float(v) for v in result["perception_mount"]["translation_m"][:2]]
+        starts = sorted(
+            nt.get("starts") or ([nt["start"]] if nt.get("start") else []),
+            key=lambda s: s["episode"],
+        )
+        tips = {s["episode"]: float(s["fork_tip_x_m"]) for s in starts}
+    except (KeyError, TypeError, ValueError) as exc:
+        raise Unverified(
+            f"(xii): the run's settings are not recorded ({exc!r})"
+        ) from exc
+    frames = list(near.get("frames") or [])
+    ticks = list(near.get("ticks") or [])
+    revisions = list(near.get("path_revisions") or [])
+    constants = {
+        "loss_per_rad": NT.PREDICT_LOSS_PER_RAD,
+        "loss_m": NT.PREDICT_LOSS_M,
+        "kappa_pad": NT.PREDICT_KAPPA_PAD,
+        "protect_w_m": NT.PROTECT_W_M,
+    }
+    blade_y_max = max(max(abs(b[2]), abs(b[3])) for b in blades)
+
+    def one(c) -> None:
+        redraw = c.get("redraw")
+        pred = redraw.get("protection_prediction") if isinstance(redraw, dict) else None
+        what = f"(xii) correction {c.get('point_m')} of episode {c.get('episode')}"
+        decided_06 = (
+            c.get("point_m") == NT.PREDICT_POINT_M and c.get("decision_s") is not None
+        )
+        if decided_06 and not c.get("accepted") and c.get("refused") is not None:
+            target = (
+                False  # refused by correction_update (source, frame) before any re-draw
+            )
+        elif decided_06 and not isinstance(redraw, dict):
+            raise Unverified(
+                f"{what}: a decided 0.6 m correction without its re-draw record"
+            )
+        elif decided_06 and c.get("accepted"):
+            # An accepted correction is always screened; a refusal on it contradicts the acceptance.
+            target = True
+            if redraw.get("refused") is not None:
+                failures.append(f"{what}: accepted, yet its re-draw is marked refused")
+        elif decided_06 and redraw.get("refused") is None:
+            raise Unverified(
+                f"{what}: an unaccepted decision without its refusal reason"
+            )
+        else:
+            target = decided_06 and redraw.get("refused") == "protection_predicted"
+        if not target:
+            if pred is not None:
+                failures.append(
+                    f"{what}: a prediction record on a correction it does not screen"
+                )
+            return
+        _xii_record(what, pred)
+        inputs = pred["inputs"]
+        try:
+            ep, decision = c["episode"], float(c["decision_s"])
+            obs = c["observation"]
+            stamp = float(obs["stamp_s"])
+            # The episode's latest accepted observation at the decision: the last processed read before it.
+            read = [
+                f
+                for f in frames
+                if f.get("episode") == ep
+                and f.get("latest_stamp_s") is not None
+                and float(f["read_s"]) <= decision + 1e-9
+            ]
+            if not read:
+                raise ValueError("no observation before the decision")
+            last = max(read, key=lambda f: float(f["read_s"]))
+            produced = [
+                f
+                for f in read
+                if f.get("accepted")
+                and f.get("stamp_s") is not None
+                and abs(float(f["stamp_s"]) - stamp) < 1e-9
+            ]
+            # The pockets are the accepting row's; every later row to the decision must carry them.
+            latest = produced[-1] if produced else last
+            later = [f for f in read if float(f["read_s"]) >= float(latest["read_s"])]
+            tick = min(
+                (t for t in ticks if t["episode"] == ep),
+                key=lambda t: abs(float(t["t"]) - decision),
+            )
+            if abs(float(tick["t"]) - decision) > 1e-9:
+                raise ValueError("no tick at the decision")
+            base = [float(v) for v in tick["base"]]
+            rear = [
+                base[0] - abs(offset) * math.cos(base[2]),
+                base[1] - abs(offset) * math.sin(base[2]),
+                base[2],
+            ]
+            arrays = tuple(
+                np.asarray(inputs["approach"][k], dtype=float)
+                for k in ("poses", "directions", "curvatures_inv_m")
+            )
+            tip = tips[ep]
+            earlier = [s["episode"] for s in starts if s["episode"] < ep]
+            protected = any(
+                bool(t.get("protect"))
+                for t in ticks
+                if t["episode"] == ep and float(t["t"]) <= decision
+            )
+            face_d = float(tick["face_distance_m"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise Unverified(f"{what}: its record is incomplete ({exc!r})") from exc
+        # The observation is the episode's latest accepted one at the decision, of this hold.
+        if not (
+            abs(float(last["latest_stamp_s"]) - stamp) < 1e-9
+            and produced
+            and abs(float(latest["latest_stamp_s"]) - stamp) < 1e-9
+            and all(
+                _close(f["latest_held"][k], latest["latest_held"][k], 0.0)
+                for f in later
+                for k in ("left", "right", "yaw")
+            )
+            and all(
+                _close(f["latest_widths_m"], latest["latest_widths_m"], 0.0)
+                for f in later
+            )
+            and obs.get("frame_version") == ep
+            and all(
+                f.get("latest_frame_version") == ep
+                and f.get("latest_source") == obs.get("source")
+                for f in later
+            )
+        ):
+            failures.append(
+                f"{what}: the observation is not the episode's latest accepted one at the decision"
+            )
+        if not (
+            _close(inputs["held"]["left"], latest["latest_held"]["left"], 1e-12)
+            and _close(inputs["held"]["right"], latest["latest_held"]["right"], 1e-12)
+            and _close(inputs["held"]["yaw"], latest["latest_held"]["yaw"], 1e-12)
+            and _close(inputs["widths_m"], latest["latest_widths_m"], 1e-12)
+            and _close(inputs["observation_stamp_s"], stamp, 1e-12)
+        ):
+            failures.append(
+                f"{what}: the held pockets are not the decision observation's"
+            )
+        if not _close(inputs["rear"], rear, 1e-9):
+            failures.append(f"{what}: the start is not the decision tick's rear axle")
+        sites = site_poses(PalletSite(*(float(v) for v in redraw["target"])), geo)
+        straight, _ = straight_from_pose(
+            Pose2D(*rear),
+            sites["prealign"],
+            sites["approach"],
+            max_lateral_m=NT.REDRAW_MAX_LATERAL_M,
+            max_yaw_rad=NT.CORRECTION_MAX_YAW_RAD,
+            min_length_m=0.3,
+        )
+        if (
+            straight is None
+            or not (
+                arrays[0].shape == np.asarray(straight.poses).shape
+                and np.allclose(arrays[0], straight.poses, rtol=0.0, atol=1e-9)
+                and np.array_equal(
+                    arrays[1], np.asarray(straight.directions, dtype=float)
+                )
+                and np.array_equal(
+                    arrays[2], np.asarray(straight.curvatures_inv_m, dtype=float)
+                )
+            )
+            or inputs["approach"]["sha256"] != NT.path_digest(*arrays)
+        ):
+            failures.append(
+                f"{what}: the approach is not the straight from the decision rear to the re-drawn target"
+            )
+        if c.get("accepted"):
+            installed = next(
+                (
+                    r
+                    for r in revisions
+                    if r.get("revision") == c.get("revision") and r.get("episode") == ep
+                ),
+                None,
+            )
+            if (
+                installed is None
+                or installed["paths"]["approach"].get("sha256")
+                != inputs["approach"]["sha256"]
+            ):
+                failures.append(
+                    f"{what}: the installed approach is not the one predicted on"
+                )
+        if dict(inputs["tracker_config"]) != approach_cfg:
+            failures.append(f"{what}: the follower is not the run's approach follower")
+        if inputs["bounds_sha256"] != nt.get("bounds_sha256") or inputs[
+            "drive_terms_sha256"
+        ] != nt.get("drive_terms_sha256"):
+            failures.append(f"{what}: the bounds or drive terms are not the run's")
+        if inputs["constants"] != constants or pred["rules"] != XII_RULES:
+            failures.append(f"{what}: the constants or rules are not this rule's")
+        if not (
+            _close(inputs["fork_tip_x_m"], tip, 0.0)
+            and _close(inputs["camera_xy_m"], camera_xy, 0.0)
+            and _close(inputs["carriage_limit_m"], carriage_limit, 1e-9)
+        ):
+            failures.append(f"{what}: the chassis inputs are not the run's")
+        retry = NT.retry_allowed("replan_rejected", len(earlier), protected, face_d)
+        if not (
+            pred["retry_allowed"] == retry
+            and pred["lost_injection"] == lost
+            and inputs["retries"] == len(earlier)
+            and inputs["protected"] == protected
+            and _close(inputs["face_distance_m"], face_d, 1e-12)
+        ):
+            failures.append(
+                f"{what}: the retry permission or the lost injection is not the run's"
+            )
+        # The same function gives every recorded output.
+        out = NT.protection_prediction(
+            arrays,
+            TrackerConfig(**approach_cfg),
+            rear,
+            latest["latest_held"],
+            tuple(latest["latest_widths_m"]),
+            rear_axle_offset_m=offset,
+            fork_tip_x_m=tip,
+            camera_xy=tuple(camera_xy),
+            blades=blades,
+            carriage_limit_m=carriage_limit,
+            blade_y_max_m=blade_y_max,
+            bounds=bounds,
+            terms=terms,
+        )
+        same = (
+            _close(pred["rear"], out["rear"], XII_TOL)
+            and pred["reached"] == out["reached"]
+            and pred["dry_status"] == out["dry_status"]
+            and all(
+                _close(pred[k], out[k], XII_TOL)
+                for k in (
+                    "face_distance_m",
+                    "camera_distance_m",
+                    "age_s",
+                    "sweep_m",
+                    "kappa_inv_m",
+                    "relative_yaw_rad",
+                )
+            )
+            and (pred["bound"] is None) == (out["bound"] is None)
+            and (
+                out["bound"] is None
+                or (
+                    set(pred["bound"]) == set(out["bound"])
+                    and all(
+                        _close(pred["bound"][k], out["bound"][k], XII_TOL)
+                        for k in out["bound"]
+                    )
+                )
+            )
+            and all(
+                (pred[k] is None) == (out[k] is None)
+                and (out[k] is None or _close(pred[k], out[k], XII_TOL))
+                for k in ("margin_m", "loss_m", "margin_phys_m")
+            )
+        )
+        if not same:
+            failures.append(
+                f"{what}: the record is not its recomputation (margin {pred['margin_m']} vs {out['margin_m']})"
+            )
+        allowed = {
+            NT.prediction_disposition(
+                out["margin_phys_m"], lost_injection=lost, retry_allowed=retry
+            )
+        }
+        if out["margin_phys_m"] is not None and abs(out["margin_phys_m"]) <= XII_TOL:
+            allowed |= {
+                NT.prediction_disposition(v, lost_injection=lost, retry_allowed=retry)
+                for v in (1.0, -1.0)
+            }
+        disposition = pred["disposition"]
+        if disposition not in allowed:
+            failures.append(
+                f"{what}: disposition {disposition} is not the rule's {sorted(allowed)}"
+            )
+        refused = redraw.get("refused") == "protection_predicted"
+        if (disposition == "refused") != refused or bool(c.get("accepted")) == refused:
+            failures.append(
+                f"{what}: the correction's outcome does not follow its disposition"
+            )
+        if refused:
+            # Decided as an accepted correction is: standing from t_s, every tick recorded, on its front
+            # observation of this hold whose pixel time (stamp - the latency bound) is after t_s.
+            try:
+                standing = [float(v) for v in c.get("standing_s") or []]
+                t_s = standing[-1] if standing else math.nan
+                trigger, pixel = float(c["trigger_s"]), float(obs["pixel_s"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise Unverified(
+                    f"{what}: the refused decision's record is incomplete ({exc!r})"
+                ) from exc
+            span = sorted(
+                (
+                    t
+                    for t in ticks
+                    if t["episode"] == ep
+                    and t_s - 1e-9 <= float(t["t"]) <= decision + 1e-9
+                ),
+                key=lambda t: float(t["t"]),
+            )
+            times = [float(t["t"]) for t in span]
+            if not (
+                standing
+                and trigger <= t_s <= decision
+                and _close(pixel, stamp - bounds.max_latency_s, 1e-9)
+                and pixel >= t_s - 1e-12
+                and obs.get("source") == "front"
+                and span
+                and abs(times[0] - t_s) <= 1e-9
+                and abs(times[-1] - decision) <= 1e-9
+                and all(
+                    b - a <= 1.5 * NT.TICK_S
+                    for a, b in zip(times, times[1:], strict=False)
+                )
+                and all(bool(t.get("standing")) for t in span)
+            ):
+                failures.append(f"{what}: refused without the decision conditions")
+            retry_rec = nt.get("retry") or {}
+            if not (
+                retry_rec.get("reason") == "replan_rejected"
+                and retry_rec.get("episode") == ep
+                and float(retry_rec.get("time_s", -math.inf)) >= decision
+            ):
+                failures.append(
+                    f"{what}: refused, yet the episode did not end in a retry"
+                )
+        decisions.append(
+            {
+                "episode": c.get("episode"),
+                "disposition": disposition,
+                "margin_m": out["margin_m"],
+                "margin_phys_m": out["margin_phys_m"],
+                "relative_yaw_rad": out["relative_yaw_rad"],
+                "retry_allowed": retry,
+                "lost_injection": lost,
+            }
+        )
+
+    for c in corrections:
+        # Any malformed piece the form checks did not reach is unverified, never a crash.
+        try:
+            one(c)
+        except Unverified:
+            raise
+        except (KeyError, TypeError, ValueError, AttributeError, IndexError) as exc:
+            raise Unverified(
+                f"(xii) a correction record is malformed ({exc!r})"
+            ) from exc
+    return {
+        "applicable": True,
+        "passed": not failures,
+        "failures": failures,
+        "rules": XII_RULES,
+        "decisions": decisions,
+    }
+
+
 def check_near_redraw(result: dict, nt: dict) -> dict:
     """Plan D8 S4c-3 stage 1: the S4b re-draw at the near capture. A near capture accepted
     after its box or dry run refused must have an accepted re-draw entry, and only such a
@@ -3849,6 +4393,26 @@ def judge_run(directory: Path, data_root: Path = ROOT) -> dict:
                 geometry,
                 np.load(control_path) if control_path.exists() else None,
             )
+            if nt.get("protection_prediction_rules") is not None or any(
+                _refused_by_prediction(c) for c in (near or {}).get("corrections") or []
+            ):
+                # Plan D8 S4 near field (xii): the protection prediction, by the run's rule marker,
+                # on the bounds and drive terms the run used (their hashes checked).
+                bounds_bytes_x = (
+                    ROOT / snapshot_relative(str(nt.get("bounds")))
+                ).read_bytes()
+                if sha256_bytes(bounds_bytes_x) != nt.get("bounds_sha256"):
+                    raise Unverified("the bounds file is not the one the run used")
+                bounds_data_x = json.loads(bounds_bytes_x)
+                checks["xii"] = check_xii(
+                    result,
+                    nt,
+                    near or {},
+                    NearFieldBounds.from_dict(bounds_data_x),
+                    NT_terms(terms_bytes, nt, bounds_data_x),
+                    blades,
+                    carriage_limit,
+                )
             if open_realign:
                 # Plan D8 S4c-3 stage 2: the run ended in its realignment before any tracker --
                 # the injection's transforms, the pallet still to the record's end, and (xi).
@@ -4019,6 +4583,8 @@ def judge_run(directory: Path, data_root: Path = ROOT) -> dict:
         "x": checks.get("x") or {"applicable": False},
         "redraw": checks.get("redraw") or {"applicable": False},  # plan D8 S4c-3
         "xi": checks.get("xi") or {"applicable": False},
+        "xii": checks.get("xii")
+        or {"applicable": False},  # plan D8 S4 near-field protection prediction
         "forbidden_pocket_contacts": contacts,
         "s4c": s4c_outcome(verdict, checks, result, vi, contacts, vii),
         "inputs_sha256": {name: sha256_bytes(data_) for name, data_ in raw.items()},

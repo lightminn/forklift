@@ -896,3 +896,143 @@ def test_s4c3_the_correction_points_of_both_dry_runs_by_the_trigger_distance():
     assert not inside
     points, inside = NT.correction_points_check([run(0.0, 0.0)[:20]], line, distance)
     assert not inside and points[0]["offsets"] is None
+
+
+# Plan D8 S4 near field: the protection prediction at the 0.6 m correction (design v4) -------------
+def _prediction_inputs():
+    import hashlib
+    import json
+
+    from insertion_geometry import read_fork_blades_m
+
+    from forklift_core.perception.near_field_bounds import NearFieldBounds
+
+    bounds_path = ROOT / "config/near_field_bounds_measured.json"
+    bounds = NearFieldBounds.load(bounds_path)
+    terms = NT.DriveTerms.from_dict(
+        json.loads((ROOT / "config/near_field_drive_terms.json").read_text()),
+        hashlib.sha256(bounds_path.read_bytes()).hexdigest(),
+        json.loads(bounds_path.read_text())["latency"],
+    )
+    blades = read_fork_blades_m(ROOT / "sim/models/dls08_measured/forklift.urdf")
+    cases = json.loads(
+        (ROOT / "tests/fixtures/near_protection_prediction/cases.json").read_text()
+    )["cases"]
+    return bounds, terms, blades, cases
+
+
+def _predict(case, bounds, terms, blades, **override):
+    from forklift_core.control import TrackerConfig
+
+    a = override.pop("approach", case["approach"])
+    return NT.protection_prediction(
+        (a["poses"], a["directions"], a["curvatures_inv_m"]),
+        TrackerConfig(**case["tracker_config"]),
+        override.pop("rear", case["rear"]),
+        case["held"],
+        tuple(case["widths_m"]),
+        rear_axle_offset_m=case["rear_axle_offset_m"],
+        fork_tip_x_m=case["fork_tip_x_m"],
+        camera_xy=tuple(case["camera_xy_m"]),
+        blades=blades,
+        carriage_limit_m=case["carriage_limit_m"],
+        blade_y_max_m=max(max(abs(b[2]), abs(b[3])) for b in blades),
+        bounds=bounds,
+        terms=terms,
+    )
+
+
+def test_the_protection_prediction_reproduces_the_recorded_cases():
+    sys.path.insert(0, str(ROOT / "sim" / "isaac"))
+    bounds, terms, blades, cases = _prediction_inputs()
+    by_run = {c["run"]: c for c in cases}
+    stuck = _predict(by_run["seed_6_v0.055_corr_lat_0.02"], bounds, terms, blades)
+    passed = _predict(by_run["seed_0_v0.055_none_0"], bounds, terms, blades)
+    for case, out in (
+        (by_run["seed_6_v0.055_corr_lat_0.02"], stuck),
+        (by_run["seed_0_v0.055_none_0"], passed),
+    ):
+        assert out["reached"] and out["face_distance_m"] <= NT.PROTECT_W_M
+        assert out["margin_m"] == pytest.approx(case["expected"]["margin_m"], abs=1e-9)
+        assert out["relative_yaw_rad"] == pytest.approx(
+            case["expected"]["relative_yaw_rad"], abs=1e-9
+        )
+        assert out["loss_m"] == pytest.approx(
+            NT.PREDICT_LOSS_PER_RAD * abs(out["relative_yaw_rad"]) + NT.PREDICT_LOSS_M
+        )
+        assert out["margin_phys_m"] == pytest.approx(out["margin_m"] - out["loss_m"])
+        assert (
+            out["bound"] is not None and 0.4 < out["camera_distance_m"] < 0.6
+        )  # the roof bin seen there
+    # The stuck run (first fresh margin -8.5 mm) screens short; the passed one (+10.4 mm) does not.
+    assert stuck["margin_phys_m"] == pytest.approx(-0.0176, abs=1e-4)
+    assert passed["margin_phys_m"] > 0.0
+
+
+def test_a_path_ending_before_the_protection_is_judged_at_its_end_and_no_bound_is_unpredictable():
+    sys.path.insert(0, str(ROOT / "sim" / "isaac"))
+    bounds, terms, blades, cases = _prediction_inputs()
+    case = cases[0]
+    a = case["approach"]
+    poses = np.asarray(a["poses"], dtype=float)
+    # The same straight approach ending 0.5 m short: its end is reached before the protection's 0.15 m.
+    end = poses[-1].copy()
+    end[:2] -= 0.5 * np.array([math.cos(end[2]), math.sin(end[2])])
+    short = {
+        "poses": [poses[0].tolist(), end.tolist()],
+        "directions": a["directions"][:2],
+        "curvatures_inv_m": a["curvatures_inv_m"][:2],
+    }
+    # From the line's own start it arrives there: judged at that end.
+    out = _predict(case, bounds, terms, blades, approach=short, rear=poses[0].tolist())
+    assert (
+        not out["reached"]
+        and out["dry_status"] == "arrived"
+        and out["margin_m"] is not None
+    )
+    # From the recorded stop (off the line) the short straight ends in a heading failure: reaching
+    # neither the protection nor the end, it is unpredictable (design v4).
+    failed = _predict(case, bounds, terms, blades, approach=short)
+    assert (
+        not failed["reached"]
+        and failed["dry_status"] == "failed"
+        and failed["margin_m"] is None
+    )
+
+    class NoRoof:
+        def __init__(self, inner):
+            self.inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
+        def observation(self, source, distance):
+            return None
+
+    none = _predict(case, NoRoof(bounds), terms, blades)
+    assert (
+        none["bound"] is None
+        and none["margin_m"] is None
+        and none["margin_phys_m"] is None
+    )
+    assert (
+        NT.prediction_disposition(
+            none["margin_phys_m"], lost_injection=False, retry_allowed=True
+        )
+        == "unpredictable"
+    )
+
+
+def test_the_prediction_disposition_is_exclusive_in_its_order():
+    d = NT.prediction_disposition
+    assert d(None, lost_injection=True, retry_allowed=True) == "unpredictable"
+    assert d(0.0, lost_injection=True, retry_allowed=True) == "accepted"
+    assert d(0.002, lost_injection=False, retry_allowed=False) == "accepted"
+    assert (
+        d(-0.001, lost_injection=True, retry_allowed=False) == "accepted_lost_injection"
+    )
+    assert (
+        d(-0.001, lost_injection=True, retry_allowed=True) == "accepted_lost_injection"
+    )
+    assert d(-0.001, lost_injection=False, retry_allowed=False) == "accepted_short"
+    assert d(-0.001, lost_injection=False, retry_allowed=True) == "refused"

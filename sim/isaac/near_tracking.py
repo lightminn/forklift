@@ -708,6 +708,106 @@ def path_digest(poses, directions, curvatures) -> str:
     return digest.hexdigest()
 
 
+# Plan D8 S4 near field: the protection prediction at the last correction (design 3판) ------------
+PREDICT_POINT_M = 0.6  # the correction point it screens (after it nothing re-draws)
+PREDICT_RULES = "v1"
+# The loss from the decision's prediction to the first fresh protection margin, bounded over the 46
+# independent development runs (1.877 |R| + 5.27 mm) plus 1 mm (the seed-level leave-out exceeded it
+# by 0.204 mm). An empirical screening, not a bound on the protection.
+PREDICT_LOSS_PER_RAD = 1.877  # m per rad (mm per mrad)
+PREDICT_LOSS_M = 0.00627
+# near_tick's curvature is the largest wheel curvature of the measured and held steering: 0.009-0.0285
+# per metre above the command over the same runs.
+PREDICT_KAPPA_PAD = 0.03
+
+
+def protection_prediction(
+    path,
+    config,
+    rear,
+    held: dict,
+    widths: tuple,
+    *,
+    rear_axle_offset_m: float,
+    fork_tip_x_m: float,
+    camera_xy: tuple,
+    blades: tuple,
+    carriage_limit_m: float,
+    blade_y_max_m: float,
+    bounds,
+    terms,
+    dt_s: float = TICK_S,
+    max_s: float = 120.0,
+) -> dict:
+    """The protection's first fresh margin as the decision predicts it: the approach path (poses,
+    directions, curvatures) driven from rest at rear on an ideal bicycle by a tracker with config,
+    to the first pose whose estimated fork tip-face (held, placed at that pose) is within
+    PROTECT_W_M (or the path's end); there the protection's own gap check with the roof bound at
+    that camera-face distance, the freshest age, near_tick's stop sweep at the cruise and the
+    command curvature plus PREDICT_KAPPA_PAD. Returns the record ("margin_m" None: unpredictable --
+    no bound there, or the dry run reached neither the protection nor the path's end)."""
+    from forklift_core.control import RearAxlePathTracker
+
+    off, rear_x = abs(rear_axle_offset_m), -abs(rear_axle_offset_m)
+    poses, directions, curvatures = path
+    tracker = RearAxlePathTracker(np.asarray(poses, dtype=float), np.asarray(directions),
+                                  np.asarray(curvatures, dtype=float), config)
+    pose, speed = np.array(rear, dtype=float), 0.0
+    vbar = config.cruise_speed_mps + terms.delta_v_mps
+    s_term = terms.at(terms.delta_s_m, STOP_LATENCY_S)
+    sweep = stop_distance_m(vbar) + (s_term if s_term is not None else math.inf)
+    age = bounds.max_latency_s + bounds.read_delay_s + TICK_S
+    reached = False
+    for _ in range(int(max_s / dt_s)):
+        base = (pose[0] + off * math.cos(pose[2]), pose[1] + off * math.sin(pose[2]), pose[2])
+        face = carried_face(held, widths, base)
+        command = tracker.update(pose, speed, dt_s)
+        reached = face_distance_m(face, fork_tip_x_m) <= PROTECT_W_M
+        if reached or command.status in ("arrived", "failed"):
+            break
+        speed = command.speed_mps
+        change = speed * command.curvature_inv_m * dt_s
+        heading = pose[2] + change / 2
+        pose[:2] += speed * dt_s * np.array([math.cos(heading), math.sin(heading)])
+        pose[2] += change
+    kappa = abs(float(command.curvature_inv_m)) + PREDICT_KAPPA_PAD
+    distance = float(np.dot(face["mid"] - np.asarray(camera_xy, dtype=float), face["axis"]))
+    bound = bounds.observation("roof", distance)
+    record = {
+        "rules": PREDICT_RULES, "rear": [float(v) for v in pose], "reached": bool(reached),
+        "dry_status": str(command.status),
+        "face_distance_m": face_distance_m(face, fork_tip_x_m), "camera_distance_m": distance,
+        "bound": bound, "age_s": age, "sweep_m": sweep, "kappa_inv_m": kappa, "relative_yaw_rad": float(face["yaw"]),
+        "margin_m": None, "loss_m": None, "margin_phys_m": None,
+    }
+    odometry = bounds.odometry(age)
+    if bound is None or odometry is None or not math.isfinite(sweep) or not (reached or command.status == "arrived"):
+        return record  # unpredictable: no bound, or the dry run reached neither the protection nor its end
+    gaps = blade_gaps(face, blades, (0.0, carriage_limit_m), rear_x)
+    lateral = lateral_sweep_m(kappa, sweep, fork_tip_x_m - rear_x, blade_y_max_m)
+    margin = min(
+        p["gap_m"] - gap_threshold_m(p, bound, odometry, gaps["rho_m"], face, lateral) for p in gaps["points"]
+    )
+    loss = PREDICT_LOSS_PER_RAD * abs(float(face["yaw"])) + PREDICT_LOSS_M
+    record.update(margin_m=float(margin), loss_m=float(loss), margin_phys_m=float(margin - loss))
+    return record
+
+
+def prediction_disposition(margin_phys_m, *, lost_injection: bool, retry_allowed: bool) -> str:
+    """The protection prediction's outcome, exclusive in this order: unpredictable (no margin),
+    accepted (not short), accepted_lost_injection (a lost injection's run must end at its drop),
+    accepted_short (no retry left: the protection decides), refused (a retry instead)."""
+    if margin_phys_m is None:
+        return "unpredictable"
+    if margin_phys_m >= 0.0:
+        return "accepted"
+    if lost_injection:
+        return "accepted_lost_injection"
+    if not retry_allowed:
+        return "accepted_short"
+    return "refused"
+
+
 # Plan D8 S4c-2: the pickup retry -----------------------------------------------------------
 RETRY_REASONS = ("mismatch", "replan_rejected")
 # The estimated fork tip to face at the episode's end must leave the camera beyond the
@@ -1108,6 +1208,13 @@ __all__ = [
     "correction_update",
     "corrections_missed",
     "path_digest",
+    "PREDICT_KAPPA_PAD",
+    "PREDICT_LOSS_M",
+    "PREDICT_LOSS_PER_RAD",
+    "PREDICT_POINT_M",
+    "PREDICT_RULES",
+    "prediction_disposition",
+    "protection_prediction",
     "DriveTerms",
     "RearHistory",
     "blade_gaps",

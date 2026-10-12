@@ -1828,6 +1828,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "drive_terms": str(args.near_drive_terms),
             "drive_terms_sha256": hashlib.sha256(args.near_drive_terms.read_bytes()).hexdigest(),
             "stop_at": args.near_tracking_stop_at,
+            # Plan D8 S4 near field, protection prediction 4판: the rule the 0.6 m correction screens with --
+            # always recorded, so the judgement (xii) applies whether or not a prediction record exists.
+            "protection_prediction_rules": near_tracking.PREDICT_RULES,
         }
         if args.near_inject is not None or args.near_drop_frames_from_m is not None:
             # Plan D8 S4c-1: what was injected, capture by capture (the judgement's (ix) reads it).
@@ -2332,6 +2335,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             terminal = terminal or "replan_rejected"
         elif corr_act["decide"] and terminal is None:
             plans_, record_, target_ = near_redraw(latest_, rear_now)
+            if plans_ is not None and abs(corr.point_m - near_tracking.PREDICT_POINT_M) < 1e-9:
+                # Plan D8 S4 near field, protection prediction 3판: the last correction screens the
+                # protection's first fresh margin; short with a retry left, it is refused into the retry.
+                record_["protection_prediction"] = pred_ = near_protection_prediction(
+                    plans_["approach"], latest_, widths_, rear_now, face_distance)
+                if pred_["disposition"] == "refused":
+                    record_["refused"] = "protection_predicted"
+                    plans_ = None
             corr_record.update(
                 decision_s=now_s, observation={"stamp_s": latest_.stamp_s, "pixel_s": pixel_s, "source": latest_.source,
                                                "frame_version": latest_.frame_version, "aligned_s": latest_.aligned_s},
@@ -2892,6 +2903,44 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "record": record_, "correction_points": points_, "accepted": plans_ is not None,
         }
         return plans_, entry
+
+    def near_protection_prediction(path_, latest_, widths_, rear_now, face_distance_) -> dict:
+        """Plan D8 S4 near field, protection prediction 3판: near_tracking.protection_prediction for the
+        re-drawn approach from where the truck stands, its disposition (the retry permission the same
+        predicate the terminal stop uses, the lost injection from the arguments) and every input the
+        judgement (xii) recomputes it from."""
+        config_ = trackers["approach"].config
+        arrays_ = (np.asarray(path_.poses, dtype=float), np.asarray(path_.directions),
+                   np.asarray(path_.curvatures_inv_m, dtype=float))
+        pred_ = near_tracking.protection_prediction(
+            arrays_, config_, rear_now, latest_.held, widths_, rear_axle_offset_m=args.rear_axle_offset_m,
+            fork_tip_x_m=near["fork_tip_x_m"], camera_xy=near["tracker"].config.camera_xy_m,
+            blades=near["blades"], carriage_limit_m=near["carriage_limit_m"], blade_y_max_m=near["blade_y_max_m"],
+            bounds=near["bounds"], terms=near["terms"],
+        )
+        retry_ = near_tracking.retry_allowed("replan_rejected", near.get("retries", 0), near["protect"] is not None,
+                                             face_distance_)
+        lost_ = args.near_drop_frames_from_m is not None
+        pred_.update(
+            retry_allowed=bool(retry_), lost_injection=lost_,
+            disposition=near_tracking.prediction_disposition(pred_["margin_phys_m"], lost_injection=lost_,
+                                                             retry_allowed=retry_),
+            inputs={
+                "rear": [float(v) for v in rear_now], "face_distance_m": float(face_distance_),
+                "retries": int(near.get("retries", 0)), "protected": near["protect"] is not None,
+                "approach": {"sha256": near_tracking.path_digest(*arrays_), "poses": arrays_[0].tolist(),
+                             "directions": arrays_[1].tolist(), "curvatures_inv_m": arrays_[2].tolist()},
+                "tracker_config": asdict(config_), "held": json.loads(record_json(latest_.held)),
+                "widths_m": [float(v) for v in widths_], "observation_stamp_s": float(latest_.stamp_s),
+                "camera_xy_m": [float(v) for v in near["tracker"].config.camera_xy_m],
+                "carriage_limit_m": float(near["carriage_limit_m"]), "fork_tip_x_m": float(near["fork_tip_x_m"]),
+                "bounds_sha256": state["near_tracking"]["bounds_sha256"],
+                "drive_terms_sha256": state["near_tracking"]["drive_terms_sha256"],
+                "constants": {"loss_per_rad": near_tracking.PREDICT_LOSS_PER_RAD, "loss_m": near_tracking.PREDICT_LOSS_M,
+                              "kappa_pad": near_tracking.PREDICT_KAPPA_PAD, "protect_w_m": near_tracking.PROTECT_W_M},
+            },
+        )
+        return pred_
 
     def near_install(now_s: float, plans_: dict, target_, point_m: float, rear_now) -> dict:
         """Plan D8 S4b: install an accepted correction at once -- the approach, insertion and

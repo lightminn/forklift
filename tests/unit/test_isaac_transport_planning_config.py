@@ -1094,3 +1094,29 @@ def test_cusp_position_stall_v7_is_wired_into_the_runner():
     assert "if estop_holding or obstacle_hold or dwell_hold or cusp_hold:" in source
     assert "wheel_curvature = kappa if (dwell_hold or cusp_hold) else curvature" in source
     assert "steering_command.copy() if (estop_holding or obstacle_hold or dwell_hold or cusp_hold)" in source
+
+
+def test_near_protection_prediction_screens_only_the_last_correction():
+    # Plan docs/plans/2026-10-04-lidar-obstacle-map.md, "근접 보호 예측 선별 설계 4판".
+    source = SCRIPT.read_text()
+    # The rule marker, always recorded with near tracking: the judgement (xii) applies by it.
+    assert '"protection_prediction_rules": near_tracking.PREDICT_RULES,' in source
+    decide = source[source.index('        elif corr_act["decide"] and terminal is None:'):]
+    decide = decide[: decide.index("        if corr_act[\"event\"] == \"closed\"")]
+    # After redraw_docking accepted, at the 0.6 m point only; a refusal turns into replan_rejected.
+    assert decide.index("plans_, record_, target_ = near_redraw(latest_, rear_now)") < decide.index(
+        "near_protection_prediction(")
+    assert "if plans_ is not None and abs(corr.point_m - near_tracking.PREDICT_POINT_M) < 1e-9:" in decide
+    assert 'if pred_["disposition"] == "refused":' in decide
+    assert 'record_["refused"] = "protection_predicted"' in decide and "plans_ = None" in decide
+    assert decide.index('record_["refused"] = "protection_predicted"') < decide.index('terminal = "replan_rejected"')
+    fn = source[source.index("    def near_protection_prediction("):]
+    fn = fn[: fn.index("    def near_install(")]
+    # The retry permission is the terminal stop's own predicate; the lost injection the argument.
+    assert ('near_tracking.retry_allowed("replan_rejected", near.get("retries", 0), near["protect"] is not None,'
+            in fn)
+    assert "lost_ = args.near_drop_frames_from_m is not None" in fn
+    assert "near_tracking.prediction_disposition(" in fn
+    for key in ('"rear"', '"approach"', '"tracker_config"', '"held"', '"widths_m"', '"bounds_sha256"',
+                '"drive_terms_sha256"', '"constants"', '"camera_xy_m"', '"carriage_limit_m"', '"fork_tip_x_m"'):
+        assert key in fn

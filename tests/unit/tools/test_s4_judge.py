@@ -3296,3 +3296,426 @@ def test_xi_a_mismatch_injected_re_observation_is_judged_through_its_bias(geomet
         {"attempt": k} for k in (1, 2, 4)
     ]  # attempt 3 not biased
     assert not check_xi_(result, nt, truth, geometry)["passed"]
+
+
+# (xii), plan D8 S4 near field: the protection prediction screening (design v4) ------------------
+def _xii_models():
+    import hashlib
+    import json
+
+    import near_tracking as NT
+
+    from forklift_core.perception.near_field_bounds import NearFieldBounds
+
+    bounds_path = ROOT / "config/near_field_bounds_measured.json"
+    bounds_sha = hashlib.sha256(bounds_path.read_bytes()).hexdigest()
+    terms_bytes = (ROOT / "config/near_field_drive_terms.json").read_bytes()
+    bounds = NearFieldBounds.load(bounds_path)
+    terms = NT.DriveTerms.from_dict(
+        json.loads(terms_bytes),
+        bounds_sha,
+        json.loads(bounds_path.read_text())["latency"],
+    )
+    cases = {
+        c["run"]: c
+        for c in json.loads(
+            (ROOT / "tests/fixtures/near_protection_prediction/cases.json").read_text()
+        )["cases"]
+    }
+    return NT, bounds, terms, bounds_sha, hashlib.sha256(terms_bytes).hexdigest(), cases
+
+
+def _xii_run(case_name, *, retry_allowed=True, lost=False):
+    """A run record as the runner leaves it: one screened 0.6 m decision of episode 2 (the case's
+    recorded inputs), its prediction record and the correction outcome the rule gives."""
+    from dataclasses import asdict
+
+    from forklift_core.control.path_tracking import TrackerConfig
+
+    NT, bounds, terms, bounds_sha, terms_sha, cases = _xii_models()
+    case = cases[case_name]
+    blades = IG.read_fork_blades_m(URDF)
+    a = case["approach"]
+    arrays = tuple(
+        np.asarray(a[k], dtype=float)
+        for k in ("poses", "directions", "curvatures_inv_m")
+    )
+    config = TrackerConfig(**case["tracker_config"])
+    pred = NT.protection_prediction(
+        arrays,
+        config,
+        case["rear"],
+        case["held"],
+        tuple(case["widths_m"]),
+        rear_axle_offset_m=case["rear_axle_offset_m"],
+        fork_tip_x_m=case["fork_tip_x_m"],
+        camera_xy=tuple(case["camera_xy_m"]),
+        blades=blades,
+        carriage_limit_m=0.346,
+        blade_y_max_m=max(max(abs(b[2]), abs(b[3])) for b in blades),
+        bounds=bounds,
+        terms=terms,
+    )
+    face_d = (
+        case["face_distance_m"] if retry_allowed else 0.5
+    )  # below RETRY_MIN_FACE_M: no retry
+    retry = NT.retry_allowed("replan_rejected", 0, False, face_d)
+    disposition = NT.prediction_disposition(
+        pred["margin_phys_m"], lost_injection=lost, retry_allowed=retry
+    )
+    pred.update(
+        retry_allowed=retry,
+        lost_injection=lost,
+        disposition=disposition,
+        inputs={
+            "rear": list(case["rear"]),
+            "face_distance_m": face_d,
+            "retries": 0,
+            "protected": False,
+            "approach": {
+                "sha256": NT.path_digest(*arrays),
+                **{
+                    k: arrays[i].tolist()
+                    for i, k in enumerate(("poses", "directions", "curvatures_inv_m"))
+                },
+            },
+            "tracker_config": asdict(config),
+            "held": copy.deepcopy(case["held"]),
+            "widths_m": case["widths_m"],
+            "observation_stamp_s": 70.0,
+            "camera_xy_m": case["camera_xy_m"],
+            "carriage_limit_m": 0.346,
+            "fork_tip_x_m": case["fork_tip_x_m"],
+            "bounds_sha256": bounds_sha,
+            "drive_terms_sha256": terms_sha,
+            "constants": {
+                "loss_per_rad": NT.PREDICT_LOSS_PER_RAD,
+                "loss_m": NT.PREDICT_LOSS_M,
+                "kappa_pad": NT.PREDICT_KAPPA_PAD,
+                "protect_w_m": NT.PROTECT_W_M,
+            },
+        },
+    )
+    off = abs(case["rear_axle_offset_m"])
+    r = case["rear"]
+    base = [r[0] + off * math.cos(r[2]), r[1] + off * math.sin(r[2]), r[2]]
+    refused = disposition == "refused"
+    times = [69.8 + k * TICK for k in range(49)]  # t_s to the decision, every tick
+    decision = times[-1]
+    stamp = 70.0
+    sha = NT.path_digest(*arrays)
+    correction = {
+        "point_m": 0.6,
+        "episode": 2,
+        "trigger_s": 69.5,
+        "standing_s": [times[0]],
+        "decision_s": decision,
+        "observation": {
+            "stamp_s": stamp,
+            "pixel_s": stamp - bounds.max_latency_s,
+            "source": "front",
+            "frame_version": 2,
+        },
+        "accepted": not refused,
+        "redraw": {
+            "target": case["target"],
+            "protection_prediction": pred,
+            **({"refused": "protection_predicted"} if refused else {}),
+        },
+        **({} if refused else {"revision": 2}),
+    }
+    latest = {
+        "latest_stamp_s": stamp,
+        "latest_held": case["held"],
+        "latest_widths_m": case["widths_m"],
+        "latest_source": "front",
+        "latest_frame_version": 2,
+        "episode": 2,
+    }
+    near = {
+        "corrections": [
+            {
+                "point_m": 1.0,
+                "episode": 2,
+                "decision_s": 62.0,
+                "accepted": True,
+                "revision": 1,
+                "redraw": {},
+            },
+            correction,
+        ],
+        "frames": [
+            {**latest, "read_s": stamp + TICK, "stamp_s": stamp, "accepted": True},
+            {
+                **latest,
+                "read_s": stamp + 0.1,
+                "stamp_s": stamp + 0.1,
+                "accepted": False,
+            },
+        ],
+        "ticks": [
+            {
+                "t": t,
+                "episode": 2,
+                "base": base,
+                "face_distance_m": face_d,
+                "protect": False,
+                "standing": True,
+            }
+            for t in times
+        ],
+        "path_revisions": [
+            {"revision": 1, "episode": 2, "paths": {"approach": {"sha256": "earlier"}}}
+        ]
+        + (
+            []
+            if refused
+            else [{"revision": 2, "episode": 2, "paths": {"approach": {"sha256": sha}}}]
+        ),
+    }
+    nt = {
+        "protection_prediction_rules": "v1",
+        "starts": [{"episode": 2, "fork_tip_x_m": case["fork_tip_x_m"]}],
+        "bounds_sha256": bounds_sha,
+        "drive_terms_sha256": terms_sha,
+        **(
+            {
+                "retry": {
+                    "reason": "replan_rejected",
+                    "episode": 2,
+                    "time_s": decision + 0.6,
+                }
+            }
+            if refused
+            else {}
+        ),
+    }
+    result = {
+        "arguments": {
+            "rear_axle_offset_m": case["rear_axle_offset_m"],
+            **({"near_drop_frames_from_m": 0.3} if lost else {}),
+        },
+        "tracker_configs": {"approach": case["tracker_config"]},
+        "geometry": case["geometry"],
+        "perception_mount": {"translation_m": [*case["camera_xy_m"], 0.27]},
+    }
+    return result, nt, near, bounds, terms, blades
+
+
+def _xii(run):
+    result, nt, near, bounds, terms, blades = run
+    return J.check_xii(result, nt, near, bounds, terms, blades, 0.346)
+
+
+def test_xii_passes_the_runners_own_records():
+    stuck = _xii(_xii_run("seed_6_v0.055_corr_lat_0.02"))
+    assert stuck["applicable"] and stuck["passed"], stuck["failures"]
+    assert [d["disposition"] for d in stuck["decisions"]] == ["refused"]
+    assert stuck["decisions"][0]["margin_phys_m"] == pytest.approx(-0.0176, abs=1e-4)
+    passed = _xii(_xii_run("seed_0_v0.055_none_0"))
+    assert passed["passed"] and [d["disposition"] for d in passed["decisions"]] == [
+        "accepted"
+    ]
+    short = _xii(_xii_run("seed_6_v0.055_corr_lat_0.02", retry_allowed=False))
+    assert short["passed"] and short["decisions"][0]["disposition"] == "accepted_short"
+    lost = _xii(_xii_run("seed_6_v0.055_corr_lat_0.02", lost=True))
+    assert (
+        lost["passed"]
+        and lost["decisions"][0]["disposition"] == "accepted_lost_injection"
+    )
+
+
+def test_xii_refuses_inputs_that_are_not_the_runs():
+    run = _xii_run("seed_6_v0.055_corr_lat_0.02")
+    pred = run[2]["corrections"][1]["redraw"]["protection_prediction"]
+    tampered = copy.deepcopy(run)
+    tp = tampered[2]["corrections"][1]["redraw"]["protection_prediction"]
+    tp["inputs"]["held"] = {
+        **pred["inputs"]["held"],
+        "yaw": pred["inputs"]["held"]["yaw"] + 0.01,
+    }
+    assert any("held pockets" in f for f in _xii(tampered)["failures"])
+    tampered = copy.deepcopy(run)
+    tampered[2]["corrections"][1]["redraw"]["protection_prediction"][
+        "margin_phys_m"
+    ] = 0.002
+    out = _xii(tampered)
+    assert any("not its recomputation" in f for f in out["failures"])
+    tampered = copy.deepcopy(run)
+    tampered[2]["corrections"][1]["redraw"]["protection_prediction"]["disposition"] = (
+        "accepted_short"
+    )
+    assert any("disposition" in f for f in _xii(tampered)["failures"])
+    tampered = copy.deepcopy(run)
+    tampered[2]["corrections"][1]["redraw"]["protection_prediction"]["inputs"][
+        "constants"
+    ]["loss_m"] = 0.0
+    assert any("constants" in f for f in _xii(tampered)["failures"])
+    tampered = copy.deepcopy(run)
+    target = run[2]["corrections"][1]["redraw"]["target"]
+    tampered[2]["corrections"][1]["redraw"]["target"] = [
+        target[0],
+        target[1] + 0.01,
+        target[2],
+    ]
+    assert any("approach is not the straight" in f for f in _xii(tampered)["failures"])
+
+
+def test_xii_needs_a_retry_after_a_refusal_and_the_decision_conditions():
+    run = _xii_run("seed_6_v0.055_corr_lat_0.02")
+    no_retry = copy.deepcopy(run)
+    no_retry[1].pop("retry")
+    assert any("did not end in a retry" in f for f in _xii(no_retry)["failures"])
+    moving = copy.deepcopy(run)
+    moving[2]["ticks"][1]["standing"] = False
+    assert any("decision conditions" in f for f in _xii(moving)["failures"])
+
+
+def test_xii_applies_by_the_marker_not_by_the_records():
+    run = _xii_run("seed_0_v0.055_none_0")
+    missing = copy.deepcopy(run)
+    missing[2]["corrections"][1]["redraw"].pop("protection_prediction")
+    with pytest.raises(J.Unverified):
+        _xii(missing)
+    stray = copy.deepcopy(run)
+    stray[2]["corrections"][0]["redraw"]["protection_prediction"] = {}
+    assert any("does not screen" in f for f in _xii(stray)["failures"])
+    old = copy.deepcopy(run)
+    old[1].pop("protection_prediction_rules")
+    old[2]["corrections"][1]["redraw"].pop("protection_prediction")
+    assert _xii(old) == {"applicable": False}
+    forged = _xii_run("seed_6_v0.055_corr_lat_0.02")
+    forged[1].pop("protection_prediction_rules")
+    out = _xii(forged)
+    assert out["applicable"] and not out["passed"]
+    other = copy.deepcopy(run)
+    other[1]["protection_prediction_rules"] = "v2"
+    with pytest.raises(J.Unverified):
+        _xii(other)
+    # A 0.6 m correction redraw refused by its own checks carries no prediction and is not screened.
+    boxed = copy.deepcopy(run)
+    boxed[2]["corrections"][1]["redraw"] = {
+        "target": run[2]["corrections"][1]["redraw"]["target"],
+        "refused": "box",
+    }
+    boxed[2]["corrections"][1]["accepted"] = False
+    assert _xii(boxed)["passed"]
+
+
+def test_xii_binds_the_observation_the_episode_and_the_record():
+    run = _xii_run("seed_6_v0.055_corr_lat_0.02")
+    # A missing re-draw record of a decided 0.6 m correction is unverified, not skipped.
+    gone = copy.deepcopy(run)
+    gone[2]["corrections"][1].pop("redraw")
+    with pytest.raises(J.Unverified):
+        _xii(gone)
+    # The observation must be the episode's latest accepted one, of this hold, with its own pixel time.
+    other = copy.deepcopy(run)
+    other[2]["corrections"][1]["observation"]["frame_version"] = 999
+    assert any("latest accepted" in f for f in _xii(other)["failures"])
+    pixel = copy.deepcopy(run)
+    pixel[2]["corrections"][1]["observation"]["pixel_s"] = 69.95
+    assert any("decision conditions" in f for f in _xii(pixel)["failures"])
+    # Every tick from t_s to the decision.
+    gap = copy.deepcopy(run)
+    del gap[2]["ticks"][20]
+    assert any("decision conditions" in f for f in _xii(gap)["failures"])
+    # A held centre's height is a length, never wrapped as an angle.
+    high = copy.deepcopy(run)
+    hp = high[2]["corrections"][1]["redraw"]["protection_prediction"]["inputs"]["held"]
+    hp["left"] = [hp["left"][0], hp["left"][1], hp["left"][2] + 2 * math.pi]
+    assert any("held pockets" in f for f in _xii(high)["failures"])
+    # Incomplete or malformed records are unverified.
+    for key in ("age_s", "bound", "inputs"):
+        cut = copy.deepcopy(run)
+        cut[2]["corrections"][1]["redraw"]["protection_prediction"].pop(key)
+        with pytest.raises(J.Unverified):
+            _xii(cut)
+    empty = copy.deepcopy(run)
+    empty[2]["corrections"][1]["redraw"]["protection_prediction"]["inputs"]["held"] = {}
+    with pytest.raises(J.Unverified):
+        _xii(empty)
+    for key, value in (("age_s", 999.0), ("sweep_m", 999.0), ("rules", "v999")):
+        bad = copy.deepcopy(run)
+        bad[2]["corrections"][1]["redraw"]["protection_prediction"][key] = value
+        assert not _xii(bad)["passed"]
+
+
+def test_xii_finds_the_installed_revision_of_its_own_episode():
+    run = _xii_run("seed_0_v0.055_none_0")
+    two = copy.deepcopy(run)
+    # An earlier episode installed revisions 1 and 2 too (revisions restart each episode).
+    two[2]["path_revisions"] = [
+        {"revision": 2, "episode": 1, "paths": {"approach": {"sha256": "episode 1"}}}
+    ] + two[2]["path_revisions"]
+    assert _xii(two)["passed"]
+    wrong = copy.deepcopy(run)
+    wrong[2]["path_revisions"][-1]["episode"] = 1
+    assert any("installed approach" in f for f in _xii(wrong)["failures"])
+
+
+def test_xii_is_judged_before_any_episode_branch():
+    source = (ROOT / "tools/s4_judge.py").read_text()
+    call = source.index('checks["xii"] = check_xii(')
+    for branch in (
+        "            if open_realign:",
+        "            if retried:\n                vii = judge_retried(",
+        '            early = (nt.get("injection") or {}).get("kind") == "mismatch"',
+    ):
+        assert call < source.index(branch, call - 2000)
+
+
+def test_xii_takes_the_pockets_from_the_accepting_frame_and_never_crashes():
+    run = _xii_run("seed_0_v0.055_none_0")
+    # A later (rejected) row carrying other pockets is not the accepted observation (Codex review 2 P2-1).
+    moved = copy.deepcopy(run)
+    later = moved[2]["frames"][1]
+    later["latest_held"] = copy.deepcopy(later["latest_held"])
+    later["latest_held"]["left"] = [
+        later["latest_held"]["left"][0],
+        later["latest_held"]["left"][1] + 0.02,
+        later["latest_held"]["left"][2],
+    ]
+    assert any("latest accepted" in f for f in _xii(moved)["failures"])
+    # Malformed pieces are unverified, not crashes (Codex review 2 P2-2).
+    for mutate in (
+        lambda r: r[2]["corrections"][1]["redraw"]["protection_prediction"][
+            "bound"
+        ].update(wall_m="bad"),
+        lambda r: r[2]["corrections"][1].update(redraw=["bad"]),
+        lambda r: r[2]["corrections"][1]["redraw"].pop("target"),
+        lambda r: r[2]["frames"][0].pop("read_s"),
+    ):
+        broken = copy.deepcopy(run)
+        mutate(broken)
+        with pytest.raises(J.Unverified):
+            _xii(broken)
+
+
+def test_xii_checks_the_accepting_rows_source_and_contradictory_marks():
+    refused = _xii_run("seed_6_v0.055_corr_lat_0.02")
+    roof = copy.deepcopy(refused)
+    roof[2]["frames"][0]["latest_source"] = (
+        "roof"  # the accepting row; the later row still says front
+    )
+    assert any("latest accepted" in f for f in _xii(roof)["failures"])
+    accepted = _xii_run("seed_0_v0.055_none_0")
+    marked = copy.deepcopy(accepted)
+    marked[2]["corrections"][1]["redraw"]["refused"] = "box"
+    marked[2]["corrections"][1]["redraw"].pop("protection_prediction")
+    with pytest.raises(
+        J.Unverified
+    ):  # accepted: always screened, so its record is required
+        _xii(marked)
+    both = copy.deepcopy(accepted)
+    both[2]["corrections"][1]["redraw"]["refused"] = "box"
+    assert any("marked refused" in f for f in _xii(both)["failures"])
+
+
+def test_xii_needs_a_reason_for_an_unaccepted_decision():
+    refused = _xii_run("seed_6_v0.055_corr_lat_0.02")
+    silent = copy.deepcopy(refused)
+    silent[2]["corrections"][1]["redraw"].pop("refused")
+    silent[2]["corrections"][1]["redraw"].pop("protection_prediction")
+    with pytest.raises(J.Unverified):
+        _xii(silent)
