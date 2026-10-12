@@ -620,20 +620,15 @@ def plan_observation_leg(
     """
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
     config = config if config is not None else make_transport_planner_config()
-    props = [prop.rectangle for prop in scenario.props]
-    pallet = pickup_obstacle if pickup_obstacle is not None else Rectangle(
-        scenario.pickup.x_m,
-        scenario.pickup.y_m,
-        geometry.pallet_depth_m,
-        geometry.pallet_width_m,
-        scenario.pickup.yaw_rad,
+    obstacles, footprint, bounds = leg_obstacles(
+        "observe", scenario, geometry, pickup_obstacle=pickup_obstacle, pickup_bounds=pickup_bounds
     )
     return _search(
         start_rear if start_rear is not None else scenario.start_rear,
         waypoint,
-        props + [pallet],
-        geometry.unloaded_footprint,
-        pickup_bounds if pickup_bounds is not None else scenario.bounds,
+        obstacles,
+        footprint,
+        bounds,
         config,
         extended,
         occupancy,
@@ -777,14 +772,32 @@ def correction_point_offsets(
 
 
 def leg_obstacles(
-    kind: str, scenario: TransportScenario, geometry: SyntheticMissionGeometry | None = None
+    kind: str,
+    scenario: TransportScenario,
+    geometry: SyntheticMissionGeometry | None = None,
+    *,
+    pickup_obstacle: Rectangle | None = None,
+    pickup_bounds: Bounds | None = None,
 ) -> tuple[list[Rectangle], Footprint, Bounds]:
-    """(rectangles, footprint, bounds) the transport or return leg's search checks besides its grid:
-    the props, plus the delivered pallet on the return; the loaded outline in transport. One source
-    for plan_transport_leg, plan_return_leg and the obstacle recovery's escape check (plan
-    2026-10-04-lidar-obstacle-map, obstacle recovery v4 E2 ①)."""
+    """(rectangles, footprint, bounds) the transport, return or observation leg's search checks
+    besides its grid: the props, plus the delivered pallet on the return and the pallet (or the
+    rectangle standing for it) on the observation leg; the loaded outline in transport. One source
+    for plan_transport_leg, plan_return_leg, plan_observation_leg and the recoveries that check a
+    sweep against them (plan 2026-10-04-lidar-obstacle-map, obstacle recovery v4 E2 ①, cusp
+    position stall v7)."""
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
     props = [prop.rectangle for prop in scenario.props]
+    if kind == "observe":
+        pallet = pickup_obstacle if pickup_obstacle is not None else Rectangle(
+            scenario.pickup.x_m,
+            scenario.pickup.y_m,
+            geometry.pallet_depth_m,
+            geometry.pallet_width_m,
+            scenario.pickup.yaw_rad,
+        )
+        return props + [pallet], geometry.unloaded_footprint, (
+            pickup_bounds if pickup_bounds is not None else scenario.bounds
+        )
     if kind == "transport":
         return props, geometry.loaded_footprint, scenario.bounds
     if kind == "return":

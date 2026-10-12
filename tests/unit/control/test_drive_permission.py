@@ -300,3 +300,55 @@ def test_an_extra_margin_ramps_from_zero_over_its_length():
     assert perm.check_path(far, path, FOOT, BODY, **kw).blocked is None
     late = perm.check_path(far, path, FOOT, BODY, extra_margin_m=0.05, extra_ramp_m=1.0, **kw)
     assert late.blocked == "occupied" and late.verified_m > 0.5
+
+
+def test_an_unknown_passing_walk_finds_an_occupied_cell_behind_unknown_ones():
+    # Cusp position stall (plan design v7): the default walk stops at the first unknown cell; the
+    # unknown-passing walk goes on, noting it, so an occupied cell further along still blocks.
+    snap = snapshot()
+    for y in np.arange(-0.6, 0.65, 0.05):
+        set_cell(snap, 2.0, y, UNKNOWN)  # a band across the path ahead of the body
+    set_cell(snap, 3.0, 0.0, OCCUPIED)
+    perm = DrivePermission(CONFIG)
+    kw = {"current_pose": (0, 0, 0), "direction": 1}
+    default = perm.check_path(snap, STRAIGHT, FOOT, BODY, **kw)
+    assert default.blocked == "unknown" and default.first_unknown_m is None
+    passing = perm.check_path(snap, STRAIGHT, FOOT, BODY, unknown_passes=True, **kw)
+    assert passing.blocked == "occupied" and passing.first_unknown_m is not None
+    assert passing.first_unknown_m <= default.verified_m + CONFIG.step_m
+    clear = snapshot()
+    for y in np.arange(-0.6, 0.65, 0.05):
+        set_cell(clear, 2.0, y, UNKNOWN)
+    open_ = perm.check_path(clear, STRAIGHT, FOOT, BODY, unknown_passes=True, **kw)
+    assert open_.blocked is None and open_.first_unknown_m is not None
+
+
+def test_an_unknown_passing_walk_checks_the_part_inside_the_grid_past_its_edge():
+    # Codex cusp implementation review P1: a sample partly outside the grid still has its cells inside
+    # checked -- an occupied cell next to the edge blocks.
+    snap = snapshot()
+    edge_path = np.column_stack((np.linspace(0, 6, 121), np.full(121, 2.7), np.zeros(121)))
+    set_cell(snap, 3.0, 2.8, OCCUPIED)
+    perm = DrivePermission(CONFIG)
+    kw = {"current_pose": (0.0, 2.7, 0.0), "direction": 1}
+    assert perm.check_path(snap, edge_path, FOOT, BODY, **kw).blocked == "edge"
+    passing = perm.check_path(snap, edge_path, FOOT, BODY, unknown_passes=True, **kw)
+    assert passing.blocked == "occupied" and passing.first_unknown_m == 0.0 and passing.verified_m == 0.0
+    clear = snapshot()
+    assert perm.check_path(clear, edge_path, FOOT, BODY, unknown_passes=True, **kw).blocked is None
+
+
+def test_an_unknown_passing_walk_counts_the_free_evidence_behind_the_unknown():
+    # Codex cusp implementation review P1: the FREE cells it walked past unknown ones to are relied on
+    # (no occupied there), so their age counts; verified_m stops at the first unknown.
+    snap = snapshot(free_at=10.0)
+    for y in np.arange(-0.6, 0.65, 0.05):
+        set_cell(snap, 2.0, y, UNKNOWN)
+    i = int(math.floor((3.0 + 1.0) / 0.05))
+    snap.free_stamp[i, :] = 9.7  # older FREE evidence past the band
+    perm = DrivePermission(CONFIG)
+    kw = {"current_pose": (0, 0, 0), "direction": 1}
+    default = perm.check_path(snap, STRAIGHT, FOOT, BODY, **kw)
+    passing = perm.check_path(snap, STRAIGHT, FOOT, BODY, unknown_passes=True, **kw)
+    assert default.oldest_free_s == 10.0 and passing.oldest_free_s == 9.7
+    assert passing.verified_m == default.verified_m

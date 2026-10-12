@@ -515,10 +515,11 @@ def test_d8b_dwells_hold_the_steering_as_well_as_the_wheels() -> None:
     source = SCRIPT.read_text()
     block = source[source.index("hold_, released_ = dwells.update("):source.index("elif released_:")]
     assert "dwell_hold = True" in block
-    assert "if estop_holding or obstacle_hold or dwell_hold:" in source
-    assert "steering_command.copy() if (estop_holding or obstacle_hold or dwell_hold)" in source
+    # (A cusp position stall's hold, plan cusp stall v7, joins the same path.)
+    assert "if estop_holding or obstacle_hold or dwell_hold or cusp_hold:" in source
+    assert "steering_command.copy() if (estop_holding or obstacle_hold or dwell_hold or cusp_hold)" in source
     # The wheels brake on the held steering's curvature, in the command actually applied.
-    assert "wheel_curvature = kappa if dwell_hold else curvature" in source
+    assert "wheel_curvature = kappa if (dwell_hold or cusp_hold) else curvature" in source
     assert "drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)" in source
     assert "ackermann_command(wheel_speed, curvature," not in source
     assert source.index("dwell_hold = dwell_standing = False") < source.index("hold_, released_ = dwells.update(")
@@ -721,7 +722,7 @@ def test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_captu
     assert "mismatch=False, unbounded=False, path_revision=0" in build_fn
     assert "near.setdefault('stop_events', [])" in build_fn and "stop_events=[]" not in build_fn
     stand = source.index("retry_stand_ = near is not None and near.get('retry_stand') and phase == 'observe'".replace("'", '"'))
-    window = source[stand : stand + 2200]  # obstacle recovery v4's escape end sits between
+    window = source[stand : stand + 2700]  # obstacle recovery v4's escape end and the cusp stall sit between
     assert 'tracking = replace(tracking, status="arrived", speed_mps=0.0)' in window
     assert "and not retry_stand_" in window
     seen = source.index("Plan D8 S4c-2 / S4c-3: the re-observation must see the pallet")

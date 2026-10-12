@@ -318,13 +318,13 @@ class ObstacleLayer:
                                       direction=direction)
 
     def check_candidate(self, path_ahead, *, current_pose, direction: int, loaded: bool, extra_margin_m: float = 0.0,
-                        extra_ramp_m: float | None = None):
+                        extra_ramp_m: float | None = None, unknown_passes: bool = False):
         """Obstacle recovery v4 D1: a candidate path checked on the snapshot the permission uses
         (shadow memory, known pallets and exemptions applied), leaving the permission as it is."""
         footprint, own = self.footprints(loaded, direction)
         return self.permission.check_path(self.snapshot, path_ahead, footprint, own, current_pose=current_pose,
                                           direction=direction, extra_margin_m=extra_margin_m,
-                                          extra_ramp_m=extra_ramp_m)
+                                          extra_ramp_m=extra_ramp_m, unknown_passes=unknown_passes)
 
     def check_arc_candidate(self, *, current_pose, curvature_inv_m: float, direction: int, loaded: bool,
                             cap_mps: float):

@@ -1022,3 +1022,75 @@ def test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recove
     assert 'args.output / f"obstacle_recovery_{dumps_ + 1}.npz"' in source
     assert "band_pose=None, label=None" in source and "band_poses_ = rear if band_pose is None else band_pose" in source
     assert 'own=list(region), band_pose=list(region), label="escape_end"' in source
+
+
+def test_cusp_position_stall_v7_is_wired_into_the_runner():
+    # Plan docs/plans/2026-10-04-lidar-obstacle-map.md, "cusp 위치 정체 복구 설계 7판".
+    source = SCRIPT.read_text()
+    assert 'cusp_monitor = CUSP_STALL.CuspStallMonitor(state["cusp_stalls"])' in source
+    assert 'state["cusp_stalls"] = []' in source
+    # The tracker's own result goes in, after the escape override and before every later recovery rule.
+    call = source.index("tracking, cusp_hold = cusp_tick(t, rear, raw_tracking_, tracking, retry_stand_)")
+    assert source.index("raw_tracking_ = tracking  # the tracker's own result") < call
+    assert source.index("escape_now_ = (") < call
+    for later in ("                dock_stop = (", "                goal_heading_miss = (", "                observe_stalled = ("):
+        assert call < source.index(later)
+    # Exclusions: D7 transport whatever --d7-docking says, a held realignment, the legacy profile.
+    fn = source[source.index("    def cusp_excluded(phase_)") :]
+    fn = fn[: fn.index("    def cusp_standing")]
+    assert 'args.tracker_profile == "20260921"' in fn
+    assert 'slam["docking"].get("accepted_any") or slam["docking"].get("reapproach")' in fn
+    assert 'slam["tracker"].mode == "holding" and realign_active()' in fn
+    assert "args.d7_docking" not in fn
+    # Ownership on the latest snapshot: the leg-ahead path, the e-stop arc at the permission's own cap
+    # in the leg's direction, every sensor alive.
+    own = source[source.index("    def cusp_ownership(") :]
+    own = own[: own.index("    def cusp_leg_checker")]
+    assert "layer_.check_candidate(leg_, current_pose=pose_, direction=dir_, loaded=loaded)" in own
+    assert "layer_.check_arc_candidate(" in own and "curvature_inv_m=kappa_, direction=dir_" in own
+    assert "cap_mps=max(abs(float(command_mps)), abs(float(signed_speed)))" in own
+    assert "sensor_timeout_s" in own
+    # The prefix's planner obstacles: the leg's rectangles (observe as plan_observation_leg has them).
+    leg = source[source.index("    def cusp_leg_checker(") :]
+    leg = leg[: leg.index("    def cusp_sensors(")]
+    assert "escape_leg(phase)[2]" in leg and 'leg_obstacles(\n            "observe"' in leg
+    assert "pickup_bounds=pickup_bounds" in leg
+    # The prefix's sensor checks: the plain walk within the stopping distance, the walk past unknown
+    # for occupied, the evidence age, sensors alive.
+    sens = source[source.index("    def cusp_sensors(") :]
+    sens = sens[: sens.index("    def cusp_heading_recovered(")]
+    assert "unknown_passes=True" in sens and 'plain_.blocked in ("unknown", "edge")' in sens
+    assert "age_ <= pconf_.evidence_max_age_s" in sens and "sensor_timeout_s" in sens
+    # Every FREE cell either walk relied on (Codex implementation review P1).
+    assert "age_ = now_s - min(plain_.oldest_free_s, passes_.oldest_free_s)" in sens
+    # A short next leg's heading miss only within the existing rules' budgets.
+    rec = source[source.index("    def cusp_heading_recovered(") :]
+    rec = rec[: rec.index("    def cusp_tick(")]
+    assert 'len(state["cusp_replans"]) < max_cusp_replans' in rec
+    assert 'goal and slam is not None' in rec and 'len(state["stall_replans"]) < 2' in rec
+    # Stopped = standing with a zero applied at the wheels.
+    assert 'state.get("applied_command", (None, None))[0] == 0.0' in source
+    # The hand-off: one forced replan per key, the block entered while handed, its direction, an occupied
+    # prefix counted as a blocked path; ownership back once no replan is pending.
+    tick = source[source.index("    def cusp_tick(") :]
+    tick = tick[: tick.index("    try:\n")]
+    # Forced only where the obstacle replan exists: with grid planning (Codex implementation review P1).
+    assert 'if result_.force_replan and obstacle is not None:\n            if grid_planning:\n                obstacle["force_replan"] = phase' in tick
+    # A silent sensor sends no scan: liveness is passed in for every tick.
+    assert "alive=lambda: cusp_alive(now_s)," in tick
+    alive = source[source.index("    def cusp_alive(") :]
+    assert "now_s - last_ <= timeout_ for last_ in layer_.last_scan_s.values()" in alive[:600]
+    assert 'obstacle.get("force_replan") == phase or bool(obstacle.get("replan_wait", {}).get(phase))' in tick
+    assert "or cusp_handed_ is not None" in source
+    assert "direction = cusp_handed_.hand_direction" in source
+    assert '((allowed == 0.0 and why == "occupied") or cusp_prefix_blocked_)' in source
+    # An end is dumped first, then the run ends.
+    assert "dump_tracking(result_.end, result_.tracking)\n            require(False, result_.end)" in tick
+    assert "release_update=lambda: tracker_.update(rear_now, signed_speed, dt)" in tick
+    # The observe stop rule waits while the stall handling holds an observe stall.
+    assert "and not cusp_monitor.holds_observe()" in source
+    # Zero command with the steering held.
+    assert "cusp_hold = False  # plan cusp position stall v7 K3" in source
+    assert "if estop_holding or obstacle_hold or dwell_hold or cusp_hold:" in source
+    assert "wheel_curvature = kappa if (dwell_hold or cusp_hold) else curvature" in source
+    assert "steering_command.copy() if (estop_holding or obstacle_hold or dwell_hold or cusp_hold)" in source

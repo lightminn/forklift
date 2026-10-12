@@ -1581,5 +1581,12 @@ def test_leg_obstacles_are_what_each_leg_search_checks():
     rects, footprint, bounds = pallet_mission.leg_obstacles("transport", scenario, geometry)
     assert rects == [prop.rectangle for prop in scenario.props]
     assert footprint == geometry.loaded_footprint and bounds == scenario.bounds
+    rects, footprint, bounds = pallet_mission.leg_obstacles("observe", scenario, geometry)
+    p = scenario.pickup
+    assert rects[-1] == Rectangle(p.x_m, p.y_m, geometry.pallet_depth_m, geometry.pallet_width_m, p.yaw_rad)
+    assert footprint == geometry.unloaded_footprint and bounds == scenario.bounds
+    zone, box = Rectangle(1.0, 2.0, 1.5, 1.5, 0.0), Bounds(-1.0, 4.0, -2.0, 5.0)
+    rects, _, bounds = pallet_mission.leg_obstacles("observe", scenario, geometry, pickup_obstacle=zone, pickup_bounds=box)
+    assert rects[-1] == zone and bounds == box
     with pytest.raises(ValueError):
-        pallet_mission.leg_obstacles("observe", scenario, geometry)
+        pallet_mission.leg_obstacles("approach", scenario, geometry)

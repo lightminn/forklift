@@ -786,3 +786,53 @@ def test_a_restarted_slew_needs_a_finite_speed():
     tracker = RearAxlePathTracker(poses, np.ones(n), np.zeros(n), TrackerConfig())
     with pytest.raises(ValueError):
         tracker.restart_speed_slew(np.nan)
+
+
+# Cusp position stall (docs/plans/2026-10-04-lidar-obstacle-map.md, "cusp 위치 정체 복구 설계 7판").
+CUSP = dict(**DOCKING, cusp_position_tolerance_m=0.03, cusp_yaw_tolerance_rad=0.05, cusp_brake_window_m=0.008)
+
+
+def test_an_offset_stop_beyond_the_cusp_tolerance_stalls_and_release_cusp_starts_the_next_leg():
+    tracker = RearAxlePathTracker(*CUSP_PATH, TrackerConfig(**CUSP))
+    commands = drive_past_cusp_off_line(tracker, lateral=0.04, yaw=0.01)
+    assert all(c.status == "tracking" and c.at_cusp for c in commands[-50:])
+    assert all(c.speed_mps >= 0 for c in commands)  # never the next leg's reverse
+    assert tracker.leg_index == 0
+    assert tracker.leg_remaining_m() <= tracker.leg_end_window_m() == 0.008
+    assert not tracker.release_cusp(stopped=False)  # only on the caller's stop decision
+    assert tracker.leg_index == 0
+    assert tracker.release_cusp(stopped=True)
+    assert tracker.leg_index == 1 and tracker.leg_remaining_m() == 0.7
+    after = [tracker.update([1.0, 0.04, 0.01], 0.0, 0.02) for _ in range(20)]
+    assert after[0].speed_mps == 0.0 or after[0].speed_mps < 0  # the slew restarts from zero
+    assert any(c.speed_mps < 0 for c in after) and all(not c.at_cusp for c in after)
+
+
+def test_release_cusp_refuses_mid_leg_the_final_leg_and_a_failed_tracker():
+    tracker = RearAxlePathTracker(*CUSP_PATH, TrackerConfig(**CUSP))
+    tracker.update([0.5, 0.0, 0.0], 0.1, 0.02)
+    assert tracker.leg_remaining_m() > tracker.leg_end_window_m()
+    assert not tracker.release_cusp(stopped=True)  # mid-leg
+    final = RearAxlePathTracker([[0, 0, 0], [1, 0, 0]], [1, 1], [0, 0], TrackerConfig(**CUSP))
+    for x in np.linspace(0, 1, 51):
+        final.update([x, 0.04, 0.0], 0.1, 0.02)
+    assert final.leg_end_window_m() == 0.008 and not final.release_cusp(stopped=True)  # a goal, not a cusp
+    lost = RearAxlePathTracker(*CUSP_PATH, TrackerConfig(**CUSP, max_cross_track_error_m=0.05))
+    lost.update([0.5, 0.2, 0.0], 0.1, 0.02)
+    assert lost.update([1.0, 0.2, 0.0], 0.0, 0.02).status == "failed"
+    assert not lost.release_cusp(stopped=True)
+
+
+def test_the_leg_end_window_is_the_one_update_uses():
+    legacy = RearAxlePathTracker(*CUSP_PATH, TrackerConfig(**DOCKING))
+    assert legacy.leg_end_window_m() == 0.008  # no cusp tolerances: the goal's
+    wide = RearAxlePathTracker(*CUSP_PATH, TrackerConfig(**DOCKING, cusp_position_tolerance_m=0.03))
+    assert wide.leg_end_window_m() == 0.03  # no brake window: the cusp tolerance
+
+
+def test_skip_legs_starts_a_later_leg_and_refuses_past_the_last():
+    tracker = RearAxlePathTracker(*CUSP_PATH, TrackerConfig(**CUSP))
+    tracker.skip_legs(1)
+    assert tracker.leg_index == 1 and tracker.leg_remaining_m() == 0.7
+    with pytest.raises(ValueError):
+        tracker.skip_legs(1)

@@ -73,6 +73,7 @@ class Check:
     oldest_free_s: float  # oldest FREE evidence the verified part relied on (inf: none needed)
     reached_end: bool
     blocked_cells: tuple = ()  # diagnostics: up to 20 (i, j) grid cells that blocked
+    first_unknown_m: float | None = None  # unknown_passes walks: where the first unknown/edge cell was
 
 
 def parts_of(shape) -> list:
@@ -243,15 +244,21 @@ class DrivePermission:
         return False
 
     def _walk(self, snapshot, samples, arc, footprint, own_cells, *, full_path_m=None, direction=0,
-              own_pose=None, own_footprint=None, extra_margin_m=0.0, extra_ramp_m=None) -> Check:
+              own_pose=None, own_footprint=None, extra_margin_m=0.0, extra_ramp_m=None,
+              unknown_passes=False) -> Check:
         """Walk the samples; between two samples the midpoint is checked with half
         the interval's motion added (translation + farthest corner x rotation), so
         the continuous sweep is covered, not just the samples (Codex L0b P1).
         extra_margin_m (obstacle recovery v4) is added to the margin, growing from 0
-        over extra_ramp_m along the walk (None: in full from the start)."""
+        over extra_ramp_m along the walk (None: in full from the start). unknown_passes (cusp
+        position stall, plan design v7): walk on past unknown and edge cells, noting where the
+        first was, so that only an occupied cell blocks -- the part of a sample inside the grid is
+        still checked, every FREE cell met counts in the evidence age, and verified_m stops at the
+        first unknown or edge."""
         cfg = self.config
         verified, blocked, oldest = 0.0, None, np.inf
         blocked_cells = ()
+        first_unknown = None
         radius = max(float(np.hypot(abs(lon) + max(fp.front_m, fp.rear_m), abs(lat) + fp.half_width_m))
                      for fp, lat, lon in parts_of(footprint))
         band = None  # cells near the present outline where RETAINED may pass, built on demand
@@ -270,8 +277,12 @@ class DrivePermission:
                 margin += extra_margin_m * (min(1.0, s / extra_ramp_m) if extra_ramp_m else 1.0)
             cells, outside = shape_cells(snapshot, pose, footprint, margin, direction=direction)
             if outside:
-                blocked = "edge"
-                break
+                if not unknown_passes:
+                    blocked = "edge"
+                    break
+                first_unknown = float(s) if first_unknown is None else first_unknown
+                nx_, ny_ = snapshot.state.shape
+                cells = cells[(cells[:, 0] >= 0) & (cells[:, 0] < nx_) & (cells[:, 1] >= 0) & (cells[:, 1] < ny_)]
             whole, partial = own_cells
             if whole or partial:
                 if own_lookup is None:
@@ -315,17 +326,20 @@ class DrivePermission:
                     states[outside] = 0
             bad = (states != FREE) & (states != RETAINED)
             if bad.any():
-                blocked = "unknown"
-                blocked_cells = tuple(map(tuple, cells[bad][:20].tolist()))
-                break
+                if not unknown_passes:
+                    blocked = "unknown"
+                    blocked_cells = tuple(map(tuple, cells[bad][:20].tolist()))
+                    break
+                first_unknown = float(s) if first_unknown is None else first_unknown
             # A RETAINED cell's stamp is the oldest fresh evidence its support
             # used, so it ages out under the same limit.
             seen = (states == FREE) | (states == RETAINED)
             if seen.any():
                 oldest = min(oldest, float(np.min(snapshot.free_stamp[cells[seen, 0], cells[seen, 1]])))
-            verified = float(s)
+            if first_unknown is None:
+                verified = float(s)
         reached_end = blocked is None and full_path_m is not None and arc[-1] >= full_path_m - 1e-9
-        return Check(verified, blocked, oldest, reached_end, blocked_cells)
+        return Check(verified, blocked, oldest, reached_end, blocked_cells, first_unknown)
 
     @staticmethod
     def _own_lookup(snapshot, own_cells, own_pose, own_footprint):
@@ -407,7 +421,7 @@ class DrivePermission:
 
     def check_path(self, snapshot: GridSnapshot, path_ahead, footprint: Footprint, own_footprint: Footprint, *,
                    current_pose, direction: int = 0, extra_margin_m: float = 0.0,
-                   extra_ramp_m: float | None = None) -> Check:
+                   extra_ramp_m: float | None = None, unknown_passes: bool = False) -> Check:
         """The verified distance along path_ahead on snapshot, leaving this permission as it is
         (obstacle recovery v4 D1: a candidate is checked before it is installed)."""
         poses = np.asarray(path_ahead, dtype=float)
@@ -417,7 +431,7 @@ class DrivePermission:
         own = self._own_cells(snapshot, current_pose, own_footprint)
         return self._walk(snapshot, samples, arc, footprint, own, full_path_m=total, direction=direction,
                           own_pose=current_pose, own_footprint=own_footprint, extra_margin_m=extra_margin_m,
-                          extra_ramp_m=extra_ramp_m)
+                          extra_ramp_m=extra_ramp_m, unknown_passes=unknown_passes)
 
     def check_arc(self, snapshot: GridSnapshot, current_pose, curvature_inv_m: float, direction: int,
                   footprint: Footprint, own_footprint: Footprint, speed_cap_mps: float) -> Check:

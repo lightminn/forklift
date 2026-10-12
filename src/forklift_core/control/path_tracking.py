@@ -208,6 +208,68 @@ class RearAxlePathTracker:
         """Path length still to drive to the final pose, from current progress."""
         return max(0.0, float(self._distance[-1] - self._progress))
 
+    # Cusp position stall (docs/plans/2026-10-04-lidar-obstacle-map.md, "cusp 위치 정체 복구
+    # 설계 7판"): read-only views of the leg being driven, and a release of its cusp from the
+    # measured pose. None of them changes how update() tracks or accepts.
+    @property
+    def leg_index(self) -> int:
+        """The leg being driven (0 first; it advances at each accepted cusp)."""
+        return self._leg
+
+    @property
+    def leg_end_index(self) -> int:
+        """The path sample the current leg ends at (a cusp, or the goal)."""
+        return int(self._leg_ends[self._leg])
+
+    def leg_remaining_m(self) -> float:
+        """Path length still to drive to the end of the current leg, from current progress."""
+        return max(0.0, float(self._distance[self._leg_ends[self._leg]] - self._progress))
+
+    def leg_end_window_m(self) -> float:
+        """The brake window update() applies at the current leg's end."""
+        cfg = self.config
+        if self._leg_ends[self._leg] == len(self._poses) - 1:
+            return cfg.position_tolerance_m
+        tolerance = cfg.position_tolerance_m if cfg.cusp_position_tolerance_m is None else cfg.cusp_position_tolerance_m
+        if cfg.cusp_brake_window_m is None:
+            return tolerance
+        return min(cfg.cusp_brake_window_m, tolerance)
+
+    def release_cusp(self, stopped: bool) -> bool:
+        """Start the next leg from the measured pose at a cusp the tracker would not accept.
+
+        Only when the current leg ends at a cusp, its remaining length is within the leg end's
+        brake window, the tracker has neither failed nor arrived, and ``stopped`` (the caller's
+        stop decision with a zero command applied). The leg switch is update()'s own; the
+        requested-speed slew restarts from zero. Returns whether it released.
+        """
+        if (
+            not stopped
+            or self._failed
+            or self._arrived
+            or self._leg_ends[self._leg] == len(self._poses) - 1
+            or self.leg_remaining_m() > self.leg_end_window_m()
+        ):
+            return False
+        self._advance_leg()
+        self._command_speed = 0.0
+        return True
+
+    def skip_legs(self, count: int) -> None:
+        """Start ``count`` legs later, as if their cusps had been accepted (for dry runs)."""
+        for _ in range(int(count)):
+            if self._leg_ends[self._leg] == len(self._poses) - 1:
+                raise ValueError("no further leg to start")
+            self._advance_leg()
+        self._command_speed = 0.0
+
+    def _advance_leg(self) -> None:
+        """The one leg switch: the next leg, from the end of this one."""
+        endpoint = self._leg_ends[self._leg]
+        self._leg += 1
+        self._segment = endpoint
+        self._progress = float(self._distance[endpoint])
+
     def restart_speed_slew(self, speed_mps: float = 0.0) -> None:
         """Restart the requested-speed slew from ``speed_mps``.
 
@@ -412,9 +474,7 @@ class RearAxlePathTracker:
                 self._arrived = True
                 status = "arrived"
             else:
-                self._leg += 1
-                self._segment = endpoint
-                self._progress = float(self._distance[endpoint])
+                self._advance_leg()
         if self._arrived:
             status = "arrived"
         return TrackingCommand(
