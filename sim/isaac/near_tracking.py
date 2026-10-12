@@ -604,6 +604,8 @@ CORRECTION_POINTS_M = (1.0, 0.6)  # estimated fork tip to face (plan D8d)
 # reaches 110.3 mrad from a start inside the 0.05 m / 0.05 rad box (plan D8 S4b revision).
 CORRECTION_MAX_YAW_RAD = 0.12
 REDRAW_MAX_LATERAL_M = 0.05  # plan D8 S4b/S4c-3: redraw_docking's lateral box (its default)
+REALIGN_MAX_LENGTH_M = 6.0  # plan D8 S4c-3 stage 2: every observe path of a realignment (D7c's cap)
+REALIGN_MIN_LEFT_M = 1.5  # ... and the straight a re-capture keeps (the approach starts before arming)
 
 
 @dataclass(frozen=True)
@@ -944,8 +946,9 @@ RUN_SPECIFIC_ARGUMENTS = (
     "near_inject_lateral_m",
     "near_inject_yaw_rad",
     "near_drop_frames_from_m",
-    # Plan D8 S4c-3: the test-only near-capture heading box.
+    # Plan D8 S4c-3: the test-only near-capture heading box and stage-1 switch.
     "near_capture_box_yaw_rad",
+    "near_capture_redraw",
 )
 CONDITION_FIELDS = (
     "settings_synthetic",

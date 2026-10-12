@@ -2868,3 +2868,431 @@ def test_redraw_a_stage_one_acceptance_with_its_chain_passes_and_each_broken_lin
     e(result)["correction_points"][1]["offsets"].update(yaw_rad=math.nan)
     with pytest.raises(J.Unverified, match="correction-point offsets"):
         J.check_near_redraw(result, nt)
+
+
+# (xi) -- plan D8 S4c-3 stage 2, the realignment ----------------------------------------
+def recapture_on_line(along=0.05, lateral=0.01, yaw=0.01):
+    """A mission geometry record (alignment straight 2.1 m), and a capture whose rear axle is
+    `along` past the prealign of a target, `lateral` across and `yaw` off its line: the base,
+    the observation that base sees of the target, and the straight's offsets from that rear."""
+    from dataclasses import asdict
+
+    from forklift_core.planning.geometry import Pose2D
+    from forklift_core.planning.pallet_mission import (
+        PalletSite,
+        SyntheticMissionGeometry,
+        site_poses,
+        straight_from_pose,
+    )
+
+    geo = SyntheticMissionGeometry(alignment_straight_m=2.1)
+    record = {
+        "unloaded_footprint": asdict(geo.unloaded_footprint),
+        **{
+            k: getattr(geo, k)
+            for k in (
+                "pallet_depth_m",
+                "pallet_width_m",
+                "axle_to_fork_tip_m",
+                "approach_gap_m",
+                "alignment_straight_m",
+                "delivery_straight_m",
+                "extraction_m",
+                "withdrawal_m",
+                "spawn_clearance_m",
+                "carriage_limit_m",
+                "insertion_reserve_m",
+                "prealign_offset_m",
+                "approach_offset_m",
+                "inserted_offset_m",
+            )
+        },
+    }
+    raw = np.array([2.0, 0.3, 0.02])
+    pre = site_poses(PalletSite(*raw), geo)["prealign"]
+    c, s_ = math.cos(pre.yaw_rad), math.sin(pre.yaw_rad)
+    rear = (
+        pre.x_m + along * c - lateral * s_,
+        pre.y_m + along * s_ + lateral * c,
+        pre.yaw_rad + yaw,
+    )
+    base = (
+        rear[0] + 0.34 * math.cos(rear[2]),
+        rear[1] + 0.34 * math.sin(rear[2]),
+        rear[2],
+    )
+    psi = raw[2] - base[2]
+    cb, sb = math.cos(base[2]), math.sin(base[2])
+    dx, dy = raw[0] - base[0], raw[1] - base[1]
+    centre = np.array([cb * dx + sb * dy, -sb * dx + cb * dy])
+    mid = centre - geo.pallet_depth_m / 2 * np.array([math.cos(psi), math.sin(psi)])
+    obs = asdict(pocket_observation(x=float(mid[0]), y=float(mid[1]), psi=float(psi)))
+    target = J._site_from_observation(obs, base, geo.pallet_depth_m)
+    sites = site_poses(PalletSite(*(float(v) for v in target)), geo)
+    _, offsets = straight_from_pose(
+        Pose2D(*rear),
+        sites["prealign"],
+        sites["approach"],
+        max_lateral_m=0.05,
+        max_yaw_rad=0.05,
+        min_length_m=0.3,
+    )
+    return record, list(base), obs, offsets
+
+
+def realign_case(geometry_):
+    """A near capture (attempt 2, tick 150) refused by its box and by stage 1, realigned once:
+    the release at its tick, the stand and in-place re-observation (attempt 3, tick 165),
+    the near leg installed at 171, the re-capture (attempt 4) accepted at tick 300 with the
+    straight its pose and observation give."""
+    sys.path.insert(0, str(ROOT / "sim" / "isaac"))
+    import near_tracking as NT
+
+    truth, _near, _nt, result = retry_case(geometry_)
+    record, base4, obs4, offsets4 = recapture_on_line()
+    result["geometry"] = record
+    t = truth["stamp_s"]
+    rec = result["near_tracking"].pop("retry")
+    rec.pop("reason")
+
+    def install(n, reason, poses, at):
+        poses = np.asarray(poses, dtype=float)
+        dirs, curvs = np.ones(len(poses), dtype=np.int8), np.zeros(len(poses))
+        digest = NT.path_digest(poses, dirs, curvs)
+        return {
+            "n": n,
+            "time_s": float(t[at]),
+            "reason": reason,
+            "slam_mode": "tracking",
+            "length_m": float(np.sum(np.hypot(*np.diff(poses[:, :2], axis=0).T))),
+            "poses": poses.tolist(),
+            "directions": dirs.tolist(),
+            "curvatures_inv_m": curvs.tolist(),
+            "sha256": digest,
+            "tracker_sha256": digest,
+        }
+
+    leg = [[-3.3 + 0.1 * k, 0.0, 0.0] for k in range(31)]  # 3.0 m
+    rec.update(
+        time_s=float(t[150]),
+        refused_attempt=2,
+        installs=[
+            install(0, "stand", [[-3.39, 0.03, 0.003], [-3.34, 0.03, 0.003]], 150),
+            install(1, "near_leg", leg, 171),
+        ],
+        end={
+            "reason": "recaptured",
+            "attempt": 4,
+            "time_s": float(t[300]),
+            "length_left_m": offsets4["length_left_m"],
+        },
+    )
+    rec["end"]["observe_tracker_sha256"] = rec["installs"][-1]["tracker_sha256"]
+    # The refused capture's attempt at the realignment's tick; the re-capture: attempt 4 at
+    # tick 300, accepted by its box with the straight from its rear (~2.05 m), a tracker
+    # started on it then.
+    result["observation_attempts"][1]["t_before_capture_s"] = float(t[150])
+    result["observation_attempts"].append(
+        {"t_before_capture_s": float(t[300]), "pocket_observation": {"status": "valid"}}
+    )
+    result["near_tracking"] = {
+        "realign": rec,
+        "realigns": 1,
+        "starts": [
+            {
+                "attempt": 4,
+                "built_s": float(t[300]),
+                "aligned_s": float(t[300]),
+                "pose": base4,
+                "observation": obs4,
+            }
+        ],
+    }
+    result["slam_summary"]["holds"][-1]["event"] = "release_near_realign"
+    result["near_capture_refused"] = [
+        {
+            "status": "pending",
+            "refused_attempt": 2,
+            "offsets_to_new_line": {
+                "along_m": 0.02,
+                "lateral_m": 0.02,
+                "yaw_rad": 0.13,
+                "length_left_m": 2.08,
+            },
+            "recoveries": [
+                {
+                    "stage": "redraw",
+                    "attempt": 2,
+                    "accepted": False,
+                    "record": {"refused": "box"},
+                }
+            ],
+        }
+    ]
+    result["near_capture"] = {
+        "status": "done",
+        "near_attempt": 4,
+        "offsets_to_new_line": dict(offsets4),
+    }
+    result["arguments"]["near_capture_redraw"] = "on"
+    return truth, result["near_tracking"], result
+
+
+def check_xi_(result, nt, truth, geometry, control=None):
+    control = control_from(truth) if control is None else control
+    return J.check_xi(result, nt, truth, geometry, control)
+
+
+def test_xi_a_clean_realignment_passes_and_each_broken_condition_fails(geometry):
+    truth, nt, result = realign_case(geometry)
+    out = check_xi_(result, nt, truth, geometry)
+    assert out["passed"], out["failures"]
+    assert out["installs"] == ["stand", "near_leg"] and out[
+        "longest_install_m"
+    ] == pytest.approx(3.0)
+
+    def rec(rs):
+        return rs["near_tracking"]["realign"]
+
+    def long_install(tr, rs):
+        sys.path.insert(0, str(ROOT / "sim" / "isaac"))
+        import near_tracking as NT
+
+        poses = np.array([[-3.3 + 0.1 * k, 0.0, 0.0] for k in range(71)])  # 7.0 m
+        dirs, curvs = np.ones(71, dtype=np.int8), np.zeros(71)
+        digest = NT.path_digest(poses, dirs, curvs)
+        rec(rs)["installs"].append(
+            {
+                **rec(rs)["installs"][1],
+                "n": 2,
+                "poses": poses.tolist(),
+                "directions": dirs.tolist(),
+                "curvatures_inv_m": curvs.tolist(),
+                "length_m": 7.0,
+                "sha256": digest,
+                "tracker_sha256": digest,
+            }
+        )
+
+    def short_recapture(tr, rs):
+        _, base, obs, offsets = recapture_on_line(along=1.7)
+        assert offsets["length_left_m"] == pytest.approx(0.4, abs=1e-6)
+        rs["near_tracking"]["starts"][0].update(pose=base, observation=obs)
+
+    bad = {
+        "two realignments": lambda tr, rs: rs["near_tracking"].update(realigns=2),
+        "refused capture missing": lambda tr, rs: rs.update(near_capture_refused=[]),
+        "refused capture accepted by its box": lambda tr, rs: (
+            rs["near_capture_refused"][0]["offsets_to_new_line"].update(yaw_rad=0.01)
+            or rs["near_capture_refused"][0].update(
+                dry_run={
+                    "status": "arrived",
+                    "position_error_m": 0.001,
+                    "yaw_error_rad": 0.001,
+                }
+            )
+        ),
+        "no stage-1 refusal": lambda tr, rs: rs["near_capture_refused"][0].update(
+            recoveries=[]
+        ),
+        "stage 1 accepted": lambda tr, rs: rs["near_capture_refused"][0]["recoveries"][
+            0
+        ].update(accepted=True),
+        "stage 1 in a redraw-off run": lambda tr, rs: rs["arguments"].update(
+            near_capture_redraw="off"
+        ),
+        "never re-captured": lambda tr, rs: rec(rs).update(end=None),
+        "re-capture short": lambda tr, rs: rec(rs)["end"].update(length_left_m=1.4),
+        "re-capture not accepted": lambda tr, rs: rs["near_capture"].update(
+            status="pending"
+        ),
+        "install too long": long_install,
+        "install held": lambda tr, rs: rec(rs)["installs"][1].update(
+            slam_mode="holding"
+        ),
+        "install not its content": lambda tr, rs: rec(rs)["installs"][1].update(
+            tracker_sha256="0" * 64
+        ),
+        "installs without the stand": lambda tr, rs: rec(rs).update(
+            installs=rec(rs)["installs"][1:]
+        ),
+        "held recovery": lambda tr, rs: rs.update(
+            failure_reason="near_capture_realign_held_recovery"
+        ),
+        "release missing": lambda tr, rs: rs["slam_summary"]["holds"].pop(),
+        "re-observation invalid": lambda tr, rs: rec(rs).update(
+            capture_status="no_pallet"
+        ),
+        # Codex S4c-3 stage-2 implementation review: an install left out, the re-capture's time
+        # moved before the re-observation, its straight 0.4 m by its acceptance, an observe
+        # replan recorded without its installation.
+        "the near leg left out": lambda tr, rs: rec(rs).update(
+            installs=rec(rs)["installs"][:1]
+        ),
+        "the re-capture's time moved": lambda tr, rs: rec(rs)["end"].update(
+            time_s=float(tr["stamp_s"][156])
+        ),
+        "the re-capture's straight short by its acceptance": lambda tr, rs: rs[
+            "near_capture"
+        ]["offsets_to_new_line"].update(length_left_m=0.4),
+        "an observe replan without its installation": lambda tr, rs: rs.update(
+            observe_replans=[{"time_s": float(tr["stamp_s"][200]), "status": "success"}]
+        ),
+        "no tracker on the re-capture": lambda tr, rs: rs["near_tracking"].update(
+            starts=[]
+        ),
+        "contact during the realignment": lambda tr, rs: tr["base_pose"].__setitem__(
+            (slice(200, 210), 0), -0.85
+        ),
+        "the re-capture came by another follower": lambda tr, rs: rec(rs)["end"].update(
+            observe_tracker_sha256="1" * 64
+        ),
+        # Codex S4c-3 stage-2 implementation review 2: the end and its attempt moved before
+        # the tracker started (a violation at 200 left outside), the start moved after the
+        # refused capture, and a re-capture whose pose and observation give 0.4 m recorded as
+        # its acceptance's 2.05 m.
+        "the re-capture moved before its tracker": lambda tr, rs: (
+            rec(rs)["end"].update(time_s=float(tr["stamp_s"][171]))
+            or rs["observation_attempts"][3].update(
+                t_before_capture_s=float(tr["stamp_s"][171])
+            )
+        ),
+        "the realignment's start moved after its refused capture": lambda tr, rs: rs[
+            "observation_attempts"
+        ][1].update(t_before_capture_s=float(tr["stamp_s"][140])),
+        "the re-capture's pose gives a short straight": short_recapture,
+    }
+    for name, breaking in bad.items():
+        truth, nt, result = realign_case(geometry)
+        breaking(truth, result)
+        assert not check_xi_(result, result["near_tracking"], truth, geometry)[
+            "passed"
+        ], name
+    # A re-capture that does not record the follower it came by cannot be bound to the last
+    # installation (the 2026-10-12 smoke ran a runner from before the field).
+    truth, nt, result = realign_case(geometry)
+    del result["near_tracking"]["realign"]["end"]["observe_tracker_sha256"]
+    with pytest.raises(J.Unverified):
+        check_xi_(result, result["near_tracking"], truth, geometry)
+    # A replan in the record without a usable time is unverified, not outside the span.
+    for replan in (
+        {"status": "success"},
+        {"status": "success", "time_s": math.nan},
+        {"status": "success", "time_s": None},
+    ):
+        truth, nt, result = realign_case(geometry)
+        result["observe_replans"] = [replan]
+        with pytest.raises(J.Unverified):
+            check_xi_(result, result["near_tracking"], truth, geometry)
+    # A redraw-off run needs no stage-1 refusal on its refused capture.
+    truth, nt, result = realign_case(geometry)
+    result["arguments"]["near_capture_redraw"] = "off"
+    result["near_capture_refused"][0]["recoveries"] = []
+    assert check_xi_(result, nt, truth, geometry)["passed"]
+    # No realignment: not applicable; a refused capture without one is unverified.
+    truth, nt, result = realign_case(geometry)
+    result["near_tracking"] = {}
+    result.pop("near_capture_refused")
+    assert check_xi_(result, result["near_tracking"], truth, geometry) == {
+        "applicable": False
+    }
+    result["near_capture_refused"] = [{}]
+    with pytest.raises(J.Unverified):
+        check_xi_(result, result["near_tracking"], truth, geometry)
+
+
+def test_xi_the_realignment_span_is_checked_in_the_truth_record():
+    truth = truth_from(np.linspace(-3.0, -2.9, 400), phase="observe")
+    # A run that ended in its realignment: no approach tick, the span checked to the end.
+    assert J.record_problems(truth, realign_span=(150, 399)) == []
+    assert any("approach or insert" in p for p in J.record_problems(truth))
+    gap = {
+        k: (v if k == "phases" else np.delete(v, 250, axis=0)) for k, v in truth.items()
+    }
+    assert any(
+        "realignment" in p for p in J.record_problems(gap, realign_span=(150, 398))
+    )
+    truth["lift_m"][260] = math.nan
+    assert any(
+        "lift_m over the realignment" in p
+        for p in J.record_problems(truth, realign_span=(150, 399))
+    )
+
+
+def test_ix_after_a_realignment_the_captures_include_the_refused_near_capture():
+    """Plan D8 S4c-3 stage 2: far captures, the refused near capture, the re-observation (far)
+    and the accepted re-capture (near), the tracker on the last; an open realignment has no
+    tracker to compare and is judged, not not_run."""
+    from dataclasses import asdict
+
+    result, near_ = injection_case("mismatch", 0.06, 0.0)
+    caps = result["near_tracking"]["injection"]["captures"]
+    refused = copy.deepcopy(caps[1])
+    reobs = {**copy.deepcopy(caps[0]), "attempt": 3}
+    recapture = {**copy.deepcopy(caps[1]), "attempt": 4}
+    del asdict
+    result["near_tracking"]["injection"]["captures"] = [
+        caps[0],
+        refused,
+        reobs,
+        recapture,
+    ]
+    result["near_capture_refused"] = [{"status": "pending", "refused_attempt": 2}]
+    result["near_tracking"]["realign"] = {"time_s": 10.5}
+    near_["frames"], near_["ticks"] = mismatch_frames()
+    near_["events"] = mismatch_events(near_["frames"])
+    out = ix(result, near_)
+    assert "not far captures" not in " ".join(out["failures"]), out["failures"]
+    result[
+        "near_capture_refused"
+    ] = []  # the same captures without a refused one recorded
+    assert any("not far captures" in f for f in ix(result, near_)["failures"])
+    # Open: no tracker started, the captures end at the re-observation.
+    result, near_ = injection_case("correction", 0.02, 0.0)
+    caps = result["near_tracking"]["injection"]["captures"]
+    result["near_tracking"]["injection"]["captures"] = [
+        caps[0],
+        caps[1],
+        {**copy.deepcopy(caps[0]), "attempt": 3},
+    ]
+    result["near_capture_refused"] = [{"status": "pending", "refused_attempt": 2}]
+    result["near_tracking"]["realign"] = {"time_s": 10.5}
+    result["near_tracking"].pop("start")
+    result["near_capture"] = {"status": "pending"}
+    out = J.check_ix(result, near_, truth_from(np.linspace(-2.0, -1.5, 200)))
+    assert out[
+        "status"
+    ] != "not_run" and "not the realignment's captures" not in " ".join(out["failures"])
+
+
+def test_xi_a_mismatch_injected_re_observation_is_judged_through_its_bias(geometry):
+    """Codex S4c-3 stage-2 implementation review P2-1: before the first tracker the
+    re-observation is biased like every capture -- its record holds the biased observation
+    and the target from it, the attempt keeps the raw one."""
+    from dataclasses import asdict
+
+    sys.path.insert(0, str(ROOT / "sim" / "isaac"))
+    import near_tracking as NT
+
+    truth, nt, result = realign_case(geometry)
+    rec = nt["realign"]
+    raw = pocket_observation(x=1.6)
+    biased = NT.biased_observation(raw, 0.6, 0.0, -0.05)
+    rec["observation"] = asdict(biased)
+    rec["target"] = J._site_from_observation(
+        rec["observation"], rec["capture_base"], 0.6
+    ).tolist()
+    rec["planned_target"] = list(rec["target"])
+    nt["injection"] = {
+        "kind": "mismatch",
+        "lateral_m": 0.0,
+        "yaw_rad": -0.05,
+        "drop_from_m": None,
+        "captures": [{"attempt": k} for k in (1, 2, 3, 4)],
+    }
+    out = check_xi_(result, nt, truth, geometry)
+    assert out["passed"], out["failures"]
+    nt["injection"]["captures"] = [
+        {"attempt": k} for k in (1, 2, 4)
+    ]  # attempt 3 not biased
+    assert not check_xi_(result, nt, truth, geometry)["passed"]

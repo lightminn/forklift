@@ -505,7 +505,7 @@ def test_d8b_custom_cruise_drives_the_straight_but_not_the_acceptance_dry_run() 
     assert "cruise_speed_mps=speeds[\"approach\"])" in source[acceptance:acceptance + 200]
     dry = source.index("acceptance_config,\n                                            rear,\n")
     driven = source.index("state[\"near_capture\"][\"dry_run_driven\"] = asdict(bicycle_rollout(")
-    tracker = source.index("approach_config,\n                                    )\n")
+    tracker = source.index("approach_config,\n                                        )\n")
     assert acceptance < dry < driven < tracker
 
 
@@ -705,9 +705,15 @@ def test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_captu
     assert retry < tick_fn.index("'event': 'terminal_standing'")
     retry_fn = functions["start_pickup_retry"]
     order = ["near['retries'] = near.get('retries', 0) + 1", "near['tracker'] = None",
-             "slam['tracker'].release(", "obstacle['layer'].refresh(", "carried(obstacle['pickup_estimate'])",
-             "state.pop('near_capture')", "near['retry_stand'] = True", "transition('observe', now_s)"]
+             "state.pop('near_capture')", "release_and_stand(now_s, 'release_pickup_retry')",
+             "transition('observe', now_s)"]
     positions = [retry_fn.index(o) for o in order]
+    assert positions == sorted(positions), order
+    # The release and the stand, shared with the S4c-3 realignment.
+    shared = functions["release_and_stand"]
+    order = ["slam['tracker'].release(", "obstacle['layer'].refresh(", "carried(obstacle['pickup_estimate'])",
+             "near['retry_stand'] = True"]
+    positions = [shared.index(o) for o in order]
     assert positions == sorted(positions), order
     assert "near['mismatch'] = near['unbounded'] = False" in retry_fn
     build_fn = functions["build_near_tracker"]
@@ -717,17 +723,18 @@ def test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_captu
     window = source[stand : stand + 900]
     assert 'tracking = replace(tracking, status="arrived", speed_mps=0.0)' in window
     assert "and not retry_stand_" in window
-    seen = source.index("Plan D8 S4c-2: the re-observation must see the pallet")
-    assert 'require(False, "near_field_retry_no_detection")' in source[seen : seen + 700]
+    seen = source.index("Plan D8 S4c-2 / S4c-3: the re-observation must see the pallet")
+    assert '"near_field_retry_no_detection" if stand_key_ == "retry"' in source[seen : seen + 900]
+    assert "require(False, reason_)" in source[seen : seen + 900]
     assert source.index("detection = detect_pockets(detector_input, prior, params)") < seen
     # What (x) judges by: each frame's hold, the re-projection, and the re-observation as
     # placed with the target the planner used.
     assert "'episode': near['episode']" in functions["feed_near_frame"]
-    assert "reprojected=reprojected_" in retry_fn and "reprojected_ = {" in retry_fn
-    assert retry_fn.index("applied_before_ = [") < retry_fn.index("slam['tracker'].release(")
-    placed = source.index("Plan D8 S4c-2: the re-observation as placed and the target it gives.")
+    assert "'reprojected': reprojected_" in shared and "reprojected_ = {" in shared
+    assert shared.index("applied_before_ = [") < shared.index("slam['tracker'].release(")
+    placed = source.index("Plan D8 S4c-2 / S4c-3: the re-observation as placed and its target.")
     assert "capture_base=" in source[placed : placed + 500] and "target=[target_pickup.x_m" in source[placed : placed + 500]
-    assert source.index('state["near_tracking"]["retry"]["planned_target"] = [') > source.index(
+    assert source.index('state["near_tracking"][stand_key_]["planned_target"] = [') > source.index(
         "planning_pickup, state[\"planning_target_source\"] = ("
     )
 
@@ -809,7 +816,7 @@ def test_s4c3_stage_one_redraws_a_refused_near_capture_before_ending() -> None:
     window = source[branch - 2500 : branch + 3500]
     assert window.index(
         'refusal = f"near_capture_misaligned:{offsets}"'
-    ) < window.index("if straight is None and near is not None:")
+    ) < window.index('if straight is None and near is not None and args.near_capture_redraw == "on":')
     assert 'refusal = f"near_capture_misaligned:dry_run:{asdict(dry)}"' in window
     assert window.index("near_capture_redraw(") < window.index(
         "require(straight is not None, refusal)"
@@ -826,3 +833,38 @@ def test_s4c3_stage_one_redraws_a_refused_near_capture_before_ending() -> None:
         '"paths0": {name_: near_tracking.path_digest(*trackers[name_].path_arrays())'
         in source
     )
+
+
+def test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install() -> None:
+    """Plan D8 S4c-3 stage 2: a near capture refused by its acceptance and stage 1 realigns once
+    per pickup (no retry event or count, the refused capture kept apart), on the release-and-
+    stand shared with the S4c-2 retry; every observe installation in the realignment is
+    recorded and capped, a held recovery ends the run, and the re-capture keeps 1.5 m."""
+    import ast
+
+    source = SCRIPT.read_text()
+    tree = ast.parse(source)
+    functions = {n.name: ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    shared = functions["release_and_stand"]
+    for needed in ("slam['tracker'].release(", "obstacle['layer'].refresh(", "carried(pocket['planning_pickup'])",
+                   "near['retry_stand'] = True", "'applied_before': applied_before_"):
+        assert needed in shared, needed
+    assert "release_and_stand(now_s, 'release_pickup_retry')" in functions["start_pickup_retry"]
+    realign = functions["start_near_realign"]
+    assert "release_and_stand(now_s, 'release_near_realign')" in realign
+    for absent in ("retry_start", "near['retries']", "near['tracker'] = None"):
+        assert absent not in realign, absent
+    assert realign.index("state['near_capture']['refused_attempt'] = attempt_") < realign.index(
+        "state.setdefault('near_capture_refused', [])")
+    assert "realign_install('stand')" in realign
+    install = functions["realign_install"]
+    assert "near_tracking.REALIGN_MAX_LENGTH_M" in install and "'slam_mode': slam['tracker'].mode" in install
+    for site in ("near_leg", "observe_replan", "observe_candidate", "backoff", "obstacle_replan"):
+        assert f'realign_install("{site}")' in source, site
+    assert source.count('"near_capture_realign_held_recovery"') == 2
+    branch = source.index("Plan D8 S4c-3 stage 2: once per pickup, instead of ending.")
+    window = source[branch - 1500 : branch + 600]
+    assert 'state["near_tracking"].get("realigns", 0) == 0' in window
+    assert window.index("near_tracking.REALIGN_MIN_LEFT_M") < window.index("start_near_realign(t, attempt_number)")
+    assert window.index("start_near_realign(t, attempt_number)") < window.index("require(straight is not None, refusal)")
+    assert 'if straight is None and near is not None and args.near_capture_redraw == "on":' in source

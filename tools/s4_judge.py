@@ -94,6 +94,10 @@ STAND_YAW_RATE_RPS = 0.001  # ... and its mean yaw rate
 STAND_WINDOW_S = 0.1
 
 
+class _NoTracker(Exception):
+    """(ix): the injection's tracker never started (plan D8 S4c-3, an open realignment)."""
+
+
 class _SkipEpisode(Exception):
     """A mismatch run: the anchor episode's (i)-(v) and (viii) are not applied."""
 
@@ -168,8 +172,11 @@ def tick_index(t: np.ndarray, time_s, what: str) -> int:
     return i
 
 
-def record_problems(truth: dict, retry_spans=(), open_retry: bool = False) -> list[str]:
-    """Why the truth record cannot carry the judgement over the approach and insertion."""
+def record_problems(
+    truth: dict, retry_spans=(), open_retry: bool = False, realign_span=None
+) -> list[str]:
+    """Why the truth record cannot carry the judgement over the approach and insertion (and
+    over a realignment, plan D8 S4c-3 stage 2: realign_span = (first, last) truth ticks)."""
     problems = []
     keys = (
         "stamp_s",
@@ -189,8 +196,22 @@ def record_problems(truth: dict, retry_spans=(), open_retry: bool = False) -> li
     t = np.asarray(truth["stamp_s"], dtype=float)
     if n < 2 or not np.all(np.isfinite(t)) or np.any(np.diff(t) <= 0):
         return ["truth stamps are not finite and increasing"]
+    if realign_span is not None:
+        lo_, hi_ = int(realign_span[0]), int(realign_span[1])
+        if not 0 <= lo_ <= hi_ < n:
+            return ["the realignment is not inside the truth record"]
+        span_r = slice(lo_, hi_ + 1)
+        if np.any(np.abs(np.diff(t[span_r]) - TICK_S) > 0.05 * TICK_S):
+            problems.append(
+                "the truth ticks are not contiguous at 120 Hz over the realignment"
+            )
+        for key in ("base_pose", "pallet_pose", "lift_m", "applied_speed_mps"):
+            if not np.all(np.isfinite(np.asarray(truth[key], dtype=float)[span_r])):
+                problems.append(f"non-finite {key} over the realignment")
     ticks = checked_ticks(truth)
     if not len(ticks):
+        if realign_span is not None:
+            return problems  # a run that ended in its realignment: no approach to check
         return ["no approach or insert tick in the truth record"]
     # One tick past the last, when recorded: the command given at the last tick. A run
     # that ends on a near-field terminal stop or at the S4a-1 approach end records nothing
@@ -1614,6 +1635,7 @@ def check_ix(
     t = np.asarray(truth["stamp_s"], dtype=float)
     events = near.get("events") or []
     outcome = nt.get("outcome")
+    starts_ = nt.get("starts") or ([nt["start"]] if nt.get("start") else [])
 
     def done(status):
         return {
@@ -1637,9 +1659,29 @@ def check_ix(
             depth = float(result["geometry"]["pallet_depth_m"])
             captures = inj["captures"]
             phases = [c["phase"] for c in captures]
-            if phases.count("near") != 1 or phases[-1] != "near" or "far" not in phases:
+            # Only refused captures the injection reached count (a refusal after the first tracker
+            # -- in a retry episode -- was never biased; Codex S4c-3 stage-2 review P2-5).
+            injected_attempts = {c.get("attempt") for c in captures}
+            refused_near = sum(
+                1
+                for c in result.get("near_capture_refused") or []
+                if c.get("refused_attempt") in injected_attempts
+            )
+            if nt.get("realign") is not None and not starts_:
+                # Plan D8 S4c-3: a run that ended in its realignment -- far captures, the
+                # refused near capture(s), and what followed it.
+                if phases.count("near") < refused_near or "far" not in phases:
+                    failures.append(
+                        f"captures {phases}: not the realignment's captures"
+                    )
+            elif (
+                phases.count("near") != 1 + refused_near
+                or phases[-1] != "near"
+                or "far" not in phases
+            ):
                 failures.append(
                     f"captures {phases}: not far captures then one near capture"
+                    + (f" after {refused_near} refused" if refused_near else "")
                 )
             for c in captures:
                 base = tuple(require_shape("capture base", c["capture_base"], (3,)))
@@ -1705,6 +1747,8 @@ def check_ix(
                     )
             # A retried run's record keeps the last episode's start; the injection's
             # tracker is the first episode's (Codex S4c-2 implementation review P2).
+            if not starts_:
+                raise _NoTracker
             start_obs = (start if start is not None else nt["start"])["observation"]
             if not _same_observation(
                 start_obs,
@@ -1714,13 +1758,15 @@ def check_ix(
                 failures.append(
                     "the tracker did not start from the near capture's observation"
                 )
+        except _NoTracker:
+            pass  # Plan D8 S4c-3: the run ended in its realignment, no tracker started
         except (KeyError, TypeError, ValueError, IndexError) as exc:
             raise Unverified(f"the injection record is incomplete ({exc!r})") from exc
     if kind == "correction":
         first_near = (
             result.get("near_capture_history") or [result.get("near_capture") or {}]
         )[0]
-        if (first_near or {}).get("status") != "done":
+        if (first_near or {}).get("status") != "done" and nt.get("realign") is None:
             return done(
                 "not_run"
             )  # the first acceptance refused: an injection design error
@@ -1987,6 +2033,14 @@ def s4c_outcome(
         return {"group": group, "status": "not_run"}
     no_contact = contacts == [] and bool(vi) and vi["contact"]["passed"]
     ok = verdict == "pass" and ix["status"] == "pass" and no_contact
+    if (checks.get("xi") or {}).get("applicable"):
+        # Plan D8 S4c-3 stage 2: a realignment -- (xi) and the mission complete.
+        ok = (
+            ok
+            and checks["xi"]["passed"]
+            and result.get("success") is True
+            and result.get("phase") == "complete"
+        )
     if "x" in checks:
         # Plan D8 S4c-2: a retried pickup -- the retry, every episode and the mission complete.
         ok = (
@@ -2111,6 +2165,354 @@ def split_episodes(near: dict, nt: dict) -> list[dict]:
     return views
 
 
+def _span_checks(
+    result: dict, truth: dict, geometry, i_from: int, i_to: int, what: str
+) -> list[str]:
+    """Over the ticks i_from..i_to (a retry or a realignment): no fork, heel or carriage box
+    sharing volume with the pallet, and no unpermitted entry in a complete permission record
+    (plan D8 S4c-2 (x), shared with S4c-3 (xi))."""
+    t = np.asarray(truth["stamp_s"], dtype=float)
+    failures = []
+    base = np.asarray(truth["base_pose"], dtype=float)
+    pallet = np.asarray(truth["pallet_pose"], dtype=float)
+    lift = np.asarray(truth["lift_m"], dtype=float)
+    boxes = tuple(geometry.fork_boxes) + tuple(geometry.carriage_boxes)
+    if not all(np.all(np.isfinite(a[i_from : i_to + 1])) for a in (base, pallet, lift)):
+        raise Unverified(f"non-finite truth over {what}")
+    touching = [
+        float(t[i])
+        for i in range(i_from, i_to + 1)
+        if geometry.forbidden_contacts(
+            base[i, :3],
+            base[i, 3:],
+            float(lift[i]),
+            pallet[i, :3],
+            pallet[i, 3:],
+            clearance_m=0.0,
+            boxes=boxes,
+        )
+    ]
+    if touching:
+        failures.append(
+            f"the truck touched the pallet during {what} ({len(touching)} ticks)"
+        )
+    layer = result.get("obstacle_layer")
+    if (
+        layer is None
+        or "unpermitted" not in layer
+        or "unpermitted_entries" not in layer
+    ):
+        raise Unverified(f"no permission record to judge {what} by")
+    listed = layer["unpermitted"]
+    total = require_count("the unpermitted entries", layer["unpermitted_entries"])
+    # Every kept entry placed in time before any is filtered out (Codex S4c-2 implementation
+    # review 2 P2: a missing or NaN time dropped the entry silently).
+    times = [
+        float(require_shape("an unpermitted entry's time", u.get("time_s"), ()))
+        for u in listed
+    ]
+    t_end = float(t[i_to]) + TIME_TOL_S
+    # The runner keeps the first 50 entries: complete over the retry only when nothing was cut
+    # or the last kept one is after it (Codex S4c-2 implementation review P2).
+    if total < len(listed) or (
+        total > len(listed) and not (times and times[-1] > t_end)
+    ):
+        raise Unverified(
+            f"the permission record is cut ({len(listed)} of {total}) before {what} ends"
+        )
+    unpermitted = [
+        u
+        for u, at_ in zip(listed, times, strict=True)
+        if float(t[i_from]) - TIME_TOL_S <= at_ <= t_end
+    ]
+    if unpermitted:
+        failures.append(f"{len(unpermitted)} unpermitted entries during {what}")
+    return failures
+
+
+def _release_checks(
+    record: dict, result: dict, at: float, event: str, jump, what: str
+) -> list[str]:
+    """The release of a retry or a realignment as the plan asks: the hold record's release
+    (event) at that time with the record's jump, the frame change the one between the
+    recorded estimates and its turn the yaw jump, and the grid re-projected on T composed
+    with the correction before (plan D8 S4c-2 (x), shared with S4c-3 (xi))."""
+    failures = []
+    layer = result.get("obstacle_layer") or {}
+    # The release and the re-projection as the plan asks (Codex S4c-2 implementation review
+    # P2): the hold record's release at the retry with the same jump, the frame change the
+    # one between the recorded estimates, its turn the yaw jump, and the grid re-projected.
+    from forklift_core.localization.slam_pose import compose, invert
+
+    try:
+        before = tuple(
+            require_finite("the estimate before", record["rear_before"], size=3)
+        )
+        after = tuple(
+            require_finite("the estimate after", record["rear_after"], size=3)
+        )
+        change = tuple(
+            require_finite("the frame change", record["frame_change"], size=3)
+        )
+        holds = (result.get("slam_summary") or {})["holds"]
+    except (KeyError, TypeError) as exc:
+        raise Unverified(f"the release record is incomplete ({exc!r})") from exc
+    releases = [h for h in holds if h.get("event") == event]
+    if (
+        len(releases) != 1
+        or not _same(releases[0].get("time_s"), at, TIME_TOL_S)
+        or not _same(
+            [releases[0].get("jump_m"), releases[0].get("jump_rad")], list(jump), 0.0
+        )
+    ):
+        failures.append(f"the SLAM record has no release at {what} with its jump")
+    if not _same(change, compose(after, invert(before)), 1e-9) or not _same(
+        abs(math.atan2(math.sin(change[2]), math.cos(change[2]))), float(jump[1]), 1e-9
+    ):
+        failures.append("the frame change is not the released estimates' change")
+    # The grid re-projected with the released correction: applied_new = T o applied_old, as
+    # every estimate moves by T (Codex S4c-2 implementation review 2 P2).
+    reproj = record.get("reprojected")
+    try:
+        applied_before = require_finite(
+            "the correction before the release", record["applied_before"], size=3
+        )
+    except (KeyError, TypeError) as exc:
+        raise Unverified(f"the release record is incomplete ({exc!r})") from exc
+    if not isinstance(reproj, dict):
+        failures.append("the grid was not re-projected at the release")
+    else:
+        try:
+            version = require_count("the grid version", reproj["version"])
+            count = require_count("the re-projections", reproj["reprojections"])
+            applied = require_finite("the grid's correction", reproj["applied"], size=3)
+            run_count = require_count(
+                "the run's re-projections", layer["reprojections"]
+            )
+        except (KeyError, TypeError) as exc:
+            raise Unverified(
+                f"the re-projection record is incomplete ({exc!r})"
+            ) from exc
+        if (
+            version < 1
+            or not 1 <= count <= run_count
+            or not _same(applied, compose(change, tuple(applied_before)), 1e-9)
+        ):
+            failures.append(
+                "the grid was not re-projected with the released correction"
+            )
+    return failures
+
+
+def _reobservation_checks(
+    record: dict,
+    result: dict,
+    truth: dict,
+    i_from: int,
+    attempt,
+    seen_valid: bool,
+    control,
+    target_of,
+    what: str,
+    observation_numbers=None,
+) -> tuple[list[str], dict]:
+    """A retry's or a realignment's re-observation (plan D8 S4c-2 (x) v3, shared with S4c-3
+    (xi)): a valid one as placed gives the target the planner used (target_of(observation,
+    base, depth) is the target the rules expect), and it was taken in place and bound to the
+    truth by its control sample -- see the comment below. Returns (failures, report)."""
+    t = np.asarray(truth["stamp_s"], dtype=float)
+    base = np.asarray(truth["base_pose"], dtype=float)
+    attempts = result.get("observation_attempts") or []
+    failures, report = [], {}
+    # The re-observation as placed gives the target the planner used (a valid one only).
+    if seen_valid:
+        try:
+            obs = record["observation"]
+            cbase = tuple(
+                require_finite(
+                    "the re-observation base", record["capture_base"], size=3
+                )
+            )
+            target = require_finite(
+                "the re-observation target", record["target"], size=3
+            )
+            planned = require_finite(
+                "the target planned", record["planned_target"], size=3
+            )
+            depth = float(result["geometry"]["pallet_depth_m"])
+        except (KeyError, TypeError) as exc:
+            raise Unverified(
+                f"the re-observation record is incomplete ({exc!r})"
+            ) from exc
+        seen = attempts[attempt - 1].get("pocket_observation") or {}
+        # observation_numbers(raw): the observation the rules expect from the attempt's raw one
+        # (a mismatch injection biases it, plan D8 S4c-3 (xi)); None: the raw one itself.
+        same_obs = (
+            _same_observation(obs, seen, tol=0.0)
+            if observation_numbers is None
+            else _same_observation(obs, seen, observation_numbers(seen), tol=1e-9)
+        )
+        if (
+            not same_obs
+            or not _same(target, target_of(obs, cbase, depth))
+            or not _same(planned, target)
+        ):
+            failures.append(
+                f"the plan after {what} is not the re-observation's own target"
+            )
+    # In place (X_RULES v3, Codex S4c-3 stage-2 reviews): the re-observation's control sample
+    # (capture_control: its end time, the control estimate and the truth then) binds the
+    # capture to the truth record -- no command from the retry to the capture's end, the truck
+    # still from the retry to the tick before the command first rises after it (the record's
+    # end when it never does), the accepted truth pose and the sample's truth the truth at
+    # that tick, the capture pose and the SLAM error the sample's, and, when the control record
+    # has a row of that very instant, the sample's estimate that row. With no re-observation
+    # the stand runs to the record's end. (No bound between the rows around the instant: the
+    # odometry noise moves a standing estimate out and back between them -- Codex x-v3
+    # review 4 -- and the capture has no control rows to bound it by.)
+    off_x = abs(float((result.get("arguments") or {}).get("rear_axle_offset_m", -0.34)))
+    applied_ = np.asarray(truth["applied_speed_mps"], dtype=float)
+    cc = None
+    if attempt is not None:
+        try:
+            t_cap0 = float(
+                require_shape(
+                    "the re-observation's start",
+                    attempts[attempt - 1]["t_before_capture_s"],
+                    (),
+                )
+            )
+            cc = attempts[attempt - 1]["capture_control"]
+            t_ce = float(require_shape("the re-observation's end", cc["time_s"], ()))
+            cc_est = require_finite(
+                "the re-observation's estimate", cc["control_rear"], size=3
+            )
+            cc_truth = require_finite(
+                "the re-observation's truth", cc["truth_rear"], size=3
+            )
+        except (KeyError, TypeError) as exc:
+            raise Unverified(
+                f"the re-observation's control sample is not recorded ({exc!r})"
+            ) from exc
+        i_ce = tick_index(t, t_ce, "the re-observation's end")
+        if not (t[i_from] - TIME_TOL_S <= t_cap0 <= t_ce + TIME_TOL_S):
+            raise Unverified(
+                f"the re-observation is not after {what} in the truth record"
+            )
+        # The sample's time is the capture's own end: the capture's elapsed physics time on
+        # the same clock (Codex S4c-3 x-v3 review 3 P2-1: a sample dated inside the capture
+        # cut the stand short).
+        try:
+            diag = attempts[attempt - 1]["capture_diagnostics"]
+            elapsed = float(
+                require_shape("the capture's end", diag["physics_time_after_s"], ())
+            ) - float(
+                require_shape("the capture's start", diag["capture_start_time_s"], ())
+            )
+        except (KeyError, TypeError) as exc:
+            raise Unverified(f"the capture's times are not recorded ({exc!r})") from exc
+        if abs(t_ce - (t_cap0 + elapsed)) > 1e-6:
+            failures.append(
+                "the re-observation's control sample is not at the capture's end"
+            )
+    else:
+        i_ce = len(t) - 1
+    if np.any(applied_[i_from : i_ce + 1] != 0.0):
+        failures.append(
+            f"a command was given between {what} and the re-observation's end"
+        )
+    moving = np.nonzero(applied_[i_ce + 1 :] != 0.0)[0]
+    i_stand = i_ce + int(moving[0]) if len(moving) else len(t) - 1
+    rear_s = rear_axle(base[i_from : i_stand + 1], off_x)
+    yaws_s = np.unwrap([yaw_of(base[j]) for j in range(i_from, i_stand + 1)])
+    travel_s = (
+        float(np.sum(np.hypot(*np.diff(rear_s, axis=0).T))) if len(rear_s) > 1 else 0.0
+    )
+    turn_s = float(np.sum(np.abs(np.diff(yaws_s)))) if len(yaws_s) > 1 else 0.0
+    if travel_s > STAND_M or turn_s > STAND_RAD:
+        failures.append(
+            f"the re-observation was not taken in place ({1e3 * travel_s:.2f} mm, "
+            f"{1e3 * turn_s:.2f} mrad over the stand)"
+        )
+    report.update(stand_travel_m=travel_s, stand_turn_rad=turn_s)
+    if cc is not None:
+        try:
+            accepted = attempts[attempt - 1]["accepted_pose"]
+            pos = require_finite(
+                "the re-observation's accepted position", accepted[0], size=3
+            )
+            quat = require_finite(
+                "the re-observation's accepted orientation", accepted[1], size=4
+            )
+            err = attempts[attempt - 1]["slam_error"]
+            err_v = require_finite(
+                "the re-observation's SLAM error",
+                [err["along_m"], err["lateral_m"], err["yaw_rad"]],
+                size=3,
+            )
+        except (KeyError, TypeError, IndexError) as exc:
+            raise Unverified(
+                f"the re-observation's pose is not recorded ({exc!r})"
+            ) from exc
+
+        def wrapped(a):
+            return math.atan2(math.sin(a), math.cos(a))
+
+        truth_yaw = yaw_of(np.concatenate((pos, quat)))
+        # The runner's rear axle: the base less the offset along the heading (yaw only -- a
+        # pitched pose is not rotated, Codex S4c-3 x-v3 review 3 P2-3).
+        tick_yaw = yaw_of(base[i_ce])
+        tick_rear = base[i_ce, :2] - off_x * np.array(
+            [math.cos(tick_yaw), math.sin(tick_yaw)]
+        )
+        if not (
+            _same(pos[:2], base[i_ce, :2], 1e-6)
+            and abs(wrapped(truth_yaw - yaw_of(base[i_ce]))) <= 1e-6
+            and _same(cc_truth[:2], tick_rear, 1e-6)
+            and abs(wrapped(cc_truth[2] - yaw_of(base[i_ce]))) <= 1e-6
+        ):
+            failures.append("the re-observation's truth is not the truth at its end")
+        c_, s_ = math.cos(cc_truth[2]), math.sin(cc_truth[2])
+        d_ = cc_est[:2] - cc_truth[:2]
+        own_err = [
+            c_ * d_[0] + s_ * d_[1],
+            -s_ * d_[0] + c_ * d_[1],
+            wrapped(cc_est[2] - cc_truth[2]),
+        ]
+        own_base = [
+            cc_est[0] + off_x * math.cos(cc_est[2]),
+            cc_est[1] + off_x * math.sin(cc_est[2]),
+            cc_est[2],
+        ]
+        # 1e-6: the runner's error comes from the float32 truth quaternion by its own operation
+        # order (the first real run differed by 1.8e-9 rad from the rebuilt value).
+        if not _same(err_v, own_err, 1e-6) or (
+            seen_valid and not _same(cbase, own_base, 1e-9)
+        ):
+            failures.append(
+                "the re-observation's capture pose or SLAM error is not its control sample"
+            )
+        if control is None:
+            raise Unverified(
+                "no control record to bind the re-observation's estimate to"
+            )
+        rows = np.asarray(control, dtype=float)
+        require_finite("the control record", rows)
+        same_time = rows[np.abs(rows[:, 0] - t_ce) <= TIME_TOL_S]
+        if len(same_time):
+            # A control row of that very instant: the sample must be it (Codex S4c-3 x-v3
+            # review 3 P2-2 -- a later correction widened the bracket).
+            r0 = same_time[-1]
+            if not (
+                _same(cc_est[:2], r0[1:3], 1e-9)
+                and abs(wrapped(cc_est[2] - r0[3])) <= 1e-9
+            ):
+                failures.append(
+                    "the re-observation's estimate is not the control row of its instant"
+                )
+    return failures, report
+
+
 def check_x(
     result: dict,
     near: dict,
@@ -2200,302 +2602,23 @@ def check_x(
         else len(t) - 1
     )
     base = np.asarray(truth["base_pose"], dtype=float)
-    pallet = np.asarray(truth["pallet_pose"], dtype=float)
-    lift = np.asarray(truth["lift_m"], dtype=float)
-    boxes = tuple(geometry.fork_boxes) + tuple(geometry.carriage_boxes)
-    if not all(
-        np.all(np.isfinite(a[i_retry : i_next + 1])) for a in (base, pallet, lift)
-    ):
-        raise Unverified("non-finite truth over the retry")
-    touching = [
-        float(t[i])
-        for i in range(i_retry, i_next + 1)
-        if geometry.forbidden_contacts(
-            base[i, :3],
-            base[i, 3:],
-            float(lift[i]),
-            pallet[i, :3],
-            pallet[i, 3:],
-            clearance_m=0.0,
-            boxes=boxes,
-        )
-    ]
-    if touching:
-        failures.append(
-            f"the truck touched the pallet during the retry ({len(touching)} ticks)"
-        )
-    layer = result.get("obstacle_layer")
-    if (
-        layer is None
-        or "unpermitted" not in layer
-        or "unpermitted_entries" not in layer
-    ):
-        raise Unverified("no permission record to judge the retry by")
-    listed = layer["unpermitted"]
-    total = require_count("the unpermitted entries", layer["unpermitted_entries"])
-    # Every kept entry placed in time before any is filtered out (Codex S4c-2 implementation
-    # review 2 P2: a missing or NaN time dropped the entry silently).
-    times = [
-        float(require_shape("an unpermitted entry's time", u.get("time_s"), ()))
-        for u in listed
-    ]
-    t_end = float(t[i_next]) + TIME_TOL_S
-    # The runner keeps the first 50 entries: complete over the retry only when nothing was cut
-    # or the last kept one is after it (Codex S4c-2 implementation review P2).
-    if total < len(listed) or (
-        total > len(listed) and not (times and times[-1] > t_end)
-    ):
-        raise Unverified(
-            f"the permission record is cut ({len(listed)} of {total}) before the retry ends"
-        )
-    unpermitted = [
-        u
-        for u, at_ in zip(listed, times, strict=True)
-        if float(t[i_retry]) - TIME_TOL_S <= at_ <= t_end
-    ]
-    if unpermitted:
-        failures.append(f"{len(unpermitted)} unpermitted entries during the retry")
-    # The release and the re-projection as the plan asks (Codex S4c-2 implementation review
-    # P2): the hold record's release at the retry with the same jump, the frame change the
-    # one between the recorded estimates, its turn the yaw jump, and the grid re-projected.
-    from forklift_core.localization.slam_pose import compose, invert
-
-    try:
-        before = tuple(
-            require_finite("the estimate before", record["rear_before"], size=3)
-        )
-        after = tuple(
-            require_finite("the estimate after", record["rear_after"], size=3)
-        )
-        change = tuple(
-            require_finite("the frame change", record["frame_change"], size=3)
-        )
-        holds = (result.get("slam_summary") or {})["holds"]
-    except (KeyError, TypeError) as exc:
-        raise Unverified(f"the release record is incomplete ({exc!r})") from exc
-    releases = [h for h in holds if h.get("event") == "release_pickup_retry"]
-    if (
-        len(releases) != 1
-        or not _same(releases[0].get("time_s"), at, TIME_TOL_S)
-        or not _same(
-            [releases[0].get("jump_m"), releases[0].get("jump_rad")], list(jump), 0.0
-        )
-    ):
-        failures.append("the SLAM record has no release at the retry with its jump")
-    if not _same(change, compose(after, invert(before)), 1e-9) or not _same(
-        abs(math.atan2(math.sin(change[2]), math.cos(change[2]))), float(jump[1]), 1e-9
-    ):
-        failures.append("the frame change is not the released estimates' change")
-    # The grid re-projected with the released correction: applied_new = T o applied_old, as
-    # every estimate moves by T (Codex S4c-2 implementation review 2 P2).
-    reproj = record.get("reprojected")
-    try:
-        applied_before = require_finite(
-            "the correction before the release", record["applied_before"], size=3
-        )
-    except (KeyError, TypeError) as exc:
-        raise Unverified(f"the release record is incomplete ({exc!r})") from exc
-    if not isinstance(reproj, dict):
-        failures.append("the grid was not re-projected at the release")
-    else:
-        try:
-            version = require_count("the grid version", reproj["version"])
-            count = require_count("the re-projections", reproj["reprojections"])
-            applied = require_finite("the grid's correction", reproj["applied"], size=3)
-            run_count = require_count(
-                "the run's re-projections", layer["reprojections"]
-            )
-        except (KeyError, TypeError) as exc:
-            raise Unverified(
-                f"the re-projection record is incomplete ({exc!r})"
-            ) from exc
-        if (
-            version < 1
-            or not 1 <= count <= run_count
-            or not _same(applied, compose(change, tuple(applied_before)), 1e-9)
-        ):
-            failures.append(
-                "the grid was not re-projected with the released correction"
-            )
-    # The re-observation as placed gives the target the planner used (a valid one only).
-    if seen_valid:
-        try:
-            obs = record["observation"]
-            cbase = tuple(
-                require_finite(
-                    "the re-observation base", record["capture_base"], size=3
-                )
-            )
-            target = require_finite(
-                "the re-observation target", record["target"], size=3
-            )
-            planned = require_finite(
-                "the target planned", record["planned_target"], size=3
-            )
-            depth = float(result["geometry"]["pallet_depth_m"])
-        except (KeyError, TypeError) as exc:
-            raise Unverified(
-                f"the re-observation record is incomplete ({exc!r})"
-            ) from exc
-        seen = attempts[attempt - 1].get("pocket_observation") or {}
-        if (
-            not _same_observation(obs, seen, tol=0.0)
-            or not _same(target, _site_from_observation(obs, cbase, depth))
-            or not _same(planned, target)
-        ):
-            failures.append(
-                "the plan after the retry is not the re-observation's own target"
-            )
-    # In place (X_RULES v3, Codex S4c-3 stage-2 reviews): the re-observation's control sample
-    # (capture_control: its end time, the control estimate and the truth then) binds the
-    # capture to the truth record -- no command from the retry to the capture's end, the truck
-    # still from the retry to the tick before the command first rises after it (the record's
-    # end when it never does), the accepted truth pose and the sample's truth the truth at
-    # that tick, the capture pose and the SLAM error the sample's, and, when the control record
-    # has a row of that very instant, the sample's estimate that row. With no re-observation
-    # the stand runs to the record's end. (No bound between the rows around the instant: the
-    # odometry noise moves a standing estimate out and back between them -- Codex x-v3
-    # review 4 -- and the capture has no control rows to bound it by.)
-    off_x = abs(float((result.get("arguments") or {}).get("rear_axle_offset_m", -0.34)))
-    applied_ = np.asarray(truth["applied_speed_mps"], dtype=float)
-    cc = None
-    if attempt is not None:
-        try:
-            t_cap0 = float(
-                require_shape(
-                    "the re-observation's start",
-                    attempts[attempt - 1]["t_before_capture_s"],
-                    (),
-                )
-            )
-            cc = attempts[attempt - 1]["capture_control"]
-            t_ce = float(require_shape("the re-observation's end", cc["time_s"], ()))
-            cc_est = require_finite(
-                "the re-observation's estimate", cc["control_rear"], size=3
-            )
-            cc_truth = require_finite(
-                "the re-observation's truth", cc["truth_rear"], size=3
-            )
-        except (KeyError, TypeError) as exc:
-            raise Unverified(
-                f"the re-observation's control sample is not recorded ({exc!r})"
-            ) from exc
-        i_ce = tick_index(t, t_ce, "the re-observation's end")
-        if not (t[i_retry] - TIME_TOL_S <= t_cap0 <= t_ce + TIME_TOL_S):
-            raise Unverified(
-                "the re-observation is not after the retry in the truth record"
-            )
-        # The sample's time is the capture's own end: the capture's elapsed physics time on
-        # the same clock (Codex S4c-3 x-v3 review 3 P2-1: a sample dated inside the capture
-        # cut the stand short).
-        try:
-            diag = attempts[attempt - 1]["capture_diagnostics"]
-            elapsed = float(
-                require_shape("the capture's end", diag["physics_time_after_s"], ())
-            ) - float(
-                require_shape("the capture's start", diag["capture_start_time_s"], ())
-            )
-        except (KeyError, TypeError) as exc:
-            raise Unverified(f"the capture's times are not recorded ({exc!r})") from exc
-        if abs(t_ce - (t_cap0 + elapsed)) > 1e-6:
-            failures.append(
-                "the re-observation's control sample is not at the capture's end"
-            )
-    else:
-        i_ce = len(t) - 1
-    if np.any(applied_[i_retry : i_ce + 1] != 0.0):
-        failures.append(
-            "a command was given between the retry and the re-observation's end"
-        )
-    moving = np.nonzero(applied_[i_ce + 1 :] != 0.0)[0]
-    i_stand = i_ce + int(moving[0]) if len(moving) else len(t) - 1
-    rear_s = rear_axle(base[i_retry : i_stand + 1], off_x)
-    yaws_s = np.unwrap([yaw_of(base[j]) for j in range(i_retry, i_stand + 1)])
-    travel_s = (
-        float(np.sum(np.hypot(*np.diff(rear_s, axis=0).T))) if len(rear_s) > 1 else 0.0
+    failures += _span_checks(result, truth, geometry, i_retry, i_next, "the retry")
+    failures += _release_checks(
+        record, result, at, "release_pickup_retry", jump, "the retry"
     )
-    turn_s = float(np.sum(np.abs(np.diff(yaws_s)))) if len(yaws_s) > 1 else 0.0
-    if travel_s > STAND_M or turn_s > STAND_RAD:
-        failures.append(
-            f"the re-observation was not taken in place ({1e3 * travel_s:.2f} mm, "
-            f"{1e3 * turn_s:.2f} mrad over the stand)"
-        )
-    report.update(stand_travel_m=travel_s, stand_turn_rad=turn_s)
-    if cc is not None:
-        try:
-            accepted = attempts[attempt - 1]["accepted_pose"]
-            pos = require_finite(
-                "the re-observation's accepted position", accepted[0], size=3
-            )
-            quat = require_finite(
-                "the re-observation's accepted orientation", accepted[1], size=4
-            )
-            err = attempts[attempt - 1]["slam_error"]
-            err_v = require_finite(
-                "the re-observation's SLAM error",
-                [err["along_m"], err["lateral_m"], err["yaw_rad"]],
-                size=3,
-            )
-        except (KeyError, TypeError, IndexError) as exc:
-            raise Unverified(
-                f"the re-observation's pose is not recorded ({exc!r})"
-            ) from exc
-
-        def wrapped(a):
-            return math.atan2(math.sin(a), math.cos(a))
-
-        truth_yaw = yaw_of(np.concatenate((pos, quat)))
-        # The runner's rear axle: the base less the offset along the heading (yaw only -- a
-        # pitched pose is not rotated, Codex S4c-3 x-v3 review 3 P2-3).
-        tick_yaw = yaw_of(base[i_ce])
-        tick_rear = base[i_ce, :2] - off_x * np.array(
-            [math.cos(tick_yaw), math.sin(tick_yaw)]
-        )
-        if not (
-            _same(pos[:2], base[i_ce, :2], 1e-6)
-            and abs(wrapped(truth_yaw - yaw_of(base[i_ce]))) <= 1e-6
-            and _same(cc_truth[:2], tick_rear, 1e-6)
-            and abs(wrapped(cc_truth[2] - yaw_of(base[i_ce]))) <= 1e-6
-        ):
-            failures.append("the re-observation's truth is not the truth at its end")
-        c_, s_ = math.cos(cc_truth[2]), math.sin(cc_truth[2])
-        d_ = cc_est[:2] - cc_truth[:2]
-        own_err = [
-            c_ * d_[0] + s_ * d_[1],
-            -s_ * d_[0] + c_ * d_[1],
-            wrapped(cc_est[2] - cc_truth[2]),
-        ]
-        own_base = [
-            cc_est[0] + off_x * math.cos(cc_est[2]),
-            cc_est[1] + off_x * math.sin(cc_est[2]),
-            cc_est[2],
-        ]
-        # 1e-6: the runner's error comes from the float32 truth quaternion by its own operation
-        # order (the first real run differed by 1.8e-9 rad from the rebuilt value).
-        if not _same(err_v, own_err, 1e-6) or (
-            seen_valid and not _same(cbase, own_base, 1e-9)
-        ):
-            failures.append(
-                "the re-observation's capture pose or SLAM error is not its control sample"
-            )
-        if control is None:
-            raise Unverified(
-                "no control record to bind the re-observation's estimate to"
-            )
-        rows = np.asarray(control, dtype=float)
-        require_finite("the control record", rows)
-        same_time = rows[np.abs(rows[:, 0] - t_ce) <= TIME_TOL_S]
-        if len(same_time):
-            # A control row of that very instant: the sample must be it (Codex S4c-3 x-v3
-            # review 3 P2-2 -- a later correction widened the bracket).
-            r0 = same_time[-1]
-            if not (
-                _same(cc_est[:2], r0[1:3], 1e-9)
-                and abs(wrapped(cc_est[2] - r0[3])) <= 1e-9
-            ):
-                failures.append(
-                    "the re-observation's estimate is not the control row of its instant"
-                )
+    reob_failures, reob_report = _reobservation_checks(
+        record,
+        result,
+        truth,
+        i_retry,
+        attempt,
+        seen_valid,
+        control,
+        lambda obs, cbase, depth: _site_from_observation(obs, cbase, depth),
+        "the retry",
+    )
+    failures += reob_failures
+    report.update(reob_report)
     rear = rear_axle(
         base, float((result.get("arguments") or {}).get("rear_axle_offset_m", -0.34))
     )
@@ -2641,9 +2764,13 @@ def judge_retried(
     )
     # (v) on one anchor to the insertion end -- or, when the run ended inside its retry, to the
     # record's end, over the whole retry (Codex S4c-2 results review).
+    realign_ = nt.get("realign")
     checks["v"] = check_v(
         truth,
-        float(views[0]["start"]["aligned_s"]),
+        min(  # plan D8 S4c-3: the earliest anchor -- a realignment's refused capture first
+            [float(views[0]["start"]["aligned_s"])]
+            + ([float(realign_["time_s"])] if realign_ is not None else [])
+        ),
         len(t) - 1
         if views[-1]["retry"] is not None
         else (end if end is not None else int(checked_ticks(truth)[-1])),
@@ -2757,6 +2884,9 @@ def check_near_redraw(result: dict, nt: dict) -> dict:
     caps = list(result.get("near_capture_history") or [])
     if result.get("near_capture"):
         caps.append(result["near_capture"])
+    # The refused captures of a realignment keep their refused entries (Codex S4c-3 stage-2
+    # review P2-5: moving them must not hide them).
+    caps += list(result.get("near_capture_refused") or [])
     entries = [
         e for c in caps for e in c.get("recoveries") or [] if e.get("stage") == "redraw"
     ]
@@ -2770,33 +2900,8 @@ def check_near_redraw(result: dict, nt: dict) -> dict:
         )
 
     def refused_first(cap) -> bool:
-        """The near capture's own acceptance refused it (box or dry run) -- with the run's
-        heading box (a smoke may narrow it, plan D8 S4c-3), which the capture records."""
-        try:
-            off = cap["offsets_to_new_line"]
-            lat, yaw, left = (
-                float(require_shape(f"near capture {k}", off[k], ()))
-                for k in ("lateral_m", "yaw_rad", "length_left_m")
-            )
-            box = cap.get("box", {"lateral_m": 0.05, "yaw_rad": 0.05, "length_m": 0.3})
-        except (KeyError, TypeError) as exc:
-            raise Unverified(
-                f"a near capture's offsets are not recorded ({exc!r})"
-            ) from exc
-        if box != {"lateral_m": 0.05, "yaw_rad": box_yaw, "length_m": 0.3}:
-            raise Unverified(f"a near capture's box {box} is not the run's")
-        if abs(lat) > 0.05 or abs(yaw) > box_yaw or left < 0.3:
-            return True
-        dry = cap.get("dry_run")
-        if dry is None:
-            raise Unverified("a near capture inside the box has no dry run")
-        return not (
-            dry.get("status") == "arrived"
-            and float(require_shape("dry run error", dry["position_error_m"], ()))
-            <= 0.006
-            and abs(float(require_shape("dry run yaw", dry["yaw_error_rad"], ())))
-            <= 0.015
-        )
+        """The near capture's own acceptance refused it, with the run's heading box."""
+        return _acceptance_refused(cap, box_yaw)
 
     done = [c for c in caps if c.get("status") == "done"]
     needed = {c.get("near_attempt") for c in done if refused_first(c)}
@@ -3136,6 +3241,449 @@ def check_near_redraw(result: dict, nt: dict) -> dict:
     return {"applicable": True, "failures": failures, "passed": not failures, **report}
 
 
+XI_RULES = "v1"  # plan D8 S4c-3 stage 2 (xi), fixed before the first stage-2 run
+
+
+def check_xi(result: dict, nt: dict, truth: dict, geometry, control) -> dict:
+    """(xi), plan D8 S4c-3 stage 2: the realignment -- once per pickup; its refused capture
+    refused by its own acceptance and (unless the test-only --near-capture-redraw off) by
+    stage 1; the release and re-projection; the re-observation valid, in place and bound to
+    the truth, its target the planned one (a correction injection on that attempt moves it);
+    every observe path installed during it recorded, under 6.0 m and installed while SLAM
+    tracked (no held recovery); the re-capture accepted with at least 1.5 m of straight; over
+    its span (the realignment's tick to the re-capture, or the record's end) no truck box in
+    the pallet and no unpermitted entry. An open realignment (no re-capture) fails."""
+    sys.path.insert(0, str(ROOT / "sim" / "isaac"))
+    import near_tracking as NT
+
+    rec = nt.get("realign")
+    if rec is None:
+        if nt.get("realigns") or result.get("near_capture_refused"):
+            raise Unverified(
+                "a realignment counted or a capture refused without its record"
+            )
+        return {"applicable": False}
+    t = np.asarray(truth["stamp_s"], dtype=float)
+    failures, report = [], {"rules": XI_RULES}
+    args = result.get("arguments") or {}
+    try:
+        at = float(require_shape("the realignment's time", rec["time_s"], ()))
+        refused_attempt = require_count(
+            "the refused capture's attempt", rec["refused_attempt"]
+        )
+        jump = require_finite(
+            "the realignment's release jump", (rec["jump_m"], rec["jump_rad"]), size=2
+        )
+        installs = list(rec["installs"])
+        end = rec["end"]
+        realigns = require_count("the realignments", nt["realigns"])
+    except (KeyError, TypeError) as exc:
+        raise Unverified(f"the realignment record is incomplete ({exc!r})") from exc
+    if realigns != 1:
+        failures.append(f"{realigns} realignments in one pickup")
+    refused = list(result.get("near_capture_refused") or [])
+    caps = [c for c in refused if c.get("refused_attempt") == refused_attempt]
+    if len(refused) != 1 or len(caps) != 1:
+        failures.append("the refused capture is not the realignment's")
+    else:
+        cap = caps[0]
+        box_yaw = float(args.get("near_capture_box_yaw_rad", 0.05))
+        if not _acceptance_refused(cap, box_yaw):
+            failures.append(
+                "the realignment's capture was not refused by its own acceptance"
+            )
+        stage1 = [e for e in cap.get("recoveries") or [] if e.get("stage") == "redraw"]
+        if args.get("near_capture_redraw", "on") == "on":
+            if not (
+                len(stage1) == 1
+                and stage1[0].get("attempt") == refused_attempt
+                and stage1[0].get("accepted") is False
+            ):
+                failures.append("the realignment's capture has no stage-1 refusal")
+        elif stage1:
+            failures.append("stage 1 ran in a --near-capture-redraw off run")
+    i_from = tick_index(t, at, "the realignment")
+    # Its start is the refused capture's own tick (Codex S4c-3 stage-2 implementation review 2
+    # P2-1: a start moved later would leave the span's first ticks unjudged).
+    attempts_ = result.get("observation_attempts") or []
+    if not 1 <= refused_attempt <= len(attempts_):
+        raise Unverified(
+            f"the refused capture's attempt {refused_attempt} is not recorded"
+        )
+    t_refused = float(
+        require_shape(
+            "the refused capture's attempt time",
+            attempts_[refused_attempt - 1].get("t_before_capture_s"),
+            (),
+        )
+    )
+    if not _same(t_refused, at, 1e-9):
+        failures.append("the realignment did not start at its refused capture")
+    recaptured = isinstance(end, dict) and end.get("reason") == "recaptured"
+    if recaptured:
+        try:
+            t_end = float(require_shape("the re-capture's time", end["time_s"], ()))
+            left = float(
+                require_shape("the re-capture's straight", end["length_left_m"], ())
+            )
+            end_attempt = require_count("the re-capture's attempt", end["attempt"])
+        except (KeyError, TypeError) as exc:
+            raise Unverified(f"the re-capture record is incomplete ({exc!r})") from exc
+        i_to = tick_index(t, t_end, "the re-capture")
+        if left < NT.REALIGN_MIN_LEFT_M:
+            failures.append(f"the re-capture kept {left:.3f} m of straight")
+        done = list(result.get("near_capture_history") or []) + (
+            [result["near_capture"]] if result.get("near_capture") else []
+        )
+        accepted_cap = next(
+            (
+                c
+                for c in done
+                if c.get("status") == "done" and c.get("near_attempt") == end_attempt
+            ),
+            None,
+        )
+        if accepted_cap is None or not 1 <= end_attempt <= len(attempts_):
+            failures.append("the re-capture is not an accepted near capture")
+        else:
+            # Its time is its attempt's, after the refusal and the re-observation, and the tracker
+            # started on it then (Codex S4c-3 stage-2 implementation review P2-3, and review 2
+            # P2-1: the tracker's own times too, so the end cannot be moved before them).
+            t_att = float(
+                require_shape(
+                    "the re-capture's attempt time",
+                    attempts_[end_attempt - 1].get("t_before_capture_s"),
+                    (),
+                )
+            )
+            reobs = rec.get("capture_attempt")
+            starts_ = nt.get("starts") or ([nt["start"]] if nt.get("start") else [])
+            start_ = next(
+                (st for st in starts_ if st.get("attempt") == end_attempt), None
+            )
+            if (
+                not _same(t_att, t_end, 1e-9)
+                or not (reobs is not None and refused_attempt < reobs < end_attempt)
+                or start_ is None
+                or not _same(start_.get("built_s", math.nan), t_end, 1e-9)
+                or not _same(start_.get("aligned_s", math.nan), t_att, 1e-9)
+            ):
+                failures.append(
+                    "the re-capture is not its attempt's, after the re-observation, with its tracker"
+                )
+            # Its straight: what the accepting rule recorded -- stage 1's offsets when the re-draw
+            # accepted it, else the capture's own (P2-4: the end record alone could hide 0.4 m).
+            redraws = [
+                e
+                for e in accepted_cap.get("recoveries") or []
+                if e.get("stage") == "redraw" and e.get("accepted") is True
+            ]
+            off_used = (
+                (redraws[-1].get("record") or {}).get("offsets")
+                if redraws
+                else accepted_cap.get("offsets_to_new_line")
+            ) or {}
+            used_left = float(
+                require_shape(
+                    "the accepted straight's length", off_used.get("length_left_m"), ()
+                )
+            )
+            if not _same(used_left, left, 1e-6) or used_left < NT.REALIGN_MIN_LEFT_M:
+                failures.append(
+                    f"the re-capture's straight is {used_left:.3f} m by its acceptance, recorded {left:.3f} m"
+                )
+            if start_ is not None:
+                # And recomputed (review 2 P2-2): the straight from the capture's rear axle to the
+                # line of the target its tracker's start observation gives (moved by a correction
+                # injection on that attempt; a mismatch one already moved the observation). Only
+                # the offsets compare: the runner draws the line from its planned approach, the
+                # same line to rounding, so the arrays' digest cannot.
+                from forklift_core.planning.geometry import Pose2D
+                from forklift_core.planning.pallet_mission import (
+                    PalletSite,
+                    site_poses,
+                    straight_from_pose,
+                )
+
+                try:
+                    geo = mission_geometry(result["geometry"])
+                    depth = float(result["geometry"]["pallet_depth_m"])
+                    offset = abs(float(args["rear_axle_offset_m"]))
+                    base = tuple(
+                        require_finite(
+                            "the re-capture's start pose", start_["pose"], size=3
+                        )
+                    )
+                    obs_ = start_["observation"]
+                    target_ = _site_from_observation(obs_, base, depth)
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise Unverified(
+                        f"the re-capture's start or geometry is not recorded ({exc!r})"
+                    ) from exc
+                inj_ = nt.get("injection") or {}
+                if inj_.get("kind") == "correction" and end_attempt in {
+                    c.get("attempt") for c in inj_.get("captures") or []
+                }:
+                    target_ = _biased_site(
+                        target_, float(inj_["lateral_m"]), float(inj_["yaw_rad"])
+                    )
+                sites_ = site_poses(PalletSite(*(float(v) for v in target_)), geo)
+                rear_ = Pose2D(
+                    base[0] - offset * math.cos(base[2]),
+                    base[1] - offset * math.sin(base[2]),
+                    base[2],
+                )
+                _, off_re = straight_from_pose(
+                    rear_,
+                    sites_["prealign"],
+                    sites_["approach"],
+                    max_lateral_m=NT.REDRAW_MAX_LATERAL_M,
+                    max_yaw_rad=NT.CORRECTION_MAX_YAW_RAD,
+                    min_length_m=0.3,
+                )
+                recomputed = [
+                    off_re[k] for k in ("lateral_m", "yaw_rad", "length_left_m")
+                ]
+                recorded = [
+                    off_used.get(k, math.nan)
+                    for k in ("lateral_m", "yaw_rad", "length_left_m")
+                ]
+                report["re_capture_recomputed"] = recomputed
+                if not _same(recomputed, recorded, 1e-6):
+                    failures.append(
+                        f"the re-capture's straight recomputed from its capture is {recomputed}, "
+                        f"recorded {recorded}"
+                    )
+    else:
+        i_to = len(t) - 1
+        failures.append(
+            f"the realignment never re-captured (the run ended {result.get('failure_reason')})"
+        )
+    if i_to < i_from:
+        raise Unverified("the re-capture is before the realignment")
+    failures += _span_checks(result, truth, geometry, i_from, i_to, "the realignment")
+    failures += _release_checks(
+        rec, result, at, "release_near_realign", jump, "the realignment"
+    )
+    attempts = result.get("observation_attempts") or []
+    attempt = rec.get("capture_attempt")
+    seen_valid = False
+    if attempt is None:
+        failures.append("the run ended before the realignment's re-observation")
+    else:
+        attempt = require_count("the re-observation attempt", attempt)
+        if not 1 <= attempt <= len(attempts):
+            raise Unverified(f"the re-observation attempt {attempt} is not recorded")
+        seen_valid = (attempts[attempt - 1].get("pocket_observation") or {}).get(
+            "status"
+        ) == "valid" and rec.get("capture_status") == "valid"
+        if not seen_valid:
+            failures.append("the realignment's re-observation did not see the pallet")
+    inj = nt.get("injection") or {}
+    injected = {c.get("attempt") for c in inj.get("captures") or []}
+
+    def target_of(obs, cbase, depth):
+        raw = _site_from_observation(obs, cbase, depth)
+        if inj.get("kind") == "correction" and attempt in injected:
+            return _biased_site(raw, float(inj["lateral_m"]), float(inj["yaw_rad"]))
+        return raw
+
+    def observation_numbers(raw):
+        from forklift_core.perception.pocket_observation import (
+            Pocket,
+            PocketObservation,
+        )
+
+        pockets = [
+            Pocket(tuple(raw[k]["center_m"]), raw[k]["width_m"], raw[k]["height_m"])
+            for k in ("left", "right")
+        ]
+        b = NT.biased_observation(
+            PocketObservation(
+                raw["stamp_ns"],
+                raw["clock_domain"],
+                raw["frame_id"],
+                raw["source_provenance"],
+                raw["status"],
+                *pockets,
+                raw["insertion_yaw_rad"],
+                raw["position_sigma_m"],
+                raw["yaw_sigma_rad"],
+                raw["reason"],
+            ),
+            float(result["geometry"]["pallet_depth_m"]),
+            float(inj["lateral_m"]),
+            float(inj["yaw_rad"]),
+        )
+        return np.array(
+            [
+                *b.left.center_m,
+                b.left.width_m,
+                b.left.height_m,
+                *b.right.center_m,
+                b.right.width_m,
+                b.right.height_m,
+                b.insertion_yaw_rad,
+            ]
+        )
+
+    biased_obs = inj.get("kind") == "mismatch" and attempt in injected
+    reob_failures, reob_report = _reobservation_checks(
+        rec,
+        result,
+        truth,
+        i_from,
+        attempt,
+        seen_valid,
+        control,
+        target_of,
+        "the realignment",
+        observation_numbers if biased_obs else None,
+    )
+    failures += reob_failures
+    report.update(reob_report)
+    # Every observe path installed during the realignment.
+    if not installs or installs[0].get("reason") != "stand":
+        failures.append("the realignment's installations do not start with its stand")
+    if [ins.get("n") for ins in installs] != list(range(len(installs))):
+        failures.append("the realignment's installations are not numbered in order")
+    lengths = []
+    for ins in installs:
+        try:
+            poses = require_finite("an installed path", ins["poses"])
+            dirs = np.asarray(ins["directions"], dtype=float)
+            curvs = np.asarray(ins["curvatures_inv_m"], dtype=float)
+            t_ins = float(require_shape("an installation's time", ins["time_s"], ()))
+            if (
+                poses.ndim != 2
+                or poses.shape[1] != 3
+                or len(dirs) != len(poses)
+                or len(curvs) != len(poses)
+            ):
+                raise ValueError("installed path shapes")
+        except (KeyError, TypeError, ValueError) as exc:
+            raise Unverified(f"an installation is incomplete ({exc!r})") from exc
+        length = (
+            float(np.sum(np.hypot(*np.diff(poses[:, :2], axis=0).T)))
+            if len(poses) > 1
+            else 0.0
+        )
+        lengths.append(length)
+        digest = NT.path_digest(poses, dirs, curvs)
+        if not (
+            length <= NT.REALIGN_MAX_LENGTH_M + 1e-9
+            and _same(length, ins.get("length_m", math.nan), 1e-9)
+            and digest == ins.get("sha256") == ins.get("tracker_sha256")
+            and ins.get("slam_mode") == "tracking"
+            and t[i_from] - TIME_TOL_S <= t_ins <= t[i_to] + TIME_TOL_S
+        ):
+            failures.append(
+                f"installation {ins.get('n')} ({ins.get('reason')}) is too long, held, "
+                "outside the realignment or not its content"
+            )
+    # Complete (P2-2): every observe replan, obstacle replan or backoff in the observe phase and
+    # candidate move recorded in the span has its installation, one near leg after the
+    # re-observation, and the last installation is the follower the re-capture came by.
+    t_lo, t_hi = float(t[i_from]) - TIME_TOL_S, float(t[i_to]) + TIME_TOL_S
+    reasons = [ins.get("reason") for ins in installs]
+
+    def in_span(r, key, what):
+        # A missing or non-finite time is unverified, not out of the span (review 2 P2-3).
+        return t_lo <= float(require_shape(what, r.get(key), ())) <= t_hi
+
+    observe_replans = [
+        r
+        for r in result.get("observe_replans") or []
+        if in_span(r, "time_s", "an observe replan's time")
+    ]
+    obstacle_observe = [
+        r
+        for r in (result.get("obstacle_layer") or {}).get("replans") or []
+        if r.get("phase") == "observe"
+        and in_span(r, "time_s", "an observe-phase obstacle replan's time")
+    ]
+    reobs_attempt = rec.get("capture_attempt")
+    invalid_after = [
+        k + 1
+        for k, a in enumerate(result.get("observation_attempts") or [])
+        if reobs_attempt is not None
+        and k + 1 > reobs_attempt
+        and in_span(a, "t_before_capture_s", "an observation attempt's time")
+        and (a.get("pocket_observation") or {}).get("status") != "valid"
+    ]
+    want_counts = {
+        "observe_replan": len(observe_replans),
+        "obstacle_replan": sum(
+            1
+            for r in obstacle_observe
+            if not r.get("failed") and not r.get("same_path")
+        ),
+        "backoff": sum(1 for r in obstacle_observe if r.get("backoff")),
+        "observe_candidate": len(invalid_after),
+    }
+    for reason_, want_ in want_counts.items():
+        if reasons.count(reason_) != want_:
+            failures.append(
+                f"{reasons.count(reason_)} {reason_} installations for {want_} recorded"
+            )
+    if attempt is not None and seen_valid and reasons.count("near_leg") != 1:
+        failures.append(
+            f"{reasons.count('near_leg')} near legs after the re-observation"
+        )
+    if recaptured:
+        if "observe_tracker_sha256" not in end:
+            raise Unverified("the re-capture does not record the follower it came by")
+        if (
+            not installs
+            or installs[-1].get("tracker_sha256") != end["observe_tracker_sha256"]
+        ):
+            failures.append(
+                "the last installation is not the follower the re-capture came by"
+            )
+    if str(result.get("failure_reason") or "").startswith(
+        "near_capture_realign_held_recovery"
+    ):
+        failures.append("a recovery was needed after the realignment's hold")
+    report.update(
+        realign_s=at,
+        span_s=float(t[i_to] - t[i_from]),
+        installs=[ins.get("reason") for ins in installs],
+        longest_install_m=max(lengths) if lengths else None,
+        jump_m=float(jump[0]),
+        jump_rad=float(jump[1]),
+        re_observation_attempt=attempt,
+    )
+    return {"applicable": True, "failures": failures, "passed": not failures, **report}
+
+
+def _acceptance_refused(cap: dict, box_yaw: float) -> bool:
+    """A near capture's own acceptance refused it: its recorded offsets outside the run's
+    box (0.05 m, box_yaw, 0.3 m -- recorded as the capture's box) or its dry run failing."""
+    try:
+        off = cap["offsets_to_new_line"]
+        lat, yaw, left = (
+            float(require_shape(f"near capture {k}", off[k], ()))
+            for k in ("lateral_m", "yaw_rad", "length_left_m")
+        )
+        box = cap.get("box", {"lateral_m": 0.05, "yaw_rad": 0.05, "length_m": 0.3})
+    except (KeyError, TypeError) as exc:
+        raise Unverified(
+            f"a near capture's offsets are not recorded ({exc!r})"
+        ) from exc
+    if box != {"lateral_m": 0.05, "yaw_rad": box_yaw, "length_m": 0.3}:
+        raise Unverified(f"a near capture's box {box} is not the run's")
+    if abs(lat) > 0.05 or abs(yaw) > box_yaw or left < 0.3:
+        return True
+    dry = cap.get("dry_run")
+    if dry is None:
+        raise Unverified("a near capture inside the box has no dry run")
+    return not (
+        dry.get("status") == "arrived"
+        and float(require_shape("dry run error", dry["position_error_m"], ())) <= 0.006
+        and abs(float(require_shape("dry run yaw", dry["yaw_error_rad"], ()))) <= 0.015
+    )
+
+
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -3252,7 +3800,23 @@ def judge_run(directory: Path, data_root: Path = ROOT) -> dict:
             open_retry = views_[-1]["retry"] is not None
         except Unverified as exc:
             problems.append(str(exc))
-    problems += record_problems(truth, retry_spans, open_retry)
+    realign_ = nt.get("realign")
+    realign_span = None
+    if realign_ is not None and len(truth.get("stamp_s", [])):
+        # Plan D8 S4c-3 stage 2: the realignment's ticks are checked contiguous and finite too.
+        t_all = np.asarray(truth["stamp_s"], dtype=float)
+        try:
+            end_ = realign_.get("end")
+            realign_span = (
+                tick_index(t_all, realign_["time_s"], "the realignment"),
+                tick_index(t_all, end_["time_s"], "the re-capture")
+                if isinstance(end_, dict) and end_.get("reason") == "recaptured"
+                else len(t_all) - 1,
+            )
+        except (Unverified, KeyError, TypeError) as exc:
+            problems.append(f"the realignment's span: {exc}")
+    problems += record_problems(truth, retry_spans, open_retry, realign_span)
+    open_realign = realign_ is not None and not (nt.get("starts") or nt.get("start"))
     terms_bytes = (
         ROOT / str(nt.get("drive_terms") or "config/near_field_drive_terms.json")
     ).read_bytes()
@@ -3277,6 +3841,23 @@ def judge_run(directory: Path, data_root: Path = ROOT) -> dict:
             end = insert_end_index(truth, result)
             vi = check_vi(truth, geometry, pallet_geo.overall_depth_m, end)
             checks["redraw"] = check_near_redraw(result, nt)  # plan D8 S4c-3 stage 1
+            control_path = Path(directory) / "slam_control.npy"
+            checks["xi"] = check_xi(  # plan D8 S4c-3 stage 2
+                result,
+                nt,
+                truth,
+                geometry,
+                np.load(control_path) if control_path.exists() else None,
+            )
+            if open_realign:
+                # Plan D8 S4c-3 stage 2: the run ended in its realignment before any tracker --
+                # the injection's transforms, the pallet still to the record's end, and (xi).
+                checks["ix"] = check_ix(result, near or {}, truth)
+                checks["v"] = check_v(
+                    truth, float(realign_["time_s"]), len(truth["stamp_s"]) - 1
+                )
+                vii = {"applicable": False, "passed": True, "stops": []}
+                raise _SkipEpisode
             if retried:
                 vii = judge_retried(
                     truth,
@@ -3340,6 +3921,14 @@ def judge_run(directory: Path, data_root: Path = ROOT) -> dict:
                 calibration={"path": str(cal_path), "sha256": cal_ref["sha256"]},
             )
             if early:
+                if realign_ is not None:
+                    # Plan D8 S4c-3: the pallet still from the realignment on (P2-6), the biased
+                    # anchor's own (v) still not applied.
+                    checks["v"] = check_v(
+                        truth,
+                        float(realign_["time_s"]),
+                        end if end is not None else int(checked_ticks(truth)[-1]),
+                    )
                 raise _SkipEpisode  # after the bounds' provenance (Codex S4c-1 review P2)
             if nt.get("injection") is not None and "corrections" not in near:
                 raise Unverified("an S4c run without its correction records")
@@ -3364,7 +3953,10 @@ def judge_run(directory: Path, data_root: Path = ROOT) -> dict:
             checks["iv"] = check_iv(truth, states, section, bounds, rear_offset)
             checks["v"] = check_v(
                 truth,
-                float(nt["start"]["aligned_s"]),
+                min(  # the earliest anchor: a realignment's refused capture came first
+                    [float(nt["start"]["aligned_s"])]
+                    + ([float(realign_["time_s"])] if realign_ is not None else [])
+                ),
                 end if end is not None else section[1],
             )
             if (
@@ -3426,6 +4018,7 @@ def judge_run(directory: Path, data_root: Path = ROOT) -> dict:
         "episodes": checks.get("episodes") or {"applicable": False},  # plan D8 S4c-2
         "x": checks.get("x") or {"applicable": False},
         "redraw": checks.get("redraw") or {"applicable": False},  # plan D8 S4c-3
+        "xi": checks.get("xi") or {"applicable": False},
         "forbidden_pocket_contacts": contacts,
         "s4c": s4c_outcome(verdict, checks, result, vi, contacts, vii),
         "inputs_sha256": {name: sha256_bytes(data_) for name, data_ in raw.items()},

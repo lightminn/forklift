@@ -286,6 +286,13 @@ def arguments() -> argparse.Namespace:
         help="Plan D8 S4c-1: the bias turning the pallet about its centre, rad.",
     )
     parser.add_argument(
+        "--near-capture-redraw",
+        choices=("on", "off"),
+        default="on",
+        help="Plan D8 S4c-3 (test only): off skips stage 1 so a refused near capture goes to "
+        "the stage-2 realignment. Needs --near-tracking.",
+    )
+    parser.add_argument(
         "--near-capture-box-yaw-rad",
         type=float,
         default=0.05,
@@ -697,6 +704,8 @@ def arguments() -> argparse.Namespace:
             parser.error("--near-inject needs exactly one of --near-inject-lateral-m and --near-inject-yaw-rad")
     elif any(v != 0.0 for v in inject_sizes):
         parser.error("--near-inject-lateral-m / --near-inject-yaw-rad need --near-inject")
+    if args.near_capture_redraw != "on" and not args.near_tracking:
+        parser.error("--near-capture-redraw needs --near-tracking")
     if args.near_capture_box_yaw_rad != 0.05:
         if not args.near_tracking:
             parser.error("--near-capture-box-yaw-rad needs --near-tracking")
@@ -2911,31 +2920,21 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         near["events"].append({"time_s": now_s, "event": "path_revision", "revision": revision_, "point_m": point_m})
         return entry_
 
-    def start_pickup_retry(now_s: float, reason: str, face_distance_m: float, episode_: int) -> None:
-        """Plan D8 S4c-2: end the episode, release the SLAM hold and re-project the grid,
-        carry the old pickup estimate and target into the released frame, forget the near
-        capture (the next valid capture is a far one), and stand in observe to re-observe
-        here -- the observe leg's hold and its follower are bypassed until that capture."""
+    def release_and_stand(now_s: float, hold_event: str) -> dict:
+        """Plan D8 S4c-2 / S4c-3 (shared): release the SLAM hold and re-project the grid,
+        carry the pickup estimate and planning target into the released frame, and install
+        the two-pose stand in observe -- its follower result, end hold and recoveries are
+        bypassed until the re-observation (near["retry_stand"]). Returns the release record."""
         from forklift_core.localization.slam_pose import compose as pose_compose
         from forklift_core.localization.slam_pose import invert as pose_invert
         from forklift_core.planning.hybrid_astar import PlanResult as _PlanResult
 
-        retry_ = {"time_s": now_s, "reason": reason, "episode": episode_, "face_distance_m": face_distance_m,
-                  "min_face_distance_m": min((r["face_distance_m"] for r in near["ticks"]
-                                              if r.get("episode") == episode_), default=None)}
-        near["events"].append({"time_s": now_s, "event": "retry_start", "reason": reason, "episode": episode_})
-        near["retries"] = near.get("retries", 0) + 1
-        near["tracker"] = None  # frames stop reaching it and near_tick stops
-        near["mismatch"] = near["unbounded"] = False
-        near["stale_waits"], near["protect"], near["arrival"] = {}, None, None
-        near["stop_state"] = near_tracking.StopState()
-        near.pop("terminal_standing_since", None)
         before_ = slam_rear(now_s)
         applied_before_ = [float(v) for v in slam["tracker"].applied[0]]
         jump_m, jump_rad = slam["tracker"].release(odom_from_base=slam_odom_base())
         after_ = slam_rear(now_s)
         frame_change = pose_compose(tuple(float(v) for v in after_), pose_invert(tuple(float(v) for v in before_)))
-        slam["holds"].append({"phase": phase, "time_s": now_s, "event": "release_pickup_retry", "jump_m": jump_m,
+        slam["holds"].append({"phase": phase, "time_s": now_s, "event": hold_event, "jump_m": jump_m,
                               "jump_rad": jump_rad})
         reprojected_ = None
         if obstacle is not None and slam["tracker"].applied is not None:
@@ -2958,7 +2957,6 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             obstacle["pickup_estimate"] = carried(obstacle["pickup_estimate"])
         if pocket.get("planning_pickup") is not None:
             pocket["planning_pickup"] = carried(pocket["planning_pickup"])
-        state.setdefault("near_capture_history", []).append(state.pop("near_capture"))
         heading_ = np.array([math.cos(float(after_[2])), math.sin(float(after_[2]))])
         stand_ = np.array([[*(np.asarray(after_[:2], dtype=float) - near_tracking.RETRY_STAND_M * heading_),
                             float(after_[2])], [float(after_[0]), float(after_[1]), float(after_[2])]])
@@ -2966,10 +2964,72 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                        near_tracking.RETRY_STAND_M, 0)
         trackers["observe"] = RearAxlePathTracker(stand_, np.ones(2), np.zeros(2), trackers["observe"].config)
         near["retry_stand"] = True
-        retry_.update(jump_m=jump_m, jump_rad=jump_rad, frame_change=list(frame_change),
-                      rear_before=[float(v) for v in before_], rear_after=[float(v) for v in after_],
-                      applied_before=applied_before_, reprojected=reprojected_)
+        return {"jump_m": jump_m, "jump_rad": jump_rad, "frame_change": list(frame_change),
+                "rear_before": [float(v) for v in before_], "rear_after": [float(v) for v in after_],
+                "applied_before": applied_before_, "reprojected": reprojected_}
+
+    def start_pickup_retry(now_s: float, reason: str, face_distance_m: float, episode_: int) -> None:
+        """Plan D8 S4c-2: end the episode, release the SLAM hold and re-project the grid,
+        carry the old pickup estimate and target into the released frame, forget the near
+        capture (the next valid capture is a far one), and stand in observe to re-observe
+        here -- the observe leg's hold and its follower are bypassed until that capture."""
+        retry_ = {"time_s": now_s, "reason": reason, "episode": episode_, "face_distance_m": face_distance_m,
+                  "min_face_distance_m": min((r["face_distance_m"] for r in near["ticks"]
+                                              if r.get("episode") == episode_), default=None)}
+        near["events"].append({"time_s": now_s, "event": "retry_start", "reason": reason, "episode": episode_})
+        near["retries"] = near.get("retries", 0) + 1
+        near["tracker"] = None  # frames stop reaching it and near_tick stops
+        near["mismatch"] = near["unbounded"] = False
+        near["stale_waits"], near["protect"], near["arrival"] = {}, None, None
+        near["stop_state"] = near_tracking.StopState()
+        near.pop("terminal_standing_since", None)
+        state.setdefault("near_capture_history", []).append(state.pop("near_capture"))
+        retry_.update(release_and_stand(now_s, "release_pickup_retry"))
         state["near_tracking"]["retry"] = retry_
+        near["stand_record"] = "retry"
+        transition("observe", now_s)
+
+    def realign_active() -> bool:
+        """Plan D8 S4c-3 stage 2: a realignment started and its re-capture not yet accepted."""
+        rec_ = (state.get("near_tracking") or {}).get("realign")
+        return rec_ is not None and rec_.get("end") is None
+
+    def realign_install(reason: str) -> None:
+        """Plan D8 S4c-3 stage 2: every observe path installed during the realignment, by
+        content and by its follower's copy, with the SLAM mode then; a path longer than
+        REALIGN_MAX_LENGTH_M ends the run (no recovery reaches past it)."""
+        if not realign_active():
+            return
+        path_ = paths["observe"]
+        poses_ = np.asarray(path_.poses, dtype=float)
+        length_ = float(np.sum(np.hypot(*np.diff(poses_[:, :2], axis=0).T))) if len(poses_) > 1 else 0.0
+        installs_ = state["near_tracking"]["realign"]["installs"]
+        installs_.append({
+            "n": len(installs_), "time_s": world.current_time - initial_time, "reason": reason,
+            "slam_mode": slam["tracker"].mode, "length_m": length_, "poses": poses_.tolist(),
+            "directions": np.asarray(path_.directions).tolist(),
+            "curvatures_inv_m": np.asarray(path_.curvatures_inv_m).tolist(),
+            "sha256": near_tracking.path_digest(path_.poses, path_.directions, path_.curvatures_inv_m),
+            "tracker_sha256": near_tracking.path_digest(*trackers["observe"].path_arrays()),
+        })
+        if obstacle is not None:
+            obstacle.setdefault("progress", {}).clear()  # the no-progress watch restarts on it
+        require(length_ <= near_tracking.REALIGN_MAX_LENGTH_M + 1e-9, f"near_capture_realign_too_long:{length_:.3f}")
+
+    def start_near_realign(now_s: float, attempt_: int) -> None:
+        """Plan D8 S4c-3 stage 2: a near capture refused by its acceptance and by stage 1 --
+        once per pickup -- releases SLAM, re-projects the grid, carries the estimates, keeps
+        the refused capture apart (near_capture_refused, not near_capture_history) and stands
+        to re-observe here; the next valid capture is a far one and the normal flow follows.
+        No tracker exists yet: no retry event, no retry count, no episode closed."""
+        state["near_tracking"]["realigns"] = state["near_tracking"].get("realigns", 0) + 1
+        state["near_capture"]["refused_attempt"] = attempt_
+        state.setdefault("near_capture_refused", []).append(json.loads(record_json(state.pop("near_capture"))))
+        record_ = {"time_s": now_s, "refused_attempt": attempt_, "installs": [], "end": None}
+        state["near_tracking"]["realign"] = record_
+        record_.update(release_and_stand(now_s, "release_near_realign"))
+        near["stand_record"] = "realign"
+        realign_install("stand")
         transition("observe", now_s)
 
     state["phase"] = "planning"
@@ -5248,6 +5308,18 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     and slam["stop_now"]
                 )
                 observe_stall_ticks = observe_stall_ticks + 1 if observe_stalled else 0
+                if (
+                    slam is not None and phase == "observe" and slam["tracker"].mode == "holding"
+                    and realign_active()
+                    and (
+                        (tracking.status == "failed" and tracking.failure == "endpoint_heading"
+                         and not tracking.off_path)
+                        or observe_stall_ticks >= 120
+                    )
+                ):
+                    # Plan D8 S4c-3 stage 2: no recovery runs held in the realignment (the
+                    # S4c-2 failure's replan did) -- whatever its budget.
+                    require(False, "near_capture_realign_held_recovery")
                 observe_miss = (
                     slam is not None
                     and phase == "observe"
@@ -5300,6 +5372,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             trackers["observe"].config,
                         )
                         phase_started = t
+                        realign_install("observe_replan")  # Plan D8 S4c-3 stage 2
                         tracking = trackers["observe"].update(rear, signed_speed, dt)
                         last_tracking = tracking
                 if tracking.status == "failed":
@@ -5574,14 +5647,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         detection = detect_pockets(detector_input, prior, params)
                         observation = detection.observation
                         if near is not None and near.get("retry_stand"):
-                            # Plan D8 S4c-2: the re-observation must see the pallet; no candidate
-                            # moves on old estimates.
+                            # Plan D8 S4c-2 / S4c-3: the re-observation must see the pallet; no
+                            # candidate moves on old estimates.
                             near["retry_stand"] = False
-                            state["near_tracking"]["retry"].update(
+                            stand_key_ = near.get("stand_record", "retry")
+                            state["near_tracking"][stand_key_].update(
                                 capture_attempt=attempt_number, capture_status=observation.status)
                             if observation.status != "valid":
-                                state["near_tracking"]["outcome"] = "near_field_retry_no_detection"
-                                require(False, "near_field_retry_no_detection")
+                                reason_ = ("near_field_retry_no_detection" if stand_key_ == "retry"
+                                           else "near_capture_realign_no_detection")
+                                state["near_tracking"]["outcome"] = reason_
+                                require(False, reason_)
                         attempt.update(
                             {
                                 "pocket_observation": asdict(observation),
@@ -5813,6 +5889,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             )
                             phase_started = t
                             apply_tracker_profile()
+                            realign_install("observe_candidate")  # Plan D8 S4c-3 stage 2
                             record_tracker_configs()
                         else:
                             if args.repeat_captures:
@@ -5866,11 +5943,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                     "raw_observation": asdict(raw_observation),
                                     "observation": asdict(observation),
                                 })
-                            retry_capture_ = (near is not None and (state["near_tracking"].get("retry") or {})
-                                              .get("capture_attempt") == attempt_number)
+                            stand_key_ = next(
+                                (k_ for k_ in ("retry", "realign")
+                                 if near is not None
+                                 and (state["near_tracking"].get(k_) or {}).get("capture_attempt") == attempt_number),
+                                None)
+                            retry_capture_ = stand_key_ is not None
                             if retry_capture_:
-                                # Plan D8 S4c-2: the re-observation as placed and the target it gives.
-                                state["near_tracking"]["retry"].update(
+                                # Plan D8 S4c-2 / S4c-3: the re-observation as placed and its target.
+                                state["near_tracking"][stand_key_].update(
                                     capture_base=[float(base[0]), float(base[1]), float(yaw)],
                                     observation=asdict(observation),
                                     target=[target_pickup.x_m, target_pickup.y_m, target_pickup.yaw_rad])
@@ -5979,7 +6060,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 state["near_tracking"]["injection"]["captures"][-1]["planned_target"] = [
                                     planning_pickup.x_m, planning_pickup.y_m, planning_pickup.yaw_rad]
                             if retry_capture_:
-                                state["near_tracking"]["retry"]["planned_target"] = [
+                                state["near_tracking"][stand_key_]["planned_target"] = [
                                     planning_pickup.x_m, planning_pickup.y_m, planning_pickup.yaw_rad]
                             if obstacle is not None and obstacle["layer"].known_enabled:
                                 # Each detection is a new relative fix: the age restarts
@@ -6134,7 +6215,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 state["near_capture"]["waypoint"] = near_leg.poses[-1].tolist()
                                 phase_started = t
                                 inset_status = "근접 재관측 위치로 이동"
+                                realign_install("near_leg")  # Plan D8 S4c-3 stage 2
                             else:
+                                near_realign_ = False  # Plan D8 S4c-3: stage 2 began at this capture
                                 if state.get("near_capture", {}).get("status") == "pending":
                                     # The new estimate moves the straight by a few
                                     # cm; re-draw it from where the truck stands
@@ -6192,7 +6275,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                             refusal = f"near_capture_misaligned:dry_run:{asdict(dry)}"
                                             straight = None
                                     redraw_entry = None
-                                    if straight is None and near is not None:
+                                    if straight is None and near is not None and args.near_capture_redraw == "on":
                                         # Plan D8 S4c-3 stage 1: the S4b re-draw acceptance at the near
                                         # capture -- the heading box 0.12 rad with both dry runs' ends,
                                         # their swept footprints and the correction points checked.
@@ -6212,65 +6295,87 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                                     redraw_plans[name_].poses, redraw_plans[name_].directions,
                                                     redraw_plans[name_].curvatures_inv_m, trackers[name_].config)
                                         state["near_capture"].setdefault("recoveries", []).append(redraw_entry)
-                                    require(straight is not None, refusal)
-                                    approach_config = acceptance_config
-                                    if args.approach_straight_speed_mps is not None:
-                                        # Plan D8b: only the driven cruise changes. The acceptance
-                                        # above stays the baseline's: at a slow cruise the tracker
-                                        # arrives where 1.5 x remaining meets the 0.012 m/s stop
-                                        # speed, ~8 mm short, past the 6 mm acceptance (smoke run
-                                        # seed 1 at 0.30: 7.76 mm). That dry run is kept as a record.
-                                        approach_config = replace(approach_config,
-                                                                  cruise_speed_mps=args.approach_straight_speed_mps)
-                                        state["near_capture"]["dry_run_driven"] = asdict(bicycle_rollout(
-                                            straight.poses, straight.directions, straight.curvatures_inv_m,
-                                            approach_config, rear,
-                                        ))
-                                    paths["approach"] = straight
-                                    state["paths"]["approach"] = path_record(straight)
-                                    (args.output / "paths.json").write_text(
-                                        record_json(state["paths"], indent=2) + "\n"
-                                    )
-                                    add_path_display(
-                                        stage, straight, "Approach", (0.05, 0.45, 1.0)
-                                    )
-                                    trackers["approach"] = RearAxlePathTracker(
-                                        straight.poses,
-                                        straight.directions,
-                                        straight.curvatures_inv_m,
-                                        approach_config,
-                                    )
-                                    if args.approach_straight_speed_mps is not None:
-                                        record_tracker_configs()  # the straight's own cruise
-                                    if redraw_entry is not None:
-                                        # Plan D8 S4c-3: what was installed, by content and by the
-                                        # followers' own copies.
-                                        redraw_entry["installed"] = {
-                                            name_: {
-                                                "sha256": near_tracking.path_digest(
-                                                    paths[name_].poses, paths[name_].directions,
-                                                    paths[name_].curvatures_inv_m),
-                                                "tracker_sha256": near_tracking.path_digest(
-                                                    *trackers[name_].path_arrays()),
-                                                "poses": np.asarray(paths[name_].poses).tolist(),
-                                                "directions": np.asarray(paths[name_].directions).tolist(),
-                                                "curvatures_inv_m": np.asarray(paths[name_].curvatures_inv_m).tolist(),
+                                    if straight is not None and realign_active() and (
+                                            straight.length_m < near_tracking.REALIGN_MIN_LEFT_M):
+                                        # Plan D8 S4c-3 stage 2: the re-capture keeps at least 1.5 m of
+                                        # straight -- the approach starts before the near-field section.
+                                        refusal = f"near_capture_realign_short:{straight.length_m:.3f}"
+                                        straight = None
+                                    if (straight is None and near is not None
+                                            and state["near_tracking"].get("realigns", 0) == 0):
+                                        # Plan D8 S4c-3 stage 2: once per pickup, instead of ending.
+                                        start_near_realign(t, attempt_number)
+                                        near_realign_ = True
+                                    if not near_realign_:
+                                        require(straight is not None, refusal)
+                                        approach_config = acceptance_config
+                                        if args.approach_straight_speed_mps is not None:
+                                            # Plan D8b: only the driven cruise changes. The acceptance
+                                            # above stays the baseline's: at a slow cruise the tracker
+                                            # arrives where 1.5 x remaining meets the 0.012 m/s stop
+                                            # speed, ~8 mm short, past the 6 mm acceptance (smoke run
+                                            # seed 1 at 0.30: 7.76 mm). That dry run is kept as a record.
+                                            approach_config = replace(approach_config,
+                                                                      cruise_speed_mps=args.approach_straight_speed_mps)
+                                            state["near_capture"]["dry_run_driven"] = asdict(bicycle_rollout(
+                                                straight.poses, straight.directions, straight.curvatures_inv_m,
+                                                approach_config, rear,
+                                            ))
+                                        paths["approach"] = straight
+                                        state["paths"]["approach"] = path_record(straight)
+                                        (args.output / "paths.json").write_text(
+                                            record_json(state["paths"], indent=2) + "\n"
+                                        )
+                                        add_path_display(
+                                            stage, straight, "Approach", (0.05, 0.45, 1.0)
+                                        )
+                                        trackers["approach"] = RearAxlePathTracker(
+                                            straight.poses,
+                                            straight.directions,
+                                            straight.curvatures_inv_m,
+                                            approach_config,
+                                        )
+                                        if args.approach_straight_speed_mps is not None:
+                                            record_tracker_configs()  # the straight's own cruise
+                                        if redraw_entry is not None:
+                                            # Plan D8 S4c-3: what was installed, by content and by the
+                                            # followers' own copies.
+                                            redraw_entry["installed"] = {
+                                                name_: {
+                                                    "sha256": near_tracking.path_digest(
+                                                        paths[name_].poses, paths[name_].directions,
+                                                        paths[name_].curvatures_inv_m),
+                                                    "tracker_sha256": near_tracking.path_digest(
+                                                        *trackers[name_].path_arrays()),
+                                                    "poses": np.asarray(paths[name_].poses).tolist(),
+                                                    "directions": np.asarray(paths[name_].directions).tolist(),
+                                                    "curvatures_inv_m": np.asarray(paths[name_].curvatures_inv_m).tolist(),
+                                                }
+                                                for name_ in ("approach", "insert", "extract")
                                             }
-                                            for name_ in ("approach", "insert", "extract")
-                                        }
-                                    if args.pocket_check:
-                                        build_pocket_check(float(straight.poses[-1][2]), rear, base)
-                                    state["near_capture"].update(
-                                        status="done",
-                                        near_attempt=attempt_number,
-                                        near_estimate_m=state["perception"][
-                                            "perception_pickup_estimate_m"
-                                        ],
-                                        near_error=state["perception"]["perception_error"],
-                                    )
-                                transition("approach", t)
-                                if near is not None and state.get("near_capture", {}).get("status") == "done":
-                                    build_near_tracker(t)  # in the hold the transition began
+                                        if args.pocket_check:
+                                            build_pocket_check(float(straight.poses[-1][2]), rear, base)
+                                        state["near_capture"].update(
+                                            status="done",
+                                            near_attempt=attempt_number,
+                                            near_estimate_m=state["perception"][
+                                                "perception_pickup_estimate_m"
+                                            ],
+                                            near_error=state["perception"]["perception_error"],
+                                        )
+                                        if realign_active():
+                                            # Plan D8 S4c-3 stage 2: the re-capture accepted ends the
+                                            # realignment.
+                                            state["near_tracking"]["realign"]["end"] = {
+                                                "reason": "recaptured", "attempt": attempt_number, "time_s": t,
+                                                "length_left_m": float(straight.length_m),
+                                                # the observe follower the truck came by (the last install)
+                                                "observe_tracker_sha256": near_tracking.path_digest(
+                                                    *trackers["observe"].path_arrays())}
+                                if not near_realign_:
+                                    transition("approach", t)
+                                    if near is not None and state.get("near_capture", {}).get("status") == "done":
+                                        build_near_tracker(t)  # in the hold the transition began
                     elif phase == "approach":
                         if near is not None and args.near_tracking_stop_at == "insert":
                             # Plan D8 S4a-1: approach only -- end where the insertion would start.
@@ -6597,6 +6702,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     f"obstacle_no_progress in {phase}",
                 )
                 if obstacle["blocked_ticks"] >= 120 or obstacle.pop("force_replan", None) == phase:
+                    # Plan D8 S4c-3 stage 2: as above, an obstacle recovery held in the realignment.
+                    require(not (phase == "observe" and realign_active() and slam is not None
+                                 and slam["tracker"].mode == "holding"), "near_capture_realign_held_recovery")
                     obstacle["blocked_ticks"] = 0
                     if phase == "transport" and slam is not None and slam["docking"].get("reapproach"):
                         # Plan D7c: a re-approach path is replaced released, never as
@@ -6806,6 +6914,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 replace(config0, cruise_speed_mps=BACKOFF_SPEED_MPS),
                             )
                             phase_started = t  # the backoff's own tracking timeout
+                            if phase == "observe":
+                                realign_install("backoff")  # Plan D8 S4c-3 stage 2
                     elif same_path(replanned, paths[phase], trackers[phase].remaining_to_goal_m()):
                         # D4: the same path again is a wait, not a retry -- it
                         # neither restarts the tracker nor the no-progress watch
@@ -6837,6 +6947,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         trackers[phase] = RearAxlePathTracker(
                             replanned.poses, replanned.directions, replanned.curvatures_inv_m, config_
                         )
+                        if phase == "observe":
+                            realign_install("obstacle_replan")  # Plan D8 S4c-3 stage 2
                         if phase == "transport" and slam is not None and not slam["docking"].get("reapproach"):
                             arm_docking()
                         phase_started = t
