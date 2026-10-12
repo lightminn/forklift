@@ -658,8 +658,11 @@ def test_same_path_is_the_remaining_part_again():
 
 def test_same_path_waits_do_not_count_as_retries():
     source = SCRIPT.read_text()
-    assert 'and not r.get("same_path") and not r.get("failed")]' in source
-    assert 'if r["phase"] == phase and not r.get("same_path") and not r.get("failed"))' in source
+    assert 'and not r.get("same_path") and not r.get("failed") and not r.get("escape")]' in source
+    assert (
+        'if r["phase"] == phase and not r.get("same_path")\n'
+        '                                          and not r.get("failed") and not r.get("escape"))'
+    ) in source
     i = source.index("if same_path(replanned, paths[phase]")
     wait = source[i : source.index("else:", i)]
     assert "RearAxlePathTracker" not in wait and '"progress"' not in wait
@@ -729,7 +732,7 @@ def test_a_failed_replan_backs_off_a_bounded_distance_then_replans():
     # The end of a backoff is never the leg's arrival; it forces a replan.
     j = source.index("# The end of a backoff is not the leg's arrival")
     assert j < source.index('if tracking.status == "arrived":\n                    if args.use_perception and phase == "observe":')
-    assert 'obstacle["force_replan"] = phase' in source[j : j + 900]
+    assert 'obstacle["force_replan"] = phase' in source[j : j + 2500]
     assert 'obstacle.pop("force_replan", None) == phase' in source
     # Codex checkpoint 8: a backoff always acts under the permission, a forced
     # replan opens the obstacle block while standing, the leg direction is kept,
@@ -939,3 +942,83 @@ def test_d7c_docking_needs_slam():
     source = SCRIPT.read_text()
     assert ('if args.d7_docking and args.slam_feedback is None:\n'
             '        parser.error("--d7-docking retries the SLAM docking match; it needs --slam-feedback")') in source
+
+
+def test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan():
+    # Plan docs/plans/2026-10-04-lidar-obstacle-map.md, "장애물 복구–허가 정합 설계 4판" (smoke 2382).
+    source = SCRIPT.read_text()
+    assert "ESCAPE_PER_LEG = 2" in source
+    block = source[source.index("escape_, escape_cands_, escape_skips_back_ = None, None, False"):]
+    e1 = block[: block.index('if replanned.status in ("invalid_start", "no_path"):')]
+    # E1: only an invalid start in transport/return_home, with budget, and not while docking owns the transport.
+    assert 'replanned.status == "invalid_start" and phase in ("transport", "return_home")' in e1
+    assert 'obstacle.setdefault("escapes", {}).get(phase, 0) < ESCAPE_PER_LEG' in e1
+    assert 'slam["docking"].get("reapproach") or slam["docking"].get("accepted_any")' in e1
+    assert "escape_, escape_cands_ = find_escape(t, rear, leg_dir_e, kappa)" in e1
+    # A chosen escape replaces the plan before the clearance-0 retry, whose statuses it does not match.
+    assert 'True, "escape", poses_e' in e1
+    # Installed on the backoff machinery: not a failure, its own budget, the end tolerance of E2's region.
+    inst = block[block.index("if escape_ is not None:\n                        # Plan v4 E2"):]
+    inst = inst[: inst.index("elif not replanned.success:")]
+    assert "backoff=True, failed=False, escape=escape_.record()" in inst
+    assert '"leg_dir": leg_dir_e' in inst and '"escape": True' in inst
+    for tol in ("position_tolerance_m=esc_.END_POSITION_TOL_M", "yaw_tolerance_rad=esc_.END_YAW_TOL_RAD",
+                "overshoot_tolerance_m=esc_.END_POSITION_TOL_M", "cruise_speed_mps=BACKOFF_SPEED_MPS"):
+        assert tol in inst
+    # The 30 s and per-leg counts leave escapes out (the failure count already does: failed False).
+    assert source.count('not r.get("escape")') == 2
+    # The old backoff: skipped where E2 refused its straight by the checker; on the return only past
+    # the rectangles (the delivered pallet the single LiDAR cannot see).
+    assert "back_ok_ = not escape_skips_back_" in block
+    assert "escape_leg(phase)[2], esc_.straight(rear, d_b, BACKOFF_M)" in block
+    assert "and back_ok_):" in block
+
+
+def test_obstacle_recovery_v4_an_escape_end_bypasses_docking_stall_and_failure():
+    source = SCRIPT.read_text()
+    e3 = source.index("escape_now_ = (")
+    # Before each of the three ways an end could otherwise go: the docking stop, the heading miss and
+    # stall replan, and the tracking-failure require.
+    assert e3 < source.index("                dock_stop = (")
+    assert e3 < source.index("                goal_heading_miss = (")
+    assert e3 < source.index('                require(\n                    tracking.status != "failed",')
+    window = source[e3 : e3 + 2000]
+    assert '"end_s" in back_e or tracking.status == "arrived"' in window
+    # An endpoint failure is the end only standing; rolling, it brakes (Codex implementation review P2-1).
+    assert '(standing_e and (tracking.status == "failed" or trackers[phase].remaining_to_goal_m() <= 1e-6))' in window
+    assert 'elif tracking.status == "failed":' in window and 'status="braking", speed_mps=0.0' in window
+    assert 'back_e["stand_ticks"] >= 120' in window
+    assert 'tracking = replace(tracking, status="arrived", speed_mps=0.0)' in window
+
+
+def test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery():
+    source = SCRIPT.read_text()
+    fn = source[source.index("    def release_after_backoff(") :]
+    fn = fn[:2500]
+    assert 'slam["tracker"].mode != "holding"' in fn and 'slam["tracker"].release(' in fn
+    assert 'slam["docking"].get("accepted_any") or slam["docking"].get("reapproach")' in fn
+    assert 'obstacle["layer"].refresh(' in fn  # the grid re-projected before any plan reads it
+    end = source.index("# The end of a backoff is not the leg's arrival")
+    end_block = source[end : end + 2500]
+    assert 'release_after_backoff(t, "release_after_backoff")' in end_block
+    # Standing first, then the release and the forced replan (Codex implementation review P2-1).
+    assert "if standing_b and not back_.get(\"released\"):" in end_block
+    assert 'if standing_b and t - back_.get("forced_s", -1e9) >= 1.0:' in end_block
+    rec = source.index('release_after_backoff(t, "release_in_backoff_recovery")')
+    assert rec < source.index("start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))", rec)
+    # D4: what the installed plan's clearance was and what stopped the truck -- read before a release
+    # refreshes the permission (Codex implementation review P2-3), the clearance of whichever plan
+    # was adopted (P2-4: the tight observe candidates and the tight mission replan too).
+    assert '"clearance_m": clearance_used_' in source and '"stop": stop_cause_' in source
+    cause = source.index("stop_cause_ = {")
+    assert cause < source.index("released_ = release_and_carry(t)", cause)
+    assert cause < source.index('release_after_backoff(t, "release_in_backoff_recovery")')
+    # ... and at a backoff's end, which releases before the forced replan reads it (review 2 P2).
+    keep = source.index('back_["stop_cause"] = {')
+    assert keep < source.index('released_b = release_after_backoff(t, "release_after_backoff")')
+    assert 'obstacle["backoff"].pop("stop_cause", None)' in source
+    assert "clearance_used_ = 0.0  # the candidates are planned tight" in source
+    assert "clearance_used_ = mission_clearance_" in source
+    assert 'args.output / f"obstacle_recovery_{dumps_ + 1}.npz"' in source
+    assert "band_pose=None, label=None" in source and "band_poses_ = rear if band_pose is None else band_pose" in source
+    assert 'own=list(region), band_pose=list(region), label="escape_end"' in source

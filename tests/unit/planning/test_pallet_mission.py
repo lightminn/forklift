@@ -1567,3 +1567,19 @@ def test_redraw_uses_the_docking_grid_when_given():
         REDRAW_SCENARIO, start, target, occupancy=blocked, docking_occupancy=clear
     )
     assert plans is not None, record
+
+
+def test_leg_obstacles_are_what_each_leg_search_checks():
+    """Obstacle recovery v4 E2 ①: one source for the legs' rectangles, outline and bounds."""
+    geometry = SyntheticMissionGeometry()
+    scenario = make_scenario(3, ASSETS)
+    rects, footprint, bounds = pallet_mission.leg_obstacles("return", scenario, geometry)
+    assert rects[:-1] == [prop.rectangle for prop in scenario.props]
+    d = scenario.destination
+    assert rects[-1] == Rectangle(d.x_m, d.y_m, geometry.pallet_depth_m, geometry.pallet_width_m, d.yaw_rad)
+    assert footprint == geometry.unloaded_footprint and bounds == scenario.bounds
+    rects, footprint, bounds = pallet_mission.leg_obstacles("transport", scenario, geometry)
+    assert rects == [prop.rectangle for prop in scenario.props]
+    assert footprint == geometry.loaded_footprint and bounds == scenario.bounds
+    with pytest.raises(ValueError):
+        pallet_mission.leg_obstacles("observe", scenario, geometry)

@@ -437,7 +437,8 @@ def test_slam_runs_dock_on_a_scan_before_the_delivery_straight() -> None:
     # replans of the transport and return legs when they start.
     # Plan D7c: the two obstacle replans of the transport now share transport_replan
     # (one lookup), and the docking retry's release and re-approach plan add three.
-    assert source.count('slam.get("transport_scenario", scenario)') == 10
+    # Obstacle recovery v4: the escape's leg (transport and return) looks them up as the replans do.
+    assert source.count('slam.get("transport_scenario", scenario)') == 12
 
 
 def test_d8b_recording_options_validate_before_startup(tmp_path) -> None:
@@ -720,7 +721,7 @@ def test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_captu
     assert "mismatch=False, unbounded=False, path_revision=0" in build_fn
     assert "near.setdefault('stop_events', [])" in build_fn and "stop_events=[]" not in build_fn
     stand = source.index("retry_stand_ = near is not None and near.get('retry_stand') and phase == 'observe'".replace("'", '"'))
-    window = source[stand : stand + 900]
+    window = source[stand : stand + 2200]  # obstacle recovery v4's escape end sits between
     assert 'tracking = replace(tracking, status="arrived", speed_mps=0.0)' in window
     assert "and not retry_stand_" in window
     seen = source.index("Plan D8 S4c-2 / S4c-3: the re-observation must see the pallet")

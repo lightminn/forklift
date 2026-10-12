@@ -317,6 +317,22 @@ class ObstacleLayer:
         return self.permission.update(self.snapshot, path_ahead, footprint, own, current_pose=current_pose,
                                       direction=direction)
 
+    def check_candidate(self, path_ahead, *, current_pose, direction: int, loaded: bool, extra_margin_m: float = 0.0,
+                        extra_ramp_m: float | None = None):
+        """Obstacle recovery v4 D1: a candidate path checked on the snapshot the permission uses
+        (shadow memory, known pallets and exemptions applied), leaving the permission as it is."""
+        footprint, own = self.footprints(loaded, direction)
+        return self.permission.check_path(self.snapshot, path_ahead, footprint, own, current_pose=current_pose,
+                                          direction=direction, extra_margin_m=extra_margin_m,
+                                          extra_ramp_m=extra_ramp_m)
+
+    def check_arc_candidate(self, *, current_pose, curvature_inv_m: float, direction: int, loaded: bool,
+                            cap_mps: float):
+        """The emergency-stop arc the permission would walk at this curvature and direction."""
+        footprint, own = self.footprints(loaded, direction)
+        return self.permission.check_arc(self.snapshot, current_pose, curvature_inv_m, direction, footprint, own,
+                                         cap_mps)
+
     def certify_withdrawal(self, path, shape, until_m: float, gaps_m) -> bool:
         """Plan v10 D5 withdrawal corridor: certified only when the smallest of the
         four blade-to-pocket gaps covers the checker's side width plus b_w and e_w
@@ -388,14 +404,20 @@ class ObstacleLayer:
             from forklift_core.control.drive_permission import parts_of
             from forklift_core.control.shadow_memory import whole_cells
 
+            # Several poses (obstacle recovery v4: an escape's end region): only the cells wholly
+            # inside the parts at every one of them, so the copy holds each pose's own cells.
             shape = self.loaded if loaded else (self.parts_shape or self.unloaded)
-            x, y, yaw = own_pose
-            c, s = math.cos(yaw), math.sin(yaw)
-            for fp, lat, lon in parts_of(shape):
-                part = (x + lon * c - lat * s, y + lon * s + lat * c, yaw)
-                for a, b in whole_cells(snap, part, fp):
-                    if 0 <= a < nx and 0 <= b < ny:
-                        sub[a, b] = False
+            poses = [own_pose] if np.ndim(own_pose) == 1 else list(own_pose)
+            out = None
+            for x, y, yaw in poses:
+                c, s = math.cos(yaw), math.sin(yaw)
+                cells = set()
+                for fp, lat, lon in parts_of(shape):
+                    part = (x + lon * c - lat * s, y + lon * s + lat * c, yaw)
+                    cells.update((a, b) for a, b in whole_cells(snap, part, fp) if 0 <= a < nx and 0 <= b < ny)
+                out = cells if out is None else out & cells
+            for a, b in out:
+                sub[a, b] = False
         from forklift_core.planning.grid_collision import OccupancyGrid
 
         return OccupancyGrid(snap.origin_x_m, snap.origin_y_m, res, occupied | sub, version=snap.correction_version)

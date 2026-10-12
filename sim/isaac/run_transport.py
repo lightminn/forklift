@@ -32,6 +32,9 @@ COMMAND_ACCEL_MPS2 = 0.8
 BACKOFF_M = 0.30
 BACKOFF_SPEED_MPS = 0.15
 BACKOFF_PER_LEG = 2
+# Obstacle recovery v4 (docs/plans/2026-10-04-lidar-obstacle-map.md, "장애물 복구–허가 정합 설계 4판"):
+# straight escapes per leg, a budget apart from the backoffs.
+ESCAPE_PER_LEG = 2
 # Plan D8b dwells: the wheel drives are velocity drives (stiffness 0, damping 20), which
 # let a standing truck roll on (confirmation matrix 1968 seed 5: 0.1-0.15 mm/s through a
 # 2 s stand); during a dwell they get this stiffness (N m/rad) around the angle they
@@ -2584,8 +2587,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             np.abs(-dx * st_ + dy * ct) <= geometry.pallet_width_m / 2 + band_across
         )
 
-    def grid_kwargs(kind=None, target=None, own=None, applied=None) -> dict:
-        """occupancy (and the pallet obstacle the plan may know) for a grid plan."""
+    def grid_kwargs(kind=None, target=None, own=None, applied=None, band_pose=None, label=None) -> dict:
+        """occupancy (and the pallet obstacle the plan may know) for a grid plan. band_pose (default
+        the truck's rear) is where the return's delivered-pallet band is cleared around; label
+        names the call in the plans record (obstacle recovery v4: the escape's grids)."""
         if not grid_planning:
             return {}
         try:  # the first plans run before the SLAM link exists
@@ -2603,13 +2608,16 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         applied_ = tuple(float(v) for v in applied) if applied is not None else (
             obstacle["applied"] or (0.0, 0.0, 0.0))
         try:
-            own_now_ = tuple(float(v) for v in (own if own is not None else rear))
+            own_ = own if own is not None else rear
+            # Several poses (obstacle recovery v4: an escape's end region) keep only the cells under all.
+            own_now_ = (tuple(tuple(float(v) for v in p_) for p_ in own_) if np.ndim(own_) == 2
+                        else tuple(float(v) for v in own_))
             loaded_now_ = bool(loaded)
         except NameError:  # the first plans, before the drive loop: nothing remembered under the truck
             own_now_, loaded_now_ = None, False
         mode_ = slam_ref["tracker"].mode if slam_ref is not None else None
         key_ = (stamp, obstacle["version"], applied_, mode_, loaded_now_,
-                None if own_now_ is None else tuple(round(v, 4) for v in own_now_))
+                None if own_now_ is None else tuple(round(v, 4) for v in np.ravel(own_now_)))
         cache_ = obstacle.get("plan_cache")
         if cache_ is not None and cache_[0] == key_:
             # One bundle per planning instant and state: retries and fallbacks
@@ -2666,8 +2674,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 "mode": mode_,
             }
             obstacle["plan_cache"] = (key_, occupancy, bundle)
-        obstacle["plans"].append({"kind": kind, "stamp_s": stamp, "occupied_cells": int(occupancy.occupied.sum()),
-                                  **bundle})
+        obstacle["plans"].append({"kind": label or kind, "stamp_s": stamp,
+                                  "occupied_cells": int(occupancy.occupied.sum()), **bundle})
         out = {"occupancy": occupancy}
         if obstacle.get("deadline") is not None and kind in ("observe", None, "mission", "return"):
             out["deadline"] = obstacle["deadline"]
@@ -2692,13 +2700,19 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             # clearance): clearing the whole band let the plan run through the
             # swelling the permission still sees, and every replan was blocked
             # again (L3c v18 seed 1: 3 replans in 30 s on the return).
-            sx, sy, syaw = (float(v) for v in rear)
             fp_r = geometry.unloaded_footprint
             grow_r = planner_config.clearance_m + res_r
-            dxs, dys = occupancy.origin_x_m + (gi_r + 0.5) * res_r - sx, occupancy.origin_y_m + (gj_r + 0.5) * res_r - sy
-            cs, ss = math.cos(syaw), math.sin(syaw)
-            us, vs = dxs * cs + dys * ss, -dxs * ss + dys * cs
-            under_r = (us <= fp_r.front_m + grow_r) & (us >= -fp_r.rear_m - grow_r) & (np.abs(vs) <= fp_r.half_width_m + grow_r)
+            band_poses_ = rear if band_pose is None else band_pose
+            band_poses_ = [band_poses_] if np.ndim(band_poses_) == 1 else list(band_poses_)
+            under_r = np.ones_like(band_r)
+            for bp_ in band_poses_:  # several poses (an escape's end region): cleared only under all
+                sx, sy, syaw = (float(v) for v in bp_)
+                dxs = occupancy.origin_x_m + (gi_r + 0.5) * res_r - sx
+                dys = occupancy.origin_y_m + (gj_r + 0.5) * res_r - sy
+                cs, ss = math.cos(syaw), math.sin(syaw)
+                us, vs = dxs * cs + dys * ss, -dxs * ss + dys * cs
+                under_r &= ((us <= fp_r.front_m + grow_r) & (us >= -fp_r.rear_m - grow_r)
+                            & (np.abs(vs) <= fp_r.half_width_m + grow_r))
             out["occupancy"] = _OccR(occupancy.origin_x_m, occupancy.origin_y_m, res_r,
                                      occupancy.occupied & ~(band_r & under_r), version=occupancy.version)
             return out
@@ -4218,6 +4232,103 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             start, config, geometry=geometry, travel_config=travel, **grid_kwargs(None),
         )
 
+    def escape_leg(phase_):
+        """Obstacle recovery v4: (kind, the leg's grid_kwargs args, its rectangle checker, outline)
+        for transport or return_home -- the rectangles, outline and bounds its replan checks."""
+        from forklift_core.planning.grid_collision import FootprintCollisionChecker
+        from forklift_core.planning.pallet_mission import leg_obstacles
+
+        if phase_ == "transport":
+            sc_ = slam.get("transport_scenario", scenario) if slam is not None else scenario
+            kind_, args_ = "transport", (None, None)
+        else:
+            sc_ = scenario if slam is None else slam.get("return_scenario", slam.get("transport_scenario", scenario))
+            kind_, args_ = "return", ("return", sc_.destination)
+        rects_, footprint_, bounds_ = leg_obstacles(kind_, grid_world(sc_), geometry)
+        return kind_, args_, FootprintCollisionChecker(rects_, footprint_, bounds_), (rects_, footprint_, bounds_)
+
+    def find_escape(now_s, rear_now, leg_dir_, kappa_now):
+        """Obstacle recovery v4 E2: the straight escape for a stop inside the planning clearance --
+        (the chosen candidate or None, every candidate). The candidates' checks: the leg's planner
+        checker over the sweep (the permission's own-cell rule on the grid), the permission's path
+        check to the length plus the stop length (and with the extra margin ramping in), the stop arcs
+        at the held steering, and the end region on the grid rebuilt for the end pose."""
+        from forklift_core.control import escape as esc
+        from forklift_core.planning.grid_collision import make_checker
+
+        _, args_, rect_checker_, (rects_, footprint_, bounds_) = escape_leg(phase)
+        pose_ = tuple(float(v) for v in rear_now)
+        occ_now_ = grid_kwargs(*args_, label="escape")["occupancy"]
+        layer_ = obstacle["layer"]
+        loaded_now_ = bool(loaded)
+        pconf_ = layer_.permission.config
+        stop_len_ = pconf_.stopping.distance_m(BACKOFF_SPEED_MPS) + pconf_.step_m
+        psi_ = float(layer_.error_table.at(layer_.grid_config.occupied_max_age_s)[1])
+        clearance_ = float((travel_config or planner_config).clearance_m)
+
+        def end_clearance(region):
+            # One grid per candidate for its whole end region: the remembered cells under the truck
+            # now come back once it has left them, and only the cells under every region pose stay
+            # out (the return band likewise) -- each pose's own grid is contained in it.
+            occ_end_ = grid_kwargs(*args_, own=list(region), band_pose=list(region), label="escape_end")["occupancy"]
+            checker_ = make_checker(rects_, footprint_, bounds_, occ_end_)
+            values_ = [esc.clearance_m(checker_.free, p_) for p_ in region]
+            return min(values_) >= 0.0, min(values_)
+
+        candidates_ = esc.evaluate(
+            pose_,
+            sweep_free=lambda poses, d: esc.rectangles_sweep_free(rect_checker_, poses)
+            and esc.grid_sweep_blocked(occ_now_, footprint_, pose_, d, poses) is None,
+            path_blocked=lambda poses, d, extra, ramp: layer_.check_candidate(
+                poses, current_pose=pose_, direction=d, loaded=loaded_now_, extra_margin_m=extra, extra_ramp_m=ramp
+            ).blocked,
+            arc_blocked=lambda k, d: layer_.check_arc_candidate(
+                current_pose=pose_, curvature_inv_m=k, direction=d, loaded=loaded_now_, cap_mps=BACKOFF_SPEED_MPS
+            ).blocked,
+            end_clearance=end_clearance,
+            kappa_now=float(kappa_now), stop_length_m=stop_len_, planner_clearance_m=clearance_, psi_rad=psi_,
+            cell_m=float(occ_now_.resolution_m),
+        )
+        choice_ = esc.choose(candidates_, int(leg_dir_))
+        dumps_ = obstacle.setdefault("recovery_dumps", 0)
+        if dumps_ < 6:
+            # Plan v4 D4: the inputs of the decision, for a CPU replay.
+            obstacle["recovery_dumps"] = dumps_ + 1
+            snap_ = layer_.snapshot
+            np.savez_compressed(
+                args.output / f"obstacle_recovery_{dumps_ + 1}.npz",
+                state=snap_.state, free_stamp=snap_.free_stamp, origin=[snap_.origin_x_m, snap_.origin_y_m],
+                res=snap_.resolution_m, planner_occupied=occ_now_.occupied,
+                planner_origin=[occ_now_.origin_x_m, occ_now_.origin_y_m], planner_res=occ_now_.resolution_m,
+                t=now_s, rear=np.asarray(pose_), kappa=float(kappa_now), leg_dir=int(leg_dir_), phase=phase,
+                loaded=loaded_now_, candidates=json.dumps([c.record() for c in candidates_]),
+                chosen=json.dumps(None if choice_ is None else choice_.record()),
+            )
+        return choice_, candidates_
+
+    def release_after_backoff(now_s, event):
+        """Obstacle recovery v4 E3: a SLAM hold -- whenever it began -- released at a backoff's or
+        escape's end, or in a recovery during one, the way the stall replan does: the grid
+        re-projected before any plan reads it; returns the released rear. Not while the delivery
+        docking is accepted or re-approaching."""
+        if slam is None or slam["tracker"].mode != "holding":
+            return None
+        if phase == "transport" and (slam["docking"].get("accepted_any") or slam["docking"].get("reapproach")):
+            return None
+        jump_m, jump_rad = slam["tracker"].release(odom_from_base=slam_odom_base())
+        slam["holds"].append({"phase": phase, "time_s": now_s, "event": event, "jump_m": jump_m, "jump_rad": jump_rad})
+        rear_now = slam_rear(world.current_time - initial_time)
+        if obstacle is not None and slam["tracker"].applied is not None:
+            obstacle["applied"] = tuple(float(v) for v in slam["tracker"].applied[0])
+            obstacle["version"] += 1
+            obstacle["reprojections"] = obstacle.get("reprojections", 0) + 1
+            obstacle["layer"].refresh(
+                now_s, obstacle["applied"], obstacle["version"],
+                current_pose=tuple(float(v) for v in rear_now), path_ahead=np.array([rear_now]), loaded=loaded,
+            )
+        slam["control"][-1][1:4] = np.asarray(rear_now, dtype=float).tolist()
+        return np.asarray(rear_now, dtype=float)
+
     try:
         if args.video:
             encoder = subprocess.Popen(
@@ -4985,6 +5096,26 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     # Plan D8 S4c-2: standing to re-observe -- no follower command, no hold and no
                     # observe recovery: the capture follows at once.
                     tracking = replace(tracking, status="arrived", speed_mps=0.0)
+                escape_now_ = (
+                    obstacle is not None and obstacle.get("backoff", {}).get("phase") == phase
+                    and obstacle["backoff"].get("escape")
+                )
+                if escape_now_:
+                    # Obstacle recovery v4 E3: an escape's end -- arrived, an endpoint failure, standing
+                    # at its end, a 120-tick stand on the way -- is the backoff end, never a docking
+                    # stop, a stall replan or a tracking failure; it stays so until a replan replaces it.
+                    back_e = obstacle["backoff"]
+                    standing_e = slam["stop_now"] if slam is not None else abs(signed_speed) < 0.01
+                    back_e["stand_ticks"] = back_e.get("stand_ticks", 0) + 1 if standing_e else 0
+                    if (
+                        "end_s" in back_e or tracking.status == "arrived"
+                        or (standing_e and (tracking.status == "failed" or trackers[phase].remaining_to_goal_m() <= 1e-6))
+                        or back_e["stand_ticks"] >= 120
+                    ):
+                        tracking = replace(tracking, status="arrived", speed_mps=0.0)
+                    elif tracking.status == "failed":
+                        # An endpoint failure while still rolling: brake and take the end standing.
+                        tracking = replace(tracking, status="braking", speed_mps=0.0)
                 last_tracking = tracking
                 if (
                     slam is not None
@@ -5492,9 +5623,23 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         back_["end_s"] = t
                         obstacle.setdefault("backoff_records", []).append(
                             {"phase": phase, "start_s": back_["time_s"], "end_s": t,
-                             "rear": [float(v) for v in rear]}
+                             "rear": [float(v) for v in rear], "escape": bool(back_.get("escape"))}
                         )
-                    if t - back_.get("forced_s", -1e9) >= 1.0:
+                    # Plan v4 E3: standing first -- then the hold released and the replan forced.
+                    standing_b = slam["stop_now"] if slam is not None else abs(signed_speed) < 0.01
+                    if standing_b and not back_.get("released"):
+                        back_["released"] = True
+                        # The stop's cause, read before the release refreshes the permission, for the
+                        # forced replan's record (Codex implementation review 2 P2).
+                        perm_b = obstacle["layer"].permission
+                        back_["stop_cause"] = {
+                            "path": getattr(perm_b.path_check, "blocked", None),
+                            "estop": getattr(getattr(perm_b, "last_estop", None), "blocked", None),
+                        }
+                        released_b = release_after_backoff(t, "release_after_backoff")
+                        if released_b is not None:
+                            rear = released_b
+                    if standing_b and t - back_.get("forced_s", -1e9) >= 1.0:
                         back_["forced_s"] = t
                         obstacle["force_replan"] = phase
                     tracking = replace(tracking, status="tracking", speed_mps=0.0)
@@ -6706,6 +6851,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     require(not (phase == "observe" and realign_active() and slam is not None
                                  and slam["tracker"].mode == "holding"), "near_capture_realign_held_recovery")
                     obstacle["blocked_ticks"] = 0
+                    perm_ = obstacle["layer"].permission
+                    # Plan v4 D4: which check stopped the truck, at what steering -- read before a release
+                    # (a backoff's end released already and kept what it read before).
+                    pre_ = (obstacle["backoff"].pop("stop_cause", None)
+                            if obstacle.get("backoff", {}).get("phase") == phase else None)
+                    stop_cause_ = {
+                        **(pre_ or {"path": getattr(perm_.path_check, "blocked", None),
+                                    "estop": getattr(getattr(perm_, "last_estop", None), "blocked", None)}),
+                        "kappa_inv_m": float(kappa),
+                        "read": "backoff_end" if pre_ is not None else "recovery",
+                    }
                     if phase == "transport" and slam is not None and slam["docking"].get("reapproach"):
                         # Plan D7c: a re-approach path is replaced released, never as
                         # a long held manoeuvre (Codex D7c re-review P2-5).
@@ -6713,6 +6869,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         if released_["released"]:
                             rear = slam_rear(t)
                             slam["control"][-1][1:4] = rear.tolist()
+                    elif obstacle.get("backoff", {}).get("phase") == phase:
+                        released_b = release_after_backoff(t, "release_in_backoff_recovery")  # plan v4 E3
+                        if released_b is not None:
+                            rear = released_b
                     start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))
                     replan_start = time.monotonic()
                     tight = replace(planner_config, clearance_m=0.0)
@@ -6740,6 +6900,36 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             grid_world(back), start, return_to_pose, planner_config, geometry=geometry,
                             travel_config=travel_config, **grid_kwargs("return", back.destination),
                         )
+                    escape_, escape_cands_, escape_skips_back_ = None, None, False
+                    leg_dir_e = obstacle.get("backoff", {}).get("leg_dir")
+                    if leg_dir_e is None and phase in trackers:
+                        leg_dir_e = trackers[phase].leg_ahead()[1] or 1
+                    if (
+                        replanned.status == "invalid_start" and phase in ("transport", "return_home")
+                        and obstacle.setdefault("escapes", {}).get(phase, 0) < ESCAPE_PER_LEG
+                        and not (phase == "transport" and slam is not None
+                                 and (slam["docking"].get("reapproach") or slam["docking"].get("accepted_any")))
+                    ):
+                        # Obstacle recovery v4 E1/E2: the start is inside the planning clearance -- look
+                        # for a straight escape before the clearance-0 replan (smoke 2382).
+                        escape_, escape_cands_ = find_escape(t, rear, leg_dir_e, kappa)
+                        old_d_ = -1 if leg_dir_e >= 0 else 1
+                        escape_skips_back_ = any(
+                            c.direction == old_d_ and abs(c.length_m - BACKOFF_M) < 1e-9 and not c.sweep_free
+                            for c in escape_cands_
+                        )
+                        if escape_ is not None:
+                            from forklift_core.control import escape as esc_
+
+                            poses_e = esc_.straight(rear, escape_.direction, escape_.length_m)
+                            replanned = PlanResult(
+                                True, "escape", poses_e, np.full(len(poses_e), escape_.direction, dtype=np.int8),
+                                np.zeros(len(poses_e)), escape_.length_m, 0,
+                            )
+                    # Plan v4 D4: the clearance of the plan finally adopted.
+                    clearance_used_ = float(
+                        (travel_config if phase in ("transport", "return_home") and travel_config is not None
+                         else planner_config).clearance_m)
                     if replanned.status in ("invalid_start", "no_path"):
                         # The truck stopped closer to the obstacle than the planning
                         # clearance (the stop guards the volume ahead, not the
@@ -6761,6 +6951,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             )
                         obstacle.setdefault("tight_replans", 0)
                         obstacle["tight_replans"] += 1
+                        clearance_used_ = 0.0
                     if not replanned.success:
                         # Diagnostics: the inputs of the failed replan, for a CPU replay.
                         failed_grid = grid_kwargs("observe" if phase == "observe" else None)
@@ -6802,6 +6993,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             )
                             if candidate_plan.success:
                                 replanned = candidate_plan
+                                clearance_used_ = 0.0  # the candidates are planned tight
                                 state["observation_waypoint_selected"] = list(coordinates)
                                 break
                     if (
@@ -6823,7 +7015,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             return_to=return_to_pose, pickup_bounds=pickup_bounds, travel_config=travel_config,
                             trace=planning_trace, **grid_kwargs("mission", pocket["planning_pickup"]),
                         )
+                        mission_clearance_ = float(planner_config.clearance_m)
                         if "invalid_start" in mission_again.status or "invalid_goal" in mission_again.status:
+                            mission_clearance_ = 0.0
                             # The waypoint next to an obstacle that has grown in
                             # view is valid only without the planning clearance
                             # (L3b v26); the grid's swelling holds the placement error.
@@ -6851,6 +7045,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 state["paths"][name] = path_record(paths[name])
                             apply_tracker_profile()
                             replanned = near_again
+                            clearance_used_ = mission_clearance_
                             state["near_capture"]["waypoint"] = near_again.poses[-1].tolist()
                             state["observation_waypoint_selected"] = near_again.poses[-1].tolist()
                     obstacle["deadline"] = None
@@ -6862,9 +7057,35 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             "status": replanned.status,
                             "planning_wall_s": time.monotonic() - replan_start,
                             **path_stats(replanned),
+                            # Plan v4 D4: the clearance the installed plan had, what stopped the truck.
+                            "clearance_m": clearance_used_,
+                            "stop": stop_cause_,
                         }
                     )
-                    if not replanned.success:
+                    if escape_cands_ is not None:
+                        obstacle["replans"][-1]["escape_candidates"] = [c.record() for c in escape_cands_]
+                    if escape_ is not None:
+                        # Plan v4 E2: driven on the backoff machinery with its own budget and its end
+                        # tolerance; not a failure, outside the 30 s and per-leg counts.
+                        obstacle["escapes"][phase] = obstacle["escapes"].get(phase, 0) + 1
+                        obstacle["replans"][-1].update(
+                            backoff=True, failed=False, escape=escape_.record(), clearance_m=None,
+                        )
+                        config0 = obstacle.get("backoff", {}).get("config", trackers[phase].config)
+                        obstacle["backoff"] = {"phase": phase, "config": config0, "time_s": t, "leg_dir": leg_dir_e,
+                                               "escape": True}
+                        obstacle.setdefault("replan_wait", {}).pop(phase, None)
+                        paths[phase] = replanned
+                        trackers[phase] = RearAxlePathTracker(
+                            replanned.poses, replanned.directions, replanned.curvatures_inv_m,
+                            replace(config0, cruise_speed_mps=BACKOFF_SPEED_MPS,
+                                    position_tolerance_m=esc_.END_POSITION_TOL_M,
+                                    yaw_tolerance_rad=esc_.END_YAW_TOL_RAD,
+                                    overshoot_tolerance_m=esc_.END_POSITION_TOL_M),
+                        )
+                        phase_started = t  # the escape's own tracking timeout
+                        requested_speed = 0.0
+                    elif not replanned.success:
                         # Standing, the grid keeps updating: a failed replan is
                         # retried when the blocked count comes round again (1 s),
                         # five failures per leg at most; the no-progress watch
@@ -6878,7 +7099,20 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         obstacle.setdefault("replan_wait", {})[phase] = True
                         requested_speed = 0.0
                         backs = obstacle.setdefault("backoffs", {})
-                        if phase in ("transport", "return_home") and backs.get(phase, 0) < BACKOFF_PER_LEG:
+                        back_ok_ = not escape_skips_back_  # plan v4: E2 refused this straight by its checker
+                        if back_ok_ and phase == "return_home":
+                            # Plan v4: the return's backoff must clear the delivered pallet the single
+                            # LiDAR cannot see (the leg's rectangles and bounds).
+                            from forklift_core.control import escape as esc_
+
+                            d_b = -1 if (leg_dir_e if leg_dir_e is not None else 1) >= 0 else 1
+                            back_ok_ = esc_.rectangles_sweep_free(
+                                escape_leg(phase)[2], esc_.straight(rear, d_b, BACKOFF_M)
+                            )
+                        if not back_ok_:
+                            obstacle["replans"][-1]["backoff_skipped"] = True
+                        if (phase in ("transport", "return_home") and backs.get(phase, 0) < BACKOFF_PER_LEG
+                                and back_ok_):
                             # D4 delta: stood with the outline already on the
                             # blocking cells, no forward plan starts (L3c v46 seed
                             # 5). Back off straight, against the leg's direction,
@@ -6932,9 +7166,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         # never counts (Codex checkpoint 6 P2).
                         recent = [r for r in obstacle["replans"]
                                   if r["phase"] == phase and t - r["time_s"] < 30.0
-                                  and not r.get("same_path") and not r.get("failed")]
+                                  and not r.get("same_path") and not r.get("failed") and not r.get("escape")]
                         require(len(recent) <= 3, f"obstacle_blocked in {phase}: {len(recent)} replans in 30 s")
-                        leg_replans = sum(1 for r in obstacle["replans"] if r["phase"] == phase and not r.get("same_path") and not r.get("failed"))
+                        leg_replans = sum(1 for r in obstacle["replans"] if r["phase"] == phase and not r.get("same_path")
+                                          and not r.get("failed") and not r.get("escape"))
                         require(leg_replans <= 10, f"obstacle_replan_limit in {phase}: {leg_replans}")
                         obstacle.setdefault("progress", {}).clear()
                         obstacle.setdefault("replan_wait", {}).pop(phase, None)

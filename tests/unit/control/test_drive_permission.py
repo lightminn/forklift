@@ -252,3 +252,51 @@ def _snap_for_shape_test(rng):
     state = np.full((120, 120), FREE, dtype=np.int8)
     free_stamp = np.zeros((120, 120))
     return GridSnapshot(state, free_stamp, 0.0, (0.0, 0.0, 0.0), 0, 1, {"low": 0.0}, -3.0, -3.0, 0.05)
+
+
+# Obstacle recovery v4 D1 (docs/plans/2026-10-04-lidar-obstacle-map.md): a candidate is checked
+# before it is installed, without changing the permission the drive loop uses.
+def test_check_path_is_update_without_changing_the_permission():
+    perm = DrivePermission(CONFIG)
+    first = snapshot()
+    installed = perm.update(first, STRAIGHT, FOOT, BODY, current_pose=(0, 0, 0))
+    other = snapshot()
+    set_cell(other, 2.0, 0.0, OCCUPIED)
+    candidate = perm.check_path(other, STRAIGHT, FOOT, BODY, current_pose=(0, 0, 0))
+    assert candidate.blocked == "occupied" and candidate.verified_m < 1.0
+    assert perm.snapshot is first and perm.path_check is installed
+    fresh = DrivePermission(CONFIG)
+    assert fresh.update(other, STRAIGHT, FOOT, BODY, current_pose=(0, 0, 0)) == candidate
+
+
+def test_check_arc_is_the_stop_arc_allowed_speed_walks():
+    snap = snapshot()
+    set_cell(snap, 1.32, -0.37, OCCUPIED)
+    perm = DrivePermission(CONFIG)
+    perm.update(snap, STRAIGHT[:2], FOOT, BODY, current_pose=(0, 0, 0))
+    allowed(perm, 0.05, curvature=0.6)
+    arc = perm.check_arc(snap, (0, 0, 0), 0.6, 1, FOOT, BODY, 0.6)
+    assert arc == perm.last_estop and arc.blocked == "occupied"
+    assert perm.snapshot is snap
+
+
+def test_an_extra_margin_ramps_from_zero_over_its_length():
+    # Driving forward, a cell 0.03 m beyond the side and envelope beside the rear axle: an extra 0.05 m
+    # at once blocks there (once this config's own envelope has ramped in); ramped from zero over 1 m it
+    # does not (the body leaves it by s ~ 0.22 m, 11 mm of extra). The same cell beside the body near
+    # the end of the metre blocks.
+    beside = 0.36 + 0.05 + 0.03 + 0.025  # a point in the cell whose near edge is 0.03 m past side + envelope
+    near = snapshot()
+    set_cell(near, 0.02, beside, OCCUPIED)
+    perm = DrivePermission(CONFIG)
+    path = STRAIGHT[:21]  # 1 m
+    kw = {"current_pose": (0, 0, 0), "direction": 1}
+    assert perm.check_path(near, path, FOOT, BODY, **kw).blocked is None
+    flat = perm.check_path(near, path, FOOT, BODY, extra_margin_m=0.05, **kw)
+    assert flat.blocked == "occupied" and flat.verified_m < 0.2
+    assert perm.check_path(near, path, FOOT, BODY, extra_margin_m=0.05, extra_ramp_m=1.0, **kw).blocked is None
+    far = snapshot()
+    set_cell(far, 2.2, beside, OCCUPIED)
+    assert perm.check_path(far, path, FOOT, BODY, **kw).blocked is None
+    late = perm.check_path(far, path, FOOT, BODY, extra_margin_m=0.05, extra_ramp_m=1.0, **kw)
+    assert late.blocked == "occupied" and late.verified_m > 0.5

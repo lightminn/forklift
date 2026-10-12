@@ -243,10 +243,12 @@ class DrivePermission:
         return False
 
     def _walk(self, snapshot, samples, arc, footprint, own_cells, *, full_path_m=None, direction=0,
-              own_pose=None, own_footprint=None) -> Check:
+              own_pose=None, own_footprint=None, extra_margin_m=0.0, extra_ramp_m=None) -> Check:
         """Walk the samples; between two samples the midpoint is checked with half
         the interval's motion added (translation + farthest corner x rotation), so
-        the continuous sweep is covered, not just the samples (Codex L0b P1)."""
+        the continuous sweep is covered, not just the samples (Codex L0b P1).
+        extra_margin_m (obstacle recovery v4) is added to the margin, growing from 0
+        over extra_ramp_m along the walk (None: in full from the start)."""
         cfg = self.config
         verified, blocked, oldest = 0.0, None, np.inf
         blocked_cells = ()
@@ -264,6 +266,8 @@ class DrivePermission:
         for pose, s, pad in checks:
             ramp = min(1.0, s / cfg.envelope_ramp_m) if cfg.envelope_ramp_m > 0 else 1.0
             margin = cfg.envelope_offset_m * ramp + pad
+            if extra_margin_m:
+                margin += extra_margin_m * (min(1.0, s / extra_ramp_m) if extra_ramp_m else 1.0)
             cells, outside = shape_cells(snapshot, pose, footprint, margin, direction=direction)
             if outside:
                 blocked = "edge"
@@ -401,17 +405,37 @@ class DrivePermission:
         partial = {(int(a), int(b)) for a, b in cells[~inside]}
         return out, partial
 
-    def update(self, snapshot: GridSnapshot, path_ahead, footprint: Footprint, own_footprint: Footprint, *,
-               current_pose, direction: int = 0) -> Check:
-        """New snapshot: the verified distance along path_ahead (rear-axle poses from the truck on)."""
+    def check_path(self, snapshot: GridSnapshot, path_ahead, footprint: Footprint, own_footprint: Footprint, *,
+                   current_pose, direction: int = 0, extra_margin_m: float = 0.0,
+                   extra_ramp_m: float | None = None) -> Check:
+        """The verified distance along path_ahead on snapshot, leaving this permission as it is
+        (obstacle recovery v4 D1: a candidate is checked before it is installed)."""
         poses = np.asarray(path_ahead, dtype=float)
         if poses.ndim != 2 or poses.shape[1] != 3 or not len(poses):
             raise ValueError("path_ahead must be a non-empty (N, 3) array")
         samples, arc, total = resample_path(poses, self.config.step_m, self.config.lookahead_m)
         own = self._own_cells(snapshot, current_pose, own_footprint)
+        return self._walk(snapshot, samples, arc, footprint, own, full_path_m=total, direction=direction,
+                          own_pose=current_pose, own_footprint=own_footprint, extra_margin_m=extra_margin_m,
+                          extra_ramp_m=extra_ramp_m)
+
+    def check_arc(self, snapshot: GridSnapshot, current_pose, curvature_inv_m: float, direction: int,
+                  footprint: Footprint, own_footprint: Footprint, speed_cap_mps: float) -> Check:
+        """The emergency-stop arc allowed_speed walks, on snapshot, leaving this permission as it is."""
+        cfg = self.config
+        length = cfg.stopping.distance_m(speed_cap_mps) + cfg.step_m
+        samples, arc = arc_poses(current_pose, curvature_inv_m, 1 if direction >= 0 else -1, length, cfg.step_m)
+        own = self._own_cells(snapshot, current_pose, own_footprint)
+        return self._walk(snapshot, samples, arc, footprint, own, direction=1 if direction >= 0 else -1,
+                          own_pose=current_pose, own_footprint=own_footprint)
+
+    def update(self, snapshot: GridSnapshot, path_ahead, footprint: Footprint, own_footprint: Footprint, *,
+               current_pose, direction: int = 0) -> Check:
+        """New snapshot: the verified distance along path_ahead (rear-axle poses from the truck on)."""
+        check = self.check_path(snapshot, path_ahead, footprint, own_footprint, current_pose=current_pose,
+                                direction=direction)
         self.snapshot = snapshot
-        self.path_check = self._walk(snapshot, samples, arc, footprint, own, full_path_m=total,
-                                     direction=direction, own_pose=current_pose, own_footprint=own_footprint)
+        self.path_check = check
         self._driven_since_m = 0.0
         return self.path_check
 
@@ -440,11 +464,7 @@ class DrivePermission:
             if now_s - last > cfg.sensor_timeout_s:
                 return 0.0, f"sensor_silent:{name}"
         # Emergency-stop arc at the present curvature and direction.
-        length = cfg.stopping.distance_m(speed_cap_mps) + cfg.step_m
-        samples, arc = arc_poses(current_pose, curvature_inv_m, 1 if direction >= 0 else -1, length, cfg.step_m)
-        own = self._own_cells(snap, current_pose, own_footprint)
-        estop = self._walk(snap, samples, arc, footprint, own, direction=1 if direction >= 0 else -1,
-                           own_pose=current_pose, own_footprint=own_footprint)
+        estop = self.check_arc(snap, current_pose, curvature_inv_m, direction, footprint, own_footprint, speed_cap_mps)
         self.last_estop = estop
         path_left = path.verified_m - self._driven_since_m
         if now_s - estop.oldest_free_s > cfg.evidence_max_age_s or now_s - path.oldest_free_s > cfg.evidence_max_age_s:

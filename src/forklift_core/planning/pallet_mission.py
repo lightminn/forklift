@@ -776,6 +776,29 @@ def correction_point_offsets(
     return out
 
 
+def leg_obstacles(
+    kind: str, scenario: TransportScenario, geometry: SyntheticMissionGeometry | None = None
+) -> tuple[list[Rectangle], Footprint, Bounds]:
+    """(rectangles, footprint, bounds) the transport or return leg's search checks besides its grid:
+    the props, plus the delivered pallet on the return; the loaded outline in transport. One source
+    for plan_transport_leg, plan_return_leg and the obstacle recovery's escape check (plan
+    2026-10-04-lidar-obstacle-map, obstacle recovery v4 E2 ①)."""
+    geometry = geometry if geometry is not None else SyntheticMissionGeometry()
+    props = [prop.rectangle for prop in scenario.props]
+    if kind == "transport":
+        return props, geometry.loaded_footprint, scenario.bounds
+    if kind == "return":
+        delivered = Rectangle(
+            scenario.destination.x_m,
+            scenario.destination.y_m,
+            geometry.pallet_depth_m,
+            geometry.pallet_width_m,
+            scenario.destination.yaw_rad,
+        )
+        return props + [delivered], geometry.unloaded_footprint, scenario.bounds
+    raise ValueError(f"unknown leg {kind!r}")
+
+
 def plan_transport_leg(
     scenario: TransportScenario,
     start_rear: Pose2D,
@@ -796,14 +819,14 @@ def plan_transport_leg(
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
     config = config if config is not None else make_transport_planner_config()
     travel_config = travel_config if travel_config is not None else config
-    props = [prop.rectangle for prop in scenario.props]
+    props, footprint, bounds = leg_obstacles("transport", scenario, geometry)
     destination = site_poses(scenario.destination, geometry)
     search = _search(
         start_rear,
         destination["predelivery"],
         props,
-        geometry.loaded_footprint,
-        scenario.bounds,
+        footprint,
+        bounds,
         travel_config,
         occupancy=occupancy,
         deadline=deadline,
@@ -1051,20 +1074,13 @@ def plan_return_leg(
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
     config = config if config is not None else make_transport_planner_config()
     travel_config = travel_config if travel_config is not None else config
-    props = [prop.rectangle for prop in scenario.props]
-    delivered = Rectangle(
-        scenario.destination.x_m,
-        scenario.destination.y_m,
-        geometry.pallet_depth_m,
-        geometry.pallet_width_m,
-        scenario.destination.yaw_rad,
-    )
+    obstacles, footprint, bounds = leg_obstacles("return", scenario, geometry)
     return _search(
         start_rear,
         return_to,
-        props + [delivered],
-        geometry.unloaded_footprint,
-        scenario.bounds,
+        obstacles,
+        footprint,
+        bounds,
         travel_config,
         occupancy=occupancy,
         deadline=deadline,

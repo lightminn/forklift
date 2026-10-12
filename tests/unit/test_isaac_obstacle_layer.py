@@ -188,6 +188,20 @@ def test_remembered_cells_under_the_truck_are_left_out_of_the_plan_copy_only():
     assert lay.memory.occupied()[a, b]  # the memory itself keeps it
 
 
+def test_with_several_own_poses_only_cells_under_all_of_them_are_left_out():
+    """Obstacle recovery v4: an escape's end region rebuilds one grid that holds each pose's own."""
+    lay = layer()
+    lay.memory.add_hits(np.array([0.3, 1.5]), np.array([0.0, 0.0]), 0.0)
+    poses = [(0.0, 0.0, 0.0), (0.4, 0.0, 0.0)]  # no blades here: the hull's front at 1.29 / 1.69
+    occ = lay.planner_grid(0.1, (0.0, 0.0, 0.0), 0, own_pose=poses, loaded=False)
+    i, j = occ.cell_of(0.3, 0.0)
+    assert not occ.occupied[i, j]  # under the body at both poses
+    i, j = occ.cell_of(1.5, 0.0)
+    assert occ.occupied[i, j]  # under the hull at the second pose only
+    alone = lay.planner_grid(0.1, (0.0, 0.0, 0.0), 0, own_pose=poses[1], loaded=False)
+    assert not alone.occupied[i, j]
+
+
 def _grid_kwargs_harness(tmp_path, slam=None, with_map=False, **outer):
     """Run the runner's grid_kwargs (AST) against a real obstacle layer."""
     import ast
@@ -239,6 +253,25 @@ def test_grid_kwargs_runs_before_the_drive_loop_and_with_a_slam_map(tmp_path):
     assert out["occupancy"].occupied[out["occupancy"].cell_of(1.025, 1.025)]
     gk(None)  # the same instant: the cached bundle
     assert len(obstacle["plans"]) == 2 and obstacle["plans"][0]["memory_revision"] == obstacle["plans"][1]["memory_revision"]
+
+
+def test_grid_kwargs_takes_an_end_region_for_its_own_cells_and_the_return_band(tmp_path):
+    """Obstacle recovery v4: an escape scores its end region on one grid -- the remembered cells and
+    the return's delivered-pallet band are left out only under every region pose; its record is labelled."""
+    from forklift_core.planning.geometry import Rectangle
+
+    gk, obstacle = _grid_kwargs_harness(tmp_path, rear=np.array([0.0, 0.0, 0.0]), loaded=False)
+    lay = obstacle["layer"]
+    lay.memory.add_hits(np.array([0.3, 1.5]), np.array([0.0, 0.0]), 0.0)
+    target = Rectangle(1.0, 0.0, 0.6, 0.8, 0.0)  # a delivered pallet whose band covers x 0.3..1.7
+    region = [(0.0, 0.0, 0.0), (0.4, 0.0, 0.0)]
+    out = gk("return", target, own=region, band_pose=region, label="escape_end")
+    occ = out["occupancy"]
+    assert obstacle["plans"][-1]["kind"] == "escape_end"
+    assert not occ.occupied[occ.cell_of(0.3, 0.0)]  # under the truck at both poses
+    assert occ.occupied[occ.cell_of(1.5, 0.0)]  # under it at the second pose only: kept
+    one = gk("return", target, own=region[1], band_pose=region[1])["occupancy"]
+    assert not one.occupied[one.cell_of(1.5, 0.0)]
 
 
 def test_a_map_swapped_after_it_was_opened_is_judged_by_the_file_read(tmp_path):
@@ -365,3 +398,30 @@ def test_codex_stage1_a_certified_withdrawal_hands_the_return_a_fresh_pallet():
     lay.refresh(4.6, (0.0, 0.0, 0.0), 0, current_pose=pose, path_ahead=onward, loaded=False, direction=-1)
     speed, why = lay.limit(4.6, current_pose=pose, curvature_inv_m=0.0, direction=-1, loaded=False, cap_mps=0.3)
     assert speed > 0.0, why
+
+
+def test_a_candidate_is_checked_on_the_permission_snapshot_without_changing_it():
+    """Obstacle recovery v4 D1: the escape's path and stop-arc checks use the snapshot and shapes the
+    permission uses, and leave its installed path check alone."""
+    lay = layer()
+    pose = (0.0, 0.0, 0.0)
+    path = np.column_stack((np.linspace(0, 4, 81), np.zeros(81), np.zeros(81)))
+    for k in range(3):
+        raw = {}
+        for s in CONFIG["sensors"]:
+            ox = s.xyz_m[0] + 0.34
+            ang = lay.beam_angles + s.yaw_rad
+            d = np.where(np.cos(ang) > 0.05, (1.62 - ox) / np.cos(ang), np.nan)
+            ok = np.isfinite(d) & (np.abs(s.xyz_m[1] + d * np.sin(ang)) < 3) & (d > 0)
+            raw[s.name] = (np.where(ok, d, np.nan), ok, np.zeros(len(ang), bool))
+        lay.add_scans(0.1 * k, raw, odom_rear=pose, loaded=False)
+    installed = lay.refresh(0.2, (0.0, 0.0, 0.0), 0, current_pose=pose, path_ahead=path, loaded=False)
+    snap = lay.snapshot
+    ahead = lay.check_candidate(path, current_pose=pose, direction=1, loaded=False)
+    assert ahead == installed and ahead.blocked == "occupied"
+    back = np.column_stack((np.linspace(0, -0.5, 26), np.zeros(26), np.zeros(26)))
+    assert lay.check_candidate(back, current_pose=pose, direction=-1, loaded=False).blocked != "occupied"
+    arc = lay.check_arc_candidate(current_pose=pose, curvature_inv_m=0.0, direction=1, loaded=False, cap_mps=0.6)
+    speed, why = lay.limit(0.2, current_pose=pose, curvature_inv_m=0.0, direction=1, loaded=False, cap_mps=0.6)
+    assert arc == lay.permission.last_estop
+    assert lay.snapshot is snap and lay.permission.path_check is installed
