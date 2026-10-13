@@ -18,4 +18,10 @@
 ## 시험
 
     python -m pytest tests/unit/console tests/integration/console -q -p no:cacheprovider -W error
-    node --test console/web/test/
+    node --test "console/web/test/*.test.mjs"
+
+## 확인한 환경 (2026-10-13)
+
+- 가짜 차량 서버: Python 3.11, websockets 16, Pillow 12 (conda base)
+- 웹 시험: Node 22 (`node --test`는 디렉터리가 아니라 글롭을 받는다)
+- 화면: 헤드리스 Chromium(Playwright)에서 1440 px·400 px 폭으로 렌더와 흐름(권한 → 작업 시작 → 수동 조종 보류 → 무장 → 누르고 있기 → 포커스 잃음 해제 → STOP → 재무장 → 재개 체크리스트)을 확인했다. Firefox·Safari·실제 폰·게임패드는 아직 확인하지 않았다.
