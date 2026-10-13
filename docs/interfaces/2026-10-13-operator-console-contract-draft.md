@@ -107,6 +107,8 @@
 | `speed_ratio`, `curvature_ratio` | −1…1 비율(합의). 차량이 현재 상한(모드·잠정값·적재·허가)을 곱해 물리량으로 바꾼다. 곡률 비율에 곱하는 상한은 차량 설정의 수동 조종 곡률 상한이다(실측 모델 추종기 0.36 m⁻¹ 이하). 클라이언트는 물리 상한을 계산하지 않는다 |
 | `lift_dir` | −1, 0, 1. 승강 속도는 차량 설정 |
 
+lease 보유자는 `tick`을 받을 때마다 `{"t": "echo", "session_epoch", "lease_id", "echo": {"state_seq", "token"}}`를 보낸다(최신값만). 텔레옵 명령의 `echo`도 같은 역할을 한다.
+
 ### 4.1 만료 시각
 
 차량은 명령을 받으면 **절대 만료 시각**을 정한다.
@@ -192,6 +194,7 @@
  "teleop_allowed": true, "teleop_forbidden_reason": null}
 ```
 
+- 표시용 계획 경로는 `plan: {"revision": n, "poses": [[x_m, y_m, direction], …]}`로, 바뀔 때만 싣는다. 안전 판단에 쓰지 않는다.
 - `mission.status`: `accepted`, `running`, `paused`, `held`(수동 조종 등으로 보류), `resuming`, `done`, `failed`, `cancelled`. 실패·보류에는 `reason`을 붙인다.
 - `mission.resume_steps`: 재개 절차 진행 중일 때 단계별 `pending / ok / failed(reason)`. 단계 이름과 사유(잠정, M-a 설계 때 확정): `stop_confirmed`(`no_speed_feedback`, `not_stopped_timeout`) → `state_verified`(`pose_unbounded`, `load_unknown`, `load_changed`, `insertion_state_unknown`, `fork_in_pocket`, `lift_mismatch`) → `frame_reexpressed`(`reprojection_failed`) → `path_rechecked`(필요하면 재계획 포함; `path_blocked:<허가 reason>`, `replan_failed:<계획기 status>`, `reobserve_required`).
 - `phase_elapsed_s`는 일시정지 동안 멈추는 작업 시간이다. `freshness`의 값들은 멈추지 않는다.
