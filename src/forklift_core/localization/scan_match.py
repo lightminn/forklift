@@ -8,12 +8,20 @@ can be used: enough inliers, a small median residual, and an information
 matrix that fixes all three directions (a single wall leaves the along-wall
 direction free and is reported degenerate). numpy only; the KD search is a
 brute-force nearest neighbour, which is fast enough for two ~1,600-beam scans.
+
+A run that never takes a small step can still be settled (2026-10-13): each
+point uses the normal of its nearest reference sample, so a point equidistant
+from two samples with different normals can switch sample every iteration and
+leave the pose trading between two states for ever. When the last four poses
+repeat with period two to rounding and each pair used the same correspondences,
+the run is settled at the midpoint of the two states if they lie within
+max_cycle_half_m / max_cycle_half_rad of it, and refused as wide_cycle if not.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import atan2, cos, sin
+from math import atan2, cos, hypot, sin
 
 import numpy as np
 
@@ -27,6 +35,7 @@ class MatchResult:
     median_residual_m: float
     min_information: float
     iterations: int
+    cycle: tuple | None = None  # a period-two cycle seen: (half distance m, half turn rad, iteration)
 
 
 def transform_points(points, pose, *, inverse: bool = False) -> np.ndarray:
@@ -38,6 +47,33 @@ def transform_points(points, pose, *, inverse: bool = False) -> np.ndarray:
     if inverse:
         return (p - [x, y]) @ rotation
     return p @ rotation.T + [x, y]
+
+
+CYCLE_TOLERANCE = 1e-9  # m per component and rad: a repeat to rounding, not an approach
+
+
+def _same_pose(a, b, tolerance: float) -> bool:
+    turn = atan2(sin(a[2] - b[2]), cos(a[2] - b[2]))
+    return abs(a[0] - b[0]) <= tolerance and abs(a[1] - b[1]) <= tolerance and abs(turn) <= tolerance
+
+
+def _two_cycle(poses, pairs, tolerance: float = CYCLE_TOLERANCE) -> bool:
+    """The last four iterations repeat with period two: poses k / k-2 and k-1 / k-3 within
+    tolerance, and each pair used the same correspondences (nearest indices and in-range
+    mask). The same pose and correspondences give the same next step, so the cycle goes on."""
+    if len(poses) < 4 or len(pairs) < 4:
+        return False
+    return all(
+        _same_pose(poses[-1 - i], poses[-3 - i], tolerance)
+        and all(np.array_equal(a, b) for a, b in zip(pairs[-1 - i], pairs[-3 - i]))
+        for i in (0, 1)
+    )
+
+
+def _midpoint(a, b) -> np.ndarray:
+    """The pose halfway between two poses, the yaw across the seam."""
+    yaw = b[2] + atan2(sin(a[2] - b[2]), cos(a[2] - b[2])) / 2
+    return np.array([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, atan2(sin(yaw), cos(yaw))])
 
 
 def _nearest(reference: np.ndarray, query: np.ndarray, chunk: int = 512):
@@ -76,12 +112,16 @@ def match_scans(
     min_inlier_fraction: float = 0.6,
     max_median_residual_m: float = 0.03,
     min_information: float = 50.0,
+    max_cycle_half_m: float = 1e-3,
+    max_cycle_half_rad: float = 1e-4,
 ) -> MatchResult:
     """Pose of the live scan's frame in the reference frame.
 
     min_information is the smallest eigenvalue of the point-to-line normal
     matrix sum(J^T J) with J = [n_x, n_y, n x p] per inlier (yaw scaled per
     radian at the point's lever arm): below it some direction is unobserved.
+    max_cycle_half_m / max_cycle_half_rad bound a settled period-two cycle (module
+    docstring): half the distance and half the turn between its two states.
     """
     if max_iterations < 1:
         raise ValueError("max_iterations must be at least 1")
@@ -94,6 +134,8 @@ def match_scans(
     normals = _normals(reference)
     used = 0
     converged = False
+    cycle = None
+    poses, pairs = [], []
     for used in range(1, max_iterations + 1):
         moved = transform_points(live, pose)
         j, d = _nearest(reference, moved)
@@ -110,6 +152,15 @@ def match_scans(
         if np.abs(step[:2]).max() < 1e-5 and abs(step[2]) < 1e-6:
             converged = True
             break
+        poses.append(pose.copy())
+        pairs.append((j, keep))
+        if _two_cycle(poses, pairs):
+            a, b = poses[-1], poses[-2]
+            cycle = (hypot(a[0] - b[0], a[1] - b[1]) / 2, abs(atan2(sin(a[2] - b[2]), cos(a[2] - b[2]))) / 2, used)
+            if cycle[0] <= max_cycle_half_m and cycle[1] <= max_cycle_half_rad:
+                pose = _midpoint(a, b)
+                converged = True
+            break
     moved = transform_points(live, pose)
     j, d = _nearest(reference, moved)
     inliers = d < inlier_m
@@ -121,7 +172,7 @@ def match_scans(
     jac = np.column_stack((n[:, 0], n[:, 1], n[:, 0] * -lever[:, 1] + n[:, 1] * lever[:, 0]))
     information = float(np.linalg.eigvalsh(jac.T @ jac)[0]) if inliers.sum() >= 3 else 0.0
     if not converged:
-        reason = "not_converged"
+        reason = "not_converged" if cycle is None else "wide_cycle"
     elif fraction < min_inlier_fraction:
         reason = "few_inliers"
     elif median > max_median_residual_m:
@@ -130,7 +181,10 @@ def match_scans(
         reason = "degenerate"
     else:
         reason = "ok"
-    return MatchResult(reason == "ok", reason, tuple(float(v) for v in pose), fraction, median, information, used)
+    return MatchResult(
+        reason == "ok", reason, tuple(float(v) for v in pose), fraction, median, information, used,
+        None if cycle is None else (float(cycle[0]), float(cycle[1]), int(cycle[2])),
+    )
 
 
 __all__ = ["MatchResult", "match_scans", "transform_points"]

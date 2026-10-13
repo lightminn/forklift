@@ -436,6 +436,10 @@ def test_the_delivery_match_inputs_are_recorded_without_stopping_the_match() -> 
     assert body.index('docking.setdefault("match_input_errors", []).append(', handler) < body.index(
         'docking.setdefault("rounds", []).append('
     )
+    # Every round keeps its own starts and their details (iterations, cycle, gates).
+    assert "start_details=[dict(d) for d in result.start_details]," in body
+    rounds = body[body.index('docking.setdefault("rounds", []).append('):]
+    assert '"starts": docking["starts"],' in rounds and '"start_details": docking["start_details"],' in rounds
 
 
 def test_slam_runs_dock_on_a_scan_before_the_delivery_straight() -> None:

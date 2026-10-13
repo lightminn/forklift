@@ -3975,6 +3975,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             reason=result.reason,
             correction=result.correction,
             starts=[[ok, why, list(q)] for ok, why, q in result.starts],
+            start_details=[dict(d) for d in result.start_details],  # iterations, cycle, gates (2026-10-13)
             goal_error_vs_truth=None
             if result.goal_estimate is None
             else [
@@ -4019,6 +4020,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     float(estimate[0] - truth_rear[0]),
                     float(estimate[1] - truth_rear[1]),
                 ],
+                # Each round's own starts: the top-level ones are the last match's.
+                "starts": docking["starts"],
+                "start_details": docking["start_details"],
             }
         )
         if args.d7_docking:

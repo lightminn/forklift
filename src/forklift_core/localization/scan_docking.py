@@ -36,6 +36,7 @@ class DockingResult:
     relative_rear: tuple | None  # R: reference rear <- live rear
     correction: tuple | None  # planned -> matched relative pose
     starts: tuple  # per start: (accepted, reason, Q)
+    start_details: tuple = ()  # per start: iterations, cycle, inlier fraction, residual, information
 
 
 def laser_points(ranges, angles) -> np.ndarray:
@@ -87,26 +88,34 @@ def dock(
     x = tuple(float(v) for v in rear_from_laser)
     planned = compose(invert(delivery_rear), estimate_rear)  # R0
     q0 = compose(compose(invert(x), planned), x)
-    starts, poses = [], []
+    starts, poses, details = [], [], []
     for delta in perturbations:
         result = match_scans(reference_points, live_points, initial=compose(q0, delta))
         starts.append((result.accepted, result.reason, result.pose))
+        details.append({
+            "iterations": result.iterations,
+            "cycle": None if result.cycle is None else list(result.cycle),
+            "inlier_fraction": result.inlier_fraction,
+            "median_residual_m": result.median_residual_m if np.isfinite(result.median_residual_m) else None,
+            "min_information": result.min_information,
+        })
         if result.accepted:
             poses.append(result.pose)
+    details = tuple(details)
     if len(poses) < len(perturbations):
         bad = [s[1] for s in starts if not s[0]]
-        return DockingResult(False, f"start_rejected:{bad[0]}", None, None, None, tuple(starts))
+        return DockingResult(False, f"start_rejected:{bad[0]}", None, None, None, tuple(starts), details)
     if not all(_close(p, poses[0], agree_m, agree_rad) for p in poses[1:]):
-        return DockingResult(False, "ambiguous", None, None, None, tuple(starts))
+        return DockingResult(False, "ambiguous", None, None, None, tuple(starts), details)
     q = poses[0]
     relative = compose(compose(x, q), invert(x))
     correction = compose(invert(planned), relative)
     if hypot(correction[0], correction[1]) > max_correction_m or abs(
         atan2(sin(correction[2]), cos(correction[2]))
     ) > max_correction_rad:
-        return DockingResult(False, "correction_out_of_bounds", None, relative, correction, tuple(starts))
+        return DockingResult(False, "correction_out_of_bounds", None, relative, correction, tuple(starts), details)
     goal = compose(estimate_rear, invert(relative))
-    return DockingResult(True, "ok", tuple(goal), tuple(relative), tuple(correction), tuple(starts))
+    return DockingResult(True, "ok", tuple(goal), tuple(relative), tuple(correction), tuple(starts), details)
 
 
 __all__ = ["DockingResult", "dock", "laser_points", "ray_scan"]
