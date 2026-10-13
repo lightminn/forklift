@@ -124,3 +124,10 @@ test("a STOP pressed before the first welcome carries no null epoch", () => {
   s.stop("console");
   assert.ok(!Object.values(sent.at(-1)).includes(null));
 });
+
+test("a pending direct-view confirmation survives a reload", () => {
+  const g = createTeleopGate({ needConfirm: true });
+  assert.equal(g.canSend(), false);
+  g.confirmDirect();
+  assert.equal(g.canSend(), true);
+});

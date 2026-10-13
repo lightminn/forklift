@@ -38,6 +38,7 @@ MIME = {
 }
 CONTROL_SEND_TIMEOUT_S = 0.2
 CONTROL_OUTBOX_MAX = 256
+MAX_JSON_DEPTH = 8
 MEDIA_SEND_TIMEOUT_S = 1.0
 MEDIA_SKIP_BYTES = 512 * 1024
 MEDIA_CLOSE_BYTES = 4 * 1024 * 1024
@@ -71,15 +72,54 @@ def _parse(text) -> dict | None:
         )
     except (ValueError, RecursionError):
         return None
-    return msg if isinstance(msg, dict) else None
+    if not isinstance(msg, dict) or _depth(msg) > MAX_JSON_DEPTH:
+        return None
+    return msg
+
+
+def _depth(value) -> int:
+    """Nesting depth without recursion (console/1 messages are shallow)."""
+    deepest, stack = 0, [(value, 1)]
+    while stack:
+        node, d = stack.pop()
+        deepest = max(deepest, d)
+        if d > MAX_JSON_DEPTH:
+            return d
+        if isinstance(node, dict):
+            children = node.values()
+        elif isinstance(node, list):
+            children = node
+        else:
+            children = ()
+        stack.extend((c, d + 1) for c in children if isinstance(c, (dict, list)))
+    return deepest
 
 
 def _encode(msg: dict) -> str | None:
     """Standard JSON only (no NaN/Infinity), or None if the message cannot be sent."""
     try:
         return json.dumps(msg, allow_nan=False)
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
+
+
+def _media_rates(msg: dict) -> dict[str, float]:
+    """Subscribed rates per kind, capped to the vehicle's; bad values drop that kind."""
+    caps = {"camera_rgb": CAMERA_HZ, "scan": SCAN_HZ, "grid": GRID_HZ}
+    rates = {}
+    for kind, cap in caps.items():
+        want = msg.get(kind)
+        if not isinstance(want, dict):
+            continue
+        hz = want.get("hz", cap)
+        if isinstance(hz, bool) or not isinstance(hz, (int, float)):
+            continue
+        if isinstance(hz, int) and not 0 < hz <= 1000:
+            continue  # refuses huge ints before any float conversion
+        if isinstance(hz, float) and not (math.isfinite(hz) and 0 < hz <= 1000):
+            continue
+        rates[kind] = min(float(hz), cap)
+    return rates
 
 
 def _frame(head: dict, body: bytes) -> bytes:
@@ -252,18 +292,7 @@ class Handle:
                 msg = _parse(raw)
                 if msg is None or msg.get("t") != "media_subscribe":
                     continue
-                caps = {"camera_rgb": CAMERA_HZ, "scan": SCAN_HZ, "grid": GRID_HZ}
-                rates = {}
-                for kind, cap in caps.items():
-                    want = msg.get(kind)
-                    if isinstance(want, dict):
-                        hz = want.get("hz", cap)
-                        if (
-                            isinstance(hz, (int, float))
-                            and math.isfinite(hz)
-                            and hz > 0
-                        ):
-                            rates[kind] = min(float(hz), cap)
+                rates = _media_rates(msg)
                 sub["rates"] = rates
         except ConnectionClosed:
             pass
@@ -327,7 +356,12 @@ class Handle:
         period = 1.0 / hz
         nxt = time.monotonic()
         while True:
-            await fn()
+            try:
+                await fn()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # one bad step must not end a shared loop
+                print(f"mock server: {fn.__name__} failed: {exc!r}", flush=True)
             nxt += period
             delay = nxt - time.monotonic()
             if delay < -period:  # fell behind: skip, never burst

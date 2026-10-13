@@ -88,3 +88,54 @@ def test_outgoing_json_is_strict():
         "t": "event",
         "x": 1.0,
     }
+
+
+def _nested(depth):
+    return "[" * depth + "1" + "]" * depth
+
+
+def test_parse_refuses_moderately_deep_nesting():
+    assert (
+        server._parse(
+            '{"t": "stop", "request_id": "s", "source": ' + _nested(980) + "}"
+        )
+        is None
+    )
+
+
+def test_encode_survives_deep_structures():
+    deep = 1
+    for _ in range(3000):
+        deep = [deep]
+    assert server._encode({"t": "event", "x": deep}) is None
+
+
+def test_a_failing_periodic_step_does_not_stop_its_loop(tmp_path):
+    async def body():
+        h = _handle(tmp_path)
+        calls = []
+
+        async def flaky():
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("boom")
+
+        task = asyncio.create_task(h._every(100.0, flaky))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        assert len(calls) > 1
+
+    asyncio.run(body())
+
+
+@pytest.mark.parametrize("hz", [10**400, -1, "x", float("nan"), True])
+def test_media_rates_refuse_bad_values(hz):
+    rates = server._media_rates({"t": "media_subscribe", "scan": {"hz": hz}})
+    assert "scan" not in rates
+
+
+def test_media_rates_cap_to_the_vehicle_limit():
+    assert (
+        server._media_rates({"t": "media_subscribe", "scan": {"hz": 999}})["scan"]
+        == server.SCAN_HZ
+    )

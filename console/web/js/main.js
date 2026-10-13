@@ -37,6 +37,23 @@ function tabClientId() {
   return id;
 }
 
+function storedFlag(key) {
+  try {
+    return sessionStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function storeFlag(key, on) {
+  try {
+    if (on) sessionStorage.setItem(key, "1");
+    else sessionStorage.removeItem(key);
+  } catch {
+    /* storage unavailable */
+  }
+}
+
 const m = {
   session: null,
   link: { up: false, tickGapMs: null, lastTickAt: null },
@@ -45,7 +62,7 @@ const m = {
   chassis: null,
   cameraModel: null,
   camera: { bitmap: null, frameId: null, lastAt: null },
-  teleop: { gate: createTeleopGate(), lastSentAt: 0, lastRead: null },
+  teleop: { gate: createTeleopGate({ needConfirm: storedFlag("console.need_direct_confirm") }), lastSentAt: 0, lastRead: null },
   padStopHeld: false,
   cache: { phaseKey: "", targetsRev: null },
   dropUntil: 0,
@@ -101,6 +118,7 @@ m.session.subscribe((msg) => {
     }
   } else if (msg.t === "state") {
     m.teleop.gate.onArmed(Boolean(msg.armed) && m.session.hasLease);
+    storeFlag("console.need_direct_confirm", m.teleop.gate.needConfirm); // survives a reload
     try {
       // remembered across a reload so the page reclaims its lease (contract 2)
       if (m.session.hasLease) sessionStorage.setItem("console.held_lease", "1");
@@ -281,6 +299,7 @@ $("m-direct").onclick = () => m.teleop.gate.setMode("direct");
 $("m-video").onclick = () => m.teleop.gate.setMode("video");
 $("direct-ok").onclick = () => {
   m.teleop.gate.confirmDirect();
+  storeFlag("console.need_direct_confirm", false);
   log("육안 조종 전환 · 지게차가 직접 보인다고 확인함", "warn");
 };
 $("l-drop").onclick = () => {

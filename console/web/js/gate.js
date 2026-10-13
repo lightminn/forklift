@@ -2,11 +2,11 @@
 
 // Direct (line-of-sight) teleop right after a video-staleness disarm needs an explicit
 // "the truck is directly visible" confirmation; toggling modes never clears it.
-export function createTeleopGate() {
+export function createTeleopGate({ needConfirm: initialNeedConfirm = false } = {}) {
   let mode = "direct";
   let armed = false;
   let videoUsed = false; // video mode was selected at some point since the last arm
-  let needConfirm = false;
+  let needConfirm = initialNeedConfirm; // restored across a reload by main.js
   return {
     setMode(next) {
       mode = next;
