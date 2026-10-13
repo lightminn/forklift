@@ -13,6 +13,7 @@ export function padSnapshot(gamepad) {
   };
   return {
     id: String(gamepad.id ?? "gamepad"),
+    index: Number.isInteger(gamepad.index) ? gamepad.index : -1,
     axes: Array.from(gamepad.axes ?? [], (a) => (Number.isFinite(a) ? a : 0)),
     buttons: { deadman: pressed(5) || pressed(7), liftUp: pressed(12), liftDown: pressed(13), stop: pressed(1) },
   };
@@ -49,6 +50,11 @@ export function createInputs({ onRelease }) {
           pad = null;
           release("gamepad_lost");
         }
+        return;
+      }
+      if (pad !== null && (snapshot.index !== pad.index || snapshot.id !== pad.id)) {
+        pad = snapshot; // a different pad took over: release as if the old one was lost
+        release("gamepad_lost");
         return;
       }
       pad = snapshot;

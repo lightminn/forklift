@@ -117,7 +117,8 @@ export function createSession({ clientId, send, now, newId, retryMs = 500 }) {
   // STOP needs no lease; like other reliable requests it is resent with the same
   // request_id until answered (the vehicle executes every copy, which is safe).
   function stop(source) {
-    const msg = { t: "stop", request_id: newId(), session_epoch: epoch, source };
+    const msg = { t: "stop", request_id: newId(), source };
+    if (epoch !== null) msg.session_epoch = epoch; // never null: the vehicle runs STOP without it
     return new Promise((resolve) => {
       pending.set(msg.request_id, { msg, resolve, lastSent: now() });
       send(msg);

@@ -92,3 +92,20 @@ test("gamepad buttons are read from .pressed, not object truthiness", () => {
   assert.equal(padSnapshot(null), null);
   assert.equal(padSnapshot({ ...raw, mapping: "" }), null);  // non-standard layout is ignored
 });
+
+test("switching to another gamepad releases like a disconnect", () => {
+  const released = [];
+  const i = createInputs({ onRelease: (r) => released.push(r) });
+  const btn = { deadman: true, liftUp: false, liftDown: false, stop: false };
+  i.setPad({ id: "pad A", index: 0, axes: [0, -1, 0, 0], buttons: btn });
+  assert.equal(i.read().deadman, true);
+  i.setPad({ id: "pad B", index: 1, axes: [0, -1, 0, 0], buttons: btn });
+  assert.deepEqual(released, ["gamepad_lost"]);
+  assert.equal(i.read().deadman, false); // B's held button counts only after a release
+});
+
+test("padSnapshot keeps the gamepad index", () => {
+  const off = { pressed: false, value: 0 };
+  const raw = { id: "pad", index: 2, connected: true, mapping: "standard", axes: [0, 0, 0, 0], buttons: Array.from({ length: 17 }, () => off) };
+  assert.equal(padSnapshot(raw).index, 2);
+});

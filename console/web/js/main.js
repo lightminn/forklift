@@ -247,7 +247,10 @@ function readPad() {
   } catch {
     pads = [];
   }
-  const raw = pads.find((g) => g && g.connected);
+  // stay with the pad in use; another pad is picked only when it is gone (inputs releases)
+  const same = pads.find((g) => g && g.connected && g.index === m.padIndex);
+  const raw = same ?? pads.find((g) => g && g.connected);
+  m.padIndex = raw ? raw.index : null;
   const snap = padSnapshot(raw ?? null);
   $("gp").textContent = raw ? (snap ? `${snap.id.slice(0, 28)} · RB 누르고 있기` : "표준 매핑이 아닌 게임패드 · 사용 안 함") : "버튼을 한 번 누르세요";
   if (snap?.buttons.stop && !m.padStopHeld) m.session.stop("gamepad").then(report);

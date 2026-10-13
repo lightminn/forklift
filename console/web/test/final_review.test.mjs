@@ -117,3 +117,10 @@ test("requests never carry null generations", () => {
   for (const k of ["lease_id", "control_gen"]) assert.ok(!(k in msg) || Number.isInteger(msg[k]) || typeof msg[k] === "string", k);
   assert.ok(!Object.values(msg).includes(null));
 });
+
+test("a STOP pressed before the first welcome carries no null epoch", () => {
+  const sent = [];
+  const s = createSession({ clientId: "a", send: (m) => sent.push(m), now: () => 0, newId: () => "s1" });
+  s.stop("console");
+  assert.ok(!Object.values(sent.at(-1)).includes(null));
+});
