@@ -55,6 +55,11 @@ export function createSession({ clientId, send, now, newId, retryMs = 500 }) {
         welcome = msg;
         if (reclaim) {
           reclaim = false;
+          // a lease request sent on the old connection may be answered from the vehicle's
+          // result cache with a lease that no longer exists: drop it and ask again
+          for (const [id, p] of [...pending]) {
+            if (p.msg.t === "lease_request") settle(id, { t: "reject", request_id: id, reason: "superseded" });
+          }
           request("lease_request"); // within the vehicle's grace period (contract 2)
         }
         break;
@@ -123,7 +128,8 @@ export function createSession({ clientId, send, now, newId, retryMs = 500 }) {
 
   // The control connection closed: the old lease may not be used any more.
   function onDisconnect() {
-    if (leaseId !== null) reclaim = true;
+    const asking = [...pending.values()].some((p) => p.msg.t === "lease_request");
+    if (leaseId !== null || asking) reclaim = true;
     leaseId = null;
     lastTick = null;
     armed = false;
@@ -162,6 +168,9 @@ export function createSession({ clientId, send, now, newId, retryMs = 500 }) {
   return {
     onMessage,
     onDisconnect,
+    expectReclaim() {
+      reclaim = true; // a reloaded page that held the lease
+    },
     request,
     pump,
     stop,

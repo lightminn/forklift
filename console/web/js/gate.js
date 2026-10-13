@@ -2,7 +2,7 @@
 
 // Direct (line-of-sight) teleop right after a video-staleness disarm needs an explicit
 // "the truck is directly visible" confirmation; toggling modes never clears it.
-export function createTeleopGate({ staleAfterS = 0.4 } = {}) {
+export function createTeleopGate() {
   let mode = "direct";
   let armed = false;
   let needConfirm = false;
@@ -10,8 +10,10 @@ export function createTeleopGate({ staleAfterS = 0.4 } = {}) {
     setMode(next) {
       mode = next;
     },
-    onArmed(nowArmed, frameAgeS) {
-      if (armed && !nowArmed && mode === "video" && frameAgeS > staleAfterS) needConfirm = true;
+    // The page cannot tell a video expiry from other disarms (the vehicle judges video
+    // age), so any disarm while in video mode asks for the confirmation.
+    onArmed(nowArmed) {
+      if (armed && !nowArmed && mode === "video") needConfirm = true;
       armed = nowArmed;
     },
     confirmDirect() {

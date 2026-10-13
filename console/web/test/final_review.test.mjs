@@ -45,8 +45,8 @@ test("teleop needs this tab's lease, not just an armed vehicle", () => {
 test("direct-view confirmation is cleared only by the explicit confirmation", () => {
   const g = createTeleopGate();
   g.setMode("video");
-  g.onArmed(true, 0.0);
-  g.onArmed(false, 0.9); // disarmed while video was stale
+  g.onArmed(true);
+  g.onArmed(false); // any disarm in video mode: the vehicle may have expired the video
   g.setMode("direct");
   assert.equal(g.canSend(), false);
   g.setMode("video");
@@ -64,4 +64,35 @@ test("a copied tab gets its own client id; a reload keeps it", () => {
   assert.equal(reload.id, "fresh-1");
   const copied = chooseClientId({ stored: "fresh-1", windowName: "", newId: () => ids.shift() });
   assert.equal(copied.id, "fresh-2");
+});
+
+test("any disarm in video mode requires the direct-view confirmation", () => {
+  const g = createTeleopGate();
+  g.setMode("video");
+  g.onArmed(true);
+  g.onArmed(false);
+  g.setMode("direct");
+  assert.equal(g.canSend(), false);
+});
+
+test("a reload that held the lease reclaims it on the first welcome", () => {
+  const sent = [];
+  let n = 0;
+  const s = createSession({ clientId: "a", send: (m) => sent.push(m), now: () => 0, newId: () => `id${++n}` });
+  s.expectReclaim();
+  s.onMessage({ t: "welcome", api: "console/1", session_epoch: 3, capabilities: {} });
+  assert.equal(sent.at(-1).t, "lease_request");
+});
+
+test("a lease request unanswered before a disconnect is replaced, not resent", async () => {
+  const { s, sent } = setup();
+  const p = s.request("lease_request", {});
+  const oldId = sent.at(-1).request_id;
+  s.onDisconnect();
+  s.onMessage({ t: "welcome", api: "console/1", session_epoch: 3, capabilities: {} });
+  const r = await p;
+  assert.equal(r.t, "reject");
+  const fresh = sent.filter((m) => m.t === "lease_request");
+  assert.equal(fresh.length, 2);
+  assert.notEqual(fresh.at(-1).request_id, oldId);
 });

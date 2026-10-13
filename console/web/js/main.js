@@ -67,6 +67,11 @@ function send(msg) {
 const frames = createFrameTracker({ raf: (cb) => requestAnimationFrame(cb) });
 const clientId = tabClientId();
 m.session = createSession({ clientId, send, now: () => performance.now(), newId: randomId });
+try {
+  if (sessionStorage.getItem("console.held_lease") === "1") m.session.expectReclaim();
+} catch {
+  /* storage unavailable */
+}
 
 m.session.subscribe((msg) => {
   if (msg.t === "welcome") {
@@ -89,8 +94,14 @@ m.session.subscribe((msg) => {
   } else if (msg.t === "event") {
     log(`${msg.kind}${msg.reason ? ` · ${msg.reason}` : ""}${msg.phase ? ` · ${msg.phase}` : ""}${msg.status ? ` · ${msg.status}` : ""}`, msg.kind.includes("stop") ? "crit" : "");
   } else if (msg.t === "state") {
-    const age = m.camera.lastAt ? (performance.now() - m.camera.lastAt) / 1000 : Infinity;
-    m.teleop.gate.onArmed(Boolean(msg.armed) && m.session.hasLease, age);
+    m.teleop.gate.onArmed(Boolean(msg.armed) && m.session.hasLease);
+    try {
+      // remembered across a reload so the page reclaims its lease (contract 2)
+      if (m.session.hasLease) sessionStorage.setItem("console.held_lease", "1");
+      else if (msg.lease && msg.lease.holder !== clientId) sessionStorage.removeItem("console.held_lease");
+    } catch {
+      /* storage unavailable */
+    }
   }
 });
 
