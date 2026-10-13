@@ -5,15 +5,19 @@
 export function createTeleopGate() {
   let mode = "direct";
   let armed = false;
+  let videoUsed = false; // video mode was selected at some point since the last arm
   let needConfirm = false;
   return {
     setMode(next) {
       mode = next;
+      if (next === "video" && armed) videoUsed = true;
     },
     // The page cannot tell a video expiry from other disarms (the vehicle judges video
-    // age), so any disarm while in video mode asks for the confirmation.
+    // age), so a disarm after video was used in that arm period asks for the
+    // confirmation, whatever mode is selected when the disarm arrives.
     onArmed(nowArmed) {
-      if (armed && !nowArmed && mode === "video") needConfirm = true;
+      if (nowArmed && !armed) videoUsed = mode === "video";
+      if (armed && !nowArmed && (videoUsed || mode === "video")) needConfirm = true;
       armed = nowArmed;
     },
     confirmDirect() {

@@ -90,14 +90,12 @@ export function createSession({ clientId, send, now, newId, retryMs = 500 }) {
   }
 
   function request(type, fields = {}) {
-    const msg = {
-      t: type,
-      request_id: newId(),
-      session_epoch: epoch,
-      lease_id: leaseId,
-      control_gen: controlGen,
-      ...fields,
-    };
+    // generations the page does not know yet are left out, never sent as null
+    const msg = { t: type, request_id: newId() };
+    if (epoch !== null) msg.session_epoch = epoch;
+    if (leaseId !== null) msg.lease_id = leaseId;
+    if (controlGen !== null) msg.control_gen = controlGen;
+    Object.assign(msg, fields);
     return new Promise((resolve) => {
       pending.set(msg.request_id, { msg, resolve, lastSent: now() });
       send(msg);

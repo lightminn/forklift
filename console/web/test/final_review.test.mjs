@@ -96,3 +96,24 @@ test("a lease request unanswered before a disconnect is replaced, not resent", a
   assert.equal(fresh.length, 2);
   assert.notEqual(fresh.at(-1).request_id, oldId);
 });
+
+test("switching to direct before the disarm arrives still needs the confirmation", () => {
+  const g = createTeleopGate();
+  g.setMode("video");
+  g.onArmed(true);
+  g.setMode("direct"); // pressed before the disarm state arrived
+  g.onArmed(false);
+  assert.equal(g.canSend(), false);
+});
+
+test("requests never carry null generations", () => {
+  const sent = [];
+  let n = 0;
+  const s = createSession({ clientId: "a", send: (m) => sent.push(m), now: () => 0, newId: () => `id${++n}` });
+  s.expectReclaim();
+  s.onMessage({ t: "welcome", api: "console/1", session_epoch: 3, capabilities: {} });
+  const msg = sent.at(-1);
+  assert.equal(msg.t, "lease_request");
+  for (const k of ["lease_id", "control_gen"]) assert.ok(!(k in msg) || Number.isInteger(msg[k]) || typeof msg[k] === "string", k);
+  assert.ok(!Object.values(msg).includes(null));
+});

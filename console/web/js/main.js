@@ -93,6 +93,12 @@ m.session.subscribe((msg) => {
     }
   } else if (msg.t === "event") {
     log(`${msg.kind}${msg.reason ? ` · ${msg.reason}` : ""}${msg.phase ? ` · ${msg.phase}` : ""}${msg.status ? ` · ${msg.status}` : ""}`, msg.kind.includes("stop") ? "crit" : "");
+  } else if (msg.t === "ack" && typeof msg.lease_id === "string") {
+    try {
+      sessionStorage.setItem("console.held_lease", "1"); // a reload right after this reclaims
+    } catch {
+      /* storage unavailable */
+    }
   } else if (msg.t === "state") {
     m.teleop.gate.onArmed(Boolean(msg.armed) && m.session.hasLease);
     try {
