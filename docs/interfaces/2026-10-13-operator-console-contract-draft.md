@@ -168,6 +168,7 @@ lease 보유자는 `tick`을 받을 때마다 `{"t": "echo", "session_epoch", "l
 
 - ID는 한 지도·세션 안에서 재사용하지 않는다. 대상의 자세나 상태가 바뀌면 `targets_revision`이 올라간다. 그래서 이전 목록을 보고 고른 ID가 다른 팔레트를 가리키는 일이 없다.
 - 보정 버전이 바뀌면 자세를 다시 표현하고 revision을 올린다.
+- 포크에 실린 팔레트(`state: carried`)는 `pose`를 `null`로 싣는다. 차체를 따라 매 주기 움직이는 자세를 대상 목록에 실으면 revision이 쉼 없이 오르기 때문이다. 내려놓으면 그 자리의 자세와 함께 revision을 올린다.
 
 **거부 사유 코드(초안).** `no_lease`, `lease_reserved`, `stale_epoch`, `stale_lease`, `stale_control`, `stale_arm`, `stale_seq`, `bad_echo`, `expired`, `stale_video`, `not_armed`, `stopped_locked`, `state_forbids_teleop`, `stale_targets`, `permission_denied:<허가 reason>`, `no_feedback:<항목>`, `unsupported`, `busy`, `invalid`.
 
