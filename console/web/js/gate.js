@@ -2,11 +2,13 @@
 
 // Direct (line-of-sight) teleop right after a video-staleness disarm needs an explicit
 // "the truck is directly visible" confirmation; toggling modes never clears it.
-export function createTeleopGate({ needConfirm: initialNeedConfirm = false } = {}) {
+export function createTeleopGate({ needConfirm: initialNeedConfirm = false, videoUsed: initialVideoUsed = false } = {}) {
   let mode = "direct";
   let armed = false;
   let videoUsed = false; // video mode was selected at some point since the last arm
-  let needConfirm = initialNeedConfirm; // restored across a reload by main.js
+  // restored across a reload by main.js; video use before a reload cannot be matched to
+  // the vehicle's arm state any more, so it asks for the confirmation conservatively
+  let needConfirm = initialNeedConfirm || initialVideoUsed;
   return {
     setMode(next) {
       mode = next;
@@ -22,6 +24,7 @@ export function createTeleopGate({ needConfirm: initialNeedConfirm = false } = {
     },
     confirmDirect() {
       needConfirm = false;
+      videoUsed = false;
     },
     canSend() {
       return !(mode === "direct" && needConfirm);
@@ -31,6 +34,9 @@ export function createTeleopGate({ needConfirm: initialNeedConfirm = false } = {
     },
     get needConfirm() {
       return needConfirm;
+    },
+    get videoUsed() {
+      return videoUsed || mode === "video";
     },
   };
 }

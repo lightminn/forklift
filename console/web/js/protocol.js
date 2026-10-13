@@ -33,7 +33,11 @@ export function createSession({ clientId, send, now, newId, retryMs = 500 }) {
   }
 
   function dropSession(reason) {
-    for (const id of [...pending.keys()]) settle(id, { t: "reject", request_id: id, reason });
+    // every request of the old session ends, except STOP: it keeps being sent until a
+    // vehicle answers (contract 1, rule 0: STOP runs whatever the generations)
+    for (const [id, p] of [...pending]) {
+      if (p.msg.t !== "stop") settle(id, { t: "reject", request_id: id, reason });
+    }
     leaseId = null;
     lastTick = null;
     armed = false;

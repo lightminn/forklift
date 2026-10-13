@@ -62,7 +62,10 @@ const m = {
   chassis: null,
   cameraModel: null,
   camera: { bitmap: null, frameId: null, lastAt: null },
-  teleop: { gate: createTeleopGate({ needConfirm: storedFlag("console.need_direct_confirm") }), lastSentAt: 0, lastRead: null },
+  teleop: { gate: createTeleopGate({
+      needConfirm: storedFlag("console.need_direct_confirm"),
+      videoUsed: storedFlag("console.video_used"),
+    }), lastSentAt: 0, lastRead: null },
   padStopHeld: false,
   cache: { phaseKey: "", targetsRev: null },
   dropUntil: 0,
@@ -119,6 +122,7 @@ m.session.subscribe((msg) => {
   } else if (msg.t === "state") {
     m.teleop.gate.onArmed(Boolean(msg.armed) && m.session.hasLease);
     storeFlag("console.need_direct_confirm", m.teleop.gate.needConfirm); // survives a reload
+    storeFlag("console.video_used", m.teleop.gate.videoUsed);
     try {
       // remembered across a reload so the page reclaims its lease (contract 2)
       if (m.session.hasLease) sessionStorage.setItem("console.held_lease", "1");
@@ -296,10 +300,14 @@ $("t-enter").onclick = () => req("mode_request", { to: "TELEOP" });
 $("t-exit").onclick = () => req("mode_request", { to: "PAUSED" });
 $("t-arm").onclick = () => req(m.session.armed ? "disarm" : "arm");
 $("m-direct").onclick = () => m.teleop.gate.setMode("direct");
-$("m-video").onclick = () => m.teleop.gate.setMode("video");
+$("m-video").onclick = () => {
+  m.teleop.gate.setMode("video");
+  storeFlag("console.video_used", true); // a reload before the disarm arrives still asks
+};
 $("direct-ok").onclick = () => {
   m.teleop.gate.confirmDirect();
   storeFlag("console.need_direct_confirm", false);
+  storeFlag("console.video_used", m.teleop.gate.videoUsed);
   log("육안 조종 전환 · 지게차가 직접 보인다고 확인함", "warn");
 };
 $("l-drop").onclick = () => {

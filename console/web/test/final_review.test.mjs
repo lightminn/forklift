@@ -131,3 +131,20 @@ test("a pending direct-view confirmation survives a reload", () => {
   g.confirmDirect();
   assert.equal(g.canSend(), true);
 });
+
+test("video use before a reload asks for the confirmation after it", () => {
+  const g = createTeleopGate({ videoUsed: true });
+  assert.equal(g.canSend(), false);
+});
+
+test("an unanswered STOP survives a vehicle session change", () => {
+  const sent = [];
+  let t = 0, n = 0;
+  const s = createSession({ clientId: "a", send: (m) => sent.push(m), now: () => t, newId: () => `id${++n}` });
+  s.onMessage({ t: "welcome", api: "console/1", session_epoch: 3, capabilities: {} });
+  s.stop("console");
+  const id = sent.at(-1).request_id;
+  s.onMessage({ t: "welcome", api: "console/1", session_epoch: 4, capabilities: {} });
+  t += 600; s.pump();
+  assert.equal(sent.filter((m) => m.t === "stop" && m.request_id === id).length, 2);
+});
