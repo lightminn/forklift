@@ -367,7 +367,10 @@ def test_the_contract_names_every_difference_from_the_bounds_condition():
 
 
 # Plan D8 S4a-2 -------------------------------------------------------------------------
-BLADES = ((0.59, 0.95, 0.1175, 0.1725), (0.59, 0.95, -0.1725, -0.1175))
+BLADES = (
+    (0.59, 0.95, 0.1175, 0.1725),
+    (0.59, 0.95, -0.1725, -0.1175),
+)  # synthetic: the 0.29 m fork spacing as recorded then, not the current model
 CORNERS = ((0.604, 0.235), (0.604, -0.235))
 WIDTHS = (0.2275, 0.2275)
 
@@ -954,14 +957,17 @@ def _prediction_inputs():
 
     from forklift_core.perception.near_field_bounds import NearFieldBounds
 
-    bounds_path = ROOT / "config/near_field_bounds_measured.json"
+    # The recorded cases ran at 0.29 m fork spacing: forks, bounds and drive terms pinned with them
+    # (tests/fixtures/near_protection_prediction/README.md).
+    fixtures = ROOT / "tests/fixtures/near_protection_prediction"
+    bounds_path = fixtures / "near_field_bounds_0p29.json"
     bounds = NearFieldBounds.load(bounds_path)
     terms = NT.DriveTerms.from_dict(
-        json.loads((ROOT / "config/near_field_drive_terms.json").read_text()),
+        json.loads((fixtures / "near_field_drive_terms_0p29.json").read_text()),
         hashlib.sha256(bounds_path.read_bytes()).hexdigest(),
         json.loads(bounds_path.read_text())["latency"],
     )
-    blades = read_fork_blades_m(ROOT / "sim/models/dls08_measured/forklift.urdf")
+    blades = read_fork_blades_m(fixtures / "forklift_0p29.urdf")
     cases = json.loads(
         (ROOT / "tests/fixtures/near_protection_prediction/cases.json").read_text()
     )["cases"]
@@ -1014,6 +1020,21 @@ def test_the_protection_prediction_reproduces_the_recorded_cases():
     # The stuck run (first fresh margin -8.5 mm) screens short; the passed one (+10.4 mm) does not.
     assert stuck["margin_phys_m"] == pytest.approx(-0.0176, abs=1e-4)
     assert passed["margin_phys_m"] > 0.0
+
+
+def test_the_same_recorded_case_clears_the_protection_with_the_current_fork_spacing():
+    # EPAL 6 fork spacing plan (2026-10-13): the refused seed 6 decision, with the forks of the
+    # current measured model (0.3725 m) and the pinned 0.29 m bounds and drive terms, predicts a
+    # positive physical margin -- a geometry regression, not an Isaac result.
+    sys.path.insert(0, str(ROOT / "sim" / "isaac"))
+    from insertion_geometry import read_fork_blades_m
+
+    bounds, terms, _, cases = _prediction_inputs()
+    blades = read_fork_blades_m(ROOT / "sim/models/dls08_measured/forklift.urdf")
+    assert max(abs(b[2] + b[3]) / 2 for b in blades) == pytest.approx(0.18625)
+    case = {c["run"]: c for c in cases}["seed_6_v0.055_corr_lat_0.02"]
+    out = _predict(case, bounds, terms, blades)
+    assert out["margin_phys_m"] == pytest.approx(0.021123, abs=1e-5)
 
 
 def test_a_path_ending_before_the_protection_is_judged_at_its_end_and_no_bound_is_unpredictable():

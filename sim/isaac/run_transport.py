@@ -3645,8 +3645,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             state.setdefault("known_pallets", []).append({"event": "lifted", "time_s": t})
         if next_phase == "withdraw" and layer_.known_config.get("withdraw_mode", "certified") != "certified":
             # Interim (user, 2026-10-08): the gate's b_w 12.9 mm + e_w 8.4 mm + the checker's
-            # 18.5 mm side width exceed the 35.6 mm smallest blade-to-pocket gap measured, so
-            # the certificate cannot hold. The withdrawal runs as before v10 (no permission,
+            # 18.5 mm side width exceed the 35.6 mm smallest blade-to-pocket gap measured (all at
+            # 0.29 m fork spacing; re-measured before "certified" returns), so the certificate
+            # cannot hold. The withdrawal runs as before v10 (no permission,
             # the planned straight); the delivered pallet joins the permission where the
             # withdrawal stops, re-fixed at b_w + e_w_full (the measured release error and
             # four-corner drift to the stop).

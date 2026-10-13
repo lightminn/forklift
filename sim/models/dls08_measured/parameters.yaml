@@ -23,7 +23,7 @@ dimensions:
   mast_height_m: 0.67
   mast_width_m: 0.36
   fork_root_x_m: 0.59
-  fork_spacing_m: 0.29
+  fork_spacing_m: 0.3725
   fork_width_m: 0.055
   fork_thickness_m: 0.025
   fork_center_height_m: 0.04

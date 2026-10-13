@@ -312,7 +312,7 @@ def single_layer(**known):
     cfg = dict(SINGLE)
     if known:
         cfg["known_pallets"] = {**SINGLE["known_pallets"], **known}
-    blades = ((0.944, 1.29, 0.1175, 0.1725), (0.944, 1.29, -0.1725, -0.1175))
+    blades = ((0.944, 1.29, 0.1175, 0.1725), (0.944, 1.29, -0.1725, -0.1175))  # synthetic: the 0.29 m fork spacing as recorded then, not the current model
     return MODULE.ObstacleLayer(
         cfg, hall=Bounds(-5, 10, -5, 5), error_table=TABLE,
         unloaded=Footprint(1.29, 0.17, 0.36), loaded=Footprint(1.53, 0.17, 0.40),

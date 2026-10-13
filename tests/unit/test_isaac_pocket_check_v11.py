@@ -34,7 +34,7 @@ BOUNDS_DATA = json.loads((ROOT / "config/near_field_bounds_measured.json").read_
 BOUNDS = NearFieldBounds.from_dict(BOUNDS_DATA)
 CAM = DepthCamera(fx=193.0, fy=193.0, cx=160.0, cy=120.0, width=320, height=240)
 OFFSET = 0.34  # rear axle behind base_link
-BLADES = ((0.884, 1.29, 0.1175, 0.1725), (0.884, 1.29, -0.1725, -0.1175))  # rear-axle frame
+BLADES = ((0.884, 1.29, 0.1175, 0.1725), (0.884, 1.29, -0.1725, -0.1175))  # rear-axle frame, synthetic 0.29 m spacing
 BODY_FRONT = 0.884  # carriage face from the rear axle
 TILT = 0.10
 INSERTION = 1.29 - BODY_FRONT - 0.016  # fork tips in when the carriage stands 16 mm before the face

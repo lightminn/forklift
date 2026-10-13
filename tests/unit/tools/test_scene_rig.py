@@ -112,7 +112,7 @@ def test_truck_boxes_are_the_carriage_collision_boxes_of_the_model():
         x1 = blade.centre_m[0] + blade.size_m[0] / 2
         z0 = blade.centre_m[2] - blade.size_m[2] / 2
         assert (x0, x1, z0) == pytest.approx((0.59, 0.95, 0.0275))
-        assert abs(blade.centre_m[1]) == pytest.approx(0.145)
+        assert abs(blade.centre_m[1]) == pytest.approx(0.18625)  # EPAL 6 fork spacing 0.3725 m (2026-10-13)
     front = max(b.centre_m[0] + b.size_m[0] / 2 for b in boxes if b.size_m[0] < 0.1)
     assert front == pytest.approx(0.604)
 

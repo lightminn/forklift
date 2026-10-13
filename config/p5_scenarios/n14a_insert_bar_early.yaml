@@ -3,4 +3,4 @@
 # (0.05 m in: the tip, 0.10 m before the face at the start, is at -0.05 m).
 # Recorded only. Fixed before any run.
 events:
-  - {id: n14a, action: spawn, phase: insert, after_m: 0.05, frame: pallet, along_m: 0.05, lateral_m: 0.145, size_m: [0.03, 0.03, 0.09]}
+  - {id: n14a, action: spawn, phase: insert, after_m: 0.05, frame: pallet, along_m: 0.05, lateral_m: 0.18625, size_m: [0.03, 0.03, 0.09]}

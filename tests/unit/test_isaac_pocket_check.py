@@ -29,7 +29,7 @@ _SPEC.loader.exec_module(pocket_check)
 GEOM = load_pallet_geometry("config/pallet_geometry_epal6.yaml")
 CAM = DepthCamera(fx=193.0, fy=193.0, cx=160.0, cy=120.0, width=320, height=240)
 OFFSET = 0.34  # rear axle behind base_link
-BLADES = ((0.87, 1.29, 0.1175, 0.1725), (0.87, 1.29, -0.1725, -0.1175))
+BLADES = ((0.87, 1.29, 0.1175, 0.1725), (0.87, 1.29, -0.1725, -0.1175))  # synthetic 0.29 m spacing
 TILT = 0.10
 
 

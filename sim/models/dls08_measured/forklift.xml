@@ -266,16 +266,16 @@
       <body name="fork_carriage" pos="0 0 0">
         <inertial mass="1.6" pos="0.65 0 0.15" diaginertia="0.05410666667 0.04817333333 0.05297333333" />
         <joint name="fork_lift" axis="0 0 1" type="slide" range="0 0.28" limited="true" damping="25" armature=".02" />
-        <geom name="left_fork_visual" type="box" size="0.18 0.0275 0.0125" pos="0.77 0.145 0.04" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
-        <geom name="left_fork_collision" type="box" size="0.18 0.0275 0.0125" pos="0.77 0.145 0.04" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
-        <geom name="left_fork_heel_visual" type="box" size="0.013 0.0275 0.11825" pos="0.59 0.145 0.15825" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
-        <geom name="left_fork_heel_collision" type="box" size="0.013 0.0275 0.11825" pos="0.59 0.145 0.15825" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+        <geom name="left_fork_visual" type="box" size="0.18 0.0275 0.0125" pos="0.77 0.18625 0.04" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="left_fork_collision" type="box" size="0.18 0.0275 0.0125" pos="0.77 0.18625 0.04" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+        <geom name="left_fork_heel_visual" type="box" size="0.013 0.0275 0.11825" pos="0.59 0.18625 0.15825" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="left_fork_heel_collision" type="box" size="0.013 0.0275 0.11825" pos="0.59 0.18625 0.15825" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
         <geom name="carriage_side_left_visual" type="box" size="0.013 0.0175 0.215" pos="0.59 0.2175 0.255" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
         <geom name="carriage_side_left_collision" type="box" size="0.013 0.0175 0.215" pos="0.59 0.2175 0.255" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
-        <geom name="right_fork_visual" type="box" size="0.18 0.0275 0.0125" pos="0.77 -0.145 0.04" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
-        <geom name="right_fork_collision" type="box" size="0.18 0.0275 0.0125" pos="0.77 -0.145 0.04" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
-        <geom name="right_fork_heel_visual" type="box" size="0.013 0.0275 0.11825" pos="0.59 -0.145 0.15825" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
-        <geom name="right_fork_heel_collision" type="box" size="0.013 0.0275 0.11825" pos="0.59 -0.145 0.15825" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+        <geom name="right_fork_visual" type="box" size="0.18 0.0275 0.0125" pos="0.77 -0.18625 0.04" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="right_fork_collision" type="box" size="0.18 0.0275 0.0125" pos="0.77 -0.18625 0.04" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
+        <geom name="right_fork_heel_visual" type="box" size="0.013 0.0275 0.11825" pos="0.59 -0.18625 0.15825" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
+        <geom name="right_fork_heel_collision" type="box" size="0.013 0.0275 0.11825" pos="0.59 -0.18625 0.15825" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
         <geom name="carriage_side_right_visual" type="box" size="0.013 0.0175 0.215" pos="0.59 -0.2175 0.255" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
         <geom name="carriage_side_right_collision" type="box" size="0.013 0.0175 0.215" pos="0.59 -0.2175 0.255" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
         <geom name="carriage_cross_0_visual" type="box" size="0.014 0.235 0.016" pos="0.59 0 0.085" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
@@ -294,8 +294,8 @@
         <geom name="carriage_grille_3_collision" type="box" size="0.01 0.006 0.065" pos="0.59 0.08 0.39" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
         <geom name="carriage_grille_4_visual" type="box" size="0.01 0.006 0.065" pos="0.59 0.16 0.39" quat="1 0 0 0" rgba="0.045 0.052 0.065 1" group="1" mass="0" contype="0" conaffinity="0" />
         <geom name="carriage_grille_4_collision" type="box" size="0.01 0.006 0.065" pos="0.59 0.16 0.39" quat="1 0 0 0" rgba="0.1 0.65 0.85 0.22" group="3" mass="0" contype="1" conaffinity="2" />
-        <site name="left_fork_tip" pos="0.95 0.145 0.04" size=".008" rgba="0 .65 .85 1" group="4" />
-        <site name="right_fork_tip" pos="0.95 -0.145 0.04" size=".008" rgba="0 .65 .85 1" group="4" />
+        <site name="left_fork_tip" pos="0.95 0.18625 0.04" size=".008" rgba="0 .65 .85 1" group="4" />
+        <site name="right_fork_tip" pos="0.95 -0.18625 0.04" size=".008" rgba="0 .65 .85 1" group="4" />
       </body>
     </body>
   </worldbody>

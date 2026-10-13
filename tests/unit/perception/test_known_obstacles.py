@@ -116,7 +116,8 @@ def test_codex_counterexample_a_certified_corridor_lets_the_withdrawal_start():
     stop = StoppingModel(latency_s=0.15, decel_mps2=1.5, margin_m=0.05)
     cfg = PermissionConfig(stop, envelope_offset_m=0.01, evidence_max_age_s=0.2, step_m=0.005, envelope_ramp_m=0.0)
     perm = DrivePermission(cfg)
-    # dls08_measured in the rear-axle frame: carriage face 0.944 m, blades 0.944-1.29 m at y +-0.145 (0.055 wide).
+    # dls08_measured in the rear-axle frame at 0.29 m fork spacing (synthetic -- the model now has 0.3725 m):
+    # carriage face 0.944 m, blades 0.944-1.29 m at y +-0.145 (0.055 wide).
     body = Footprint(0.944, 0.17, 0.36)
     blade = Footprint(0.173, 0.173, 0.0275)
     parts = [(body, 0.0, 0.0), (blade, 0.145, 1.117), (blade, -0.145, 1.117)]

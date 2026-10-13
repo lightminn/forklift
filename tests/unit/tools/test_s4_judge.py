@@ -17,7 +17,10 @@ PALLET = ROOT / "sim/models/epal6_pallet/pallet.urdf"
 TICK = 1.0 / 120.0
 PHASES = np.array(["other", "observe", "approach", "insert"])
 CORNERS = ((0.604, 0.235), (0.604, -0.235))
-BLADES = ((0.59, 0.95, 0.1175, 0.1725), (0.59, 0.95, -0.1725, -0.1175))
+BLADES = (
+    (0.59, 0.95, 0.1175, 0.1725),
+    (0.59, 0.95, -0.1725, -0.1175),
+)  # synthetic: the 0.29 m fork spacing as recorded then, not the current model
 TERMS = {"delta_v_mps": 0.003, "tick_s": TICK, "delta_s_m": [0.001] * 121}
 
 
@@ -3398,6 +3401,9 @@ def test_xi_a_mismatch_injected_re_observation_is_judged_through_its_bias(geomet
 
 
 # (xii), plan D8 S4 near field: the protection prediction screening (design v4) ------------------
+XII_FIXTURES = ROOT / "tests/fixtures/near_protection_prediction"
+
+
 def _xii_models():
     import hashlib
     import json
@@ -3406,9 +3412,11 @@ def _xii_models():
 
     from forklift_core.perception.near_field_bounds import NearFieldBounds
 
-    bounds_path = ROOT / "config/near_field_bounds_measured.json"
+    # The recorded cases ran at 0.29 m fork spacing: forks, bounds and drive terms pinned with them
+    # (tests/fixtures/near_protection_prediction/README.md).
+    bounds_path = XII_FIXTURES / "near_field_bounds_0p29.json"
     bounds_sha = hashlib.sha256(bounds_path.read_bytes()).hexdigest()
-    terms_bytes = (ROOT / "config/near_field_drive_terms.json").read_bytes()
+    terms_bytes = (XII_FIXTURES / "near_field_drive_terms_0p29.json").read_bytes()
     bounds = NearFieldBounds.load(bounds_path)
     terms = NT.DriveTerms.from_dict(
         json.loads(terms_bytes),
@@ -3433,7 +3441,7 @@ def _xii_run(case_name, *, retry_allowed=True, lost=False):
 
     NT, bounds, terms, bounds_sha, terms_sha, cases = _xii_models()
     case = cases[case_name]
-    blades = IG.read_fork_blades_m(URDF)
+    blades = IG.read_fork_blades_m(XII_FIXTURES / "forklift_0p29.urdf")
     a = case["approach"]
     arrays = tuple(
         np.asarray(a[k], dtype=float)

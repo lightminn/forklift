@@ -31,6 +31,7 @@ frame. Samples are this run's, not a bound beyond them.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import sys
@@ -38,7 +39,10 @@ from pathlib import Path
 
 import numpy as np
 
+ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(ROOT / "sim" / "isaac"))
+import insertion_geometry as IG  # noqa: E402
 from p0a_measure import rear_truth  # noqa: E402
 
 from forklift_core.localization.slam_pose import OdometryNoise  # noqa: E402
@@ -60,9 +64,20 @@ def outlines_of(result):
         f = g.get(key)
         return (float(f["front_m"]), float(f["rear_m"]), float(f["half_width_m"])) if f else default
     return fp("unloaded_footprint", UNLOADED), fp("loaded_footprint", LOADED)
-# dls08_measured blades in the rear-axle frame (x from the carriage face to the tips, y centre).
-BLADE_X = (0.944, 1.29)
-BLADE_Y = (0.145, -0.145)
+def blade_points(result: dict, rear_axle_x_in_base_m: float) -> list:
+    """The two blades' sample points (x at the blade box's root and tip, y each blade's centre) in
+    the rear-axle frame, read from the URDF the run used -- refused when the file at its recorded
+    path is not that file (the fork spacing is a test setting that changes). The blade box starts
+    at its root (0.93 m on dls08_measured), not at the carriage face (0.944 m) the former
+    constants used, so e_w taken with this is not the 2026-10-08 measurement's definition; the
+    points are written into each row."""
+    path = ROOT / result["arguments"]["forklift_urdf"]
+    if hashlib.sha256(path.read_bytes()).hexdigest() != result.get("forklift_urdf_sha256"):
+        raise SystemExit(f"{path}: not the forklift URDF the run used")
+    off = -float(rear_axle_x_in_base_m)
+    blades = IG.read_fork_blades_m(path)
+    xs = (min(b[0] for b in blades) + off, max(b[1] for b in blades) + off)
+    return [(x, (b[2] + b[3]) / 2) for x in xs for b in blades]
 
 
 def compose(a, b):
@@ -271,7 +286,7 @@ def withdraw_command(args) -> dict:
         truth = all_truth[i0:i1]
         rates = log["wheel_rates_rad_s"].astype(float)[i0:i1, 2:4]
         steering = log["steering_rad"].astype(float)[i0:i1]
-        blade = [(x, y) for x in BLADE_X for y in BLADE_Y]
+        blade = blade_points(result, float(g["rear_axle_x_in_base_m"]))
         # The real pallet after the release (it may slide as the forks leave): 0.1 s samples
         # interpolated to every tick (Codex stage-1 4th P2: a 50 mm slide read as 0).
         ticks = stamps[i0:i1]
@@ -303,6 +318,7 @@ def withdraw_command(args) -> dict:
                 e_full = max(e_full, corner_error_m(believed, actual_now, depth, width))
         clear = result.get("lateral_clearance_min_m", {}).get("withdraw")
         rows.append({"run": str(run), "b_w_m": b_w, "e_w_m": e_w, "e_w_full_m": e_full, "pallet_slide_m": slide,
+                     "blade_points_rear_m": [list(q) for q in blade],
                      "withdraw_s": t_end - t_release, "truth_clearance_m": clear})
     if not rows:
         raise SystemExit("no runs")

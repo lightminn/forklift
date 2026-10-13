@@ -654,9 +654,13 @@ def test_the_runner_hands_the_models_target_to_the_controller(runner):
     pallet = load_pallet_geometry(ROOT / "config/pallet_geometry_epal6.yaml")
     settings = yaml.safe_load((ROOT / "config/isaac_pocket_insertion.yaml").read_text())
     assert "target_front_x_m" not in settings["controller"]
-    for model, target in (("dls08_measured", 0.62), ("dls08_provisional", 0.59)):
-        frame = geometry.tracking_frame(ROOT / f"sim/models/{model}/forklift.urdf", pallet)
-        controller = module.with_frame_target(settings, frame)["controller"]
-        assert PocketInsertionConfig(**controller).target_front_x_m == pytest.approx(target)
+    for model, target, fork_y in (("dls08_measured", 0.62, 0.18625), ("dls08_provisional", 0.59, 0.145)):
+        urdf = ROOT / f"sim/models/{model}/forklift.urdf"
+        frame = geometry.tracking_frame(urdf, pallet)
+        controller = module.with_frame_target(settings, frame, geometry.read_fork_blades_m(urdf))["controller"]
+        config = PocketInsertionConfig(**controller)
+        assert config.target_front_x_m == pytest.approx(target)
+        # EPAL 6 fork spacing plan S0.2: the blades come from the model, not the 0.145 default.
+        assert config.fork_center_y_m == pytest.approx(fork_y) and config.fork_width_m == pytest.approx(0.055)
     source = (ROOT / "sim/isaac/run_pocket_insertion.py").read_text()
-    assert "tracking_settings = with_frame_target(tracking_settings, frame)" in source
+    assert "tracking_settings = with_frame_target(tracking_settings, frame, read_fork_blades_m(args.forklift_urdf))" in source

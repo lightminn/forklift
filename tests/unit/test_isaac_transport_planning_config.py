@@ -803,8 +803,9 @@ def test_pocket_bars_meet_the_pallet_solids_exactly():
     assert "stringer_1" in _bar_meets_pallet((0, 0, 0.021), -0.05, (0, 0.145), (0.03, 0.03, 0.12))
     # Touching the stringer's underside (0.100 m) counts.
     assert "stringer_1" in _bar_meets_pallet((0, 0, 0.0), 0.0, (0, 0.145), (0.03, 0.03, 0.100))
-    # The fixed N11 bar in its pocket, level pallet: clear.
-    assert _bar_meets_pallet((0, 0, 0.0), 0.0, (0.25, 0.145), (0.03, 0.03, 0.09)) == []
+    # The fixed N11 bar in its pocket (on the blade, 0.18625 m since the EPAL 6 fork spacing
+    # plan), level pallet: clear.
+    assert _bar_meets_pallet((0, 0, 0.0), 0.0, (0.25, 0.18625), (0.03, 0.03, 0.09)) == []
 
 
 def test_the_n3_straight_follows_the_leg_direction():

@@ -95,7 +95,9 @@ known_pallets:
   empirical_m: null
   empirical_max_age_s: null
   # The certificate needs min gap >= 18.5 mm + b_w + e_w (~40 mm); the smallest measured
-  # gap was 35.6 mm, so it cannot hold yet. Interim (user, 2026-10-08): the withdrawal
+  # gap was 35.6 mm at 0.29 m fork spacing, so it could not hold. b_w / e_w / e_w_full were
+  # measured at 0.29 m (gate_measure) and do not carry over to the 0.3725 m spacing (EPAL 6
+  # fork spacing plan, 2026-10-13): re-measure them before "certified" returns. Interim (user, 2026-10-08): the withdrawal
   # runs uncertified as before v10 and the delivered pallet joins the permission where it
   # stops. "certified" returns once D8 re-observes the pallet at the release.
   withdraw_mode: uncertified
