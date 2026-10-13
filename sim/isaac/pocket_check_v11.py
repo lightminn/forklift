@@ -68,6 +68,264 @@ class V11Config:
     frame_max_age_s: float = 0.2  # newest new frame's pixels at most this old (with L_hi)
 
 
+def _rpy(r: float, p: float, y: float) -> np.ndarray:
+    cr, sr, cp, sp, cy, sy = math.cos(r), math.sin(r), math.cos(p), math.sin(p), math.cos(y), math.sin(y)
+    return np.array([[cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+                     [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+                     [-sp, cp * sr, cp * cr]])
+
+
+def _axis_rotation(axis, angle: float) -> np.ndarray:
+    k = np.asarray(axis, dtype=float)
+    k = k / np.linalg.norm(k)
+    kx = np.array([[0.0, -k[2], k[1]], [k[2], 0.0, -k[0]], [-k[1], k[0], 0.0]])
+    return np.eye(3) + math.sin(angle) * kx + (1 - math.cos(angle)) * (kx @ kx)
+
+
+def _clip(poly: list, axis: int, c: float, keep_below: bool) -> list:
+    """Sutherland-Hodgman: the part of a convex polygon (list of (x, y)) with coordinate `axis`
+    <= c (keep_below) or >= c."""
+    out = []
+    n = len(poly)
+    for k in range(n):
+        a, b = poly[k], poly[(k + 1) % n]
+        ina = a[axis] <= c if keep_below else a[axis] >= c
+        inb = b[axis] <= c if keep_below else b[axis] >= c
+        if ina:
+            out.append(a)
+        if ina != inb:
+            f = (c - a[axis]) / (b[axis] - a[axis])
+            q = (a[0] + f * (b[0] - a[0]), a[1] + f * (b[1] - a[1]))
+            out.append((c, q[1]) if axis == 0 else (q[0], c))
+    return out
+
+
+def _hull(points) -> list:
+    """Convex hull (monotone chain) of 2-D points, counter-clockwise."""
+    pts = sorted(set((round(float(px), 12), round(float(py), 12)) for px, py in points))
+    if len(pts) <= 2:
+        return pts
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower, upper = [], []
+    for q in pts:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], q) <= 0:
+            lower.pop()
+        lower.append(q)
+    for q in reversed(pts):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], q) <= 0:
+            upper.pop()
+        upper.append(q)
+    return lower[:-1] + upper[:-1]
+
+
+def truck_split_from_urdf(urdf_path, rear_axle_offset_m: float, body_rear_m: float, body_half_width_m: float,
+                          carriage_face_m: float, carriage_half_width_m: float, z_band=(SCOPE_FLOOR_M, H_DET_M),
+                          steer_samples: int = 61, rim_points: int = 48) -> dict:
+    """V14 (plan 6판): the chassis/carriage split read from the URDF collision shapes. Every
+    shape that reaches the D0 band (z0 < band top and z1 > band bottom) is sampled over the whole
+    allowed range of the revolute joints (the steering envelope; each sample's offset from the
+    joint axis circumscribed by 1/cos(half the sample step), so the envelope between samples is
+    covered), prismatic joints at 0 and continuous joints at 0 -- the model is refused unless
+    every prismatic joint moves its child straight up in base_link (the lift: up only), every
+    continuous joint's child carries only cylinders about that joint's axis (a spinning wheel is
+    the same shape) and no revolute joint sits under another (independent subtrees, so one
+    sample angle for all is every combination). A shape counts when it meets the band at any
+    height its prismatic ancestors allow (the lift's whole travel). Boxes by their corners, cylinders by rim
+    polygons circumscribed by their radius. The chassis box ends at the frontmost point of any
+    shape wider than the carriage half-width; the carriage box runs from there to the carriage
+    face, as wide as the widest non-blade point there (at least the carriage front corners).
+    Containment is exact for each shape's footprint (its convex hull, clipped at the chassis
+    front into the part each box must hold), else ValueError (the model is refused). Lengths in
+    the rear-axle frame (x forward from the rear axle)."""
+    import xml.etree.ElementTree as ET
+
+    root = ET.parse(urdf_path).getroot()
+
+    def origin(el):
+        o = el.find("origin")
+        xyz = [float(v) for v in (o.get("xyz", "0 0 0") if o is not None else "0 0 0").split()]
+        rpy = [float(v) for v in (o.get("rpy", "0 0 0") if o is not None else "0 0 0").split()]
+        return np.asarray(xyz), _rpy(*rpy)
+
+    joints, raw_limits = {}, {}
+    for j in root.findall("joint"):
+        axis = j.find("axis")
+        limit = j.find("limit")
+        kind = j.get("type")
+        if limit is not None:
+            raw_limits[j.find("child").get("link")] = (float(limit.get("lower", "nan")), float(limit.get("upper", "nan")))
+        joints[j.find("child").get("link")] = (
+            j.find("parent").get("link"), *origin(j), kind,
+            np.asarray([float(v) for v in axis.get("xyz").split()] if axis is not None else [1.0, 0.0, 0.0]),
+            (float(limit.get("lower")), float(limit.get("upper"))) if limit is not None and kind == "revolute"
+            else (0.0, 0.0))
+
+    def chain_of(link):
+        chain = []
+        while link in joints:
+            chain.append(joints[link])
+            link = joints[link][0]
+        return list(reversed(chain))
+
+    def static_rotation(link):  # base <- link at all joints 0
+        r = np.eye(3)
+        for joint in chain_of(link):
+            r = r @ joint[2]
+        return r
+
+    # The supported joint set (else refuse): see the docstring.
+    children = {}
+    for child, joint in joints.items():
+        children.setdefault(joint[0], []).append(child)
+
+    def subtree(link):
+        out, stack = [], [link]
+        while stack:
+            k = stack.pop()
+            out.append(k)
+            stack.extend(children.get(k, []))
+        return out
+
+    for child, (_parent, _xyz, _rot, kind, axis, _lim) in joints.items():
+        if kind == "prismatic":
+            up = static_rotation(child) @ (axis / np.linalg.norm(axis))
+            q_lo, q_hi = raw_limits.get(child, (-math.inf, math.inf))
+            if (abs(abs(up[2]) - 1) > 1e-9 or not (math.isfinite(q_lo) and math.isfinite(q_hi))
+                    or (up[2] > 0 and q_lo < 0) or (up[2] < 0 and q_hi > 0)
+                    or any(c[3] != "fixed" for c in chain_of(child)[:-1])):
+                raise ValueError(f"{child}: a prismatic joint that does not move only upward in base_link "
+                                 "(or sits under a moving joint)")
+        elif kind == "continuous":
+            # Every shape the spin carries -- the child and every link fixed under it -- must be a
+            # cylinder about the spin axis (the same shape at any spin angle).
+            a = axis / np.linalg.norm(axis)
+            for link_name in subtree(child):
+                r_c, t_c = np.eye(3), np.zeros(3)  # child <- link
+                k = link_name
+                while k != child:
+                    j = joints[k]
+                    if j[3] != "fixed":
+                        raise ValueError(f"{link_name}: a moving joint under a spinning link")
+                    r_c, t_c = j[2] @ r_c, j[2] @ t_c + j[1]
+                    k = j[0]
+                for col in root.find(f"link[@name='{link_name}']").findall("collision"):
+                    xyz, crot = origin(col)
+                    if col.find("geometry/cylinder") is None:
+                        raise ValueError(f"{link_name}: a spinning link carries a non-cylinder collision")
+                    ca = r_c @ crot @ np.array([0.0, 0.0, 1.0])
+                    centre = r_c @ xyz + t_c
+                    off = centre - np.dot(centre, a) * a
+                    if abs(abs(float(np.dot(ca, a))) - 1) > 1e-9 or np.linalg.norm(off) > 1e-9:
+                        raise ValueError(f"{link_name}: a cylinder not about its joint's spin axis")
+        elif kind == "revolute" and any(c[3] == "revolute" for c in chain_of(child)[:-1]):
+            raise ValueError(f"{child}: a revolute joint under another revolute joint")
+        elif kind not in ("fixed", "revolute", "prismatic", "continuous"):
+            raise ValueError(f"{child}: joint type {kind} is not read")
+
+    limits = [v[5] for v in joints.values() if v[3] == "revolute"]
+    lo = min((a for a, _ in limits), default=0.0)
+    hi = max((b for _, b in limits), default=0.0)
+    angles = np.linspace(lo, hi, steer_samples) if hi > lo else np.array([0.0])
+    theta_pad = 1.0 / math.cos((hi - lo) / max(steer_samples - 1, 1) / 2) if hi > lo else 1.0
+
+    def to_base(link, local, angle, scale):
+        pts = local
+        for _parent, xyz, rot, kind, axis, (jlo, jhi) in reversed(chain_of(link)):
+            if kind == "revolute":
+                a = axis / np.linalg.norm(axis)
+                along = np.outer(pts @ a, a)
+                pts = along + (pts - along) * scale
+                pts = pts @ _axis_rotation(a, min(max(angle, jlo), jhi)).T
+            pts = pts @ rot.T + xyz
+        return pts
+
+    def lift_range(link):  # the base-z travel the link's prismatic ancestors allow (upward only, checked)
+        lo_z = hi_z = 0.0
+        k = link
+        while k in joints:
+            j = joints[k]
+            if j[3] == "prismatic":
+                up_z = (static_rotation(k) @ (j[4] / np.linalg.norm(j[4])))[2]
+                ends = sorted(up_z * q for q in raw_limits[k])
+                lo_z, hi_z = lo_z + ends[0], hi_z + ends[1]
+            k = j[0]
+        return lo_z, hi_z
+
+    pad = 1.0 / math.cos(math.pi / rim_points)
+    shapes = []  # (footprint points (x_rear, y), is_blade): per shape, the swept footprint of each angle step
+    for link in root.findall("link"):
+        steered = any(c[3] == "revolute" for c in chain_of(link.get("name")))
+        z_lo, z_hi = lift_range(link.get("name"))
+        for col in link.findall("collision"):
+            geom = col.find("geometry")
+            xyz, rot = origin(col)
+            if geom.find("box") is not None:
+                hx, hy, hz = (float(v) / 2 for v in geom.find("box").get("size").split())
+                local = np.array([[a * hx, b * hy, c * hz] for a in (-1, 1) for b in (-1, 1) for c in (-1, 1)])
+            elif geom.find("cylinder") is not None:
+                rad = float(geom.find("cylinder").get("radius")) * pad
+                half = float(geom.find("cylinder").get("length")) / 2
+                th = np.linspace(0.0, 2 * math.pi, rim_points, endpoint=False)
+                ring = np.column_stack([rad * np.cos(th), rad * np.sin(th)])
+                local = np.vstack([np.column_stack([ring, np.full(rim_points, z)]) for z in (-half, half)])
+            else:
+                raise ValueError(f"{col.get('name')}: only box and cylinder collisions are read")
+            blade = (col.get("name") or "").endswith("_fork_collision")
+            local = local @ rot.T + xyz
+            if not steered:
+                sweeps = [to_base(link.get("name"), local, 0.0, 1.0)]
+            else:
+                # Each step between adjacent sample angles: the points at both ends as they are and
+                # circumscribed (1/cos(step/2) from the axis) -- every point's arc between the two
+                # samples lies between those chords, so the step's hull holds the swept shape.
+                at = [np.vstack([to_base(link.get("name"), local, float(g), 1.0),
+                                 to_base(link.get("name"), local, float(g), theta_pad)]) for g in angles]
+                sweeps = [np.vstack([at[k], at[k + 1]]) for k in range(len(at) - 1)] or at
+            for pts in sweeps:
+                # The lift moves the shape straight up through [z_lo, z_hi]: in the band at any height?
+                if pts[:, 2].min() + z_lo >= z_band[1] or pts[:, 2].max() + z_hi <= z_band[0]:
+                    continue
+                shapes.append((np.column_stack([pts[:, 0] + rear_axle_offset_m, pts[:, 1]]), blade))
+    tol = 1e-9
+    hulls = [(_hull(fp), blade) for fp, blade in shapes]
+    # The chassis front: the frontmost point of any footprint where it is wider than the carriage
+    # (each convex footprint clipped to y >= half and to y <= -half -- edges, not only corners).
+    wide = []
+    for hull, _ in hulls:
+        if len(hull) < 3:
+            continue
+        edge = carriage_half_width_m + 1e-7  # strictly wider: the carriage itself is exactly half wide
+        for side in (_clip(hull, 1, edge, False), _clip(hull, 1, -edge, True)):
+            if side:
+                wide.append(max(q[0] for q in side))
+    if not wide:
+        raise ValueError("no shape wider than the carriage reaches the D0 band")
+    front = max(wide)
+    if front > carriage_face_m + tol:
+        raise ValueError(f"a shape wider than the carriage reaches {front:.4f} m, ahead of the carriage face")
+    ahead = [max(abs(q[1]) for q in _clip(hull, 0, front, False)) for hull, blade in hulls
+             if not blade and len(hull) > 2 and max(q[0] for q in hull) > front + tol]
+    half = max([carriage_half_width_m, *ahead])
+    outside = []
+    for hull, blade in hulls:
+        if blade or len(hull) < 3:
+            continue
+        # Behind the front the chassis box holds the footprint; ahead of it the carriage box
+        # (points on the line x = front belong to the chassis box).
+        bad = [q for q in _clip(hull, 0, front, True)
+               if not (q[0] >= -body_rear_m - tol and abs(q[1]) <= body_half_width_m + tol)]
+        bad += [q for q in _clip(hull, 0, front, False) if q[0] > front + tol
+                and not (q[0] <= carriage_face_m + tol and abs(q[1]) <= half + tol)]
+        outside += [(round(q[0], 4), round(q[1], 4)) for q in bad]
+    if outside:
+        raise ValueError(f"the truck boxes do not cover the URDF collision shapes: {outside[:5]}")
+    return {"chassis_front_m": front, "carriage_depth_m": carriage_face_m - front,
+            "carriage_half_width_m": half, "steer_range_rad": [float(lo), float(hi)], "footprints": len(shapes)}
+
+
 def pallet_from_base(observation) -> tuple[float, float, float]:
     """(ox, oy, yaw): the pallet frame in base_link -- origin at the midpoint of the two
     pocket front centres, x along the observation's insertion yaw."""
@@ -231,12 +489,14 @@ class PalletPocketCheck:
         return axis_errors(bound, self._x_extent, self._y_extent, PALLET_TERM_M + m_k)
 
     def add_frame(self, stamp_s: float, depth_m: np.ndarray, observation, bound: dict | None, lift_m: float,
-                  motion: tuple = (0.0, 0.0, 0.0), truck_pallet=None, carried=None) -> dict:
+                  motion: tuple = (0.0, 0.0, 0.0), truck_pallet=None, carried=None, standing=None) -> dict:
         """One depth frame. observation/bound: the tracker's accepted observation in this frame
         (None: the frame is only an obstacle check, V5 -- then truck_pallet, the base pose in the
         pallet frame by the carried estimate, places it and carried = (the latest accepted
-        observation's bound, its stamp) gives that estimate's e_d). motion: (v̄, ω̄, ρ) over the
-        frame's pixel-time window. A non-finite observation, bound or motion certifies nothing."""
+        observation's bound, its stamp) gives that estimate's e_d; standing = (d0, φ0) adds the
+        residual-motion bound of a frame placed by the anchor pose while standing, V13). motion:
+        (v̄, ω̄, ρ) over the frame's pixel-time window. A non-finite observation, bound or motion
+        certifies nothing."""
         # A frame is new by its render stamp: a re-read of the same render carries the same stamp,
         # and a standing camera may render identical pixels at a new time.
         if not math.isfinite(float(stamp_s)) or float(stamp_s) <= self.last_seen_s + 1e-9:
@@ -259,7 +519,7 @@ class PalletPocketCheck:
             e_x, e_y = self.frame_errors(bound, motion)
             errors_at = self._frame_errors_at(bound, motion)
         elif truck_pallet is not None and all_finite(*truck_pallet, lift_m) and carried is not None:
-            errors_at = self._carried_errors_at(truck_pallet, carried, stamp_s)
+            errors_at = self._carried_errors_at(truck_pallet, carried, stamp_s, standing)
         if errors_at is None:  # not placed: no obstacle check, so not fresh either
             rec = {"time_s": float(stamp_s), "new": True, "accepted": False, "placed": False}
             self.records.append(rec)
@@ -342,12 +602,17 @@ class PalletPocketCheck:
                     float(bound["lateral_m"]) + np.abs(pts[:, 0]) * yaw + extra)
         return at
 
-    def _carried_errors_at(self, truck_pallet, carried, stamp_s: float):
+    def _carried_errors_at(self, truck_pallet, carried, stamp_s: float, standing=None):
         """Per-point e_d (V3) of the carried estimate that places a frame without an accepted
-        observation: the latest bound + e(a) + ρ_p ψ(a) + term, ρ_p from the rear axle; None when
-        the bound is unusable or the age has no odometry row (the frame cannot be placed)."""
+        observation: the latest bound + e(a) + ρ_p ψ(a) + term, ρ_p from the rear axle; plus
+        d0 + ρ_p φ0 for a frame placed by the anchor pose while standing (V13 -- standing =
+        (d0, φ0)); None when the bound or the standing bound is unusable or the age has no
+        odometry row (the frame cannot be placed)."""
         bound, latest_stamp_s = carried
         if not bound_ok(bound) or not all_finite(latest_stamp_s):
+            return None
+        d0, phi0 = standing if standing is not None else (0.0, 0.0)
+        if not (all_finite(d0, phi0) and d0 >= 0.0 and phi0 >= 0.0):
             return None
         odo = self.demand_terms(float(stamp_s) - (float(latest_stamp_s) - self.l_hi))
         if odo is None:
@@ -358,7 +623,8 @@ class PalletPocketCheck:
         yaw = float(bound["yaw_rad"])
 
         def at(pts):
-            extra = e + np.hypot(pts[:, 0] - rear[0], pts[:, 1] - rear[1]) * psi + PALLET_TERM_M
+            rho = np.hypot(pts[:, 0] - rear[0], pts[:, 1] - rear[1])
+            extra = e + rho * psi + PALLET_TERM_M + d0 + rho * phi0
             return (float(bound["along_m"]) + np.abs(pts[:, 1]) * yaw + extra,
                     float(bound["lateral_m"]) + np.abs(pts[:, 0]) * yaw + extra)
         return at

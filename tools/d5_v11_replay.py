@@ -21,6 +21,7 @@ Usage: python tools/d5_v11_replay.py --runs RUN_DIR [RUN_DIR ...] --output OUT.j
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -113,6 +114,39 @@ class Run:
             return None
         return np.load(self.directory / "pocket_frames" / rec["file"])["depth_m"].astype(float)
 
+    def command_zero(self, t0: float, t1: float) -> bool:
+        """The applied command was exactly zero over [t0, t1]. A record at t_k holds the command of
+        the step that ended at t_k (the runner records after the physics step), so the records read
+        run from the first at or after t0 to the first at or after t1 (the step containing t1);
+        a span starting before the record, or ending after it, is not known to be zero."""
+        if not len(self.t) or t0 < self.t[0] - 1e-9 or t1 > self.t[-1] + 1e-9:
+            return False
+        lo = int(np.searchsorted(self.t, t0 - 1e-9))
+        hi = int(np.searchsorted(self.t, t1 - 1e-9)) + 1
+        v = np.asarray(self.truth["applied_speed_mps"][lo:hi], dtype=float)
+        return bool(len(v)) and bool(np.all(v == 0.0))
+
+    def standing_motion(self, t0: float, t1: float, rear_axle_offset_m: float) -> tuple[float, float]:
+        """The truth's largest rear-axle position and heading change between any two instants in
+        [t0, t1] (V13's d0 / phi0 definition, checked on this run): the records bracketing both
+        ends are included, so an end between two records (interpolated) is covered; a span off
+        the record or a non-finite pose is unbounded (inf)."""
+        if not len(self.t) or t0 < self.t[0] - 1e-9 or t1 > self.t[-1] + 1e-9:
+            return math.inf, math.inf
+        lo = max(int(np.searchsorted(self.t, t0 + 1e-9)) - 1, 0)  # the record at or before t0
+        hi = int(np.searchsorted(self.t, t1 - 1e-9)) + 1  # through the record at or after t1
+        seg = np.asarray(self.truth["base_pose"][lo:hi], dtype=float)
+        if not len(seg) or not np.all(np.isfinite(seg)):
+            return math.inf, math.inf
+        w, x, y, z = seg[:, 3], seg[:, 4], seg[:, 5], seg[:, 6]
+        yaw = np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+        dyaw = yaw[:, None] - yaw[None, :]
+        phi = float(np.max(np.abs(np.arctan2(np.sin(dyaw), np.cos(dyaw)))))
+        # base_link positions interpolate linearly between records (the bracketing records bound
+        # any instant); the rear axle moves by at most that plus offset * the heading change.
+        d_base = float(np.max(np.hypot(seg[:, None, 0] - seg[None, :, 0], seg[:, None, 1] - seg[None, :, 1])))
+        return d_base + abs(rear_axle_offset_m) * phi, phi
+
     def window_motion(self, stamp_s: float, l_lo: float, l_hi: float, wheelbase: float) -> tuple[float, float]:
         """(v̄, ω̄): the applied command's largest |v| and |v·κ| over the pixel-time window (V2)."""
         lo, hi = self.i(stamp_s - l_hi), self.i(stamp_s - l_lo)
@@ -131,11 +165,21 @@ def build(run: Run, bounds: NearFieldBounds, band, root: Path, config: dict | No
     layer = yaml.safe_load((root / args["obstacle_layer"]).read_text())["permission"]
     k = r["pocket_camera"]["intrinsics"]
     bfo = r["perception"]["base_from_optical"]
+    config = dict(config or {})
+    body_front = float(geom["axle_to_fork_tip_m"]) - float(geom["carriage_limit_m"])
+    if "carriage_depth_m" not in config:
+        # V14 (plan 6판): the chassis/carriage split read from the run's URDF (refused when the
+        # boxes do not cover its collision shapes).
+        corners = IG.read_carriage_front_corners_m(root / args["forklift_urdf"])
+        split = V11.truck_split_from_urdf(
+            root / args["forklift_urdf"], offset, float(geom["unloaded_footprint"]["rear_m"]),
+            float(geom["unloaded_footprint"]["half_width_m"]), body_front, max(abs(c[1]) for c in corners))
+        config.update(carriage_depth_m=split["carriage_depth_m"], carriage_half_width_m=split["carriage_half_width_m"])
     return V11.PalletPocketCheck(
         pallet_geometry=load_pallet_geometry(root / args["pallet_geometry"]),
         blades_rear=tuple((x0 + offset, x1 + offset, y0, y1)
                           for x0, x1, y0, y1 in IG.read_fork_blades_m(root / args["forklift_urdf"])),
-        body_front_m=float(geom["axle_to_fork_tip_m"]) - float(geom["carriage_limit_m"]),
+        body_front_m=body_front,
         body_rear_m=float(geom["unloaded_footprint"]["rear_m"]),
         body_half_width_m=float(geom["unloaded_footprint"]["half_width_m"]),
         insertion_depth_m=float(geom["axle_to_fork_tip_m"]) + float(geom["pallet_depth_m"]) / 2
@@ -146,7 +190,7 @@ def build(run: Run, bounds: NearFieldBounds, band, root: Path, config: dict | No
         camera=DepthCamera(float(k["fx"]), float(k["fy"]), float(k["cx"]), float(k["cy"]), int(k["width"]),
                            int(k["height"])),
         stopping=StoppingModel(float(layer["latency_s"]), float(layer["decel_mps2"]), float(layer["margin_m"])),
-        bounds=bounds, latency_band_s=band, noise_seed=int(args["seed"]), config=V11.V11Config(**(config or {})),
+        bounds=bounds, latency_band_s=band, noise_seed=int(args["seed"]), config=V11.V11Config(**config),
     ), offset
 
 
@@ -200,8 +244,75 @@ def record_problems(run: Run) -> list:
     return out
 
 
-def replay(run: Run, bounds: NearFieldBounds, band, root: Path, config: dict | None = None) -> dict:
-    problems = record_problems(run)
+def _sha256(path: Path) -> str | None:
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+
+
+def run_files_digest(directory: Path) -> str:
+    """tools/s4_judge.py run_files_digest: one hash over the run files the judgement reads."""
+    names = ["result.json", "near_tracking.json", "paths.json", "slam_control.npy", "pocket_frames/index.json",
+             "pocket_frames/truth.npz"]
+    names += sorted(p.relative_to(directory).as_posix() for p in (directory / "pocket_frames").glob("frame_*.npz"))
+    digest = hashlib.sha256()
+    for name in names:
+        path = directory / name
+        digest.update(name.encode() + b"\0" + (_sha256(path) if path.exists() else "-").encode())
+    return digest.hexdigest()
+
+
+def depth_sha256(depth) -> str:
+    """sim/isaac/g2_records.py depth_sha256: the depth array's exact bytes, dtype and shape."""
+    array = np.ascontiguousarray(np.asarray(depth))
+    digest = hashlib.sha256()
+    digest.update(str(array.dtype).encode())
+    digest.update(str(array.shape).encode())
+    digest.update(array.tobytes())
+    return digest.hexdigest()
+
+
+def input_problems(run: Run, root: Path, bounds_sha: str | None, manifest: dict | None,
+                   require_manifest: bool) -> list:
+    """The replay contract (plan 6판): the URDF, pallet geometry, near-field bounds, drive terms and
+    obstacle layer the replay reads are the files the run used, every near-capture depth is the
+    array the runner hashed, and the run files match the batch manifest when one is given."""
+    r, out = run.result, []
+    args = r.get("arguments") or {}
+    nt = r.get("near_tracking") or {}
+    for key, sha_key in (("forklift_urdf", "forklift_urdf_sha256"), ("pallet_geometry", "pallet_geometry_sha256")):
+        if not args.get(key) or _sha256(root / args[key]) != r.get(sha_key):
+            out.append(f"{key} is not the file the run used")
+    if bounds_sha is None or bounds_sha != nt.get("bounds_sha256"):
+        out.append("near-field bounds are not the file the run used")
+    terms_path = root / str(nt.get("drive_terms") or "config/near_field_drive_terms.json")
+    if _sha256(terms_path) != nt.get("drive_terms_sha256"):
+        out.append("drive terms are not the file the run used")
+    else:
+        recorded = json.loads(terms_path.read_text())["condition"]["input_files"].get("argument obstacle_layer")
+        if not args.get("obstacle_layer") or _sha256(root / args["obstacle_layer"]) != recorded:
+            out.append("obstacle layer is not the file the run used")
+    attempts = r.get("observation_attempts") or []
+    starts = nt.get("starts") or ([nt["start"]] if nt.get("start") else [])
+    for s in starts:
+        k = int(s.get("attempt", 1))
+        path = run.directory / f"perception_capture_{k}_depth_m.npy"
+        want = attempts[k - 1].get("depth_sha256") if 0 < k <= len(attempts) else None
+        if not path.is_file() or want is None or depth_sha256(np.load(path)) != want:
+            out.append(f"near-capture depth of attempt {k} is not the array the runner hashed")
+    if manifest is not None:
+        want = (manifest.get("runs") or {}).get(run.directory.parent.name)
+        if want is None or run_files_digest(run.directory) != want:
+            out.append("run files do not match the batch manifest")
+    elif require_manifest:
+        out.append("no batch manifest")
+    return out
+
+
+def replay(run: Run, bounds: NearFieldBounds, band, root: Path, config: dict | None = None, *,
+           bounds_sha: str | None = None, standing=None, manifest: dict | None = None,
+           require_manifest: bool = False) -> dict:
+    """standing: (d0, φ0) of the bounds file's `standing` field (V13), None turns the anchor
+    placement off."""
+    problems = record_problems(run) or input_problems(run, root, bounds_sha, manifest, require_manifest)
     if problems:
         return {"run": str(run.directory), "success": run.result.get("success"),
                 "failure_reason": run.result.get("failure_reason"), "episodes": [], "status": "unverified",
@@ -210,7 +321,9 @@ def replay(run: Run, bounds: NearFieldBounds, band, root: Path, config: dict | N
     starts = nt.get("starts") or ([nt["start"]] if nt.get("start") else [])
     wheelbase = float(run.result["chassis_model"]["drive_geometry"]["wheelbase_m"])
     l_lo, l_hi = float(band[0]), float(band[1])
-    frames = [f for f in run.near["frames"] if "skipped" not in f]
+    # Frames the tracker read: accepted / rejected, and the ones it skipped as uncovered (V13 may
+    # place those by the anchor pose); the other skips (dropped, not_new, ...) reach no one.
+    frames = [f for f in run.near["frames"] if f.get("skipped") in (None, "uncovered")]
     ticks = run.near["ticks"]
     # The runner records the terminal events as their own event or as a stop with that reason.
     terminal = ("mismatch", "unbounded", "lost")
@@ -231,7 +344,7 @@ def replay(run: Run, bounds: NearFieldBounds, band, root: Path, config: dict | N
         latest = None
         out = {"episode": ep, "ticks": 0, "blocks": [], "first_block": None, "frames_fed": 0,
                "standing_refusals": {}, "standing_coverage": [], "nonfinite_ticks": 0, "nonfinite_frames": 0,
-               "missing_depth": 0}
+               "missing_depth": 0, "anchor_placed": 0, "anchor_refused": {}}
         last_insert = None
         checked_i: set = set()
         if capture.exists():
@@ -250,6 +363,36 @@ def replay(run: Run, bounds: NearFieldBounds, band, root: Path, config: dict | N
             while fi < len(f_ep) and float(f_ep[fi]["read_s"]) <= now + 1e-9:
                 f = f_ep[fi]
                 fi += 1
+                if f.get("skipped") == "uncovered":
+                    # V13 (plan 6판): placed by the anchor pose for the obstacle check and freshness
+                    # only, while the truck stood under a zero applied command since the anchor.
+                    stamp = float(f["stamp_s"])
+                    anchor_t = min(float(start["built_s"]), float(start["capture_stamp_s"]) - l_hi)
+                    why = ("no_standing_bound" if standing is None
+                           else "after_an_observation" if latest is None
+                           or latest["stamp"] != float(start["capture_stamp_s"])
+                           else "before_the_anchor" if stamp - l_lo <= anchor_t
+                           else "moving" if not run.command_zero(anchor_t, stamp - l_lo) else None)
+                    if why is None:
+                        # The S4-batch check of the empirical bound (plan 6판): a span whose true
+                        # motion exceeds d0 / phi0 does not use the rule.
+                        d_true, phi_true = run.standing_motion(anchor_t, stamp - l_lo, offset)
+                        if not (d_true <= standing[0] + 1e-12 and phi_true <= standing[1] + 1e-12):
+                            why = "standing_bound_exceeded"  # NaN / inf never pass
+                    if why is not None:
+                        out["anchor_refused"][why] = out["anchor_refused"].get(why, 0) + 1
+                        continue
+                    depth = run.depth(stamp)
+                    if depth is None:
+                        out["missing_depth"] += 1
+                        continue
+                    truck = V11.pose_in_frame(pallet_in_held(held), tuple(anchor_pose))
+                    rec = check.add_frame(stamp, depth, None, None, float(run.truth["lift_m"][run.i(stamp)]),
+                                          truck_pallet=truck, carried=(dict(bounds.near_capture),
+                                                                       float(start["capture_stamp_s"])),
+                                          standing=tuple(standing))
+                    out["anchor_placed"] += int(bool(rec.get("new")) and rec.get("placed", True))
+                    continue
                 depth = run.depth(f["stamp_s"])
                 if depth is None:
                     out["missing_depth"] += 1  # a recorded read without its depth: not reproduced
@@ -415,17 +558,29 @@ def main(argv=None) -> int:
     ap.add_argument("--bounds", type=Path, default=ROOT / "config/near_field_bounds_measured.json")
     ap.add_argument("--config", type=json.loads, default=json.loads(os.environ.get("D5V11_CONFIG") or "{}"),
                     help="V11Config overrides as JSON (default: $D5V11_CONFIG)")
+    ap.add_argument("--standing", type=json.loads, default=None,
+                    help="[d0_m, phi0_rad] instead of the bounds file's standing field (diagnostics only)")
+    ap.add_argument("--manifest", type=Path, default=None, help="the batch manifest.json (run files digests)")
+    ap.add_argument("--require-manifest", action="store_true", help="a run without a manifest is unverified")
     ns = ap.parse_args(argv)
     data = json.loads(ns.bounds.read_text())
     bounds = NearFieldBounds.from_dict(data)
     band = tuple(data["latency"]["band_s"])
+    field = data.get("standing")
+    standing = ns.standing if ns.standing is not None else (
+        (float(field["d0_m"]), float(field["phi0_rad"])) if field else None)
+    manifest = json.loads(ns.manifest.read_text()) if ns.manifest else None
+    bounds_sha = hashlib.sha256(ns.bounds.read_bytes()).hexdigest()
     out = []
     for d in ns.runs:
         try:
-            out.append(replay(Run(d), bounds, band, ROOT, ns.config))
+            out.append(replay(Run(d), bounds, band, ROOT, ns.config, bounds_sha=bounds_sha, standing=standing,
+                              manifest=manifest, require_manifest=ns.require_manifest))
         except Exception as exc:  # noqa: BLE001
             out.append({"run": str(d), "error": f"{type(exc).__name__}: {exc}", "status": "unverified"})
-    ns.output.write_text(json.dumps(json_safe({"rules": V11.RULES, "config": ns.config, "runs": out}), indent=1) + "\n")
+    ns.output.write_text(json.dumps(json_safe({"rules": V11.RULES, "config": ns.config, "standing": standing,
+                                               "standing_from": "argument" if ns.standing is not None else
+                                               ("bounds" if field else None), "runs": out}), indent=1) + "\n")
     return 1 if any("error" in r for r in out) else 0
 
 

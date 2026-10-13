@@ -340,3 +340,21 @@ def test_recorded_paths_start_at_the_artifacts_directory():
         "artifacts/20261008_d8b_isaac/third/seed_1/run"
     )
     assert EX.artifact_path("relative/run") == "relative/run"
+
+
+def test_the_standing_bound_is_the_largest_change_between_any_two_instants():
+    # D5 v11 V13: zero command from 0.0 s to 0.05 s; the rear axle goes +0.19 mm then -0.19 mm
+    # (0.38 mm apart -- a first-tick reference would read 0.19 mm), heading +-0.01 mrad; the
+    # command turns on at 0.05 s and the motion after it is not read.
+    t = np.arange(0.0, 0.1, 1 / 120)
+    base = np.tile([0.34, 0.0, 0.1, 1.0, 0.0, 0.0, 0.0], (len(t), 1))
+    base[2, 1], base[4, 1] = 0.00019, -0.00019
+    for k, yaw in ((3, 1e-5), (5, -1e-5)):
+        base[k, 3], base[k, 6] = math.cos(yaw / 2), math.sin(yaw / 2)
+    base[8:, 0] += 0.01  # moving after the command
+    applied = np.where(t < 0.05 - 1e-9, 0.0, 0.05)
+    out = EX.standing_motion(t, base, applied, 0.0, -0.34)
+    assert out["ticks"] == 6 and out["span_s"] == [0.0, pytest.approx(5 / 120)]
+    assert out["d_m"] == pytest.approx(0.00038 + 0.34 * 2e-5, abs=1e-9)  # base + offset * heading
+    assert out["phi_rad"] == pytest.approx(2e-5, rel=1e-6)
+    assert EX.standing_motion(t, base, np.full(len(t), 0.05), 0.0, -0.34) is None

@@ -312,3 +312,92 @@ def test_only_a_placed_frame_keeps_the_depth_fresh():
     assert rec["new"] and rec["placed"] is False
     allowed, why = check.limit(0.15, (START, 0.0, 0.0), BOUND, 0.0, 0.0, 1, 0.0, 0.0)
     assert why == "depth_stale" and allowed == 0.0
+
+
+def test_a_frame_placed_by_the_anchor_while_standing_allows_the_residual_motion_bound():
+    # V13: the same 35 mm carried offset that latches with a zero bound is allowed once the
+    # standing bound d0 = 10 mm is added (d0 + rho * phi0 to both axes).
+    base = (-0.9, 0.0, 0.0)
+    off = (base[0] - 0.035, 0.0, 0.0)
+    zero = {"lateral_m": 0.0, "along_m": 0.0, "yaw_rad": 0.0}
+    check = make()
+    depth = render(check, base)
+    assert check.add_frame(0.0, depth, None, None, 0.0, truck_pallet=off, carried=(zero, -0.05))["obstacle"] > 0
+    check = make()
+    rec = check.add_frame(0.0, depth, None, None, 0.0, truck_pallet=off, carried=(zero, -0.05), standing=(0.010, 0.0))
+    assert rec["obstacle"] == 0 and not check.obstacle
+    bad = make().add_frame(0.0, depth, None, None, 0.0, truck_pallet=off, carried=(zero, -0.05),
+                           standing=(float("nan"), 0.0))
+    assert bad["placed"] is False
+
+
+def _urdf(tmp_path, extra_base="", carriage_axis="0 0 1", wheel_geometry="", nested=False, wheel_child="",
+          carriage_extra="", lift_parent="base_link"):
+    """A minimal truck: a body box, two steered front wheels, a carriage with two blades."""
+    wheel = wheel_geometry or '<cylinder radius="0.1" length="0.08" />'
+    carrier = "carrier_l"
+    nest = ('<joint name="nested" type="revolute"><parent link="carrier_l" /><child link="carrier_n" />'
+            '<axis xyz="0 0 1" /><limit lower="-0.2" upper="0.2" /></joint><link name="carrier_n" />') if nested else ""
+    if nested:
+        carrier = "carrier_n"
+    text = f"""<robot name="t">
+<link name="base_link">
+  <collision name="body"><origin xyz="0 0 0.09" /><geometry><box size="0.6 0.5 0.12" /></geometry></collision>
+  {extra_base}
+</link>
+<joint name="steer_l" type="revolute"><parent link="base_link" /><child link="carrier_l" />
+  <origin xyz="0.3 0.2 0.1" /><axis xyz="0 0 1" /><limit lower="-0.2" upper="0.2" /></joint>
+<link name="carrier_l" />
+{nest}
+<joint name="spin_l" type="continuous"><parent link="{carrier}" /><child link="wheel_l" /><axis xyz="0 1 0" /></joint>
+<link name="wheel_l"><collision name="tire"><origin rpy="1.570796327 0 0" /><geometry>{wheel}</geometry></collision></link>
+{wheel_child}
+<joint name="lift" type="prismatic"><parent link="{lift_parent}" /><child link="carriage" />
+  <axis xyz="{carriage_axis}" /><limit lower="0" upper="0.28" /></joint>
+<link name="carriage">
+  <collision name="face"><origin xyz="0.5 0 0.1" /><geometry><box size="0.02 0.4 0.12" /></geometry></collision>
+  <collision name="left_fork_collision"><origin xyz="0.7 0.15 0.04" /><geometry><box size="0.36 0.05 0.02" /></geometry></collision>
+  <collision name="right_fork_collision"><origin xyz="0.7 -0.15 0.04" /><geometry><box size="0.36 0.05 0.02" /></geometry></collision>
+  {carriage_extra}
+</link>
+</robot>"""
+    path = tmp_path / "t.urdf"
+    path.write_text(text)
+    return path
+
+
+def test_the_truck_split_refuses_what_it_cannot_cover(tmp_path):
+    # Rear axle at base_link x = -0.3; body half-width 0.36 (the wheels reach 0.24 + 0.04 = 0.28).
+    split = V11.truck_split_from_urdf(_urdf(tmp_path), 0.3, 0.6, 0.36, 0.81, 0.2)
+    assert split["carriage_half_width_m"] == 0.2 and split["chassis_front_m"] > 0.3 + 0.4
+    # A box rotated 45 degrees centred on the carriage half-width (base x 0.43, y 0.2): its corners
+    # wider than 0.2 sit at x 0.43, but its edge stays wider than 0.2 up to x 0.43 + 0.0495 (Codex
+    # S0b P2: a corner test would put the front at 0.43 and leave that edge outside both boxes).
+    corner = ('<collision name="diamond"><origin xyz="0.43 0.2 0.1" rpy="0 0 0.785398" />'
+              '<geometry><box size="0.07 0.07 0.05" /></geometry></collision>')
+    split = V11.truck_split_from_urdf(_urdf(tmp_path, extra_base=corner), 0.3, 0.6, 0.36, 0.81, 0.2)
+    assert split["chassis_front_m"] >= 0.3 + 0.43 + 0.07 / math.sqrt(2) - 1e-6
+    with pytest.raises(ValueError):  # a body box narrower than the steered wheels
+        V11.truck_split_from_urdf(_urdf(tmp_path), 0.3, 0.6, 0.25, 0.81, 0.2)
+    hub_box = ('<joint name="hub" type="fixed"><parent link="wheel_l" /><child link="hub_l" /></joint>'
+               '<link name="hub_l"><collision name="flag"><origin xyz="0.3 0 0" /><geometry><box size="0.05 0.05 0.05" />'
+               '</geometry></collision></link>')
+    for kwargs in ({"carriage_axis": "0 1 0"},  # a lift that moves sideways
+                   {"carriage_axis": "0 0 -1"},  # a lift that moves down
+                   {"wheel_geometry": '<box size="0.2 0.08 0.2" />'},  # a spinning box
+                   {"wheel_child": hub_box},  # a box fixed under a spinning wheel
+                   {"nested": True},  # a revolute under a revolute
+                   {"lift_parent": "carrier_l"},  # a lift under a steered link
+                   # a wide plate below the band at lift 0 that the lift raises into it, ahead of the face
+                   {"carriage_extra": '<collision name="plate"><origin xyz="0.6 0 0.015" />'
+                                      '<geometry><box size="0.05 0.6 0.02" /></geometry></collision>'}):
+        with pytest.raises(ValueError):
+            V11.truck_split_from_urdf(_urdf(tmp_path, **kwargs), 0.3, 0.6, 0.36, 0.81, 0.2)
+
+
+def test_the_truck_split_front_holds_the_finely_sampled_steering_envelope():
+    # 61 samples with each step's arcs circumscribed cover what 2001 plain samples find.
+    urdf = ROOT / "sim/models/dls08_measured/forklift.urdf"
+    coarse = V11.truck_split_from_urdf(urdf, 0.34, 0.17, 0.36, 0.944, 0.235)
+    fine = V11.truck_split_from_urdf(urdf, 0.34, 0.17, 0.36, 0.944, 0.235, steer_samples=2001)
+    assert coarse["chassis_front_m"] >= fine["chassis_front_m"] - 1e-9

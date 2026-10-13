@@ -19,6 +19,9 @@ d8b_observations.json and the recorded runs themselves -- this writes one JSON f
   near_capture the near-capture observation the runner used against the truth at both
                ends of its capture window; its bound is the larger of the front bound
                over its distance interval (interval_bound) and the captures' own errors.
+  standing     (when every run recorded its applied command) d0 / phi0: the largest
+               rear-axle position / heading change between any two instants of the
+               zero-command stretch after the near capture (D5 v11 V13).
 
 Bounds are sample maxima of one synthetic camera model under the recorded contract
 (1 mm depth, no added noise, render cadence, video off), not proven limits; the file
@@ -325,6 +328,57 @@ def near_capture_check(run: CAL.Run, geometry, front_rows: list[dict]) -> dict:
     }
 
 
+STANDING_MAX_S = 0.5  # the longest zero-command stretch after the anchor that the standing bound reads
+
+
+def standing_motion(
+    t: np.ndarray,
+    base: np.ndarray,
+    applied: np.ndarray,
+    start_s: float,
+    rear_axle_offset_m: float,
+) -> dict | None:
+    """D5 v11 V13 (plan 6판): the truth's rear-axle motion while the applied command stays exactly
+    zero from start_s (the near capture's window start, the anchor) to the first non-zero command
+    or STANDING_MAX_S -- the largest change of position and of heading between ANY two instants of
+    that stretch (not from its first tick: the anchor may sit anywhere in it; the rear axle's as
+    base_link's change + offset * the heading change), the pose recorded
+    at or before start_s included (the replay brackets a span's ends by their records). None when
+    no zero-command tick is recorded there or a pose is not finite."""
+    first = int(np.searchsorted(t, start_s - 1e-9))
+    hi = first
+    while (
+        hi < len(t) and t[hi] <= start_s + STANDING_MAX_S + 1e-9 and applied[hi] == 0.0
+    ):
+        hi += 1
+    if hi - first < 1:
+        return None
+    lo = max(int(np.searchsorted(t, start_s + 1e-9)) - 1, 0)
+    seg = base[lo:hi]
+    if not np.all(np.isfinite(seg)):
+        return None
+    w, x, y, z = seg[:, 3], seg[:, 4], seg[:, 5], seg[:, 6]
+    yaw = np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+    dyaw = yaw[:, None] - yaw[None, :]
+    phi = float(np.max(np.abs(np.arctan2(np.sin(dyaw), np.cos(dyaw)))))
+    # base_link positions interpolate linearly between records; the rear axle moves by at most
+    # that plus offset * the heading change (the rear axle is not linear in the heading).
+    d_base = float(
+        np.max(
+            np.hypot(
+                seg[:, None, 0] - seg[None, :, 0], seg[:, None, 1] - seg[None, :, 1]
+            )
+        )
+    )
+    d = d_base + abs(rear_axle_offset_m) * phi
+    return {
+        "span_s": [float(t[lo]), float(t[hi - 1])],
+        "ticks": hi - lo,
+        "d_m": d,
+        "phi_rad": phi,
+    }
+
+
 def near_capture_bound(checks: list[dict]) -> dict:
     """The near-capture observation's bound: per component the larger of every capture's
     front bound (interval_bound at its true distance) and every capture's own error -- the near captures are
@@ -417,6 +471,33 @@ def build(
     odometry = age_grid(merge_max(tables_e), merge_max(tables_psi))
     checks = [near_capture_check(run, geometry, observation["front"]) for run in runs]
     contract = calibration["contract"]
+    standing_runs = {}
+    l_hi = float(calibration["band_s"][1])
+    for run in runs:
+        data = np.load(run.directory / "pocket_frames/truth.npz")
+        if "applied_speed_mps" not in data.files:
+            standing_runs = None  # a record without the applied command: no standing bound (V13 off)
+            break
+        applied = np.asarray(data["applied_speed_mps"], dtype=float)
+        # Every near capture of the run (re-captures included): the D5 v11 replay's anchor is at
+        # or after its capture's window start - L_hi (the capture's pixel start, or the tracker's
+        # build, which is the window start), so each stretch is read from there.
+        attempts = run.result.get("observation_attempts") or [run.result["perception"]]
+        standing_runs[artifact_path(run.key)] = [
+            standing_motion(
+                run.truth.t,
+                run.truth.base,
+                applied,
+                float(a["t_before_capture_s"]) - l_hi,
+                float(contract["rear_axle_offset_m"]),
+            )
+            for a in attempts
+            if a.get("t_before_capture_s") is not None
+        ]
+    if standing_runs is not None and not any(
+        s for spans in standing_runs.values() for s in spans
+    ):
+        standing_runs = None
     return {
         "schema": SCHEMA,
         "condition": {
@@ -460,6 +541,29 @@ def build(
             **odometry,
         },
         "near_capture": {"bound": near_capture_bound(checks), "captures": checks},
+        **(
+            {
+                "standing": {
+                    "d0_m": max(
+                        s["d_m"] for spans in standing_runs.values() for s in spans if s
+                    ),
+                    "phi0_rad": max(
+                        s["phi_rad"]
+                        for spans in standing_runs.values()
+                        for s in spans
+                        if s
+                    ),
+                    "definition": "the truth's rear-axle position and heading change between any two "
+                    "instants while the applied command stays exactly zero from each near capture's "
+                    f"window start - L_hi (at most {STANDING_MAX_S} s; a capture with a non-zero command "
+                    "there gives no span); D5 v11 V13 adds d0 + rho * phi0 to a frame placed by the "
+                    "anchor pose, and its replay rechecks each span against the truth",
+                    "runs": standing_runs,
+                }
+            }
+            if standing_runs
+            else {}
+        ),
         "provenance": {
             "calibration": {"sha256": calibration_sha},
             "observations": {"sha256": observations_sha},
