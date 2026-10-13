@@ -190,3 +190,28 @@ def permission(
     if free < SLOW_M:
         return min(cap, 0.12), f"slow:{free:.2f}m"
     return cap, "ok"
+
+
+# Forward camera of the fake vehicle (synthetic, D435i-like field of view). camera_link
+# axes: x forward, y left, z up; pitched down about +y. Display overlays only.
+_HFOV_RAD = math.radians(69.0)
+_PITCH_RAD = math.radians(14.0)
+CAMERA_MODEL = {
+    "calibration_version": 1,
+    "width": 640,
+    "height": 400,
+    "fx": 320.0 / math.tan(_HFOV_RAD / 2),
+    "fy": 320.0 / math.tan(_HFOV_RAD / 2),
+    "cx": 320.0,
+    "cy": 200.0,
+    "base_from_camera": {
+        "frame": "camera_link (x forward, y left, z up)",
+        "xyz_m": [0.70, 0.0, 1.05],
+        "quaternion_xyzw": [
+            0.0,
+            math.sin(_PITCH_RAD / 2),
+            0.0,
+            math.cos(_PITCH_RAD / 2),
+        ],
+    },
+}
