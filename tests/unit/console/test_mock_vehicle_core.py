@@ -812,3 +812,190 @@ def test_mock_mission_completes_for_every_pallet_and_drop(pallet_id, dest):
         if v.mission["status"] == "done":
             break
     assert v.mission["status"] == "done", (v.mission["phase"], v.permit)
+
+
+# --- Codex review of Tasks 1-2 (round 1) -------------------------------------------------
+
+
+def test_repeated_teleop_mode_request_does_not_reopen_old_seqs(env):
+    v, clock = env
+    epoch, lid = lease(v)
+    into_teleop(v, "a", epoch, lid)
+    t1 = v.make_tick()
+    teleop(v, "a", epoch, lid, t1, seq=1)
+    teleop(v, "a", epoch, lid, v.make_tick(), seq=2, deadman=False)
+    assert req(v, "a", "mode_request", epoch, lid, to="TELEOP")["t"] == "ack"
+    teleop(v, "a", epoch, lid, t1, seq=1)  # replayed old command
+    assert v.last_teleop_reject == "stale_seq"
+
+
+def test_reversal_waits_for_stop_confirmation(env):
+    v, clock = env
+    epoch, lid = lease(v)
+    into_teleop(v, "a", epoch, lid)
+    _drive(v, clock, epoch, lid, 10, speed=1.0)
+    assert v.applied_speed_mps > 0.2
+    seen = []
+    for i in range(
+        12
+    ):  # reverse requested; stop is confirmed only 0.5 s after reaching 0
+        tick = v.make_tick()
+        teleop(v, "a", epoch, lid, tick, seq=100 + i, speed=-1.0)
+        clock.t += 0.05
+        v.step(0.05)
+        seen.append((v.applied_speed_mps, v.stopped_confirmed))
+    assert all(s >= 0.0 for s, confirmed in seen if not confirmed)
+    _drive(v, clock, epoch, lid, 6, speed=-1.0, start_seq=200)
+    assert v.applied_speed_mps < 0.0
+
+
+def test_auto_playback_never_moves_against_the_applied_speed(env):
+    v, clock = env
+    epoch, lid = lease(v)
+    req(
+        v,
+        "a",
+        "mission_submit",
+        epoch,
+        lid,
+        pallet_id="P-01",
+        destination_id="D-A",
+        targets_revision=v.targets_revision,
+    )
+    for _ in range(120 * 120):
+        before = v.pose
+        tick = v.make_tick()
+        v.handle(
+            "a",
+            {
+                "t": "echo",
+                "session_epoch": epoch,
+                "lease_id": lid,
+                "echo": {"state_seq": tick["state_seq"], "token": tick["token"]},
+            },
+        )
+        clock.t += 1 / 120
+        v.step(1 / 120)
+        import math as _m
+
+        dx, dy = v.pose.x_m - before.x_m, v.pose.y_m - before.y_m
+        along = dx * _m.cos(before.yaw_rad) + dy * _m.sin(before.yaw_rad)
+        assert along * v.applied_speed_mps >= -1e-9, (
+            v.mission["phase"],
+            along,
+            v.applied_speed_mps,
+        )
+        if v.mission["status"] == "done":
+            break
+
+
+def test_cancel_keeps_load_and_fork_state(env):
+    v, clock = env
+    epoch, lid = lease(v)
+    v.debug_set_phase("transport", forks_in_pocket=False, carried="P-01")
+    v.lift_m = 0.12
+    assert (
+        req(v, "a", "mission_cancel", epoch, lid, mission_id=v.mission["mission_id"])[
+            "t"
+        ]
+        == "ack"
+    )
+    s = v.make_state()
+    assert s["load"]["state"] == "loaded" and s["limits"][
+        "forward_mps"
+    ] == pytest.approx(0.30)
+    v2 = MockVehicle(Clock(), lambda: "t2")
+    e2, l2 = lease(v2)
+    v2.debug_set_phase("insert", forks_in_pocket=True)
+    assert (
+        req(v2, "a", "mission_cancel", e2, l2, mission_id=v2.mission["mission_id"])["t"]
+        == "ack"
+    )
+    assert v2.forks_in_pocket is True
+    assert (
+        req(v2, "a", "mode_request", e2, l2, to="TELEOP")["reason"]
+        == "state_forbids_teleop"
+    )
+
+
+def _pause_and_settle(v, clock, epoch, lid):
+    assert (
+        req(v, "a", "mission_pause", epoch, lid, mission_id=v.mission["mission_id"])[
+            "t"
+        ]
+        == "ack"
+    )
+    _idle(v, clock, epoch, lid, 14)
+
+
+def test_resume_with_forks_in_pocket_fails_state_verified(env):
+    v, clock = env
+    epoch, lid = lease(v)
+    v.debug_set_phase("insert", forks_in_pocket=True)
+    _pause_and_settle(v, clock, epoch, lid)
+    r = req(v, "a", "mission_resume", epoch, lid, mission_id=v.mission["mission_id"])
+    assert r["t"] == "reject"
+    steps = {s["name"]: s for s in r["resume_steps"]}
+    assert (
+        steps["state_verified"]["result"] == "failed"
+        and steps["state_verified"]["reason"] == "fork_in_pocket"
+    )
+
+
+def test_resume_refused_when_the_rechecked_path_is_blocked(env):
+    v, clock = env
+    epoch, lid = lease(v)
+    req(
+        v,
+        "a",
+        "mission_submit",
+        epoch,
+        lid,
+        pallet_id="P-01",
+        destination_id="D-A",
+        targets_revision=v.targets_revision,
+    )
+    _idle(v, clock, epoch, lid, 50)  # into approach
+    _pause_and_settle(v, clock, epoch, lid)
+    p = v.pose
+    import math as _m
+
+    ahead = (p.x_m + _m.cos(p.yaw_rad) * 1.3, p.y_m + _m.sin(p.yaw_rad) * 1.3)
+    v.world.boxes.append((ahead[0], ahead[1], 0.3, 0.3))
+    r = req(v, "a", "mission_resume", epoch, lid, mission_id=v.mission["mission_id"])
+    assert r["t"] == "reject"
+    last = r["resume_steps"][-1]
+    assert last["name"] == "path_rechecked" and last["result"] == "failed"
+    assert last["reason"].startswith("path_blocked:")
+    assert v.mode == "PAUSED"
+
+
+def test_command_shows_the_request_even_when_drive_is_blocked(env):
+    v, clock = env
+    epoch, lid = lease(v)
+    into_teleop(v, "a", epoch, lid)
+    _idle(v, clock, epoch, lid, 12)
+    tick = v.make_tick()
+    teleop(v, "a", epoch, lid, tick, seq=1, speed=1.0, lift_dir=1, curvature_ratio=0.5)
+    v.step(0.005)
+    s = v.make_state()
+    assert s["command"]["speed_mps"] == pytest.approx(0.5)
+    assert s["command"]["curvature_inv_m"] == pytest.approx(0.18)
+    assert s["applied"]["speed_mps"] == 0.0
+
+
+def test_targets_revision_moves_when_a_pallet_changes_state(env):
+    v, clock = env
+    epoch, lid = lease(v)
+    v.debug_set_phase("insert", forks_in_pocket=True)
+    rev = v.targets_revision
+    v._next_phase()  # insert -> lift: the pallet becomes carried
+    assert v.targets_revision > rev
+
+
+def test_wrong_epoch_teleop_is_reported_as_stale_epoch(env):
+    v, _ = env
+    epoch, lid = lease(v)
+    into_teleop(v, "a", epoch, lid)
+    teleop(v, "a", epoch + 1, lid, v.make_tick(), seq=1)
+    assert v.last_teleop_reject == "stale_epoch"

@@ -520,7 +520,12 @@ class MockVehicle:
     def _reply(msg: dict, reason: str | None = None, **extra) -> dict:
         if reason is None:
             return {"t": "ack", "request_id": msg.get("request_id"), **extra}
-        return {"t": "reject", "request_id": msg.get("request_id"), "reason": reason}
+        return {
+            "t": "reject",
+            "request_id": msg.get("request_id"),
+            "reason": reason,
+            **extra,
+        }
 
     def _reliable(self, client_id: str, msg: dict, conn_id) -> dict:
         t = msg["t"]
@@ -577,6 +582,8 @@ class MockVehicle:
                 self._set_mode("PAUSED")
             return self._reply(msg)
         if to == "TELEOP":
+            if self.mode == "TELEOP":
+                return self._reply(msg)  # same mode: nothing changes, seq order kept
             reason = self._teleop_reason()
             if reason is not None:
                 return self._reply(msg, reason=reason)
@@ -663,13 +670,9 @@ class MockVehicle:
     def _req_mission_cancel(self, msg: dict) -> dict:
         if not self._mission_matches(msg):
             return self._reply(msg, reason="invalid")
+        # load, lift and fork state are physical: cancelling the job does not change them
         self.mission["status"] = "cancelled"
-        for p in self.world.pallets:
-            if p.state == "carried":
-                p.state = "available"
-                p.pose = self._carried_pose(p)
-        self.world.carried = None
-        self.forks_in_pocket = False
+        self.mission["legs"] = []
         if self.mode != "STOPPED":
             self._set_mode("PAUSED")
         return self._reply(msg)
@@ -691,11 +694,7 @@ class MockVehicle:
             ok = False
         else:
             steps.append({"name": "stop_confirmed", "result": "ok"})
-        if (
-            ok
-            and self.forks_in_pocket
-            and m["phase"] not in ("insert", "extract", "withdraw")
-        ):
+        if ok and self.forks_in_pocket:  # only recovery actions with forks in a pocket
             steps.append(
                 {
                     "name": "state_verified",
@@ -709,13 +708,40 @@ class MockVehicle:
         if ok:
             steps.append({"name": "frame_reexpressed", "result": "ok"})
             self._replan()
-            steps.append({"name": "path_rechecked", "result": "ok"})
+            blocked = self._first_leg_blocked()
+            if blocked is None:
+                steps.append({"name": "path_rechecked", "result": "ok"})
+            else:
+                steps.append(
+                    {
+                        "name": "path_rechecked",
+                        "result": "failed",
+                        "reason": f"path_blocked:{blocked}",
+                    }
+                )
+                ok = False
         m["resume_steps"] = steps
         if not ok:
             return self._reply(msg, reason="resume_failed", resume_steps=steps)
         m["status"], m["reason"] = "running", None
         self._set_mode("AUTO")
         return self._reply(msg, resume_steps=steps)
+
+    def _first_leg_blocked(self) -> str | None:
+        m = self.mission
+        if not m["legs"]:
+            return None
+        leg = m["legs"][m["leg_index"]]
+        skip = tuple(p.pallet_id for p in self.world.pallets if self._in_pocket_with(p))
+        limit, reason = permission(
+            self.world,
+            self.pose,
+            leg.speed_mps * leg.direction,
+            paths.curvature_at(leg),
+            self._load(),
+            skip,
+        )
+        return reason if limit == 0.0 else None
 
     def _req_recovery(self, msg: dict) -> dict:
         if msg.get("action") != "withdraw_straight" or not self.forks_in_pocket:
@@ -728,6 +754,7 @@ class MockVehicle:
             p0.yaw_rad,
         )
         m = self.mission
+        m["before_recovery"] = m["status"]
         m["phase"], m["phase_t"] = "recover", 0.0
         m["legs"], m["leg_index"] = [paths.hermite_leg(p0, p1, -1, 0.1)], 0
         m["status"], m["reason"] = "running", "recovery"
@@ -749,7 +776,10 @@ class MockVehicle:
                 self._teleop = None
                 self._event("disarm", reason="input_state")
             return
-        if not holder or msg.get("session_epoch") != self.session_epoch:
+        if msg.get("session_epoch") != self.session_epoch:
+            self.last_teleop_reject = "stale_epoch"
+            return
+        if not holder:
             self.last_teleop_reject = "no_lease"
             return
         if msg.get("lease_id") != self.lease["lease_id"]:
@@ -863,14 +893,17 @@ class MockVehicle:
             forbidden = phase in TELEOP_FORBIDDEN or self.forks_in_pocket
             self.drive_allowed = not forbidden and not lift_active
             self.lift_allowed = phase not in NO_MANUAL_LIFT and self.stopped_confirmed
-            if msg is not None and msg["deadman"] and self.armed and self.drive_allowed:
+            if msg is not None and msg["deadman"] and self.armed:
                 fwd, rev = self._caps(load)
                 ratio = msg["speed_ratio"]
                 target = ratio * (fwd if ratio >= 0 else rev)
                 curvature = msg["curvature_ratio"] * CHASSIS.teleop_curvature_inv_m
         else:
             self.drive_allowed = self.lift_allowed = None
+        # command = the requested physical values; applied shows what the gates let through
         self.command = {"speed_mps": target, "curvature_inv_m": curvature}
+        if self.mode == "TELEOP" and not self.drive_allowed:
+            target = 0.0
         self._output(target, curvature, dt_s)
         self._integrate(dt_s)
         moved = False
@@ -908,8 +941,12 @@ class MockVehicle:
         curvature = max(-lim, min(lim, curvature))
         prev = self.applied_speed_mps
         goal = target
-        if prev * target < 0:
-            goal = 0.0  # reversing: decelerate to zero first
+        if prev * target < 0 or (
+            not self.stopped_confirmed and target * self._last_nonzero_sign < 0
+        ):
+            goal = (
+                0.0  # reversing: stop and confirm the stop before moving the other way
+            )
         rate = (
             self.cfg.decel_mps2 if abs(goal) < abs(prev) else self.cfg.accel_mps2
         ) * dt_s
@@ -1101,6 +1138,7 @@ class MockVehicle:
         p = self._pallet()
         if m["phase"] == "lift":
             p.state, self.world.carried = "carried", p.pallet_id
+            self.targets_revision += 1  # contract 5.1: a target's state changed
         self._event("phase", phase=m["phase"])
 
     def _step_mission(self, dt_s: float) -> None:
@@ -1145,7 +1183,12 @@ class MockVehicle:
         curvature = paths.curvature_at(leg)
         self.command = {"speed_mps": target, "curvature_inv_m": curvature}
         out = self._output(target, curvature, dt_s)
-        self.pose = paths.advance(leg, abs(out) * dt_s)
+        if out * leg.direction > 0:
+            self.pose = paths.advance(leg, abs(out) * dt_s)
+        elif out != 0.0:
+            # residual motion from the previous leg's direction: move the way the wheels turn,
+            # and start this leg only once that motion has stopped
+            self._integrate(dt_s)
         self._carry()
         if leg.s_m >= leg.length_m - 1e-9:
             m["leg_index"] += 1
@@ -1155,8 +1198,9 @@ class MockVehicle:
     def _finish_motion_phase(self) -> None:
         m = self.mission
         if m["phase"] == "recover":
+            # the job cannot simply resume from a withdrawn fork: it ends, a new one is submitted
             self.forks_in_pocket = False
-            m["status"], m["reason"] = "held", "recovered"
+            m["status"], m["reason"] = "cancelled", "recovered_by_withdraw"
             m["legs"] = []
             self._set_mode("PAUSED")
             return
