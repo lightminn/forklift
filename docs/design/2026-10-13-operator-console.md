@@ -225,7 +225,7 @@ ROS 2 msg/action 패키지와 노드는 실제로 쓸 때 만든다. 빈 scaffol
 | M-a | 미션 실행부를 `forklift_core/mission/`으로 분리. 외부 명령(일시정지·정지·재개) 입력 경계를 둔다. 동등성은 같은 입력을 재생해 명령·전이·hold/release·재계획 순서를 대조한다 | 메인 | S4 확인 배치 결과 |
 | M-b | 중재기 `forklift_core/safety/` (4.1–4.5, 5.1–5.2). 시계와 토큰 난수원은 주입받는다. 결과 저장 상한에 닿으면 `busy`로 받고, STOP은 캐시 없이 항상 실행한다(계약 1절) | 메인 로드맵 | M-a |
 | I-1 | `docs/interfaces/` 계약 합의 | 메인 + 콘솔 | C0 |
-| C1 | 웹 앱 `console/web/` + 가짜 차량 백엔드(같은 API) | 콘솔 | I-1 초안 (합의 전에도 가짜 백엔드로 시작 가능) |
+| C1 | 웹 앱 `console/web/` + 가짜 차량 백엔드(같은 API). **가짜 차량으로 동작(2026-10-13, `feat/console-c1`)**, 확인 범위는 `console/README.md` | 콘솔 | I-1 초안 (합의 전에도 가짜 백엔드로 시작 가능) |
 | M-c | Isaac 실시간 실행기: 로봇 쪽 단조 시계 lease·watchdog, sim 관측 시각과 벽시계 구분, reset 때 epoch 무효화, 늦은 응답·밀린 명령 폐기, 페이싱 초과 처리. 판정 runner와 별개 | 메인 | M-a, M-b |
 | C2 | 게이트웨이 노드 | 콘솔 | I-1 합의, 사용할 msg/action이 생긴 뒤 |
 | C3 | Isaac 연결 시험 | 콘솔 + 메인 | M-c, C1, C2 |

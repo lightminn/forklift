@@ -39,6 +39,9 @@ forklift/
 │       ├── forklift_interfaces/      # 필요한 사용자 정의 msg/srv/action
 │       ├── forklift_description/     # 실제 선택한 차체의 URDF·mesh
 │       └── forklift_bringup/         # launch와 ROS 파라미터 config
+├── console/                          # 운용 콘솔: 웹 앱과 개발용 가짜 차량
+│   ├── web/                          # 브라우저 콘솔(빌드 없음, ES 모듈, node --test)
+│   └── mock_vehicle/                 # console/1 계약을 흉내 낸 가짜 차량 서버
 ├── firmware/                         # 자체 MCU 코드; 보드 선정 후 생성
 ├── sim/                              # 선택한 엔진의 모델·환경·어댑터
 ├── config/                           # ROS와 독립적인 실행·시나리오 설정
@@ -172,7 +175,7 @@ README에는 프로젝트가 요구하는 버전과 설치·실행 절차를 적
 - 시나리오 이름은 `case_a_straight`, `case_b_curved`, `case_c_reverse`, `case_d_rear_obstacle`로 통일한다. 입력 조건과 기대 행동도 같이 명시한다.
 - 무작위 시험은 seed를 저장한다. 기대값을 구현 함수로 다시 계산하지 않는다. 경계·반례·실패 처리와 사용자가 관찰하는 결과를 검증한다.
 - 시뮬레이션·ROS·장치 의존 시험은 `simulation`, `ros`, `hardware` marker 등으로 의존성을 드러내고 별도 명령/CI job에서 실행한다. 필요한 환경이 없으면 skip 사유와 개수를 보고하며 pass로 세지 않는다.
-- 기본 검사 흐름은 Ruff lint → Ruff format check → 단위·로컬 통합시험이다. 패키지 레이아웃·의존성·배포 경로를 바꾸면 설치된 wheel을 소스 트리 밖에서 import/실행하는 검사도 한다.
+- 기본 검사 흐름은 Ruff lint → Ruff format check → 단위·로컬 통합시험이다. 패키지 레이아웃·의존성·배포 경로를 바꾸면 설치된 wheel을 소스 트리 밖에서 import/실행하는 검사도 한다. 운용 콘솔의 웹 모듈은 `node --test "console/web/test/*.test.mjs"`로 시험한다(Node 18 이상; Node 22는 디렉터리 인자를 받지 않는다). 브라우저 화면은 자동 시험 범위 밖이므로 변경 시 렌더 확인을 남긴다.
 - CI는 로컬과 같은 명령을 사용한다. ROS·Jetson·센서 장치가 필요한 job을 기본 Python job의 성공으로 대체하지 않는다.
 
 실행 산출물은 `artifacts/<UTC시각>_<시나리오>_<구분자>/`에 모은다. 예: `artifacts/20260910T120000Z_case_a_straight_01/`. 결과 디렉터리는 기존 실행을 덮어쓰지 않는다.
