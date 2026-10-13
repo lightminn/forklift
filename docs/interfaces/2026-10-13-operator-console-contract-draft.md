@@ -1,8 +1,8 @@
 # 콘솔 인터페이스 계약 초안 (`console/1`)
 
-작성: 2026-10-13 · 상태: **콘솔 쪽 요구 초안, 메인 개발과 미합의** · 설계: [개별 지게차 운용 콘솔 설계](../design/2026-10-13-operator-console.md)
+작성: 2026-10-13 · 상태: **초안, 9절 항목은 메인 개발과 합의함(2026-10-13). 재개 절차 이름·사유는 잠정이며 M-a 설계 때 확정** · 설계: [개별 지게차 운용 콘솔 설계](../design/2026-10-13-operator-console.md)
 
-이 문서는 웹 앱과 차량 쪽 게이트웨이 사이의 메시지(`console/1`)와, 그 뒤에서 차량 스택이 지켜야 할 의미를 적는다. 메인 개발과 합의하면 상태를 바꾸고, 그때 ROS 2 msg/action 정의로 옮길 항목을 표시한다. 합의 전에는 웹 앱의 가짜 차량 백엔드만 이 형식을 쓴다.
+이 문서는 웹 앱과 차량 쪽 게이트웨이 사이의 메시지(`console/1`)와, 그 뒤에서 차량 스택이 지켜야 할 의미를 적는다. ROS 2 msg/action 정의로 옮길 항목은 8절에 표시한다. 차량 쪽(중재기 M-b, 미션 실행부 M-a)이 생기기 전에는 웹 앱의 가짜 차량 백엔드만 이 형식을 쓴다.
 
 ## 1. 공통 규칙
 
@@ -33,16 +33,17 @@
 
 | 성질 | 해당 메시지 | 규칙 |
 |---|---|---|
-| 신뢰 + 응답 | 조종 권한, 모드 요청, STOP, 재무장, 작업 지시, 복구 동작 | `request_id`로 멱등이다. 차량은 반드시 `ack`(수락) 또는 `reject`(사유)로 답한다. 응답이 없으면 클라이언트는 같은 `request_id`로 재전송한다. 재전송에도 `session_epoch`·`lease_id`·`control_gen`이 붙으므로, 재접속이나 정지 경계 뒤에는 **아직 처리되지 않은** 이전 세대의 요청이 거부된다(STOP 제외. 이미 처리한 요청은 아래 처리 순서대로 원래 결과를 돌려받는다). 클라이언트는 거부를 받으면 현재 세대로 자동 재전송하지 않고 조종자에게 다시 묻는다 |
+| 신뢰 + 응답 | 조종 권한, 모드 요청, STOP, 재무장, 작업 지시, 복구 동작 | `request_id`로 멱등이다. 차량은 반드시 `ack`(수락) 또는 `reject`(사유)로 답한다. 응답이 없으면 클라이언트는 같은 `request_id`로 재전송한다. 재전송에도 `session_epoch`·`lease_id`·`control_gen`이 붙으므로, 재접속이나 정지 경계 뒤에는 **아직 처리되지 않은** 이전 세대의 요청이 거부된다(STOP 제외: 항상 다시 실행한다. 이미 처리한 다른 요청은 아래 처리 순서대로 원래 결과를 돌려받는다). 클라이언트는 거부를 받으면 현재 세대로 자동 재전송하지 않고 조종자에게 다시 묻는다 |
 | 최신값만 | 텔레옵 명령, 입력 상태, 회신 | 큐에 쌓지 않고 마지막 값만 처리한다. 응답하지 않는다. 결과는 상태 메시지로 확인한다 |
 | 스트림 | 상태, 회신 토큰, 미디어 | 구독할 때 정한 상한(Hz, 해상도)을 넘지 않는다. 밀리면 오래된 것부터 버린다 |
 
 **요청 처리 순서.** 신뢰 요청을 받으면 차량은 다음 순서로 처리한다.
 
+0. **STOP은 예외다.** STOP은 결과 캐시·세대 검사와 무관하게 정지 효과를 먼저 실행하고 `ack`한다. 결과를 저장하지 않으며, 같은 `request_id`가 다시 와도 다시 정지시킨다. 이미 정지 상태면 정지가 유지될 뿐이라 결과가 같다. 재무장 뒤 늦게 도착한 중복 STOP이 차를 다시 세우는 것은 안전한 쪽의 동작으로 받아들인다. 캐시가 가득 차도 STOP은 막히지 않는다.
 1. **이미 처리한 요청인가.** 같은 `client_id`·`session_epoch`·조종 권한 소유자 범위에서 같은 `request_id`를 이미 처리했다면, 저장해 둔 원래 결과(`ack` 또는 `reject`)를 그대로 돌려준다. 다시 실행하지 않고 세대 검사도 하지 않는다. 응답만 유실된 경우(예: 일시정지는 성공했지만 `ack`가 사라져 재전송한 경우)에 원래 성공을 확인할 수 있다.
 2. **처음 받은 요청이면** 세대(`session_epoch`, `lease_id`, `control_gen`)를 검사하고, 맞으면 실행한다. 그 결과를 `request_id`로 저장한다.
 
-결과 저장 기간은 해당 `session_epoch`가 끝날 때까지다. `request_id`는 클라이언트가 만드는 예측할 수 없는 값이며, 재사용하지 않는다.
+결과 저장 기간은 해당 `session_epoch`가 끝날 때까지다. 저장 상한(개수·메모리)에 닿으면 저장된 결과를 버리지 않고 새 신뢰 요청을 `reject(busy)`로 받지 않는다. 버린 `request_id`의 재전송을 새 요청과 구분할 수 없게 되는 것을 피하려는 것이다(STOP은 0번대로 영향을 받지 않는다). `request_id`는 클라이언트가 만드는 예측할 수 없는 값이며, 재사용하지 않는다.
 
 **버전.** 첫 메시지에서 `api: "console/1"`을 맞춘다. 맞지 않으면 연결을 거부한다.
 
@@ -103,7 +104,7 @@
 | `frame_echo` | 영상 조종일 때 마지막으로 **표시한** 카메라 프레임(4.2). 육안 조종이면 생략 |
 | `mode` | `direct`(육안) 또는 `video`(영상). 모드별 속도 상한이 다르다 |
 | `deadman` | 누르고 있기가 눌린 상태. `false`면 0 명령 |
-| `speed_ratio`, `curvature_ratio` | −1…1 비율. 차량이 현재 상한(모드·잠정값·허가)을 곱해 물리량으로 바꾼다. 클라이언트는 물리 상한을 계산하지 않는다 |
+| `speed_ratio`, `curvature_ratio` | −1…1 비율(합의). 차량이 현재 상한(모드·잠정값·적재·허가)을 곱해 물리량으로 바꾼다. 곡률 비율에 곱하는 상한은 차량 설정의 수동 조종 곡률 상한이다(실측 모델 추종기 0.36 m⁻¹ 이하). 클라이언트는 물리 상한을 계산하지 않는다 |
 | `lift_dir` | −1, 0, 1. 승강 속도는 차량 설정 |
 
 ### 4.1 만료 시각
@@ -146,7 +147,7 @@
 
 | 메시지 | 권한 | 주요 필드 | 차량 처리 |
 |---|---|---|---|
-| `stop` | **연결된 모든 클라이언트** | `request_id`, `source: console \| gamepad \| key` | 안전 선점 정지. 항상 수락한다. 권한을 좁히는 방향이라 관찰 기기에도 허용한다 |
+| `stop` | **연결된 모든 클라이언트** | `request_id`, `source: console \| gamepad \| key` | 안전 선점 정지. 항상 실행하고 수락한다(1절 처리 순서 0). 권한을 좁히는 방향이라 관찰 기기에도 허용한다. 인증이 없으므로 AP 안의 아무 기기나 STOP을 반복해 작업을 멈출 수 있다. 이것은 안전한 쪽의 고장으로 적는다(더 큰 한계는 설계 7.4) |
 | `rearm` | lease | `request_id`, `lease_id`, `control_gen` | 정지 완료(설계 4.3의 1단계) 확인 뒤 `STOPPED → PAUSED` |
 | `mode_request` | lease | `request_id`, `lease_id`, `control_gen`, `to: TELEOP \| PAUSED` | `STOPPED`에서는 모두 `reject(stopped_locked)`(나가는 길은 `rearm`뿐). 그 밖에서는 `to: PAUSED`를 어느 작업 단계에서나 받고, `to: TELEOP`만 상태 조건(설계 4.5)을 검사해 아니면 `reject(state_forbids_teleop)` |
 | `arm` / `disarm` | lease | `request_id`, `lease_id`, `control_gen` | TELEOP에서만. `arm`은 새 `arm_gen`을 돌려준다 |
@@ -179,9 +180,11 @@
  "pose": {"frame": "map", "x_m": 6.12, "y_m": 5.40, "yaw_rad": 0.08, "correction_version": 12, "source": "slam"},
  "rear_axle_speed_mps": 0.31, "steering_rad": [0.05, 0.04], "lift_m": 0.0,
  "load": {"state": null},
- "applied": {"speed_mps": 0.30, "curvature_inv_m": -0.11, "stop_kind": "none"},
+ "command": {"speed_mps": 0.21, "curvature_inv_m": -0.108},
+ "applied": {"speed_mps": 0.30, "curvature_inv_m": -0.11, "steering_rad": [0.05, 0.04], "stop_kind": "none"},
  "permit": {"limit_mps": 0.5, "reason": "ok"},
  "limits": {"forward_mps": 0.5, "reverse_mps": 0.25, "curvature_inv_m": 0.36, "provisional": true},
+ "drive_allowed": true, "lift_allowed": true,
  "mission": {"mission_id": "M-0007", "status": "held", "phase": "approach", "reason": "teleop",
              "phase_elapsed_s": 41.2, "resume_steps": null},
  "freshness": {"grid_free_age_s": 0.4, "slam_correction_age_s": 0.9, "near_obs_age_s": null},
@@ -190,9 +193,10 @@
 ```
 
 - `mission.status`: `accepted`, `running`, `paused`, `held`(수동 조종 등으로 보류), `resuming`, `done`, `failed`, `cancelled`. 실패·보류에는 `reason`을 붙인다.
-- `mission.resume_steps`: 재개 절차 진행 중일 때 단계별 `pending / ok / failed(reason)`.
+- `mission.resume_steps`: 재개 절차 진행 중일 때 단계별 `pending / ok / failed(reason)`. 단계 이름과 사유(잠정, M-a 설계 때 확정): `stop_confirmed`(`no_speed_feedback`, `not_stopped_timeout`) → `state_verified`(`pose_unbounded`, `load_unknown`, `load_changed`, `insertion_state_unknown`, `fork_in_pocket`, `lift_mismatch`) → `frame_reexpressed`(`reprojection_failed`) → `path_rechecked`(필요하면 재계획 포함; `path_blocked:<허가 reason>`, `replan_failed:<계획기 status>`, `reobserve_required`).
 - `phase_elapsed_s`는 일시정지 동안 멈추는 작업 시간이다. `freshness`의 값들은 멈추지 않는다.
-- `applied`는 구동 어댑터가 실제로 적용한 명령이다(화면의 "명령 대비 적용" 표시용).
+- `command`는 텔레옵 비율에 현재 상한을 곱한 물리 명령이다. `applied`는 slew, 허가 상한, 안전 선점, Ackermann 바퀴 속도 한계, 조향 속도 한계까지 거친 값이다(배치 runner의 `applied_command` 지점과 같은 위치). 화면은 둘을 나란히 보여 준다.
+- `drive_allowed`·`lift_allowed`는 중재기가 **제어 주기마다** 현재 상태로 따로 판정한 결과다(설계 4.5). TELEOP 진입 때 한 번만 보는 것이 아니다.
 - `pacing`은 Isaac에서만 의미가 있다. 실시간 배속을 유지하지 못하면(`ok: false`) 수동 조종을 막는다. 기준은 M-c가 정한다.
 - 잴 수 없는 값은 `null`로 둔다. 0이나 추정값으로 채우지 않는다.
 
@@ -225,12 +229,26 @@
 | 만료가 붙은 구동 명령과 적용 피드백 | 중재기 ↔ 구동 어댑터 사이. 콘솔은 적용 피드백만 읽는다 |
 | 작업 대상 목록 | 토픽(latched) 또는 서비스, revision 포함 |
 
-## 9. 합의할 항목
+## 9. 합의 결과 (2026-10-13, 메인 개발 답)
 
-1. **회신 토큰의 발급·검증 위치.** 콘솔 초안은 중재기가 토큰을 발급·기억하고 직접 판정하는 쪽이다. 게이트웨이가 멈추거나 늦어져도 판정이 차량 쪽에 남도록 하려는 것이다. 이 경우 `tick` 송출 시각은 게이트웨이가 아니라 중재기가 기록하므로, 중재기 → 게이트웨이 → 소켓 구간의 지연도 나이에 들어간다.
-2. **TELEOP의 허가 입력.** 설계 4.4에서 제안한 "명령 곡률의 원호를 앞 경로로 쓰는" 방식과, 비율 → 물리량 → 곡률 제한 → slew → 최종 허가 상한 → 안전 선점의 적용 순서.
-3. **관찰 기기의 STOP 허용**(5절).
-4. **`speed_ratio` 비율 방식**(차량이 상한을 곱함)과 물리량 방식 중 어느 쪽인지.
-5. **재개 절차** 단계의 이름과 실패 사유 목록.
-6. **수치 예산.** `tick` 주기, `command_max_age_s`, `lease_timeout_s`, `grace_s`, `video_max_age_s`, `camera_latency_bound_s`를 정하는 방법(설계 5.4).
-7. **피드백이 없는 차량의 처리.** 바퀴 속도를 잴 수 없는 차량에서 재무장을 금지할지(초안), 다른 정지 확인 수단을 둘지.
+1. **회신 토큰의 발급·검증 위치 — 동의(조건 둘).** 중재기(`forklift_core/safety/`)가 토큰을 발급·보관하고, 제어 주기마다 만료 시각을 판정한다. 조건은 두 가지다.
+   - 중재기는 순수 모듈이라 시계와 난수원을 주입받는다. 노드가 단조 시각과 `os.urandom` 기반 토큰 생성기를 넘기고, 시험에서는 바꿔 끼운다.
+   - 기록하는 송출 시각은 중재기가 tick을 만든 시각이다. 그래서 중재기 → 게이트웨이 → 소켓 구간의 지연도 나이에 들어간다(보수적).
+   마지막 방어선은 MCU 자체 시계 만료다.
+2. **TELEOP의 허가 입력 — 수정 합의.** 설계 4.4에 반영했다.
+   - 원호를 앞 경로로 쓰는 방식과 적용 순서는 동의했다.
+   - 설치 방식: 매 제어 주기 `update()`로 원호를 넣은 뒤 `allowed_speed`를 읽는다.
+   - 방향은 실제 이동 방향, 길이·검사 속도는 남은 속도와 직전 적용 명령을 덮는 값으로 잡는다.
+   - 보장 범위의 한계를 문서에 밝힌다.
+   - 적재 footprint를 쓰고, `applied`를 정의한다.
+3. **관찰 기기의 STOP — 동의.** 반복 STOP으로 작업을 멈출 수 있는 점은 안전한 쪽의 고장으로 적는다(5절).
+4. **명령 형식 — 동의(비율).** 상태에 물리 명령(`command`)과 적용값(`applied`)을 함께 싣는다(6절).
+5. **재개 절차 단계·사유 — 잠정 동의.** 6절에 적은 이름과 사유이며, M-a 설계 때 실제 분기와 맞춰 확정한다.
+6. **수치 예산 — 방법 동의, 측정 근거 수정.** 설계 5.4에 반영했다.
+7. **바퀴 속도 피드백이 없는 차량 — 재무장·재개 금지에 동의, 대안은 보류.** 지금 구현을 실차에 쓰려면 검증된 바퀴·조향 피드백이 필요하다. 수단은 H1/H3에서 확인한다. 스캔 정합이나 영상 정지 감지 같은 다른 정지 확인 수단은 그 결과를 보고 검증 대상으로만 둔다.
+
+**차량 쪽 작업 분담(합의).**
+- M-a: 외부 명령 입력, 일시정지 중 phase 한도만 정지, 재개 단계별 결과, 작업 대상 목록과 `targets_revision`. 착수 시점은 사용자와 정한다.
+- M-b: 세대 4종, 처리 순서, 결과 저장 상한, STOP 예외, `STOPPED` 탈출은 `rearm`뿐, 영상 조종 만료는 둘 중 이른 쪽.
+- M-c: 실시간 배속 보고와 미달 시 텔레옵 차단, 촬영 단위 `frame_id`와 렌더 수신 단조 시각, 잡마다 새 `session_epoch`, 게이트웨이 노드·포트 파일, 판정 배치와 같은 GPU 동시 사용 금지, `camera_latency_bound_s` 측정.
+- H3: 바퀴 속도·조향·승강 피드백, 적용 명령 피드백, MCU 자체 시계 만료.
