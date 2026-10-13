@@ -60,6 +60,14 @@ export function createInputs({ onRelease }) {
       pad = snapshot;
       unlatch("gamepad", pad.buttons.deadman);
     },
+    // gamepaddisconnected for the pad in use: release at once, even if the same index
+    // is back before the next poll (the Gamepad API may reuse indices)
+    padDisconnected(index) {
+      if (pad !== null && pad.index === index) {
+        pad = null;
+        release("gamepad_lost");
+      }
+    },
     visibility(hidden) {
       if (hidden) release("hidden");
     },

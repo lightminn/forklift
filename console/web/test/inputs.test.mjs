@@ -109,3 +109,14 @@ test("padSnapshot keeps the gamepad index", () => {
   const raw = { id: "pad", index: 2, connected: true, mapping: "standard", axes: [0, 0, 0, 0], buttons: Array.from({ length: 17 }, () => off) };
   assert.equal(padSnapshot(raw).index, 2);
 });
+
+test("a disconnect event for the pad in use releases even if it reconnects before the next poll", () => {
+  const released = [];
+  const i = createInputs({ onRelease: (r) => released.push(r) });
+  const held = { deadman: true, liftUp: false, liftDown: false, stop: false };
+  i.setPad({ id: "pad A", index: 0, axes: [0, -1, 0, 0], buttons: held });
+  i.padDisconnected(0);
+  assert.deepEqual(released, ["gamepad_lost"]);
+  i.setPad({ id: "pad A", index: 0, axes: [0, -1, 0, 0], buttons: held }); // same index again
+  assert.equal(i.read().deadman, false);
+});

@@ -148,3 +148,10 @@ test("an unanswered STOP survives a vehicle session change", () => {
   t += 600; s.pump();
   assert.equal(sent.filter((m) => m.t === "stop" && m.request_id === id).length, 2);
 });
+
+test("a lease-reclaim mark belongs to the client id that set it", async () => {
+  const { shouldReclaim } = await import("../js/gate.js");
+  assert.equal(shouldReclaim("tab-1", "tab-1"), true);
+  assert.equal(shouldReclaim("tab-1", "tab-2"), false); // inherited by a copied tab
+  assert.equal(shouldReclaim(null, "tab-1"), false);
+});

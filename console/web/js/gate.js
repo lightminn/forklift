@@ -49,3 +49,9 @@ export function chooseClientId({ stored, windowName, newId }) {
   const id = newId();
   return { id, windowName: mark(id) };
 }
+
+// The reload flag stores the client id that held the lease; a tab with another id (for
+// example one opened from this tab, which copies sessionStorage) must not reclaim it.
+export function shouldReclaim(storedHolder, clientId) {
+  return typeof storedHolder === "string" && storedHolder === clientId;
+}
