@@ -2745,6 +2745,28 @@ def redraw_case(injection=None):
     return result, nt
 
 
+def test_redraw_a_record_written_before_a_follower_field_existed_still_passes():
+    # Runs recorded before cusp_heading_pending_rad (EPAL 6 fork spacing plan, fix A) lack it in
+    # the approach follower and in both dry-run settings alike.
+    result, nt = redraw_case()
+    result["tracker_configs"]["approach"].pop("cusp_heading_pending_rad")
+    for c in result["near_capture"]["recoveries"][0]["dry_run_configs"]:
+        c.pop("cusp_heading_pending_rad")
+    out = J.check_near_redraw(result, nt)
+    assert out["passed"], out["failures"]
+    # Only that field: another one missing from the approach follower still fails, and a bad
+    # value fails rather than raising (Codex fix A implementation review 2 P2).
+    for name, change in (
+        ("missing", lambda c: c.pop("max_acceleration_mps2")),
+        ("zero", lambda c: c.update(max_acceleration_mps2=0.0)),
+        ("none", lambda c: c.update(lookahead_m=None)),
+        ("nan", lambda c: c.update(lookahead_m=float("nan"))),
+    ):
+        result, nt = redraw_case()
+        change(result["tracker_configs"]["approach"])
+        assert not J.check_near_redraw(result, nt)["passed"], name
+
+
 def test_redraw_a_stage_one_acceptance_with_its_chain_passes_and_each_broken_link_fails():
     sys.path.insert(0, str(ROOT / "sim" / "isaac"))
     import near_tracking as NT
@@ -3602,7 +3624,11 @@ def _xii_run(case_name, *, retry_allowed=True, lost=False):
             "rear_axle_offset_m": case["rear_axle_offset_m"],
             **({"near_drop_frames_from_m": 0.3} if lost else {}),
         },
-        "tracker_configs": {"approach": case["tracker_config"]},
+        # As the runner records both (asdict of its config): the case's dict lacks fields added
+        # since (cusp_heading_pending_rad), which asdict fills with their defaults.
+        "tracker_configs": {
+            "approach": asdict(TrackerConfig(**case["tracker_config"]))
+        },
         "geometry": case["geometry"],
         "perception_mount": {"translation_m": [*case["camera_xy_m"], 0.27]},
     }

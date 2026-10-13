@@ -638,3 +638,34 @@ def test_a_goal_stall_counts_only_within_an_existing_rules_budget():
     assert not prefix_converged(
         PrefixResult("timeout", 1.6, -0.068, 0.032, None, True), ref, lambda goal: True
     )
+
+
+def test_the_cusp_heading_hold_bounds_replace_the_limits_for_that_cusp_only():
+    # EPAL 6 fork spacing plan, fix A: 30 mm / 0.08 rad for the cusp being judged.
+    assert pose_bounds(CONFIG, 0.03, 0.08, bounds=(0.03, 0.08)) == (True, False)
+    assert pose_bounds(CONFIG, 0.0301, 0.0, bounds=(0.03, 0.08)) == (
+        False,
+        False,
+    )  # not the stall's 60 mm
+    assert pose_bounds(CONFIG, 0.0, 0.0801, bounds=(0.03, 0.08)) == (False, False)
+    assert pose_bounds(CONFIG, 0.0, 0.1101, bounds=(0.03, 0.08)) == (False, True)
+    assert pose_bounds(CONFIG, 0.0, 0.062) == (
+        False,
+        False,
+    )  # the stall's own limit is unchanged
+    hold = replace(CONFIG, cusp_heading_pending_rad=0.08)
+    tracker = RearAxlePathTracker(*forward_then_reverse(), hold)
+    for x in np.linspace(0.0, 1.0, 51):
+        tracker.update([x, 0.005, 0.062], 0.1, 0.02)
+    raw = tracker.update((1.0, 0.005, 0.062), 0.0, DT)
+    assert raw.cusp_pending
+    args = dict(
+        end_recovered=lambda goal: False,
+        sweep_free=lambda trajectory: True,
+        sensors=None,
+    )
+    judged = judge(tracker, (1.0, 0.005, 0.062), raw, {}, bounds=(0.03, 0.08), **args)
+    assert judged.pose_ok and judged.record["bounds_ok"]
+    assert not judge(
+        tracker, (1.0, 0.005, 0.062), raw, {}, **args
+    ).pose_ok  # 0.05 without the override

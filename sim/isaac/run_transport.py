@@ -45,6 +45,11 @@ ROUND2_KEEP_M = 0.6
 # An observation waypoint missed by at most this much, standing, is arrival.
 OBSERVE_ARRIVAL_M = 0.10
 OBSERVE_ARRIVAL_YAW_RAD = 0.10
+# EPAL 6 fork spacing plan, fix A: an observe cusp reached inside its window but missed in heading by
+# 0.05-0.08 rad holds; once standing it is released when the next leg's judgement (cusp_stall.judge
+# with these limits for that cusp only) passes, else it fails as before.
+CUSP_HEADING_HOLD_RAD = 0.08
+CUSP_HEADING_HOLD_POSITION_M = 0.03
 
 
 def same_path(new, current, remaining_m: float, tol_m: float = 0.01, yaw_tol_rad: float = 0.02) -> bool:
@@ -121,6 +126,9 @@ pocket_recorder = load_perception_module(
 )
 near_tracking = load_perception_module(
     "run_transport_near_tracking", Path(__file__).with_name("near_tracking.py")
+)
+CUSP_HOLD = load_perception_module(
+    "run_transport_cusp_heading_hold", Path(__file__).with_name("cusp_heading_hold.py")
 )
 CAMERA_CALIBRATION = load_perception_module(
     "run_transport_camera_calibration",
@@ -3562,6 +3570,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad
                 # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).
                 cusp_brake_window_m=0.008,
+                # An observe cusp missed by 0.05-0.08 rad holds for the next-leg judgement
+                # (cusp_heading_hold below; EPAL 6 fork spacing plan, fix A).
+                cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD if name == "observe" else None,
                 # Optional path speed caps; absent from the settings = off.
                 max_lateral_acceleration_mps2=settings.get(
                     "max_lateral_acceleration_mps2"
@@ -4479,6 +4490,35 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     def cusp_stopped() -> bool:
         """K1's stopped: standing with a zero command applied at the wheels on the last tick."""
         return cusp_standing() and state.get("applied_command", (None, None))[0] == 0.0
+
+    def cusp_heading_motion(signed_speed_now) -> dict:
+        """Speed, steering and pose at this tick, for the cusp heading hold records (fix A): the
+        speed and rear pose control used (under SLAM the tracker speed and the estimate) beside the
+        measured speed and the true rear pose (Codex fix A implementation review 2 P3)."""
+        return {"control_speed_mps": float(signed_speed_now),
+                "measured_speed_mps": float(np.dot(robot.get_linear_velocity()[:2], forward)),
+                "truth_rear": np.asarray(truth_rear, dtype=float).tolist(),
+                "steering_command_rad": np.asarray(steering_command, dtype=float).tolist(),
+                "steering_actual_rad": np.asarray(robot.get_joint_positions()[steers], dtype=float).tolist()}
+
+    cusp_holds = CUSP_HOLD.CuspHeadingHolds(state)  # fix A's hold records
+
+    def cusp_heading_end(tracking_now) -> dict:
+        """The tracking result a hold record keeps (fix A)."""
+        return {"status": tracking_now.status, "failure": tracking_now.failure,
+                "position_error_m": tracking_now.position_error_m, "yaw_error_rad": tracking_now.yaw_error_rad}
+
+    def cusp_heading_offset(tracker_, progress_m, pose) -> tuple[float, float]:
+        """Signed lateral and heading offset of pose from tracker_'s path at progress_m."""
+        path_ = tracker_._poses
+        i_ = int(np.clip(np.searchsorted(tracker_._distance, progress_m, side="right") - 1, 0, len(path_) - 2))
+        f_ = float(np.clip((progress_m - tracker_._distance[i_]) / tracker_._lengths[i_], 0.0, 1.0))
+        point_ = path_[i_, :2] + f_ * (path_[i_ + 1, :2] - path_[i_, :2])
+        y0_, y1_ = float(path_[i_, 2]), float(path_[i_ + 1, 2])
+        yaw_ = y0_ + f_ * math.atan2(math.sin(y1_ - y0_), math.cos(y1_ - y0_))
+        d_ = np.asarray(pose[:2], dtype=float) - point_
+        return (float(math.cos(yaw_) * d_[1] - math.sin(yaw_) * d_[0]),
+                math.atan2(math.sin(float(pose[2]) - yaw_), math.cos(float(pose[2]) - yaw_)))
 
     def cusp_alive(now_s) -> bool:
         """Every obstacle sensor within its timeout -- checked every tick: a silent one sends no scan."""
@@ -5720,6 +5760,69 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             phase_started = t
                             tracking = trackers[phase].update(rear, signed_speed, dt)
                             last_tracking = tracking
+                # EPAL 6 fork spacing plan, fix A: an observe cusp held for a heading miss of
+                # 0.05-0.08 rad (the tracker's cusp_pending). Standing, re-check the window,
+                # judge the next leg from here with this cusp's limits only, and release it;
+                # anything else latches the tracker's failure for the observe replan below.
+                if phase == "observe" and state["cusp_heading_watch"] is not None:
+                    # The released leg, every tick: when it first moves, its largest lateral and
+                    # heading offset from the path, and how it ends -- ahead of the hold below, so
+                    # a leg held again at its end counts that tick (Codex fix A review 2 P3).
+                    watched = trackers["observe"]
+                    cusp_holds.tick(
+                        t, id(watched), watched.leg_index, cusp_heading_end(tracking), tracking.cusp_pending,
+                        tracking.speed_mps,
+                        cusp_heading_offset(watched, tracking.progress_m, rear)
+                        if id(watched) == state["cusp_heading_watch"]["tracker"] else None)
+                if phase == "observe" and tracking.cusp_pending:
+                    hold_tracker = trackers["observe"]
+                    hold = cusp_holds.held(
+                        t, [id(hold_tracker), hold_tracker.leg_index],
+                        {"rear": rear.tolist(), "position_error_m": tracking.position_error_m,
+                         "yaw_error_rad": tracking.yaw_error_rad, **cusp_heading_motion(signed_speed)},
+                        cusp_heading_end(tracking))
+                    decision = None
+                    if slam is not None and slam["tracker"].mode == "holding" and realign_active():
+                        decision = "realign_held"  # no recovery in a held realignment (S4c-3)
+                    elif cusp_stopped():
+                        if not (tracking.position_error_m <= CUSP_HEADING_HOLD_POSITION_M
+                                and hold_tracker.leg_remaining_m() <= hold_tracker.leg_end_window_m()):
+                            decision = "window"
+                        else:
+                            from forklift_core.control import escape as esc
+
+                            judged = CUSP_STALL.judge(
+                                hold_tracker, rear, tracking, {}, end_recovered=cusp_end_recovered,
+                                sweep_free=lambda trajectory_: esc.rectangles_sweep_free(cusp_leg_checker(), trajectory_),
+                                sensors=(lambda trajectory_, direction_, t_=t, rear_=rear: cusp_sensors(
+                                    t_, rear_, trajectory_, direction_)) if obstacle is not None else None,
+                                bounds=(CUSP_HEADING_HOLD_POSITION_M, CUSP_HEADING_HOLD_RAD),
+                            )
+                            hold["judgement"] = judged.record
+                            if not (judged.pose_ok and judged.sensor_ok and not judged.prefix_occupied):
+                                decision = "judged_out"
+                            elif hold_tracker.release_cusp(True):
+                                decision = "released"
+                            else:
+                                decision = "release_refused"
+                    if decision is not None:
+                        cusp_holds.decide(
+                            t, decision,
+                            {"decided_rear": rear.tolist(), "decided_position_error_m": tracking.position_error_m,
+                             "decided_yaw_error_rad": tracking.yaw_error_rad,
+                             "decided": cusp_heading_motion(signed_speed)},
+                            cusp_heading_end(tracking))
+                        if decision != "released":
+                            hold_tracker.fail_pending()
+                        tracking = hold_tracker.update(rear, signed_speed, dt)
+                        last_tracking = tracking
+                        if decision == "released":
+                            # The new watch sees this tick's update too: the next leg's first command,
+                            # or its end reached at once (Codex fix A implementation review 3 P2).
+                            cusp_holds.tick(
+                                t, id(hold_tracker), hold_tracker.leg_index, cusp_heading_end(tracking),
+                                tracking.cusp_pending, tracking.speed_mps,
+                                cusp_heading_offset(hold_tracker, tracking.progress_m, rear))
                 # Under SLAM, an observe leg judged out of heading at a cusp or
                 # its end (S2 seed 1: -0.078 rad at a cusp of the near leg, three
                 # versions running): brake, then plan the leg again from the
@@ -6320,6 +6423,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                     # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad
                                     # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).
                                     cusp_brake_window_m=0.008,
+                                    # As the first observe tracker (fix A; Codex fix A implementation
+                                    # review 1 P2: the candidate path dropped it).
+                                    cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD,
                                     # Optional path speed caps; absent from the settings = off.
                                     max_lateral_acceleration_mps2=settings.get(
                                         "max_lateral_acceleration_mps2"

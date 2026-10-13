@@ -1,6 +1,7 @@
 """Plan D8 S4a: the runner side of near-field tracking (no Isaac)."""
 
 import importlib.util
+import json
 import math
 import sys
 from pathlib import Path
@@ -191,6 +192,21 @@ def test_the_condition_names_every_argument_setting_and_input_that_differs(tmp_p
         "tracker_configs approach differs from the measurement runs"
     ]
     assert NT.tracker_config_problems(None, longer) == ["tracker_configs missing"]
+    # A follower field added since (fix A's hold) reads as its earlier value None on a record
+    # without it; the observe tracker's 0.08 still differs (Codex fix A implementation review 1).
+    recorded = json.loads((ROOT / "config/near_field_drive_terms.json").read_text())[
+        "condition"
+    ]["tracker_configs"]
+    now = {
+        phase: {**config, "cusp_heading_pending_rad": None}
+        for phase, config in recorded.items()
+    }
+    assert NT.tracker_config_problems(recorded, now) == []
+    assert NT.tracker_config_problems(now, recorded) == []
+    now["observe"]["cusp_heading_pending_rad"] = 0.08
+    assert NT.tracker_config_problems(recorded, now) == [
+        "tracker_configs observe differs from the measurement runs"
+    ]
     # The same file written as an absolute path is the same input (compared by content).
     absolute = {
         **result,

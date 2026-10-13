@@ -1069,6 +1069,13 @@ SPEED_DEPENDENT_TRACKER_FIELDS = (
 )  # the speed under test
 
 
+# Follower fields added after runs were recorded, with the value every earlier run had: a
+# record without one is read as that default (Codex fix A implementation review 1 P2: the
+# measured contract and old records otherwise all differ). A run that sets the field (the
+# observe tracker's hold, 0.08) still differs from a record without it.
+TRACKER_FIELDS_ADDED = {"cusp_heading_pending_rad": None}  # EPAL 6 fork spacing plan, fix A
+
+
 def tracker_configs_shared(configs) -> dict | None:
     """The follower configs without the fields that follow the straight speed under test
     (between the 0.055 and 0.08 m/s measurement runs only approach.cruise_speed_mps
@@ -1083,10 +1090,15 @@ def tracker_configs_shared(configs) -> dict | None:
 
 
 def tracker_config_problems(expected, observed) -> list[str]:
-    """The followers' configs (speed fields aside) against the measurement runs'."""
+    """The followers' configs (speed fields aside) against the measurement runs', a field
+    added since read as its earlier value on either side (TRACKER_FIELDS_ADDED)."""
     want, have = tracker_configs_shared(expected), tracker_configs_shared(observed)
     if want is None or have is None:
         return ["tracker_configs missing"]
+    want, have = (
+        {k: {**TRACKER_FIELDS_ADDED, **v} if isinstance(v, dict) else v for k, v in c.items()}
+        for c in (want, have)
+    )
     return [
         f"tracker_configs {phase} differs from the measurement runs"
         for phase in sorted(set(want) | set(have))

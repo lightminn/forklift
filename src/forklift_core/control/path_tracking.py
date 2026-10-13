@@ -59,6 +59,11 @@ class TrackerConfig:
     # not carry into a turn the steering cannot follow.
     max_lateral_acceleration_mps2: float | None = None
     max_reverse_speed_mps: float | None = None
+    # A cusp reached inside its window whose heading misses cusp_yaw_tolerance_rad but stays within
+    # this holds (zero command, ``cusp_pending``) instead of failing, for the caller to judge the
+    # next leg from the stopped pose and release_cusp() or fail_pending() (EPAL 6 fork spacing plan,
+    # fix A). None fails at once as before. Rollouts ignore it (rollout.py).
+    cusp_heading_pending_rad: float | None = None
 
     def __post_init__(self) -> None:
         for name in self.__dataclass_fields__:
@@ -102,6 +107,9 @@ class TrackingCommand:
     # Whether this pose is beyond max_cross_track_error_m right now. failure
     # keeps the first cause; this says whether the vehicle has since left the path.
     off_path: bool = False
+    # Holding at a cusp whose heading miss is within cusp_heading_pending_rad: status "braking",
+    # speed 0, until the caller releases the cusp or fails the hold.
+    cusp_pending: bool = False
 
 
 class RearAxlePathTracker:
@@ -169,6 +177,9 @@ class RearAxlePathTracker:
         self._failure = None
         self._arrived = False
         self._command_speed: float | None = None
+        # A cusp held for the caller's judgement (cusp_heading_pending_rad): latched until
+        # release_cusp() or fail_pending(), whatever the pose does meanwhile.
+        self._pending = False
 
     def _speed_profile(self) -> np.ndarray:
         """Largest speed on the segment arriving at each sample, braked ahead."""
@@ -255,6 +266,14 @@ class RearAxlePathTracker:
         self._command_speed = 0.0
         return True
 
+    def fail_pending(self) -> None:
+        """Latch the endpoint_heading failure of a cusp held for judgement (cusp_pending): the
+        caller judged it not releasable (EPAL 6 fork spacing plan, fix A)."""
+        if not self._failed:
+            self._failure = "endpoint_heading"
+        self._failed = True
+        self._pending = False
+
     def skip_legs(self, count: int) -> None:
         """Start ``count`` legs later, as if their cusps had been accepted (for dry runs)."""
         for _ in range(int(count)):
@@ -265,6 +284,7 @@ class RearAxlePathTracker:
 
     def _advance_leg(self) -> None:
         """The one leg switch: the next leg, from the end of this one."""
+        self._pending = False
         endpoint = self._leg_ends[self._leg]
         self._leg += 1
         self._segment = endpoint
@@ -387,14 +407,25 @@ class RearAxlePathTracker:
             position_error <= position_tolerance
             or self._overshoot_accepted(pose, goal, endpoint, position_tolerance)
         )
-        if at_endpoint and abs(yaw_error) > yaw_tolerance:
-            if not self._failed:
-                self._failure = "endpoint_heading"
-            self._failed = True
+        if self._pending:
+            pass  # held: only release_cusp(), fail_pending() or a cross-track failure end it
+        elif at_endpoint and abs(yaw_error) > yaw_tolerance:
+            if (
+                not self._failed
+                and endpoint != len(self._poses) - 1
+                and cfg.cusp_heading_pending_rad is not None
+                and abs(yaw_error) <= cfg.cusp_heading_pending_rad
+            ):
+                self._pending = True  # held for the caller's judgement, not failed
+            else:
+                if not self._failed:
+                    self._failure = "endpoint_heading"
+                self._failed = True
+        pending = self._pending and not self._failed
         direction = self._directions[self._segment + 1]
         curvature = 0.0
         status = "tracking"
-        if self._failed or self._arrived or at_endpoint:
+        if self._failed or self._arrived or at_endpoint or pending:
             target_speed = 0.0
             status = "failed" if self._failed else "braking"
         else:
@@ -463,10 +494,15 @@ class RearAxlePathTracker:
                 self._command_speed + delta_speed,
             )
         )
+        if pending:
+            # A zero command at once, as the caller's stop for a failed observe leg is
+            # (Codex fix A implementation review 1 P2); release_cusp() restarts the slew from 0.
+            speed = 0.0
         self._command_speed = speed
         if (
             at_endpoint
             and not self._failed
+            and not pending
             and abs(signed_speed_mps) <= cfg.stop_speed_mps
             and abs(speed) < 1e-12
         ):
@@ -488,6 +524,7 @@ class RearAxlePathTracker:
             self._failure if self._failed else None,
             endpoint != len(self._poses) - 1,
             off_path,
+            pending,
         )
 
 

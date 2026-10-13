@@ -70,13 +70,20 @@ def pose_bounds(
     position_error_m: float,
     yaw_error_rad: float,
     stall: StallConfig = DEFAULT_STALL,
+    bounds: tuple[float, float] | None = None,
 ) -> tuple[bool, bool]:
     """(within, far): within 2 x the cusp position tolerance and the cusp heading tolerance (the
-    existing cusp heading limit, not loosened); far when past them by far_m / far_rad."""
-    position, heading = cusp_tolerances(config)
-    within = position_error_m <= 2.0 * position and abs(yaw_error_rad) <= heading
+    existing cusp heading limit, not loosened); far when past them by far_m / far_rad. bounds =
+    (position_m, heading_rad) replaces both limits for the cusp being judged only (the cusp heading
+    hold of the EPAL 6 fork spacing plan, fix A: 30 mm and 0.08 rad)."""
+    if bounds is None:
+        position, heading = cusp_tolerances(config)
+        position = 2.0 * position
+    else:
+        position, heading = (float(v) for v in bounds)
+    within = position_error_m <= position and abs(yaw_error_rad) <= heading
     far = (
-        position_error_m > 2.0 * position + stall.far_m
+        position_error_m > position + stall.far_m
         or abs(yaw_error_rad) > heading + stall.far_rad
     )
     return bool(within), bool(far)
@@ -153,13 +160,16 @@ def judge(
     sweep_free: Callable[[np.ndarray], bool],
     sensors: Callable[[np.ndarray, int], tuple[bool, bool, dict | None]] | None,
     stall: StallConfig = DEFAULT_STALL,
+    bounds: tuple[float, float] | None = None,
 ) -> Judgement:
     """K3 for the control pose rear now. The next leg's prefix is rolled from rear (the tracker on the
     whole path, the stalled leg passed by its own switch) and the reference from the stalled leg end's
     path pose (kept in cache). sweep_free(trajectory) checks the leg's planner obstacles; sensors
-    (trajectory, direction) -> (sensor_ok, prefix_occupied, record), None without an obstacle layer."""
+    (trajectory, direction) -> (sensor_ok, prefix_occupied, record), None without an obstacle layer.
+    bounds overrides the current cusp's pose limits only (pose_bounds); the rollouts keep the
+    tracker's config."""
     within, far = pose_bounds(
-        tracker.config, raw.position_error_m, raw.yaw_error_rad, stall
+        tracker.config, raw.position_error_m, raw.yaw_error_rad, stall, bounds
     )
     record = {
         "rear": [float(v) for v in rear],

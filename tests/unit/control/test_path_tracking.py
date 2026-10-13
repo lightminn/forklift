@@ -836,3 +836,66 @@ def test_skip_legs_starts_a_later_leg_and_refuses_past_the_last():
     assert tracker.leg_index == 1 and tracker.leg_remaining_m() == 0.7
     with pytest.raises(ValueError):
         tracker.skip_legs(1)
+
+
+# Cusp heading hold (EPAL 6 fork spacing plan, fix A) -------------------------------------------
+HOLD = dict(**CUSP, cusp_heading_pending_rad=0.08)
+
+
+def test_a_cusp_heading_miss_within_the_hold_band_holds_instead_of_failing():
+    tracker = RearAxlePathTracker(*CUSP_PATH, TrackerConfig(**HOLD))
+    commands = drive_past_cusp_off_line(tracker, lateral=0.01, yaw=0.062)
+    assert commands[-1].cusp_pending and commands[-1].status == "braking" and commands[-1].speed_mps == 0.0
+    assert all(c.status != "failed" for c in commands) and tracker.leg_index == 0  # not advanced by itself
+    assert tracker.release_cusp(True) and tracker.leg_index == 1
+    assert not tracker.update([1.0, 0.01, 0.062], 0.0, 0.02).cusp_pending
+
+
+def test_a_held_cusp_failed_by_the_caller_latches_endpoint_heading():
+    tracker = RearAxlePathTracker(*CUSP_PATH, TrackerConfig(**HOLD))
+    drive_past_cusp_off_line(tracker, lateral=0.01, yaw=0.062)
+    tracker.fail_pending()
+    command = tracker.update([1.0, 0.01, 0.062], 0.0, 0.02)
+    assert command.status == "failed" and command.failure == "endpoint_heading" and not command.cusp_pending
+    assert not tracker.release_cusp(True)
+
+
+def test_a_cusp_miss_beyond_the_band_and_a_goal_miss_still_fail():
+    tracker = RearAxlePathTracker(*CUSP_PATH, TrackerConfig(**HOLD))
+    commands = drive_past_cusp_off_line(tracker, lateral=0.01, yaw=0.09)
+    assert commands[-1].status == "failed" and commands[-1].failure == "endpoint_heading"
+    # The final goal keeps its own tolerance: no hold there.
+    poses = np.column_stack((np.linspace(0.0, 1.0, 11), np.zeros(11), np.zeros(11)))
+    goal = RearAxlePathTracker(poses, np.ones(11), np.zeros(11), TrackerConfig(**HOLD))
+    for x in np.linspace(0, 1, 51):
+        goal.update([x, 0.0, 0.04], 0.1, 0.02)
+    last = [goal.update([1.0, 0.0, 0.04], 0.0, 0.02) for _ in range(50)][-1]
+    assert last.status == "failed" and not last.cusp_pending
+
+
+def test_without_the_hold_the_same_cusp_miss_fails_at_once():
+    tracker = RearAxlePathTracker(*CUSP_PATH, TrackerConfig(**CUSP))
+    commands = drive_past_cusp_off_line(tracker, lateral=0.01, yaw=0.062)
+    assert commands[-1].status == "failed" and not any(c.cusp_pending for c in commands)
+
+
+def test_the_first_held_command_is_zero_while_the_truck_still_moves():
+    # Codex fix A implementation review 1 P2: the speed slew left 0.124 m/s on the first hold.
+    tracker = RearAxlePathTracker(*CUSP_PATH, TrackerConfig(**HOLD))
+    for x in np.linspace(0, 0.99, 50):
+        tracker.update([x, 0.01, 0.062], 0.1, 0.02)
+    commands = [tracker.update([1.0, 0.01, 0.062], 0.1, 0.02) for _ in range(5)]
+    assert commands[0].cusp_pending and all(c.speed_mps == 0.0 and c.status == "braking" for c in commands)
+
+
+def test_a_held_cusp_stays_held_whatever_the_pose_does_until_the_caller_decides():
+    # Codex fix A implementation review 1 P2: back inside 0.05 rad it advanced by itself, past
+    # 30 mm it went back to tracking.
+    tracker = RearAxlePathTracker(*CUSP_PATH, TrackerConfig(**HOLD))
+    drive_past_cusp_off_line(tracker, lateral=0.01, yaw=0.062)
+    for pose in ([1.0, 0.01, 0.049], [1.0, 0.0313, 0.062], [1.0, 0.0, 0.0], [0.97, 0.01, 0.062]):
+        command = tracker.update(pose, 0.0, 0.02)
+        assert command.cusp_pending and command.status == "braking" and command.speed_mps == 0.0, pose
+        assert tracker.leg_index == 0
+    assert tracker.release_cusp(True) and tracker.leg_index == 1
+    assert not tracker.update([1.0, 0.0, 0.0], 0.0, 0.02).cusp_pending

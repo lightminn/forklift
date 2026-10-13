@@ -11,7 +11,7 @@ too little straight to converge at 0.8 m).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import cos, sin
 
 import numpy as np
@@ -41,7 +41,8 @@ def bicycle_rollout(
     dt_s: float = 1.0 / 120.0,
     max_time_s: float = 60.0,
 ) -> RolloutResult:
-    tracker = RearAxlePathTracker(poses, directions, curvatures, config)
+    # A rollout judges with the tracker's own cusp rule, without the caller's hold (fix A).
+    tracker = RearAxlePathTracker(poses, directions, curvatures, replace(config, cusp_heading_pending_rad=None))
     pose = np.asarray(start_pose, dtype=float).copy()
     speed = 0.0
     steps = int(max_time_s / dt_s)
@@ -103,7 +104,8 @@ def leg_prefix_rollout(
     a cusp into a goal). The time budget is 3 x prefix / cruise + 10 s. The same call from the
     previous leg end's path pose gives the reference run to compare with at equal progress.
     """
-    tracker = RearAxlePathTracker(poses, directions, curvatures, config)
+    # A rollout judges with the tracker's own cusp rule, without the caller's hold (fix A).
+    tracker = RearAxlePathTracker(poses, directions, curvatures, replace(config, cusp_heading_pending_rad=None))
     tracker.skip_legs(start_leg)
     path = np.asarray(poses, dtype=float)
     start = float(tracker._progress)

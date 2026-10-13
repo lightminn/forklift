@@ -1136,3 +1136,27 @@ def test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the
     release = release[: release.index("\n    def ", 10)]
     assert "return_turnaround_kwargs" not in release and "plan_return_leg(" in release
     assert src.count("**return_turnaround_kwargs()") == 2  # the live return plan and its tight retry
+
+
+def test_only_the_observe_tracker_holds_a_cusp_heading_miss_for_judgement():
+    # EPAL 6 fork spacing plan, fix A: 0.08 rad / 30 mm for the cusp being judged, observe only.
+    source = SCRIPT.read_text()
+    assert "CUSP_HEADING_HOLD_RAD = 0.08\n" in source and "CUSP_HEADING_HOLD_POSITION_M = 0.03\n" in source
+    assert 'cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD if name == "observe" else None,' in source
+    block = source[source.index('if phase == "observe" and tracking.cusp_pending:'):]
+    block = block[:block.index("# Under SLAM, an observe leg judged out of heading")]
+    assert "bounds=(CUSP_HEADING_HOLD_POSITION_M, CUSP_HEADING_HOLD_RAD)" in block
+    assert "hold_tracker.release_cusp(True)" in block and "hold_tracker.fail_pending()" in block
+    assert 'decision = "realign_held"' in block and "cusp_stopped()" in block
+    # The watch runs ahead of the hold, and once more on the release tick's own update (Codex fix
+    # A implementation review 2 P3, 3 P2).
+    whole = source[source.index('if phase == "observe" and state["cusp_heading_watch"] is not None:'):]
+    assert whole.index("cusp_holds.tick(") < whole.index('if phase == "observe" and tracking.cusp_pending:')
+    after_update = block[block.index("tracking = hold_tracker.update(rear, signed_speed, dt)"):]
+    assert 'if decision == "released":' in after_update and "cusp_holds.tick(" in after_update
+    # Every observe tracker holds, the candidate re-route's too (Codex fix A implementation
+    # review 1 P2: it was built without the field); the near leg reuses the observe config.
+    assert source.count("cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD") == 2
+    candidate = source[source.index('trackers["observe"] = RearAxlePathTracker(\n                                observe_plan.poses'):]
+    assert "cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD," in candidate[: candidate.index("phase_started = t")]
+    assert "near_leg.curvatures_inv_m,\n                                    trackers[\"observe\"].config," in source

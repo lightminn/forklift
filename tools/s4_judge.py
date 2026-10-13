@@ -3684,7 +3684,14 @@ def check_near_redraw(result: dict, nt: dict) -> dict:
         # record's (Codex S4c-3 implementation review 3 P2: points taken from elsewhere).
         try:
             configs = [TrackerConfig(**c) for c in e["dry_run_configs"]]
-            approach_cfg = dict(result["tracker_configs"]["approach"])
+            # A record written before a follower field existed lacks it here and in the dry
+            # runs' settings, which TrackerConfig fills: fill only those fields, with the value
+            # the earlier runs had (NT.TRACKER_FIELDS_ADDED; Codex fix A implementation review
+            # 2 P2: any other missing field must still fail the comparison).
+            approach_cfg = {
+                **NT.TRACKER_FIELDS_ADDED,
+                **result["tracker_configs"]["approach"],
+            }
         except (KeyError, TypeError) as exc:
             raise Unverified(
                 f"{what}: the dry runs' settings are not recorded ({exc!r})"
