@@ -68,6 +68,7 @@ never passed. Every input is hashed from the bytes that are parsed.
 from __future__ import annotations
 
 import argparse
+import collections
 import hashlib
 import io
 import json
@@ -991,19 +992,39 @@ def check_ii(run, near: dict, states: list[dict], bounds, section: tuple) -> dic
     return {"ticks": checked, "worst": worst, "passed": passed}
 
 
-def check_iii(run, bounds_data: dict, calibration: dict, model, spans=None) -> dict:
+III_RULES = "v2"  # every read counts toward the cadence (2026-10-13)
+
+
+def check_iii(
+    run, bounds_data: dict, calibration: dict, model, spans=None, coverage=None
+) -> dict:
     """(iii): every read of the approach and insertion 12 ticks after the previous one and one
     tick after its stamp, and the run's L (the calibration's method ①, single-piece frames,
     with the calibration's largest dwell bias bound for every distance it covers) within the
-    measured band."""
+    measured band. Rules v2 (2026-10-13): every read counts -- one whose time label is not ok
+    or that has no stamp (a stalled renderer reads the same frame again) fails the cadence;
+    the delays and gaps are measured on the timed reads as before; and each covered interval
+    (an episode's span, or the build to the last approach or insert tick) holds two timed reads
+    or more, the first within two render periods of its start (the first read comes at the
+    second render after the build: 13-24 ticks over the two recorded S4 batches) and
+    the last within one of its end (0-12 ticks there)."""
     from tools import d8b_calibration as CAL
 
+    def label(r) -> str:
+        name = r.get("time_label", r.get("result"))
+        if not isinstance(name, str) or not isinstance(r.get("read_s"), (int, float)):
+            raise Unverified("a read without a time label or a read time")
+        return "no_time" if r.get("stamp_s") is None and name == "ok" else name
+
+    labels = [label(r) for r in run.reads]
+    if spans is not None and any(
+        not any(lo - TIME_TOL_S <= r["read_s"] <= hi + TIME_TOL_S for lo, hi in spans)
+        for r in run.reads
+    ):
+        raise Unverified("a read outside every episode")
+    non_ok = collections.Counter(name for name in labels if name != "ok")
     reads = sorted(
-        (
-            r
-            for r in run.reads
-            if r.get("time_label", r["result"]) == "ok" and r["stamp_s"] is not None
-        ),
+        (r for r, name in zip(run.reads, labels, strict=True) if name == "ok"),
         key=lambda r: r["read_s"],
     )
     if len(reads) < 2:
@@ -1015,14 +1036,8 @@ def check_iii(run, bounds_data: dict, calibration: dict, model, spans=None) -> d
             b["stamp_s"] - a["stamp_s"] for a, b in zip(reads, reads[1:], strict=False)
         ]
     else:
-        # Plan D8 S4c-2: the cadence within each episode -- no read is made between them.
-        if any(
-            not any(
-                lo - TIME_TOL_S <= r["read_s"] <= hi + TIME_TOL_S for lo, hi in spans
-            )
-            for r in reads
-        ):
-            raise Unverified("a read outside every episode")
+        # Plan D8 S4c-2: the cadence within each episode -- no read is made between them
+        # (every read inside one, checked above).
         gaps = []
         for lo, hi in spans:
             inside = [
@@ -1038,8 +1053,28 @@ def check_iii(run, bounds_data: dict, calibration: dict, model, spans=None) -> d
         (latency["read_delay_s"], latency["render_period_s"]),
         size=2,
     )
-    cadence_ok = all(abs(d - a_s) <= 0.25 * TICK_S for d in delays) and all(
-        abs(g - period) <= 0.25 * TICK_S for g in gaps
+    uncovered = []
+    for lo, hi in coverage if coverage is not None else (spans or []):
+        inside = [r for r in reads if lo - TIME_TOL_S <= r["read_s"] <= hi + TIME_TOL_S]
+        if len(inside) < 2:
+            uncovered.append({"span_s": [lo, hi], "reads": len(inside)})
+        elif (
+            inside[0]["read_s"] - lo > 2 * period + 0.25 * TICK_S
+            or hi - inside[-1]["read_s"] > period + 0.25 * TICK_S
+        ):
+            uncovered.append(
+                {
+                    "span_s": [lo, hi],
+                    "reads": len(inside),
+                    "first_s": inside[0]["read_s"],
+                    "last_s": inside[-1]["read_s"],
+                }
+            )
+    cadence_ok = (
+        not non_ok
+        and not uncovered
+        and all(abs(d - a_s) <= 0.25 * TICK_S for d in delays)
+        and all(abs(g - period) <= 0.25 * TICK_S for g in gaps)
     )
     entries = []
     for dwells in calibration["dwells"].values():
@@ -1078,7 +1113,10 @@ def check_iii(run, bounds_data: dict, calibration: dict, model, spans=None) -> d
         if summary[key]:
             frame_failures.append(f"{summary[key]} {key} frames")
     return {
+        "rules": III_RULES,
         "reads": len(reads),
+        "non_ok_reads": dict(sorted(non_ok.items())),
+        "uncovered": uncovered,
         "cadence_ok": cadence_ok,
         "max_delay_error_s": max(abs(d - a_s) for d in delays),
         "max_gap_error_s": max(abs(g - period) for g in gaps) if gaps else 0.0,
@@ -4271,6 +4309,19 @@ def run_files_digest(directory: Path) -> str:
     return digest.hexdigest()
 
 
+def read_index_problems(index_reads, recorded_reads) -> list[str]:
+    """(iii) rules v2 (2026-10-13): the read index holds every read the recorder counted,
+    numbered 0..n-1 in order -- a missing read cannot hide a gap in the cadence."""
+    if not isinstance(index_reads, list) or recorded_reads != len(index_reads):
+        held = len(index_reads) if isinstance(index_reads, list) else None
+        return [f"the read index holds {held} reads, the run recorded {recorded_reads}"]
+    if [r.get("index") if isinstance(r, dict) else None for r in index_reads] != list(
+        range(len(index_reads))
+    ):
+        return ["the read index is not numbered 0..n-1 in order"]
+    return []
+
+
 def judge_run(directory: Path, data_root: Path = ROOT) -> dict:
     sys.path.insert(0, str(ROOT / "sim" / "isaac"))
     import insertion_geometry as IG
@@ -4316,6 +4367,15 @@ def judge_run(directory: Path, data_root: Path = ROOT) -> dict:
         problems.append(
             f"the truth record holds {len(truth.get('stamp_s', []))} ticks, the run recorded {recorded}"
         )
+    # (iii) rules v2: every read the recorder made is in the index, numbered without a gap
+    # (the index is one of run_files_digest's files, hashed before and after).
+    index_path = directory / "pocket_frames/index.json"
+    problems += read_index_problems(
+        json.loads(index_path.read_text()).get("reads")
+        if index_path.exists()
+        else None,
+        (result.get("pocket_recording") or {}).get("reads"),
+    )
     near = (
         json.loads(raw["near_tracking.json"]) if "near_tracking.json" in raw else None
     )
@@ -4512,7 +4572,18 @@ def judge_run(directory: Path, data_root: Path = ROOT) -> dict:
             )
             checks["ii"] = check_ii(run, near, states, bounds, section)
             checks["iii"] = check_iii(
-                run, bounds_data, calibration, CAL.PalletModel.from_geometry(pallet_geo)
+                run,
+                bounds_data,
+                calibration,
+                CAL.PalletModel.from_geometry(pallet_geo),
+                # Rules v2: the build (its frame is read a tick before the first near-field
+                # row) to the last approach or insert tick.
+                coverage=[
+                    (
+                        float(nt["start"]["built_s"]),
+                        float(truth["stamp_s"][int(checked_ticks(truth)[-1])]),
+                    )
+                ],
             )
             checks["iv"] = check_iv(truth, states, section, bounds, rear_offset)
             checks["v"] = check_v(

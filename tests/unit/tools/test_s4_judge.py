@@ -908,6 +908,105 @@ def test_iii_checks_the_read_cadence_the_run_delay_and_the_frames(monkeypatch):
     ):
         monkeypatch.setattr(CAL, "summarise_run", lambda rows, c=change: {**good, **c})
         assert not J.check_iii(run, data, calibration, None)["passed"], change
+    # Rules v2 (2026-10-13): every read counts, not only the timed ones -- a run whose renderer
+    # stalls at the end (the same frame read again) used to pass on its earlier reads.
+    monkeypatch.setattr(CAL, "summarise_run", lambda rows: dict(good))
+    stalled = reads + [
+        {
+            "read_s": reads[-1]["read_s"] + 0.1 * k,
+            "stamp_s": reads[-1]["stamp_s"],
+            "result": "ok",
+            "time_label": "same_stamp",
+        }
+        for k in (1, 2, 3)
+    ]
+    out = J.check_iii(SimpleNamespace(reads=stalled), data, calibration, None)
+    assert out["rules"] == "v2" and out["non_ok_reads"] == {"same_stamp": 3}
+    assert not out["cadence_ok"] and not out["passed"] and out["reads"] == 20
+    untimed = reads + [{"read_s": 12.5, "stamp_s": None, "result": "no_time"}]
+    out = J.check_iii(SimpleNamespace(reads=untimed), data, calibration, None)
+    assert out["non_ok_reads"] == {"no_time": 1} and not out["passed"]
+    assert J.check_iii(run, data, calibration, None)["non_ok_reads"] == {}
+    # A read labelled ok without a render stamp is untimed (the normalisation, not its result).
+    blank = reads + [
+        {"read_s": 12.5, "stamp_s": None, "result": "ok", "time_label": "ok"}
+    ]
+    out = J.check_iii(SimpleNamespace(reads=blank), data, calibration, None)
+    assert out["non_ok_reads"] == {"no_time": 1} and not out["cadence_ok"]
+    # A read without a label or a read time cannot be judged.
+    for broken in (
+        {"read_s": 12.5, "stamp_s": 12.4},
+        {"stamp_s": 12.4, "result": "ok"},
+    ):
+        with pytest.raises(J.Unverified, match="time label or a read time"):
+            J.check_iii(
+                SimpleNamespace(reads=reads + [broken]), data, calibration, None
+            )
+    # An episode's span must hold its reads: none, one, or a late first or early last fails.
+    span = (reads[0]["read_s"] - TICK, reads[-1]["read_s"])
+    assert J.check_iii(run, data, calibration, None, coverage=[span])["uncovered"] == []
+    longer = (span[0], span[1] + 5.0)
+    out = J.check_iii(run, data, calibration, None, coverage=[span, longer])
+    assert not out["cadence_ok"] and out["uncovered"][0]["span_s"] == list(longer)
+    for empty in ((20.0, 25.0), (reads[3]["read_s"] - 0.01, reads[3]["read_s"] + 0.01)):
+        out = J.check_iii(run, data, calibration, None, coverage=[span, empty])
+        assert not out["cadence_ok"] and out["uncovered"][0]["reads"] < 2, empty
+    late = (span[0] - 2 * 0.1, span[1])
+    assert J.check_iii(run, data, calibration, None, coverage=[late])["uncovered"]
+    # An episode span with no read at all also fails when the spans themselves are given.
+    out = J.check_iii(run, data, calibration, None, spans=[span, (20.0, 25.0)])
+    assert not out["cadence_ok"] and out["uncovered"][0]["reads"] == 0
+
+
+def test_iii_a_stalled_read_outside_every_episode_is_unverified(monkeypatch):
+    """Rules v2: the episode check covers every read, not only the timed ones."""
+    from types import SimpleNamespace
+
+    from tools import d8b_calibration as CAL
+
+    data = {
+        "latency": {"read_delay_s": TICK, "render_period_s": 0.1, "band_s": [0.08, 0.1]}
+    }
+    calibration = {
+        "dwells": {
+            "start": [
+                {
+                    "bias_m": 1e-6,
+                    "max_shift_m": 1e-5,
+                    "distance_m": d,
+                    "distance_range_m": [d, d],
+                }
+                for d in (0.5, 1.0)
+            ]
+        }
+    }
+    reads = [
+        {"read_s": 10.0 + 0.1 * k + TICK, "stamp_s": 10.0 + 0.1 * k, "result": "ok"}
+        for k in range(10)
+    ]
+    reads.append(
+        {"read_s": 15.0, "stamp_s": 11.0, "result": "ok", "time_label": "same_stamp"}
+    )
+    monkeypatch.setattr(CAL, "analyse_frames", lambda run_, model, entries: [])
+    with pytest.raises(J.Unverified, match="outside every episode"):
+        J.check_iii(
+            SimpleNamespace(reads=reads), data, calibration, None, spans=[(10.0, 11.1)]
+        )
+
+
+def test_the_read_index_must_hold_every_recorded_read_in_order():
+    reads = [{"index": k} for k in range(4)]
+    assert J.read_index_problems(reads, 4) == []
+    assert J.read_index_problems(reads, 5) == [
+        "the read index holds 4 reads, the run recorded 5"
+    ]
+    assert J.read_index_problems(None, 4) == [
+        "the read index holds None reads, the run recorded 4"
+    ]
+    gap = [{"index": k} for k in (0, 1, 3, 4)]
+    assert J.read_index_problems(gap, 4) == [
+        "the read index is not numbered 0..n-1 in order"
+    ]
 
 
 def test_iv_the_window_ends_are_interpolated_and_a_result_replaced_before_the_section_is_skipped(
