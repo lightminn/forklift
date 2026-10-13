@@ -16,6 +16,7 @@ export function createSession({ clientId, send, now, newId, retryMs = 500 }) {
   let seqArmGen = null;
   let state = null;
   let welcome = null;
+  let reclaim = false; // held the lease when the connection dropped
   let targets = null;
   const pending = new Map(); // request_id -> {msg, resolve, lastSent}
   const listeners = new Set();
@@ -46,9 +47,16 @@ export function createSession({ clientId, send, now, newId, retryMs = 500 }) {
     if (!msg || typeof msg.t !== "string") return;
     switch (msg.t) {
       case "welcome":
-        if (epoch !== null && msg.session_epoch !== epoch) dropSession("stale_epoch");
+        if (epoch !== null && msg.session_epoch !== epoch) {
+          dropSession("stale_epoch");
+          reclaim = false; // a restarted vehicle has no lease to give back
+        }
         epoch = msg.session_epoch;
         welcome = msg;
+        if (reclaim) {
+          reclaim = false;
+          request("lease_request"); // within the vehicle's grace period (contract 2)
+        }
         break;
       case "tick":
         if (msg.session_epoch === epoch) lastTick = { state_seq: msg.state_seq, token: msg.token };
@@ -103,14 +111,26 @@ export function createSession({ clientId, send, now, newId, retryMs = 500 }) {
     }
   }
 
+  // STOP needs no lease; like other reliable requests it is resent with the same
+  // request_id until answered (the vehicle executes every copy, which is safe).
   function stop(source) {
     const msg = { t: "stop", request_id: newId(), session_epoch: epoch, source };
-    send(msg);
-    return msg;
+    return new Promise((resolve) => {
+      pending.set(msg.request_id, { msg, resolve, lastSent: now() });
+      send(msg);
+    });
+  }
+
+  // The control connection closed: the old lease may not be used any more.
+  function onDisconnect() {
+    if (leaseId !== null) reclaim = true;
+    leaseId = null;
+    lastTick = null;
+    armed = false;
   }
 
   function teleopCommand({ mode, deadman, speedRatio, curvatureRatio, liftDir, frameId }) {
-    if (!armed || lastTick === null || armGen === null) return null; // the vehicle judges the lease
+    if (!armed || lastTick === null || armGen === null || leaseId === null) return null;
     if (seqArmGen !== armGen) {
       seqArmGen = armGen;
       seq = 0;
@@ -141,6 +161,7 @@ export function createSession({ clientId, send, now, newId, retryMs = 500 }) {
 
   return {
     onMessage,
+    onDisconnect,
     request,
     pump,
     stop,

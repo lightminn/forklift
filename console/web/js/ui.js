@@ -164,22 +164,23 @@ export function render(m) {
   const inTele = mode === "TELEOP";
   $("t-enter").disabled = !lease || inTele || mode === "STOPPED" || Boolean(forbidden);
   $("t-exit").disabled = !lease || !inTele;
-  $("t-arm").disabled = !lease || !inTele || (m.teleop.needDirectConfirm && m.teleop.mode === "direct");
+  const gate = m.teleop.gate;
+  $("t-arm").disabled = !lease || !inTele || !gate.canSend();
   $("t-arm").textContent = st.armed ? "조종 준비 풀기" : "조종 준비";
   const arm = $("arm-chip");
   if (!inTele) chip(arm, "", "해제됨");
   else if (!st.armed) chip(arm, "warn", "준비 안 됨");
   else if (m.teleop.lastRead?.deadman) chip(arm, "tel", "조종 중");
   else chip(arm, "acc", "준비됨 · 누르고 있기 대기");
-  const live = inTele && st.armed;
+  const live = inTele && st.armed && lease; // an observer never drives
   $("deadman").disabled = !live;
   $("deadman").dataset.on = String(Boolean(live && m.teleop.lastRead?.deadman));
   $("joy").setAttribute("aria-disabled", String(!live));
   $("lift-up").disabled = $("lift-dn").disabled = !live || st.lift_allowed === false;
   $("lift-val").textContent = `${Number.isFinite(st.lift_m) ? Math.round(st.lift_m * 1000) : "—"} / 280 mm`;
-  $("m-direct").setAttribute("aria-pressed", String(m.teleop.mode === "direct"));
-  $("m-video").setAttribute("aria-pressed", String(m.teleop.mode === "video"));
-  $("direct-confirm").hidden = !(m.teleop.needDirectConfirm && m.teleop.mode === "direct");
+  $("m-direct").setAttribute("aria-pressed", String(gate.mode === "direct"));
+  $("m-video").setAttribute("aria-pressed", String(gate.mode === "video"));
+  $("direct-confirm").hidden = gate.canSend();
   const lim = st.limits;
   const cmd = st.command;
   const vn = lim.forward_mps ? cmd.speed_mps / lim.forward_mps : 0;

@@ -37,6 +37,7 @@ MIME = {
     ".css": "text/css; charset=utf-8",
 }
 CONTROL_SEND_TIMEOUT_S = 0.2
+CONTROL_OUTBOX_MAX = 256
 MEDIA_SEND_TIMEOUT_S = 1.0
 MEDIA_SKIP_BYTES = 512 * 1024
 MEDIA_CLOSE_BYTES = 4 * 1024 * 1024
@@ -54,14 +55,31 @@ def _reject_constant(name: str):
     raise ValueError(f"non-finite number {name}")
 
 
+def _finite_float(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value):  # 1e400 parses as inf without this check
+        raise ValueError(f"non-finite number {text}")
+    return value
+
+
 def _parse(text) -> dict | None:
     if not isinstance(text, str):
         return None
     try:
-        msg = json.loads(text, parse_constant=_reject_constant)
-    except ValueError:
+        msg = json.loads(
+            text, parse_constant=_reject_constant, parse_float=_finite_float
+        )
+    except (ValueError, RecursionError):
         return None
     return msg if isinstance(msg, dict) else None
+
+
+def _encode(msg: dict) -> str | None:
+    """Standard JSON only (no NaN/Infinity), or None if the message cannot be sent."""
+    try:
+        return json.dumps(msg, allow_nan=False)
+    except ValueError:
+        return None
 
 
 def _frame(head: dict, body: bytes) -> bytes:
@@ -79,6 +97,8 @@ class Handle:
         self.server = None
         self.tasks: list[asyncio.Task] = []
         self.control: dict[str, tuple[ServerConnection, str]] = {}
+        self.outbox: dict[str, asyncio.Queue] = {}
+        self.writers: dict[str, asyncio.Task] = {}
         self.media: dict[str, dict] = {}
         self.media_drops = 0
         self.media_closed = 0
@@ -92,9 +112,10 @@ class Handle:
     def close(self) -> None:
         for task in self.tasks:
             task.cancel()
+        for task in self.writers.values():
+            task.cancel()
         for sub in self.media.values():
-            pending = sub.get("pending")
-            if pending is not None:
+            for pending in sub.get("pending", {}).values():
                 pending.cancel()
         if self.server is not None:
             self.server.close()
@@ -149,13 +170,44 @@ class Handle:
         elif path == MEDIA_PATH:
             await self._media(ws)
 
-    async def _send_control(self, ws: ServerConnection, msg: dict) -> bool:
+    def attach_control(self, conn_id: str, ws, client_id: str) -> None:
+        """Register a control connection with its own outbox and writer.
+
+        Every message to a connection goes through its queue, so one slow reader never
+        delays ticks or replies to the others; its writer aborts it on a stuck send.
+        """
+        self.control[conn_id] = (ws, client_id)
+        self.outbox[conn_id] = asyncio.Queue(maxsize=CONTROL_OUTBOX_MAX)
+        self.writers[conn_id] = asyncio.create_task(self._writer(conn_id, ws))
+
+    def detach_control(self, conn_id: str) -> None:
+        self.control.pop(conn_id, None)
+        self.outbox.pop(conn_id, None)
+        task = self.writers.pop(conn_id, None)
+        if task is not None:
+            task.cancel()
+
+    async def _writer(self, conn_id: str, ws) -> None:
+        queue = self.outbox[conn_id]
+        while True:
+            text = await queue.get()
+            try:
+                await asyncio.wait_for(ws.send(text), CONTROL_SEND_TIMEOUT_S)
+            except (TimeoutError, ConnectionClosed):
+                ws.transport.abort()  # its teleop expires; other clients are unaffected
+                return
+
+    def _send_control(self, conn_id: str, msg: dict) -> None:
+        queue = self.outbox.get(conn_id)
+        text = _encode(msg)
+        if queue is None or text is None:
+            return
         try:
-            await asyncio.wait_for(ws.send(json.dumps(msg)), CONTROL_SEND_TIMEOUT_S)
-            return True
-        except (TimeoutError, ConnectionClosed):
-            ws.transport.abort()  # its teleop expires; other clients are unaffected
-            return False
+            queue.put_nowait(text)
+        except asyncio.QueueFull:
+            ws, _ = self.control.get(conn_id, (None, None))
+            if ws is not None:
+                ws.transport.abort()
 
     async def _control(self, ws: ServerConnection) -> None:
         try:
@@ -174,21 +226,21 @@ class Handle:
             return
         conn_id = uuid.uuid4().hex
         welcome = self.vehicle.connect(client_id, conn_id)
-        self.control[conn_id] = (ws, client_id)
+        self.attach_control(conn_id, ws, client_id)
         try:
-            await self._send_control(ws, welcome)
-            await self._send_control(ws, self.vehicle.make_targets())
+            self._send_control(conn_id, welcome)
+            self._send_control(conn_id, self.vehicle.make_targets())
             async for raw in ws:
                 msg = _parse(raw)
                 if msg is None:
                     continue
                 reply = self.vehicle.handle(client_id, msg, conn_id=conn_id)
                 if reply is not None:
-                    await self._send_control(ws, reply)
+                    self._send_control(conn_id, reply)
         except ConnectionClosed:
             pass
         finally:
-            self.control.pop(conn_id, None)
+            self.detach_control(conn_id)
             self.vehicle.disconnect(client_id, conn_id)
 
     async def _media(self, ws: ServerConnection) -> None:
@@ -227,9 +279,9 @@ class Handle:
         otherwise hold frames back instead of filling the transport buffer.
         """
         ws = sub["ws"]
-        pending = sub.get("pending")
+        pending = sub.setdefault("pending", {}).get(kind)  # one in flight per kind
         if pending is not None and not pending.done():
-            if time.monotonic() - sub["pending_since"] > MEDIA_SEND_TIMEOUT_S:
+            if time.monotonic() - sub["pending_since"][kind] > MEDIA_SEND_TIMEOUT_S:
                 self._close_media(conn_id, ws)
             else:
                 self.media_drops += 1
@@ -242,8 +294,8 @@ class Handle:
             self.media_drops += 1
             return
         sub["last"][kind] = time.monotonic()
-        sub["pending_since"] = time.monotonic()
-        sub["pending"] = asyncio.create_task(
+        sub.setdefault("pending_since", {})[kind] = time.monotonic()
+        sub["pending"][kind] = asyncio.create_task(
             self._media_send_task(conn_id, ws, payload)
         )
 
@@ -290,8 +342,8 @@ class Handle:
         self.vehicle.step(dt)
 
     async def _broadcast_control(self, msg: dict) -> None:
-        conns = list(self.control.values())
-        await asyncio.gather(*(self._send_control(ws, msg) for ws, _ in conns))
+        for conn_id in list(self.control):
+            self._send_control(conn_id, msg)
 
     async def _tick(self) -> None:
         if self.control:

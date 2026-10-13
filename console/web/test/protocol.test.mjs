@@ -42,8 +42,14 @@ test("unanswered request is resent with the same id", async () => {
   assert.equal(sent.filter((m) => m.request_id === id).length, 2);
 });
 
+function withLease(s, sent) {
+  s.request("lease_request", {});
+  s.onMessage({ t: "ack", request_id: sent.at(-1).request_id, lease_id: "L1" });
+}
+
 test("teleop command needs arm and a received tick, echoes the latest token", () => {
-  const { s } = setup();
+  const { s, sent } = setup();
+  withLease(s, sent);
   assert.equal(s.teleopCommand({ mode: "direct", deadman: true, speedRatio: 0.5, curvatureRatio: 0, liftDir: 0 }), null);
   s.onMessage({ t: "state", state_seq: 2, session_epoch: 3, control_gen: 7, arm_gen: 4, armed: true, mode: "TELEOP" });
   assert.equal(s.teleopCommand({ mode: "direct", deadman: true, speedRatio: 0.5, curvatureRatio: 0, liftDir: 0 }), null);
@@ -56,7 +62,8 @@ test("teleop command needs arm and a received tick, echoes the latest token", ()
 });
 
 test("seq restarts when arm_gen changes", () => {
-  const { s } = setup();
+  const { s, sent } = setup();
+  withLease(s, sent);
   s.onMessage({ t: "state", state_seq: 2, session_epoch: 3, control_gen: 7, arm_gen: 4, armed: true, mode: "TELEOP" });
   s.onMessage({ t: "tick", session_epoch: 3, state_seq: 9, token: "k9" });
   const args = { mode: "direct", deadman: true, speedRatio: 0.1, curvatureRatio: 0, liftDir: 0 };

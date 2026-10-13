@@ -3,6 +3,7 @@
 
 import { drawCamera } from "./camera.js";
 import { createFrameTracker } from "./frames.js";
+import { chooseClientId, createTeleopGate } from "./gate.js";
 import { createInputs, padSnapshot } from "./inputs.js";
 import { drawMap } from "./map.js";
 import { decodeScan, parseFrame } from "./media.js";
@@ -17,17 +18,23 @@ function randomId() {
 }
 
 // One unpredictable id per tab, kept across reloads so a refresh can reclaim the lease
-// inside the vehicle's grace period (contract 2). Storage may be unavailable.
+// inside the vehicle's grace period (contract 2); a window opened from this tab gets
+// its own id (gate.chooseClientId). Storage may be unavailable.
 function tabClientId() {
+  let stored = null;
   try {
-    const kept = sessionStorage.getItem("console.client_id");
-    if (kept) return kept;
-    const id = randomId();
-    sessionStorage.setItem("console.client_id", id);
-    return id;
+    stored = sessionStorage.getItem("console.client_id");
   } catch {
-    return randomId();
+    stored = null;
   }
+  const { id, windowName } = chooseClientId({ stored, windowName: window.name, newId: randomId });
+  window.name = windowName;
+  try {
+    sessionStorage.setItem("console.client_id", id);
+  } catch {
+    /* storage unavailable: the id lives for this page only */
+  }
+  return id;
 }
 
 const m = {
@@ -38,7 +45,8 @@ const m = {
   chassis: null,
   cameraModel: null,
   camera: { bitmap: null, frameId: null, lastAt: null },
-  teleop: { mode: "direct", lastSentAt: 0, lastRead: null, needDirectConfirm: false, wasArmed: false },
+  teleop: { gate: createTeleopGate(), lastSentAt: 0, lastRead: null },
+  padStopHeld: false,
   cache: { phaseKey: "", targetsRev: null },
   dropUntil: 0,
 };
@@ -81,10 +89,8 @@ m.session.subscribe((msg) => {
   } else if (msg.t === "event") {
     log(`${msg.kind}${msg.reason ? ` · ${msg.reason}` : ""}${msg.phase ? ` · ${msg.phase}` : ""}${msg.status ? ` · ${msg.status}` : ""}`, msg.kind.includes("stop") ? "crit" : "");
   } else if (msg.t === "state") {
-    const armed = Boolean(msg.armed);
     const age = m.camera.lastAt ? (performance.now() - m.camera.lastAt) / 1000 : Infinity;
-    if (m.teleop.wasArmed && !armed && m.teleop.mode === "video" && age > 0.4) m.teleop.needDirectConfirm = true;
-    m.teleop.wasArmed = armed;
+    m.teleop.gate.onArmed(Boolean(msg.armed) && m.session.hasLease, age);
   }
 });
 
@@ -104,6 +110,7 @@ function connectControl() {
   });
   ws.addEventListener("close", () => {
     m.link.up = false;
+    m.session.onDisconnect(); // the old lease is not used again; the next welcome reclaims it
     if (control === ws) control = null;
     const wait = Math.max(1000, m.dropUntil - performance.now());
     setTimeout(connectControl, wait);
@@ -196,7 +203,7 @@ const typing = (e) => /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName);
 addEventListener("keydown", (e) => {
   if (typing(e)) return;
   if (e.key === "Escape") {
-    m.session.stop("key");
+    m.session.stop("key").then(report);
     return;
   }
   const k = KEYMAP[e.key.toLowerCase()];
@@ -226,7 +233,8 @@ function readPad() {
   const raw = pads.find((g) => g && g.connected);
   const snap = padSnapshot(raw ?? null);
   $("gp").textContent = raw ? (snap ? `${snap.id.slice(0, 28)} · RB 누르고 있기` : "표준 매핑이 아닌 게임패드 · 사용 안 함") : "버튼을 한 번 누르세요";
-  if (snap?.buttons.stop) m.session.stop("gamepad");
+  if (snap?.buttons.stop && !m.padStopHeld) m.session.stop("gamepad").then(report);
+  m.padStopHeld = Boolean(snap?.buttons.stop);
   return snap;
 }
 
@@ -234,7 +242,7 @@ function readPad() {
 const req = (type, fields) => m.session.request(type, fields).then(report);
 const missionId = () => m.session.state?.mission?.mission_id;
 $("lease").onclick = () => (m.session.hasLease ? req("lease_release") : req("lease_request"));
-$("stop").onclick = $("stop2").onclick = () => m.session.stop("console");
+$("stop").onclick = $("stop2").onclick = () => m.session.stop("console").then(report);
 $("rearm").onclick = () => req("rearm");
 $("m-start").onclick = () => {
   const pallet = document.querySelector('input[name="pal"]:checked')?.value;
@@ -249,15 +257,10 @@ $("recover").onclick = () => req("recovery", { action: "withdraw_straight" });
 $("t-enter").onclick = () => req("mode_request", { to: "TELEOP" });
 $("t-exit").onclick = () => req("mode_request", { to: "PAUSED" });
 $("t-arm").onclick = () => req(m.session.armed ? "disarm" : "arm");
-$("m-direct").onclick = () => {
-  m.teleop.mode = "direct";
-};
-$("m-video").onclick = () => {
-  m.teleop.mode = "video";
-  m.teleop.needDirectConfirm = false;
-};
+$("m-direct").onclick = () => m.teleop.gate.setMode("direct");
+$("m-video").onclick = () => m.teleop.gate.setMode("video");
 $("direct-ok").onclick = () => {
-  m.teleop.needDirectConfirm = false;
+  m.teleop.gate.confirmDirect();
   log("육안 조종 전환 · 지게차가 직접 보인다고 확인함", "warn");
 };
 $("l-drop").onclick = () => {
@@ -275,10 +278,10 @@ function frame(now) {
   inputs.setPad(snap);
   const r = inputs.read();
   m.teleop.lastRead = r;
-  const allowed = !(m.teleop.mode === "direct" && m.teleop.needDirectConfirm);
+  const allowed = m.teleop.gate.canSend() && m.session.hasLease;
   if (st && st.mode === "TELEOP" && m.session.armed && allowed && now - m.teleop.lastSentAt >= TELEOP_MIN_INTERVAL_MS) {
     const cmd = m.session.teleopCommand({
-      mode: m.teleop.mode,
+      mode: m.teleop.gate.mode,
       deadman: r.deadman,
       speedRatio: r.speedRatio,
       curvatureRatio: r.curvatureRatio,
