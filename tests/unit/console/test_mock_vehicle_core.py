@@ -999,3 +999,99 @@ def test_wrong_epoch_teleop_is_reported_as_stale_epoch(env):
     into_teleop(v, "a", epoch, lid)
     teleop(v, "a", epoch + 1, lid, v.make_tick(), seq=1)
     assert v.last_teleop_reject == "stale_epoch"
+
+
+# --- Codex review of Tasks 1-2 (round 2) -------------------------------------------------
+
+
+def test_new_mission_refused_while_forks_in_pocket_or_loaded(env):
+    v, clock = env
+    epoch, lid = lease(v)
+    v.debug_set_phase("insert", forks_in_pocket=True)
+    req(v, "a", "mission_cancel", epoch, lid, mission_id=v.mission["mission_id"])
+    r = req(
+        v,
+        "a",
+        "mission_submit",
+        epoch,
+        lid,
+        pallet_id="P-02",
+        destination_id="D-A",
+        targets_revision=v.targets_revision,
+    )
+    assert r["t"] == "reject" and r["reason"] == "fork_in_pocket"
+    assert v.forks_in_pocket is True
+    v.forks_in_pocket = False
+    v.debug_set_phase("transport", forks_in_pocket=False, carried="P-01")
+    req(v, "a", "mission_cancel", epoch, lid, mission_id=v.mission["mission_id"])
+    r = req(
+        v,
+        "a",
+        "mission_submit",
+        epoch,
+        lid,
+        pallet_id="P-02",
+        destination_id="D-A",
+        targets_revision=v.targets_revision,
+    )
+    assert r["t"] == "reject" and r["reason"] == "load_present"
+
+
+def test_resume_checks_the_whole_remaining_path(env):
+    v, clock = env
+    epoch, lid = lease(v)
+    req(
+        v,
+        "a",
+        "mission_submit",
+        epoch,
+        lid,
+        pallet_id="P-01",
+        destination_id="D-A",
+        targets_revision=v.targets_revision,
+    )
+    _idle(v, clock, epoch, lid, 50)  # into approach
+    _pause_and_settle(v, clock, epoch, lid)
+    v._replan()
+    leg = v.mission["legs"][v.mission["leg_index"]]
+    mid = leg.points[len(leg.points) // 2]
+    import math as _m
+
+    ahead = (mid[0] + _m.cos(mid[2]) * 1.3, mid[1] + _m.sin(mid[2]) * 1.3)
+    v.world.circles.append((ahead[0], ahead[1], 0.12))
+    r = req(v, "a", "mission_resume", epoch, lid, mission_id=v.mission["mission_id"])
+    assert r["t"] == "reject" and r["resume_steps"][-1]["reason"].startswith(
+        "path_blocked:"
+    )
+
+
+def test_playback_moves_no_further_than_the_applied_speed_allows(env):
+    v, clock = env
+    epoch, lid = lease(v)
+    v.debug_set_phase("insert", forks_in_pocket=True)
+    v.applied_speed_mps = 0.08  # still creeping forward when the withdraw is requested
+    v.stopped_confirmed = False
+    assert req(v, "a", "recovery", epoch, lid, action="withdraw_straight")["t"] == "ack"
+    import math as _m
+
+    for _ in range(240):
+        before = v.pose
+        clock.t += 1 / 120
+        v._still_since = v._still_since  # untouched; stop confirmation runs normally
+        v.step(1 / 120)
+        moved = _m.hypot(v.pose.x_m - before.x_m, v.pose.y_m - before.y_m)
+        assert moved <= abs(v.applied_speed_mps) / 120 + 1e-6, (
+            moved,
+            v.applied_speed_mps,
+        )
+        if v.mission["status"] != "running":
+            break
+
+
+def test_carried_pallets_do_not_publish_a_moving_pose(env):
+    v, clock = env
+    epoch, lid = lease(v)
+    v.debug_set_phase("transport", forks_in_pocket=False, carried="P-01")
+    t = v.make_targets()
+    carried = next(p for p in t["pallets"] if p["pallet_id"] == "P-01")
+    assert carried["state"] == "carried" and carried["pose"] is None

@@ -370,7 +370,7 @@ class MockVehicle:
                 {
                     "pallet_id": p.pallet_id,
                     "kind": p.kind,
-                    "pose": asdict(p.pose),
+                    "pose": None if p.state == "carried" else asdict(p.pose),
                     "depth_m": p.depth_m,
                     "width_m": p.width_m,
                     "state": p.state,
@@ -626,6 +626,10 @@ class MockVehicle:
         dest = self.world.destinations.get(msg.get("destination_id"))
         if pallet is None or dest is None or pallet.state != "available":
             return self._reply(msg, reason="invalid")
+        if self.forks_in_pocket:  # a new job starts with an empty observe approach
+            return self._reply(msg, reason="fork_in_pocket")
+        if self._load() is not None:
+            return self._reply(msg, reason="load_present")
         if self.mission is not None and self.mission["status"] in (
             "running",
             "paused",
@@ -728,20 +732,25 @@ class MockVehicle:
         return self._reply(msg, resume_steps=steps)
 
     def _first_leg_blocked(self) -> str | None:
+        """path_rechecked: every remaining leg, sampled along its length (plan rule 14)."""
         m = self.mission
-        if not m["legs"]:
-            return None
-        leg = m["legs"][m["leg_index"]]
         skip = tuple(p.pallet_id for p in self.world.pallets if self._in_pocket_with(p))
-        limit, reason = permission(
-            self.world,
-            self.pose,
-            leg.speed_mps * leg.direction,
-            paths.curvature_at(leg),
-            self._load(),
-            skip,
-        )
-        return reason if limit == 0.0 else None
+        load = self._load()
+        for k, leg in enumerate(m["legs"][m["leg_index"] :]):
+            start = leg.index if k == 0 else 0
+            pts = leg.points[start::5] + [leg.points[-1]]
+            for x, y, yaw, _s, kappa in pts:
+                limit, reason = permission(
+                    self.world,
+                    Pose(x, y, yaw),
+                    leg.speed_mps * leg.direction,
+                    kappa,
+                    load,
+                    skip,
+                )
+                if limit == 0.0:
+                    return reason
+        return None
 
     def _req_recovery(self, msg: dict) -> dict:
         if msg.get("action") != "withdraw_straight" or not self.forks_in_pocket:
@@ -1173,6 +1182,15 @@ class MockVehicle:
             self._finish_motion_phase()
             return
         leg = legs[m["leg_index"]]
+        if leg.s_m == 0.0:
+            x0, y0, yaw0 = leg.points[0][:3]
+            if math.hypot(self.pose.x_m - x0, self.pose.y_m - y0) > 1e-6:
+                # residual motion moved the truck: start this leg from where it really is
+                x1, y1, yaw1 = leg.points[-1][:3]
+                leg = paths.hermite_leg(
+                    self.pose, Pose(x1, y1, yaw1), leg.direction, leg.speed_mps
+                )
+                legs[m["leg_index"]] = leg
         ramp = min(
             1.0,
             max(
