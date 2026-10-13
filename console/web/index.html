@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>지게차 운용 콘솔</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="var(--robot-ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17h9V9H6L3 13z"/><path d="M15 4v13h6"/><circle cx="6" cy="18" r="2"/><circle cx="11" cy="18" r="2"/></svg>
+      </div>
+      <div>
+        <h1>지게차 운용 콘솔</h1>
+        <p><span class="mono" id="vehicle-id">—</span> · <span id="backend-label">연결 중</span> · <span class="gens" id="gens">epoch — · control — · arm —</span></p>
+      </div>
+    </div>
+    <div class="seg" role="group" aria-label="연결 대상">
+      <button id="be-real" type="button" aria-pressed="false" disabled title="준비 중">실차</button>
+      <button id="be-isaac" type="button" aria-pressed="false" disabled title="준비 중">Isaac Sim · ws1</button>
+      <button id="be-mock" type="button" aria-pressed="true">가짜 차량</button>
+    </div>
+    <div class="mode" id="mode" data-m="PAUSED"><i class="dot"></i><b id="mode-code">—</b><span id="mode-ko">연결 중</span></div>
+    <span class="chip stopkind" id="stop-kind">정지 종류 —</span>
+    <button class="btn" id="rearm" type="button" hidden>재무장</button>
+    <button class="btn lease" id="lease" type="button" aria-pressed="false">조종 권한 받기</button>
+    <button class="stop" id="stop" type="button"><b>STOP</b><small>편의 정지 · 비상정지 아님</small></button>
+  </header>
+
+  <div class="draft">
+    <strong>가짜 차량</strong>
+    <span>console/1 계약을 흉내 낸 개발용 차량에 연결되어 있습니다. 수치 상한은 잠정값입니다.</span>
+    <span>물리 비상정지는 이 화면과 독립된 하드웨어 경로입니다.</span>
+  </div>
+
+  <main class="grid">
+    <div class="col col-left">
+      <section class="panel" id="p-mission">
+        <header><h2 class="ko">작업 지시</h2><span class="hint" id="mission-gate"></span></header>
+        <div class="field">
+          <span class="lbl">팔레트 <span class="mono hint" id="targets-rev"></span></span>
+          <div class="pallets" id="pallet-list"></div>
+        </div>
+        <div class="field">
+          <label for="dest">하역 위치</label>
+          <select id="dest"></select>
+        </div>
+        <div class="row">
+          <button class="btn primary" id="m-start" type="button">작업 시작</button>
+          <button class="btn" id="m-pause" type="button">일시정지</button>
+          <button class="btn" id="m-resume" type="button">재개</button>
+          <button class="btn" id="m-cancel" type="button">취소</button>
+        </div>
+        <div class="req">
+          <div class="req-head"><span class="mono" id="req-id">요청 없음</span><span class="chip" id="req-status">—</span></div>
+          <ol class="phases" id="phases"></ol>
+          <ol class="steps" id="resume-steps" hidden></ol>
+          <div class="forbid" id="forbid" hidden>
+            <div class="notice warn" id="forbid-reason"></div>
+            <button class="btn" id="recover" type="button">축 따라 똑바로 빼기</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" id="p-state">
+        <header><h2 class="ko">차량 상태</h2><span class="chip" id="loc-chip"><i></i>위치</span></header>
+        <div class="readouts">
+          <div class="ro"><small>속도(뒤 차축)</small><b id="r-v">—</b><u>m/s</u></div>
+          <div class="ro"><small>조향</small><b id="r-st">—</b><u>°</u></div>
+          <div class="ro"><small>포크 높이</small><b id="r-lift">—</b><u>mm</u></div>
+        </div>
+        <dl class="kv">
+          <dt>위치 (map)</dt><dd class="mono" id="r-pose">—</dd>
+          <dt>적재</dt><dd id="r-load">—</dd>
+          <dt>주행 허가</dt><dd id="r-permit">—</dd>
+          <dt>명령 / 적용</dt><dd class="mono" id="r-cmd">—</dd>
+          <dt>조향 한계</dt><dd>모델 계산값 · 최소 회전 반경 <span class="mono" id="r-radius">2.73</span> m(뒤 차축)</dd>
+          <dt>작업 시간</dt><dd class="mono" id="r-phase-t">—</dd>
+          <dt>신선도</dt><dd id="r-fresh">—</dd>
+          <dt>정지 확인</dt><dd id="r-still">—</dd>
+          <dt>배터리</dt><dd class="unknown">측정 장치 없음</dd>
+        </dl>
+      </section>
+    </div>
+
+    <div class="col col-center">
+      <section class="panel view" id="p-map">
+        <header><h2 class="ko">지도 · LiDAR</h2><span class="hint mono" id="map-meta">격자 대기 중</span></header>
+        <div class="canvas-wrap map-wrap"><canvas id="map"></canvas></div>
+        <div class="legend">
+          <span><i class="sw" style="background:var(--robot)"></i>지게차</span>
+          <span><i class="sw dot" style="background:var(--lidar)"></i>LiDAR 점</span>
+          <span><i class="sw" style="background:var(--accent)"></i>계획 경로(전진)</span>
+          <span><i class="sw" style="background:var(--warn)"></i>후진 구간</span>
+          <span><i class="sw" style="background:var(--teleop)"></i>조종 예상 궤적(차체 외곽)</span>
+          <span><i class="sw" style="background:var(--dest)"></i>하역 위치</span>
+        </div>
+      </section>
+
+      <section class="panel view" id="p-cam">
+        <header><h2 class="ko">전방 카메라</h2><span class="hint mono" id="cam-meta">영상 대기 중</span></header>
+        <div class="canvas-wrap cam-wrap"><canvas id="cam"></canvas><div class="cam-banner" id="cam-banner" hidden></div></div>
+        <div class="legend">
+          <span><i class="sw" style="background:#b79cff"></i>조종 예상 궤적 (바닥 투영)</span>
+          <span id="cam-age">마지막 프레임 이후 —</span>
+          <span>영상 신선도 판정은 차량이 합니다</span>
+        </div>
+      </section>
+    </div>
+
+    <div class="col col-right">
+      <section class="panel" id="p-tele">
+        <header><h2 class="ko">수동 조종</h2><span class="chip" id="arm-chip">해제됨</span></header>
+        <div class="tele-top">
+          <button class="btn teleop" id="t-enter" type="button">수동 조종 시작</button>
+          <button class="btn" id="t-exit" type="button">수동 조종 끝내기</button>
+          <button class="btn" id="t-arm" type="button">조종 준비</button>
+          <div class="modes" role="group" aria-label="조종 방식">
+            <button id="m-direct" type="button" aria-pressed="true">육안</button>
+            <button id="m-video" type="button" aria-pressed="false">영상</button>
+          </div>
+        </div>
+        <div class="confirm" id="direct-confirm" hidden>
+          <div class="notice warn">영상이 끊겨 조종 준비가 풀렸습니다. 육안으로 계속하려면 지게차가 직접 보이는지 확인하세요.</div>
+          <button class="btn" id="direct-ok" type="button">지게차가 직접 보인다</button>
+        </div>
+        <div class="pads">
+          <button class="deadman" id="deadman" type="button" data-on="false"><b>누르고 있기</b><small>누르는 동안만 움직임<br>떼면 즉시 0 속도</small></button>
+          <div class="joy" id="joy" aria-disabled="true" aria-label="주행 조이스틱: 위아래 속도, 좌우 조향">
+            <div class="knob" id="knob"></div>
+            <span class="joy-lbl" style="top:2%;left:50%;transform:translateX(-50%)">전진</span>
+            <span class="joy-lbl" style="bottom:2%;left:50%;transform:translateX(-50%)">후진</span>
+          </div>
+        </div>
+        <div class="lift">
+          <button class="btn" id="lift-dn" type="button">▼ 내리기</button>
+          <span class="mono" id="lift-val">— / 280 mm</span>
+          <button class="btn" id="lift-up" type="button">▲ 올리기</button>
+        </div>
+        <div class="bars">
+          <div class="bar"><span>속도 명령</span><div class="track"><div class="fill" id="b-v"></div></div><span class="mono" id="b-v-t">—</span></div>
+          <div class="bar"><span>곡률 명령</span><div class="track"><div class="fill" id="b-s"></div></div><span class="mono" id="b-s-t">—</span></div>
+        </div>
+        <div class="permit"><span class="hint" id="limits">상한 —</span><span class="chip" id="permit-chip">—</span></div>
+        <div class="inputs">
+          <div>입력: <span id="input-src">—</span> · 게임패드: <span id="gp">버튼을 한 번 누르세요</span></div>
+          <div class="notice" id="gp-note" hidden>게임패드는 localhost(ssh -L) 접속에서만 확실히 동작합니다.</div>
+          <div>키보드: <kbd>Space</kbd> 누르고 있기 · <kbd>W</kbd><kbd>S</kbd> 속도 · <kbd>A</kbd><kbd>D</kbd> 조향 · <kbd>R</kbd><kbd>F</kbd> 포크 · <kbd>Esc</kbd> 정지</div>
+          <div>탭이 가려지거나 포커스를 잃으면 조종 준비가 풀립니다.</div>
+        </div>
+      </section>
+
+      <section class="panel" id="p-link">
+        <header><h2 class="ko">통신</h2><span class="chip" id="link-chip"><i></i>연결 중</span></header>
+        <dl class="kv" style="margin-top:0">
+          <dt>접속 주소</dt><dd class="mono" id="l-ep">—</dd>
+          <dt>왕복(참고)</dt><dd class="mono" id="l-rtt">—</dd>
+          <dt>명령 유효기한</dt><dd class="mono">0.30 s · 차량 시계 (잠정)</dd>
+          <dt>접속 기기</dt><dd id="l-peers">—</dd>
+          <dt>끊김 시 동작</dt><dd>자동 주행은 계속 · 수동 조종은 만료로 정지</dd>
+        </dl>
+        <div class="row" style="margin-top:10px"><button class="btn" id="l-drop" type="button">끊김 시험 (3초, 가짜 차량)</button></div>
+      </section>
+
+      <section class="panel" id="p-log">
+        <header><h2 class="ko">이벤트</h2><span class="hint">최근 순</span></header>
+        <ol class="log" id="log"></ol>
+      </section>
+    </div>
+  </main>
+
+  <div class="phone-stop"><button class="stop" id="stop2" type="button"><b>STOP</b><small>편의 정지 · 비상정지 아님</small></button></div>
+</div>
+<script type="module" src="/js/main.js"></script>
+</body>
+</html>
