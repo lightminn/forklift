@@ -50,6 +50,8 @@ OBSERVE_ARRIVAL_YAW_RAD = 0.10
 # with these limits for that cusp only) passes, else it fails as before.
 CUSP_HEADING_HOLD_RAD = 0.08
 CUSP_HEADING_HOLD_POSITION_M = 0.03
+# Fix A holds observe cusps; (A') adds the return (unloaded, no other cusp heading recovery).
+CUSP_HEADING_HOLD_PHASES = ("observe", "return_home")
 
 
 def same_path(new, current, remaining_m: float, tol_m: float = 0.01, yaw_tol_rad: float = 0.02) -> bool:
@@ -3570,9 +3572,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad
                 # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).
                 cusp_brake_window_m=0.008,
-                # An observe cusp missed by 0.05-0.08 rad holds for the next-leg judgement
-                # (cusp_heading_hold below; EPAL 6 fork spacing plan, fix A).
-                cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD if name == "observe" else None,
+                # An observe or return cusp missed by 0.05-0.08 rad holds for the next-leg
+                # judgement (cusp_heading_hold below; EPAL 6 fork spacing plan, fix A and A').
+                cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD if name in CUSP_HEADING_HOLD_PHASES else None,
                 # Optional path speed caps; absent from the settings = off.
                 max_lateral_acceleration_mps2=settings.get(
                     "max_lateral_acceleration_mps2"
@@ -3601,6 +3603,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 cusp_brake_window_m=None,
                 overshoot_tolerance_m=None,
                 position_tolerance_m=0.008,
+                # Nor the cusp heading hold (fix A / A'): with no cusp tolerance it would hold
+                # between 0.03 and 0.08 rad (Codex A' design review 1).
+                cusp_heading_pending_rad=None,
             )
             if name == "observe":
                 # It also judged observation stops at 0.03 rad (P3 is newer).
@@ -5425,6 +5430,20 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 require(t - phase_started < limit, f"Tracking timeout in {phase}")
                 tracking = trackers[phase].update(rear, signed_speed, dt)
                 raw_tracking_ = tracking  # the tracker's own result, before any rule below rewrites it
+                # Fix A / A' records (cusp_heading_hold): every tracker tick, on the tracker's own
+                # result before any rule below rewrites it or replaces the tracker (Codex A' design
+                # review 2 P2: a return goal failure was taken by the stall replan first and the
+                # watch read "replaced"), a hold or watch of another tracker or phase ends; then the
+                # released leg's watch -- when it first moves, its largest lateral and heading offset
+                # from the path, and how it ends (ahead of the hold step, so a leg held again at its
+                # end counts that tick -- Codex fix A review 2 P3).
+                cusp_holds.sync(t, phase, id(trackers[phase]), trackers[phase].leg_index, cusp_heading_end(tracking))
+                if phase in CUSP_HEADING_HOLD_PHASES and state["cusp_heading_watch"] is not None:
+                    cusp_holds.tick(
+                        t, phase, id(trackers[phase]), trackers[phase].leg_index, cusp_heading_end(tracking),
+                        tracking.cusp_pending, tracking.speed_mps,
+                        cusp_heading_offset(trackers[phase], tracking.progress_m, rear)
+                        if id(trackers[phase]) == state["cusp_heading_watch"]["tracker"] else None)
                 retry_stand_ = near is not None and near.get("retry_stand") and phase == "observe"
                 if retry_stand_:
                     # Plan D8 S4c-2: standing to re-observe -- no follower command, no hold and no
@@ -5760,24 +5779,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             phase_started = t
                             tracking = trackers[phase].update(rear, signed_speed, dt)
                             last_tracking = tracking
-                # EPAL 6 fork spacing plan, fix A: an observe cusp held for a heading miss of
-                # 0.05-0.08 rad (the tracker's cusp_pending). Standing, re-check the window,
-                # judge the next leg from here with this cusp's limits only, and release it;
-                # anything else latches the tracker's failure for the observe replan below.
-                if phase == "observe" and state["cusp_heading_watch"] is not None:
-                    # The released leg, every tick: when it first moves, its largest lateral and
-                    # heading offset from the path, and how it ends -- ahead of the hold below, so
-                    # a leg held again at its end counts that tick (Codex fix A review 2 P3).
-                    watched = trackers["observe"]
-                    cusp_holds.tick(
-                        t, id(watched), watched.leg_index, cusp_heading_end(tracking), tracking.cusp_pending,
-                        tracking.speed_mps,
-                        cusp_heading_offset(watched, tracking.progress_m, rear)
-                        if id(watched) == state["cusp_heading_watch"]["tracker"] else None)
-                if phase == "observe" and tracking.cusp_pending:
-                    hold_tracker = trackers["observe"]
+                # EPAL 6 fork spacing plan, fix A (observe) and A' (return): a cusp held for a
+                # heading miss of 0.05-0.08 rad (the tracker's cusp_pending). Standing, re-check the
+                # window, judge the next leg from here with this cusp's limits only, and release it;
+                # anything else latches the tracker's failure for the existing path (the observe
+                # replan below; a failed return ends the run as before).
+                hold_tracker = trackers[phase]
+                if phase in CUSP_HEADING_HOLD_PHASES and tracking.cusp_pending:
                     hold = cusp_holds.held(
-                        t, [id(hold_tracker), hold_tracker.leg_index],
+                        t, [phase, id(hold_tracker), hold_tracker.leg_index],
                         {"rear": rear.tolist(), "position_error_m": tracking.position_error_m,
                          "yaw_error_rad": tracking.yaw_error_rad, **cusp_heading_motion(signed_speed)},
                         cusp_heading_end(tracking))
@@ -5820,7 +5830,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             # The new watch sees this tick's update too: the next leg's first command,
                             # or its end reached at once (Codex fix A implementation review 3 P2).
                             cusp_holds.tick(
-                                t, id(hold_tracker), hold_tracker.leg_index, cusp_heading_end(tracking),
+                                t, phase, id(hold_tracker), hold_tracker.leg_index, cusp_heading_end(tracking),
                                 tracking.cusp_pending, tracking.speed_mps,
                                 cusp_heading_offset(hold_tracker, tracking.progress_m, rear))
                 # Under SLAM, an observe leg judged out of heading at a cusp or
@@ -6681,6 +6691,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                             # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad
                                             # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).
                                             cusp_brake_window_m=0.008,
+                                            # The return holds a cusp heading miss of 0.05-0.08 rad for
+                                            # judgement (EPAL 6 fork spacing plan, A').
+                                            cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD
+                                            if name in CUSP_HEADING_HOLD_PHASES
+                                            else None,
                                             # Optional path speed caps; absent from the settings = off.
                                             max_lateral_acceleration_mps2=settings.get(
                                                 "max_lateral_acceleration_mps2"
