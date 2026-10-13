@@ -963,7 +963,11 @@ class MockVehicle:
         if prev != 0.0:
             self._last_nonzero_sign = 1 if prev > 0 else -1
         if cap is None:
-            if not self.stopped_confirmed:
+            # actual motion first: any residual speed decides, then the last motion until
+            # the stop is confirmed, and only a confirmed stop lets the request choose
+            if prev != 0.0:
+                direction = 1 if prev > 0 else -1
+            elif not self.stopped_confirmed:
                 direction = self._last_nonzero_sign
             else:
                 direction = 1 if target >= 0 else -1
@@ -994,6 +998,8 @@ class MockVehicle:
         m = self.mission
         return (
             m is not None
+            and self.mode != "TELEOP"  # manual driving always sees the pallet
+            and m["status"] in ("running", "paused", "held", "resuming")
             and m["pallet_id"] == pallet.pallet_id
             and m["phase"]
             in ("approach", "insert", "extract", "recover", "withdraw", "return")

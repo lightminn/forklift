@@ -1095,3 +1095,52 @@ def test_carried_pallets_do_not_publish_a_moving_pose(env):
     t = v.make_targets()
     carried = next(p for p in t["pallets"] if p["pallet_id"] == "P-01")
     assert carried["state"] == "carried" and carried["pose"] is None
+
+
+# --- Codex review of Tasks 1-2 (round 3) -------------------------------------------------
+
+
+def test_permission_follows_residual_motion_even_after_stop_confirmation(env):
+    v, clock = env
+    epoch, lid = lease(v)
+    into_teleop(v, "a", epoch, lid)
+    v.applied_speed_mps = 0.018  # below the stop threshold but still rolling forward
+    v.stopped_confirmed = True
+    tick = v.make_tick()
+    teleop(v, "a", epoch, lid, tick, seq=1, speed=-1.0)
+    v.step(1 / 120)
+    assert v.applied_speed_mps >= 0.0
+    if v.applied_speed_mps > 0.0:
+        assert v.last_permission_direction == 1
+
+
+def test_cancelled_job_pallet_is_an_obstacle_again_in_teleop(env):
+    v, clock = env
+    epoch, lid = lease(v)
+    req(
+        v,
+        "a",
+        "mission_submit",
+        epoch,
+        lid,
+        pallet_id="P-01",
+        destination_id="D-A",
+        targets_revision=v.targets_revision,
+    )
+    p = next(q for q in v.world.pallets if q.pallet_id == "P-01")
+    from console.mock_vehicle.world import CHASSIS, Pose
+
+    # put the truck 0.15 m short of the pallet face, still in the approach phase
+    v.mission["phase"] = "approach"
+    v.pose = Pose(
+        p.pose.x_m - p.depth_m / 2 - CHASSIS.nose_from_rear_m - 0.15, p.pose.y_m, 0.0
+    )
+    assert (
+        req(v, "a", "mission_cancel", epoch, lid, mission_id=v.mission["mission_id"])[
+            "t"
+        ]
+        == "ack"
+    )
+    into_teleop(v, "a", epoch, lid)
+    _drive(v, clock, epoch, lid, 5, speed=1.0)
+    assert v.applied_speed_mps == 0.0 and v.permit[1].startswith("occupied")
