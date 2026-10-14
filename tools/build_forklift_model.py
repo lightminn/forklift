@@ -265,7 +265,17 @@ def export_urdf(links: list[Link], parameters: dict, output: Path) -> None:
             limits.update(effort=str(effort), velocity=str(velocity))
             ET.SubElement(joint, "limit", limits)
         for name, pos in link.sites.items():
-            ET.SubElement(root, "link", name=name)
+            site = ET.SubElement(root, "link", name=name)
+            site_mass = a.get("site_link_mass_kg")
+            if site_mass is not None:
+                # A URDF link with no inertial becomes a PhysX body with the default 1 kg (the two
+                # fork-tip frames weighed 2 kg at the fork tips; EPAL 6 fork spacing plan, new plant
+                # candidate). A model that sets this key gives each frame link this mass instead.
+                inertial = ET.SubElement(site, "inertial")
+                ET.SubElement(inertial, "origin", xyz="0 0 0", rpy="0 0 0")
+                ET.SubElement(inertial, "mass", value=str(site_mass))
+                moment = str(a.get("site_link_inertia_kgm2", 1e-9))
+                ET.SubElement(inertial, "inertia", ixx=moment, iyy=moment, izz=moment, ixy="0", ixz="0", iyz="0")
             joint = ET.SubElement(root, "joint", name=name + "_fixed", type="fixed")
             ET.SubElement(joint, "parent", link=link.name)
             ET.SubElement(joint, "child", link=name)

@@ -1,6 +1,6 @@
 {
   "model_name": "dls08_measured",
-  "parameter_sha256": "c6a8e15681d288c672d096ec85c30dcd87ee2bfef888886512c0fd01c1b5ae87",
+  "parameter_sha256": "c1c788d6fac04ad28ad712561ce0fe82e7999b5de3867b6cd5c122ebcda9d036",
   "evidence": {
     "identity": "delivered_chassis_dls_marking_sku_unconfirmed",
     "catalogue": "team_measured_2026_09_30_matches_catalogue",

@@ -2175,13 +2175,25 @@
     <axis xyz="0 0 1" />
     <limit lower="0" upper="0.28" effort="180.0" velocity="1.0" />
   </joint>
-  <link name="left_fork_tip" />
+  <link name="left_fork_tip">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="0.0001" />
+      <inertia ixx="1e-09" iyy="1e-09" izz="1e-09" ixy="0" ixz="0" iyz="0" />
+    </inertial>
+  </link>
   <joint name="left_fork_tip_fixed" type="fixed">
     <parent link="fork_carriage" />
     <child link="left_fork_tip" />
     <origin xyz="0.95 0.18625 0.04" rpy="0 0 0" />
   </joint>
-  <link name="right_fork_tip" />
+  <link name="right_fork_tip">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="0.0001" />
+      <inertia ixx="1e-09" iyy="1e-09" izz="1e-09" ixy="0" ixz="0" iyz="0" />
+    </inertial>
+  </link>
   <joint name="right_fork_tip_fixed" type="fixed">
     <parent link="fork_carriage" />
     <child link="right_fork_tip" />
