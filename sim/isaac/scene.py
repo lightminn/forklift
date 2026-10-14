@@ -399,6 +399,13 @@ def configure_drives(
     material_api.CreateStaticFrictionAttr(settings["static_friction"])
     material_api.CreateDynamicFrictionAttr(settings["dynamic_friction"])
     material_api.CreateRestitutionAttr(0.0)
+    if settings.get("contact_stiffness_n_per_m") is not None:
+        # Diagnostic (EPAL 6 fork spacing plan, cause survey after the S4 rerun): a compliant contact
+        # spreads the weight over all four wheels instead of the rigid solver's diagonal pair. Off
+        # (rigid contact) unless a settings file sets it.
+        physx_material = PhysxSchema.PhysxMaterialAPI.Apply(physics_material.GetPrim())
+        physx_material.CreateCompliantContactStiffnessAttr(float(settings["contact_stiffness_n_per_m"]))
+        physx_material.CreateCompliantContactDampingAttr(float(settings.get("contact_damping_n_s_per_m", 0.0)))
     roots = ["/World/Forklift"]
     if expected_pallet_box_count is not None:
         roots.append("/World/Pallet")
