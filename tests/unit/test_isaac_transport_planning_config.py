@@ -1283,3 +1283,14 @@ def test_the_probe_window_metrics_read_curvature_residual_and_rolling_ratio():
     assert m["kappa_true"] == pytest.approx(kappa, rel=1e-6)
     assert m["residual"] == pytest.approx(kappa - 0.30, abs=1e-6)
     assert m["rolling_ratio"] == pytest.approx(0.99, rel=1e-3)
+
+
+def test_the_plant_backend_readback_uses_the_isaac_5_1_body_getters():
+    """New plant candidate V0: Isaac Sim 5.1's isaacsim.core.prims Articulation has get_body_masses /
+    get_body_coms / get_body_inertias; get_masses does not exist, and the record came back as an
+    AttributeError in every run of fs_plant2/fs_plant3 (fork spacing plan, D-a)."""
+    source = SCRIPT.read_text()
+    block = source[source.index('state["plant_backend"] = {\n'): source.index('state["plant_backend"] = {"error"')]
+    for getter in ("get_body_masses()", "get_body_coms()[0]", "get_body_inertias()"):
+        assert f"view_.{getter}" in block
+    assert "view_.get_masses(" not in source and "view_.get_coms(" not in source

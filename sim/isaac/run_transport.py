@@ -2048,9 +2048,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         view_ = robot._articulation_view
         state["plant_backend"] = {
             "body_names": list(view_.body_names),
-            "masses_kg": np.asarray(view_.get_masses(), dtype=float).reshape(-1).tolist(),
-            "coms": np.asarray(view_.get_coms()[0], dtype=float).reshape(-1, 3).tolist(),
-            "inertias": np.asarray(view_.get_inertias(), dtype=float).reshape(-1, 9).tolist(),
+            # isaacsim.core.prims Articulation (Isaac Sim 5.1): get_body_* (get_masses does not exist).
+            "masses_kg": np.asarray(view_.get_body_masses(), dtype=float).reshape(-1).tolist(),
+            "coms": np.asarray(view_.get_body_coms()[0], dtype=float).reshape(-1, 3).tolist(),
+            "inertias": np.asarray(view_.get_body_inertias(), dtype=float).reshape(-1, 9).tolist(),
         }
     except Exception as exc_:  # noqa: BLE001 -- the API differs between releases; record why
         state["plant_backend"] = {"error": repr(exc_)}
