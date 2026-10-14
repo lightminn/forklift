@@ -232,11 +232,31 @@ def anchor_running_max(
     running maximum, so the runtime row always covers it."""
     ages, e_, psi_ = anchor_pairs(control, anchor, aligned_s, end_s)
     k = np.ceil(ages / TICK_S - 1e-6).astype(int)
-    e = np.zeros(int(k.max()) + 1)
-    psi = np.zeros(int(k.max()) + 1)
+    # The table must reach the runtime row of the oldest pair (its lookup takes the first age at
+    # or above age - 1 ns): pad to that tick; the merged running maximum fills it.
+    end = int(np.ceil((float(ages.max()) - 1e-9) / TICK_S - 1e-9))
+    e = np.zeros(max(int(k.max()), end) + 1)
+    psi = np.zeros(max(int(k.max()), end) + 1)
     np.maximum.at(e, k, e_)
     np.maximum.at(psi, k, psi_)
     return e, psi
+
+
+def table_misses(odometry: dict, pairs: list) -> list[tuple]:
+    """Pairs (age, e, psi) the stored grid does not cover by the runtime's lookup
+    (NearFieldBounds.odometry: the first age at or above age - 1 ns, None past the end)."""
+    import bisect
+
+    ages, e_t, psi_t = odometry["age_s"], odometry["e_m"], odometry["psi_rad"]
+    misses = []
+    for a_, e_, p_ in pairs:
+        for age, e, psi in zip(a_, e_, p_, strict=True):
+            if age <= 0:
+                continue
+            i = bisect.bisect_left(ages, float(age) - 1e-9)
+            if i >= len(ages) or e > e_t[i] + 1e-15 or psi > psi_t[i] + 1e-15:
+                misses.append((float(age), float(e), float(psi)))
+    return misses
 
 
 def merge_max(tables: list[np.ndarray]) -> np.ndarray:
@@ -410,7 +430,7 @@ def supplement_odometry(runs: list, contract: dict) -> dict:
     specs = sorted(check_supplement_run(run, contract) for run in runs)
     if specs != sorted(SUPPLEMENT_SPECS):
         raise ValueError("the supplement runs are not the declared specs")
-    tables_e, tables_psi, record = [], [], {}
+    tables_e, tables_psi, record, pairs = [], [], {}, []
     for run in runs:
         episodes = supplement_episodes(run)
         for ep in episodes:
@@ -419,17 +439,17 @@ def supplement_odometry(runs: list, contract: dict) -> dict:
             e, psi = odometry_running_max(run.control, *ep["span_s"])
             tables_e.append(e)
             tables_psi.append(psi)
-            e, psi = anchor_running_max(
-                run.control, ep.pop("_anchor"), ep["aligned_s"], ep["span_s"][1]
-            )
+            anchor = ep.pop("_anchor")
+            e, psi = anchor_running_max(run.control, anchor, ep["aligned_s"], ep["span_s"][1])
             tables_e.append(e)
             tables_psi.append(psi)
+            pairs.append(anchor_pairs(run.control, anchor, ep["aligned_s"], ep["span_s"][1]))
         record[artifact_path(run.key)] = {
             "spec": list(check_supplement_run(run, contract)),
             "files": {name: sha256(run.directory / name) for name in SUPPLEMENT_FILES},
             "episodes": episodes,
         }
-    return {"e": tables_e, "psi": tables_psi, "runs": record}
+    return {"e": tables_e, "psi": tables_psi, "runs": record, "pairs": pairs}
 
 
 SUPPLEMENT_FILES = ("slam_control.npy", "pocket_frames/truth.npz", "result.json")
@@ -651,7 +671,7 @@ def build(
         OBS.check_assets(run, geometry_path, ROOT / run.meta["forklift_urdf"])
     observation = observation_bounds(observations)
     rate = cadence({r.key: r.reads for r in runs})
-    tables_e, tables_psi, files = [], [], {}
+    tables_e, tables_psi, files, raw_pairs = [], [], {}, []
     for run in runs:
         span = run.phase_span()
         e, psi = odometry_running_max(run.control, *span)
@@ -697,6 +717,7 @@ def build(
         e, psi = anchor_running_max(run.control, anchor, aligned, span[1])
         tables_e.append(e)
         tables_psi.append(psi)
+        raw_pairs.append(anchor_pairs(run.control, anchor, aligned, span[1]))
         files[run.key] = {name: sha256(run.directory / name) for name in RAW_FILES}
         files[run.key]["frames"] = {k: frames[k] for k in ("count", "sha256")}
     contract = calibration["contract"]
@@ -706,6 +727,14 @@ def build(
         tables_e += supplement["e"]
         tables_psi += supplement["psi"]
     odometry = age_grid(merge_max(tables_e), merge_max(tables_psi))
+    if supplement:
+        raw_pairs += supplement["pairs"]
+    for e_, psi_ in zip(tables_e, tables_psi, strict=True):
+        k = np.arange(1, len(e_))
+        raw_pairs.append((k * TICK_S, e_[1:], psi_[1:]))
+    uncovered = table_misses(odometry, raw_pairs)
+    if uncovered:
+        raise ValueError(f"the odometry table does not cover its own pairs: {uncovered[:3]}")
     checks = [near_capture_check(run, geometry, observation["front"]) for run in runs]
     standing_runs = {}
     l_hi = float(calibration["band_s"][1])

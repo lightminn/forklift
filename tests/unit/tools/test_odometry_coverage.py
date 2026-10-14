@@ -57,3 +57,10 @@ def test_the_gate_reads_the_table_with_the_runtime_validation():
     source = OC.Path(OC.__file__).read_text()
     assert "NearFieldBounds.load(args.bounds)" in source
     assert 'raise ValueError("a near-field episode is recorded without its tracker start")' in source
+
+
+def test_near_field_records_in_a_run_not_marked_as_near_tracking_are_unverifiable():
+    source = OC.Path(OC.__file__).read_text()
+    marked = source.index('if not (run.result.get("arguments") or {}).get("near_tracking"):')
+    assert source.index("if started(run):", marked) < source.index("continue  # a run without", marked)
+    assert 'raise ValueError("near-field records in a run not marked --near-tracking")' in source

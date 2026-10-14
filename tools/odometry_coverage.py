@@ -114,7 +114,9 @@ def main(argv=None) -> int:
         try:
             run = CAL.Run.load(path)
             if not (run.result.get("arguments") or {}).get("near_tracking"):
-                continue  # only near-tracking runs have episodes
+                if started(run):
+                    raise ValueError("near-field records in a run not marked --near-tracking")
+                continue  # a run without near tracking has no anchor-held episode
             if not started(run):
                 # Ended before any near-capture tracker was built: no anchor-held span.
                 runs[key] = {"episodes": [], "note": run.result.get("failure_reason")}

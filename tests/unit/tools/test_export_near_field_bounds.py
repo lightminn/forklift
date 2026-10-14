@@ -505,3 +505,25 @@ def test_approach_ticks_before_the_first_tracker_build_are_refused():
     late = [{"episode": 2, "attempt": 1, "aligned_s": t(4), "built_s": t(5)}]
     with pytest.raises(ValueError, match="before the first tracker build"):
         EX.supplement_episodes(_Run(phases, late, attempts))
+
+
+def test_the_table_reaches_the_runtime_row_of_the_oldest_anchor_pair():
+    # A capture window starting 0.600000004 s before the span's last tick: the runtime reads that
+    # pair at the first age at or above 0.600000003 s, which must exist.
+    rows = control_rows(2, start=10.0)
+    anchor = anchor_at(10.0 - TICK / 3)
+    aligned = 10.0 + TICK - 0.600000004
+    e, psi = EX.anchor_running_max(rows, anchor, aligned, 10.0 + TICK)
+    grid = EX.age_grid(EX.merge_max([e]), EX.merge_max([psi]))
+    pairs = [EX.anchor_pairs(rows, anchor, aligned, 10.0 + TICK)]
+    assert EX.table_misses(grid, pairs) == []
+    assert grid["age_s"][-1] >= 0.600000003
+
+
+def test_table_misses_finds_a_pair_past_the_end_or_over_its_row():
+    grid = {"age_s": [TICK, 2 * TICK], "e_m": [0.001, 0.002], "psi_rad": [0.001, 0.002]}
+    ok = (np.array([TICK, 2 * TICK]), np.array([0.001, 0.002]), np.array([0.0, 0.0]))
+    assert EX.table_misses(grid, [ok]) == []
+    past = (np.array([2 * TICK + 1e-6]), np.array([0.0]), np.array([0.0]))
+    over = (np.array([TICK]), np.array([0.0015]), np.array([0.0]))
+    assert len(EX.table_misses(grid, [past, over])) == 2
