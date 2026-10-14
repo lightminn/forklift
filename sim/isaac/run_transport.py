@@ -52,6 +52,12 @@ CUSP_HEADING_HOLD_RAD = 0.08
 CUSP_HEADING_HOLD_POSITION_M = 0.03
 # Fix A holds observe cusps; (A') adds the return (unloaded, no other cusp heading recovery).
 CUSP_HEADING_HOLD_PHASES = ("observe", "return_home")
+# EPAL 6 fork spacing plan, fix (1) after the S4 result: the observe replans (a leg judged out of heading
+# at a cusp or its end, or stalled at a cusp) are budgeted per observe leg, not per run -- the far
+# observation leg has this many, and each near-leg installation (the first near leg, the one after a
+# retry's or a realignment's re-observation) opens its own. Both S4 failures of this kind were on a
+# near leg whose run had spent the budget before it.
+OBSERVE_REPLANS_PER_LEG = 2
 
 
 def same_path(new, current, remaining_m: float, tol_m: float = 0.01, yaw_tol_rad: float = 0.02) -> bool:
@@ -1310,6 +1316,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     estop = ESTOP.EstopProbe(list(args.estop_probe)) if args.estop_probe else None
     state["estop_probes"] = estop.records if estop is not None else None
     state["observe_replans"] = []
+    # The observe leg the replan budget belongs to: serial 0 is the far observation leg, each near-leg
+    # installation the next; "start" is its first entry in observe_replans (fix (1)).
+    state["observe_replan_leg"] = {"serial": 0, "start": 0}
     state["cusp_stalls"] = []  # plan cusp position stall v7 K4, one record per stall
     observe_stall_ticks = 0
     slam_stall_ticks = 0
@@ -5884,7 +5893,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         )
                         or observe_stall_ticks >= 120
                     )
-                    and len(state["observe_replans"]) < 2
+                    and len(state["observe_replans"]) - state["observe_replan_leg"]["start"]
+                    < OBSERVE_REPLANS_PER_LEG
                 )
                 if observe_miss:
                     observe_stall_ticks = 0
@@ -5902,6 +5912,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             extended=False,
                             **grid_kwargs("observe"),
                         )
+                        leg_ = state["observe_replan_leg"]
                         state["observe_replans"].append(
                             {
                                 "time_s": t,
@@ -5909,6 +5920,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 "yaw_error_rad": last_tracking.yaw_error_rad,
                                 "status": replanned.status,
                                 "planning_wall_s": time.monotonic() - replan_start,
+                                "leg_serial": leg_["serial"],
+                                "budget_left": OBSERVE_REPLANS_PER_LEG
+                                - (len(state["observe_replans"]) + 1 - leg_["start"]),
                             }
                         )
                         require(replanned.success, f"observe_replan_failed:{replanned.status}")
@@ -6788,6 +6802,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                     "far_error": state["perception"]["perception_error"],
                                 }
                             if near_leg is not None:
+                                # Fix (1): a near leg opens its own observe replan budget.
+                                state["observe_replan_leg"] = {
+                                    "serial": state["observe_replan_leg"]["serial"] + 1,
+                                    "start": len(state["observe_replans"]),
+                                }
                                 paths["observe"] = near_leg
                                 trackers["observe"] = RearAxlePathTracker(
                                     near_leg.poses,

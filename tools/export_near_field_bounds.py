@@ -15,7 +15,11 @@ d8b_observations.json and the recorded runs themselves -- this writes one JSON f
                run's [near-capture anchor, insertion end] (sliding windows), rear-axle
                position e and heading psi apart, as the running maximum over age, every
                tick to 0.5 s and every 0.1 s after (a lookup takes the first grid age at
-               or above the query: the running maximum makes that conservative);
+               or above the query: the running maximum makes that conservative); and the
+               near capture's anchor sample (capture_control, off the tick grid) against
+               every later tick at the tracker's lookup age; with --odometry-supplement,
+               the correction runs' episodes the same way (EPAL 6 fork spacing plan,
+               (3) (b) -- S2 has no correction re-draws);
   near_capture the near-capture observation the runner used against the truth at both
                ends of its capture window; its bound is the larger of the front bound
                over its distance interval (interval_bound) and the captures' own errors.
@@ -154,10 +158,7 @@ def odometry_running_max(
         raise ValueError("fewer than two control rows in the span")
     if abs(rows[0, 0] - start_s) > TICK_S / 2 or abs(rows[-1, 0] - end_s) > TICK_S / 2:
         raise ValueError("the control record does not reach both ends of the span")
-    ticks = (rows[:, 0] - rows[0, 0]) / TICK_S
-    if np.any(np.abs(ticks - np.round(ticks)) > 0.05) or np.any(
-        np.diff(np.round(ticks)) != 1
-    ):
+    if not contiguous_ticks(rows):
         raise ValueError("the control record is not one row per tick across the span")
     c, g = rows[:, 1:4], rows[:, 4:7]
     n = len(rows)
@@ -186,6 +187,58 @@ def anchor_table(control: np.ndarray, start_s: float, end_s: float) -> dict:
     }
 
 
+def contiguous_ticks(rows: np.ndarray) -> bool:
+    ticks = (rows[:, 0] - rows[0, 0]) / TICK_S
+    return bool(
+        np.all(np.abs(ticks - np.round(ticks)) <= 0.05)
+        and np.all(np.diff(np.round(ticks)) == 1)
+    )
+
+
+def anchor_pairs(
+    control: np.ndarray, anchor: dict, aligned_s: float, end_s: float
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """EPAL 6 fork spacing plan, (3) (b) 11th draft: the anchor sample -- the control and truth
+    rear axle at the capture's end (``capture_control``), off the tick grid -- against every
+    control tick after it up to end_s: (age, e, psi) per tick, the age being the one the tracker
+    looks the pair up with, tick time - the anchor's aligned_s (the capture window's start). No
+    interpolation over the capture gap and no first-tick stand-in for the anchor."""
+    t0 = float(anchor["time_s"])
+    if t0 < aligned_s - 1e-9:
+        raise ValueError("the anchor sample is before its aligned time")
+    rows = control[(control[:, 0] > t0 + 1e-9) & (control[:, 0] <= end_s + 1e-9)]
+    if len(rows) < 1:
+        raise ValueError("no control tick after the anchor sample")
+    if rows[0, 0] - t0 > TICK_S + 1e-6 or abs(rows[-1, 0] - end_s) > TICK_S / 2:
+        raise ValueError("the control record does not reach both ends of the anchor span")
+    if len(rows) > 1 and not contiguous_ticks(rows):
+        raise ValueError("the control record is not one row per tick across the anchor span")
+    c0 = np.asarray(anchor["control_rear"], dtype=float)
+    g0 = np.asarray(anchor["truth_rear"], dtype=float)
+    if c0.shape != (3,) or g0.shape != (3,) or not (
+        np.all(np.isfinite(c0)) and np.all(np.isfinite(g0))
+    ):
+        raise ValueError("the anchor sample is not a finite rear pose pair")
+    d = CAL.relative(c0, rows[:, 1:4]) - CAL.relative(g0, rows[:, 4:7])
+    return rows[:, 0] - aligned_s, np.hypot(d[:, 0], d[:, 1]), np.abs(CAL.wrap(d[:, 2]))
+
+
+def anchor_running_max(
+    control: np.ndarray, anchor: dict, aligned_s: float, end_s: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """The anchor pairs on the tick grid: index k holds the largest error of the pairs whose age
+    rounds up to k ticks (0 where there is none). Rounding up within 1e-6 tick puts a pair at or
+    below the row the runtime lookup reads (its tolerance is 1 ns), and the stored table is a
+    running maximum, so the runtime row always covers it."""
+    ages, e_, psi_ = anchor_pairs(control, anchor, aligned_s, end_s)
+    k = np.ceil(ages / TICK_S - 1e-6).astype(int)
+    e = np.zeros(int(k.max()) + 1)
+    psi = np.zeros(int(k.max()) + 1)
+    np.maximum.at(e, k, e_)
+    np.maximum.at(psi, k, psi_)
+    return e, psi
+
+
 def merge_max(tables: list[np.ndarray]) -> np.ndarray:
     out = np.zeros(max(len(t) for t in tables))
     for t in tables:
@@ -208,6 +261,178 @@ def age_grid(e: np.ndarray, psi: np.ndarray) -> dict:
         "e_m": [float(e[k]) for k in index],
         "psi_rad": [float(psi[k]) for k in index],
     }
+
+
+# The correction-run odometry supplement ------------------------------------------------------
+# EPAL 6 fork spacing plan, (3) (b) 11th draft: S2 has no correction re-draws, and its odometry
+# table did not cover the long ages of the S4 correction runs. These runs -- held-out seeds, each
+# seed both correction kinds, signs by parity as in the S4 correction group -- give e and psi only.
+SUPPLEMENT_SPECS = tuple(
+    (seed, kind, value)
+    for seed in range(9, 18)
+    for kind, value in (
+        ("lateral", 0.02 if seed % 2 == 0 else -0.02),
+        ("yaw", -0.015 if seed % 2 == 0 else 0.015),
+    )
+)
+SUPPLEMENT_SPEED_MPS = 0.055
+# The bounds table and drive terms the supplement runs with (bound to each other, 3158055).
+SUPPLEMENT_INPUT_SHA256 = {
+    "bounds_sha256": "dc1a9d8601d22a6369ee84dc483919982aaeb68b46d72c6ee17c4ffdb4c332df",
+    "drive_terms_sha256": "2b08bd585c64812c91a08f43df52d67f230a0685ae48d92594357626c02a5b86",
+}
+EPISODE_PHASES = ("approach", "insert")
+
+
+def near_anchor(run, attempt_number: int) -> tuple[dict, float]:
+    """The anchor sample (capture_control) and aligned time (the capture window's start, the
+    tracker's aligned_s) of observation attempt ``attempt_number``."""
+    attempts = run.result.get("observation_attempts") or []
+    if not 1 <= int(attempt_number) <= len(attempts):
+        raise ValueError(f"{run.key}: no observation attempt {attempt_number}")
+    attempt = attempts[int(attempt_number) - 1]
+    anchor = attempt.get("capture_control")
+    aligned = attempt.get("t_before_capture_s")
+    if anchor is None or aligned is None:
+        raise ValueError(
+            f"{run.key}: attempt {attempt_number} has no capture_control or capture start"
+        )
+    return anchor, float(aligned)
+
+
+def s2_anchor(run) -> tuple[dict, float]:
+    """An S2 run's near capture: the one accepted (status done) attempt."""
+    near = run.result.get("near_capture") or {}
+    if near.get("status") != "done" or not isinstance(near.get("near_attempt"), int):
+        raise ValueError(f"{run.key}: no accepted near capture to anchor the odometry")
+    return near_anchor(run, near["near_attempt"])
+
+
+def supplement_episodes(run) -> list[dict]:
+    """One episode per accepted near-capture tracker build (near_tracking.starts): from its first
+    approach/insert tick to its last one (re-draws do not split it; a retry or release does, with
+    the next build), its anchor and how it ended -- normally (an insert followed by the post-
+    insertion phase) or truncated, with the reason."""
+    starts = sorted(
+        (run.result.get("near_tracking") or {}).get("starts") or [],
+        key=lambda s: float(s["built_s"]),
+    )
+    if not starts:
+        raise ValueError(f"{run.key}: no near-tracking episode")
+    names = list(run.truth.phases)
+    codes = [names.index(p) for p in EPISODE_PHASES if p in names]
+    t, phase = run.truth.t, run.truth.phase
+    ticks = np.flatnonzero(np.isin(phase, codes))
+    if len(ticks) and t[ticks[0]] < float(starts[0]["built_s"]) - 1e-9:
+        raise ValueError(f"{run.key}: approach/insert ticks before the first tracker build")
+    episodes = []
+    for i, start in enumerate(starts):
+        lo = float(start["built_s"])
+        hi = float(starts[i + 1]["built_s"]) if i + 1 < len(starts) else math.inf
+        mine = ticks[(t[ticks] >= lo - 1e-9) & (t[ticks] < hi - 1e-9)]
+        anchor, aligned = near_anchor(run, start["attempt"])
+        if abs(aligned - float(start["aligned_s"])) > 1e-9:
+            raise ValueError(
+                f"{run.key}: episode {start.get('episode')}'s aligned time is not its capture's start"
+            )
+        if not len(mine):
+            episodes.append(
+                {"episode": start.get("episode"), "attempt": start["attempt"], "span_s": None,
+                 "ended": "no approach tick", "truncated": True,
+                 "reason": run.result.get("failure_reason")}
+            )
+            continue
+        last = int(mine[-1])
+        after = names[int(phase[last + 1])] if last + 1 < len(phase) else None
+        normal = names[int(phase[last])] == "insert" and after not in (None, *EPISODE_PHASES, "observe")
+        episodes.append(
+            {
+                "episode": start.get("episode"),
+                "attempt": start["attempt"],
+                "aligned_s": aligned,
+                "anchor_s": float(anchor["time_s"]),
+                "span_s": [float(t[mine[0]]), float(t[last])],
+                "ended": names[int(phase[last])],
+                "next_phase": after,
+                "truncated": not normal,
+                "reason": None
+                if normal
+                else ("retry or realignment" if after == "observe" else run.result.get("failure_reason")),
+                "_anchor": anchor,
+            }
+        )
+    return episodes
+
+
+def check_supplement_run(run, contract: dict) -> tuple[int, str, float]:
+    """The supplement run's spec and its share of the S2 contract: the same camera, cadence,
+    assets and code by content (the closed loop still uses S2's L); near tracking with a
+    correction injection, D5 off, 0.055 m/s."""
+    CAL.check_hashes(run)
+    for k in CAL.CONTRACT_KEYS:
+        if run.meta.get(k) != contract.get(k):
+            raise ValueError(f"{run.key}: meta {k} differs from the S2 contract")
+    for k in CAL.HASH_KEYS:
+        if run.result.get(k) != contract.get(k):
+            raise ValueError(f"{run.key}: {k} differs from the S2 contract")
+    args = run.result.get("arguments") or {}
+    if not args.get("near_tracking") or args.get("near_inject") != "correction":
+        raise ValueError(f"{run.key}: not a near-tracking correction run")
+    if args.get("pocket_check"):
+        raise ValueError(f"{run.key}: D5 is on")
+    if args.get("approach_straight_speed_mps") != SUPPLEMENT_SPEED_MPS:
+        raise ValueError(f"{run.key}: not at {SUPPLEMENT_SPEED_MPS} m/s")
+    seed = run.result.get("seed")
+    if not isinstance(seed, int):
+        raise ValueError(f"{run.key}: no scene seed")
+    CAL.check_seed(run, seed)  # the odometry noise seed is the scene seed, as in S2
+    # The runner records the axis not injected as 0.0 and refuses both or neither.
+    lateral, yaw = args.get("near_inject_lateral_m"), args.get("near_inject_yaw_rad")
+    if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in (lateral, yaw)):
+        raise ValueError(f"{run.key}: the injection is not recorded")
+    if (lateral != 0.0) == (yaw != 0.0):
+        raise ValueError(f"{run.key}: one correction kind per run")
+    kind, value = ("lateral", lateral) if lateral != 0.0 else ("yaw", yaw)
+    # The fixed input pair and the runner's own near contract against the measurement runs.
+    near = run.result.get("near_tracking") or {}
+    for name, want in SUPPLEMENT_INPUT_SHA256.items():
+        if near.get(name) != want:
+            raise ValueError(f"{run.key}: {name} is not the plan's fixed input")
+    for name in ("contract_problems", "tracker_config_problems"):
+        if near.get(name) != []:
+            raise ValueError(f"{run.key}: near-tracking {name} {near.get(name)!r}")
+    return seed, kind, float(value)
+
+
+def supplement_odometry(runs: list, contract: dict) -> dict:
+    """The supplement's e and psi tables (both pair sets, every episode, truncated ones
+    included) and its record: per run the spec, hashes and episodes."""
+    specs = sorted(check_supplement_run(run, contract) for run in runs)
+    if specs != sorted(SUPPLEMENT_SPECS):
+        raise ValueError("the supplement runs are not the declared specs")
+    tables_e, tables_psi, record = [], [], {}
+    for run in runs:
+        episodes = supplement_episodes(run)
+        for ep in episodes:
+            if ep["span_s"] is None:
+                continue
+            e, psi = odometry_running_max(run.control, *ep["span_s"])
+            tables_e.append(e)
+            tables_psi.append(psi)
+            e, psi = anchor_running_max(
+                run.control, ep.pop("_anchor"), ep["aligned_s"], ep["span_s"][1]
+            )
+            tables_e.append(e)
+            tables_psi.append(psi)
+        record[artifact_path(run.key)] = {
+            "spec": list(check_supplement_run(run, contract)),
+            "files": {name: sha256(run.directory / name) for name in SUPPLEMENT_FILES},
+            "episodes": episodes,
+        }
+    return {"e": tables_e, "psi": tables_psi, "runs": record}
+
+
+SUPPLEMENT_FILES = ("slam_control.npy", "pocket_frames/truth.npz", "result.json")
 
 
 # Cadence ------------------------------------------------------------------------------------
@@ -401,6 +626,7 @@ def build(
     geometry_path: Path,
     commit: str | None,
     calibration_mtime: float,
+    supplement_runs: list | None = None,
 ) -> dict:
     if not calibration.get("verdict", {}).get("pass"):
         raise ValueError("the calibration did not pass")
@@ -466,11 +692,21 @@ def build(
             raise ValueError(f"{run.key}: {newer[:3]} changed after the calibration")
         tables_e.append(e)
         tables_psi.append(psi)
+        # (3) (b): the near capture's anchor sample against every later tick of the span.
+        anchor, aligned = s2_anchor(run)
+        e, psi = anchor_running_max(run.control, anchor, aligned, span[1])
+        tables_e.append(e)
+        tables_psi.append(psi)
         files[run.key] = {name: sha256(run.directory / name) for name in RAW_FILES}
         files[run.key]["frames"] = {k: frames[k] for k in ("count", "sha256")}
+    contract = calibration["contract"]
+    supplement = None
+    if supplement_runs:
+        supplement = supplement_odometry(supplement_runs, contract)
+        tables_e += supplement["e"]
+        tables_psi += supplement["psi"]
     odometry = age_grid(merge_max(tables_e), merge_max(tables_psi))
     checks = [near_capture_check(run, geometry, observation["front"]) for run in runs]
-    contract = calibration["contract"]
     standing_runs = {}
     l_hi = float(calibration["band_s"][1])
     for run in runs:
@@ -534,8 +770,14 @@ def build(
         "odometry": {
             "tick_s": TICK_S,
             "reference": "rear axle centre",
-            "windows": "every pair inside each run's "
-            "[near-capture anchor, insertion end]",
+            "windows": "every pair of control ticks inside each run's [first approach tick, "
+            "insertion end], and the near capture's anchor sample (capture_control) against every "
+            "later tick at the tracker's lookup age (tick time - the capture's aligned time)"
+            + (
+                "; with the correction-run supplement's episodes the same way (e and psi only)"
+                if supplement
+                else ""
+            ),
             "lookup": "first grid age at or above the query; "
             "beyond the last age unbounded",
             **odometry,
@@ -570,6 +812,12 @@ def build(
             "runs": {artifact_path(k): v for k, v in files.items()},
             "tool_sha256": sha256(Path(__file__)),
             "commit": commit,
+            **(
+                {"odometry_supplement": {"specs": [list(x) for x in SUPPLEMENT_SPECS],
+                                         "runs": supplement["runs"]}}
+                if supplement
+                else {}
+            ),
         },
     }
 
@@ -584,6 +832,14 @@ def main(argv=None) -> int:
         default=ROOT / "config/pallet_geometry_epal6.yaml",
     )
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--odometry-supplement",
+        type=Path,
+        nargs="+",
+        default=None,
+        help="the correction-run odometry supplement's run directories (fork spacing plan "
+        "(3) (b)): e and psi only, merged per age with the calibrated runs",
+    )
     args = parser.parse_args(argv)
     from forklift_core.perception.pallet_geometry import load_pallet_geometry
 
@@ -609,6 +865,9 @@ def main(argv=None) -> int:
         args.pallet_geometry,
         commit,
         args.calibration.stat().st_mtime,
+        [CAL.Run.load(p) for p in args.odometry_supplement]
+        if args.odometry_supplement
+        else None,
     )
     out["provenance"]["calibration"]["path"] = artifact_path(args.calibration)
     out["provenance"]["observations"]["path"] = artifact_path(args.observations)

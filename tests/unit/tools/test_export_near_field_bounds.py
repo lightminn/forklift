@@ -358,3 +358,150 @@ def test_the_standing_bound_is_the_largest_change_between_any_two_instants():
     assert out["d_m"] == pytest.approx(0.00038 + 0.34 * 2e-5, abs=1e-9)  # base + offset * heading
     assert out["phi_rad"] == pytest.approx(2e-5, rel=1e-6)
     assert EX.standing_motion(t, base, np.full(len(t), 0.05), 0.0, -0.34) is None
+
+
+# --- the correction-run odometry supplement (fork spacing plan, (3) (b) 11th draft) ---------------
+
+
+def anchor_at(t, control=(0.0, 0.0, 0.0), truth=(0.0, 0.0, 0.0)):
+    return {"time_s": t, "control_rear": list(control), "truth_rear": list(truth)}
+
+
+def test_the_anchor_sample_pairs_sit_at_the_trackers_lookup_age():
+    rows = control_rows(40, drift=lambda k: (0.0, 0.0, 0.0001 * k))
+    # Capture window [9.95, 10.0 - TICK/3]: the anchor sample sits between two ticks, its control
+    # heading 0.002 off the truth's.
+    anchor = anchor_at(10.0 - TICK / 3, control=(0.0, 0.0, 0.002))
+    e, psi = EX.anchor_running_max(rows, anchor, 9.95, 10.0 + 39 * TICK)
+    # The first tick after the sample (10.0) is looked up at 10.0 - 9.95 = 0.05 s -> index 6.
+    assert psi[6] == pytest.approx(0.002)
+    assert psi[: 6].max() == 0.0
+    # The last tick: heading error 0.0039 off, the anchor's 0.002 the other way.
+    k = int(math.ceil((39 * TICK + 0.05) / TICK - 1e-6))
+    assert psi[k] == pytest.approx(abs(0.0039 - 0.002))
+    # Ages are not the tick difference from the first tick: the capture window counts.
+    assert len(psi) == k + 1
+
+
+def test_the_anchor_pairs_refuse_a_gap_a_late_record_or_an_anchor_before_its_window():
+    rows = control_rows(30)
+    end = 10.0 + 29 * TICK
+    with pytest.raises(ValueError, match="one row per tick"):
+        EX.anchor_running_max(np.delete(rows, 12, axis=0), anchor_at(10.0 - TICK / 2), 9.9, end)
+    with pytest.raises(ValueError, match="both ends"):
+        EX.anchor_running_max(rows[5:], anchor_at(10.0 - TICK / 2), 9.9, end)
+    with pytest.raises(ValueError, match="before its aligned time"):
+        EX.anchor_running_max(rows, anchor_at(9.8), 9.9, end)
+
+
+class _Truth:
+    def __init__(self, phases, t):
+        self.phases = ["other", "observe", "approach", "insert"]
+        self.phase = np.array([self.phases.index(p) for p in phases])
+        self.t = np.asarray(t, dtype=float)
+
+
+class _Run:
+    def __init__(self, phases, starts, attempts, failure=None):
+        self.key = "/runs/x"
+        self.truth = _Truth(phases, 10.0 + np.arange(len(phases)) * TICK)
+        self.result = {
+            "near_tracking": {"starts": starts},
+            "observation_attempts": attempts,
+            "failure_reason": failure,
+        }
+
+
+def test_episodes_follow_tracker_builds_and_report_how_they_ended():
+    t = lambda k: 10.0 + k * TICK  # noqa: E731
+    phases = ["observe"] * 5 + ["approach"] * 10 + ["observe"] * 5 + ["approach"] * 5 + ["insert"] * 5 + ["other"] * 3
+    attempts = [
+        {"t_before_capture_s": t(1), "capture_control": anchor_at(t(2) - TICK / 2)},
+        {"t_before_capture_s": t(3), "capture_control": anchor_at(t(4) - TICK / 2)},
+        {"t_before_capture_s": t(16), "capture_control": anchor_at(t(19) - TICK / 2)},
+    ]
+    starts = [
+        {"episode": 2, "attempt": 2, "aligned_s": t(3), "built_s": t(4)},
+        {"episode": 3, "attempt": 3, "aligned_s": t(16), "built_s": t(19)},
+    ]
+    first, second = EX.supplement_episodes(_Run(phases, starts, attempts))
+    assert first["span_s"] == [pytest.approx(t(5)), pytest.approx(t(14))]
+    assert first["truncated"] and first["reason"] == "retry or realignment"
+    assert second["span_s"] == [pytest.approx(t(20)), pytest.approx(t(29))]
+    assert not second["truncated"] and second["ended"] == "insert"
+    # A run that ends in the approach is truncated with its failure.
+    (only,) = EX.supplement_episodes(
+        _Run(phases[:12], starts[:1], attempts, failure="near_field_mismatch")
+    )
+    assert only["truncated"] and only["reason"] == "near_field_mismatch"
+    # The episode's aligned time must be its capture's start.
+    bad = [dict(starts[0], aligned_s=t(2))]
+    with pytest.raises(ValueError, match="aligned time"):
+        EX.supplement_episodes(_Run(phases, bad, attempts))
+
+
+def test_the_supplement_specs_are_both_kinds_per_held_out_seed_signed_by_parity():
+    assert len(EX.SUPPLEMENT_SPECS) == 18
+    assert {s for s, _, _ in EX.SUPPLEMENT_SPECS} == set(range(9, 18))
+    assert (10, "lateral", 0.02) in EX.SUPPLEMENT_SPECS and (10, "yaw", -0.015) in EX.SUPPLEMENT_SPECS
+    assert (9, "lateral", -0.02) in EX.SUPPLEMENT_SPECS and (9, "yaw", 0.015) in EX.SUPPLEMENT_SPECS
+
+
+def test_a_supplement_run_must_share_the_s2_contract_and_be_a_correction_run(monkeypatch):
+    monkeypatch.setattr(EX.CAL, "check_hashes", lambda run: None)
+    contract = {k: f"c-{k}" for k in (*EX.CAL.CONTRACT_KEYS, *EX.CAL.HASH_KEYS)}
+
+    def run(**changes):
+        args = {"near_tracking": True, "near_inject": "correction", "approach_straight_speed_mps": 0.055,
+                # As the runner records it: the axis not injected is 0.0.
+                "near_inject_lateral_m": 0.02, "near_inject_yaw_rad": 0.0, "pocket_check": False,
+                "slam_noise_seed": 10}
+        near = {**EX.SUPPLEMENT_INPUT_SHA256, "contract_problems": [], "tracker_config_problems": []}
+        meta = {k: contract[k] for k in EX.CAL.CONTRACT_KEYS}
+        result = {**{k: contract[k] for k in EX.CAL.HASH_KEYS}, "seed": 10}
+        for key, value in changes.items():
+            target = {"args": args, "near": near, "meta": meta, "result": result}[key.split("__")[0]]
+            target[key.split("__")[1]] = value
+
+        class Run:
+            pass
+
+        Run.key = "/runs/s"
+        Run.meta = meta
+        Run.result = {**result, "arguments": args, "near_tracking": near}
+        return Run
+
+    assert EX.check_supplement_run(run(), contract) == (10, "lateral", 0.02)
+    assert EX.check_supplement_run(
+        run(args__near_inject_lateral_m=0.0, args__near_inject_yaw_rad=-0.015), contract
+    ) == (10, "yaw", -0.015)
+    for changes, match in (
+        ({"meta__fps": 1}, "meta fps"),
+        ({"args__near_inject": "mismatch"}, "correction run"),
+        ({"args__near_inject_yaw_rad": 0.015}, "one correction kind"),
+        ({"args__near_inject_lateral_m": 0.0}, "one correction kind"),
+        ({"args__slam_noise_seed": 0}, "slam noise seed"),
+        ({"near__bounds_sha256": "0" * 64}, "fixed input"),
+        ({"near__contract_problems": ["x differs"]}, "contract_problems"),
+        ({"near__tracker_config_problems": None}, "tracker_config_problems"),
+    ):
+        with pytest.raises(ValueError, match=match):
+            EX.check_supplement_run(run(**changes), contract)
+
+
+def test_an_s2_run_needs_its_accepted_near_capture_to_anchor_the_odometry():
+    class Run:
+        key = "/runs/s2"
+        result = {"near_capture": {"status": "failed", "near_attempt": None}}
+
+    with pytest.raises(ValueError, match="accepted near capture"):
+        EX.s2_anchor(Run)
+
+
+def test_approach_ticks_before_the_first_tracker_build_are_refused():
+    t = lambda k: 10.0 + k * TICK  # noqa: E731
+    phases = ["observe"] * 3 + ["approach"] * 6 + ["insert"] * 3 + ["other"] * 2
+    attempts = [{"t_before_capture_s": t(4), "capture_control": anchor_at(t(5) - TICK / 2)}]
+    late = [{"episode": 2, "attempt": 1, "aligned_s": t(4), "built_s": t(5)}]
+    with pytest.raises(ValueError, match="before the first tracker build"):
+        EX.supplement_episodes(_Run(phases, late, attempts))

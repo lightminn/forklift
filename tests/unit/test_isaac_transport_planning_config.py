@@ -1172,3 +1172,31 @@ def test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judge
     # The 2026-09-21 profile had neither cusp tolerances nor the hold.
     profile = source[source.index("    def apply_tracker_profile() -> None:") :]
     assert "cusp_heading_pending_rad=None," in profile[: profile.index("    def record_tracker_configs()")]
+
+
+def test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own():
+    """Fork spacing plan, fix (1) after the S4 result: the observe-miss replan is budgeted per observe
+    leg (OBSERVE_REPLANS_PER_LEG), the near-leg installation opens a new budget, the held-realignment
+    no-recovery rule still comes first, and each record names its leg and the budget left."""
+    source = SCRIPT.read_text()
+    assert "OBSERVE_REPLANS_PER_LEG = 2" in source
+    assert 'state["observe_replan_leg"] = {"serial": 0, "start": 0}' in source
+    # No run-wide count of observe replans is left.
+    assert 'len(state["observe_replans"]) < 2' not in source
+    miss = source.index("observe_miss = (")
+    assert source.index(
+        'len(state["observe_replans"]) - state["observe_replan_leg"]["start"]', miss
+    ) < source.index("if observe_miss:", miss)
+    # The held-realignment refusal is checked before the replan rule.
+    assert source.index('require(False, "near_capture_realign_held_recovery")') < miss
+    record = source.index('state["observe_replans"].append(', miss)
+    assert source.index('"leg_serial": leg_["serial"]', record) < source.index(
+        "paths[\"observe\"] = replanned", record
+    )
+    assert '"budget_left": OBSERVE_REPLANS_PER_LEG' in source[record:]
+    # The near leg resets the budget where it is installed, not inside realign_install (which
+    # returns at once outside a realignment), and only there.
+    near = source.index("if near_leg is not None:")
+    reset = source.index('state["observe_replan_leg"] = {\n', near)
+    assert reset < source.index("paths[\"observe\"] = near_leg", near)
+    assert source.count('state["observe_replan_leg"] = {') == 2
