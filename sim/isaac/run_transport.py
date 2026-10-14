@@ -836,7 +836,14 @@ def run_steering_probe(world, robot, wheels, steers, settings, args, action_type
     offset = abs(float(args.rear_axle_offset_m))
     steering = np.asarray(robot.get_joint_positions()[steers], dtype=float).copy()
     speed = 0.0
-    rows, efforts_applied, efforts_measured = [], [], []
+    rows, efforts_applied, efforts_measured, joint_forces = [], [], [], []
+    names = list(robot.dof_names)
+    # The 6-D incoming joint force of each wheel's support joint (front: the steering joint, rear: the
+    # spin joint) -- its vertical part is the wheel's share of the truck's weight.
+    try:
+        body_names = list(robot._articulation_view.body_names)
+    except Exception:  # noqa: BLE001 -- recorded for the analysis only
+        body_names = []
     t0 = float(world.current_time)
     for index, (label, target_speed, kappa, seconds) in enumerate(probe_segments()):
         for _ in range(int(round(seconds / dt))):
@@ -859,6 +866,10 @@ def run_steering_probe(world, robot, wheels, steers, settings, args, action_type
             rear = (float(position[0]) - offset * math.cos(yaw), float(position[1]) - offset * math.sin(yaw), yaw)
             rows.append([float(world.current_time) - t0, index, speed, kappa, *drive.steering_rad, *steering,
                          *q[steers], *qd[steers], *drive.wheel_rates_rad_s, *qd[wheels], *rear])
+            try:
+                joint_forces.append(np.asarray(robot.get_measured_joint_forces(), dtype=float).reshape(-1, 6))
+            except Exception:  # noqa: BLE001
+                joint_forces.append(np.full((1, 6), math.nan))
             for store, name in ((efforts_applied, "get_applied_joint_efforts"), (efforts_measured, "get_measured_joint_efforts")):
                 try:
                     e = np.asarray(getattr(robot, name)(), dtype=float)
@@ -871,7 +882,9 @@ def run_steering_probe(world, robot, wheels, steers, settings, args, action_type
                "w_FL", "w_FR", "w_RL", "w_RR", "rear_x", "rear_y", "rear_yaw")
     np.savez(out_dir / "steering_probe.npz", record=x, columns=np.array(columns),
              efforts_applied=np.asarray(efforts_applied), efforts_measured=np.asarray(efforts_measured),
-             effort_columns=np.array(("steer_FL", "steer_FR", "spin_FL", "spin_FR")))
+             effort_columns=np.array(("steer_FL", "steer_FR", "spin_FL", "spin_FR")),
+             joint_forces=np.asarray(joint_forces, dtype=float), body_names=np.array(body_names),
+             dof_names=np.array(names))
     half, wheelbase = geometry.track_m / 2, geometry.wheelbase_m
 
     def wheel_kappa(left, right):
@@ -898,6 +911,7 @@ def run_steering_probe(world, robot, wheels, steers, settings, args, action_type
             "err_FR_mrad": (q_fr - float(np.mean(seg[:, c["target_FR"]]))) * 1e3,
             "kappa_FL": k_fl, "kappa_FR": k_fr, "kappa_avg": (k_fl + k_fr) / 2,
             "kappa_true": sign * dyaw / ds if ds > 0.02 else None, "distance_m": ds,
+            "joint_force_mean": np.nanmean(np.asarray(joint_forces)[x[:, 1] == index][-tick:], axis=0).tolist(),
             "effort_applied": np.nanmean(ea, axis=0).tolist() if len(ea) else None,
             "effort_measured": np.nanmean(em, axis=0).tolist() if len(em) else None,
             "wheel_rate_FL": [float(np.mean(seg[:, c["w_cmd_FL"]])), float(np.mean(seg[:, c["w_FL"]]))],
