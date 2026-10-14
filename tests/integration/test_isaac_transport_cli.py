@@ -119,6 +119,20 @@ def test_g2_rerun_options_validate_before_startup() -> None:
             "stops before planning",
         ),
         (["--repeat-at-attempt", "1"], "requires --repeat-captures"),
+        (["--repeat-at-near-capture"], "requires --repeat-captures"),
+        (
+            [
+                "--use-perception",
+                "--pallet-prior",
+                prior,
+                "--repeat-captures",
+                "10",
+                "--repeat-at-attempt",
+                "1",
+                "--repeat-at-near-capture",
+            ],
+            "one of --repeat-at-attempt or --repeat-at-near-capture",
+        ),
     ):
         result = subprocess.run(
             [

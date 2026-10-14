@@ -585,6 +585,12 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument("--repeat-at-attempt", type=int, default=None)
     parser.add_argument(
+        "--repeat-at-near-capture",
+        action="store_true",
+        help="Diagnostic: take the --repeat-captures batch at the first near capture "
+        "instead of at an observation attempt number (fork spacing plan, (B)).",
+    )
+    parser.add_argument(
         "--tracker-profile",
         choices=("current", "20260921"),
         default="current",
@@ -661,16 +667,19 @@ def arguments() -> argparse.Namespace:
     if args.repeat_captures < 0:
         parser.error("--repeat-captures must not be negative")
     if args.repeat_captures:
-        if not args.use_perception or args.repeat_at_attempt is None:
+        if not args.use_perception or (
+            (args.repeat_at_attempt is None) == (not args.repeat_at_near_capture)
+        ):
             parser.error(
-                "--repeat-captures requires --use-perception and --repeat-at-attempt"
+                "--repeat-captures requires --use-perception and one of "
+                "--repeat-at-attempt or --repeat-at-near-capture"
             )
-        if args.repeat_at_attempt < 1:
+        if args.repeat_at_attempt is not None and args.repeat_at_attempt < 1:
             parser.error("--repeat-at-attempt counts from 1")
         if args.planning_target != "perception":
             parser.error("a repeat-capture run stops before planning")
-    elif args.repeat_at_attempt is not None:
-        parser.error("--repeat-at-attempt requires --repeat-captures")
+    elif args.repeat_at_attempt is not None or args.repeat_at_near_capture:
+        parser.error("--repeat-at-attempt or --repeat-at-near-capture requires --repeat-captures")
     if args.obstacles < 1 or args.max_sim_seconds <= 0:
         parser.error("obstacles and max-sim-seconds must be positive")
     if args.obstacle_layer is not None and not args.record_slam:
@@ -6226,7 +6235,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         )
                         if (
                             args.repeat_captures
-                            and attempt_number == args.repeat_at_attempt
+                            and (
+                                attempt_number == args.repeat_at_attempt
+                                if args.repeat_at_attempt is not None
+                                else state.get("near_capture", {}).get("status") == "pending"
+                            )
                         ):
                             # G2r: the original capture above is G2's; hold the
                             # wheels, capture again, then stop whatever is seen.
@@ -6460,7 +6473,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             realign_install("observe_candidate")  # Plan D8 S4c-3 stage 2
                             record_tracker_configs()
                         else:
-                            if args.repeat_captures:
+                            if args.repeat_captures and args.repeat_at_attempt is not None:
                                 # G2r took another path to a valid detection
                                 # before the requested attempt: no batch, no plan.
                                 state["repeat_capture"] = {
