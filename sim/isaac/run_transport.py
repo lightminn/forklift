@@ -838,18 +838,23 @@ def probe_segments() -> list[tuple[str, float, float, float]]:
     return out
 
 
+TYRE_FIELDS = ("Jx", "Jy", "Jz", "Mx", "My", "Mz", "floor_contacts", "min_separation_m", "other_contacts", "other_impulse")
+
+
 def tyre_floor_forces(stage_wheels: tuple[str, ...]) -> list[list[float]]:
-    """Per tyre (in stage_wheels order): the summed contact impulse (x, y, z) of this step's contact
-    report against everything outside the robot, the contact count and the mean contact point (x, y);
-    NaN when the report is unavailable."""
-    out = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0] for _ in stage_wheels]
+    """Per tyre (in stage_wheels order), from this step's PhysX contact report against everything
+    outside the robot (TYRE_FIELDS): the floor contacts' (normal within 0.9 of vertical) summed impulse
+    on the tyre (x, y, z) and its moment about the world origin summed per contact point (p x J -- not
+    the mean point times the sum), their count and smallest separation; the other contacts' count and
+    summed impulse magnitude. NaN when the report is unavailable. Divide impulses by the step for force."""
+    out = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, math.inf, 0.0, 0.0] for _ in stage_wheels]
     try:
         from omni.physx import get_physx_simulation_interface
         from pxr import PhysicsSchemaTools
 
         headers, data = get_physx_simulation_interface().get_contact_report()
     except Exception:  # noqa: BLE001 -- recorded as missing
-        return [[math.nan] * 6 for _ in stage_wheels]
+        return [[math.nan] * len(TYRE_FIELDS) for _ in stage_wheels]
     for header in headers:
         paths = (str(PhysicsSchemaTools.intToSdfPath(header.actor0)), str(PhysicsSchemaTools.intToSdfPath(header.actor1)))
         for w, wheel in enumerate(stage_wheels):
@@ -859,18 +864,24 @@ def tyre_floor_forces(stage_wheels: tuple[str, ...]) -> list[list[float]]:
             if other.startswith("/World/Forklift"):
                 continue
             sign = 1.0 if paths[1] == wheel else -1.0  # the impulse acts on actor1 (+) or actor0 (-)
+            row = out[w]
             for k in range(header.contact_data_offset, header.contact_data_offset + header.num_contact_data):
                 c = data[k]
-                out[w][0] += sign * float(c.impulse[0])
-                out[w][1] += sign * float(c.impulse[1])
-                out[w][2] += sign * float(c.impulse[2])
-                out[w][3] += 1.0
-                out[w][4] += float(c.position[0])
-                out[w][5] += float(c.position[1])
+                j = np.array([float(c.impulse[0]), float(c.impulse[1]), float(c.impulse[2])]) * sign
+                if abs(float(c.normal[2])) >= 0.9:
+                    p_ = np.array([float(c.position[0]), float(c.position[1]), float(c.position[2])])
+                    m = np.cross(p_, j)
+                    for i in range(3):
+                        row[i] += float(j[i])
+                        row[3 + i] += float(m[i])
+                    row[6] += 1.0
+                    row[7] = min(row[7], float(c.separation))
+                else:
+                    row[8] += 1.0
+                    row[9] += float(np.linalg.norm(j))
     for row in out:
-        if row[3] > 0:
-            row[4] /= row[3]
-            row[5] /= row[3]
+        if row[7] == math.inf:
+            row[7] = math.nan
     return out
 
 
@@ -938,6 +949,7 @@ def run_steering_probe(world, robot, wheels, steers, settings, args, action_type
              effort_columns=np.array(("steer_FL", "steer_FR", "spin_FL", "spin_FR")),
              joint_forces=np.asarray(joint_forces, dtype=float), body_names=np.array(body_names),
              tyre_contacts=np.asarray(tyre_contacts, dtype=float), tyre_names=np.array(stage_wheels),
+             tyre_fields=np.array(TYRE_FIELDS),
              dof_names=np.array(names))
     half, wheelbase = geometry.track_m / 2, geometry.wheelbase_m
 
@@ -969,7 +981,10 @@ def run_steering_probe(world, robot, wheels, steers, settings, args, action_type
             "joint_force_mean": np.nanmean(np.asarray(joint_forces)[x[:, 1] == index][-tick:], axis=0).tolist(),
             # Tyre-floor force (N): the mean impulse per step / dt, per tyre FL FR RL RR, and the contact count.
             "tyre_force_n": (np.nanmean(tc[:, :, :3], axis=0) / dt).tolist() if len(tc) else None,
-            "tyre_contacts_mean": np.nanmean(tc[:, :, 3], axis=0).tolist() if len(tc) else None,
+            "tyre_moment_nm": (np.nanmean(tc[:, :, 3:6], axis=0) / dt).tolist() if len(tc) else None,
+            "tyre_floor_contacts_mean": np.nanmean(tc[:, :, 6], axis=0).tolist() if len(tc) else None,
+            "tyre_min_separation_m": np.nanmin(tc[:, :, 7], axis=0).tolist() if len(tc) else None,
+            "tyre_other_contacts_max": np.nanmax(tc[:, :, 8], axis=0).tolist() if len(tc) else None,
             "q_rate_FL_mean": float(np.mean(seg[:, c["qd_FL"]])), "q_rate_FR_mean": float(np.mean(seg[:, c["qd_FR"]])),
             "effort_applied": np.nanmean(ea, axis=0).tolist() if len(ea) else None,
             "effort_measured": np.nanmean(em, axis=0).tolist() if len(em) else None,
@@ -1963,6 +1978,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     )
     state["initial_pallet_m"] = initial_pallet.tolist()
     state["velocities_before_planning"] = body_velocities()
+    try:
+        # New plant candidate V0: what the engine holds per body, not what the stage authored.
+        view_ = robot._articulation_view
+        state["plant_backend"] = {
+            "body_names": list(view_.body_names),
+            "masses_kg": np.asarray(view_.get_masses(), dtype=float).reshape(-1).tolist(),
+            "coms": np.asarray(view_.get_coms()[0], dtype=float).reshape(-1, 3).tolist(),
+            "inertias": np.asarray(view_.get_inertias(), dtype=float).reshape(-1, 9).tolist(),
+        }
+    except Exception as exc_:  # noqa: BLE001 -- the API differs between releases; record why
+        state["plant_backend"] = {"error": repr(exc_)}
     if args.steering_probe:
         state["steering_probe"] = run_steering_probe(
             world, robot, wheels, steers, settings, args, ArticulationAction, ackermann_command, args.output
