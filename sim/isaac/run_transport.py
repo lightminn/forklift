@@ -883,10 +883,14 @@ def probe_segments_long() -> list[tuple[str, float, float, float]]:
 
 def tyre_floor_forces(stage_wheels: tuple[str, ...]) -> list[list[float]]:
     """Per tyre (in stage_wheels order), from this step's PhysX contact report against everything
-    outside the robot (TYRE_FIELDS): the floor contacts' (normal within 0.9 of vertical) summed impulse
-    on the tyre (x, y, z) and its moment about the world origin summed per contact point (p x J -- not
-    the mean point times the sum), their count and smallest separation; the other contacts' count and
-    summed impulse magnitude. NaN when the report is unavailable. Divide impulses by the step for force."""
+    outside the robot (TYRE_FIELDS): the floor contacts' (normal within 0.9 of vertical -- classified by
+    the normal, not by the other actor) summed impulse (x, y, z) as the report gives it and its moment
+    about the world origin summed per contact point (p x J -- not the mean point times the sum), their
+    count and smallest separation; the other contacts' count and summed impulse magnitude. NaN when the
+    report is unavailable. Divide impulses by the step for force. Sign: standing, the floor impulses sum
+    to about -weight x dt, so the floor's push on the truck is the negative of J and of p x J (fork
+    spacing plan, D-c). Friction anchor impulses, which PhysX reports apart from contact points, are
+    not summed here."""
     out = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, math.inf, 0.0, 0.0] for _ in stage_wheels]
     try:
         from omni.physx import get_physx_simulation_interface
