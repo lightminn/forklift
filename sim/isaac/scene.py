@@ -384,6 +384,32 @@ def create_pallet(
     return pallet
 
 
+def tyre_contact_readback(stage: Usd.Stage) -> list[dict]:
+    """Every robot collider's bound physics material and its friction / compliant-contact values, read
+    back from the stage after configure_drives (the plant record: the same base USD hash is not the
+    same plant once a run-time material changes)."""
+    out = []
+    for prim in Usd.PrimRange(stage.GetPrimAtPath("/World/Forklift")):
+        if not prim.HasAPI(UsdPhysics.CollisionAPI) or "_tire_collision" not in str(prim.GetPath()):
+            continue
+        material, _ = UsdShade.MaterialBindingAPI(prim).ComputeBoundMaterial("physics")
+        mprim = material.GetPrim() if material else None
+
+        def value(name):
+            attr = mprim.GetAttribute(name) if mprim else None
+            return attr.Get() if attr and attr.IsValid() and attr.HasAuthoredValue() else None
+
+        out.append({
+            "collider": str(prim.GetPath()),
+            "material": str(mprim.GetPath()) if mprim else None,
+            "static_friction": value("physics:staticFriction"),
+            "dynamic_friction": value("physics:dynamicFriction"),
+            "compliant_stiffness": value("physxMaterial:compliantContactStiffness"),
+            "compliant_damping": value("physxMaterial:compliantContactDamping"),
+        })
+    return out
+
+
 def configure_drives(
     stage: Usd.Stage,
     settings: dict,
@@ -419,6 +445,19 @@ def configure_drives(
         for prim in instances:
             prim.SetInstanceable(False)
         print("COLLISION_INSTANCES_EXPANDED", root_path, len(instances), flush=True)
+    # EPAL 6 fork spacing plan, new plant candidate: the four tyre colliders alone get a compliant
+    # contact (a rigid four-wheel stance settled onto a diagonal pair); every other robot, pallet and
+    # floor contact keeps the rigid material. Off unless a settings file sets the stiffness.
+    tyre_material = None
+    if settings.get("tyre_contact_stiffness_n_per_m") is not None:
+        tyre_material = UsdShade.Material.Define(stage, "/World/TyreContactMaterial")
+        tyre_api = UsdPhysics.MaterialAPI.Apply(tyre_material.GetPrim())
+        tyre_api.CreateStaticFrictionAttr(settings["static_friction"])
+        tyre_api.CreateDynamicFrictionAttr(settings["dynamic_friction"])
+        tyre_api.CreateRestitutionAttr(0.0)
+        tyre_physx = PhysxSchema.PhysxMaterialAPI.Apply(tyre_material.GetPrim())
+        tyre_physx.CreateCompliantContactStiffnessAttr(float(settings["tyre_contact_stiffness_n_per_m"]))
+        tyre_physx.CreateCompliantContactDampingAttr(float(settings["tyre_contact_damping_n_s_per_m"]))
     collision_counts = {}
     for root_path in roots:
         collision_counts[root_path] = 0
@@ -428,8 +467,9 @@ def configure_drives(
                 contact = PhysxSchema.PhysxCollisionAPI.Apply(prim)
                 contact.CreateContactOffsetAttr(0.002)
                 contact.CreateRestOffsetAttr(0.0)
+                tyre = tyre_material is not None and root_path == "/World/Forklift" and "_tire_collision" in str(prim.GetPath())
                 UsdShade.MaterialBindingAPI.Apply(prim).Bind(
-                    physics_material, UsdShade.Tokens.strongerThanDescendants, "physics"
+                    tyre_material if tyre else physics_material, UsdShade.Tokens.strongerThanDescendants, "physics"
                 )
             if prim.HasAPI(UsdPhysics.ArticulationRootAPI):
                 physics = PhysxSchema.PhysxArticulationAPI.Apply(prim)

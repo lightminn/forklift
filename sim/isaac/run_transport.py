@@ -813,18 +813,57 @@ def require(condition: bool, reason: str) -> None:
 # joints, their efforts and the truth pose every physics tick.
 PROBE_CURVATURES = (0.29, -0.29, 0.36, -0.36)
 PROBE_SPEED_MPS = 0.25
+PROBE_FAST_MPS = 0.6  # shorter arcs: the run starts facing the pallet about 5 m ahead
 
 
 def probe_segments() -> list[tuple[str, float, float, float]]:
     """(label, speed m/s, curvature 1/m, seconds): standstill steering steps, then the same
-    curvatures rolling forward and in reverse, each between straight stretches."""
+    curvatures rolling forward and in reverse at 0.25 m/s, then at 0.6 m/s, each between straight
+    stretches (a forward run is followed by its reverse, so the truck comes back)."""
     out = [("settle", 0.0, 0.0, 1.0)]
     out += [("still", 0.0, k, 2.5) for k in PROBE_CURVATURES]
     out.append(("still", 0.0, 0.0, 1.5))
-    for label, speed in (("fwd", PROBE_SPEED_MPS), ("rev", -PROBE_SPEED_MPS)):
-        out.append((label, speed, 0.0, 1.5))
-        out += [(label, speed, k, 2.5) for k in PROBE_CURVATURES]
-        out += [(label, speed, 0.0, 1.0), ("stop", 0.0, 0.0, 1.5)]
+    for label, speed, arc in (("fwd", PROBE_SPEED_MPS, 2.5), ("rev", -PROBE_SPEED_MPS, 2.5),
+                              ("fwd_fast", PROBE_FAST_MPS, 1.0), ("rev_fast", -PROBE_FAST_MPS, 1.0)):
+        out.append((label, speed, 0.0, 1.5 if arc > 2 else 1.0))
+        out += [(label, speed, k, arc) for k in PROBE_CURVATURES]
+        out += [(label, speed, 0.0, 1.0 if arc > 2 else 0.5), ("stop", 0.0, 0.0, 1.5)]
+    return out
+
+
+def tyre_floor_forces(stage_wheels: tuple[str, ...]) -> list[list[float]]:
+    """Per tyre (in stage_wheels order): the summed contact impulse (x, y, z) of this step's contact
+    report against everything outside the robot, the contact count and the mean contact point (x, y);
+    NaN when the report is unavailable."""
+    out = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0] for _ in stage_wheels]
+    try:
+        from omni.physx import get_physx_simulation_interface
+        from pxr import PhysicsSchemaTools
+
+        headers, data = get_physx_simulation_interface().get_contact_report()
+    except Exception:  # noqa: BLE001 -- recorded as missing
+        return [[math.nan] * 6 for _ in stage_wheels]
+    for header in headers:
+        paths = (str(PhysicsSchemaTools.intToSdfPath(header.actor0)), str(PhysicsSchemaTools.intToSdfPath(header.actor1)))
+        for w, wheel in enumerate(stage_wheels):
+            if wheel not in paths:
+                continue
+            other = paths[1] if paths[0] == wheel else paths[0]
+            if other.startswith("/World/Forklift"):
+                continue
+            sign = 1.0 if paths[1] == wheel else -1.0  # the impulse acts on actor1 (+) or actor0 (-)
+            for k in range(header.contact_data_offset, header.contact_data_offset + header.num_contact_data):
+                c = data[k]
+                out[w][0] += sign * float(c.impulse[0])
+                out[w][1] += sign * float(c.impulse[1])
+                out[w][2] += sign * float(c.impulse[2])
+                out[w][3] += 1.0
+                out[w][4] += float(c.position[0])
+                out[w][5] += float(c.position[1])
+    for row in out:
+        if row[3] > 0:
+            row[4] /= row[3]
+            row[5] /= row[3]
     return out
 
 
@@ -836,7 +875,8 @@ def run_steering_probe(world, robot, wheels, steers, settings, args, action_type
     offset = abs(float(args.rear_axle_offset_m))
     steering = np.asarray(robot.get_joint_positions()[steers], dtype=float).copy()
     speed = 0.0
-    rows, efforts_applied, efforts_measured, joint_forces = [], [], [], []
+    rows, efforts_applied, efforts_measured, joint_forces, tyre_contacts = [], [], [], [], []
+    stage_wheels = tuple(f"/World/Forklift/{n}" for n in ("front_left_wheel", "front_right_wheel", "rear_left_wheel", "rear_right_wheel"))
     names = list(robot.dof_names)
     # The 6-D incoming joint force of each wheel's support joint (front: the steering joint, rear: the
     # spin joint) -- its vertical part is the wheel's share of the truck's weight.
@@ -866,6 +906,7 @@ def run_steering_probe(world, robot, wheels, steers, settings, args, action_type
             rear = (float(position[0]) - offset * math.cos(yaw), float(position[1]) - offset * math.sin(yaw), yaw)
             rows.append([float(world.current_time) - t0, index, speed, kappa, *drive.steering_rad, *steering,
                          *q[steers], *qd[steers], *drive.wheel_rates_rad_s, *qd[wheels], *rear])
+            tyre_contacts.append(tyre_floor_forces(stage_wheels))
             try:
                 joint_forces.append(np.asarray(robot.get_measured_joint_forces(), dtype=float).reshape(-1, 6))
             except Exception:  # noqa: BLE001
@@ -884,6 +925,7 @@ def run_steering_probe(world, robot, wheels, steers, settings, args, action_type
              efforts_applied=np.asarray(efforts_applied), efforts_measured=np.asarray(efforts_measured),
              effort_columns=np.array(("steer_FL", "steer_FR", "spin_FL", "spin_FR")),
              joint_forces=np.asarray(joint_forces, dtype=float), body_names=np.array(body_names),
+             tyre_contacts=np.asarray(tyre_contacts, dtype=float), tyre_names=np.array(stage_wheels),
              dof_names=np.array(names))
     half, wheelbase = geometry.track_m / 2, geometry.wheelbase_m
 
@@ -892,11 +934,12 @@ def run_steering_probe(world, robot, wheels, steers, settings, args, action_type
         return tl / (wheelbase + tl * half), tr / (wheelbase - tr * half)
 
     summary = []
-    tick = int(round(1.0 / dt))
     for index, (label, target_speed, kappa, seconds) in enumerate(probe_segments()):
+        tick = int(round(min(1.0, seconds / 2) / dt))  # the segment's last half, at most 1 s
         seg = x[x[:, 1] == index][-tick:]
         ea = np.asarray(efforts_applied)[x[:, 1] == index][-tick:]
         em = np.asarray(efforts_measured)[x[:, 1] == index][-tick:]
+        tc = np.asarray(tyre_contacts)[x[:, 1] == index][-tick:]
         c = {k: i for i, k in enumerate(columns)}
         q_fl, q_fr = float(np.mean(seg[:, c["q_FL"]])), float(np.mean(seg[:, c["q_FR"]]))
         k_fl, k_fr = wheel_kappa(q_fl, q_fr)
@@ -912,12 +955,17 @@ def run_steering_probe(world, robot, wheels, steers, settings, args, action_type
             "kappa_FL": k_fl, "kappa_FR": k_fr, "kappa_avg": (k_fl + k_fr) / 2,
             "kappa_true": sign * dyaw / ds if ds > 0.02 else None, "distance_m": ds,
             "joint_force_mean": np.nanmean(np.asarray(joint_forces)[x[:, 1] == index][-tick:], axis=0).tolist(),
+            # Tyre-floor force (N): the mean impulse per step / dt, per tyre FL FR RL RR, and the contact count.
+            "tyre_force_n": (np.nanmean(tc[:, :, :3], axis=0) / dt).tolist() if len(tc) else None,
+            "tyre_contacts_mean": np.nanmean(tc[:, :, 3], axis=0).tolist() if len(tc) else None,
+            "q_rate_FL_mean": float(np.mean(seg[:, c["qd_FL"]])), "q_rate_FR_mean": float(np.mean(seg[:, c["qd_FR"]])),
             "effort_applied": np.nanmean(ea, axis=0).tolist() if len(ea) else None,
             "effort_measured": np.nanmean(em, axis=0).tolist() if len(em) else None,
             "wheel_rate_FL": [float(np.mean(seg[:, c["w_cmd_FL"]])), float(np.mean(seg[:, c["w_FL"]]))],
             "wheel_rate_FR": [float(np.mean(seg[:, c["w_cmd_FR"]])), float(np.mean(seg[:, c["w_FR"]]))],
         })
-    return {"segments": summary, "dt_s": dt, "speed_mps": PROBE_SPEED_MPS, "curvatures": list(PROBE_CURVATURES)}
+    return {"segments": summary, "dt_s": dt, "speeds_mps": [PROBE_SPEED_MPS, PROBE_FAST_MPS],
+            "curvatures": list(PROBE_CURVATURES)}
 
 
 # Colour range of the robot-camera depth video; display only, not a sensor limit.
@@ -1598,6 +1646,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         settings,
         expected_pallet_box_count=len(insertion_geometry.pallet_boxes),
     )
+    # The plant record (EPAL 6 fork spacing plan, new plant candidate): each tyre's material as bound.
+    from scene import tyre_contact_readback
+
+    state["plant_tyre_contact"] = tyre_contact_readback(stage)
+    if args.steering_probe:
+        # The probe reads each tyre's floor contact directly (not the joint reaction forces).
+        from pxr import PhysxSchema as PS
+
+        for wheel_ in ("front_left_wheel", "front_right_wheel", "rear_left_wheel", "rear_right_wheel"):
+            report_ = PS.PhysxContactReportAPI.Apply(stage.GetPrimAtPath(f"/World/Forklift/{wheel_}"))
+            report_.CreateThresholdAttr(0.0)
     # Physics-step scheduling sets the recording rate. Acquire every rendered
     # frame so the SDK elapsed-time threshold cannot skip frame metadata.
     camera = Camera(
