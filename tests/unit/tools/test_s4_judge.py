@@ -747,7 +747,10 @@ def test_ii_exact_odometry_passes_and_a_drift_past_the_table_fails(bounds):
     run, states, ticks = odometry_case(bounds)
     out = J.check_ii(run, {"ticks": ticks}, states, bounds, (40, 189))
     assert out["passed"] and out["worst"]["e_ratio"] == pytest.approx(0.0, abs=1e-9)
-    run, states, ticks = odometry_case(bounds, scale=1.5)  # the control reads 50 % long
+    # The control reads 200 % long (about 22 mm over the 0.2 s age): past the table. 50 % (5.5 mm) was
+    # until the fork spacing plan's correction-run supplement raised e at short ages (0.1 s: 3.43 ->
+    # 3.88 mm).
+    run, states, ticks = odometry_case(bounds, scale=3.0)
     assert not J.check_ii(run, {"ticks": ticks}, states, bounds, (40, 189))["passed"]
 
 
