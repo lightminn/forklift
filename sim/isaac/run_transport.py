@@ -6241,7 +6241,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 for v in capture_diagnostics.accepted_pose
                             ]
 
-                            def observed(obs) -> dict:
+                            def observed(result) -> dict:
+                                obs, diag = result.observation, result.diagnostics
                                 valid = obs.status == "valid"
                                 return {
                                     "status": obs.status,
@@ -6253,6 +6254,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                     if valid
                                     else None,
                                     "insertion_yaw_rad": obs.insertion_yaw_rad,
+                                    # Fork spacing plan (B): the lower-deck evidence per
+                                    # capture, to see how much it moves in place.
+                                    "selected_lower": diag.selected_lower,
+                                    "rejected_lower": [
+                                        p.lower for p in diag.rejected_patterns
+                                    ],
                                 }
 
                             def valid_fraction(depth) -> float:
@@ -6268,7 +6275,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                     "valid_fraction": valid_fraction(
                                         scene_input.depth_m
                                     ),
-                                    **observed(observation),
+                                    **observed(detection),
                                 }
                             ]
                             for index in range(1, args.repeat_captures + 1):
@@ -6315,7 +6322,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                                 ),
                                                 prior,
                                                 params,
-                                            ).observation
+                                            )
                                         ),
                                     }
                                 )
