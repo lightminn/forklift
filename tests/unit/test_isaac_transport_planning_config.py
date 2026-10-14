@@ -1308,7 +1308,7 @@ def test_the_cause_separation_settings_are_probe_only_and_recorded():
     exec(source[source.index("DIAGNOSTIC_PROBE_SETTINGS = "): source.index("TYRE_LINKS = ")], namespace)  # noqa: S102
     assert set(namespace["DIAGNOSTIC_PROBE_SETTINGS"]) == {
         "physx_friction_correlation_distance_m", "physx_solver_pgs", "physx_enable_stabilization",
-        "tyre_damping_combine_max", "wheel_drive_damping"}
+        "tyre_damping_combine_max", "wheel_drive_damping", "physx_external_forces_every_iteration"}
     world = source.index("world = World(stage_units_in_meters=1.0")
     block = source[world: source.index('state["physics_scene"] = {', world) + 400]
     for call in ("set_friction_correlation_distance(", 'set_solver_type("PGS")', "enable_stablization(True)",
@@ -1318,3 +1318,16 @@ def test_the_cause_separation_settings_are_probe_only_and_recorded():
     assert 'float(settings.get("wheel_drive_damping", 20.0)) if wheel' in scene
     assert 'if settings.get("tyre_damping_combine_max"):' in scene and 'CreateDampingCombineModeAttr("max")' in scene
     assert '"damping_combine_mode": value("physxMaterial:dampingCombineMode")' in scene
+
+
+def test_the_reverse_first_long_set_swaps_each_pair_and_keeps_the_segments():
+    """Cause separation E (Codex): order and contact history apart from the direction -- the same
+    segments as the long set, each reverse run before its forward run."""
+    helpers = _probe_helpers()
+    long_, rev = helpers["probe_segments_long"](), helpers["probe_segments_long_reverse_first"]()
+    assert sorted(long_) == sorted(rev) and len(long_) == len(rev)
+    moving = [(lab, v, k, s) for lab, v, k, s in rev if v != 0]
+    for i, (_, v, k, s) in enumerate(moving):
+        if v < 0:
+            assert moving[i + 1][1:] == (-v, k, s)
+    assert moving[0][1] < 0

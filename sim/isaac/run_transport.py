@@ -592,7 +592,7 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--repeat-at-attempt", type=int, default=None)
     parser.add_argument(
         "--steering-probe-set",
-        choices=("standard", "long"),
+        choices=("standard", "long", "long_reverse_first"),
         default="standard",
         help="The --steering-probe segment set: standard, or long steady-state runs (new plant diagnostic D-a).",
     )
@@ -826,7 +826,7 @@ def require(condition: bool, reason: str) -> None:
 # Fork spacing plan, cause separation E: scene and drive settings a settings file may set for a
 # --steering-probe only (numbers, as every settings value must be: 1 switches a flag on).
 DIAGNOSTIC_PROBE_SETTINGS = ("physx_friction_correlation_distance_m", "physx_solver_pgs", "physx_enable_stabilization",
-                             "tyre_damping_combine_max", "wheel_drive_damping")
+                             "tyre_damping_combine_max", "wheel_drive_damping", "physx_external_forces_every_iteration")
 TYRE_LINKS = tuple(f"/World/Forklift/{n}" for n in ("front_left_wheel", "front_right_wheel", "rear_left_wheel", "rear_right_wheel"))
 PROBE_CURVATURES = (0.29, -0.29, 0.36, -0.36)
 PROBE_SPEED_MPS = 0.25
@@ -869,6 +869,20 @@ def probe_window_metrics(rows, c: dict, dt: float, wheel_kappa, target_speed: fl
             "residual": None if k_true is None else k_true - (k_fl + k_fr) / 2, "rolling_ratio": ratio,
             "err_FL_mrad": float(np.mean(rows[:, c["q_FL"]] - rows[:, c["target_FL"]])) * 1e3,
             "err_FR_mrad": float(np.mean(rows[:, c["q_FR"]] - rows[:, c["target_FR"]])) * 1e3}
+
+
+def probe_segments_long_reverse_first() -> list[tuple[str, float, float, float]]:
+    """probe_segments_long() with each forward/reverse pair swapped (cause separation E: order and
+    contact history apart from the direction)."""
+    out, segs, i = [], probe_segments_long(), 0
+    while i < len(segs):
+        if segs[i][0].startswith("fwd") and i + 2 < len(segs) and segs[i + 2][0].startswith("rev"):
+            out += [segs[i + 2], segs[i + 1], segs[i], segs[i + 3]]
+            i += 4
+        else:
+            out.append(segs[i])
+            i += 1
+    return out
 
 
 def probe_segments_long() -> list[tuple[str, float, float, float]]:
@@ -937,7 +951,8 @@ def run_steering_probe(world, robot, wheels, steers, settings, args, action_type
     """Drive probe_segments() (or probe_segments_long()) and return a per-segment summary; the per-tick
     record goes to steering_probe.npz. Segment summaries use the last second of each segment, plus the
     steady window when one exists."""
-    segments = probe_segments_long() if args.steering_probe_set == "long" else probe_segments()
+    segments = {"long": probe_segments_long, "long_reverse_first": probe_segments_long_reverse_first,
+                "standard": probe_segments}[args.steering_probe_set]()
     dt = 1.0 / float(settings["physics_hz"])
     geometry = args.drive_geometry
     offset = abs(float(args.rear_axle_offset_m))
@@ -978,7 +993,7 @@ def run_steering_probe(world, robot, wheels, steers, settings, args, action_type
             rear = (float(position[0]) - offset * math.cos(yaw), float(position[1]) - offset * math.sin(yaw), yaw)
             rows.append([float(world.current_time) - t0, index, speed, kappa, *drive.steering_rad, *steering,
                          *q[steers], *qd[steers], *drive.wheel_rates_rad_s, *qd[wheels], *rear,
-                         float(position[2]), roll, pitch])
+                         float(position[2]), roll, pitch, *q[wheels]])
             tyre_contacts.append(tyre_floor_forces(stage_wheels))
             try:
                 joint_forces.append(np.asarray(robot.get_measured_joint_forces(), dtype=float).reshape(-1, 6))
@@ -993,7 +1008,10 @@ def run_steering_probe(world, robot, wheels, steers, settings, args, action_type
     x = np.asarray(rows, dtype=float)
     columns = ("t", "segment", "speed_cmd", "kappa_cmd", "target_FL", "target_FR", "cmd_FL", "cmd_FR",
                "q_FL", "q_FR", "qd_FL", "qd_FR", "w_cmd_FL", "w_cmd_FR", "w_cmd_RL", "w_cmd_RR",
-               "w_FL", "w_FR", "w_RL", "w_RR", "rear_x", "rear_y", "rear_yaw", "base_z", "roll", "pitch")
+               "w_FL", "w_FR", "w_RL", "w_RR", "rear_x", "rear_y", "rear_yaw", "base_z", "roll", "pitch",
+               # Wheel joint angles (cause separation E): a creep in the rates is a real rotation only if
+               # these advance by the integrated rate.
+               "p_FL", "p_FR", "p_RL", "p_RR")
     np.savez(out_dir / "steering_probe.npz", record=x, columns=np.array(columns),
              efforts_applied=np.asarray(efforts_applied), efforts_measured=np.asarray(efforts_measured),
              effort_columns=np.array(("steer_FL", "steer_FR", "spin_FL", "spin_FR")),
@@ -1553,11 +1571,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         physics_context.set_solver_type("PGS")
     if settings.get("physx_enable_stabilization"):
         physics_context.enable_stablization(True)
+    if settings.get("physx_external_forces_every_iteration"):
+        physics_context._physx_scene_api.CreateEnableExternalForcesEveryIterationAttr(True)
     state["physics_scene"] = {
         "solver_type": physics_context.get_solver_type(),
         "friction_correlation_distance_m": physics_context.get_friction_correlation_distance(),
         "friction_offset_threshold_m": physics_context.get_friction_offset_threshold(),
         "stabilization": physics_context.is_stablization_enabled(),
+        "external_forces_every_iteration": physics_context._physx_scene_api.GetEnableExternalForcesEveryIterationAttr().Get(),
         "dt_s": physics_context.get_physics_dt(),
     }
     catalogue, offsets = read_catalogue(stage, app, args.asset_root)
@@ -2076,6 +2097,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "coms": np.asarray(view_.get_body_coms()[0], dtype=float).reshape(-1, 3).tolist(),
             "inertias": np.asarray(view_.get_body_inertias(), dtype=float).reshape(-1, 9).tolist(),
         }
+        # Cause separation E: the drives as the engine holds them (gains, effort limits) per DOF.
+        kps_, kds_ = view_.get_gains()
+        state["plant_backend"].update(
+            dof_names=list(view_.dof_names),
+            drive_stiffness=np.asarray(kps_, dtype=float).reshape(-1).tolist(),
+            drive_damping=np.asarray(kds_, dtype=float).reshape(-1).tolist(),
+            max_efforts=np.asarray(view_.get_max_efforts(), dtype=float).reshape(-1).tolist(),
+        )
     except Exception as exc_:  # noqa: BLE001 -- the API differs between releases; record why
         state["plant_backend"] = {"error": repr(exc_)}
     if args.steering_probe:
