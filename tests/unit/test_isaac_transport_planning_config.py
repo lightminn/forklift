@@ -1235,3 +1235,51 @@ def test_the_probe_segments_cover_each_curvature_standing_forward_and_reverse():
     assert all(seconds > 0 for *_, seconds in segments)
     assert {round(v, 3) for lab, v, _, _ in segments if lab == "fwd"} == {0.25}
     assert {round(v, 3) for lab, v, _, _ in segments if lab == "rev"} == {-0.25}
+
+
+def _probe_helpers():
+    source = SCRIPT.read_text()
+    import math
+
+    namespace = {"np": np, "math": math}
+    exec(source[source.index("PROBE_CURVATURES = "): source.index("def run_steering_probe(")], namespace)  # noqa: S102
+    return namespace
+
+
+def test_the_long_probe_set_holds_each_run_long_enough_and_comes_back():
+    """Fork spacing plan, diagnostic D-a (fixed before results): 0.25 m/s straight 4 s and 0.6 m/s
+    straight 3.5 s, forward then reverse, and the 0.6 m/s +-0.36 arcs held 2.5 s, each forward run
+    followed by the same reverse run."""
+    segments = _probe_helpers()["probe_segments_long"]()
+    moving = [(lab, v, k, s) for lab, v, k, s in segments if v != 0]
+    assert (0.25, 0.0, 4.0) in {(v, k, s) for _, v, k, s in moving}
+    assert (-0.25, 0.0, 4.0) in {(v, k, s) for _, v, k, s in moving}
+    assert {(v, s) for _, v, k, s in moving if k == 0 and abs(v) > 0.5} == {(0.6, 3.5), (-0.6, 3.5)}
+    for kappa in (0.36, -0.36):
+        assert {(v, s) for _, v, k, s in moving if k == kappa} == {(0.6, 2.5), (-0.6, 2.5)}
+    # Each forward run is followed (after a stop) by the same reverse run.
+    for i, (_, v, k, s) in enumerate(moving):
+        if v > 0:
+            assert moving[i + 1][1:] == (-v, k, s)
+    assert sum(1 for lab, v, *_ in segments if v == 0 and lab == "stop") == len(moving)
+
+
+def test_the_probe_window_metrics_read_curvature_residual_and_rolling_ratio():
+    helpers = _probe_helpers()
+    columns = ("t", "segment", "speed_cmd", "kappa_cmd", "target_FL", "target_FR", "cmd_FL", "cmd_FR",
+               "q_FL", "q_FR", "qd_FL", "qd_FR", "w_cmd_FL", "w_cmd_FR", "w_cmd_RL", "w_cmd_RR",
+               "w_FL", "w_FR", "w_RL", "w_RR", "rear_x", "rear_y", "rear_yaw", "base_z", "roll", "pitch")
+    c = {k: i for i, k in enumerate(columns)}
+    dt, kappa, speed, radius = 1 / 120, 0.3, -0.6, 0.125
+    t = np.arange(120) * dt
+    s = speed * t
+    rows = np.zeros((len(t), len(columns)))
+    rows[:, c["rear_yaw"]] = kappa * s
+    rows[:, c["rear_x"]] = np.sin(kappa * s) / kappa
+    rows[:, c["rear_y"]] = (1 - np.cos(kappa * s)) / kappa
+    rows[:, c["w_RL"]] = rows[:, c["w_RR"]] = speed / radius / 0.99  # wheels spin 1 % fast
+    rows[:, c["q_FL"]] = rows[:, c["q_FR"]] = 0.1
+    m = helpers["probe_window_metrics"](rows, c, dt, lambda l, r: (0.31, 0.29), speed, radius)
+    assert m["kappa_true"] == pytest.approx(kappa, rel=1e-6)
+    assert m["residual"] == pytest.approx(kappa - 0.30, abs=1e-6)
+    assert m["rolling_ratio"] == pytest.approx(0.99, rel=1e-3)

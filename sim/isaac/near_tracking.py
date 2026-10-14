@@ -1055,7 +1055,7 @@ RUN_SPECIFIC_ARGUMENTS = (
 # is a difference (2026-10-13: --return-turnaround, off unless given; 2026-10-14: the
 # --repeat-at-near-capture diagnostic, off unless given; the --steering-probe diagnostic likewise).
 POST_MEASUREMENT_ARGUMENTS = {"return_turnaround": False, "repeat_at_near_capture": False, "steering_probe": False,
-                              "tyre_contact_log": False}
+                              "tyre_contact_log": False, "steering_probe_set": "standard"}
 CONDITION_FIELDS = (
     "settings_synthetic",
     "detector_params",

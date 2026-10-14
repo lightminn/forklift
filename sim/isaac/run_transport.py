@@ -591,6 +591,12 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument("--repeat-at-attempt", type=int, default=None)
     parser.add_argument(
+        "--steering-probe-set",
+        choices=("standard", "long"),
+        default="standard",
+        help="The --steering-probe segment set: standard, or long steady-state runs (new plant diagnostic D-a).",
+    )
+    parser.add_argument(
         "--tyre-contact-log",
         action="store_true",
         help="Diagnostic: log each tyre's floor contact (PhysX contact report) every 0.1 s of the mission to "
@@ -841,6 +847,40 @@ def probe_segments() -> list[tuple[str, float, float, float]]:
 TYRE_FIELDS = ("Jx", "Jy", "Jz", "Mx", "My", "Mz", "floor_contacts", "min_separation_m", "other_contacts", "other_impulse")
 
 
+def probe_window_metrics(rows, c: dict, dt: float, wheel_kappa, target_speed: float, radius: float) -> dict:
+    """Curvature from both front wheels' actual angles and from the truth rear pose, their residual,
+    and the rolling ratio (rear-axle longitudinal speed over the two rear wheels' actual rate x radius)
+    over a steady window."""
+    q_fl, q_fr = float(np.mean(rows[:, c["q_FL"]])), float(np.mean(rows[:, c["q_FR"]]))
+    k_fl, k_fr = wheel_kappa(q_fl, q_fr)
+    dx, dy = np.diff(rows[:, c["rear_x"]]), np.diff(rows[:, c["rear_y"]])
+    yaw = np.unwrap(rows[:, c["rear_yaw"]])
+    ds = float(np.sum(np.hypot(dx, dy)))
+    sign = 1.0 if target_speed >= 0 else -1.0
+    k_true = sign * float(yaw[-1] - yaw[0]) / ds if ds > 0.02 else None
+    v_long = (dx * np.cos(yaw[1:]) + dy * np.sin(yaw[1:])) / dt
+    w = (rows[1:, c["w_RL"]] + rows[1:, c["w_RR"]]) / 2
+    ratio = float(np.mean(v_long) / np.mean(w * radius)) if abs(float(np.mean(w))) > 1e-3 else None
+    return {"kappa_FL": k_fl, "kappa_FR": k_fr, "kappa_avg": (k_fl + k_fr) / 2, "kappa_true": k_true,
+            "residual": None if k_true is None else k_true - (k_fl + k_fr) / 2, "rolling_ratio": ratio,
+            "err_FL_mrad": float(np.mean(rows[:, c["q_FL"]] - rows[:, c["target_FL"]])) * 1e3,
+            "err_FR_mrad": float(np.mean(rows[:, c["q_FR"]] - rows[:, c["target_FR"]])) * 1e3}
+
+
+def probe_segments_long() -> list[tuple[str, float, float, float]]:
+    """The long steady-state set (new plant candidate, diagnostic D-a): straight runs long enough to
+    settle after the 0.8 m/s^2 slew, and the 0.6 m/s full-command arcs held longer; each forward run
+    is followed by the same reverse run so the truck comes back."""
+    out = [("settle", 0.0, 0.0, 1.0)]
+    for label, speed, seconds in (("fwd", PROBE_SPEED_MPS, 4.0), ("rev", -PROBE_SPEED_MPS, 4.0),
+                                  ("fwd_fast", PROBE_FAST_MPS, 3.5), ("rev_fast", -PROBE_FAST_MPS, 3.5)):
+        out += [(label, speed, 0.0, seconds), ("stop", 0.0, 0.0, 1.5)]
+    for kappa in (0.36, -0.36):
+        out += [("fwd_fast", PROBE_FAST_MPS, kappa, 2.5), ("stop", 0.0, 0.0, 1.5),
+                ("rev_fast", -PROBE_FAST_MPS, kappa, 2.5), ("stop", 0.0, 0.0, 1.5)]
+    return out
+
+
 def tyre_floor_forces(stage_wheels: tuple[str, ...]) -> list[list[float]]:
     """Per tyre (in stage_wheels order), from this step's PhysX contact report against everything
     outside the robot (TYRE_FIELDS): the floor contacts' (normal within 0.9 of vertical) summed impulse
@@ -886,8 +926,10 @@ def tyre_floor_forces(stage_wheels: tuple[str, ...]) -> list[list[float]]:
 
 
 def run_steering_probe(world, robot, wheels, steers, settings, args, action_type, ackermann, out_dir) -> dict:
-    """Drive probe_segments() and return a per-segment summary; the per-tick record goes to
-    steering_probe.npz. Segment summaries use the last second of each segment."""
+    """Drive probe_segments() (or probe_segments_long()) and return a per-segment summary; the per-tick
+    record goes to steering_probe.npz. Segment summaries use the last second of each segment, plus the
+    steady window when one exists."""
+    segments = probe_segments_long() if args.steering_probe_set == "long" else probe_segments()
     dt = 1.0 / float(settings["physics_hz"])
     geometry = args.drive_geometry
     offset = abs(float(args.rear_axle_offset_m))
@@ -903,7 +945,7 @@ def run_steering_probe(world, robot, wheels, steers, settings, args, action_type
     except Exception:  # noqa: BLE001 -- recorded for the analysis only
         body_names = []
     t0 = float(world.current_time)
-    for index, (label, target_speed, kappa, seconds) in enumerate(probe_segments()):
+    for index, (label, target_speed, kappa, seconds) in enumerate(segments):
         for _ in range(int(round(seconds / dt))):
             if speed * target_speed < 0:
                 target = 0.0
@@ -958,9 +1000,29 @@ def run_steering_probe(world, robot, wheels, steers, settings, args, action_type
         return tl / (wheelbase + tl * half), tr / (wheelbase - tr * half)
 
     summary = []
-    for index, (label, target_speed, kappa, seconds) in enumerate(probe_segments()):
+    for index, (label, target_speed, kappa, seconds) in enumerate(segments):
         tick = int(round(min(1.0, seconds / 2) / dt))  # the segment's last half, at most 1 s
         seg = x[x[:, 1] == index][-tick:]
+        whole = x[x[:, 1] == index]
+        c = {k: i for i, k in enumerate(columns)}
+        # The 13th draft's steady window: both wheels |qdot| < 0.02 rad/s and |d error/dt| < 5 mrad/s,
+        # the longest such run in the segment's second half, used when >= 0.3 s.
+        late = whole[len(whole) // 2:]  # not `half`: wheel_kappa reads the half track by that name
+        steady_mask = np.zeros(len(late), dtype=bool)
+        if len(late) > 2:
+            err_l = late[:, c["q_FL"]] - late[:, c["target_FL"]]
+            err_r = late[:, c["q_FR"]] - late[:, c["target_FR"]]
+            slope = np.maximum(np.abs(np.gradient(err_l, dt)), np.abs(np.gradient(err_r, dt)))
+            steady_mask = (np.abs(late[:, c["qd_FL"]]) < 0.02) & (np.abs(late[:, c["qd_FR"]]) < 0.02) & (slope < 0.005)
+        best, run_start, best_span = 0, None, None
+        for i_, ok_ in enumerate(np.r_[steady_mask, False]):
+            if ok_ and run_start is None:
+                run_start = i_
+            elif not ok_ and run_start is not None:
+                if i_ - run_start > best:
+                    best, best_span = i_ - run_start, (run_start, i_)
+                run_start = None
+        steady = late[best_span[0]:best_span[1]] if best_span and best * dt >= 0.3 else None
         ea = np.asarray(efforts_applied)[x[:, 1] == index][-tick:]
         em = np.asarray(efforts_measured)[x[:, 1] == index][-tick:]
         tc = np.asarray(tyre_contacts)[x[:, 1] == index][-tick:]
@@ -986,6 +1048,9 @@ def run_steering_probe(world, robot, wheels, steers, settings, args, action_type
             "tyre_min_separation_m": np.nanmin(tc[:, :, 7], axis=0).tolist() if len(tc) else None,
             "tyre_other_contacts_max": np.nanmax(tc[:, :, 8], axis=0).tolist() if len(tc) else None,
             "q_rate_FL_mean": float(np.mean(seg[:, c["qd_FL"]])), "q_rate_FR_mean": float(np.mean(seg[:, c["qd_FR"]])),
+            "steady_s": None if steady is None else len(steady) * dt,
+            "steady": None if steady is None else probe_window_metrics(steady, c, dt, wheel_kappa, target_speed,
+                                                                    geometry.wheel_radius_m),
             "effort_applied": np.nanmean(ea, axis=0).tolist() if len(ea) else None,
             "effort_measured": np.nanmean(em, axis=0).tolist() if len(em) else None,
             "wheel_rate_FL": [float(np.mean(seg[:, c["w_cmd_FL"]])), float(np.mean(seg[:, c["w_FL"]]))],
