@@ -105,6 +105,11 @@ ARGUMENTS_BY_DESIGN = (
     "slam_map_dir",
     "measure_safety_stops_m",
     "record_dwell_gaps",
+    # The near-field files are this measurement's outputs, named by every run since D8 S4 but
+    # read only with --near-tracking (as near_tracking.RUN_SPECIFIC_ARGUMENTS skips them); a
+    # bounds file's provenance strings are not runner inputs (EPAL 6 fork spacing plan S3).
+    "near_bounds",
+    "near_drive_terms",
 )
 HOLD_S = 0.5
 

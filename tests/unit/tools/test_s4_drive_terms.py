@@ -468,6 +468,20 @@ def test_recorded_lidar_factory_and_scene_must_match_the_d8b_run():
     assert any("s5_0.08: factory differs" in p for p in problems)
 
 
+def test_the_near_field_files_are_not_compared_with_the_d8b_run():
+    # Their content is this measurement's output and a bounds file names its provenance runs
+    # by artifact paths no snapshot holds (EPAL 6 fork spacing plan S3).
+    runs = matrix()
+    runs["s1_0.055"].result["arguments"]["near_bounds"] = (
+        "/x/config/near_field_bounds_measured.json"
+    )
+    runs["s1_0.055"].result["arguments"]["near_drive_terms"] = (
+        "/x/config/near_field_drive_terms.json"
+    )
+    assert problems_of(runs) == []
+    assert {"near_bounds", "near_drive_terms"} <= set(DT.ARGUMENTS_BY_DESIGN)
+
+
 def test_the_snapshot_part_of_an_argument_path_is_ignored():
     assert (
         DT.snapshot_relative("/home/p/snapshots/abc/config/x.yaml") == "config/x.yaml"

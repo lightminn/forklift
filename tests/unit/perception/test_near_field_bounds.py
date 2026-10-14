@@ -152,13 +152,19 @@ def test_the_committed_bounds_load_with_the_d8b_values():
         Path(__file__).resolve().parents[3] / "config/near_field_bounds_measured.json"
     )
     b = NearFieldBounds.load(path)
+    # The EPAL 6 fork spacing plan's S2 re-measure (0.3725 m forks, 2026-10-14, batch s2v2).
     assert b.align_latency_s == pytest.approx(0.091668, abs=1e-6)
-    assert b.max_latency_s == pytest.approx(0.098940, abs=1e-6)
+    assert b.max_latency_s == pytest.approx(0.098850, abs=1e-6)
     assert b.read_delay_s == pytest.approx(
         1 / 120
     ) and b.render_period_s == pytest.approx(0.1)
-    assert b.odometry(0.1) == pytest.approx((0.003495, 0.001871), abs=1e-6)
-    assert b.observation("front", 2.5)["lateral_m"] == pytest.approx(0.005937, abs=1e-6)
-    assert b.observation("front", 0.411) is None and b.observation("roof", 1.76) is None
-    assert b.near_capture["lateral_m"] == pytest.approx(0.005937, abs=1e-6)
+    assert b.odometry(0.1) == pytest.approx((0.003434, 0.001798), abs=1e-6)
+    assert b.observation("front", 2.5)["lateral_m"] == pytest.approx(0.006191, abs=1e-6)
+    # 0.411 m now returns a bound: the lookup's widened edge (along bound + 10 mm) moved from 0.411173
+    # to 0.410968 m; the 0.5-0.4 m bin itself had valid reads in both measurements.
+    assert b.observation("front", 0.411)["lateral_m"] == pytest.approx(
+        0.003878, abs=1e-6
+    )
+    assert b.observation("front", 0.39) is None and b.observation("roof", 1.76) is None
+    assert b.near_capture["lateral_m"] == pytest.approx(0.006191, abs=1e-6)
     assert b.condition["video"] is False

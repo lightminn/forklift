@@ -194,9 +194,14 @@ def test_the_condition_names_every_argument_setting_and_input_that_differs(tmp_p
     assert NT.tracker_config_problems(None, longer) == ["tracker_configs missing"]
     # A follower field added since (fix A's hold) reads as its earlier value None on a record
     # without it; the observe tracker's 0.08 still differs (Codex fix A implementation review 1).
-    recorded = json.loads((ROOT / "config/near_field_drive_terms.json").read_text())[
+    measured = json.loads((ROOT / "config/near_field_drive_terms.json").read_text())[
         "condition"
     ]["tracker_configs"]
+    # A record from before the field (the committed terms carry it since the S3 re-measure).
+    recorded = {
+        phase: {k: v for k, v in config.items() if k != "cusp_heading_pending_rad"}
+        for phase, config in measured.items()
+    }
     now = {
         phase: {**config, "cusp_heading_pending_rad": None}
         for phase, config in recorded.items()
