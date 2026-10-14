@@ -1200,3 +1200,38 @@ def test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own():
     reset = source.index('state["observe_replan_leg"] = {\n', near)
     assert reset < source.index("paths[\"observe\"] = near_leg", near)
     assert source.count('state["observe_replan_leg"] = {') == 2
+
+
+def test_the_steering_probe_runs_after_the_spawn_checks_and_ends_the_run():
+    """Fork spacing plan, cause survey after the S4 rerun: --steering-probe drives scripted segments
+    through the runner's command path once the spawn is checked, records them and returns."""
+    source = SCRIPT.read_text()
+    spawn = source.index('"Truck spawn displaced"')
+    call = source.index("if args.steering_probe:", spawn)
+    assert call < source.index("obstacle = None  # the priority-5 obstacle layer", spawn)
+    body = source[call: source.index("return\n", call)]
+    assert "run_steering_probe(" in body and 'state["phase"] = "steering_probe_done"' in body
+    probe = source[source.index("def run_steering_probe("): source.index("def ", source.index("def run_steering_probe(") + 10)]
+    # The runner's own command path: Ackermann targets, the steering rate limit, the wheel-rate slew.
+    assert "ackermann(speed, kappa, geometry)" in probe
+    assert 'settings["steering_command_rate_rad_s"] * dt' in probe
+    assert "COMMAND_ACCEL_MPS2 * dt" in probe
+
+
+def test_the_probe_segments_cover_each_curvature_standing_forward_and_reverse():
+    import importlib.util as util
+
+    spec = util.spec_from_file_location("_rt_probe", SCRIPT)
+    # Read the pure helper without importing the runner (it needs Isaac): exec its source slice.
+    source = SCRIPT.read_text()
+    start = source.index("PROBE_CURVATURES = ")
+    end = source.index("def run_steering_probe(")
+    namespace = {}
+    exec(source[start:end], namespace)  # noqa: S102 -- a constant tuple and a pure function
+    segments = namespace["probe_segments"]()
+    assert spec is not None
+    for label in ("still", "fwd", "rev"):
+        assert {k for lab, _, k, _ in segments if lab == label} >= {0.29, -0.29, 0.36, -0.36}
+    assert all(seconds > 0 for *_, seconds in segments)
+    assert {round(v, 3) for lab, v, _, _ in segments if lab == "fwd"} == {0.25}
+    assert {round(v, 3) for lab, v, _, _ in segments if lab == "rev"} == {-0.25}

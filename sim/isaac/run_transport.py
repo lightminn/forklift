@@ -591,6 +591,13 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument("--repeat-at-attempt", type=int, default=None)
     parser.add_argument(
+        "--steering-probe",
+        action="store_true",
+        help="Diagnostic: after the spawn checks, drive scripted steering segments (standstill, "
+        "forward, reverse at +-0.29 / +-0.36 1/m) and stop, recording the joints, efforts and truth "
+        "pose (fork spacing plan, cause survey after the S4 rerun).",
+    )
+    parser.add_argument(
         "--repeat-at-near-capture",
         action="store_true",
         help="Diagnostic: take the --repeat-captures batch at the first near capture "
@@ -797,6 +804,106 @@ def require(condition: bool, reason: str) -> None:
     """A failed experimental invariant always aborts, even under Python -O."""
     if not condition:
         raise RuntimeError(reason)
+
+
+# EPAL 6 fork spacing plan, cause survey after the S4 rerun: the steering response probe. The recorded
+# runs show the front-left wheel short of its command while the body follows that wheel's curvature;
+# this drives scripted segments (standstill, forward, reverse at each curvature) through the runner's
+# own command path (Ackermann targets, the steering rate limit, the wheel-rate slew) and records the
+# joints, their efforts and the truth pose every physics tick.
+PROBE_CURVATURES = (0.29, -0.29, 0.36, -0.36)
+PROBE_SPEED_MPS = 0.25
+
+
+def probe_segments() -> list[tuple[str, float, float, float]]:
+    """(label, speed m/s, curvature 1/m, seconds): standstill steering steps, then the same
+    curvatures rolling forward and in reverse, each between straight stretches."""
+    out = [("settle", 0.0, 0.0, 1.0)]
+    out += [("still", 0.0, k, 2.5) for k in PROBE_CURVATURES]
+    out.append(("still", 0.0, 0.0, 1.5))
+    for label, speed in (("fwd", PROBE_SPEED_MPS), ("rev", -PROBE_SPEED_MPS)):
+        out.append((label, speed, 0.0, 1.5))
+        out += [(label, speed, k, 2.5) for k in PROBE_CURVATURES]
+        out += [(label, speed, 0.0, 1.0), ("stop", 0.0, 0.0, 1.5)]
+    return out
+
+
+def run_steering_probe(world, robot, wheels, steers, settings, args, action_type, ackermann, out_dir) -> dict:
+    """Drive probe_segments() and return a per-segment summary; the per-tick record goes to
+    steering_probe.npz. Segment summaries use the last second of each segment."""
+    dt = 1.0 / float(settings["physics_hz"])
+    geometry = args.drive_geometry
+    offset = abs(float(args.rear_axle_offset_m))
+    steering = np.asarray(robot.get_joint_positions()[steers], dtype=float).copy()
+    speed = 0.0
+    rows, efforts_applied, efforts_measured = [], [], []
+    t0 = float(world.current_time)
+    for index, (label, target_speed, kappa, seconds) in enumerate(probe_segments()):
+        for _ in range(int(round(seconds / dt))):
+            if speed * target_speed < 0:
+                target = 0.0
+            else:
+                target = target_speed
+            speed += float(np.clip(target - speed, -COMMAND_ACCEL_MPS2 * dt, COMMAND_ACCEL_MPS2 * dt))
+            drive = ackermann(speed, kappa, geometry)
+            rate = settings["steering_command_rate_rad_s"] * dt
+            steering += np.clip(np.asarray(drive.steering_rad) - steering, -rate, rate)
+            rates = np.asarray(drive.wheel_rates_rad_s, dtype=float)
+            robot.apply_action(action_type(joint_velocities=rates, joint_indices=wheels))
+            robot.apply_action(action_type(joint_positions=steering.copy(), joint_indices=steers))
+            world.step(render=False)
+            q = np.asarray(robot.get_joint_positions(), dtype=float)
+            qd = np.asarray(robot.get_joint_velocities(), dtype=float)
+            position, orientation = robot.get_world_pose()
+            yaw, _ = yaw_and_tilt(np.asarray(orientation, dtype=float))
+            rear = (float(position[0]) - offset * math.cos(yaw), float(position[1]) - offset * math.sin(yaw), yaw)
+            rows.append([float(world.current_time) - t0, index, speed, kappa, *drive.steering_rad, *steering,
+                         *q[steers], *qd[steers], *drive.wheel_rates_rad_s, *qd[wheels], *rear])
+            for store, name in ((efforts_applied, "get_applied_joint_efforts"), (efforts_measured, "get_measured_joint_efforts")):
+                try:
+                    e = np.asarray(getattr(robot, name)(), dtype=float)
+                    store.append([*e[steers], *e[wheels[:2]]])
+                except Exception:  # noqa: BLE001 -- the API differs between Isaac releases; record what exists
+                    store.append([math.nan] * 4)
+    x = np.asarray(rows, dtype=float)
+    columns = ("t", "segment", "speed_cmd", "kappa_cmd", "target_FL", "target_FR", "cmd_FL", "cmd_FR",
+               "q_FL", "q_FR", "qd_FL", "qd_FR", "w_cmd_FL", "w_cmd_FR", "w_cmd_RL", "w_cmd_RR",
+               "w_FL", "w_FR", "w_RL", "w_RR", "rear_x", "rear_y", "rear_yaw")
+    np.savez(out_dir / "steering_probe.npz", record=x, columns=np.array(columns),
+             efforts_applied=np.asarray(efforts_applied), efforts_measured=np.asarray(efforts_measured),
+             effort_columns=np.array(("steer_FL", "steer_FR", "spin_FL", "spin_FR")))
+    half, wheelbase = geometry.track_m / 2, geometry.wheelbase_m
+
+    def wheel_kappa(left, right):
+        tl, tr = math.tan(left), math.tan(right)
+        return tl / (wheelbase + tl * half), tr / (wheelbase - tr * half)
+
+    summary = []
+    tick = int(round(1.0 / dt))
+    for index, (label, target_speed, kappa, seconds) in enumerate(probe_segments()):
+        seg = x[x[:, 1] == index][-tick:]
+        ea = np.asarray(efforts_applied)[x[:, 1] == index][-tick:]
+        em = np.asarray(efforts_measured)[x[:, 1] == index][-tick:]
+        c = {k: i for i, k in enumerate(columns)}
+        q_fl, q_fr = float(np.mean(seg[:, c["q_FL"]])), float(np.mean(seg[:, c["q_FR"]]))
+        k_fl, k_fr = wheel_kappa(q_fl, q_fr)
+        ds = float(np.sum(np.hypot(np.diff(seg[:, c["rear_x"]]), np.diff(seg[:, c["rear_y"]]))))
+        dyaw = float(np.unwrap(seg[:, c["rear_yaw"]])[-1] - np.unwrap(seg[:, c["rear_yaw"]])[0])
+        sign = 1.0 if target_speed >= 0 else -1.0
+        summary.append({
+            "segment": index, "label": label, "speed_mps": target_speed, "kappa_cmd": kappa,
+            "target_FL": float(np.mean(seg[:, c["target_FL"]])), "target_FR": float(np.mean(seg[:, c["target_FR"]])),
+            "q_FL": q_fl, "q_FR": q_fr,
+            "err_FL_mrad": (q_fl - float(np.mean(seg[:, c["target_FL"]]))) * 1e3,
+            "err_FR_mrad": (q_fr - float(np.mean(seg[:, c["target_FR"]]))) * 1e3,
+            "kappa_FL": k_fl, "kappa_FR": k_fr, "kappa_avg": (k_fl + k_fr) / 2,
+            "kappa_true": sign * dyaw / ds if ds > 0.02 else None, "distance_m": ds,
+            "effort_applied": np.nanmean(ea, axis=0).tolist() if len(ea) else None,
+            "effort_measured": np.nanmean(em, axis=0).tolist() if len(em) else None,
+            "wheel_rate_FL": [float(np.mean(seg[:, c["w_cmd_FL"]])), float(np.mean(seg[:, c["w_FL"]]))],
+            "wheel_rate_FR": [float(np.mean(seg[:, c["w_cmd_FR"]])), float(np.mean(seg[:, c["w_FR"]]))],
+        })
+    return {"segments": summary, "dt_s": dt, "speed_mps": PROBE_SPEED_MPS, "curvatures": list(PROBE_CURVATURES)}
 
 
 # Colour range of the robot-camera depth video; display only, not a sensor limit.
@@ -1759,6 +1866,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     )
     state["initial_pallet_m"] = initial_pallet.tolist()
     state["velocities_before_planning"] = body_velocities()
+    if args.steering_probe:
+        state["steering_probe"] = run_steering_probe(
+            world, robot, wheels, steers, settings, args, ArticulationAction, ackermann_command, args.output
+        )
+        state["phase"] = "steering_probe_done"
+        state["success"] = True
+        return
     obstacle = None  # the priority-5 obstacle layer
     if args.obstacle_layer is not None:
         import obstacle_layer as obstacle_module

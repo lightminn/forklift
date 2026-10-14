@@ -1053,8 +1053,8 @@ RUN_SPECIFIC_ARGUMENTS = (
 # Arguments added after the measurement runs, each at the value that reproduces them: a run
 # holding that value matches measurement records that predate the argument, any other value
 # is a difference (2026-10-13: --return-turnaround, off unless given; 2026-10-14: the
-# --repeat-at-near-capture diagnostic, off unless given).
-POST_MEASUREMENT_ARGUMENTS = {"return_turnaround": False, "repeat_at_near_capture": False}
+# --repeat-at-near-capture diagnostic, off unless given; the --steering-probe diagnostic likewise).
+POST_MEASUREMENT_ARGUMENTS = {"return_turnaround": False, "repeat_at_near_capture": False, "steering_probe": False}
 CONDITION_FIELDS = (
     "settings_synthetic",
     "detector_params",
