@@ -384,6 +384,46 @@ def create_pallet(
     return pallet
 
 
+def plant_readback(stage: Usd.Stage) -> dict:
+    """The run's plant as the stage holds it after configure_drives (new plant candidate V0): every
+    collider's bound physics material counted by (root, material, compliant stiffness, damping,
+    acceleration-spring flag), the colliders with a compliant contact by path, the rigid bodies with
+    neither an authored mass nor a collider (PhysX gives those a default mass), and the articulation's
+    solver iterations."""
+    counts, compliant, massless, solver = {}, [], [], {}
+    for prim in Usd.PrimRange(stage.GetPseudoRoot(), Usd.TraverseInstanceProxies()):
+        path = str(prim.GetPath())
+        if prim.HasAPI(UsdPhysics.CollisionAPI):
+            material, _ = UsdShade.MaterialBindingAPI(prim).ComputeBoundMaterial("physics")
+            mprim = material.GetPrim() if material else None
+
+            def value(name):
+                attr = mprim.GetAttribute(name) if mprim else None
+                return attr.Get() if attr and attr.IsValid() and attr.HasAuthoredValue() else None
+
+            key = (path.split("/")[2] if path.count("/") >= 2 else path, str(mprim.GetPath()) if mprim else None,
+                   value("physxMaterial:compliantContactStiffness"), value("physxMaterial:compliantContactDamping"),
+                   value("physxMaterial:compliantContactAccelerationSpring"))
+            counts[key] = counts.get(key, 0) + 1
+            if key[2]:
+                compliant.append(path)
+        if prim.HasAPI(UsdPhysics.RigidBodyAPI):
+            mass = UsdPhysics.MassAPI(prim).GetMassAttr().Get() if prim.HasAPI(UsdPhysics.MassAPI) else None
+            has_collider = any(p.HasAPI(UsdPhysics.CollisionAPI) for p in Usd.PrimRange(prim, Usd.TraverseInstanceProxies()))
+            if not mass and not has_collider:
+                massless.append(path)
+        if prim.HasAPI(UsdPhysics.ArticulationRootAPI):
+            physx = PhysxSchema.PhysxArticulationAPI(prim)
+            solver[path] = [physx.GetSolverPositionIterationCountAttr().Get(), physx.GetSolverVelocityIterationCountAttr().Get()]
+    return {
+        "materials": [{"root": k[0], "material": k[1], "compliant_stiffness": k[2], "compliant_damping": k[3],
+                       "acceleration_spring": k[4], "colliders": n} for k, n in sorted(counts.items(), key=str)],
+        "compliant_colliders": compliant,
+        "massless_bodies": massless,
+        "articulation_solver_iterations": solver,
+    }
+
+
 def tyre_contact_readback(stage: Usd.Stage) -> list[dict]:
     """Every robot collider's bound physics material and its friction / compliant-contact values, read
     back from the stage after configure_drives (the plant record: the same base USD hash is not the
@@ -448,6 +488,8 @@ def configure_drives(
     # EPAL 6 fork spacing plan, new plant candidate: the four tyre colliders alone get a compliant
     # contact (a rigid four-wheel stance settled onto a diagonal pair); every other robot, pallet and
     # floor contact keeps the rigid material. Off unless a settings file sets the stiffness.
+    if settings.get("tyre_contact_stiffness_n_per_m") is not None and settings.get("contact_stiffness_n_per_m") is not None:
+        raise ValueError("the diagnostic common compliant contact and the tyre-only one exclude each other")
     tyre_material = None
     if settings.get("tyre_contact_stiffness_n_per_m") is not None:
         tyre_material = UsdShade.Material.Define(stage, "/World/TyreContactMaterial")
@@ -473,8 +515,9 @@ def configure_drives(
                 )
             if prim.HasAPI(UsdPhysics.ArticulationRootAPI):
                 physics = PhysxSchema.PhysxArticulationAPI.Apply(prim)
-                physics.CreateSolverPositionIterationCountAttr(32)
-                physics.CreateSolverVelocityIterationCountAttr(8)
+                # 32/8 unless a convergence check sets them (new plant candidate V4).
+                physics.CreateSolverPositionIterationCountAttr(int(settings.get("solver_position_iterations", 32)))
+                physics.CreateSolverVelocityIterationCountAttr(int(settings.get("solver_velocity_iterations", 8)))
             if prim.IsA(UsdPhysics.RevoluteJoint) or prim.IsA(
                 UsdPhysics.PrismaticJoint
             ):

@@ -591,6 +591,12 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument("--repeat-at-attempt", type=int, default=None)
     parser.add_argument(
+        "--tyre-contact-log",
+        action="store_true",
+        help="Diagnostic: log each tyre's floor contact (PhysX contact report) every 0.1 s of the mission to "
+        "tyre_contacts.npy (fork spacing plan, new plant candidate V1/V5).",
+    )
+    parser.add_argument(
         "--steering-probe",
         action="store_true",
         help="Diagnostic: after the spawn checks, drive scripted steering segments (standstill, "
@@ -811,6 +817,7 @@ def require(condition: bool, reason: str) -> None:
 # this drives scripted segments (standstill, forward, reverse at each curvature) through the runner's
 # own command path (Ackermann targets, the steering rate limit, the wheel-rate slew) and records the
 # joints, their efforts and the truth pose every physics tick.
+TYRE_LINKS = tuple(f"/World/Forklift/{n}" for n in ("front_left_wheel", "front_right_wheel", "rear_left_wheel", "rear_right_wheel"))
 PROBE_CURVATURES = (0.29, -0.29, 0.36, -0.36)
 PROBE_SPEED_MPS = 0.25
 PROBE_FAST_MPS = 0.6  # shorter arcs: the run starts facing the pallet about 5 m ahead
@@ -876,7 +883,7 @@ def run_steering_probe(world, robot, wheels, steers, settings, args, action_type
     steering = np.asarray(robot.get_joint_positions()[steers], dtype=float).copy()
     speed = 0.0
     rows, efforts_applied, efforts_measured, joint_forces, tyre_contacts = [], [], [], [], []
-    stage_wheels = tuple(f"/World/Forklift/{n}" for n in ("front_left_wheel", "front_right_wheel", "rear_left_wheel", "rear_right_wheel"))
+    stage_wheels = TYRE_LINKS
     names = list(robot.dof_names)
     # The 6-D incoming joint force of each wheel's support joint (front: the steering joint, rear: the
     # spin joint) -- its vertical part is the wheel's share of the truck's weight.
@@ -902,10 +909,15 @@ def run_steering_probe(world, robot, wheels, steers, settings, args, action_type
             q = np.asarray(robot.get_joint_positions(), dtype=float)
             qd = np.asarray(robot.get_joint_velocities(), dtype=float)
             position, orientation = robot.get_world_pose()
-            yaw, _ = yaw_and_tilt(np.asarray(orientation, dtype=float))
+            quat = np.asarray(orientation, dtype=float)
+            yaw, _ = yaw_and_tilt(quat)
+            w_, x_, y_, z_ = quat
+            roll = math.atan2(2 * (w_ * x_ + y_ * z_), 1 - 2 * (x_ * x_ + y_ * y_))
+            pitch = math.asin(max(-1.0, min(1.0, 2 * (w_ * y_ - z_ * x_))))
             rear = (float(position[0]) - offset * math.cos(yaw), float(position[1]) - offset * math.sin(yaw), yaw)
             rows.append([float(world.current_time) - t0, index, speed, kappa, *drive.steering_rad, *steering,
-                         *q[steers], *qd[steers], *drive.wheel_rates_rad_s, *qd[wheels], *rear])
+                         *q[steers], *qd[steers], *drive.wheel_rates_rad_s, *qd[wheels], *rear,
+                         float(position[2]), roll, pitch])
             tyre_contacts.append(tyre_floor_forces(stage_wheels))
             try:
                 joint_forces.append(np.asarray(robot.get_measured_joint_forces(), dtype=float).reshape(-1, 6))
@@ -920,7 +932,7 @@ def run_steering_probe(world, robot, wheels, steers, settings, args, action_type
     x = np.asarray(rows, dtype=float)
     columns = ("t", "segment", "speed_cmd", "kappa_cmd", "target_FL", "target_FR", "cmd_FL", "cmd_FR",
                "q_FL", "q_FR", "qd_FL", "qd_FR", "w_cmd_FL", "w_cmd_FR", "w_cmd_RL", "w_cmd_RR",
-               "w_FL", "w_FR", "w_RL", "w_RR", "rear_x", "rear_y", "rear_yaw")
+               "w_FL", "w_FR", "w_RL", "w_RR", "rear_x", "rear_y", "rear_yaw", "base_z", "roll", "pitch")
     np.savez(out_dir / "steering_probe.npz", record=x, columns=np.array(columns),
              efforts_applied=np.asarray(efforts_applied), efforts_measured=np.asarray(efforts_measured),
              effort_columns=np.array(("steer_FL", "steer_FR", "spin_FL", "spin_FR")),
@@ -1434,7 +1446,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     state["scene_chassis"] = chassis_record(scene_chassis)
     require_scene_matches_model(scene_chassis, args.forklift_urdf)
     state["scene_chassis_matches_urdf"] = True
-    world = World(stage_units_in_meters=1.0, physics_dt=1 / 120, rendering_dt=1 / 120)
+    # The chassis comparison sees axles, joints, wheels and collision boxes, not masses: a scene built
+    # from another URDF (e.g. before the fork-tip frames got their explicit mass) must be refused by
+    # the URDF it was built from, as its manifest records it (EPAL 6 fork spacing plan, new plant).
+    scene_manifest = Path(args.base_scene).resolve().parent / "base_scene_manifest.json"
+    if scene_manifest.exists():
+        built_from = json.loads(scene_manifest.read_text()).get("forklift_urdf_sha256")
+        running = hashlib.sha256(Path(args.forklift_urdf).read_bytes()).hexdigest()
+        require(built_from in (None, running), "base scene built from another forklift URDF")
+        state["scene_built_from_urdf_sha256"] = built_from
+    hz = float(settings["physics_hz"])  # 120 except in a --steering-probe convergence check
+    world = World(stage_units_in_meters=1.0, physics_dt=1 / hz, rendering_dt=1 / hz)
     catalogue, offsets = read_catalogue(stage, app, args.asset_root)
     geometry = SyntheticMissionGeometry(
         unloaded_footprint=Footprint(args.axle_to_fork_tip_m, 0.17, 0.36),
@@ -1647,11 +1669,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         expected_pallet_box_count=len(insertion_geometry.pallet_boxes),
     )
     # The plant record (EPAL 6 fork spacing plan, new plant candidate): each tyre's material as bound.
-    from scene import tyre_contact_readback
+    from scene import plant_readback, tyre_contact_readback
 
     state["plant_tyre_contact"] = tyre_contact_readback(stage)
-    if args.steering_probe:
-        # The probe reads each tyre's floor contact directly (not the joint reaction forces).
+    state["plant"] = plant_readback(stage)
+    if args.steering_probe or args.tyre_contact_log:
+        # The probe and the mission log read each tyre's floor contact directly (not the joint
+        # reaction forces).
         from pxr import PhysxSchema as PS
 
         for wheel_ in ("front_left_wheel", "front_right_wheel", "rear_left_wheel", "rear_right_wheel"):
@@ -5215,6 +5239,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             frame_due = args.video and tick % fps_divisor == 0
             world.step(render=render or frame_due)
             stamp_now = world.current_time - initial_time
+            if args.tyre_contact_log and tick % 12 == 0:
+                # New plant candidate V1 (loaded) / V5: each tyre's floor contact every 0.1 s.
+                forces_ = tyre_floor_forces(TYRE_LINKS)
+                state.setdefault("tyre_contact_rows", []).append(
+                    [stamp_now, *[v for row_ in forces_ for v in row_]])
             if slam_log is None:
                 if frame_due:
                     write_video_frame(stamp_now)
@@ -8447,7 +8476,10 @@ def main() -> None:
     import yaml
 
     settings = yaml.safe_load(args.settings.read_text())
-    require(settings["physics_hz"] == 120, "This adapter requires 120Hz physics")
+    require(
+        settings["physics_hz"] == 120 or (args.steering_probe and settings["physics_hz"] in (120, 240)),
+        "This adapter requires 120Hz physics (240 Hz only for a --steering-probe convergence check)",
+    )
     require(
         all(
             isinstance(v, (int, float)) and math.isfinite(v) and v > 0
@@ -8536,6 +8568,9 @@ def main() -> None:
         traceback.print_exc()
     finally:
         state["wall_time_s"] = time.monotonic() - started
+        if state.get("tyre_contact_rows") is not None:
+            # (t, then per tyre FL FR RL RR: impulse x y z, contact count, mean contact x y)
+            np.save(args.output / "tyre_contacts.npy", np.asarray(state.pop("tyre_contact_rows"), dtype=float))
         if app is not None and "render_mode" in state:
             import carb
 
