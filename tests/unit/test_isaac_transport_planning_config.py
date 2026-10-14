@@ -1294,3 +1294,27 @@ def test_the_plant_backend_readback_uses_the_isaac_5_1_body_getters():
     for getter in ("get_body_masses()", "get_body_coms()[0]", "get_body_inertias()"):
         assert f"view_.{getter}" in block
     assert "view_.get_masses(" not in source and "view_.get_coms(" not in source
+
+
+def test_the_cause_separation_settings_are_probe_only_and_recorded():
+    """Fork spacing plan, cause separation E: the scene and drive settings a settings file may set for a
+    --steering-probe (friction correlation distance, PGS, stabilization, the tyre's damping combine mode,
+    the wheel drive damping) are refused for any other run, applied after the World exists and recorded."""
+    source = SCRIPT.read_text()
+    main = source[source.index("def main() -> None:"):]
+    guard = main.index("DIAGNOSTIC_PROBE_SETTINGS")
+    assert "args.steering_probe or not any(k in settings for k in DIAGNOSTIC_PROBE_SETTINGS)" in main[guard - 200: guard + 200]
+    namespace = {}
+    exec(source[source.index("DIAGNOSTIC_PROBE_SETTINGS = "): source.index("TYRE_LINKS = ")], namespace)  # noqa: S102
+    assert set(namespace["DIAGNOSTIC_PROBE_SETTINGS"]) == {
+        "physx_friction_correlation_distance_m", "physx_solver_pgs", "physx_enable_stabilization",
+        "tyre_damping_combine_max", "wheel_drive_damping"}
+    world = source.index("world = World(stage_units_in_meters=1.0")
+    block = source[world: source.index('state["physics_scene"] = {', world) + 400]
+    for call in ("set_friction_correlation_distance(", 'set_solver_type("PGS")', "enable_stablization(True)",
+                 "get_friction_offset_threshold()", "is_stablization_enabled()"):
+        assert call in block
+    scene = (SCRIPT.parent / "scene.py").read_text()
+    assert 'float(settings.get("wheel_drive_damping", 20.0)) if wheel' in scene
+    assert 'if settings.get("tyre_damping_combine_max"):' in scene and 'CreateDampingCombineModeAttr("max")' in scene
+    assert '"damping_combine_mode": value("physxMaterial:dampingCombineMode")' in scene

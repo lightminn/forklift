@@ -446,6 +446,10 @@ def tyre_contact_readback(stage: Usd.Stage) -> list[dict]:
             "dynamic_friction": value("physics:dynamicFriction"),
             "compliant_stiffness": value("physxMaterial:compliantContactStiffness"),
             "compliant_damping": value("physxMaterial:compliantContactDamping"),
+            # PhysX combines the two materials' compliant damping by this mode ("average" unless authored),
+            # so against a rigid floor material the damping in effect is not the value above.
+            "damping_combine_mode": value("physxMaterial:dampingCombineMode"),
+            "friction_combine_mode": value("physxMaterial:frictionCombineMode"),
         })
     return out
 
@@ -500,6 +504,10 @@ def configure_drives(
         tyre_physx = PhysxSchema.PhysxMaterialAPI.Apply(tyre_material.GetPrim())
         tyre_physx.CreateCompliantContactStiffnessAttr(float(settings["tyre_contact_stiffness_n_per_m"]))
         tyre_physx.CreateCompliantContactDampingAttr(float(settings["tyre_contact_damping_n_s_per_m"]))
+        if settings.get("tyre_damping_combine_max"):
+            # Cause separation E (diagnostic, --steering-probe only): the tyre's damping wins over the
+            # rigid floor material's instead of being averaged with it.
+            tyre_physx.CreateDampingCombineModeAttr("max")
     collision_counts = {}
     for root_path in roots:
         collision_counts[root_path] = 0
@@ -535,7 +543,7 @@ def configure_drives(
                 drive.CreateDampingAttr(
                     400.0
                     if is_lift
-                    else (20.0 if wheel else settings["steering_damping"])
+                    else (float(settings.get("wheel_drive_damping", 20.0)) if wheel else settings["steering_damping"])
                 )
                 drive.CreateMaxForceAttr(
                     settings["lift_force_n"]

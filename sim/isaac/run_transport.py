@@ -823,6 +823,10 @@ def require(condition: bool, reason: str) -> None:
 # this drives scripted segments (standstill, forward, reverse at each curvature) through the runner's
 # own command path (Ackermann targets, the steering rate limit, the wheel-rate slew) and records the
 # joints, their efforts and the truth pose every physics tick.
+# Fork spacing plan, cause separation E: scene and drive settings a settings file may set for a
+# --steering-probe only (numbers, as every settings value must be: 1 switches a flag on).
+DIAGNOSTIC_PROBE_SETTINGS = ("physx_friction_correlation_distance_m", "physx_solver_pgs", "physx_enable_stabilization",
+                             "tyre_damping_combine_max", "wheel_drive_damping")
 TYRE_LINKS = tuple(f"/World/Forklift/{n}" for n in ("front_left_wheel", "front_right_wheel", "rear_left_wheel", "rear_right_wheel"))
 PROBE_CURVATURES = (0.29, -0.29, 0.36, -0.36)
 PROBE_SPEED_MPS = 0.25
@@ -1541,6 +1545,21 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         state["scene_built_from_urdf_sha256"] = built_from
     hz = float(settings["physics_hz"])  # 120 except in a --steering-probe convergence check
     world = World(stage_units_in_meters=1.0, physics_dt=1 / hz, rendering_dt=1 / hz)
+    physics_context = world.get_physics_context()
+    # Cause separation E (diagnostic, --steering-probe only): one scene solver setting at a time.
+    if settings.get("physx_friction_correlation_distance_m") is not None:
+        physics_context.set_friction_correlation_distance(float(settings["physx_friction_correlation_distance_m"]))
+    if settings.get("physx_solver_pgs"):
+        physics_context.set_solver_type("PGS")
+    if settings.get("physx_enable_stabilization"):
+        physics_context.enable_stablization(True)
+    state["physics_scene"] = {
+        "solver_type": physics_context.get_solver_type(),
+        "friction_correlation_distance_m": physics_context.get_friction_correlation_distance(),
+        "friction_offset_threshold_m": physics_context.get_friction_offset_threshold(),
+        "stabilization": physics_context.is_stablization_enabled(),
+        "dt_s": physics_context.get_physics_dt(),
+    }
     catalogue, offsets = read_catalogue(stage, app, args.asset_root)
     geometry = SyntheticMissionGeometry(
         unloaded_footprint=Footprint(args.axle_to_fork_tip_m, 0.17, 0.36),
@@ -8582,6 +8601,10 @@ def main() -> None:
             for v in settings.values()
         ),
         "Settings must be positive finite values",
+    )
+    require(
+        args.steering_probe or not any(k in settings for k in DIAGNOSTIC_PROBE_SETTINGS),
+        f"{', '.join(k for k in DIAGNOSTIC_PROBE_SETTINGS if k in settings)}: diagnostic settings, --steering-probe only",
     )
     from chassis_contract import require_curvature_within_model
     from insertion_geometry import read_carriage_limit_m, read_drive_geometry_m
