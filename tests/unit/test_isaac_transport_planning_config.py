@@ -492,7 +492,7 @@ def test_only_a_transport_heading_failure_at_a_cusp_is_replanned():
     parts = {ast.unparse(v) for v in test.values}
     assert parts == {
         "tracking.status == 'failed'",
-        "phase == 'transport'",
+        "ms.phase == 'transport'",
         "tracking.failure == 'endpoint_heading'",
         "tracking.at_cusp",
         "not tracking.off_path",
@@ -512,7 +512,7 @@ def test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules():
     assert "cusp_stop_ticks < cusp_stop_needed" in branch
     assert "replace(tracking, status='braking')" in branch
     # The replan is the active plan everywhere afterwards.
-    assert "state.setdefault('paths', {})[phase] = path_record(replanned)" in branch
+    assert "state.setdefault('paths', {})[ms.phase] = path_record(replanned)" in branch
     assert "add_path_display(stage, replanned, 'Transport'" in branch
     assert "state['planning_wall_s'] = " in branch
     # Stopped: the transport leg alone, same planner config, from the measured rear pose.
@@ -523,7 +523,7 @@ def test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules():
     )
     assert "planner_config" in branch and "travel_config=travel_config" in branch
     # Same tracker configuration as the leg it replaces.
-    assert "trackers[phase].config" in branch.split("RearAxlePathTracker(")[1]
+    assert "trackers[ms.phase].config" in branch.split("RearAxlePathTracker(")[1]
     source = SCRIPT.read_text()
     assert "max_cusp_replans = 2" in source
     assert "cusp_stop_ticks, cusp_stop_needed = 0, 12" in source
@@ -660,10 +660,10 @@ def test_same_path_waits_do_not_count_as_retries():
     source = SCRIPT.read_text()
     assert 'and not r.get("same_path") and not r.get("failed") and not r.get("escape")]' in source
     assert (
-        'if r["phase"] == phase and not r.get("same_path")\n'
+        'if r["phase"] == ms.phase and not r.get("same_path")\n'
         '                                          and not r.get("failed") and not r.get("escape"))'
     ) in source
-    i = source.index("if same_path(replanned, paths[phase]")
+    i = source.index("if same_path(replanned, paths[ms.phase]")
     wait = source[i : source.index("else:", i)]
     assert "RearAxlePathTracker" not in wait and '"progress"' not in wait
 
@@ -690,8 +690,8 @@ def test_wheel_target_brakes_at_the_stopping_model_deceleration():
 
 def test_the_retry_limit_is_checked_after_the_same_path_test():
     source = SCRIPT.read_text()
-    same = source.index("if same_path(replanned, paths[phase]")
-    assert source.index('f"obstacle_blocked in {phase}') > same
+    same = source.index("if same_path(replanned, paths[ms.phase]")
+    assert source.index('f"obstacle_blocked in {ms.phase}') > same
 
 
 def test_loose_arrival_only_at_observation_waypoints():
@@ -714,9 +714,9 @@ def test_a_failed_blocked_replan_stands_and_retries():
     source = SCRIPT.read_text()
     i = source.index("# Standing, the grid keeps updating: a failed replan is")
     block = source[i : source.index("elif same_path(replanned", i)]
-    assert "failures < 5" in block and 'obstacle.setdefault("replan_wait", {})[phase] = True' in block
+    assert "failures < 5" in block and 'obstacle.setdefault("replan_wait", {})[ms.phase] = True' in block
     # Held on later ticks too, until a replan succeeds or the path clears (Codex checkpoint 7 P2).
-    j = source.index('if obstacle is not None and obstacle.get("replan_wait", {}).get(phase):')
+    j = source.index('if obstacle is not None and obstacle.get("replan_wait", {}).get(ms.phase):')
     assert j < source.index("drive = ackermann_command(requested_speed")
     assert "check_.blocked is None" in source[j : j + 600]  # a verified path, not a zero count
     assert 'if replanned.status in ("invalid_start", "no_path"):' in source
@@ -726,25 +726,25 @@ def test_a_failed_replan_backs_off_a_bounded_distance_then_replans():
     source = SCRIPT.read_text()
     assert "BACKOFF_M = 0.30" in source and "BACKOFF_SPEED_MPS = 0.15" in source and "BACKOFF_PER_LEG = 2" in source
     i = source.index("# D4 delta: stood with the outline already on the")
-    block = source[source.rindex("if phase in", 0, i) : i + 2500]
-    assert 'phase in ("transport", "return_home")' in block and "backs.get(phase, 0) < BACKOFF_PER_LEG" in block
+    block = source[source.rindex("if ms.phase in", 0, i) : i + 2500]
+    assert 'phase in ("transport", "return_home")' in block and "backs.get(ms.phase, 0) < BACKOFF_PER_LEG" in block
     assert "d = -1 if leg_dir >= 0 else 1" in block  # against the leg's direction
     # The end of a backoff is never the leg's arrival; it forces a replan.
     j = source.index("# The end of a backoff is not the leg's arrival")
-    assert j < source.index('if tracking.status == "arrived":\n                    if args.use_perception and phase == "observe":')
-    assert 'obstacle["force_replan"] = phase' in source[j : j + 2500]
-    assert 'obstacle.pop("force_replan", None) == phase' in source
+    assert j < source.index('if tracking.status == "arrived":\n                    if args.use_perception and ms.phase == "observe":')
+    assert 'obstacle["force_replan"] = ms.phase' in source[j : j + 2500]
+    assert 'obstacle.pop("force_replan", None) == ms.phase' in source
     # Codex checkpoint 8: a backoff always acts under the permission, a forced
     # replan opens the obstacle block while standing, the leg direction is kept,
     # and the stall replan ends a backoff too.
-    k = source.index('acting = (\n                    phase in ("observe", "approach", "transport", "return_home")')
+    k = source.index('acting = (\n                    ms.phase in ("observe", "approach", "transport", "return_home")')
     # Plan v10 D5: the withdrawal acts under the permission too when known pallets are on.
-    assert '(phase == "withdraw" and obstacle["layer"].known_enabled' in source[k : k + 400]
+    assert '(ms.phase == "withdraw" and obstacle["layer"].known_enabled' in source[k : k + 400]
     assert 'known_config.get("withdraw_mode", "certified") == "certified"' in source[k : k + 400]
     assert ') and not docking_straight' in source[k : k + 500]
     # (the plan v10 withdraw tracking check now sits between them, hence the wider window)
-    assert 'obstacle.get("backoff", {}).get("phase") == phase' in source[k - 2000 : k]
-    assert 'or obstacle.get("force_replan") == phase' in source
+    assert 'obstacle.get("backoff", {}).get("phase") == ms.phase' in source[k - 2000 : k]
+    assert 'or obstacle.get("force_replan") == ms.phase' in source
     assert 'leg_dir = obstacle.get("backoff", {}).get("leg_dir")' in source
     assert 'stall_config = obstacle.pop("backoff")["config"]' in source
 
@@ -764,10 +764,10 @@ def test_pocket_bars_are_judged_against_the_block_columns_not_the_outline():
     # Codex checkpoint 9 P1: the 0.6 x 0.8 m outline holds the pockets.
     source = SCRIPT.read_text()
     assert 'new_obstacles.setdefault("pallet_frame", []).append(rect)' in source
-    i = source.index('f"Measured pallet footprint overlap in {phase}"')
+    i = source.index('f"Measured pallet footprint overlap in {ms.phase}"')
     head = source[source.rindex("in_outline = []", 0, i) : i]
     assert "if not any(o is r_ for r_ in in_outline)" in head
-    assert 'f"Measured pallet solid overlap in {phase}: {box_.name}"' in source[i : i + 3500]
+    assert 'f"Measured pallet solid overlap in {ms.phase}: {box_.name}"' in source[i : i + 3500]
     assert "centre_p = (centre_w - np.asarray(ppos, dtype=float)) @ rot_" in source  # full pose, exact SAT
     assert "PALLET_BOXES = PALLET_BOXES_OF(args.pallet_geometry_loaded)" in source  # the canonical solids
 
@@ -891,7 +891,7 @@ def test_every_path_replacement_restarts_the_no_progress_baseline():
     stall = source.index('require(replanned.success, f"stall_replan_failed:{replanned.status}")')
     window = source[stall : stall + 2500]
     assert window.index("arm_docking()") < window.index('obstacle.setdefault("progress", {}).clear()')
-    cusp = source.index('"replaced_path": path_record(paths[phase]),')
+    cusp = source.index('"replaced_path": path_record(paths[ms.phase]),')
     window = source[cusp : cusp + 1500]
     assert window.index("arm_docking()") < window.index('obstacle.setdefault("progress", {}).clear()')
     # ... and a D7c re-approach installed in place of the transport path (plan D7c ④).
@@ -913,12 +913,12 @@ def test_d7c_docking_branches_are_inert_without_the_flag():
     assert "        if args.d7_docking and result.accepted:\n" in source  # the early goal commit
     assert "        if path is None and args.d7_docking:\n" in source  # (b) instead of docking_unaligned
     # Without the flag the stall and cusp branches are the old ones (d7_owned is False).
-    assert "d7_owned = phase == \"transport\" and bool(" in source
+    assert "d7_owned = ms.phase == \"transport\" and bool(" in source
 
 
 def test_d7c_reapproach_is_under_the_permission_and_kept_by_obstacle_replans():
     source = SCRIPT.read_text()
-    straight = source.index("docking_straight = (phase == \"approach\"")
+    straight = source.index("docking_straight = (ms.phase == \"approach\"")
     window = source[straight : straight + 1500]
     assert 'if slam is not None and slam["docking"].get("reapproach"):\n' in window
     assert window.index("reapproach") < window.index("acting = (")
@@ -952,8 +952,8 @@ def test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan():
     block = source[source.index("escape_, escape_cands_, escape_skips_back_ = None, None, False"):]
     e1 = block[: block.index('if replanned.status in ("invalid_start", "no_path"):')]
     # E1: only an invalid start in transport/return_home, with budget, and not while docking owns the transport.
-    assert 'replanned.status == "invalid_start" and phase in ("transport", "return_home")' in e1
-    assert 'obstacle.setdefault("escapes", {}).get(phase, 0) < ESCAPE_PER_LEG' in e1
+    assert 'replanned.status == "invalid_start" and ms.phase in ("transport", "return_home")' in e1
+    assert 'obstacle.setdefault("escapes", {}).get(ms.phase, 0) < ESCAPE_PER_LEG' in e1
     assert 'slam["docking"].get("reapproach") or slam["docking"].get("accepted_any")' in e1
     assert "escape_, escape_cands_ = find_escape(t, rear, leg_dir_e, kappa)" in e1
     # A chosen escape replaces the plan before the clearance-0 retry, whose statuses it does not match.
@@ -971,7 +971,7 @@ def test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan():
     # The old backoff: skipped where E2 refused its straight by the checker; on the return only past
     # the rectangles (the delivered pallet the single LiDAR cannot see).
     assert "back_ok_ = not escape_skips_back_" in block
-    assert "escape_leg(phase)[2], esc_.straight(rear, d_b, BACKOFF_M)" in block
+    assert "escape_leg(ms.phase)[2], esc_.straight(rear, d_b, BACKOFF_M)" in block
     assert "and back_ok_):" in block
 
 
@@ -986,7 +986,7 @@ def test_obstacle_recovery_v4_an_escape_end_bypasses_docking_stall_and_failure()
     window = source[e3 : e3 + 2000]
     assert '"end_s" in back_e or tracking.status == "arrived"' in window
     # An endpoint failure is the end only standing; rolling, it brakes (Codex implementation review P2-1).
-    assert '(standing_e and (tracking.status == "failed" or trackers[phase].remaining_to_goal_m() <= 1e-6))' in window
+    assert '(standing_e and (tracking.status == "failed" or trackers[ms.phase].remaining_to_goal_m() <= 1e-6))' in window
     assert 'elif tracking.status == "failed":' in window and 'status="braking", speed_mps=0.0' in window
     assert 'back_e["stand_ticks"] >= 120' in window
     assert 'tracking = replace(tracking, status="arrived", speed_mps=0.0)' in window
@@ -1054,7 +1054,7 @@ def test_cusp_position_stall_v7_is_wired_into_the_runner():
     # The prefix's planner obstacles: the leg's rectangles (observe as plan_observation_leg has them).
     leg = source[source.index("    def cusp_leg_checker(") :]
     leg = leg[: leg.index("    def cusp_sensors(")]
-    assert "escape_leg(phase)[2]" in leg and 'leg_obstacles(\n            "observe"' in leg
+    assert "escape_leg(ms.phase)[2]" in leg and 'leg_obstacles(\n            "observe"' in leg
     assert "pickup_bounds=pickup_bounds" in leg
     # The prefix's sensor checks: the plain walk within the stopping distance, the walk past unknown
     # for occupied, the evidence age, sensors alive.
@@ -1076,12 +1076,12 @@ def test_cusp_position_stall_v7_is_wired_into_the_runner():
     tick = source[source.index("    def cusp_tick(") :]
     tick = tick[: tick.index("    try:\n")]
     # Forced only where the obstacle replan exists: with grid planning (Codex implementation review P1).
-    assert 'if result_.force_replan and obstacle is not None:\n            if grid_planning:\n                obstacle["force_replan"] = phase' in tick
+    assert 'if result_.force_replan and obstacle is not None:\n            if grid_planning:\n                obstacle["force_replan"] = ms.phase' in tick
     # A silent sensor sends no scan: liveness is passed in for every tick.
     assert "alive=lambda: cusp_alive(now_s)," in tick
     alive = source[source.index("    def cusp_alive(") :]
     assert "now_s - last_ <= timeout_ for last_ in layer_.last_scan_s.values()" in alive[:600]
-    assert 'obstacle.get("force_replan") == phase or bool(obstacle.get("replan_wait", {}).get(phase))' in tick
+    assert 'obstacle.get("force_replan") == ms.phase or bool(obstacle.get("replan_wait", {}).get(ms.phase))' in tick
     assert "or cusp_handed_ is not None" in source
     assert "direction = cusp_handed_.hand_direction" in source
     assert '((allowed == 0.0 and why == "occupied") or cusp_prefix_blocked_)' in source
@@ -1128,7 +1128,7 @@ def test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the
     pending SLAM release, re-projects the grid before it weighs the turnaround (a standing truck can
     skip the obstacle block's re-projection), and the release replans carry no turnaround."""
     src = SCRIPT.read_text()
-    start = src.index('and not obstacle.setdefault("live_replanned", {}).get(phase)')
+    start = src.index('and not obstacle.setdefault("live_replanned", {}).get(ms.phase)')
     block = src[start:src.index('obstacle["deadline"] = None', start)]
     assert 'slam.get("pending_release") is not None' in block.split("):", 1)[0]
     assert block.index('obstacle["layer"].refresh(') < block.index("**return_turnaround_kwargs()")
@@ -1145,7 +1145,7 @@ def test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judge
     assert "CUSP_HEADING_HOLD_RAD = 0.08\n" in source and "CUSP_HEADING_HOLD_POSITION_M = 0.03\n" in source
     assert 'CUSP_HEADING_HOLD_PHASES = ("observe", "return_home")\n' in source
     assert "cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD if name in CUSP_HEADING_HOLD_PHASES else None," in source
-    block = source[source.index("if phase in CUSP_HEADING_HOLD_PHASES and tracking.cusp_pending:"):]
+    block = source[source.index("if ms.phase in CUSP_HEADING_HOLD_PHASES and tracking.cusp_pending:"):]
     block = block[: block.index("# Under SLAM, an observe leg judged out of heading")]
     assert "bounds=(CUSP_HEADING_HOLD_POSITION_M, CUSP_HEADING_HOLD_RAD)" in block
     assert "hold_tracker.release_cusp(True)" in block and "hold_tracker.fail_pending()" in block
@@ -1157,7 +1157,7 @@ def test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judge
     whole = source[raw:]
     first_rule = whole.index("retry_stand_ = near is not None")
     assert whole.index("cusp_holds.sync(") < whole.index("cusp_holds.tick(") < first_rule
-    assert first_rule < whole.index("if phase in CUSP_HEADING_HOLD_PHASES and tracking.cusp_pending:")
+    assert first_rule < whole.index("if ms.phase in CUSP_HEADING_HOLD_PHASES and tracking.cusp_pending:")
     after_update = block[block.index("tracking = hold_tracker.update(rear, signed_speed, dt)") :]
     assert 'if decision == "released":' in after_update and "cusp_holds.tick(" in after_update
     # Every observe and return tracker holds: the first ones, the candidate re-route's, the ones built

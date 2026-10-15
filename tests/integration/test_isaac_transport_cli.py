@@ -426,7 +426,7 @@ def test_slam_release_replans_both_travel_legs_and_gates_on_a_stop() -> None:
     source = SCRIPT.read_text()
     assert "if slam[\"stop_now\"]:\n                    slam_release(t)" in source
     assert "rear = slam_rear(t)  # the released estimate" in source
-    assert "if phase in trackers and not releasing and not warming:" in source
+    assert "if ms.phase in trackers and not releasing and not warming:" in source
 
 
 def test_slam_runs_see_the_pallet_again_before_the_final_straight() -> None:
@@ -650,12 +650,12 @@ def test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival() -> 
     assert between_.startswith("        if boundary is not None:\n") and "require(" not in between_
     assert "until S4a-2" not in source
     # Decided after the scheduled safety stops and before the arrival transitions.
-    tick = source.index("hold_, released_, arrive_ = near_tick(t, rear_stamp, rear, requested_speed, phase, curvature,")
-    assert source.index("safety_stops.update(") < tick < source.index("elif phase == \"approach\":\n")
+    tick = source.index("hold_, released_, arrive_ = near_tick(t, rear_stamp, rear, requested_speed, ms.phase, curvature,")
+    assert source.index("safety_stops.update(") < tick < source.index("elif ms.phase == \"approach\":\n")
     block = source[tick:source.index("phase == \"observe\" and tracking.status", tick)]
     for line in ("requested_speed = 0.0", "dwell_hold = True", "safety_hold = True",
                  "tracking = replace(tracking, status=\"tracking\", speed_mps=0.0)",
-                 "trackers[phase].restart_speed_slew(0.0)"):
+                 "trackers[ms.phase].restart_speed_slew(0.0)"):
         assert line in block, line
     # S4a-2: the carriage-corner insertion end becomes the insertion's arrival, standing.
     arrive = block.index("if arrive_:")
@@ -759,7 +759,7 @@ def test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_captu
     build_fn = functions["build_near_tracker"]
     assert "mismatch=False, unbounded=False, path_revision=0" in build_fn
     assert "near.setdefault('stop_events', [])" in build_fn and "stop_events=[]" not in build_fn
-    stand = source.index("retry_stand_ = near is not None and near.get('retry_stand') and phase == 'observe'".replace("'", '"'))
+    stand = source.index("retry_stand_ = near is not None and near.get('retry_stand') and ms.phase == 'observe'".replace("'", '"'))
     window = source[stand : stand + 2700]  # obstacle recovery v4's escape end and the cusp stall sit between
     assert 'tracking = replace(tracking, status="arrived", speed_mps=0.0)' in window
     assert "and not retry_stand_" in window
@@ -801,7 +801,7 @@ def test_s4b_correction_points_are_decided_before_the_stop_and_install_at_once()
     assert "near['first_target']" in redraw_fn and "dry(acceptance_), dry(driven_)" in redraw_fn
     assert "max_yaw_rad=near_tracking.CORRECTION_MAX_YAW_RAD" in redraw_fn  # S4b revision: 0.12 rad
     install_fn = functions["near_install"]
-    for line in ("nonlocal phase_started", "phase_started = now_s", "pocket['planning_pickup'] = target_",
+    for line in ("ms.phase_started = now_s",  # M-a1 step 0: the phase clock lives on the MissionState "pocket['planning_pickup'] = target_",
                  "obstacle['pickup_estimate'] = target_", "obstacle['layer'].refresh(", "trackers[name_] = RearAxlePathTracker(",
                  "trackers[name_].path_arrays()", "near['path_revision'] = revision_"):
         assert line in install_fn, line
