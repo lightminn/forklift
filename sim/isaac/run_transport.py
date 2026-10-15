@@ -2521,6 +2521,22 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         xf.SetScale(NGf.Vec3f(*(float(v) for v in osize)))
         NUsdPhysics.CollisionAPI.Apply(cube.GetPrim())
 
+    def place_chase_camera(chase_camera, chase_eye, chase_target) -> None:
+        """The chase view's camera looking from its eye at its target (USD math; a video Sink)."""
+        chase_look = Gf.Matrix4d().SetLookAt(
+            Gf.Vec3d(*chase_eye),
+            Gf.Vec3d(*chase_target),
+            Gf.Vec3d(0, 0, 1),
+        )
+        chase_quat = chase_look.GetInverse().ExtractRotationQuat()
+        chase_camera.set_world_pose(
+            position=chase_eye,
+            orientation=np.array(
+                [chase_quat.GetReal(), *chase_quat.GetImaginary()]
+            ),
+            camera_axes="usd",
+        )
+
     def cast_reference_scan(*a, **k):
         """The delivery reference scan's ray cast (a USD scene query)."""
         import planar_lidar as _planar_lidar
@@ -2537,6 +2553,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         slam_link_client=lambda *a, **k: __import__("forklift_core.localization.slam_link",
                                                     fromlist=["SlamLinkClient"]).SlamLinkClient(*a, **k),
         cast_reference_scan=cast_reference_scan,
+        place_chase_camera=place_chase_camera,
     )
     from types import SimpleNamespace as _Setup
 
@@ -2559,8 +2576,6 @@ def drive(S, isaac) -> None:
         Footprint = _bound["Footprint"]
     if "FootprintCollisionChecker" in _bound:
         FootprintCollisionChecker = _bound["FootprintCollisionChecker"]
-    if "Gf" in _bound:
-        Gf = _bound["Gf"]
     if "Image" in _bound:
         Image = _bound["Image"]
     if "PALLET_BOXES" in _bound:
@@ -5358,19 +5373,7 @@ def drive(S, isaac) -> None:
                 chase_eye, chase_target, chase_yaw = MISSION_VIEWS.chase_pose(
                     base, yaw, chase_yaw, fps_divisor / 120
                 )
-                chase_look = Gf.Matrix4d().SetLookAt(
-                    Gf.Vec3d(*chase_eye),
-                    Gf.Vec3d(*chase_target),
-                    Gf.Vec3d(0, 0, 1),
-                )
-                chase_quat = chase_look.GetInverse().ExtractRotationQuat()
-                extra_cameras["chase"].set_world_pose(
-                    position=chase_eye,
-                    orientation=np.array(
-                        [chase_quat.GetReal(), *chase_quat.GetImaginary()]
-                    ),
-                    camera_axes="usd",
-                )
+                isaac.place_chase_camera(extra_cameras["chase"], chase_eye, chase_target)
             if slam is not None:
                 slam["last_command"] = requested_speed
             near_done = state.get("near_capture", {}).get("status") == "done"

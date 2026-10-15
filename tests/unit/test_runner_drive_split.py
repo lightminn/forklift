@@ -37,3 +37,12 @@ def test_drive_imports_nothing_from_isaac_and_run_hands_over_at_the_initial_plan
     statements = [ast.unparse(s) for s in drive.body if not isinstance(s, ast.FunctionDef)]
     begin = next(i for i, text in enumerate(statements) if text == "state['phase'] = 'planning'")
     assert all(text.startswith(("'", '"', "_bound", "if '", "if boundary is not None")) for text in statements[:begin])
+
+
+def test_drive_reads_no_isaac_helper_names():
+    """Isaac-typed helpers (USD math, articulation actions) are reached through ``isaac`` only (Codex R2 review:
+    the chase camera's Gf look-at ran inside drive)."""
+    tree = ast.parse(SCRIPT.read_text())
+    drive = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "drive")
+    names = {n.id for n in ast.walk(drive) if isinstance(n, ast.Name)}
+    assert not names & {"Gf", "ArticulationAction", "UsdGeom", "UsdPhysics", "omni", "Camera", "World"}
