@@ -1358,3 +1358,16 @@ def test_the_encoder_model_feeds_the_odometry_increments_and_is_part_of_the_cont
     assert 'slam["odom_speed"] = slam["odometry"].interval_speed' in team
     assert "noise" not in team
     assert '"encoder_model": state.get("encoder_model") or {"name": "reported"}' in source
+
+
+def test_the_pocket_check_reads_stillness_from_the_stop_detector_under_team_spec_encoders():
+    """Codex (encoder implementation P2): a one-tick speed from counts is 0 on many moving ticks at
+    0.02 m/s; the still frame must follow the stop detector and a moving frame carry one count per
+    tick of speed error. The reported path keeps speed_now < 0.01."""
+    source = SCRIPT.read_text()
+    block = source[source.index('encoder_record_ = state.get("encoder_model") or {"name": "reported"}'):]
+    block = block[: block.index('pocket["await_still_frame"] = False')]
+    assert 'still_ = bool(slam.get("stop_now"))' in block
+    assert 'max(abs(slam["odom_speed"]), abs(slam["tracker_speed"])) + quantum_' in block
+    assert "still_ = speed_now < 0.01" in block
+    assert "and still_ and yaw_rate_now < 0.01:" in block

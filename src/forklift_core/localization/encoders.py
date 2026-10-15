@@ -145,6 +145,7 @@ class EncoderModelSpec:
     """What a --encoder-model name means (recorded in meta.json with the run's INL phases)."""
 
     name: str
+    algorithm: int  # bumped when the counting or reading rule changes; descriptions are not compared
     wheel_counts_per_rev: int
     wheel_hysteresis_rad: float
     wheel_inl_amplitude_rad: float
@@ -157,6 +158,11 @@ class EncoderModelSpec:
     sample: str = "one reading per physics tick; row i is the rotation over (t[i-1], t[i]], row 0 is 0"
 
 
+SPEC_COMPARED_FIELDS = ("name", "algorithm", "wheel_counts_per_rev", "wheel_hysteresis_rad", "wheel_inl_amplitude_rad",
+                        "steering_bits", "steering_inl_amplitude_rad")
+ENCODER_ARRAYS = ("wheel_counts", "wheel_increments_rad", "steering_measured_rad")
+
+
 def encoder_model_spec(name: str) -> EncoderModelSpec | None:
     """None for "reported" (the engine's joint velocity, the runner's behaviour before the model)."""
     if name not in ENCODER_MODELS:
@@ -166,6 +172,7 @@ def encoder_model_spec(name: str) -> EncoderModelSpec | None:
     inl = name == "team_spec_typical_inl"
     return EncoderModelSpec(
         name=name,
+        algorithm=1,
         wheel_counts_per_rev=MT6701_COUNTS_PER_REV,
         wheel_hysteresis_rad=MT6701_ABZ_HYSTERESIS_RAD,
         wheel_inl_amplitude_rad=MT6701_INL_TYPICAL_RAD if inl else 0.0,
@@ -214,6 +221,9 @@ def encoder_odometry_inputs(log, meta: dict, *, phase_seed: int | None = None, c
     record = meta.get("encoder_model")
     name = "reported" if record is None else record.get("name")
     spec = encoder_model_spec(name)
+    present = [k for k in ENCODER_ARRAYS if k in getattr(log, "files", log)]
+    if spec is None and present:
+        raise ValueError(f"encoder arrays {present} in a log recorded as {name!r} (lost or contradicting model record)")
     stamps = np.asarray(log["joint_stamps_s"], dtype=float)
     if stamps.ndim != 1 or len(stamps) < 2 or not np.isfinite(stamps).all() or np.any(np.diff(stamps) <= 0):
         raise ValueError("joint_stamps_s must be finite and strictly increasing")
@@ -221,8 +231,10 @@ def encoder_odometry_inputs(log, meta: dict, *, phase_seed: int | None = None, c
     if spec is None:
         return {"kind": "rates", "rates": np.asarray(log["wheel_rates_rad_s"], dtype=float)[:, 2:4],
                 "steering": steering_true}
-    if {k: v for k, v in record.items() if k != "phases_rad"} != asdict(spec):
+    if any(record.get(k) != getattr(spec, k) for k in SPEC_COMPARED_FIELDS):
         raise ValueError(f"the log's encoder model record differs from {name!r} as this code defines it")
+    if len(present) != len(ENCODER_ARRAYS) and check_recorded:
+        raise ValueError(f"a {name!r} log must carry {list(ENCODER_ARRAYS)}, has {present}")
     angles = np.asarray(log["wheel_angles_rad"], dtype=float)
     if angles.shape != (len(stamps), 4) or not np.isfinite(angles).all():
         raise ValueError("wheel_angles_rad must be finite and (N, 4)")
@@ -235,10 +247,16 @@ def encoder_odometry_inputs(log, meta: dict, *, phase_seed: int | None = None, c
     steering = np.array([r[1] for r in rows], dtype=float)
     counts = np.array([r[2] for r in rows], dtype=np.int64)
     if phase_seed is None and check_recorded:
-        for key, value in (("wheel_counts", counts), ("wheel_increments_rad", increments),
-                           ("steering_measured_rad", steering)):
+        for key, value, integer in (("wheel_counts", counts, True), ("wheel_increments_rad", increments, False),
+                                    ("steering_measured_rad", steering, False)):
             recorded = np.asarray(log[key])
-            if recorded.shape != value.shape or not np.array_equal(recorded, value.astype(recorded.dtype)):
+            kind_ok = (np.issubdtype(recorded.dtype, np.integer) if integer
+                       else np.issubdtype(recorded.dtype, np.floating) and np.isfinite(recorded).all())
+            if not kind_ok or recorded.dtype == np.bool_:
+                raise ValueError(f"the recorded {key} has dtype {recorded.dtype}")
+            # Compare in the regenerated value's own type: a record narrowed to another dtype differs.
+            if recorded.shape != value.shape or not np.array_equal(recorded.astype(value.dtype), value) \
+                    or (not integer and recorded.dtype != np.float64):
                 raise ValueError(f"the recorded {key} does not match the encoder model")
         if not np.allclose(np.diff(counts, axis=0) * (2 * math.pi / spec.wheel_counts_per_rev), increments[1:],
                            rtol=0, atol=1e-12):

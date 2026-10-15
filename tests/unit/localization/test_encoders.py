@@ -173,8 +173,9 @@ def test_a_team_spec_log_replays_to_its_recorded_counts_and_damage_is_refused():
         encoder_odometry_inputs(log, {"encoder_model": {**meta["encoder_model"], "wheel_counts_per_rev": 2048}})
     with pytest.raises(ValueError, match="wheel_angles_rad"):
         encoder_odometry_inputs(dict(log, wheel_angles_rad=log["wheel_angles_rad"][:, :2]), meta)
-    # A run without the record (or "reported") replays the reported rates as before.
-    assert encoder_odometry_inputs(log, {})["kind"] == "rates"
+    # A run without the record and without encoder arrays (or "reported") replays the reported rates.
+    legacy = {k: v for k, v in log.items() if k not in ("wheel_counts", "wheel_increments_rad", "steering_measured_rad")}
+    assert encoder_odometry_inputs(legacy, {})["kind"] == "rates"
     quantised, qmeta = _team_log("team_spec_quantized", seed=None)
     assert encoder_odometry_inputs(quantised, qmeta)["kind"] == "increments"
 
@@ -190,3 +191,26 @@ def test_a_mid_span_replay_takes_no_increment_from_before_its_first_row():
     expected = (np.diff(out["counts"][i0:i1], axis=0).sum(axis=0) * 2 * math.pi / 4096).mean() * 0.125
     travelled = np.hypot(*np.diff(poses[:, :2], axis=0).T).sum()
     assert travelled == pytest.approx(abs(expected), rel=1e-6)
+
+
+def test_a_narrowed_or_orphaned_encoder_record_is_refused_and_a_description_change_is_not():
+    """Codex (encoder implementation P2/P3): increments cut to integers or counts turned to bools must not
+    pass by being compared in their own dtype; encoder arrays without their model record are not
+    replayed as reported rates; only the numeric spec and the algorithm version are compared."""
+    from forklift_core.localization.encoders import encoder_odometry_inputs
+
+    log, meta = _team_log("team_spec_typical_inl", seed=4)
+    for key, bad in (("wheel_increments_rad", log["wheel_increments_rad"].astype(int)),
+                     ("steering_measured_rad", log["steering_measured_rad"].astype(np.float32)),
+                     ("wheel_counts", log["wheel_counts"].astype(bool))):
+        with pytest.raises(ValueError, match=key):
+            encoder_odometry_inputs(dict(log, **{key: bad}), meta)
+    with pytest.raises(ValueError, match="lost or contradicting"):
+        encoder_odometry_inputs(log, {})
+    partial = {k: v for k, v in log.items() if k != "steering_measured_rad"}
+    with pytest.raises(ValueError, match="must carry"):
+        encoder_odometry_inputs(partial, meta)
+    reworded = {"encoder_model": {**meta["encoder_model"], "steering": "described differently"}}
+    assert encoder_odometry_inputs(log, reworded)["kind"] == "increments"
+    with pytest.raises(ValueError, match="differs"):
+        encoder_odometry_inputs(log, {"encoder_model": {**meta["encoder_model"], "algorithm": 2}})
