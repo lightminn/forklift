@@ -25,6 +25,7 @@ alias graph and non-string keys.
 from __future__ import annotations
 
 import base64
+import collections
 import dataclasses
 import pathlib
 import hashlib
@@ -155,6 +156,8 @@ class Encoder:
                 "fields": {f.name: self.encode(getattr(value, f.name)) for f in dataclasses.fields(value)}})
         if isinstance(value, list):
             return self._shared(value, lambda: {"$list": [self.encode(v) for v in value]})
+        if isinstance(value, collections.deque):
+            return self._shared(value, lambda: {"$deque": [self.encode(v) for v in value], "maxlen": value.maxlen})
         if isinstance(value, dict):
             if all(isinstance(k, str) for k in value):
                 return self._shared(value, lambda: {"$map": {k: self.encode(v) for k, v in value.items()}})
@@ -205,6 +208,12 @@ def decode(node: Any, arrays: dict[str, np.ndarray], services=None, *, by_id: di
                 by_id[ident] = out
             out.extend(walk(v) for v in n["$list"])
             return out
+        if "$deque" in n:
+            out_q: collections.deque = collections.deque(maxlen=n.get("maxlen"))
+            if ident is not None:
+                by_id[ident] = out_q
+            out_q.extend(walk(v) for v in n["$deque"])
+            return out_q
         if "$map" in n or "$dict" in n:
             out_d: dict = {}
             if ident is not None:

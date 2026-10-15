@@ -124,3 +124,12 @@ def test_paths_and_services_by_logical_id():
     assert out["p"] == P("/a/b.yaml") and out["s"] is replay_svc and out["t"][0] is replay_svc
     with pytest.raises(ValueError, match="no service supplied for Slam"):
         decode(node, arrays)
+
+
+def test_a_deque_keeps_its_items_maxlen_and_identity():
+    import collections
+
+    q = collections.deque([1, (2, 3)], maxlen=5)
+    out = roundtrip({"a": q, "b": q})
+    assert isinstance(out["a"], collections.deque) and out["a"].maxlen == 5 and list(out["a"]) == [1, (2, 3)]
+    assert out["a"] is out["b"]

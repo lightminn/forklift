@@ -97,6 +97,8 @@ def _unrunnable(name):
 
 def build_inputs(run_dir: Path, gate: ReplayBoundary):
     snap = json.loads((run_dir / "boundary/setup_snapshot.json").read_text())
+    if snap.get("opaque"):  # a value the snapshot could not keep: the replay would hand back a marker
+        raise ReplayMismatch(f"the setup snapshot holds opaque values: {snap['opaque']}")
     arrays = {}
     extra = run_dir / "boundary/setup_arrays.npz"
     if extra.exists():

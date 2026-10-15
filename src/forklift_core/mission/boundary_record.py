@@ -11,6 +11,7 @@ recorder stops writing (the run goes on) and says so in ``boundary_meta.json``.
 
 from __future__ import annotations
 
+import collections
 import contextlib
 import dataclasses
 import functools
@@ -400,7 +401,7 @@ def _immutable(value: Any, depth: int = 0) -> bool:
 def _mutable(value: Any) -> bool:
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         return not _immutable(value)
-    return isinstance(value, (list, dict, np.ndarray)) or (
+    return isinstance(value, (list, dict, np.ndarray, collections.deque)) or (
         hasattr(value, "__dict__") and not isinstance(value, type) and not callable(value))
 
 
