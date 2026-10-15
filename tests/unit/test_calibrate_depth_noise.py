@@ -107,3 +107,13 @@ def test_the_pallet_comparison_inputs_are_hashed(tmp_path):
     before = report["files_sha256"]
     (tmp_path / "val/000000/scene_gt.json").write_text(json.dumps({str(f): [{"obj_id": 2}] for f in range(4)}))
     assert cal.pallet_surface_report(tmp_path, _frames(tmp_path, "val/000000"), z_range=(5.0, 6.0))["files_sha256"] != before
+
+
+def test_a_frame_with_zero_variance_is_rejected_not_fatal(tmp_path):
+    """Millimetre steps can make more than half the second differences exactly zero (MAD = 0)."""
+    _cache(tmp_path, frames=5)
+    path = tmp_path / "dynamic/000000/depth/000004.png"
+    raw = np.full((480, 640), 5250, np.uint16)  # a noise-free wall: every second difference is 0
+    Image.fromarray(raw).save(path)
+    result = cal.calibrate(tmp_path, _frames(tmp_path, "dynamic/000000"), z_range=(5.0, 6.0))
+    assert result["per_frame"]["accepted"] == 4 and result["rejected"]["degenerate"] == 1

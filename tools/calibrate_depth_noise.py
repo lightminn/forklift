@@ -127,6 +127,9 @@ def frame_structure(depth, masks, *, z_range, margin_px) -> dict:
         var = _variances(depth, background, z_range)
     except ValueError as exc:
         return {**record, "reject": "samples", "detail": str(exc)}
+    if any(v <= 0 for axis in var.values() for v in axis.values()):
+        # 1 mm depth steps can leave more than half the second differences exactly 0 (MAD = 0)
+        return {**record, "reject": "degenerate"}
     s = fit.fit_noise_structure(var[1], var[0])
     patches = fit.patch_plane_rms(depth, background, z_range=z_range)
     record.update(k_iid=s.k_iid, k_corr=s.k_corr, g=list(s.correlation_px), rel_residual_rms=s.rel_residual_rms,
@@ -136,6 +139,8 @@ def frame_structure(depth, masks, *, z_range, margin_px) -> dict:
         try:
             b = _variances(depth, background, (lo, hi))
         except ValueError:
+            continue
+        if any(v <= 0 for axis in b.values() for v in axis.values()):
             continue
         bs = fit.fit_noise_structure(b[1], b[0])
         bands[f"{lo}-{hi}"] = {"k_iid": bs.k_iid, "k_corr": bs.k_corr, "g": list(bs.correlation_px)}
@@ -203,7 +208,7 @@ def calibrate(cache: Path, frames, *, z_range=(1.5, 4.0), margin_px: int = 8, ac
                       "k_iid": _dist([r["k_iid"] for r in accepted]), "k_corr": _dist([r["k_corr"] for r in accepted]),
                       "g_u": _dist([r["g"][0] for r in accepted]), "g_v": _dist([r["g"][1] for r in accepted])},
         "rejected": {reason: sum(r.get("reject") == reason for r in records)
-                     for reason in ("samples", "patches", "grid_edge", "residual")},
+                     for reason in ("samples", "degenerate", "patches", "grid_edge", "residual")},
         "band_fits": bands,
         "patch_check": {"model_median": model, "ratio": _dist(ratios), "ratio_median": float(np.median(ratios))},
         "dropout_fraction": float(np.median([r["dropout"] for r in records])),
@@ -235,6 +240,8 @@ def pallet_surface_report(cache: Path, frames, *, z_range=(0.5, 2.5), margin_px:
             pal = _variances(depth, fit.erode(region, 4), z_range, PALLET_STEPS)
             bg = _variances(depth, fit.background_mask(depth, masks, margin_px=margin_px), z_range, PALLET_STEPS)
         except ValueError:
+            continue
+        if any(v <= 0 for d in (pal, bg) for axis in d.values() for v in axis.values()):
             continue
         for s in PALLET_STEPS:
             ratios_u[s].append(float(np.sqrt(pal[1][s] / bg[1][s])))
