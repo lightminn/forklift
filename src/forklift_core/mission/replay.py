@@ -407,13 +407,16 @@ class ReplayProxy:
                 children[name] = ReplayProxy(child_port, gate, spec=spec)
             return children[name]
         spec = object.__getattribute__(self, "_spec")
-        static = None
-        for klass in getattr(spec, "__mro__", ()):
-            if name in vars(klass):
-                static = vars(klass)[name]
-                break
-        is_method = isinstance(static, (staticmethod, classmethod)) or (
-            callable(static) and not isinstance(static, property))
+        if isinstance(spec, dict):  # a recorded spec (a class the replay cannot import): method names
+            is_method = name in spec.get("methods", ())
+        else:
+            static = None
+            for klass in getattr(spec, "__mro__", ()):
+                if name in vars(klass):
+                    static = vars(klass)[name]
+                    break
+            is_method = isinstance(static, (staticmethod, classmethod)) or (
+                callable(static) and not isinstance(static, property))
         if not is_method:
             if not gate.active:
                 raise session.fail(f"{port}.{name} read outside a recorded tick (no service to read)")

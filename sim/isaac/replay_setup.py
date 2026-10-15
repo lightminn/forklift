@@ -77,6 +77,20 @@ class FileAudit:
         return list(self.paths)
 
 
+def service_spec(obj) -> dict:
+    """What a replay proxy needs to tell a method call from an attribute read on a service whose class it cannot
+    import (Isaac objects on CPU): the class's methods and properties."""
+    methods, properties = set(), set()
+    for klass in type(obj).__mro__:
+        for key, value in vars(klass).items():
+            if isinstance(value, property):
+                properties.add(key)
+            elif callable(value) or isinstance(value, (staticmethod, classmethod)):
+                methods.add(key)
+    return {"type": f"{type(obj).__module__}:{type(obj).__qualname__}", "methods": sorted(methods - properties),
+            "properties": sorted(properties)}
+
+
 def _import_path(obj) -> str | None:
     if isinstance(obj, types.ModuleType):
         return obj.__name__
@@ -119,7 +133,7 @@ def write_setup_snapshot(names: dict, directory: Path, files: list[str], *, serv
             out[name] = {"kind": "adapters", "names": sorted(vars(value))}
             continue
         if id(value) in service_ids:
-            out[name] = {"kind": "service", "id": service_ids[id(value)]}
+            out[name] = {"kind": "service", "id": service_ids[id(value)], "spec": service_spec(value)}
             continue
         path = _import_path(value) if callable(value) or isinstance(value, types.ModuleType) else None
         if path is not None:
