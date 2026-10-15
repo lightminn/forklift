@@ -5875,8 +5875,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         key_ = f"{name_}.{k_}"
                         if not isinstance(v_, list) or key_ in per_tick_lists:
                             continue
-                        if len(v_) > branch_counts.get(key_, 0):
-                            grown.append(f"{key_}+{len(v_) - branch_counts.get(key_, 0)}")
+                        start_ = branch_counts.get(key_, 0)
+                        for item_ in v_[start_:]:
+                            # A branch id from the new record's identifying fields (a transition's from/to, a
+                            # hold event, a replan kind or reason), not only the list that grew (Codex M-a1).
+                            tag_ = ",".join(
+                                f"{k}={item_[k]}" for k in ("from", "to", "event", "kind", "reason", "phase", "status")
+                                if isinstance(item_, dict) and isinstance(item_.get(k), (str, int, float, bool))
+                            ) if isinstance(item_, dict) else ""
+                            grown.append(f"{key_}[{tag_}]" if tag_ else key_)
                         branch_counts[key_] = len(v_)
                 return grown
 
