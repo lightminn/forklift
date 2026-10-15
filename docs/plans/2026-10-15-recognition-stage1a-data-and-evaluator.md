@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 > **이 계획의 실행 방식(사용자 결정 2026-10-15):** 이 세션에서 직접 구현(executing-plans), **각 작업 묶음(아래 "검토 지점")마다 Codex 검토를 받고 지적이 수렴한 뒤 다음 묶음으로 간다.**
-> **판:** 2판 — 1판의 검토 ① 원자료 재계산, ② Codex 적대적 검토(P1 2 · P2 16 · P3 4), ③ 결론을 보지 않은 독립 검토(계획 코드를 실제로 실행, P1 4 · P2 8)를 반영. 처리 기록은 맨 끝 "자체 검토".
+> **판:** 3판 — Codex 2판 재검토(P2 6 · P3 2)와 사용자 결정(알려진 형상의 질량 미상 → 현장 기본 적재 선언) 반영. 2판은 1판의 검토 ① 원자료 재계산, ② Codex 적대적 검토(P1 2 · P2 16 · P3 4), ③ 결론을 보지 않은 독립 검토(계획 코드를 실제로 실행, P1 4 · P2 8)를 반영. 처리 기록은 맨 끝 "자체 검토".
 
 **Goal:** 설계 §5·§3.3–3.4 의 장면 생성·정답·데이터 계약 판 2·통계·다중 인스턴스 평가기를 CPU 에서 끝까지 돌게 만들고, 지금 검출기의 기준선을 CPU 렌더 장면(dev)에서 기록한다.
 
@@ -22,7 +22,7 @@
 - 시험 포크 간격(설계 §13): EPAL 6 **0.3725 m**, T11 × 0.6 **0.290 m**.
 - 끼움·위험 판정 상수(설계 §3.1·§3.4·§9.3): M_req 잠정 **0.066 m**, 추종 종점 허용 **0.0338 m**(8 + 25.8 mm), 삽입 끝 투영 길이 **0.33 m**, 삽입축 위험 **0.040 m**, 종방향 지지 여유 **0.036 m**, 횡방향 지지 여유 **0.020 m**, 세로 여유 **0.005 m**, 적재 한도 **10 kg**.
 - 사유 코드 다섯 개(설계 §3.4): `fork_spacing_adjust`, `lift_alignment_needed`, `support_unverified`, `payload_limit`, `near_tracking_unavailable`.
-- **알려진 형상의 적재(설계 §9.3 해석 보충, 작업 3 에서 설계에 기록):** 알려진 형상은 작업 지시에 질량이 없으면 **빈 팔레트로 가정**하고 적재 사유를 내지 않으며, 결과에 그 가정을 표시한다(`payload_assumed_empty`). 지시가 질량을 주면 그 값으로 검사한다. 비규격은 질량·질량중심이 지시에 없으면 `support_unverified` 다. 사용자 결정 ③(지시 없으면 가장 가까운 팔레트를 자율로)이 알려진 형상에서 성립하려면 이 가정이 필요하다.
+- **알려진 형상의 적재(사용자 결정 2026-10-15, 작업 3 에서 설계 §9.3 에 기록):** 작업 지시에 질량이 없으면 **현장 기본 적재 선언**(`config/site_load_defaults.yaml` — 형상별 팔레트 질량·짐 질량·질량중심, 현장 정책값이지 측정값이 아니다)으로 검사하고, 결과·콘솔에 그 출처(`load_source = "site_default"`)를 표시한다. 기본값도 없으면 `support_unverified`(콘솔 확인). 비규격은 질량·질량중심이 지시에 없으면 `support_unverified` 다. 이 계획의 기본값은 팔레트 10.0 kg(시뮬 설정 `config/isaac_transport*.yaml` 의 `pallet_mass_kg` 와 같다)·짐 0 kg·중앙 하중이다.
 - 통계: 단측 95 % Clopper–Pearson 상한. 분할 eval = ⌈0.3 × 총⌉(ADR 0004 D6). **시험 단위는 장면**이다.
 - 장면 수(설계 §3.4): 알려진 형상 S1–S6 각 61 × 2 형상 = 732, S7 194(eval 59), N 94(eval 29) = 1,020. 형상별 eval 지시 장면 ≥ 59(애매하지 않은 것 ≥ 29, 애매한 것 ≥ 15).
 - TF 출처(설계 §13): 판 2 `tf.json` `origin` ∈ {`received_tf_static`, `isaac_render_pose`, `rig_render_pose`}, 그리고 `rig_render_pose` ↔ `render_source = "rig"`, `isaac_render_pose` ↔ `"isaac"` 로 묶인다. CPU 렌더(이 계획)는 **기구 회귀용이지 렌더 기반 판정 모집단이 아니다**(ADR 0004 D5). 정식 판정은 `isaac` + 잡음 판에서만 한다(설계 §5.3).
@@ -565,13 +565,14 @@ def removed_volume_fraction(before: Sequence[PalletBox], after: Sequence[PalletB
 ### Task 3: 포크 끼움 정답 `fork_fit` + 설계 §9.3 해석 보충
 
 **Files:**
-- Create: `src/forklift_core/perception/fork_fit.py`
-- Modify: `docs/design/2026-10-15-pallet-recognition-generality.md` (§9.3 끝에 해석 보충 한 문단)
+- Create: `src/forklift_core/perception/fork_fit.py`, `config/site_load_defaults.yaml`
+- Modify: `docs/design/2026-10-15-pallet-recognition-generality.md` (§9.3 끝에 사용자 결정 한 문단)
 - Test: `tests/unit/perception/test_fork_fit.py`
 
 **Interfaces:**
 - Consumes: `PalletSpec`, `face_layout`, `choose_pocket_pair`, `pair_margin`, `target_insertion_depth_m` (`pallet_geometry.py:257`)
-- Produces: 상수(Global Constraints), `TEST_FORK_SPACING_M`, `ForkSetup`(`spacing_m`, `blade_width_m=0.055`, `blade_thickness_m=0.025`, `lowest_centre_m=0.040`, `carriage_limit_m=0.346`, `reserve_m=0.016`, `lift_travel_m=0.28`; 속성 `blade_top_m`, `blade_bottom_m`), `LoadDeclaration`(`pallet_mass_kg`, `load_mass_kg`, `com_x_max_m`, `com_y_max_m`; `to_json()`), `FitResult`(`pickable`, `reasons`, `axis`, `pair`, `min_lateral_margin_m`, `fork_centre_offset_m`, `insertion_target_m`, `payload_assumed_empty`; `to_json()`), `fork_fit(spec, axis, setup, load, *, support_z_m=0.0, m_req_m=M_REQ_PROVISIONAL_M) -> FitResult`, `danger_threshold_m(fit) -> float`, `lane_reachable(spec, axis, setup, *, support_z_m) -> bool`
+- Produces: 상수(Global Constraints), `TEST_FORK_SPACING_M`, `ForkSetup`(`spacing_m`, `blade_width_m=0.055`, `blade_thickness_m=0.025`, `lowest_centre_m=0.040`, `carriage_limit_m=0.346`, `reserve_m=0.016`, `lift_travel_m=0.28`; 속성 `blade_top_m`, `blade_bottom_m`), `LoadDeclaration`(`pallet_mass_kg`, `load_mass_kg`, `com_x_max_m`, `com_y_max_m`; `to_json()`), `FitResult`(`pickable`, `reasons`, `axis`, `pair`, `min_lateral_margin_m`, `fork_centre_offset_m`, `insertion_target_m`, `load_source`; `to_json()`), `fork_fit(spec, axis, setup, load, *, load_source="instruction", support_z_m=0.0, m_req_m=M_REQ_PROVISIONAL_M) -> FitResult` — **모든 개구 쌍을 날 여유 큰 순으로 보고, 쌍에 따라 달라지는 조건(가로 여유·횡방향 지지)을 모두 만족하는 첫 쌍**을 고른다(없으면 여유가 가장 큰 쌍의 사유), `danger_threshold_m(fit) -> float`, `lane_reachable(spec, axis, setup, *, support_z_m) -> bool`, `load_site_defaults(path, specs) -> dict[str, LoadDeclaration]`
+- Create: `config/site_load_defaults.yaml`
 
 - [ ] **Step 1: 실패하는 시험 작성**
 
@@ -582,7 +583,7 @@ from pathlib import Path
 import pytest
 
 from forklift_core.perception.fork_fit import (
-    TEST_FORK_SPACING_M, ForkSetup, LoadDeclaration, danger_threshold_m, fork_fit, lane_reachable,
+    TEST_FORK_SPACING_M, ForkSetup, LoadDeclaration, danger_threshold_m, fork_fit, lane_reachable, load_site_defaults,
 )
 from forklift_core.perception.pallet_geometry import load_pallet_geometry
 from forklift_core.perception.pallet_model import KNOWN_ENTRY_AXES, PalletSpec, spec_from_geometry
@@ -610,15 +611,23 @@ def _ns(**overrides):
 CENTRED = LoadDeclaration(2.0, 6.0, com_x_max_m=0.275, com_y_max_m=0.0)
 
 
+def _site(name):
+    return load_site_defaults(ROOT / "config/site_load_defaults.yaml", {name: _known(name)})[name]
+
+
 @pytest.mark.parametrize(("name", "margin"), [("epal6", 0.08625), ("t11_06", 0.0775)])
-def test_known_shapes_at_their_test_spacing(name, margin):
-    fit = fork_fit(_known(name), "x", ForkSetup(TEST_FORK_SPACING_M[name]), None)
-    assert fit.pickable and fit.reasons == () and fit.payload_assumed_empty
+def test_known_shapes_at_their_test_spacing_with_the_site_default(name, margin):
+    fit = fork_fit(_known(name), "x", ForkSetup(TEST_FORK_SPACING_M[name]), _site(name), load_source="site_default")
+    assert fit.pickable and fit.reasons == () and fit.load_source == "site_default"
     assert fit.min_lateral_margin_m == pytest.approx(margin, abs=1e-9)
 
 
+def test_known_shape_without_any_load_needs_confirmation():
+    assert fork_fit(_known("epal6"), "x", ForkSetup(0.3725), None).reasons == ("support_unverified",)
+
+
 def test_t11_at_the_epal_spacing_needs_adjustment():
-    fit = fork_fit(_known("t11_06"), "x", ForkSetup(0.3725), None)
+    fit = fork_fit(_known("t11_06"), "x", ForkSetup(0.3725), _site("t11_06"), load_source="site_default")
     assert fit.min_lateral_margin_m == pytest.approx(0.03625, abs=1e-9)
     assert fit.reasons == ("fork_spacing_adjust",)
 
@@ -629,7 +638,17 @@ def test_known_shape_with_a_declared_heavy_load_hits_the_payload_limit():
 
 
 def test_danger_threshold_is_margin_minus_tracking_allowance():
-    assert danger_threshold_m(fork_fit(_known("t11_06"), "x", ForkSetup(0.290), None)) == pytest.approx(0.0437)
+    fit = fork_fit(_known("t11_06"), "x", ForkSetup(0.290), _site("t11_06"), load_source="site_default")
+    assert danger_threshold_m(fit) == pytest.approx(0.0437)
+
+
+def test_a_valid_pair_is_found_when_the_widest_margin_pair_fails_support():
+    # Codex counterexample: (0,1) has the widest margin (91.25 mm) but its fork
+    # centre sits 215 mm off-centre; (1,2) fits with 86.25 mm and supports.
+    spec = _ns(overall_width_m=1.2, column_centres_y_m=(-0.565, -0.21, 0.1575, 0.5275),
+               column_widths_m=(0.07, 0.12, 0.135, 0.145))
+    fit = fork_fit(spec, "x", ForkSetup(0.3725), CENTRED)
+    assert fit.pickable and fit.pair == (1, 2)
 
 
 def test_nonstandard_rules():
@@ -647,7 +666,7 @@ def test_nonstandard_rules():
 
 def test_upper_layer_needs_lift_alignment_but_is_reachable():
     spec = _known("epal6")
-    fit = fork_fit(spec, "x", ForkSetup(0.3725), None, support_z_m=0.288)
+    fit = fork_fit(spec, "x", ForkSetup(0.3725), _site("epal6"), load_source="site_default", support_z_m=0.288)
     assert "lift_alignment_needed" in fit.reasons
     # Lane 0.288-0.388 m; blades lifted 0.28 m sit at 0.3075-0.3325 m.
     assert lane_reachable(spec, "x", ForkSetup(0.3725), support_z_m=0.288)
@@ -668,9 +687,10 @@ polygon or contact verification (ADR 0004 D3).
 """
 
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
 from forklift_core.perception.pallet_geometry import target_insertion_depth_m
-from forklift_core.perception.pallet_model import PalletSpec, choose_pocket_pair, face_layout, pair_margin
+from forklift_core.perception.pallet_model import PalletSpec, face_layout, pair_margin
 
 M_REQ_PROVISIONAL_M = 0.066
 TRACKING_ALLOWANCE_M = 0.0338
@@ -724,12 +744,28 @@ class FitResult:
     min_lateral_margin_m: float
     fork_centre_offset_m: float
     insertion_target_m: float
-    payload_assumed_empty: bool
+    load_source: str | None
 
     def to_json(self) -> dict:
         obj = asdict(self)
         obj["reasons"], obj["pair"] = list(self.reasons), list(self.pair)
         return obj
+
+
+def load_site_defaults(path, specs: dict) -> dict:
+    """Site default load declarations for known shapes (a site policy, not a measurement)."""
+    import yaml
+
+    obj = yaml.safe_load(Path(path).read_text())
+    out = {}
+    for name, entry in obj["shapes"].items():
+        if name not in specs:
+            continue
+        if entry.get("com") != "centred":
+            raise ValueError("site defaults support only a centred centre of mass")
+        out[name] = LoadDeclaration(float(entry["pallet_mass_kg"]), float(entry["load_mass_kg"]),
+                                    specs[name].overall_depth_m / 2, 0.0)
+    return out
 
 
 def _lane(spec, axis, support_z_m):
@@ -744,28 +780,44 @@ def lane_reachable(spec: PalletSpec, axis: str, setup: ForkSetup, *, support_z_m
     return lift <= setup.lift_travel_m + 1e-12 and setup.blade_top_m + lift + VERTICAL_MARGIN_M <= ceiling + 1e-12
 
 
-def fork_fit(spec, axis, setup, load, *, support_z_m: float = 0.0, m_req_m: float = M_REQ_PROVISIONAL_M) -> FitResult:
-    layout, floor, ceiling = _lane(spec, axis, support_z_m)
-    pair = choose_pocket_pair(layout, setup.spacing_m, setup.blade_width_m)
-    margin, centre = pair_margin(layout, pair, setup.spacing_m, setup.blade_width_m)
-    target = target_insertion_depth_m(layout.depth_m, setup.carriage_limit_m, setup.reserve_m)
+def _pair_reasons(spec, setup, load, margin, centre, target, m_req_m) -> set:
     reasons = set()
     if margin < m_req_m:
         reasons.add("fork_spacing_adjust")
+    if not spec.known and (load is None or target < load.com_x_max_m + SUPPORT_LONGITUDINAL_MARGIN_M
+                           or abs(centre) + load.com_y_max_m > setup.spacing_m / 2 - SUPPORT_LATERAL_MARGIN_M):
+        reasons.add("support_unverified")
+    return reasons
+
+
+def fork_fit(spec, axis, setup, load, *, load_source: str | None = "instruction", support_z_m: float = 0.0,
+             m_req_m: float = M_REQ_PROVISIONAL_M) -> FitResult:
+    layout, floor, ceiling = _lane(spec, axis, support_z_m)
+    target = target_insertion_depth_m(layout.depth_m, setup.carriage_limit_m, setup.reserve_m)
+    n = len(layout.opening_intervals_m)
+    if n < 2:
+        raise ValueError("A face needs two openings")
+    options = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            margin, centre = pair_margin(layout, (i, j), setup.spacing_m, setup.blade_width_m)
+            options.append((-round(margin, 9), round(abs(centre), 9), (i, j), margin, centre))
+    options.sort()
+    chosen = next((o for o in options if not _pair_reasons(spec, setup, load, o[3], o[4], target, m_req_m)), options[0])
+    _, _, pair, margin, centre = chosen
+    reasons = _pair_reasons(spec, setup, load, margin, centre, target, m_req_m)
     if (floor > setup.blade_bottom_m - VERTICAL_MARGIN_M + 1e-12
             or ceiling < setup.blade_top_m + VERTICAL_MARGIN_M - 1e-12):
         reasons.add("lift_alignment_needed")
-    if load is not None and load.pallet_mass_kg + load.load_mass_kg > PAYLOAD_LIMIT_KG:
+    if load is None:
+        reasons.add("support_unverified")  # mass unknown: confirm on the console
+        load_source = None
+    elif load.pallet_mass_kg + load.load_mass_kg > PAYLOAD_LIMIT_KG:
         reasons.add("payload_limit")
-    assumed_empty = spec.known and load is None
-    if not spec.known:
-        if (load is None or target < load.com_x_max_m + SUPPORT_LONGITUDINAL_MARGIN_M
-                or abs(centre) + load.com_y_max_m > setup.spacing_m / 2 - SUPPORT_LATERAL_MARGIN_M):
-            reasons.add("support_unverified")
-        if spec.top_style != "boards":
-            reasons.add("near_tracking_unavailable")
+    if not spec.known and spec.top_style != "boards":
+        reasons.add("near_tracking_unavailable")
     ordered = tuple(code for code in REASON_CODES if code in reasons)
-    return FitResult(not ordered, ordered, axis, pair, margin, centre, target, assumed_empty)
+    return FitResult(not ordered, ordered, axis, pair, margin, centre, target, load_source)
 
 
 def danger_threshold_m(fit: FitResult) -> float:
@@ -773,14 +825,27 @@ def danger_threshold_m(fit: FitResult) -> float:
     return fit.min_lateral_margin_m - TRACKING_ALLOWANCE_M
 ```
 
-- [ ] **Step 4: 설계 §9.3 보충** — §9.3 문단 끝에 덧붙인다:
+- [ ] **Step 4: 현장 기본값 파일과 설계 §9.3 기록** — `config/site_load_defaults.yaml`:
 
-```markdown
-**해석 보충 (2026-10-15, 단계 1A 계획 검토):** ⑤ 의 "작업 지시의 값, 없으면 콘솔 확인"은 **비규격**에 적용한다(비규격은 질량·질량중심이 없으면 ③ 에서 이미 `support_unverified` 다). **알려진 형상은 지시에 질량이 없으면 빈 팔레트로 가정**하고 적재 사유를 내지 않되 결과에 그 가정(`payload_assumed_empty`)을 남긴다 — 그렇지 않으면 사용자 결정 ③(지시 없으면 가장 가까운 팔레트를 자율로)이 알려진 형상에서도 성립하지 않는다. 지시가 질량을 주면 알려진 형상도 그 값으로 검사한다.
+```yaml
+# Site default load declaration for known pallet shapes, used when a task
+# instruction gives no mass (user decision 2026-10-15). A site policy, not a
+# measurement: the pallet mass equals the simulation setting pallet_mass_kg
+# in config/isaac_transport*.yaml. Change it per site; results record the source.
+source: site_default
+shapes:
+  epal6: {pallet_mass_kg: 10.0, load_mass_kg: 0.0, com: centred}
+  t11_06: {pallet_mass_kg: 10.0, load_mass_kg: 0.0, com: centred}
 ```
 
-- [ ] **Step 5: 통과 확인** — Expected: 7 passed
-- [ ] **Step 6: 커밋** — `git add src/forklift_core/perception/fork_fit.py tests/unit/perception/test_fork_fit.py docs/design/2026-10-15-pallet-recognition-generality.md` · `git commit -m "perception: fork-fit truth with real blade margins, per-face lanes and layer reach, support precheck, five reason codes; design 9.3 clarification for known-shape payload"`
+설계 §9.3 문단 끝에 덧붙인다:
+
+```markdown
+**사용자 결정 (2026-10-15, 단계 1A 계획 검토):** ⑤ 의 질량이 작업 지시에 없을 때, **알려진 형상은 현장 기본 적재 선언**(`config/site_load_defaults.yaml` — 형상별 팔레트·짐 질량과 질량중심, 현장 정책값)으로 검사하고 결과·콘솔에 그 출처를 표시한다. 기본값도 없으면 콘솔 확인(`support_unverified`)이다. 비규격은 지시에 질량·질량중심이 없으면 지금처럼 `support_unverified` 다.
+```
+
+- [ ] **Step 5: 통과 확인** — Expected: 9 passed
+- [ ] **Step 6: 커밋** — `git add src/forklift_core/perception/fork_fit.py tests/unit/perception/test_fork_fit.py config/site_load_defaults.yaml docs/design/2026-10-15-pallet-recognition-generality.md` · `git commit -m "perception: fork-fit truth with real blade margins, a pair search over every opening pair, per-face lanes and layer reach, support precheck, site default load for known shapes, five reason codes"`
 
 **검토 A:** 작업 1–3 뒤 Codex — 초점: "알려진 형상 22 상자 일치, 면별 차선·포켓 띠, 날 여유 기준 쌍 선택, fork_fit 의 여유·세로·지지·적재 규칙이 설계 §3.1·§9.2·§9.3(보충 포함)과 같은가, 손상 범위·절단 위치". 수렴까지 반복.
 
@@ -1150,9 +1215,9 @@ def eval_count(total: int) -> int:
   - `FaceTruth`(`axis`, `sign`(+1 기본 면 / −1 반대 면), `insertion_yaw_rad`, `left_m`, `right_m`, `pocket_width_m: (좌, 우)`, `pocket_height_m`, `accessible`, `exposure`, `fit: dict`, `danger_threshold_m`)
   - `InstanceTruth`(`instance_id`, `spec: dict`(`PalletSpec.to_json()`), `known`, `layer`, `support_z_m`, `support_visible`, `lane_reachable`, `faces`, `eligible`, `damage: list[dict]`; `to_json()`)
   - `scene_truths(instances, setup, *, distractors=(), layers=None) -> tuple[list[InstanceTruth], RenderedScene]` — `instances` 원소는 `(spec, placement, damage, load)`. **전체 렌더 한 번 + 인스턴스별 단독 렌더**, 반환한 렌더를 생성기가 그대로 쓴다.
-  - `EXPOSURE_MIN = 0.5`, `FACE_SLAB_M = 0.02`
+  - `EXPOSURE_MIN = 0.5`, `FACE_PLANE_TOL_M = 0.001`, `SUPPORT_TOL_M = 0.002`
 
-면 노출(설계 §3.4 "진입면 노출"): 적중점을 그 인스턴스의 팔레트 좌표로 옮겨, 면 평면(x 면은 x = ∓깊이/2, y 면은 y = ∓폭/2)에서 `FACE_SLAB_M` 이내인 그 인스턴스 화소를 센다. 노출 = 장면에서의 개수 / 단독 렌더에서의 개수. `eligible` = 접근 가능한 면 중 노출 ≥ 0.5 인 것이 있음. `support_visible` = 1 층(바닥)이거나 바로 아래 인스턴스 화소가 장면에 하나라도 있음. 끼움 정답은 **면마다** `fork_fit(spec, axis, setup, load, support_z_m=…)`.
+면 노출(설계 §3.4 "진입면 노출"): 적중점을 그 인스턴스의 팔레트 좌표로 옮겨, **면 평면 위(허용 1 mm)** 에 놓인 그 인스턴스 화소만 센다 — 상판 윗면·측면의 모서리 근처 점이 섞이지 않게(20 mm 두께로 세면 105 mm 가림판에서 실제 48.8 % 가 50.2 % 로 바뀌어 문턱을 넘는다, Codex 반례). 노출 = 장면에서의 개수 / 단독 렌더에서의 개수. `eligible` = 접근 가능한 면 중 노출 ≥ 0.5 인 것이 있음. `support_visible` = 1 층이면 참, 그 위 층이면 **바로 아래 인스턴스의 윗면(받침 높이 ± 2 mm 의 적중점)이 장면에 하나라도 보임** — 아래 팔레트의 수직면이 보이는 것과 구별한다(EPAL 6 3 단 맨 위는 받침 0.288 m 가 카메라 0.27 m 보다 높아 받침면이 보이지 않는다). 끼움 정답은 **면마다** `fork_fit(spec, axis, setup, load, support_z_m=…)`.
 
 - [ ] **Step 1: 실패하는 시험 작성**
 
@@ -1163,13 +1228,14 @@ from pathlib import Path
 
 import pytest
 
-from forklift_core.perception.fork_fit import ForkSetup
+from forklift_core.perception.fork_fit import ForkSetup, LoadDeclaration
 from forklift_core.perception.pallet_geometry import load_pallet_geometry
 from forklift_core.perception.pallet_model import KNOWN_ENTRY_AXES, spec_from_geometry
 from tools import recognition_truth as rt
 from tools import scene_rig
 
 ROOT = Path(__file__).resolve().parents[2]
+SITE = LoadDeclaration(10.0, 0.0, 0.3, 0.0)  # the site default for EPAL 6 (config/site_load_defaults.yaml)
 
 
 def _spec(name):
@@ -1203,8 +1269,8 @@ def test_t11_faces_at_45_degrees_and_y_face_height():
 
 def test_stacked_layer_raises_the_pockets_and_needs_lift():
     _, spec = _spec("epal6")
-    lower = (spec, rt.Placement(2.5, 0.0, 0.0, 0.0), (), None)
-    upper = (spec, rt.Placement(2.5, 0.0, 0.0, 0.144), (), None)
+    lower = (spec, rt.Placement(2.5, 0.0, 0.0, 0.0), (), SITE)
+    upper = (spec, rt.Placement(2.5, 0.0, 0.0, 0.144), (), SITE)
     _, up_t = _truth([lower, upper], layers=[0, 1])
     front = up_t.faces[0]
     assert front.left_m[2] == pytest.approx(0.144 + 0.022 + 0.039)
@@ -1223,10 +1289,17 @@ def test_touching_pallets_keep_their_own_face_exposure():
 
 def test_a_low_screen_in_front_cuts_face_exposure_below_half():
     _, spec = _spec("epal6")
-    screen = [scene_rig.Box((2.5 - 0.3 - 0.05, 0.0, 0.06), (0.01, 1.0, 0.12))]
+    screen = [scene_rig.Box((2.5 - 0.3 - 0.05, 0.0, 0.0525), (0.01, 1.0, 0.105))]
     t = _truth([(spec, rt.Placement(2.5, 0.0, 0.0, 0.0), (), None)], distractors=screen)[0]
     front = next(f for f in t.faces if f.accessible)
     assert front.exposure < 0.5 and not t.eligible
+
+
+def test_support_surface_above_the_camera_is_not_visible():
+    _, spec = _spec("epal6")
+    tiers = [(spec, rt.Placement(2.5, 0.0, 0.0, k * 0.144), (), None) for k in range(3)]
+    truths = _truth(tiers, layers=[0, 1, 2])
+    assert truths[0].support_visible and not truths[2].support_visible
 ```
 
 - [ ] **Step 2: 실패 확인** — `ImportError`
@@ -1250,7 +1323,8 @@ from forklift_core.perception.pallet_model import PalletSpec, face_layout, spec_
 from tools import instance_rig, scene_rig
 
 EXPOSURE_MIN = 0.5
-FACE_SLAB_M = 0.02
+FACE_PLANE_TOL_M = 0.001
+SUPPORT_TOL_M = 0.002
 
 
 def _wrap(angle: float) -> float:
@@ -1317,11 +1391,25 @@ def _local(points, placement: Placement):
 
 
 def _face_mask(local, spec: PalletSpec, axis: str, sign: int):
+    """Hits on the entry-face plane itself, not on the top or sides near its edges."""
     if axis == "x":
         plane = -spec.overall_depth_m / 2 if sign == 1 else spec.overall_depth_m / 2
-        return np.abs(local[..., 0] - plane) <= FACE_SLAB_M
+        return np.abs(local[..., 0] - plane) <= FACE_PLANE_TOL_M
     plane = -spec.overall_width_m / 2 if sign == 1 else spec.overall_width_m / 2
-    return np.abs(local[..., 1] - plane) <= FACE_SLAB_M
+    return np.abs(local[..., 1] - plane) <= FACE_PLANE_TOL_M
+
+
+def _top_visible(rendered, m, spec, placement, top_z) -> bool:
+    """Hits on the interior of instance m's top surface (not its face or side edges)."""
+    local = _local(rendered.points_base, placement)
+    inside = ((np.abs(local[..., 0]) < spec.overall_depth_m / 2 - SUPPORT_TOL_M)
+              & (np.abs(local[..., 1]) < spec.overall_width_m / 2 - SUPPORT_TOL_M))
+    on_top = np.abs(rendered.points_base[..., 2] - top_z) <= SUPPORT_TOL_M
+    # An upward-facing surface can only be hit by a descending ray, so a camera at
+    # or below it sees board sides there, never the surface itself.
+    camera_z = float(rendered.scene.base_from_optical.translation_m[2])
+    descending = rendered.points_base[..., 2] < camera_z
+    return bool(((rendered.instance_ids == m) & inside & on_top & descending).any())
 
 
 def _faces(spec, placement, setup, load, scene_local, scene_ids, k, solo_local, solo_ids):
@@ -1361,8 +1449,9 @@ def scene_truths(instances, setup: ForkSetup, *, distractors: Sequence[scene_rig
         solo = instance_rig.render_instances([placed[k]], floor=False, back_wall=False)
         faces = _faces(spec, placement, setup, load, _local(rendered.points_base, placement), rendered.instance_ids,
                        k, _local(solo.points_base, placement), solo.instance_ids)
-        below = [m for m in range(len(instances)) if layers[m] == layers[k] - 1]
-        support_visible = layers[k] == 0 or any((rendered.instance_ids == m).any() for m in below)
+        support_visible = layers[k] == 0 or any(
+            _top_visible(rendered, m, instances[m][0], instances[m][1], placement.support_z_m)
+            for m in range(len(instances)) if layers[m] == layers[k] - 1)
         first = next((f for f in faces if f.accessible), faces[0])
         truths.append(InstanceTruth(
             k, spec.to_json(), spec.known, layers[k], placement.support_z_m, support_visible,
@@ -1372,7 +1461,7 @@ def scene_truths(instances, setup: ForkSetup, *, distractors: Sequence[scene_rig
     return truths, rendered
 ```
 
-- [ ] **Step 4: 통과 확인** — Expected: 5 passed
+- [ ] **Step 4: 통과 확인** — Expected: 6 passed
 - [ ] **Step 5: 커밋** — `git add tools/recognition_truth.py tests/unit/test_recognition_truth.py` · `git commit -m "tools: recognition ground truth -- per-face pockets and fit, entry-face exposure against solo renders, support visibility and layer reach"`
 
 ### Task 8: 장면 조리법 `recognition_scenes`
@@ -1390,7 +1479,7 @@ def scene_truths(instances, setup: ForkSetup, *, distractors: Sequence[scene_rig
 - **지시 내용**: S2·S3 의 애매함 = 반경이 대상과 가장 가까운 이웃까지 + 0.1 m, 층 없음. 애매하지 않음 = 반경 min(0.3, 이웃 거리/2), 층 없음. **S4 의 애매하지 않음 = 반경 0.3 m + 대상 절대 층, 애매함 = 반경 0.3 m + 층 없음**(같은 수평 위치의 층이 모두 반경 안).
 - **S2 맞닿음**: r % 4 == 0 이면 같은 yaw·간격 0·엇갈림 없음(`touching=True`). 나머지는 간격 0.01–0.30 m, yaw ±5°, 엇갈림 ±0.15 m(삽입축 방향). 줄지어 놓는 축 = 팔레트의 왼쪽 축.
 - **S3**: 뒤 팔레트를 삽입축 방향으로 (간격 0.05–1.0 m + 깊이)만큼, 가로는 왼쪽 축 방향 ±0.2 m.
-- **S7 층화**: r % 2 == 0 → 집을 수 있는 계열, 아니면 위반 계열 `S7_VIOLATIONS[(r // 2) % 5]`. 집을 수 있는 계열은 시험 간격 s ∈ {0.3725, 0.290} 에 포켓 중심을 ±s/2 에 두고 개구 폭 w ∈ [0.195, min(0.28, s − 0.06)](여유 (w − 0.055)/2 ≥ 0.07 ≥ M_req), 가운데 기둥 c = s − w, 바깥 기둥 o ∈ [0.06, 0.20], 전체 폭이 0.60 m 미만이면 o 를 늘린다; 깊이 0.50–0.58 m, 판 상판, 천장 ≥ 0.07 m(받침 0.010–0.025 + 개구 0.06–0.12), 중앙 하중(x_c = 깊이/2, y_c = 0), 질량 합 ≤ 10 kg. r % 4 == 0 이면 s = 0.3725, w ∈ [0.195, 0.2025] 로 가운데를 두 기둥 + 0.05 m 좁은 개구로 나눈 **4 기둥** 형상(쌍 선택 시험). 위반 계열은 집을 수 있는 계열에서 하나만 바꾼다 — `fork_spacing_adjust`: w ∈ [0.10, 0.18]; `lift_alignment_needed`: 받침 0.010 · 개구 0.040–0.045; `support_unverified`: 깊이 0.62–1.20 m; `payload_limit`: 질량 합 10.5–14 kg; `near_tracking_unavailable`: 평평한 상판.
+- **S7 층화**: r % 2 == 0 → 집을 수 있는 계열, 아니면 위반 계열 `S7_VIOLATIONS[(r // 2) % 5]`. 집을 수 있는 계열은 시험 간격 s ∈ {0.3725, 0.290} 에 포켓 중심을 ±s/2 에 두고 개구 폭 w ∈ [0.195, min(0.28, s − 0.06)](여유 (w − 0.055)/2 ≥ 0.07 ≥ M_req), 가운데 기둥 c = s − w, 바깥 기둥 o ∈ [0.06, 0.20], 전체 폭이 0.60 m 미만이면 o 를 늘린다; 깊이 0.50–0.58 m, 판 상판, 천장 ≥ 0.07 m(받침 0.010–0.025 + 개구 0.06–0.12), 중앙 하중(x_c = 깊이/2, y_c = 0), 질량 합 ≤ 10 kg. r % 4 == 0 이면 s = 0.3725, w ∈ [0.195, 0.2025] 로 가운데를 두 기둥 + 0.05 m 좁은 개구로 나눈 **4 기둥** 형상(쌍 선택 시험). 위반 계열은 집을 수 있는 계열에서 하나만 바꾼다(모든 치수는 설계 §5.1 범위 안 — 기둥 폭 0.06–0.20 m, 개구 높이 0.045–0.12 m) — `fork_spacing_adjust`: w ∈ [0.10, 0.18]·가운데 기둥 c ∈ [0.06, 0.20] 를 따로 뽑는다(개구가 좁아 어느 정렬로도 여유 ≤ 62.5 mm); `lift_alignment_needed`: 받침 0.010 · 개구 0.045–0.047(천장 ≤ 57 mm < 57.5 mm); `support_unverified`: 깊이 0.62–1.20 m; `payload_limit`: 질량 합 10.5–14 kg; `near_tracking_unavailable`: 평평한 상판.
 - **N**: `structure(g, kind)` 의 grounded·shelf·blocks + 플라스틱 크레이트 더미(상자 2–4개).
 - 겹침 검사는 S4 의 층끼리를 빼고 모든 물체 쌍에 한다. 실패하면 같은 배치 스트림으로 다시 뽑는다(최대 200회).
 
@@ -1471,6 +1560,14 @@ def test_s7_eval_is_stratified(catalogue):
     assert sum(v == () for v in verdicts) >= 25
     for code in rs.S7_VIOLATIONS:
         assert sum(code in v for v in verdicts) >= 4, code
+
+
+def test_s7_shapes_stay_inside_the_design_ranges(catalogue):
+    for r in (r for r in catalogue if r.case == "S7"):
+        spec = r.instances[0].spec
+        assert all(0.06 - 1e-9 <= w <= 0.20 + 1e-9 for w in spec.column_widths_m), r.scene_id
+        assert 0.045 - 1e-9 <= spec.opening_height_m <= 0.12 + 1e-9, r.scene_id
+        assert 0.60 - 1e-9 <= spec.overall_width_m <= 1.20 + 1e-9, r.scene_id
 ```
 
 - [ ] **Step 2: 실패 확인** — `ImportError`
@@ -1593,11 +1690,10 @@ def _s7_spec(rng, rank: int, index: int):
     s = 0.3725 if four else float(rng.choice([0.3725, 0.290]))
     if violation == "fork_spacing_adjust":
         w = float(rng.uniform(0.10, 0.18))
-    elif four:
-        w = float(rng.uniform(0.195, 0.2025))
+        c = float(rng.uniform(0.06, 0.20))
     else:
-        w = float(rng.uniform(0.195, min(0.28, s - 0.06)))
-    c = s - w
+        w = float(rng.uniform(0.195, 0.2025)) if four else float(rng.uniform(0.195, min(0.28, s - 0.06)))
+        c = s - w
     o = float(rng.uniform(0.06, 0.20))
     width = 2 * o + 2 * w + c
     if width < 0.60:
@@ -1615,7 +1711,7 @@ def _s7_spec(rng, rank: int, index: int):
     row = float(min(rng.uniform(0.08, 0.15), depth / 4))
     lift_case = violation == "lift_alignment_needed"
     deck = 0.010 if lift_case else float(rng.uniform(0.010, 0.025))
-    opening = float(rng.uniform(0.040, 0.045)) if lift_case else float(rng.uniform(0.06, 0.12))
+    opening = float(rng.uniform(0.045, 0.047)) if lift_case else float(rng.uniform(0.06, 0.12))
     board = float(rng.uniform(0.08, 0.14))
     spec = PalletSpec(
         name=f"nonstandard_{index}", known=False, overall_width_m=width, overall_depth_m=depth,
@@ -1818,7 +1914,7 @@ def catalogue_digest(recipes) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 ```
 
-- [ ] **Step 4: 통과 확인** — `git add tools/recognition_scenes.py tests/unit/test_recognition_scenes.py`, Run(ws1, 백그라운드): `FORKLIFT_REPO=/home/light/school/2-2/embedded-design/forklift-wt-perception ~/bin/forklift-ws1-pytest tests/unit/test_recognition_scenes.py -q -p no:cacheprovider -W error` · Expected: 10 passed. S7 층화 시험이 실패하면 사유별 개수를 출력해 생성 규칙을 고친다(시험 문턱은 바꾸지 않는다).
+- [ ] **Step 4: 통과 확인** — `git add tools/recognition_scenes.py tests/unit/test_recognition_scenes.py`, Run(ws1, 백그라운드): `FORKLIFT_REPO=/home/light/school/2-2/embedded-design/forklift-wt-perception ~/bin/forklift-ws1-pytest tests/unit/test_recognition_scenes.py -q -p no:cacheprovider -W error` · Expected: 11 passed. S7 층화 시험이 실패하면 사유별 개수를 출력해 생성 규칙을 고친다(시험 문턱은 바꾸지 않는다).
 - [ ] **Step 5: 커밋** — `git commit -m "tools: deterministic recognition scene recipes -- rank-assigned instructions and touching rows, S4 layer instructions, stratified S7 (pickable vs one violation each), split seed streams, catalogue digest; 1,020 scenes"`
 
 ### Task 9: 데이터 계약 판 2 `recognition_dataset` + ADR 0004 D5 개정
@@ -1830,7 +1926,7 @@ def catalogue_digest(recipes) -> str:
 
 **Interfaces:**
 - Consumes: `SceneInput`, `_read_json`, `_read_png`, `_require_fields`, `decode_depth_mm`, `intrinsics_from_camera_info`(`scene_dataset.py`), `rotation_matrix_from_quaternion_xyzw`
-- Produces: `SCHEMA_VERSION = 2`, `TF_ORIGINS`, `ORIGIN_SOURCE = {"rig_render_pose": "rig", "isaac_render_pose": "isaac"}`, `RecognitionInput`(`scene`, `instruction: dict`), `RecognitionSample`(`input`, `origin`, `meta`, `truth`, `instruction`, `instance_ids`), `write_recognition_scene(scene_dir, scene, instance_ids, *, origin, meta, truth, instruction)`, `read_meta(scene_dir) -> dict`(scene.json 만), `load_recognition_input(scene_dir) -> RecognitionInput`, `load_recognition_sample(scene_dir) -> RecognitionSample`, `scene_digest(scene_dir) -> str`(장면 디렉터리의 모든 파일 sha256)
+- Produces: `SCHEMA_VERSION = 2`, `TF_ORIGINS`, `ORIGIN_SOURCE = {"rig_render_pose": "rig", "isaac_render_pose": "isaac", "received_tf_static": "capture"}`(마지막은 실센서 캡처용 — 이 계획에서는 쓰지 않는다), `RecognitionInput`(`scene`, `instruction: dict`), `RecognitionSample`(`input`, `origin`, `meta`, `truth`, `instruction`, `instance_ids`), `write_recognition_scene(scene_dir, scene, instance_ids, *, origin, meta, truth, instruction)`, `read_meta(scene_dir) -> dict`(scene.json 만), `load_recognition_input(scene_dir) -> RecognitionInput`, `load_recognition_sample(scene_dir) -> RecognitionSample`, `scene_digest(scene_dir) -> str`(장면 디렉터리의 모든 파일 sha256)
 
 파일: `rgb.png`, `depth_mm.png`, `depth_meta.json`, `camera_info.json`, `tf.json`, `instances.png`(uint16: 0 없음, k+1 인스턴스, 65535 방해물), `scene.json`(`schema_version: 2`, 메타), `instruction.json`(**시스템 입력만** — `present`, `x_m`, `y_m`, `radius_m`, `layer`, `load`), `truth.json`(인스턴스 정답 + `instruction_truth: {kind, target}`). 입력 로더는 `instruction.json` 까지 읽고 `truth.json`·`instances.png` 는 읽지 않는다. 로더는 판 1 과 같은 검증(CameraInfo·장면 시각 일치, CameraInfo 프레임 = TF source, RGB·depth 크기 = CameraInfo; 표본 로더는 마스크 크기도)을 하고, `origin` 과 `meta.render_source` 의 짝(`ORIGIN_SOURCE`)을 강제한다.
 
@@ -1901,6 +1997,17 @@ def test_tf_rotation_round_trips_at_180_degrees(tmp_path, axis):
     assert np.allclose(rd.load_recognition_input(tmp_path).scene.base_from_optical.rotation, rot, atol=1e-9)
 
 
+@pytest.mark.parametrize(("field", "value"), [("clock_domain", "banana"), ("source_provenance", "ground_truth"),
+                                              ("stamp_ns", True)])
+def test_unsupported_scene_metadata_is_rejected(tmp_path, field, value):
+    _write(tmp_path)
+    meta = json.loads((tmp_path / "scene.json").read_text())
+    meta[field] = value
+    (tmp_path / "scene.json").write_text(json.dumps(meta))
+    with pytest.raises(ValueError):
+        rd.load_recognition_input(tmp_path)
+
+
 def test_digest_covers_every_file(tmp_path):
     _write(tmp_path)
     before = rd.scene_digest(tmp_path)
@@ -1931,13 +2038,14 @@ from pathlib import Path
 import numpy as np
 
 from forklift_core.geometry import RigidTransform, rotation_matrix_from_quaternion_xyzw
+from forklift_core.perception.pocket_observation import CLOCK_DOMAINS, PROVENANCES
 from forklift_core.perception.scene_dataset import (
-    SceneInput, _read_json, _read_png, _require_fields, decode_depth_mm, intrinsics_from_camera_info,
+    SceneInput, _nonnegative_int, _read_json, _read_png, _require_fields, decode_depth_mm, intrinsics_from_camera_info,
 )
 
 SCHEMA_VERSION = 2
 TF_ORIGINS = ("received_tf_static", "isaac_render_pose", "rig_render_pose")
-ORIGIN_SOURCE = {"rig_render_pose": "rig", "isaac_render_pose": "isaac"}
+ORIGIN_SOURCE = {"rig_render_pose": "rig", "isaac_render_pose": "isaac", "received_tf_static": "capture"}
 _DISTRACTOR = 65535
 
 
@@ -2036,6 +2144,12 @@ def read_meta(scene_dir) -> dict:
     meta = _read_json(Path(scene_dir) / "scene.json")
     if meta.get("schema_version") != SCHEMA_VERSION:
         raise ValueError("scene.json schema_version must be 2")
+    _require_fields(meta, {"scene_id", "case", "split", "render_source", "stamp_ns", "clock_domain",
+                           "source_provenance"}, "scene", allow_extra=True)
+    meta["stamp_ns"] = _nonnegative_int(meta["stamp_ns"], "scene.stamp_ns")
+    for name, allowed in (("clock_domain", CLOCK_DOMAINS), ("source_provenance", PROVENANCES)):
+        if not isinstance(meta[name], str) or meta[name] not in allowed:
+            raise ValueError(f"Unsupported scene {name}: {meta[name]!r}")
     return meta
 
 
@@ -2050,7 +2164,7 @@ def _load_input(scene_dir: Path):
         raise ValueError("TF must map camera_optical_frame to base_link")
     if intrinsics.frame_id != tf["source_frame"]:
         raise ValueError("CameraInfo frame must match TF source_frame")
-    if info["stamp_ns"] != meta["stamp_ns"]:
+    if _nonnegative_int(info["stamp_ns"], "camera_info.stamp_ns") != meta["stamp_ns"]:
         raise ValueError("CameraInfo and scene acquisition stamps must match")
     transform = RigidTransform(source_frame=tf["source_frame"], target_frame=tf["target_frame"],
                                rotation=rotation_matrix_from_quaternion_xyzw(tf["quaternion_xyzw"]),
@@ -2095,7 +2209,7 @@ def scene_digest(scene_dir) -> str:
 **개정 (2026-10-15, 사용자 결정 — 팔레트 인식 일반화 설계 §13).** 데이터 계약을 **명시적으로 확장**한다: 스키마 판 2(`forklift_core.perception.recognition_dataset`)의 `tf.json` `origin` 은 `received_tf_static` · `isaac_render_pose` · `rig_render_pose` 중 하나이고, 렌더 출처는 `meta.render_source` 와 짝이 맞아야 한다. 렌더 자세에서 계산한 변환은 그 출처 이름으로 적고 `received_tf_static` 이라는 이름을 붙이지 않는다(위 금지는 그대로). `isaac_render_pose` 장면은 Isaac 모집단으로만, `rig_render_pose` 장면은 CPU 기구 회귀로만 쓰며 렌더 기반 판정 분모에 넣지 않는다. 판 1 로더(`scene_dataset.py`)는 바꾸지 않는다.
 ```
 
-- [ ] **Step 5: 통과 확인** — Expected: 8 passed(Pillow 12 에서 `-W error` 로도)
+- [ ] **Step 5: 통과 확인** — Expected: 11 passed(Pillow 12 에서 `-W error` 로도)
 - [ ] **Step 6: 커밋** — `git add src/forklift_core/perception/recognition_dataset.py tests/unit/perception/test_recognition_dataset.py docs/decisions/0004-simulation-engine-and-insertion-depth.md` · `git commit -m "perception: scene dataset schema v2 (instruction input vs truth, v1 input checks kept, origin/render_source pairing, robust quaternion, full-file digest); ADR 0004 D5 amendment"`
 
 **검토 C:** 작업 7–9 뒤 Codex — 초점: "면별 정답·노출·끼움, 조리법 규칙(지시·맞닿음·S4·S7 층화)과 하한, 판 2 의 입력/정답 분리와 검증". 수렴까지 반복.
@@ -2553,7 +2667,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import numpy as np
 
 from forklift_core.perception.depth_noise import NoiseModel, apply_noise
-from forklift_core.perception.fork_fit import ForkSetup
+from forklift_core.perception.fork_fit import ForkSetup, load_site_defaults
 from forklift_core.perception.recognition_dataset import write_recognition_scene
 from tools import recognition_scenes as rs
 from tools.recognition_truth import scene_truths
@@ -2572,6 +2686,8 @@ def main(argv=None):
         print(json.dumps({"catalogue_sha256": rs.catalogue_digest(recipes), "numpy": np.__version__}))
         return
     cases, counts = set(a.cases.split(",")), {}
+    site = load_site_defaults(Path(__file__).resolve().parents[1] / "config/site_load_defaults.yaml",
+                              {k: rs.known_spec(k) for k in ("epal6", "t11_06")})
     for recipe in recipes:
         if recipe.case not in cases:
             continue
@@ -2581,8 +2697,14 @@ def main(argv=None):
             continue
         instr = recipe.instruction
         holder = instr.target if instr.target is not None else 0
+
+        def load_for(k, inst):
+            if k == holder and instr.load is not None:
+                return instr.load
+            return site.get(recipe.shape_key) if inst.spec.known else None
+
         truths, rendered = scene_truths(
-            [(i.spec, i.placement, i.damage, instr.load if k == holder else None) for k, i in enumerate(recipe.instances)],
+            [(i.spec, i.placement, i.damage, load_for(k, i)) for k, i in enumerate(recipe.instances)],
             ForkSetup(recipe.fork_spacing_m), distractors=recipe.distractors,
             layers=[i.layer for i in recipe.instances])
         scene, ids, noise = rendered.scene, rendered.instance_ids, None
@@ -2710,7 +2832,10 @@ def main(argv=None):
         raise SystemExit(f"dataset must hold exactly one render source, found {sorted(sources)}")
     a.output.mkdir(parents=True, exist_ok=True)
     metrics = summarize(verdicts, split=a.split, render_source=sources.pop())
-    metrics.update({"detector": a.detector, "dataset_sha256": digest.hexdigest(), "source": _source(a.source_manifest)})
+    elapsed = sorted(v.elapsed_s for v in verdicts)
+    metrics.update({"detector": a.detector, "dataset_sha256": digest.hexdigest(), "source": _source(a.source_manifest),
+                    "elapsed_s": {"n": len(elapsed), "p50": elapsed[len(elapsed) // 2],
+                                  "p95": elapsed[min(len(elapsed) - 1, int(0.95 * len(elapsed)))], "max": elapsed[-1]}})
     (a.output / "metrics.json").write_text(json.dumps(metrics, indent=1, default=float))
     with (a.output / "verdicts.csv").open("w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(asdict(verdicts[0]).keys()))
@@ -2790,4 +2915,6 @@ Run: `tools/hpc_sweep.sh deploy/hpc/recognition_stage1a_evaluate.tsv cpu1 2` (�
    - ① 원자료 재계산(1판 직후): 끼움 시험값·지지·천장·적재·적층 높이·장면 수 일치. 지시 배정을 분할 안 순위로, 해당 없는 관문 제거, 기준선을 UBAI 로.
    - ② Codex 적대적 검토(1판, P1 2 · P2 16 · P3 4)와 ③ 독립 검토(1판 코드를 실제로 실행, P1 4 · P2 8 · P3 다수) → 2판에서 처리: 접근 가능한 면만 대응(②1·③5), 대응되지 않은 집기 허용 후보도 위험 판정(②2), 자세 p95·S4/S7 높이 관문 구현(②3), 후보 유한성 검사(②4), 날 여유 기준 쌍 선택(②5), S7 층화로 집을 수 있는 형상 보장(②6·③3), 형상 생성을 구성으로 바꿔 무효 형상 제거(②7), 진입면 노출(②8·③6), S4 지시 재정의(②9·③8), 절대 층 없는 선택·재관측 처리(②10·③11), 정답 스키마에 형상 매개변수·받침 가시성·층 도달(②11·③9), 판 2 로더에 판 1 검증·출처 짝 강제(②12·②13), 분할 우선 로드(②14), 손상 절단 위치(②15), 시험 수집·대역 시험 수정(②16·③1·③2), 알려진 형상 적재 가정을 설계 해석 보충으로(②17), 전 파일 해시·소스 manifest(②18), 쿼터니언 Shepperd(②19), Pillow `mode=` 제거·판 고정(②20·③4), 렌더 재사용(②21), 거리 제곱 잡음 시험(②22), 맞닿음 행(③7), T11 y 면 높이(③10), 지시 입력/정답 분리·기준선이 형상 라벨을 안 씀(③12), 시드 스트림 분리·S3 가로 흔들림·flying pixel 방향·카탈로그 해시 대조(③ P3).
    - 2판 코드 실행 확인(2026-10-15, scratch 사본, 로컬): 작업 1–11 의 시험 전부 통과(장면 조리법 10개 36 s, CLI 통합 2개 32 s). 노출 시험의 가림판을 105 → 120 mm 로 올렸다(105 mm 에서 노출 0.502 로 문턱에 걸침). 예상 시험 수를 실제 수로 고쳤다.
-   - 2판에 대한 Codex 재검토: (아래에 기록)
+   - Codex 2판 재검토(P2 6 · P3 2) → 3판: 알려진 형상의 질량 미상은 **사용자 결정(2026-10-15)으로 현장 기본 적재 선언**(`config/site_load_defaults.yaml`, 출처 표시, 없으면 콘솔 확인)으로 바꿈(②17), 면 노출을 면 평면 위 적중점만으로(허용 1 mm, 105 mm 가림판 시험 유지), `support_visible` 을 아래 팔레트 윗면 적중으로, 끼움에서 모든 개구 쌍을 조건까지 보고 고름(쌍 대안 반례 시험), S7 위반 치수를 설계 범위 안으로(범위 시험 추가), 판 2 메타 검증(clock·provenance·시각 형식), P3: `received_tf_static` ↔ `capture` 짝, 처리 시간 분포를 metrics 에 보존.
+   - 3판 코드 실행 확인(scratch 사본, 로컬): 작업 1–11 의 시험 91개 전부 통과. 받침면 판정은 처음 "받침 높이 근처 적중"으로 썼다가 판 옆면·앞면 모서리가 잡혀 실패했고, "아래 팔레트 윗면 안쪽 + 하강 광선"으로 고쳤다.
+   - 3판에 대한 Codex 재검토: (아래에 기록)
