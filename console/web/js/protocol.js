@@ -40,6 +40,8 @@ export function createSession({ clientId, send, now, newId, retryMs = 500 }) {
     }
     leaseId = null;
     lastTick = null;
+    state = null; // nothing of the old session is shown as current
+    targets = null;
     armed = false;
     controlGen = null;
     armGen = null;

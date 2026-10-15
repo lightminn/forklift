@@ -120,3 +120,36 @@ test("a disconnect event for the pad in use releases even if it reconnects befor
   i.setPad({ id: "pad A", index: 0, axes: [0, -1, 0, 0], buttons: held }); // same index again
   assert.equal(i.read().deadman, false);
 });
+
+test("a frame drawn while the camera is not on screen never counts as displayed", () => {
+  const queue = [];
+  let visible = false;
+  const f = createFrameTracker({ raf: (cb) => queue.push(cb), visible: () => visible });
+  f.reset(1);
+  f.drawn(1, 5); // camera window collapsed, scrolled away or another view open
+  queue.shift()?.();
+  assert.equal(f.displayedFrameId, null);
+  visible = true;
+  f.drawn(1, 6);
+  visible = false; // hidden before the next animation frame: still not seen
+  queue.shift()?.();
+  assert.equal(f.displayedFrameId, null);
+  visible = true;
+  f.drawn(1, 7);
+  queue.shift()();
+  assert.equal(f.displayedFrameId, 7);
+});
+
+test("hiding the controls releases every source until each is let go", () => {
+  const released = [];
+  const i = createInputs({ onRelease: (r) => released.push(r) });
+  i.setKeys({ deadman: true, w: true });
+  assert.equal(i.read().deadman, true);
+  i.controlsHidden();
+  assert.deepEqual(released, ["controls_hidden"]);
+  assert.equal(i.read().deadman, false); // still held, but latched off
+  i.setKeys({ deadman: false, w: false });
+  i.read();
+  i.setKeys({ deadman: true });
+  assert.equal(i.read().deadman, true);
+});

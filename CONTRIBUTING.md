@@ -39,8 +39,10 @@ forklift/
 │       ├── forklift_interfaces/      # 필요한 사용자 정의 msg/srv/action
 │       ├── forklift_description/     # 실제 선택한 차체의 URDF·mesh
 │       └── forklift_bringup/         # launch와 ROS 파라미터 config
-├── console/                          # 운용 콘솔: 웹 앱과 개발용 가짜 차량
+├── console/                          # 운용 콘솔: 웹 앱, 게이트웨이, 개발용 가짜 차량
 │   ├── web/                          # 브라우저 콘솔(빌드 없음, ES 모듈, node --test)
+│   ├── wire.py                       # 게이트웨이와 가짜 차량이 함께 쓰는 console/1 전송 규칙
+│   ├── gateway/                      # 관찰 전용 게이트웨이(C2a): ROS 2 → console/1, rclpy 는 ros_node.py 만
 │   └── mock_vehicle/                 # console/1 계약을 흉내 낸 가짜 차량 서버
 ├── firmware/                         # 자체 MCU 코드; 보드 선정 후 생성
 ├── sim/                              # 선택한 엔진의 모델·환경·어댑터

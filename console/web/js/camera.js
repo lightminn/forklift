@@ -38,7 +38,7 @@ export function drawCamera(cv, view, tok) {
   if (view.bitmap) c.drawImage(view.bitmap, 0, 0, w, h);
   const st = view.state;
   const model = view.cameraModel;
-  if (st && model && st.mode === "TELEOP" && view.chassis) {
+  if (st?.pose && model && st.mode === "TELEOP" && view.chassis) {
     const cmd = st.command || { speed_mps: 0, curvature_inv_m: 0 };
     const dir = cmd.speed_mps < 0 ? -1 : 1;
     if (dir > 0) {

@@ -74,6 +74,10 @@ export function createInputs({ onRelease }) {
     focus(focused) {
       if (!focused) release("blur");
     },
+    // the teleop controls and their feedback left the screen (tab switch)
+    controlsHidden() {
+      release("controls_hidden");
+    },
     read() {
       const ax = pad ? pad.axes : [];
       const steer = ax.length > 2 ? ax[2] : (ax[0] ?? 0);
