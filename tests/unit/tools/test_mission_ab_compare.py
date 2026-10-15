@@ -21,18 +21,25 @@ def run_dir(base: Path, name: str, *, wall=1.0, map_index=3, x=0.5, snapshot="sn
         "wall_time_s": wall,
         "simulation_wall_s": wall * 2,
         "arguments": {"output": str(run), "slam_feedback": str(run.parent / "sock/slam.sock"),
+                      "record_boundary": name == "b",
                       "near_bounds": f"/home/projects/forklift/snapshots/{snapshot}/config/near.json"},
         "source_sha256": {"sim/isaac/run_transport.py": snapshot},
         "observation_attempts": [{"detection_diagnostics": {"elapsed_s": wall / 10},
                                   "capture_diagnostics": {"rejection_counts": {"sensor_frame_not_ready": int(wall)}}}],
-        "obstacle_layer": {"grid_plans": [{"slam_map": {"index": map_index, "after_scan_id": 10 + map_index}}],
+        "obstacle_layer": {"grid_plans": [{"slam_map": {"index": map_index, "after_scan_id": 10 + map_index},
+                                           "memory_revision": 100 + map_index}],
                            "wall_s_per_scan": {"max": wall, "mean": wall / 2}},
         "final_pallet_m": [x, 1.0, 0.0],
     }
     (run / "result.json").write_text(json.dumps(result))
     np.savez(run / "slam_log.npz", base_pose_world=np.array([[x, 0.0, np.nan]]))
     (run / "paths.json").write_text(json.dumps({"transport": [[0, 0, 0], [1, 0, 0]]}))
+    (run / "pocket_frames").mkdir()
+    (run / "pocket_frames" / "index.json").write_text(json.dumps({"reads": [{"rendering_frame": [200 + map_index, 1]}]}))
     (run / "pallet.usd").write_bytes(name.encode())  # scene exports differ by path: not compared
+    if name == "b":
+        (run / "boundary").mkdir()
+        (run / "boundary" / "boundary_00000.jsonl").write_text("{}\n")  # a record of the run: not compared
     return run
 
 
@@ -43,6 +50,8 @@ def test_runs_that_differ_only_in_wall_time_paths_snapshot_and_nondeterministic_
     assert rep["equal"], rep["differences"]
     assert any("slam_map.index" in d for d in rep["nondeterministic"])
     assert any("sensor_frame_not_ready" in d for d in rep["nondeterministic"])
+    assert any("memory_revision" in d for d in rep["nondeterministic"])
+    assert any("rendering_frame" in d for d in rep["nondeterministic"])
     assert rep["provenance"] == ["result.json: source_sha256.sim/isaac/run_transport.py differs"]
     assert "slam_log.npz" in rep["identical"] and "paths.json" in rep["identical"]
 

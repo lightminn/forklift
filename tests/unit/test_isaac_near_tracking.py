@@ -229,6 +229,10 @@ def test_the_condition_names_every_argument_setting_and_input_that_differs(tmp_p
     assert "seed" not in expected["arguments"] and "output" not in expected["arguments"]
     assert expected["input_files"]["file config/age.json"] is not None
     assert NT.condition_problems(expected, NT.run_condition(result, tmp_path)) == []
+    # M-a0: a recording-only argument matches at any value (record on/off runs compare equal).
+    recorded_on = {**result, "arguments": {**result["arguments"], "record_boundary": True}}
+    assert NT.condition_problems(expected, NT.run_condition(recorded_on, tmp_path)) == []
+    assert NT.RECORDING_ONLY_ARGUMENTS == frozenset({"record_boundary"})
     changed = {
         **result,
         "arguments": {**result["arguments"], "slam_noise_spec": "3sigma", "seed": 5},

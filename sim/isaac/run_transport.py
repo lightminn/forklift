@@ -619,6 +619,14 @@ def arguments() -> argparse.Namespace:
         help="The --steering-probe segment set: standard, or long steady-state runs (new plant diagnostic D-a).",
     )
     parser.add_argument(
+        "--record-boundary",
+        action="store_true",
+        help="M-a0: record every control tick's boundary -- the calls the mission logic makes to the vehicle, "
+        "clock, SLAM and obstacle services, capture and planners, with their requests and responses, and the "
+        "tick's commands -- under OUTPUT/boundary for replaying a moved mission core "
+        "(docs/plans/2026-10-15-m-a05-boundary.md section 5). Recording only; off by default.",
+    )
+    parser.add_argument(
         "--tyre-contact-log",
         action="store_true",
         help="Diagnostic: log each tyre's floor contact (PhysX contact report) every 0.1 s of the mission to "
@@ -1536,6 +1544,28 @@ class TrackerBook(dict):
             self._drain(tracker, "end")
 
 
+# The M-a0 boundary record of the running mission, closed by whichever exit comes first (the run's own
+# finally, or main()'s for failures before the mission loop's try).
+_BOUNDARY_RECORD: dict = {"gate": None, "time": None}
+
+
+def close_boundary_record(state: dict) -> None:
+    gate = _BOUNDARY_RECORD.get("gate")
+    if gate is None:
+        return
+    try:
+        if gate.recorder.in_tick:  # a break, an early return or a failure inside a tick
+            gate.recorder.tick_end(outputs={"exit": state.get("phase")}, branches=[])
+        gate.recorder.close()
+    except Exception as exc:  # noqa: BLE001 -- a recording failure never replaces the run's own result
+        state["boundary_record_error"] = repr(exc)
+    finally:
+        _BOUNDARY_RECORD["gate"] = None
+        if _BOUNDARY_RECORD.get("time") is not None:
+            globals()["time"] = _BOUNDARY_RECORD["time"]  # the wall clock proxy (Clock) undone
+            _BOUNDARY_RECORD["time"] = None
+
+
 def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     """Construct and execute one immutable seeded scenario; state keeps evidence."""
     tracker_book = {"book": None}  # set once the trackers exist; drained in the finally block
@@ -1603,6 +1633,30 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         site_poses,
     )
 
+    # M-a0 boundary record (docs/plans/2026-10-15-m-a05-boundary.md section 5): the planners are a port
+    # (they check wall-clock deadlines and read the asynchronously replaced SLAM map), so each call's
+    # request and response is recorded; the services are wrapped before the mission loop.
+    boundary = None
+    if args.record_boundary:
+        from forklift_core.mission.boundary_record import (
+            BoundaryRecorder,
+            RecordingGate,
+            RecordingProxy,
+            recorded_function,
+        )
+
+        boundary = RecordingGate(BoundaryRecorder(args.output / "boundary"))
+        boundary.recorder.value_types.add("ArticulationAction")  # the joint commands, by value
+        _BOUNDARY_RECORD["gate"] = boundary
+        plan_docking_reapproach = recorded_function(plan_docking_reapproach, "Planner", "plan_docking_reapproach", boundary)
+        plan_transport = recorded_function(plan_transport, "Planner", "plan_transport", boundary)
+        final_straight_prefix = recorded_function(final_straight_prefix, "Planner", "final_straight_prefix", boundary)
+        redraw_docking = recorded_function(redraw_docking, "Planner", "redraw_docking", boundary)
+        straight_from_pose = recorded_function(straight_from_pose, "Planner", "straight_from_pose", boundary)
+        plan_return_leg = recorded_function(plan_return_leg, "Planner", "plan_return_leg", boundary)
+        plan_transport_leg = recorded_function(plan_transport_leg, "Planner", "plan_transport_leg", boundary)
+        bicycle_rollout = recorded_function(bicycle_rollout, "Planner", "bicycle_rollout", boundary)
+
     if args.use_perception:
         from forklift_core.perception.pocket_detector import (
             DetectorParams,
@@ -1611,6 +1665,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         from forklift_core.planning import Pose2D
         from forklift_core.planning.observation_viewpoints import runtime_viewpoints
         from forklift_core.planning.pallet_mission import plan_observation_leg
+
+        if boundary is not None:
+            detect_pockets = recorded_function(detect_pockets, "Perception", "detect_pockets", boundary)
+            runtime_viewpoints = recorded_function(runtime_viewpoints, "Planner", "runtime_viewpoints", boundary)
+            plan_observation_leg = recorded_function(plan_observation_leg, "Planner", "plan_observation_leg", boundary)
 
         root = Path(__file__).resolve().parents[2]
         adapter = load_perception_module(
@@ -2412,7 +2471,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         )
         now_s = world.current_time - initial_time
         first = check.add_frame(now_s, scene.depth_m, tuple(float(v) for v in rear_now))
-        pocket["check"] = check
+        # M-a0.5 PocketCheck service: depth frames recorded by hash only.
+        pocket["check"] = check if boundary is None else RecordingProxy(
+            check, "PocketCheck", boundary, hash_only_requests={"add_frame"})
         state["pocket_check"] = {"built_s": now_s, "axis_yaw_rad": axis_yaw, "first_frame": first}
         require(check.valid, f"pocket_check_refused:{check.invalid_reason}")
         obstacle["layer"].exempt = check.region_control()
@@ -2570,6 +2631,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             config, near["bounds"], start["observation"], start["pose"], start["aligned_s"],
             front_fn=front_fn, roof_fn=roof_fn, frame_version=episode,
         )
+        if boundary is not None:  # M-a0.5 NearTracking service: frames recorded by hash only
+            near["tracker"] = RecordingProxy(near["tracker"], "NearTracking", boundary, hash_only_requests={"on_frame"})
         from insertion_geometry import read_carriage_front_corners_m
 
         blades_ = read_fork_blades_m(args.forklift_urdf)
@@ -3319,6 +3382,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             )
         return out
 
+    if boundary is not None:
+        from forklift_core.mission.boundary_record import DictWatch as _GridWatch
+
+        # The planning grid preparation (it reads the asynchronously replaced SLAM map file) is part of the
+        # Planner port; what it installs in the core (pickup_estimate, the plan record) is recorded beside it.
+        grid_kwargs = recorded_function(
+            grid_kwargs, "Planner", "grid_kwargs", boundary,
+            watch=_GridWatch(boundary.recorder, {"obstacle": obstacle}, keys={"obstacle": ["pickup_estimate", "plans"]},
+                             append_only={"plans"}),
+        )
+
     def correction_grid(first_target, target, rear_now) -> dict:
         """Plan D8 S4b ③: the grid a correction point's docking straights are checked on --
         the live grid, and for the docking straights that grid with only the band of the
@@ -3634,6 +3708,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         transition("observe", now_s)
 
     state["phase"] = "planning"
+    if boundary is not None:
+        boundary.recorder.tick_begin(-1, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")  # the initial plans
     if args.use_perception:
         planning_start = time.monotonic()
         state["fixed_observation_waypoints"] = len(args.observation_waypoints)
@@ -3789,6 +3865,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             flush=True,
         )
 
+    if boundary is not None:
+        boundary.recorder.tick_end(outputs={"setup": True, "paths": sorted(paths)}, branches=[])
     drive_geometry = args.drive_geometry
     obstacles = [item.rectangle for item in scenario.props]
     pickup_obstacle = Rectangle(
@@ -3889,6 +3967,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             invert,
         )
         from forklift_core.localization.scan_docking import dock, laser_points
+
+        if boundary is not None:
+            dock = recorded_function(dock, "Planner", "dock", boundary)
         from forklift_core.localization.wheel_odometry import AckermannOdometryGeometry
 
         # The known start (odom = map = world); the plan's v3 state machine.
@@ -5731,8 +5812,71 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             )
         if near is not None:
             check_near_contract()
+        if boundary is not None:
+            # The services the mission logic calls (M-a0.5 ports); the physics step is one recorded call so
+            # what the services do inside it (SLAM receive, scans, odometry) is not recorded as the core's.
+            robot = RecordingProxy(robot, "Vehicle", boundary)
+            pallet = RecordingProxy(pallet, "SimTruth", boundary)
+            world = RecordingProxy(world, "Clock", boundary)
+            if slam is not None:
+                slam["tracker"] = RecordingProxy(slam["tracker"], "Slam", boundary)
+            if obstacle is not None:
+                obstacle["layer"] = RecordingProxy(obstacle["layer"], "Obstacles", boundary,
+                                                   child_ports={"permission": "Permission"})
+            if args.use_perception:
+                perception_capture = RecordingProxy(perception_capture, "Capture", boundary)
+            from forklift_core.mission.boundary_record import DictWatch
+
+            # What the physics step writes into the core's dictionaries (services updated per tick).
+            step_watch = DictWatch(
+                boundary.recorder, {"slam": slam, "obstacle": obstacle},
+                keys={"slam": ["stop_now", "tracker_speed", "odom_speed", "odom_rear", "odom_yaw_rate", "scan_id",
+                               "last_scan_odom_base", "last_scan_estimate_rear", "records"],
+                      "obstacle": ["version", "last_stamp", "applied", "scans"]},
+                append_only={"records", "scans"},
+            )
+            stepper["fn"] = recorded_function(stepper["fn"], "Vehicle", "step", boundary, watch=step_watch)
+            # The pocket camera's frame read and selection with what it feeds the near tracker and the
+            # pocket check (services), and what that changes in the core's dictionaries.
+            read_pocket_frame = recorded_function(
+                read_pocket_frame, "Frames", "read_pocket_frame", boundary,
+                watch=DictWatch(
+                    boundary.recorder, {"pocket": pocket, "near": near},
+                    keys={"pocket": ["await_still_frame", "still_frame_s", "still_frames", "frames_read",
+                                     "frames_without_time", "frames_bad_time", "silenced_frames"],
+                          "near": ["last_stamp", "last_fed_stamp", "mismatch", "unbounded", "frames", "events"]},
+                    append_only={"frames", "events"},
+                ),
+            )
+            # Branch coverage (plan D2): the record lists of the core's dictionaries that grew in a tick name the
+            # branches it took (a transition, a replan, a retry, a stop event...); the per-tick logs are left out.
+            per_tick_lists = {"state.samples", "state.tyre_contact_rows", "slam.control", "slam.records",
+                              "obstacle.scans", "near.frames", "near.ticks", "pocket.history"}
+            branch_counts: dict = {}
+
+            def branch_probe() -> list:
+                grown = []
+                for name_, d_ in (("state", state), ("obstacle", obstacle), ("near", near), ("slam", slam),
+                                  ("pocket", pocket)):
+                    if not isinstance(d_, dict):
+                        continue
+                    for k_, v_ in list(d_.items()):
+                        key_ = f"{name_}.{k_}"
+                        if not isinstance(v_, list) or key_ in per_tick_lists:
+                            continue
+                        if len(v_) > branch_counts.get(key_, 0):
+                            grown.append(f"{key_}+{len(v_) - branch_counts.get(key_, 0)}")
+                        branch_counts[key_] = len(v_)
+                return grown
+
+            branch_probe()  # the counts the loop starts from
+            # Core-side wall-clock reads (planning deadlines) through a Clock proxy of this module's `time`.
+            _BOUNDARY_RECORD["time"] = time
+            globals()["time"] = RecordingProxy(time, "Clock", boundary)
         for step in range(int(120 * args.max_sim_seconds)):
             t = world.current_time - initial_time
+            if boundary is not None:
+                boundary.recorder.tick_begin(step, tick_t=t, work_t=t, commands=[], stop_kind="none")
             book_clock["t"] = t
             rear_stamp = t  # the time of the control pose `rear` (a capture moves it on)
             dwell_hold = dwell_standing = False
@@ -8529,6 +8673,20 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 state["samples"].append(sample)
                 if step % 240 == 0:
                     print("SAMPLE", record_json(sample), flush=True)
+            if boundary is not None:
+                boundary.recorder.tick_end(
+                    outputs={
+                        "candidate": {"speed_mps": requested_speed, "curvature_inv_m": curvature},
+                        "holds": {"dwell": dwell_hold, "cusp": cusp_hold, "safety": safety_hold},
+                        "phase": phase,
+                        "speed_mps": drive.speed_mps,
+                        "curvature_inv_m": drive.curvature_inv_m,
+                        "wheel_rates_rad_s": np.asarray(drive.wheel_rates_rad_s),
+                        "steering_command": np.asarray(steering_command),
+                        "lift_command": lift_command,
+                    },
+                    branches=branch_probe(),
+                )
         if phase in ("repeat_capture_done", "repeat_target_not_reached", "near_tracking_stopped"):
             return
         require(phase == "complete", "Mission exceeded simulation time budget")
@@ -8610,6 +8768,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 # replacing a failure already raised (main() records that one).
                 state["success"] = False
                 state.setdefault("failure_reason", f"pocket_recording_close_failed: {exc!r}")
+        close_boundary_record(state)
         if tracker_book["book"] is not None:
             try:
                 tracker_book["book"].close()  # the leg switches not yet drained (V5 cusp arrivals)
@@ -8888,6 +9047,7 @@ def main() -> None:
         (args.output / "failure.txt").write_text(traceback.format_exc())
         traceback.print_exc()
     finally:
+        close_boundary_record(state)  # failures before the mission loop's own finally (initial planning)
         state["wall_time_s"] = time.monotonic() - started
         if state.get("tyre_contact_rows") is not None:
             # (t, then per tyre FL FR RL RR: impulse x y z, contact count, mean contact x y)

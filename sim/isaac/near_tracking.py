@@ -1061,7 +1061,13 @@ POST_MEASUREMENT_ARGUMENTS = {"return_turnaround": False, "repeat_at_near_captur
                               "encoder_model": "reported",
                               # 2026-10-15: the odometry's own wheel radius; unset = the geometric one
                               # every earlier record integrated with.
-                              "odometry_wheel_radius_m": None}
+                              "odometry_wheel_radius_m": None,
+                              # 2026-10-15: M-a0 boundary record (recording only).
+                              "record_boundary": False}
+# Arguments that only add records to a run (M-a0 boundary record, docs/plans/2026-10-15-m-a05-boundary.md
+# section 5): any value matches the measurement condition. Justified by record on/off comparisons that are
+# equal under tools/mission_ab_compare.py; an argument whose on/off runs differ is removed from this set.
+RECORDING_ONLY_ARGUMENTS = frozenset({"record_boundary"})
 CONDITION_FIELDS = (
     "settings_synthetic",
     "detector_params",
@@ -1174,6 +1180,8 @@ def condition_problems(expected: dict, observed: dict, skip=()) -> list[str]:
                     and key in POST_MEASUREMENT_ARGUMENTS
                     and have.get(key) == POST_MEASUREMENT_ARGUMENTS[key]
                 ):
+                    continue
+                if name == "arguments" and key in RECORDING_ONLY_ARGUMENTS:
                     continue
                 if want.get(key) != have.get(key) or (
                     name == "input_files" and have.get(key) is None

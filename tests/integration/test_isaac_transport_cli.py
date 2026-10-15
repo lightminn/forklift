@@ -642,7 +642,12 @@ def test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival() -> 
         assert guarded, ast.unparse(call)
     assert source.count("near = None\n") == 1
     # The contract is checked before the first tick; S4a-2 opens the insertion.
-    assert source.index("            check_near_contract()\n        for step in range(") > 0
+    check_ = source.index("            check_near_contract()\n")
+    loop_ = source.index("        for step in range(int(120 * args.max_sim_seconds)):")
+    assert check_ < loop_
+    # Only the M-a0 boundary-record wrapping (recording only) sits between the check and the loop.
+    between_ = source[check_ + len("            check_near_contract()\n"): loop_]
+    assert between_.startswith("        if boundary is not None:\n") and "require(" not in between_
     assert "until S4a-2" not in source
     # Decided after the scheduled safety stops and before the arrival transitions.
     tick = source.index("hold_, released_, arrive_ = near_tick(t, rear_stamp, rear, requested_speed, phase, curvature,")
