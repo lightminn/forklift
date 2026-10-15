@@ -171,3 +171,27 @@ def test_runs_with_different_encoder_models_are_not_mixed(tmp_path):
     (b / "meta.json").write_text(json.dumps(meta))
     with pytest.raises(SystemExit, match="different encoder models"):
         MODULE.odometry_command(SimpleNamespace(run=[a, b], draws=1, start_every=120, max_age_s=None))
+
+
+def test_runs_with_different_odometry_wheel_radii_are_not_mixed(tmp_path):
+    """2026-10-15 (fork spacing plan, odometry-only radius): a table records the radius its runs'
+    odometry integrated with and mixes no two."""
+    import json
+    from types import SimpleNamespace
+
+    import pytest
+
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir(), b.mkdir()
+    _team_spec_run(a)
+    _team_spec_run(b)
+    out = MODULE.odometry_command(SimpleNamespace(run=[a], draws=1, start_every=120, max_age_s=None))
+    radius = json.loads((a / "meta.json").read_text())["odometry_geometry"]["wheel_radius_m"]
+    assert out["odometry_wheel_radius_m"] == radius
+    meta = json.loads((b / "meta.json").read_text())
+    meta["odometry_geometry"]["wheel_radius_m"] = radius * 0.996
+    (b / "meta.json").write_text(json.dumps(meta))
+    with pytest.raises(SystemExit, match="different odometry wheel radii"):
+        MODULE.odometry_command(SimpleNamespace(run=[a, b], draws=1, start_every=120, max_age_s=None))
+    with pytest.raises(SystemExit, match="different odometry wheel radii"):
+        MODULE.age_command(SimpleNamespace(run=[a, b], draws=1))

@@ -122,6 +122,16 @@ def encoder_model_of(runs) -> str:
     return names.pop()
 
 
+def odometry_radius_of(runs) -> float:
+    """The one wheel radius every run's odometry integrated with (meta.json odometry_geometry; a
+    calibrated radius from --odometry-wheel-radius-m or the geometric one): a table mixes no two
+    (2026-10-15)."""
+    radii = {float(json.loads((run / "meta.json").read_text())["odometry_geometry"]["wheel_radius_m"]) for run in runs}
+    if len(radii) != 1:
+        raise SystemExit(f"runs recorded with different odometry wheel radii: {sorted(radii)}")
+    return radii.pop()
+
+
 def odometry_noise_record(model: str) -> dict:
     if model == "reported":
         return {"wheel_rate_std_rad_s": 0.2, "steering_std_rad": 0.005}
@@ -131,6 +141,7 @@ def odometry_noise_record(model: str) -> dict:
 
 def odometry_command(args) -> dict:
     model = encoder_model_of(args.run)
+    radius = odometry_radius_of(args.run)
     per_run = []
     all_d, all_p, all_y = [], [], []
     for run in args.run:
@@ -174,6 +185,7 @@ def odometry_command(args) -> dict:
         "runs": per_run,
         "draws": args.draws,
         "noise": odometry_noise_record(model),
+        "odometry_wheel_radius_m": radius,
         "reference": "rear axle centre",
         "max_age_s": args.max_age_s,
         "bins_upper_m": upper.tolist(),
@@ -228,6 +240,7 @@ def cumulative_table(maxima):
 def age_command(args) -> dict:
     """Odometry error by observation age, from every recorded scan stamp (Codex P0a)."""
     model = encoder_model_of(args.run)
+    radius = odometry_radius_of(args.run)
     maxima = np.zeros((len(AGES_S), 2))
     per_run = []
     for run in args.run:
@@ -267,6 +280,7 @@ def age_command(args) -> dict:
         "source": ("wheel odometry (rear wheel rates + steering), OdometryNoise model redrawn" if model == "reported"
                    else "wheel odometry from the team-spec encoders (rear wheel counts + steering)"),
         "noise": odometry_noise_record(model),
+        "odometry_wheel_radius_m": radius,
         "reference": "rear axle centre",
         "draws": args.draws,
         "ages_s": list(AGES_S),

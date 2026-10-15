@@ -445,7 +445,7 @@ def evaluate_command(args) -> dict:
     from forklift_core.control.drive_permission import shape_meets
     from forklift_core.control.shadow_memory import ShadowMemory
     from forklift_core.localization.slam_pose import OdometryNoise
-    from forklift_core.localization.encoders import encoder_odometry_inputs
+    from forklift_core.localization.encoders import encoder_odometry_inputs, meta_odometry_table_problem
     from forklift_core.localization.wheel_odometry import (
         AckermannOdometryGeometry,
         integrate_wheel_odometry,
@@ -461,6 +461,9 @@ def evaluate_command(args) -> dict:
     sections = np.load(args.sections)
     candidates = load_candidates(args.candidates)
     age = json.loads(args.odometry_age.read_text())
+    problem = meta_odometry_table_problem(age, meta)
+    if problem is not None:
+        raise SystemExit(problem)
     table = AgeErrorTable(tuple(age["ages_s"]), tuple(age["cumulative_position_m"]), tuple(age["cumulative_yaw_rad"]))
     g = meta["odometry_geometry"]
     rear_x = float(g["rear_axle_x_in_base_m"])
@@ -1178,6 +1181,8 @@ def single_command(args) -> dict:
     import sys as _sys
     import tempfile
 
+    from forklift_core.localization.encoders import meta_odometry_table_problem
+
     _sys.path.insert(0, str(ROOT / "sim" / "isaac"))
     import obstacle_layer as OL
     import planar_lidar
@@ -1296,6 +1301,9 @@ def single_command(args) -> dict:
         base = log["base_pose_world"].astype(float)
         yaw = np.unwrap(_yaw(base[:, 3:7]))
         g = meta["odometry_geometry"]
+        problem = meta_odometry_table_problem(age, meta)
+        if problem is not None:
+            raise SystemExit(f"{run}: {problem}")
         rear_x = float(g["rear_axle_x_in_base_m"])
         truth_rear = np.column_stack((base[:, 0] + rear_x * np.cos(yaw), base[:, 1] + rear_x * np.sin(yaw), yaw))
         steer = log["steering_rad"].astype(float)

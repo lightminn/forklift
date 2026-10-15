@@ -284,3 +284,31 @@ __all__ = [
     "QuadratureWheelEncoder",
     "first_harmonic_inl",
 ]
+
+
+def odometry_table_problem(table: dict, *, encoder_model: str, wheel_radius_m: float, geometric_radius: bool) -> str | None:
+    """Why an odometry error table (tools/p0a_measure.py output) does not cover odometry integrated
+    with this encoder model and wheel radius, or None. A table without an encoder model read the
+    reported rates; a table without a radius (made before the odometry-only radius) is accepted only
+    for odometry on the geometric radius (fork spacing plan, odometry-radius review P2)."""
+    model = (table.get("noise") or {}).get("encoder_model", "reported")
+    if model != encoder_model:
+        return f"odometry age table from encoder model {model}, this run reads {encoder_model}"
+    radius = table.get("odometry_wheel_radius_m")
+    if radius is None:
+        if not geometric_radius:
+            return "odometry age table records no wheel radius; this run uses --odometry-wheel-radius-m"
+    elif not math.isclose(float(radius), float(wheel_radius_m), rel_tol=0.0, abs_tol=1e-9):
+        return f"odometry age table from wheel radius {radius}, this run integrates with {wheel_radius_m}"
+    return None
+
+
+def meta_odometry_table_problem(table: dict, meta: dict) -> str | None:
+    """odometry_table_problem for a recorded run (its meta.json)."""
+    g = meta["odometry_geometry"]
+    return odometry_table_problem(
+        table,
+        encoder_model=(meta.get("encoder_model") or {"name": "reported"})["name"],
+        wheel_radius_m=float(g["wheel_radius_m"]),
+        geometric_radius=g.get("wheel_radius_source", "geometric") == "geometric",
+    )

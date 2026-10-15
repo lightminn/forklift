@@ -1429,3 +1429,63 @@ def test_the_runner_stamps_every_leg_switch_and_the_plant_record_carries_frictio
     scene = (SCRIPT.parent / "scene.py").read_text()
     assert 'value("physics:staticFriction"), value("physics:dynamicFriction"))' in scene
     assert '"static_friction": k[5], "dynamic_friction": k[6]' in scene
+
+
+def test_the_odometry_wheel_radius_is_the_odometrys_own_and_part_of_the_contract():
+    """Fork spacing plan (16th draft): an odometry-only wheel radius -- the SLAM odometry integrates
+    with --odometry-wheel-radius-m when given; drive commands, speed limits and the plant keep the
+    geometric radius; meta.json records both so replays integrate with the same value; a run
+    without it matches every earlier measurement record."""
+    import sys
+    from types import SimpleNamespace
+
+    sys.path.insert(0, str(SCRIPT.parent))
+    import near_tracking
+
+    assert near_tracking.POST_MEASUREMENT_ARGUMENTS["odometry_wheel_radius_m"] is None
+    radius = _probe_helpers()["odometry_wheel_radius"]
+    geometry = SimpleNamespace(wheel_radius_m=0.125)
+    assert radius(SimpleNamespace(odometry_wheel_radius_m=None, drive_geometry=geometry)) == 0.125
+    assert radius(SimpleNamespace(odometry_wheel_radius_m=0.1245, drive_geometry=geometry)) == 0.1245
+    source = SCRIPT.read_text()
+    odometry = source[source.index('"odometry": IncrementalWheelOdometry('):]
+    odometry = odometry[: odometry.index("initial_pose=slam_start")]
+    assert "odometry_wheel_radius(args)" in odometry and "args.drive_geometry.wheel_radius_m" not in odometry
+    meta = source[source.index('"odometry_geometry": {'):]
+    meta = meta[: meta.index("},")]
+    assert '"wheel_radius_m": odometry_wheel_radius(args)' in meta
+    assert '"geometric_wheel_radius_m": args.drive_geometry.wheel_radius_m' in meta
+    assert 'slam["odom_speed"] = float(np.mean(rates)) * odometry_wheel_radius(args)' in source
+    assert '"odometry_wheel_radius_m": odometry_wheel_radius(args)' in source  # the feedback record
+    # Nothing else reads it: the drive and the plant stay on the geometric radius. Four uses above and
+    # one in age_table_problem (the obstacle layer's table must match).
+    assert source.count("odometry_wheel_radius(args)") - source.count("def odometry_wheel_radius(args)") == 5
+    checker = source[source.index("def age_table_problem("): source.index("def probe_segments()")]
+    assert checker.count("odometry_wheel_radius(args)") == 1
+    assert 'parser.error("--odometry-wheel-radius-m is the SLAM odometry\'s radius; it needs --record-slam")' in source
+    assert 'parser.error("--pocket-check is not defined for --odometry-wheel-radius-m yet")' in source
+    assert "require(0.9 * geometric_ <= args.odometry_wheel_radius_m <= 1.1 * geometric_," in source
+
+
+def test_the_obstacle_layers_age_table_must_match_the_runs_odometry():
+    """Codex (odometry-radius review, P2): the obstacle layer's odometry age-error table covers only
+    odometry integrated the same way -- same encoder model, same wheel radius; a table that records no
+    radius (made before the argument) only for a run on the geometric radius."""
+    from types import SimpleNamespace
+
+    problem = _probe_helpers()["age_table_problem"]
+    geometry = SimpleNamespace(wheel_radius_m=0.125)
+
+    def run(model="reported", radius=None):
+        return SimpleNamespace(encoder_model=model, odometry_wheel_radius_m=radius, drive_geometry=geometry)
+
+    old = {"noise": {"wheel_rate_std_rad_s": 0.2, "steering_std_rad": 0.005}}
+    team = {"noise": {"encoder_model": "team_spec_typical_inl", "gaussian": None}, "odometry_wheel_radius_m": 0.125}
+    assert problem(old, run()) is None
+    assert "encoder model" in problem(old, run("team_spec_typical_inl"))
+    assert problem(team, run("team_spec_typical_inl")) is None
+    assert "records no wheel radius" in problem(old, run(radius=0.1245))
+    assert "wheel radius 0.125" in problem(team, run("team_spec_typical_inl", 0.1245))
+    assert problem(dict(team, odometry_wheel_radius_m=0.1245), run("team_spec_typical_inl", 0.1245)) is None
+    source = SCRIPT.read_text()
+    assert "table_problem_ = age_table_problem(age_table, args)" in source

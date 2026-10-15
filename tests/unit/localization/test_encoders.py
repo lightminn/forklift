@@ -215,3 +215,25 @@ def test_a_narrowed_or_orphaned_encoder_record_is_refused_and_a_description_chan
     assert encoder_odometry_inputs(log, reworded)["kind"] == "increments"
     with pytest.raises(ValueError, match="differs"):
         encoder_odometry_inputs(log, {"encoder_model": {**meta["encoder_model"], "algorithm": 2}})
+
+
+def test_an_odometry_table_must_come_from_the_same_encoders_and_wheel_radius():
+    """Fork spacing plan, odometry-radius review (Codex P2): the runner's obstacle layer and both P0b
+    paths accept an odometry age table only for odometry integrated the same way."""
+    from forklift_core.localization.encoders import meta_odometry_table_problem
+
+    def meta(model=None, radius=0.125, source=None):
+        g = {"wheel_radius_m": radius}
+        if source:
+            g["wheel_radius_source"] = source
+        return {"odometry_geometry": g, **({"encoder_model": {"name": model}} if model else {})}
+
+    old = {"noise": {"wheel_rate_std_rad_s": 0.2}}
+    team = {"noise": {"encoder_model": "team_spec_typical_inl"}, "odometry_wheel_radius_m": 0.125}
+    assert meta_odometry_table_problem(old, meta()) is None
+    assert "encoder model" in meta_odometry_table_problem(old, meta("team_spec_typical_inl"))
+    assert meta_odometry_table_problem(team, meta("team_spec_typical_inl", source="geometric")) is None
+    assert "records no wheel radius" in meta_odometry_table_problem(
+        old, meta(radius=0.1245, source="--odometry-wheel-radius-m"))
+    assert "wheel radius 0.125" in meta_odometry_table_problem(
+        team, meta("team_spec_typical_inl", 0.1245, "--odometry-wheel-radius-m"))

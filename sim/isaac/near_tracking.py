@@ -1058,7 +1058,10 @@ POST_MEASUREMENT_ARGUMENTS = {"return_turnaround": False, "repeat_at_near_captur
                               "tyre_contact_log": False, "steering_probe_set": "standard",
                               # 2026-10-15: the odometry's encoders; a record without the argument read
                               # the engine-reported rates, so a team-spec run differs from those tables.
-                              "encoder_model": "reported"}
+                              "encoder_model": "reported",
+                              # 2026-10-15: the odometry's own wheel radius; unset = the geometric one
+                              # every earlier record integrated with.
+                              "odometry_wheel_radius_m": None}
 CONDITION_FIELDS = (
     "settings_synthetic",
     "detector_params",

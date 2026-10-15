@@ -557,6 +557,16 @@ def arguments() -> argparse.Namespace:
         "Gaussian wheel and steering noise is not added (the LiDAR range noise is).",
     )
     parser.add_argument(
+        "--odometry-wheel-radius-m",
+        type=float,
+        default=None,
+        help="The rear wheel radius the SLAM odometry integrates with -- an effective rolling radius from a "
+        "calibration (fork spacing plan V3: r_cal = truth travel / wheel angle advance on a straight); unset = "
+        "the chassis model's geometric radius. Only the odometry reads it: drive commands, speed limits and "
+        "the plant keep the geometric radius. Recorded in meta.json odometry_geometry, so every replay "
+        "integrates with the same value.",
+    )
+    parser.add_argument(
         "--slam-noise-spec",
         nargs="?",
         const="max",
@@ -726,6 +736,15 @@ def arguments() -> argparse.Namespace:
         parser.error("--pocket-check is not defined for a team-spec --encoder-model yet (no speed bound / replay rule)")
     if args.encoder_model != "reported" and not args.record_slam:
         parser.error("--encoder-model reads the encoders into the SLAM record and odometry; it needs --record-slam")
+    if args.odometry_wheel_radius_m is not None:
+        if not args.record_slam:
+            parser.error("--odometry-wheel-radius-m is the SLAM odometry's radius; it needs --record-slam")
+        if args.pocket_check:
+            # The pocket check records a one-tick odometry speed for d5_replay, whose rule assumes the
+            # geometric radius; not defined for a calibrated one yet.
+            parser.error("--pocket-check is not defined for --odometry-wheel-radius-m yet")
+        if not args.odometry_wheel_radius_m > 0:
+            parser.error("--odometry-wheel-radius-m must be positive")
     if args.obstacle_layer is not None and not args.record_slam:
         parser.error("--obstacle-layer needs --record-slam (the scan tick lives there)")
     if args.obstacle_act and args.obstacle_layer is None:
@@ -850,6 +869,23 @@ TYRE_LINKS = tuple(f"/World/Forklift/{n}" for n in ("front_left_wheel", "front_r
 PROBE_CURVATURES = (0.29, -0.29, 0.36, -0.36)
 PROBE_SPEED_MPS = 0.25
 PROBE_FAST_MPS = 0.6  # shorter arcs: the run starts facing the pallet about 5 m ahead
+
+
+def odometry_wheel_radius(args) -> float:
+    """The rear wheel radius the SLAM odometry integrates with: --odometry-wheel-radius-m when given,
+    else the chassis model's geometric radius (fork spacing plan, 16th draft: odometry-only radius)."""
+    if args.odometry_wheel_radius_m is not None:
+        return float(args.odometry_wheel_radius_m)
+    return float(args.drive_geometry.wheel_radius_m)
+
+
+def age_table_problem(table: dict, args) -> str | None:
+    """Why an odometry age-error table does not cover this run's odometry (same encoder model, same
+    odometry wheel radius; forklift_core.localization.encoders.odometry_table_problem), or None."""
+    from forklift_core.localization.encoders import odometry_table_problem
+
+    return odometry_table_problem(table, encoder_model=args.encoder_model, wheel_radius_m=odometry_wheel_radius(args),
+                                  geometric_radius=args.odometry_wheel_radius_m is None)
 
 
 def probe_segments() -> list[tuple[str, float, float, float]]:
@@ -1276,7 +1312,10 @@ def write_slam_record(args, state, scenario, factory, log, lidar_config) -> None
         "odometry_geometry": {
             "wheelbase_m": args.drive_geometry.wheelbase_m,
             "track_m": args.drive_geometry.track_m,
-            "wheel_radius_m": args.drive_geometry.wheel_radius_m,
+            # What the odometry integrated with (replays read this); the geometric one beside it.
+            "wheel_radius_m": odometry_wheel_radius(args),
+            "geometric_wheel_radius_m": args.drive_geometry.wheel_radius_m,
+            "wheel_radius_source": "geometric" if args.odometry_wheel_radius_m is None else "--odometry-wheel-radius-m",
             "rear_axle_x_in_base_m": args.rear_axle_offset_m,
             "source": f"{args.forklift_urdf} joint origins",
         },
@@ -2194,6 +2233,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
 
         layer_config = obstacle_module.load_layer_config(args.obstacle_layer)
         age_table = json.loads(Path(layer_config["odometry_age"]).read_text())
+        table_problem_ = age_table_problem(age_table, args)
+        require(table_problem_ is None, str(table_problem_))
         obstacle = {
             "layer": obstacle_module.ObstacleLayer(
                 layer_config,
@@ -3873,7 +3914,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 AckermannOdometryGeometry(
                     args.drive_geometry.wheelbase_m,
                     args.drive_geometry.track_m,
-                    args.drive_geometry.wheel_radius_m,
+                    odometry_wheel_radius(args),
                 ),
                 initial_pose=slam_start,
             ),
@@ -3917,6 +3958,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             # instead of the reported rates plus Gaussian noise; the LiDAR range noise stays.
             "encoder_model": args.encoder_model,
             "wheel_steering_gaussian_noise": args.encoder_model == "reported" and args.slam_noise_seed is not None,
+            "odometry_wheel_radius_m": odometry_wheel_radius(args),
         }
 
     def slam_odom_base():
@@ -5518,7 +5560,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 angles = slam["noise"].steering(steer_true)
                 previous_yaw = slam["odom_rear"][2]
                 slam["odom_rear"] = slam["odometry"].update(stamp_now, rates, angles)
-                slam["odom_speed"] = float(np.mean(rates)) * args.drive_geometry.wheel_radius_m
+                slam["odom_speed"] = float(np.mean(rates)) * odometry_wheel_radius(args)
             if slam is not None:
                 slam["odom_yaw_rate"] = (slam["odom_rear"][2] - previous_yaw) * 120.0
                 slam["stop_now"] = slam["stop"].update(
@@ -8768,6 +8810,12 @@ def main() -> None:
     )
     args.carriage_limit_m = read_carriage_limit_m(args.forklift_urdf)
     require_curvature_within_model(settings, args.drive_geometry)
+    if args.odometry_wheel_radius_m is not None:
+        # A typo guard: a rolling-radius calibration moves the radius by well under 10 %.
+        geometric_ = args.drive_geometry.wheel_radius_m
+        require(0.9 * geometric_ <= args.odometry_wheel_radius_m <= 1.1 * geometric_,
+                f"--odometry-wheel-radius-m {args.odometry_wheel_radius_m} is not within 10 % of the geometric "
+                f"radius {geometric_}")
     state = {
         "success": False,
         # Overwritten once the scene build starts; a result still at "startup"
