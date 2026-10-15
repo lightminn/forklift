@@ -1069,7 +1069,7 @@ POST_MEASUREMENT_ARGUMENTS = {"return_turnaround": False, "repeat_at_near_captur
 # a call runs), so what it can change is wall-clock timing, to which runs are already sensitive (render
 # readiness, map callbacks, planning deadlines); a run with it on applies the bounds but is never a bounds
 # measurement run.
-RECORDING_ONLY_ARGUMENTS = frozenset({"record_boundary"})
+RECORDING_ONLY_ARGUMENTS = frozenset({"record_boundary", "record_boundary_format"})
 CONDITION_FIELDS = (
     "settings_synthetic",
     "detector_params",

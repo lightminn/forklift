@@ -627,6 +627,15 @@ def arguments() -> argparse.Namespace:
         "(docs/plans/2026-10-15-m-a05-boundary.md section 5). Recording only; off by default.",
     )
     parser.add_argument(
+        "--record-boundary-format",
+        type=int,
+        choices=(1, 2),
+        default=1,
+        help="M-a1 replay plan R3: 1 keeps the M-a0 record (comparison form, the frozen records' call sequence); "
+        "2 records values a replay can hand back, the setup snapshot and the files the setup read "
+        "(docs/plans/2026-10-16-m-a1-replay.md). Recording only.",
+    )
+    parser.add_argument(
         "--tyre-contact-log",
         action="store_true",
         help="Diagnostic: log each tyre's floor contact (PhysX contact report) every 0.1 s of the mission to "
@@ -1578,6 +1587,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     """Construct and execute one immutable seeded scenario; state keeps evidence."""
     from forklift_core.mission.state import MissionState
 
+    # M-a1 replay plan R3 (format 2): the files the setup reads, from here to the hand-over to drive().
+    setup_files = None
+    if args.record_boundary and args.record_boundary_format == 2:
+        from replay_setup import FileAudit
+
+        setup_files = FileAudit()
+
     ms = MissionState()  # M-a1 step 0: the phase and its start, shared with the mission core
     tracker_book = {"book": None}  # set once the trackers exist; drained in the finally block
     import omni.usd
@@ -1656,7 +1672,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             recorded_function,
         )
 
-        boundary = RecordingGate(BoundaryRecorder(args.output / "boundary"))
+        boundary = RecordingGate(BoundaryRecorder(args.output / "boundary", value_format=args.record_boundary_format))
         boundary.recorder.value_types.add("ArticulationAction")  # the joint commands, by value
         _BOUNDARY_RECORD["gate"] = boundary
         plan_docking_reapproach = recorded_function(plan_docking_reapproach, "Planner", "plan_docking_reapproach", boundary)
@@ -2557,6 +2573,16 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     )
     from types import SimpleNamespace as _Setup
 
+    if setup_files is not None:  # M-a1 replay plan R3: the setup snapshot a replay builds drive's S from
+        from replay_setup import write_setup_snapshot
+
+        state["setup_snapshot"] = write_setup_snapshot(
+            dict(locals()), args.output / "boundary",
+            # what the setup opened, and the files the arguments name (main() read some before run())
+            setup_files.stop() + [str(v_) for v_ in vars(args).values()
+                                  if isinstance(v_, (str, Path)) and len(str(v_)) < 4096 and Path(v_).is_file()],
+            services={"Obstacles": obstacle["layer"]} if obstacle is not None else None,
+            repo_root=Path(__file__).resolve().parents[2])
     return drive(_Setup(**locals()), isaac)
 
 
