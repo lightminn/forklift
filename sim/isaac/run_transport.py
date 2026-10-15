@@ -5534,219 +5534,221 @@ def drive(S, isaac) -> None:
             }
         )
     finally:
-        if recorder is not None:
-            # Plan D8b: first in the finally block, so neither an earlier record nor the
-            # encoders can stop it, and guarded, so a failed write never replaces the
-            # run's own failure (Codex D8b impl P1).
-            try:
-                state["pocket_recording"] = recorder.close(
+        try:
+            if recorder is not None:
+                # Plan D8b: first in the finally block, so neither an earlier record nor the
+                # encoders can stop it, and guarded, so a failed write never replaces the
+                # run's own failure (Codex D8b impl P1).
+                try:
+                    state["pocket_recording"] = recorder.close(
+                        {
+                            "plan": "D8b (docs/plans/2026-10-04-lidar-obstacle-map.md)",
+                            "camera": state.get("pocket_camera"),
+                            "mount": state.get("perception_mount"),
+                            "lift_joint": "fork_lift",
+                            "forklift_urdf": str(args.forklift_urdf),
+                            "pallet_geometry": str(args.pallet_geometry),
+                            "rear_axle_offset_m": args.rear_axle_offset_m,
+                            "approach_straight_speed_mps": args.approach_straight_speed_mps,
+                            "dwell_gaps_m": None if args.record_dwell_gaps is None else list(args.record_dwell_gaps),
+                            "dwell_hold_s": None if dwells is None else dwells.hold_s,
+                        "dwell_wheel_kp": DWELL_WHEEL_KP if dwells is not None else None,
+                        "dwell_wheel_locks": wheel_lock["events"],
+                            "dwell_d_end_m": dwell_d_end_m,
+                            "safety_stop_gaps_m": (None if args.measure_safety_stops_m is None
+                                                   else list(args.measure_safety_stops_m)),
+                            "safety_stops": [] if safety_stops is None else safety_stops.records,
+                            "pocket_check": args.pocket_check,
+                            "video": args.video,
+                            "fps": args.fps,
+                            "depth": "normalised optical-axis metres, float32, invalid NaN (adapter.normalize_depth)",
+                            "truth": "base_pose/pallet_pose: physics position + quaternion wxyz per tick; "
+                            "camera_prim_pose: Camera.get_world_pose(camera_axes='world'), diagnosis only",
+                            "near_capture": state.get("near_capture"),
+                            "approach_path": state.get("paths", {}).get("approach"),
+                        },
+                        [] if dwells is None else dwells.records,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    state["pocket_recording_close_error"] = repr(exc)
+                    traceback.print_exc()
+                    # A recording run without its records measured nothing: fail it, never
+                    # replacing a failure already raised (main() records that one).
+                    state["success"] = False
+                    state.setdefault("failure_reason", f"pocket_recording_close_failed: {exc!r}")
+            if not early_ports:
+                close_boundary_record(state, sys.exc_info()[1])
+            if tracker_book["book"] is not None:
+                try:
+                    tracker_book["book"].close()  # the leg switches not yet drained (V5 cusp arrivals)
+                except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own failure
+                    state.setdefault("record_errors", []).append(f"leg switches: {exc_!r}")
+            if near is not None:
+                # Plan D8 S4a ⑥: every frame, tick and event of the near-field tracking; the
+                # summary in result.json. Guarded: a failed write never replaces the run's own
+                # failure.
+                try:
+                    (args.output / "near_tracking.json").write_text(
+                        record_json({"frames": near["frames"], "ticks": near["ticks"], "events": near["events"],
+                                     "stop_events": near.get("stop_events") or [], "protect": near.get("protect"),
+                                     "corrections": near["corrections"], "path_revisions": near["path_revisions"]}) + "\n"
+                    )
+                    fed_ = [f for f in near["frames"] if "skipped" not in f]
+                    state["near_tracking"].update(
+                        frames_fed=len(fed_),
+                        frames_skipped={
+                            k_: sum(1 for f in near["frames"] if f.get("skipped") == k_)
+                            for k_ in ("no_time", "future", "not_new", "uncovered", "bad_depth")
+                            + (("dropped",) if args.near_drop_frames_from_m is not None else ())
+                        },
+                        accepted=sum(1 for f in fed_ if f.get("accepted")),
+                        rejected=sum(1 for f in fed_ if f.get("rejected")),
+                        handoff_s=next((f["read_s"] for f in fed_ if f.get("mode") == "roof"), None),
+                        armed_s=next((e["time_s"] for e in near["events"] if e["event"] == "armed"), None),
+                        **({"drop_latch": near.get("drop_latch")} if args.near_drop_frames_from_m is not None else {}),
+                        stops=[e for e in near["events"]
+                               if e["event"] in ("stop", "release", "terminal_standing", "insert_end_arrival")],
+                        protect=near.get("protect"),
+                        stop_events=near.get("stop_events") or [],
+                        mismatch=bool(near.get("mismatch")),
+                        unbounded=bool(near.get("unbounded")),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    state["near_tracking_write_error"] = repr(exc)
+                    traceback.print_exc()
+                    # A tracking run without its record shows nothing: fail it, never replacing
+                    # a failure already raised (Codex S4a-1 review P2).
+                    state["success"] = False
+                    state.setdefault("failure_reason", f"near_tracking_record_failed: {exc!r}")
+            if state.get("obstacle_layer") is not None and obstacle is not None:
+                scans_rec = obstacle["scans"]
+                walls = [x["total_wall_s"] for x in scans_rec] or [0.0]
+                state["obstacle_layer"].update(
                     {
-                        "plan": "D8b (docs/plans/2026-10-04-lidar-obstacle-map.md)",
-                        "camera": state.get("pocket_camera"),
-                        "mount": state.get("perception_mount"),
-                        "lift_joint": "fork_lift",
-                        "forklift_urdf": str(args.forklift_urdf),
-                        "pallet_geometry": str(args.pallet_geometry),
-                        "rear_axle_offset_m": args.rear_axle_offset_m,
-                        "approach_straight_speed_mps": args.approach_straight_speed_mps,
-                        "dwell_gaps_m": None if args.record_dwell_gaps is None else list(args.record_dwell_gaps),
-                        "dwell_hold_s": None if dwells is None else dwells.hold_s,
-                    "dwell_wheel_kp": DWELL_WHEEL_KP if dwells is not None else None,
-                    "dwell_wheel_locks": wheel_lock["events"],
-                        "dwell_d_end_m": dwell_d_end_m,
-                        "safety_stop_gaps_m": (None if args.measure_safety_stops_m is None
-                                               else list(args.measure_safety_stops_m)),
-                        "safety_stops": [] if safety_stops is None else safety_stops.records,
-                        "pocket_check": args.pocket_check,
-                        "video": args.video,
-                        "fps": args.fps,
-                        "depth": "normalised optical-axis metres, float32, invalid NaN (adapter.normalize_depth)",
-                        "truth": "base_pose/pallet_pose: physics position + quaternion wxyz per tick; "
-                        "camera_prim_pose: Camera.get_world_pose(camera_axes='world'), diagnosis only",
-                        "near_capture": state.get("near_capture"),
-                        "approach_path": state.get("paths", {}).get("approach"),
-                    },
-                    [] if dwells is None else dwells.records,
+                        "scans": len(scans_rec),
+                        "wall_s_per_scan": {"mean": float(np.mean(walls)), "max": float(np.max(walls))},
+                        "control_ticks": obstacle["ticks"],
+                        "slowed_ticks": obstacle["slowed"],
+                        "slowed_reasons": obstacle["reasons"],
+                        "min_allowed_mps": obstacle["min_allowed"],
+                        "truth_events": obstacle["events"],
+                        "unpermitted_entries": len(obstacle["unpermitted"]),
+                        "unpermitted": obstacle["unpermitted"][:50],
+                        "event_objects": len(obstacle.get("event_objects", {})),
+                        "reprojections": obstacle.get("reprojections", 0),
+                        "grid_planning": grid_planning,
+                        "replans": obstacle.get("replans", []),
+                        "grid_plans": obstacle.get("plans", []),
+                        "live_plans": obstacle.get("live_plans", []),
+                        "mission_replans": obstacle.get("mission_replans", []),
+                        "silence_trace": obstacle.get("silence_trace"),
+                        "backoff_records": obstacle.get("backoff_records", []),
+                        "shadow_memory": None if obstacle["layer"].shadow is None else {
+                            **obstacle["layer"].shadow.stats,
+                            "band_m": obstacle["layer"].shadow.band_m,
+                            "premise": "nothing inside the start-up band cells (outline grown by startup_reach_m)",
+                        },
+                    }
                 )
-            except Exception as exc:  # noqa: BLE001
-                state["pocket_recording_close_error"] = repr(exc)
-                traceback.print_exc()
-                # A recording run without its records measured nothing: fail it, never
-                # replacing a failure already raised (main() records that one).
-                state["success"] = False
-                state.setdefault("failure_reason", f"pocket_recording_close_failed: {exc!r}")
-        if not early_ports:
-            close_boundary_record(state, sys.exc_info()[1])
-        if tracker_book["book"] is not None:
-            try:
-                tracker_book["book"].close()  # the leg switches not yet drained (V5 cusp arrivals)
-            except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own failure
-                state.setdefault("record_errors", []).append(f"leg switches: {exc_!r}")
-        if near is not None:
-            # Plan D8 S4a ⑥: every frame, tick and event of the near-field tracking; the
-            # summary in result.json. Guarded: a failed write never replaces the run's own
-            # failure.
-            try:
-                (args.output / "near_tracking.json").write_text(
-                    record_json({"frames": near["frames"], "ticks": near["ticks"], "events": near["events"],
-                                 "stop_events": near.get("stop_events") or [], "protect": near.get("protect"),
-                                 "corrections": near["corrections"], "path_revisions": near["path_revisions"]}) + "\n"
+                (args.output / "obstacle_scans.json").write_text(record_json(scans_rec) + "\n")
+                if overlay["plan_history"] or overlay["grids"]:
+                    (args.output / "plan_history.json").write_text(
+                        record_json({"plans": overlay["plan_history"], "replans": obstacle.get("replans", []),
+                                     "new_obstacles": new_obstacles["schedule"].log if new_obstacles is not None else []})
+                        + "\n"
+                    )
+                    g_ = overlay["grids"]
+                    np.savez_compressed(
+                        args.output / "obstacle_grid_frames.npz",
+                        times=np.array([x[0] for x in g_]), origins=np.array([[x[1], x[2]] for x in g_]).reshape(-1, 2),
+                        resolution=np.array([x[3] for x in g_]),
+                        offsets=np.cumsum([0] + [len(x[4]) for x in g_]),
+                        cells=np.concatenate([x[4] for x in g_]).reshape(-1, 2) if g_ else np.zeros((0, 2), np.int32),
+                    )
+            if slam is not None:
+                # First, so a video shutdown failure cannot lose the SLAM record.
+                slam["link"].close()
+                (args.output / "slam_records.json").write_text(
+                    record_json(slam["records"]) + "\n"
                 )
-                fed_ = [f for f in near["frames"] if "skipped" not in f]
-                state["near_tracking"].update(
-                    frames_fed=len(fed_),
-                    frames_skipped={
-                        k_: sum(1 for f in near["frames"] if f.get("skipped") == k_)
-                        for k_ in ("no_time", "future", "not_new", "uncovered", "bad_depth")
-                        + (("dropped",) if args.near_drop_frames_from_m is not None else ())
-                    },
-                    accepted=sum(1 for f in fed_ if f.get("accepted")),
-                    rejected=sum(1 for f in fed_ if f.get("rejected")),
-                    handoff_s=next((f["read_s"] for f in fed_ if f.get("mode") == "roof"), None),
-                    armed_s=next((e["time_s"] for e in near["events"] if e["event"] == "armed"), None),
-                    **({"drop_latch": near.get("drop_latch")} if args.near_drop_frames_from_m is not None else {}),
-                    stops=[e for e in near["events"]
-                           if e["event"] in ("stop", "release", "terminal_standing", "insert_end_arrival")],
-                    protect=near.get("protect"),
-                    stop_events=near.get("stop_events") or [],
-                    mismatch=bool(near.get("mismatch")),
-                    unbounded=bool(near.get("unbounded")),
-                )
-            except Exception as exc:  # noqa: BLE001
-                state["near_tracking_write_error"] = repr(exc)
-                traceback.print_exc()
-                # A tracking run without its record shows nothing: fail it, never replacing
-                # a failure already raised (Codex S4a-1 review P2).
-                state["success"] = False
-                state.setdefault("failure_reason", f"near_tracking_record_failed: {exc!r}")
-        if state.get("obstacle_layer") is not None and obstacle is not None:
-            scans_rec = obstacle["scans"]
-            walls = [x["total_wall_s"] for x in scans_rec] or [0.0]
-            state["obstacle_layer"].update(
-                {
-                    "scans": len(scans_rec),
-                    "wall_s_per_scan": {"mean": float(np.mean(walls)), "max": float(np.max(walls))},
-                    "control_ticks": obstacle["ticks"],
-                    "slowed_ticks": obstacle["slowed"],
-                    "slowed_reasons": obstacle["reasons"],
-                    "min_allowed_mps": obstacle["min_allowed"],
-                    "truth_events": obstacle["events"],
-                    "unpermitted_entries": len(obstacle["unpermitted"]),
-                    "unpermitted": obstacle["unpermitted"][:50],
-                    "event_objects": len(obstacle.get("event_objects", {})),
-                    "reprojections": obstacle.get("reprojections", 0),
-                    "grid_planning": grid_planning,
-                    "replans": obstacle.get("replans", []),
-                    "grid_plans": obstacle.get("plans", []),
-                    "live_plans": obstacle.get("live_plans", []),
-                    "mission_replans": obstacle.get("mission_replans", []),
-                    "silence_trace": obstacle.get("silence_trace"),
-                    "backoff_records": obstacle.get("backoff_records", []),
-                    "shadow_memory": None if obstacle["layer"].shadow is None else {
-                        **obstacle["layer"].shadow.stats,
-                        "band_m": obstacle["layer"].shadow.band_m,
-                        "premise": "nothing inside the start-up band cells (outline grown by startup_reach_m)",
-                    },
+                control = np.asarray(slam["control"], dtype=float).reshape(-1, 7)
+                np.save(args.output / "slam_control.npy", control)
+                error = np.hypot(control[:, 1] - control[:, 4], control[:, 2] - control[:, 5])
+                yaw_error = np.abs(np.angle(np.exp(1j * (control[:, 3] - control[:, 6]))))
+                statuses = [record["status"] for record in slam["records"]]
+                state["slam_summary"] = {
+                    "control_samples": int(len(control)),
+                    "raw_position_rmse_m": float(np.sqrt(np.mean(error**2)))
+                    if len(error)
+                    else None,
+                    "raw_position_max_m": float(error.max()) if len(error) else None,
+                    "raw_yaw_rmse_rad": float(np.sqrt(np.mean(yaw_error**2)))
+                    if len(error)
+                    else None,
+                    "raw_yaw_max_rad": float(yaw_error.max()) if len(error) else None,
+                    "scans": len(statuses),
+                    "processed": statuses.count("processed"),
+                    "skipped": statuses.count("skipped"),
+                    "holds": slam["holds"],
+                    "link_failures": statuses.count("link_failure"),
+                    "pending_release_at_end": slam["pending_release"],
+                    "final_mode": slam["tracker"].mode,
                 }
+            if frame_log is not None:
+                frame_log.close()
+            (args.output / "frame_audit.json").write_text(
+                record_json(frame_audit, indent=2) + "\n"
             )
-            (args.output / "obstacle_scans.json").write_text(record_json(scans_rec) + "\n")
-            if overlay["plan_history"] or overlay["grids"]:
-                (args.output / "plan_history.json").write_text(
-                    record_json({"plans": overlay["plan_history"], "replans": obstacle.get("replans", []),
-                                 "new_obstacles": new_obstacles["schedule"].log if new_obstacles is not None else []})
+            if video_frames:
+                (args.output / "video_frames.json").write_text(
+                    record_json(
+                        {
+                            "fps": args.fps,
+                            "clock": "Isaac simulation time since the first recorded step",
+                            "overview_video": "transport.mp4",
+                            "overview_floor_points": state.get("overview_floor_points"),
+                            "robot_camera": {
+                                "mount": (
+                                    "perception camera (synthetic baseline_0p50)"
+                                    if args.perception_mount == "legacy"
+                                    else f"perception camera ({args.perception_mount})"
+                                ),
+                                "resolution": [
+                                    perception_calibration.width,
+                                    perception_calibration.height,
+                                ],
+                                "depth_video_range_m": list(DEPTH_VIDEO_RANGE_M),
+                                "timing": "video only, not a freshness-checked capture",
+                            },
+                            "frames": video_frames,
+                        },
+                        indent=1,
+                    )
                     + "\n"
                 )
-                g_ = overlay["grids"]
-                np.savez_compressed(
-                    args.output / "obstacle_grid_frames.npz",
-                    times=np.array([x[0] for x in g_]), origins=np.array([[x[1], x[2]] for x in g_]).reshape(-1, 2),
-                    resolution=np.array([x[3] for x in g_]),
-                    offsets=np.cumsum([0] + [len(x[4]) for x in g_]),
-                    cells=np.concatenate([x[4] for x in g_]).reshape(-1, 2) if g_ else np.zeros((0, 2), np.int32),
-                )
-        if slam is not None:
-            # First, so a video shutdown failure cannot lose the SLAM record.
-            slam["link"].close()
-            (args.output / "slam_records.json").write_text(
-                record_json(slam["records"]) + "\n"
+            if slam_log is not None and slam_log["scan_stamps_s"]:
+                write_slam_record(args, state, replace(scenario, destination=truth_destination), factory, slam_log, lidar_config)
+            # Records first, encoders last: a slow ffmpeg shutdown must neither
+            # lose the records above nor replace the run's own failure reason.
+            failing = sys.exc_info()[0] is not None
+            video_results = []
+            encoders = ([("transport", encoder)] if encoder is not None else []) + list(
+                extra_encoders.items()
             )
-            control = np.asarray(slam["control"], dtype=float).reshape(-1, 7)
-            np.save(args.output / "slam_control.npy", control)
-            error = np.hypot(control[:, 1] - control[:, 4], control[:, 2] - control[:, 5])
-            yaw_error = np.abs(np.angle(np.exp(1j * (control[:, 3] - control[:, 6]))))
-            statuses = [record["status"] for record in slam["records"]]
-            state["slam_summary"] = {
-                "control_samples": int(len(control)),
-                "raw_position_rmse_m": float(np.sqrt(np.mean(error**2)))
-                if len(error)
-                else None,
-                "raw_position_max_m": float(error.max()) if len(error) else None,
-                "raw_yaw_rmse_rad": float(np.sqrt(np.mean(yaw_error**2)))
-                if len(error)
-                else None,
-                "raw_yaw_max_rad": float(yaw_error.max()) if len(error) else None,
-                "scans": len(statuses),
-                "processed": statuses.count("processed"),
-                "skipped": statuses.count("skipped"),
-                "holds": slam["holds"],
-                "link_failures": statuses.count("link_failure"),
-                "pending_release_at_end": slam["pending_release"],
-                "final_mode": slam["tracker"].mode,
-            }
-        if frame_log is not None:
-            frame_log.close()
-        (args.output / "frame_audit.json").write_text(
-            record_json(frame_audit, indent=2) + "\n"
-        )
-        if video_frames:
-            (args.output / "video_frames.json").write_text(
-                record_json(
-                    {
-                        "fps": args.fps,
-                        "clock": "Isaac simulation time since the first recorded step",
-                        "overview_video": "transport.mp4",
-                        "overview_floor_points": state.get("overview_floor_points"),
-                        "robot_camera": {
-                            "mount": (
-                                "perception camera (synthetic baseline_0p50)"
-                                if args.perception_mount == "legacy"
-                                else f"perception camera ({args.perception_mount})"
-                            ),
-                            "resolution": [
-                                perception_calibration.width,
-                                perception_calibration.height,
-                            ],
-                            "depth_video_range_m": list(DEPTH_VIDEO_RANGE_M),
-                            "timing": "video only, not a freshness-checked capture",
-                        },
-                        "frames": video_frames,
-                    },
-                    indent=1,
-                )
-                + "\n"
-            )
-        if slam_log is not None and slam_log["scan_stamps_s"]:
-            write_slam_record(args, state, replace(scenario, destination=truth_destination), factory, slam_log, lidar_config)
-        # Records first, encoders last: a slow ffmpeg shutdown must neither
-        # lose the records above nor replace the run's own failure reason.
-        failing = sys.exc_info()[0] is not None
-        video_results = []
-        encoders = ([("transport", encoder)] if encoder is not None else []) + list(
-            extra_encoders.items()
-        )
-        for name, process in encoders:
-            try:
-                process.stdin.close()
-                video_results.append((name, process.wait(timeout=60)))
-            except (OSError, subprocess.TimeoutExpired) as exc:
-                process.kill()
-                state.setdefault("video_shutdown_errors", []).append(f"{name}: {exc!r}")
-                video_results.append((name, None))
-        if not failing:
-            for name, exit_code in video_results:
-                require(exit_code == 0, f"{name} video encoding failed")
-        if early_ports:  # format 2: closed last, so the summaries above read the services inside the exit tick
-            close_boundary_record(state, sys.exc_info()[1])
+            for name, process in encoders:
+                try:
+                    process.stdin.close()
+                    video_results.append((name, process.wait(timeout=60)))
+                except (OSError, subprocess.TimeoutExpired) as exc:
+                    process.kill()
+                    state.setdefault("video_shutdown_errors", []).append(f"{name}: {exc!r}")
+                    video_results.append((name, None))
+            if not failing:
+                for name, exit_code in video_results:
+                    require(exit_code == 0, f"{name} video encoding failed")
+        finally:
+            if early_ports:  # format 2: closed last, so the summaries above read the services inside the exit tick
+                close_boundary_record(state, sys.exc_info()[1])
 
 
 def main() -> None:

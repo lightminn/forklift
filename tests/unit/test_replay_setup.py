@@ -42,3 +42,17 @@ def test_the_snapshot_writes_each_name_by_kind_and_copies_the_files(tmp_path):
     assert snap["names"]["json"]["path"] == "json" and audit["opaque"] == []
     (copied,) = snap["files"]
     assert (tmp_path / "boundary/setup_files" / copied["sha256"]).read_text() == "depth: 1.2\n"
+
+
+def test_a_service_spec_takes_each_names_first_definition_in_the_mro():
+    class Base:
+        @property
+        def value(self):
+            return 1
+
+    class Child(Base):
+        def value(self):  # overrides the property with a method
+            return 2
+
+    spec = RS.service_spec(Child())
+    assert "value" in spec["methods"] and "value" not in spec["properties"]

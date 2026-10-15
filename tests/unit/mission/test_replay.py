@@ -815,3 +815,76 @@ def test_an_unchanged_frozen_field_inside_a_changed_argument_is_left_alone(tmp_p
     replay_with = one_call(tmp_path, fn, call)
     holder, pose = replay_with(call)
     assert holder.items == [1] and holder.pose is pose
+
+
+# --- Codex R3/R4 review (P2 x7, P3 x2) ---------------------------------------------------------------------
+
+def test_a_tick_whose_head_times_were_deferred_must_set_them(tmp_path):
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    rec.tick_begin(0, tick_t=None, work_t=None, commands=[], stop_kind="none")
+    rec.tick_time(tick_t=1.0, work_t=1.0)
+    rec.tick_end(outputs={}, branches=[])
+    rec.close()
+    session = ReplaySession(tmp_path)
+    session.tick_begin(0, tick_t=None, work_t=None, commands=[], stop_kind="none")
+    with pytest.raises(ReplayMismatch, match="head times were never set"):
+        session.tick_end(outputs={}, branches=[])
+    session = ReplaySession(tmp_path)
+    session.tick_begin(0, tick_t=None, work_t=None, commands=[], stop_kind="none")
+    with pytest.raises(ReplayMismatch, match="tick_t"):
+        session.tick_time(tick_t=2.0, work_t=2.0)
+
+
+class Tagged(int):
+    """An int carrying state of its own (not a plain value)."""
+
+
+def test_a_scalar_subclass_with_state_is_not_a_plain_value(tmp_path):
+    from forklift_core.mission.replay_codec import immutable, plain_value
+
+    tagged = Tagged(3)
+    tagged.items = []
+    assert not plain_value(tagged) and not immutable(tagged) and plain_value(3) and immutable((1, Pose2D(0, 0, 0)))
+
+    def fn(x):
+        x.items.append(1)
+
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    gate = RecordingGate(rec)
+    rec.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    recorded_function(fn, "Svc", "f", gate)(tagged)
+    rec.tick_end(outputs={}, branches=[])
+    rec.close()
+    from forklift_core.mission.replay import read_ticks
+
+    assert "unsupported" in next(iter(read_ticks(tmp_path)))["calls"][0]["changes"]
+
+
+def test_a_frozen_value_shared_by_an_argument_and_a_watched_key_replays_as_values(tmp_path):
+    core = {"pose": None}
+    p = Pose2D(1.0, 2.0, 0.0)
+
+    def store(x):
+        core["pose"] = x
+
+    def use(a, b):
+        return a == b
+
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    gate = RecordingGate(rec)
+    watch = DictWatch(rec, {"core": core})
+    rec.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    recorded_function(store, "Svc", "store", gate, watch=watch)(p)
+    recorded_function(use, "Svc", "use", gate)(p, core["pose"])
+    rec.tick_end(outputs={}, branches=[])
+    rec.close()
+    session = ReplaySession(tmp_path)
+    rgate = ReplayGate(session)
+    rcore = {"pose": None}
+    rwatch = DictWatch(None, {"core": rcore})
+    session.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    q = Pose2D(1.0, 2.0, 0.0)
+    recorded_function(lambda x: None, "Svc", "store", rgate, watch=rwatch)(q)
+    assert recorded_function(lambda a, b: None, "Svc", "use", rgate)(q, rcore["pose"]) is True
+    session.tick_end(outputs={}, branches=[])
+    session.finish()

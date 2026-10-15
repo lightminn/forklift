@@ -89,21 +89,43 @@ class ReplayBoundary(ReplayGate):
         self.recorder = SessionRecorder(session)
 
 
-def _unrunnable(name):
+def _unrunnable(name, session=None):
     def run(*args, **kwargs):
-        raise ReplayMismatch(f"{name} ran outside a recorded tick (a replay has no planner to run)")
+        message = f"{name} ran outside a recorded tick (a replay has nothing to run)"
+        if session is not None:
+            raise session.fail(message)  # latched: the replayed code catching it does not hide it
+        raise ReplayMismatch(message)
     return run
 
 
-def build_inputs(run_dir: Path, gate: ReplayBoundary):
+def build_inputs(run_dir: Path, gate: ReplayBoundary, output: Path | None = None):
     snap = json.loads((run_dir / "boundary/setup_snapshot.json").read_text())
     if snap.get("opaque"):  # a value the snapshot could not keep: the replay would hand back a marker
         raise ReplayMismatch(f"the setup snapshot holds opaque values: {snap['opaque']}")
     arrays = {}
     extra = run_dir / "boundary/setup_arrays.npz"
     if extra.exists():
+        from forklift_core.mission.replay_codec import Encoder
+
         with np.load(extra, allow_pickle=False) as z:
             arrays = {k: z[k] for k in z.files}
+        bad = [k for k, a in arrays.items() if Encoder.digest(a) != k]
+        if bad:
+            raise ReplayMismatch(f"setup arrays do not match their hashes: {bad[:3]}")
+    # The files the setup read must still be what it read (the replay runs where they are, by the same paths).
+    import hashlib
+
+    changed = []
+    for item in snap.get("files", []):
+        path_ = Path(item["path"])
+        try:
+            digest = hashlib.sha256(path_.read_bytes()).hexdigest()
+        except OSError:
+            digest = None
+        if digest != item["sha256"]:
+            changed.append(item["path"])
+    if changed:
+        raise ReplayMismatch(f"setup input files differ from the recorded ones: {changed[:5]}")
     specs, services = {}, {}
     for name, item in snap["names"].items():
         if item["kind"] == "service":
@@ -141,7 +163,7 @@ def build_inputs(run_dir: Path, gate: ReplayBoundary):
                 obj = getattr(obj, part)
             values[name] = obj
         elif kind == "port":
-            values[name] = BR.recorded_function(_unrunnable(name), item["port"], item["method"], gate)
+            values[name] = BR.recorded_function(_unrunnable(name, gate.session), item["port"], item["method"], gate)
         elif kind == "value":
             values[name] = decode(item["node"], arrays, services=services, by_id=shared_ids)
         elif kind in ("adapters", "excluded"):
@@ -151,7 +173,11 @@ def build_inputs(run_dir: Path, gate: ReplayBoundary):
     specs_by_port = dict(specs)
 
     def proxy_factory(target, port, gate_, **kw):
+        if gate_ is not gate:
+            raise gate.session.fail(f"a {port} proxy built on another gate")
         if isinstance(target, ReplayProxy):
+            if object.__getattribute__(target, "_port") != port:  # a service wired to another port
+                raise gate.session.fail(f"the {object.__getattribute__(target, '_port')} service wrapped as {port}")
             spec = object.__getattribute__(target, "_spec")
         elif isinstance(target, types.ModuleType):  # the runner's `time` module as the Clock port
             spec = {"methods": sorted(n for n in dir(target) if callable(getattr(target, n, None)))}
@@ -161,6 +187,9 @@ def build_inputs(run_dir: Path, gate: ReplayBoundary):
         return ReplayProxy(port, gate, spec=spec, child_ports=kw.get("child_ports"), child_specs=child_specs,
                            hash_only_requests=kw.get("hash_only_requests", ()), watches=kw.get("watches"))
 
+    if output is not None and "args" in values:  # the replay writes its own outputs, never the evidence's
+        values["args"].output = Path(output)
+        Path(output).mkdir(parents=True, exist_ok=True)
     values["RecordingProxy"] = proxy_factory
     values["recorded_function"] = BR.recorded_function
     values["boundary"] = gate
@@ -173,13 +202,13 @@ def build_inputs(run_dir: Path, gate: ReplayBoundary):
         spawn_box=lambda *a, **k: None,
         remove_prim=lambda *a, **k: None,
         slam_link_client=lambda *a, **k: types.SimpleNamespace(close=lambda: None),
-        cast_reference_scan=_unrunnable("cast_reference_scan"),
+        cast_reference_scan=_unrunnable("cast_reference_scan", gate.session),
         place_chase_camera=lambda *a, **k: None,
     )
     return types.SimpleNamespace(**values), adapters, snap
 
 
-def replay_run(run_dir: Path) -> dict:
+def replay_run(run_dir: Path, output: Path | None = None) -> dict:
     run_dir = Path(run_dir)
     _install_isaac_value_types()
     session = ReplaySession(run_dir / "boundary", allow_opaque={("Planner", "redraw_docking")})
@@ -189,7 +218,11 @@ def replay_run(run_dir: Path) -> dict:
     spec = importlib.util.spec_from_file_location("run_transport_replay", ROOT / "sim/isaac/run_transport.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    S, adapters, snap = build_inputs(run_dir, gate)
+    if output is None:
+        import tempfile
+
+        output = Path(tempfile.mkdtemp(prefix="boundary_replay_"))
+    S, adapters, snap = build_inputs(run_dir, gate, output)
     module._BOUNDARY_RECORD["gate"] = gate
     outcome = {"run_dir": str(run_dir), "ticks_done": 0}
     try:
@@ -205,7 +238,7 @@ def replay_run(run_dir: Path) -> dict:
     except Exception as exc:  # noqa: BLE001 -- the replayed run's own end (a require) is part of the record
         outcome["drive"] = f"{type(exc).__name__}: {exc}"
         outcome["traceback"] = traceback.format_exc()[-4000:]
-    if session.failure is None and outcome.get("drive") == "returned":
+    if session.failure is None:  # a recorded failure replayed exactly ends the same way: finish it too
         try:
             session.finish()  # every recorded tick replayed, as many as the meta says
             outcome["finish"] = "ok"
@@ -221,8 +254,9 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("run_dir", type=Path)
     parser.add_argument("--json", type=Path)
+    parser.add_argument("--output", type=Path, help="where the replayed run writes (default: a new temporary directory)")
     args = parser.parse_args(argv)
-    out = replay_run(args.run_dir)
+    out = replay_run(args.run_dir, args.output)
     text = json.dumps(out, indent=1)
     if args.json:
         args.json.write_text(text + "\n")

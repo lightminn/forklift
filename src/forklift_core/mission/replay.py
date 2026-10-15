@@ -15,6 +15,7 @@ different tick count from its meta, or whose array payload does not match its ha
 
 from __future__ import annotations
 
+import collections
 import dataclasses
 import importlib
 import json
@@ -111,6 +112,13 @@ def apply_inplace(actual: Any, after: Any, where: str = "argument", *, replaced=
     if isinstance(actual, list) and isinstance(after, list):
         new = [sub(actual[i], b, i) if i < len(actual) else b for i, b in enumerate(after)]
         actual[:] = new
+        return actual
+    if isinstance(actual, collections.deque) and isinstance(after, collections.deque):
+        if actual.maxlen != after.maxlen:
+            raise Unsupported(f"{where}: a deque's maxlen changed")
+        new = [sub(actual[i], b, i) if i < len(actual) else b for i, b in enumerate(after)]
+        actual.clear()
+        actual.extend(new)
         return actual
     if isinstance(actual, dict) and isinstance(after, dict):
         for key in list(actual):
@@ -211,9 +219,11 @@ class ReplaySession:
             raise self.fail(f"tick {tick}: the record has no more ticks")
         if recorded["tick"] != tick:
             raise self.fail(f"tick {tick}: the record's next tick is {recorded['tick']}")
+        self._time_pending = False
         for key in ("tick_t", "work_t", "commands", "stop_kind"):
             if key in head and head[key] is None and key in ("tick_t", "work_t"):
-                continue  # set later in the tick (tick_time), checked there
+                self._time_pending = True  # set later in the tick (tick_time), required before it ends
+                continue
             if key in head and _canonical(self.encode(head[key])) != _canonical(recorded[key]):
                 raise self.fail(f"tick {tick} {key}: {head[key]!r} differs from the recorded one")
         self.tick, self._next = recorded, 0
@@ -226,11 +236,14 @@ class ReplaySession:
         for key, value in (("tick_t", tick_t), ("work_t", work_t)):
             if _canonical(self.encode(value)) != _canonical(tick[key]):
                 raise self.fail(f"tick {tick['tick']} {key}: {value!r} differs from the recorded head")
+        self._time_pending = False
 
     def tick_end(self, *, outputs: Any, branches: list[str]) -> None:
         tick = self.tick
         if tick is None:
             raise self.fail("tick_end without tick_begin")
+        if getattr(self, "_time_pending", False):
+            raise self.fail(f"tick {tick['tick']}: its head times were never set (tick_time)")
         if self._next != len(tick["calls"]):
             left = tick["calls"][self._next]
             raise self.fail(f"tick {tick['tick']}: {len(tick['calls']) - self._next} recorded calls not made, "

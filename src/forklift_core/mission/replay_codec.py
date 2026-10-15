@@ -50,11 +50,33 @@ def _resolve(qualname: str) -> type:
     return obj
 
 
+_PLAIN_TYPES = (type(None), bool, int, float, str, bytes)
+
+
 def plain_value(value: Any) -> bool:
-    """A scalar this codec encodes by value (shared with the recorder's change check)."""
-    if isinstance(value, np.generic):
+    """A scalar this codec encodes by value (shared with the recorder's change check): exactly a built-in
+    scalar, a numpy scalar of an encoded kind or a pathlib path -- not a subclass that may carry more state."""
+    t = type(value)
+    if t in _PLAIN_TYPES:
+        return True
+    if isinstance(value, np.generic) and t.__module__ == "numpy":
         return value.dtype.kind in "biufcmMSU"
-    return value is None or isinstance(value, (bool, int, float, str, bytes, pathlib.PurePath))
+    return t.__module__ == "pathlib" and isinstance(value, pathlib.PurePath)
+
+
+def immutable(value: Any, depth: int = 0) -> bool:
+    """A value no one can change in place: plain scalars, and tuples / frozen dataclasses made only of such
+    values. Its identity carries no meaning, so neither the change model nor the alias graph tracks it."""
+    if depth > 20:
+        return False
+    if plain_value(value):
+        return True
+    if type(value) is tuple:
+        return all(immutable(v, depth + 1) for v in value)
+    if dataclasses.is_dataclass(value) and not isinstance(value, type) and value.__dataclass_params__.frozen \
+            and not getattr(value, "__dict__", {}).keys() - {f.name for f in dataclasses.fields(value)}:
+        return all(immutable(getattr(value, f.name), depth + 1) for f in dataclasses.fields(value))
+    return False
 
 
 class Encoder:
@@ -144,12 +166,15 @@ class Encoder:
             return self._shared(value, lambda: self.array_key(value))
         if isinstance(value, float) and not math.isfinite(value):
             return {"$float": repr(value)}
-        if value is None or isinstance(value, (bool, int, float, str)):
+        if type(value) in (type(None), bool, int, float, str):
             return value
-        if isinstance(value, bytes):
+        if type(value) is bytes:
             return {"$bytes": base64.b64encode(value).decode("ascii")}
         if isinstance(value, tuple):
             return {"$tuple": [self.encode(v) for v in value]}
+        if dataclasses.is_dataclass(value) and not isinstance(value, type) and immutable(value):
+            return {"$dataclass": _qualname(type(value)),  # a value: no identity (sharing it is harmless)
+                    "fields": {f.name: self.encode(getattr(value, f.name)) for f in dataclasses.fields(value)}}
         if dataclasses.is_dataclass(value) and not isinstance(value, type):
             return self._shared(value, lambda: {
                 "$dataclass": _qualname(type(value)),

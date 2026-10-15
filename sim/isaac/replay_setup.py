@@ -82,9 +82,12 @@ class FileAudit:
 def service_spec(obj) -> dict:
     """What a replay proxy needs to tell a method call from an attribute read on a service whose class it cannot
     import (Isaac objects on CPU): the class's methods and properties."""
-    methods, properties = set(), set()
-    for klass in type(obj).__mro__:
+    methods, properties, seen = set(), set(), set()
+    for klass in type(obj).__mro__:  # the first definition of a name in the MRO is the one that counts
         for key, value in vars(klass).items():
+            if key in seen:
+                continue
+            seen.add(key)
             if isinstance(value, property):
                 properties.add(key)
             elif callable(value) or isinstance(value, (staticmethod, classmethod)):

@@ -382,20 +382,10 @@ class RecordingGate:
         return out or None
 
 
-def _immutable(value: Any, depth: int = 0) -> bool:
-    """A value no one can change in place: scalars, and tuples / frozen dataclasses made only of such values
-    (sharing one is harmless, so the change model does not track its identity)."""
-    from forklift_core.mission.replay_codec import plain_value
+def _immutable(value: Any) -> bool:
+    from forklift_core.mission.replay_codec import immutable
 
-    if depth > 20:
-        return False
-    if plain_value(value):
-        return True
-    if isinstance(value, tuple):
-        return all(_immutable(v, depth + 1) for v in value)
-    if dataclasses.is_dataclass(value) and not isinstance(value, type) and value.__dataclass_params__.frozen:
-        return all(_immutable(getattr(value, f.name), depth + 1) for f in dataclasses.fields(value))
-    return False
+    return immutable(value)
 
 
 def _mutable(value: Any) -> bool:
@@ -436,7 +426,7 @@ def _walk(value: Any, path: tuple, out: dict, problems: list, stack=()) -> None:
             if not _simple_key(k):
                 problems.append(f"{path} has a {type(k).__name__} key")
             _walk(v, path + (repr(k),), out, problems, stack)
-    elif isinstance(value, (list, tuple)):
+    elif isinstance(value, (list, tuple, collections.deque)):
         for i, v in enumerate(value):
             _walk(v, path + (i,), out, problems, stack)
     elif dataclasses.is_dataclass(value) and not isinstance(value, type):
@@ -578,16 +568,17 @@ def check_state(before: "_State", after: "_State") -> tuple[list, str | None]:
 
 def _identities(value: Any, out: set, depth: int = 0) -> set:
     """The ids of the mutable objects (containers, arrays, dataclass and plain objects) inside ``value``."""
-    if depth > 50 or value is None or isinstance(value, (bool, int, float, str, bytes)):
-        return out
+    if depth > 50 or _immutable(value):
+        return out  # a value no one can change: sharing it is no alias
     if id(value) in out:
         return out
-    if isinstance(value, (list, dict, np.ndarray)) or dataclasses.is_dataclass(value) or hasattr(value, "__dict__"):
+    if isinstance(value, (list, dict, np.ndarray, collections.deque)) or dataclasses.is_dataclass(value) \
+            or hasattr(value, "__dict__"):
         out.add(id(value))
     if isinstance(value, dict):
         for v in value.values():
             _identities(v, out, depth + 1)
-    elif isinstance(value, (list, tuple)):
+    elif isinstance(value, (list, tuple, collections.deque)):
         for v in value:
             _identities(v, out, depth + 1)
     elif dataclasses.is_dataclass(value) and not isinstance(value, type):
