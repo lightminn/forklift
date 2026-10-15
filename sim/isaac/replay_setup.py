@@ -29,8 +29,7 @@ FORMAT = "forklift_setup_snapshot/1"
 SERVICES = {
     "robot": "Vehicle", "world": "Clock", "pallet": "SimTruth", "stage": "Stage", "camera": "OverviewCamera",
     "pocket_camera": "PocketCamera", "perception_camera": "PerceptionCamera", "perception_display": "DisplayCamera",
-    "perception_capture": "Capture", "boundary": "Boundary", "recorder": "PocketRecorder", "overlay": "Overlay",
-    "inset": "Inset",
+    "perception_capture": "Capture", "boundary": "Boundary", "recorder": "PocketRecorder",
 }
 # Value types kept by their attributes (plain objects without a dataclass encoding).
 VALUE_TYPES = {"Namespace", "SimpleNamespace"}
