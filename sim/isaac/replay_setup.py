@@ -33,7 +33,25 @@ SERVICES = {
     "inset": "Inset",
 }
 # Value types kept by their attributes (plain objects without a dataclass encoding).
-VALUE_TYPES = {"Namespace", "SimpleNamespace"}
+VALUE_TYPES = {"Namespace", "SimpleNamespace", "InsertionGeometry", "CommandWindow", "RearHistory"}
+# The recorded planner functions (recorded_function wrappers when recording): a replay supplies its own wrappers.
+PORT_FUNCTIONS = {"bicycle_rollout", "detect_pockets", "final_straight_prefix", "plan_docking_reapproach",
+                  "plan_observation_leg", "plan_return_leg", "plan_transport", "plan_transport_leg", "redraw_docking",
+                  "runtime_viewpoints", "straight_from_pose"}
+# Setup names drive's prologue lists but never reads before rebinding them (checked statically, plan R3 notes).
+EXCLUDED = {"q": "a setup Gf.Quatd; drive reads q only in hook lambdas called after the loop has assigned it"}
+
+
+def drive_inputs(drive) -> list[str]:
+    """The setup names drive's prologue binds (``if "name" in _bound``)."""
+    import ast
+    import inspect
+    import textwrap
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(drive)))
+    fn = tree.body[0]
+    return [ast.literal_eval(st.test.left) for st in fn.body
+            if isinstance(st, ast.If) and ast.unparse(st.test).endswith("in _bound")]
 
 
 class FileAudit:
@@ -76,7 +94,7 @@ def _import_path(obj) -> str | None:
 
 
 def write_setup_snapshot(names: dict, directory: Path, files: list[str], *, services: dict | None = None,
-                         repo_root: Path | None = None) -> dict:
+                         repo_root: Path | None = None, wanted=None) -> dict:
     """``names``: run()'s locals at the hand-over. ``services``: extra live objects by logical id (objects inside
     containers, e.g. the obstacle layer). Returns the snapshot's audit (opaque paths, files)."""
     from forklift_core.mission.replay_codec import Encoder
@@ -89,7 +107,16 @@ def write_setup_snapshot(names: dict, directory: Path, files: list[str], *, serv
     encoder = Encoder(opaque_ok=True, value_types=VALUE_TYPES, services=service_ids)
     out, opaque = {}, []
     for name, value in sorted(names.items()):
-        if name.startswith("__") or name in ("S",):
+        if name.startswith("__") or name in ("S",) or (wanted is not None and name not in wanted):
+            continue
+        if name in EXCLUDED:
+            out[name] = {"kind": "excluded", "why": EXCLUDED[name]}
+            continue
+        if name in PORT_FUNCTIONS:
+            out[name] = {"kind": "port", "port": "Planner", "method": name}
+            continue
+        if name == "isaac":
+            out[name] = {"kind": "adapters", "names": sorted(vars(value))}
             continue
         if id(value) in service_ids:
             out[name] = {"kind": "service", "id": service_ids[id(value)]}
