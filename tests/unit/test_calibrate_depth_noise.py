@@ -123,3 +123,9 @@ def test_a_noise_free_quantised_frame_is_measured_at_the_dither_level(tmp_path):
     depth, masks, _ = cal._load(tmp_path, frames[4])
     record = cal.frame_structure(depth, masks, z_range=(5.0, 6.0), margin_px=8, seed=0)
     assert "reject" not in record and max(c[0] for c in record["components"]) < 1e-4
+
+def test_a_frame_whose_pallet_mask_is_empty_is_skipped(tmp_path):
+    _cache(tmp_path, scene="val/000000", with_gt=True)
+    Image.fromarray(np.zeros((480, 640), np.uint8)).save(tmp_path / "val/000000/mask_visib/000001_000000.png")
+    report = cal.pallet_surface_report(tmp_path, _frames(tmp_path, "val/000000"), z_range=(5.0, 6.0))
+    assert report["ratio_u"][1]["n"] == 3 and report["pallet_frames"] == 3

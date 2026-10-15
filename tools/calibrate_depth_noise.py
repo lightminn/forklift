@@ -271,7 +271,7 @@ def _pallet_ids(cache: Path) -> set:
 def pallet_surface_report(cache: Path, frames, *, z_range=(0.5, 2.5), margin_px: int = 8) -> dict:
     ids = _pallet_ids(cache)
     ratios_u, ratios_v = {s: [] for s in PALLET_STEPS}, {s: [] for s in PALLET_STEPS}
-    drops, touched, files = [], set(), ["models_names.json"]
+    drops, touched, files, used = [], set(), ["models_names.json"], 0
     for f in frames:
         gts = json.loads((cache / f["scene"] / "scene_gt.json").read_text())[str(f["frame"])]
         files += [f"{f['scene']}/scene_camera.json", f"{f['scene']}/scene_gt.json", f["depth"], *f["masks"]]
@@ -281,6 +281,9 @@ def pallet_surface_report(cache: Path, frames, *, z_range=(0.5, 2.5), margin_px:
             continue
         touched.add(f["scene"])
         region = np.any(pallets, axis=0)
+        if not region.any():  # the pallet is listed for the frame but not visible in it
+            continue
+        used += 1
         drops.append(fit.dropout_fraction(depth, region))
         try:
             pal = _variances(depth, fit.erode(region, 4), z_range, PALLET_STEPS)
@@ -294,7 +297,7 @@ def pallet_surface_report(cache: Path, frames, *, z_range=(0.5, 2.5), margin_px:
             ratios_v[s].append(float(np.sqrt(pal[0][s] / bg[0][s])))
     files = list(dict.fromkeys(files))
     return {"scenes": sorted(touched), "files": files, "files_sha256": _digest(cache, files),
-            "pallet_dropout_fraction": float(np.median(drops)) if drops else None,
+            "pallet_frames": used, "pallet_dropout_fraction": float(np.median(drops)) if drops else None,
             "ratio_u": {s: _dist(v) for s, v in ratios_u.items()},
             "ratio_v": {s: _dist(v) for s, v in ratios_v.items()},
             "note": "pallet / background noise std at small steps; larger steps include gaps between boards"}
