@@ -3424,6 +3424,9 @@ def drive(S, isaac) -> None:
         cells.world, cells.robot = world, robot
         _BOUNDARY_RECORD["time"] = time
         globals()["time"] = RecordingProxy(time, "Clock", boundary)
+        if obstacle is not None:
+            obstacle["layer"] = RecordingProxy(obstacle["layer"], "Obstacles", boundary,
+                                               child_ports={"permission": "Permission"})
     state["phase"] = "planning"
     if boundary is not None:
         boundary.recorder.tick_begin(-1, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")  # the initial plans
@@ -4792,7 +4795,7 @@ def drive(S, isaac) -> None:
                 cells.world, cells.robot = world, robot  # the capture's callbacks read the proxies from here on
             if slam is not None:
                 slam["tracker"] = RecordingProxy(slam["tracker"], "Slam", boundary)
-            if obstacle is not None:
+            if obstacle is not None and not early_ports:
                 obstacle["layer"] = RecordingProxy(obstacle["layer"], "Obstacles", boundary,
                                                    child_ports={"permission": "Permission"})
             if args.use_perception:
