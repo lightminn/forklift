@@ -35,15 +35,27 @@ def leg(x0=0.0, length=1.0):
 class Geometry:
     """near_tracking with its geometry stood in for: the face is ``face_m`` ahead of the fork tip."""
 
-    def __init__(self, face_m=2.0, budget_ok=True, entered=False):
+    def __init__(self, face_m=2.0, budget_ok=True, entered=False, k_tip=1.0, gap_margin=0.01, carriage_gap=0.5,
+                 sigma=0.005):
         self.face_m, self.budget_ok, self.entered_ = face_m, budget_ok, entered
+        # The protection: the tip sweep factor, the worst blade-wall margin, the carriage corners' gap and
+        # uncertainty.
+        self.k_tip, self.gap_margin, self.carriage_gap, self.sigma = k_tip, gap_margin, carriage_gap, sigma
 
     def module(self):
         g = self
         ns = SimpleNamespace(**{k: v for k, v in vars(NT).items() if not k.startswith("__")})
         ns.face_min_x_m = lambda held, widths, base: g.face_m
         ns.section_entered = lambda face_x, tip: face_x <= 1.5
-        ns.carried_face = lambda held, widths, base: {"face": g.face_m}
+        ns.carried_face = lambda held, widths, base: {s_: {w_: (g.face_m + 0.9, 0.2) for w_ in ("outer", "inner")}
+                                                      for s_ in ("left", "right")}
+        ns.corner_sweep_factor = lambda *a: g.k_tip
+        ns.blade_gaps = lambda face, blades, depths, rear_x: {"points": [{"gap_m": 0.05, "at": "left_inner"}],
+                                                              "rho_m": 1.0}
+        ns.lateral_sweep_m = lambda *a: 0.001
+        ns.gap_threshold_m = lambda point, bound, odometry, rho, face, lat: 0.05 - g.gap_margin
+        ns.carriage_gaps = lambda face, corners: [g.carriage_gap, g.carriage_gap]
+        ns.carriage_uncertainty_m = lambda *a: g.sigma
         ns.face_distance_m = lambda face, tip: g.face_m
         ns.entered = lambda face, tip: g.entered_
         ns.result_wait_s = lambda *a: 0.05
@@ -355,3 +367,168 @@ def test_the_near_capture_redraw_checks_the_correction_points_on_the_trajectorie
         core.test_response = ({"approach": leg()}, {"refused": None}, trajs[:1])  # one rollout: outside the box
         plans, entry = core.near_capture_redraw((4.0, 0.0, 0.0), (3.9, 0.0, 0.0), obs, 3, cfg_a, cfg_d, 14.0)
         assert plans is None and entry["record"]["refused"] == "correction_point" and entry["accepted"] is False
+
+
+# --- The protection (Codex 6d review P2): its entry, fresh and stale evidence, the insertion end ---
+
+def protected(geom, *, stamp_s=10.0, odometry=(0.001, 0.001), **kw):
+    # Both correction points done, so none opens on the approach.
+    core, near, calls = make(geom, tracker=Tracker(armed=True, stamp_s=stamp_s),
+                             correction=NT.CorrectionState(next_index=2), **kw)
+    near["bounds"].odometry = lambda age: odometry
+    near["corners"] = ((0.35, 0.2), (0.35, -0.2))
+    return core, near, calls
+
+
+def test_the_protection_starts_within_w_of_the_face_and_a_short_tip_stopping_distance_is_terminal():
+    core, near, _ = protected(Geometry(face_m=0.14))
+    tick(core, 10.0, phase="approach")
+    p = near["protect"]
+    assert p["phase"] == "approach" and p["face_distance_m"] == 0.14 and p["kappa_b"] == 0.0
+    assert near["events"][0]["event"] == "protect" and near["stop_state"].reason is None
+    row = near["ticks"][-1]
+    assert row["protect"] is True and row["protection"]["fresh"] is True and row["protection"]["inside"] is False
+    # Entered with less than the along error plus the tip's stopping sweep left: stuck.
+    core, near, _ = protected(Geometry(face_m=0.14, k_tip=100.0))
+    tick(core, 10.0, phase="approach")
+    assert near["stop_state"].reason == "stuck" and near["stop_state"].terminal
+    # No odometry bound: unbounded, not a measured shortfall.
+    core, near, _ = protected(Geometry(face_m=0.14), odometry=None)
+    tick(core, 10.0, phase="approach")
+    assert near["stop_state"].reason == "unbounded" and near["ticks"][-1]["protect"] is True
+
+
+def test_a_gap_shortfall_ends_on_fresh_evidence_and_waits_on_stale_until_a_new_observation():
+    core, near, _ = protected(Geometry(face_m=0.5, gap_margin=-0.01), stamp_s=10.0)
+    tick(core, 10.0, phase="insert")
+    assert near["stop_state"].reason == "stuck"  # a new observation confirms it
+    core, near, _ = protected(Geometry(face_m=0.5, gap_margin=-0.01), stamp_s=9.5)
+    assert tick(core, 10.0, phase="insert") == (True, False, False)
+    assert near["stop_state"].reason == "gap_wait" and near["stale_waits"] == {"gap_wait": 9.5}
+    core.options.near_tracking = Geometry(face_m=0.5).module()  # the margin is back
+    tick(core, 10.1, phase="insert")
+    assert near["stale_waits"] == {"gap_wait": 9.5}  # held: no observation newer than the one that raised it
+    near["tracker"].latest.stamp_s = 10.15
+    core.slam["stop_now"] = True
+    assert tick(core, 10.2, phase="insert") == (False, True, False)  # decided afresh on it, and released standing
+    assert near["stale_waits"] == {}
+
+
+def test_the_insertion_end_latches_on_fresh_certain_evidence_and_arrives_standing():
+    core, near, _ = protected(Geometry(face_m=0.1, carriage_gap=0.0))
+    assert tick(core, 10.0, phase="insert") == (True, False, False)  # latched; not standing yet
+    assert near["stop_state"].insert_end is True and near["stop_state"].reason == "insert_end"
+    assert near.get("arrival") is None
+    core.slam["stop_now"] = True
+    near["tracker"].latest.stamp_s = 10.1  # a fresh observation this tick too (an old one would wait again)
+    assert tick(core, 10.1, phase="insert") == (True, False, True)
+    assert near["arrival"]["reason"] == "insert_end" and near["arrival"]["time_s"] == 10.1
+    assert near["events"][-1]["event"] == "insert_end_arrival"
+    # Unconfirmed (old evidence) or uncertain: it stands and waits, never latches.
+    core, near, _ = protected(Geometry(face_m=0.1, carriage_gap=0.0), stamp_s=9.5, standing=True)
+    tick(core, 10.0, phase="insert")
+    assert near["stop_state"].insert_end is False and near["stop_state"].reason == "insert_end_unconfirmed"
+    core, near, _ = protected(Geometry(face_m=0.1, carriage_gap=0.0, sigma=0.02, entered=True), standing=True)
+    tick(core, 10.0, phase="insert")
+    assert near["stop_state"].insert_end is False
+    assert near["ticks"][-1]["waits"] == ["carriage_uncertain", "insert_end_unconfirmed"]
+    # Only in the insertion: on the approach a small carriage gap does not end anything.
+    core, near, _ = protected(Geometry(face_m=0.1, carriage_gap=0.0), standing=True)
+    tick(core, 10.0, phase="approach")
+    assert near["stop_state"].insert_end is False
+
+
+# --- The real near_redraw, near_protection_prediction and the runner's redraw_docking_traced ---
+
+def test_near_redraw_places_the_latest_observation_and_dry_runs_both_cruises_from_here():
+    asked, rolled = [], []
+    adapter = SimpleNamespace(estimate_pallet_center_m=lambda obs, depth: (2.0, 0.1),
+                              estimate_world_pallet_site=lambda xy, yaw, base, base_yaw: Pose2D(xy[0] + base[0], xy[1] + base[1], yaw + base_yaw))
+    g2 = SimpleNamespace(planning_target=lambda mode, site, pickup: (Pose2D(5.2, 0.1, 0.02), None))
+
+    def redraw_docking(world, start, target, config, **k):
+        asked.append((world, start, target, config, k))
+        for dry in k["dry_runs"]:
+            dry(SimpleNamespace(poses="P", directions="D", curvatures_inv_m="K"))
+        return {"approach": leg()}, {"refused": None}
+
+    driven = TrackerConfig(cruise_speed_mps=0.29)
+    hooks = SimpleNamespace(
+        redraw_docking=redraw_docking, grid_world=lambda sc: ("world", sc),
+        bicycle_rollout=lambda poses, dirs, curv, config, start: rolled.append((config.cruise_speed_mps, start)),
+        correction_grid=lambda first, target, rear: {"occupancy": ("GRID", first, target)})
+    near = {"first_target": Pose2D(5.0, 0.0, 0.0)}
+    core = MissionCore(MissionState(phase="approach", phase_started=0.0), state={"transitions": []}, obstacle=None,
+                       slam=None, pocket={"check": None, "planning_pickup": Pose2D(5.1, 0.0, 0.0)}, paths={},
+                       trackers={"approach": SimpleNamespace(config=driven)}, geometry=SimpleNamespace(pallet_depth_m=0.8),
+                       settings={}, pallet_geometry=None, hooks=hooks, near=near,
+                       options=SimpleNamespace(near_tracking=NT, adapter=adapter, G2=g2, planning_target="estimate",
+                                               scenario=SimpleNamespace(pickup="PICKUP"), approach_straight_speed_mps=0.2,
+                                               speeds={"approach": 0.2}, planner_config="CFG", pickup_bounds="B"))
+    latest = SimpleNamespace(observation=SimpleNamespace(insertion_yaw_rad=0.01), pose=(1.0, 0.5, 0.1))
+    plans, record, target = core.near_redraw(latest, (1.0, 0.5, 0.1))
+    (world, start, tgt, config, k), = asked
+    assert world == ("world", core.options.scenario) and (start.x_m, start.y_m, start.yaw_rad) == (1.0, 0.5, 0.1)
+    assert tgt == Pose2D(5.2, 0.1, 0.02) == target and config == "CFG" and k["max_yaw_rad"] == NT.CORRECTION_MAX_YAW_RAD
+    assert k["occupancy"] == ("GRID", near["first_target"], target) and k["pickup_bounds"] == "B"
+    assert [r[0] for r in rolled] == [0.2, 0.29] and all(np.allclose(r[1], (1.0, 0.5, 0.1)) for r in rolled)
+    assert record["previous_target"] == [5.1, 0.0, 0.0] and record["dry_run_cruise_mps"] == [0.2, 0.29]
+    assert record["site"] == pytest.approx([3.0, 0.6, 0.11])  # the observation placed with its own pose
+    core.options.approach_straight_speed_mps = None  # no slower approach straight: both dry runs at the driven cruise
+    rolled.clear()
+    core.near_redraw(latest, (1.0, 0.5, 0.1))
+    assert [r[0] for r in rolled] == [0.29, 0.29]
+
+
+def test_the_protection_prediction_carries_its_inputs_and_disposes_by_the_retry_rule():
+    nt = SimpleNamespace(**{k: v for k, v in vars(NT).items() if not k.startswith("__")})
+    asked = []
+    nt.protection_prediction = lambda arrays, config, rear, held, widths, **k: asked.append(k) or {"margin_phys_m": -0.01}
+    near = {"fork_tip_x_m": 0.9, "tracker": SimpleNamespace(config=SimpleNamespace(camera_xy_m=(0.4, 0.0))),
+            "blades": "BLADES", "carriage_limit_m": 0.35, "blade_y_max_m": 0.3, "bounds": "BOUNDS", "terms": "TERMS",
+            "protect": None, "retries": 0}
+    core = MissionCore(MissionState(phase="approach", phase_started=0.0), state={
+        "transitions": [], "near_tracking": {"bounds_sha256": "B1", "drive_terms_sha256": "D1"}}, obstacle=None, slam=None,
+        pocket={"check": None}, paths={}, trackers={"approach": SimpleNamespace(config=TrackerConfig())}, geometry=None,
+        settings={}, pallet_geometry=None, hooks=SimpleNamespace(record_json=lambda v, indent=None: '{"h": 1}'), near=near,
+        options=SimpleNamespace(near_tracking=nt, rear_axle_offset_m=0.35, near_drop_frames_from_m=None))
+    latest = SimpleNamespace(held={"h": 1}, stamp_s=9.9)
+    pred = core.near_protection_prediction(leg(), latest, (0.2, 0.2), (1.0, 0.0, 0.0), 0.6)
+    assert asked[0]["camera_xy"] == (0.4, 0.0) and asked[0]["rear_axle_offset_m"] == 0.35
+    assert pred["retry_allowed"] is True and pred["lost_injection"] is False
+    assert pred["disposition"] == NT.prediction_disposition(-0.01, lost_injection=False, retry_allowed=True)
+    inputs = pred["inputs"]
+    assert inputs["face_distance_m"] == 0.6 and inputs["retries"] == 0 and inputs["protected"] is False
+    assert inputs["held"] == {"h": 1} and inputs["bounds_sha256"] == "B1" and inputs["drive_terms_sha256"] == "D1"
+    assert inputs["approach"]["sha256"] == NT.path_digest(leg().poses, leg().directions, leg().curvatures_inv_m)
+    near["retries"] = 1  # no retry left: the same shortfall is disposed of differently
+    core.options.near_drop_frames_from_m = 0.4
+    pred = core.near_protection_prediction(leg(), latest, (0.2, 0.2), (1.0, 0.0, 0.0), 0.6)
+    assert pred["retry_allowed"] is False and pred["lost_injection"] is True
+    assert pred["disposition"] == NT.prediction_disposition(-0.01, lost_injection=True, retry_allowed=False)
+
+
+def test_the_runners_traced_redraw_returns_its_dry_runs_trajectories_in_call_order_and_is_one_planner_call():
+    import ast
+
+    source = (ROOT / "sim/isaac/run_transport.py").read_text()
+    fn = next(n for n in ast.walk(ast.parse(source)) if isinstance(n, ast.FunctionDef)
+              and n.name == "redraw_docking_traced")
+    rolled = []
+
+    def bicycle_rollout(poses, directions, curvatures, config, start):
+        rolled.append((config, tuple(start)))
+        return SimpleNamespace(trajectory=f"T{len(rolled)}")
+
+    def redraw_docking(scenario, rear_pose, target, config, *, dry_runs, **k):
+        assert k == {"max_yaw_rad": 0.12}
+        results = [dry(SimpleNamespace(poses=0, directions=0, curvatures_inv_m=0)) for dry in dry_runs]
+        return ("PLANS", [r.trajectory for r in results]), {"record": 1}
+
+    namespace = {"np": np, "bicycle_rollout": bicycle_rollout, "redraw_docking": redraw_docking}
+    exec(compile(ast.Module(body=[fn], type_ignores=[]), "run_transport.py", "exec"), namespace)
+    plans, record, trajectories = namespace["redraw_docking_traced"](
+        "SC", "POSE", "TARGET", "CFG", start_rear=(1.0, 2.0, 0.0), dry_configs=("A", "D"), max_yaw_rad=0.12)
+    assert plans == ("PLANS", ["T1", "T2"]) and record == {"record": 1} and trajectories == ["T1", "T2"]
+    assert rolled == [("A", (1.0, 2.0, 0.0)), ("D", (1.0, 2.0, 0.0))]
+    assert 'recorded_function(redraw_docking_traced, "Planner", "redraw_docking_traced", boundary)' in source
