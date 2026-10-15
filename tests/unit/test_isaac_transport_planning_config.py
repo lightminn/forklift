@@ -1075,49 +1075,50 @@ def test_cusp_position_stall_v7_is_wired_into_the_runner():
     for later in ("stall_ = core.docking_and_stall(", "recover_ = core.cusp_and_observe_recovery("):
         assert follow < source.index(later)
     # Exclusions: D7 transport whatever --d7-docking says, a held realignment, the legacy profile.
-    fn = source[source.index("    def cusp_excluded(phase_)") :]
-    fn = fn[: fn.index("    def cusp_standing")]
-    assert 'args.tracker_profile == "20260921"' in fn
+    # The cusp rules are MissionCore methods since M-a1 slice 6a (same indentation as the closures were).
+    moved = CORE.read_text()
+
+    def method(name):
+        text = moved[moved.index(f"    def {name}(") :]
+        return text[: text.index("\n    def ", 10)] if "\n    def " in text[10:] else text
+
+    fn = method("cusp_excluded")
+    assert 'options.tracker_profile == "20260921"' in fn
     assert 'slam["docking"].get("accepted_any") or slam["docking"].get("reapproach")' in fn
     assert 'slam["tracker"].mode == "holding" and realign_active()' in fn
     assert "args.d7_docking" not in fn
     # Ownership on the latest snapshot: the leg-ahead path, the e-stop arc at the permission's own cap
     # in the leg's direction, every sensor alive.
-    own = source[source.index("    def cusp_ownership(") :]
-    own = own[: own.index("    def cusp_leg_checker")]
+    own = method("cusp_ownership")
     assert "layer_.check_candidate(leg_, current_pose=pose_, direction=dir_, loaded=loaded)" in own
     assert "layer_.check_arc_candidate(" in own and "curvature_inv_m=kappa_, direction=dir_" in own
     assert "cap_mps=max(abs(float(command_mps)), abs(float(signed_speed)))" in own
     assert "sensor_timeout_s" in own
     # The prefix's planner obstacles: the leg's rectangles (observe as plan_observation_leg has them).
-    leg = source[source.index("    def cusp_leg_checker(") :]
-    leg = leg[: leg.index("    def cusp_sensors(")]
+    leg = method("cusp_leg_checker")
     assert "escape_leg(ms.phase)[2]" in leg and 'leg_obstacles(\n            "observe"' in leg
     assert "pickup_bounds=pickup_bounds" in leg
     # The prefix's sensor checks: the plain walk within the stopping distance, the walk past unknown
     # for occupied, the evidence age, sensors alive.
-    sens = source[source.index("    def cusp_sensors(") :]
-    sens = sens[: sens.index("    def cusp_end_recovered(")]
+    sens = method("cusp_sensors")
     assert "unknown_passes=True" in sens and 'plain_.blocked in ("unknown", "edge")' in sens
     assert "age_ <= pconf_.evidence_max_age_s" in sens and "sensor_timeout_s" in sens
     # Every FREE cell either walk relied on (Codex implementation review P1).
     assert "age_ = now_s - min(plain_.oldest_free_s, passes_.oldest_free_s)" in sens
     # A short next leg's heading miss only within the existing rules' budgets.
-    rec = source[source.index("    def cusp_end_recovered(") :]
-    rec = rec[: rec.index("    def cusp_tick(")]
+    rec = method("cusp_end_recovered")
     assert 'len(state["cusp_replans"]) < max_cusp_replans' in rec
     assert 'goal and slam is not None' in rec and 'len(state["stall_replans"]) < 2' in rec
     # Stopped = standing with a zero applied at the wheels.
-    assert 'state.get("applied_command", (None, None))[0] == 0.0' in source
+    assert 'state.get("applied_command", (None, None))[0] == 0.0' in method("cusp_stopped")
     # The hand-off: one forced replan per key, the block entered while handed, its direction, an occupied
     # prefix counted as a blocked path; ownership back once no replan is pending.
-    tick = source[source.index("    def cusp_tick(") :]
-    tick = tick[: tick.index("    try:\n")]
+    tick = method("cusp_tick")
     # Forced only where the obstacle replan exists: with grid planning (Codex implementation review P1).
     assert 'if result_.force_replan and obstacle is not None:\n            if grid_planning:\n                obstacle["force_replan"] = ms.phase' in tick
     # A silent sensor sends no scan: liveness is passed in for every tick.
     assert "alive=lambda: cusp_alive(now_s)," in tick
-    alive = source[source.index("    def cusp_alive(") :]
+    alive = method("cusp_alive")
     assert "now_s - last_ <= timeout_ for last_ in layer_.last_scan_s.values()" in alive[:600]
     assert 'obstacle.get("force_replan") == ms.phase or bool(obstacle.get("replan_wait", {}).get(ms.phase))' in tick
     assert "or cusp_handed_ is not None" in source

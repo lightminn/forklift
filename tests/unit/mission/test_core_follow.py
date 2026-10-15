@@ -52,10 +52,7 @@ def make(phase="transport", *, result=Tracking(), slam=None, near=None, obstacle
 
     holds = SimpleNamespace(sync=log("holds.sync"), tick=log("holds.tick"))
     hooks = SimpleNamespace(
-        require=require, dump_tracking=log("dump_tracking"), cusp_heading_end=lambda tr: {"end": tr.status},
-        cusp_heading_offset=log("offset", (0.01, 0.02)),
-        cusp_tick=lambda t, rear, raw, tracking, stand: calls.append(("cusp_tick", (raw, tracking, stand), {})) or cusp(
-            raw, tracking),
+        require=require, dump_tracking=log("dump_tracking"),
         cusp_holds=lambda: holds, slam_odom_base=lambda: "ODOM", slam_error=lambda: "ERR",
     )
     tracker = Tracker(calls, result, remaining)
@@ -66,6 +63,11 @@ def make(phase="transport", *, result=Tracking(), slam=None, near=None, obstacle
                        settings={"drive_acceleration_mps2": 0.5}, pallet_geometry=None, hooks=hooks, near=near,
                        options=SimpleNamespace(dwells=None, safety_stops=None,
                                                cusp_heading_hold_phases=("observe", "return_home")))
+    # The cusp rules are MissionCore methods since slice 6a; stand-ins on the instance as before.
+    core.cusp_heading_end = lambda tr: {"end": tr.status}
+    core.cusp_heading_offset = log("offset", (0.01, 0.02))
+    core.cusp_tick = lambda t, rear, raw, tracking, stand: calls.append(("cusp_tick", (raw, tracking, stand), {})) or cusp(
+            raw, tracking)
     return core, ms, state, tracker, calls
 
 

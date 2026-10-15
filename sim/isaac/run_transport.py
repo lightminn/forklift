@@ -4424,8 +4424,6 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             apply_tracker_profile=lambda: apply_tracker_profile(), same_path=same_path, path_stats=path_stats,
             # M-a1 slice 4a: the follower rules' helpers and the cusp heading holds (built further down run()).
             dump_tracking=lambda reason, tracking_: dump_tracking(reason, tracking_),
-            cusp_heading_end=lambda tracking_: cusp_heading_end(tracking_),
-            cusp_heading_offset=lambda *a: cusp_heading_offset(*a), cusp_tick=lambda *a: cusp_tick(*a),
             cusp_holds=lambda: cusp_holds,
             start_docking_retry=lambda *a: start_docking_retry(*a),
             now_s=lambda: world.current_time - initial_time,
@@ -4433,9 +4431,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             set_rear=set_rear,
             # M-a1 slice 4a-iii: the cusp helpers (built further down run()) and truth.
             cusp_monitor=lambda: cusp_monitor, cusp_heading_motion=lambda v: cusp_heading_motion(v),
-            cusp_stopped=lambda: cusp_stopped(), cusp_end_recovered=lambda goal: cusp_end_recovered(goal),
-            cusp_leg_checker=lambda: cusp_leg_checker(), cusp_sensors=lambda *a: cusp_sensors(*a),
             truth_yaw_rate=lambda: robot.get_angular_velocity()[2],
+            # M-a1 slice 6a: the cusp rules' ports -- the loop's load state and control speed (read when
+            # called), the held steering and the standing test (Vehicle reads; truth without SLAM).
+            loaded=lambda: loaded, signed_speed=lambda: signed_speed, held_kappa=lambda: held_kappa(),
+            cusp_standing=lambda: cusp_standing(),
             near_tick=lambda *a: near_tick(*a),  # M-a1 slice 4a-iv
             # M-a1 slice 4b: the video overlay's text (a Sink), the tracker config record.
             set_inset=set_inset, record_tracker_configs=lambda: record_tracker_configs(),
@@ -4486,7 +4486,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 rear_axle_offset_m=args.rear_axle_offset_m,
                                 pallet_prior_loaded=args.pallet_prior_loaded,
                                 depth_quantize_mm=args.depth_quantize_mm, drive_geometry=drive_geometry,
-                                command_accel_mps2=COMMAND_ACCEL_MPS2),
+                                command_accel_mps2=COMMAND_ACCEL_MPS2, dt=dt, pickup_zone=pickup_zone,
+                                tracker_profile=args.tracker_profile),
     )
     transition = core.transition
 
@@ -5167,19 +5168,6 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     # (forklift_core.control.cusp_stall) and the checks it needs from this world.
     cusp_monitor = CUSP_STALL.CuspStallMonitor(state["cusp_stalls"])
 
-    def cusp_excluded(phase_) -> str | None:
-        """K2: where another rule owns a cusp stop -- D7 transport (docking accepted or re-approaching,
-        whatever --d7-docking says), a held S4c-3 realignment, the legacy tracker profile."""
-        if args.tracker_profile == "20260921":
-            return "tracker_profile"
-        if phase_ == "transport" and slam is not None and (
-            slam["docking"].get("accepted_any") or slam["docking"].get("reapproach")
-        ):
-            return "d7_transport"
-        if phase_ == "observe" and slam is not None and slam["tracker"].mode == "holding" and realign_active():
-            return "realign_held"
-        return None
-
     def cusp_standing() -> bool:
         """The stop decision the cusp rules use: SLAM's stop detector, or the planar speed and yaw rate."""
         if slam is not None:
@@ -5188,10 +5176,6 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             float(np.linalg.norm(robot.get_linear_velocity()[:2])) <= trackers[ms.phase].config.stop_speed_mps
             and abs(float(robot.get_angular_velocity()[2])) <= cusp_stop_yaw_rate_radps
         )
-
-    def cusp_stopped() -> bool:
-        """K1's stopped: standing with a zero command applied at the wheels on the last tick."""
-        return cusp_standing() and state.get("applied_command", (None, None))[0] == 0.0
 
     def cusp_heading_motion(signed_speed_now) -> dict:
         """Speed, steering and pose at this tick, for the cusp heading hold records (fix A): the
@@ -5204,164 +5188,6 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 "steering_actual_rad": np.asarray(robot.get_joint_positions()[steers], dtype=float).tolist()}
 
     cusp_holds = CUSP_HOLD.CuspHeadingHolds(state)  # fix A's hold records
-
-    def cusp_heading_end(tracking_now) -> dict:
-        """The tracking result a hold record keeps (fix A)."""
-        return {"status": tracking_now.status, "failure": tracking_now.failure,
-                "position_error_m": tracking_now.position_error_m, "yaw_error_rad": tracking_now.yaw_error_rad}
-
-    def cusp_heading_offset(tracker_, progress_m, pose) -> tuple[float, float]:
-        """Signed lateral and heading offset of pose from tracker_'s path at progress_m."""
-        path_ = tracker_._poses
-        i_ = int(np.clip(np.searchsorted(tracker_._distance, progress_m, side="right") - 1, 0, len(path_) - 2))
-        f_ = float(np.clip((progress_m - tracker_._distance[i_]) / tracker_._lengths[i_], 0.0, 1.0))
-        point_ = path_[i_, :2] + f_ * (path_[i_ + 1, :2] - path_[i_, :2])
-        y0_, y1_ = float(path_[i_, 2]), float(path_[i_ + 1, 2])
-        yaw_ = y0_ + f_ * math.atan2(math.sin(y1_ - y0_), math.cos(y1_ - y0_))
-        d_ = np.asarray(pose[:2], dtype=float) - point_
-        return (float(math.cos(yaw_) * d_[1] - math.sin(yaw_) * d_[0]),
-                math.atan2(math.sin(float(pose[2]) - yaw_), math.cos(float(pose[2]) - yaw_)))
-
-    def cusp_alive(now_s) -> bool:
-        """Every obstacle sensor within its timeout -- checked every tick: a silent one sends no scan."""
-        if obstacle is None:
-            return True
-        layer_ = obstacle["layer"]
-        timeout_ = layer_.permission.config.sensor_timeout_s
-        return all(now_s - last_ <= timeout_ for last_ in layer_.last_scan_s.values())
-
-    def cusp_scan_id(now_s):
-        """Which scan a standing decision belongs to: the obstacle layer's last stamp (0.1 s without one)."""
-        if obstacle is not None:
-            return obstacle.get("last_stamp")
-        return math.floor(now_s * 10.0 + 1e-9)
-
-    def cusp_ownership(now_s, rear_now, command_mps) -> tuple[bool, dict | None]:
-        """K2: whether the obstacle side leaves this stop alone, judged on the layer's latest snapshot
-        now -- the current leg's path ahead and the e-stop arc at the held curvature in the leg's
-        direction (the permission's own cap, max(|command|, |measured|)) unblocked and every sensor
-        alive. Without a layer the planner obstacles alone decide, so the stall handling owns it."""
-        if obstacle is None:
-            return True, None
-        layer_ = obstacle["layer"]
-        if layer_.snapshot is None:
-            return False, {"time_s": now_s, "why": "no_snapshot"}
-        leg_, dir_ = trackers[ms.phase].leg_ahead()
-        pose_ = tuple(float(v) for v in rear_now)
-        kappa_ = held_kappa()
-        path_ = layer_.check_candidate(leg_, current_pose=pose_, direction=dir_, loaded=loaded)
-        arc_ = layer_.check_arc_candidate(
-            current_pose=pose_, curvature_inv_m=kappa_, direction=dir_, loaded=loaded,
-            cap_mps=max(abs(float(command_mps)), abs(float(signed_speed))),
-        )
-        timeout_ = layer_.permission.config.sensor_timeout_s
-        silent_ = sorted(name_ for name_, last_ in layer_.last_scan_s.items() if now_s - last_ > timeout_)
-        record_ = {
-            "time_s": now_s, "path": path_.blocked, "path_verified_m": path_.verified_m, "arc": arc_.blocked,
-            "arc_verified_m": arc_.verified_m, "kappa_inv_m": kappa_, "silent": silent_,
-        }
-        return path_.blocked is None and arc_.blocked is None and not silent_, record_
-
-    def cusp_leg_checker():
-        """K3: the leg's planner rectangles and bounds -- transport and return as their replans check
-        them (leg_obstacles), observe as plan_observation_leg does (the pickup obstacle, the pickup and
-        scene bounds)."""
-        from forklift_core.planning.grid_collision import FootprintCollisionChecker as GridChecker
-        from forklift_core.planning.pallet_mission import leg_obstacles
-
-        if ms.phase in ("transport", "return_home"):
-            return escape_leg(ms.phase)[2]
-        pickup_ = None
-        if grid_planning:
-            known_ = obstacle.get("pickup_estimate")
-            pickup_ = pickup_zone if known_ is None else Rectangle(
-                known_.x_m, known_.y_m, geometry.pallet_depth_m, geometry.pallet_width_m, known_.yaw_rad
-            )
-        rects_, footprint_, bounds_ = leg_obstacles(
-            "observe", grid_world(scenario), geometry, pickup_obstacle=pickup_, pickup_bounds=pickup_bounds
-        )
-        return GridChecker(rects_, footprint_, bounds_)
-
-    def cusp_sensors(now_s, rear_now, trajectory, direction):
-        """K3's sensor checks on the next leg's prefix: no unknown or edge cell within the stopping
-        distance (at the leg's cruise, plus a step), no occupied cell anywhere in it (walking past
-        unknown), the FREE evidence it relied on within the permission's age limit, sensors alive."""
-        layer_ = obstacle["layer"]
-        pconf_ = layer_.permission.config
-        pose_ = tuple(float(v) for v in rear_now)
-        plain_ = layer_.check_candidate(trajectory, current_pose=pose_, direction=direction, loaded=loaded)
-        passes_ = layer_.check_candidate(trajectory, current_pose=pose_, direction=direction, loaded=loaded,
-                                         unknown_passes=True)
-        stop_need_ = pconf_.stopping.distance_m(trackers[ms.phase].config.cruise_speed_mps) + pconf_.step_m
-        unknown_near_ = plain_.blocked in ("unknown", "edge") and plain_.verified_m < stop_need_
-        # Every FREE cell either walk relied on, past the first unknown too (Codex implementation review P1).
-        age_ = now_s - min(plain_.oldest_free_s, passes_.oldest_free_s)
-        silent_ = sorted(n_ for n_, last_ in layer_.last_scan_s.items() if now_s - last_ > pconf_.sensor_timeout_s)
-        occupied_ = passes_.blocked == "occupied"
-        ok_ = not unknown_near_ and not occupied_ and age_ <= pconf_.evidence_max_age_s and not silent_
-        return ok_, occupied_, {
-            "plain": plain_.blocked, "plain_verified_m": plain_.verified_m, "stop_need_m": stop_need_,
-            "passes": passes_.blocked, "first_unknown_m": passes_.first_unknown_m,
-            "evidence_age_s": age_ if math.isfinite(age_) else None, "silent": silent_,
-        }
-
-    def cusp_end_recovered(goal: bool) -> bool:
-        """A short next leg's end missed (in heading, or a stall at the final goal -- cusp design
-        amendment) that an existing rule recovers within its budget: a transport cusp by the cusp
-        replan, a transport or return goal by the stall replan (SLAM only); a return cusp and the
-        observe leg are refused."""
-        if ms.phase == "transport" and not goal:
-            return len(state["cusp_replans"]) < max_cusp_replans
-        if ms.phase in ("transport", "return_home") and goal and slam is not None:
-            return len(state["stall_replans"]) < 2
-        return False
-
-    def cusp_tick(now_s, rear_now, raw_, tracking_, retry_stand) -> tuple:
-        """K2/K3 for this tick: (tracking, hold the steering); a hand-off forces the obstacle replan,
-        an unrecoverable stall ends the run."""
-        from forklift_core.control import escape as esc
-
-        tracker_ = trackers[ms.phase]
-        pose_ = tuple(float(v) for v in rear_now)
-
-        def judge_now(latch_):
-            return CUSP_STALL.judge(
-                tracker_, rear_now, raw_, latch_.cache, end_recovered=cusp_end_recovered,
-                sweep_free=lambda trajectory_: esc.rectangles_sweep_free(cusp_leg_checker(), trajectory_),
-                sensors=(lambda trajectory_, direction_: cusp_sensors(now_s, rear_now, trajectory_, direction_))
-                if obstacle is not None else None,
-            )
-
-        def replan_pending():
-            return obstacle is not None and (
-                obstacle.get("force_replan") == ms.phase or bool(obstacle.get("replan_wait", {}).get(ms.phase))
-            )
-
-        def prefix_occupied(latch_):
-            return obstacle["layer"].check_candidate(
-                latch_.prefix_trajectory, current_pose=pose_, direction=latch_.hand_direction, loaded=loaded,
-                unknown_passes=True,
-            ).blocked == "occupied"
-
-        result_ = cusp_monitor.tick(
-            now_s, ms.phase, tracker_, raw_, tracking_, rear=rear_now, excluded=cusp_excluded(ms.phase),
-            retry_stand=bool(retry_stand), standing=cusp_standing, stopped=cusp_stopped,
-            alive=lambda: cusp_alive(now_s),
-            ownership=lambda command_: cusp_ownership(now_s, rear_now, command_), judge_now=judge_now,
-            scan_id=lambda: cusp_scan_id(now_s), replan_pending=replan_pending, prefix_occupied=prefix_occupied,
-            release_update=lambda: tracker_.update(rear_now, signed_speed, dt),
-            watch_since_s=(obstacle.get("progress", {}).get("since_s") if obstacle is not None else None),
-        )
-        if result_.force_replan and obstacle is not None:
-            if grid_planning:
-                obstacle["force_replan"] = ms.phase
-            elif cusp_monitor.latch is not None:
-                # The obstacle replan exists only with grid planning (Codex implementation review P1).
-                cusp_monitor.latch.record["events"].append({"time_s": now_s, "event": "force_skipped_no_grid"})
-        if result_.end is not None:
-            dump_tracking(result_.end, result_.tracking)
-            require(False, result_.end)
-        return result_.tracking, result_.hold
 
     try:
         if args.video:

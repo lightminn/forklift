@@ -102,9 +102,7 @@ class World:
             realign_active=lambda: realign, realign_install=log("realign_install"),
             cusp_holds=lambda: self.holds,
             cusp_monitor=lambda: SimpleNamespace(holds_observe=lambda: holds_observe),
-            cusp_heading_motion=lambda v: {"speed": v}, cusp_heading_end=lambda tr: {"end": tr.status},
-            cusp_heading_offset=lambda tracker, progress, rear: (0.0, 0.0), cusp_stopped=lambda: stopped,
-            cusp_end_recovered=lambda goal: True, cusp_leg_checker=lambda: None, cusp_sensors=lambda *a: None,
+            cusp_heading_motion=lambda v: {"speed": v},
             truth_velocity=lambda: np.array([*velocity, 0.0]), truth_yaw_rate=lambda: yaw_rate,
         )
         self.tracker = HoldTracker(self.calls)
@@ -122,6 +120,13 @@ class World:
                                     cusp_heading_hold_phases=("observe", "return_home"),
                                     cusp_heading_hold_position_m=0.03, cusp_heading_hold_rad=0.08,
                                     observe_replans_per_leg=2))
+        # The cusp rules are MissionCore methods since slice 6a; stand-ins on the instance as before.
+        self.core.cusp_heading_end = lambda tr: {"end": tr.status}
+        self.core.cusp_heading_offset = lambda tracker, progress, rear: (0.0, 0.0)
+        self.core.cusp_stopped = lambda: stopped
+        self.core.cusp_end_recovered = lambda goal: True
+        self.core.cusp_leg_checker = lambda: None
+        self.core.cusp_sensors = lambda *a: None
 
     def names(self):
         return [c[0] for c in self.calls if c[0] not in ("require", "grid_kwargs")]
