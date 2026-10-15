@@ -105,3 +105,11 @@ def test_instruction_load_must_be_a_valid_declaration(tmp_path):
     with pytest.raises(ValueError):
         rd.write_recognition_scene(tmp_path, out.scene, out.instance_ids, origin="rig_render_pose", meta=META,
                                    truth={"instances": []}, instruction=bad)
+
+
+def test_absent_instruction_fields_are_still_type_checked(tmp_path):
+    out = instance_rig.render_instances([])
+    hidden = {"present": False, "x_m": {"target": 0, "instance_spec": {"depth_m": 0.55}}}
+    with pytest.raises(ValueError):
+        rd.write_recognition_scene(tmp_path, out.scene, out.instance_ids, origin="rig_render_pose", meta=META,
+                                   truth={"instances": []}, instruction=hidden)

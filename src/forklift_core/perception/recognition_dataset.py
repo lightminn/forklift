@@ -76,17 +76,23 @@ def check_instruction(obj) -> dict:
         raise ValueError(f"instruction input may hold only {INSTRUCTION_FIELDS}, with present")
     if not isinstance(obj["present"], bool):
         raise ValueError("instruction present must be a bool")
-    if obj["present"]:
-        for name in ("x_m", "y_m"):
-            _finite_scalar(obj.get(name), f"instruction {name}")
-        if _finite_scalar(obj.get("radius_m"), "instruction radius_m") <= 0:
-            raise ValueError("instruction radius_m must be positive")
-        layer = obj.get("layer")
-        if layer is not None and (isinstance(layer, bool) or not isinstance(layer, int) or layer < 0):
-            raise ValueError("instruction layer must be a nonnegative int or null")
-    if obj.get("load") is not None:
-        LoadDeclaration(**obj["load"])  # validates names, finiteness and source
-    return obj
+    clean = {"present": obj["present"]}
+    for name in ("x_m", "y_m", "radius_m"):
+        if name in obj or obj["present"]:
+            clean[name] = _finite_scalar(obj.get(name), f"instruction {name}")
+    if obj["present"] and clean["radius_m"] <= 0:
+        raise ValueError("instruction radius_m must be positive")
+    if clean.get("radius_m", 0.0) < 0:
+        raise ValueError("instruction radius_m must be nonnegative")
+    layer = obj.get("layer")
+    if layer is not None and (isinstance(layer, bool) or not isinstance(layer, int) or layer < 0):
+        raise ValueError("instruction layer must be a nonnegative int or null")
+    if "layer" in obj or obj["present"]:
+        clean["layer"] = layer
+    load = obj.get("load")
+    if "load" in obj or obj["present"]:
+        clean["load"] = None if load is None else LoadDeclaration(**load).to_json()
+    return clean
 
 
 def _png(path: Path, array) -> None:
@@ -105,7 +111,7 @@ def _check_meta(origin: str, meta: dict) -> None:
 
 def write_recognition_scene(scene_dir, scene: SceneInput, instance_ids, *, origin, meta, truth, instruction) -> None:
     _check_meta(origin, meta)
-    check_instruction(instruction)
+    instruction = check_instruction(instruction)
     scene_dir = Path(scene_dir)
     scene_dir.mkdir(parents=True, exist_ok=True)
     depth = scene.depth_m
