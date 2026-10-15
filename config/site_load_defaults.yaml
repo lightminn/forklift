@@ -1,0 +1,8 @@
+# Site default load declaration for known pallet shapes, used when a task
+# instruction gives no mass (user decision 2026-10-15). A site policy, not a
+# measurement: the pallet mass equals the simulation setting pallet_mass_kg
+# in config/isaac_transport*.yaml. Change it per site; results record the source.
+source: site_default
+shapes:
+  epal6: {pallet_mass_kg: 10.0, load_mass_kg: 0.0, com: centred}
+  t11_06: {pallet_mass_kg: 10.0, load_mass_kg: 0.0, com: centred}

@@ -1,0 +1,1 @@
+env	(python -c "import PIL" 2>/dev/null || $HOME/forklift-venv/bin/pip install 'Pillow>=10,<13') && python -c "import PIL, numpy, yaml; print(PIL.__version__, numpy.__version__, yaml.__version__)" && python tools/generate_recognition_scenes.py --out /dev/null --digest-only

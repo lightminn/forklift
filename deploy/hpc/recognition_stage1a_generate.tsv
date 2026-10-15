@@ -1,0 +1,8 @@
+gen_s1	python tools/generate_recognition_scenes.py --out hpc_data/stage1a --cases S1
+gen_s2	python tools/generate_recognition_scenes.py --out hpc_data/stage1a --cases S2
+gen_s3	python tools/generate_recognition_scenes.py --out hpc_data/stage1a --cases S3
+gen_s4	python tools/generate_recognition_scenes.py --out hpc_data/stage1a --cases S4
+gen_s5	python tools/generate_recognition_scenes.py --out hpc_data/stage1a --cases S5
+gen_s6	python tools/generate_recognition_scenes.py --out hpc_data/stage1a --cases S6
+gen_s7	python tools/generate_recognition_scenes.py --out hpc_data/stage1a --cases S7
+gen_n	python tools/generate_recognition_scenes.py --out hpc_data/stage1a --cases N
