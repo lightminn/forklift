@@ -35,8 +35,11 @@ export function predictSweep(pose, curvature, direction, chassis, steps = 30, ds
   return { left, right };
 }
 
-export function worldSize(grid) {
-  return grid ? [grid.head.width * grid.head.resolution_m, grid.head.height * grid.head.resolution_m] : [14, 9];
+// World rectangle covered by the grid: lower-left corner and size, metres.
+export function worldBounds(grid) {
+  if (!grid) return { x0: 0, y0: 0, w: 14, h: 9 };
+  const [x0, y0] = grid.head.origin_m ?? [0, 0];
+  return { x0, y0, w: grid.head.width * grid.head.resolution_m, h: grid.head.height * grid.head.resolution_m };
 }
 
 const MODE_TOK = { AUTO: "accent", TELEOP: "teleop", STOPPED: "crit" };
@@ -78,22 +81,24 @@ export function drawMap(cv, model, tok, view, layers) {
   const h = H / dpr;
   const c = cv.getContext("2d");
   const grid = model.grid;
-  const [ww, wh] = worldSize(grid);
-  if (!view.fitted || view.worldKey !== `${ww}x${wh}` || view.sizeKey !== `${w}x${h}`) {
-    if (!view.fitted || view.worldKey !== `${ww}x${wh}`) fitView(view, ww, wh, w, h);
+  const B = worldBounds(grid);
+  const worldKey = `${B.x0},${B.y0},${B.w}x${B.h}`;
+  if (!view.fitted || view.worldKey !== worldKey || view.sizeKey !== `${w}x${h}`) {
+    if (!view.fitted || view.worldKey !== worldKey) fitView(view, B.w, B.h, w, h, 0.04, B.x0, B.y0);
     else {
+      // canvas resized: keep the zoom level and the centre
       const keep = view.scale / view.fitScale;
       const { cx, cy } = view;
-      fitView(view, ww, wh, w, h);
+      fitView(view, B.w, B.h, w, h, 0.04, B.x0, B.y0);
       view.scale = view.fitScale * keep;
       view.cx = cx;
       view.cy = cy;
     }
-    view.worldKey = `${ww}x${wh}`;
+    view.worldKey = worldKey;
     view.sizeKey = `${w}x${h}`;
   }
   const st = model.state;
-  if (view.follow && st) {
+  if (view.follow && st?.pose) {
     view.cx = st.pose.x_m;
     view.cy = st.pose.y_m;
   }
@@ -103,17 +108,18 @@ export function drawMap(cv, model, tok, view, layers) {
   c.fillStyle = tok["map-bg"];
   c.fillRect(0, 0, w, h);
 
-  // grid cells: free floor slightly lifted, occupied in blue
+  // grid cells: free floor slightly lifted, occupied in blue, unknown left dark
   if (grid && layers.grid) {
     const { width: nx, height: ny, resolution_m: res } = grid.head;
+    const values = grid.head.values ?? { unknown: 0, free: 1, occupied: 2 };
     const cells = grid.cells;
     const cell = res * sc + 0.6;
-    for (const [value, color] of [[0, tok["map-free"]], [2, tok.obst]]) {
+    for (const [value, color] of [[values.free, tok["map-free"]], [values.occupied, tok.obst]]) {
       c.fillStyle = color;
       for (let j = 0; j < ny; j += 1) {
         for (let i = 0; i < nx; i += 1) {
           if (cells[j * nx + i] !== value) continue;
-          const [x, y] = P(i * res, (j + 1) * res);
+          const [x, y] = P(B.x0 + i * res, B.y0 + (j + 1) * res);
           if (x > w || y > h || x + cell < 0 || y + cell < 0) continue;
           c.fillRect(x, y, cell, cell);
         }
@@ -125,15 +131,15 @@ export function drawMap(cv, model, tok, view, layers) {
     c.strokeStyle = color;
     c.lineWidth = lw;
     c.beginPath();
-    for (let x = 0; x <= ww + 1e-9; x += step) {
-      const [a, b] = P(x, 0);
-      const [, d] = P(x, wh);
+    for (let x = Math.ceil(B.x0 / step) * step; x <= B.x0 + B.w + 1e-9; x += step) {
+      const [a, b] = P(x, B.y0);
+      const [, d] = P(x, B.y0 + B.h);
       c.moveTo(Math.round(a) + 0.5, b);
       c.lineTo(Math.round(a) + 0.5, d);
     }
-    for (let y = 0; y <= wh + 1e-9; y += step) {
-      const [a, b] = P(0, y);
-      const [cc] = P(ww, y);
+    for (let y = Math.ceil(B.y0 / step) * step; y <= B.y0 + B.h + 1e-9; y += step) {
+      const [a, b] = P(B.x0, y);
+      const [cc] = P(B.x0 + B.w, y);
       c.moveTo(a, Math.round(b) + 0.5);
       c.lineTo(cc, Math.round(b) + 0.5);
     }
@@ -251,7 +257,7 @@ export function drawMap(cv, model, tok, view, layers) {
     }
   }
 
-  if (layers.sweep && st && st.mode === "TELEOP" && model.chassis) {
+  if (layers.sweep && st?.pose && st.mode === "TELEOP" && model.chassis) {
     const cmd = st.command || { speed_mps: 0, curvature_inv_m: 0 };
     const dir = cmd.speed_mps < 0 ? -1 : 1;
     const sweep = predictSweep(st.pose, cmd.curvature_inv_m, dir, model.chassis);
@@ -280,10 +286,11 @@ export function drawMap(cv, model, tok, view, layers) {
   }
 
   // truck: glow in the mode colour, chevron for heading, forks ahead, tag below
-  if (st && model.chassis) {
+  if (st?.pose && model.chassis) {
     const ch = model.chassis;
     const p = st.pose;
-    const color = tok[MODE_TOK[st.mode] ?? "robot"];
+    const color = model.stale ? tok.muted : tok[MODE_TOK[st.mode] ?? "robot"];
+    if (model.stale) c.globalAlpha = 0.45; // an old pose is not a stopped truck
     const [x, y] = P(p.x_m, p.y_m);
     const bodyFront = ch.nose_from_rear_m - 0.36;
     const hw = ch.half_width_m * sc;
@@ -326,7 +333,8 @@ export function drawMap(cv, model, tok, view, layers) {
     c.lineCap = "butt";
     c.restore();
     const reach = (ch.nose_from_rear_m + 0.1) * sc;
-    tag(c, `${model.vehicleId ?? "차량"} · ${st.mode}`, x, y + Math.max(reach * 0.55, hw) + 8, color, tok);
+    tag(c, `${model.vehicleId ?? "차량"} · ${model.stale ? "위치 지연" : st.mode ?? "관찰"}`, x, y + Math.max(reach * 0.55, hw) + 8, color, tok);
+    c.globalAlpha = 1;
   }
 
   // scale bar, top-left

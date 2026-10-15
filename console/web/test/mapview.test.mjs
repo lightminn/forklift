@@ -62,3 +62,13 @@ test("an unfitted view reports no zoom and maps nothing", () => {
   assert.equal(zoomPercent(v), null);
   assert.equal(v.fitted, false);
 });
+
+test("fit honours a world that does not start at the origin (ROS map origin)", () => {
+  const v = createMapView();
+  fitView(v, 20, 10, 1000, 500, 0, -12.5, -3);
+  near(v.cx, -2.5);
+  near(v.cy, 2);
+  const [x0, y0] = worldToScreen(v, 1000, 500, -12.5, -3);
+  near(x0, 0);
+  near(y0, 500);
+});

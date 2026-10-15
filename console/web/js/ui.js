@@ -1,6 +1,7 @@
 // Panel rendering from the latest vehicle state. Buttons are only enabled when the
 // request could be accepted; the vehicle still decides and may reject.
 
+import { controlProfile } from "./profile.js";
 import { blockReason, currentDestination, missionProgress, PHASES, subtaskOf } from "./wizard.js";
 
 const MODE_KO = { AUTO: "자동 주행", TELEOP: "수동 조종", PAUSED: "대기", STOPPED: "정지됨" };
@@ -49,6 +50,7 @@ function badge(el, cls, text) {
 export function renderPallets(targets, onPick) {
   const box = $("pallet-list");
   const checked = document.querySelector('input[name="pal"]:checked')?.value;
+  const firstList = box.children.length === 0;
   box.innerHTML = "";
   for (const p of targets.pallets) {
     const lab = document.createElement("label");
@@ -61,16 +63,22 @@ export function renderPallets(targets, onPick) {
     input.addEventListener("change", onPick);
     box.appendChild(lab);
   }
-  if (!document.querySelector('input[name="pal"]:checked')) {
+  // a first list picks the first available pallet; later lists never swap in another one
+  if (firstList && !document.querySelector('input[name="pal"]:checked')) {
     const first = box.querySelector("input:not(:disabled)");
     if (first) first.checked = true;
   }
   const dest = $("dest");
+  const firstDest = dest.options.length === 0;
   const keep = dest.value;
-  dest.innerHTML = targets.destinations
-    .map((d) => `<option value="${esc(d.destination_id)}">${esc(d.destination_id)} · (${d.pose.x_m.toFixed(1)}, ${d.pose.y_m.toFixed(1)}) m</option>`)
-    .join("");
+  dest.innerHTML =
+    '<option value="">하역 위치를 고르세요</option>' +
+    targets.destinations
+      .map((d) => `<option value="${esc(d.destination_id)}">${esc(d.destination_id)} · (${d.pose.x_m.toFixed(1)}, ${d.pose.y_m.toFixed(1)}) m</option>`)
+      .join("");
   if (keep && targets.destinations.some((d) => d.destination_id === keep)) dest.value = keep;
+  else if (firstDest && targets.destinations.length) dest.value = targets.destinations[0].destination_id;
+  else dest.value = "";
   $("targets-rev").textContent = `rev ${targets.targets_revision}`;
 }
 
@@ -115,7 +123,7 @@ export function renderWizard(wz, ctx) {
   $("wz-next").disabled = !ctx.nextOk;
   const why = blockReason(ctx.block);
   $("m-start").disabled = Boolean(why) || !ctx.selection.pallet || !ctx.selection.destination;
-  $("wz-why").textContent = wz.step === 3 ? why ?? "" : "";
+  $("wz-why").textContent = ctx.note || (wz.step === 3 ? why ?? "" : "");
   if (wz.step === 3 && ctx.template) {
     const sel = ctx.selection;
     $("wz-review").innerHTML = `<dt>작업 종류</dt><dd>${esc(ctx.template.name)} <span class="mono hint">${esc(ctx.template.code)}</span></dd>
@@ -152,23 +160,37 @@ export function render(m) {
   $("l-rtt").textContent = m.link.up && m.link.tickGapMs !== null ? `${Math.round(m.link.tickGapMs)} ms` : "—";
   $("lease").textContent = lease ? "조종 권한: 이 기기" : "조종 권한 받기";
   $("lease").setAttribute("aria-pressed", String(lease));
+  const prof = controlProfile(w?.capabilities);
+  const monitor = w?.capabilities?.control === false; // explicit only: before a welcome STOP still sends
+  $("monitor-alert").hidden = !monitor;
+  $("draft").hidden = w?.backend !== "mock";
+  for (const id of ["stop", "stop2"]) {
+    const b = $(id);
+    b.classList.toggle("nostop-btn", monitor);
+    b.querySelector("b").textContent = monitor ? "정지 불가" : "STOP";
+    b.querySelector("small").textContent = monitor ? "이 연결은 관찰 전용 · 비상정지 사용" : "편의 정지 · 비상정지 아님";
+  }
+  $("lease").disabled = monitor;
+  $("lease").title = monitor ? "관찰 전용 연결입니다" : "";
+  $("tab-tele").disabled = !prof.teleop; // monitor only: nothing to steer with
+  for (const [id, be] of [["be-real", "real"], ["be-isaac", "isaac"], ["be-mock", "mock"]]) $(id).setAttribute("aria-pressed", String(w?.backend === be));
   if (!st) {
     $("m-open").disabled = true;
     return;
   }
 
-  const mode = st.mode;
-  $("mode").dataset.m = mode;
-  $("mode-code").textContent = mode;
-  $("mode-ko").textContent = MODE_KO[mode] ?? mode;
-  chip($("stop-kind"), st.stop_kind === "safety_preempt" ? "crit" : st.stop_kind === "controlled_decel" ? "warn" : "", STOP_KO[st.stop_kind] ?? st.stop_kind);
+  const mode = st.mode; // null: no arbiter behind this connection (monitor only)
+  $("mode").dataset.m = mode ?? "NONE";
+  $("mode-code").textContent = mode ?? "—";
+  $("mode-ko").textContent = mode ? MODE_KO[mode] ?? mode : "판정 없음";
+  chip($("stop-kind"), st.stop_kind === "safety_preempt" ? "crit" : st.stop_kind === "controlled_decel" ? "warn" : "", st.stop_kind ? STOP_KO[st.stop_kind] ?? st.stop_kind : "정지 종류 —");
   $("rearm").hidden = mode !== "STOPPED";
   $("rearm").disabled = !lease || !st.stopped_confirmed;
   $("l-peers").textContent = `${st.lease?.holder ? (lease ? "이 기기(조종)" : "다른 기기(조종)") : "조종 기기 없음"} · 관찰 ${st.lease?.observers ?? 0}대${st.lease?.reserved_until_s ? ` · 재연결 대기 ${st.lease.reserved_until_s.toFixed(1)} s` : ""}`;
 
   // badges
   badge($("b-lease"), lease ? "ok" : st.lease?.holder ? "warn" : "", lease ? "이 기기" : st.lease?.holder ? "다른 기기" : "없음");
-  badge($("b-mode"), MODE_CLS[mode] ?? "", MODE_KO[mode] ?? mode);
+  badge($("b-mode"), MODE_CLS[mode] ?? "", mode ? MODE_KO[mode] ?? mode : "판정 없음");
   const mi = st.mission;
   const [mcls, mko] = mi ? STATUS[mi.status] ?? ["", mi.status] : ["", "작업 없음"];
   badge($("b-work"), mcls, mko);
@@ -192,7 +214,7 @@ export function render(m) {
   $("d-dest").textContent = currentDestination(mi) ?? "지정된 목적지 없음";
 
   // mission
-  const why = blockReason({ state: st, hasLease: lease, mode, mission: mi });
+  const why = blockReason({ state: st, canMission: prof.mission, hasLease: lease, mode, mission: mi });
   $("mission-gate").textContent = "";
   const ready = $("ready-line");
   ready.className = `ready ${why ? "warn" : "ok"}`;
@@ -236,27 +258,29 @@ export function render(m) {
   $("recover").disabled = !lease || mode === "STOPPED";
 
   // position and readouts
-  $("r-x").textContent = st.pose.x_m.toFixed(3);
-  $("r-y").textContent = st.pose.y_m.toFixed(3);
-  $("r-yaw").textContent = deg(st.pose.yaw_rad);
-  $("d-frame").textContent = `${st.pose.frame ?? "map"} · 보정 ${st.pose.correction_version ?? "—"}`;
+  const pose = st.pose;
+  $("r-x").textContent = pose ? pose.x_m.toFixed(3) : "—";
+  $("r-y").textContent = pose ? pose.y_m.toFixed(3) : "—";
+  $("r-yaw").textContent = pose ? deg(pose.yaw_rad) : "—";
+  $("d-frame").textContent = pose ? `${pose.frame ?? "map"} · 보정 ${pose.correction_version ?? "—"}` : "위치 없음";
   $("r-v").textContent = fmt(st.rear_axle_speed_mps);
   $("r-st").textContent = st.steering_rad ? deg(st.steering_rad[0]) : "—";
   $("r-lift").textContent = Number.isFinite(st.lift_m) ? Math.round(st.lift_m * 1000) : "—";
   $("r-load").textContent = st.load?.state === "loaded" ? `적재 · ${st.load.pallet_id}` : st.load?.state === "empty" ? "없음" : "측정 안 됨";
-  $("r-permit").textContent = `${st.permit.reason} · 상한 ${st.permit.limit_mps.toFixed(2)} m/s`;
-  $("r-cmd").textContent = `${st.command.speed_mps.toFixed(2)} → ${st.applied.speed_mps.toFixed(2)} m/s`;
+  $("r-permit").textContent = st.permit ? `${st.permit.reason} · 상한 ${st.permit.limit_mps.toFixed(2)} m/s` : "판정 없음";
+  $("r-cmd").textContent = st.command && st.applied ? `${st.command.speed_mps.toFixed(2)} → ${st.applied.speed_mps.toFixed(2)} m/s` : "—";
   if (m.chassis) $("r-radius").textContent = m.chassis.model_turning_radius_m.toFixed(2);
-  $("r-phase-t").textContent = mi ? `${mi.phase_elapsed_s.toFixed(1)} s (일시정지 동안 멈춤)` : "—";
+  $("r-phase-t").textContent = mi && Number.isFinite(mi.phase_elapsed_s) ? `${mi.phase_elapsed_s.toFixed(1)} s (일시정지 동안 멈춤)` : "—";
   const fr = st.freshness || {};
   const parts = [["격자", fr.grid_free_age_s], ["SLAM 보정", fr.slam_correction_age_s], ["근접 관측", fr.near_obs_age_s]];
   $("r-fresh").textContent = parts.map(([k, v]) => `${k} ${v === null || v === undefined ? "측정 안 됨" : `${v.toFixed(1)} s`}`).join(" · ");
   $("r-still").textContent = st.stopped_confirmed ? "정지 확인됨" : "확인 안 됨";
-  chip($("loc-chip"), st.pose.source === "mock_truth" ? "" : "ok", st.pose.source === "mock_truth" ? "정답 위치(가짜 차량)" : st.pose.source);
+  if (!pose) chip($("loc-chip"), "warn", "위치 없음");
+  else chip($("loc-chip"), pose.source === "mock_truth" ? "" : "ok", pose.source === "mock_truth" ? "정답 위치(가짜 차량)" : pose.source);
 
   // teleop
   const inTele = mode === "TELEOP";
-  $("t-enter").disabled = !lease || inTele || mode === "STOPPED" || Boolean(forbidden);
+  $("t-enter").disabled = !prof.teleop || !lease || inTele || mode === "STOPPED" || Boolean(forbidden);
   $("t-exit").disabled = !lease || !inTele;
   const gate = m.teleop.gate;
   $("t-arm").disabled = !lease || !inTele || !gate.canSend();
@@ -270,13 +294,13 @@ export function render(m) {
   $("deadman").disabled = !live;
   $("deadman").dataset.on = String(Boolean(live && m.teleop.lastRead?.deadman));
   $("joy").setAttribute("aria-disabled", String(!live));
-  $("lift-up").disabled = $("lift-dn").disabled = !live || st.lift_allowed === false;
+  $("lift-up").disabled = $("lift-dn").disabled = !live || !prof.lift || st.lift_allowed === false;
   $("lift-val").textContent = `${Number.isFinite(st.lift_m) ? Math.round(st.lift_m * 1000) : "—"} / 280 mm`;
   $("m-direct").setAttribute("aria-pressed", String(gate.mode === "direct"));
   $("m-video").setAttribute("aria-pressed", String(gate.mode === "video"));
   $("direct-confirm").hidden = gate.canSend();
-  const lim = st.limits;
-  const cmd = st.command;
+  const lim = st.limits ?? { forward_mps: 0, reverse_mps: 0, curvature_inv_m: 0, provisional: false };
+  const cmd = st.command ?? { speed_mps: 0, curvature_inv_m: 0 };
   const vn = lim.forward_mps ? cmd.speed_mps / lim.forward_mps : 0;
   const sn = lim.curvature_inv_m ? cmd.curvature_inv_m / lim.curvature_inv_m : 0;
   const bar = (el, n) => {
@@ -288,9 +312,10 @@ export function render(m) {
   bar($("b-s"), -sn);
   $("b-v-t").textContent = `${cmd.speed_mps.toFixed(2)} m/s`;
   $("b-s-t").textContent = `${cmd.curvature_inv_m.toFixed(2)} 1/m`;
-  $("limits").textContent = `상한 전진 ${lim.forward_mps.toFixed(2)} · 후진 ${lim.reverse_mps.toFixed(2)} m/s${lim.provisional ? " (잠정)" : ""}${st.drive_allowed === false ? " · 주행 금지" : ""}`;
-  const pr = st.permit.reason;
-  chip($("permit-chip"), pr === "ok" ? "ok" : pr.startsWith("occupied") ? "crit" : "warn", pr === "ok" ? "주행 허가 ok" : pr);
+  $("limits").textContent = st.limits ? `상한 전진 ${lim.forward_mps.toFixed(2)} · 후진 ${lim.reverse_mps.toFixed(2)} m/s${lim.provisional ? " (잠정)" : ""}${st.drive_allowed === false ? " · 주행 금지" : ""}` : "상한 —";
+  const pr = st.permit?.reason;
+  if (!pr) chip($("permit-chip"), "", "허가 판정 없음");
+  else chip($("permit-chip"), pr === "ok" ? "ok" : pr.startsWith("occupied") ? "crit" : "warn", pr === "ok" ? "주행 허가 ok" : pr);
   $("input-src").textContent = m.teleop.lastRead ? m.teleop.lastRead.source : "—";
 
   // camera age (browser-side, for reference only)

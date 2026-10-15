@@ -10,6 +10,7 @@ import { createMapView, panBy, zoomAt, zoomPercent } from "./mapview.js";
 import { decodeScan, parseFrame } from "./media.js";
 import { API, createSession } from "./protocol.js";
 import { log, render, renderPallets, renderTemplates, renderWizard } from "./ui.js";
+import { controlProfile, staleness } from "./profile.js";
 import { blockReason, nextAllowed, templatesFor } from "./wizard.js";
 
 const TELEOP_MIN_INTERVAL_MS = 33; // ~30 Hz cap: a fast display must not flood ticks
@@ -73,7 +74,8 @@ const m = {
   dropUntil: 0,
   view: createMapView(),
   layers: { grid: true, lidar: true, plan: true, sweep: true },
-  wz: { open: false, step: 1, template: null, query: "" },
+  wz: { open: false, step: 1, template: null, query: "", confirmed: null, note: "" },
+  stateAt: null,
 };
 const tok = {};
 function readTokens() {
@@ -89,7 +91,30 @@ function send(msg) {
   if (control && control.readyState === WebSocket.OPEN) control.send(JSON.stringify(msg));
 }
 
-const frames = createFrameTracker({ raf: (cb) => requestAnimationFrame(cb) });
+// The camera counts as on screen only while at least half of it is inside the viewport
+// (IntersectionObserver also reports a collapsed window or a hidden view as outside) and
+// the tab is shown. Video teleop relies on this: the vehicle sees the displayed frame age.
+let camOnScreen = false;
+new IntersectionObserver(
+  (entries) => {
+    for (const e of entries) {
+      const was = camOnScreen;
+      camOnScreen = e.isIntersecting && e.intersectionRatio >= 0.5;
+      if (was && !camOnScreen) cameraLeftScreen();
+    }
+  },
+  { threshold: [0, 0.5, 1] },
+).observe(document.getElementById("cam"));
+const cameraVisible = () => camOnScreen && !document.hidden;
+// video teleop must not go on with the camera off screen: ask the vehicle to disarm now
+// (the displayed frame also stops advancing, so the vehicle would expire it anyway)
+function cameraLeftScreen() {
+  if (m.teleop.gate.mode === "video" && m.session.armed) {
+    m.session.request("disarm").then(report);
+    log("조종 준비 해제 요청 · 카메라가 화면에서 사라짐", "warn");
+  }
+}
+const frames = createFrameTracker({ raf: (cb) => requestAnimationFrame(cb), visible: cameraVisible });
 const clientId = tabClientId();
 m.session = createSession({ clientId, send, now: () => performance.now(), newId: randomId });
 try {
@@ -126,6 +151,9 @@ m.session.subscribe((msg) => {
       /* storage unavailable */
     }
   } else if (msg.t === "state") {
+    m.stateAt = performance.now();
+    if (msg.mode === "TELEOP" && m.lastMode !== "TELEOP") showTab("tele"); // controls on screen when teleop starts
+    m.lastMode = msg.mode;
     m.teleop.gate.onArmed(Boolean(msg.armed) && m.session.hasLease);
     storeFlag("console.need_direct_confirm", m.teleop.gate.needConfirm); // survives a reload
     storeFlag("console.video_used", m.teleop.gate.videoUsed);
@@ -193,6 +221,23 @@ function connectMedia() {
   ws.addEventListener("close", () => setTimeout(connectMedia, 1000));
 }
 
+// ------------------------------------------------------------------ STOP
+// Monitor-only connection (capabilities.control === false, gateway C2a): this page cannot
+// stop the truck. Say so loudly instead of sending a request that does nothing. Until a
+// welcome says so, STOP is sent as before (it is kept and resent until answered).
+const monitorOnly = () => m.session.welcome?.capabilities?.control === false;
+function pressStop(source) {
+  if (monitorOnly()) {
+    $("nostop").hidden = false;
+    log(`정지 불가 · 관찰 전용 연결 (${source})`, "crit");
+    return;
+  }
+  m.session.stop(source).then(report);
+}
+$("nostop").onclick = () => {
+  $("nostop").hidden = true;
+};
+
 // ------------------------------------------------------------------ inputs
 const inputs = createInputs({
   onRelease(reason) {
@@ -246,11 +291,11 @@ bindHold($("lift-dn"), () => inputs.setTouch({ lift: -1 }), () => inputs.setTouc
 const KEYMAP = { " ": "deadman", w: "w", a: "a", s: "s", d: "d", r: "r", f: "f" };
 const typing = (e) => /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName);
 addEventListener("keydown", (e) => {
-  if (typing(e)) return;
   if (e.key === "Escape") {
-    m.session.stop("key").then(report);
+    pressStop("key"); // also from a text field: STOP never waits for focus
     return;
   }
+  if (typing(e)) return;
   const k = KEYMAP[e.key.toLowerCase()];
   if (k) {
     inputs.setKeys({ [k]: true });
@@ -282,7 +327,7 @@ function readPad() {
   m.padIndex = raw ? raw.index : null;
   const snap = padSnapshot(raw ?? null);
   $("gp").textContent = raw ? (snap ? `${snap.id.slice(0, 28)} · RB 누르고 있기` : "표준 매핑이 아닌 게임패드 · 사용 안 함") : "버튼을 한 번 누르세요";
-  if (snap?.buttons.stop && !m.padStopHeld) m.session.stop("gamepad").then(report);
+  if (snap?.buttons.stop && !m.padStopHeld) pressStop("gamepad");
   m.padStopHeld = Boolean(snap?.buttons.stop);
   return snap;
 }
@@ -291,7 +336,7 @@ function readPad() {
 const req = (type, fields) => m.session.request(type, fields).then(report);
 const missionId = () => m.session.state?.mission?.mission_id;
 $("lease").onclick = () => (m.session.hasLease ? req("lease_release") : req("lease_request"));
-$("stop").onclick = $("stop2").onclick = () => m.session.stop("console").then(report);
+$("stop").onclick = $("stop2").onclick = () => pressStop("console");
 $("rearm").onclick = () => req("rearm");
 $("m-start").onclick = () => {
   const pallet = document.querySelector('input[name="pal"]:checked')?.value;
@@ -299,8 +344,10 @@ $("m-start").onclick = () => {
   if (!pallet || !targets) return;
   req("mission_submit", { pallet_id: pallet, destination_id: $("dest").value, targets_revision: targets.targets_revision }).then((r) => {
     if (r && r.t === "reject") {
-      $("wz-why").textContent = `거부 · ${r.reason}`;
+      m.wz.note = r.reason === "stale_targets" ? "대상 목록이 바뀌었습니다 · 다시 고르세요" : `거부 · ${r.reason}`;
+      log(`작업 지시 거부 · ${r.reason}`, "warn");
       if (r.reason === "stale_targets") wizardGo(2); // the list changed: pick again
+      else refreshWizard();
     } else if (r) closeWizard();
   });
 };
@@ -342,6 +389,10 @@ for (const b of document.querySelectorAll(".rail-item")) b.onclick = () => showV
 
 function showTab(name) {
   const tele = name === "tele";
+  const tabsShown = getComputedStyle(document.querySelector(".tabs")).display !== "none"; // phones show both panes
+  if (!tele && tabsShown && !$("pane-tele").hidden) {
+    inputs.controlsHidden(); // the controls and their feedback leave the screen: release (C1 rule)
+  }
   $("tab-detail").setAttribute("aria-selected", String(!tele));
   $("tab-tele").setAttribute("aria-selected", String(tele));
   $("pane-detail").hidden = tele;
@@ -404,6 +455,7 @@ mapCv.addEventListener("pointermove", (e) => {
     const [a, b] = [...pointers.values()];
     const d = Math.hypot(a.x - b.x, a.y - b.y);
     const { rc, w, h } = mapSize();
+    m.view.follow = false; // a zoom anchored at the fingers cannot also follow the truck
     zoomAt(m.view, w, h, (a.x + b.x) / 2 - rc.left, (a.y + b.y) / 2 - rc.top, d / Math.max(1, pinch.d));
     pinch.d = d;
   }
@@ -427,6 +479,8 @@ mapCv.addEventListener(
     if (!m.view.fitted) return;
     e.preventDefault();
     const { rc, w, h } = mapSize();
+    m.view.follow = false;
+    $("map-follow").setAttribute("aria-pressed", "false");
     zoomAt(m.view, w, h, e.clientX - rc.left, e.clientY - rc.top, Math.exp(-e.deltaY * 0.0015));
   },
   { passive: false },
@@ -452,7 +506,13 @@ function wizardSelection() {
 }
 function blockCtx() {
   const st = m.session.state;
-  return { state: st, hasLease: m.session.hasLease, mode: st?.mode, mission: st?.mission };
+  return {
+    state: st,
+    canMission: controlProfile(m.session.welcome?.capabilities).mission,
+    hasLease: m.session.hasLease,
+    mode: st?.mode,
+    mission: st?.mission,
+  };
 }
 function refreshWizard() {
   if (!m.wz.open) return;
@@ -460,7 +520,15 @@ function refreshWizard() {
   const all = templatesFor(caps);
   if (m.wz.template && !all.some((t) => t.code === m.wz.template)) m.wz.template = null;
   const sel = wizardSelection();
+  const c = m.wz.confirmed;
+  if (m.wz.step === 3 && c && (c.pallet !== sel.pallet || c.destination !== sel.destination)) {
+    // the reviewed targets changed under the dialog (list update): never submit a substitute
+    m.wz.note = "대상 목록이 바뀌어 고른 대상이 달라졌습니다 · 다시 고르세요";
+    m.wz.step = 2;
+    m.wz.confirmed = null;
+  }
   renderWizard(m.wz, {
+    note: m.wz.note,
     nextOk: nextAllowed(m.wz.step, sel),
     selection: sel,
     template: all.find((t) => t.code === m.wz.template) ?? null,
@@ -477,6 +545,10 @@ function drawTemplates() {
 }
 function wizardGo(step) {
   m.wz.step = step;
+  if (step === 3) {
+    const sel = wizardSelection();
+    m.wz.confirmed = { pallet: sel.pallet, destination: sel.destination };
+  } else m.wz.confirmed = null;
   if (step === 1) drawTemplates();
   refreshWizard();
 }
@@ -490,9 +562,11 @@ function openWizard({ pallet } = {}) {
   if (!m.wz.template && all.length === 1) m.wz.template = all[0].code;
   m.wz.open = true;
   m.wz.query = "";
+  m.wz.note = "";
   $("wz-search").value = "";
   $("wz-why").textContent = "";
   $("wizard").hidden = false;
+  for (const id of ["rail", "subbar", "body"]) document.querySelector(`.${id}`).inert = true; // STOP bar stays live
   if (pallet) {
     const input = document.querySelector(`input[name="pal"][value="${CSS.escape(pallet)}"]`);
     if (input && !input.disabled) input.checked = true;
@@ -501,7 +575,9 @@ function openWizard({ pallet } = {}) {
 }
 function closeWizard() {
   m.wz.open = false;
+  m.wz.confirmed = null;
   $("wizard").hidden = true;
+  for (const id of ["rail", "subbar", "body"]) document.querySelector(`.${id}`).inert = false;
 }
 $("m-open").onclick = () => openWizard();
 $("wz-close").onclick = $("wz-cancel").onclick = closeWizard;
@@ -516,8 +592,14 @@ $("wz-search").addEventListener("input", (e) => {
   m.wz.query = e.target.value;
   drawTemplates();
 });
-$("pallet-list").addEventListener("change", refreshWizard);
-$("dest").addEventListener("change", refreshWizard);
+$("pallet-list").addEventListener("change", () => {
+  m.wz.note = "";
+  refreshWizard();
+});
+$("dest").addEventListener("change", () => {
+  m.wz.note = "";
+  refreshWizard();
+});
 
 // ------------------------------------------------------------------ loops
 function frame(now) {
@@ -541,7 +623,7 @@ function frame(now) {
       m.teleop.lastSentAt = now;
     }
   }
-  drawMap($("map"), { grid: m.grid, scanPoints: m.scanPoints, state: st, targets: m.session.targets, chassis: m.chassis, vehicleId: m.session.welcome?.vehicle_id }, tok, m.view, m.layers);
+  drawMap($("map"), { grid: m.grid, scanPoints: m.scanPoints, state: st, targets: m.session.targets, chassis: m.chassis, vehicleId: m.session.welcome?.vehicle_id, stale: m.stale }, tok, m.view, m.layers);
   const zp = zoomPercent(m.view);
   $("zoom-pct").textContent = zp === null ? "—" : `${Math.round(zp)}%`;
   if (!m.camera.bitmap) drawCamera($("cam"), { state: st, cameraModel: m.cameraModel, chassis: m.chassis }, tok);
@@ -553,7 +635,15 @@ setInterval(readTokens, 1000);
 setInterval(() => m.session.pump(), 100);
 setInterval(() => {
   render(m);
+  if (m.wz.open && m.session.state?.mode && ["AUTO", "TELEOP", "STOPPED"].includes(m.session.state.mode)) closeWizard();
   refreshWizard();
+  const stale = staleness({
+    stateAgeS: m.stateAt === null ? null : (performance.now() - m.stateAt) / 1000,
+    poseAgeS: m.session.state?.pose?.age_s ?? null,
+  });
+  m.stale = m.session.state ? stale.stale : false;
+  $("stale-banner").hidden = !m.stale;
+  $("stale-banner").textContent = stale.text;
 }, 100);
 connectControl();
 connectMedia();

@@ -7,11 +7,12 @@ export function createMapView() {
   return { scale: null, fitScale: null, cx: 0, cy: 0, follow: false, fitted: false };
 }
 
-export function fitView(v, worldW, worldH, w, h, margin = 0.04) {
+// (x0, y0) is the world's lower-left corner, e.g. a ROS map origin.
+export function fitView(v, worldW, worldH, w, h, margin = 0.04, x0 = 0, y0 = 0) {
   v.fitScale = Math.min(w / worldW, h / worldH) * (1 - 2 * margin);
   v.scale = v.fitScale;
-  v.cx = worldW / 2;
-  v.cy = worldH / 2;
+  v.cx = x0 + worldW / 2;
+  v.cy = y0 + worldH / 2;
   v.fitted = true;
   return v;
 }

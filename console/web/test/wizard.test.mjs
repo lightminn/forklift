@@ -64,3 +64,10 @@ test("progress counts finished phases and is full only when done", () => {
   assert.ok(Math.abs(missionProgress({ phase: "transport", status: "running" }) - 5 / 9) < 1e-12);
   assert.equal(missionProgress({ phase: "return", status: "done" }), 1);
 });
+
+test("a connection that takes no tasks says so before anything else about the vehicle state", () => {
+  const base = { hasLease: true, mode: "PAUSED", mission: null };
+  assert.match(blockReason({ ...base, canMission: false }), /작업 지시를 받지 않습니다/);
+  assert.match(blockReason({ ...base, hasLease: false, canMission: false }), /작업 지시를 받지 않습니다/);
+  assert.equal(blockReason({ ...base, canMission: true }), null);
+});

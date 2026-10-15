@@ -48,9 +48,10 @@ export function nextAllowed(step, sel) {
   return false;
 }
 
-// Why a task cannot be assigned now, or null. ctx: { state?, hasLease, mode, mission }.
+// Why a task cannot be assigned now, or null. ctx: { state?, canMission?, hasLease, mode, mission }.
 export function blockReason(ctx) {
   if ("state" in ctx && !ctx.state) return "차량에 연결되지 않았습니다";
+  if (ctx.canMission === false) return "이 연결은 작업 지시를 받지 않습니다 (관찰 전용 또는 미지원)";
   if (!ctx.hasLease) return "조종 권한이 있어야 지시할 수 있습니다";
   if (ctx.mode === "STOPPED") return "정지 상태입니다 · 재무장 뒤 지시할 수 있습니다";
   if (ctx.mode === "TELEOP") return "수동 조종 중에는 지시할 수 없습니다";
