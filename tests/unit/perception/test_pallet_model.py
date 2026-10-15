@@ -85,3 +85,8 @@ def test_pair_choice_maximises_blade_margin_not_centre_spacing():
 def test_overlapping_columns_are_rejected():
     with pytest.raises(ValueError, match="overlap"):
         _spec(overall_width_m=0.6, column_centres_y_m=(-0.25, -0.20, 0.25), column_widths_m=(0.10,) * 3)
+
+
+def test_nonfinite_member_centres_are_rejected():
+    with pytest.raises(ValueError):
+        _spec(column_centres_y_m=(-0.57, float("nan"), 0.055, 0.57))

@@ -25,6 +25,7 @@ PAYLOAD_LIMIT_KG = 10.0
 REASON_CODES = ("fork_spacing_adjust", "lift_alignment_needed", "support_unverified",
                 "payload_limit", "near_tracking_unavailable")
 TEST_FORK_SPACING_M = {"epal6": 0.3725, "t11_06": 0.290}
+MIN_ROOF_GAP_M = 0.005  # roof tracking needs board edges: a visible gap between top boards
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,13 @@ class ForkSetup:
     carriage_limit_m: float = 0.346
     reserve_m: float = 0.016
     lift_travel_m: float = 0.28
+
+    def __post_init__(self) -> None:
+        for name in ("spacing_m", "blade_width_m", "blade_thickness_m", "lowest_centre_m",
+                     "carriage_limit_m", "reserve_m", "lift_travel_m"):
+            value = _finite_scalar(getattr(self, name), name)
+            if value < 0 or (value == 0 and name not in ("reserve_m", "lift_travel_m")):
+                raise ValueError(f"{name} must be finite and positive")
 
     @property
     def blade_top_m(self) -> float:
@@ -94,8 +102,8 @@ def load_site_defaults(path, specs: dict) -> dict:
     obj = yaml.safe_load(Path(path).read_text())
     out = {}
     for name, entry in obj["shapes"].items():
-        if name not in specs:
-            continue
+        if name not in specs or not specs[name].known:
+            continue  # site defaults apply to known shapes only (design 9.3)
         if entry.get("com") != "centred":
             raise ValueError("site defaults support only a centred centre of mass")
         out[name] = LoadDeclaration(entry["pallet_mass_kg"], entry["load_mass_kg"],
@@ -119,13 +127,27 @@ def _pair_reasons(spec, setup, load, margin, centre, target, m_req_m) -> set:
     reasons = set()
     if margin < m_req_m:
         reasons.add("fork_spacing_adjust")
-    if not spec.known and (load is None or target < load.com_x_max_m + SUPPORT_LONGITUDINAL_MARGIN_M
+    if not spec.known and (load is None or load.source != "instruction"
+                           or target < load.com_x_max_m + SUPPORT_LONGITUDINAL_MARGIN_M
                            or abs(centre) + load.com_y_max_m > setup.spacing_m / 2 - SUPPORT_LATERAL_MARGIN_M):
         reasons.add("support_unverified")
     return reasons
 
 
+def _roof_trackable(spec: PalletSpec, axis: str) -> bool:
+    """Roof tracking reads board edges that run along the insertion axis (design 9.1):
+    boards, entered through an x face, with a visible gap between them."""
+    if spec.top_style != "boards" or axis != "x":
+        return False
+    gap = (spec.overall_width_m - spec.top_board_count * spec.top_board_width_m) / (spec.top_board_count - 1)
+    return gap >= MIN_ROOF_GAP_M
+
+
 def fork_fit(spec, axis, setup, load, *, support_z_m: float = 0.0, m_req_m: float = M_REQ_PROVISIONAL_M) -> FitResult:
+    if _finite_scalar(support_z_m, "support_z_m") < 0:
+        raise ValueError("support_z_m must be finite and nonnegative")
+    if _finite_scalar(m_req_m, "m_req_m") <= 0:
+        raise ValueError("m_req_m must be finite and positive")
     layout, floor, ceiling = _lane(spec, axis, support_z_m)
     target = target_insertion_depth_m(layout.depth_m, setup.carriage_limit_m, setup.reserve_m)
     n = len(layout.opening_intervals_m)
@@ -148,7 +170,7 @@ def fork_fit(spec, axis, setup, load, *, support_z_m: float = 0.0, m_req_m: floa
         reasons.add("support_unverified")  # mass unknown: confirm on the console
     elif load.pallet_mass_kg + load.load_mass_kg > PAYLOAD_LIMIT_KG:
         reasons.add("payload_limit")
-    if not spec.known and spec.top_style != "boards":
+    if not _roof_trackable(spec, axis):
         reasons.add("near_tracking_unavailable")
     ordered = tuple(code for code in REASON_CODES if code in reasons)
     return FitResult(not ordered, ordered, axis, pair, margin, centre, target, load_source)

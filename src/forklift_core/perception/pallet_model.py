@@ -24,6 +24,8 @@ def _intervals(centres, widths):
 def _check_members(centres, widths, span, label):
     if len(centres) != len(widths) or len(centres) < 3:
         raise ValueError(f"{label} needs at least three members with widths")
+    for index, centre in enumerate(centres):
+        _finite_scalar(centre, f"{label} centre[{index}]")
     for index, width in enumerate(widths):
         if _finite_scalar(width, f"{label} width[{index}]") <= 0:
             raise ValueError(f"{label} widths must be positive")

@@ -98,3 +98,32 @@ def test_upper_layer_needs_lift_alignment_but_is_reachable():
     # Lane 0.288-0.388 m; blades lifted 0.28 m sit at 0.3075-0.3325 m.
     assert lane_reachable(spec, "x", ForkSetup(0.3725), support_z_m=0.288)
     assert not lane_reachable(spec, "x", ForkSetup(0.3725), support_z_m=0.432)
+
+
+def test_a_face_whose_boards_cross_the_insertion_axis_cannot_be_near_tracked():
+    # T11 y-face: the top boards run along x, across the forks' path (design section 2).
+    fit = fork_fit(_known("t11_06"), "y", ForkSetup(0.290), _site("t11_06"))
+    assert "near_tracking_unavailable" in fit.reasons
+
+
+def test_boards_without_gaps_cannot_be_near_tracked():
+    seamless = _ns(top_board_count=2, top_board_width_m=0.41)  # 2 x 0.41 covers 0.82 m
+    assert "near_tracking_unavailable" in fork_fit(seamless, "x", ForkSetup(0.3725), CENTRED).reasons
+
+
+def test_a_site_default_is_not_accepted_for_a_nonstandard_pallet():
+    assumed = LoadDeclaration(2.0, 6.0, 0.275, 0.0, "site_default")
+    assert "support_unverified" in fork_fit(_ns(), "x", ForkSetup(0.3725), assumed).reasons
+
+
+@pytest.mark.parametrize("kwargs", [{"spacing_m": float("nan")}, {"spacing_m": 0.3725, "blade_width_m": float("nan")},
+                                    {"spacing_m": 0.3725, "lowest_centre_m": -0.01}])
+def test_fork_setup_must_be_finite_and_positive(kwargs):
+    with pytest.raises(ValueError):
+        ForkSetup(**kwargs)
+
+
+@pytest.mark.parametrize(("support", "m_req"), [(float("nan"), 0.066), (0.0, float("nan")), (-0.1, 0.066)])
+def test_fit_rejects_nonfinite_or_negative_heights_and_thresholds(support, m_req):
+    with pytest.raises(ValueError):
+        fork_fit(_known("epal6"), "x", ForkSetup(0.3725), _site("epal6"), support_z_m=support, m_req_m=m_req)
