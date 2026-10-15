@@ -17,3 +17,9 @@ class MissionState:
     phase_started: float = 0.0  # loop time t at which the phase began
     lift_command: float = 0.0  # the lift joint's position target, ramped by the core (slice 2)
     next_candidate_index: int = 0  # the next observation candidate to try (slice 3c)
+    # Tick counters and the follower's last result, carried across control ticks (slice 4 step 0).
+    dock_stop_ticks: int = 0
+    slam_stall_ticks: int = 0
+    cusp_stop_ticks: int = 0
+    observe_stall_ticks: int = 0
+    last_tracking: object = None

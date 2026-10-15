@@ -1816,13 +1816,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     # installation the next; "start" is its first entry in observe_replans (fix (1)).
     state["observe_replan_leg"] = {"serial": 0, "start": 0}
     state["cusp_stalls"] = []  # plan cusp position stall v7 K4, one record per stall
-    observe_stall_ticks = 0
-    slam_stall_ticks = 0
-    dock_stop_ticks = 0
+    ms.observe_stall_ticks = 0
+    ms.slam_stall_ticks = 0
+    ms.dock_stop_ticks = 0
     max_cusp_replans = 2
     # Stopped = zero command, planar speed and yaw rate under these for this
     # many consecutive ticks (0.1 s), not the forward speed alone (Codex review).
-    cusp_stop_ticks, cusp_stop_needed = 0, 12
+    ms.cusp_stop_ticks, cusp_stop_needed = 0, 12
     cusp_stop_yaw_rate_radps = 0.02
     # None keeps every planner call exactly as in the original bay runs.
     pickup_bounds = travel_config = factory = None
@@ -5252,7 +5252,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     ],
                     stdin=subprocess.PIPE,
                 )
-        last_tracking = None
+        ms.last_tracking = None
 
         def dump_tracking(reason: str, tracking) -> None:
             # The run aborts right after this, before the next sample; keep what
@@ -6026,7 +6026,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 # (length / cruise when there are none), plus 10 s.
                 limit = core.tracking_limit(t)  # M-a1 slice 2
                 if t - ms.phase_started >= limit:
-                    dump_tracking("timeout", last_tracking)
+                    dump_tracking("timeout", ms.last_tracking)
                 require(t - ms.phase_started < limit, f"Tracking timeout in {ms.phase}")
                 tracking = trackers[ms.phase].update(rear, signed_speed, dt)
                 raw_tracking_ = tracking  # the tracker's own result, before any rule below rewrites it
@@ -6072,7 +6072,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 # Plan cusp position stall v7: a leg standing at its cusp end outside the cusp tolerance
                 # is held at zero, then started from the measured pose or handed on (K2/K3).
                 tracking, cusp_hold = cusp_tick(t, rear, raw_tracking_, tracking, retry_stand_)
-                last_tracking = tracking
+                ms.last_tracking = tracking
                 if (
                     slam is not None
                     and not retry_stand_
@@ -6118,9 +6118,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     # (0.03 m, 0.05 rad) -- dock here, as an arrival would, rather
                     # than a stall replan (l8_measured seed 1 + N1: 37.5 mm lateral).
                     tracking = replace(tracking, status="braking", speed_mps=0.0)
-                    dock_stop_ticks = dock_stop_ticks + 1 if slam["stop_now"] else 0
-                    if dock_stop_ticks >= 120:
-                        dock_stop_ticks = 0
+                    ms.dock_stop_ticks = ms.dock_stop_ticks + 1 if slam["stop_now"] else 0
+                    if ms.dock_stop_ticks >= 120:
+                        ms.dock_stop_ticks = 0
                         state.setdefault("docking_retries", []).append(
                             {"trigger": "a", "time_s": t, "counted": False, "round": d7_docking_.get("round", 1),
                              "reapproach": bool(d7_docking_.get("reapproach")),
@@ -6130,9 +6130,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         rear = slam_rear(t)  # a retry may have released the correction
                         slam["control"][-1][1:4] = rear.tolist()
                         tracking = trackers[ms.phase].update(rear, signed_speed, dt)
-                        last_tracking = tracking
+                        ms.last_tracking = tracking
                 else:
-                    dock_stop_ticks = 0
+                    ms.dock_stop_ticks = 0
                 goal_heading_miss = (
                     slam is not None
                     and not dock_stop
@@ -6169,24 +6169,24 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     )
                 )
                 if stalled and goal_heading_miss:
-                    slam_stall_ticks = max(slam_stall_ticks, 119)
-                slam_stall_ticks = slam_stall_ticks + 1 if stalled else 0
-                if slam_stall_ticks >= 120 and d7_owned:
+                    ms.slam_stall_ticks = max(ms.slam_stall_ticks, 119)
+                ms.slam_stall_ticks = ms.slam_stall_ticks + 1 if stalled else 0
+                if ms.slam_stall_ticks >= 120 and d7_owned:
                     # Plan D7c (c)/(d): after a docked straight or during a
                     # re-approach, a retry instead of transport_recovery_after_docking.
-                    slam_stall_ticks = 0
+                    ms.slam_stall_ticks = 0
                     start_docking_retry(
                         t, "d" if d7_docking_.get("reapproach") else "c", "transport_recovery_after_docking"
                     )
                     rear = slam_rear(t)
                     slam["control"][-1][1:4] = rear.tolist()
                     tracking = trackers[ms.phase].update(rear, signed_speed, dt)
-                    last_tracking = tracking
-                elif slam_stall_ticks >= 120 and len(state["stall_replans"]) < 2:
+                    ms.last_tracking = tracking
+                elif ms.slam_stall_ticks >= 120 and len(state["stall_replans"]) < 2:
                     # Stopped at the end of the path but outside the goal
                     # tolerance (an estimate shift before the hold): plan the
                     # leg again from here, in the held frame (Codex v3.5 P2).
-                    slam_stall_ticks = 0
+                    ms.slam_stall_ticks = 0
                     start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))
                     replan_start = time.monotonic()
                     # After a docking match the transport is held relative to the
@@ -6282,7 +6282,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         obstacle.setdefault("progress", {}).clear()
                     ms.phase_started = t
                     tracking = trackers[ms.phase].update(rear, signed_speed, dt)
-                    last_tracking = tracking
+                    ms.last_tracking = tracking
                 if (
                     tracking.status == "failed"
                     and ms.phase == "transport"
@@ -6302,23 +6302,23 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             <= cusp_stop_yaw_rate_radps
                         )
                     )
-                    cusp_stop_ticks = cusp_stop_ticks + 1 if stopped else 0
-                    if cusp_stop_ticks < cusp_stop_needed:
+                    ms.cusp_stop_ticks = ms.cusp_stop_ticks + 1 if stopped else 0
+                    if ms.cusp_stop_ticks < cusp_stop_needed:
                         # The failed tracker already commands zero; let it stop.
                         tracking = replace(tracking, status="braking")
                     elif d7_owned:
                         # Plan D7c (c)/(d): a cusp after a docked straight or inside a
                         # re-approach is a docking retry, not a cusp replan.
-                        cusp_stop_ticks = 0
+                        ms.cusp_stop_ticks = 0
                         start_docking_retry(
                             t, "d" if d7_docking_.get("reapproach") else "c", "transport_recovery_after_docking"
                         )
                         rear = slam_rear(t)
                         slam["control"][-1][1:4] = rear.tolist()
                         tracking = trackers[ms.phase].update(rear, signed_speed, dt)
-                        last_tracking = tracking
+                        ms.last_tracking = tracking
                     else:
-                        cusp_stop_ticks = 0
+                        ms.cusp_stop_ticks = 0
                         require(
                             not (slam is not None and slam["docking"].get("accepted_any")),
                             "transport_recovery_after_docking",
@@ -6378,7 +6378,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 obstacle.setdefault("progress", {}).clear()  # plan D7d, as above
                             ms.phase_started = t
                             tracking = trackers[ms.phase].update(rear, signed_speed, dt)
-                            last_tracking = tracking
+                            ms.last_tracking = tracking
                 # EPAL 6 fork spacing plan, fix A (observe) and A' (return): a cusp held for a
                 # heading miss of 0.05-0.08 rad (the tracker's cusp_pending). Standing, re-check the
                 # window, judge the next leg from here with this cusp's limits only, and release it;
@@ -6425,7 +6425,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         if decision != "released":
                             hold_tracker.fail_pending()
                         tracking = hold_tracker.update(rear, signed_speed, dt)
-                        last_tracking = tracking
+                        ms.last_tracking = tracking
                         if decision == "released":
                             # The new watch sees this tick's update too: the next leg's first command,
                             # or its end reached at once (Codex fix A implementation review 3 P2).
@@ -6451,14 +6451,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     and slam["stop_now"]
                     and not cusp_monitor.holds_observe()
                 )
-                observe_stall_ticks = observe_stall_ticks + 1 if observe_stalled else 0
+                ms.observe_stall_ticks = ms.observe_stall_ticks + 1 if observe_stalled else 0
                 if (
                     slam is not None and ms.phase == "observe" and slam["tracker"].mode == "holding"
                     and realign_active()
                     and (
                         (tracking.status == "failed" and tracking.failure == "endpoint_heading"
                          and not tracking.off_path)
-                        or observe_stall_ticks >= 120
+                        or ms.observe_stall_ticks >= 120
                     )
                 ):
                     # Plan D8 S4c-3 stage 2: no recovery runs held in the realignment (the
@@ -6473,13 +6473,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             and tracking.failure == "endpoint_heading"
                             and not tracking.off_path
                         )
-                        or observe_stall_ticks >= 120
+                        or ms.observe_stall_ticks >= 120
                     )
                     and len(state["observe_replans"]) - state["observe_replan_leg"]["start"]
                     < OBSERVE_REPLANS_PER_LEG
                 )
                 if observe_miss:
-                    observe_stall_ticks = 0
+                    ms.observe_stall_ticks = 0
                     tracking = replace(tracking, status="braking", speed_mps=0.0)
                     if slam["stop_now"]:
                         target = PlanningPose(*(float(v) for v in paths["observe"].poses[-1]))
@@ -6499,7 +6499,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             {
                                 "time_s": t,
                                 "rear_pose": rear.tolist(),
-                                "yaw_error_rad": last_tracking.yaw_error_rad,
+                                "yaw_error_rad": ms.last_tracking.yaw_error_rad,
                                 "status": replanned.status,
                                 "planning_wall_s": time.monotonic() - replan_start,
                                 "leg_serial": leg_["serial"],
@@ -6523,7 +6523,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         ms.phase_started = t
                         realign_install("observe_replan")  # Plan D8 S4c-3 stage 2
                         tracking = trackers["observe"].update(rear, signed_speed, dt)
-                        last_tracking = tracking
+                        ms.last_tracking = tracking
                 if tracking.status == "failed":
                     dump_tracking("failed", tracking)
                 require(
