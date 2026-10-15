@@ -65,7 +65,7 @@ class Encoder:
     alias graph are kept as usual."""
 
     def __init__(self, *, opaque_ok: bool = False, value_types=(), hash_arrays: bool = False,
-                 identity: bool = True, services=None) -> None:
+                 identity: bool = True, services=None, full_types=()) -> None:
         self.arrays: dict[str, np.ndarray] = {}
         self.opaque_ok = opaque_ok
         self.value_types = set(value_types)
@@ -76,6 +76,8 @@ class Encoder:
         # Live service objects by identity -> their logical id, written as {"$service": id} (a replay supplies its
         # own object for that id); checked before any other kind.
         self.services = dict(services or {})
+        # Value types kept with their private attributes too (a setup snapshot rebuilding a helper object whole).
+        self.full_types = set(full_types)
         self._stack: set[int] = set()
         self._seen: dict[int, list] = {}  # id(obj) -> [obj, encoded node, assigned id or None]
         self._next_id = 0
@@ -157,10 +159,11 @@ class Encoder:
             if all(isinstance(k, str) for k in value):
                 return self._shared(value, lambda: {"$map": {k: self.encode(v) for k, v in value.items()}})
             return self._shared(value, lambda: {"$dict": [[self.encode(k), self.encode(v)] for k, v in value.items()]})
-        if type(value).__name__ in self.value_types and hasattr(value, "__dict__"):
+        if type(value).__name__ in (self.value_types | self.full_types) and hasattr(value, "__dict__"):
+            full = type(value).__name__ in self.full_types
             return self._shared(value, lambda: {
                 "$object": _qualname(type(value)),
-                "attrs": {k: self.encode(v) for k, v in vars(value).items() if not k.startswith("_")}})
+                "attrs": {k: self.encode(v) for k, v in vars(value).items() if full or not k.startswith("_")}})
         if self.opaque_ok:
             return {"$opaque": _qualname(type(value))}
         raise TypeError(f"no value encoding for a {_qualname(type(value))}")

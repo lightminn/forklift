@@ -33,7 +33,9 @@ SERVICES = {
     "inset": "Inset",
 }
 # Value types kept by their attributes (plain objects without a dataclass encoding).
-VALUE_TYPES = {"Namespace", "SimpleNamespace", "InsertionGeometry", "CommandWindow", "RearHistory"}
+VALUE_TYPES = {"Namespace", "SimpleNamespace"}
+# Helper objects the setup built, kept whole (private attributes included: their methods read them).
+FULL_TYPES = {"InsertionGeometry", "CommandWindow", "RearHistory"}
 # The recorded planner functions (recorded_function wrappers when recording): a replay supplies its own wrappers.
 PORT_FUNCTIONS = {name: "Planner" for name in (
     "bicycle_rollout", "final_straight_prefix", "plan_docking_reapproach", "plan_observation_leg", "plan_return_leg",
@@ -119,7 +121,7 @@ def write_setup_snapshot(names: dict, directory: Path, files: list[str], *, serv
     service_ids = {id(names[k]): v for k, v in SERVICES.items() if k in names and names[k] is not None}
     for logical, obj in (services or {}).items():
         service_ids[id(obj)] = logical
-    encoder = Encoder(opaque_ok=True, value_types=VALUE_TYPES, services=service_ids)
+    encoder = Encoder(opaque_ok=True, value_types=VALUE_TYPES, services=service_ids, full_types=FULL_TYPES)
     out, opaque = {}, []
     for name, value in sorted(names.items()):
         if name.startswith("__") or name in ("S",) or (wanted is not None and name not in wanted):
