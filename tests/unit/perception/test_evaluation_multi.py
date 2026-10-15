@@ -1,0 +1,104 @@
+# tests/unit/perception/test_evaluation_multi.py
+import math
+
+import pytest
+
+from forklift_core.perception.evaluation_multi import CandidateView, TargetDecision, judge_scene, summarize
+
+
+def _face(left, right, yaw=0.0, accessible=True, sign=1, pickable=True, thr=0.0437):
+    return {"axis": "x", "sign": sign, "insertion_yaw_rad": yaw, "left_m": left, "right_m": right,
+            "pocket_width_m": [0.2, 0.2], "pocket_height_m": 0.078, "accessible": accessible, "exposure": 1.0,
+            "fit": {"pickable": pickable, "reasons": [] if pickable else ["fork_spacing_adjust"]},
+            "danger_threshold_m": thr}
+
+
+def _inst(k, y, *, eligible=True, pickable=True, thr=0.0437, layer=0):
+    return {"instance_id": k, "known": True, "layer": layer, "support_z_m": 0.0, "eligible": eligible,
+            "faces": [_face([2.0, y + 0.186, 0.061], [2.0, y - 0.186, 0.061], pickable=pickable, thr=thr),
+                      _face([2.6, y - 0.186, 0.061], [2.6, y + 0.186, 0.061], yaw=math.pi, accessible=False, sign=-1)]}
+
+
+META = {"scene_id": "s", "case": "S2", "shape_key": "epal6", "split": "eval", "render_source": "rig", "noise": {"k": 1}}
+NONE_IN = {"present": False}
+
+
+def _truth(insts, kind="none", target=None):
+    return {"instances": insts, "instruction_truth": {"kind": kind, "target": target}}
+
+
+def _cand(cid, y, dy=0.0, yaw=0.0, pickable=True, layer=0, dx=0.0):
+    return CandidateView(cid, yaw, (2.0 + dx, y + 0.186 + dy, 0.061), (2.0 + dx, y - 0.186 + dy, 0.061),
+                         True, True, pickable, (), layer)
+
+
+def test_perfect_two_pallets_pass():
+    v = judge_scene(META, _truth([_inst(0, 0.5), _inst(1, -0.5)]), NONE_IN,
+                    [_cand("a", 0.5), _cand("b", -0.5)], TargetDecision("selected", "a", ()))
+    assert (v.miss, v.dangerous, v.extra) == (False, False, False)
+
+
+def test_back_face_candidate_is_not_matched():
+    c = CandidateView("a", math.pi, (2.6, -0.186, 0.061), (2.6, 0.186, 0.061), True, True, False, (), 0)
+    v = judge_scene(META, _truth([_inst(0, 0.0)]), NONE_IN, [c], TargetDecision("none", None, ()))
+    assert v.miss and v.extra
+
+
+def test_unmatched_pickable_duplicate_far_along_the_axis_is_dangerous():
+    v = judge_scene(META, _truth([_inst(0, 0.0)]), NONE_IN, [_cand("a", 0.0), _cand("b", 0.0, dx=0.25)],
+                    TargetDecision("selected", "b", ()))
+    assert v.extra and v.dangerous
+
+
+def test_lateral_plus_yaw_projection_is_dangerous():
+    c = _cand("a", 0.0, dy=0.035, yaw=math.radians(3.9))  # 35 + 0.33 tan 3.9 deg = 57.5 mm > 43.7
+    assert judge_scene(META, _truth([_inst(0, 0.0)]), NONE_IN, [c], TargetDecision("selected", "a", ())).dangerous
+
+
+def test_nonfitting_pallet_correct_stop_vs_allowed_pick():
+    meta = {**META, "case": "S7", "shape_key": "nonstandard"}
+    truth = _truth([_inst(0, 0.0, pickable=False, thr=-0.0475)], "unambiguous", 0)
+    instr = {"present": True, "x_m": 2.3, "y_m": 0.0, "radius_m": 0.3, "layer": None}
+    stop = judge_scene(meta, truth, instr, [_cand("a", 0.0, pickable=False)],
+                       TargetDecision("not_pickable", "a", ("fork_spacing_adjust",)))
+    assert not stop.dangerous and stop.fit_error is False and stop.target_error is False
+    pick = judge_scene(meta, truth, instr, [_cand("a", 0.0)], TargetDecision("selected", "a", ()))
+    assert pick.dangerous and pick.fit_error
+
+
+def test_nan_candidates_are_rejected():
+    with pytest.raises(ValueError, match="finite"):
+        CandidateView("a", 0.0, (float("nan"), 0.0, 0.0), (2.0, 0.0, 0.0), True, True, True, (), 0)
+
+
+def test_instruction_rules():
+    truth_amb = _truth([_inst(0, 0.2), _inst(1, -0.2)], "ambiguous", 0)
+    instr = {"present": True, "x_m": 2.3, "y_m": 0.0, "radius_m": 0.5, "layer": None}
+    cands = [_cand("a", 0.2), _cand("b", -0.2)]
+    assert judge_scene(META, truth_amb, instr, cands, TargetDecision("selected", "a", ())).target_error
+    assert judge_scene(META, truth_amb, instr, cands, TargetDecision("ask_operator", None, ())).target_error is False
+    truth_un = _truth([_inst(0, 0.5), _inst(1, -0.5)], "unambiguous", 1)
+    for status in ("ask_operator", "reobserve"):
+        v = judge_scene(META, truth_un, instr, [_cand("a", 0.5), _cand("b", -0.5)], TargetDecision(status, None, ()))
+        assert v.deferred_unambiguous and v.target_error is False
+
+
+def test_selecting_without_an_absolute_layer_is_an_error():
+    meta = {**META, "case": "S4"}
+    truth = _truth([_inst(0, 0.0, layer=1)], "unambiguous", 0)
+    instr = {"present": True, "x_m": 2.3, "y_m": 0.0, "radius_m": 0.3, "layer": 1}
+    v = judge_scene(meta, truth, instr, [_cand("a", 0.0, layer=None)], TargetDecision("selected", "a", ()))
+    assert v.target_error
+
+
+def test_pose_gate_fails_on_a_30_mm_lateral_offset():
+    verdicts = [judge_scene({**META, "scene_id": str(i)}, _truth([_inst(0, 0.0, thr=0.2)]), NONE_IN,
+                            [_cand("a", 0.0, dy=0.03)], TargetDecision("selected", "a", ())) for i in range(114)]
+    gates = summarize(verdicts, split="eval", render_source="rig")["gates"]
+    assert not gates["known:epal6:pose_lateral_p95"]["pass"]
+
+
+def test_empty_population_never_passes_and_known_has_no_fit_gate():
+    gates = summarize([], split="eval", render_source="isaac")["gates"]
+    assert gates and all(not g["pass"] for g in gates.values())
+    assert not any(k.startswith("known") and k.endswith(":fit_error") for k in gates)
