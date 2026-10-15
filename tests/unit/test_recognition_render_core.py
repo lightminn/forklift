@@ -110,3 +110,18 @@ def test_stale_tokens_are_reported(rc):
     frame = rc.decode_semantic(_payload([[1, 2]], {"1": {"class": "floor_t4"}, "2": {"class": "wall_t2"}}), 5,
                                shape=(1, 2))
     assert frame.status == "stale" and frame.stale_tokens == (2, 4)
+
+
+def test_token_none_decodes_any_token_for_diagnosis(rc):
+    frame = rc.decode_semantic(_payload([[1, 2]], {"1": {"class": "floor_t4"}, "2": {"class": "inst_0_t4"}}), None,
+                               shape=(1, 2))
+    assert frame.ready and frame.instance_ids.tolist() == [[-1, 0]]
+
+
+def test_fixed_labels_decode_without_a_token(rc):
+    """Isaac sometimes keeps the previous scene's id->label map (2026-10-15 renders); fixed class
+    labels make that stale map identical to the fresh one, and the rig comparison checks every scene."""
+    assert rc.scene_label("inst_2") == "inst_2" and rc.parse_label("inst_2") == ("inst_2", None)
+    labels = {"0": {"class": "BACKGROUND"}, "1": {"class": "floor"}, "2": {"class": "inst_1"}, "3": {"class": "distractor"}}
+    frame = rc.decode_semantic(_payload([[0, 1, 2, 3]], labels), None, shape=(1, 4))
+    assert frame.ready and frame.instance_ids.tolist() == [[-1, -1, 1, -2]]

@@ -30,6 +30,8 @@ def arguments(argv=None):
     p.add_argument("--shard", default="0/1")
     p.add_argument("--render-mode", default="RaytracedLighting")
     p.add_argument("--max-captures", type=int, default=8)
+    p.add_argument("--save-unready", type=Path, default=None,
+                   help="diagnosis: write scenes that never became ready, decoded ignoring the token")
     return p.parse_args(argv)
 
 
@@ -48,13 +50,11 @@ def selected(args):
     return out[index::count]
 
 
-def build(stage, recipe, token, previous_root, rc):
-    """Each scene gets its own root: reusing prim paths left stale semantic labels."""
+def build(stage, recipe, token, rc):
+    """Labelled box prims for one scene under its own root, labels carrying the scene token."""
     from isaacsim.core.utils.semantics import add_labels
     from pxr import Gf, UsdGeom
 
-    if previous_root and stage.GetPrimAtPath(previous_root):
-        stage.RemovePrim(previous_root)
     root = rc.scene_root(token)
     specs = rc.prim_specs(recipe, root=root)
     UsdGeom.Xform.Define(stage, root)
@@ -122,13 +122,38 @@ def main(argv=None):
         for token, recipe in enumerate(selected(args)):
             try:
                 previous, root = root, rc.scene_root(token)  # set first so a failed build is still removed
-                build(stage, recipe, token, previous, rc)
+                if previous and stage.GetPrimAtPath(previous):
+                    stage.RemovePrim(previous)
+                    # One capture with no labelled prims before the next scene: without it Isaac kept the
+                    # previous scene's id->label map for 34 of 1,020 scenes (2026-10-15, jobs 2848/2852/2857),
+                    # app updates and fresh prim paths did not help; with it S1 rendered 122/122 (job 2860).
+                    cc.capture_static(rep, annotators)
+                build(stage, recipe, token, rc)
                 frame, semantic, attempt = None, None, 0
                 for attempt in range(1, args.max_captures + 1):
                     frame = cc.capture_static(rep, annotators)
                     semantic = rc.decode_semantic(frame.get("seg"), token)
                     if semantic.ready:
                         break
+                if not semantic.ready and args.save_unready is not None:
+                    loose = rc.decode_semantic(frame.get("seg"), None)
+                    if loose.instance_ids is not None:
+                        pos, q_wxyz = camera.get_world_pose(camera_axes="ros")
+                        diag = SceneInput(
+                            rgb=np.asarray(frame["rgb"])[:, :, :3].astype(np.uint8),
+                            depth_m=rc.clean_depth(frame["z"]), intrinsics=intrinsics,
+                            base_from_optical=RigidTransform(
+                                "camera_optical_frame", "base_link",
+                                rotation_matrix_from_quaternion_xyzw(np.roll(np.asarray(q_wxyz, dtype=float), -1)),
+                                np.asarray(pos, dtype=float)),
+                            stamp_ns=2_000_000_000, clock_domain="synthetic", source_provenance="synthetic")
+                        record = recipe_record(recipe, site, intrinsics=intrinsics)
+                        write_recognition_scene(
+                            args.save_unready / recipe.scene_id, diag, loose.instance_ids, origin="isaac_render_pose",
+                            meta={**record.meta, "render_source": "isaac", "truth_render": "rig", "noise": None,
+                                  "render_token": token, "unready": semantic.status,
+                                  "stale_tokens": list(semantic.stale_tokens)},
+                            truth=record.truth, instruction=record.instruction)
                 if not semantic.ready:
                     raise RuntimeError(f"semantics not ready after {args.max_captures} captures: {semantic.status} "
                                        f"(stale pixels {semantic.stale_pixels}, tokens {semantic.stale_tokens})")

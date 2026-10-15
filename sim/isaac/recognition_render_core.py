@@ -2,12 +2,16 @@
 
 The prims reproduce tools.instance_rig's world exactly -- the recipe's boxes, a
 floor whose top is z = 0 and a back wall whose front face is x = BACK_WALL_X_M --
-so the CPU-rig truth (stage 1A) applies to the Isaac image. Every label carries a
-per-scene token, and every scene is built under its own root (/World/Scene_t<token>):
-on the 2026-10-15 full render, rebuilding prims at the same paths left 34 of 1,020
-scenes showing only the previous token's labels for all 8 captures. A frame that
-still shows another token's labels is stale; an annotator that has not produced a
-buffer yet is "not ready", not a failure.
+so the CPU-rig truth (stage 1A) applies to the Isaac image.
+
+Every scene is built under its own root (/World/Scene_t<token>) and its labels carry
+the scene token. On the 2026-10-15 renders Isaac kept the previous scene's id->label
+map for the same 34 of 1,020 scenes across all captures (their depth was the new
+scene's); app updates, fresh prim paths and fixed class labels did not help, while one
+capture with no labelled prims between scenes did. The token check is what exposes a
+kept map, and tools/compare_isaac_rig.py checks every scene against the rig. Fixed
+class labels (scene_label(base) without a token) still decode. An annotator that has
+not produced a buffer yet is "not ready", not a failure.
 """
 
 from __future__ import annotations
@@ -65,15 +69,19 @@ def prim_specs(recipe, root: str = "/World/Scene") -> list[PrimSpec]:
     return specs
 
 
-def scene_label(base: str, token: int) -> str:
-    return f"{base}_t{token}"
+def scene_label(base: str, token: int | None = None) -> str:
+    return base if token is None else f"{base}_t{token}"
 
 
 def parse_label(label: str):
-    base, sep, token = str(label).rpartition("_t")
-    if not sep or not base or not token.isdigit():
-        return None
-    return base, int(token)
+    """(base, token) for token labels, (base, None) for fixed class labels, None for anything else."""
+    text = str(label)
+    base, sep, token = text.rpartition("_t")
+    if sep and base and token.isdigit():
+        return base, int(token)
+    if text in ("floor", "wall", "distractor") or (text.startswith("inst_") and text[5:].isdigit()):
+        return text, None
+    return None
 
 
 def _class_names(value) -> list[str]:
@@ -114,7 +122,7 @@ def decode_semantic(payload, token: int, shape=(480, 640)) -> SemanticFrame:
             continue
         base, tok = parsed
         hit = array == int(key)
-        if tok != token:
+        if token is not None and tok != token:  # token None: fixed labels, or any token for diagnosis
             count = int(hit.sum())
             stale += count
             if count:
