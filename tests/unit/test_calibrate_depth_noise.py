@@ -10,7 +10,7 @@ from tools import calibrate_depth_noise as cal
 from tools import instance_rig
 
 QUIET = dict(edge_jump_m=1e9, dropout_fraction=0.0, quantize_step_m=0.0, registration_shift_px=(0, 0))
-TRUE = dict(axial_k=0.0006, correlated_k=0.004, correlation_px=(4.0, 3.0))
+TRUE = dict(axial_k=0.0, components=((0.0008, (1.8, 0.0)), (0.004, (6.0, 4.0))))
 
 
 def _cache(root, scene="dynamic/000000", frames=4, with_gt=False):
@@ -52,15 +52,19 @@ def test_frames_come_from_the_listing_not_from_the_cache(tmp_path):
     assert frames[0]["masks"] == ["dynamic/000000/mask_visib/000000_000000.png"]
 
 
-def test_calibration_recovers_known_noise_and_passes_the_patch_check(tmp_path):
+def test_the_survey_recovers_known_components_and_reports_the_patch_check(tmp_path):
     fx = _cache(tmp_path)
     result = cal.calibrate(tmp_path, _frames(tmp_path, "dynamic/000000"), z_range=(5.0, 6.0))
-    assert result["k_iid"] == pytest.approx(0.0006, rel=0.15) and result["k_corr"] == pytest.approx(0.004, rel=0.15)
-    assert result["correlation_px_source"][0] == pytest.approx(4.0, rel=0.2)
-    assert result["source_fx"] == pytest.approx(fx) and result["frames"] == 4 and result["per_frame"]["accepted"] == 4
-    assert 0.9 < result["patch_check"]["ratio_median"] < 1.1
-    assert result["dropout_fraction"] < 0.01 and result["license"] == "CC-BY-4.0"
-
+    short, long = result["survey"]["short"], result["survey"]["long"]
+    assert short["k"]["p50"] == pytest.approx(0.0008, rel=0.2) and short["g_u"]["p50"] == pytest.approx(1.8, rel=0.3)
+    assert long["k"]["p50"] == pytest.approx(0.004, rel=0.15) and long["g_u"]["p50"] == pytest.approx(6.0, rel=0.25)
+    assert result["role"] == "provisional" and result["source_fx"] == pytest.approx(fx) and result["usable"] == 4
+    assert 0.85 < result["patch_check"]["ratio"]["p50"] < 1.15
+    mid = result["levels"]["mid"]
+    assert mid["k_iid"] == 0.0 and [c["k"] for c in mid["components"]] == pytest.approx([0.0008, 0.004], rel=0.2)
+    assert result["levels"]["low"]["components"][1]["k"] <= mid["components"][1]["k"] <= \
+        result["levels"]["high"]["components"][1]["k"]
+    assert result["dropout_fraction"] < 0.01 and result["license"] == "CC-BY-4.0" and result["history"]
 
 def test_pallet_surface_report_uses_the_pallet_masks(tmp_path):
     _cache(tmp_path, scene="val/000000", with_gt=True)
@@ -70,7 +74,7 @@ def test_pallet_surface_report_uses_the_pallet_masks(tmp_path):
     assert set(report["ratio_u"]) == {1, 2, 3, 4, 6, 8}
 
 
-def test_frames_without_full_plane_patches_are_not_accepted(tmp_path):
+def test_frames_without_full_plane_patches_are_not_used(tmp_path):
     _cache(tmp_path)
     from PIL import Image as _Image
 
@@ -79,19 +83,17 @@ def test_frames_without_full_plane_patches_are_not_accepted(tmp_path):
         raw = np.asarray(_Image.open(path)).copy()
         raw[24::48, 24::48] = 0
         _Image.fromarray(raw).save(path)
-    with pytest.raises(ValueError, match="frames accepted"):
-        cal.calibrate(tmp_path, _frames(tmp_path, "dynamic/000000"), z_range=(5.0, 6.0))
+    result = cal.calibrate(tmp_path, _frames(tmp_path, "dynamic/000000"), z_range=(5.0, 6.0))
+    assert result["usable"] == 1 and result["rejected"]["patches"] == 3
 
-
-def test_config_round_trip_scales_k_and_correlation(tmp_path):
+def test_config_round_trip_gives_a_provisional_noise_model(tmp_path):
     fx = _cache(tmp_path)
     out = tmp_path / "noise.yaml"
     cal.main(["--cache", str(tmp_path), "--no-download", "--calibration-scenes", "dynamic/000000",
               "--pallet-scenes", "", "--stride", "1", "--z-range", "5.0,6.0", "--out", str(out)])
-    model = NoiseModel.from_yaml(out, seed=3, target_fx=fx / 2, scale=1.5)
-    assert model.correlation_px[0] == pytest.approx(4.0 / 2 * 1.5, rel=0.2) and model.seed == 3
-    assert model.axial_k == pytest.approx(0.0009, rel=0.15) and model.correlated_k == pytest.approx(0.006, rel=0.15)
-
+    model = NoiseModel.from_yaml(out, seed=3, target_fx=fx / 2, level="mid")
+    (k1, g1), (k2, g2) = model.components
+    assert k2 == pytest.approx(0.004, rel=0.15) and g2[0] == pytest.approx(3.0, rel=0.25) and model.seed == 3
 
 def test_a_cache_from_another_revision_is_refused(tmp_path):
     _cache(tmp_path)
@@ -109,11 +111,12 @@ def test_the_pallet_comparison_inputs_are_hashed(tmp_path):
     assert cal.pallet_surface_report(tmp_path, _frames(tmp_path, "val/000000"), z_range=(5.0, 6.0))["files_sha256"] != before
 
 
-def test_a_frame_with_zero_variance_is_rejected_not_fatal(tmp_path):
-    """Millimetre steps can make more than half the second differences exactly zero (MAD = 0)."""
+def test_a_noise_free_quantised_frame_is_measured_at_the_dither_level(tmp_path):
+    """1 mm steps leave over half the second differences at 0 (MAD = 0); a +-0.5 mm dither unties them."""
     _cache(tmp_path, frames=5)
     path = tmp_path / "dynamic/000000/depth/000004.png"
-    raw = np.full((480, 640), 5250, np.uint16)  # a noise-free wall: every second difference is 0
-    Image.fromarray(raw).save(path)
-    result = cal.calibrate(tmp_path, _frames(tmp_path, "dynamic/000000"), z_range=(5.0, 6.0))
-    assert result["per_frame"]["accepted"] == 4 and result["rejected"]["degenerate"] == 1
+    Image.fromarray(np.full((480, 640), 5250, np.uint16)).save(path)
+    frames = _frames(tmp_path, "dynamic/000000")
+    depth, masks, _ = cal._load(tmp_path, frames[4])
+    record = cal.frame_structure(depth, masks, z_range=(5.0, 6.0), margin_px=8, seed=0)
+    assert "reject" not in record and max(c[0] for c in record["components"]) < 1e-4

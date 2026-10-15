@@ -103,17 +103,18 @@ def test_generator_output_is_unchanged_by_the_record_refactor(tmp_path, noise):
     assert got == {k: v for k, v in GOLDEN.items() if k[0] == noise}
 
 
-def test_mixed_noise_configurations_are_refused(tmp_path):
+def test_mixed_noise_levels_are_refused(tmp_path):
     from tools import apply_recognition_noise as app
 
+    level = {"k_iid": 0.0, "components": [{"k": 0.001, "correlation_px_source": [2.0, 1.0]}]}
     cfg = tmp_path / "noise.yaml"
     cfg.write_text(json.dumps({"source": "t", "license": "CC-BY-4.0", "revision": "r", "files_sha256": "x",
-                               "k_iid": 0.0006, "k_corr": 0.0, "correlation_px_source": [1.0, 1.0],
-                               "source_fx": 465.741156, "dropout_fraction": 0.0}))
+                               "role": "provisional", "source_fx": 465.741156, "dropout_fraction": 0.0,
+                               "levels": {"low": level, "high": level}}))
     gen.main(["--out", str(tmp_path / "clean"), "--cases", "S1", "--limit", "2", "--noise", "none"])
     dirs = sorted((tmp_path / "clean").iterdir())
-    app.apply_to_scene(dirs[0], tmp_path / "mixed", cfg, 1.0)
-    app.apply_to_scene(dirs[1], tmp_path / "mixed", cfg, 1.66)
+    app.apply_to_scene(dirs[0], tmp_path / "mixed", cfg, 1.0, "low")
+    app.apply_to_scene(dirs[1], tmp_path / "mixed", cfg, 1.0, "high")
     for d in (tmp_path / "mixed").iterdir():  # both into dev so the split filter keeps them
         meta = json.loads((d / "scene.json").read_text())
         meta["split"] = "dev"

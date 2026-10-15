@@ -262,7 +262,8 @@ def judge_scene(meta, truth, instruction_input, candidates: Sequence[CandidateVi
     noise = meta.get("noise")
     role = noise.get("role") if isinstance(noise, dict) else None
     signature = None if noise is None else (
-        f"{noise['config_sha256']}:{noise['scale']}" if isinstance(noise, dict) and "config_sha256" in noise
+        f"{noise['config_sha256']}:{noise['scale']}:{noise.get('role')}:{noise.get('level')}"
+        if isinstance(noise, dict) and "config_sha256" in noise
         else "legacy")
     return SceneVerdict(
         meta["scene_id"], meta["case"], meta["shape_key"], meta["split"], population,

@@ -4,9 +4,9 @@
 Every parameter is a model value, not a measurement: axial sigma k*z^2, mixed
 ("flying") pixels on the far side of depth edges, random dropouts, rounding, and
 a fixed RGB/label shift against the depth grid. Gates are judged on noisy
-renders because clean renders make p95 optimistic. An optional Gaussian-correlated
-k_corr z^2 component (stage 1B, measured on real D435i depth) draws from its own
-random stream, so the defaults reproduce stage 1A exactly.
+renders because clean renders make p95 optimistic. Optional Gaussian-correlated
+k z^2 components (stage 1B) each draw from their own random stream, so the
+defaults reproduce stage 1A exactly.
 """
 
 from dataclasses import asdict, dataclass, replace
@@ -25,20 +25,20 @@ class NoiseModel:
     dropout_fraction: float = 0.01
     quantize_step_m: float = 0.001
     seed: int = 0
-    correlated_k: float = 0.0
-    correlation_px: tuple = (0.0, 0.0)
+    components: tuple = ()
 
     def to_json(self) -> dict:
         obj = asdict(self)
         obj["registration_shift_px"] = list(self.registration_shift_px)
-        if self.correlated_k > 0:
-            obj["correlation_px"] = [float(v) for v in self.correlation_px]
+        if self.components:
+            obj["components"] = [[float(k), [float(g) for g in width]] for k, width in self.components]
         else:
-            del obj["correlated_k"], obj["correlation_px"]
+            del obj["components"]
         return obj
 
     @classmethod
-    def from_yaml(cls, path, *, seed: int, target_fx: float, scale: float = 1.0) -> "NoiseModel":
+    def from_yaml(cls, path, *, seed: int, target_fx: float, level: str = "mid", scale: float = 1.0) -> "NoiseModel":
+        """One level of a noise config; widths are converted from the source grid to target_fx."""
         import math
 
         import yaml
@@ -57,16 +57,23 @@ class NoiseModel:
         for name in ("source", "license", "revision", "files_sha256"):
             if not isinstance(obj.get(name), str) or not obj[name]:
                 raise ValueError(f"noise config needs a non-empty {name}")
-        px = obj.get("correlation_px_source")
-        if not isinstance(px, list) or len(px) != 2:
-            raise ValueError("noise config correlation_px_source must hold two widths")
+        if obj.get("role") not in ("official", "provisional"):
+            raise ValueError("noise config role must be official or provisional")
+        levels = obj.get("levels")
+        if not isinstance(levels, dict) or level not in levels or not isinstance(levels[level], dict):
+            raise ValueError(f"noise config has no level {level!r}")
         ratio = number(target_fx, "target_fx", inclusive=False) / number(obj.get("source_fx"), "source_fx",
                                                                          inclusive=False)
         scale = number(scale, "scale", inclusive=False)
-        return cls(axial_k=number(obj.get("k_iid"), "k_iid") * scale,
-                   correlated_k=number(obj.get("k_corr"), "k_corr") * scale,
-                   correlation_px=tuple(number(p, "correlation_px_source", inclusive=False) * ratio * scale
-                                        for p in px),
+        entry = levels[level]
+        components = []
+        for c in entry.get("components", []):
+            px = c.get("correlation_px_source") if isinstance(c, dict) else None
+            if not isinstance(px, list) or len(px) != 2:
+                raise ValueError("noise config component needs k and two correlation widths")
+            widths = tuple(number(g, "correlation_px_source") * ratio * scale for g in px)
+            components.append((number(c.get("k"), "component k") * scale, widths))
+        return cls(axial_k=number(entry.get("k_iid"), "k_iid") * scale, components=tuple(components),
                    dropout_fraction=number(obj.get("dropout_fraction"), "dropout_fraction", high=1.0),
                    seed=int(seed))
 
@@ -104,9 +111,9 @@ def apply_noise(scene: SceneInput, labels, model: NoiseModel):
     finite = np.isfinite(clean)
     sigma = model.axial_k * np.square(np.where(finite, clean, 0.0))
     depth = np.where(finite, clean + rng.normal(0.0, 1.0, clean.shape) * sigma, clean)
-    if model.correlated_k > 0:
-        field = correlated_field(clean.shape, model.correlation_px, np.random.default_rng([model.seed, 1]))
-        depth = np.where(finite, depth + field * model.correlated_k * np.square(np.where(finite, clean, 0.0)), depth)
+    for i, (k, width) in enumerate(model.components):
+        field = correlated_field(clean.shape, width, np.random.default_rng([model.seed, 1 + i]))
+        depth = np.where(finite, depth + field * k * np.square(np.where(finite, clean, 0.0)), depth)
     mix = np.zeros(clean.shape, bool)
     target = np.full(clean.shape, np.nan)
     for axis in (0, 1):

@@ -189,10 +189,13 @@ def _verdict(noise, render_source="isaac"):
 
 
 def test_official_needs_isaac_and_the_official_noise_role():
-    official = {"config_sha256": "h", "scale": 1.0, "role": "official"}
-    sensitivity = {"config_sha256": "h", "scale": 1.66, "role": "sensitivity"}
+    official = {"config_sha256": "h", "scale": 1.0, "role": "official", "level": "mid"}
+    sensitivity = {"config_sha256": "h", "scale": 1.66, "role": "sensitivity", "level": "mid"}
+    provisional = {"config_sha256": "h", "scale": 1.0, "role": "provisional", "level": "low"}
+    assert not summarize([_verdict(provisional)], split="dev", render_source="isaac")["official"]
+    assert _verdict(provisional).noise_signature == "h:1.0:provisional:low"
     assert summarize([_verdict(official)], split="dev", render_source="isaac")["official"]
     assert not summarize([_verdict(sensitivity)], split="dev", render_source="isaac")["official"]
     assert not summarize([_verdict({"k": 1})], split="dev", render_source="isaac")["official"]
     assert not summarize([_verdict(None)], split="dev", render_source="isaac")["official"]
-    assert _verdict(official).noise_signature == "h:1.0" and _verdict({"k": 1}).noise_signature == "legacy"
+    assert _verdict(official).noise_signature == "h:1.0:official:mid" and _verdict({"k": 1}).noise_signature == "legacy"

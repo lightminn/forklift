@@ -57,36 +57,59 @@ def test_correlated_field_has_unit_variance_and_gaussian_correlation():
         assert np.mean(a[lag:] * a[:-lag]) == pytest.approx(np.exp(-lag * lag / (4 * g * g)), abs=0.05)
 
 
-def test_zero_correlated_k_leaves_the_stage1a_noise_untouched():
+def test_no_components_leaves_the_stage1a_noise_untouched():
     out = instance_rig.render_instances([[scene_rig.Box((2.0, 0.0, 0.15), (0.3, 0.6, 0.3))]])
     base = NoiseModel(seed=11)
     a, ids_a = apply_noise(out.scene, out.instance_ids, base)
-    b, ids_b = apply_noise(out.scene, out.instance_ids, replace(base, correlation_px=(5.0, 5.0)))
+    b, ids_b = apply_noise(out.scene, out.instance_ids, replace(base, components=()))
     assert np.array_equal(a.depth_m, b.depth_m, equal_nan=True) and np.array_equal(ids_a, ids_b)
-    assert np.array_equal(a.rgb, b.rgb)
     assert set(base.to_json()) == {"axial_k", "edge_jump_m", "flying_fraction", "registration_shift_px",
                                    "dropout_fraction", "quantize_step_m", "seed"}
 
 
-def test_correlated_noise_grows_with_depth_squared():
+def test_correlated_components_add_in_variance_and_grow_with_depth_squared():
     out = instance_rig.render_instances([], floor=False)  # back wall only: z = 5.25 m everywhere
-    model = NoiseModel(axial_k=0.0, correlated_k=0.002, correlation_px=(3.0, 3.0), seed=2, **QUIET)
+    model = NoiseModel(axial_k=0.0, components=((0.001, (2.0, 0.0)), (0.002, (6.0, 4.0))), seed=2, **QUIET)
     noisy, _ = apply_noise(out.scene, out.instance_ids, model)
     residual = noisy.depth_m - out.scene.depth_m
-    assert residual.std() == pytest.approx(0.002 * 5.25 ** 2, rel=0.1)
-    assert model.to_json()["correlation_px"] == [3.0, 3.0]
+    assert residual.std() == pytest.approx(np.hypot(0.001, 0.002) * 5.25 ** 2, rel=0.1)
+    assert model.to_json()["components"] == [[0.001, [2.0, 0.0]], [0.002, [6.0, 4.0]]]
 
 
-GOOD = {"source": "s", "license": "CC-BY-4.0", "revision": "r", "files_sha256": "h", "k_iid": 0.001, "k_corr": 0.002,
-        "correlation_px_source": [8.0, 6.0], "source_fx": 900.0, "dropout_fraction": 0.02}
+def test_each_component_draws_its_own_stream():
+    out = instance_rig.render_instances([], floor=False)
+    one = NoiseModel(axial_k=0.0, components=((0.002, (3.0, 3.0)),), seed=5, **QUIET)
+    two = NoiseModel(axial_k=0.0, components=((0.002, (3.0, 3.0)), (0.0, (1.0, 1.0))), seed=5, **QUIET)
+    a, _ = apply_noise(out.scene, out.instance_ids, one)
+    b, _ = apply_noise(out.scene, out.instance_ids, two)
+    assert np.allclose(a.depth_m, b.depth_m)
 
 
-@pytest.mark.parametrize("change", [{"source": ""}, {"k_corr": -1.0}, {"correlation_px_source": [8.0]},
-                                    {"dropout_fraction": 1.0}, {"source_fx": 0.0}, {"revision": None}])
+GOOD = {"source": "s", "license": "CC-BY-4.0", "revision": "r", "files_sha256": "h", "role": "provisional",
+        "source_fx": 900.0, "dropout_fraction": 0.02,
+        "levels": {"mid": {"k_iid": 0.001, "components": [{"k": 0.0005, "correlation_px_source": [2.0, 0.0]},
+                                                            {"k": 0.003, "correlation_px_source": [12.0, 8.0]}]}}}
+
+
+def test_noise_config_level_scales_widths_to_the_target_grid(tmp_path):
+    import yaml
+
+    path = tmp_path / "n.yaml"
+    path.write_text(yaml.safe_dump(GOOD))
+    model = NoiseModel.from_yaml(path, seed=4, target_fx=450.0, level="mid", scale=2.0)
+    assert model.axial_k == pytest.approx(0.002) and model.seed == 4
+    flat = [v for k, width in model.components for v in (k, *width)]
+    assert flat == pytest.approx([0.001, 2.0, 0.0, 0.006, 12.0, 8.0])
+
+
+@pytest.mark.parametrize("change", [{"source": ""}, {"role": "maybe"}, {"source_fx": 0.0}, {"revision": None},
+                                    {"dropout_fraction": 1.0}, {"levels": {}},
+                                    {"levels": {"mid": {"k_iid": -1.0, "components": []}}},
+                                    {"levels": {"mid": {"k_iid": 0.001, "components": [{"k": 0.1}]}}}])
 def test_noise_config_is_validated(tmp_path, change):
     import yaml
 
     path = tmp_path / "n.yaml"
     path.write_text(yaml.safe_dump({**GOOD, **change}))
     with pytest.raises(ValueError, match="noise config"):
-        NoiseModel.from_yaml(path, seed=0, target_fx=450.0)
+        NoiseModel.from_yaml(path, seed=0, target_fx=450.0, level="mid")

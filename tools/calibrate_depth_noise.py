@@ -33,20 +33,34 @@ PALLET_SCENES = ("val/000000", "val/000005")
 BANDS = ((1.5, 2.5), (2.5, 4.0), (4.0, 6.0))
 PALLET_STEPS = (1, 2, 3, 4, 6, 8)
 MIN_PATCHES = 20
-METHOD = ("per-frame robust variogram of inverse-depth second differences on background pixels (margin_px from "
-          "every visible object mask and invalid pixel); V(s) = 6A + B(6 - 8 rho(s) + 2 rho(2s)), "
-          "rho = exp(-s^2/(4 g^2)); adopted values are medians over accepted frames; cross-checked against "
-          "48 px patch plane residuals")
+DIAGNOSTIC_STEPS = (48, 64)
+DITHER_STEP_M = 0.001  # MR6D depth is whole millimetres (depth_scale 1.0)
+METHOD = ("per-frame two-component fit (depth_noise_fit.fit_noise_components) of the robust variogram of "
+          "inverse-depth second differences, steps 1-32, on background pixels (margin_px from every visible object "
+          "mask and invalid pixel) after a seeded +-0.5 mm dither of the whole-millimetre depth; components sorted "
+          "by width into short and long; no acceptance gate -- the distribution over usable frames is reported and "
+          "the levels are its percentiles")
+HISTORY = [
+    "2026-10-15 plan v2 method (single correlated component, frames accepted only at fit residual <= 0.15): UBAI "
+    "job 1012969 stopped on a frame whose MAD was 0 (over half the 1 px second differences of whole-millimetre "
+    "depth are exactly 0); run 20261015T144823Z (zero-variance frames rejected) accepted 0/240 frames; with the "
+    "dither the single-component residual was 0.50-0.55 on every probed frame",
+    "Codex 2026-10-16: a gate on steps 4-32 passed a model that underpredicts vertical step 1 by 91 %; patch "
+    "plane residuals of the same image cannot separate sensor error from surface shape; dither plus MAD is not "
+    "additive -- so these values are a model of MR6D background inverse-depth variation, not a sensor measurement",
+    "user decision 2026-10-16: provisional low/mid/high levels for the stage 1B baseline; the official noise "
+    "population waits for a team D435i capture",
+]
 LIMITATIONS = [
+    "a model of MR6D background inverse-depth variation: second differences and patch residuals cannot tell "
+    "sensor error from surface shape, so the long component may include real surface relief",
     "MR6D depth is registered to the 1280x720 colour grid; its native depth mode and RealSense post-processing "
     "(spatial, temporal, hole-filling filters) are not recorded, and a spatial filter alone produces correlated error",
-    "the robot's depth mode is not chosen and the target K (fx 465.74) is synthetic; the x1.66 sensitivity variant "
-    "scales k and g for a 640x480 native mode and is an approximation, not a bound",
-    "fitted on indoor background surfaces; the patch check ties the model to planar patches, and pallet surfaces "
-    "are compared in pallet_surface (reported only)",
-    "beyond the measured depth bands the k z^2 law is assumed",
-    "a fresh correlated field is drawn per scene; any fixed-pattern part of the error is not reproduced, so gains "
-    "from multi-frame fusion would be overstated",
+    "the robot's depth mode is not chosen and the target K (fx 465.74) is synthetic; widths are converted by the "
+    "focal-length ratio, assuming the correlation is fixed in angle",
+    "the +-0.5 mm dither adds its own small variance and the MAD scale assumes a Gaussian; neither is corrected",
+    "a fresh field is drawn per scene: any fixed-pattern part of the error is not reproduced, so gains from "
+    "multi-frame fusion would be overstated",
     "dropout is modelled as independent pixels at the background rate; structured holes on pallets (grazing top "
     "boards, occlusion shadows) are reported in pallet_surface, not modelled",
     "edge mixing (flying pixels), quantisation and RGB registration keep the model's assumed defaults",
@@ -118,22 +132,40 @@ def _variances(depth, valid, z_range, steps=fit.STEPS):
             for axis in (1, 0)}
 
 
-def frame_structure(depth, masks, *, z_range, margin_px) -> dict:
+def dither(depth, rng, step_m: float = DITHER_STEP_M):
+    """Untie whole-millimetre depth (otherwise over half the 1 px second differences are exactly 0)."""
+    return np.where(np.isfinite(depth), depth + rng.uniform(-step_m / 2, step_m / 2, depth.shape), np.nan)
+
+
+def frame_structure(depth, masks, *, z_range, margin_px, seed) -> dict:
     background = fit.background_mask(depth, masks, margin_px=margin_px)
     objects = np.any(masks, axis=0) if masks else np.zeros(depth.shape, bool)
     record = {"dropout": fit.dropout_fraction(depth, ~objects),
               "depth_m": [float(v) for v in np.nanpercentile(np.where(background, depth, np.nan), [5, 50, 95])]}
+    depth = dither(depth, np.random.default_rng(seed))
     try:
         var = _variances(depth, background, z_range)
     except ValueError as exc:
         return {**record, "reject": "samples", "detail": str(exc)}
     if any(v <= 0 for axis in var.values() for v in axis.values()):
-        # 1 mm depth steps can leave more than half the second differences exactly 0 (MAD = 0)
         return {**record, "reject": "degenerate"}
-    s = fit.fit_noise_structure(var[1], var[0])
     patches = fit.patch_plane_rms(depth, background, z_range=z_range)
-    record.update(k_iid=s.k_iid, k_corr=s.k_corr, g=list(s.correlation_px), rel_residual_rms=s.rel_residual_rms,
-                  patch_median=float(np.median(patches)) if patches.size else None, patches=int(patches.size))
+    if patches.size < MIN_PATCHES:
+        return {**record, "reject": "patches"}
+    s = fit.fit_noise_components(var[1], var[0])
+    components = [[k, list(g)] for k, g in s.components]
+    if len(components) == 1:
+        components.insert(0, [0.0, [0.0, 0.0]])
+    model = fit.model_patch_rms_components(0.0, s.components, size=depth.shape)
+    record.update(components=components, rel_residual_rms=s.rel_residual_rms, ratio_u=s.ratio_u, ratio_v=s.ratio_v,
+                  patch_ratio=float(np.median(patches)) / model, patches=int(patches.size))
+    diag = {}
+    for axis, name in ((1, "u"), (0, "v")):
+        for step in DIAGNOSTIC_STEPS:
+            d = fit.second_differences(depth, axis=axis, step=step, z_range=z_range, valid=background)
+            if d.size >= 1000:
+                diag[f"{name}{step}"] = fit.robust_variance(d)
+    record["diagnostic_variance"] = diag
     bands = {}
     for lo, hi in BANDS:
         try:
@@ -142,15 +174,9 @@ def frame_structure(depth, masks, *, z_range, margin_px) -> dict:
             continue
         if any(v <= 0 for axis in b.values() for v in axis.values()):
             continue
-        bs = fit.fit_noise_structure(b[1], b[0])
-        bands[f"{lo}-{hi}"] = {"k_iid": bs.k_iid, "k_corr": bs.k_corr, "g": list(bs.correlation_px)}
+        bs = fit.fit_noise_components(b[1], b[0])
+        bands[f"{lo}-{hi}"] = [[k, list(g)] for k, g in bs.components]
     record["bands"] = bands
-    if patches.size < MIN_PATCHES:
-        record["reject"] = "patches"
-    elif s.at_grid_edge:
-        record["reject"] = "grid_edge"
-    elif s.rel_residual_rms > 0.15:
-        record["reject"] = "residual"
     return record
 
 
@@ -170,50 +196,65 @@ def _dist(values):
             "p90": float(np.percentile(v, 90))}
 
 
-def calibrate(cache: Path, frames, *, z_range=(1.5, 4.0), margin_px: int = 8, accept_fraction: float = 0.75) -> dict:
+def _component_dist(rows, j):
+    return {"k": _dist([r["components"][j][0] for r in rows]), "g_u": _dist([r["components"][j][1][0] for r in rows]),
+            "g_v": _dist([r["components"][j][1][1] for r in rows])}
+
+
+def calibrate(cache: Path, frames, *, z_range=(1.5, 4.0), margin_px: int = 8) -> dict:
     records, files, grid = [], [], None
     for f in frames:
         depth, masks, k = _load(cache, f)
-        records.append(frame_structure(depth, masks, z_range=z_range, margin_px=margin_px))
+        seed = int(hashlib.sha256(f["depth"].encode()).hexdigest()[:8], 16)
+        records.append(frame_structure(depth, masks, z_range=z_range, margin_px=margin_px, seed=seed))
         files += [f["depth"], *f["masks"]]
         grid = {"width": int(depth.shape[1]), "height": int(depth.shape[0]), "fx": float(k[0, 0]),
                 "fy": float(k[1, 1])}
-    accepted = [r for r in records if "reject" not in r]
-    if len(accepted) < accept_fraction * len(records):
-        raise ValueError(f"only {len(accepted)}/{len(records)} frames accepted")
-    k_iid = float(np.median([r["k_iid"] for r in accepted]))
-    k_corr = float(np.median([r["k_corr"] for r in accepted]))
-    g = [float(np.median([r["g"][j] for r in accepted])) for j in (0, 1)]
-    model = fit.model_patch_rms(fit.NoiseStructure(k_iid, k_corr, tuple(g), 0.0, False),
-                                size=(grid["height"], grid["width"]))
-    ratios = [r["patch_median"] / model for r in accepted if r["patch_median"] is not None]
-    if not ratios or not 0.67 <= float(np.median(ratios)) <= 1.5:
-        raise ValueError(f"patch check failed: observed/model ratios {_dist(ratios)}")
+    usable = [r for r in records if "reject" not in r]
+    if not usable:
+        raise ValueError(f"no usable frame among {len(records)}")
+    short, long = _component_dist(usable, 0), _component_dist(usable, 1)
+
+    def component(dist, k_key):
+        return {"k": dist["k"][k_key], "correlation_px_source": [dist["g_u"]["p50"], dist["g_v"]["p50"]]}
+
+    levels = {name: {"k_iid": 0.0, "components": [component(short, "p50"), component(long, pct)]}
+              for name, pct in (("low", "p10"), ("mid", "p50"), ("high", "p90"))}
     bands = {}
     for lo, hi in BANDS:
         key = f"{lo}-{hi}"
-        rows = [r["bands"][key] for r in accepted if key in r["bands"]]
-        bands[key] = {"k_iid": _dist([b["k_iid"] for b in rows]), "k_corr": _dist([b["k_corr"] for b in rows]),
-                      "g_u": _dist([b["g"][0] for b in rows])}
+        rows = [{"components": r["bands"][key]} for r in usable if key in r["bands"] and len(r["bands"][key]) == 2]
+        bands[key] = {"short": _component_dist(rows, 0), "long": _component_dist(rows, 1)} if rows else {"n": 0}
+    steps = list(fit.STEPS)
     scenes = sorted({f["scene"] for f in frames})
     files = ["models_names.json", *[f"{s}/scene_camera.json" for s in scenes], *files]
     return {
         "source": f"Hugging Face {DATASET} (MR6D, Intel RealSense D435i)", "license": "CC-BY-4.0",
-        "revision": REVISION, "retrieved": datetime.date.today().isoformat(), "method": METHOD,
-        "calibration_split": scenes, "files": files, "files_sha256": _digest(cache, files),
-        "source_grid": grid, "source_fx": grid["fx"], "z_range_m": [float(v) for v in z_range],
-        "margin_px": margin_px, "steps": list(fit.STEPS),
-        "k_iid": k_iid, "k_corr": k_corr, "correlation_px_source": g,
-        "per_frame": {"accepted": len(accepted), "total": len(records),
-                      "k_iid": _dist([r["k_iid"] for r in accepted]), "k_corr": _dist([r["k_corr"] for r in accepted]),
-                      "g_u": _dist([r["g"][0] for r in accepted]), "g_v": _dist([r["g"][1] for r in accepted])},
+        "revision": REVISION, "role": "provisional", "retrieved": datetime.date.today().isoformat(),
+        "method": METHOD, "history": HISTORY, "calibration_split": scenes, "files": files,
+        "files_sha256": _digest(cache, files), "source_grid": grid, "source_fx": grid["fx"],
+        "z_range_m": [float(v) for v in z_range], "margin_px": margin_px, "steps": steps,
+        "levels": levels,
+        "levels_note": ("artificial scenarios: the long component's k at the p10/p50/p90 of the usable frames "
+                        "(every frame not rejected for samples, degenerate variance or patches) with the median "
+                        "widths and the median short component; components are ordered by g_u + g_v. Not an 80 % "
+                        "coverage, confidence interval or worst case: the joint variation of widths and amplitudes, "
+                        "the short component's spread and the dither/MAD bias are not covered, and detection need "
+                        "not change monotonically across the levels. k_iid is 0: the two components are the whole "
+                        "correlated-plus-per-pixel model (a zero width is per-pixel noise)"),
+        "frames": len(records), "usable": len(usable),
         "rejected": {reason: sum(r.get("reject") == reason for r in records)
-                     for reason in ("samples", "degenerate", "patches", "grid_edge", "residual")},
+                     for reason in ("samples", "degenerate", "patches")},
+        "survey": {"short": short, "long": long, "rel_residual_rms": _dist([r["rel_residual_rms"] for r in usable]),
+                   "ratio_u": {s: _dist([r["ratio_u"][i] for r in usable]) for i, s in enumerate(steps)},
+                   "ratio_v": {s: _dist([r["ratio_v"][i] for r in usable]) for i, s in enumerate(steps)}},
         "band_fits": bands,
-        "patch_check": {"model_median": model, "ratio": _dist(ratios), "ratio_median": float(np.median(ratios))},
+        "patch_check": {"ratio": _dist([r["patch_ratio"] for r in usable]),
+                        "note": "observed / model median 48 px plane residual per frame; a consistency figure, "
+                                "not an identification of sensor error"},
         "dropout_fraction": float(np.median([r["dropout"] for r in records])),
         "background_depth_m": _dist([r["depth_m"][1] for r in records]),
-        "frames": len(records), "limitations": LIMITATIONS,
+        "limitations": LIMITATIONS,
     }
 
 
@@ -275,8 +316,8 @@ def main(argv=None):
     result["pallet_surface"] = pallet
     result["calibration_touched"] = pallet["scenes"]
     a.out.write_text(yaml.safe_dump(result, sort_keys=False, allow_unicode=True))
-    print(json.dumps({k: result[k] for k in ("k_iid", "k_corr", "correlation_px_source", "dropout_fraction",
-                                             "frames")} | {"accepted": result["per_frame"]["accepted"]}))
+    print(json.dumps({"levels": result["levels"], "frames": result["frames"], "usable": result["usable"],
+                      "rejected": result["rejected"], "dropout_fraction": result["dropout_fraction"]}))
 
 
 if __name__ == "__main__":

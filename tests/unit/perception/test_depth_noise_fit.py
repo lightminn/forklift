@@ -8,7 +8,7 @@ from tools import instance_rig
 
 QUIET = dict(edge_jump_m=1e9, dropout_fraction=0.0, quantize_step_m=0.0, registration_shift_px=(0, 0))
 WALL = (5.0, 6.0)  # the rig's back wall sits at z = 5.25 m
-MIXED = dict(axial_k=0.0006, correlated_k=0.004, correlation_px=(4.0, 3.0))
+MIXED = dict(axial_k=0.0006, components=((0.004, (4.0, 3.0)),))
 
 
 def _wall():
@@ -73,3 +73,32 @@ def test_background_mask_and_erosion_keep_a_margin():
 def test_dropout_fraction_counts_zero_and_nan():
     depth = np.array([[1.0, 0.0], [np.nan, 2.0]])
     assert fit.dropout_fraction(depth, np.ones_like(depth, bool)) == pytest.approx(0.5)
+
+
+def test_the_response_uses_the_generators_discrete_kernel():
+    """Codex 2026-10-16: at width 0.5 px and step 1 the continuous formula gives 3.094, the kernel 3.947."""
+    assert fit.component_response(1, 0.5) == pytest.approx(3.947, abs=0.01)
+    assert fit.component_response(4, 0.0) == 6.0
+
+
+def _two(depth):
+    return fit.fit_noise_components(*_variances(depth))
+
+
+def test_two_correlated_components_are_recovered():
+    out = _wall()
+    model = NoiseModel(axial_k=0.0, components=((0.001, (2.0, 0.0)), (0.004, (6.0, 4.0))), seed=6, **QUIET)
+    noisy, _ = apply_noise(out.scene, out.instance_ids, model)
+    s = _two(noisy.depth_m)
+    (k1, g1), (k2, g2) = s.components
+    assert k1 == pytest.approx(0.001, rel=0.2) and g1[0] == pytest.approx(2.0, rel=0.25) and g1[1] < 0.6
+    assert k2 == pytest.approx(0.004, rel=0.15) and g2 == pytest.approx((6.0, 4.0), rel=0.25)
+    assert len(s.ratio_u) == len(fit.STEPS) and max(abs(r - 1) for r in s.ratio_u + s.ratio_v) < 0.15
+
+
+def test_iid_noise_is_the_zero_width_component():
+    out = _wall()
+    noisy, _ = apply_noise(out.scene, out.instance_ids, NoiseModel(seed=7, **MIXED, **QUIET))
+    (k1, g1), (k2, g2) = _two(noisy.depth_m).components
+    assert k1 == pytest.approx(0.0006, rel=0.2) and max(g1) < 0.6
+    assert k2 == pytest.approx(0.004, rel=0.15) and g2 == pytest.approx((4.0, 3.0), rel=0.25)
