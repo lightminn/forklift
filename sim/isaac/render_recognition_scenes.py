@@ -48,13 +48,16 @@ def selected(args):
     return out[index::count]
 
 
-def build(stage, specs, token, rc):
+def build(stage, recipe, token, previous_root, rc):
+    """Each scene gets its own root: reusing prim paths left stale semantic labels."""
     from isaacsim.core.utils.semantics import add_labels
     from pxr import Gf, UsdGeom
 
-    if stage.GetPrimAtPath("/World/Scene"):
-        stage.RemovePrim("/World/Scene")
-    UsdGeom.Xform.Define(stage, "/World/Scene")
+    if previous_root and stage.GetPrimAtPath(previous_root):
+        stage.RemovePrim(previous_root)
+    root = rc.scene_root(token)
+    specs = rc.prim_specs(recipe, root=root)
+    UsdGeom.Xform.Define(stage, root)
     for spec in specs:
         parent = spec.path.rsplit("/", 1)[0]
         if not stage.GetPrimAtPath(parent):
@@ -67,6 +70,7 @@ def build(stage, specs, token, rc):
         xf.AddScaleOp().Set(Gf.Vec3d(*(s / 2 for s in spec.size_m)))
         cube.CreateDisplayColorAttr([Gf.Vec3f(*spec.colour)])
         add_labels(cube.GetPrim(), labels=[rc.scene_label(spec.base_label, token)], instance_name="class")
+    return root
 
 
 def main(argv=None):
@@ -114,10 +118,11 @@ def main(argv=None):
         for _ in range(10):
             world.step(render=True)
         world.pause()
-        site = load_site()
+        site, root = load_site(), None
         for token, recipe in enumerate(selected(args)):
             try:
-                build(stage, rc.prim_specs(recipe), token, rc)
+                previous, root = root, rc.scene_root(token)  # set first so a failed build is still removed
+                build(stage, recipe, token, previous, rc)
                 frame, semantic, attempt = None, None, 0
                 for attempt in range(1, args.max_captures + 1):
                     frame = cc.capture_static(rep, annotators)
@@ -126,7 +131,7 @@ def main(argv=None):
                         break
                 if not semantic.ready:
                     raise RuntimeError(f"semantics not ready after {args.max_captures} captures: {semantic.status} "
-                                       f"(stale pixels {semantic.stale_pixels})")
+                                       f"(stale pixels {semantic.stale_pixels}, tokens {semantic.stale_tokens})")
                 pos, q_wxyz = camera.get_world_pose(camera_axes="ros")
                 scene = SceneInput(
                     rgb=np.asarray(frame["rgb"])[:, :, :3].astype(np.uint8), depth_m=rc.clean_depth(frame["z"]),

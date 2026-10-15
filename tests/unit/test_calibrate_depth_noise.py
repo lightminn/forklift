@@ -37,12 +37,12 @@ def _cache(root, scene="dynamic/000000", frames=4, with_gt=False):
     if with_gt:
         (base / "scene_gt.json").write_text(json.dumps(gts))
         names.append(f"{scene}/scene_gt.json")
-    (root / "listing.json").write_text(json.dumps(names))
+    (root / "listing.json").write_text(json.dumps({"revision": cal.REVISION, "files": names}))
     return i.fx
 
 
 def _frames(root, scene, stride=1):
-    return cal.select_frames(json.loads((root / "listing.json").read_text()), [scene], stride)
+    return cal.select_frames(cal.read_listing(root), [scene], stride)
 
 
 def test_frames_come_from_the_listing_not_from_the_cache(tmp_path):
@@ -91,3 +91,19 @@ def test_config_round_trip_scales_k_and_correlation(tmp_path):
     model = NoiseModel.from_yaml(out, seed=3, target_fx=fx / 2, scale=1.5)
     assert model.correlation_px[0] == pytest.approx(4.0 / 2 * 1.5, rel=0.2) and model.seed == 3
     assert model.axial_k == pytest.approx(0.0009, rel=0.15) and model.correlated_k == pytest.approx(0.006, rel=0.15)
+
+
+def test_a_cache_from_another_revision_is_refused(tmp_path):
+    _cache(tmp_path)
+    (tmp_path / "listing.json").write_text(json.dumps({"revision": "other", "files": []}))
+    with pytest.raises(ValueError, match="revision"):
+        cal.read_listing(tmp_path)
+
+
+def test_the_pallet_comparison_inputs_are_hashed(tmp_path):
+    _cache(tmp_path, scene="val/000000", with_gt=True)
+    report = cal.pallet_surface_report(tmp_path, _frames(tmp_path, "val/000000"), z_range=(5.0, 6.0))
+    assert "val/000000/scene_gt.json" in report["files"] and "val/000000/depth/000000.png" in report["files"]
+    before = report["files_sha256"]
+    (tmp_path / "val/000000/scene_gt.json").write_text(json.dumps({str(f): [{"obj_id": 2}] for f in range(4)}))
+    assert cal.pallet_surface_report(tmp_path, _frames(tmp_path, "val/000000"), z_range=(5.0, 6.0))["files_sha256"] != before

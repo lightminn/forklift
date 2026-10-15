@@ -55,3 +55,21 @@ def test_the_rig_k_fails_the_k_contract(tmp_path):
     sample = _write(tmp_path, record, record.rendered.scene.depth_m, record.rendered.instance_ids, "x")
     report = cmp.compare_scene(sample, recipe, SETTINGS)
     assert not report["k_contract"] and not report["pass"]
+
+
+def test_a_missing_pallet_block_fails(tmp_path):
+    """A part missing from the render shows through as background: those pixels change id, so the
+    per-target mismatch fraction (id or depth) must catch what IoU and same-id depth miss."""
+    from tools import instance_rig
+
+    recipe = next(r for r in rs.catalogue() if r.scene_id == "s1_epal6_1000000")
+    rig_k = gen.recipe_record(recipe, gen.load_site()).rendered.scene.intrinsics
+    k = replace(rig_k, cx=319.5, cy=239.5)
+    record = gen.recipe_record(recipe, gen.load_site(), intrinsics=k)
+    boxes = rs.recipe_boxes(recipe, 0)
+    broken = instance_rig.render_instances([boxes[:8] + boxes[9:]], distractors=recipe.distractors, intrinsics=k)
+    write_recognition_scene(tmp_path / recipe.scene_id, broken.scene, broken.instance_ids, origin="isaac_render_pose",
+                            meta={**record.meta, "render_source": "isaac", "truth_render": "rig", "noise": None},
+                            truth=record.truth, instruction=record.instruction)
+    report = cmp.compare_scene(load_recognition_sample(tmp_path / recipe.scene_id), recipe, SETTINGS)
+    assert report["targets"]["0"]["mismatch"] > cmp.MISMATCH_MAX and not report["pass"]

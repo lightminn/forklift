@@ -3,8 +3,11 @@
 The prims reproduce tools.instance_rig's world exactly -- the recipe's boxes, a
 floor whose top is z = 0 and a back wall whose front face is x = BACK_WALL_X_M --
 so the CPU-rig truth (stage 1A) applies to the Isaac image. Every label carries a
-per-scene token: a frame that still shows the previous scene's labels is stale,
-and an annotator that has not produced a buffer yet is "not ready", not a failure.
+per-scene token, and every scene is built under its own root (/World/Scene_t<token>):
+on the 2026-10-15 full render, rebuilding prims at the same paths left 34 of 1,020
+scenes showing only the previous token's labels for all 8 captures. A frame that
+still shows another token's labels is stale; an annotator that has not produced a
+buffer yet is "not ready", not a failure.
 """
 
 from __future__ import annotations
@@ -39,20 +42,25 @@ class SemanticFrame:
     ready: bool
     status: str
     stale_pixels: int
+    stale_tokens: tuple = ()
 
 
-def prim_specs(recipe) -> list[PrimSpec]:
+def scene_root(token: int) -> str:
+    return f"/World/Scene_t{token}"
+
+
+def prim_specs(recipe, root: str = "/World/Scene") -> list[PrimSpec]:
     specs = [
-        PrimSpec("/World/Scene/floor", (0.0, 0.0, -0.05), (40.0, 40.0, 0.1), 0.0, "floor", CONCRETE),
-        PrimSpec("/World/Scene/wall", (scene_rig.BACK_WALL_X_M + 0.05, 0.0, 5.0), (0.1, 40.0, 10.0), 0.0,
+        PrimSpec(f"{root}/floor", (0.0, 0.0, -0.05), (40.0, 40.0, 0.1), 0.0, "floor", CONCRETE),
+        PrimSpec(f"{root}/wall", (scene_rig.BACK_WALL_X_M + 0.05, 0.0, 5.0), (0.1, 40.0, 10.0), 0.0,
                  "wall", PAINT),
     ]
     for k in range(len(recipe.instances)):
         for i, box in enumerate(rs.recipe_boxes(recipe, k)):
-            specs.append(PrimSpec(f"/World/Scene/inst_{k}/box_{i}", tuple(box.centre_m), tuple(box.size_m),
+            specs.append(PrimSpec(f"{root}/inst_{k}/box_{i}", tuple(box.centre_m), tuple(box.size_m),
                                   float(box.yaw_rad), f"inst_{k}", WOOD))
     for i, box in enumerate(recipe.distractors):
-        specs.append(PrimSpec(f"/World/Scene/distractor/box_{i}", tuple(box.centre_m), tuple(box.size_m),
+        specs.append(PrimSpec(f"{root}/distractor/box_{i}", tuple(box.centre_m), tuple(box.size_m),
                               float(box.yaw_rad), "distractor", GREY))
     return specs
 
@@ -96,7 +104,7 @@ def decode_semantic(payload, token: int, shape=(480, 640)) -> SemanticFrame:
     if array.shape != tuple(shape):
         return _not_ready("shape_mismatch")
     ids = np.full(array.shape, -1, dtype=np.int32)
-    stale, floor = 0, 0
+    stale, floor, stale_tokens = 0, 0, set()
     for key, value in labels.items():
         names = _class_names(value)
         if len(names) > 1:
@@ -107,7 +115,10 @@ def decode_semantic(payload, token: int, shape=(480, 640)) -> SemanticFrame:
         base, tok = parsed
         hit = array == int(key)
         if tok != token:
-            stale += int(hit.sum())
+            count = int(hit.sum())
+            stale += count
+            if count:
+                stale_tokens.add(tok)
         elif base == "distractor":
             ids[hit] = -2
         elif base.startswith("inst_"):
@@ -115,7 +126,8 @@ def decode_semantic(payload, token: int, shape=(480, 640)) -> SemanticFrame:
         elif base == "floor":
             floor += int(hit.sum())
     ready = floor > 0 and stale == 0
-    return SemanticFrame(ids, ready, "ready" if ready else ("stale" if stale else "floor_missing"), stale)
+    return SemanticFrame(ids, ready, "ready" if ready else ("stale" if stale else "floor_missing"), stale,
+                         tuple(sorted(stale_tokens)))
 
 
 def clean_depth(z) -> np.ndarray:
@@ -125,3 +137,18 @@ def clean_depth(z) -> np.ndarray:
     depth = depth.copy()
     depth[~np.isfinite(depth) | (depth <= 0)] = np.nan
     return depth
+
+
+def status_exit_code(path) -> int:
+    """Job exit code from status.json: Isaac's close path may end the process before main returns."""
+    import json
+
+    try:
+        status = json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return 1
+    return 0 if status.get("rendered") and not status.get("failed") and "fatal" not in status else 1
+
+
+if __name__ == "__main__":
+    sys.exit(status_exit_code(sys.argv[1]))

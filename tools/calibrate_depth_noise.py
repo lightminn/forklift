@@ -58,6 +58,13 @@ def _get(url: str) -> bytes:
         return response.read()
 
 
+def read_listing(cache: Path) -> list:
+    obj = json.loads((cache / "listing.json").read_text())
+    if not isinstance(obj, dict) or obj.get("revision") != REVISION:
+        raise ValueError(f"cache listing is not from revision {REVISION}")
+    return obj["files"]
+
+
 def snapshot_listing(cache: Path) -> list:
     path = cache / "listing.json"
     if not path.exists():
@@ -65,8 +72,9 @@ def snapshot_listing(cache: Path) -> list:
         if info.get("sha") != REVISION:
             raise ValueError(f"dataset API returned revision {info.get('sha')}, expected {REVISION}")
         cache.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(sorted(s["rfilename"] for s in info["siblings"])))
-    return json.loads(path.read_text())
+        path.write_text(json.dumps({"revision": REVISION,
+                                    "files": sorted(s["rfilename"] for s in info["siblings"])}))
+    return read_listing(cache)
 
 
 def select_frames(listing, scenes, stride: int) -> list:
@@ -141,6 +149,14 @@ def frame_structure(depth, masks, *, z_range, margin_px) -> dict:
     return record
 
 
+def _digest(cache: Path, files) -> str:
+    digest = hashlib.sha256()
+    for rel in files:
+        digest.update(rel.encode())
+        digest.update(hashlib.sha256((cache / rel).read_bytes()).digest())
+    return digest.hexdigest()
+
+
 def _dist(values):
     v = np.asarray(values, dtype=float)
     if not v.size:
@@ -176,14 +192,10 @@ def calibrate(cache: Path, frames, *, z_range=(1.5, 4.0), margin_px: int = 8, ac
                       "g_u": _dist([b["g"][0] for b in rows])}
     scenes = sorted({f["scene"] for f in frames})
     files = ["models_names.json", *[f"{s}/scene_camera.json" for s in scenes], *files]
-    digest = hashlib.sha256()
-    for rel in files:
-        digest.update(rel.encode())
-        digest.update(hashlib.sha256((cache / rel).read_bytes()).digest())
     return {
         "source": f"Hugging Face {DATASET} (MR6D, Intel RealSense D435i)", "license": "CC-BY-4.0",
         "revision": REVISION, "retrieved": datetime.date.today().isoformat(), "method": METHOD,
-        "calibration_split": scenes, "files": files, "files_sha256": digest.hexdigest(),
+        "calibration_split": scenes, "files": files, "files_sha256": _digest(cache, files),
         "source_grid": grid, "source_fx": grid["fx"], "z_range_m": [float(v) for v in z_range],
         "margin_px": margin_px, "steps": list(fit.STEPS),
         "k_iid": k_iid, "k_corr": k_corr, "correlation_px_source": g,
@@ -208,9 +220,10 @@ def _pallet_ids(cache: Path) -> set:
 def pallet_surface_report(cache: Path, frames, *, z_range=(0.5, 2.5), margin_px: int = 8) -> dict:
     ids = _pallet_ids(cache)
     ratios_u, ratios_v = {s: [] for s in PALLET_STEPS}, {s: [] for s in PALLET_STEPS}
-    drops, touched = [], set()
+    drops, touched, files = [], set(), ["models_names.json"]
     for f in frames:
         gts = json.loads((cache / f["scene"] / "scene_gt.json").read_text())[str(f["frame"])]
+        files += [f"{f['scene']}/scene_camera.json", f"{f['scene']}/scene_gt.json", f["depth"], *f["masks"]]
         depth, masks, _ = _load(cache, f)
         pallets = [m for m, gt in zip(masks, gts) if int(gt["obj_id"]) in ids]
         if not pallets:
@@ -226,7 +239,9 @@ def pallet_surface_report(cache: Path, frames, *, z_range=(0.5, 2.5), margin_px:
         for s in PALLET_STEPS:
             ratios_u[s].append(float(np.sqrt(pal[1][s] / bg[1][s])))
             ratios_v[s].append(float(np.sqrt(pal[0][s] / bg[0][s])))
-    return {"scenes": sorted(touched), "pallet_dropout_fraction": float(np.median(drops)) if drops else None,
+    files = list(dict.fromkeys(files))
+    return {"scenes": sorted(touched), "files": files, "files_sha256": _digest(cache, files),
+            "pallet_dropout_fraction": float(np.median(drops)) if drops else None,
             "ratio_u": {s: _dist(v) for s, v in ratios_u.items()},
             "ratio_v": {s: _dist(v) for s, v in ratios_v.items()},
             "note": "pallet / background noise std at small steps; larger steps include gaps between boards"}
@@ -243,7 +258,7 @@ def main(argv=None):
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--no-download", action="store_true")
     a = p.parse_args(argv)
-    listing = json.loads((a.cache / "listing.json").read_text()) if a.no_download else snapshot_listing(a.cache)
+    listing = read_listing(a.cache) if a.no_download else snapshot_listing(a.cache)
     frames = select_frames(listing, [s for s in a.calibration_scenes.split(",") if s], a.stride)
     pallet_frames = select_frames(listing, [s for s in a.pallet_scenes.split(",") if s], a.pallet_stride)
     if not a.no_download:

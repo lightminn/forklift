@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Check noise-free Isaac renders against the CPU rig rendered at the scene's own K.
 
-Per target (instance or the distractor group): IoU, valid-depth fraction and depth
-error. Background: distance of Isaac's back-projected points to the floor (z = 0)
+Per target (instance or the distractor group): IoU, valid-depth fraction, depth error
+on pixels both renders give the target, and the mismatch fraction -- rig target pixels
+that Isaac labels differently, leaves without depth or puts more than 5 mm away -- which
+catches a missing or misplaced part whose pixels drop out of the same-id comparison. Background: distance of Isaac's back-projected points to the floor (z = 0)
 or the back wall (x = BACK_WALL_X_M). Plus the K convention and the camera pose.
 """
 
@@ -25,6 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SETTINGS = ROOT / "config/isaac_perception_camera.yaml"
 IOU_MIN, VALID_MIN, DEPTH_MEDIAN_MAX_M, DEPTH_P95_MAX_M = 0.97, 0.99, 0.001, 0.003
 BACKGROUND_P95_MAX_M, POSE_MM_MAX, POSE_DEG_MAX, K_TOL_PX, MIN_PIXELS = 0.002, 1.0, 0.01, 0.01, 200
+MISMATCH_MAX, MISMATCH_DEPTH_M = 0.005, 0.005
 
 
 def load_settings(path) -> dict:
@@ -45,10 +48,13 @@ def _target(depth_a, depth_b, a, b) -> dict:
     valid = float(np.isfinite(depth_a[b]).mean()) if b.any() else 1.0
     both = a & b & np.isfinite(depth_a) & np.isfinite(depth_b)
     diff = np.abs(depth_a[both] - depth_b[both])
+    with np.errstate(invalid="ignore"):
+        agree = a & np.isfinite(depth_a) & (np.abs(depth_a - depth_b) <= MISMATCH_DEPTH_M)
+    mismatch = float((b & ~agree).sum() / b.sum()) if b.any() else 0.0
     report = {"pixels": int(b.sum()), "iou": float(np.logical_and(a, b).sum() / union) if union else 1.0,
-              "valid": valid, "depth_median_m": float(np.median(diff)) if diff.size else None,
+              "valid": valid, "mismatch": mismatch, "depth_median_m": float(np.median(diff)) if diff.size else None,
               "depth_p95_m": float(np.percentile(diff, 95)) if diff.size else None}
-    report["pass"] = bool(report["iou"] >= IOU_MIN and valid >= VALID_MIN and diff.size
+    report["pass"] = bool(report["iou"] >= IOU_MIN and valid >= VALID_MIN and mismatch <= MISMATCH_MAX and diff.size
                           and report["depth_median_m"] <= DEPTH_MEDIAN_MAX_M
                           and report["depth_p95_m"] <= DEPTH_P95_MAX_M)
     return report
@@ -104,6 +110,7 @@ def main(argv=None):
         "scenes": len(reports), "targets": len(targets),
         "iou_min": min((t["iou"] for t in targets), default=None),
         "valid_min": min((t["valid"] for t in targets), default=None),
+        "mismatch_max": max((t["mismatch"] for t in targets), default=None),
         "depth_p95_max_m": max((t["depth_p95_m"] or 0.0 for t in targets), default=None),
         "background_p95_max_m": max((r["background"]["surface_p95_m"] or 0.0 for r in reports.values()),
                                     default=None),

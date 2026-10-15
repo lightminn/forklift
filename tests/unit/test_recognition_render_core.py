@@ -81,3 +81,32 @@ def test_bad_nonempty_semantics_are_refused(rc):
 def test_clean_depth(rc):
     out = rc.clean_depth(np.array([np.inf, 0.0, -1.0, 2.0]).reshape(2, 2, 1))
     assert out.shape == (2, 2) and np.isnan(out.ravel()[:3]).all() and out[1, 1] == 2.0
+
+
+@pytest.mark.parametrize("status, code", [
+    ({"rendered": [{"scene_id": "a", "captures": 1}], "failed": []}, 0),
+    ({"rendered": [], "failed": [{"scene_id": "a", "error": "x"}]}, 1),
+    ({"rendered": [], "failed": [], "fatal": {"error": "x"}}, 1),
+    ({"rendered": [], "failed": []}, 1),      # nothing rendered
+    (None, 1),                                # status.json never written
+])
+def test_the_job_exit_code_comes_from_status_json(rc, tmp_path, status, code):
+    import json
+
+    path = tmp_path / "status.json"
+    if status is not None:
+        path.write_text(json.dumps(status))
+    assert rc.status_exit_code(path) == code
+
+
+def test_each_scene_gets_its_own_prim_root(rc):
+    recipe = next(r for r in rs.catalogue() if r.case == "S1")
+    a, b = rc.prim_specs(recipe, root=rc.scene_root(3)), rc.prim_specs(recipe, root=rc.scene_root(4))
+    assert all(s.path.startswith("/World/Scene_t3/") for s in a) and all(s.path.startswith("/World/Scene_t4/") for s in b)
+    assert not {s.path for s in a} & {s.path for s in b}
+
+
+def test_stale_tokens_are_reported(rc):
+    frame = rc.decode_semantic(_payload([[1, 2]], {"1": {"class": "floor_t4"}, "2": {"class": "wall_t2"}}), 5,
+                               shape=(1, 2))
+    assert frame.status == "stale" and frame.stale_tokens == (2, 4)
