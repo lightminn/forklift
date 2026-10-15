@@ -794,3 +794,24 @@ def test_a_frozen_value_replaced_by_another_is_assigned(tmp_path):
     rcore = {"pickup_estimate": Pose2D(0.0, 0.0, 0.0)}
     replay_with(lambda f: f(Pose2D(1.0, 2.0, 0.1)), watch_dicts_replay={"core": rcore})
     assert rcore["pickup_estimate"] == Pose2D(1.0, 2.0, 0.1)
+
+
+@dataclass(frozen=True)
+class FrozenHolder:
+    pose: Pose2D
+    items: list
+
+
+def test_an_unchanged_frozen_field_inside_a_changed_argument_is_left_alone(tmp_path):
+    def fn(holder):
+        holder.items.append(1)
+
+    def call(f):
+        holder = FrozenHolder(Pose2D(1.0, 0.0, 0.0), [])
+        pose = holder.pose
+        f(holder)
+        return holder, pose
+
+    replay_with = one_call(tmp_path, fn, call)
+    holder, pose = replay_with(call)
+    assert holder.items == [1] and holder.pose is pose

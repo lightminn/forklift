@@ -100,7 +100,10 @@ def apply_inplace(actual: Any, after: Any, where: str = "argument", *, replaced=
     from forklift_core.mission.boundary_record import _immutable
 
     if _immutable(actual):
-        return after  # nothing held can change in place: the holder gets the new value
+        # Nothing held can change in place: an equal value keeps the caller's object, another one replaces it.
+        same = _canonical(Encoder(opaque_ok=True, value_types=value_types).encode(actual)) == _canonical(
+            Encoder(opaque_ok=True, value_types=value_types).encode(after))
+        return actual if same else after
 
     def sub(a, b, step):
         return apply_inplace(a, b, where, replaced=replaced, path=path + (step,), value_types=value_types)
