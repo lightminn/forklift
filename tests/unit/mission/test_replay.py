@@ -576,3 +576,94 @@ def test_the_final_state_catches_what_no_call_record_carries(tmp_path):
     session.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
     session.tick_end(outputs={}, branches=[])
     session.finish(final_state={"log": [{"n": 9}], "a": np.ones(2)})
+
+
+# --- Codex R1 re-review 4 (P2 x8) --------------------------------------------------------------------------
+
+class Opaque:
+    def __init__(self):
+        self.n = 1
+
+
+@pytest.mark.parametrize("change", ["arg_takes_logged_child", "new_log_takes_watched", "opaque_in_view",
+                                    "edit_last_logged", "cycle", "float_key", "int_watched_key"])
+def test_more_out_of_model_changes_are_refused(tmp_path, change):
+    core = {"anchor": [5], "log": [{"child": [1]}], "obj": Opaque() if change == "opaque_in_view" else 0}
+    if change == "int_watched_key":
+        core[1] = [0]
+
+    def fn(box):
+        if change == "arg_takes_logged_child":
+            box["x"] = core["log"][0]["child"]
+        elif change == "new_log_takes_watched":
+            core["newlog"] = core["anchor"]
+        elif change == "opaque_in_view":
+            core["obj"].n = 9
+        elif change == "edit_last_logged":
+            core["log"][-1]["child"].append(2)
+        elif change == "cycle":
+            box["items"].append(box["items"])
+        elif change == "float_key":
+            box[0.5] = 1
+        else:
+            core[1].append(1)
+
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    gate = RecordingGate(rec)
+    watch = DictWatch(rec, {"core": core}, append_only={"log", "newlog"})
+    rec.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    recorded_function(fn, "Svc", "f", gate, watch=watch)({"items": [1]})
+    rec.tick_end(outputs={}, branches=[])
+    rec.close()
+    from forklift_core.mission.replay import read_ticks
+
+    entry = next(iter(read_ticks(tmp_path)))
+    assert "unsupported" in (entry["calls"][0].get("changes") or {}), change
+
+
+def test_a_list_replaced_by_none_is_restored(tmp_path):
+    def fn(box):
+        box["items"] = None
+
+    def call(f):
+        box = {"items": [1]}
+        held = box["items"]
+        f(box)
+        return box, held
+
+    replay_with = one_call(tmp_path, fn, call)
+    box, held = replay_with(call)
+    assert box == {"items": None} and held == [1]
+
+
+def test_a_popped_array_made_read_only_is_refused(tmp_path):
+    def fn(box):
+        box.pop("a").setflags(write=False)
+
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    gate = RecordingGate(rec)
+    rec.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    recorded_function(fn, "Svc", "f", gate)({"a": np.zeros(2)})
+    rec.tick_end(outputs={}, branches=[])
+    rec.close()
+    from forklift_core.mission.replay import read_ticks
+
+    assert "unsupported" in next(iter(read_ticks(tmp_path)))["calls"][0]["changes"]
+
+
+def test_a_missing_final_state_file_and_nan_arrays(tmp_path):
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    rec.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    rec.tick_end(outputs={}, branches=[])
+    rec.close(final_state={"a": np.array([np.nan])})
+
+    def run(final):
+        session = ReplaySession(tmp_path)
+        session.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+        session.tick_end(outputs={}, branches=[])
+        session.finish(final_state=final)
+
+    run({"a": np.array([np.nan])})  # the same NaN array passes
+    (tmp_path / "final_state.json").unlink()
+    with pytest.raises(ReplayMismatch, match="final_state.json is missing"):
+        run({"a": np.array([1.0])})

@@ -76,7 +76,10 @@ class Encoder:
         array = np.ascontiguousarray(value).copy()
         key = self.digest(array)
         if self.hash_arrays:
-            return {"$sha256": key, "dtype": str(array.dtype), "shape": list(array.shape)}
+            node = {"$sha256": key, "dtype": str(array.dtype), "shape": list(array.shape)}
+            if not value.flags.writeable:
+                node["readonly"] = True
+            return node
         self.arrays.setdefault(key, array)
         node = {"$array": key, "dtype": str(array.dtype), "shape": list(array.shape)}
         if not value.flags.writeable:

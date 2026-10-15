@@ -158,10 +158,8 @@ def apply_inplace(actual: Any, after: Any, where: str = "argument", *, replaced=
     enc = Encoder(opaque_ok=True, value_types=value_types)
     if _canonical(enc.encode(actual)) == _canonical(Encoder(opaque_ok=True, value_types=value_types).encode(after)):
         return actual  # unchanged
-    if isinstance(actual, (list, dict, np.ndarray, tuple)) or (dataclasses.is_dataclass(actual)
-                                                                and not isinstance(actual, type)) \
-            or type(actual).__name__ in value_types:
-        raise Unsupported(f"{where}: a {type(actual).__name__} became a {type(after).__name__}")
+    # Another value of another kind: the recording's change check let it through only if the old object left
+    # unchanged (or stays elsewhere), so the holder simply gets the new value.
     return after
 
 
@@ -234,19 +232,15 @@ class ReplaySession:
         """``final_state``: the replayed run's core containers at its end, compared with the recorded ones when
         the record has them (``final_state.json``)."""
         recorded = self.directory / "final_state.json"
-        if self.failure is None and recorded.exists():
+        if self.failure is None and self.meta.get("final_state"):
+            if not recorded.exists():
+                raise self.fail("the record says it has a final state but final_state.json is missing")
             if final_state is None:
                 raise self.fail("the record has a final state and the replay gave none")
-            arrays = {}
-            extra = self.directory / "final_state_arrays.npz"
-            if extra.exists():
-                with np.load(extra, allow_pickle=False) as z:
-                    arrays = {k: z[k] for k in z.files}
-            mine = Encoder(opaque_ok=True, value_types=self.value_types)
-            node = mine.encode(final_state)
-            want = json.loads(recorded.read_text())
-            if _canonical(node) != _canonical(want) or any(
-                    not np.array_equal(mine.arrays[k], arrays.get(k)) for k in mine.arrays):
+            # Arrays by content hash (the node carries it): exact bytes, NaN included.
+            node = Encoder(opaque_ok=True, value_types=self.value_types, hash_arrays=True).encode(final_state)
+            if _canonical(node) != recorded.read_text().strip() and _canonical(node) != _canonical(
+                    json.loads(recorded.read_text())):
                 raise self.fail("the replay's final state differs from the recorded one")
         if self.failure is not None:
             raise ReplayMismatch(f"the replay failed earlier: {self.failure}")

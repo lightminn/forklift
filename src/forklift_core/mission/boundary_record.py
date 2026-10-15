@@ -166,14 +166,14 @@ class BoundaryRecorder:
         to an already-logged item, show up there)."""
         if self._closed:
             return
+        self._final_state = False
         if final_state is not None and self.value_format == 2:
             from forklift_core.mission.replay_codec import Encoder
 
-            encoder = Encoder(opaque_ok=True, value_types=self.value_types)
-            node = encoder.encode(final_state)
-            (self.directory / "final_state.json").write_text(json.dumps(node, allow_nan=True) + "\n")
-            if encoder.arrays:
-                np.savez_compressed(self.directory / "final_state_arrays.npz", **encoder.arrays)
+            # Comparison only: arrays by content hash and read-only state.
+            node = Encoder(opaque_ok=True, value_types=self.value_types, hash_arrays=True).encode(final_state)
+            (self.directory / "final_state.json").write_text(json.dumps(node, sort_keys=True, allow_nan=True) + "\n")
+            self._final_state = True
         if self._tick is not None:
             raise RuntimeError("close inside a tick")
         self._closed = True
@@ -182,7 +182,8 @@ class BoundaryRecorder:
             "format": "forklift_boundary_record/1", "ticks": self._ticks, "chunks": self._chunk,
             "bytes": self._bytes, "stopped_at_tick": self.stopped_at_tick, "stopped_reason": self.stopped_reason,
             "opaque_values": self.opaque_values,
-        } | ({"format": "forklift_boundary_record/2", "value_types": sorted(self.value_types)}
+        } | ({"format": "forklift_boundary_record/2", "value_types": sorted(self.value_types),
+              "final_state": self._final_state}
              if self.value_format == 2 else {}), indent=1) + "\n")
 
     # -- internals ---------------------------------------------------------------------------------
@@ -380,7 +381,8 @@ def _mutable(value: Any) -> bool:
 
 
 def _simple_key(key: Any) -> bool:
-    return key is None or isinstance(key, (str, int, float, bool)) or (
+    """Keys the replay rebuilds exactly by value (no floats: NaN keys and -0.0 do not round-trip by value)."""
+    return key is None or isinstance(key, (str, int, bool)) or (
         isinstance(key, tuple) and all(_simple_key(k) for k in key))
 
 
@@ -391,8 +393,14 @@ def _walk(value: Any, path: tuple, out: dict, problems: list, stack=()) -> None:
     if _mutable(value):
         out[path] = value
         if id(value) in stack:
+            problems.append(f"{path} closes a reference cycle")
             return
         stack = stack + (id(value),)
+        if (not isinstance(value, (list, dict, np.ndarray)) and not dataclasses.is_dataclass(value)
+                and type(value).__name__ not in getattr(_walk, "value_types", ())):
+            # Not encoded by value (recorded as opaque): its changes cannot be seen or replayed.
+            problems.append(f"{path} holds a {type(value).__name__} with no value encoding")
+            return
     if isinstance(value, dict):
         for k, v in value.items():
             if not _simple_key(k):
@@ -426,6 +434,7 @@ class _State:
     def __init__(self, recorder, raw: dict, watch, *, texts: bool = True) -> None:
         self.paths: dict = {}
         self.problems: list = []
+        _walk.value_types = recorder.value_types
         _walk(raw["args"], ("A", "'args'"), self.paths, self.problems)
         _walk(raw["kwargs"], ("A", "'kwargs'"), self.paths, self.problems)
         self.paths.pop(("A", "'args'"), None)  # the call's own argument containers
@@ -437,8 +446,17 @@ class _State:
             for k, v in list(d.items()):
                 if not watch.in_scope(name, k):
                     continue
+                if not isinstance(k, str):
+                    self.problems.append(f"watched {name} has a {type(k).__name__} key")
                 if k in watch.append_only and isinstance(v, list):
                     self.appends[(name, k)] = (v, list(v))  # the list and its items (kept alive)
+                    # The last logged item by content (an edit to it is checked per call); every item's objects
+                    # by identity (cached per list, items are never re-walked once seen).
+                    ids = watch.logged_ids(name, k, v)
+                    self.log_ids = getattr(self, "log_ids", set()) | ids
+                    if v and texts:
+                        self.log_last = getattr(self, "log_last", {})
+                        self.log_last[(name, k)] = (v[-1], _compare_text(recorder, v[-1]))
                 else:
                     _walk(v, ("W", name, k), self.paths, self.problems)
         # Comparison only: arrays by hash (nothing stored in the record).
@@ -457,10 +475,18 @@ def check_state(before: "_State", after: "_State") -> tuple[list, str | None]:
     replaced paths, None) or ([], why not)."""
     if after.problems or before.problems:
         return [], "; ".join(sorted(set(before.problems + after.problems)))
-    before_ids = {id(o) for o in before.paths.values()}
+    before_ids = {id(o) for o in before.paths.values()} | getattr(before, "log_ids", set())
     for lst, items in before.appends.values():
         before_ids.add(id(lst))
         before_ids.update(id(x) for x in items)
+    for key, (item, text) in getattr(before, "log_last", {}).items():
+        if _compare_text(before.recorder, item) != text:
+            return [], f"append-only {key}: its last logged item was changed"
+    for key in after.appends:
+        if key not in before.appends:  # a new log: a fresh list, its items fresh like any appended item
+            if id(after.appends[key][0]) in before_ids:
+                return [], f"append-only {key} is new and holds an object that existed before the call"
+            before.appends[key] = (after.appends[key][0], [])
     differ = [q for q, o in after.paths.items() if q in before.paths and before.paths[q] is not o]
     differ.sort(key=lambda q: (len(q), repr(q)))
     replaced = [q for q in differ if not any(q[:len(r)] == r for r in differ if len(r) < len(q))]
@@ -564,6 +590,22 @@ class DictWatch:
         self.skip = set(skip)
         # Per dictionary, the only keys compared (None: all but ``skip``) -- keeps a per-physics-tick watch cheap.
         self.keys = {name: set(k) for name, k in (keys or {}).items()}
+
+    def logged_ids(self, name: str, key, lst: list) -> set:
+        """The ids of every mutable object inside an append-only list's items (format 2's change check),
+        cached per list: an item is walked once, when first seen."""
+        cache = self.__dict__.setdefault("_logged", {})
+        entry = cache.get((name, key))
+        if entry is None or entry[0] is not lst or entry[1] > len(lst):
+            entry = [lst, 0, set(), []]  # the list, items seen, ids, the items (kept alive)
+            cache[(name, key)] = entry
+        for item in lst[entry[1]:]:
+            inner: dict = {}
+            _walk(item, (), inner, [])
+            entry[2].update(id(o) for o in inner.values())
+            entry[3].append(item)
+        entry[1] = len(lst)
+        return set(entry[2])
 
     def in_scope(self, name: str, key) -> bool:
         only = self.keys.get(name)
