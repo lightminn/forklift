@@ -70,9 +70,10 @@ def test_a_straight_without_a_round_two_stop_is_not_judged():
 
 
 def test_the_runner_refuses_on_it_only_with_the_flag():
-    source = (ROOT / "sim/isaac/run_transport.py").read_text()
+    # The delivery docking is a MissionCore method since M-a1 slice 6b (args.X read as options.X).
+    source = (ROOT / "src/forklift_core/mission/core.py").read_text()
     call = source.index("DOCKING_RETRY.round_two_stop_check(")
-    guard = source.rindex("if args.d7_docking and round_number == 1 and result.accepted:", 0, call)
+    guard = source.rindex("if options.d7_docking and round_number == 1 and result.accepted:", 0, call)
     window = source[guard : call + 400]
     assert "clear=pose_clear" in window and "if not stop_ok:\n                        path = None" in window
     # The whole straight's sweep and the stop path's use one pose check.

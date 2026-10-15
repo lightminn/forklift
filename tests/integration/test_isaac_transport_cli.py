@@ -442,9 +442,10 @@ def test_slam_runs_see_the_pallet_again_before_the_final_straight() -> None:
 def test_the_delivery_match_inputs_are_recorded_without_stopping_the_match() -> None:
     """2026-10-13: every delivery match round's inputs go to delivery_match_N.npz for
     offline replay; a failed write is noted and the round is still recorded (Codex P2)."""
-    source = SCRIPT.read_text()
-    start = source.index("    def dock_at_delivery_straight(t: float) -> None:")
-    body = source[start : source.index("\n    def ", start + 10)]
+    source = CORE.read_text()  # the delivery docking is a MissionCore method since M-a1 slice 6b
+    start = source.index("    def dock_at_delivery_straight(self, t: float) -> None:")
+    end = source.find("\n    def ", start + 10)
+    body = source[start : end if end >= 0 else len(source)]
     save = body.index("f\"delivery_match_{len(docking.get('rounds', [])) + 1}.npz\"")
     guard = body.rindex("try:", 0, save)
     handler = body.index("except OSError as exc:", save)
@@ -461,13 +462,13 @@ def test_the_delivery_match_inputs_are_recorded_without_stopping_the_match() -> 
 def test_slam_runs_dock_on_a_scan_before_the_delivery_straight() -> None:
     """Plan v3.8: stop at the straight start, match, move the whole drop."""
     source = SCRIPT.read_text()
-    # The transport arrival moved to the mission core (M-a1 slice 2); the runner hands it the docking.
-    assert 'hooks.dock_at_delivery_straight(t)' in CORE.read_text()
-    assert 'dock_at_delivery_straight=lambda t_: dock_at_delivery_straight(t_)' in source
-    assert 'ignore_self=True' in source
+    # The transport arrival (M-a1 slice 2) and the delivery docking (slice 6b) are the mission core's.
+    core = CORE.read_text()
+    assert 'self.dock_at_delivery_straight(t)' in core
+    assert 'ignore_self=True' in source  # the runner's scan for the match (a port)
     # The withdraw follows every goal change (plan D7c factored it into move_withdraw).
-    assert "set_withdraw(np.array([compose(tuple(frame_change), tuple(pose)) for pose in paths[\"withdraw\"].poses]))" in source
-    assert source.count("move_withdraw(step_shift)") == 2
+    assert "set_withdraw(np.array([compose(tuple(frame_change), tuple(pose)) for pose in paths[\"withdraw\"].poses]))" in core
+    assert core.count("move_withdraw(step_shift)") == 2
     # Three SLAM recoveries, plus the priority-5 obstacle replan of the
     # transport leg and the return leg's fallback to it.
     # (and the zero-clearance retry of that obstacle replan), plus the live

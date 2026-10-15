@@ -120,6 +120,10 @@ class World:
                                     cusp_heading_hold_phases=("observe", "return_home"),
                                     cusp_heading_hold_position_m=0.03, cusp_heading_hold_rad=0.08,
                                     observe_replans_per_leg=2))
+        # Docking/withdrawal helpers are MissionCore methods since slice 6b; this test's stand-ins go on the instance.
+        for name_ in ['dock_at_delivery_straight', 'arm_docking', 'release_and_carry', 'transport_replan', 'start_docking_retry']:
+            if hasattr(self.hooks, name_):
+                setattr(self.core, name_, getattr(self.hooks, name_))
         # The cusp rules are MissionCore methods since slice 6a; stand-ins on the instance as before.
         self.core.cusp_heading_end = lambda tr: {"end": tr.status}
         self.core.cusp_heading_offset = lambda tracker, progress, rear: (0.0, 0.0)

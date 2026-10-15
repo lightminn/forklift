@@ -64,7 +64,10 @@ from forklift_core.control import RearAxlePathTracker, TrackerConfig, ackermann_
 from forklift_core.control import cusp_stall as CUSP_STALL
 from forklift_core.mission.state import MissionState
 from forklift_core.perception.pocket_detector import DetectorParams
-from forklift_core.planning import PlanResult, Rectangle
+from forklift_core.localization.scan_docking import laser_points
+from forklift_core.localization.slam_pose import compose, invert
+from forklift_core.planning import PlanResult, Rectangle, collision_free_pose
+from forklift_core.planning.pallet_mission import SearchBudget
 from forklift_core.planning import Pose2D as PlanningPose
 
 __all__ = ["MissionCore"]
@@ -302,7 +305,7 @@ class MissionCore:
             transition("transport", t)
         elif ms.phase == "transport":
             if slam is not None and slam["docking"]["status"] == "armed":
-                hooks.dock_at_delivery_straight(t)
+                self.dock_at_delivery_straight(t)
                 if self.options.d7_docking:
                     # A (b) retry may have released the correction: this
                     # tick's pose and control record follow (Codex D7c impl P2-3).
@@ -452,7 +455,7 @@ class MissionCore:
                 hooks.write_paths()
                 trackers[ms.phase] = RearAxlePathTracker(live.poses, live.directions, live.curvatures_inv_m, trackers[ms.phase].config)
                 if ms.phase == "transport" and slam is not None:
-                    hooks.arm_docking()
+                    self.arm_docking()
                 ms.phase_started = t
             stand = True
         elif (
@@ -709,13 +712,13 @@ class MissionCore:
         require, wall, same_path, path_stats, path_record = (hooks.require, hooks.wall, hooks.same_path, hooks.path_stats,
                                                              hooks.path_record)
         realign_active, realign_install, release_and_carry, release_after_backoff, slam_rear = (
-            hooks.realign_active, hooks.realign_install, hooks.release_and_carry, hooks.release_after_backoff,
+            hooks.realign_active, hooks.realign_install, self.release_and_carry, hooks.release_after_backoff,
             hooks.slam_rear)
         grid_world, grid_kwargs, plan_observation_leg, plan_return_leg, plan_transport = (
             hooks.grid_world, hooks.grid_kwargs, hooks.plan_observation_leg, hooks.plan_return_leg, hooks.plan_transport)
         transport_replan, find_escape, escape_leg, final_straight_prefix = (
-            hooks.transport_replan, hooks.find_escape, hooks.escape_leg, hooks.final_straight_prefix)
-        apply_tracker_profile, arm_docking = hooks.apply_tracker_profile, hooks.arm_docking
+            self.transport_replan, hooks.find_escape, hooks.escape_leg, hooks.final_straight_prefix)
+        apply_tracker_profile, arm_docking = hooks.apply_tracker_profile, self.arm_docking
         # Plan D8 S4c-3 stage 2: as above, an obstacle recovery held in the realignment.
         require(not (ms.phase == "observe" and realign_active() and slam is not None
                      and slam["tracker"].mode == "holding"), "near_capture_realign_held_recovery")
@@ -1155,8 +1158,8 @@ class MissionCore:
         return_to_pose = options.return_to_pose
         require, wall, path_stats, path_record = hooks.require, hooks.wall, hooks.path_stats, hooks.path_record
         dock_at_delivery_straight, start_docking_retry, slam_rear, slam_odom_base, arm_docking = (
-            hooks.dock_at_delivery_straight, hooks.start_docking_retry, hooks.slam_rear, hooks.slam_odom_base,
-            hooks.arm_docking)
+            self.dock_at_delivery_straight, self.start_docking_retry, hooks.slam_rear, hooks.slam_odom_base,
+            self.arm_docking)
         grid_world, grid_kwargs, plan_transport_leg, plan_return_leg = (
             hooks.grid_world, hooks.grid_kwargs, hooks.plan_transport_leg, hooks.plan_return_leg)
         # The final goal judged out of heading tolerance under SLAM:
@@ -1367,7 +1370,7 @@ class MissionCore:
             options.cusp_heading_hold_phases, options.cusp_heading_hold_position_m, options.cusp_heading_hold_rad,
             options.observe_replans_per_leg)
         require, wall, path_record, start_docking_retry, slam_rear, arm_docking = (
-            hooks.require, hooks.wall, hooks.path_record, hooks.start_docking_retry, hooks.slam_rear, hooks.arm_docking)
+            hooks.require, hooks.wall, hooks.path_record, self.start_docking_retry, hooks.slam_rear, self.arm_docking)
         grid_world, grid_kwargs, plan_transport_leg, plan_observation_leg = (
             hooks.grid_world, hooks.grid_kwargs, hooks.plan_transport_leg, hooks.plan_observation_leg)
         realign_active, realign_install = hooks.realign_active, hooks.realign_install
@@ -2807,3 +2810,551 @@ class MissionCore:
             dump_tracking(result_.end, result_.tracking)
             require(False, result_.end)
         return result_.tracking, result_.hold
+
+    # --- M-a1 slice 6b: closures moved from run(), statement for statement ---
+    def set_withdraw(self, poses) -> None:
+        paths = self.paths
+        path_record = self.hooks.path_record  # a runner module-level name
+        state = self.state
+        trackers = self.trackers
+        paths["withdraw"] = replace(paths["withdraw"], poses=np.asarray(poses, dtype=float))
+        state["paths"]["withdraw"] = path_record(paths["withdraw"])
+        trackers["withdraw"] = RearAxlePathTracker(
+            paths["withdraw"].poses,
+            paths["withdraw"].directions,
+            paths["withdraw"].curvatures_inv_m,
+            trackers["withdraw"].config,
+        )
+
+    def move_withdraw(self, frame_change) -> None:
+        """The withdraw follows the docked goal: move it by the goal's change."""
+        paths = self.paths
+        set_withdraw = self.set_withdraw
+        if "withdraw" in paths:
+            set_withdraw(np.array([compose(tuple(frame_change), tuple(pose)) for pose in paths["withdraw"].poses]))
+
+    def docking_stop_config(self):
+        """A stop to look, judged like arm_docking's (3 cm, 0.05 rad)."""
+        slam = self.slam
+        trackers = self.trackers
+        base_ = slam.get("transport_config", trackers["transport"].config)
+        return replace(base_, position_tolerance_m=0.03, yaw_tolerance_rad=0.05)
+
+    def arm_docking(self) -> None:
+        """Drive transport only to where its delivery straight begins (v3.8)."""
+        final_straight_prefix = self.hooks.final_straight_prefix
+        geometry = self.geometry
+        paths = self.paths
+        slam = self.slam
+        trackers = self.trackers
+        docking = slam["docking"]
+        if docking["status"] not in ("pending", "armed"):
+            return
+        full = paths["transport"]
+        # The current round's stop: 1.5 m, then 0.4 m (Codex 5de6c3a P2).
+        prefix = final_straight_prefix(full, docking.get("keep_m", geometry.delivery_straight_m))
+        if prefix is None:
+            docking["status"] = "no_final_straight"
+            return
+        docking.update(
+            status="armed",
+            delivery_rear=[float(v) for v in full.poses[-1]],
+            predelivery_rear=[float(v) for v in prefix.poses[-1]],
+        )
+        # A stop to look, not a final goal: judged like an observe stop (3 cm,
+        # 0.05 rad); the docked straight that follows keeps the 8 mm goal.
+        slam.setdefault("transport_config", trackers["transport"].config)
+        trackers["transport"] = RearAxlePathTracker(
+            prefix.poses,
+            prefix.directions,
+            prefix.curvatures_inv_m,
+            replace(
+                slam["transport_config"],
+                position_tolerance_m=0.03,
+                yaw_tolerance_rad=0.05,
+            ),
+        )
+
+    def reapproach_plan(self, start_rear, line, config=None):
+        """Plan D7c ③: the re-approach to the docking line's start, accepted only
+        inside its box and length, and when the transport tracker's dry run stops
+        at the line start within the stop's tolerance."""
+        time = self.hooks.time_module()  # the runner's time (the recorded Clock proxy when recording)
+        bicycle_rollout = self.hooks.bicycle_rollout
+        docking_stop_config = self.docking_stop_config
+        geometry = self.geometry
+        grid_kwargs = self.hooks.grid_kwargs
+        grid_world = self.hooks.grid_world
+        plan_docking_reapproach = self.hooks.plan_docking_reapproach
+        planner_config = self.options.planner_config
+        scenario = self.options.scenario
+        slam = self.slam
+        planned_at = time.monotonic()
+        # The grid around the start pose (after a release: the released one, Codex
+        # D7c impl P1-2), and an obstacle replan's shared budget when one runs (P1-1).
+        grid_ = grid_kwargs(None, own=tuple(float(v) for v in start_rear))
+        deadline_ = grid_.get("deadline")
+        path, record = plan_docking_reapproach(
+            grid_world(slam.get("transport_scenario", scenario)),
+            PlanningPose(*(float(v) for v in start_rear)),
+            PlanningPose(*(float(v) for v in line)),
+            config if config is not None else planner_config,
+            geometry=geometry,
+            keep_m=geometry.delivery_straight_m,
+            deadline=deadline_ if deadline_ is not None else SearchBudget(20.0),
+            **({"occupancy": grid_["occupancy"]} if "occupancy" in grid_ else {}),
+        )
+        record["planning_wall_s"] = time.monotonic() - planned_at
+        if path is not None:
+            dry = bicycle_rollout(
+                path.poses, path.directions, path.curvatures_inv_m, docking_stop_config(), np.asarray(start_rear)
+            )
+            record["dry_run"] = {k: v for k, v in asdict(dry).items() if k != "trajectory"}
+            if not (dry.status == "arrived" and dry.position_error_m <= 0.03 and abs(dry.yaw_error_rad) <= 0.05):
+                record["refused"] = "dry_run"
+                path = None
+        return path, record
+
+    def install_reapproach(self, t: float, path, goal) -> None:
+        """Plan D7c ④: the re-approach replaces the transport path; the docking waits
+        at its end (no arm_docking: a re-approach may end on a reverse curve)."""
+        path_record = self.hooks.path_record  # a runner module-level name
+        record_json = self.hooks.record_json  # a runner module-level name
+        options = self.options
+        add_path_display = self.hooks.add_path_display
+        docking_stop_config = self.docking_stop_config
+        geometry = self.geometry
+        ms = self.ms
+        obstacle = self.obstacle
+        paths = self.paths
+        slam = self.slam
+        stage = self.hooks.stage()
+        state = self.state
+        trackers = self.trackers
+        state.setdefault("paths_replaced", []).append(
+            {"leg": "transport", "time_s": t, "by": "reapproach", "path": state["paths"].get("transport")})
+        paths["transport"] = path
+        state["paths"]["transport"] = path_record(path)
+        (options.output / "paths.json").write_text(record_json(state["paths"], indent=2) + "\n")
+        add_path_display(stage, path, "Transport", (1.0, 0.65, 0.04))
+        trackers["transport"] = RearAxlePathTracker(
+            path.poses, path.directions, path.curvatures_inv_m, docking_stop_config()
+        )
+        slam["docking"].update(
+            status="armed", round=1, keep_m=geometry.delivery_straight_m, reapproach=True,
+            await_retry_match=True, retry_seed_goal=[float(v) for v in goal],
+        )
+        if obstacle is not None:
+            if obstacle.get("backoff", {}).get("phase") == "transport":
+                obstacle.pop("backoff")
+            obstacle.setdefault("replan_wait", {}).pop("transport", None)
+            obstacle.setdefault("progress", {}).clear()
+        ms.phase_started = t
+
+    def release_and_carry(self, t: float) -> dict:
+        """Plan D7c: release a held correction; a goal still in the held frame moves
+        with everything held by T = after o before^-1, once (docking_retry.py)."""
+        DOCKING_RETRY = self.options.DOCKING_RETRY  # a runner module-level name
+        loaded = self.hooks.loaded()
+        ms = self.ms
+        obstacle = self.obstacle
+        paths = self.paths
+        scenario = self.options.scenario
+        set_withdraw = self.set_withdraw
+        slam = self.slam
+        slam_odom_base = self.hooks.slam_odom_base
+        slam_rear = self.hooks.slam_rear
+        docking = slam["docking"]
+        if slam["tracker"].mode != "holding":
+            return {"released": False}
+        before = slam_rear(t)
+        jump_m, jump_rad = slam["tracker"].release(odom_from_base=slam_odom_base())
+        after = slam_rear(t)
+        site = slam.get("transport_scenario", scenario).destination
+        carry = DOCKING_RETRY.carry_on_release(
+            docking,
+            tuple(float(v) for v in before),
+            tuple(float(v) for v in after),
+            withdraw_poses=paths["withdraw"].poses if "withdraw" in paths else None,
+            destination=(site.x_m, site.y_m, site.yaw_rad),
+        )
+        if carry["moved"]:
+            if "withdraw" in paths:
+                set_withdraw(carry["withdraw_poses"])
+            sc_ = slam.get("transport_scenario", scenario)
+            x_, y_, yaw_ = carry["destination"]
+            slam["transport_scenario"] = replace(
+                sc_, destination=replace(sc_.destination, x_m=x_, y_m=y_, yaw_rad=yaw_)
+            )
+        event = {"phase": ms.phase, "time_s": t, "event": "release_docking_retry", "jump_m": jump_m,
+                 "jump_rad": jump_rad, "frame_change": carry["frame_change"], "goal_moved": carry["moved"]}
+        slam["holds"].append(event)
+        if obstacle is not None and slam["tracker"].applied is not None:
+            # The grid is re-projected with the released correction before any
+            # plan reads it, as for a stall replan's release (Codex checkpoint P1).
+            obstacle["applied"] = tuple(float(v) for v in slam["tracker"].applied[0])
+            obstacle["version"] += 1
+            obstacle["reprojections"] = obstacle.get("reprojections", 0) + 1
+            obstacle["layer"].refresh(
+                t, obstacle["applied"], obstacle["version"],
+                current_pose=tuple(float(v) for v in after),
+                path_ahead=np.array([after]), loaded=loaded,
+            )
+        return {"released": True, **{k: event[k] for k in ("jump_m", "jump_rad", "frame_change", "goal_moved")},
+                "rear": [float(v) for v in after]}
+
+    def start_docking_retry(self, t: float, trigger: str, failure: str) -> None:
+        """Plan D7c (delivery): release, plan back to the docking line's start, and
+        match again on arrival. At most two per delivery; the third ends the run with
+        the failure the retry replaced."""
+        DOCKING_RETRY = self.options.DOCKING_RETRY  # a runner module-level name
+        require = self.hooks.require  # a runner module-level name
+        geometry = self.geometry
+        install_reapproach = self.install_reapproach
+        reapproach_plan = self.reapproach_plan
+        release_and_carry = self.release_and_carry
+        slam = self.slam
+        slam_rear = self.hooks.slam_rear
+        state = self.state
+        retries = state.setdefault("docking_retries", [])
+        require(sum(1 for r in retries if r.get("counted")) < 2, failure)
+        event = {"trigger": trigger, "time_s": t, "counted": True, "replaces": failure}
+        retries.append(event)
+        if "previous_goal" not in slam["docking"]:
+            # No match committed a goal (a refused first match): the prior, a map pose
+            # that a release does not move (Codex D7c impl P2-4).
+            slam["docking"]["previous_goal"] = list(slam["docking"]["delivery_rear_prior"])
+            slam["docking"]["goal_frame"] = "map"
+        event["release"] = release_and_carry(t)
+        goal = tuple(slam["docking"]["previous_goal"])
+        line = DOCKING_RETRY.line_start(goal, geometry.delivery_straight_m)
+        start_now = slam_rear(t)
+        path, record = reapproach_plan(start_now, line)
+        event.update(goal=list(goal), goal_frame=slam["docking"].get("goal_frame"), line_start=list(line),
+                     start=[float(v) for v in start_now], plan=record)
+        require(path is not None, f"docking_retry_no_plan:{record.get('refused')}:{record.get('status')}")
+        install_reapproach(t, path, goal)
+
+    def transport_replan(self, start, config, travel):
+        """The transport leg -- or, during a D7c re-approach, the re-approach to the
+        docking line's start (an obstacle replan must not undo it: Codex D7c P2)."""
+        DOCKING_RETRY = self.options.DOCKING_RETRY  # a runner module-level name
+        geometry = self.geometry
+        grid_kwargs = self.hooks.grid_kwargs
+        grid_world = self.hooks.grid_world
+        initial_time = self.options.initial_time
+        plan_transport_leg = self.hooks.plan_transport_leg
+        reapproach_plan = self.reapproach_plan
+        scenario = self.options.scenario
+        slam = self.slam
+        state = self.state
+        world = self.hooks.world()
+        if slam is not None and slam["docking"].get("reapproach"):
+            line = DOCKING_RETRY.line_start(slam["docking"]["previous_goal"], geometry.delivery_straight_m)
+            path, record = reapproach_plan((start.x_m, start.y_m, start.yaw_rad), line, config)
+            state.setdefault("docking_retries", []).append(
+                {"trigger": "obstacle_replan", "time_s": world.current_time - initial_time, "counted": False,
+                 "plan": record}
+            )
+            if path is not None:
+                return path
+            # A search failure keeps its own status (invalid_start / no_path drive the
+            # zero-clearance retry -- Codex D7c impl P2-6); an operating refusal is named.
+            status_ = record.get("status") if record.get("refused") == "no_path" else f"reapproach_{record.get('refused')}"
+            return PlanResult(False, status_, np.empty((0, 3)), np.empty(0, dtype=np.int8), np.empty(0), 0.0,
+                              int(record.get("expansions", 0)))
+        return plan_transport_leg(
+            grid_world(slam.get("transport_scenario", scenario) if slam is not None else scenario),
+            start, config, geometry=geometry, travel_config=travel, **grid_kwargs(None),
+        )
+
+    def dock_at_delivery_straight(self, t: float) -> None:
+        """Match the live scan to the delivery reference and re-place the goal.
+
+        Codex v3.8: goal_est = A o R^-1 with R = X o Q o X^-1; the whole rest
+        of the drop (delivery straight, withdraw, any transport replan) is
+        moved by the same correction E = goal_est o D^-1; an accepted match
+        whose straight cannot be redrawn is re-aligned by a collision-checked
+        plan, not dropped; a refused match falls back to the SLAM goal.
+        """
+        DOCKING_RETRY = self.options.DOCKING_RETRY  # a runner module-level name
+        ROUND2_KEEP_M = self.options.ROUND2_KEEP_M  # a runner module-level name
+        path_record = self.hooks.path_record  # a runner module-level name
+        record_json = self.hooks.record_json  # a runner module-level name
+        require = self.hooks.require  # a runner module-level name
+        time = self.hooks.time_module()  # the runner's time (the recorded Clock proxy when recording)
+        options = self.options
+        add_path_display = self.hooks.add_path_display
+        beam_angles = self.hooks.beam_angles()  # bound only under SLAM in run()
+        bicycle_rollout = self.hooks.bicycle_rollout
+        dock = self.hooks.dock
+        docking_stop_config = self.docking_stop_config
+        final_straight_prefix = self.hooks.final_straight_prefix
+        geometry = self.geometry
+        grid_kwargs = self.hooks.grid_kwargs
+        grid_planning = self.options.grid_planning
+        laser_mount = self.hooks.laser_mount()  # bound only under SLAM in run()
+        move_withdraw = self.move_withdraw
+        ms = self.ms
+        obstacles = self.hooks.truth_obstacles()
+        paths = self.paths
+        rear = self.hooks.rear()  # the runner's, read when called
+        scenario = self.options.scenario
+        slam = self.slam
+        stage = self.hooks.stage()
+        start_docking_retry = self.start_docking_retry
+        state = self.state
+        straight_from_pose = self.hooks.straight_from_pose
+        trackers = self.trackers
+        truth_rear = self.hooks.truth_rear()  # the runner's, read when called
+        docking = slam["docking"]
+        state["delivery_docking"] = docking  # linked first: kept if a step fails
+        delivery = tuple(docking["delivery_rear_prior"])
+        path_end = docking["delivery_rear"]
+        docking["path_end_vs_prior_m"] = float(math.hypot(path_end[0] - delivery[0], path_end[1] - delivery[1]))
+        # A: the estimate at the instant of the scan being matched (Codex P3).
+        # Re-expressed with the correction applied now, so a release between
+        # the scan and this match cannot mix frames (Codex 5de6c3a P2).
+        bx, by, byaw = compose(slam["tracker"].applied[0], slam["last_scan_odom_base"])
+        estimate = (
+            bx - abs(options.rear_axle_offset_m) * math.cos(byaw),
+            by - abs(options.rear_axle_offset_m) * math.sin(byaw),
+            byaw,
+        )
+        offset = abs(options.rear_axle_offset_m)
+        rear_from_laser = (
+            offset + float(laser_mount.xyz_m[0]),
+            float(laser_mount.xyz_m[1]),
+            float(laser_mount.yaw_rad),
+        )
+        live = laser_points(slam["last_sent_ranges"], beam_angles)
+        # The station the reference scan was taken at (the prior differs only with
+        # --destination-prior-error-m). After a D7c retry the first match is seeded
+        # from the latest goal, not the prior (Codex D7c re-review P2-3).
+        reference = tuple(docking.get("delivery_rear_reference", delivery))
+        seeded = docking.get("retry_seed_goal") is not None
+        seed = tuple(docking["retry_seed_goal"]) if seeded else delivery
+        match_start = time.monotonic()
+        result = dock(
+            slam["reference_points"],
+            live,
+            rear_from_laser=rear_from_laser,
+            estimate_rear=estimate,
+            delivery_rear=seed,
+        )
+        # Evaluation only: where the delivery pose really is in the estimate frame.
+        expected = compose(estimate, compose(invert(tuple(truth_rear)), reference))
+        docking.update(
+            match_wall_s=time.monotonic() - match_start,
+            live_beams=int(len(live)),
+            accepted=result.accepted,
+            reason=result.reason,
+            correction=result.correction,
+            starts=[[ok, why, list(q)] for ok, why, q in result.starts],
+            start_details=[dict(d) for d in result.start_details],  # iterations, cycle, gates (2026-10-13)
+            goal_error_vs_truth=None
+            if result.goal_estimate is None
+            else [
+                float(result.goal_estimate[0] - expected[0]),
+                float(result.goal_estimate[1] - expected[1]),
+                float(math.atan2(math.sin(result.goal_estimate[2] - expected[2]), math.cos(result.goal_estimate[2] - expected[2]))),
+            ],
+            slam_goal_error_vs_truth=[
+                float(delivery[0] - expected[0]),
+                float(delivery[1] - expected[1]),
+            ],
+        )
+        # The match inputs, so a refused match can be replayed offline (2026-10-13:
+        # every not_converged refusal so far had all starts within 0.11 mm). Record
+        # only: a failed write is noted and the match goes on (Codex P2).
+        try:
+            np.savez_compressed(
+                options.output / f"delivery_match_{len(docking.get('rounds', [])) + 1}.npz",
+                reference=slam["reference_points"], live=live, rear_from_laser=rear_from_laser,
+                estimate=estimate, seed=seed, reference_rear=reference, truth_rear=tuple(truth_rear),
+            )
+        except OSError as exc:
+            docking.setdefault("match_input_errors", []).append(f"{type(exc).__name__}: {exc}")
+        if options.d7_docking:
+            docking["match_seed"] = "latest_goal" if seeded else "prior"
+        retry_match = docking.pop("await_retry_match", False)
+        round_number = docking.get("round", 1)
+        keep_m = docking.get("keep_m", geometry.delivery_straight_m)
+        previous_goal = tuple(docking.get("previous_goal", delivery))
+        # A refused match keeps the best goal so far (the SLAM goal in round 1).
+        goal = result.goal_estimate if result.accepted else previous_goal
+        shift = compose(goal, invert(delivery))  # E: planned -> corrected (total)
+        step_shift = compose(goal, invert(previous_goal))  # since the last round
+        docking.setdefault("rounds", []).append(
+            {
+                "round": round_number,
+                "keep_m": keep_m,
+                "accepted": result.accepted,
+                "reason": result.reason,
+                "goal_error_vs_truth": docking["goal_error_vs_truth"],
+                "estimate_vs_truth_at_match": [
+                    float(estimate[0] - truth_rear[0]),
+                    float(estimate[1] - truth_rear[1]),
+                ],
+                # Each round's own starts: the top-level ones are the last match's.
+                "starts": docking["starts"],
+                "start_details": docking["start_details"],
+            }
+        )
+        if options.d7_docking:
+            # Plan D7c records: when, how long, and the errors in the docking line's
+            # frame (along, lateral, yaw) rather than world dx/dy.
+            entry_ = docking["rounds"][-1]
+            entry_.update(time_s=t, match_wall_s=docking["match_wall_s"], retry_match=retry_match,
+                          estimate_error_truck_frame=list(compose(invert(tuple(truth_rear)), estimate)))
+            if result.goal_estimate is not None:
+                entry_["goal_error_line_frame"] = list(compose(invert(expected), tuple(result.goal_estimate)))
+        if retry_match:
+            # Plan D7c: the first match after a retry must be accepted -- no
+            # falling back to the previous goal (Codex D7c review P1-4).
+            docking.pop("retry_seed_goal", None)
+            require(result.accepted, f"docking_retry_match_refused:{result.reason}")
+        if result.accepted:
+            docking["accepted_any"] = True
+        # A refused second round keeps the first round's valid correction
+        # (Codex 5de6c3a P2): still "done", and its world map W is reused.
+        docking["status"] = "done" if docking.get("accepted_any") else "fallback"
+        committed = False
+        if options.d7_docking and result.accepted:
+            # Plan D7c: commit the matched goal before the straight check, so a
+            # refused straight retries from it (Codex D7c review P1-3). The goal is
+            # in the held frame the match ran in.
+            docking["to_world"] = list(compose(compose(reference, result.relative_rear), invert(estimate)))
+            move_withdraw(step_shift)
+            docking["previous_goal"] = list(goal)
+            docking["goal_frame"] = "held"
+            committed = True
+        line_start = compose(goal, (-keep_m, 0.0, 0.0))
+        # Delivery corrections of ~10 cm are the point of docking (seed 0: 92 mm),
+        # so the box is wider than the insertion one; what makes it safe is the
+        # dry run arriving AND its swept loaded footprint staying clear.
+        straight, offsets = straight_from_pose(
+            PlanningPose(*estimate),
+            PlanningPose(*line_start),
+            PlanningPose(*goal),
+            max_lateral_m=0.12,
+            max_yaw_rad=0.08,
+            min_length_m=0.3,
+        )
+        docking["offsets_to_new_line"] = offsets
+        path = None
+        if straight is not None:
+            config = slam.get("transport_config", trackers["transport"].config)
+            dry = bicycle_rollout(
+                straight.poses, straight.directions, straight.curvatures_inv_m, config, rear
+            )
+            # The obstacles are in world; the dry run is in the estimate frame.
+            # After an accepted match the truck's world pose is D o R, so
+            # W = (D o R) o A^-1 carries estimate poses into world (Codex v3.8
+            # impl P1). Without a match the estimate is the best world guess.
+            if result.accepted:
+                to_world = compose(compose(reference, result.relative_rear), invert(estimate))
+                docking["to_world"] = list(to_world)  # the held frame keeps it valid
+            elif docking.get("to_world") is not None:
+                to_world = tuple(docking["to_world"])
+            else:
+                to_world = (0.0, 0.0, 0.0)
+            if grid_planning:
+                # The LiDAR grid, not the ground truth (plan audit table): the
+                # dry run is in the estimate frame, which the grid shares.
+                from forklift_core.planning.grid_collision import GridFootprintChecker
+
+                swept_checker = GridFootprintChecker(
+                    grid_kwargs("docking")["occupancy"], geometry.loaded_footprint, scenario.bounds
+                )
+
+                def pose_clear(pose):
+                    return swept_checker.free(tuple(pose))
+            else:
+
+                def pose_clear(pose):
+                    return collision_free_pose(
+                        np.asarray(compose(to_world, tuple(pose))),
+                        obstacles,
+                        geometry.loaded_footprint,
+                        scenario.bounds,
+                    )
+            swept_clear = all(pose_clear(pose) for pose in dry.trajectory)
+            docking["dry_run"] = {
+                **{k: v for k, v in asdict(dry).items() if k != "trajectory"},
+                "trajectory_samples": len(dry.trajectory),
+                "swept_clear": swept_clear,
+            }
+            # The tracker stops anywhere inside its own tolerance (Codex v3.8 P2:
+            # a clean 0.7 m straight stops at 7.8 mm); require yaw margin only.
+            if (
+                dry.status == "arrived"
+                and dry.position_error_m <= config.position_tolerance_m
+                and abs(dry.yaw_error_rad) <= 0.75 * config.yaw_tolerance_rad
+                and swept_clear
+            ):
+                path = straight
+                if options.d7_docking and round_number == 1 and result.accepted:
+                    # Plan D7c: what is driven after an accepted first round is the
+                    # straight cut at the round-2 stop, judged at the stop's tolerance
+                    # -- dry-run that, not only the whole straight (Codex D7 Isaac review
+                    # P1: seed 1, whole straight 0.0145 rad, the 0.90 m stop path 0.086).
+                    stop_ok, docking["prefix_dry_run"] = DOCKING_RETRY.round_two_stop_check(
+                        straight, rear, docking_stop_config(), ROUND2_KEEP_M, clear=pose_clear
+                    )
+                    if not stop_ok:
+                        path = None
+        corrected = replace(
+            scenario,
+            destination=replace(
+                scenario.destination,
+                **dict(
+                    zip(
+                        ("x_m", "y_m", "yaw_rad"),
+                        compose(shift, (scenario.destination.x_m, scenario.destination.y_m, scenario.destination.yaw_rad)),
+                    )
+                ),
+            ),
+        )
+        slam["transport_scenario"] = corrected
+        # No long held detour: a Hybrid A* re-alignment for a 9 cm correction
+        # drove 13.3 m forward-only on held odometry and drifted 0.5 m (S2 v3.8
+        # seed 0). A straight that cannot be accepted ends the run instead.
+        if path is None and options.d7_docking:
+            # Plan D7c (b): back to the line's start and match again.
+            start_docking_retry(t, "b", f"docking_unaligned:{offsets}:{docking.get('dry_run')}")
+            return
+        require(path is not None, f"docking_unaligned:{offsets}:{docking.get('dry_run')}")
+        docking.pop("reapproach", None)  # plan D7c: a straight ends the re-approach
+        # The path being replaced, kept (paths.json holds only the latest): the transport search
+        # path's cusps are judged from it (fork spacing plan, V5 cusp arrivals).
+        state.setdefault("paths_replaced", []).append(
+            {"leg": "transport", "time_s": t, "by": "delivery_straight", "path": state["paths"].get("transport")})
+        paths["transport"] = path
+        state["paths"]["transport"] = path_record(path)
+        trackers["transport"] = RearAxlePathTracker(
+            path.poses, path.directions, path.curvatures_inv_m, slam.get("transport_config", trackers["transport"].config)
+        )
+        if not committed:
+            move_withdraw(step_shift)
+        (options.output / "paths.json").write_text(record_json(state["paths"], indent=2) + "\n")
+        add_path_display(stage, path, "Transport", (1.0, 0.65, 0.04))
+        ms.phase_started = t
+        docking["previous_goal"] = list(goal)
+        if round_number == 1 and result.accepted:
+            # Second round: loaded wheels slip (~5 % over the 1.5 m straight,
+            # S2 v3.8c seed 3: 8 cm short), so stop again 0.6 m out and match
+            # once more; the last 0.6 m then carries only that slip (~3 cm).
+            # 0.4 m left the tracker too little straight to settle its yaw: a
+            # 1.1 cm / 6 mrad start failed the 0.015 rad dry-run margin (L3c v15
+            # seed 3: 0.016); 0.6 m settles it to 0.0045 (offline dry run, Codex).
+            final_keep = ROUND2_KEEP_M
+            prefix = final_straight_prefix(path, final_keep)
+            if prefix is not None:
+                docking.update(status="armed", round=2, keep_m=final_keep)
+                trackers["transport"] = RearAxlePathTracker(
+                    prefix.poses,
+                    prefix.directions,
+                    prefix.curvatures_inv_m,
+                    replace(slam["transport_config"], position_tolerance_m=0.03, yaw_tolerance_rad=0.05),
+                )

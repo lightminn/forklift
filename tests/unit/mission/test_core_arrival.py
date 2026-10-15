@@ -50,6 +50,10 @@ def make(phase, *, near=None, slam=None, trackers=None, stop_at=None, d7=False, 
                        trackers=trackers if trackers is not None else {}, geometry=SimpleNamespace(),
                        settings={"lift_target_m": 0.1, "lift_rate_mps": 0.06}, pallet_geometry=None, hooks=hooks,
                        near=near, options=options)
+    # Docking/withdrawal helpers are MissionCore methods since slice 6b; this test's stand-ins go on the instance.
+    for name_ in ['dock_at_delivery_straight', 'arm_docking', 'release_and_carry', 'transport_replan', 'start_docking_retry']:
+        if hasattr(hooks, name_):
+            setattr(core, name_, getattr(hooks, name_))
     return core, ms, state, log
 
 

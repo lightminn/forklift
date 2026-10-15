@@ -920,8 +920,8 @@ def test_every_path_replacement_restarts_the_no_progress_baseline():
     window = moved[cusp : cusp + 1500]
     assert window.index("arm_docking()") < window.index('obstacle.setdefault("progress", {}).clear()')
     # ... and a D7c re-approach installed in place of the transport path (plan D7c ④).
-    install = source.index("    def install_reapproach(")
-    assert 'obstacle.setdefault("progress", {}).clear()' in source[install : install + 1500]
+    install = moved.index("    def install_reapproach(self, ")  # a MissionCore method since M-a1 slice 6b
+    assert 'obstacle.setdefault("progress", {}).clear()' in moved[install : moved.index("\n    def ", install + 10)]
     # ... and a plan D8 S4b correction point's re-drawn docking straights.
     near_install = source.index("    def near_install(")
     assert 'obstacle.setdefault("progress", {}).clear()' in source[near_install : near_install + 3000]
@@ -940,8 +940,9 @@ def test_d7c_docking_branches_are_inert_without_the_flag():
     source = SCRIPT.read_text()
     core = CORE.read_text()  # the D7c docking stop moved to the mission core (M-a1 slice 4a-ii)
     assert 'd7_docking_ = slam["docking"] if (options.d7_docking and slam is not None) else {}' in core
-    assert "        if args.d7_docking and result.accepted:\n" in source  # the early goal commit
-    assert "        if path is None and args.d7_docking:\n" in source  # (b) instead of docking_unaligned
+    # (the delivery docking is a MissionCore method since M-a1 slice 6b)
+    assert "        if options.d7_docking and result.accepted:\n" in core  # the early goal commit
+    assert "        if path is None and options.d7_docking:\n" in core  # (b) instead of docking_unaligned
     # Without the flag the stall and cusp branches are the old ones (d7_owned is False).
     assert "d7_owned = ms.phase == \"transport\" and bool(" in core
 

@@ -71,9 +71,11 @@ def test_the_planner_pickup_obstacle_is_the_zone_prior_or_the_estimate():
 
 
 def test_the_delivery_docking_sweep_uses_the_grid_when_grid_planning():
-    i = SOURCE.index("swept_checker = GridFootprintChecker(")
-    head = SOURCE[SOURCE.rindex("if grid_planning:", 0, i) : i]
-    assert "grid_kwargs(\"docking\")" in SOURCE[i : i + 200] and len(head) < 400
+    # The delivery docking is a MissionCore method since M-a1 slice 6b.
+    core = (Path(__file__).resolve().parents[2] / "src/forklift_core/mission/core.py").read_text()
+    i = core.index("swept_checker = GridFootprintChecker(")
+    head = core[core.rindex("if grid_planning:", 0, i) : i]
+    assert "grid_kwargs(\"docking\")" in core[i : i + 200] and len(head) < 400
 
 
 def test_runtime_viewpoints_cannot_join_grid_planning():

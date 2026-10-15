@@ -105,6 +105,10 @@ class World:
                                 paths=self.paths, trackers=self.trackers, geometry=SimpleNamespace(
                                     alignment_straight_m=1.0), settings={}, pallet_geometry=None,
                                 hooks=self.hooks, options=options)
+        # Docking/withdrawal helpers are MissionCore methods since slice 6b; this test's stand-ins go on the instance.
+        for name_ in ['dock_at_delivery_straight', 'arm_docking', 'release_and_carry', 'transport_replan', 'start_docking_retry']:
+            if hasattr(self.hooks, name_):
+                setattr(self.core, name_, getattr(self.hooks, name_))
 
     def log(self, name, *args, **kwargs):
         self.calls.append((name, args, kwargs))
@@ -143,7 +147,7 @@ def test_a_new_path_is_installed_with_the_leg_config_and_restarts_the_phase_and_
 def test_the_deadline_is_20_s_and_halved_for_the_leg_after_recognition():
     seen = []
     w = World("transport", plans=[plan()])
-    w.hooks.transport_replan = lambda *a: seen.append(dict(w.obstacle)["deadline"]) or plan()
+    w.core.transport_replan = lambda *a: seen.append(dict(w.obstacle)["deadline"]) or plan()
     w.replan()
     assert seen == [1021.0]  # the start read at 1000, the deadline read at 1001 + 20 s
     w = World("observe", plans=[plan()], recognised=True)
@@ -341,7 +345,7 @@ def test_after_a_release_the_runners_closures_see_the_released_pose():
     w.ms.phase = "transport"
     w.trackers["transport"] = w.trackers["observe"]
     w.plans = [plan()]
-    w.hooks.transport_replan = lambda *a: w.hooks.grid_kwargs(None) and plan()
+    w.core.transport_replan = lambda *a: w.hooks.grid_kwargs(None) and plan()
     w.replan()
     (grid,) = [c for c in w.calls if c[0] == "grid_kwargs"]
     assert grid[2]["own_pose"] == (1.2, 2.0, 0.0)  # the re-approach release's pose

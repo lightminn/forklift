@@ -81,6 +81,10 @@ class World:
             trackers={phase: self.tracker}, geometry="G", settings={}, pallet_geometry=None, hooks=self.hooks,
             options=SimpleNamespace(d7_docking=True, planner_config=Config(), travel_config=None, scenario="SC",
                                     return_to_pose="HOME"))
+        # Docking/withdrawal helpers are MissionCore methods since slice 6b; this test's stand-ins go on the instance.
+        for name_ in ['dock_at_delivery_straight', 'arm_docking', 'release_and_carry', 'transport_replan', 'start_docking_retry']:
+            if hasattr(self.hooks, name_):
+                setattr(self.core, name_, getattr(self.hooks, name_))
 
     def names(self):
         return [c[0] for c in self.calls if c[0] not in ("require", "grid_kwargs")]
