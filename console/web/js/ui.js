@@ -30,7 +30,6 @@ const FORBID_KO = {
 const PALLET_STATE = { available: "대기", carried: "적재 중", delivered: "하역 완료" };
 
 const $ = (id) => document.getElementById(id);
-const fmt = (v, d = 2) => (v === null || v === undefined || !Number.isFinite(v) ? "측정 안 됨" : v.toFixed(d));
 const deg = (rad) => {
   const d = (rad * 180) / Math.PI;
   return (Math.abs(d) < 0.05 ? 0 : d).toFixed(1); // no "-0.0"
@@ -263,7 +262,7 @@ export function render(m) {
   $("r-y").textContent = pose ? pose.y_m.toFixed(3) : "—";
   $("r-yaw").textContent = pose ? deg(pose.yaw_rad) : "—";
   $("d-frame").textContent = pose ? `${pose.frame ?? "map"} · 보정 ${pose.correction_version ?? "—"}` : "위치 없음";
-  $("r-v").textContent = fmt(st.rear_axle_speed_mps);
+  $("r-v").textContent = Number.isFinite(st.rear_axle_speed_mps) ? st.rear_axle_speed_mps.toFixed(2) : "—";
   $("r-st").textContent = st.steering_rad ? deg(st.steering_rad[0]) : "—";
   $("r-lift").textContent = Number.isFinite(st.lift_m) ? Math.round(st.lift_m * 1000) : "—";
   $("r-load").textContent = st.load?.state === "loaded" ? `적재 · ${st.load.pallet_id}` : st.load?.state === "empty" ? "없음" : "측정 안 됨";

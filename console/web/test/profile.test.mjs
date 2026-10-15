@@ -25,10 +25,12 @@ test("the picture is stale when the state or the pose behind it is older than 1 
   assert.equal(staleness({ stateAgeS: 0.2, poseAgeS: 0.1 }).stale, false);
   const a = staleness({ stateAgeS: 1.6, poseAgeS: 0.1 });
   assert.equal(a.stale, true);
-  assert.match(a.text, /1\.6 s/);
+  assert.match(a.text, /1\.7 s/); // 1.6 s since received + 0.1 s old when sent
+  // the pose was already 3.04 s old when sent, and that state arrived 0.2 s ago
   const b = staleness({ stateAgeS: 0.2, poseAgeS: 3.04 });
   assert.equal(b.stale, true);
-  assert.match(b.text, /3\.0 s/);
+  assert.match(b.text, /3\.2 s/);
+  assert.equal(staleness({ stateAgeS: 0.6, poseAgeS: 0.6 }).stale, true); // 1.2 s in all
   assert.equal(staleness({ stateAgeS: null, poseAgeS: null }).stale, true);
   assert.equal(staleness({ stateAgeS: 0.1, poseAgeS: null }).stale, false); // no age reported: judged by the state alone
 });

@@ -16,11 +16,12 @@ export function controlProfile(capabilities) {
 
 export const STALE_S = 1.0;
 
-// stateAgeS: since the browser last received a state; poseAgeS: the age the vehicle
-// reports for the pose it sent (null when it does not report one).
+// stateAgeS: since the browser last received a state; poseAgeS: how old the pose already
+// was when the vehicle sent that state (null when it does not say). The pose on screen is
+// as old as both together.
 export function staleness({ stateAgeS, poseAgeS }) {
   if (stateAgeS === null || stateAgeS === undefined) return { stale: true, text: "상태를 받지 못했습니다" };
-  const age = Math.max(stateAgeS, poseAgeS ?? 0);
+  const age = stateAgeS + (poseAgeS ?? 0);
   if (age <= STALE_S) return { stale: false, text: "" };
   return { stale: true, text: `위치 ${age.toFixed(1)} s 전 · 지금 위치가 아닐 수 있습니다` };
 }
