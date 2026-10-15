@@ -241,8 +241,8 @@ def test_a_rotated_map_is_withheld_and_reported(tmp_path, unused_tcp_port):
             await m.send(
                 json.dumps({"t": "media_subscribe", "client_id": "a", "grid": {}})
             )
-            with pytest.raises(TimeoutError):
-                await asyncio.wait_for(m.recv(), 1.5)
+            head, body = await _media_until(m, "grid")
+            assert head["withdrawn"] is True and body == b""  # the page drops its copy
             c = await _hello(unused_tcp_port)
             st = await _until(c, "state", lambda s: s["notes"])
             assert "회전" in st["notes"][0]

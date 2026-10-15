@@ -165,7 +165,7 @@ def test_state_reports_what_is_measured_and_null_for_the_rest():
         assert st[key] is None, key
     assert st["load"] == {"state": None}
     assert st["freshness"]["slam_correction_age_s"] == pytest.approx(0.8)
-    assert st["freshness"]["grid_age_s"] == pytest.approx(1.0)
+    assert st["freshness"]["grid_free_age_s"] == pytest.approx(1.0)
     assert st["freshness"]["scan_age_s"] == pytest.approx(0.05)
 
 
@@ -187,6 +187,77 @@ def test_state_without_any_pose():
     assert st["rear_axle_speed_mps"] is None
     assert st["freshness"] == {
         "slam_correction_age_s": None,
-        "grid_age_s": None,
+        "grid_free_age_s": None,
+        "near_obs_age_s": None,
         "scan_age_s": None,
     }
+
+
+def test_speed_comes_from_successive_odom_poses_along_the_heading():
+    # the Isaac bridge and the replay publish odom poses with an empty twist
+    v = convert.speed_from_poses(
+        (10.0, 0.0, 0.0, math.pi / 2), (10.5, 0.0, 0.15, math.pi / 2)
+    )
+    assert v == pytest.approx(0.3)
+    reverse = convert.speed_from_poses((1.0, 1.0, 1.0, 0.0), (1.2, 0.96, 1.0, 0.0))
+    assert reverse == pytest.approx(-0.2)
+    assert (
+        convert.speed_from_poses((1.0, 0, 0, 0), (1.0, 1, 0, 0)) is None
+    )  # no time passed
+    assert (
+        convert.speed_from_poses((1.0, 0, 0, 0), (0.5, 1, 0, 0)) is None
+    )  # time went back
+    assert (
+        convert.speed_from_poses((1.0, 0, 0, 0), (2.5, 1, 0, 0)) is None
+    )  # gap too long
+
+
+def test_a_non_finite_value_becomes_null_instead_of_breaking_the_state():
+    snap = Snapshot(
+        base=PoseSample("map", math.nan, 1.0, 0.0, received_s=9.9),
+        speed_mps=math.inf,
+        speed_received_s=9.9,
+    )
+    st = convert.state(snap, now=10.0, epoch=1, seq=1, rear_axle_x_m=-0.34)
+    assert st["pose"] is None
+    assert st["rear_axle_speed_mps"] is None
+    from console import wire
+
+    assert wire.encode(st) is not None  # strict JSON still encodes
+
+
+def test_freshness_uses_the_contract_names():
+    snap = Snapshot(grid_received_s=8.0, scan_received_s=9.5)
+    fr = convert.state(snap, now=10.0, epoch=1, seq=1, rear_axle_x_m=0.0)["freshness"]
+    assert fr["grid_free_age_s"] == pytest.approx(2.0)
+    assert fr["scan_age_s"] == pytest.approx(0.5)
+    assert fr["near_obs_age_s"] is None
+    assert "grid_age_s" not in fr
+
+
+def test_a_scan_placed_with_a_later_pose_says_so():
+    scan = ScanMessage(-1.0, 0.5, 0.1, 10.0, [1.0], received_s=5.0)
+    laser = PoseSample("map", 0.0, 0.0, 0.0, received_s=5.0)
+    head, _ = convert.scan_frame(scan, laser, epoch=1, pose_at="latest", delay_s=0.42)
+    assert head["pose_at"] == "latest" and head["pose_delay_s"] == pytest.approx(0.42)
+    head, _ = convert.scan_frame(scan, laser, epoch=1)
+    assert head["pose_at"] == "scan_stamp" and head["pose_delay_s"] == 0.0
+
+
+def test_a_withdrawn_grid_tells_the_page_to_drop_its_copy():
+    head, body = convert.withdrawn_grid(epoch=3, reason="rotated")
+    assert head == {
+        "t": "grid",
+        "session_epoch": 3,
+        "withdrawn": True,
+        "reason": "rotated",
+    }
+    assert body == b""
+
+
+def test_camera_head_keeps_the_capture_domain():
+    head = convert.camera_head(
+        epoch=2, frame_id=5, stamp_ns=77, received_s=1.5, jpeg_bytes=10, domain="sim"
+    )
+    assert head["capture"] == {"domain": "sim", "stamp_ns": 77}
+    assert head["frame_id"] == 5 and head["jpeg_bytes"] == 10

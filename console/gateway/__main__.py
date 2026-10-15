@@ -19,7 +19,7 @@ WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
 REAR_AXLE_X_M = -0.34
 
 
-async def _serve(store: Store, args) -> None:
+async def _serve(store: Store, args, capture_domain: str) -> None:
     gw = await server.start(
         store,
         args.host,
@@ -29,6 +29,7 @@ async def _serve(store: Store, args) -> None:
         args.backend,
         secrets.randbits(48) | 1,  # a new session for every start (contract 2)
         args.rear_axle_x,
+        capture_domain=capture_domain,
     )
     print(
         f"console gateway (monitor only): http://{args.host}:{args.port}/ "
@@ -57,9 +58,9 @@ def main(argv=None) -> None:
     from console.gateway.ros_node import spin_in_thread
 
     store = Store()
-    spin_in_thread(store, args=["console_gateway", *ros_args])
+    node, _ = spin_in_thread(store, args=["console_gateway", *ros_args])
     try:
-        asyncio.run(_serve(store, args))
+        asyncio.run(_serve(store, args, "sim" if node.sim_time else "sensor"))
     except KeyboardInterrupt:
         pass
     finally:

@@ -66,11 +66,14 @@ class FakeRobot(Node):
         grid.info.origin.orientation.w = 1.0
         grid.data = [0, 100, -1, 30]
         self.map_pub.publish(grid)
+        self.tf_on = True
+        self.t0 = self.get_clock().now().nanoseconds
         self.create_timer(0.05, self.tick)
 
     def tick(self):
         now = self.get_clock().now().to_msg()
-        self.tfb.sendTransform(_tf(now, "odom", "base_link", 2.0, 1.0, math.pi / 2))
+        if self.tf_on:
+            self.tfb.sendTransform(_tf(now, "odom", "base_link", 2.0, 1.0, math.pi / 2))
         scan = LaserScan()
         scan.header.stamp = now
         scan.header.frame_id = "laser"
@@ -78,8 +81,13 @@ class FakeRobot(Node):
         scan.range_min, scan.range_max = 0.1, 8.0
         scan.ranges = [1.0, float("inf"), 2.0]
         self.scan_pub.publish(scan)
+        # like the Isaac bridge and the replay: pose only, the twist left empty;
+        # heading +y at 0.3 m/s, the position following the stamp (timer jitter-proof)
         odom = Odometry()
-        odom.twist.twist.linear.x = 0.3
+        odom.header.stamp = now
+        odom.pose.pose.position.y = 0.3 * (now.sec * 1e9 + now.nanosec - self.t0) * 1e-9
+        odom.pose.pose.orientation.z = math.sin(math.pi / 4)
+        odom.pose.pose.orientation.w = math.cos(math.pi / 4)
         self.odom_pub.publish(odom)
         cam = CompressedImage()
         cam.header.stamp = now
@@ -123,16 +131,35 @@ def test_gateway_node_turns_ros_topics_into_console_messages(tmp_path, unused_tc
                     msg.get("t") == "state"
                     and msg["pose"]
                     and msg["pose"]["frame"] == "map"
+                    and msg["rear_axle_speed_mps"] is not None  # needs two odom poses
                 ):
                     st = msg
                     break
-            assert st is not None, "no map pose within 10 s"
+            assert st is not None, "no map pose with a speed within 10 s"
             # map -> base_link = (3, 1, +90 deg); the rear axle is 0.34 m behind: (3, 0.66)
             assert st["pose"]["x_m"] == pytest.approx(3.0, abs=1e-6)
             assert st["pose"]["y_m"] == pytest.approx(0.66, abs=1e-6)
             assert st["pose"]["yaw_rad"] == pytest.approx(math.pi / 2, abs=1e-6)
             assert st["pose"]["correction_version"] == 1  # the static map -> odom, once
-            assert st["rear_axle_speed_mps"] == pytest.approx(0.3)
+            assert st["rear_axle_speed_mps"] == pytest.approx(
+                0.3, abs=1e-4
+            )  # float stamps
+            assert st["pose"]["age_s"] < 0.5
+            # the publisher stops: the buffer keeps answering with its last transform,
+            # and that pose must age instead of looking current
+            robot.tf_on = False
+            stop_at = time.monotonic()
+            aged = None
+            while (
+                time.monotonic() < stop_at + 3.0
+            ):  # states queued meanwhile come first
+                msg = json.loads(await c.recv())
+                if msg.get("t") == "state" and msg["pose"]["age_s"] > 1.0:
+                    aged = msg
+                    break
+            assert aged is not None, "the pose never aged after its TF stopped"
+            # the last transform was stamped up to one 0.05 s tick before the stop
+            assert time.monotonic() - stop_at >= 0.9
             await c.close()
 
             m = await websockets.connect(
@@ -170,7 +197,8 @@ def test_gateway_node_turns_ros_topics_into_console_messages(tmp_path, unused_tc
     try:
         asyncio.run(asyncio.wait_for(body(), 40))
     finally:
-        ex.shutdown()
+        ex.shutdown(timeout_sec=2.0)
+        spin.join(timeout=2.0)
         gw_node.destroy_node()
         robot.destroy_node()
         rclpy.shutdown()

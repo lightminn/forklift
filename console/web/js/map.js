@@ -278,11 +278,13 @@ export function drawMap(cv, model, tok, view, layers) {
 
   if (layers.lidar) {
     c.fillStyle = tok.lidar;
+    c.globalAlpha = model.scanApprox ? 0.4 : 1; // placed with a later pose: may be off
     const pts = model.scanPoints || [];
     for (let i = 0; i < pts.length; i += 2) {
       const [x, y] = P(pts[i], pts[i + 1]);
       c.fillRect(x - 1.2, y - 1.2, 2.4, 2.4);
     }
+    c.globalAlpha = 1;
   }
 
   // truck: glow in the mode colour, chevron for heading, forks ahead, tag below

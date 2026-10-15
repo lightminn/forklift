@@ -55,6 +55,7 @@
       <span class="legend-mode" data-m="STOPPED"><i></i>정지됨</span>
       <span class="monitor-alert" id="monitor-alert" hidden>관찰 전용 연결 · 이 화면으로 차량을 멈출 수 없습니다 · 물리 비상정지를 쓰세요</span>
       <span class="draft" id="draft"><strong>가짜 차량</strong> console/1 계약을 흉내 낸 개발용 차량입니다. 수치 상한은 잠정값이고, 물리 비상정지는 이 화면과 독립된 하드웨어 경로입니다.</span>
+      <span class="notes" id="notes" hidden></span>
       <span class="gens" id="gens">epoch — · control — · arm —</span>
     </div>
 
@@ -105,9 +106,9 @@
         <dl class="kv wide">
           <dt>접속 주소</dt><dd class="mono" id="l-ep">—</dd>
           <dt>tick 간격(참고)</dt><dd class="mono" id="l-rtt">—</dd>
-          <dt>명령 유효기한</dt><dd class="mono">0.30 s · 차량 시계 (잠정)</dd>
+          <dt>명령 유효기한</dt><dd class="mono" id="l-ttl">0.30 s · 차량 시계 (잠정)</dd>
           <dt>접속 기기</dt><dd id="l-peers">—</dd>
-          <dt>끊김 시 동작</dt><dd>자동 주행은 계속 · 수동 조종은 만료로 정지</dd>
+          <dt>끊김 시 동작</dt><dd id="l-policy">자동 주행은 계속 · 수동 조종은 만료로 정지</dd>
         </dl>
         <div class="row"><button class="btn" id="l-drop" type="button">끊김 시험 (3초, 가짜 차량)</button></div>
       </section>

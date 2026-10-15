@@ -10,7 +10,7 @@ import { createMapView, panBy, zoomAt, zoomPercent } from "./mapview.js";
 import { decodeScan, parseFrame } from "./media.js";
 import { API, createSession } from "./protocol.js";
 import { log, render, renderPallets, renderTemplates, renderWizard } from "./ui.js";
-import { controlProfile, staleness, stopIsRefused } from "./profile.js";
+import { controlProfile, frameAgreement, scanDrawable, staleness, stopIsRefused } from "./profile.js";
 import { blockReason, nextAllowed, templatesFor } from "./wizard.js";
 
 const TELEOP_MIN_INTERVAL_MS = 33; // ~30 Hz cap: a fast display must not flood ticks
@@ -61,7 +61,9 @@ const m = {
   session: null,
   link: { up: false, tickGapMs: null, lastTickAt: null },
   grid: null,
-  scanPoints: [],
+  scan: null, // {frame, points, at, approx}
+  mediaEpoch: null,
+  frameNote: null,
   chassis: null,
   cameraModel: null,
   camera: { bitmap: null, frameId: null, lastAt: null },
@@ -126,6 +128,13 @@ try {
 
 m.session.subscribe((msg) => {
   if (msg.t === "welcome") {
+    if (msg.session_epoch !== m.mediaEpoch) {
+      // a new vehicle session: nothing of the old one stays on screen
+      m.grid = null;
+      m.scan = null;
+      m.mediaEpoch = msg.session_epoch;
+    }
+    subscribeMedia(); // (re)subscribe now that the epoch is known: frames sent before it were dropped
     m.linkWelcome = msg;
     if (!stopIsRefused(msg)) $("nostop").hidden = true; // a vehicle that can stop: no stale notice
     frames.reset(msg.session_epoch);
@@ -194,12 +203,20 @@ function connectControl() {
   });
 }
 
+let media = null;
+function subscribeMedia() {
+  // only once the control connection has told us the session epoch; every subscribe
+  // makes the vehicle send its current frames again
+  if (media && media.readyState === WebSocket.OPEN && m.session.epoch !== null) {
+    media.send(JSON.stringify({ t: "media_subscribe", client_id: clientId, camera_rgb: { hz: 15 }, scan: { hz: 10 }, grid: { hz: 1 } }));
+  }
+}
+
 function connectMedia() {
   const ws = new WebSocket(`ws://${location.host}/api/v1/media`);
+  media = ws;
   ws.binaryType = "arraybuffer";
-  ws.addEventListener("open", () => {
-    ws.send(JSON.stringify({ t: "media_subscribe", client_id: clientId, camera_rgb: { hz: 15 }, scan: { hz: 10 }, grid: { hz: 1 } }));
-  });
+  ws.addEventListener("open", subscribeMedia);
   ws.addEventListener("message", async (ev) => {
     if (!(ev.data instanceof ArrayBuffer)) return;
     const { head, body } = parseFrame(ev.data);
@@ -217,12 +234,15 @@ function connectMedia() {
       drawCamera($("cam"), { ...m.camera, state: m.session.state, cameraModel: m.cameraModel, chassis: m.chassis }, tok);
       frames.drawn(head.session_epoch, head.frame_id);
     } else if (head.t === "scan") {
-      m.scanPoints = decodeScan(head, body);
+      m.scan = { frame: head.frame ?? null, points: decodeScan(head, body), at: performance.now(), approx: head.pose_at === "latest" };
     } else if (head.t === "grid") {
-      m.grid = { head, cells: new Uint8Array(body) };
+      m.grid = head.withdrawn ? null : { head, cells: new Uint8Array(body) }; // withdrawn: drop the old map
     }
   });
-  ws.addEventListener("close", () => setTimeout(connectMedia, 1000));
+  ws.addEventListener("close", () => {
+    if (media === ws) media = null;
+    setTimeout(connectMedia, 1000);
+  });
 }
 
 // ------------------------------------------------------------------ STOP
@@ -604,10 +624,18 @@ $("dest").addEventListener("change", () => {
 // The teleop controls and their feedback must be on screen to drive: a tab switch, a view
 // or a width change that hides them releases every input (C1 rule), whatever caused it.
 let teleShown = true;
+let hiddenDisarmSent = false;
 function checkTeleVisible() {
   const shown = $("pane-tele").getClientRects().length > 0;
   if (teleShown && !shown) inputs.controlsHidden();
   teleShown = shown;
+  // an arm answered after the controls were hidden (a late ack) is asked back at once
+  if (!shown && m.session.armed && !hiddenDisarmSent) {
+    hiddenDisarmSent = true;
+    m.session.request("disarm").then(report);
+    log("조종 준비 해제 요청 · 조종판이 화면에 없음", "warn");
+  }
+  if (!m.session.armed) hiddenDisarmSent = false;
 }
 
 function frame(now) {
@@ -617,7 +645,7 @@ function frame(now) {
   inputs.setPad(snap);
   const r = inputs.read();
   m.teleop.lastRead = r;
-  const allowed = m.teleop.gate.canSend() && m.session.hasLease;
+  const allowed = m.teleop.gate.canSend() && m.session.hasLease && teleShown; // hidden controls never drive
   if (st && st.mode === "TELEOP" && m.session.armed && allowed && now - m.teleop.lastSentAt >= TELEOP_MIN_INTERVAL_MS) {
     const cmd = m.session.teleopCommand({
       mode: m.teleop.gate.mode,
@@ -632,7 +660,25 @@ function frame(now) {
       m.teleop.lastSentAt = now;
     }
   }
-  drawMap($("map"), { grid: m.grid, scanPoints: m.scanPoints, state: st, targets: m.session.targets, chassis: m.chassis, vehicleId: m.session.welcome?.vehicle_id, stale: m.stale }, tok, m.view, m.layers);
+  const agree = frameAgreement({ gridFrame: m.grid?.head.frame ?? null, poseFrame: st?.pose?.frame ?? null, scanFrame: m.scan?.frame ?? null });
+  m.frameNote = agree.note;
+  const scanOk = agree.scan && scanDrawable(m.scan ? { ageS: (now - m.scan.at) / 1000 } : null);
+  drawMap(
+    $("map"),
+    {
+      grid: m.grid,
+      scanPoints: scanOk ? m.scan.points : [],
+      scanApprox: Boolean(m.scan?.approx),
+      state: st && !agree.pose ? { ...st, pose: null } : st,
+      targets: m.session.targets,
+      chassis: m.chassis,
+      vehicleId: m.session.welcome?.vehicle_id,
+      stale: m.stale,
+    },
+    tok,
+    m.view,
+    m.layers,
+  );
   const zp = zoomPercent(m.view);
   $("zoom-pct").textContent = zp === null ? "—" : `${Math.round(zp)}%`;
   if (!m.camera.bitmap) drawCamera($("cam"), { state: st, cameraModel: m.cameraModel, chassis: m.chassis }, tok);

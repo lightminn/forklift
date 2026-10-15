@@ -41,12 +41,14 @@ class Gateway(wire.ControlOutboxMixin, wire.MediaFanoutMixin):
         epoch: int,
         rear_axle_x_m: float,
         clock=time.monotonic,
+        capture_domain: str = "sensor",
     ):
         self.store = store
         self.web_root = web_root
         self.clock = clock
         self.epoch = epoch
         self.rear_axle_x_m = rear_axle_x_m
+        self.capture_domain = capture_domain  # "sim" when the stamps are sim time
         self.welcome_msg = convert.welcome(vehicle_id, backend, epoch)
         self.state_seq = 0
         self.server = None
@@ -166,6 +168,9 @@ class Gateway(wire.ControlOutboxMixin, wire.MediaFanoutMixin):
                 sub["rates"] = wire.media_rates(
                     msg, {"camera_rgb": CAMERA_HZ, "scan": SCAN_HZ, "grid": GRID_HZ}
                 )
+                # a (re)subscribe gets the current frames again: the page may have
+                # dropped earlier ones (e.g. before it knew the session epoch)
+                sub["sent_seq"] = {}
         except ConnectionClosed:
             pass
         finally:
@@ -181,29 +186,25 @@ class Gateway(wire.ControlOutboxMixin, wire.MediaFanoutMixin):
                 )
             except convert.GridRotated as exc:
                 self.store.note("grid", f"지도 원점이 회전되어 표시하지 않음 ({exc})")
-                return None
+                return wire.frame(*convert.withdrawn_grid(self.epoch, "rotated"))
             except ValueError as exc:
                 self.store.note("grid", f"지도 형식 오류 ({exc})")
-                return None
+                return wire.frame(*convert.withdrawn_grid(self.epoch, "invalid"))
             self.store.note("grid", None)
             return wire.frame(head, body)
         if kind == "scan":
-            scan, laser = value
-            out = convert.scan_frame(scan, laser, self.epoch)
+            scan, laser, pose_at, delay_s = value
+            out = convert.scan_frame(scan, laser, self.epoch, pose_at, delay_s)
             return None if out is None else wire.frame(*out)
-        # camera: JPEG passed through; one frame_id per received image
-        head = {
-            "t": "camera",
-            "session_epoch": self.epoch,
-            "frame_id": self.frame_id,
-            "acquired_mono_ns": int(value.received_s * 1e9),
-            "capture": {"domain": "sensor", "stamp_ns": value.stamp_ns},
-            "calibration_version": None,
-            "format": "jpeg",
-            "width": None,
-            "height": None,
-            "jpeg_bytes": len(value.jpeg),
-        }
+        # camera: JPEG passed through; one frame_id per capture (the store drops re-sends)
+        head = convert.camera_head(
+            self.epoch,
+            self.frame_id,
+            value.stamp_ns,
+            value.received_s,
+            len(value.jpeg),
+            self.capture_domain,
+        )
         return wire.frame(head, value.jpeg)
 
     async def _media_kind(self, kind: str) -> None:
@@ -240,8 +241,17 @@ async def start(
     backend: str,
     epoch: int,
     rear_axle_x_m: float,
+    capture_domain: str = "sensor",
 ) -> Gateway:
-    gw = Gateway(store, web_root, vehicle_id, backend, epoch, rear_axle_x_m)
+    gw = Gateway(
+        store,
+        web_root,
+        vehicle_id,
+        backend,
+        epoch,
+        rear_axle_x_m,
+        capture_domain=capture_domain,
+    )
     gw.server = await serve(
         gw.handler,
         host,

@@ -185,13 +185,17 @@ export function render(m) {
   chip($("stop-kind"), st.stop_kind === "safety_preempt" ? "crit" : st.stop_kind === "controlled_decel" ? "warn" : "", st.stop_kind ? STOP_KO[st.stop_kind] ?? st.stop_kind : "정지 종류 —");
   $("rearm").hidden = mode !== "STOPPED";
   $("rearm").disabled = !lease || !st.stopped_confirmed;
-  $("l-peers").textContent = `${st.lease?.holder ? (lease ? "이 기기(조종)" : "다른 기기(조종)") : "조종 기기 없음"} · 관찰 ${st.lease?.observers ?? 0}대${st.lease?.reserved_until_s ? ` · 재연결 대기 ${st.lease.reserved_until_s.toFixed(1)} s` : ""}`;
+  $("l-peers").textContent = monitor
+    ? "알 수 없음 · 이 연결은 조종 권한을 다루지 않습니다"
+    : `${st.lease?.holder ? (lease ? "이 기기(조종)" : "다른 기기(조종)") : "조종 기기 없음"} · 관찰 ${st.lease?.observers ?? 0}대${st.lease?.reserved_until_s ? ` · 재연결 대기 ${st.lease.reserved_until_s.toFixed(1)} s` : ""}`;
+  $("l-ttl").textContent = monitor ? "해당 없음 · 이 연결은 명령을 보내지 않습니다" : "0.30 s · 차량 시계 (잠정)";
+  $("l-policy").textContent = monitor ? "이 연결과 무관 · 차량 쪽 동작은 이 화면이 알 수 없습니다" : "자동 주행은 계속 · 수동 조종은 만료로 정지";
 
   // badges
-  badge($("b-lease"), lease ? "ok" : st.lease?.holder ? "warn" : "", lease ? "이 기기" : st.lease?.holder ? "다른 기기" : "없음");
+  badge($("b-lease"), lease ? "ok" : st.lease?.holder ? "warn" : "", monitor ? "모름" : lease ? "이 기기" : st.lease?.holder ? "다른 기기" : "없음");
   badge($("b-mode"), MODE_CLS[mode] ?? "", mode ? MODE_KO[mode] ?? mode : "판정 없음");
   const mi = st.mission;
-  const [mcls, mko] = mi ? STATUS[mi.status] ?? ["", mi.status] : ["", "작업 없음"];
+  const [mcls, mko] = mi ? STATUS[mi.status] ?? ["", mi.status] : ["", monitor ? "모름" : "작업 없음"];
   badge($("b-work"), mcls, mko);
 
   // progress strip and destination
@@ -205,12 +209,12 @@ export function render(m) {
     $("d-prog-fill").style.width = `${(pct * 100).toFixed(1)}%`;
     $("d-prog-pct").textContent = `${mi.pallet_id} → ${mi.destination_id} · ${Math.round(pct * 100)}%`;
   } else {
-    $("req-status-line").textContent = "진행 중인 작업 없음";
+    $("req-status-line").textContent = monitor ? "작업 정보 없음 · 관찰 전용 연결" : "진행 중인 작업 없음";
     prog.dataset.tone = "";
     $("d-prog-fill").style.width = "0";
     $("d-prog-pct").textContent = "";
   }
-  $("d-dest").textContent = currentDestination(mi) ?? "지정된 목적지 없음";
+  $("d-dest").textContent = currentDestination(mi) ?? (monitor ? "알 수 없음 (관찰 전용)" : "지정된 목적지 없음");
 
   // mission
   const why = blockReason({ state: st, canMission: prof.mission, hasLease: lease, mode, mission: mi });
@@ -271,7 +275,7 @@ export function render(m) {
   if (m.chassis) $("r-radius").textContent = m.chassis.model_turning_radius_m.toFixed(2);
   $("r-phase-t").textContent = mi && Number.isFinite(mi.phase_elapsed_s) ? `${mi.phase_elapsed_s.toFixed(1)} s (일시정지 동안 멈춤)` : "—";
   const fr = st.freshness || {};
-  const parts = [["격자", fr.grid_free_age_s], ["SLAM 보정", fr.slam_correction_age_s], ["근접 관측", fr.near_obs_age_s]];
+  const parts = [["격자", fr.grid_free_age_s], ["스캔", fr.scan_age_s], ["SLAM 보정", fr.slam_correction_age_s], ["근접 관측", fr.near_obs_age_s]];
   $("r-fresh").textContent = parts.map(([k, v]) => `${k} ${v === null || v === undefined ? "측정 안 됨" : `${v.toFixed(1)} s`}`).join(" · ");
   $("r-still").textContent = st.stopped_confirmed ? "정지 확인됨" : "확인 안 됨";
   if (!pose) chip($("loc-chip"), "warn", "위치 없음");
@@ -324,5 +328,8 @@ export function render(m) {
   banner.hidden = !(age !== null && age > 1.0);
   banner.textContent = "영상이 멈췄습니다 · 영상 조종은 차량이 거부합니다";
   $("cam-meta").textContent = m.camera.frameId ? `frame ${m.camera.frameId}` : "영상 대기 중";
-  $("map-meta").textContent = m.grid ? `${m.grid.head.resolution_m} m 격자 · 스캔 ${m.scanPoints.length / 2}점` : "격자 대기 중";
+  $("map-meta").textContent = m.grid ? `${m.grid.head.resolution_m} m 격자 · 스캔 ${m.scan ? m.scan.points.length / 2 : 0}점` : "격자 대기 중";
+  const notes = [...(st.notes ?? []), ...(m.frameNote ? [m.frameNote] : [])];
+  $("notes").hidden = notes.length === 0;
+  $("notes").textContent = notes.join(" · ");
 }

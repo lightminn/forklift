@@ -20,6 +20,7 @@ GRID_YAW_TOLERANCE_RAD = 1e-3
 CORRECTION_STEP_M = 1e-3
 CORRECTION_STEP_RAD = 1e-3
 SPEED_MAX_AGE_S = 1.0
+SPEED_MAX_GAP_S = 0.5  # odom poses further apart than this give no speed
 BACKENDS = ("real", "isaac")
 
 # Display-only outline of dls08_measured (sim/models/dls08_measured/parameters.yaml),
@@ -131,8 +132,19 @@ def grid_frame(g: GridMessage, epoch: int, correction_version: int | None):
     return head, grid_cells(g.data, g.width, g.height)
 
 
-def scan_frame(s: ScanMessage, laser: PoseSample | None, epoch: int):
-    """None without a laser pose: the page could not place the points."""
+def scan_frame(
+    s: ScanMessage,
+    laser: PoseSample | None,
+    epoch: int,
+    pose_at: str = "scan_stamp",
+    delay_s: float = 0.0,
+):
+    """None without a laser pose: the page could not place the points.
+
+    pose_at says where the laser pose came from: "scan_stamp" (the transform at the
+    scan's own time) or "latest" (the newest transform, delay_s after the scan, used
+    when the one at the scan time is not available -- the points may be misplaced).
+    """
     if laser is None:
         return None
     vals = []
@@ -149,8 +161,63 @@ def scan_frame(s: ScanMessage, laser: PoseSample | None, epoch: int):
         "range_max_m": s.range_max_m,
         "dtype": "float32le",
         "count": len(vals),
+        "pose_at": pose_at,
+        "pose_delay_s": delay_s,
     }
     return head, struct.pack(f"<{len(vals)}f", *vals)
+
+
+def withdrawn_grid(epoch: int, reason: str):
+    """Tells the page to drop the grid it shows (the current map cannot be sent)."""
+    return {
+        "t": "grid",
+        "session_epoch": epoch,
+        "withdrawn": True,
+        "reason": reason,
+    }, b""
+
+
+def camera_head(
+    epoch: int,
+    frame_id: int,
+    stamp_ns: int,
+    received_s: float,
+    jpeg_bytes: int,
+    domain: str,
+) -> dict:
+    return {
+        "t": "camera",
+        "session_epoch": epoch,
+        "frame_id": frame_id,  # one id per capture (stamp); a re-sent capture keeps it
+        "acquired_mono_ns": int(received_s * 1e9),
+        "capture": {"domain": domain, "stamp_ns": stamp_ns},
+        "calibration_version": None,
+        "format": "jpeg",
+        "width": None,
+        "height": None,
+        "jpeg_bytes": jpeg_bytes,
+    }
+
+
+def speed_from_poses(prev, cur):
+    """Rear-axle speed from two odom poses (stamp_s, x, y, yaw), signed along the heading.
+
+    The Isaac bridge and the replay publish odom poses with an empty twist, so the
+    twist cannot be trusted; any point on the centreline has the same along-body speed.
+    None when time did not advance or the poses are too far apart.
+    """
+    dt = cur[0] - prev[0]
+    if not 0.0 < dt <= SPEED_MAX_GAP_S:
+        return None
+    yaw = (
+        (prev[3] + cur[3]) / 2 if abs(_wrap(cur[3] - prev[3])) < math.pi / 2 else cur[3]
+    )
+    along = (cur[1] - prev[1]) * math.cos(yaw) + (cur[2] - prev[2]) * math.sin(yaw)
+    return along / dt
+
+
+def _finite(*values) -> bool:
+    return all(isinstance(v, (int, float)) and math.isfinite(v) for v in values)
 
 
 def is_jpeg(data: bytes) -> bool:
@@ -158,7 +225,9 @@ def is_jpeg(data: bytes) -> bool:
 
 
 class CorrectionTracker:
-    """Counts map -> odom changes larger than 1 mm or 1 mrad (provisional version)."""
+    """Counts map -> odom changes: a new count when the transform has moved more than
+    1 mm or 1 mrad from the last counted one (so slow drift is counted too). A display
+    value only, not evidence that SLAM is healthy (provisional version)."""
 
     def __init__(self):
         self.last = None
@@ -227,7 +296,9 @@ def _age(now: float, at: float | None):
 
 def state(snap: Snapshot, now: float, epoch: int, seq: int, rear_axle_x_m: float):
     pose = None
-    if snap.base is not None:
+    if snap.base is not None and _finite(
+        snap.base.x_m, snap.base.y_m, snap.base.yaw_rad
+    ):
         b = snap.base
         x, y, yaw = rear_axle_pose(b.x_m, b.y_m, b.yaw_rad, rear_axle_x_m)
         in_map = b.frame == "map"
@@ -241,7 +312,7 @@ def state(snap: Snapshot, now: float, epoch: int, seq: int, rear_axle_x_m: float
             "age_s": now - b.received_s,
         }
     speed = None
-    if snap.speed_mps is not None and snap.speed_received_s is not None:
+    if _finite(snap.speed_mps) and snap.speed_received_s is not None:
         if now - snap.speed_received_s <= SPEED_MAX_AGE_S:
             speed = snap.speed_mps
     return {
@@ -267,9 +338,10 @@ def state(snap: Snapshot, now: float, epoch: int, seq: int, rear_axle_x_m: float
         "drive_allowed": None,
         "lift_allowed": None,
         "mission": None,
-        "freshness": {
+        "freshness": {  # contract 6 names; scan_age_s is added by the C2a draft
             "slam_correction_age_s": snap.correction_age_s,
-            "grid_age_s": _age(now, snap.grid_received_s),
+            "grid_free_age_s": _age(now, snap.grid_received_s),
+            "near_obs_age_s": None,
             "scan_age_s": _age(now, snap.scan_received_s),
         },
         "pacing": None,

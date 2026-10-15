@@ -32,3 +32,18 @@ export function staleness({ stateAgeS, poseAgeS }) {
 export function stopIsRefused(linkWelcome) {
   return linkWelcome?.capabilities?.control === false;
 }
+
+// A pose or scan in another frame than the grid would be drawn misaligned (e.g. odom
+// before map -> odom is known). Draw each only in the grid's frame; with no grid, draw
+// the pose alone and a scan only in the pose's frame.
+export function frameAgreement({ gridFrame, poseFrame, scanFrame }) {
+  const base = gridFrame ?? poseFrame ?? null;
+  const pose = !poseFrame || !gridFrame || poseFrame === gridFrame;
+  const scan = Boolean(scanFrame) && (base === null || scanFrame === base);
+  const note = gridFrame && poseFrame && poseFrame !== gridFrame ? `위치가 ${poseFrame} 좌표라 ${gridFrame} 지도 위에 그리지 않습니다` : null;
+  return { pose, scan, note };
+}
+
+export function scanDrawable(scan) {
+  return Boolean(scan) && scan.ageS <= STALE_S;
+}

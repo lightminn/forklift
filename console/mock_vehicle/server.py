@@ -230,7 +230,7 @@ class Handle(wire.ControlOutboxMixin, wire.MediaFanoutMixin):
         head = {
             "t": "scan",
             "session_epoch": v.session_epoch,
-            "frame": "base_link",
+            "frame": "map",  # the frame of "pose" below (scan origin in map)
             "pose": {"x_m": p.x_m, "y_m": p.y_m, "yaw_rad": p.yaw_rad},
             "angle_min_rad": -math.pi,
             "angle_increment_rad": inc,
