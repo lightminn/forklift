@@ -54,3 +54,12 @@ def test_known_shape_truth_records_the_site_default_source(tmp_path):
 def test_digest_only_prints_the_catalogue_digest():
     out = _run("tools/generate_recognition_scenes.py", "--out", "/nonexistent", "--digest-only").stdout
     assert "catalogue_sha256" in out and "numpy" in out
+
+
+def test_source_revision_outside_a_git_checkout_is_recorded_as_unknown(tmp_path, monkeypatch):
+    sys.path.insert(0, str(ROOT))
+    from tools import evaluate_recognition as ev
+
+    monkeypatch.setattr(ev, "ROOT", tmp_path)  # not a git checkout, no manifest
+    source = ev._source(None)
+    assert source["revision"] is None and "no git checkout" in source["reason"]

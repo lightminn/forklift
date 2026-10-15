@@ -66,9 +66,13 @@ def _oracle(sample):
 
 
 def _source(manifest):
+    """The evaluated source: a manifest (remote runs), the git checkout, or an explicit unknown."""
     if manifest is not None:
         return json.loads(Path(manifest).read_text())
-    rev = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=True)
+    rev = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True)
+    if rev.returncode != 0:
+        return {"revision": None, "dirty": None,
+                "reason": "no git checkout and no --source-manifest; this run is not tied to a revision"}
     dirty = subprocess.run(["git", "status", "--porcelain"], cwd=ROOT, capture_output=True, text=True, check=True)
     return {"revision": rev.stdout.strip(), "dirty": bool(dirty.stdout.strip())}
 
