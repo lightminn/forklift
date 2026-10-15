@@ -139,7 +139,9 @@ class GatewayNode(Node):
         self.store.set_base(self.pose_of(self.base_frame))
         m2o = self.lookup(self.map_frame, self.odom_frame)
         if m2o is not None:
-            self.store.set_map_to_odom(m2o[:3], self.clock())
+            now = self.clock()
+            age = self._age((self.map_frame, self.odom_frame), m2o[3])
+            self.store.set_map_to_odom(m2o[:3], now, received_s=now - age)
 
     # ------------------------------------------------------------ topics
     def on_map(self, msg: OccupancyGrid) -> None:

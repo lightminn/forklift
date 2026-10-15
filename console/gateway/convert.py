@@ -159,9 +159,11 @@ def scan_frame(
 ):
     """None without a laser pose: the page could not place the points.
 
-    pose_at says where the laser pose came from: "scan_stamp" (the transform at the
-    scan's own time) or "latest" (the newest transform, delay_s after the scan, used
-    when the one at the scan time is not available -- the points may be misplaced).
+    pose_at says where the laser pose came from: "scan_stamp" -- the laser's motion in
+    odom at the scan's own time, with the latest map -> odom correction (whose age is
+    freshness.slam_correction_age_s) -- or "latest" (the newest motion, delay_s after
+    the scan, used when the one at the scan time is not available -- the points may be
+    misplaced).
     """
     if laser is None:
         return None
