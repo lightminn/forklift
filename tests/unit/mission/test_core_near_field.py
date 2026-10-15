@@ -466,17 +466,18 @@ def test_near_redraw_places_the_latest_observation_and_dry_runs_both_cruises_fro
                                                scenario=SimpleNamespace(pickup="PICKUP"), approach_straight_speed_mps=0.2,
                                                speeds={"approach": 0.2}, planner_config="CFG", pickup_bounds="B"))
     latest = SimpleNamespace(observation=SimpleNamespace(insertion_yaw_rad=0.01), pose=(1.0, 0.5, 0.1))
-    plans, record, target = core.near_redraw(latest, (1.0, 0.5, 0.1))
+    rear_now = (1.3, 0.4, 0.05)  # where the truck stands now, apart from where the observation was placed
+    plans, record, target = core.near_redraw(latest, rear_now)
     (world, start, tgt, config, k), = asked
-    assert world == ("world", core.options.scenario) and (start.x_m, start.y_m, start.yaw_rad) == (1.0, 0.5, 0.1)
+    assert world == ("world", core.options.scenario) and (start.x_m, start.y_m, start.yaw_rad) == rear_now
     assert tgt == Pose2D(5.2, 0.1, 0.02) == target and config == "CFG" and k["max_yaw_rad"] == NT.CORRECTION_MAX_YAW_RAD
     assert k["occupancy"] == ("GRID", near["first_target"], target) and k["pickup_bounds"] == "B"
-    assert [r[0] for r in rolled] == [0.2, 0.29] and all(np.allclose(r[1], (1.0, 0.5, 0.1)) for r in rolled)
+    assert [r[0] for r in rolled] == [0.2, 0.29] and all(np.allclose(r[1], rear_now) for r in rolled)
     assert record["previous_target"] == [5.1, 0.0, 0.0] and record["dry_run_cruise_mps"] == [0.2, 0.29]
     assert record["site"] == pytest.approx([3.0, 0.6, 0.11])  # the observation placed with its own pose
     core.options.approach_straight_speed_mps = None  # no slower approach straight: both dry runs at the driven cruise
     rolled.clear()
-    core.near_redraw(latest, (1.0, 0.5, 0.1))
+    core.near_redraw(latest, rear_now)
     assert [r[0] for r in rolled] == [0.29, 0.29]
 
 
