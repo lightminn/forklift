@@ -414,8 +414,6 @@ def _walk(value: Any, path: tuple, out: dict, problems: list, stack=()) -> None:
     """path -> every mutable object reachable from ``value`` (dict keys by repr, list and tuple indices,
     ``.attribute``; an object reached by two paths appears under both). Dictionary keys must be plain
     immutable values (the replay rebuilds them by value)."""
-    from forklift_core.mission.replay_codec import plain_value
-
     if _immutable(value):
         return  # nothing in it can change or be shared harmfully
     if not (_mutable(value) or isinstance(value, tuple) or callable(value)):

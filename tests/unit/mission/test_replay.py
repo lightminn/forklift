@@ -782,3 +782,15 @@ def test_a_frozen_value_shared_between_an_argument_and_a_watched_key_is_fine(tmp
     rcore = {"pickup_estimate": None}
     replay_with(lambda f: f(Pose2D(1.0, 2.0, 0.1)), watch_dicts_replay={"core": rcore})
     assert rcore["pickup_estimate"] == Pose2D(1.0, 2.0, 0.1)
+
+
+def test_a_frozen_value_replaced_by_another_is_assigned(tmp_path):
+    core = {"pickup_estimate": Pose2D(0.0, 0.0, 0.0)}
+
+    def fn(target):
+        core["pickup_estimate"] = target
+
+    replay_with = one_call(tmp_path, fn, lambda f: f(Pose2D(1.0, 2.0, 0.1)), watch_dicts={"core": core})
+    rcore = {"pickup_estimate": Pose2D(0.0, 0.0, 0.0)}
+    replay_with(lambda f: f(Pose2D(1.0, 2.0, 0.1)), watch_dicts_replay={"core": rcore})
+    assert rcore["pickup_estimate"] == Pose2D(1.0, 2.0, 0.1)

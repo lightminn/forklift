@@ -97,6 +97,10 @@ def apply_inplace(actual: Any, after: Any, where: str = "argument", *, replaced=
     replaced without the record saying so is refused."""
     if path in replaced:
         return after
+    from forklift_core.mission.boundary_record import _immutable
+
+    if _immutable(actual):
+        return after  # nothing held can change in place: the holder gets the new value
 
     def sub(a, b, step):
         return apply_inplace(a, b, where, replaced=replaced, path=path + (step,), value_types=value_types)
