@@ -1372,6 +1372,47 @@ def test_the_pocket_check_is_refused_with_a_team_spec_encoder_model():
     assert "still_ = bool(slam.get" not in source
 
 
+def _tracker_book_class():
+    source = SCRIPT.read_text()
+    namespace = {}
+    exec(source[source.index("class TrackerBook(dict):"): source.index("def run(app, args")], namespace)  # noqa: S102
+    return namespace["TrackerBook"]
+
+
+def _cusp_tracker():
+    from forklift_core.control.path_tracking import RearAxlePathTracker
+
+    x = np.r_[np.linspace(0, 1, 51), np.linspace(0.98, 0.3, 35)]
+    poses = np.column_stack((x, np.zeros_like(x), np.zeros_like(x)))
+    return RearAxlePathTracker(poses, np.r_[np.ones(51), -np.ones(35)], np.zeros(len(x)))
+
+
+def test_the_tracker_book_keeps_every_switch_with_its_owner_and_version():
+    """Codex (leg-switch review P2): a switch must survive its tracker's replacement and the end of
+    the run, and carry the phase that owned the tracker and a path-version serial -- not the phase
+    current when it was collected."""
+    book_class = _tracker_book_class()
+    record, versions, clock = [], [], {"t": None}
+    book = book_class(record, versions, clock, {"transport": _cusp_tracker()})
+    assert versions[0]["serial"] == 1 and versions[0]["phase"] == "transport"
+    assert [c["index"] for c in versions[0]["cusps"]] == [50] and versions[0]["installed_s"] is None
+    clock["t"] = 12.5
+    book["transport"].skip_legs(1)          # a switch ...
+    book["transport"] = _cusp_tracker()     # ... and its tracker replaced before any collect
+    assert [(e["serial"], e["phase"], e["stamped"], e["time_s"]) for e in record] == [(1, "transport", "replaced", 12.5)]
+    assert versions[0]["replaced_s"] == 12.5 and versions[1]["serial"] == 2
+    clock["t"] = 13.0
+    book.update({"lower": _cusp_tracker()})  # update() goes through the book too
+    assert versions[2]["phase"] == "lower"
+    book["transport"].skip_legs(1)
+    book.collect()
+    book.collect()                           # nothing twice
+    assert [(e["serial"], e["stamped"]) for e in record] == [(1, "replaced"), (2, "tick")]
+    book["lower"].skip_legs(1)
+    book.close()                             # the end drains what no tick collected
+    assert record[-1]["serial"] == 3 and record[-1]["phase"] == "lower" and record[-1]["stamped"] == "end"
+
+
 def test_the_runner_stamps_every_leg_switch_and_the_plant_record_carries_friction():
     """Fork spacing plan (Codex, batch R/C rules): the V5 cusp arrival is read at the switch; the
     runner collects each tracker's new leg switches every tick with the time and phase, and V0's
@@ -1379,8 +1420,12 @@ def test_the_runner_stamps_every_leg_switch_and_the_plant_record_carries_frictio
     source = SCRIPT.read_text()
     loop = source[source.index("for step in range(int(120 * args.max_sim_seconds)):"):]
     harvest = loop[: loop.index('stepper["fn"](pocket_frames and step % 12 == 0)')]
-    assert 'state.setdefault("leg_switches", []).append({**event_, "time_s": t, "phase": phase})' in harvest
-    assert "tracker_._switches_kept = len(switches_)" in harvest
+    assert "trackers.collect()" in harvest and 'book_clock["t"] = t' in harvest
+    assert 'trackers = TrackerBook(state.setdefault("leg_switches", []), state.setdefault("tracker_versions", [])' in source
+    # Drained in the finally block after the D8b recorder (which stays first) and before the records are written.
+    closing = source.index('tracker_book["book"].close()')
+    assert source.index('state["pocket_recording"] = recorder.close(') < closing < source.index(
+        "write_slam_record(args, state, replace(scenario")
     scene = (SCRIPT.parent / "scene.py").read_text()
     assert 'value("physics:staticFriction"), value("physics:dynamicFriction"))' in scene
     assert '"static_friction": k[5], "dynamic_friction": k[6]' in scene

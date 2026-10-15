@@ -1446,8 +1446,60 @@ def path_stats(path) -> dict:
     }
 
 
+class TrackerBook(dict):
+    """The runner's path trackers by owner phase (fork spacing plan, V5 cusp arrivals; Codex leg-switch
+    review). Installing a tracker stamps it with a serial (its path version), its owner phase, the time
+    and its cusp endpoints; its leg switches go into the record each tick (collect), when it is replaced
+    and at the end (close), so a switch is not lost to a replacement or an exception."""
+
+    def __init__(self, record: list, versions: list, clock: dict, initial=()) -> None:
+        super().__init__()
+        self._record, self._versions, self._clock, self._serial = record, versions, clock, 0
+        for phase, tracker in dict(initial).items():
+            self[phase] = tracker
+
+    def __setitem__(self, phase, tracker) -> None:
+        old = self.get(phase)
+        if old is not None and old is not tracker:
+            self._drain(old, "replaced")
+            if getattr(old, "_book", None) is not None:
+                old._book["replaced_s"] = self._clock.get("t")
+        if getattr(tracker, "_book", None) is None:
+            self._serial += 1
+            ends = list(getattr(tracker, "_leg_ends", []))[:-1]
+            poses = getattr(tracker, "_poses", None)
+            tracker._book = {
+                "serial": self._serial, "phase": phase, "installed_s": self._clock.get("t"), "replaced_s": None,
+                "cusps": [{"index": int(i), "pose": [float(v) for v in poses[i]]} for i in ends] if poses is not None else [],
+            }
+            tracker._switches_kept = 0
+            self._versions.append(tracker._book)
+        super().__setitem__(phase, tracker)
+
+    def update(self, other=(), **more) -> None:  # dict.update would bypass __setitem__
+        for phase, tracker in dict(other, **more).items():
+            self[phase] = tracker
+
+    def _drain(self, tracker, how: str) -> None:
+        switches = getattr(tracker, "leg_switches", None) or []
+        book = getattr(tracker, "_book", None) or {}
+        for event in switches[getattr(tracker, "_switches_kept", 0):]:
+            self._record.append({**event, "serial": book.get("serial"), "phase": book.get("phase"),
+                                 "time_s": self._clock.get("t"), "stamped": how})
+        tracker._switches_kept = len(switches)
+
+    def collect(self) -> None:
+        for tracker in list(self.values()):
+            self._drain(tracker, "tick")
+
+    def close(self) -> None:
+        for tracker in list(self.values()):
+            self._drain(tracker, "end")
+
+
 def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     """Construct and execute one immutable seeded scenario; state keeps evidence."""
+    tracker_book = {"book": None}  # set once the trackers exist; drained in the finally block
     import omni.usd
     from insertion_geometry import InsertionGeometry, read_fork_blades_m
     from isaacsim.core.api import World
@@ -3949,7 +4001,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         # The return runs unloaded, so it reuses the unloaded approach speed
         # rather than introducing a settings key the recorded runs never had.
         speeds["return_home"] = settings["approach_speed_mps"]
-    trackers = {
+    book_clock = {"t": None}  # the control loop's time; None before it starts
+    trackers = TrackerBook(state.setdefault("leg_switches", []), state.setdefault("tracker_versions", []), book_clock, {
         name: RearAxlePathTracker(
             path.poses,
             path.directions,
@@ -4002,7 +4055,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             ),
         )
         for name, path in paths.items()
-    }
+    })
+    tracker_book["book"] = trackers
 
     def apply_tracker_profile() -> None:
         # The 2026-09-21 G2 baseline had no cusp or overshoot tolerances and
@@ -5637,6 +5691,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             check_near_contract()
         for step in range(int(120 * args.max_sim_seconds)):
             t = world.current_time - initial_time
+            book_clock["t"] = t
             rear_stamp = t  # the time of the control pose `rear` (a capture moves it on)
             dwell_hold = dwell_standing = False
             cusp_hold = False  # plan cusp position stall v7 K3: zero command, steering held
@@ -8403,14 +8458,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 del pocket["history"][:-120]
                 # Plan D8b: the pose with its own time (D5 keeps its history as it was).
                 pocket["control_stamped"] = (rear_stamp, tuple(float(v) for v in rear))
-            # Leg switches the trackers made this tick, stamped (V5 cusp arrivals: the error at the
-            # switch, not the closest approach). A tracker replaced in the tick it switched is missed.
-            for tracker_ in list(trackers.values()):
-                switches_ = getattr(tracker_, "leg_switches", None)
-                if switches_:
-                    for event_ in switches_[getattr(tracker_, "_switches_kept", 0):]:
-                        state.setdefault("leg_switches", []).append({**event_, "time_s": t, "phase": phase})
-                    tracker_._switches_kept = len(switches_)
+            # Leg switches the trackers made this tick, stamped with this tick's time (V5 cusp
+            # arrivals: the error at the switch); a replaced tracker is drained on replacement and the
+            # rest at the end (TrackerBook).
+            trackers.collect()
             stepper["fn"](pocket_frames and step % 12 == 0)
             if pocket_frames and step % 12 == 0:
                 read_pocket_frame()
@@ -8517,6 +8568,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 # replacing a failure already raised (main() records that one).
                 state["success"] = False
                 state.setdefault("failure_reason", f"pocket_recording_close_failed: {exc!r}")
+        if tracker_book["book"] is not None:
+            try:
+                tracker_book["book"].close()  # the leg switches not yet drained (V5 cusp arrivals)
+            except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own failure
+                state.setdefault("record_errors", []).append(f"leg switches: {exc_!r}")
         if near is not None:
             # Plan D8 S4a ⑥: every frame, tick and event of the near-field tracking; the
             # summary in result.json. Guarded: a failed write never replaces the run's own
