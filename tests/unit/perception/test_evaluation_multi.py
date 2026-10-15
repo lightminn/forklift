@@ -181,3 +181,18 @@ def test_any_selection_in_a_negative_scene_is_a_false_positive():
     meta = {**META, "case": "N", "shape_key": "negative"}
     v = judge_scene(meta, _truth([]), NONE_IN, [], TargetDecision("selected", "ghost", ()))
     assert v.negative_fp
+
+
+def _verdict(noise, render_source="isaac"):
+    meta = {**META, "split": "dev", "render_source": render_source, "noise": noise}
+    return judge_scene(meta, _truth([_inst(0, 0.0)]), NONE_IN, [_cand("a", 0.0)], TargetDecision("selected", "a", ()))
+
+
+def test_official_needs_isaac_and_the_official_noise_role():
+    official = {"config_sha256": "h", "scale": 1.0, "role": "official"}
+    sensitivity = {"config_sha256": "h", "scale": 1.66, "role": "sensitivity"}
+    assert summarize([_verdict(official)], split="dev", render_source="isaac")["official"]
+    assert not summarize([_verdict(sensitivity)], split="dev", render_source="isaac")["official"]
+    assert not summarize([_verdict({"k": 1})], split="dev", render_source="isaac")["official"]
+    assert not summarize([_verdict(None)], split="dev", render_source="isaac")["official"]
+    assert _verdict(official).noise_signature == "h:1.0" and _verdict({"k": 1}).noise_signature == "legacy"

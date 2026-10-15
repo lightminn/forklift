@@ -888,7 +888,7 @@ if __name__ == "__main__":
 `deploy/hpc/recognition_stage1b_calibrate.tsv`(UBAI, `tools/hpc_sweep.sh` 형식):
 
 ```
-calibrate	python tools/calibrate_depth_noise.py --out hpc_data/depth_noise_d435i.yaml && cat hpc_data/depth_noise_d435i.yaml
+calibrate	mkdir -p hpc_data && python tools/calibrate_depth_noise.py --out hpc_data/depth_noise_d435i.yaml && cat hpc_data/depth_noise_d435i.yaml
 ```
 
 - [ ] **Step 4: 통과 확인(합성)** — Expected: `test_calibrate_depth_noise.py` 5 passed, `test_depth_noise.py` 의 설정 검사 6 passed. 시험은 로컬에서 한 파일씩(1 분 이내).

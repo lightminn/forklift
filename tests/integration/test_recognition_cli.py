@@ -1,9 +1,16 @@
 # tests/integration/test_recognition_cli.py
 import csv
+import hashlib
 import json
 import subprocess
 import sys
 from pathlib import Path
+
+import numpy as np
+import pytest
+
+from forklift_core.perception.recognition_dataset import load_recognition_sample
+from tools import generate_recognition_scenes as gen
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -63,3 +70,55 @@ def test_source_revision_outside_a_git_checkout_is_recorded_as_unknown(tmp_path,
     monkeypatch.setattr(ev, "ROOT", tmp_path)  # not a git checkout, no manifest
     source = ev._source(None)
     assert source["revision"] is None and "no git checkout" in source["reason"]
+
+
+GOLDEN = {  # measured with the pre-refactor generator (stage 1B task 4, step 1)
+    ('default', 'n_negative_1000926'): '3c240092ca9418a25630c9ee135b960b25ad2e045dc312618485eb1347f0487d',
+    ('default', 's2_epal6_1000122'): 'adcd96d2a651afcc9746690d56a8e6278f365722d4561cff7edc7335a5cb530c',
+    ('default', 's2_t11_06_1000183'): '831d4bf609d3abc5da1bb7718b5578354998d0f8f9cf890d29a3284217f133fd',
+    ('default', 's7_nonstandard_1000732'): 'd82400922a204843aa03227f08238a0d3560204d84fb7255de9405f1314b6940',
+    ('none', 'n_negative_1000926'): 'da6bdd6fe32590cadb91134598197cca64eb4de0a098ecd17217bf2a4d0cce13',
+    ('none', 's2_epal6_1000122'): '9cb68ab0272be408b8627939692bc8811c523eb15326e924a7c34568701f063c',
+    ('none', 's2_t11_06_1000183'): 'a34b33e77410a0e9b4941e8f274f1869507d5f9cf0b858a816988493208cc15f',
+    ('none', 's7_nonstandard_1000732'): '9c613ae1a4e47c894612130ac8b3724a6a8612bc1c8341157e5b435399de7109',
+}
+
+
+def _content_digest(scene_dir):
+    s = load_recognition_sample(scene_dir)
+    scene, h = s.input.scene, hashlib.sha256()
+    for array in (np.nan_to_num(scene.depth_m, nan=-1.0), scene.rgb, s.instance_ids,
+                  np.asarray(scene.base_from_optical.rotation), np.asarray(scene.base_from_optical.translation_m)):
+        h.update(np.ascontiguousarray(array).tobytes())
+    i = scene.intrinsics
+    for obj in ([i.width, i.height, i.fx, i.fy, i.cx, i.cy, i.frame_id], s.origin, s.meta, s.truth, s.instruction):
+        h.update(json.dumps(obj, sort_keys=True).encode())
+    return h.hexdigest()
+
+
+@pytest.mark.parametrize("noise", ["default", "none"])
+def test_generator_output_is_unchanged_by_the_record_refactor(tmp_path, noise):
+    gen.main(["--out", str(tmp_path), "--cases", "S2,S7,N", "--limit", "1", "--noise", noise])
+    got = {(noise, d.name): _content_digest(d) for d in sorted(tmp_path.iterdir())}
+    assert got == {k: v for k, v in GOLDEN.items() if k[0] == noise}
+
+
+def test_mixed_noise_configurations_are_refused(tmp_path):
+    from tools import apply_recognition_noise as app
+
+    cfg = tmp_path / "noise.yaml"
+    cfg.write_text(json.dumps({"source": "t", "license": "CC-BY-4.0", "revision": "r", "files_sha256": "x",
+                               "k_iid": 0.0006, "k_corr": 0.0, "correlation_px_source": [1.0, 1.0],
+                               "source_fx": 465.741156, "dropout_fraction": 0.0}))
+    gen.main(["--out", str(tmp_path / "clean"), "--cases", "S1", "--limit", "2", "--noise", "none"])
+    dirs = sorted((tmp_path / "clean").iterdir())
+    app.apply_to_scene(dirs[0], tmp_path / "mixed", cfg, 1.0)
+    app.apply_to_scene(dirs[1], tmp_path / "mixed", cfg, 1.66)
+    for d in (tmp_path / "mixed").iterdir():  # both into dev so the split filter keeps them
+        meta = json.loads((d / "scene.json").read_text())
+        meta["split"] = "dev"
+        (d / "scene.json").write_text(json.dumps(meta))
+    proc = subprocess.run([sys.executable, "tools/evaluate_recognition.py", "--dataset", str(tmp_path / "mixed"),
+                           "--split", "dev", "--detector", "oracle", "--output", str(tmp_path / "out")],
+                          cwd=ROOT, capture_output=True, text=True)
+    assert proc.returncode != 0 and "exactly one noise configuration" in proc.stderr
