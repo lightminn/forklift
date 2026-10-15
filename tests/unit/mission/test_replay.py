@@ -688,7 +688,7 @@ def test_a_cached_bundle_shared_by_two_log_rows_replays(tmp_path):
     f("mission")
     f("mission")
     rec.tick_end(outputs={}, branches=[])
-    rec.close()
+    rec.close(final_state=obstacle)
     from forklift_core.mission.replay import read_ticks
 
     assert all("unsupported" not in (c.get("changes") or {}) for c in next(iter(read_ticks(tmp_path)))["calls"])
@@ -699,7 +699,7 @@ def test_a_cached_bundle_shared_by_two_log_rows_replays(tmp_path):
     session.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
     assert rf("mission") == 1 and rf("mission") == 1
     session.tick_end(outputs={}, branches=[])
-    session.finish()
+    session.finish(final_state=rob)  # compared by value: the rows' shared list is not an identity claim
     assert rob["plans"] == obstacle["plans"]
 
 
@@ -725,3 +725,29 @@ def test_unknown_kinds_opaque_log_items_and_aliased_new_logs_are_refused(tmp_pat
     from forklift_core.mission.replay import read_ticks
 
     assert "unsupported" in (next(iter(read_ticks(tmp_path)))["calls"][0].get("changes") or {}), change
+
+
+# --- Codex R1 re-review 6 (P2 x3) --------------------------------------------------------------------------
+
+def test_a_new_log_on_an_empty_watched_dict_records_and_replays(tmp_path):
+    core = {}
+
+    def fn(_):
+        core["log"] = [{"n": 1}]
+
+    replay_with = one_call(tmp_path, fn, lambda f: f(0), watch_dicts={"core": core})
+    rcore = {}
+    replay_with(lambda f: f(0), watch_dicts_replay={"core": rcore})
+    assert rcore == {"log": [{"n": 1}]}
+
+
+def test_bytes_are_values(tmp_path):
+    core = {"payload": b"old"}
+
+    def fn(_):
+        core["payload"] = b"new"
+
+    replay_with = one_call(tmp_path, fn, lambda f: f(0), watch_dicts={"core": core})
+    rcore = {"payload": b"old"}
+    replay_with(lambda f: f(0), watch_dicts_replay={"core": rcore})
+    assert rcore["payload"] == b"new"

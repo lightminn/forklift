@@ -238,7 +238,8 @@ class ReplaySession:
             if final_state is None:
                 raise self.fail("the record has a final state and the replay gave none")
             # Arrays by content hash (the node carries it): exact bytes, NaN included.
-            node = Encoder(opaque_ok=True, value_types=self.value_types, hash_arrays=True).encode(final_state)
+            node = Encoder(opaque_ok=True, value_types=self.value_types, hash_arrays=True,
+                           identity=False).encode(final_state)
             if _canonical(node) != recorded.read_text().strip() and _canonical(node) != _canonical(
                     json.loads(recorded.read_text())):
                 raise self.fail("the replay's final state differs from the recorded one")

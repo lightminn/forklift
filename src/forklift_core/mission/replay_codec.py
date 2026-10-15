@@ -24,6 +24,7 @@ alias graph and non-string keys.
 
 from __future__ import annotations
 
+import base64
 import dataclasses
 import hashlib
 import importlib
@@ -55,11 +56,16 @@ class Encoder:
     (``{"$sha256": ...}``, nothing stored) -- for large requests compared by hash; every other type and the
     alias graph are kept as usual."""
 
-    def __init__(self, *, opaque_ok: bool = False, value_types=(), hash_arrays: bool = False) -> None:
+    def __init__(self, *, opaque_ok: bool = False, value_types=(), hash_arrays: bool = False,
+                 identity: bool = True) -> None:
         self.arrays: dict[str, np.ndarray] = {}
         self.opaque_ok = opaque_ok
         self.value_types = set(value_types)
         self.hash_arrays = hash_arrays
+        # identity=False: a pure value encoding (no $id/$ref; an object met twice is written twice) -- for value
+        # comparisons such as a run's final state, where object identity was already checked call by call.
+        self.identity = identity
+        self._stack: set[int] = set()
         self._seen: dict[int, list] = {}  # id(obj) -> [obj, encoded node, assigned id or None]
         self._next_id = 0
 
@@ -89,6 +95,14 @@ class Encoder:
     def _shared(self, value: Any, build) -> dict:
         """A node for an object whose identity matters (mutable containers, arrays, dataclasses, value
         objects): written once, referred to by ``{"$ref": id}`` when met again."""
+        if not self.identity:
+            if id(value) in self._stack:
+                return {"$cycle": True}
+            self._stack.add(id(value))
+            try:
+                return build()
+            finally:
+                self._stack.discard(id(value))
         seen = self._seen.get(id(value))
         if seen is not None:
             if seen[2] is None:  # second reference: name the first one
@@ -114,6 +128,8 @@ class Encoder:
             return {"$float": repr(value)}
         if value is None or isinstance(value, (bool, int, float, str)):
             return value
+        if isinstance(value, bytes):
+            return {"$bytes": base64.b64encode(value).decode("ascii")}
         if isinstance(value, tuple):
             return {"$tuple": [self.encode(v) for v in value]}
         if dataclasses.is_dataclass(value) and not isinstance(value, type):
@@ -188,6 +204,8 @@ def decode(node: Any, arrays: dict[str, np.ndarray]) -> Any:
             return array
         if "$float" in n:
             return float(n["$float"])
+        if "$bytes" in n:
+            return base64.b64decode(n["$bytes"])
         if "$tuple" in n:
             return tuple(walk(v) for v in n["$tuple"])
         if "$dataclass" in n:

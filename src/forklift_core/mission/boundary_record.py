@@ -171,7 +171,8 @@ class BoundaryRecorder:
             from forklift_core.mission.replay_codec import Encoder
 
             # Comparison only: arrays by content hash and read-only state.
-            node = Encoder(opaque_ok=True, value_types=self.value_types, hash_arrays=True).encode(final_state)
+            node = Encoder(opaque_ok=True, value_types=self.value_types, hash_arrays=True,
+                           identity=False).encode(final_state)
             (self.directory / "final_state.json").write_text(json.dumps(node, sort_keys=True, allow_nan=True) + "\n")
             self._final_state = True
         if self._tick is not None:
@@ -489,6 +490,7 @@ def check_state(before: "_State", after: "_State") -> tuple[list, str | None]:
     for key, (item, text) in getattr(before, "log_last", {}).items():
         if _compare_text(before.recorder, item) != text:
             return [], f"append-only {key}: its last logged item was changed"
+    seen: dict[int, tuple] = {}
     for key in after.appends:
         if key not in before.appends:  # a new log: a fresh list of its own, its items like any appended item
             lst = after.appends[key][0]
@@ -507,7 +509,6 @@ def check_state(before: "_State", after: "_State") -> tuple[list, str | None]:
         return (q in before.paths and before.paths[q] is o and q in after.paths and after.paths[q] is o
                 and not under(q))
 
-    seen: dict[int, tuple] = {}
     for q, o in after.paths.items():
         if stays(q, o):
             continue
