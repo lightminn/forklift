@@ -2756,15 +2756,15 @@ if __name__ == "__main__":
 CPU 전용 잡이므로 전역 지침대로 **UBAI(`gate1_External`) Slurm** 에서 돌린다. 저장소의 `tools/hpc_sweep.sh jobs.tsv [파티션] [코어]` 가 동기화 → 제출 → 대기 → 회수(`artifacts/hpc/<run-id>/out/<이름>.txt`)를 한 번에 한다(원격 venv `~/forklift-venv`, 원격 사본 `~/forklift`). SSH 왕복이 2분 넘으니 묶어서 보낸다.
 
 **Files:**
-- Create: `deploy/hpc/recognition_stage1a_generate.tsv`, `deploy/hpc/recognition_stage1a_evaluate.tsv`, `docs/validation/<실행일>-recognition-stage1a-cpu-baseline.md`
+- Create: `deploy/hpc/recognition_stage1a_env.tsv`, `deploy/hpc/recognition_stage1a_generate.tsv`, `deploy/hpc/recognition_stage1a_evaluate.tsv`, `docs/validation/<실행일>-recognition-stage1a-cpu-baseline.md`
 
-- [ ] **Step 1: 원격 환경 확인 묶음** — `deploy/hpc/recognition_stage1a_generate.tsv` 첫 줄에 Pillow 확인을 넣는다(없으면 설치; 병렬 줄과 겹치지 않게 **별도 sweep 으로 먼저** 1코어로 돌린다):
+- [ ] **Step 1: 원격 환경 확인 묶음** — `deploy/hpc/recognition_stage1a_env.tsv` 한 줄로 Pillow 를 확인하고 없으면 설치한다(생성 줄들과 동시에 설치하지 않도록 **별도 sweep 으로 먼저** 1코어로 돌린다):
 
 ```
 env	python -c "import PIL, numpy, yaml; print(PIL.__version__, numpy.__version__, yaml.__version__)" || ($HOME/forklift-venv/bin/pip install 'Pillow>=10' && python -c "import PIL; print(PIL.__version__)")
 ```
 
-Run(로컬, worktree 에서, `run_in_background`): `printf 'env\t...\n' > /tmp/... ; tools/hpc_sweep.sh <그 파일> cpu1 1`
+Run(worktree 에서, `run_in_background`): `tools/hpc_sweep.sh deploy/hpc/recognition_stage1a_env.tsv cpu1 1` — 출력 `env.txt` 에 세 버전이 찍혀야 한다.
 
 - [ ] **Step 2: 생성 묶음** — 사례·형상마다 한 줄(병렬). 같은 `out/data` 아래 장면 디렉터리가 겹치지 않는다(장면 ID 에 사례·형상·시드):
 
@@ -2792,7 +2792,7 @@ Run: `tools/hpc_sweep.sh deploy/hpc/recognition_stage1a_evaluate.tsv cpu1 2` (�
 
 - [ ] **Step 4: 결과 확인** — oracle: 모든 양성 모집단의 `miss`·`extra`·`dangerous_observed_zero` 실패 0(평가기 자기 점검; 하나라도 실패면 평가기나 정답의 결함이므로 고친 뒤 다시). baseline: 사례별 칸(`cells`)의 놓침·추가 후보·위험·음성 오검출을 표로 읽는다. 기대(설계 §1 진단): S2(맞닿음·부분 가림)·S4(위층)·S5(상판 결손)에서 놓침, S6·N 에서 추가 후보·음성 오검출. 기대와 다른 칸은 반례로 따로 적는다.
 - [ ] **Step 5: 검증 기록 작성** — `docs/validation/<실행일>-recognition-stage1a-cpu-baseline.md`: 실행 조건(리비전, `dataset_sha256`, 잡음 모델, 장면 수, UBAI run-id·job ID, numpy·Pillow 버전), oracle 자기 점검, baseline 사례별 표(dev 만), 해석 경계("`rig_render_pose` CPU 기구 회귀이며 렌더 기반 모집단이 아니다 — Isaac 판정은 단계 1B").
-- [ ] **Step 6: 커밋·푸시** — `git add deploy/hpc/recognition_stage1a_generate.tsv deploy/hpc/recognition_stage1a_evaluate.tsv docs/validation/<파일>` · `git commit -m "validation: recognition stage 1A CPU baseline on dev at UBAI (oracle self-check, current detector by case)"` · `git push`
+- [ ] **Step 6: 커밋·푸시** — `git add deploy/hpc/recognition_stage1a_env.tsv deploy/hpc/recognition_stage1a_generate.tsv deploy/hpc/recognition_stage1a_evaluate.tsv docs/validation/<파일>` · `git commit -m "validation: recognition stage 1A CPU baseline on dev at UBAI (oracle self-check, current detector by case)"` · `git push`
 
 **검토 D:** 작업 10–12 뒤 Codex — 초점: "판정 규칙이 설계 §3.4 와 같은가(특히 위험·추가 후보·지시·끼움), 빈 모집단 처리, CLI 가 정답을 입력 경로로 흘리지 않는가, 기준선 결과 해석이 데이터로 지지되는가". 수렴까지 반복.
 
