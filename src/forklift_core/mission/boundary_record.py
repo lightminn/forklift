@@ -160,9 +160,20 @@ class BoundaryRecorder:
         if len(self._lines) >= self.chunk_ticks:
             self._flush()
 
-    def close(self) -> None:
+    def close(self, final_state: Any = None) -> None:
+        """``final_state`` (format 2): the core's containers as the run ended -- written beside the record so a
+        replay can compare its own end state (changes a call made that its record entry does not carry, e.g.
+        to an already-logged item, show up there)."""
         if self._closed:
             return
+        if final_state is not None and self.value_format == 2:
+            from forklift_core.mission.replay_codec import Encoder
+
+            encoder = Encoder(opaque_ok=True, value_types=self.value_types)
+            node = encoder.encode(final_state)
+            (self.directory / "final_state.json").write_text(json.dumps(node, allow_nan=True) + "\n")
+            if encoder.arrays:
+                np.savez_compressed(self.directory / "final_state_arrays.npz", **encoder.arrays)
         if self._tick is not None:
             raise RuntimeError("close inside a tick")
         self._closed = True
@@ -311,44 +322,49 @@ class RecordingGate:
             watch: "DictWatch | None" = None):
         """Run ``fn`` and record it: the request as it was before the call, the response or the exception,
         the arguments again when the call changed them (``request_after``), and what the call changed in
-        the watched core dictionaries (``watched``)."""
+        the watched core dictionaries (``watched``). Format 2 also checks the call's effect against the
+        replay's change model (:func:`check_state`) and records where fresh objects replaced old ones."""
         if not self.active:
             return fn(*args, **kwargs)
         raw = {"args": list(args), "kwargs": dict(kwargs)}
         before = self.recorder.encode_request(raw, hash_only)
-        paths_before = _paths(raw) if self.recorder.value_format == 2 else None  # objects kept alive
         marks = watch.mark() if watch is not None else None
+        state = _State(self.recorder, raw, watch) if self.recorder.value_format == 2 else None
         self.depth += 1
         try:
             result = fn(*args, **kwargs)
         except BaseException as exc:
             self.depth -= 1
             self.recorder.call(port, method, request=None, encoded_request=before, exception=exc,
-                               changes=self._changes(raw, before, hash_only, watch, marks, paths_before))
+                               changes=self._changes(raw, before, hash_only, watch, marks, state))
             raise
         self.depth -= 1
-        changes = self._changes(raw, before, hash_only, watch, marks, paths_before)
+        changes = self._changes(raw, before, hash_only, watch, marks, state)
         if self.recorder.value_format == 2 and _shares_objects(result, raw):
             # A response that hands back an argument's own object: a replay cannot restore that identity.
             changes = dict(changes or {}, response_aliases_request=True)
         self.recorder.call(port, method, request=None, encoded_request=before, response=result, changes=changes)
         return result
 
-    def _changes(self, raw, before, hash_only, watch, marks, paths_before=None):
+    def _changes(self, raw, before, hash_only, watch, marks, state=None):
         after = self.recorder.encode_request(raw, hash_only)
         changed_request = json.dumps(after, sort_keys=True) != json.dumps(before, sort_keys=True)
-        watched = watch.changes(marks) if watch is not None else None
         if self.recorder.value_format == 2:
-            # The arguments' objects before/after: replaced paths, or a change outside the replay's model.
-            paths_after = _paths(raw)
-            for top in ((), ("'args'",), ("'kwargs'",)):  # the call's own argument containers
-                paths_before.pop(top, None)
-                paths_after.pop(top, None)
-            replaced, problem = check_change(paths_before, paths_after)
-            if replaced or problem:
+            replaced, problem = check_state(state, _State(self.recorder, raw, watch, texts=False))
+            arg_paths = [q[1:] for q in replaced if q[0] == "A"]
+            watched_paths: dict = {}
+            for q in replaced:
+                if q[0] == "W":
+                    watched_paths.setdefault((q[1], q[2]), []).append(q[3:])
+            watched = watch.changes(marks, force=set(watched_paths)) if watch is not None else None
+            for (name, key), rel in watched_paths.items():
+                change = (watched or {}).get(name, {}).get(key)
+                if isinstance(change, dict) and "$value" in change:
+                    change["$replaced_paths"] = rel
+            if arg_paths or problem:
                 changed_request = True
-            return self.recorder.encode_changes(after if changed_request else None, watched, replaced,
-                                                f"arguments: {problem}" if problem else None)
+            return self.recorder.encode_changes(after if changed_request else None, watched, arg_paths, problem)
+        watched = watch.changes(marks) if watch is not None else None
         out = {}
         if changed_request:
             out["request_after"] = after
@@ -363,53 +379,134 @@ def _mutable(value: Any) -> bool:
         hasattr(value, "__dict__") and not isinstance(value, type) and not callable(value))
 
 
-def _paths(value: Any, path: tuple = (), out: dict | None = None, depth: int = 0) -> dict:
+def _simple_key(key: Any) -> bool:
+    return key is None or isinstance(key, (str, int, float, bool)) or (
+        isinstance(key, tuple) and all(_simple_key(k) for k in key))
+
+
+def _walk(value: Any, path: tuple, out: dict, problems: list, stack=()) -> None:
     """path -> every mutable object reachable from ``value`` (dict keys by repr, list and tuple indices,
-    ``.attribute``); the objects are kept so their ids stay valid while compared."""
-    out = {} if out is None else out
-    if depth > 50:
-        return out
+    ``.attribute``; an object reached by two paths appears under both). Dictionary keys must be plain
+    immutable values (the replay rebuilds them by value)."""
     if _mutable(value):
         out[path] = value
+        if id(value) in stack:
+            return
+        stack = stack + (id(value),)
     if isinstance(value, dict):
         for k, v in value.items():
-            _paths(v, path + (repr(k),), out, depth + 1)
+            if not _simple_key(k):
+                problems.append(f"{path} has a {type(k).__name__} key")
+            _walk(v, path + (repr(k),), out, problems, stack)
     elif isinstance(value, (list, tuple)):
         for i, v in enumerate(value):
-            _paths(v, path + (i,), out, depth + 1)
+            _walk(v, path + (i,), out, problems, stack)
     elif dataclasses.is_dataclass(value) and not isinstance(value, type):
         for f in dataclasses.fields(value):
-            _paths(getattr(value, f.name), path + ("." + f.name,), out, depth + 1)
+            _walk(getattr(value, f.name), path + ("." + f.name,), out, problems, stack)
     elif hasattr(value, "__dict__") and not isinstance(value, type) and not callable(value):
         for k, v in vars(value).items():
             if not k.startswith("_"):
-                _paths(v, path + ("." + k,), out, depth + 1)
-    return out
+                _walk(v, path + ("." + k,), out, problems, stack)
 
 
-def check_change(before: dict, after: dict, foreign=()) -> tuple[list, str | None]:
-    """Whether a call's effect on one structure (path -> object maps from :func:`_paths`, before and after)
-    fits the replay's change model: an object that was there stays at its path (its content may change), or
-    the path now holds a fresh object; a fresh object (new path or replaced one) holds no object that existed
-    before (here or in ``foreign``, the other structures' objects) and is reached by one path only. Returns
-    (the minimal replaced paths, None) or ([], why not)."""
-    before_ids = {id(o) for o in before.values()} | {id(o) for o in foreign}
-    replaced = sorted((q for q, o in after.items() if q in before and before[q] is not o),
-                      key=lambda q: (len(q), repr(q)))
-    minimal = [q for q in replaced if not any(q[:len(r)] == r for r in replaced if len(r) < len(q))]
+def _compare_text(recorder, value: Any) -> str:
+    """A comparison encoding: arrays by hash, nothing stored, not counted as recorded values."""
+    from forklift_core.mission.replay_codec import Encoder
+
+    return json.dumps(Encoder(opaque_ok=True, value_types=recorder.value_types, hash_arrays=True).encode(value),
+                      sort_keys=True)
+
+
+class _State:
+    """One call's view of what it may change: the arguments (paths under ``("A",)``), each watched key's
+    value (``("W", dict, key)``) and each append-only watched list (its object and its items). ``texts``:
+    each object's encoding, to tell later whether an object that left its path was changed."""
+
+    def __init__(self, recorder, raw: dict, watch, *, texts: bool = True) -> None:
+        self.paths: dict = {}
+        self.problems: list = []
+        _walk(raw["args"], ("A", "'args'"), self.paths, self.problems)
+        _walk(raw["kwargs"], ("A", "'kwargs'"), self.paths, self.problems)
+        self.paths.pop(("A", "'args'"), None)  # the call's own argument containers
+        self.paths.pop(("A", "'kwargs'"), None)
+        self.appends: dict = {}
+        for name, d in ((watch.dicts if watch is not None else {}) or {}).items():
+            if d is None:
+                continue
+            for k, v in list(d.items()):
+                if not watch.in_scope(name, k):
+                    continue
+                if k in watch.append_only and isinstance(v, list):
+                    self.appends[(name, k)] = (v, list(v))  # the list and its items (kept alive)
+                else:
+                    _walk(v, ("W", name, k), self.paths, self.problems)
+        # Comparison only: arrays by hash (nothing stored in the record).
+        self.texts = {q: _compare_text(recorder, o) for q, o in self.paths.items()} if texts else None
+        self.recorder = recorder
+
+
+def check_state(before: "_State", after: "_State") -> tuple[list, str | None]:
+    """Whether a call's effect fits the replay's change model, and where fresh objects replaced old ones.
+
+    The model: an object that was there stays at its path (its content may change); a path that holds
+    another object holds a fresh one, and so does every path under it; a fresh object (at a new path, a
+    replaced one or appended to an append-only list) contains no object that existed before anywhere in the
+    call's view and is reached by one path only; an object that left the view is unchanged; append-only lists
+    keep their object and their items and only grow; dictionary keys are plain values. Returns (the minimal
+    replaced paths, None) or ([], why not)."""
+    if after.problems or before.problems:
+        return [], "; ".join(sorted(set(before.problems + after.problems)))
+    before_ids = {id(o) for o in before.paths.values()}
+    for lst, items in before.appends.values():
+        before_ids.add(id(lst))
+        before_ids.update(id(x) for x in items)
+    differ = [q for q, o in after.paths.items() if q in before.paths and before.paths[q] is not o]
+    differ.sort(key=lambda q: (len(q), repr(q)))
+    replaced = [q for q in differ if not any(q[:len(r)] == r for r in differ if len(r) < len(q))]
+
+    def under(q):
+        return any(q[:len(r)] == r for r in replaced)
+
+    def stays(q, o):  # an old object still at its own path (before and after), under no replaced path
+        return (q in before.paths and before.paths[q] is o and q in after.paths and after.paths[q] is o
+                and not under(q))
+
     seen: dict[int, tuple] = {}
-    for q, o in after.items():
-        if q in before and before[q] is o:
-            continue  # an object that was there, at its path (aliases that existed before stay as they were)
-        fresh_here = any(q[:len(r)] == r for r in minimal) or q not in before
+    for q, o in after.paths.items():
+        if stays(q, o):
+            continue
+        if id(o) in before_ids:
+            return [], f"{q} now holds an object that existed before the call"
         if id(o) in seen:
             return [], f"{q} and {seen[id(o)]} now hold one new object"
         seen[id(o)] = q
-        if not fresh_here:
-            return [], f"{q} holds another object"
-        if id(o) in before_ids:
-            return [], f"{q} now holds an object that existed before the call"
-    return minimal, None
+    for key, (lst, items) in before.appends.items():
+        now = after.appends.get(key)
+        if now is None or now[0] is not lst:
+            return [], f"append-only {key} was replaced or removed"
+        cur = now[1]
+        if len(cur) < len(items) or any(a is not b for a, b in zip(cur, items)):
+            return [], f"append-only {key} changed its existing items"
+        for x in cur[len(items):]:
+            inner: dict = {}
+            _walk(x, (), inner, [])
+            for o in {id(o): o for o in inner.values()}.values():  # x itself and what it holds, once each
+                if id(o) in before_ids or id(o) in seen:
+                    return [], f"append-only {key} got an object that existed or is held elsewhere"
+                seen[id(o)] = ("appended", key)
+    after_ids = {id(o) for o in after.paths.values()}
+    for q, o in before.paths.items():
+        if stays(q, o):
+            continue
+        if id(o) in after_ids:
+            # Still in the view: legitimate only where it also stays at an old path of its own.
+            if not any(stays(r, o) for r, x in after.paths.items() if x is o):
+                return [], f"the object at {q} moved"
+            continue
+        if _compare_text(before.recorder, o) != before.texts[q]:
+            return [], f"the object that left {q} was changed"
+    return replaced, None
 
 
 def _identities(value: Any, out: set, depth: int = 0) -> set:
@@ -468,76 +565,51 @@ class DictWatch:
         # Per dictionary, the only keys compared (None: all but ``skip``) -- keeps a per-physics-tick watch cheap.
         self.keys = {name: set(k) for name, k in (keys or {}).items()}
 
+    def in_scope(self, name: str, key) -> bool:
+        only = self.keys.get(name)
+        return key not in self.skip and (only is None or key in only)
+
     def _snapshot(self, d: dict, name: str = "") -> dict:
         snap = {}
-        only = self.keys.get(name)
-        # Format 2 also keeps which object each key holds: a replacement by an equal object is a change too.
-        ident = self.recorder.value_format == 2
+        v2 = self.recorder.value_format == 2
         for k, v in list(d.items()):
-            if k in self.skip or (only is not None and k not in only):
+            if not self.in_scope(name, k):
                 continue
             if k in self.append_only and isinstance(v, list):
-                snap[k] = ("$len", len(v), v) if ident else ("$len", len(v))
+                snap[k] = ("$len", len(v), v) if v2 else ("$len", len(v))
             else:
-                text = json.dumps(self.recorder.encode(v), sort_keys=True)
-                snap[k] = (text, _paths(v)) if ident else text
+                snap[k] = json.dumps(self.recorder.encode(v), sort_keys=True)
         return snap
 
     def mark(self) -> dict:
         return {name: self._snapshot(d, name) for name, d in self.dicts.items() if d is not None}
 
-    def changes(self, marks: dict) -> dict:
+    def changes(self, marks: dict, force=()) -> dict:
+        """``force``: (dict, key) pairs reported as value changes even when their encoding is the same (format
+        2: a fresh object put in place of an equal one)."""
         out = {}
-        fresh: dict[int, list] = {}
         for name, d in self.dicts.items():
             if d is None or name not in marks:
                 continue
             before, now = marks[name], self._snapshot(d, name)
             diff = {}
             for k in set(before) | set(now):
-                if self.recorder.value_format == 2 and k in before and k in now:
-                    b_, n_ = before[k], now[k]
-                    if b_[0] == "$len" and n_[0] == "$len":
-                        if b_[2] is n_[2] and b_[1] == n_[1]:
-                            continue
-                    elif b_[0] != "$len" and n_[0] != "$len":
-                        if b_[0] == n_[0] and b_[1].keys() == n_[1].keys() and all(
-                                b_[1][q] is n_[1][q] for q in b_[1]):
-                            continue
-                elif before.get(k) == now.get(k):
+                if before.get(k) == now.get(k) and (name, k) not in force:
                     continue
                 if k not in d:
                     diff[k] = {"$deleted": True}
-                elif (isinstance(now.get(k), tuple) and now[k][0] == "$len" and isinstance(before.get(k), tuple)
-                      and before[k][0] == "$len" and len(now[k]) == 3 and before[k][2] is now[k][2]
-                      and before[k][1] <= now[k][1]):
-                    diff[k] = {"$append": d[k][before[k][1]:]}
-                elif isinstance(now.get(k), tuple) and now[k][0] == "$len" and len(now[k]) == 2:  # format 1
+                elif isinstance(now.get(k), tuple) and now[k][0] == "$len" and (
+                        len(now[k]) == 2 or (isinstance(before.get(k), tuple) and before[k][2] is now[k][2])):
                     start = before[k][1] if isinstance(before.get(k), tuple) else 0
+                    if len(now[k]) == 3 and start == now[k][1]:
+                        continue  # same list, same length: nothing appended (format 2 compares the list object)
                     diff[k] = {"$append": d[k][start:]}
                 elif self.recorder.value_format == 2:
-                    # The value, the paths now holding fresh objects, or why the change is outside the model.
-                    was = before.get(k)
-                    old_paths = {} if was is None or was[0] == "$len" else was[1]
-                    if was is not None and was[0] == "$len":
-                        old_paths = {(): was[2]}
-                    new_paths = _paths(d[k])
-                    foreign = [o for kk, vv in before.items() if kk != k and vv[0] != "$len" for o in vv[1].values()]
-                    replaced, problem = check_change(old_paths, new_paths, foreign)
-                    diff[k] = {"$value": d[k], "$replaced_paths": replaced, "$problem": problem}
-                    for q, o in new_paths.items():  # the fresh objects, to find one shared by two keys
-                        if not (q in old_paths and old_paths[q] is o):
-                            fresh.setdefault(id(o), []).append(f"{name}.{k}")
+                    diff[k] = {"$value": d[k]}
                 else:
                     diff[k] = d[k]
             if diff:
                 out[name] = diff
-        shared = sorted({", ".join(sorted(set(h))) for h in fresh.values() if len(set(h)) > 1})
-        if shared:  # one new object under two watched keys: outside the replay's change model
-            for name, diff in out.items():
-                for k, change in diff.items():
-                    if isinstance(change, dict) and "$value" in change and any(f"{name}.{k}" in g for g in shared):
-                        change["$problem"] = change.get("$problem") or f"shares a new object ({'; '.join(shared)})"
         return out
 
 

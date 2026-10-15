@@ -115,14 +115,26 @@ def apply_inplace(actual: Any, after: Any, where: str = "argument", *, replaced=
     if isinstance(actual, np.ndarray) and isinstance(after, np.ndarray):
         if actual.shape != after.shape or actual.dtype != after.dtype:
             raise Unsupported(f"{where}: an array changed shape or dtype in place")
-        if not np.array_equal(actual, after, equal_nan=actual.dtype.kind in "fc"):
-            actual[...] = after  # only a changed array is written (a read-only one may stand unchanged)
+        if actual.tobytes() != after.tobytes():  # the exact bytes (-0.0, NaN payloads); unchanged ones untouched
+            if not actual.flags.writeable:
+                try:
+                    actual.setflags(write=True)
+                except ValueError:
+                    raise Unsupported(f"{where}: a read-only array that does not own its data changed") from None
+            actual[...] = after
+        if actual.flags.writeable != after.flags.writeable:
+            try:
+                actual.setflags(write=after.flags.writeable)
+            except ValueError:
+                raise Unsupported(f"{where}: an array's read-only state cannot be restored") from None
         return actual
-    if isinstance(actual, tuple) and isinstance(after, tuple) and len(actual) == len(after):
-        for i, (a, b) in enumerate(zip(actual, after)):
-            if sub(a, b, i) is not a:
-                raise Unsupported(f"{where}: a tuple element would have to be replaced")
-        return actual
+    if isinstance(actual, tuple) and isinstance(after, tuple):
+        # A tuple cannot change in place: its mutable elements are updated where they are, and if any element
+        # (or the length) differs the holder gets a new tuple made of them.
+        elements = [sub(actual[i], b, i) if i < len(actual) else b for i, b in enumerate(after)]
+        if len(elements) == len(actual) and all(e is a for e, a in zip(elements, actual)):
+            return actual
+        return tuple(elements)
     if dataclasses.is_dataclass(actual) and not isinstance(actual, type) and type(actual) is type(after):
         for f in dataclasses.fields(actual):
             a, b = getattr(actual, f.name), getattr(after, f.name)
@@ -218,7 +230,24 @@ class ReplaySession:
         self.tick = None
         self.ticks_done += 1
 
-    def finish(self) -> None:
+    def finish(self, final_state: Any = None) -> None:
+        """``final_state``: the replayed run's core containers at its end, compared with the recorded ones when
+        the record has them (``final_state.json``)."""
+        recorded = self.directory / "final_state.json"
+        if self.failure is None and recorded.exists():
+            if final_state is None:
+                raise self.fail("the record has a final state and the replay gave none")
+            arrays = {}
+            extra = self.directory / "final_state_arrays.npz"
+            if extra.exists():
+                with np.load(extra, allow_pickle=False) as z:
+                    arrays = {k: z[k] for k in z.files}
+            mine = Encoder(opaque_ok=True, value_types=self.value_types)
+            node = mine.encode(final_state)
+            want = json.loads(recorded.read_text())
+            if _canonical(node) != _canonical(want) or any(
+                    not np.array_equal(mine.arrays[k], arrays.get(k)) for k in mine.arrays):
+                raise self.fail("the replay's final state differs from the recorded one")
         if self.failure is not None:
             raise ReplayMismatch(f"the replay failed earlier: {self.failure}")
         if self.tick is not None:

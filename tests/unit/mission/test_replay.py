@@ -468,3 +468,111 @@ def test_a_restoration_error_the_code_catches_still_fails_the_replay(tmp_path):
     with pytest.raises(ReplayMismatch, match="restoring the recorded response failed"):
         session.tick_end(outputs={}, branches=[])
         session.finish()
+
+
+# --- Codex R1 re-review 3 (P2 x7): the change model, checked over one view per call ------------------------
+
+# An edit to an already-logged item of an append-only list is not checked per call (it would re-encode the
+# whole log every physics step); the end-of-run final state catches it (test below).
+@pytest.mark.parametrize("change", ["old_child_in_new_parent", "pop_then_mutate", "arg_takes_watched",
+                                    "watched_takes_other_watched", "append_old_object", "object_key"])
+def test_out_of_model_changes_are_refused(tmp_path, change):
+    core = {"anchor": [5], "log": [{"n": 1}]}
+    other = {"x": [6]}
+
+    @dataclass(eq=False)
+    class Key:
+        n: int
+
+    def fn(box):
+        if change == "old_child_in_new_parent":
+            box["p"] = {"child": box["p"]["child"]}
+        elif change == "pop_then_mutate":
+            box.pop("items").append(2)
+        elif change == "arg_takes_watched":
+            box["x"] = core["anchor"]
+        elif change == "watched_takes_other_watched":
+            core["anchor"] = other["x"]
+        elif change == "append_edits_prefix":
+            core["log"][0]["n"] = 9
+            core["log"].append({"n": 2})
+        elif change == "append_old_object":
+            core["log"].append(core["anchor"])
+        else:
+            box["items"].append(1)
+
+    def call(f):
+        box = {"p": {"child": [1]}, "items": [1]}
+        if change == "object_key":
+            box[Key(1)] = 1
+        f(box)
+
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    gate = RecordingGate(rec)
+    watch = DictWatch(rec, {"core": core, "other": other}, append_only={"log"})
+    rec.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    call(recorded_function(fn, "Svc", "f", gate, watch=watch))
+    rec.tick_end(outputs={}, branches=[])
+    rec.close()
+    entry = next(iter(__import__("forklift_core.mission.replay", fromlist=["read_ticks"]).read_ticks(tmp_path)))
+    assert "unsupported" in entry["calls"][0]["changes"], change
+
+
+def test_a_popped_object_left_unchanged_is_fine(tmp_path):
+    def fn(box):
+        box.pop("items")
+
+    def call(f):
+        box = {"items": [1], "keep": 2}
+        held = box["items"]
+        f(box)
+        return box, held
+
+    replay_with = one_call(tmp_path, fn, call)
+    box, held = replay_with(call)
+    assert box == {"keep": 2} and held == [1]
+
+
+def test_a_tuple_value_change_installs_a_new_tuple(tmp_path):
+    core = {"odom_rear": (1.0, 2.0, 0.0), "pose": [(0.0, 0.0)]}
+
+    def step(_):
+        core["odom_rear"] = (1.1, 2.0, 0.0)
+        core["pose"][0] = (0.5, 0.0)
+
+    replay_with = one_call(tmp_path, step, lambda f: f(0), watch_dicts={"core": core})
+    rcore = {"odom_rear": (1.0, 2.0, 0.0), "pose": [(0.0, 0.0)]}
+    rpose = rcore["pose"]
+    replay_with(lambda f: f(0), watch_dicts_replay={"core": rcore})
+    assert rcore["odom_rear"] == (1.1, 2.0, 0.0) and rcore["pose"] is rpose and rpose == [(0.5, 0.0)]
+
+
+def test_array_bytes_and_read_only_state_are_restored_exactly(tmp_path):
+    def flip(arr):
+        arr[0] = -0.0
+        arr.setflags(write=False)
+
+    def call(f):
+        arr = np.zeros(2)
+        f(arr)
+        return arr
+
+    replay_with = one_call(tmp_path, flip, call)
+    arr = replay_with(call)
+    assert np.signbit(arr[0]) and not arr.flags.writeable
+
+
+def test_the_final_state_catches_what_no_call_record_carries(tmp_path):
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    rec.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    rec.tick_end(outputs={}, branches=[])
+    rec.close(final_state={"log": [{"n": 9}], "a": np.ones(2)})
+    session = ReplaySession(tmp_path)
+    session.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    session.tick_end(outputs={}, branches=[])
+    with pytest.raises(ReplayMismatch, match="final state differs"):
+        session.finish(final_state={"log": [{"n": 1}], "a": np.ones(2)})
+    session = ReplaySession(tmp_path)
+    session.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    session.tick_end(outputs={}, branches=[])
+    session.finish(final_state={"log": [{"n": 9}], "a": np.ones(2)})
