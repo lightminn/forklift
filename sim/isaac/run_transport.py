@@ -4581,6 +4581,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             return
         require(path is not None, f"docking_unaligned:{offsets}:{docking.get('dry_run')}")
         docking.pop("reapproach", None)  # plan D7c: a straight ends the re-approach
+        # The path being replaced, kept (paths.json holds only the latest): the transport search
+        # path's cusps are judged from it (fork spacing plan, V5 cusp arrivals).
+        state.setdefault("paths_replaced", []).append(
+            {"leg": "transport", "time_s": t, "by": "delivery_straight", "path": state["paths"].get("transport")})
         paths["transport"] = path
         state["paths"]["transport"] = path_record(path)
         trackers["transport"] = RearAxlePathTracker(
@@ -4706,6 +4710,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         """Plan D7c ④: the re-approach replaces the transport path; the docking waits
         at its end (no arm_docking: a re-approach may end on a reverse curve)."""
         nonlocal phase_started
+        state.setdefault("paths_replaced", []).append(
+            {"leg": "transport", "time_s": t, "by": "reapproach", "path": state["paths"].get("transport")})
         paths["transport"] = path
         state["paths"]["transport"] = path_record(path)
         (args.output / "paths.json").write_text(record_json(state["paths"], indent=2) + "\n")
