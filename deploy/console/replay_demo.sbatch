@@ -5,6 +5,7 @@
 #SBATCH --mem=3G
 #SBATCH --time=00:30:00
 #SBATCH --output=slurm-console-replay-%j.log
+#SBATCH --signal=B:TERM@60
 # Monitor-only console on a recorded Isaac SLAM bag (C2a demo, CPU only).
 #
 #   sbatch deploy/console/replay_demo.sbatch <bag directory> [passes]
@@ -23,10 +24,16 @@ PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); pr
 NAME=console-replay-$SLURM_JOB_ID
 echo "$PORT" > "console-replay-$SLURM_JOB_ID.port"
 echo "host=$(hostname) port=$PORT job=$SLURM_JOB_ID bag=$BAG passes=$PASSES"
-trap 'docker stop -t 3 "$NAME" >/dev/null 2>&1' EXIT TERM INT
+# The container runs detached and the script waits with the interruptible `wait`
+# builtin: a foreground `docker run` delays the trap until it returns, and Slurm's kill
+# of the client leaves the container running (seen on ws1, 2026-10-15). --signal sends
+# TERM 60 s before the time limit so a timeout cleans up the same way as scancel.
+cleanup() { docker stop -t 3 "$NAME" >/dev/null 2>&1; }
+trap cleanup EXIT
+trap 'cleanup; exit 143' TERM INT
 # --group-add 2000: recorded files belong to the lab group; a private ROS domain on
 # localhost keeps this replay off other jobs' graphs.
-docker run --rm --name "$NAME" --network host --group-add 2000 \
+docker run -d --rm --name "$NAME" --network host --group-add 2000 \
   -e ROS_DOMAIN_ID=$((SLURM_JOB_ID % 200 + 20)) -e ROS_LOCALHOST_ONLY=1 \
   -v "$ROOT":/workspace -v "$BAG":/data/bag:ro -w /workspace \
   forklift/ros2-console:jazzy bash -c "
@@ -46,4 +53,6 @@ docker run --rm --name "$NAME" --network host --group-add 2000 \
       echo \"pass \$pass end \$(date +%T)\"
     done
     sleep 30
-  "
+  " > /dev/null
+docker logs -f "$NAME" &   # pass lines into this log; ends with the container
+wait $!
