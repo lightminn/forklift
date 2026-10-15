@@ -50,7 +50,9 @@ def _resolve(qualname: str) -> type:
 
 def plain_value(value: Any) -> bool:
     """A scalar this codec encodes by value (shared with the recorder's change check)."""
-    return value is None or isinstance(value, (bool, int, float, str, bytes, np.bool_, np.integer, np.floating))
+    if isinstance(value, np.generic):
+        return value.dtype.kind in "biufcmMSU"
+    return value is None or isinstance(value, (bool, int, float, str, bytes))
 
 
 class Encoder:
@@ -121,12 +123,10 @@ class Encoder:
         return node
 
     def encode(self, value: Any) -> Any:
+        if isinstance(value, np.generic) and value.dtype.kind in "biufcmMSU":  # numpy scalars: dtype + bytes
+            return {"$np": value.dtype.str, "b": base64.b64encode(value.tobytes()).decode("ascii")}
         if isinstance(value, np.ndarray):
             return self._shared(value, lambda: self.array_key(value))
-        if isinstance(value, (np.bool_, np.integer, np.floating)):  # kept with its dtype
-            plain = value.item()
-            return {"$np": str(value.dtype),
-                    "v": {"$float": repr(plain)} if isinstance(plain, float) and not math.isfinite(plain) else plain}
         if isinstance(value, float) and not math.isfinite(value):
             return {"$float": repr(value)}
         if value is None or isinstance(value, (bool, int, float, str)):
@@ -208,8 +208,7 @@ def decode(node: Any, arrays: dict[str, np.ndarray]) -> Any:
         if "$float" in n:
             return float(n["$float"])
         if "$np" in n:
-            v = n["v"]
-            return np.dtype(n["$np"]).type(float(v["$float"]) if isinstance(v, dict) else v)
+            return np.frombuffer(base64.b64decode(n["b"]), dtype=np.dtype(n["$np"]))[0].copy()
         if "$bytes" in n:
             return base64.b64decode(n["$bytes"])
         if "$tuple" in n:

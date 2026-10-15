@@ -102,5 +102,11 @@ def test_numpy_scalars_keep_their_dtype_and_unencodable_ones_are_refused():
     out = roundtrip({"f": np.float32(1.5), "i": np.int16(-3), "b": np.bool_(True), "n": np.float64("nan")})
     assert out["f"].dtype == np.float32 and out["f"] == np.float32(1.5)
     assert out["i"].dtype == np.int16 and out["b"].dtype == np.bool_ and np.isnan(out["n"])
+    more = roundtrip({"c": np.complex64(1 + 2j), "l": np.longdouble(1) / 3, "t": np.timedelta64(1, "s"),
+                      "d": np.datetime64("2026-10-16")})
+    assert more["c"] == np.complex64(1 + 2j) and more["l"] == np.longdouble(1) / 3
+    assert more["t"] == np.timedelta64(1, "s") and more["d"] == np.datetime64("2026-10-16")
+    text = roundtrip({"s": np.str_("x")})["s"]
+    assert type(text) is np.str_ and text == "x"
     with pytest.raises(TypeError, match="no value encoding"):
-        encode({"c": np.complex64(1 + 2j)})
+        encode({"v": np.void(b"ab")})

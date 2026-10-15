@@ -754,10 +754,10 @@ def test_bytes_are_values(tmp_path):
 
 
 def test_a_numpy_scalar_without_a_value_encoding_in_the_view_is_refused(tmp_path):
-    core = {"z": np.complex64(1 + 2j)}
+    core = {"z": np.void(b"ab")}
 
     def fn(_):
-        core["z"] = np.complex64(3 + 4j)
+        core["z"] = np.void(b"cd")
 
     rec = BoundaryRecorder(tmp_path, value_format=2)
     gate = RecordingGate(rec)
