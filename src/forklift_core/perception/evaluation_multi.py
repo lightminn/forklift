@@ -76,6 +76,8 @@ class SceneVerdict:
     population: str
     render_source: str
     noisy: bool
+    noise_role: str | None
+    noise_signature: str | None
     miss: bool | None
     dangerous: bool
     extra: bool
@@ -257,9 +259,15 @@ def judge_scene(meta, truth, instruction_input, candidates: Sequence[CandidateVi
             cand = counted[matched_inst[k_inst]]
             face = costs[matched_inst[k_inst], k_inst][1]
             fit_error = None if cand.pickable is None else cand.pickable != face["fit"]["pickable"]
+    noise = meta.get("noise")
+    role = noise.get("role") if isinstance(noise, dict) else None
+    signature = None if noise is None else (
+        f"{noise['config_sha256']}:{noise['scale']}:{noise.get('role')}:{noise.get('level')}"
+        if isinstance(noise, dict) and "config_sha256" in noise
+        else "legacy")
     return SceneVerdict(
         meta["scene_id"], meta["case"], meta["shape_key"], meta["split"], population,
-        meta.get("render_source", "rig"), meta.get("noise") is not None,
+        meta.get("render_source", "rig"), noise is not None, role, signature,
         # In a negative scene, any counted candidate or any attempt to pick is a false positive.
         miss, dangerous, len(pairs) < len(counted),
         (bool(counted) or decision.status == "selected") if negative else None,
@@ -299,5 +307,5 @@ def summarize(verdicts: Sequence[SceneVerdict], *, split: str, render_source: st
             cell = [v for v in mine if v.case == case]
             cells[f"{pop}:{case}"] = {name: _gate([getattr(v, name) for v in cell], GATES[name]) for name in names}
     return {"split": split, "render_source": render_source, "scenes": len(chosen),
-            "official": render_source == "isaac" and bool(chosen) and all(v.noisy for v in chosen),
+            "official": render_source == "isaac" and bool(chosen) and all(v.noise_role == "official" for v in chosen),
             "gates": gates, "cells": cells}

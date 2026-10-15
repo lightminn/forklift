@@ -86,7 +86,7 @@ def main(argv=None):
     p.add_argument("--source-manifest", type=Path, default=None)
     a = p.parse_args(argv)
     run = {"baseline": _baseline, "oracle": _oracle}[a.detector]
-    verdicts, digest, sources = [], hashlib.sha256(), set()
+    verdicts, digest, sources, signatures = [], hashlib.sha256(), set(), set()
     for scene_json in sorted(a.dataset.glob("*/scene.json")):
         if read_meta(scene_json.parent)["split"] != a.split:
             continue
@@ -97,8 +97,11 @@ def main(argv=None):
         cands, decision = run(sample)
         verdicts.append(judge_scene(sample.meta, sample.truth, sample.input.instruction, cands, decision,
                                     elapsed_s=time.perf_counter() - start))
+        signatures.add(verdicts[-1].noise_signature)
     if len(sources) != 1:
         raise SystemExit(f"dataset must hold exactly one render source, found {sorted(sources)}")
+    if len(signatures) != 1:
+        raise SystemExit(f"dataset must hold exactly one noise configuration, found {sorted(map(str, signatures))}")
     a.output.mkdir(parents=True, exist_ok=True)
     metrics = summarize(verdicts, split=a.split, render_source=sources.pop())
     elapsed = sorted(v.elapsed_s for v in verdicts)

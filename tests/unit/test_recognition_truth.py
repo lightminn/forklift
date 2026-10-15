@@ -77,3 +77,17 @@ def test_support_surface_above_the_camera_is_not_visible():
     tiers = [(spec, rt.Placement(2.5, 0.0, 0.0, k * 0.144), (), None) for k in range(3)]
     truths = _truth(tiers, layers=[0, 1, 2])
     assert truths[0].support_visible and not truths[2].support_visible
+
+
+def test_truth_can_be_computed_at_another_camera_k():
+    from dataclasses import replace
+
+    from tools import generate_recognition_scenes as gen
+    from tools import recognition_scenes as rs
+
+    recipe = next(r for r in rs.catalogue() if r.case == "S3" and r.split == "dev")
+    base = gen.recipe_record(recipe, gen.load_site())
+    k = base.rendered.scene.intrinsics
+    shifted = gen.recipe_record(recipe, gen.load_site(), intrinsics=replace(k, cx=k.cx - 0.5, cy=k.cy - 0.5))
+    assert shifted.rendered.scene.intrinsics.cx == k.cx - 0.5
+    assert [f.exposure for t in base.truths for f in t.faces] != [f.exposure for t in shifted.truths for f in t.faces]

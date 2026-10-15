@@ -1,0 +1,1 @@
+calibrate	mkdir -p hpc_data && python tools/calibrate_depth_noise.py --out hpc_data/depth_noise_d435i.yaml && cat hpc_data/depth_noise_d435i.yaml

@@ -138,13 +138,14 @@ def _faces(spec, placement, setup, load, scene_local, scene_ids, k, solo_local, 
     return tuple(out)
 
 
-def scene_truths(instances, setup: ForkSetup, *, distractors: Sequence[scene_rig.Box] = (), layers=None):
+def scene_truths(instances, setup: ForkSetup, *, distractors: Sequence[scene_rig.Box] = (), layers=None,
+                 intrinsics=None):
     placed = [placed_boxes(instance_boxes(s, d), p) for s, p, d, _ in instances]
-    rendered = instance_rig.render_instances(placed, distractors=distractors)
+    rendered = instance_rig.render_instances(placed, distractors=distractors, intrinsics=intrinsics)
     layers = [0] * len(instances) if layers is None else list(layers)
     truths = []
     for k, (spec, placement, damage, load) in enumerate(instances):
-        solo = instance_rig.render_instances([placed[k]], floor=False, back_wall=False)
+        solo = instance_rig.render_instances([placed[k]], floor=False, back_wall=False, intrinsics=intrinsics)
         faces = _faces(spec, placement, setup, load, _local(rendered.points_base, placement), rendered.instance_ids,
                        k, _local(solo.points_base, placement), solo.instance_ids)
         support_visible = layers[k] == 0 or any(
