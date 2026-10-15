@@ -34,6 +34,7 @@ def run_dir(base: Path, name: str, *, wall=1.0, map_index=3, x=0.5, snapshot="sn
     (run / "result.json").write_text(json.dumps(result))
     np.savez(run / "slam_log.npz", base_pose_world=np.array([[x, 0.0, np.nan]]))
     (run / "paths.json").write_text(json.dumps({"transport": [[0, 0, 0], [1, 0, 0]]}))
+    (run / "meta.json").write_text(json.dumps({"record_boundary": name == "b", "seed": 0}))
     (run / "pocket_frames").mkdir()
     (run / "pocket_frames" / "index.json").write_text(json.dumps({"reads": [{"rendering_frame": [200 + map_index, 1]}]}))
     (run / "pallet.usd").write_bytes(name.encode())  # scene exports differ by path: not compared

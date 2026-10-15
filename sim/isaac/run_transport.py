@@ -1317,6 +1317,8 @@ def write_slam_record(args, state, scenario, factory, log, lidar_config) -> None
         "wheel_rate_sign": "positive rolls the truck forward (drive command sign)",
         "steering_order": ["front_left", "front_right"],
         "encoder_model": state.get("encoder_model") or {"name": "reported"},
+        # M-a0: a boundary-recorded run's slam log is never measurement evidence (P0a reads this file).
+        "record_boundary": bool(args.record_boundary),
         "odometry_geometry": {
             "wheelbase_m": args.drive_geometry.wheelbase_m,
             "track_m": args.drive_geometry.track_m,

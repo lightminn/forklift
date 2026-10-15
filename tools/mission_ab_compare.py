@@ -13,7 +13,8 @@ every recorded file matches after normalisation:
   bookkeeping of a capture, and the renderer frame numbers of pocket frame reads) are reported under
   ``nondeterministic``, not as differences;
 - source provenance (``source_sha256``, ``script_sha256``) is reported under ``provenance``;
-- the boundary record directory (``boundary/``) and recording-only arguments (``record_boundary``) are skipped;
+- the boundary record directory (``boundary/``) and recording-only arguments (``record_boundary``, in
+  ``arguments`` and at the top of ``meta.json``) are skipped;
 - JSON is compared by value (key order ignored, floats exactly); arrays (``.npz`` / ``.npy``) bit for
   bit (dtype, shape and bytes); other files byte for byte; scene exports and images are skipped.
 
@@ -59,7 +60,7 @@ def _walk(a, b, path: str, run_a: Path, run_b: Path, out: dict, name: str) -> No
     if isinstance(a, dict) and isinstance(b, dict):
         for key in sorted(set(a) | set(b), key=str):
             sub = f"{path}.{key}" if path else str(key)
-            if WALL_KEY.search(str(key)) or (path == "arguments" and key in RECORDING_ONLY_ARGUMENTS):
+            if WALL_KEY.search(str(key)) or (path in ("", "arguments") and key in RECORDING_ONLY_ARGUMENTS):
                 continue
             if key in PROVENANCE_KEYS:
                 if a.get(key) != b.get(key):
