@@ -80,3 +80,17 @@ def test_s7_shapes_stay_inside_the_design_ranges(catalogue):
         assert all(0.06 - 1e-9 <= w <= 0.20 + 1e-9 for w in spec.column_widths_m), r.scene_id
         assert 0.045 - 1e-9 <= spec.opening_height_m <= 0.12 + 1e-9, r.scene_id
         assert 0.60 - 1e-9 <= spec.overall_width_m <= 1.20 + 1e-9, r.scene_id
+
+
+def test_s3_adjacent_gaps_stay_inside_the_design_range(catalogue):
+    import math
+
+    for r in (r for r in catalogue if r.case == "S3" or (r.case == "S5" and r.rank % 3 == 2)):
+        if len(r.instances) < 2:
+            continue
+        yaw = r.instances[0].placement.yaw_rad
+        a = (math.cos(yaw), math.sin(yaw))
+        depth = r.instances[0].spec.overall_depth_m
+        along = [p.placement.x_m * a[0] + p.placement.y_m * a[1] for p in r.instances]
+        for front, back in zip(along, along[1:]):
+            assert 0.05 - 1e-9 <= back - front - depth <= 1.0 + 1e-9, r.scene_id

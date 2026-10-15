@@ -16,7 +16,9 @@ from pathlib import Path
 
 import numpy as np
 
+from forklift_core._validation import _finite_scalar
 from forklift_core.geometry import RigidTransform, rotation_matrix_from_quaternion_xyzw
+from forklift_core.perception.fork_fit import LoadDeclaration
 from forklift_core.perception.pocket_observation import CLOCK_DOMAINS, PROVENANCES
 from forklift_core.perception.scene_dataset import (
     SceneInput, _nonnegative_int, _read_json, _read_png, _require_fields, decode_depth_mm, intrinsics_from_camera_info,
@@ -65,6 +67,28 @@ def _quaternion_xyzw(rotation) -> list[float]:
     return [float(v) for v in q]
 
 
+INSTRUCTION_FIELDS = ("present", "x_m", "y_m", "radius_m", "layer", "load")
+
+
+def check_instruction(obj) -> dict:
+    """System-input instruction only: no evaluator truth (kind, target, ...) may ride along."""
+    if not isinstance(obj, dict) or set(obj) - set(INSTRUCTION_FIELDS) or "present" not in obj:
+        raise ValueError(f"instruction input may hold only {INSTRUCTION_FIELDS}, with present")
+    if not isinstance(obj["present"], bool):
+        raise ValueError("instruction present must be a bool")
+    if obj["present"]:
+        for name in ("x_m", "y_m"):
+            _finite_scalar(obj.get(name), f"instruction {name}")
+        if _finite_scalar(obj.get("radius_m"), "instruction radius_m") <= 0:
+            raise ValueError("instruction radius_m must be positive")
+        layer = obj.get("layer")
+        if layer is not None and (isinstance(layer, bool) or not isinstance(layer, int) or layer < 0):
+            raise ValueError("instruction layer must be a nonnegative int or null")
+    if obj.get("load") is not None:
+        LoadDeclaration(**obj["load"])  # validates names, finiteness and source
+    return obj
+
+
 def _png(path: Path, array) -> None:
     from PIL import Image
 
@@ -81,6 +105,7 @@ def _check_meta(origin: str, meta: dict) -> None:
 
 def write_recognition_scene(scene_dir, scene: SceneInput, instance_ids, *, origin, meta, truth, instruction) -> None:
     _check_meta(origin, meta)
+    check_instruction(instruction)
     scene_dir = Path(scene_dir)
     scene_dir.mkdir(parents=True, exist_ok=True)
     depth = scene.depth_m
@@ -156,7 +181,7 @@ def _load_input(scene_dir: Path):
     scene = SceneInput(rgb=rgb, depth_m=depth, intrinsics=intrinsics, base_from_optical=transform,
                        stamp_ns=int(meta["stamp_ns"]), clock_domain=meta["clock_domain"],
                        source_provenance=meta["source_provenance"])
-    return RecognitionInput(scene, _read_json(scene_dir / "instruction.json")), tf["origin"], meta
+    return RecognitionInput(scene, check_instruction(_read_json(scene_dir / "instruction.json"))), tf["origin"], meta
 
 
 def load_recognition_input(scene_dir) -> RecognitionInput:

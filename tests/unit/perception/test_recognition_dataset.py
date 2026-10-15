@@ -78,3 +78,30 @@ def test_digest_covers_every_file(tmp_path):
     before = rd.scene_digest(tmp_path)
     (tmp_path / "truth.json").write_text(json.dumps({"instances": [1]}))
     assert rd.scene_digest(tmp_path) != before
+
+
+@pytest.mark.parametrize("extra", [{"kind": "unambiguous"}, {"target": 0}, {"instance_spec": {}}])
+def test_instruction_input_rejects_truth_fields(tmp_path, extra):
+    out = instance_rig.render_instances([])
+    with pytest.raises(ValueError, match="instruction"):
+        rd.write_recognition_scene(tmp_path, out.scene, out.instance_ids, origin="rig_render_pose", meta=META,
+                                   truth={"instances": []}, instruction={"present": False, **extra})
+
+
+def test_instruction_input_is_checked_on_load(tmp_path):
+    _write(tmp_path)
+    (tmp_path / "instruction.json").write_text(json.dumps({"present": True, "x_m": 1.0, "y_m": 0.0,
+                                                           "radius_m": 0.3, "layer": None, "load": None,
+                                                           "target": 1}))
+    with pytest.raises(ValueError, match="instruction"):
+        rd.load_recognition_input(tmp_path)
+
+
+def test_instruction_load_must_be_a_valid_declaration(tmp_path):
+    out = instance_rig.render_instances([])
+    bad = {"present": True, "x_m": 1.0, "y_m": 0.0, "radius_m": 0.3, "layer": None,
+           "load": {"pallet_mass_kg": float("nan"), "load_mass_kg": 0.0, "com_x_max_m": 0.3, "com_y_max_m": 0.0,
+                    "source": "instruction"}}
+    with pytest.raises(ValueError):
+        rd.write_recognition_scene(tmp_path, out.scene, out.instance_ids, origin="rig_render_pose", meta=META,
+                                   truth={"instances": []}, instruction=bad)

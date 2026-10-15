@@ -167,6 +167,7 @@ def _place_known(rule, rng, spec, touching):
     a, n = _axes(yaw)
     count = int(rng.integers(2, 4)) if rule in ("S2", "S3", "S4") else 1
     out = []
+    behind = 0.0  # S3: distance of the current pallet behind the first, one gap drawn per neighbour
     for k in range(count):
         if rule == "S2":
             gap = 0.0 if touching else float(rng.uniform(0.01, 0.30))
@@ -176,7 +177,8 @@ def _place_known(rule, rng, spec, touching):
             jitter = 0.0 if touching else float(rng.uniform(-0.087, 0.087))
             out.append((Placement(float(pos[0]), float(pos[1]), yaw + jitter, 0.0), 0))
         elif rule == "S3":
-            behind = sum(float(rng.uniform(0.05, 1.0)) + spec.overall_depth_m for _ in range(k))
+            if k:
+                behind += float(rng.uniform(0.05, 1.0)) + spec.overall_depth_m
             side = float(rng.uniform(-0.2, 0.2)) if k else 0.0
             pos = np.array([x, y]) + a * behind + n * side
             out.append((Placement(float(pos[0]), float(pos[1]), yaw, 0.0), 0))
