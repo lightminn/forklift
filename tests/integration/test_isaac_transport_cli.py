@@ -434,7 +434,7 @@ def test_slam_runs_see_the_pallet_again_before_the_final_straight() -> None:
     """Plan v3.6: near capture from final_straight_prefix, no silent fallback."""
     source = SCRIPT.read_text()
     assert "final_straight_prefix(\n                                    paths[\"approach\"], geometry.alignment_straight_m" in source
-    assert 'f"near_capture_failed:{attempt[\'retry_reason\']}"' in source
+    assert 'f"near_capture_failed:{attempt[\'retry_reason\']}"' in CORE.read_text()  # (M-a1 slice 4b-iii)
     assert 'if slam is not None and "near_capture" not in state:' in source
 
 
@@ -628,6 +628,18 @@ def test_s4_near_tracking_options_validate_before_startup() -> None:
         assert expected in result.stderr, (flags, result.stderr)
 
 
+def _core_hook(call, parents) -> bool:
+    """The runner's ``near_tick=lambda *a: near_tick(*a)`` handed to MissionCore -- the only call of a guarded
+    function allowed outside a ``near is not None`` test, since the core guards it (Codex 4a-iii/iv P3)."""
+    import ast
+
+    lam = parents.get(call)
+    kw = parents.get(lam)
+    owner = parents.get(parents.get(parents.get(kw)))  # keyword -> SimpleNamespace(...) -> hooks= -> MissionCore(...)
+    return (isinstance(lam, ast.Lambda) and lam.body is call and isinstance(kw, ast.keyword)
+            and kw.arg == call.func.id and isinstance(owner, ast.Call) and ast.unparse(owner.func) == "MissionCore")
+
+
 def test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival() -> None:
     """Plan D8 S4a: with --near-tracking off the run is unchanged -- every call into the
     near-field path sits under a `near is not None` test -- and the stop is decided before
@@ -642,7 +654,7 @@ def test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival() -> 
     parents.update({child: node for node in ast.walk(core_tree) for child in ast.iter_child_nodes(node)})
     calls = [n for t_ in (tree, core_tree) for n in ast.walk(t_) if isinstance(n, ast.Call)
              and getattr(n.func, "id", None) in guarded_calls
-             and not (isinstance(parents.get(n), ast.Lambda) and [ast.unparse(a) for a in n.args] == ["*a"])]
+             and not _core_hook(n, parents)]
     assert {c.func.id for c in calls} == set(guarded_calls)
     for call in calls:
         node, guarded = call, False
@@ -918,9 +930,9 @@ def test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_in
     install = functions["realign_install"]
     assert "near_tracking.REALIGN_MAX_LENGTH_M" in install and "'slam_mode': slam['tracker'].mode" in install
     core = CORE.read_text()  # the obstacle replan's installs moved to the mission core (M-a1 slice 3c)
-    for site in ("near_leg", "observe_candidate"):
+    for site in ("near_leg",):
         assert f'realign_install("{site}")' in source, site
-    for site in ("backoff", "obstacle_replan", "observe_replan"):
+    for site in ("backoff", "obstacle_replan", "observe_replan", "observe_candidate"):
         assert f'realign_install("{site}")' in core, site
     assert source.count('"near_capture_realign_held_recovery"') + core.count('"near_capture_realign_held_recovery"') == 2
     branch = source.index("Plan D8 S4c-3 stage 2: once per pickup, instead of ending.")

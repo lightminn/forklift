@@ -266,10 +266,10 @@ def test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules():
 
 
 def test_the_re_observation_tracker_uses_the_repositioning_tolerances():
-    tree = ast.parse(SCRIPT.read_text())
+    # (the re-observation's candidate tracker moved to the mission core, M-a1 slice 4b-iii)
     literal = [
         {k.arg: k.value for k in call.keywords}
-        for call in ast.walk(tree)
+        for call in [*ast.walk(ast.parse(SCRIPT.read_text())), *ast.walk(ast.parse(CORE.read_text()))]
         if isinstance(call, ast.Call)
         and getattr(call.func, "id", "") == "TrackerConfig"
         and isinstance(
@@ -284,10 +284,10 @@ def test_the_re_observation_tracker_uses_the_repositioning_tolerances():
 
 
 def test_every_runner_tracker_releases_gear_change_cusps_the_same_way():
-    tree = ast.parse(SCRIPT.read_text())
+    # (the re-observation's candidate tracker moved to the mission core, M-a1 slice 4b-iii)
     configs = [
         {k.arg: k.value for k in call.keywords}
-        for call in ast.walk(tree)
+        for call in [*ast.walk(ast.parse(SCRIPT.read_text())), *ast.walk(ast.parse(CORE.read_text()))]
         if isinstance(call, ast.Call)
         and getattr(call.func, "id", "") == "TrackerConfig"
     ]
@@ -435,11 +435,15 @@ def test_runtime_viewpoints_extend_the_default_list_before_any_candidate_is_plan
     source = SCRIPT.read_text()
     extend = source.index("args.observation_waypoints = list(args.observation_waypoints) + [")
     first_loop = source.index("for candidate_index, coordinates, extended in initial_candidates:")
-    reobserve = source.index("while ms.next_candidate_index < len(")  # the cursor is mission state (M-a1 slice 3c)
+    # The re-observation moved to the mission core (M-a1 slice 4b-iii); it reads the same list, which the
+    # runner hands it after the extension (the core is built later in run()).
+    core = CORE.read_text()
+    reobserve = core.index("while ms.next_candidate_index < len(")
     assert source.count("args.observation_waypoints = list(args.observation_waypoints) + [") == 1
-    assert extend < first_loop < reobserve
+    assert extend < first_loop < source.index("    core = MissionCore(")
+    assert "observation_waypoints=args.observation_waypoints" in source
     assert "if args.runtime_viewpoints:" in source[source.rindex("if args.use_perception:", 0, extend) : extend]
-    assert "args.observation_waypoints" in source[reobserve : reobserve + 120]
+    assert "options.observation_waypoints" in core[reobserve : reobserve + 120]
 
 
 def test_runtime_viewpoints_only_follow_the_default_bay_list():
@@ -1199,9 +1203,11 @@ def test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judge
     # Every observe and return tracker holds: the first ones, the candidate re-route's, the ones built
     # after the far observation (Codex fix A implementation review 1 P2); the near leg and the
     # replans reuse a tracker's config.
-    assert source.count("cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD") == 3
-    candidate = source[
-        source.index('trackers["observe"] = RearAxlePathTracker(\n                                observe_plan.poses') :
+    moved = CORE.read_text()  # the candidate re-route's tracker moved to the mission core (M-a1 slice 4b-iii)
+    assert source.count("cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD") + moved.count(
+        "cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD") == 3
+    candidate = moved[
+        moved.index('trackers["observe"] = RearAxlePathTracker(\n            observe_plan.poses') :
     ]
     assert "cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD," in candidate[: candidate.index("phase_started = t")]
     assert 'near_leg.curvatures_inv_m,\n                                    trackers["observe"].config,' in source

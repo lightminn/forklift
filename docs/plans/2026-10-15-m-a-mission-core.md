@@ -98,6 +98,7 @@
 - **M-a1 4 조각 분할(2026-10-15)**: 0 단계 — 틱을 넘는 카운터(`dock_stop_ticks`·`slam_stall_ticks`·`cusp_stop_ticks`·`observe_stall_ticks`)와 `last_tracking` 을 `MissionState` 로(`68ebf33`). 4a-i 추종 틱(`follow`: 시간 한도·추종기 갱신·cusp heading 기록·재관찰 정지·탈출 끝·cusp 위치 정체·최종 목표 근처 SLAM hold), 4a-ii D7c 도킹 정지·SLAM 목표 heading 미달·정체 재계획(`docking_and_stall`), 4a-iii cusp 정지·heading hold·observe 정체, 4a-iv 명령 계산·근접 틱·후퇴 끝, 4b 관찰 도착(캡처·인식·근접 캡처).
 - **M-a1 4a 결과(2026-10-15)**: 4a-i·ii 경계 기록 접두 비교(ws1 잡 2825·2826) 네 실행 모두 **접두 일치**·임무 성공. Codex 재검토: 3 조각 P2(`rear`) 닫힘, P3(감사 제외)는 '훅 람다가 자기 `*args`·`**kwargs` 를 그대로 넘기는 호출' 만 제외하도록 좁힘. 4a-iii cusp·observe 복구(`cusp_and_observe_recovery`), 4a-iv 명령·근접 틱·느슨한 관찰 도착·후퇴 끝(`command`) — `release` 뒤 `set_rear`. `requested_speed` 는 `read_pocket_frame` 이 읽지만 루프 끝에서만 불린다(그때는 실행기 값이 갱신돼 있다).
 - **M-a1 4b 분할(2026-10-15)**: 관찰 도착(약 900 줄)을 4b-i 캡처·검출, 4b-ii 반복 캡처 진단(측정 전용), 4b-iii 인식 실패 시 다음 후보, 4b-iv 인식 성공 시 추정·참값 오차 기록·미션 계획, 4b-v 근접 구간 설치로 나눈다.
+- **M-a1 4a-iii·iv 결과(2026-10-15)**: 경계 기록 접두 비교(ws1 잡 2829·2830) 네 실행 모두 **접두 일치**·임무 성공. Codex 검토 새 P1/P2 없음, P3(근접 가드 시험의 예외)는 `MissionCore(...)` 에 넘기는 `near_tick=` 훅 하나로 좁혔다. 4b-iii 인식 실패 → 다음 후보(`observe_failed`): 영상 오버레이 문구(`inset_status`·`inset_detail`, 영상 클로저가 읽는다)는 Sink 훅 `set_inset` 으로 돌려준다.
 
 ## 6. 열린 질문
 

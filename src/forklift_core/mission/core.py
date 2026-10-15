@@ -60,7 +60,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from forklift_core.control import RearAxlePathTracker
+from forklift_core.control import RearAxlePathTracker, TrackerConfig
 from forklift_core.control import cusp_stall as CUSP_STALL
 from forklift_core.mission.state import MissionState
 from forklift_core.planning import PlanResult
@@ -1768,3 +1768,139 @@ class MissionCore:
             requested_speed = 0.0
         return SimpleNamespace(requested_speed=requested_speed, curvature=curvature, tracking=tracking, rear=rear,
                                dwell_hold=dwell_hold, dwell_standing=dwell_standing, safety_hold=safety_hold)
+
+    def observe_failed(self, t: float, rear, attempt: dict, attempt_number: int, observation) -> bool:
+        """An observation that did not detect the pallet: a near capture fails outright (no fallback to the
+        far estimate); otherwise the remaining observation candidates are planned from here and the first
+        reachable one installed as the observe leg (all exhausted ends the run, or the repeat-capture
+        diagnostic). True ends the mission loop (the repeat diagnostic's target not reached)."""
+        ms, state, hooks, options = self.ms, self.state, self.hooks, self.options
+        paths, trackers, geometry, settings, transition = self.paths, self.trackers, self.geometry, self.settings, self.transition
+        planner_config, scenario, pickup_bounds, speeds = (options.planner_config, options.scenario, options.pickup_bounds,
+                                                           options.speeds)
+        CUSP_HEADING_HOLD_RAD, Pose2D = options.cusp_heading_hold_rad, PlanningPose
+        require, wall, grid_world, grid_kwargs, plan_observation_leg = (
+            hooks.require, hooks.wall, hooks.grid_world, hooks.grid_kwargs, hooks.plan_observation_leg)
+        apply_tracker_profile, realign_install, record_tracker_configs = (
+            hooks.apply_tracker_profile, hooks.realign_install, hooks.record_tracker_configs)
+        attempt["retry_reason"] = (
+            f"perception_{observation.status}:{observation.reason}"
+        )
+        if state.get("near_capture", {}).get("status") == "pending":
+            # No silent fallback to the far estimate (v3.6).
+            state["near_capture"]["status"] = "failed"
+            require(
+                False,
+                f"near_capture_failed:{attempt['retry_reason']}",
+            )
+        hooks.set_inset(f"인식 실패 #{attempt_number} · 재관측 이동", f"사유: {observation.reason}")
+        planning_start = wall()
+        observe_plan = None
+        while ms.next_candidate_index < len(
+            options.observation_waypoints
+        ):
+            candidate_index = ms.next_candidate_index
+            ms.next_candidate_index += 1
+            coordinates = options.observation_waypoints[
+                candidate_index
+            ]
+            waypoint = Pose2D(*coordinates)
+            candidate_plan = plan_observation_leg(
+                grid_world(scenario),
+                waypoint,
+                planner_config,
+                geometry=geometry,
+                start_rear=Pose2D(rear[0], rear[1], rear[2]),
+                pickup_bounds=pickup_bounds,
+                # Re-observation keeps the earlier ladder.
+                extended=False,
+                **grid_kwargs("observe"),
+            )
+            state["observation_candidates"].append(
+                {
+                    "candidate_index": candidate_index,
+                    "pose": list(coordinates),
+                    "start_rear": rear.tolist(),
+                    "success": candidate_plan.success,
+                    "status": candidate_plan.status,
+                    "analytic_expansion_interval": (
+                        candidate_plan.analytic_expansion_interval
+                    ),
+                    "search_attempts": [
+                        list(entry)
+                        for entry in candidate_plan.search_attempts
+                    ],
+                }
+            )
+            if candidate_plan.success:
+                observe_plan = candidate_plan
+                state["observation_waypoint_selected"] = list(
+                    coordinates
+                )
+                break
+        state["planning_wall_s"] += (
+            wall() - planning_start
+        )
+        if observe_plan is None and options.repeat_captures:
+            state["repeat_capture"] = {
+                "status": "repeat_target_not_reached",
+                "attempts_made": attempt_number,
+                "reason": "candidates_exhausted",
+            }
+            transition("repeat_target_not_reached", t)
+            return True
+        if observe_plan is None:
+            state["planning_status"] = "all_candidates_exhausted"
+            reasons = ";".join(
+                candidate["status"]
+                for candidate in state["observation_candidates"]
+            )
+            require(
+                False,
+                f"observe:all_candidates_exhausted:{attempt['retry_reason']}:{reasons}",
+            )
+        state["planning_status"] = observe_plan.status
+        paths["observe"] = observe_plan
+        trackers["observe"] = RearAxlePathTracker(
+            observe_plan.poses,
+            observe_plan.directions,
+            observe_plan.curvatures_inv_m,
+            TrackerConfig(
+                cruise_speed_mps=speeds["observe"],
+                max_curvature_inv_m=settings[
+                    "tracker_curvature_inv_m"
+                ],
+                max_acceleration_mps2=settings[
+                    "drive_acceleration_mps2"
+                ],
+                lookahead_m=0.28,
+                position_tolerance_m=0.03,
+                # Judged like a cusp in heading (P3, above).
+                yaw_tolerance_rad=0.05,
+                # Gear-change cusps are not goals (2026-09-26): the next leg
+                # starts from the measured pose. Final goals keep the rules above.
+                cusp_position_tolerance_m=0.03,
+                cusp_yaw_tolerance_rad=0.05,
+                # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad
+                # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).
+                cusp_brake_window_m=0.008,
+                # As the first observe tracker (fix A; Codex fix A implementation
+                # review 1 P2: the candidate path dropped it).
+                cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD,
+                # Optional path speed caps; absent from the settings = off.
+                max_lateral_acceleration_mps2=settings.get(
+                    "max_lateral_acceleration_mps2"
+                ),
+                max_reverse_speed_mps=settings.get(
+                    "max_reverse_speed_mps"
+                ),
+                overshoot_tolerance_m=0.03,
+                stop_speed_mps=0.012,
+                max_cross_track_error_m=0.35,
+            ),
+        )
+        ms.phase_started = t
+        apply_tracker_profile()
+        realign_install("observe_candidate")  # Plan D8 S4c-3 stage 2
+        record_tracker_configs()
+        return False
