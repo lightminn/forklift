@@ -2674,10 +2674,11 @@ def test_oracle_self_check_and_label_free_baseline(tmp_path):
 def test_known_shape_truth_records_the_site_default_source(tmp_path):
     data = tmp_path / "data"
     _run("tools/generate_recognition_scenes.py", "--out", str(data), "--cases", "S1", "--limit", "2", "--noise", "none")
-    for truth in data.glob("s1_*/truth.json"):
+    truths = sorted(data.glob("s1_*/truth.json"))
+    assert len(truths) == 4  # S1 x two shapes x --limit 2; S1 instructions carry no load
+    for truth in truths:
         inst = json.loads(truth.read_text())["instances"][0]
-        assert {f["fit"]["load_source"] for f in inst["faces"]} <= {"site_default", "instruction"}
-        assert any(f["fit"]["load_source"] == "site_default" for f in inst["faces"])
+        assert {f["fit"]["load_source"] for f in inst["faces"]} == {"site_default"}
 
 
 def test_digest_only_prints_the_catalogue_digest():
@@ -2954,4 +2955,4 @@ Run: `tools/hpc_sweep.sh deploy/hpc/recognition_stage1a_evaluate.tsv cpu1 2` (�
    - 3판 코드 실행 확인(scratch 사본, 로컬): 작업 1–11 의 시험 87개 전부 통과. 받침면 판정은 처음 "받침 높이 근처 적중"으로 썼다가 판 옆면·앞면 모서리가 잡혀 실패했고, "아래 팔레트 윗면 안쪽 + 하강 광선"으로 고쳤다.
    - Codex 3판 재검토(P2 2 · P3 1) → 4판: 적재 선언에 출처(`LoadDeclaration.source`)를 실어 정답까지 그대로 기록(생성 결과 시험 추가), 적재 선언의 유한·음이 아님·팔레트 질량 양수 검증, P3: 받침면 판정을 아래 팔레트의 상자별 윗면 안쪽으로.
    - 4판 코드 실행 확인(scratch 사본, 로컬): 시험 91개 전부 통과.
-   - 4판에 대한 Codex 재검토: (아래에 기록)
+   - 4판에 대한 Codex 재검토: **새 P1/P2 없음 — 수렴**(2026-10-15). P3(CLI 시험의 출처 단언이 느슨함)는 정답 파일 4개와 모든 면의 `site_default` 를 확인하도록 고쳤다.
