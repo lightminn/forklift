@@ -195,6 +195,11 @@ def replay_run(run_dir: Path) -> dict:
         outcome["drive"] = "returned"
     except ReplayMismatch as exc:
         outcome["drive"] = f"mismatch: {exc}"
+        context = exc.__context__
+        if context is not None:  # what the replayed run raised first (a require, a crash) before this mismatch
+            outcome["context"] = f"{type(context).__name__}: {context}"
+            outcome["context_traceback"] = "".join(
+                traceback.format_exception(type(context), context, context.__traceback__))[-4000:]
     except Exception as exc:  # noqa: BLE001 -- the replayed run's own end (a require) is part of the record
         outcome["drive"] = f"{type(exc).__name__}: {exc}"
         outcome["traceback"] = traceback.format_exc()[-4000:]
