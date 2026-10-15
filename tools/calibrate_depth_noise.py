@@ -164,8 +164,10 @@ def frame_structure(depth, masks, *, z_range, margin_px, seed) -> dict:
         for step in DIAGNOSTIC_STEPS:
             d = fit.second_differences(depth, axis=axis, step=step, z_range=z_range, valid=background)
             if d.size >= 1000:
-                diag[f"{name}{step}"] = fit.robust_variance(d)
-    record["diagnostic_variance"] = diag
+                predicted = sum(k * k * fit.component_response(step, g[0 if name == "u" else 1])
+                                for k, g in s.components)
+                diag[f"{name}{step}"] = predicted / fit.robust_variance(d)
+    record["diagnostic_ratio"] = diag  # model / measured variance at steps the fit did not use
     bands = {}
     for lo, hi in BANDS:
         try:
@@ -247,7 +249,10 @@ def calibrate(cache: Path, frames, *, z_range=(1.5, 4.0), margin_px: int = 8) ->
                      for reason in ("samples", "degenerate", "patches")},
         "survey": {"short": short, "long": long, "rel_residual_rms": _dist([r["rel_residual_rms"] for r in usable]),
                    "ratio_u": {s: _dist([r["ratio_u"][i] for r in usable]) for i, s in enumerate(steps)},
-                   "ratio_v": {s: _dist([r["ratio_v"][i] for r in usable]) for i, s in enumerate(steps)}},
+                   "ratio_v": {s: _dist([r["ratio_v"][i] for r in usable]) for i, s in enumerate(steps)},
+                   "diagnostic_ratio": {f"{a}{s}": _dist([r["diagnostic_ratio"][f"{a}{s}"] for r in usable
+                                                          if f"{a}{s}" in r["diagnostic_ratio"]])
+                                        for a in "uv" for s in DIAGNOSTIC_STEPS}},
         "band_fits": bands,
         "patch_check": {"ratio": _dist([r["patch_ratio"] for r in usable]),
                         "note": "observed / model median 48 px plane residual per frame; a consistency figure, "

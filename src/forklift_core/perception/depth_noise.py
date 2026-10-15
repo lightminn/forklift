@@ -66,8 +66,10 @@ class NoiseModel:
                                                                          inclusive=False)
         scale = number(scale, "scale", inclusive=False)
         entry = levels[level]
+        if not isinstance(entry.get("components"), list):
+            raise ValueError(f"noise config level {level!r} needs a components list (use [] for none)")
         components = []
-        for c in entry.get("components", []):
+        for c in entry["components"]:
             px = c.get("correlation_px_source") if isinstance(c, dict) else None
             if not isinstance(px, list) or len(px) != 2:
                 raise ValueError("noise config component needs k and two correlation widths")

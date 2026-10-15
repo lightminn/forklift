@@ -65,6 +65,9 @@ def test_the_survey_recovers_known_components_and_reports_the_patch_check(tmp_pa
     assert result["levels"]["low"]["components"][1]["k"] <= mid["components"][1]["k"] <= \
         result["levels"]["high"]["components"][1]["k"]
     assert result["dropout_fraction"] < 0.01 and result["license"] == "CC-BY-4.0" and result["history"]
+    for key in ("u48", "u64", "v48", "v64"):  # large-step diagnostics survive into the output
+        assert result["survey"]["diagnostic_ratio"][key]["n"] == 4
+        assert 0.7 < result["survey"]["diagnostic_ratio"][key]["p50"] < 1.3
 
 def test_pallet_surface_report_uses_the_pallet_masks(tmp_path):
     _cache(tmp_path, scene="val/000000", with_gt=True)

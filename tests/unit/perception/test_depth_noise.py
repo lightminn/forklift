@@ -105,7 +105,10 @@ def test_noise_config_level_scales_widths_to_the_target_grid(tmp_path):
 @pytest.mark.parametrize("change", [{"source": ""}, {"role": "maybe"}, {"source_fx": 0.0}, {"revision": None},
                                     {"dropout_fraction": 1.0}, {"levels": {}},
                                     {"levels": {"mid": {"k_iid": -1.0, "components": []}}},
-                                    {"levels": {"mid": {"k_iid": 0.001, "components": [{"k": 0.1}]}}}])
+                                    {"levels": {"mid": {"k_iid": 0.001, "components": [{"k": 0.1}]}}},
+                                    {"levels": {"mid": {"k_iid": 0.0}}},
+                                    {"levels": {"mid": {"k_iid": 0.0, "components": None}}},
+                                    {"levels": {"mid": {"k_iid": 0.0, "components": {}}}}])
 def test_noise_config_is_validated(tmp_path, change):
     import yaml
 
