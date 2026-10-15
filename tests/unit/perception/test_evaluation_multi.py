@@ -153,3 +153,25 @@ def _broken(**changes):
 def test_malformed_instance_truth_is_refused(inst):
     with pytest.raises(ValueError, match="truth"):
         judge_scene(META, _truth([inst]), NONE_IN, [], TargetDecision("none", None, ()))
+
+
+@pytest.mark.parametrize("chosen", ["ghost", "u"])
+def test_selecting_an_unidentified_or_missing_candidate_is_dangerous(chosen):
+    good = _cand("a", 0.0)
+    unidentified = CandidateView("u", 0.0, good.left_m, good.right_m, True, False, True, (), 0)
+    v = judge_scene(META, _truth([_inst(0, 0.0)]), NONE_IN, [good, unidentified],
+                    TargetDecision("selected", chosen, ()))
+    assert v.dangerous
+
+
+def test_not_pickable_is_judged_on_the_face_the_candidate_matched():
+    inst = _inst(0, 0.0)
+    y_face = _face([2.3, 0.3, 0.045], [2.3, 0.0, 0.045], yaw=math.pi / 2, pickable=False)
+    y_face["axis"] = "y"
+    inst["faces"].append(y_face)  # x face pickable, y face not (near tracking unavailable)
+    instr = {"present": True, "x_m": 2.3, "y_m": 0.0, "radius_m": 0.3, "layer": None}
+    on_y = CandidateView("y", math.pi / 2, (2.3, 0.3, 0.045), (2.3, 0.0, 0.045), True, True, False,
+                         ("near_tracking_unavailable",), 0)
+    v = judge_scene(META, _truth([inst], "unambiguous", 0), instr, [on_y],
+                    TargetDecision("not_pickable", "y", ("near_tracking_unavailable",)))
+    assert v.target_error is False

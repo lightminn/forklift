@@ -220,12 +220,16 @@ def judge_scene(meta, truth, instruction_input, candidates: Sequence[CandidateVi
                 continue
             (_, err), face = min(options, key=lambda o: o[0][0])
         dangerous = dangerous or _danger(err, face)
+    by_id = {c.candidate_id: k for k, c in enumerate(counted)}
+    if decision.status == "selected" and decision.candidate_id not in by_id:
+        # Auto-selection may only pick a fitted, identified candidate (design 7.5):
+        # picking an unidentified or nonexistent one is unsafe whatever the instruction.
+        dangerous = True
     negative = population == "negative"
     miss = None if negative else any(inst["eligible"] and k not in matched_inst for k, inst in enumerate(instances))
     target_error = deferred = fit_error = None
     itruth = truth["instruction_truth"]
     target = itruth.get("target")
-    by_id = {c.candidate_id: k for k, c in enumerate(counted)}
     if not negative and itruth["kind"] == "ambiguous":
         target_error = decision.status == "selected"
     elif not negative and itruth["kind"] == "unambiguous":
@@ -239,7 +243,12 @@ def judge_scene(meta, truth, instruction_input, candidates: Sequence[CandidateVi
         elif decision.status == "none":
             target_error = bool(tgt["eligible"])
         elif decision.status == "not_pickable":
-            target_error = tgt_pickable
+            k = by_id.get(decision.candidate_id)
+            if k is not None and pairs.get(k) == target:
+                # Judge the stop on the face this candidate matched, not on another face.
+                target_error = bool(costs[k, target][1]["fit"]["pickable"])
+            else:
+                target_error = tgt_pickable
         else:
             target_error = False
     if population == "nonstandard" and instances:
