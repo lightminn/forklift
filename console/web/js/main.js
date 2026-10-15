@@ -5,10 +5,12 @@ import { drawCamera } from "./camera.js";
 import { createFrameTracker } from "./frames.js";
 import { chooseClientId, createTeleopGate, shouldReclaim } from "./gate.js";
 import { createInputs, padSnapshot } from "./inputs.js";
-import { drawMap } from "./map.js";
+import { drawMap, palletAt } from "./map.js";
+import { createMapView, panBy, zoomAt, zoomPercent } from "./mapview.js";
 import { decodeScan, parseFrame } from "./media.js";
 import { API, createSession } from "./protocol.js";
-import { log, render, renderPallets } from "./ui.js";
+import { log, render, renderPallets, renderTemplates, renderWizard } from "./ui.js";
+import { blockReason, nextAllowed, templatesFor } from "./wizard.js";
 
 const TELEOP_MIN_INTERVAL_MS = 33; // ~30 Hz cap: a fast display must not flood ticks
 const $ = (id) => document.getElementById(id);
@@ -69,11 +71,14 @@ const m = {
   padStopHeld: false,
   cache: { phaseKey: "", targetsRev: null },
   dropUntil: 0,
+  view: createMapView(),
+  layers: { grid: true, lidar: true, plan: true, sweep: true },
+  wz: { open: false, step: 1, template: null, query: "" },
 };
 const tok = {};
 function readTokens() {
   const cs = getComputedStyle(document.documentElement);
-  for (const k of ["map-bg", "map-grid", "map-obst", "lidar", "accent", "warn", "robot", "robot-ink", "dest", "teleop", "fg", "muted", "panel"]) {
+  for (const k of ["map-bg", "map-grid", "map-free", "obst", "lidar", "accent", "warn", "ok", "crit", "robot", "robot-ink", "dest", "teleop", "fg", "muted", "panel", "line-2", "road", "road-in", "node", "station", "station-fill"]) {
     tok[k] = cs.getPropertyValue(`--${k}`).trim();
   }
   tok.font = getComputedStyle(document.body).fontFamily;
@@ -110,6 +115,7 @@ m.session.subscribe((msg) => {
     if (msg.targets_revision !== m.cache.targetsRev) {
       m.cache.targetsRev = msg.targets_revision;
       renderPallets(msg, () => {});
+      if (m.wz.open) refreshWizard();
     }
   } else if (msg.t === "event") {
     log(`${msg.kind}${msg.reason ? ` · ${msg.reason}` : ""}${msg.phase ? ` · ${msg.phase}` : ""}${msg.status ? ` · ${msg.status}` : ""}`, msg.kind.includes("stop") ? "crit" : "");
@@ -291,7 +297,12 @@ $("m-start").onclick = () => {
   const pallet = document.querySelector('input[name="pal"]:checked')?.value;
   const targets = m.session.targets;
   if (!pallet || !targets) return;
-  req("mission_submit", { pallet_id: pallet, destination_id: $("dest").value, targets_revision: targets.targets_revision });
+  req("mission_submit", { pallet_id: pallet, destination_id: $("dest").value, targets_revision: targets.targets_revision }).then((r) => {
+    if (r && r.t === "reject") {
+      $("wz-why").textContent = `거부 · ${r.reason}`;
+      if (r.reason === "stale_targets") wizardGo(2); // the list changed: pick again
+    } else if (r) closeWizard();
+  });
 };
 $("m-pause").onclick = () => req("mission_pause", { mission_id: missionId() });
 $("m-resume").onclick = () => req("mission_resume", { mission_id: missionId() });
@@ -319,6 +330,195 @@ $("l-drop").onclick = () => {
 const local = ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
 $("gp-note").hidden = local;
 
+// ------------------------------------------------------------------ layout: views, tabs, layers, camera window
+function showView(name) {
+  for (const b of document.querySelectorAll(".rail-item")) {
+    if (b.dataset.view === name) b.setAttribute("aria-current", "page");
+    else b.removeAttribute("aria-current");
+  }
+  for (const p of document.querySelectorAll("[data-view-panel]")) p.hidden = p.dataset.viewPanel !== name;
+}
+for (const b of document.querySelectorAll(".rail-item")) b.onclick = () => showView(b.dataset.view);
+
+function showTab(name) {
+  const tele = name === "tele";
+  $("tab-detail").setAttribute("aria-selected", String(!tele));
+  $("tab-tele").setAttribute("aria-selected", String(tele));
+  $("pane-detail").hidden = tele;
+  $("pane-tele").hidden = !tele;
+}
+$("tab-detail").onclick = () => showTab("detail");
+$("tab-tele").onclick = () => showTab("tele");
+$("go-tele").onclick = () => showTab("tele");
+
+function setLayer(name, on) {
+  m.layers[name] = on;
+  const b = document.querySelector(`.layers [data-layer="${name}"]`);
+  if (b) b.setAttribute("aria-pressed", String(on));
+  if (name === "lidar") {
+    $("lidar-on").setAttribute("aria-pressed", String(on));
+    $("lidar-off").setAttribute("aria-pressed", String(!on));
+  }
+}
+for (const b of document.querySelectorAll(".layers [data-layer]")) b.onclick = () => setLayer(b.dataset.layer, !m.layers[b.dataset.layer]);
+$("lidar-on").onclick = () => setLayer("lidar", true);
+$("lidar-off").onclick = () => setLayer("lidar", false);
+$("cam-toggle").onclick = () => {
+  const pip = $("p-cam");
+  const collapsed = pip.classList.toggle("collapsed");
+  $("cam-toggle").setAttribute("aria-expanded", String(!collapsed));
+  $("cam-toggle").textContent = collapsed ? "+" : "–";
+};
+
+// ------------------------------------------------------------------ map: drag to pan, wheel / pinch to zoom, click a pallet
+const mapCv = $("map");
+const pointers = new Map();
+let pinch = null;
+let press = null;
+const mapSize = () => {
+  const rc = mapCv.getBoundingClientRect();
+  return { rc, w: rc.width, h: rc.height };
+};
+mapCv.addEventListener("pointerdown", (e) => {
+  try {
+    mapCv.setPointerCapture(e.pointerId);
+  } catch {
+    /* pointer already gone */
+  }
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  press = pointers.size === 1 ? { x: e.clientX, y: e.clientY, moved: false } : null;
+  if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    pinch = { d: Math.hypot(a.x - b.x, a.y - b.y) };
+  }
+});
+mapCv.addEventListener("pointermove", (e) => {
+  const prev = pointers.get(e.pointerId);
+  if (!prev || !m.view.fitted) return;
+  const cur = { x: e.clientX, y: e.clientY };
+  pointers.set(e.pointerId, cur);
+  if (pointers.size === 1) {
+    panBy(m.view, cur.x - prev.x, cur.y - prev.y);
+    if (press && Math.hypot(cur.x - press.x, cur.y - press.y) > 4) press.moved = true;
+  } else if (pointers.size === 2 && pinch) {
+    const [a, b] = [...pointers.values()];
+    const d = Math.hypot(a.x - b.x, a.y - b.y);
+    const { rc, w, h } = mapSize();
+    zoomAt(m.view, w, h, (a.x + b.x) / 2 - rc.left, (a.y + b.y) / 2 - rc.top, d / Math.max(1, pinch.d));
+    pinch.d = d;
+  }
+  $("map-follow").setAttribute("aria-pressed", String(m.view.follow));
+});
+function endPointer(e) {
+  if (!pointers.has(e.pointerId)) return;
+  pointers.delete(e.pointerId);
+  if (pointers.size < 2) pinch = null;
+  if (e.type === "pointerup" && press && !press.moved && pointers.size === 0) {
+    const { rc, w, h } = mapSize();
+    const p = palletAt(m.view, w, h, m.session.targets, e.clientX - rc.left, e.clientY - rc.top);
+    if (p && p.state === "available") openWizard({ pallet: p.pallet_id });
+  }
+  if (pointers.size === 0) press = null;
+}
+for (const t of ["pointerup", "pointercancel"]) mapCv.addEventListener(t, endPointer);
+mapCv.addEventListener(
+  "wheel",
+  (e) => {
+    if (!m.view.fitted) return;
+    e.preventDefault();
+    const { rc, w, h } = mapSize();
+    zoomAt(m.view, w, h, e.clientX - rc.left, e.clientY - rc.top, Math.exp(-e.deltaY * 0.0015));
+  },
+  { passive: false },
+);
+$("map-fit").onclick = () => {
+  m.view.fitted = false; // the next draw fits the world again
+  m.view.follow = false;
+  $("map-follow").setAttribute("aria-pressed", "false");
+};
+$("map-follow").onclick = () => {
+  m.view.follow = !m.view.follow;
+  $("map-follow").setAttribute("aria-pressed", String(m.view.follow));
+};
+
+// ------------------------------------------------------------------ task assignment wizard
+function wizardSelection() {
+  return {
+    template: m.wz.template,
+    pallet: document.querySelector('input[name="pal"]:checked')?.value ?? null,
+    destination: $("dest").value || null,
+    revision: m.session.targets?.targets_revision ?? null,
+  };
+}
+function blockCtx() {
+  const st = m.session.state;
+  return { state: st, hasLease: m.session.hasLease, mode: st?.mode, mission: st?.mission };
+}
+function refreshWizard() {
+  if (!m.wz.open) return;
+  const caps = m.session.welcome?.capabilities;
+  const all = templatesFor(caps);
+  if (m.wz.template && !all.some((t) => t.code === m.wz.template)) m.wz.template = null;
+  const sel = wizardSelection();
+  renderWizard(m.wz, {
+    nextOk: nextAllowed(m.wz.step, sel),
+    selection: sel,
+    template: all.find((t) => t.code === m.wz.template) ?? null,
+    block: blockCtx(),
+  });
+}
+function drawTemplates() {
+  const list = templatesFor(m.session.welcome?.capabilities, m.wz.query);
+  renderTemplates(list, m.wz.template, (code) => {
+    m.wz.template = code;
+    drawTemplates();
+    refreshWizard();
+  });
+}
+function wizardGo(step) {
+  m.wz.step = step;
+  if (step === 1) drawTemplates();
+  refreshWizard();
+}
+function openWizard({ pallet } = {}) {
+  const why = blockReason(blockCtx());
+  if (why) {
+    log(`작업 지정 불가 · ${why}`, "warn");
+    return;
+  }
+  const all = templatesFor(m.session.welcome?.capabilities);
+  if (!m.wz.template && all.length === 1) m.wz.template = all[0].code;
+  m.wz.open = true;
+  m.wz.query = "";
+  $("wz-search").value = "";
+  $("wz-why").textContent = "";
+  $("wizard").hidden = false;
+  if (pallet) {
+    const input = document.querySelector(`input[name="pal"][value="${CSS.escape(pallet)}"]`);
+    if (input && !input.disabled) input.checked = true;
+  }
+  wizardGo(pallet && m.wz.template ? 2 : 1);
+}
+function closeWizard() {
+  m.wz.open = false;
+  $("wizard").hidden = true;
+}
+$("m-open").onclick = () => openWizard();
+$("wz-close").onclick = $("wz-cancel").onclick = closeWizard;
+$("wizard").addEventListener("pointerdown", (e) => {
+  if (e.target === $("wizard")) closeWizard();
+});
+$("wz-next").onclick = () => {
+  if (nextAllowed(m.wz.step, wizardSelection())) wizardGo(m.wz.step + 1);
+};
+$("wz-back").onclick = () => wizardGo(Math.max(1, m.wz.step - 1));
+$("wz-search").addEventListener("input", (e) => {
+  m.wz.query = e.target.value;
+  drawTemplates();
+});
+$("pallet-list").addEventListener("change", refreshWizard);
+$("dest").addEventListener("change", refreshWizard);
+
 // ------------------------------------------------------------------ loops
 function frame(now) {
   const st = m.session.state;
@@ -341,7 +541,9 @@ function frame(now) {
       m.teleop.lastSentAt = now;
     }
   }
-  drawMap($("map"), { grid: m.grid, scanPoints: m.scanPoints, state: st, targets: m.session.targets, chassis: m.chassis }, tok);
+  drawMap($("map"), { grid: m.grid, scanPoints: m.scanPoints, state: st, targets: m.session.targets, chassis: m.chassis, vehicleId: m.session.welcome?.vehicle_id }, tok, m.view, m.layers);
+  const zp = zoomPercent(m.view);
+  $("zoom-pct").textContent = zp === null ? "—" : `${Math.round(zp)}%`;
   if (!m.camera.bitmap) drawCamera($("cam"), { state: st, cameraModel: m.cameraModel, chassis: m.chassis }, tok);
   requestAnimationFrame(frame);
 }
@@ -349,7 +551,10 @@ function frame(now) {
 readTokens();
 setInterval(readTokens, 1000);
 setInterval(() => m.session.pump(), 100);
-setInterval(() => render(m), 100);
+setInterval(() => {
+  render(m);
+  refreshWizard();
+}, 100);
 connectControl();
 connectMedia();
 requestAnimationFrame(frame);

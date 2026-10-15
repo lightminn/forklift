@@ -1,5 +1,8 @@
-// Top-down map: occupancy grid, LiDAR points, plan, targets, truck footprint and the
-// teleop predicted sweep. Display only; nothing here decides motion.
+// Top-down map: occupancy grid, LiDAR points, plan as a road with nodes, pallets and
+// destinations as stations, the truck with its mode glow and tag, and the teleop
+// predicted sweep. Display only; nothing here decides motion.
+
+import { fitView, worldToScreen } from "./mapview.js";
 
 export function fitCanvas(cv) {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -32,166 +35,325 @@ export function predictSweep(pose, curvature, direction, chassis, steps = 30, ds
   return { left, right };
 }
 
-export function drawMap(cv, model, tok) {
-  const { w, h, dpr } = fitCanvas(cv);
+export function worldSize(grid) {
+  return grid ? [grid.head.width * grid.head.resolution_m, grid.head.height * grid.head.resolution_m] : [14, 9];
+}
+
+const MODE_TOK = { AUTO: "accent", TELEOP: "teleop", STOPPED: "crit" };
+
+function roundRect(c, x, y, w, h, r) {
+  c.beginPath();
+  c.moveTo(x + r, y);
+  c.arcTo(x + w, y, x + w, y + h, r);
+  c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r);
+  c.arcTo(x, y, x + w, y, r);
+  c.closePath();
+}
+
+function tag(c, text, x, y, color, tok) {
+  c.font = `600 11px ${tok.font}`;
+  const tw = c.measureText(text).width;
+  const w = tw + 24;
+  roundRect(c, x - w / 2, y, w, 19, 6);
+  c.fillStyle = "rgba(13,15,20,0.9)";
+  c.fill();
+  c.strokeStyle = color;
+  c.lineWidth = 1;
+  c.stroke();
+  c.fillStyle = color;
+  c.beginPath();
+  c.arc(x - w / 2 + 9, y + 9.5, 3, 0, Math.PI * 2);
+  c.fill();
+  c.fillStyle = tok.fg;
+  c.textAlign = "left";
+  c.textBaseline = "middle";
+  c.fillText(text, x - w / 2 + 16, y + 10);
+  c.textBaseline = "alphabetic";
+}
+
+export function drawMap(cv, model, tok, view, layers) {
+  const { w: W, h: H, dpr } = fitCanvas(cv);
+  const w = W / dpr;
+  const h = H / dpr;
   const c = cv.getContext("2d");
   const grid = model.grid;
-  const W = grid ? grid.head.width * grid.head.resolution_m : 14;
-  const H = grid ? grid.head.height * grid.head.resolution_m : 9;
-  const sc = Math.min(w / W, h / H);
-  const ox = (w - W * sc) / 2;
-  const oy = (h - H * sc) / 2;
-  const X = (x) => ox + x * sc;
-  const Y = (y) => oy + (H - y) * sc;
-  c.setTransform(1, 0, 0, 1, 0, 0);
+  const [ww, wh] = worldSize(grid);
+  if (!view.fitted || view.worldKey !== `${ww}x${wh}` || view.sizeKey !== `${w}x${h}`) {
+    if (!view.fitted || view.worldKey !== `${ww}x${wh}`) fitView(view, ww, wh, w, h);
+    else {
+      const keep = view.scale / view.fitScale;
+      const { cx, cy } = view;
+      fitView(view, ww, wh, w, h);
+      view.scale = view.fitScale * keep;
+      view.cx = cx;
+      view.cy = cy;
+    }
+    view.worldKey = `${ww}x${wh}`;
+    view.sizeKey = `${w}x${h}`;
+  }
+  const st = model.state;
+  if (view.follow && st) {
+    view.cx = st.pose.x_m;
+    view.cy = st.pose.y_m;
+  }
+  const P = (x, y) => worldToScreen(view, w, h, x, y);
+  const sc = view.scale;
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
   c.fillStyle = tok["map-bg"];
   c.fillRect(0, 0, w, h);
-  if (grid) {
+
+  // grid cells: free floor slightly lifted, occupied in blue
+  if (grid && layers.grid) {
     const { width: nx, height: ny, resolution_m: res } = grid.head;
     const cells = grid.cells;
-    c.fillStyle = tok["map-obst"];
-    for (let j = 0; j < ny; j += 1) {
-      for (let i = 0; i < nx; i += 1) {
-        const v = cells[j * nx + i];
-        if (v === 2) c.fillRect(X(i * res), Y((j + 1) * res), res * sc + 0.5, res * sc + 0.5);
+    const cell = res * sc + 0.6;
+    for (const [value, color] of [[0, tok["map-free"]], [2, tok.obst]]) {
+      c.fillStyle = color;
+      for (let j = 0; j < ny; j += 1) {
+        for (let i = 0; i < nx; i += 1) {
+          if (cells[j * nx + i] !== value) continue;
+          const [x, y] = P(i * res, (j + 1) * res);
+          if (x > w || y > h || x + cell < 0 || y + cell < 0) continue;
+          c.fillRect(x, y, cell, cell);
+        }
       }
     }
-    c.fillStyle = tok["map-grid"];
-    for (let j = 0; j < ny; j += 1) {
-      for (let i = 0; i < nx; i += 1) {
-        if (cells[j * nx + i] === 0) c.fillRect(X(i * res), Y((j + 1) * res), res * sc, res * sc);
-      }
+  }
+  // metre lines, brighter every 5 m
+  for (const [step, color, lw] of [[1, tok["map-grid"], 1], [5, tok["line-2"], 1]]) {
+    c.strokeStyle = color;
+    c.lineWidth = lw;
+    c.beginPath();
+    for (let x = 0; x <= ww + 1e-9; x += step) {
+      const [a, b] = P(x, 0);
+      const [, d] = P(x, wh);
+      c.moveTo(Math.round(a) + 0.5, b);
+      c.lineTo(Math.round(a) + 0.5, d);
     }
+    for (let y = 0; y <= wh + 1e-9; y += step) {
+      const [a, b] = P(0, y);
+      const [cc] = P(ww, y);
+      c.moveTo(a, Math.round(b) + 0.5);
+      c.lineTo(cc, Math.round(b) + 0.5);
+    }
+    c.stroke();
   }
-  c.strokeStyle = tok["map-grid"];
-  c.lineWidth = 1;
-  c.beginPath();
-  for (let x = 0; x <= W; x += 1) {
-    c.moveTo(X(x), Y(0));
-    c.lineTo(X(x), Y(H));
-  }
-  for (let y = 0; y <= H; y += 1) {
-    c.moveTo(X(0), Y(y));
-    c.lineTo(X(W), Y(y));
-  }
-  c.stroke();
-  c.strokeStyle = tok["map-obst"];
-  c.lineWidth = 3 * dpr;
-  c.strokeRect(X(0), Y(H), W * sc, H * sc);
 
-  const font = (px, weight = 500) => `${weight} ${px * dpr}px ${tok.font}`;
   const targets = model.targets;
+  const mission = st?.mission;
+  const label = (text, x, y, color) => {
+    c.font = `500 11px ${tok.font}`;
+    c.fillStyle = color;
+    c.textAlign = "center";
+    c.fillText(text, x, y);
+  };
   if (targets) {
+    // destinations: dashed bays with an approach stub
     for (const d of targets.destinations) {
-      c.strokeStyle = tok.dest;
-      c.lineWidth = 3 * dpr;
-      c.beginPath();
-      c.arc(X(d.pose.x_m), Y(d.pose.y_m), 0.55 * sc, 0, Math.PI * 2);
-      c.stroke();
-      c.fillStyle = tok.dest;
-      c.font = font(11, 600);
-      c.textAlign = "center";
-      c.fillText(d.destination_id, X(d.pose.x_m), Y(d.pose.y_m) - 0.65 * sc);
-    }
-    const missionPallet = model.state?.mission?.pallet_id;
-    for (const p of targets.pallets) {
-      if (p.state === "carried") continue;
-      const sel = p.pallet_id === missionPallet;
+      const sel = mission && mission.destination_id === d.destination_id && ["running", "paused", "held", "resuming"].includes(mission.status);
+      const [x, y] = P(d.pose.x_m, d.pose.y_m);
+      const s = 0.9 * sc;
       c.save();
-      c.translate(X(p.pose.x_m), Y(p.pose.y_m));
-      c.rotate(-p.pose.yaw_rad);
-      c.fillStyle = tok.panel;
-      c.strokeStyle = sel ? tok.accent : tok.muted;
-      c.lineWidth = (sel ? 2.5 : 1.5) * dpr;
-      c.fillRect((-p.depth_m / 2) * sc, (-p.width_m / 2) * sc, p.depth_m * sc, p.width_m * sc);
-      c.strokeRect((-p.depth_m / 2) * sc, (-p.width_m / 2) * sc, p.depth_m * sc, p.width_m * sc);
+      c.translate(x, y);
+      c.rotate(-d.pose.yaw_rad);
+      c.fillStyle = tok["station-fill"];
+      c.strokeStyle = sel ? tok.accent : tok.dest;
+      c.lineWidth = sel ? 2 : 1.4;
+      c.setLineDash([5, 4]);
+      c.fillRect(-s / 2, -s / 2, s, s);
+      c.strokeRect(-s / 2, -s / 2, s, s);
+      c.setLineDash([]);
       c.restore();
-      c.fillStyle = sel ? tok.accent : tok.muted;
-      c.textAlign = "center";
-      c.font = font(11, 600);
-      c.fillText(p.pallet_id, X(p.pose.x_m), Y(p.pose.y_m) + (p.width_m / 2 + 0.3) * sc);
+      label(`하역 ${d.destination_id}`, x, y + s / 2 + 15, sel ? tok.accent : tok.dest);
+    }
+    // pallets: station boxes with slats and an insertion stub on the approach side
+    for (const p of targets.pallets) {
+      if (p.state === "carried" || !p.pose) continue;
+      const sel = mission && mission.pallet_id === p.pallet_id && ["running", "paused", "held", "resuming"].includes(mission.status);
+      const [x, y] = P(p.pose.x_m, p.pose.y_m);
+      const dw = p.depth_m * sc;
+      const ws = p.width_m * sc;
+      c.save();
+      c.translate(x, y);
+      c.rotate(-p.pose.yaw_rad);
+      c.strokeStyle = tok.dest;
+      c.lineWidth = 2;
+      c.beginPath();
+      c.moveTo(-dw / 2, 0);
+      c.lineTo(-dw / 2 - 0.45 * sc, 0);
+      c.stroke();
+      c.fillStyle = tok.node;
+      c.beginPath();
+      c.arc(-dw / 2 - 0.45 * sc, 0, 3.5, 0, Math.PI * 2);
+      c.fill();
+      c.fillStyle = tok["station-fill"];
+      c.strokeStyle = sel ? tok.accent : p.state === "delivered" ? tok.ok : tok.station;
+      c.lineWidth = sel ? 2.2 : 1.4;
+      if (sel) {
+        c.shadowColor = tok.accent;
+        c.shadowBlur = 12;
+      }
+      c.fillRect(-dw / 2, -ws / 2, dw, ws);
+      c.shadowBlur = 0;
+      c.strokeRect(-dw / 2, -ws / 2, dw, ws);
+      c.strokeStyle = tok.muted;
+      c.globalAlpha = 0.5;
+      c.lineWidth = 1;
+      c.beginPath();
+      for (const f of [-0.3, 0, 0.3]) {
+        c.moveTo(-dw / 2 + 3, f * ws);
+        c.lineTo(dw / 2 - 3, f * ws);
+      }
+      c.stroke();
+      c.globalAlpha = 1;
+      c.restore();
+      label(`${p.pallet_id} · ${p.kind}`, x, y + Math.max(dw, ws) / 2 + 15, sel ? tok.accent : tok.station);
     }
   }
 
-  const plan = model.state?.plan;
-  if (plan && plan.poses.length > 1 && model.state.mode !== "TELEOP") {
-    for (let i = 1; i < plan.poses.length; i += 1) {
-      const [x0, y0] = plan.poses[i - 1];
-      const [x1, y1, dir] = plan.poses[i];
-      c.strokeStyle = dir < 0 ? tok.warn : tok.accent;
-      c.lineWidth = 2.5 * dpr;
-      c.setLineDash(dir < 0 ? [6 * dpr, 4 * dpr] : []);
+  // plan as a road: wide grey band, darker core, reverse stretches dashed amber, nodes at cusps
+  const plan = st?.plan;
+  if (layers.plan && plan && plan.poses.length > 1 && st.mode !== "TELEOP") {
+    const pts = plan.poses.map(([x, y, dir]) => [...P(x, y), dir]);
+    c.lineCap = "round";
+    c.lineJoin = "round";
+    c.strokeStyle = tok.road;
+    c.lineWidth = Math.max(7, 0.22 * sc);
+    c.beginPath();
+    pts.forEach(([x, y], i) => (i ? c.lineTo(x, y) : c.moveTo(x, y)));
+    c.stroke();
+    c.strokeStyle = tok["road-in"];
+    c.lineWidth = Math.max(3, 0.1 * sc);
+    c.stroke();
+    c.strokeStyle = tok.warn;
+    c.lineWidth = 2;
+    c.setLineDash([6, 5]);
+    c.beginPath();
+    for (let i = 1; i < pts.length; i += 1) {
+      if (pts[i][2] >= 0) continue;
+      c.moveTo(pts[i - 1][0], pts[i - 1][1]);
+      c.lineTo(pts[i][0], pts[i][1]);
+    }
+    c.stroke();
+    c.setLineDash([]);
+    c.lineCap = "butt";
+    const nodes = [pts[0], pts[pts.length - 1]];
+    for (let i = 2; i < pts.length; i += 1) if (Math.sign(pts[i][2]) !== Math.sign(pts[i - 1][2])) nodes.push(pts[i - 1]);
+    for (const [x, y] of nodes) {
+      c.fillStyle = tok["road-in"];
+      c.strokeStyle = tok.node;
+      c.lineWidth = 2;
       c.beginPath();
-      c.moveTo(X(x0), Y(y0));
-      c.lineTo(X(x1), Y(y1));
+      c.arc(x, y, 5, 0, Math.PI * 2);
+      c.fill();
       c.stroke();
     }
-    c.setLineDash([]);
   }
 
-  const st = model.state;
-  if (st && st.mode === "TELEOP" && model.chassis) {
+  if (layers.sweep && st && st.mode === "TELEOP" && model.chassis) {
     const cmd = st.command || { speed_mps: 0, curvature_inv_m: 0 };
     const dir = cmd.speed_mps < 0 ? -1 : 1;
     const sweep = predictSweep(st.pose, cmd.curvature_inv_m, dir, model.chassis);
     c.strokeStyle = tok.teleop;
-    c.lineWidth = 2 * dpr;
-    c.setLineDash([3 * dpr, 3 * dpr]);
+    c.lineWidth = 2;
+    c.setLineDash([4, 4]);
     for (const side of [sweep.left, sweep.right]) {
       c.beginPath();
-      side.forEach(([x, y], i) => (i ? c.lineTo(X(x), Y(y)) : c.moveTo(X(x), Y(y))));
+      side.forEach(([x, y], i) => {
+        const [px, py] = P(x, y);
+        if (i) c.lineTo(px, py);
+        else c.moveTo(px, py);
+      });
       c.stroke();
     }
     c.setLineDash([]);
   }
 
-  c.fillStyle = tok.lidar;
-  const rr = 1.6 * dpr;
-  const pts = model.scanPoints || [];
-  for (let i = 0; i < pts.length; i += 2) c.fillRect(X(pts[i]) - rr / 2, Y(pts[i + 1]) - rr / 2, rr, rr);
+  if (layers.lidar) {
+    c.fillStyle = tok.lidar;
+    const pts = model.scanPoints || [];
+    for (let i = 0; i < pts.length; i += 2) {
+      const [x, y] = P(pts[i], pts[i + 1]);
+      c.fillRect(x - 1.2, y - 1.2, 2.4, 2.4);
+    }
+  }
 
+  // truck: glow in the mode colour, chevron for heading, forks ahead, tag below
   if (st && model.chassis) {
     const ch = model.chassis;
     const p = st.pose;
-    c.save();
-    c.translate(X(p.x_m), Y(p.y_m));
-    c.rotate(-p.yaw_rad);
-    c.fillStyle = tok.robot;
-    c.strokeStyle = tok["robot-ink"];
-    c.lineWidth = 1.2 * dpr;
+    const color = tok[MODE_TOK[st.mode] ?? "robot"];
+    const [x, y] = P(p.x_m, p.y_m);
     const bodyFront = ch.nose_from_rear_m - 0.36;
-    c.beginPath();
-    c.rect(-ch.rear_overhang_m * sc, -ch.half_width_m * sc, (ch.rear_overhang_m + bodyFront) * sc, 2 * ch.half_width_m * sc);
-    c.fill();
-    c.stroke();
-    c.fillStyle = tok["robot-ink"];
-    for (const fy of [-0.17, 0.17]) c.fillRect(bodyFront * sc, (fy - 0.0275) * sc, 0.36 * sc, 0.055 * sc);
-    c.beginPath();
-    c.lineWidth = 1.5 * dpr;
-    c.moveTo(-0.2 * sc, 0);
-    c.lineTo(0.25 * sc, 0);
-    c.lineTo(0.13 * sc, -0.09 * sc);
-    c.moveTo(0.25 * sc, 0);
-    c.lineTo(0.13 * sc, 0.09 * sc);
-    c.stroke();
-    c.restore();
+    const hw = ch.half_width_m * sc;
+    c.save();
+    c.translate(x, y);
+    c.rotate(-p.yaw_rad);
+    c.fillStyle = tok.station;
+    for (const fy of [-0.17, 0.17]) c.fillRect(bodyFront * sc, (fy - 0.0275) * sc, 0.36 * sc, Math.max(2, 0.055 * sc));
     if (st.load?.state === "loaded" && targets) {
       const lp = targets.pallets.find((q) => q.pallet_id === st.load.pallet_id);
       if (lp) {
         const off = ch.nose_from_rear_m - 0.33; // back face of the load: fork tip minus insertion depth
-        c.save();
-        c.translate(X(p.x_m + off * Math.cos(p.yaw_rad)), Y(p.y_m + off * Math.sin(p.yaw_rad)));
-        c.rotate(-p.yaw_rad);
-        c.strokeStyle = tok.accent;
-        c.lineWidth = 2 * dpr;
-        c.strokeRect(0, (-lp.width_m / 2) * sc, lp.depth_m * sc, lp.width_m * sc);
-        c.restore();
+        c.fillStyle = "rgba(245,165,36,0.18)";
+        c.strokeStyle = tok.dest;
+        c.lineWidth = 1.6;
+        c.fillRect(off * sc, (-lp.width_m / 2) * sc, lp.depth_m * sc, lp.width_m * sc);
+        c.strokeRect(off * sc, (-lp.width_m / 2) * sc, lp.depth_m * sc, lp.width_m * sc);
       }
     }
+    roundRect(c, -ch.rear_overhang_m * sc, -hw, (ch.rear_overhang_m + bodyFront) * sc, 2 * hw, Math.min(10, 0.12 * sc));
+    c.shadowColor = color;
+    c.shadowBlur = 22;
+    c.fillStyle = tok.panel;
+    c.fill();
+    c.shadowBlur = 0;
+    c.strokeStyle = color;
+    c.lineWidth = 2;
+    c.stroke();
+    const mid = ((bodyFront - ch.rear_overhang_m) / 2) * sc;
+    const a = Math.min(hw * 0.7, 0.2 * sc);
+    c.strokeStyle = tok.fg;
+    c.lineWidth = Math.max(2, 0.05 * sc);
+    c.lineCap = "round";
+    c.lineJoin = "round";
+    c.beginPath();
+    c.moveTo(mid - a * 0.5, -a);
+    c.lineTo(mid + a * 0.5, 0);
+    c.lineTo(mid - a * 0.5, a);
+    c.stroke();
+    c.lineCap = "butt";
+    c.restore();
+    const reach = (ch.nose_from_rear_m + 0.1) * sc;
+    tag(c, `${model.vehicleId ?? "차량"} · ${st.mode}`, x, y + Math.max(reach * 0.55, hw) + 8, color, tok);
   }
+
+  // scale bar, top-left
+  const meters = sc > 120 ? 0.5 : sc > 40 ? 1 : sc > 12 ? 5 : 10;
   c.fillStyle = tok.fg;
-  c.fillRect(X(0.4), Y(0.35), sc, 2 * dpr);
-  c.font = font(10);
+  c.fillRect(14, 16, meters * sc, 2);
+  c.fillRect(14, 12, 1.5, 8);
+  c.fillRect(14 + meters * sc - 1.5, 12, 1.5, 8);
+  c.font = `500 10.5px ${tok.font}`;
   c.textAlign = "left";
-  c.fillText("1 m", X(0.4), Y(0.35) - 5 * dpr);
+  c.fillText(`${meters} m`, 18 + meters * sc, 20);
+}
+
+// Pallet under a screen point, if any (for picking on the map).
+export function palletAt(view, w, h, targets, px, py) {
+  if (!targets || !view.fitted) return null;
+  for (const p of targets.pallets) {
+    if (!p.pose) continue;
+    const [x, y] = worldToScreen(view, w, h, p.pose.x_m, p.pose.y_m);
+    const dx = px - x;
+    const dy = py - y;
+    const c = Math.cos(p.pose.yaw_rad);
+    const s = Math.sin(p.pose.yaw_rad);
+    // screen y is flipped: rotate into the pallet frame
+    const lx = (dx * c - dy * s) / view.scale;
+    const ly = (-dx * s - dy * c) / view.scale;
+    if (Math.abs(lx) <= p.depth_m / 2 + 0.1 && Math.abs(ly) <= p.width_m / 2 + 0.1) return p;
+  }
+  return null;
 }
