@@ -6,6 +6,12 @@ back clears it instead of keeping the end of the previous pass. A pose's age is 
 larger of its stamp's age on the node clock and the wall time since that stamp last
 advanced -- the buffer keeps answering with its last transform after the publisher has
 stopped, and that answer must age.
+
+A pose in map is the latest map -> odom correction composed with the latest odom ->
+frame motion, not a lookup at their common time: slam_toolbox stamps map -> odom with
+its last keyframe, which stops advancing while the truck waits, and a common-time lookup
+froze the displayed pose for tens of seconds (Isaac online SLAM, 2026-10-15). The pose's
+age is the motion's; the correction's age is reported separately (freshness).
 """
 
 from __future__ import annotations
@@ -30,6 +36,7 @@ from console.gateway.convert import (
     GridMessage,
     PoseSample,
     ScanMessage,
+    compose2d,
     is_jpeg,
     speed_from_poses,
     yaw_from_quat,
@@ -103,14 +110,29 @@ class GatewayNode(Node):
         return max(ros_age, stalled)
 
     def pose_of(self, frame: str, at: Time | None = None):
-        """frame in map, else in odom, as a PoseSample; None if neither is known."""
-        for target in (self.map_frame, self.odom_frame):
-            got = self.lookup(target, frame, at)
-            if got is not None:
-                x, y, yaw, stamp_ns = got
-                kind = "map" if target == self.map_frame else "odom"
-                age = 0.0 if at is not None else self._age((target, frame), stamp_ns)
-                return PoseSample(kind, x, y, yaw, received_s=self.clock() - age)
+        """frame in map (latest correction after the odom motion), else in odom, else a
+        direct map lookup (e.g. a localiser publishing map -> frame); None if unknown.
+        With `at`, the motion part is taken at that time (a scan's stamp)."""
+        motion = self.lookup(self.odom_frame, frame, at)
+        if motion is not None:
+            x, y, yaw, stamp_ns = motion
+            age = (
+                0.0 if at is not None else self._age((self.odom_frame, frame), stamp_ns)
+            )
+            received = self.clock() - age
+            correction = self.lookup(self.map_frame, self.odom_frame)
+            if correction is not None:
+                return PoseSample(
+                    "map", *compose2d(correction[:3], (x, y, yaw)), received_s=received
+                )
+            return PoseSample("odom", x, y, yaw, received_s=received)
+        direct = self.lookup(self.map_frame, frame, at)
+        if direct is not None:
+            x, y, yaw, stamp_ns = direct
+            age = (
+                0.0 if at is not None else self._age((self.map_frame, frame), stamp_ns)
+            )
+            return PoseSample("map", x, y, yaw, received_s=self.clock() - age)
         return None
 
     def on_pose_timer(self) -> None:

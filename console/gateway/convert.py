@@ -98,6 +98,16 @@ def yaw_from_quat(x: float, y: float, z: float, w: float) -> float:
     return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
 
 
+def compose2d(a, b):
+    """Pose b given in a's frame, expressed in a's parent frame: (x, y, yaw) each."""
+    c, s = math.cos(a[2]), math.sin(a[2])
+    return (
+        a[0] + c * b[0] - s * b[1],
+        a[1] + s * b[0] + c * b[1],
+        math.atan2(math.sin(a[2] + b[2]), math.cos(a[2] + b[2])),
+    )
+
+
 def rear_axle_pose(x: float, y: float, yaw: float, rear_axle_x_m: float):
     """base_link pose to the rear-axle pose the console uses (rear_axle_x_m in base_link)."""
     return (

@@ -202,3 +202,86 @@ def test_gateway_node_turns_ros_topics_into_console_messages(tmp_path, unused_tc
         gw_node.destroy_node()
         robot.destroy_node()
         rclpy.shutdown()
+
+
+class StalledCorrectionRobot(Node):
+    """slam_toolbox's map -> odom carries the last keyframe's stamp: it stops advancing
+    while the truck waits, but odom -> base_link keeps moving (here +x at 0.5 m/s)."""
+
+    def __init__(self):
+        super().__init__("stalled_robot")
+        self.tfb = TransformBroadcaster(self)
+        self.static = StaticTransformBroadcaster(self)
+        now = self.get_clock().now()
+        self.t0 = now.nanoseconds
+        self.static.sendTransform(
+            [_tf(now.to_msg(), "base_link", "laser", 0.1, 0.0, 0.0)]
+        )
+        self.correction_sent = False
+        self.create_timer(0.05, self.tick)
+
+    def tick(self):
+        now = self.get_clock().now()
+        if not self.correction_sent:  # one keyframe, then none
+            self.tfb.sendTransform(_tf(now.to_msg(), "map", "odom", 10.0, 0.0, 0.0))
+            self.correction_sent = True
+        x = 0.5 * (now.nanoseconds - self.t0) * 1e-9
+        self.tfb.sendTransform(_tf(now.to_msg(), "odom", "base_link", x, 0.0, 0.0))
+
+
+def test_the_pose_follows_odometry_while_the_slam_correction_is_old(
+    tmp_path, unused_tcp_port
+):
+    rclpy.init(args=["gw2"])
+    store = Store()
+    gw_node = GatewayNode(store)
+    robot = StalledCorrectionRobot()
+    ex = MultiThreadedExecutor()
+    ex.add_node(gw_node)
+    ex.add_node(robot)
+    spin = threading.Thread(target=ex.spin, daemon=True)
+    spin.start()
+
+    async def body():
+        gw = await server.start(
+            store, "127.0.0.1", unused_tcp_port, tmp_path, "fl-1", "isaac", 6, 0.0
+        )
+        try:
+            c = await websockets.connect(
+                f"ws://127.0.0.1:{unused_tcp_port}/api/v1/control"
+            )
+            await c.send(
+                json.dumps({"t": "hello", "api": "console/1", "client_id": "a"})
+            )
+            await asyncio.sleep(2.0)  # the correction is now 2 s old
+            seen = []
+            end = time.monotonic() + 2.0
+            while time.monotonic() < end:
+                msg = json.loads(await c.recv())
+                if (
+                    msg.get("t") == "state"
+                    and msg["pose"]
+                    and msg["pose"]["frame"] == "map"
+                ):
+                    seen.append(msg["pose"])
+            assert len(seen) >= 5
+            # map x = 10 + odom x, and odom x keeps growing at 0.5 m/s
+            assert seen[-1]["x_m"] - seen[0]["x_m"] > 0.5
+            assert seen[-1]["x_m"] > 10.9
+            # the publisher shares this process: under load its ticks can stall, and then a
+            # grown age is right -- judge the typical age, not the worst
+            ages = sorted(p["age_s"] for p in seen[1:])
+            assert ages[len(ages) // 2] < 0.5  # the motion is current
+            await c.close()
+        finally:
+            gw.close()
+            await gw.wait_closed()
+
+    try:
+        asyncio.run(asyncio.wait_for(body(), 30))
+    finally:
+        ex.shutdown(timeout_sec=2.0)
+        spin.join(timeout=2.0)
+        gw_node.destroy_node()
+        robot.destroy_node()
+        rclpy.shutdown()
