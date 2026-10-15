@@ -149,6 +149,30 @@ def _danger(errors, face) -> bool:
 INSTRUCTION_KINDS = ("none", "ambiguous", "unambiguous")
 
 
+def _finite_vector(value, n) -> bool:
+    try:
+        return len(value) == n and all(np.isfinite(float(v)) for v in value)
+    except (TypeError, ValueError):
+        return False
+
+
+def _check_instance_truth(inst) -> None:
+    """Every field the judgment reads must be present and finite."""
+    if (not isinstance(inst, dict) or not isinstance(inst.get("eligible"), bool)
+            or not isinstance(inst.get("layer"), int) or isinstance(inst.get("layer"), bool)
+            or not isinstance(inst.get("faces"), list) or not inst["faces"]):
+        raise ValueError("instance truth needs eligible, layer and at least one face")
+    for face in inst["faces"]:
+        fit = face.get("fit") if isinstance(face, dict) else None
+        if (not isinstance(face, dict) or not isinstance(face.get("accessible"), bool)
+                or not _finite_vector(face.get("left_m"), 3) or not _finite_vector(face.get("right_m"), 3)
+                or not _finite_vector([face.get("insertion_yaw_rad")], 1)
+                or not _finite_vector([face.get("danger_threshold_m")], 1)
+                or not isinstance(fit, dict) or not isinstance(fit.get("pickable"), bool)
+                or not isinstance(fit.get("reasons"), list)):
+            raise ValueError("face truth needs accessible, finite pockets, yaw and danger threshold, and a fit")
+
+
 def _check_truth(population, truth, instruction_input) -> None:
     """Refuse corrupt or inconsistent truth instead of scoring it as a clean scene."""
     if not isinstance(truth, dict) or not isinstance(truth.get("instances"), list):
@@ -156,6 +180,8 @@ def _check_truth(population, truth, instruction_input) -> None:
     itruth = truth.get("instruction_truth")
     if not isinstance(itruth, dict) or itruth.get("kind") not in INSTRUCTION_KINDS:
         raise ValueError("truth must hold instruction_truth with a known kind")
+    for inst in truth["instances"]:
+        _check_instance_truth(inst)
     if population != "negative" and not truth["instances"]:
         raise ValueError("a positive scene's truth must list at least one instance")
     present = bool(instruction_input.get("present"))

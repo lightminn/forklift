@@ -125,3 +125,29 @@ def test_instruction_input_must_agree_with_the_instruction_truth():
         judge_scene(META, _truth([_inst(0, 0.0)]), instr, [], TargetDecision("none", None, ()))
     with pytest.raises(ValueError, match="instruction"):
         judge_scene(META, _truth([_inst(0, 0.0)], "unambiguous", 3), instr, [], TargetDecision("none", None, ()))
+
+
+def _broken(**changes):
+    inst = _inst(0, 0.0)
+    face = dict(inst["faces"][0])
+    for key, value in changes.items():
+        if key in face:
+            face[key] = value
+        else:
+            inst[key] = value
+    inst["faces"] = [face] + inst["faces"][1:]
+    return inst
+
+
+@pytest.mark.parametrize("inst", [
+    _broken(danger_threshold_m=float("nan")),
+    _broken(left_m=[2.0, float("nan"), 0.061]),
+    _broken(insertion_yaw_rad=float("inf")),
+    _broken(fit={"reasons": []}),
+    _broken(accessible="yes"),
+    {"eligible": False, "faces": []},
+    {"instance_id": 0, "layer": 0, "faces": [_face([2.0, 0.186, 0.061], [2.0, -0.186, 0.061])]},
+])
+def test_malformed_instance_truth_is_refused(inst):
+    with pytest.raises(ValueError, match="truth"):
+        judge_scene(META, _truth([inst]), NONE_IN, [], TargetDecision("none", None, ()))
