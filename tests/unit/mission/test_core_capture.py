@@ -57,8 +57,11 @@ class World:
         q = np.array([math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2)])
         diag = Diag(accepted_pose=(np.array([3.0, 4.0, 0.2]), q))
 
+        self.clock = 54.0  # the physics time; the capture steps it (Codex 4b P3)
+
         def capture(max_attempts):
             log_("capture", max_attempts)
+            self.clock = 55.0
             if fail:
                 raise CaptureFailure("not_still", Diag(accepted_pose=(), attempts=5))
             return SimpleNamespace(depth_m=np.array([[1.0, np.nan]]), base_from_optical=SimpleNamespace(
@@ -80,7 +83,7 @@ class World:
             slam_error=lambda: log_("slam_error") or (0.1, 0.4, 0.07),
             detect_pockets=lambda inp, prior, params: log_("detect_pockets", inp, prior) or SimpleNamespace(
                 observation=observation, diagnostics=DetectionDiag()),
-            save_capture=lambda number, scene: log_("save_capture", number), now_s=lambda: 55.0,
+            save_capture=lambda number, scene: log_("save_capture", number), now_s=lambda: self.clock,
         )
         adapter = SimpleNamespace(CaptureFailure=CaptureFailure,
                                   detector_input=lambda scene, mm: log_("detector_input", mm) or "INPUT")
