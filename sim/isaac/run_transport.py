@@ -3428,6 +3428,8 @@ def drive(S, isaac) -> None:
         if obstacle is not None:
             obstacle["layer"] = RecordingProxy(obstacle["layer"], "Obstacles", boundary,
                                                child_ports={"permission": "Permission"})
+        if recorder is not None:  # the pocket frames recorder: its phase, its closing statistics
+            recorder = RecordingProxy(recorder, "PocketRecorder", boundary)
     state["phase"] = "planning"
     if boundary is not None:
         boundary.recorder.tick_begin(-1, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")  # the initial plans
