@@ -1331,3 +1331,30 @@ def test_the_reverse_first_long_set_swaps_each_pair_and_keeps_the_segments():
         if v < 0:
             assert moving[i + 1][1:] == (-v, k, s)
     assert moving[0][1] < 0
+
+
+def test_the_encoder_model_feeds_the_odometry_increments_and_is_part_of_the_contract():
+    """2026-10-15 (user: map the team's encoder specs into the simulation): --encoder-model
+    team_spec_* reads the rear wheels' joint angles as MT6701 x4 counts and the steering as a
+    KTH7801-C 12-bit angle each tick, integrates increments (no rate trapezoid, no Gaussian), records
+    them, and differs from every measurement made before it (reported)."""
+    import sys
+
+    sys.path.insert(0, str(SCRIPT.parent))
+    import near_tracking
+
+    assert near_tracking.POST_MEASUREMENT_ARGUMENTS["encoder_model"] == "reported"
+    source = SCRIPT.read_text()
+    args = source[source.index('"--encoder-model",'): source.index('"--encoder-model",') + 300]
+    assert 'choices=("reported", "team_spec_quantized", "team_spec_typical_inl")' in args
+    assert 'default="reported"' in args
+    assert 'if args.encoder_model != "reported" and not args.record_slam:' in source
+    step = source[source.index("            rates_true = robot.get_joint_velocities()[wheels]"):]
+    step = step[: step.index("            if recorder is not None:")]
+    assert 'slam_log["wheel_angles_rad"].append(wheel_angles)' in step
+    assert "encoder_model.read(wheel_angles[2:4], steer_true)" in step
+    team = step[step.index("if slam is not None and encoder_model is not None:"): step.index("elif slam is not None:")]
+    assert "update_increments(stamp_now, increments_, steering_measured_)" in team
+    assert 'slam["odom_speed"] = slam["odometry"].interval_speed' in team
+    assert "noise" not in team
+    assert '"encoder_model": state.get("encoder_model") or {"name": "reported"}' in source

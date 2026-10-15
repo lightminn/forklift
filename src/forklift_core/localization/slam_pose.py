@@ -20,6 +20,7 @@ from forklift_core._validation import _finite_scalar
 from forklift_core.localization.wheel_odometry import (
     AckermannOdometryGeometry,
     _curvature_inv_m,
+    advance_arc,
 )
 
 
@@ -56,8 +57,42 @@ class IncrementalWheelOdometry:
         self.geometry = geometry
         self.pose = [_finite_scalar(v, "initial pose") for v in initial_pose]
         self._last = None  # (stamp, speed, curvature)
+        self._path = None  # "rates" or "increments": one object integrates one kind of input
+
+    def _use(self, path: str) -> None:
+        if self._path not in (None, path):
+            raise ValueError(f"this odometry integrates {self._path}, not {path}")
+        self._path = path
+
+    def update_increments(self, stamp_s, rear_wheel_increments_rad, steering_rad) -> tuple[float, float, float]:
+        """integrate_wheel_odometry_increments one sample at a time, bit for bit: the increments are
+        the rear wheels' rotation over the interval ending at this stamp (ignored on the first)."""
+        self._use("increments")
+        stamp = _finite_scalar(stamp_s, "stamp_s")
+        increments = np.asarray(rear_wheel_increments_rad, dtype=float)
+        steering = np.asarray(steering_rad, dtype=float)
+        if increments.shape != (2,) or steering.shape != (2,):
+            raise ValueError("wheel increments and steering must each hold two values")
+        if not (np.isfinite(increments).all() and np.isfinite(steering).all()):
+            raise ValueError("wheel increments and steering must be finite")
+        if np.any(np.abs(steering) >= np.pi / 2):
+            raise ValueError("steering angles must be below pi/2")
+        curvature = float(_curvature_inv_m(steering[None, :], self.geometry)[0])
+        distance = 0.0
+        if self._last is not None:
+            last_stamp, _, last_curvature = self._last
+            if stamp - last_stamp <= 0:
+                raise ValueError("stamps must be strictly increasing")
+            distance = increments.mean() * self.geometry.wheel_radius_m
+            self.pose = list(advance_arc(*self.pose, distance, (last_curvature + curvature) / 2))
+            self.interval_speed = distance / (stamp - last_stamp)
+        else:
+            self.interval_speed = 0.0
+        self._last = (stamp, None, curvature)
+        return tuple(self.pose)
 
     def update(self, stamp_s, rear_wheel_rates_rad_s, steering_rad) -> tuple[float, float, float]:
+        self._use("rates")
         stamp = _finite_scalar(stamp_s, "stamp_s")
         rates = np.asarray(rear_wheel_rates_rad_s, dtype=float)
         steering = np.asarray(steering_rad, dtype=float)

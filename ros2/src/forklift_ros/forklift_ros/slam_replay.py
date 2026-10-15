@@ -29,9 +29,11 @@ from pathlib import Path
 
 import numpy as np
 
+from forklift_core.localization.encoders import encoder_odometry_inputs
 from forklift_core.localization.wheel_odometry import (
     AckermannOdometryGeometry,
     integrate_wheel_odometry,
+    integrate_wheel_odometry_increments,
 )
 
 LOG_FORMAT = "forklift_slam_log_v1"
@@ -46,6 +48,7 @@ _ARRAYS = (
     "scan_ranges_m",
     "laser_pose_world",
 )
+_ENCODER_ARRAYS = ("wheel_angles_rad", "wheel_counts", "wheel_increments_rad", "steering_measured_rad")
 
 
 @dataclass(frozen=True)
@@ -82,6 +85,8 @@ def load_slam_log(directory: Path) -> tuple[dict[str, np.ndarray], dict]:
         raise ValueError(f"unsupported record format: {meta.get('format')!r}")
     with np.load(directory / "slam_log.npz") as data:
         log = {name: np.asarray(data[name]) for name in _ARRAYS}
+        # A team-spec encoder record (2026-10-15) also carries the encoder arrays.
+        log.update({name: np.asarray(data[name]) for name in _ENCODER_ARRAYS if name in data.files})
     joints = len(log["joint_stamps_s"])
     scans = len(log["scan_stamps_s"])
     expected = {
@@ -115,6 +120,18 @@ def odometry_base_poses(
         geometry_record["wheel_radius_m"],
     )
     rear_x = geometry_record["rear_axle_x_in_base_m"]
+    encoders = encoder_odometry_inputs(log, meta)
+    if encoders["kind"] == "increments":
+        # The run's own team-spec encoder readings (checked against the record); the Gaussian wheel
+        # and steering noise does not apply to them.
+        rear = integrate_wheel_odometry_increments(
+            log["joint_stamps_s"], encoders["increments"], encoders["steering"], geometry,
+            initial_pose=(rear_x, 0, 0),
+        )
+        base = rear.copy()
+        base[:, 0] -= rear_x * np.cos(rear[:, 2])
+        base[:, 1] -= rear_x * np.sin(rear[:, 2])
+        return base
     rates = log["wheel_rates_rad_s"][:, 2:4].astype(float)
     steering = log["steering_rad"].astype(float)
     if noise.wheel_rate_std_rad_s:

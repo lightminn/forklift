@@ -109,3 +109,65 @@ def test_triangle_cells_cover_every_cell_the_triangle_touches():
     cells = {tuple(c) for c in p0b.triangle_cells(tri, 0.05)}
     assert (0, 0) in cells and (4, 0) in cells and (0, 2) in cells
     assert (4, 2) not in cells  # beyond the hypotenuse
+
+
+def _team_spec_run(directory, *, garbage_rates=True, steps=1200, speed=0.4):
+    """A straight 10 s run whose reported rates are garbage (zero) while the wheel joint angles move
+    with the truck: a replay that read the rates would see no motion."""
+    import json
+
+    from forklift_core.localization.encoders import TeamEncoderModel, encoder_model_spec, sensor_phases
+
+    radius, rear_x = 0.125, -0.34
+    t = np.arange(steps) / 120
+    x = speed * t
+    base = np.column_stack((x, np.zeros(steps), np.zeros(steps), np.ones(steps), np.zeros((steps, 3))))
+    theta = x / radius
+    angles = np.column_stack((theta, theta, theta, theta))
+    wrapped = np.mod(angles + 2 * np.pi, 4 * np.pi) - 2 * np.pi
+    from forklift_core.localization.encoders import AngleUnwrapper
+
+    unwrap = [AngleUnwrapper() for _ in range(4)]
+    continuous = np.array([[u.update(v) for u, v in zip(unwrap, row, strict=True)] for row in wrapped])
+    model = TeamEncoderModel(encoder_model_spec("team_spec_typical_inl"), sensor_phases(3))
+    rows = [model.read(continuous[k, 2:4], (0.0, 0.0)) for k in range(steps)]
+    np.savez_compressed(
+        directory / "slam_log.npz", joint_stamps_s=t,
+        wheel_rates_rad_s=np.zeros((steps, 4)) if garbage_rates else np.full((steps, 4), speed / radius),
+        steering_rad=np.zeros((steps, 2)), base_pose_world=base, wheel_angles_rad=continuous,
+        wheel_counts=np.array([r[2] for r in rows], dtype=np.int64),
+        wheel_increments_rad=np.array([r[0] for r in rows]), steering_measured_rad=np.array([r[1] for r in rows]),
+        scan_stamps_s=t[::12])
+    (directory / "meta.json").write_text(json.dumps({
+        "encoder_model": model.record(),
+        "odometry_geometry": {"wheelbase_m": 0.66, "track_m": 0.53, "wheel_radius_m": radius,
+                              "rear_axle_x_in_base_m": rear_x}}))
+
+
+def test_a_team_spec_run_replays_its_encoder_counts_not_the_reported_rates(tmp_path):
+    from types import SimpleNamespace
+
+    _team_spec_run(tmp_path)
+    out = MODULE.odometry_command(SimpleNamespace(run=[tmp_path], draws=2, start_every=120, max_age_s=None))
+    # Counts and INL (1 deg on a 0.125 m wheel = 2.2 mm) only: no Gaussian, no zero-rate drift.
+    assert max(v for v in out["position_error_max_m"] if v == v) < 0.006
+    assert out["noise"]["encoder_model"] == "team_spec_typical_inl" and out["noise"]["gaussian"] is None
+    ages = MODULE.age_command(SimpleNamespace(run=[tmp_path], draws=2))
+    assert max(ages["position_max_m"]) < 0.006 and "team-spec" in ages["source"]
+
+
+def test_runs_with_different_encoder_models_are_not_mixed(tmp_path):
+    import json
+    from types import SimpleNamespace
+
+    import pytest
+
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir(), b.mkdir()
+    _team_spec_run(a)
+    _team_spec_run(b)
+    meta = json.loads((b / "meta.json").read_text())
+    meta.pop("encoder_model")
+    (b / "meta.json").write_text(json.dumps(meta))
+    with pytest.raises(SystemExit, match="different encoder models"):
+        MODULE.odometry_command(SimpleNamespace(run=[a, b], draws=1, start_every=120, max_age_s=None))

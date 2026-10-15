@@ -45,10 +45,12 @@ sys.path.insert(0, str(ROOT / "sim" / "isaac"))
 import insertion_geometry as IG  # noqa: E402
 from p0a_measure import rear_truth  # noqa: E402
 
+from forklift_core.localization.encoders import encoder_odometry_inputs  # noqa: E402
 from forklift_core.localization.slam_pose import OdometryNoise  # noqa: E402
 from forklift_core.localization.wheel_odometry import (  # noqa: E402
     AckermannOdometryGeometry,
     integrate_wheel_odometry,
+    integrate_wheel_odometry_increments,
 )
 
 LATENCY_S, DECEL_MPS2, MARGIN_M, ENVELOPE_M = 0.15, 1.5, 0.05, 0.01
@@ -295,12 +297,21 @@ def withdraw_command(args) -> dict:
                                         np.interp(ticks, sample_t, np.unwrap(sample_p[:, 2]))])
         slide = max(math.dist(pallet_world[k, :2], pallet_world[0, :2]) for k in range(len(pallet_world)))
         e_w = e_full = 0.0
+        encoders = encoder_odometry_inputs(log, meta)["kind"]  # validates a team-spec record
         for draw in range(args.draws):
-            noise = OdometryNoise(seed=30_000 + draw)
-            odom = integrate_wheel_odometry(
-                stamps[i0:i1], rates + noise._wheels.normal(0, noise.wheel_rate_std_rad_s, rates.shape),
-                steering + noise._steering.normal(0, noise.steering_std_rad, steering.shape), geom,
-                initial_pose=tuple(truth[0]))
+            if encoders == "increments":
+                # The team's encoders over the whole log (the counter has history), then this span;
+                # its first row's increment is outside the span and is not integrated.
+                drawn = encoder_odometry_inputs(log, meta, phase_seed=30_000 + draw)
+                odom = integrate_wheel_odometry_increments(
+                    stamps[i0:i1], drawn["increments"][i0:i1], drawn["steering"][i0:i1], geom,
+                    initial_pose=tuple(truth[0]))
+            else:
+                noise = OdometryNoise(seed=30_000 + draw)
+                odom = integrate_wheel_odometry(
+                    stamps[i0:i1], rates + noise._wheels.normal(0, noise.wheel_rate_std_rad_s, rates.shape),
+                    steering + noise._steering.normal(0, noise.steering_std_rad, steering.shape), geom,
+                    initial_pose=tuple(truth[0]))
             t0, o0 = tuple(truth[0]), tuple(odom[0])
             actual0 = compose(invert(t0), tuple(pallet_world[0]))  # the pallet in the release truck frame
             for k in range(len(truth)):

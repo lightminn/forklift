@@ -1055,7 +1055,10 @@ RUN_SPECIFIC_ARGUMENTS = (
 # is a difference (2026-10-13: --return-turnaround, off unless given; 2026-10-14: the
 # --repeat-at-near-capture diagnostic, off unless given; the --steering-probe diagnostic likewise).
 POST_MEASUREMENT_ARGUMENTS = {"return_turnaround": False, "repeat_at_near_capture": False, "steering_probe": False,
-                              "tyre_contact_log": False, "steering_probe_set": "standard"}
+                              "tyre_contact_log": False, "steering_probe_set": "standard",
+                              # 2026-10-15: the odometry's encoders; a record without the argument read
+                              # the engine-reported rates, so a team-spec run differs from those tables.
+                              "encoder_model": "reported"}
 CONDITION_FIELDS = (
     "settings_synthetic",
     "detector_params",

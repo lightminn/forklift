@@ -545,6 +545,18 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument("--slam-noise-seed", type=int, default=None)
     parser.add_argument(
+        "--encoder-model",
+        choices=("reported", "team_spec_quantized", "team_spec_typical_inl"),
+        default="reported",
+        help="What the SLAM odometry reads as its encoders: the engine-reported joint velocities "
+        "(reported, the runner's behaviour before 2026-10-15) or the team's selected parts -- MT6701 x4 "
+        "(4,096 counts/rev, ABZ hysteresis 0.088 deg) on the rear wheels and a KTH7801-C 12-bit steering "
+        "angle, counted from the joint angles each physics tick and integrated as increments; "
+        "team_spec_typical_inl adds a first-harmonic INL at the datasheet typical amplitude (MT6701 1.0 deg, "
+        "KTH7801 0.35 deg; shape assumed, phase per --slam-noise-seed). With a team-spec model the "
+        "Gaussian wheel and steering noise is not added (the LiDAR range noise is).",
+    )
+    parser.add_argument(
         "--slam-noise-spec",
         nargs="?",
         const="max",
@@ -707,6 +719,8 @@ def arguments() -> argparse.Namespace:
         parser.error("--repeat-at-attempt or --repeat-at-near-capture requires --repeat-captures")
     if args.obstacles < 1 or args.max_sim_seconds <= 0:
         parser.error("obstacles and max-sim-seconds must be positive")
+    if args.encoder_model != "reported" and not args.record_slam:
+        parser.error("--encoder-model reads the encoders into the SLAM record and odometry; it needs --record-slam")
     if args.obstacle_layer is not None and not args.record_slam:
         parser.error("--obstacle-layer needs --record-slam (the scan tick lives there)")
     if args.obstacle_act and args.obstacle_layer is None:
@@ -1253,6 +1267,7 @@ def write_slam_record(args, state, scenario, factory, log, lidar_config) -> None
         "wheel_order": ["front_left", "front_right", "rear_left", "rear_right"],
         "wheel_rate_sign": "positive rolls the truck forward (drive command sign)",
         "steering_order": ["front_left", "front_right"],
+        "encoder_model": state.get("encoder_model") or {"name": "reported"},
         "odometry_geometry": {
             "wheelbase_m": args.drive_geometry.wheelbase_m,
             "track_m": args.drive_geometry.track_m,
@@ -3745,7 +3760,24 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "scan_stamps_s": [],
             "scan_ranges_m": [],
             "laser_pose_world": [],
+            # The four wheels' continuous joint angles (front left, front right, rear left, rear
+            # right): the engine-reported rate is not their derivative under TGS (cause separation E).
+            "wheel_angles_rad": [],
         }
+        from forklift_core.localization.encoders import (
+            AngleUnwrapper,
+            TeamEncoderModel,
+            encoder_model_spec,
+            sensor_phases,
+        )
+
+        wheel_unwrap = [AngleUnwrapper() for _ in range(4)]
+        encoder_spec = encoder_model_spec(args.encoder_model)
+        encoder_model = None
+        if encoder_spec is not None:
+            encoder_model = TeamEncoderModel(encoder_spec, sensor_phases(args.slam_noise_seed))
+            slam_log.update(wheel_counts=[], wheel_increments_rad=[], steering_measured_rad=[])
+        state["encoder_model"] = {"name": "reported"} if encoder_model is None else encoder_model.record()
         state["lidar_synthetic"] = lidar_config
     if args.slam_feedback is not None:
         from forklift_core.localization import slam_link
@@ -3824,6 +3856,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 "withdraw",
             ],
             "release_limits": {"position_m": 0.02, "yaw_rad": 0.02},
+            # With a team-spec encoder model the odometry reads quantised counts and steering
+            # instead of the reported rates plus Gaussian noise; the LiDAR range noise stays.
+            "encoder_model": args.encoder_model,
+            "wheel_steering_gaussian_noise": args.encoder_model == "reported",
         }
 
     def slam_odom_base():
@@ -5394,17 +5430,31 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 return
             now_base, now_q = robot.get_world_pose()
             rates_true = robot.get_joint_velocities()[wheels]
-            steer_true = robot.get_joint_positions()[steers]
+            joint_q = np.asarray(robot.get_joint_positions(), dtype=float)
+            steer_true = joint_q[steers]
+            wheel_angles = [unwrap_.update(joint_q[i_]) for unwrap_, i_ in zip(wheel_unwrap, wheels, strict=True)]
             slam_log["joint_stamps_s"].append(stamp_now)
             slam_log["wheel_rates_rad_s"].append(rates_true)
             slam_log["steering_rad"].append(steer_true)
             slam_log["base_pose_world"].append(np.concatenate((now_base, now_q)))
-            if slam is not None:
+            slam_log["wheel_angles_rad"].append(wheel_angles)
+            if encoder_model is not None:
+                # The team's encoders, read from the joint angles this tick (row = the interval ending now).
+                increments_, steering_measured_, counts_ = encoder_model.read(wheel_angles[2:4], steer_true)
+                slam_log["wheel_counts"].append(counts_)
+                slam_log["wheel_increments_rad"].append(increments_)
+                slam_log["steering_measured_rad"].append(steering_measured_)
+            if slam is not None and encoder_model is not None:
+                previous_yaw = slam["odom_rear"][2]
+                slam["odom_rear"] = slam["odometry"].update_increments(stamp_now, increments_, steering_measured_)
+                slam["odom_speed"] = slam["odometry"].interval_speed
+            elif slam is not None:
                 rates = slam["noise"].wheel_rates(rates_true[2:4])
                 angles = slam["noise"].steering(steer_true)
                 previous_yaw = slam["odom_rear"][2]
                 slam["odom_rear"] = slam["odometry"].update(stamp_now, rates, angles)
                 slam["odom_speed"] = float(np.mean(rates)) * args.drive_geometry.wheel_radius_m
+            if slam is not None:
                 slam["odom_yaw_rate"] = (slam["odom_rear"][2] - previous_yaw) * 120.0
                 slam["stop_now"] = slam["stop"].update(
                     commanded_speed=slam.get("last_command", 0.0),

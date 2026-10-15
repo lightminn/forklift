@@ -32,10 +32,12 @@ from pathlib import Path
 
 import numpy as np
 
+from forklift_core.localization.encoders import encoder_odometry_inputs
 from forklift_core.localization.slam_pose import OdometryNoise
 from forklift_core.localization.wheel_odometry import (
     AckermannOdometryGeometry,
     integrate_wheel_odometry,
+    integrate_wheel_odometry_increments,
 )
 
 DISTANCE_BINS_M = np.arange(0.0, 12.01, 0.5)
@@ -110,7 +112,25 @@ def binned_max(d, value, bins=DISTANCE_BINS_M):
     return upper, maxima
 
 
+def encoder_model_of(runs) -> str:
+    """The one encoder model every run was recorded with (meta.json; none recorded = reported): a
+    table mixes no two models (2026-10-15)."""
+    names = {(json.loads((run / "meta.json").read_text()).get("encoder_model") or {"name": "reported"})["name"]
+             for run in runs}
+    if len(names) != 1:
+        raise SystemExit(f"runs recorded with different encoder models: {sorted(names)}")
+    return names.pop()
+
+
+def odometry_noise_record(model: str) -> dict:
+    if model == "reported":
+        return {"wheel_rate_std_rad_s": 0.2, "steering_std_rad": 0.005}
+    return {"encoder_model": model, "gaussian": None,
+            "draws": "each draw regenerates the counts as another sensor unit (INL phase); no Gaussian"}
+
+
 def odometry_command(args) -> dict:
+    model = encoder_model_of(args.run)
     per_run = []
     all_d, all_p, all_y = [], [], []
     for run in args.run:
@@ -122,13 +142,21 @@ def odometry_command(args) -> dict:
         stamps = log["joint_stamps_s"]
         rates = log["wheel_rates_rad_s"].astype(float)[:, 2:4]
         steering = log["steering_rad"].astype(float)
+        encoders = encoder_odometry_inputs(log, meta)["kind"]  # validates a team-spec record
         for draw in range(args.draws):
-            noise = OdometryNoise(seed=10_000 + draw)
-            noisy_rates = rates + noise._wheels.normal(0, noise.wheel_rate_std_rad_s, rates.shape)
-            noisy_steer = steering + noise._steering.normal(0, noise.steering_std_rad, steering.shape)
-            odom = integrate_wheel_odometry(
-                stamps, noisy_rates, noisy_steer, geometry, initial_pose=tuple(truth[0])
-            )
+            if encoders == "increments":
+                # The team's encoders: counts regenerated per draw as another sensor unit, no Gaussian.
+                drawn = encoder_odometry_inputs(log, meta, phase_seed=10_000 + draw)
+                odom = integrate_wheel_odometry_increments(
+                    stamps, drawn["increments"], drawn["steering"], geometry, initial_pose=tuple(truth[0])
+                )
+            else:
+                noise = OdometryNoise(seed=10_000 + draw)
+                noisy_rates = rates + noise._wheels.normal(0, noise.wheel_rate_std_rad_s, rates.shape)
+                noisy_steer = steering + noise._steering.normal(0, noise.steering_std_rad, steering.shape)
+                odom = integrate_wheel_odometry(
+                    stamps, noisy_rates, noisy_steer, geometry, initial_pose=tuple(truth[0])
+                )
             d, p, y = relative_errors(
                 truth, odom, start_every=args.start_every, max_distance_m=12.0,
                 stamps=stamps, max_age_s=args.max_age_s,
@@ -145,7 +173,7 @@ def odometry_command(args) -> dict:
     return {
         "runs": per_run,
         "draws": args.draws,
-        "noise": {"wheel_rate_std_rad_s": 0.2, "steering_std_rad": 0.005},
+        "noise": odometry_noise_record(model),
         "reference": "rear axle centre",
         "max_age_s": args.max_age_s,
         "bins_upper_m": upper.tolist(),
@@ -199,6 +227,7 @@ def cumulative_table(maxima):
 
 def age_command(args) -> dict:
     """Odometry error by observation age, from every recorded scan stamp (Codex P0a)."""
+    model = encoder_model_of(args.run)
     maxima = np.zeros((len(AGES_S), 2))
     per_run = []
     for run in args.run:
@@ -213,22 +242,31 @@ def age_command(args) -> dict:
         rates = log["wheel_rates_rad_s"].astype(float)[:, 2:4]
         steering = log["steering_rad"].astype(float)
         run_max = np.zeros_like(maxima)
+        encoders = encoder_odometry_inputs(log, meta)["kind"]
         for draw in range(args.draws):
-            noise = OdometryNoise(seed=20_000 + draw)
-            odom = integrate_wheel_odometry(
-                stamps,
-                rates + noise._wheels.normal(0, noise.wheel_rate_std_rad_s, rates.shape),
-                steering + noise._steering.normal(0, noise.steering_std_rad, steering.shape),
-                geometry,
-                initial_pose=tuple(truth[0]),
-            )
+            if encoders == "increments":
+                drawn = encoder_odometry_inputs(log, meta, phase_seed=20_000 + draw)
+                odom = integrate_wheel_odometry_increments(
+                    stamps, drawn["increments"], drawn["steering"], geometry, initial_pose=tuple(truth[0])
+                )
+            else:
+                noise = OdometryNoise(seed=20_000 + draw)
+                odom = integrate_wheel_odometry(
+                    stamps,
+                    rates + noise._wheels.normal(0, noise.wheel_rate_std_rad_s, rates.shape),
+                    steering + noise._steering.normal(0, noise.steering_std_rad, steering.shape),
+                    geometry,
+                    initial_pose=tuple(truth[0]),
+                )
             for i in starts:
                 run_max = np.fmax(run_max, relative_error_at(i, AGES_S, stamps, truth, odom))
         maxima = np.fmax(maxima, run_max)
         per_run.append({"run": str(run), "scan_starts": int(len(starts)), "max": run_max.tolist()})
     table = cumulative_table(maxima)
     return {
-        "source": "wheel odometry (rear wheel rates + steering), OdometryNoise model redrawn",
+        "source": ("wheel odometry (rear wheel rates + steering), OdometryNoise model redrawn" if model == "reported"
+                   else "wheel odometry from the team-spec encoders (rear wheel counts + steering)"),
+        "noise": odometry_noise_record(model),
         "reference": "rear axle centre",
         "draws": args.draws,
         "ages_s": list(AGES_S),

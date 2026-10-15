@@ -445,7 +445,12 @@ def evaluate_command(args) -> dict:
     from forklift_core.control.drive_permission import shape_meets
     from forklift_core.control.shadow_memory import ShadowMemory
     from forklift_core.localization.slam_pose import OdometryNoise
-    from forklift_core.localization.wheel_odometry import AckermannOdometryGeometry, integrate_wheel_odometry
+    from forklift_core.localization.encoders import encoder_odometry_inputs
+    from forklift_core.localization.wheel_odometry import (
+        AckermannOdometryGeometry,
+        integrate_wheel_odometry,
+        integrate_wheel_odometry_increments,
+    )
     from forklift_core.perception.obstacle_grid import AgeErrorTable, GridConfig, ObstacleGrid, ObstacleScan
     from forklift_core.planning.geometry import Footprint, FootprintCollisionChecker, Rectangle
 
@@ -484,14 +489,21 @@ def evaluate_command(args) -> dict:
     truth_rear = np.column_stack((base[:, 0] + rear_x * np.cos(yaw), base[:, 1] + rear_x * np.sin(yaw), yaw))
     rates = log["wheel_rates_rad_s"].astype(float)[:, 2:4]
     steer = log["steering_rad"].astype(float)
-    noise = OdometryNoise(seed=args.noise_seed)
-    odom = integrate_wheel_odometry(
-        stamps,
-        rates + noise._wheels.normal(0, noise.wheel_rate_std_rad_s, rates.shape),
-        steer + noise._steering.normal(0, noise.steering_std_rad, steer.shape),
-        AckermannOdometryGeometry(g["wheelbase_m"], g["track_m"], g["wheel_radius_m"]),
-        initial_pose=tuple(truth_rear[0]),
-    )
+    odo_geometry = AckermannOdometryGeometry(g["wheelbase_m"], g["track_m"], g["wheel_radius_m"])
+    if encoder_odometry_inputs(log, meta)["kind"] == "increments":
+        # The team's encoders: the counts as another sensor unit for this seed, no Gaussian.
+        drawn = encoder_odometry_inputs(log, meta, phase_seed=args.noise_seed)
+        odom = integrate_wheel_odometry_increments(
+            stamps, drawn["increments"], drawn["steering"], odo_geometry, initial_pose=tuple(truth_rear[0]))
+    else:
+        noise = OdometryNoise(seed=args.noise_seed)
+        odom = integrate_wheel_odometry(
+            stamps,
+            rates + noise._wheels.normal(0, noise.wheel_rate_std_rad_s, rates.shape),
+            steer + noise._steering.normal(0, noise.steering_std_rad, steer.shape),
+            odo_geometry,
+            initial_pose=tuple(truth_rear[0]),
+        )
     velocity = np.gradient(base[:, :2], stamps, axis=0)
     signed_speed = velocity[:, 0] * np.cos(yaw) + velocity[:, 1] * np.sin(yaw)
 
