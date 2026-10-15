@@ -26,7 +26,8 @@ __all__ = ["BoundaryRecorder", "DictWatch", "measurement_refusal", "RecordingGat
 
 
 class BoundaryRecorder:
-    def __init__(self, directory: Path, *, chunk_ticks: int = 1200, max_bytes: int = 2_000_000_000) -> None:
+    def __init__(self, directory: Path, *, chunk_ticks: int = 1200, max_bytes: int = 2_000_000_000,
+                 value_format: int = 1) -> None:
         if chunk_ticks < 1 or max_bytes < 1:
             raise ValueError("chunk_ticks and max_bytes must be positive")
         self.directory = Path(directory)
@@ -50,6 +51,11 @@ class BoundaryRecorder:
         # Classes recorded by value through their instance attributes (e.g. Isaac's ArticulationAction).
         self.value_types: set[str] = set()
         self._closed = False
+        # Format 2 (the M-a1 replay, docs/plans/2026-10-16-m-a1-replay.md): values through replay_codec, so a
+        # replay can hand them back (tuples, qualified dataclasses, aliases); format 1 keeps the comparison form.
+        if value_format not in (1, 2):
+            raise ValueError("value_format is 1 or 2")
+        self.value_format = int(value_format)
 
     @property
     def in_tick(self) -> bool:
@@ -75,7 +81,9 @@ class BoundaryRecorder:
         entry = {"seq": len(self._tick["calls"]), "port": port, "method": method,
                  "request": encoded_request if encoded_request is not None else self._encode(request)}
         if exception is not None:
-            entry["exception"] = {"type": type(exception).__name__, "message": str(exception)}
+            type_name = (type(exception).__name__ if self.value_format == 1
+                         else f"{type(exception).__module__}:{type(exception).__qualname__}")
+            entry["exception"] = {"type": type_name, "message": str(exception)}
             attributes = {k: v for k, v in vars(exception).items() if not k.startswith("__")} if hasattr(exception, "__dict__") else {}
             if attributes:  # what a caller reads from the exception (e.g. a capture failure's diagnostics)
                 entry["exception"]["attributes"] = self._encode(attributes)
@@ -117,7 +125,7 @@ class BoundaryRecorder:
             "format": "forklift_boundary_record/1", "ticks": self._ticks, "chunks": self._chunk,
             "bytes": self._bytes, "stopped_at_tick": self.stopped_at_tick, "stopped_reason": self.stopped_reason,
             "opaque_values": self.opaque_values,
-        }, indent=1) + "\n")
+        } | ({"format": "forklift_boundary_record/2"} if self.value_format == 2 else {}), indent=1) + "\n")
 
     # -- internals ---------------------------------------------------------------------------------
     def _flush(self) -> None:
@@ -142,6 +150,16 @@ class BoundaryRecorder:
         return {"$array": key, "dtype": str(array.dtype), "shape": list(array.shape)}
 
     def _encode(self, value: Any) -> Any:
+        if self.value_format == 2:
+            from forklift_core.mission.replay_codec import Encoder
+
+            encoder = Encoder(opaque_ok=self.opaque_ok)
+            node = encoder.encode(value)
+            for key, array in encoder.arrays.items():
+                if key not in self._written and key not in self._pending_arrays:
+                    self._pending_arrays[key] = array
+            self.opaque_values += json.dumps(node).count('"$opaque"')
+            return node
         if isinstance(value, np.ndarray):
             return self._array_ref(value)
         if isinstance(value, (np.floating,)):
@@ -269,7 +287,8 @@ class RecordingGate:
         out = {}
         after = self.recorder.encode(_hash_only(raw) if hash_only else raw)
         if json.dumps(after, sort_keys=True) != json.dumps(before, sort_keys=True):
-            out["request_after"] = after
+            # Format 2 encodes the changes once more in call(): hand it the values, not their encoding.
+            out["request_after"] = after if self.recorder.value_format == 1 else (_hash_only(raw) if hash_only else raw)
         if watch is not None:
             changed = watch.changes(marks)
             if changed:

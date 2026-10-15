@@ -149,7 +149,7 @@ def decode(node: Any, arrays: dict[str, np.ndarray]) -> Any:
             for k, v in items:
                 out_d[k] = walk(v)
             return out_d
-        if "$opaque" in n:
+        if "$opaque" in n or "$sha256" in n:  # comparison-only payloads come back as their markers
             return dict(n)
         raise ValueError(f"unknown node {sorted(n)}")
 
