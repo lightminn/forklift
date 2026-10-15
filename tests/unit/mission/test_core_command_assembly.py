@@ -17,6 +17,11 @@ GEOMETRY = AckermannGeometry(wheelbase_m=1.0, track_m=0.6, wheel_radius_m=0.1, m
 
 def make(*, slam=None, obstacle=None, act=True, near=None, steering=(0.0, 0.0)):
     calls = []
+    pose = {"rear": np.array([2.0, 3.0, 0.0])}  # the estimate; the release moves it (Codex slice-5 P3)
+
+    def release(t):
+        calls.append(("slam_release", (t,)))
+        pose["rear"] = np.array([3.0, 4.0, 0.1])
 
     def require(ok, reason):
         calls.append(("require", (bool(ok), reason)))
@@ -24,8 +29,8 @@ def make(*, slam=None, obstacle=None, act=True, near=None, steering=(0.0, 0.0)):
             raise RuntimeError(reason)
 
     hooks = SimpleNamespace(
-        require=require, slam_release=lambda t: calls.append(("slam_release", (t,))),
-        slam_rear=lambda t: np.array([3.0, 4.0, 0.1]), set_rear=lambda v: calls.append(("set_rear", (tuple(v),))),
+        require=require, slam_release=release,
+        slam_rear=lambda t: pose["rear"].copy(), set_rear=lambda v: calls.append(("set_rear", (tuple(v),))),
         steering_position=lambda: np.array(steering),
     )
     state = {"transitions": []}
