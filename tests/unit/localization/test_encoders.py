@@ -202,7 +202,8 @@ def test_a_narrowed_or_orphaned_encoder_record_is_refused_and_a_description_chan
     log, meta = _team_log("team_spec_typical_inl", seed=4)
     for key, bad in (("wheel_increments_rad", log["wheel_increments_rad"].astype(int)),
                      ("steering_measured_rad", log["steering_measured_rad"].astype(np.float32)),
-                     ("wheel_counts", log["wheel_counts"].astype(bool))):
+                     ("wheel_counts", log["wheel_counts"].astype(bool)),
+                     ("wheel_counts", (log["wheel_counts"] - 5000).astype(np.uint64))):
         with pytest.raises(ValueError, match=key):
             encoder_odometry_inputs(dict(log, **{key: bad}), meta)
     with pytest.raises(ValueError, match="lost or contradicting"):

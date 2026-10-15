@@ -250,7 +250,8 @@ def encoder_odometry_inputs(log, meta: dict, *, phase_seed: int | None = None, c
         for key, value, integer in (("wheel_counts", counts, True), ("wheel_increments_rad", increments, False),
                                     ("steering_measured_rad", steering, False)):
             recorded = np.asarray(log[key])
-            kind_ok = (np.issubdtype(recorded.dtype, np.integer) if integer
+            # Counts: signed integers only (an unsigned record wraps when compared, Codex round 2).
+            kind_ok = (np.issubdtype(recorded.dtype, np.signedinteger) if integer
                        else np.issubdtype(recorded.dtype, np.floating) and np.isfinite(recorded).all())
             if not kind_ok or recorded.dtype == np.bool_:
                 raise ValueError(f"the recorded {key} has dtype {recorded.dtype}")

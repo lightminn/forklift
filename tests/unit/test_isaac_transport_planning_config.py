@@ -1360,14 +1360,13 @@ def test_the_encoder_model_feeds_the_odometry_increments_and_is_part_of_the_cont
     assert '"encoder_model": state.get("encoder_model") or {"name": "reported"}' in source
 
 
-def test_the_pocket_check_reads_stillness_from_the_stop_detector_under_team_spec_encoders():
-    """Codex (encoder implementation P2): a one-tick speed from counts is 0 on many moving ticks at
-    0.02 m/s; the still frame must follow the stop detector and a moving frame carry one count per
-    tick of speed error. The reported path keeps speed_now < 0.01."""
+def test_the_pocket_check_is_refused_with_a_team_spec_encoder_model():
+    """Codex (encoder implementation round 2, P2): the pocket check's still-frame test, frame-lag
+    bound and d5_replay record use a one-tick odometry speed, which quantised counts with hysteresis
+    do not bound; until a bound and a replay rule exist the combination is refused, and the reported
+    path is unchanged."""
     source = SCRIPT.read_text()
-    block = source[source.index('encoder_record_ = state.get("encoder_model") or {"name": "reported"}'):]
-    block = block[: block.index('pocket["await_still_frame"] = False')]
-    assert 'still_ = bool(slam.get("stop_now"))' in block
-    assert 'max(abs(slam["odom_speed"]), abs(slam["tracker_speed"])) + quantum_' in block
-    assert "still_ = speed_now < 0.01" in block
-    assert "and still_ and yaw_rate_now < 0.01:" in block
+    assert 'if args.encoder_model != "reported" and args.pocket_check:' in source
+    assert ('if pocket.get("await_still_frame") and record.get("new") and speed_now < 0.01 and yaw_rate_now < 0.01:'
+            in source)
+    assert "still_ = bool(slam.get" not in source

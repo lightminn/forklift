@@ -719,6 +719,11 @@ def arguments() -> argparse.Namespace:
         parser.error("--repeat-at-attempt or --repeat-at-near-capture requires --repeat-captures")
     if args.obstacles < 1 or args.max_sim_seconds <= 0:
         parser.error("obstacles and max-sim-seconds must be positive")
+    if args.encoder_model != "reported" and args.pocket_check:
+        # Codex (encoder implementation round 2): the pocket check takes a one-tick odometry speed as
+        # its still-frame test and its frame-lag bound and records it for d5_replay; with quantised
+        # counts (and the MT6701 hysteresis) neither holds, and no bound is defined yet.
+        parser.error("--pocket-check is not defined for a team-spec --encoder-model yet (no speed bound / replay rule)")
     if args.encoder_model != "reported" and not args.record_slam:
         parser.error("--encoder-model reads the encoders into the SLAM record and odometry; it needs --record-slam")
     if args.obstacle_layer is not None and not args.record_slam:
@@ -2882,22 +2887,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         # (pixel lag, L3c v7): the odometry speed, never the truth -- not the
         # command, which stays up while the permission holds the truck (L3c v11:
         # a standing truck kept eroding the strip against the face).
+        speed_now = abs(slam["odom_speed"]) if slam is not None else abs(requested_speed)
         yaw_rate_now = abs(slam.get("odom_yaw_rate", 0.0)) if slam is not None else 0.0
-        encoder_record_ = state.get("encoder_model") or {"name": "reported"}
-        if slam is not None and encoder_record_["name"] != "reported":
-            # Team-spec encoders: a one-tick speed is quantised (one count on each rear wheel is
-            # 0.023 m/s at 120 Hz), so stillness comes from the stop detector and a moving frame
-            # carries one count per tick of speed error (Codex encoder implementation P2).
-            quantum_ = (2 * math.pi / encoder_record_["wheel_counts_per_rev"]
-                        * args.drive_geometry.wheel_radius_m * 120.0)
-            still_ = bool(slam.get("stop_now"))
-            speed_now = 0.0 if still_ else max(abs(slam["odom_speed"]), abs(slam["tracker_speed"])) + quantum_
-        else:
-            speed_now = abs(slam["odom_speed"]) if slam is not None else abs(requested_speed)
-            still_ = speed_now < 0.01
         record = check.add_frame(stamp, depth, rear_at, speed_mps=speed_now, yaw_rate_rps=yaw_rate_now,
                                  lift_m=float(robot.get_joint_positions()[lift_index[0]]))
-        if pocket.get("await_still_frame") and record.get("new") and still_ and yaw_rate_now < 0.01:
+        if pocket.get("await_still_frame") and record.get("new") and speed_now < 0.01 and yaw_rate_now < 0.01:
             pocket["await_still_frame"] = False
             pocket["still_frame_s"] = stamp
             # Diagnostics: the standing frames as the check saw them.
