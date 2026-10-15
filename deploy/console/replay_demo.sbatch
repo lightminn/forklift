@@ -55,7 +55,7 @@ docker run -d --rm --name "$NAME" -p "127.0.0.1:$PORT:8765" --group-add 2000 \
     GW=\$!
     for pass in \$(seq 1 $PASSES); do
       kill -0 \$GW 2>/dev/null || { echo 'gateway died'; exit 3; }
-      echo \"pass \$pass start \$(date +%T)\"
+      echo \"pass \$pass start \$(date +%T), slam nodes running: \$(pgrep -fc '[s]ync_slam_toolbox_node')\"
       ros2 launch slam_toolbox online_sync_launch.py \
         slam_params_file:=/workspace/ros2/src/forklift_bringup/config/slam_toolbox_isaac_replay.yaml \
         use_sim_time:=true autostart:=true > /dev/null 2>&1 &
@@ -66,7 +66,15 @@ docker run -d --rm --name "$NAME" -p "127.0.0.1:$PORT:8765" --group-add 2000 \
         || { echo 'bag play failed'; kill \$SLAM; exit 5; }
       sleep 15   # the last map lands; then the pose goes stale on screen
       kill -0 \$SLAM 2>/dev/null || { echo 'slam_toolbox died during the pass'; exit 4; }
-      kill \$SLAM; wait \$SLAM 2>/dev/null
+      # SIGINT is ros2 launch's orderly shutdown (SIGTERM may leave its children); the
+      # next pass must not share map or TF with this one. [s] keeps this shell's own
+      # command line from matching.
+      kill -INT \$SLAM
+      for _ in \$(seq 1 20); do kill -0 \$SLAM 2>/dev/null || break; sleep 0.5; done
+      pkill -INT -f '[s]ync_slam_toolbox_node'; sleep 2
+      pkill -KILL -f '[s]ync_slam_toolbox_node'
+      wait \$SLAM 2>/dev/null
+      if pgrep -f '[s]ync_slam_toolbox_node' > /dev/null; then echo 'slam_toolbox left running'; exit 4; fi
       echo \"pass \$pass end \$(date +%T)\"
     done
     sleep 30
