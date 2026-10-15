@@ -279,8 +279,11 @@ class ReplaySession:
             raise self.fail(f"{where}: {port}.{method} where {entry['port']}.{entry['method']} was recorded")
         if _has_opaque(entry["request"]) and (port, method) not in self.allow_opaque:
             raise self.fail(f"{where}: {port}.{method} was recorded with an opaque request value")
-        if _canonical(request_node) != _canonical(entry["request"]):
-            raise self.fail(f"{where}: {port}.{method} request differs from the recorded one")
+        got, want = _canonical(request_node), _canonical(entry["request"])
+        if got != want:
+            at = next((i for i, (a, b) in enumerate(zip(got, want)) if a != b), min(len(got), len(want)))
+            raise self.fail(f"{where}: {port}.{method} request differs from the recorded one "
+                            f"(at {at}: got ...{got[max(0, at - 80):at + 120]}... recorded ...{want[max(0, at - 80):at + 120]}...)")
         if _has_opaque(entry.get("response")) or _has_opaque(entry.get("exception")):
             raise self.fail(f"{where}: {port}.{method} answered with an opaque value (cannot be handed back)")
         self._next += 1
