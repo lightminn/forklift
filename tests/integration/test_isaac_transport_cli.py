@@ -559,7 +559,8 @@ def test_d8b_every_read_is_recorded_before_the_d5_check_can_drop_it() -> None:
     assert "trackers[\"approach\"].restart_speed_slew(0.0)" in command
     assert "tracking = replace(tracking, status=\"tracking\", speed_mps=0.0)" in command
     # The recorder is written first in the finally block, guarded.
-    finally_at = source.index("    finally:\n        if recorder is not None:")
+    # (M-a1 replay R3: the finally's body sits in a try whose own finally closes a format-2 record.)
+    finally_at = source.index("    finally:\n        try:\n            if recorder is not None:")
     assert finally_at < source.index("state[\"pocket_recording\"] = recorder.close(") < source.index(
         "state[\"pocket_recording_close_error\"] = repr(exc)") < source.index("write_slam_record(args, state, replace(scenario")
     # A failed close fails the run without replacing an earlier failure reason.
