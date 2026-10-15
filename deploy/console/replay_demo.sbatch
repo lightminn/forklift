@@ -73,6 +73,7 @@ docker run -d --rm --name "$NAME" -p "127.0.0.1:$PORT:8765" --group-add 2000 \
       for _ in \$(seq 1 20); do kill -0 \$SLAM 2>/dev/null || break; sleep 0.5; done
       pkill -INT -f '[s]ync_slam_toolbox_node'; sleep 2
       pkill -KILL -f '[s]ync_slam_toolbox_node'
+      kill -KILL \$SLAM 2>/dev/null   # a launcher stuck in shutdown must not hold the wait
       wait \$SLAM 2>/dev/null
       if pgrep -f '[s]ync_slam_toolbox_node' > /dev/null; then echo 'slam_toolbox left running'; exit 4; fi
       echo \"pass \$pass end \$(date +%T)\"
