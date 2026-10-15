@@ -75,3 +75,18 @@ def test_correlated_noise_grows_with_depth_squared():
     residual = noisy.depth_m - out.scene.depth_m
     assert residual.std() == pytest.approx(0.002 * 5.25 ** 2, rel=0.1)
     assert model.to_json()["correlation_px"] == [3.0, 3.0]
+
+
+GOOD = {"source": "s", "license": "CC-BY-4.0", "revision": "r", "files_sha256": "h", "k_iid": 0.001, "k_corr": 0.002,
+        "correlation_px_source": [8.0, 6.0], "source_fx": 900.0, "dropout_fraction": 0.02}
+
+
+@pytest.mark.parametrize("change", [{"source": ""}, {"k_corr": -1.0}, {"correlation_px_source": [8.0]},
+                                    {"dropout_fraction": 1.0}, {"source_fx": 0.0}, {"revision": None}])
+def test_noise_config_is_validated(tmp_path, change):
+    import yaml
+
+    path = tmp_path / "n.yaml"
+    path.write_text(yaml.safe_dump({**GOOD, **change}))
+    with pytest.raises(ValueError, match="noise config"):
+        NoiseModel.from_yaml(path, seed=0, target_fx=450.0)

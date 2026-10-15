@@ -37,6 +37,39 @@ class NoiseModel:
             del obj["correlated_k"], obj["correlation_px"]
         return obj
 
+    @classmethod
+    def from_yaml(cls, path, *, seed: int, target_fx: float, scale: float = 1.0) -> "NoiseModel":
+        import math
+
+        import yaml
+
+        with open(path, encoding="utf-8") as f:
+            obj = yaml.safe_load(f)
+
+        def number(value, name, *, low=0.0, inclusive=True, high=math.inf):
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) \
+                    or value < low or (value == low and not inclusive) or value >= high:
+                raise ValueError(f"noise config {name} out of range: {value!r}")
+            return float(value)
+
+        if not isinstance(obj, dict):
+            raise ValueError("noise config must be a mapping")
+        for name in ("source", "license", "revision", "files_sha256"):
+            if not isinstance(obj.get(name), str) or not obj[name]:
+                raise ValueError(f"noise config needs a non-empty {name}")
+        px = obj.get("correlation_px_source")
+        if not isinstance(px, list) or len(px) != 2:
+            raise ValueError("noise config correlation_px_source must hold two widths")
+        ratio = number(target_fx, "target_fx", inclusive=False) / number(obj.get("source_fx"), "source_fx",
+                                                                         inclusive=False)
+        scale = number(scale, "scale", inclusive=False)
+        return cls(axial_k=number(obj.get("k_iid"), "k_iid") * scale,
+                   correlated_k=number(obj.get("k_corr"), "k_corr") * scale,
+                   correlation_px=tuple(number(p, "correlation_px_source", inclusive=False) * ratio * scale
+                                        for p in px),
+                   dropout_fraction=number(obj.get("dropout_fraction"), "dropout_fraction", high=1.0),
+                   seed=int(seed))
+
 
 def gaussian_kernel(sigma_px: float):
     if sigma_px <= 0:
