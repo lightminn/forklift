@@ -1,0 +1,2 @@
+oracle_dev	python tools/evaluate_recognition.py --dataset hpc_data/stage1a --split dev --detector oracle --output hpc_data/stage1a_oracle_dev --source-manifest source_manifest.json && cat hpc_data/stage1a_oracle_dev/metrics.json
+baseline_dev	python tools/evaluate_recognition.py --dataset hpc_data/stage1a --split dev --detector baseline --output hpc_data/stage1a_baseline_dev --source-manifest source_manifest.json && cat hpc_data/stage1a_baseline_dev/metrics.json && cat hpc_data/stage1a_baseline_dev/verdicts.csv
