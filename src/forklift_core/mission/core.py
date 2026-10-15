@@ -14,6 +14,17 @@ reaches what has not moved yet through ``hooks``:
   (estimate minus truth -- recorded, not decided on);
 - ``fork_blades()``: the fork blades from the chassis model, read when a withdrawal is certified.
 
+Slice 2: the follower's time limit, the arrival transitions other than a perception observe, the lift target's
+ramp (``MissionState.lift_command``) and the timed transitions (``tracking_limit`` / ``arrive`` /
+``lift_and_timers``, until 2026-10-15 inline in the runner's loop). ``near`` is the runner's near-tracking
+record (None without it); ``options`` carries ``near_tracking_stop_at``, ``d7_docking``, the ``dwells`` and
+``safety_stops`` schedules and ``home_rear`` (the scenario's start). More hooks:
+
+- ``insertion_measured()``, ``truth_relative_yaw()``, ``pallet_z()``, ``lift_position()``, ``truth_rear()``:
+  simulation truth (the plan's ``SimTruth`` list) -- the loop's samples of this tick, read when called;
+- ``dock_at_delivery_straight(t)``, ``slam_rear(t)``: the D7 docking at the delivery straight and the control
+  pose it may have moved.
+
 The bodies are the runner's, statement for statement: moving them changes no decision.
 """
 
@@ -33,7 +44,8 @@ __all__ = ["MissionCore"]
 
 class MissionCore:
     def __init__(self, ms: MissionState, *, state: dict, obstacle: dict | None, slam: dict | None, pocket: dict,
-                 paths: dict, trackers: dict, geometry, settings: dict, pallet_geometry, hooks: SimpleNamespace):
+                 paths: dict, trackers: dict, geometry, settings: dict, pallet_geometry, hooks: SimpleNamespace,
+                 near: dict | None = None, options: SimpleNamespace | None = None):
         self.ms = ms
         self.state = state
         self.obstacle = obstacle
@@ -45,6 +57,8 @@ class MissionCore:
         self.settings = settings
         self.pallet_geometry = pallet_geometry
         self.hooks = hooks
+        self.near = near
+        self.options = options
 
     def known_transition(self, from_phase: str, next_phase: str, t: float) -> None:
         """Known pallets across the mission (plan v10 D5)."""
@@ -200,3 +214,130 @@ class MissionCore:
         elif ms.phase in ("transport", "settle"):
             slam["pending_release"] = ms.phase
             slam["release_wait_from"] = t
+
+    def tracking_limit(self, t: float) -> float:
+        """The follower's time limit in the current phase: three times the path time at the tracker's own speed
+        caps (length / cruise when there are none), plus 10 s; standing by design is not slowness."""
+        ms, options = self.ms, self.options
+        limit = max(30.0, 3 * self.trackers[ms.phase].nominal_duration_s() + 10)
+        if options.dwells is not None and ms.phase == "approach":
+            limit += options.dwells.held_s(t)  # plan D8b: standing by design is not slowness
+        if options.safety_stops is not None and ms.phase == "approach":
+            limit += options.safety_stops.held_s(t)  # plan D8 S4a-1 ⓪: the scheduled stops
+        return limit
+
+    def arrive(self, t: float, tracking) -> SimpleNamespace:
+        """The follower arrived in a phase other than a perception observe (whose capture is still the
+        runner's). ``stop`` ends the mission loop; ``rear`` is the control pose re-read when a D7 docking
+        retry released the correction this tick (the runner's ``rear`` takes it), else None."""
+        ms, state, slam, hooks, geometry, near = self.ms, self.state, self.slam, self.hooks, self.geometry, self.near
+        transition = self.transition
+        rear = None
+        if ms.phase == "approach":
+            if near is not None and self.options.near_tracking_stop_at == "insert":
+                # Plan D8 S4a-1: approach only -- end where the insertion would start.
+                state["near_tracking"]["outcome"] = "stopped_at_insert"
+                state["near_tracking"]["arrival"] = {
+                    "time_s": t,
+                    "position_error_m": tracking.position_error_m,
+                    "yaw_error_rad": tracking.yaw_error_rad,
+                }
+                transition("near_tracking_stopped", t)
+                return SimpleNamespace(stop=True, rear=rear)
+            transition("insert", t)
+        elif ms.phase == "insert":
+            state["insertion_error"] = {
+                "position_m": tracking.position_error_m,
+                "yaw_rad": tracking.yaw_error_rad,
+            }
+            # What the forks actually reach, not the planned target.
+            state["insertion_measured"] = hooks.insertion_measured()
+            if near is not None:
+                # Plan D8 S4a-2 ⑤: why the insertion ended; insertion_error keeps its
+                # meaning (the follower against the path end).
+                arrival_ = near.get("arrival") or {"reason": "path", "time_s": t}
+                state["near_tracking"]["insert_arrival"] = {
+                    **arrival_,
+                    "last_tick": near["ticks"][-1] if near["ticks"] else None,
+                    "insertion_measured": state["insertion_measured"],
+                }
+            # Insertion-axis yaw against the true pallet (fork axis
+            # along the pallet x axis either way round).
+            relative_yaw = hooks.truth_relative_yaw()
+            state["insertion_truth_yaw_rad"] = float(
+                math.atan2(math.sin(2 * relative_yaw), math.cos(2 * relative_yaw)) / 2
+            )
+            if slam is not None:
+                state["slam_error_insert_end"] = hooks.slam_error()
+            transition("lift", t)
+        elif ms.phase == "extract":
+            transition("transport", t)
+        elif ms.phase == "transport":
+            if slam is not None and slam["docking"]["status"] == "armed":
+                hooks.dock_at_delivery_straight(t)
+                if self.options.d7_docking:
+                    # A (b) retry may have released the correction: this
+                    # tick's pose and control record follow (Codex D7c impl P2-3).
+                    rear = hooks.slam_rear(t)
+                    slam["control"][-1][1:4] = rear.tolist()
+            else:
+                transition("lower", t)
+        elif ms.phase == "withdraw":
+            transition("settle", t)
+        elif ms.phase == "return_home":
+            transition("home_settle", t)
+        return SimpleNamespace(stop=False, rear=rear)
+
+    def lift_and_timers(self, t: float, dt: float) -> bool:
+        """The lift target's ramp and the timed transitions (lift, lower, settle, home settle). True ends the
+        mission loop."""
+        ms, state, settings, hooks, transition = self.ms, self.state, self.settings, self.hooks, self.transition
+        desired_lift = (
+            settings["lift_target_m"]
+            if ms.phase in ["lift", "extract", "transport"]
+            else 0.0
+        )
+        ms.lift_command += float(
+            np.clip(
+                desired_lift - ms.lift_command,
+                -settings["lift_rate_mps"] * dt,
+                settings["lift_rate_mps"] * dt,
+            )
+        )
+        if ms.phase == "lift" and t - ms.phase_started > 4.5:
+            hooks.require(hooks.pallet_z() > 0.06, "Pallet was not lifted")
+            transition("extract", t)
+        if ms.phase == "lower" and t - ms.phase_started > 4.5:
+            hooks.require(
+                abs(hooks.pallet_z()) < 0.008, "Pallet did not settle onto destination floor"
+            )
+            hooks.require(
+                hooks.lift_position() < 0.012,
+                "Fork did not lower",
+            )
+            transition("withdraw", t)
+        if ms.phase == "settle" and t - ms.phase_started > 1.0:
+            if "return_home" in self.trackers:
+                transition("return_home", t)
+            else:
+                transition("complete", t)
+                return True
+        if ms.phase == "home_settle" and t - ms.phase_started > 1.0:
+            truth_rear, home = hooks.truth_rear(), self.options.home_rear
+            state["return_home_error"] = {
+                "position_m": float(
+                    np.hypot(
+                        truth_rear[0] - home.x_m,
+                        truth_rear[1] - home.y_m,
+                    )
+                ),
+                "yaw_rad": float(
+                    math.atan2(
+                        math.sin(truth_rear[2] - home.yaw_rad),
+                        math.cos(truth_rear[2] - home.yaw_rad),
+                    )
+                ),
+            }
+            transition("complete", t)
+            return True
+        return False

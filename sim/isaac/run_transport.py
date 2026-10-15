@@ -4226,7 +4226,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     ms.phase_started = 0.0
     initial_time = world.current_time
     simulation_started_wall = time.monotonic()
-    lift_command = 0.0
+    ms.lift_command = 0.0
     steering_command = np.zeros(2)
     state["transitions"] = []
     state["samples"] = []
@@ -4257,7 +4257,19 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             echo=lambda text: print(text, flush=True), record_json=record_json, snapshot=snapshot, require=require,
             control_correction=control_correction, known_pallet=known_pallet, slam_odom_base=slam_odom_base,
             slam_error=slam_error, fork_blades=lambda: read_fork_blades_m(args.forklift_urdf),
+            # M-a1 slice 2. Truth (the plan's SimTruth list): the loop's own samples, read when called.
+            insertion_measured=lambda: insertion_geometry.insertion_measures(
+                base, q, float(robot.get_joint_positions()[lift_index[0]]), ppos, pq, geometry.pallet_depth_m),
+            truth_relative_yaw=lambda: yaw_and_tilt(q)[0] - yaw_and_tilt(pq)[0],
+            pallet_z=lambda: ppos[2],
+            lift_position=lambda: robot.get_joint_positions()[lift_index[0]],
+            truth_rear=lambda: truth_rear,
+            # defined further down run()
+            dock_at_delivery_straight=lambda t_: dock_at_delivery_straight(t_), slam_rear=lambda t_: slam_rear(t_),
         ),
+        near=near,
+        options=SimpleNamespace(near_tracking_stop_at=args.near_tracking_stop_at, d7_docking=args.d7_docking,
+                                dwells=dwells, safety_stops=safety_stops, home_rear=scenario.start_rear),
     )
     transition = core.transition
 
@@ -5812,7 +5824,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         pallet_position_m=ppos,
                         pallet_quaternion_wxyz=pq,
                         lift_m=float(robot.get_joint_positions()[lift_index[0]]),
-                        lift_command_m=lift_command,
+                        lift_command_m=ms.lift_command,
                     )
             if not (tilt < 0.1 and pallet_tilt < 0.15):
                 state["tilt_abort_state"] = {
@@ -5825,7 +5837,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     "pallet_position_m": ppos,
                     "pallet_quaternion_wxyz": pq,
                     "lift_m": float(robot.get_joint_positions()[lift_index[0]]),
-                    "lift_command_m": lift_command,
+                    "lift_command_m": ms.lift_command,
                 }
             require(
                 tilt < 0.1 and pallet_tilt < 0.15, f"Excessive body tilt in {ms.phase}"
@@ -5982,11 +5994,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             if ms.phase in trackers and not releasing and not warming:
                 # Three times the path time at the tracker's own speed caps
                 # (length / cruise when there are none), plus 10 s.
-                limit = max(30.0, 3 * trackers[ms.phase].nominal_duration_s() + 10)
-                if dwells is not None and ms.phase == "approach":
-                    limit += dwells.held_s(t)  # plan D8b: standing by design is not slowness
-                if safety_stops is not None and ms.phase == "approach":
-                    limit += safety_stops.held_s(t)  # plan D8 S4a-1 ⓪: the scheduled stops
+                limit = core.tracking_limit(t)  # M-a1 slice 2
                 if t - ms.phase_started >= limit:
                     dump_tracking("timeout", last_tracking)
                 require(t - ms.phase_started < limit, f"Tracking timeout in {ms.phase}")
@@ -7525,114 +7533,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                     transition("approach", t)
                                     if near is not None and state.get("near_capture", {}).get("status") == "done":
                                         build_near_tracker(t)  # in the hold the transition began
-                    elif ms.phase == "approach":
-                        if near is not None and args.near_tracking_stop_at == "insert":
-                            # Plan D8 S4a-1: approach only -- end where the insertion would start.
-                            state["near_tracking"]["outcome"] = "stopped_at_insert"
-                            state["near_tracking"]["arrival"] = {
-                                "time_s": t,
-                                "position_error_m": tracking.position_error_m,
-                                "yaw_error_rad": tracking.yaw_error_rad,
-                            }
-                            transition("near_tracking_stopped", t)
+                    else:
+                        # M-a1 slice 2: every other arrival is the core's.
+                        arrival_ = core.arrive(t, tracking)
+                        if arrival_.rear is not None:
+                            rear = arrival_.rear
+                        if arrival_.stop:
                             break
-                        transition("insert", t)
-                    elif ms.phase == "insert":
-                        state["insertion_error"] = {
-                            "position_m": tracking.position_error_m,
-                            "yaw_rad": tracking.yaw_error_rad,
-                        }
-                        # What the forks actually reach, not the planned target.
-                        state["insertion_measured"] = (
-                            insertion_geometry.insertion_measures(
-                                base,
-                                q,
-                                float(robot.get_joint_positions()[lift_index[0]]),
-                                ppos,
-                                pq,
-                                geometry.pallet_depth_m,
-                            )
-                        )
-                        if near is not None:
-                            # Plan D8 S4a-2 ⑤: why the insertion ended; insertion_error keeps its
-                            # meaning (the follower against the path end).
-                            arrival_ = near.get("arrival") or {"reason": "path", "time_s": t}
-                            state["near_tracking"]["insert_arrival"] = {
-                                **arrival_,
-                                "last_tick": near["ticks"][-1] if near["ticks"] else None,
-                                "insertion_measured": state["insertion_measured"],
-                            }
-                        # Insertion-axis yaw against the true pallet (fork axis
-                        # along the pallet x axis either way round).
-                        relative_yaw = yaw_and_tilt(q)[0] - yaw_and_tilt(pq)[0]
-                        state["insertion_truth_yaw_rad"] = float(
-                            math.atan2(math.sin(2 * relative_yaw), math.cos(2 * relative_yaw)) / 2
-                        )
-                        if slam is not None:
-                            state["slam_error_insert_end"] = slam_error()
-                        transition("lift", t)
-                    elif ms.phase == "extract":
-                        transition("transport", t)
-                    elif ms.phase == "transport":
-                        if slam is not None and slam["docking"]["status"] == "armed":
-                            dock_at_delivery_straight(t)
-                            if args.d7_docking:
-                                # A (b) retry may have released the correction: this
-                                # tick's pose and control record follow (Codex D7c impl P2-3).
-                                rear = slam_rear(t)
-                                slam["control"][-1][1:4] = rear.tolist()
-                        else:
-                            transition("lower", t)
-                    elif ms.phase == "withdraw":
-                        transition("settle", t)
-                    elif ms.phase == "return_home":
-                        transition("home_settle", t)
-            desired_lift = (
-                settings["lift_target_m"]
-                if ms.phase in ["lift", "extract", "transport"]
-                else 0.0
-            )
-            lift_command += float(
-                np.clip(
-                    desired_lift - lift_command,
-                    -settings["lift_rate_mps"] * dt,
-                    settings["lift_rate_mps"] * dt,
-                )
-            )
-            if ms.phase == "lift" and t - ms.phase_started > 4.5:
-                require(ppos[2] > 0.06, "Pallet was not lifted")
-                transition("extract", t)
-            if ms.phase == "lower" and t - ms.phase_started > 4.5:
-                require(
-                    abs(ppos[2]) < 0.008, "Pallet did not settle onto destination floor"
-                )
-                require(
-                    robot.get_joint_positions()[lift_index[0]] < 0.012,
-                    "Fork did not lower",
-                )
-                transition("withdraw", t)
-            if ms.phase == "settle" and t - ms.phase_started > 1.0:
-                if "return_home" in trackers:
-                    transition("return_home", t)
-                else:
-                    transition("complete", t)
-                    break
-            if ms.phase == "home_settle" and t - ms.phase_started > 1.0:
-                state["return_home_error"] = {
-                    "position_m": float(
-                        np.hypot(
-                            truth_rear[0] - scenario.start_rear.x_m,
-                            truth_rear[1] - scenario.start_rear.y_m,
-                        )
-                    ),
-                    "yaw_rad": float(
-                        math.atan2(
-                            math.sin(truth_rear[2] - scenario.start_rear.yaw_rad),
-                            math.cos(truth_rear[2] - scenario.start_rear.yaw_rad),
-                        )
-                    ),
-                }
-                transition("complete", t)
+            if core.lift_and_timers(t, dt):  # M-a1 slice 2: the lift ramp and the timed transitions
                 break
             # The curvature the wheels actually hold: an emergency stop keeps it, so
             # the permission, the stop itself and the probe all use this one.
@@ -8491,7 +8399,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             )
             robot.apply_action(
                 ArticulationAction(
-                    joint_positions=np.array([lift_command]), joint_indices=lift_index
+                    joint_positions=np.array([ms.lift_command]), joint_indices=lift_index
                 )
             )
             if "chase" in extra_cameras and step % fps_divisor == 0:
@@ -8565,7 +8473,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         "curvature_inv_m": drive.curvature_inv_m,
                         "wheel_rates_rad_s": np.asarray(drive.wheel_rates_rad_s),
                         "steering_command": np.asarray(steering_command),
-                        "lift_command": lift_command,
+                        "lift_command": ms.lift_command,
                     },
                     branches=branch_probe(),
                 )

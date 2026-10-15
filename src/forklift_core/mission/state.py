@@ -15,3 +15,4 @@ __all__ = ["MissionState"]
 class MissionState:
     phase: str | None = None  # None until the runner picks the first phase
     phase_started: float = 0.0  # loop time t at which the phase began
+    lift_command: float = 0.0  # the lift joint's position target, ramped by the core (slice 2)

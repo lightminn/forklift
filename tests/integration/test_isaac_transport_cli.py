@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "sim/isaac/run_transport.py"
+CORE = ROOT / "src/forklift_core/mission/core.py"  # the mission logic moved out of the runner (M-a1)
 PROVISIONAL_URDF = ROOT / "sim/models/dls08_provisional/forklift.urdf"
 
 
@@ -459,7 +460,9 @@ def test_the_delivery_match_inputs_are_recorded_without_stopping_the_match() -> 
 def test_slam_runs_dock_on_a_scan_before_the_delivery_straight() -> None:
     """Plan v3.8: stop at the straight start, match, move the whole drop."""
     source = SCRIPT.read_text()
-    assert 'dock_at_delivery_straight(t)' in source
+    # The transport arrival moved to the mission core (M-a1 slice 2); the runner hands it the docking.
+    assert 'hooks.dock_at_delivery_straight(t)' in CORE.read_text()
+    assert 'dock_at_delivery_straight=lambda t_: dock_at_delivery_straight(t_)' in source
     assert 'ignore_self=True' in source
     # The withdraw follows every goal change (plan D7c factored it into move_withdraw).
     assert "set_withdraw(np.array([compose(tuple(frame_change), tuple(pose)) for pose in paths[\"withdraw\"].poses]))" in source
@@ -651,7 +654,7 @@ def test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival() -> 
     assert "until S4a-2" not in source
     # Decided after the scheduled safety stops and before the arrival transitions.
     tick = source.index("hold_, released_, arrive_ = near_tick(t, rear_stamp, rear, requested_speed, ms.phase, curvature,")
-    assert source.index("safety_stops.update(") < tick < source.index("elif ms.phase == \"approach\":\n")
+    assert source.index("safety_stops.update(") < tick < source.index("arrival_ = core.arrive(t, tracking)")
     block = source[tick:source.index("phase == \"observe\" and tracking.status", tick)]
     for line in ("requested_speed = 0.0", "dwell_hold = True", "safety_hold = True",
                  "tracking = replace(tracking, status=\"tracking\", speed_mps=0.0)",
@@ -660,7 +663,8 @@ def test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival() -> 
     # S4a-2: the carriage-corner insertion end becomes the insertion's arrival, standing.
     arrive = block.index("if arrive_:")
     assert arrive < block.index("tracking = replace(tracking, status=\"arrived\", speed_mps=0.0)") < block.index("elif hold_:")
-    assert "state[\"near_tracking\"][\"insert_arrival\"]" in source
+    core = CORE.read_text()  # the arrival transitions moved to the mission core (M-a1 slice 2)
+    assert "state[\"near_tracking\"][\"insert_arrival\"]" in core
     # Built in the hold the approach transition begins; fed the raw frame before D5 reads it.
     build = source.index("build_near_tracker(t)  # in the hold the transition began")
     assert source.rindex("transition(\"approach\", t)", 0, build) > build - 300
@@ -668,7 +672,8 @@ def test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival() -> 
     assert source.index("record_pocket_read(raw)\n        if raw is None:") < feed < source.index(
         "        if check is None:\n            pocket[\"frames_read\"] += 1")
     # S4a-1 ends at the approach's arrival, and the loop end lets that phase return.
-    assert "transition(\"near_tracking_stopped\", t)\n                            break" in source
+    assert "transition(\"near_tracking_stopped\", t)\n                return SimpleNamespace(stop=True, rear=rear)" in core
+    assert "if arrival_.stop:\n                            break" in source
     assert "\"repeat_target_not_reached\", \"near_tracking_stopped\"):\n            return" in source
     # Terminal stops end the run only once the stop detector sees the truck stand.
     functions = {n.name: ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
