@@ -364,15 +364,70 @@ def test_an_object_the_call_replaced_is_replaced_in_the_replay_too(tmp_path):
     replay_with = one_call(tmp_path, swap, call)
     assert replay_with(call) is False
 
-    core = {"a": [1], "b": [1]}
+    core = {"box": {"items": []}}
+    inner = core["box"]["items"]
 
-    def merge(_):
-        core["b"] = core["a"]  # two keys now hold one object
+    def swap_inner(_):
+        core["box"]["items"] = []  # inside a watched value, an equal value, another object
 
-    replay_with = one_call(tmp_path / "w", merge, lambda f: f(0), watch_dicts={"core": core})
-    rcore = {"a": [1], "b": [1]}
+    replay_with = one_call(tmp_path / "w", swap_inner, lambda f: f(0), watch_dicts={"core": core})
+    assert core["box"]["items"] is not inner
+    rcore = {"box": {"items": []}}
+    rbox, rinner = rcore["box"], rcore["box"]["items"]
     replay_with(lambda f: f(0), watch_dicts_replay={"core": rcore})
-    assert rcore["b"] is rcore["a"]
+    assert rcore["box"] is rbox and rcore["box"]["items"] is not rinner
+
+
+@pytest.mark.parametrize("change", ["merge_args", "merge_watched", "fresh_twice"])
+def test_a_change_outside_the_change_model_is_recorded_as_such_and_refused(tmp_path, change):
+    core = {"a": [1], "b": [2]}
+
+    def fn(box):
+        if change == "merge_args":
+            box["b"] = box["a"]
+        elif change == "merge_watched":
+            core["b"] = core["a"]
+        else:
+            core["a"] = core["b"] = [9]
+
+    replay_with = one_call(tmp_path, fn, lambda f: f({"a": [1], "b": [1]}), watch_dicts={"core": core})
+    with pytest.raises(ReplayMismatch, match="outside the replay's model"):
+        replay_with(lambda f: f({"a": [1], "b": [1]}), watch_dicts_replay={"core": {"a": [1], "b": [2]}})
+
+
+def test_an_unchanged_read_only_array_beside_a_changed_argument_is_left_alone(tmp_path):
+    frozen = np.zeros(2)
+    frozen.setflags(write=False)
+
+    def fill(arr, box):
+        box.append(1)
+
+    def call(f):
+        box = []
+        f(frozen, box)
+        return box
+
+    replay_with = one_call(tmp_path, fill, call)
+    assert replay_with(call) == [1]
+
+
+def test_a_failing_exception_restoration_the_code_catches_still_fails_the_replay(tmp_path):
+    def boom():
+        raise Refused("x")
+
+    replay_with = one_call(tmp_path, boom, lambda f: f())
+    path = next(tmp_path.glob("boundary_*.jsonl"))
+    text = path.read_text()
+    path.write_text(text.replace('"args":{"$tuple":["x"]}', '"args":{"$ref":9}'))
+
+    def sloppy(f):
+        try:
+            f()
+        except Exception:
+            pass
+
+    with pytest.raises(ReplayMismatch, match="restoring the recorded exception failed"):
+        replay_with(sloppy)
 
 
 def test_a_registered_value_objects_attributes_are_restored(tmp_path):

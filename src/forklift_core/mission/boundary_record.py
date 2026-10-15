@@ -80,22 +80,19 @@ class BoundaryRecorder:
             return self._encode(_hash_only(raw) if hash_only else raw)
         return self._encode(raw, hash_arrays=hash_only)
 
-    def encode_changes(self, request_after: Any, watched: dict | None, replaced_paths=(), dicts=None) -> dict | None:
-        """Format 2: a call's changes as plain JSON whose leaves are value nodes -- ``request_after`` (already
-        an encoded request) and per watched dictionary and key one of ``{"value": node}``, ``{"append":
-        node}`` or ``{"deleted": true}``."""
+    def encode_changes(self, request_after: Any, watched: dict | None, replaced_paths=(), problem=None) -> dict | None:
+        """Format 2: a call's changes as plain JSON whose leaves are value nodes -- ``request_after`` (an encoded
+        request) with the argument paths that now hold another (fresh) object, and per watched dictionary and
+        key one of ``{"value": node, "replaced_paths": [...]}``, ``{"append": node}`` or ``{"deleted": true}``.
+        ``unsupported`` names a change outside the replay's change model (``check_change``); a replay refuses
+        that call."""
         out: dict = {}
+        problems = [problem] if problem else []
         if request_after is not None:
             out["request_after"] = request_after
             if replaced_paths:
-                out["replaced_paths"] = [list(p) for p in replaced_paths]
+                out["replaced_paths"] = [list(q) for q in replaced_paths]
         if watched:
-            # Which watched key holds which object now: a replacement by another key's object is an alias.
-            holders = {}
-            for name, d in (dicts or {}).items():
-                for key, value in (d or {}).items():
-                    if _mutable(value):
-                        holders.setdefault(id(value), []).append([name, key])
             enc: dict = {}
             for name, diff in watched.items():
                 enc[name] = {}
@@ -105,15 +102,15 @@ class BoundaryRecorder:
                     elif isinstance(change, dict) and set(change) == {"$append"}:
                         enc[name][key] = {"append": self._encode(change["$append"])}
                     else:
-                        value = change["$value"]
-                        node = {"value": self._encode(value)}
-                        if change.get("$replaced"):
-                            node["replaced"] = True
-                            others = [h for h in holders.get(id(value), []) if h != [name, key]]
-                            if others:
-                                node["alias_of"] = others[0]
+                        node = {"value": self._encode(change["$value"])}
+                        if change.get("$replaced_paths"):
+                            node["replaced_paths"] = [list(q) for q in change["$replaced_paths"]]
+                        if change.get("$problem"):
+                            problems.append(f"{name}.{key}: {change['$problem']}")
                         enc[name][key] = node
             out["watched"] = enc
+        if problems:
+            out["unsupported"] = "; ".join(problems)
         return out or None
 
     def call(self, port: str, method: str, *, request: Any, response: Any = None, exception: BaseException | None = None,
@@ -319,7 +316,7 @@ class RecordingGate:
             return fn(*args, **kwargs)
         raw = {"args": list(args), "kwargs": dict(kwargs)}
         before = self.recorder.encode_request(raw, hash_only)
-        paths_before = _paths(raw) if self.recorder.value_format == 2 else None
+        paths_before = _paths(raw) if self.recorder.value_format == 2 else None  # objects kept alive
         marks = watch.mark() if watch is not None else None
         self.depth += 1
         try:
@@ -342,13 +339,16 @@ class RecordingGate:
         changed_request = json.dumps(after, sort_keys=True) != json.dumps(before, sort_keys=True)
         watched = watch.changes(marks) if watch is not None else None
         if self.recorder.value_format == 2:
-            # Objects inside the arguments that the call replaced (same path, another object).
+            # The arguments' objects before/after: replaced paths, or a change outside the replay's model.
             paths_after = _paths(raw)
-            replaced = sorted(p for p, i in paths_after.items() if p in paths_before and paths_before[p] != i)
-            if replaced:
+            for top in ((), ("'args'",), ("'kwargs'",)):  # the call's own argument containers
+                paths_before.pop(top, None)
+                paths_after.pop(top, None)
+            replaced, problem = check_change(paths_before, paths_after)
+            if replaced or problem:
                 changed_request = True
             return self.recorder.encode_changes(after if changed_request else None, watched, replaced,
-                                                watch.dicts if watch is not None else None)
+                                                f"arguments: {problem}" if problem else None)
         out = {}
         if changed_request:
             out["request_after"] = after
@@ -364,12 +364,13 @@ def _mutable(value: Any) -> bool:
 
 
 def _paths(value: Any, path: tuple = (), out: dict | None = None, depth: int = 0) -> dict:
-    """path -> id of every mutable object reachable from ``value`` (dict keys, list indices, attribute names)."""
+    """path -> every mutable object reachable from ``value`` (dict keys by repr, list and tuple indices,
+    ``.attribute``); the objects are kept so their ids stay valid while compared."""
     out = {} if out is None else out
     if depth > 50:
         return out
     if _mutable(value):
-        out[path] = id(value)
+        out[path] = value
     if isinstance(value, dict):
         for k, v in value.items():
             _paths(v, path + (repr(k),), out, depth + 1)
@@ -384,6 +385,31 @@ def _paths(value: Any, path: tuple = (), out: dict | None = None, depth: int = 0
             if not k.startswith("_"):
                 _paths(v, path + ("." + k,), out, depth + 1)
     return out
+
+
+def check_change(before: dict, after: dict, foreign=()) -> tuple[list, str | None]:
+    """Whether a call's effect on one structure (path -> object maps from :func:`_paths`, before and after)
+    fits the replay's change model: an object that was there stays at its path (its content may change), or
+    the path now holds a fresh object; a fresh object (new path or replaced one) holds no object that existed
+    before (here or in ``foreign``, the other structures' objects) and is reached by one path only. Returns
+    (the minimal replaced paths, None) or ([], why not)."""
+    before_ids = {id(o) for o in before.values()} | {id(o) for o in foreign}
+    replaced = sorted((q for q, o in after.items() if q in before and before[q] is not o),
+                      key=lambda q: (len(q), repr(q)))
+    minimal = [q for q in replaced if not any(q[:len(r)] == r for r in replaced if len(r) < len(q))]
+    seen: dict[int, tuple] = {}
+    for q, o in after.items():
+        if q in before and before[q] is o:
+            continue  # an object that was there, at its path (aliases that existed before stay as they were)
+        fresh_here = any(q[:len(r)] == r for r in minimal) or q not in before
+        if id(o) in seen:
+            return [], f"{q} and {seen[id(o)]} now hold one new object"
+        seen[id(o)] = q
+        if not fresh_here:
+            return [], f"{q} holds another object"
+        if id(o) in before_ids:
+            return [], f"{q} now holds an object that existed before the call"
+    return minimal, None
 
 
 def _identities(value: Any, out: set, depth: int = 0) -> set:
@@ -451,10 +477,10 @@ class DictWatch:
             if k in self.skip or (only is not None and k not in only):
                 continue
             if k in self.append_only and isinstance(v, list):
-                snap[k] = ("$len", len(v), id(v)) if ident else ("$len", len(v))
+                snap[k] = ("$len", len(v), v) if ident else ("$len", len(v))
             else:
                 text = json.dumps(self.recorder.encode(v), sort_keys=True)
-                snap[k] = (text, id(v) if ident and _mutable(v) else None) if ident else text
+                snap[k] = (text, _paths(v)) if ident else text
         return snap
 
     def mark(self) -> dict:
@@ -462,31 +488,56 @@ class DictWatch:
 
     def changes(self, marks: dict) -> dict:
         out = {}
+        fresh: dict[int, list] = {}
         for name, d in self.dicts.items():
             if d is None or name not in marks:
                 continue
             before, now = marks[name], self._snapshot(d, name)
             diff = {}
             for k in set(before) | set(now):
-                if before.get(k) == now.get(k):
+                if self.recorder.value_format == 2 and k in before and k in now:
+                    b_, n_ = before[k], now[k]
+                    if b_[0] == "$len" and n_[0] == "$len":
+                        if b_[2] is n_[2] and b_[1] == n_[1]:
+                            continue
+                    elif b_[0] != "$len" and n_[0] != "$len":
+                        if b_[0] == n_[0] and b_[1].keys() == n_[1].keys() and all(
+                                b_[1][q] is n_[1][q] for q in b_[1]):
+                            continue
+                elif before.get(k) == now.get(k):
                     continue
                 if k not in d:
                     diff[k] = {"$deleted": True}
                 elif (isinstance(now.get(k), tuple) and now[k][0] == "$len" and isinstance(before.get(k), tuple)
-                      and before[k][0] == "$len" and before[k][2:] == now[k][2:] and before[k][1] <= now[k][1]):
+                      and before[k][0] == "$len" and len(now[k]) == 3 and before[k][2] is now[k][2]
+                      and before[k][1] <= now[k][1]):
                     diff[k] = {"$append": d[k][before[k][1]:]}
                 elif isinstance(now.get(k), tuple) and now[k][0] == "$len" and len(now[k]) == 2:  # format 1
                     start = before[k][1] if isinstance(before.get(k), tuple) else 0
                     diff[k] = {"$append": d[k][start:]}
                 elif self.recorder.value_format == 2:
-                    # The value, and whether the key now holds another object than before.
-                    was, is_ = before.get(k), now.get(k)
-                    replaced = was is None or was[-1] != is_[-1] or (was[0] == "$len") != (is_[0] == "$len")
-                    diff[k] = {"$value": d[k], "$replaced": bool(replaced and _mutable(d[k]))}
+                    # The value, the paths now holding fresh objects, or why the change is outside the model.
+                    was = before.get(k)
+                    old_paths = {} if was is None or was[0] == "$len" else was[1]
+                    if was is not None and was[0] == "$len":
+                        old_paths = {(): was[2]}
+                    new_paths = _paths(d[k])
+                    foreign = [o for kk, vv in before.items() if kk != k and vv[0] != "$len" for o in vv[1].values()]
+                    replaced, problem = check_change(old_paths, new_paths, foreign)
+                    diff[k] = {"$value": d[k], "$replaced_paths": replaced, "$problem": problem}
+                    for q, o in new_paths.items():  # the fresh objects, to find one shared by two keys
+                        if not (q in old_paths and old_paths[q] is o):
+                            fresh.setdefault(id(o), []).append(f"{name}.{k}")
                 else:
                     diff[k] = d[k]
             if diff:
                 out[name] = diff
+        shared = sorted({", ".join(sorted(set(h))) for h in fresh.values() if len(set(h)) > 1})
+        if shared:  # one new object under two watched keys: outside the replay's change model
+            for name, diff in out.items():
+                for k, change in diff.items():
+                    if isinstance(change, dict) and "$value" in change and any(f"{name}.{k}" in g for g in shared):
+                        change["$problem"] = change.get("$problem") or f"shares a new object ({'; '.join(shared)})"
         return out
 
 

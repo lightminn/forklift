@@ -115,7 +115,8 @@ def apply_inplace(actual: Any, after: Any, where: str = "argument", *, replaced=
     if isinstance(actual, np.ndarray) and isinstance(after, np.ndarray):
         if actual.shape != after.shape or actual.dtype != after.dtype:
             raise Unsupported(f"{where}: an array changed shape or dtype in place")
-        actual[...] = after
+        if not np.array_equal(actual, after, equal_nan=actual.dtype.kind in "fc"):
+            actual[...] = after  # only a changed array is written (a read-only one may stand unchanged)
         return actual
     if isinstance(actual, tuple) and isinstance(after, tuple) and len(actual) == len(after):
         for i, (a, b) in enumerate(zip(actual, after)):
@@ -278,6 +279,8 @@ class ReplayGate:
         changes = entry.get("changes") or {}
         if changes.get("response_aliases_request"):
             raise session.fail(f"{where}: the response handed back an argument's own object (not replayable)")
+        if changes.get("unsupported"):
+            raise session.fail(f"{where}: a change outside the replay's model was recorded: {changes['unsupported']}")
         try:
             if "request_after" in changes:
                 after = session.decode(changes["request_after"])
@@ -285,7 +288,6 @@ class ReplayGate:
                 replaced = frozenset(tuple(p) for p in changes.get("replaced_paths") or ())
                 apply_inplace(actual, after, f"{where} arguments", replaced=replaced,
                               value_types=frozenset(session.value_types))
-            aliases = []
             for name, diff in (changes.get("watched") or {}).items():
                 target = None if watch is None else watch.dicts.get(name)
                 if target is None:
@@ -295,21 +297,25 @@ class ReplayGate:
                         target.pop(key, None)
                     elif "append" in change:
                         target.setdefault(key, []).extend(session.decode(change["append"]))
-                    elif "alias_of" in change:
-                        aliases.append((target, key, change["alias_of"]))
-                    elif change.get("replaced") or key not in target:
+                    elif key not in target:
                         target[key] = session.decode(change["value"])
                     else:
+                        paths = frozenset(tuple(q) for q in change.get("replaced_paths") or ())
                         target[key] = apply_inplace(target[key], session.decode(change["value"]),
-                                                    f"{where} {name}.{key}", value_types=frozenset(session.value_types))
-            for target, key, (name2, key2) in aliases:  # after every other change: the object they now share
-                target[key] = watch.dicts[name2][key2]
+                                                    f"{where} {name}.{key}", replaced=paths,
+                                                    value_types=frozenset(session.value_types))
         except ReplayMismatch as exc:
             raise session.fail(str(exc)) from None
         except Exception as exc:  # restoring the record failed: never a service exception the caller may catch
             raise session.fail(f"{where}: restoring the recorded changes failed: {type(exc).__name__}: {exc}") from None
         if "exception" in entry:
-            raise self._exception(entry["exception"])
+            try:
+                exc = self._exception(entry["exception"])
+            except ReplayMismatch:
+                raise
+            except Exception as err:
+                raise session.fail(f"{where}: restoring the recorded exception failed: {type(err).__name__}: {err}") from None
+            raise exc
         try:
             return session.decode(entry["response"])
         except Exception as exc:
