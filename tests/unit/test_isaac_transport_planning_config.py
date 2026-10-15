@@ -231,9 +231,8 @@ def test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules():
     # repositioning goal cannot correct sideways, so the tighter tolerance only
     # deadlocks it (docs/validation/2026-09-23-return-to-start-runs.md,
     # 2026-09-26-factory-hall-and-isaac-slam.md).
-    tree = ast.parse(SCRIPT.read_text())
-    rules = []
-    for node in ast.walk(tree):
+    rules = []  # (the mission plan after a detection moved to the mission core, M-a1 slice 4b-iv)
+    for node in [*ast.walk(ast.parse(SCRIPT.read_text())), *ast.walk(ast.parse(CORE.read_text()))]:
         if not isinstance(node, ast.DictComp):
             continue
         source = ast.unparse(node.generators[0].iter)
@@ -612,13 +611,15 @@ def test_the_carriage_mount_is_guarded_and_checked():
 
 def test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount():
     source = SCRIPT.read_text()
-    # Both detection paths go through the tested helper with the run's setting.
-    assert source.count("adapter.detector_input(") == 2
-    assert "adapter.detector_input(\n                            scene_input, args.depth_quantize_mm\n" in source
+    # Both detection paths go through the tested helper with the run's setting; the observe arrival's
+    # moved to the mission core (M-a1 slice 4b-i), the repeat-capture diagnostic stays in the runner.
+    core = CORE.read_text()
+    assert source.count("adapter.detector_input(") + core.count("adapter.detector_input(") == 2
+    assert "adapter.detector_input(\n            scene_input, options.depth_quantize_mm\n" in core
     assert "repeat_input, args.depth_quantize_mm" in source
-    assert "detection = detect_pockets(detector_input, prior, params)" in source
-    assert 'attempt["base_from_optical"] = {' in source
-    assert 'attempt["depth_quantize_mm"] = args.depth_quantize_mm' in source
+    assert "detection = detect_pockets(detector_input, prior, params)" in core
+    assert 'attempt["base_from_optical"] = {' in core
+    assert 'attempt["depth_quantize_mm"] = options.depth_quantize_mm' in core
     tree = ast.parse(source)
     defaults = {
         ast.unparse(call.args[0]): next(
@@ -1210,7 +1211,7 @@ def test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judge
         moved.index('trackers["observe"] = RearAxlePathTracker(\n            observe_plan.poses') :
     ]
     assert "cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD," in candidate[: candidate.index("phase_started = t")]
-    assert 'near_leg.curvatures_inv_m,\n                                    trackers["observe"].config,' in source
+    assert 'near_leg.curvatures_inv_m,\n                trackers["observe"].config,' in moved  # (M-a1 slice 4b-v)
     # The 2026-09-21 profile had neither cusp tolerances nor the hold.
     profile = source[source.index("    def apply_tracker_profile() -> None:") :]
     assert "cusp_heading_pending_rad=None," in profile[: profile.index("    def record_tracker_configs()")]
@@ -1240,10 +1241,10 @@ def test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own():
     assert '"budget_left": OBSERVE_REPLANS_PER_LEG' in moved[record:]
     # The near leg resets the budget where it is installed, not inside realign_install (which
     # returns at once outside a realignment), and only there.
-    near = source.index("if near_leg is not None:")
-    reset = source.index('state["observe_replan_leg"] = {\n', near)
-    assert reset < source.index("paths[\"observe\"] = near_leg", near)
-    assert source.count('state["observe_replan_leg"] = {') == 2
+    near = moved.index("if near_leg is not None:")  # the near leg install moved to the core (M-a1 slice 4b-v)
+    reset = moved.index('state["observe_replan_leg"] = {\n', near)
+    assert reset < moved.index("paths[\"observe\"] = near_leg", near)
+    assert source.count('state["observe_replan_leg"] = {') + moved.count('state["observe_replan_leg"] = {') == 2
 
 
 def test_the_steering_probe_runs_after_the_spawn_checks_and_ends_the_run():

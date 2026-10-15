@@ -4250,6 +4250,129 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
 
     # M-a1 slice 1: the phase transition and the known-pallet bookkeeping it carries moved to the
     # mission core; what has not moved yet is reached through hooks.
+    def save_capture(attempt_number, scene_input) -> None:
+        """M-a1 slice 4b-i: the capture's diagnostic image and depth dumps, the runner's statements unchanged
+        (a Sink the mission core calls where they stood)."""
+        # Diagnostic dump for offline root-cause analysis; not part
+        # of the perception contract itself.
+        Image.fromarray(scene_input.rgb).save(
+            args.output / f"perception_capture_{attempt_number}_rgb.png"
+        )
+        np.save(
+            args.output
+            / f"perception_capture_{attempt_number}_depth_m.npy",
+            scene_input.depth_m,
+        )
+        finite_depth = scene_input.depth_m[
+            np.isfinite(scene_input.depth_m)
+        ]
+        if finite_depth.size:
+            depth_range = (
+                float(finite_depth.min()),
+                float(finite_depth.max()),
+            )
+            normalized = np.clip(
+                (scene_input.depth_m - depth_range[0])
+                / max(depth_range[1] - depth_range[0], 1e-6),
+                0,
+                1,
+            )
+            normalized = np.nan_to_num(normalized, nan=0.0)
+            Image.fromarray((normalized * 255).astype(np.uint8)).save(
+                args.output
+                / f"perception_capture_{attempt_number}_depth_vis.png"
+            )
+
+    def record_capture_evaluation(target_pickup, attempt, attempt_number, capture_diagnostics, step, t) -> None:
+        """M-a1 slice 4b-iv: the accepted capture's evaluation records (truth), the runner's statements unchanged,
+        called by the mission core where they stood -- a plain call, so each robot/pallet read is recorded as
+        before (Codex 4b design)."""
+        # Ground-truth pickup is for error evaluation here, never
+        # the planning target; the collision map still uses it.
+        state["perception"]["perception_error"] = {
+            "position_m": float(
+                np.hypot(
+                    target_pickup.x_m - scenario.pickup.x_m,
+                    target_pickup.y_m - scenario.pickup.y_m,
+                )
+            ),
+            "yaw_rad": float(
+                math.atan2(
+                    math.sin(
+                        target_pickup.yaw_rad
+                        - scenario.pickup.yaw_rad
+                    ),
+                    math.cos(
+                        target_pickup.yaw_rad
+                        - scenario.pickup.yaw_rad
+                    ),
+                )
+            ),
+        }
+        # Against the pallet as it stands, read the way the
+        # runner reads it; spawn checks XY and z, not yaw.
+        pallet_position, pallet_orientation = (
+            pallet.get_world_pose()
+        )
+        pallet_position = np.asarray(pallet_position, dtype=float)
+        pallet_orientation = np.asarray(
+            pallet_orientation, dtype=float
+        )
+        state["perception"]["perception_error_actual"] = (
+            G2.site_error(
+                (
+                    target_pickup.x_m,
+                    target_pickup.y_m,
+                    target_pickup.yaw_rad,
+                ),
+                (
+                    pallet_position[0],
+                    pallet_position[1],
+                    yaw_and_tilt(pallet_orientation)[0],
+                ),
+            )
+        )
+        state["handoff"] = {
+            "attempt_number": attempt_number,
+            "candidate_index": attempt["candidate_index"],
+            "depth_sha256": attempt["depth_sha256"],
+            "loop_step": step,
+            "accepted_pose": [
+                np.asarray(v, dtype=float).tolist()
+                for v in capture_diagnostics.accepted_pose
+            ],
+            "linear_velocity_mps": np.asarray(
+                robot.get_linear_velocity(), dtype=float
+            ).tolist(),
+            "angular_velocity_radps": np.asarray(
+                robot.get_angular_velocity(), dtype=float
+            ).tolist(),
+            "steering_rad": np.asarray(
+                robot.get_joint_positions()[steers], dtype=float
+            ).tolist(),
+            "pallet_position_m": pallet_position.tolist(),
+            "pallet_orientation_wxyz": pallet_orientation.tolist(),
+            "simulation_time_s": world.current_time - initial_time,
+            "t_before_capture_s": t,
+        }
+
+    def set_inset_estimate(observation_, capture_pose_, site_, scene_input_, attempt_number_) -> None:
+        # The video inset's estimate (a Sink the core reaches through a hook); write_video_frame reads it.
+        nonlocal inset_estimate
+        if args.camera_inset or args.robot_camera:
+            inset_estimate = inset.InsetEstimate(
+                observation=observation_,
+                capture_pose=capture_pose_,
+                pallet_site=site_,
+                intrinsics=scene_input_.intrinsics,
+                base_from_optical=scene_input_.base_from_optical,
+                attempt_number=attempt_number_,
+            )
+
+    def set_inset_status(status: str) -> None:
+        nonlocal inset_status  # the video overlay's first line (a Sink)
+        inset_status = status
+
     def set_inset(status: str, detail: str) -> None:
         # The video overlay's two lines, read by write_video_frame (a Sink the core reaches through a hook).
         nonlocal inset_status, inset_detail
@@ -4316,6 +4439,21 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             near_tick=lambda *a: near_tick(*a),  # M-a1 slice 4a-iv
             # M-a1 slice 4b: the video overlay's text (a Sink), the tracker config record.
             set_inset=set_inset, record_tracker_configs=lambda: record_tracker_configs(),
+            # M-a1 slice 4b-iv: the evaluation records, the planning target (truth under oracle), Sinks.
+            record_capture_evaluation=record_capture_evaluation, set_inset_estimate=set_inset_estimate,
+            planning_target=lambda target_: G2.planning_target(args.planning_target, target_, scenario.pickup),
+            export_scene=lambda: stage.GetRootLayer().Export(str(args.output / "scene.usda")),
+            # M-a1 slice 4b-v: the near capture's straight, its acceptance and what it installs.
+            set_inset_status=set_inset_status,
+            straight_from_pose=lambda *a, **k: straight_from_pose(*a, **k),
+            bicycle_rollout=lambda *a, **k: bicycle_rollout(*a, **k),
+            near_capture_redraw=lambda *a: near_capture_redraw(*a),
+            start_near_realign=lambda *a: start_near_realign(*a),
+            build_pocket_check=lambda *a: build_pocket_check(*a), build_near_tracker=lambda *a: build_near_tracker(*a),
+            # M-a1 slice 4b-i: the capture port (recorded when recording; built further down run()), the detector
+            # port and the capture's dumps.
+            perception_capture=lambda: perception_capture, detect_pockets=lambda *a: detect_pockets(*a),
+            save_capture=save_capture,
         ),
         near=near,
         options=SimpleNamespace(near_tracking_stop_at=args.near_tracking_stop_at, d7_docking=args.d7_docking,
@@ -4334,7 +4472,18 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 cusp_heading_hold_rad=CUSP_HEADING_HOLD_RAD,
                                 observe_replans_per_leg=OBSERVE_REPLANS_PER_LEG, dwell_d_end_m=dwell_d_end_m,
                                 observe_arrival_m=OBSERVE_ARRIVAL_M, observe_arrival_yaw_rad=OBSERVE_ARRIVAL_YAW_RAD,
-                                speeds=speeds, repeat_captures=args.repeat_captures),
+                                speeds=speeds, repeat_captures=args.repeat_captures,
+                                repeat_at_attempt=args.repeat_at_attempt, extra_views=args.extra_views,
+                                near_inject=args.near_inject, near_inject_lateral_m=args.near_inject_lateral_m,
+                                near_inject_yaw_rad=args.near_inject_yaw_rad, initial_time=initial_time,
+                                adapter=adapter if args.use_perception else None, near_tracking=near_tracking,
+                                near_capture_box_yaw_rad=args.near_capture_box_yaw_rad,
+                                approach_straight_speed_mps=args.approach_straight_speed_mps,
+                                near_capture_redraw=args.near_capture_redraw, G2=G2, yaw_and_tilt=yaw_and_tilt,
+                                perception_max_attempts=args.perception_max_attempts,
+                                rear_axle_offset_m=args.rear_axle_offset_m,
+                                pallet_prior_loaded=args.pallet_prior_loaded,
+                                depth_quantize_mm=args.depth_quantize_mm),
     )
     transition = core.transition
 
@@ -6076,171 +6225,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 dwell_hold, dwell_standing, safety_hold = command_.dwell_hold, command_.dwell_standing, command_.safety_hold
                 if tracking.status == "arrived":
                     if args.use_perception and ms.phase == "observe":
-                        attempt_number = len(state["observation_attempts"]) + 1
-                        attempt = {
-                            "candidate_index": ms.next_candidate_index - 1,
-                            "waypoint": list(state["observation_waypoint_selected"]),
-                            "arrived_pose": rear.tolist(),
-                            "pocket_observation": None,
-                            "frame_diagnostics": None,
-                            "detection_diagnostics": None,
-                            "capture_attempts": None,
-                            # Main-loop step and the t the next phase starts from:
-                            # together they fix the remaining time budget.
-                            "loop_step": step,
-                            "t_before_capture_s": t,
-                        }
-                        state["observation_attempts"].append(attempt)
-                        try:
-                            scene_input, frame_diagnostics, capture_attempts = (
-                                perception_capture.capture(
-                                    max_attempts=args.perception_max_attempts,
-                                )
-                            )
-                        except adapter.CaptureFailure as exc:
-                            attempt["capture_failure"] = exc.reason
-                            attempt["capture_diagnostics"] = asdict(exc.diagnostics)
-                            attempt["capture_attempts"] = exc.diagnostics.attempts
-                            require(False, f"perception_capture_failed:{exc.reason}")
-                        attempt["depth_sha256"] = G2.depth_sha256(scene_input.depth_m)
-                        pocket["capture"] = scene_input
-                        # Diagnostic dump for offline root-cause analysis; not part
-                        # of the perception contract itself.
-                        Image.fromarray(scene_input.rgb).save(
-                            args.output / f"perception_capture_{attempt_number}_rgb.png"
-                        )
-                        np.save(
-                            args.output
-                            / f"perception_capture_{attempt_number}_depth_m.npy",
-                            scene_input.depth_m,
-                        )
-                        finite_depth = scene_input.depth_m[
-                            np.isfinite(scene_input.depth_m)
-                        ]
-                        if finite_depth.size:
-                            depth_range = (
-                                float(finite_depth.min()),
-                                float(finite_depth.max()),
-                            )
-                            normalized = np.clip(
-                                (scene_input.depth_m - depth_range[0])
-                                / max(depth_range[1] - depth_range[0], 1e-6),
-                                0,
-                                1,
-                            )
-                            normalized = np.nan_to_num(normalized, nan=0.0)
-                            Image.fromarray((normalized * 255).astype(np.uint8)).save(
-                                args.output
-                                / f"perception_capture_{attempt_number}_depth_vis.png"
-                            )
-                        # Use the accepted end pose as the stationary acquisition
-                        # representative; no timestamp interpolation is implied.
-                        capture_diagnostics = perception_capture.state.diagnostics
-                        attempt["capture_diagnostics"] = asdict(capture_diagnostics)
-                        attempt["accepted_pose"] = [
-                            np.asarray(v, dtype=float).tolist()
-                            for v in capture_diagnostics.accepted_pose
-                        ]
-                        base, q = map(np.asarray, capture_diagnostics.accepted_pose)
-                        yaw, _ = yaw_and_tilt(q)
-                        forward = np.array([math.cos(yaw), math.sin(yaw)])
-                        rear = np.array(
-                            [
-                                base[0] - abs(args.rear_axle_offset_m) * forward[0],
-                                base[1] - abs(args.rear_axle_offset_m) * forward[1],
-                                yaw,
-                            ]
-                        )
-                        if slam is not None:
-                            now_s = world.current_time - initial_time
-                            near_pending = (
-                                state.get("near_capture", {}).get("status") == "pending"
-                            )
-                            if slam["tracker"].mode == "holding" and not near_pending:
-                                # An observe leg ends held (below). Anything but the
-                                # near capture is followed by more driving, so let
-                                # SLAM back in now, while the truck stands still
-                                # for the capture (plan v3.6).
-                                jump_m, jump_rad = slam["tracker"].release(
-                                    odom_from_base=slam_odom_base()
-                                )
-                                slam["holds"].append(
-                                    {
-                                        "phase": ms.phase,
-                                        "time_s": now_s,
-                                        "event": "release_at_capture",
-                                        "jump_m": jump_m,
-                                        "jump_rad": jump_rad,
-                                    }
-                                )
-                            # The accepted ground-truth pose only validated the
-                            # capture; control takes the estimate at this instant.
-                            truth_rear_capture = [float(v) for v in rear]
-                            rear = slam_rear(now_s)
-                            rear_stamp = now_s
-                            yaw = float(rear[2])
-                            forward = np.array([math.cos(yaw), math.sin(yaw)])
-                            base = np.array(
-                                [
-                                    rear[0] + abs(args.rear_axle_offset_m) * forward[0],
-                                    rear[1] + abs(args.rear_axle_offset_m) * forward[1],
-                                    float(base[2]),
-                                ]
-                            )
-                            attempt["control_pose_source"] = "slam_estimate"
-                            attempt["slam_error"] = slam_error()
-                            # Plan D8 S4c-2 (x) v3: the control sample of this instant (the
-                            # control record has none -- the capture ends between loop ticks).
-                            attempt["capture_control"] = {
-                                "time_s": now_s,
-                                "control_rear": [float(v) for v in rear],
-                                "truth_rear": truth_rear_capture,
-                            }
-                        attempt.update(
-                            {
-                                "frame_diagnostics": asdict(frame_diagnostics),
-                                "capture_attempts": capture_attempts,
-                            }
-                        )
-                        prior = args.pallet_prior_loaded
-                        params = DetectorParams.derived_for(prior)
-                        state["detector_params"] = asdict(params)
-                        # B1c: the detector sees millimetre depth when asked; the
-                        # saved depth above stays raw (G3 applies the same rounding).
-                        detector_input = adapter.detector_input(
-                            scene_input, args.depth_quantize_mm
-                        )
-                        attempt["base_from_optical"] = {
-                            "translation_m": np.asarray(
-                                scene_input.base_from_optical.translation_m
-                            ).tolist(),
-                            "rotation": np.asarray(
-                                scene_input.base_from_optical.rotation
-                            ).tolist(),
-                        }
-                        attempt["depth_quantize_mm"] = args.depth_quantize_mm
-                        detection = detect_pockets(detector_input, prior, params)
-                        observation = detection.observation
-                        if near is not None and near.get("retry_stand"):
-                            # Plan D8 S4c-2 / S4c-3: the re-observation must see the pallet; no
-                            # candidate moves on old estimates.
-                            near["retry_stand"] = False
-                            stand_key_ = near.get("stand_record", "retry")
-                            state["near_tracking"][stand_key_].update(
-                                capture_attempt=attempt_number, capture_status=observation.status)
-                            if observation.status != "valid":
-                                reason_ = ("near_field_retry_no_detection" if stand_key_ == "retry"
-                                           else "near_capture_realign_no_detection")
-                                state["near_tracking"]["outcome"] = reason_
-                                require(False, reason_)
-                        attempt.update(
-                            {
-                                "pocket_observation": asdict(observation),
-                                "frame_diagnostics": asdict(frame_diagnostics),
-                                "detection_diagnostics": asdict(detection.diagnostics),
-                                "capture_attempts": capture_attempts,
-                            }
-                        )
+                        # M-a1 slice 4b-i: the capture and the detection are the core's (the capture itself a port).
+                        captured_ = core.capture_and_detect(t, rear, step)
+                        attempt, attempt_number, scene_input = captured_.attempt, captured_.attempt_number, captured_.scene_input
+                        frame_diagnostics, capture_attempts = captured_.frame_diagnostics, captured_.capture_attempts
+                        capture_diagnostics, base, q, yaw = captured_.capture_diagnostics, captured_.base, captured_.q, captured_.yaw
+                        forward, rear = captured_.forward, captured_.rear
+                        if captured_.rear_stamp is not None:
+                            rear_stamp = captured_.rear_stamp
+                        prior, params, detection, observation = captured_.prior, captured_.params, captured_.detection, captured_.observation
                         if (
                             args.repeat_captures
                             and (
@@ -6363,500 +6356,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             if core.observe_failed(t, rear, attempt, attempt_number, observation):
                                 break
                         else:
-                            if args.repeat_captures and args.repeat_at_attempt is not None:
-                                # G2r took another path to a valid detection
-                                # before the requested attempt: no batch, no plan.
-                                state["repeat_capture"] = {
-                                    "status": "repeat_target_not_reached",
-                                    "attempts_made": attempt_number,
-                                    "reason": "valid_detection_before_target",
-                                }
-                                transition("repeat_target_not_reached", t)
+                            # M-a1 slice 4b-iv: a valid observation's estimate, records, plan and followers are the core's.
+                            succeeded_ = core.observe_succeeded(t, rear, base, yaw, attempt, attempt_number, observation, scene_input,
+                                                                capture_diagnostics, step)
+                            if succeeded_.stop:
                                 break
-                            if args.extra_views:
-                                attempt["acceptance_simulation_time_s"] = (
-                                    world.current_time - initial_time
-                                )
-                            state["perception"] = attempt.copy()
-                            # Plan D8 S4c-1: a capture before the first tracker is biased once --
-                            # correction: its target only; mismatch: its observation (so its target
-                            # and the tracker's start observation too).
-                            inject_ = (near is not None and args.near_inject is not None
-                                       and not near.get("injection_closed"))
-                            raw_observation = observation
-                            if inject_ and args.near_inject == "mismatch":
-                                observation = near_tracking.biased_observation(
-                                    observation, geometry.pallet_depth_m,
-                                    args.near_inject_lateral_m, args.near_inject_yaw_rad)
-                            base_xy = adapter.estimate_pallet_center_m(
-                                observation, geometry.pallet_depth_m
-                            )
-                            target_pickup = adapter.estimate_world_pallet_site(
-                                base_xy,
-                                observation.insertion_yaw_rad,
-                                (base[0], base[1]),
-                                yaw,
-                            )
-                            if inject_:
-                                raw_target = adapter.estimate_world_pallet_site(
-                                    adapter.estimate_pallet_center_m(raw_observation, geometry.pallet_depth_m),
-                                    raw_observation.insertion_yaw_rad, (base[0], base[1]), yaw)
-                                if args.near_inject == "correction":
-                                    target_pickup = near_tracking.biased_site(
-                                        target_pickup, args.near_inject_lateral_m, args.near_inject_yaw_rad)
-                                state["near_tracking"]["injection"]["captures"].append({
-                                    "attempt": attempt_number,
-                                    "phase": "near" if state.get("near_capture", {}).get("status") == "pending" else "far",
-                                    "time_s": t,
-                                    "capture_base": [float(base[0]), float(base[1]), float(yaw)],
-                                    "raw_target": [raw_target.x_m, raw_target.y_m, raw_target.yaw_rad],
-                                    "target": [target_pickup.x_m, target_pickup.y_m, target_pickup.yaw_rad],
-                                    "raw_observation": asdict(raw_observation),
-                                    "observation": asdict(observation),
-                                })
-                            stand_key_ = next(
-                                (k_ for k_ in ("retry", "realign")
-                                 if near is not None
-                                 and (state["near_tracking"].get(k_) or {}).get("capture_attempt") == attempt_number),
-                                None)
-                            retry_capture_ = stand_key_ is not None
-                            if retry_capture_:
-                                # Plan D8 S4c-2 / S4c-3: the re-observation as placed and its target.
-                                state["near_tracking"][stand_key_].update(
-                                    capture_base=[float(base[0]), float(base[1]), float(yaw)],
-                                    observation=asdict(observation),
-                                    target=[target_pickup.x_m, target_pickup.y_m, target_pickup.yaw_rad])
-                            if near is not None and state.get("near_capture", {}).get("status") == "pending":
-                                # Plan D8 S4a ①: the near capture's observation, the control
-                                # base it was placed with (this map estimate) and its time.
-                                near["start"] = {
-                                    "observation": observation,
-                                    "pose": (float(base[0]), float(base[1]), float(yaw)),
-                                    "aligned_s": float(attempt["t_before_capture_s"]),
-                                    # The capture's own acquisition stamp: tau's reference
-                                    # before the first frame (Codex S4a-1 review P3).
-                                    "capture_stamp_s": scene_input.stamp_ns * 1e-9 - initial_time,
-                                    "attempt": attempt_number,
-                                }
-                            start_rear_pose = Pose2D(rear[0], rear[1], rear[2])
-                            if args.camera_inset or args.robot_camera:
-                                inset_estimate = inset.InsetEstimate(
-                                    observation=observation,
-                                    capture_pose=(float(base[0]), float(base[1]), yaw),
-                                    pallet_site=target_pickup,
-                                    intrinsics=scene_input.intrinsics,
-                                    base_from_optical=scene_input.base_from_optical,
-                                    attempt_number=attempt_number,
-                                )
-                            state["perception"]["perception_pickup_estimate_m"] = {
-                                "x_m": target_pickup.x_m,
-                                "y_m": target_pickup.y_m,
-                                "yaw_rad": target_pickup.yaw_rad,
-                            }
-                            # Ground-truth pickup is for error evaluation here, never
-                            # the planning target; the collision map still uses it.
-                            state["perception"]["perception_error"] = {
-                                "position_m": float(
-                                    np.hypot(
-                                        target_pickup.x_m - scenario.pickup.x_m,
-                                        target_pickup.y_m - scenario.pickup.y_m,
-                                    )
-                                ),
-                                "yaw_rad": float(
-                                    math.atan2(
-                                        math.sin(
-                                            target_pickup.yaw_rad
-                                            - scenario.pickup.yaw_rad
-                                        ),
-                                        math.cos(
-                                            target_pickup.yaw_rad
-                                            - scenario.pickup.yaw_rad
-                                        ),
-                                    )
-                                ),
-                            }
-                            # Against the pallet as it stands, read the way the
-                            # runner reads it; spawn checks XY and z, not yaw.
-                            pallet_position, pallet_orientation = (
-                                pallet.get_world_pose()
-                            )
-                            pallet_position = np.asarray(pallet_position, dtype=float)
-                            pallet_orientation = np.asarray(
-                                pallet_orientation, dtype=float
-                            )
-                            state["perception"]["perception_error_actual"] = (
-                                G2.site_error(
-                                    (
-                                        target_pickup.x_m,
-                                        target_pickup.y_m,
-                                        target_pickup.yaw_rad,
-                                    ),
-                                    (
-                                        pallet_position[0],
-                                        pallet_position[1],
-                                        yaw_and_tilt(pallet_orientation)[0],
-                                    ),
-                                )
-                            )
-                            state["handoff"] = {
-                                "attempt_number": attempt_number,
-                                "candidate_index": attempt["candidate_index"],
-                                "depth_sha256": attempt["depth_sha256"],
-                                "loop_step": step,
-                                "accepted_pose": [
-                                    np.asarray(v, dtype=float).tolist()
-                                    for v in capture_diagnostics.accepted_pose
-                                ],
-                                "linear_velocity_mps": np.asarray(
-                                    robot.get_linear_velocity(), dtype=float
-                                ).tolist(),
-                                "angular_velocity_radps": np.asarray(
-                                    robot.get_angular_velocity(), dtype=float
-                                ).tolist(),
-                                "steering_rad": np.asarray(
-                                    robot.get_joint_positions()[steers], dtype=float
-                                ).tolist(),
-                                "pallet_position_m": pallet_position.tolist(),
-                                "pallet_orientation_wxyz": pallet_orientation.tolist(),
-                                "simulation_time_s": world.current_time - initial_time,
-                                "t_before_capture_s": t,
-                            }
-                            planning_pickup, state["planning_target_source"] = (
-                                G2.planning_target(
-                                    args.planning_target, target_pickup, scenario.pickup
-                                )
-                            )
-                            pocket["planning_pickup"] = planning_pickup
-                            if inject_:
-                                state["near_tracking"]["injection"]["captures"][-1]["planned_target"] = [
-                                    planning_pickup.x_m, planning_pickup.y_m, planning_pickup.yaw_rad]
-                            if retry_capture_:
-                                state["near_tracking"][stand_key_]["planned_target"] = [
-                                    planning_pickup.x_m, planning_pickup.y_m, planning_pickup.yaw_rad]
-                            if obstacle is not None and obstacle["layer"].known_enabled:
-                                # Each detection is a new relative fix: the age restarts
-                                # even for the same value (Codex stage-1 P2-8).
-                                known_pallet((planning_pickup.x_m, planning_pickup.y_m, planning_pickup.yaw_rad),
-                                             obstacle["layer"].known_config.get("r_fix_pickup_m", 0.05),
-                                             f"recognised:attempt{len(state.get('observation_attempts', []))}")
-                            planning_start = time.monotonic()
-                            planning_trace = []
-                            plans = plan_transport(
-                                grid_world(scenario),
-                                planner_config,
-                                geometry=geometry,
-                                target_pickup=planning_pickup,
-                                start_rear=start_rear_pose,
-                                return_to=return_to_pose,
-                                pickup_bounds=pickup_bounds,
-                                travel_config=travel_config,
-                                trace=planning_trace,
-                                **grid_kwargs("mission", planning_pickup),
-                            )
-                            state.setdefault("planning_traces", []).append(
-                                planning_trace
-                            )
-                            state["planning_wall_s"] += (
-                                time.monotonic() - planning_start
-                            )
-                            state["planning_status"] = plans.status
-                            # MissionPlan.status already contains the failing phase.
-                            require(plans.success, plans.status)
-                            paths.update(
-                                {name: getattr(plans, name) for name in mission_stages}
-                            )
-                            trackers.update(
-                                {
-                                    name: RearAxlePathTracker(
-                                        path.poses,
-                                        path.directions,
-                                        path.curvatures_inv_m,
-                                        TrackerConfig(
-                                            cruise_speed_mps=speeds[name],
-                                            max_curvature_inv_m=settings[
-                                                "tracker_curvature_inv_m"
-                                            ],
-                                            max_acceleration_mps2=settings[
-                                                "drive_acceleration_mps2"
-                                            ],
-                                            lookahead_m=0.28,
-                                            # Same rule as the trackers built
-                                            # without perception (observe is
-                                            # excluded below and keeps its own
-                                            # tracker; the return is 0.03 rad).
-                                            position_tolerance_m=(
-                                                0.03 if name == "observe" else 0.008
-                                            ),
-                                            yaw_tolerance_rad=(
-                                                0.05
-                                                if name == "observe"
-                                                else 0.03
-                                                if name == "return_home"
-                                                else 0.02
-                                            ),
-                                            # Gear-change cusps are not goals (2026-09-26): the next leg
-                                            # starts from the measured pose. Final goals keep the rules above.
-                                            cusp_position_tolerance_m=0.03,
-                                            cusp_yaw_tolerance_rad=0.05,
-                                            # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad
-                                            # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).
-                                            cusp_brake_window_m=0.008,
-                                            # The return holds a cusp heading miss of 0.05-0.08 rad for
-                                            # judgement (EPAL 6 fork spacing plan, A').
-                                            cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD
-                                            if name in CUSP_HEADING_HOLD_PHASES
-                                            else None,
-                                            # Optional path speed caps; absent from the settings = off.
-                                            max_lateral_acceleration_mps2=settings.get(
-                                                "max_lateral_acceleration_mps2"
-                                            ),
-                                            max_reverse_speed_mps=settings.get(
-                                                "max_reverse_speed_mps"
-                                            ),
-                                            # A stop just past the goal is fine except deeper into
-                                            # the pallet: insertion keeps the round 8 mm.
-                                            overshoot_tolerance_m=None
-                                            if name == "insert"
-                                            else 0.03,
-                                            stop_speed_mps=0.012,
-                                            max_cross_track_error_m=0.35,
-                                        ),
-                                    )
-                                    for name, path in paths.items()
-                                    if name != "observe"
-                                }
-                            )
-                            apply_tracker_profile()
-                            record_tracker_configs()
-                            state["paths"] = {
-                                name: path_record(path) for name, path in paths.items()
-                            }
-                            (args.output / "paths.json").write_text(
-                                record_json(state["paths"], indent=2) + "\n"
-                            )
-                            add_path_display(
-                                stage, paths["approach"], "Approach", (0.05, 0.45, 1.0)
-                            )
-                            add_path_display(
-                                stage,
-                                paths["transport"],
-                                "Transport",
-                                (1.0, 0.65, 0.04),
-                            )
-                            stage.GetRootLayer().Export(str(args.output / "scene.usda"))
-                            print(
-                                "PLANNED",
-                                record_json(
-                                    {
-                                        k: {
-                                            "length_m": v.length_m,
-                                            "expansions": v.expanded_nodes,
-                                        }
-                                        for k, v in paths.items()
-                                    }
-                                ),
-                                flush=True,
-                            )
-                            near_leg = None
-                            if slam is not None and "near_capture" not in state:
-                                # Plan v3.6: see the pallet again where the final
-                                # straight begins, so only that straight (and the
-                                # insert/extract) runs on held odometry. Curved
-                                # approaches drifted 0.02-0.03 rad held (S2 v3.5).
-                                near_leg = final_straight_prefix(
-                                    paths["approach"], geometry.alignment_straight_m
-                                )
-                                # Every approach ends in the 0.8 m alignment straight;
-                                # not finding it is a failure, not a skip (Codex v3.6 P1).
-                                require(near_leg is not None, "near_capture_no_final_straight")
-                                state["near_capture"] = {
-                                    "status": "pending",
-                                    "far_attempt": attempt_number,
-                                    "far_estimate_m": state["perception"][
-                                        "perception_pickup_estimate_m"
-                                    ],
-                                    "far_error": state["perception"]["perception_error"],
-                                }
-                            if near_leg is not None:
-                                # Fix (1): a near leg opens its own observe replan budget.
-                                state["observe_replan_leg"] = {
-                                    "serial": state["observe_replan_leg"]["serial"] + 1,
-                                    "start": len(state["observe_replans"]),
-                                }
-                                paths["observe"] = near_leg
-                                trackers["observe"] = RearAxlePathTracker(
-                                    near_leg.poses,
-                                    near_leg.directions,
-                                    near_leg.curvatures_inv_m,
-                                    trackers["observe"].config,
-                                )
-                                state["observation_waypoint_selected"] = (
-                                    near_leg.poses[-1].tolist()
-                                )
-                                state["near_capture"]["waypoint"] = near_leg.poses[-1].tolist()
-                                ms.phase_started = t
-                                inset_status = "근접 재관측 위치로 이동"
-                                realign_install("near_leg")  # Plan D8 S4c-3 stage 2
-                            else:
-                                near_realign_ = False  # Plan D8 S4c-3: stage 2 began at this capture
-                                if state.get("near_capture", {}).get("status") == "pending":
-                                    # The new estimate moves the straight by a few
-                                    # cm; re-draw it from where the truck stands
-                                    # instead of a Hybrid A* manoeuvre that would
-                                    # run held (Codex v3.6 P2).
-                                    new_prefix = final_straight_prefix(
-                                        paths["approach"], geometry.alignment_straight_m
-                                    )
-                                    require(
-                                        new_prefix is not None,
-                                        "near_capture_no_final_straight",
-                                    )
-                                    line_start = Pose2D(*new_prefix.poses[-1])
-                                    line_end = Pose2D(*paths["approach"].poses[-1])
-                                    straight, offsets = straight_from_pose(
-                                        Pose2D(float(rear[0]), float(rear[1]), float(rear[2])),
-                                        line_start,
-                                        line_end,
-                                        # The box stays at 5 cm / 0.05 rad: the dry run
-                                        # checks arrival only, not the swept footprint,
-                                        # and a wider box admitted a collision (Codex v3.7 P1).
-                                        # A smoke may narrow the heading (plan D8 S4c-3).
-                                        max_lateral_m=0.05,
-                                        max_yaw_rad=args.near_capture_box_yaw_rad,
-                                        min_length_m=0.3,
-                                    )
-                                    state["near_capture"]["offsets_to_new_line"] = offsets
-                                    state["near_capture"]["box"] = {
-                                        "lateral_m": 0.05, "yaw_rad": args.near_capture_box_yaw_rad, "length_m": 0.3}
-                                    # The box above only bounds the projection; whether
-                                    # the approach tracker converges within this straight
-                                    # is checked by a dry run with margin (v3.7, Codex
-                                    # v3.6 re-review P2).
-                                    acceptance_config = trackers["approach"].config
-                                    if args.approach_straight_speed_mps is not None:
-                                        # Plan D8b: the baseline cruise, also when an earlier
-                                        # near capture left a custom-cruise tracker here.
-                                        acceptance_config = replace(acceptance_config,
-                                                                    cruise_speed_mps=speeds["approach"])
-                                    refusal = f"near_capture_misaligned:{offsets}"
-                                    if straight is not None:
-                                        dry = bicycle_rollout(
-                                            straight.poses,
-                                            straight.directions,
-                                            straight.curvatures_inv_m,
-                                            acceptance_config,
-                                            rear,
-                                        )
-                                        state["near_capture"]["dry_run"] = asdict(dry)
-                                        if not (
-                                            dry.status == "arrived"
-                                            and dry.position_error_m <= 0.006
-                                            and abs(dry.yaw_error_rad) <= 0.015
-                                        ):
-                                            refusal = f"near_capture_misaligned:dry_run:{asdict(dry)}"
-                                            straight = None
-                                    redraw_entry = None
-                                    if straight is None and near is not None and args.near_capture_redraw == "on":
-                                        # Plan D8 S4c-3 stage 1: the S4b re-draw acceptance at the near
-                                        # capture -- the heading box 0.12 rad with both dry runs' ends,
-                                        # their swept footprints and the correction points checked.
-                                        driven_config = acceptance_config
-                                        if args.approach_straight_speed_mps is not None:
-                                            driven_config = replace(acceptance_config,
-                                                                    cruise_speed_mps=args.approach_straight_speed_mps)
-                                        redraw_plans, redraw_entry = near_capture_redraw(
-                                            rear, (float(base[0]), float(base[1]), float(yaw)), observation,
-                                            attempt_number, acceptance_config, driven_config, t)
-                                        if redraw_plans is not None:
-                                            straight = redraw_plans["approach"]
-                                            for name_ in ("insert", "extract"):
-                                                paths[name_] = redraw_plans[name_]
-                                                state["paths"][name_] = path_record(redraw_plans[name_])
-                                                trackers[name_] = RearAxlePathTracker(
-                                                    redraw_plans[name_].poses, redraw_plans[name_].directions,
-                                                    redraw_plans[name_].curvatures_inv_m, trackers[name_].config)
-                                        state["near_capture"].setdefault("recoveries", []).append(redraw_entry)
-                                    if straight is not None and realign_active() and (
-                                            straight.length_m < near_tracking.REALIGN_MIN_LEFT_M):
-                                        # Plan D8 S4c-3 stage 2: the re-capture keeps at least 1.5 m of
-                                        # straight -- the approach starts before the near-field section.
-                                        refusal = f"near_capture_realign_short:{straight.length_m:.3f}"
-                                        straight = None
-                                    if (straight is None and near is not None
-                                            and state["near_tracking"].get("realigns", 0) == 0):
-                                        # Plan D8 S4c-3 stage 2: once per pickup, instead of ending.
-                                        start_near_realign(t, attempt_number)
-                                        near_realign_ = True
-                                    if not near_realign_:
-                                        require(straight is not None, refusal)
-                                        approach_config = acceptance_config
-                                        if args.approach_straight_speed_mps is not None:
-                                            # Plan D8b: only the driven cruise changes. The acceptance
-                                            # above stays the baseline's: at a slow cruise the tracker
-                                            # arrives where 1.5 x remaining meets the 0.012 m/s stop
-                                            # speed, ~8 mm short, past the 6 mm acceptance (smoke run
-                                            # seed 1 at 0.30: 7.76 mm). That dry run is kept as a record.
-                                            approach_config = replace(approach_config,
-                                                                      cruise_speed_mps=args.approach_straight_speed_mps)
-                                            state["near_capture"]["dry_run_driven"] = asdict(bicycle_rollout(
-                                                straight.poses, straight.directions, straight.curvatures_inv_m,
-                                                approach_config, rear,
-                                            ))
-                                        paths["approach"] = straight
-                                        state["paths"]["approach"] = path_record(straight)
-                                        (args.output / "paths.json").write_text(
-                                            record_json(state["paths"], indent=2) + "\n"
-                                        )
-                                        add_path_display(
-                                            stage, straight, "Approach", (0.05, 0.45, 1.0)
-                                        )
-                                        trackers["approach"] = RearAxlePathTracker(
-                                            straight.poses,
-                                            straight.directions,
-                                            straight.curvatures_inv_m,
-                                            approach_config,
-                                        )
-                                        if args.approach_straight_speed_mps is not None:
-                                            record_tracker_configs()  # the straight's own cruise
-                                        if redraw_entry is not None:
-                                            # Plan D8 S4c-3: what was installed, by content and by the
-                                            # followers' own copies.
-                                            redraw_entry["installed"] = {
-                                                name_: {
-                                                    "sha256": near_tracking.path_digest(
-                                                        paths[name_].poses, paths[name_].directions,
-                                                        paths[name_].curvatures_inv_m),
-                                                    "tracker_sha256": near_tracking.path_digest(
-                                                        *trackers[name_].path_arrays()),
-                                                    "poses": np.asarray(paths[name_].poses).tolist(),
-                                                    "directions": np.asarray(paths[name_].directions).tolist(),
-                                                    "curvatures_inv_m": np.asarray(paths[name_].curvatures_inv_m).tolist(),
-                                                }
-                                                for name_ in ("approach", "insert", "extract")
-                                            }
-                                        if args.pocket_check:
-                                            build_pocket_check(float(straight.poses[-1][2]), rear, base)
-                                        state["near_capture"].update(
-                                            status="done",
-                                            near_attempt=attempt_number,
-                                            near_estimate_m=state["perception"][
-                                                "perception_pickup_estimate_m"
-                                            ],
-                                            near_error=state["perception"]["perception_error"],
-                                        )
-                                        if realign_active():
-                                            # Plan D8 S4c-3 stage 2: the re-capture accepted ends the
-                                            # realignment.
-                                            state["near_tracking"]["realign"]["end"] = {
-                                                "reason": "recaptured", "attempt": attempt_number, "time_s": t,
-                                                "length_left_m": float(straight.length_m),
-                                                # the observe follower the truck came by (the last install)
-                                                "observe_tracker_sha256": near_tracking.path_digest(
-                                                    *trackers["observe"].path_arrays())}
-                                if not near_realign_:
-                                    transition("approach", t)
-                                    if near is not None and state.get("near_capture", {}).get("status") == "done":
-                                        build_near_tracker(t)  # in the hold the transition began
+                            observation, near_leg = succeeded_.observation, succeeded_.near_leg
+                            # M-a1 slice 4b-v: the near leg, or the near capture's re-drawn straight, is the core's.
+                            core.near_leg_or_recapture(t, rear, base, yaw, observation, attempt_number, near_leg)
                     else:
                         # M-a1 slice 2: every other arrival is the core's.
                         arrival_ = core.arrive(t, tracking)
