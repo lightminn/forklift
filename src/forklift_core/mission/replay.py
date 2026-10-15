@@ -87,13 +87,22 @@ def _resolve(qualname: str):
     return obj
 
 
-def apply_inplace(actual: Any, after: Any, where: str = "argument") -> Any:
+def apply_inplace(actual: Any, after: Any, where: str = "argument", *, replaced=frozenset(), path: tuple = (),
+                  value_types=frozenset()) -> Any:
     """Make ``actual`` equal ``after`` keeping every mutable object the caller may hold elsewhere: lists and
     dictionaries are updated in place element by element (their elements recursively), arrays of the same
-    shape and dtype in place, mutable dataclasses field by field, tuples through their mutable elements.
-    Returns the object to use; a change that needs a held object replaced is refused."""
+    shape and dtype in place, mutable dataclasses and registered value objects attribute by attribute,
+    tuples through their mutable elements. At a path in ``replaced`` (the recorded call put another object
+    there) the new object is used instead. Returns the object to use; a change that needs a held object
+    replaced without the record saying so is refused."""
+    if path in replaced:
+        return after
+
+    def sub(a, b, step):
+        return apply_inplace(a, b, where, replaced=replaced, path=path + (step,), value_types=value_types)
+
     if isinstance(actual, list) and isinstance(after, list):
-        new = [apply_inplace(actual[i], b, where) if i < len(actual) else b for i, b in enumerate(after)]
+        new = [sub(actual[i], b, i) if i < len(actual) else b for i, b in enumerate(after)]
         actual[:] = new
         return actual
     if isinstance(actual, dict) and isinstance(after, dict):
@@ -101,7 +110,7 @@ def apply_inplace(actual: Any, after: Any, where: str = "argument") -> Any:
             if key not in after:
                 del actual[key]
         for key, value in after.items():
-            actual[key] = apply_inplace(actual[key], value, where) if key in actual else value
+            actual[key] = sub(actual[key], value, repr(key)) if key in actual else value
         return actual
     if isinstance(actual, np.ndarray) and isinstance(after, np.ndarray):
         if actual.shape != after.shape or actual.dtype != after.dtype:
@@ -109,24 +118,36 @@ def apply_inplace(actual: Any, after: Any, where: str = "argument") -> Any:
         actual[...] = after
         return actual
     if isinstance(actual, tuple) and isinstance(after, tuple) and len(actual) == len(after):
-        for a, b in zip(actual, after):
-            if apply_inplace(a, b, where) is not a:
+        for i, (a, b) in enumerate(zip(actual, after)):
+            if sub(a, b, i) is not a:
                 raise Unsupported(f"{where}: a tuple element would have to be replaced")
         return actual
     if dataclasses.is_dataclass(actual) and not isinstance(actual, type) and type(actual) is type(after):
         for f in dataclasses.fields(actual):
             a, b = getattr(actual, f.name), getattr(after, f.name)
-            new = apply_inplace(a, b, where)
+            new = sub(a, b, "." + f.name)
             if new is not a:
                 try:
                     setattr(actual, f.name, new)
                 except dataclasses.FrozenInstanceError:
                     raise Unsupported(f"{where}: a frozen dataclass field would have to change") from None
         return actual
-    if _canonical(Encoder(opaque_ok=True).encode(actual)) == _canonical(Encoder(opaque_ok=True).encode(after)):
+    if type(actual) is type(after) and type(actual).__name__ in value_types and hasattr(actual, "__dict__"):
+        for key in list(vars(actual)):
+            if not key.startswith("_") and key not in vars(after):
+                delattr(actual, key)
+        for key, b in vars(after).items():
+            a = getattr(actual, key, None)
+            new = sub(a, b, "." + key) if hasattr(actual, key) else b
+            if new is not a:
+                setattr(actual, key, new)
+        return actual
+    enc = Encoder(opaque_ok=True, value_types=value_types)
+    if _canonical(enc.encode(actual)) == _canonical(Encoder(opaque_ok=True, value_types=value_types).encode(after)):
         return actual  # unchanged
     if isinstance(actual, (list, dict, np.ndarray, tuple)) or (dataclasses.is_dataclass(actual)
-                                                                and not isinstance(actual, type)):
+                                                                and not isinstance(actual, type)) \
+            or type(actual).__name__ in value_types:
         raise Unsupported(f"{where}: a {type(actual).__name__} became a {type(after).__name__}")
     return after
 
@@ -260,12 +281,11 @@ class ReplayGate:
         try:
             if "request_after" in changes:
                 after = session.decode(changes["request_after"])
-                for i, value in enumerate(after.get("args", [])):
-                    if i < len(args):
-                        apply_inplace(args[i], value, f"{where} argument {i}")
-                for key, value in (after.get("kwargs") or {}).items():
-                    if kwargs is not None and key in kwargs:
-                        apply_inplace(kwargs[key], value, f"{where} argument {key}")
+                actual = {"args": list(args), "kwargs": dict(kwargs or {})}
+                replaced = frozenset(tuple(p) for p in changes.get("replaced_paths") or ())
+                apply_inplace(actual, after, f"{where} arguments", replaced=replaced,
+                              value_types=frozenset(session.value_types))
+            aliases = []
             for name, diff in (changes.get("watched") or {}).items():
                 target = None if watch is None else watch.dicts.get(name)
                 if target is None:
@@ -275,15 +295,25 @@ class ReplayGate:
                         target.pop(key, None)
                     elif "append" in change:
                         target.setdefault(key, []).extend(session.decode(change["append"]))
+                    elif "alias_of" in change:
+                        aliases.append((target, key, change["alias_of"]))
+                    elif change.get("replaced") or key not in target:
+                        target[key] = session.decode(change["value"])
                     else:
-                        value = session.decode(change["value"])
-                        target[key] = (apply_inplace(target[key], value, f"{where} {name}.{key}")
-                                       if key in target else value)
-        except Unsupported as exc:
+                        target[key] = apply_inplace(target[key], session.decode(change["value"]),
+                                                    f"{where} {name}.{key}", value_types=frozenset(session.value_types))
+            for target, key, (name2, key2) in aliases:  # after every other change: the object they now share
+                target[key] = watch.dicts[name2][key2]
+        except ReplayMismatch as exc:
             raise session.fail(str(exc)) from None
+        except Exception as exc:  # restoring the record failed: never a service exception the caller may catch
+            raise session.fail(f"{where}: restoring the recorded changes failed: {type(exc).__name__}: {exc}") from None
         if "exception" in entry:
             raise self._exception(entry["exception"])
-        return session.decode(entry["response"])
+        try:
+            return session.decode(entry["response"])
+        except Exception as exc:
+            raise session.fail(f"{where}: restoring the recorded response failed: {type(exc).__name__}: {exc}") from None
 
     def _exception(self, record: dict) -> BaseException:
         if ":" not in record["type"]:

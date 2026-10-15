@@ -87,3 +87,12 @@ def test_arrays_and_mutable_dataclasses_keep_their_identity():
     assert out["a"] is out["b"][0] and out["h1"] is out["h2"]
     out["a"][0] = 1.0
     assert out["b"][0][0] == 1.0
+
+
+def test_a_dataclass_whose_post_init_copies_a_field_keeps_the_restored_alias():
+    from forklift_core.geometry import FramePoints
+
+    fp = FramePoints("base_link", np.zeros((2, 3)))
+    out = roundtrip({"fp": fp, "raw": fp.xyz_m})
+    assert out["fp"].xyz_m is out["raw"] and isinstance(out["fp"], FramePoints)
+    assert not out["raw"].flags.writeable  # read-only as recorded

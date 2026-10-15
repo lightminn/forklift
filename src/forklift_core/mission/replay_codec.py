@@ -78,7 +78,10 @@ class Encoder:
         if self.hash_arrays:
             return {"$sha256": key, "dtype": str(array.dtype), "shape": list(array.shape)}
         self.arrays.setdefault(key, array)
-        return {"$array": key, "dtype": str(array.dtype), "shape": list(array.shape)}
+        node = {"$array": key, "dtype": str(array.dtype), "shape": list(array.shape)}
+        if not value.flags.writeable:
+            node["readonly"] = True
+        return node
 
     def _shared(self, value: Any, build) -> dict:
         """A node for an object whose identity matters (mutable containers, arrays, dataclasses, value
@@ -176,19 +179,26 @@ def decode(node: Any, arrays: dict[str, np.ndarray]) -> Any:
 
     def build(n: dict) -> Any:
         if "$array" in n:
-            return arrays[n["$array"]].copy()
+            array = arrays[n["$array"]].copy()
+            if n.get("readonly"):
+                array.setflags(write=False)
+            return array
         if "$float" in n:
             return float(n["$float"])
         if "$tuple" in n:
             return tuple(walk(v) for v in n["$tuple"])
         if "$dataclass" in n:
+            # Built through __init__ (so __post_init__ derives whatever it derives), then every field set back to
+            # the restored object itself: __post_init__ may copy or normalise a field (an array copied) and break
+            # the alias graph.
             cls = _resolve(n["$dataclass"])
             fields = {k: walk(v) for k, v in n["fields"].items()}
-            init = {f.name: fields[f.name] for f in dataclasses.fields(cls) if f.init and f.name in fields}
-            obj = cls(**init)
-            for f in dataclasses.fields(cls):
-                if not f.init and f.name in fields:
-                    object.__setattr__(obj, f.name, fields[f.name])
+            try:
+                obj = cls(**{f.name: fields[f.name] for f in dataclasses.fields(cls) if f.init and f.name in fields})
+            except Exception:
+                obj = cls.__new__(cls)
+            for k, v in fields.items():
+                object.__setattr__(obj, k, v)
             return obj
         if "$object" in n:
             cls = _resolve(n["$object"])

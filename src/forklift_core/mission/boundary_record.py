@@ -80,14 +80,22 @@ class BoundaryRecorder:
             return self._encode(_hash_only(raw) if hash_only else raw)
         return self._encode(raw, hash_arrays=hash_only)
 
-    def encode_changes(self, request_after: Any, watched: dict | None) -> dict | None:
+    def encode_changes(self, request_after: Any, watched: dict | None, replaced_paths=(), dicts=None) -> dict | None:
         """Format 2: a call's changes as plain JSON whose leaves are value nodes -- ``request_after`` (already
         an encoded request) and per watched dictionary and key one of ``{"value": node}``, ``{"append":
         node}`` or ``{"deleted": true}``."""
         out: dict = {}
         if request_after is not None:
             out["request_after"] = request_after
+            if replaced_paths:
+                out["replaced_paths"] = [list(p) for p in replaced_paths]
         if watched:
+            # Which watched key holds which object now: a replacement by another key's object is an alias.
+            holders = {}
+            for name, d in (dicts or {}).items():
+                for key, value in (d or {}).items():
+                    if _mutable(value):
+                        holders.setdefault(id(value), []).append([name, key])
             enc: dict = {}
             for name, diff in watched.items():
                 enc[name] = {}
@@ -97,7 +105,14 @@ class BoundaryRecorder:
                     elif isinstance(change, dict) and set(change) == {"$append"}:
                         enc[name][key] = {"append": self._encode(change["$append"])}
                     else:
-                        enc[name][key] = {"value": self._encode(change)}
+                        value = change["$value"]
+                        node = {"value": self._encode(value)}
+                        if change.get("$replaced"):
+                            node["replaced"] = True
+                            others = [h for h in holders.get(id(value), []) if h != [name, key]]
+                            if others:
+                                node["alias_of"] = others[0]
+                        enc[name][key] = node
             out["watched"] = enc
         return out or None
 
@@ -304,6 +319,7 @@ class RecordingGate:
             return fn(*args, **kwargs)
         raw = {"args": list(args), "kwargs": dict(kwargs)}
         before = self.recorder.encode_request(raw, hash_only)
+        paths_before = _paths(raw) if self.recorder.value_format == 2 else None
         marks = watch.mark() if watch is not None else None
         self.depth += 1
         try:
@@ -311,28 +327,63 @@ class RecordingGate:
         except BaseException as exc:
             self.depth -= 1
             self.recorder.call(port, method, request=None, encoded_request=before, exception=exc,
-                               changes=self._changes(raw, before, hash_only, watch, marks))
+                               changes=self._changes(raw, before, hash_only, watch, marks, paths_before))
             raise
         self.depth -= 1
-        changes = self._changes(raw, before, hash_only, watch, marks)
+        changes = self._changes(raw, before, hash_only, watch, marks, paths_before)
         if self.recorder.value_format == 2 and _shares_objects(result, raw):
             # A response that hands back an argument's own object: a replay cannot restore that identity.
             changes = dict(changes or {}, response_aliases_request=True)
         self.recorder.call(port, method, request=None, encoded_request=before, response=result, changes=changes)
         return result
 
-    def _changes(self, raw, before, hash_only, watch, marks):
+    def _changes(self, raw, before, hash_only, watch, marks, paths_before=None):
         after = self.recorder.encode_request(raw, hash_only)
         changed_request = json.dumps(after, sort_keys=True) != json.dumps(before, sort_keys=True)
         watched = watch.changes(marks) if watch is not None else None
         if self.recorder.value_format == 2:
-            return self.recorder.encode_changes(after if changed_request else None, watched)
+            # Objects inside the arguments that the call replaced (same path, another object).
+            paths_after = _paths(raw)
+            replaced = sorted(p for p, i in paths_after.items() if p in paths_before and paths_before[p] != i)
+            if replaced:
+                changed_request = True
+            return self.recorder.encode_changes(after if changed_request else None, watched, replaced,
+                                                watch.dicts if watch is not None else None)
         out = {}
         if changed_request:
             out["request_after"] = after
         if watched:
             out["watched"] = watched
         return out or None
+
+
+def _mutable(value: Any) -> bool:
+    return isinstance(value, (list, dict, np.ndarray)) or (
+        dataclasses.is_dataclass(value) and not isinstance(value, type)) or (
+        hasattr(value, "__dict__") and not isinstance(value, type) and not callable(value))
+
+
+def _paths(value: Any, path: tuple = (), out: dict | None = None, depth: int = 0) -> dict:
+    """path -> id of every mutable object reachable from ``value`` (dict keys, list indices, attribute names)."""
+    out = {} if out is None else out
+    if depth > 50:
+        return out
+    if _mutable(value):
+        out[path] = id(value)
+    if isinstance(value, dict):
+        for k, v in value.items():
+            _paths(v, path + (repr(k),), out, depth + 1)
+    elif isinstance(value, (list, tuple)):
+        for i, v in enumerate(value):
+            _paths(v, path + (i,), out, depth + 1)
+    elif dataclasses.is_dataclass(value) and not isinstance(value, type):
+        for f in dataclasses.fields(value):
+            _paths(getattr(value, f.name), path + ("." + f.name,), out, depth + 1)
+    elif hasattr(value, "__dict__") and not isinstance(value, type) and not callable(value):
+        for k, v in vars(value).items():
+            if not k.startswith("_"):
+                _paths(v, path + ("." + k,), out, depth + 1)
+    return out
 
 
 def _identities(value: Any, out: set, depth: int = 0) -> set:
@@ -352,6 +403,10 @@ def _identities(value: Any, out: set, depth: int = 0) -> set:
     elif dataclasses.is_dataclass(value) and not isinstance(value, type):
         for f in dataclasses.fields(value):
             _identities(getattr(value, f.name), out, depth + 1)
+    elif hasattr(value, "__dict__") and not isinstance(value, type):
+        for k, v in vars(value).items():
+            if not k.startswith("_"):
+                _identities(v, out, depth + 1)
     return out
 
 
@@ -390,13 +445,16 @@ class DictWatch:
     def _snapshot(self, d: dict, name: str = "") -> dict:
         snap = {}
         only = self.keys.get(name)
+        # Format 2 also keeps which object each key holds: a replacement by an equal object is a change too.
+        ident = self.recorder.value_format == 2
         for k, v in list(d.items()):
             if k in self.skip or (only is not None and k not in only):
                 continue
             if k in self.append_only and isinstance(v, list):
-                snap[k] = ("$len", len(v))
+                snap[k] = ("$len", len(v), id(v)) if ident else ("$len", len(v))
             else:
-                snap[k] = json.dumps(self.recorder.encode(v), sort_keys=True)
+                text = json.dumps(self.recorder.encode(v), sort_keys=True)
+                snap[k] = (text, id(v) if ident and _mutable(v) else None) if ident else text
         return snap
 
     def mark(self) -> dict:
@@ -414,9 +472,17 @@ class DictWatch:
                     continue
                 if k not in d:
                     diff[k] = {"$deleted": True}
-                elif isinstance(now.get(k), tuple) and now[k][0] == "$len":
+                elif (isinstance(now.get(k), tuple) and now[k][0] == "$len" and isinstance(before.get(k), tuple)
+                      and before[k][0] == "$len" and before[k][2:] == now[k][2:] and before[k][1] <= now[k][1]):
+                    diff[k] = {"$append": d[k][before[k][1]:]}
+                elif isinstance(now.get(k), tuple) and now[k][0] == "$len" and len(now[k]) == 2:  # format 1
                     start = before[k][1] if isinstance(before.get(k), tuple) else 0
                     diff[k] = {"$append": d[k][start:]}
+                elif self.recorder.value_format == 2:
+                    # The value, and whether the key now holds another object than before.
+                    was, is_ = before.get(k), now.get(k)
+                    replaced = was is None or was[-1] != is_[-1] or (was[0] == "$len") != (is_[0] == "$len")
+                    diff[k] = {"$value": d[k], "$replaced": bool(replaced and _mutable(d[k]))}
                 else:
                     diff[k] = d[k]
             if diff:

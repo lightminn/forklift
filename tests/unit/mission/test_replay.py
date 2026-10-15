@@ -347,3 +347,69 @@ def test_the_tick_heads_commands_are_compared(tmp_path):
     replay_with(lambda f: f(1))
     with pytest.raises(ReplayMismatch, match="commands"):
         replay_with(lambda f: f(1), commands_replay=["cancel"])
+
+
+# --- Codex R1 re-review (P2 x5) ---------------------------------------------------------------------------
+
+def test_an_object_the_call_replaced_is_replaced_in_the_replay_too(tmp_path):
+    def swap(box):
+        box["items"] = []  # an equal value, another object
+
+    def call(f):
+        box = {"items": []}
+        old = box["items"]
+        f(box)
+        return box["items"] is old
+
+    replay_with = one_call(tmp_path, swap, call)
+    assert replay_with(call) is False
+
+    core = {"a": [1], "b": [1]}
+
+    def merge(_):
+        core["b"] = core["a"]  # two keys now hold one object
+
+    replay_with = one_call(tmp_path / "w", merge, lambda f: f(0), watch_dicts={"core": core})
+    rcore = {"a": [1], "b": [1]}
+    replay_with(lambda f: f(0), watch_dicts_replay={"core": rcore})
+    assert rcore["b"] is rcore["a"]
+
+
+def test_a_registered_value_objects_attributes_are_restored(tmp_path):
+    def bump(action):
+        action.joint = 7
+
+    def call(f):
+        act = Action(1)
+        f(act)
+        return act.joint
+
+    replay_with = one_call(tmp_path, bump, call, value_types={"Action"})
+    assert replay_with(call) == 7
+
+
+def test_a_response_sharing_a_value_objects_inner_list_is_refused(tmp_path):
+    replay_with = one_call(tmp_path, lambda act: act.joint, lambda f: f(Action([1])), value_types={"Action"})
+    with pytest.raises(ReplayMismatch, match="argument's own object"):
+        replay_with(lambda f: f(Action([1])))
+
+
+def test_a_restoration_error_the_code_catches_still_fails_the_replay(tmp_path):
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    rec.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    rec.call("Svc", "f", request={"args": [], "kwargs": {}}, response=None)
+    rec.tick_end(outputs={}, branches=[])
+    rec.close()
+    path = next(tmp_path.glob("boundary_*.jsonl"))
+    path.write_text(path.read_text().replace('"response":null', '"response":{"$ref":5}'))  # an unresolvable answer
+    session = ReplaySession(tmp_path)
+    gate = ReplayGate(session)
+    f = recorded_function(lambda: None, "Svc", "f", gate)
+    session.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    try:
+        f()
+    except Exception:
+        pass  # caught by the code under test
+    with pytest.raises(ReplayMismatch, match="restoring the recorded response failed"):
+        session.tick_end(outputs={}, branches=[])
+        session.finish()
