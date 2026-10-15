@@ -386,10 +386,16 @@ def _simple_key(key: Any) -> bool:
         isinstance(key, tuple) and all(_simple_key(k) for k in key))
 
 
+_PLAIN = (type(None), bool, int, float, str, bytes, np.generic)
+
+
 def _walk(value: Any, path: tuple, out: dict, problems: list, stack=()) -> None:
     """path -> every mutable object reachable from ``value`` (dict keys by repr, list and tuple indices,
     ``.attribute``; an object reached by two paths appears under both). Dictionary keys must be plain
     immutable values (the replay rebuilds them by value)."""
+    if not (_mutable(value) or isinstance(value, (_PLAIN, tuple)) or callable(value)):
+        problems.append(f"{path} holds a {type(value).__name__}, which has no value encoding")
+        return
     if _mutable(value):
         out[path] = value
         if id(value) in stack:
@@ -454,6 +460,7 @@ class _State:
                     # by identity (cached per list, items are never re-walked once seen).
                     ids = watch.logged_ids(name, k, v)
                     self.log_ids = getattr(self, "log_ids", set()) | ids
+                    self.problems += [f"log {name}.{k} item {q}" for q in watch.logged_problems(name, k)]
                     if v and texts:
                         self.log_last = getattr(self, "log_last", {})
                         self.log_last[(name, k)] = (v[-1], _compare_text(recorder, v[-1]))
@@ -483,10 +490,12 @@ def check_state(before: "_State", after: "_State") -> tuple[list, str | None]:
         if _compare_text(before.recorder, item) != text:
             return [], f"append-only {key}: its last logged item was changed"
     for key in after.appends:
-        if key not in before.appends:  # a new log: a fresh list, its items fresh like any appended item
-            if id(after.appends[key][0]) in before_ids:
-                return [], f"append-only {key} is new and holds an object that existed before the call"
-            before.appends[key] = (after.appends[key][0], [])
+        if key not in before.appends:  # a new log: a fresh list of its own, its items like any appended item
+            lst = after.appends[key][0]
+            if id(lst) in before_ids or id(lst) in seen:
+                return [], f"append-only {key} is new and holds an object that existed or is held elsewhere"
+            seen[id(lst)] = ("new log", key)
+            before.appends[key] = (lst, [])
     differ = [q for q, o in after.paths.items() if q in before.paths and before.paths[q] is not o]
     differ.sort(key=lambda q: (len(q), repr(q)))
     replaced = [q for q in differ if not any(q[:len(r)] == r for r in differ if len(r) < len(q))]
@@ -507,6 +516,8 @@ def check_state(before: "_State", after: "_State") -> tuple[list, str | None]:
         if id(o) in seen:
             return [], f"{q} and {seen[id(o)]} now hold one new object"
         seen[id(o)] = q
+    view_ids = {id(o) for o in before.paths.values()}
+    log_lists = {id(lst) for lst, _ in before.appends.values()}
     for key, (lst, items) in before.appends.items():
         now = after.appends.get(key)
         if now is None or now[0] is not lst:
@@ -516,11 +527,17 @@ def check_state(before: "_State", after: "_State") -> tuple[list, str | None]:
             return [], f"append-only {key} changed its existing items"
         for x in cur[len(items):]:
             inner: dict = {}
-            _walk(x, (), inner, [])
-            for o in {id(o): o for o in inner.values()}.values():  # x itself and what it holds, once each
-                if id(o) in before_ids or id(o) in seen:
-                    return [], f"append-only {key} got an object that existed or is held elsewhere"
-                seen[id(o)] = ("appended", key)
+            problems: list = []
+            _walk(x, (), inner, problems)
+            if problems:
+                return [], f"append-only {key} got an item outside the model: {'; '.join(problems)}"
+            # Logs are value records: an appended item may share objects with logged items (a cached plan
+            # bundle, run_transport grid_kwargs) -- the replay gives each its own copy, nothing mutates a logged
+            # object afterwards -- but never with the core's state (arguments, watched values) or the list itself.
+            for o in {id(o): o for o in inner.values()}.values():
+                if id(o) in view_ids or id(o) in log_lists or seen.get(id(o), ("",))[0] not in ("", "logged"):
+                    return [], f"append-only {key} got an object held by the core's state"
+                seen.setdefault(id(o), ("logged", key))
     after_ids = {id(o) for o in after.paths.values()}
     for q, o in before.paths.items():
         if stays(q, o):
@@ -599,13 +616,20 @@ class DictWatch:
         if entry is None or entry[0] is not lst or entry[1] > len(lst):
             entry = [lst, 0, set(), []]  # the list, items seen, ids, the items (kept alive)
             cache[(name, key)] = entry
+        problems = entry[4] if len(entry) > 4 else []
+        if len(entry) == 4:
+            entry.append(problems)
         for item in lst[entry[1]:]:
             inner: dict = {}
-            _walk(item, (), inner, [])
+            _walk(item, (len(entry[3]),), inner, problems)
             entry[2].update(id(o) for o in inner.values())
             entry[3].append(item)
         entry[1] = len(lst)
         return set(entry[2])
+
+    def logged_problems(self, name: str, key) -> list:
+        entry = self.__dict__.get("_logged", {}).get((name, key))
+        return list(entry[4]) if entry is not None and len(entry) > 4 else []
 
     def in_scope(self, name: str, key) -> bool:
         only = self.keys.get(name)

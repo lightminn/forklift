@@ -667,3 +667,61 @@ def test_a_missing_final_state_file_and_nan_arrays(tmp_path):
     (tmp_path / "final_state.json").unlink()
     with pytest.raises(ReplayMismatch, match="final_state.json is missing"):
         run({"a": np.array([1.0])})
+
+
+# --- Codex R1 re-review 5 (P2 x4) --------------------------------------------------------------------------
+
+def test_a_cached_bundle_shared_by_two_log_rows_replays(tmp_path):
+    """grid_kwargs appends {kind, **bundle} for a cached bundle: two rows share bundle["applied"]."""
+    obstacle = {"plans": []}
+    bundle = {"applied": [0.1, 0.0, 0.0], "mode": "tracking"}
+
+    def grid(kind):
+        obstacle["plans"].append({"kind": kind, **bundle})
+        return 1
+
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    gate = RecordingGate(rec)
+    watch = DictWatch(rec, {"obstacle": obstacle}, keys={"obstacle": ["plans"]}, append_only={"plans"})
+    f = recorded_function(grid, "Planner", "grid_kwargs", gate, watch=watch)
+    rec.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    f("mission")
+    f("mission")
+    rec.tick_end(outputs={}, branches=[])
+    rec.close()
+    from forklift_core.mission.replay import read_ticks
+
+    assert all("unsupported" not in (c.get("changes") or {}) for c in next(iter(read_ticks(tmp_path)))["calls"])
+    session = ReplaySession(tmp_path)
+    rob = {"plans": []}
+    rwatch = DictWatch(None, {"obstacle": rob}, keys={"obstacle": ["plans"]}, append_only={"plans"})
+    rf = recorded_function(lambda k: None, "Planner", "grid_kwargs", ReplayGate(session), watch=rwatch)
+    session.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    assert rf("mission") == 1 and rf("mission") == 1
+    session.tick_end(outputs={}, branches=[])
+    session.finish()
+    assert rob["plans"] == obstacle["plans"]
+
+
+@pytest.mark.parametrize("change", ["set_in_view", "opaque_logged", "new_lists_alias"])
+def test_unknown_kinds_opaque_log_items_and_aliased_new_logs_are_refused(tmp_path, change):
+    core = {"tags": {1}, "log": []}
+
+    def fn(_):
+        if change == "set_in_view":
+            core["tags"].add(2)
+        elif change == "opaque_logged":
+            core["log"].append(Opaque())
+        else:
+            core["a"] = core["b"] = []
+
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    gate = RecordingGate(rec)
+    watch = DictWatch(rec, {"core": core}, append_only={"log", "a", "b"})
+    rec.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    recorded_function(fn, "Svc", "f", gate, watch=watch)(0)
+    rec.tick_end(outputs={}, branches=[])
+    rec.close()
+    from forklift_core.mission.replay import read_ticks
+
+    assert "unsupported" in (next(iter(read_ticks(tmp_path)))["calls"][0].get("changes") or {}), change
