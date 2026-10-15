@@ -39,7 +39,9 @@ NONDETERMINISTIC = (
     re.compile(r"\.slam_map\.(index|after_scan_id)$"),
     # The planning memory revision counts every memory update (SLAM map installs, hits, FREE updates,
     # retractions), so the map-install timing moves it between runs of one source (2026-10-15 near runs);
-    # the memory's planning-relevant content is still compared, bit for bit, in grid_mission_plan_*.npz.
+    # in this comparison the memory's content is compared only where a run saves it (grid_mission_plan_*.npz,
+    # the mission plans); the replay evidence covers every grid preparation, whose responses the boundary
+    # record keeps by content.
     re.compile(r"\.memory_revision$"),
     re.compile(r"\.capture_diagnostics\.(rejection_counts|sensor_frame_id)(\.|$)"),
     re.compile(r"^reads\[\d+\]\.rendering_frame"),  # renderer frame bookkeeping in pocket_frames/index.json

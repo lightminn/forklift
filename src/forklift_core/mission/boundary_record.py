@@ -336,13 +336,17 @@ class RecordingProxy:
     hold sub-services (e.g. the obstacle layer's ``permission``) to the port their calls are recorded
     under: reading such an attribute returns a proxy of it instead of recording an opaque object."""
 
-    def __init__(self, target, port: str, gate: RecordingGate, *, hash_only_requests=(), child_ports=None) -> None:
+    def __init__(self, target, port: str, gate: RecordingGate, *, hash_only_requests=(), child_ports=None,
+                 watches=None) -> None:
         object.__setattr__(self, "_target", target)
         object.__setattr__(self, "_port", port)
         object.__setattr__(self, "_gate", gate)
         object.__setattr__(self, "_hash_only", frozenset(hash_only_requests))
         object.__setattr__(self, "_child_ports", dict(child_ports or {}))
         object.__setattr__(self, "_children", {})
+        # Per method, a DictWatch for what the call changes in the core's dictionaries (e.g. a capture that
+        # steps physics inside itself, where the nested step's own watch is not recorded).
+        object.__setattr__(self, "_watches", dict(watches or {}))
 
     def __getattr__(self, name: str):
         target, gate = object.__getattribute__(self, "_target"), object.__getattribute__(self, "_gate")
@@ -358,9 +362,10 @@ class RecordingProxy:
             return cached
         if callable(value):
             hash_only = name in object.__getattribute__(self, "_hash_only")
+            watch = object.__getattribute__(self, "_watches").get(name)
 
             def method(*args, **kwargs):
-                return gate.run(port, name, value, args, kwargs, hash_only=hash_only)
+                return gate.run(port, name, value, args, kwargs, hash_only=hash_only, watch=watch)
 
             return method
         if gate.active:

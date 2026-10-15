@@ -280,3 +280,33 @@ def test_value_types_exception_attributes_and_an_idempotent_close(tmp_path):
     assert action["$object"] == "ArticulationAction" and action["joint_indices"] == [2, 3]
     assert np.array_equal(action["joint_velocities"], [0.5, 0.5])
     assert tick["calls"][1]["exception"]["attributes"] == {"reason": "sensor_frame_not_ready", "attempts": 7}
+
+
+def test_a_method_watch_covers_what_nested_unrecorded_steps_change(tmp_path):
+    from forklift_core.mission.boundary_record import DictWatch, RecordingGate, RecordingProxy, recorded_function
+
+    slam = {"stop_now": False, "scan_id": 4}
+
+    def step(render):
+        slam["scan_id"] += 1
+        slam["stop_now"] = True
+
+    rec = BoundaryRecorder(tmp_path)
+    gate = RecordingGate(rec)
+    watch = DictWatch(rec, {"slam": slam}, keys={"slam": ["stop_now", "scan_id"]})
+    stepper = recorded_function(step, "Vehicle", "step", gate, watch=watch)
+
+    class Capture:
+        def capture(self):
+            stepper(True)  # nested: not recorded as its own call
+            stepper(True)
+            return {"accepted": True}
+
+    proxy = RecordingProxy(Capture(), "Capture", gate, watches={"capture": watch})
+    _tick(rec)
+    proxy.capture()
+    rec.tick_end(outputs={}, branches=[])
+    rec.close()
+    (tick,) = list(read_record(tmp_path))
+    assert [(c["port"], c["method"]) for c in tick["calls"]] == [("Capture", "capture")]
+    assert tick["calls"][0]["changes"]["watched"] == {"slam": {"scan_id": 6, "stop_now": True}}

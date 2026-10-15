@@ -1546,7 +1546,7 @@ class TrackerBook(dict):
 
 # The M-a0 boundary record of the running mission, closed by whichever exit comes first (the run's own
 # finally, or main()'s for failures before the mission loop's try).
-_BOUNDARY_RECORD: dict = {"gate": None, "time": None}
+_BOUNDARY_RECORD: dict = {"gate": None, "time": None, "probe": None}
 
 
 def close_boundary_record(state: dict) -> None:
@@ -1555,12 +1555,15 @@ def close_boundary_record(state: dict) -> None:
         return
     try:
         if gate.recorder.in_tick:  # a break, an early return or a failure inside a tick
-            gate.recorder.tick_end(outputs={"exit": state.get("phase")}, branches=[])
+            probe = _BOUNDARY_RECORD.get("probe")
+            gate.recorder.tick_end(outputs={"exit": state.get("phase"), "failure_reason": state.get("failure_reason")},
+                                   branches=probe() if probe is not None else [])
         gate.recorder.close()
     except Exception as exc:  # noqa: BLE001 -- a recording failure never replaces the run's own result
         state["boundary_record_error"] = repr(exc)
     finally:
         _BOUNDARY_RECORD["gate"] = None
+        _BOUNDARY_RECORD["probe"] = None
         if _BOUNDARY_RECORD.get("time") is not None:
             globals()["time"] = _BOUNDARY_RECORD["time"]  # the wall clock proxy (Clock) undone
             _BOUNDARY_RECORD["time"] = None
@@ -5815,6 +5818,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         if boundary is not None:
             # The services the mission logic calls (M-a0.5 ports); the physics step is one recorded call so
             # what the services do inside it (SLAM receive, scans, odometry) is not recorded as the core's.
+            from forklift_core.mission.boundary_record import DictWatch
+
+            # What the physics step writes into the core's dictionaries (services updated per tick), and the
+            # scans the core reads back (docking reads last_sent_ranges, the permission diagnostics last_raw).
+            step_watch = DictWatch(
+                boundary.recorder, {"slam": slam, "obstacle": obstacle},
+                keys={"slam": ["stop_now", "tracker_speed", "odom_speed", "odom_rear", "odom_yaw_rate", "scan_id",
+                               "last_scan_odom_base", "last_scan_estimate_rear", "last_sent_ranges", "records"],
+                      "obstacle": ["version", "last_stamp", "applied", "last_raw", "scans"]},
+                append_only={"records", "scans"},
+            )
             robot = RecordingProxy(robot, "Vehicle", boundary)
             pallet = RecordingProxy(pallet, "SimTruth", boundary)
             world = RecordingProxy(world, "Clock", boundary)
@@ -5824,17 +5838,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 obstacle["layer"] = RecordingProxy(obstacle["layer"], "Obstacles", boundary,
                                                    child_ports={"permission": "Permission"})
             if args.use_perception:
-                perception_capture = RecordingProxy(perception_capture, "Capture", boundary)
-            from forklift_core.mission.boundary_record import DictWatch
-
-            # What the physics step writes into the core's dictionaries (services updated per tick).
-            step_watch = DictWatch(
-                boundary.recorder, {"slam": slam, "obstacle": obstacle},
-                keys={"slam": ["stop_now", "tracker_speed", "odom_speed", "odom_rear", "odom_yaw_rate", "scan_id",
-                               "last_scan_odom_base", "last_scan_estimate_rear", "records"],
-                      "obstacle": ["version", "last_stamp", "applied", "scans"]},
-                append_only={"records", "scans"},
-            )
+                # A capture steps physics inside itself: the same watch covers what those steps change.
+                perception_capture = RecordingProxy(perception_capture, "Capture", boundary,
+                                                    watches={"capture": step_watch})
             stepper["fn"] = recorded_function(stepper["fn"], "Vehicle", "step", boundary, watch=step_watch)
             # The pocket camera's frame read and selection with what it feeds the near tracker and the
             # pocket check (services), and what that changes in the core's dictionaries.
@@ -5870,6 +5876,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 return grown
 
             branch_probe()  # the counts the loop starts from
+            _BOUNDARY_RECORD["probe"] = branch_probe  # an exit tick closes with its branches too
             # Core-side wall-clock reads (planning deadlines) through a Clock proxy of this module's `time`.
             _BOUNDARY_RECORD["time"] = time
             globals()["time"] = RecordingProxy(time, "Clock", boundary)
