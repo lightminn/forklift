@@ -264,7 +264,12 @@ def test_an_accepted_first_match_moves_the_goal_and_withdraw_installs_the_straig
     assert d["accepted_any"] is True and d["previous_goal"] == [9.05, 0.02, 0.01] and d["goal_frame"] == "held"
     assert (d["status"], d["round"], d["keep_m"]) == ("armed", 2, 0.6) and d["rounds"][0]["accepted"] is True
     assert d["match_seed"] == "prior" and d["dry_run"]["swept_clear"] is True and "to_world" in d
-    assert not np.allclose(w.core.paths["withdraw"].poses, withdraw_before)  # moved once, before the straight
+    # Moved exactly once by the step since the last goal (the SLAM goal), before the straight (Codex 6c P3).
+    from forklift_core.localization.slam_pose import compose, invert
+
+    step = compose((9.05, 0.02, 0.01), invert((9.0, 0.0, 0.0)))
+    np.testing.assert_allclose(w.core.paths["withdraw"].poses, [compose(step, tuple(p)) for p in withdraw_before],
+                               atol=1e-12)
     assert w.core.paths["transport"].length_m == pytest.approx(1.05) and w.ms.phase_started == 12.0
     assert w.state["paths_replaced"][-1]["by"] == "delivery_straight" and w.state["delivery_docking"] is d
     dest = w.slam["transport_scenario"].destination

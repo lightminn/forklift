@@ -10,6 +10,19 @@ CORE = ROOT / "src/forklift_core/mission/core.py"  # the mission logic moved out
 PROVISIONAL_URDF = ROOT / "sim/models/dls08_provisional/forklift.urdf"
 
 
+def runner_and_core_functions(tree) -> dict:
+    """The runner's functions by name (unparsed), with the mission core's methods that moved out of
+    run() (M-a1 slices 6c, 6d) in their place."""
+    import ast
+
+    functions = {n.name: ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    core = ast.parse(CORE.read_text())
+    cls = next(n for n in core.body if isinstance(n, ast.ClassDef) and n.name == "MissionCore")
+    functions.update({n.name: ast.unparse(n) for n in cls.body if isinstance(n, ast.FunctionDef)
+                      and n.name not in functions})
+    return functions
+
+
 def test_isaac_transport_help_does_not_require_simulator_sdk() -> None:
     result = subprocess.run(
         [sys.executable, str(SCRIPT), "--help"],
@@ -509,7 +522,7 @@ def test_d8b_every_read_is_recorded_before_the_d5_check_can_drop_it() -> None:
     import ast
 
     tree = ast.parse(SCRIPT.read_text())
-    functions = {node.name: ast.unparse(node) for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    functions = runner_and_core_functions(tree)
     read = functions["read_pocket_frame"]
     assert read.index("record_pocket_read(raw)") < read.index("if raw is None:") < read.index("frames_without_time")
     assert "if check is None:" in read
@@ -604,7 +617,7 @@ def test_s4_safety_stops_take_the_dwell_path_without_the_wheel_lock_and_record_t
     assert slew < assembly.index("cap = obstacle.get(\"permission_cap\")") < zero
     assert zero < assembly.index("drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)")
     tree = ast.parse(source)
-    functions = {node.name: ast.unparse(node) for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    functions = runner_and_core_functions(tree)
     assert "applied_speed_mps=state.get('applied_command'" in functions["record_truth_tick"]
     recorded = assembly.index("state[\"applied_command\"] = (float(drive.speed_mps)")
     assert assembly.index("drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)") < recorded
@@ -706,7 +719,7 @@ def test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival() -> 
     assert "if arrival_.stop:\n                            break" in source
     assert "\"repeat_target_not_reached\", \"near_tracking_stopped\"):\n            return" in source
     # Terminal stops end the run only once the stop detector sees the truck stand.
-    functions = {n.name: ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    functions = runner_and_core_functions(tree)
     feed_fn = functions["feed_near_frame"]
     assert feed_fn.index("skipped='bad_depth'") < feed_fn.index("get_current_frame()") < feed_fn.index(
         "row['skipped'] = 'uncovered'")
@@ -720,7 +733,8 @@ def test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival() -> 
     latched = tick_fn.index("if near['stop_state'].terminal:")
     assert latched < tick_fn.index("near_tracking.correction_update(") < tick_fn.index("near_redraw(latest_, rear_now)")
     # A gap shortfall ends the run only on a fresh observation; otherwise it waits.
-    tick_src = source[source.index("    def near_tick("):source.index("    def read_pocket_frame(")]
+    core_src = CORE.read_text()  # near_tick moved to the mission core (M-a1 slice 6d)
+    tick_src = core_src[core_src.index("    def near_tick("):core_src.index("\n    def ", core_src.index("    def near_tick(") + 10)]
     fresh_branch = tick_src[tick_src.index("if margins_[worst_] < 0:"):tick_src.index("ghat = ")]
     assert fresh_branch.index("if fresh:") < fresh_branch.index('terminal = terminal or "stuck"') < fresh_branch.index(
         'stale_now.add("gap_wait")')
@@ -744,7 +758,7 @@ def test_s4c1_injections_bias_only_the_captures_before_the_tracker_and_drop_befo
 
     source = SCRIPT.read_text()
     tree = ast.parse(source)
-    functions = {n.name: ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    functions = runner_and_core_functions(tree)
     assert "near['injection_closed'] = True" in functions["build_near_tracker"]
     core = CORE.read_text()  # the injection moved to the mission core with the observation (M-a1 slice 4b-iv)
     inject = core.index("inject_ = (near is not None and options.near_inject is not None")
@@ -756,7 +770,7 @@ def test_s4c1_injections_bias_only_the_captures_before_the_tracker_and_drop_befo
     assert feed_fn.index("row.update(skipped='dropped'") < feed_fn.index("adapter.normalize_depth(")
     assert feed_fn.index("return 'dropped'") < feed_fn.index("near['last_stamp'] = stamp")
     tick_fn = functions["near_tick"]
-    assert "face_distance <= args.near_drop_frames_from_m" in tick_fn and "'face_distance_m': face_distance" in tick_fn
+    assert "face_distance <= options.near_drop_frames_from_m" in tick_fn and "'face_distance_m': face_distance" in tick_fn
     assert "known pallet would carry the injected bias" in functions["check_near_contract"]
     near_tracking = (ROOT / "sim/isaac/near_tracking.py").read_text()
     for name in ("near_inject", "near_inject_lateral_m", "near_inject_yaw_rad", "near_drop_frames_from_m"):
@@ -773,10 +787,7 @@ def test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_captu
 
     source = SCRIPT.read_text()
     tree = ast.parse(source)
-    functions = {n.name: ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
-    # The shared release-and-stand moved to the mission core (M-a1 slice 6c).
-    functions.update({n.name: ast.unparse(n) for n in ast.walk(ast.parse(CORE.read_text()))
-                      if isinstance(n, ast.FunctionDef) and n.name == "release_and_stand"})
+    functions = runner_and_core_functions(tree)
     tick_fn = functions["near_tick"]
     retry = tick_fn.index("near_tracking.retry_allowed(")
     assert tick_fn.index("near.setdefault('terminal_standing_since', now_s)") < retry
@@ -830,7 +841,7 @@ def test_s4b_correction_points_are_decided_before_the_stop_and_install_at_once()
 
     source = SCRIPT.read_text()
     tree = ast.parse(source)
-    functions = {n.name: ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    functions = runner_and_core_functions(tree)
     tick_fn = functions["near_tick"]
     assert tick_fn.index("near_tracking.correction_update(") < tick_fn.index("near_tracking.decide_stop(")
     assert tick_fn.index("near_redraw(latest_, rear_now)") < tick_fn.index("near_install(")
@@ -865,20 +876,19 @@ def test_s4c3_stage_one_redraws_a_refused_near_capture_before_ending() -> None:
 
     source = SCRIPT.read_text()
     tree = ast.parse(source)
-    functions = {
-        n.name: ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
-    }
+    functions = runner_and_core_functions(tree)
     redraw_fn = functions["near_capture_redraw"]
     for needed in (
-        "redraw_docking(",
+        "redraw_docking_traced(",  # the dry runs' trajectories come back in the Planner response (M-a1 6d)
+        "dry_configs=(acceptance_, driven_)",
         "max_yaw_rad=near_tracking.CORRECTION_MAX_YAW_RAD",
         "correction_grid(target_, target_, rear_now)",
         "record_['refused'] = 'correction_point'",
         "'raw_target':",
         "'line':",
         "held_pockets(observation_,",
-        "near_tracking.rollout_face_distance(held_, widths_, tip_x_, args.rear_axle_offset_m)",
-        "near_tracking.correction_points_check(",
+        "near_tracking.rollout_face_distance(held_, widths_, tip_x_, options.rear_axle_offset_m)",
+        "near_tracking.correction_points_check(list(trajectories_),",
         "'fork_tip_x_m': tip_x_",
     ):
         assert needed in redraw_fn, needed
@@ -929,10 +939,7 @@ def test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_in
 
     source = SCRIPT.read_text()
     tree = ast.parse(source)
-    functions = {n.name: ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
-    # The shared release-and-stand moved to the mission core (M-a1 slice 6c).
-    functions.update({n.name: ast.unparse(n) for n in ast.walk(ast.parse(CORE.read_text()))
-                      if isinstance(n, ast.FunctionDef) and n.name == "release_and_stand"})
+    functions = runner_and_core_functions(tree)
     shared = functions["release_and_stand"]
     for needed in ("slam['tracker'].release(", "obstacle['layer'].refresh(", "carried(pocket['planning_pickup'])",
                    "near['retry_stand'] = True", "'applied_before': applied_before_"):

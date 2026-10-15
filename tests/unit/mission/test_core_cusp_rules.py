@@ -42,7 +42,7 @@ def make(phase="transport", *, slam=None, obstacle=None, profile="default", stat
                                                grid_planning=True, pickup_zone="ZONE", pickup_bounds="B",
                                                scenario="SC"))
     # Helpers moved into MissionCore (slices 6b/6c): this test's stand-ins go on the instance.
-    for name_ in ['dock_at_delivery_straight', 'arm_docking', 'release_and_carry', 'transport_replan', 'start_docking_retry', 'release_and_stand', 'release_after_backoff', 'slam_release', 'escape_leg', 'find_escape']:
+    for name_ in ['dock_at_delivery_straight', 'arm_docking', 'release_and_carry', 'transport_replan', 'start_docking_retry', 'release_and_stand', 'release_after_backoff', 'slam_release', 'escape_leg', 'find_escape', 'hold_count', 'near_tick', 'near_redraw', 'near_capture_redraw', 'near_protection_prediction', 'near_install', 'start_pickup_retry']:
         if hasattr(hooks, name_):
             setattr(core, name_, getattr(hooks, name_))
     return core, tracker, calls

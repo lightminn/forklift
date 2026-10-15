@@ -924,8 +924,8 @@ def test_every_path_replacement_restarts_the_no_progress_baseline():
     install = moved.index("    def install_reapproach(self, ")  # a MissionCore method since M-a1 slice 6b
     assert 'obstacle.setdefault("progress", {}).clear()' in moved[install : moved.index("\n    def ", install + 10)]
     # ... and a plan D8 S4b correction point's re-drawn docking straights.
-    near_install = source.index("    def near_install(")
-    assert 'obstacle.setdefault("progress", {}).clear()' in source[near_install : near_install + 3000]
+    near_install = moved.index("    def near_install(self, ")  # a MissionCore method since M-a1 slice 6d
+    assert 'obstacle.setdefault("progress", {}).clear()' in moved[near_install : near_install + 3500]
     # ... and every observe path a plan D8 S4c-3 realignment installs.
     realign = source.index("    def realign_install(")
     assert 'obstacle.setdefault("progress", {}).clear()' in source[realign : realign + 2000]
@@ -1147,7 +1147,8 @@ def test_near_protection_prediction_screens_only_the_last_correction():
     source = SCRIPT.read_text()
     # The rule marker, always recorded with near tracking: the judgement (xii) applies by it.
     assert '"protection_prediction_rules": near_tracking.PREDICT_RULES,' in source
-    decide = source[source.index('        elif corr_act["decide"] and terminal is None:'):]
+    core = CORE.read_text()  # near_tick and the prediction moved to the mission core (M-a1 slice 6d)
+    decide = core[core.index('        elif corr_act["decide"] and terminal is None:'):]
     decide = decide[: decide.index("        if corr_act[\"event\"] == \"closed\"")]
     # After redraw_docking accepted, at the 0.6 m point only; a refusal turns into replan_rejected.
     assert decide.index("plans_, record_, target_ = near_redraw(latest_, rear_now)") < decide.index(
@@ -1156,12 +1157,12 @@ def test_near_protection_prediction_screens_only_the_last_correction():
     assert 'if pred_["disposition"] == "refused":' in decide
     assert 'record_["refused"] = "protection_predicted"' in decide and "plans_ = None" in decide
     assert decide.index('record_["refused"] = "protection_predicted"') < decide.index('terminal = "replan_rejected"')
-    fn = source[source.index("    def near_protection_prediction("):]
+    fn = core[core.index("    def near_protection_prediction("):]
     fn = fn[: fn.index("    def near_install(")]
     # The retry permission is the terminal stop's own predicate; the lost injection the argument.
     assert ('near_tracking.retry_allowed("replan_rejected", near.get("retries", 0), near["protect"] is not None,'
             in fn)
-    assert "lost_ = args.near_drop_frames_from_m is not None" in fn
+    assert "lost_ = options.near_drop_frames_from_m is not None" in fn
     assert "near_tracking.prediction_disposition(" in fn
     for key in ('"rear"', '"approach"', '"tracker_config"', '"held"', '"widths_m"', '"bounds_sha256"',
                 '"drive_terms_sha256"', '"constants"', '"camera_xy_m"', '"carriage_limit_m"', '"fork_tip_x_m"'):

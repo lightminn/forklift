@@ -72,6 +72,8 @@ class World:
             options=SimpleNamespace(speeds={"approach": 0.4}, near_tracking=near_tracking,
                                     near_capture_box_yaw_rad=0.05, approach_straight_speed_mps=slow,
                                     near_capture_redraw=redraw, pocket_check=pocket))
+        # near_capture_redraw moved into MissionCore (slice 6d): this test's stand-in goes on the instance.
+        self.core.near_capture_redraw = self.hooks.near_capture_redraw
 
     def log(self, name, *args, **kwargs):
         self.calls.append((name, args, kwargs))
