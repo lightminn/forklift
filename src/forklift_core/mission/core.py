@@ -305,6 +305,7 @@ class MissionCore:
                     # A (b) retry may have released the correction: this
                     # tick's pose and control record follow (Codex D7c impl P2-3).
                     rear = hooks.slam_rear(t)
+                    hooks.set_rear(rear)  # the runner's closures (grid_kwargs, ...) read its rear (Codex slice-3 P2)
                     slam["control"][-1][1:4] = rear.tolist()
             else:
                 transition("lower", t)
@@ -734,11 +735,13 @@ class MissionCore:
             released_ = release_and_carry(t)
             if released_["released"]:
                 rear = slam_rear(t)
+                hooks.set_rear(rear)  # the runner's closures (grid_kwargs, ...) read its rear (Codex slice-3 P2)
                 slam["control"][-1][1:4] = rear.tolist()
         elif obstacle.get("backoff", {}).get("phase") == ms.phase:
             released_b = release_after_backoff(t, "release_in_backoff_recovery")  # plan v4 E3
             if released_b is not None:
                 rear = released_b
+                hooks.set_rear(rear)  # the runner's closures (grid_kwargs, ...) read its rear (Codex slice-3 P2)
         start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))
         replan_start = wall()
         tight = replace(planner_config, clearance_m=0.0)
@@ -1055,3 +1058,293 @@ class MissionCore:
             ms.phase_started = t
             requested_speed = 0.0
         return SimpleNamespace(rear=rear, requested_speed=requested_speed)
+
+    def follow(self, t: float, rear, signed_speed: float, dt: float) -> SimpleNamespace:
+        """The follower's tick: the time limit, the tracker update and the rules that rewrite its result
+        before anything else reads it -- the cusp heading holds' records, a re-observation stand, an
+        escape's end, the cusp position stall (``cusp_tick``) and the SLAM hold near a final goal. Returns
+        the rewritten ``tracking`` and ``cusp_hold``."""
+        ms, state, obstacle, slam, hooks, options, near = (self.ms, self.state, self.obstacle, self.slam, self.hooks,
+                                                          self.options, self.near)
+        trackers, settings, core = self.trackers, self.settings, self
+        require, dump_tracking, cusp_heading_end, cusp_heading_offset, cusp_tick = (
+            hooks.require, hooks.dump_tracking, hooks.cusp_heading_end, hooks.cusp_heading_offset, hooks.cusp_tick)
+        slam_odom_base, slam_error = hooks.slam_odom_base, hooks.slam_error
+        cusp_holds, CUSP_HEADING_HOLD_PHASES = hooks.cusp_holds(), options.cusp_heading_hold_phases
+        limit = core.tracking_limit(t)  # M-a1 slice 2
+        if t - ms.phase_started >= limit:
+            dump_tracking("timeout", ms.last_tracking)
+        require(t - ms.phase_started < limit, f"Tracking timeout in {ms.phase}")
+        tracking = trackers[ms.phase].update(rear, signed_speed, dt)
+        raw_tracking_ = tracking  # the tracker's own result, before any rule below rewrites it
+        # Fix A / A' records (cusp_heading_hold): every tracker tick, on the tracker's own
+        # result before any rule below rewrites it or replaces the tracker (Codex A' design
+        # review 2 P2: a return goal failure was taken by the stall replan first and the
+        # watch read "replaced"), a hold or watch of another tracker or phase ends; then the
+        # released leg's watch -- when it first moves, its largest lateral and heading offset
+        # from the path, and how it ends (ahead of the hold step, so a leg held again at its
+        # end counts that tick -- Codex fix A review 2 P3).
+        cusp_holds.sync(t, ms.phase, id(trackers[ms.phase]), trackers[ms.phase].leg_index, cusp_heading_end(tracking))
+        if ms.phase in CUSP_HEADING_HOLD_PHASES and state["cusp_heading_watch"] is not None:
+            cusp_holds.tick(
+                t, ms.phase, id(trackers[ms.phase]), trackers[ms.phase].leg_index, cusp_heading_end(tracking),
+                tracking.cusp_pending, tracking.speed_mps,
+                cusp_heading_offset(trackers[ms.phase], tracking.progress_m, rear)
+                if id(trackers[ms.phase]) == state["cusp_heading_watch"]["tracker"] else None)
+        retry_stand_ = near is not None and near.get("retry_stand") and ms.phase == "observe"
+        if retry_stand_:
+            # Plan D8 S4c-2: standing to re-observe -- no follower command, no hold and no
+            # observe recovery: the capture follows at once.
+            tracking = replace(tracking, status="arrived", speed_mps=0.0)
+        escape_now_ = (
+            obstacle is not None and obstacle.get("backoff", {}).get("phase") == ms.phase
+            and obstacle["backoff"].get("escape")
+        )
+        if escape_now_:
+            # Obstacle recovery v4 E3: an escape's end -- arrived, an endpoint failure, standing
+            # at its end, a 120-tick stand on the way -- is the backoff end, never a docking
+            # stop, a stall replan or a tracking failure; it stays so until a replan replaces it.
+            back_e = obstacle["backoff"]
+            standing_e = slam["stop_now"] if slam is not None else abs(signed_speed) < 0.01
+            back_e["stand_ticks"] = back_e.get("stand_ticks", 0) + 1 if standing_e else 0
+            if (
+                "end_s" in back_e or tracking.status == "arrived"
+                or (standing_e and (tracking.status == "failed" or trackers[ms.phase].remaining_to_goal_m() <= 1e-6))
+                or back_e["stand_ticks"] >= 120
+            ):
+                tracking = replace(tracking, status="arrived", speed_mps=0.0)
+            elif tracking.status == "failed":
+                # An endpoint failure while still rolling: brake and take the end standing.
+                tracking = replace(tracking, status="braking", speed_mps=0.0)
+        # Plan cusp position stall v7: a leg standing at its cusp end outside the cusp tolerance
+        # is held at zero, then started from the measured pose or handed on (K2/K3).
+        tracking, cusp_hold = cusp_tick(t, rear, raw_tracking_, tracking, retry_stand_)
+        ms.last_tracking = tracking
+        if (
+            slam is not None
+            and not retry_stand_
+            and ms.phase in ("observe", "approach", "transport", "return_home")
+            and slam["tracker"].mode == "tracking"
+            and trackers[ms.phase].remaining_to_goal_m()
+            <= 0.5 + signed_speed**2 / (2 * settings["drive_acceleration_mps2"])
+        ):
+            # The window grows with the braking distance (Codex v3.5 P2:
+            # a correction at 0.507 m and 0.55 m/s left no room to stop).
+            # A final goal is judged at 8 mm:
+            # a SLAM correction landing in the last half metre moves
+            # the estimate by centimetres and leaves the truck stopped
+            # outside the tolerance (S2 seed 1 on v3.4, transport).
+            # Freeze it there (plan v3.5; approach already holds from
+            # the capture). Released at settle as before.
+            slam["tracker"].hold(odom_from_base=slam_odom_base())
+            slam["holds"].append(
+                {"phase": ms.phase, "time_s": t, "event": "hold", "error": slam_error()}
+            )
+        return SimpleNamespace(tracking=tracking, cusp_hold=cusp_hold)
+
+    def docking_and_stall(self, t: float, rear, tracking, signed_speed: float, dt: float, loaded: bool) -> SimpleNamespace:
+        """After the follower's rules: the D7c docking stop at the delivery straight (a), the final goal
+        missed in heading under SLAM, and the stall at a path end -- a docking retry (c)/(d) when D7 owns
+        the transport, else a SLAM stall replan of the leg (twice at most). Returns ``tracking``, ``rear``,
+        ``d7_docking_`` and ``d7_owned`` (the cusp rule after it reads the last two)."""
+        ms, state, obstacle, slam, hooks, options = self.ms, self.state, self.obstacle, self.slam, self.hooks, self.options
+        paths, trackers, geometry = self.paths, self.trackers, self.geometry
+        planner_config, travel_config, scenario = options.planner_config, options.travel_config, options.scenario
+        return_to_pose = options.return_to_pose
+        require, wall, path_stats, path_record = hooks.require, hooks.wall, hooks.path_stats, hooks.path_record
+        dock_at_delivery_straight, start_docking_retry, slam_rear, slam_odom_base, arm_docking = (
+            hooks.dock_at_delivery_straight, hooks.start_docking_retry, hooks.slam_rear, hooks.slam_odom_base,
+            hooks.arm_docking)
+        grid_world, grid_kwargs, plan_transport_leg, plan_return_leg = (
+            hooks.grid_world, hooks.grid_kwargs, hooks.plan_transport_leg, hooks.plan_return_leg)
+        # The final goal judged out of heading tolerance under SLAM:
+        # brake to a stop and replan from there rather than end the
+        # mission (S3 seed 3 failed its return at -0.054 rad vs 0.03).
+        d7_docking_ = slam["docking"] if (options.d7_docking and slam is not None) else {}
+        # Plan D7c: a docked straight or a re-approach is recovered by a
+        # docking retry, judged before the stall/cusp budgets (Codex D7c P2).
+        d7_owned = ms.phase == "transport" and bool(
+            d7_docking_.get("accepted_any") or d7_docking_.get("reapproach")
+        )
+        dock_stop = (
+            ms.phase == "transport"
+            and d7_docking_.get("status") == "armed"
+            and slam["tracker"].mode == "holding"
+            and not tracking.at_cusp
+            and not tracking.off_path
+            and (
+                (tracking.status == "failed" and tracking.failure == "endpoint_heading")
+                or (tracking.status == "tracking" and trackers[ms.phase].remaining_to_goal_m() <= 1e-6)
+            )
+        )
+        if dock_stop:
+            # Plan D7c (a): stopped at the docking stop outside its tolerance
+            # (0.03 m, 0.05 rad) -- dock here, as an arrival would, rather
+            # than a stall replan (l8_measured seed 1 + N1: 37.5 mm lateral).
+            tracking = replace(tracking, status="braking", speed_mps=0.0)
+            ms.dock_stop_ticks = ms.dock_stop_ticks + 1 if slam["stop_now"] else 0
+            if ms.dock_stop_ticks >= 120:
+                ms.dock_stop_ticks = 0
+                state.setdefault("docking_retries", []).append(
+                    {"trigger": "a", "time_s": t, "counted": False, "round": d7_docking_.get("round", 1),
+                     "reapproach": bool(d7_docking_.get("reapproach")),
+                     "position_error_m": tracking.position_error_m, "yaw_error_rad": tracking.yaw_error_rad}
+                )
+                dock_at_delivery_straight(t)
+                rear = slam_rear(t)  # a retry may have released the correction
+                hooks.set_rear(rear)  # the runner's closures (grid_kwargs, ...) read its rear (Codex slice-3 P2)
+                slam["control"][-1][1:4] = rear.tolist()
+                tracking = trackers[ms.phase].update(rear, signed_speed, dt)
+                ms.last_tracking = tracking
+        else:
+            ms.dock_stop_ticks = 0
+        goal_heading_miss = (
+            slam is not None
+            and not dock_stop
+            and ms.phase in ("transport", "return_home")
+            and tracking.status == "failed"
+            and tracking.failure == "endpoint_heading"
+            and not tracking.at_cusp
+            and not tracking.off_path
+            and (len(state["stall_replans"]) < 2 or d7_owned)
+        )
+        if goal_heading_miss:
+            # Judged inside the 8 mm brake window, still creeping
+            # (S3 rerun: 6.6 mm left at -0.008 m/s): command zero and
+            # wait for the stop detector.
+            tracking = replace(tracking, status="braking", speed_mps=0.0)
+        stalled = (
+            slam is not None
+            and ms.phase in ("transport", "return_home")
+            and tracking.speed_mps == 0.0
+            and slam["stop_now"]
+            and (
+                goal_heading_miss
+                or (
+                    tracking.status == "tracking"
+                    and trackers[ms.phase].remaining_to_goal_m() <= 1e-6
+                )
+                # Plan D7c (d): a re-approach stopped at a cusp short of its
+                # tolerance (status tracking, no failure -- Codex D7c impl P2-5).
+                or (
+                    bool(d7_docking_.get("reapproach"))
+                    and tracking.status == "tracking"
+                    and tracking.at_cusp
+                )
+            )
+        )
+        if stalled and goal_heading_miss:
+            ms.slam_stall_ticks = max(ms.slam_stall_ticks, 119)
+        ms.slam_stall_ticks = ms.slam_stall_ticks + 1 if stalled else 0
+        if ms.slam_stall_ticks >= 120 and d7_owned:
+            # Plan D7c (c)/(d): after a docked straight or during a
+            # re-approach, a retry instead of transport_recovery_after_docking.
+            ms.slam_stall_ticks = 0
+            start_docking_retry(
+                t, "d" if d7_docking_.get("reapproach") else "c", "transport_recovery_after_docking"
+            )
+            rear = slam_rear(t)
+            hooks.set_rear(rear)  # the runner's closures (grid_kwargs, ...) read its rear (Codex slice-3 P2)
+            slam["control"][-1][1:4] = rear.tolist()
+            tracking = trackers[ms.phase].update(rear, signed_speed, dt)
+            ms.last_tracking = tracking
+        elif ms.slam_stall_ticks >= 120 and len(state["stall_replans"]) < 2:
+            # Stopped at the end of the path but outside the goal
+            # tolerance (an estimate shift before the hold): plan the
+            # leg again from here, in the held frame (Codex v3.5 P2).
+            ms.slam_stall_ticks = 0
+            start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))
+            replan_start = wall()
+            # After a docking match the transport is held relative to the
+            # station: a Hybrid A* recovery there would drive a held
+            # detour in a frame mixed with world obstacles (Codex 5de6c3a
+            # P2) -- end the run instead.
+            require(
+                not (ms.phase == "transport" and slam["docking"].get("accepted_any")),
+                "transport_recovery_after_docking",
+            )
+            if slam["tracker"].mode == "holding":
+                # No match is held against (the docking fell back): a
+                # recovery planned now may be a long manoeuvre -- a yaw
+                # fix at a 2 m radius is a full loop -- and must not run
+                # on dead reckoning (L3c v22 seed 1: 15 m held). The truck
+                # stands still: let SLAM back in first, as at a capture.
+                jump_m, jump_rad = slam["tracker"].release(odom_from_base=slam_odom_base())
+                slam["holds"].append(
+                    {"phase": ms.phase, "time_s": t, "event": "release_before_stall_replan",
+                     "jump_m": jump_m, "jump_rad": jump_rad}
+                )
+                rear_now = slam_rear(hooks.now_s())
+                if obstacle is not None and slam["tracker"].applied is not None:
+                    # The new correction re-projects the grid before any
+                    # plan reads it, and this tick goes on from the new
+                    # pose (Codex checkpoint P1: no mixed frames).
+                    obstacle["applied"] = tuple(float(v) for v in slam["tracker"].applied[0])
+                    obstacle["version"] += 1
+                    obstacle["reprojections"] = obstacle.get("reprojections", 0) + 1
+                    obstacle["layer"].refresh(
+                        t, obstacle["applied"], obstacle["version"],
+                        current_pose=tuple(float(v) for v in rear_now),
+                        path_ahead=np.array([rear_now]), loaded=loaded,
+                    )
+                rear = np.asarray(rear_now, dtype=float)
+                hooks.set_rear(rear)  # the runner's closures (grid_kwargs, ...) read its rear (Codex slice-3 P2)
+                start = PlanningPose(float(rear_now[0]), float(rear_now[1]), float(rear_now[2]))
+            if ms.phase == "transport":
+                # After docking, the corrected drop (v3.8, Codex P1).
+                replanned = plan_transport_leg(
+                    grid_world(slam.get("transport_scenario", scenario)), start, planner_config,
+                    geometry=geometry, travel_config=travel_config,
+                    **grid_kwargs(None),
+                )
+            else:
+                replanned = plan_return_leg(
+                    grid_world(slam.get("return_scenario", scenario)), start, return_to_pose, planner_config,
+                    geometry=geometry, travel_config=travel_config,
+                    **grid_kwargs(None),
+                )
+            state["stall_replans"].append(
+                {
+                    "phase": ms.phase,
+                    "time_s": t,
+                    "rear_pose": rear.tolist(),
+                    "position_error_m": tracking.position_error_m,
+                    "yaw_error_rad": tracking.yaw_error_rad,
+                    "status": replanned.status,
+                    "planning_wall_s": wall() - replan_start,
+                    **path_stats(replanned),
+                }
+            )
+            require(replanned.success, f"stall_replan_failed:{replanned.status}")
+            paths[ms.phase] = replanned
+            state.setdefault("paths", {})[ms.phase] = path_record(replanned)
+            hooks.write_paths()
+            hooks.show_path(
+                replanned,
+                "Transport" if ms.phase == "transport" else "Return",
+                (1.0, 0.65, 0.04) if ms.phase == "transport" else (0.55, 0.2, 0.85),
+            )
+            stall_config = trackers[ms.phase].config
+            if obstacle is not None and obstacle.get("backoff", {}).get("phase") == ms.phase:
+                # A replan accepted here ends a backoff too (Codex checkpoint 8 P2).
+                stall_config = obstacle.pop("backoff")["config"]
+                obstacle.setdefault("replan_wait", {}).pop(ms.phase, None)
+            trackers[ms.phase] = RearAxlePathTracker(
+                replanned.poses,
+                replanned.directions,
+                replanned.curvatures_inv_m,
+                stall_config,
+            )
+            if ms.phase == "transport":
+                arm_docking()  # keep the stop before the delivery straight
+            if obstacle is not None:
+                # The no-progress watch compares remaining lengths on one path:
+                # a replaced path starts its own baseline next tick, after
+                # arm_docking, as obstacle replans already do (plan D7d -- a
+                # stall replan's 23 m loop was judged against the old path's
+                # near-zero remainder, l8_measured seed 1 + N1).
+                obstacle.setdefault("progress", {}).clear()
+            ms.phase_started = t
+            tracking = trackers[ms.phase].update(rear, signed_speed, dt)
+            ms.last_tracking = tracking
+        return SimpleNamespace(tracking=tracking, rear=rear, d7_docking_=d7_docking_, d7_owned=d7_owned)

@@ -58,6 +58,7 @@ class World:
                 raise RuntimeError(reason)
 
         clock = iter(range(1000, 2000))
+        self.runner_rear = REAR  # run()'s rear, which the runner's closures read
         rect_checker = SimpleNamespace(free=lambda pose, pad: sweep_free)
         self.hooks = SimpleNamespace(
             require=require, wall=lambda: float(next(clock)),
@@ -69,7 +70,8 @@ class World:
             release_after_backoff=lambda t, event: log("release_after_backoff", t, event) or np.array([1.5, 2.0, 0.0]),
             slam_rear=lambda t: np.array([1.2, 2.0, 0.0]),
             grid_world=lambda sc: ("world", sc),
-            grid_kwargs=lambda *a, **k: log("grid_kwargs", *a) or {"occupancy": SimpleNamespace(
+            set_rear=lambda value: setattr(self, "runner_rear", value),
+            grid_kwargs=lambda *a, **k: log("grid_kwargs", *a, own_pose=tuple(self.runner_rear)) or {"occupancy": SimpleNamespace(
                 occupied=np.zeros((1, 1)), origin_x_m=0.0, origin_y_m=0.0, resolution_m=0.05)},
             plan_observation_leg=answer("plan_observation_leg"), plan_return_leg=answer("plan_return_leg"),
             transport_replan=answer("transport_replan"),
@@ -170,7 +172,7 @@ def test_the_return_replans_home_on_the_return_scenario():
     w.replan()
     _, args, kwargs = [c for c in w.calls if c[0] == "plan_return_leg"][0]
     assert args[0] == ("world", back) and args[2:] == ("HOME", w.core.options.planner_config)
-    assert ("grid_kwargs", ("return", "D2"), {}) in w.calls
+    assert [c[1] for c in w.calls if c[0] == "grid_kwargs"] == [("return", "D2")]
 
 
 def test_a_held_realignment_refuses_the_recovery():
@@ -323,3 +325,23 @@ def test_the_mission_replan_falls_back_to_zero_clearance_on_an_invalid_start_or_
     plans = [c for c in w.calls if c[0] == "plan_transport"]
     assert [p[1][1] for p in plans] == [Config(), Config(clearance_m=0.0)]
     assert w.obstacle["replans"][-1]["clearance_m"] == 0.0
+
+
+def test_after_a_release_the_runners_closures_see_the_released_pose():
+    """Codex slice-3 P2: grid_kwargs reads run()'s rear for its own pose; a release inside the core must reach it
+    before the replan's grid is prepared."""
+    w = World("transport", plans=[plan()])
+    w.obstacle["backoff"] = {"phase": "transport", "config": TrackerConfig(), "leg_dir": 1}
+    w.replan()
+    grids = [c for c in w.calls if c[0] == "grid_kwargs"]
+    assert grids == [] or all(c[2]["own_pose"] == (1.5, 2.0, 0.0) for c in grids)
+    np.testing.assert_array_equal(w.runner_rear, [1.5, 2.0, 0.0])
+    slam = {"docking": {"reapproach": True}, "tracker": SimpleNamespace(mode="tracking"), "control": [[0, 0, 0, 0]]}
+    w = World("observe", plans=[plan()], slam=slam)
+    w.ms.phase = "transport"
+    w.trackers["transport"] = w.trackers["observe"]
+    w.plans = [plan()]
+    w.hooks.transport_replan = lambda *a: w.hooks.grid_kwargs(None) and plan()
+    w.replan()
+    (grid,) = [c for c in w.calls if c[0] == "grid_kwargs"]
+    assert grid[2]["own_pose"] == (1.2, 2.0, 0.0)  # the re-approach release's pose

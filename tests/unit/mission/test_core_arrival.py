@@ -37,7 +37,7 @@ def make(phase, *, near=None, slam=None, trackers=None, stop_at=None, d7=False, 
         insertion_measured=log.hook("insertion_measured", {"depth_m": 0.33}),
         truth_relative_yaw=log.hook("truth_relative_yaw", lambda: truth["relative_yaw"]),
         dock_at_delivery_straight=log.hook("dock_at_delivery_straight"),
-        slam_rear=log.hook("slam_rear", np.array([4.0, 5.0, 0.2])),
+        slam_rear=log.hook("slam_rear", np.array([4.0, 5.0, 0.2])), set_rear=log.hook("set_rear"),
         pallet_z=log.hook("pallet_z", lambda: truth["pallet_z"]),
         lift_position=log.hook("lift_position", lambda: truth["lift"]),
         truth_rear=log.hook("truth_rear", lambda: truth["rear"]),
@@ -111,7 +111,7 @@ def test_transport_arrival_docks_when_armed_and_rereads_the_pose_under_d7():
     core, ms, _, log = make("transport", slam=slam, d7=True)
     result = core.arrive(40.0, track())
     assert ms.phase == "transport" and result.stop is False
-    assert [n for n, *_ in log] == ["dock_at_delivery_straight", "slam_rear"]
+    assert [n for n, *_ in log] == ["dock_at_delivery_straight", "slam_rear", "set_rear"]
     np.testing.assert_array_equal(result.rear, [4.0, 5.0, 0.2])
     assert slam["control"][-1] == [0.0, 4.0, 5.0, 0.2]
     slam["control"] = [[0.0, 0.0, 0.0, 0.0]]

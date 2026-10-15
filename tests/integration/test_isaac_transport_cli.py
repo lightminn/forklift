@@ -766,8 +766,9 @@ def test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_captu
     build_fn = functions["build_near_tracker"]
     assert "mismatch=False, unbounded=False, path_revision=0" in build_fn
     assert "near.setdefault('stop_events', [])" in build_fn and "stop_events=[]" not in build_fn
-    stand = source.index("retry_stand_ = near is not None and near.get('retry_stand') and ms.phase == 'observe'".replace("'", '"'))
-    window = source[stand : stand + 2700]  # obstacle recovery v4's escape end and the cusp stall sit between
+    core = CORE.read_text()  # the follower's tick moved to the mission core (M-a1 slice 4a-i)
+    stand = core.index("retry_stand_ = near is not None and near.get('retry_stand') and ms.phase == 'observe'".replace("'", '"'))
+    window = core[stand : stand + 2700]  # obstacle recovery v4's escape end and the cusp stall sit between
     assert 'tracking = replace(tracking, status="arrived", speed_mps=0.0)' in window
     assert "and not retry_stand_" in window
     seen = source.index("Plan D8 S4c-2 / S4c-3: the re-observation must see the pallet")

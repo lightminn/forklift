@@ -24,6 +24,12 @@ SCRIPT = Path(__file__).resolve().parents[2] / "sim/isaac/run_transport.py"
 CORE = Path(__file__).resolve().parents[2] / "src/forklift_core/mission/core.py"  # moved mission logic (M-a1)
 
 
+def _pass_through(call) -> bool:
+    """``f(*a, **k)``: the runner's hook for the core, every argument passed straight on."""
+    return (bool(call.args) and all(isinstance(a, ast.Starred) and isinstance(a.value, ast.Name) for a in call.args)
+            and all(k.arg is None and isinstance(k.value, ast.Name) for k in call.keywords))
+
+
 @pytest.mark.parametrize("d7", [False, True])
 @pytest.mark.parametrize(
     "gap,clearance,approach_clearance",
@@ -148,7 +154,7 @@ def test_all_runner_planning_calls_use_the_recorded_config(
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
         and node.func.id in ("plan_observation_leg", "plan_transport")
-        and not any(isinstance(a, ast.Starred) for a in node.args)  # the core's hooks pass straight through
+        and not _pass_through(node)  # the runner's hook for the core passes straight through
     ]
     # Third observation leg call: the SLAM observe replan (online SLAM plan
     # v3.8, same recorded planner_config, earlier ladder); fourth and fifth:
@@ -542,7 +548,7 @@ def test_the_extended_ladder_is_a_second_pass_for_the_first_observation_only():
         node
         for node in [*ast.walk(ast.parse(source)), *ast.walk(ast.parse(CORE.read_text()))]
         if isinstance(node, ast.Call) and ast.unparse(node.func) == "plan_observation_leg"
-        and not any(isinstance(a, ast.Starred) for a in node.args)  # the core's hook passes straight through
+        and not _pass_through(node)  # the runner's hook for the core passes straight through
     ]
     extended = {
         next(ast.unparse(k.value) for k in c.keywords if k.arg == "extended") for c in calls
@@ -751,7 +757,7 @@ def test_a_failed_replan_backs_off_a_bounded_distance_then_replans():
     assert 'obstacle.get("backoff", {}).get("phase") == ms.phase' in core[k - 2000 : k]
     assert 'or obstacle.get("force_replan") == ms.phase' in source
     assert 'leg_dir = obstacle.get("backoff", {}).get("leg_dir")' in core
-    assert 'stall_config = obstacle.pop("backoff")["config"]' in source
+    assert 'stall_config = obstacle.pop("backoff")["config"]' in core  # the stall replan too (M-a1 slice 4a-ii)
 
 
 def test_new_obstacle_rules_get_the_leg_direction_the_pallet_face_and_can_silence_the_depth_camera():
@@ -894,8 +900,9 @@ def test_every_path_replacement_restarts_the_no_progress_baseline():
     # old path's near-zero remainder. Obstacle, stall and cusp replans that replace the phase
     # path all clear the watch after arm_docking, so it restarts on the path being driven.
     source = SCRIPT.read_text()
-    stall = source.index('require(replanned.success, f"stall_replan_failed:{replanned.status}")')
-    window = source[stall : stall + 2500]
+    moved = CORE.read_text()  # the stall replan moved to the mission core (M-a1 slice 4a-ii)
+    stall = moved.index('require(replanned.success, f"stall_replan_failed:{replanned.status}")')
+    window = moved[stall : stall + 2500]
     assert window.index("arm_docking()") < window.index('obstacle.setdefault("progress", {}).clear()')
     cusp = source.index('"replaced_path": path_record(paths[ms.phase]),')
     window = source[cusp : cusp + 1500]
@@ -919,11 +926,12 @@ def test_every_path_replacement_restarts_the_no_progress_baseline():
 def test_d7c_docking_branches_are_inert_without_the_flag():
     # Plan D7c: flag-off runs drive and record as before.
     source = SCRIPT.read_text()
-    assert 'd7_docking_ = slam["docking"] if (args.d7_docking and slam is not None) else {}' in source
+    core = CORE.read_text()  # the D7c docking stop moved to the mission core (M-a1 slice 4a-ii)
+    assert 'd7_docking_ = slam["docking"] if (options.d7_docking and slam is not None) else {}' in core
     assert "        if args.d7_docking and result.accepted:\n" in source  # the early goal commit
     assert "        if path is None and args.d7_docking:\n" in source  # (b) instead of docking_unaligned
     # Without the flag the stall and cusp branches are the old ones (d7_owned is False).
-    assert "d7_owned = ms.phase == \"transport\" and bool(" in source
+    assert "d7_owned = ms.phase == \"transport\" and bool(" in core
 
 
 def test_d7c_reapproach_is_under_the_permission_and_kept_by_obstacle_replans():
@@ -989,13 +997,15 @@ def test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan():
 
 def test_obstacle_recovery_v4_an_escape_end_bypasses_docking_stall_and_failure():
     source = SCRIPT.read_text()
-    e3 = source.index("escape_now_ = (")
+    core = CORE.read_text()  # the follower's tick moved to the mission core (M-a1 slice 4a-i)
+    e3 = core.index("escape_now_ = (")
     # Before each of the three ways an end could otherwise go: the docking stop, the heading miss and
-    # stall replan, and the tracking-failure require.
-    assert e3 < source.index("                dock_stop = (")
-    assert e3 < source.index("                goal_heading_miss = (")
-    assert e3 < source.index('                require(\n                    tracking.status != "failed",')
-    window = source[e3 : e3 + 2000]
+    # stall replan, and the tracking-failure require -- the runner calls the follower first.
+    follow = source.index("follow_ = core.follow(t, rear, signed_speed, dt)")
+    docking = source.index("stall_ = core.docking_and_stall(")  # the docking stop and heading miss (slice 4a-ii)
+    assert follow < docking and core.index("        dock_stop = (") < core.index("        goal_heading_miss = (")
+    assert follow < source.index('                require(\n                    tracking.status != "failed",')
+    window = core[e3 : e3 + 2000]
     assert '"end_s" in back_e or tracking.status == "arrived"' in window
     # An endpoint failure is the end only standing; rolling, it brakes (Codex implementation review P2-1).
     assert '(standing_e and (tracking.status == "failed" or trackers[ms.phase].remaining_to_goal_m() <= 1e-6))' in window
@@ -1044,11 +1054,13 @@ def test_cusp_position_stall_v7_is_wired_into_the_runner():
     assert 'cusp_monitor = CUSP_STALL.CuspStallMonitor(state["cusp_stalls"])' in source
     assert 'state["cusp_stalls"] = []' in source
     # The tracker's own result goes in, after the escape override and before every later recovery rule.
-    call = source.index("tracking, cusp_hold = cusp_tick(t, rear, raw_tracking_, tracking, retry_stand_)")
-    assert source.index("raw_tracking_ = tracking  # the tracker's own result") < call
-    assert source.index("escape_now_ = (") < call
-    for later in ("                dock_stop = (", "                goal_heading_miss = (", "                observe_stalled = ("):
-        assert call < source.index(later)
+    core = CORE.read_text()  # the follower's tick moved to the mission core (M-a1 slice 4a-i)
+    call = core.index("tracking, cusp_hold = cusp_tick(t, rear, raw_tracking_, tracking, retry_stand_)")
+    assert core.index("raw_tracking_ = tracking  # the tracker's own result") < call
+    assert core.index("escape_now_ = (") < call
+    follow = source.index("follow_ = core.follow(t, rear, signed_speed, dt)")
+    for later in ("stall_ = core.docking_and_stall(", "                observe_stalled = ("):
+        assert follow < source.index(later)
     # Exclusions: D7 transport whatever --d7-docking says, a held realignment, the legacy profile.
     fn = source[source.index("    def cusp_excluded(phase_)") :]
     fn = fn[: fn.index("    def cusp_standing")]
@@ -1169,11 +1181,13 @@ def test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judge
     # sync() and the watch on every tracker tick's own result, before any rule rewrites it or
     # replaces the tracker, then the hold; the watch once more on the release tick's own update
     # (Codex fix A implementation review 2 P3, 3 P2; A' design review 1 P2, 2 P2).
-    raw = source.index("raw_tracking_ = tracking  # the tracker's own result")
-    whole = source[raw:]
+    core = CORE.read_text()  # the follower's tick moved to the mission core (M-a1 slice 4a-i)
+    raw = core.index("raw_tracking_ = tracking  # the tracker's own result")
+    whole = core[raw:]
     first_rule = whole.index("retry_stand_ = near is not None")
     assert whole.index("cusp_holds.sync(") < whole.index("cusp_holds.tick(") < first_rule
-    assert first_rule < whole.index("if ms.phase in CUSP_HEADING_HOLD_PHASES and tracking.cusp_pending:")
+    assert source.index("follow_ = core.follow(t, rear, signed_speed, dt)") < source.index(
+        "if ms.phase in CUSP_HEADING_HOLD_PHASES and tracking.cusp_pending:")
     after_update = block[block.index("tracking = hold_tracker.update(rear, signed_speed, dt)") :]
     assert 'if decision == "released":' in after_update and "cusp_holds.tick(" in after_update
     # Every observe and return tracker holds: the first ones, the candidate re-route's, the ones built

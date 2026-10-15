@@ -19,8 +19,15 @@ def _calls(prefix):
         if isinstance(node, ast.Call):
             f = node.func
             name = f.id if isinstance(f, ast.Name) else (f.attr if isinstance(f, ast.Attribute) else "")
-            if name.startswith(prefix) and not any(isinstance(a, ast.Starred) for a in node.args):
-                yield node  # (a call passing *args straight through is the runner's hook for the core)
+            if name.startswith(prefix) and not _pass_through(node):
+                yield node
+
+
+def _pass_through(call) -> bool:
+    """The runner's hook for the core, ``f(*a, **k)``: every argument passed straight on, nothing added
+    (Codex slice-3 P3: any starred argument was too wide)."""
+    return (bool(call.args) and all(isinstance(a, ast.Starred) and isinstance(a.value, ast.Name) for a in call.args)
+            and all(k.arg is None and isinstance(k.value, ast.Name) for k in call.keywords))
 
 
 def test_every_plan_sees_the_grid_world_without_props():
