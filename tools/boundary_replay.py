@@ -107,8 +107,14 @@ def build_inputs(run_dir: Path, gate: ReplayBoundary):
         if item["kind"] == "service":
             specs[item["id"]] = item.get("spec") or {}
             services[item["id"]] = ReplayProxy(item["id"], gate, spec=specs[item["id"]])
-    # Services that sat inside containers only (the obstacle layer): a proxy under their logical id.
-    services.setdefault("Obstacles", ReplayProxy("Obstacles", gate, spec={}))
+    # Services that sat inside containers only (the obstacle layer), with their recorded specs.
+    for logical, spec_ in (snap.get("service_specs") or {}).items():
+        specs.setdefault(logical, spec_)
+    for logical, spec_ in (snap.get("service_specs") or {}).items():
+        if logical not in services and logical != "Permission":
+            services[logical] = ReplayProxy(logical, gate, spec=spec_,
+                                            child_ports={"permission": "Permission"} if logical == "Obstacles" else None,
+                                            child_specs={"permission": specs.get("Permission", {})})
     values = {}
     shared_ids: dict = {}  # one alias numbering across the snapshot's values (one Encoder wrote them in name order)
     for name, item in sorted(snap["names"].items()):
@@ -149,7 +155,7 @@ def build_inputs(run_dir: Path, gate: ReplayBoundary):
             spec = {"methods": sorted(n for n in dir(target) if callable(getattr(target, n, None)))}
         else:
             spec = specs_by_port.get(port, type(target))
-        child_specs = {}
+        child_specs = {name: specs_by_port.get(child, {}) for name, child in (kw.get("child_ports") or {}).items()}
         return ReplayProxy(port, gate, spec=spec, child_ports=kw.get("child_ports"), child_specs=child_specs,
                            hash_only_requests=kw.get("hash_only_requests", ()), watches=kw.get("watches"))
 

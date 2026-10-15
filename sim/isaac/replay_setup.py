@@ -172,8 +172,11 @@ def write_setup_snapshot(names: dict, directory: Path, files: list[str], *, serv
             except ValueError:
                 rel = None
         copied.append({"path": str(p), "repo_relative": rel, "sha256": digest, "bytes": len(data)})
+    # Every service's method/property spec by logical id (those inside containers included).
+    service_specs = {logical: service_spec(obj) for logical, obj in (services or {}).items() if obj is not None}
     (directory / "setup_snapshot.json").write_text(json.dumps(
-        {"format": FORMAT, "names": out, "opaque": opaque, "files": copied}, allow_nan=True) + "\n")
+        {"format": FORMAT, "names": out, "opaque": opaque, "files": copied, "service_specs": service_specs},
+        allow_nan=True) + "\n")
     if encoder.arrays:
         np.savez_compressed(directory / "setup_arrays.npz", **encoder.arrays)
     return {"opaque": opaque, "files": len(copied)}

@@ -2581,7 +2581,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             # what the setup opened, and the files the arguments name (main() read some before run())
             setup_files.stop() + [str(v_) for v_ in vars(args).values()
                                   if isinstance(v_, (str, Path)) and len(str(v_)) < 4096 and Path(v_).is_file()],
-            services={"Obstacles": obstacle["layer"]} if obstacle is not None else None,
+            services=({"Obstacles": obstacle["layer"], "Permission": obstacle["layer"].permission}
+                      if obstacle is not None else None),
             repo_root=Path(__file__).resolve().parents[2],
             wanted=set(__import__("replay_setup").drive_inputs(drive)))
     return drive(_Setup(**locals()), isaac)
