@@ -98,6 +98,16 @@ def yaw_from_quat(x: float, y: float, z: float, w: float) -> float:
     return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
 
 
+def compose2d(a, b):
+    """Pose b given in a's frame, expressed in a's parent frame: (x, y, yaw) each."""
+    c, s = math.cos(a[2]), math.sin(a[2])
+    return (
+        a[0] + c * b[0] - s * b[1],
+        a[1] + s * b[0] + c * b[1],
+        math.atan2(math.sin(a[2] + b[2]), math.cos(a[2] + b[2])),
+    )
+
+
 def rear_axle_pose(x: float, y: float, yaw: float, rear_axle_x_m: float):
     """base_link pose to the rear-axle pose the console uses (rear_axle_x_m in base_link)."""
     return (
@@ -149,9 +159,11 @@ def scan_frame(
 ):
     """None without a laser pose: the page could not place the points.
 
-    pose_at says where the laser pose came from: "scan_stamp" (the transform at the
-    scan's own time) or "latest" (the newest transform, delay_s after the scan, used
-    when the one at the scan time is not available -- the points may be misplaced).
+    pose_at says where the laser pose came from: "scan_stamp" -- the laser's motion in
+    odom at the scan's own time, with the latest map -> odom correction (whose age is
+    freshness.slam_correction_age_s) -- or "latest" (the newest motion, delay_s after
+    the scan, used when the one at the scan time is not available -- the points may be
+    misplaced).
     """
     if laser is None:
         return None

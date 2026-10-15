@@ -30,6 +30,9 @@ class Store:
         self._lock = threading.Lock()
         self._snap = Snapshot()
         self._corr = CorrectionTracker()
+        self._corr_received_s: float | None = (
+            None  # the correction's own time, gateway clock
+        )
         self._grid: GridMessage | None = None
         self._scan: tuple[ScanMessage, PoseSample | None, str, float] | None = None
         self._camera: CameraFrame | None = None
@@ -41,9 +44,14 @@ class Store:
         with self._lock:
             self._snap.base = pose
 
-    def set_map_to_odom(self, xyyaw, now: float) -> None:
+    def set_map_to_odom(
+        self, xyyaw, now: float, received_s: float | None = None
+    ) -> None:
+        """received_s: the correction's own time on the gateway clock (its stamp's age
+        taken off now); the age shown is from that, not from when it was first seen."""
         with self._lock:
             self._corr.update(xyyaw, now)
+            self._corr_received_s = now if received_s is None else received_s
 
     def set_speed(self, mps: float, now: float) -> None:
         with self._lock:
@@ -92,7 +100,11 @@ class Store:
             return replace(
                 self._snap,
                 correction_version=self._corr.version or None,
-                correction_age_s=self._corr.age(now),
+                correction_age_s=(
+                    None
+                    if self._corr_received_s is None
+                    else now - self._corr_received_s
+                ),
                 notes=sorted(self._notes.values()),
             )
 

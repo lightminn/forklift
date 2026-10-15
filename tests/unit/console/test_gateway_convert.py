@@ -310,3 +310,11 @@ def test_a_monitor_link_claims_no_limits():
         convert.welcome("fl-1", "isaac", epoch=1)["capabilities"]["provisional_limits"]
         is False
     )
+
+
+def test_compose2d_applies_the_second_pose_in_the_first_frame():
+    # map -> odom: 1 m east, turned +90 deg; odom -> base_link: 2 m ahead in odom x
+    x, y, yaw = convert.compose2d((1.0, 0.0, math.pi / 2), (2.0, 0.0, 0.1))
+    assert (x, y, yaw) == pytest.approx((1.0, 2.0, math.pi / 2 + 0.1))
+    x, y, yaw = convert.compose2d((0.0, 0.0, 3.0), (0.0, 0.0, 0.5))
+    assert yaw == pytest.approx(math.atan2(math.sin(3.5), math.cos(3.5)))  # wrapped
