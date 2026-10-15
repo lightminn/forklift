@@ -73,6 +73,34 @@ class BoundaryRecorder:
         """``value`` encoded now (arrays copied): for recording a request before the call runs."""
         return self._encode(value)
 
+    def encode_request(self, raw: Any, hash_only: bool = False) -> Any:
+        """A call's arguments encoded now; ``hash_only`` keeps arrays by content hash only (format 2 keeps
+        every other type and the alias graph; format 1 flattens as before)."""
+        if self.value_format == 1:
+            return self._encode(_hash_only(raw) if hash_only else raw)
+        return self._encode(raw, hash_arrays=hash_only)
+
+    def encode_changes(self, request_after: Any, watched: dict | None) -> dict | None:
+        """Format 2: a call's changes as plain JSON whose leaves are value nodes -- ``request_after`` (already
+        an encoded request) and per watched dictionary and key one of ``{"value": node}``, ``{"append":
+        node}`` or ``{"deleted": true}``."""
+        out: dict = {}
+        if request_after is not None:
+            out["request_after"] = request_after
+        if watched:
+            enc: dict = {}
+            for name, diff in watched.items():
+                enc[name] = {}
+                for key, change in diff.items():
+                    if isinstance(change, dict) and change.get("$deleted") is True and len(change) == 1:
+                        enc[name][key] = {"deleted": True}
+                    elif isinstance(change, dict) and set(change) == {"$append"}:
+                        enc[name][key] = {"append": self._encode(change["$append"])}
+                    else:
+                        enc[name][key] = {"value": self._encode(change)}
+            out["watched"] = enc
+        return out or None
+
     def call(self, port: str, method: str, *, request: Any, response: Any = None, exception: BaseException | None = None,
              changes: Any = None, encoded_request: Any = None) -> None:
         """``encoded_request`` (from :meth:`encode` before the call) replaces ``request``."""
@@ -84,13 +112,19 @@ class BoundaryRecorder:
             type_name = (type(exception).__name__ if self.value_format == 1
                          else f"{type(exception).__module__}:{type(exception).__qualname__}")
             entry["exception"] = {"type": type_name, "message": str(exception)}
+            if self.value_format == 2:  # what rebuilding it needs: its args (errno, filename ... ride in them)
+                entry["exception"]["args"] = self._encode(tuple(exception.args))
+                if isinstance(exception, OSError) and (exception.filename is not None or exception.filename2 is not None):
+                    # Native state outside args (OSError keeps the file names apart).
+                    entry["exception"]["os_error"] = self._encode(
+                        (exception.errno, exception.strerror, exception.filename, None, exception.filename2))
             attributes = {k: v for k, v in vars(exception).items() if not k.startswith("__")} if hasattr(exception, "__dict__") else {}
             if attributes:  # what a caller reads from the exception (e.g. a capture failure's diagnostics)
                 entry["exception"]["attributes"] = self._encode(attributes)
         else:
             entry["response"] = self._encode(response)
         if changes is not None:
-            entry["changes"] = self._encode(changes)
+            entry["changes"] = changes if self.value_format == 2 else self._encode(changes)
         self._tick["calls"].append(entry)
 
     def tick_end(self, *, outputs: Any, branches: list[str]) -> None:
@@ -125,7 +159,8 @@ class BoundaryRecorder:
             "format": "forklift_boundary_record/1", "ticks": self._ticks, "chunks": self._chunk,
             "bytes": self._bytes, "stopped_at_tick": self.stopped_at_tick, "stopped_reason": self.stopped_reason,
             "opaque_values": self.opaque_values,
-        } | ({"format": "forklift_boundary_record/2"} if self.value_format == 2 else {}), indent=1) + "\n")
+        } | ({"format": "forklift_boundary_record/2", "value_types": sorted(self.value_types)}
+             if self.value_format == 2 else {}), indent=1) + "\n")
 
     # -- internals ---------------------------------------------------------------------------------
     def _flush(self) -> None:
@@ -149,11 +184,11 @@ class BoundaryRecorder:
             self._pending_arrays[key] = array
         return {"$array": key, "dtype": str(array.dtype), "shape": list(array.shape)}
 
-    def _encode(self, value: Any) -> Any:
+    def _encode(self, value: Any, *, hash_arrays: bool = False) -> Any:
         if self.value_format == 2:
             from forklift_core.mission.replay_codec import Encoder
 
-            encoder = Encoder(opaque_ok=self.opaque_ok)
+            encoder = Encoder(opaque_ok=self.opaque_ok, value_types=self.value_types, hash_arrays=hash_arrays)
             node = encoder.encode(value)
             for key, array in encoder.arrays.items():
                 if key not in self._written and key not in self._pending_arrays:
@@ -268,7 +303,7 @@ class RecordingGate:
         if not self.active:
             return fn(*args, **kwargs)
         raw = {"args": list(args), "kwargs": dict(kwargs)}
-        before = self.recorder.encode(_hash_only(raw) if hash_only else raw)
+        before = self.recorder.encode_request(raw, hash_only)
         marks = watch.mark() if watch is not None else None
         self.depth += 1
         try:
@@ -279,21 +314,52 @@ class RecordingGate:
                                changes=self._changes(raw, before, hash_only, watch, marks))
             raise
         self.depth -= 1
-        self.recorder.call(port, method, request=None, encoded_request=before, response=result,
-                           changes=self._changes(raw, before, hash_only, watch, marks))
+        changes = self._changes(raw, before, hash_only, watch, marks)
+        if self.recorder.value_format == 2 and _shares_objects(result, raw):
+            # A response that hands back an argument's own object: a replay cannot restore that identity.
+            changes = dict(changes or {}, response_aliases_request=True)
+        self.recorder.call(port, method, request=None, encoded_request=before, response=result, changes=changes)
         return result
 
     def _changes(self, raw, before, hash_only, watch, marks):
+        after = self.recorder.encode_request(raw, hash_only)
+        changed_request = json.dumps(after, sort_keys=True) != json.dumps(before, sort_keys=True)
+        watched = watch.changes(marks) if watch is not None else None
+        if self.recorder.value_format == 2:
+            return self.recorder.encode_changes(after if changed_request else None, watched)
         out = {}
-        after = self.recorder.encode(_hash_only(raw) if hash_only else raw)
-        if json.dumps(after, sort_keys=True) != json.dumps(before, sort_keys=True):
-            # Format 2 encodes the changes once more in call(): hand it the values, not their encoding.
-            out["request_after"] = after if self.recorder.value_format == 1 else (_hash_only(raw) if hash_only else raw)
-        if watch is not None:
-            changed = watch.changes(marks)
-            if changed:
-                out["watched"] = changed
+        if changed_request:
+            out["request_after"] = after
+        if watched:
+            out["watched"] = watched
         return out or None
+
+
+def _identities(value: Any, out: set, depth: int = 0) -> set:
+    """The ids of the mutable objects (containers, arrays, dataclass and plain objects) inside ``value``."""
+    if depth > 50 or value is None or isinstance(value, (bool, int, float, str, bytes)):
+        return out
+    if id(value) in out:
+        return out
+    if isinstance(value, (list, dict, np.ndarray)) or dataclasses.is_dataclass(value) or hasattr(value, "__dict__"):
+        out.add(id(value))
+    if isinstance(value, dict):
+        for v in value.values():
+            _identities(v, out, depth + 1)
+    elif isinstance(value, (list, tuple)):
+        for v in value:
+            _identities(v, out, depth + 1)
+    elif dataclasses.is_dataclass(value) and not isinstance(value, type):
+        for f in dataclasses.fields(value):
+            _identities(getattr(value, f.name), out, depth + 1)
+    return out
+
+
+def _shares_objects(response: Any, raw: dict) -> bool:
+    if response is None:
+        return False
+    inner = _identities(raw, set()) - {id(raw), id(raw["args"]), id(raw["kwargs"])}
+    return bool(inner & _identities(response, set()))
 
 
 def recorded_function(fn, port: str, method: str, gate: RecordingGate, *, hash_only: bool = False,

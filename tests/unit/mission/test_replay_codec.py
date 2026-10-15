@@ -78,3 +78,12 @@ def test_a_value_without_an_encoding_is_refused_unless_comparison_only():
 def test_an_unknown_class_does_not_decode_silently():
     with pytest.raises(ModuleNotFoundError):
         decode({"$dataclass": "no_such_module:X", "fields": {}}, {})
+
+
+def test_arrays_and_mutable_dataclasses_keep_their_identity():
+    arr = np.zeros(3)
+    h = Holder("h", [])
+    out = roundtrip({"a": arr, "b": [arr], "h1": h, "h2": h})
+    assert out["a"] is out["b"][0] and out["h1"] is out["h2"]
+    out["a"][0] = 1.0
+    assert out["b"][0][0] == 1.0

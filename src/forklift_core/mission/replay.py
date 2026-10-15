@@ -2,15 +2,20 @@
 
 The replayed code runs with :class:`ReplayGate` where the recorded run had a ``RecordingGate`` and with
 :class:`ReplayProxy` where it had ``RecordingProxy`` objects. Every boundary call is matched, in order,
-against the record: port, method and request must equal the recorded ones (opaque values by their type,
-hash-only requests by hash), nothing is skipped. The recorded answer is then handed back as if the call had
-run: the arguments the call changed are changed the same way (``request_after``), the watched core
-dictionaries get the recorded changes (``watched``) -- also when the call raised -- and the response is
-returned or the exception raised again. A mismatch raises :class:`ReplayMismatch` at the call.
+against the record: port, method and request must equal the recorded ones (the encoding, alias graph
+included; opaque values only where the session allows them, hash-only requests by array hash), nothing is
+skipped. The recorded answer is then handed back as if the call had run: the arguments the call changed are
+changed the same way, in place (``request_after``), the watched core dictionaries get the recorded changes
+(``watched``) -- also when the call raised -- and the response is returned or the exception raised again.
+
+A mismatch raises :class:`ReplayMismatch` at the call and is kept by the session: :meth:`ReplaySession.finish`
+fails on it even when the replayed code caught the exception. A record that stopped at its size cap, has a
+different tick count from its meta, or whose array payload does not match its hash is refused.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import importlib
 import json
 from pathlib import Path
@@ -25,15 +30,21 @@ class ReplayMismatch(AssertionError):
     """The replayed run asked something the recorded run did not, at this point."""
 
 
+class Unsupported(ReplayMismatch):
+    """A recorded change the replay cannot apply faithfully."""
+
+
 def check_format(directory: Path) -> dict:
     meta = json.loads((Path(directory) / "boundary_meta.json").read_text())
     if meta.get("format") != "forklift_boundary_record/2":
         raise ValueError(f"not a format-2 boundary record: {meta.get('format')}")
+    if meta.get("stopped_at_tick") is not None:
+        raise ValueError(f"the record stopped at tick {meta['stopped_at_tick']} ({meta.get('stopped_reason')})")
     return meta
 
 
 def read_ticks(directory: Path) -> Iterator[dict]:
-    """The ticks of a format-2 record in order, as written (decode values with :meth:`ReplaySession.decode`)."""
+    """The ticks of a format-2 record in order, as written."""
     directory = Path(directory)
     check_format(directory)
     for path in sorted(directory.glob("boundary_*.jsonl")):
@@ -44,24 +55,28 @@ def read_ticks(directory: Path) -> Iterator[dict]:
 
 
 def load_arrays(directory: Path) -> dict[str, np.ndarray]:
+    """The array payloads, each checked against its content hash."""
     arrays: dict[str, np.ndarray] = {}
     for path in sorted(Path(directory).glob("arrays_*.npz")):
         with np.load(path, allow_pickle=False) as z:
-            arrays.update({k: z[k] for k in z.files})
+            for key in z.files:
+                array = z[key]
+                if Encoder.digest(array) != key:
+                    raise ValueError(f"{path.name}: array {key[:12]} does not match its hash")
+                arrays[key] = array
     return arrays
 
 
 def _canonical(node: Any) -> str:
-    """A request's comparison form: the encoding, with alias ids dropped (a fresh encoding numbers them
-    the same way only if the same objects alias the same way, which the request compare checks anyway
-    through the structure)."""
-    def strip(n):
-        if isinstance(n, dict):
-            return {k: strip(v) for k, v in n.items() if k != "$id"}
-        if isinstance(n, list):
-            return [strip(v) for v in n]
-        return n
-    return json.dumps(strip(node), sort_keys=True, allow_nan=True)
+    return json.dumps(node, sort_keys=True, allow_nan=True)
+
+
+def _has_opaque(node: Any) -> bool:
+    if isinstance(node, dict):
+        return "$opaque" in node or any(_has_opaque(v) for v in node.values())
+    if isinstance(node, list):
+        return any(_has_opaque(v) for v in node)
+    return False
 
 
 def _resolve(qualname: str):
@@ -72,33 +87,77 @@ def _resolve(qualname: str):
     return obj
 
 
-def _apply_inplace(actual: Any, after: Any) -> Any:
-    """Make ``actual`` (a caller's argument) look like ``after`` in place where it is mutable; returns
-    the value to use."""
+def apply_inplace(actual: Any, after: Any, where: str = "argument") -> Any:
+    """Make ``actual`` equal ``after`` keeping every mutable object the caller may hold elsewhere: lists and
+    dictionaries are updated in place element by element (their elements recursively), arrays of the same
+    shape and dtype in place, mutable dataclasses field by field, tuples through their mutable elements.
+    Returns the object to use; a change that needs a held object replaced is refused."""
     if isinstance(actual, list) and isinstance(after, list):
-        actual[:] = after
+        new = [apply_inplace(actual[i], b, where) if i < len(actual) else b for i, b in enumerate(after)]
+        actual[:] = new
         return actual
     if isinstance(actual, dict) and isinstance(after, dict):
-        actual.clear()
-        actual.update(after)
+        for key in list(actual):
+            if key not in after:
+                del actual[key]
+        for key, value in after.items():
+            actual[key] = apply_inplace(actual[key], value, where) if key in actual else value
         return actual
+    if isinstance(actual, np.ndarray) and isinstance(after, np.ndarray):
+        if actual.shape != after.shape or actual.dtype != after.dtype:
+            raise Unsupported(f"{where}: an array changed shape or dtype in place")
+        actual[...] = after
+        return actual
+    if isinstance(actual, tuple) and isinstance(after, tuple) and len(actual) == len(after):
+        for a, b in zip(actual, after):
+            if apply_inplace(a, b, where) is not a:
+                raise Unsupported(f"{where}: a tuple element would have to be replaced")
+        return actual
+    if dataclasses.is_dataclass(actual) and not isinstance(actual, type) and type(actual) is type(after):
+        for f in dataclasses.fields(actual):
+            a, b = getattr(actual, f.name), getattr(after, f.name)
+            new = apply_inplace(a, b, where)
+            if new is not a:
+                try:
+                    setattr(actual, f.name, new)
+                except dataclasses.FrozenInstanceError:
+                    raise Unsupported(f"{where}: a frozen dataclass field would have to change") from None
+        return actual
+    if _canonical(Encoder(opaque_ok=True).encode(actual)) == _canonical(Encoder(opaque_ok=True).encode(after)):
+        return actual  # unchanged
+    if isinstance(actual, (list, dict, np.ndarray, tuple)) or (dataclasses.is_dataclass(actual)
+                                                                and not isinstance(actual, type)):
+        raise Unsupported(f"{where}: a {type(actual).__name__} became a {type(after).__name__}")
     return after
 
 
 class ReplaySession:
-    """The recorded ticks, consumed in order by the replayed run."""
+    """The recorded ticks, consumed in order by the replayed run. ``allow_opaque``: the (port, method) pairs
+    whose recorded request may hold opaque values (callbacks whose request descriptors are checked elsewhere,
+    plan section 3.4)."""
 
-    def __init__(self, directory: Path) -> None:
+    def __init__(self, directory: Path, *, allow_opaque=()) -> None:
         self.directory = Path(directory)
         self.meta = check_format(self.directory)
+        self.value_types = set(self.meta.get("value_types") or ())
+        self.allow_opaque = set(allow_opaque)
         self.arrays = load_arrays(self.directory)
         self._ticks = read_ticks(self.directory)
         self.tick: dict | None = None
         self._next = 0
         self.ticks_done = 0
+        self.failure: str | None = None
 
     def decode(self, node: Any) -> Any:
         return decode(node, self.arrays)
+
+    def encode(self, value: Any, *, hash_arrays: bool = False, opaque_ok: bool = True) -> Any:
+        return Encoder(opaque_ok=opaque_ok, value_types=self.value_types, hash_arrays=hash_arrays).encode(value)
+
+    def fail(self, message: str) -> ReplayMismatch:
+        if self.failure is None:
+            self.failure = message
+        return ReplayMismatch(message)
 
     # -- ticks ---------------------------------------------------------------------------------------
     @property
@@ -107,41 +166,46 @@ class ReplaySession:
 
     def tick_begin(self, tick: int, **head) -> None:
         if self.tick is not None:
-            raise ReplayMismatch("tick_begin inside a tick")
+            raise self.fail("tick_begin inside a tick")
         recorded = next(self._ticks, None)
         if recorded is None:
-            raise ReplayMismatch(f"tick {tick}: the record has no more ticks")
+            raise self.fail(f"tick {tick}: the record has no more ticks")
         if recorded["tick"] != tick:
-            raise ReplayMismatch(f"tick {tick}: the record's next tick is {recorded['tick']}")
-        for key in ("tick_t", "work_t", "stop_kind"):
-            if key in head:
-                got = _canonical(Encoder(opaque_ok=True).encode(head[key]))
-                if got != _canonical(recorded[key]):
-                    raise ReplayMismatch(f"tick {tick} {key}: {head[key]!r} != recorded {self.decode(recorded[key])!r}")
+            raise self.fail(f"tick {tick}: the record's next tick is {recorded['tick']}")
+        for key in ("tick_t", "work_t", "commands", "stop_kind"):
+            if key in head and _canonical(self.encode(head[key])) != _canonical(recorded[key]):
+                raise self.fail(f"tick {tick} {key}: {head[key]!r} differs from the recorded one")
         self.tick, self._next = recorded, 0
 
     def tick_end(self, *, outputs: Any, branches: list[str]) -> None:
         tick = self.tick
         if tick is None:
-            raise ReplayMismatch("tick_end without tick_begin")
+            raise self.fail("tick_end without tick_begin")
         if self._next != len(tick["calls"]):
             left = tick["calls"][self._next]
-            raise ReplayMismatch(f"tick {tick['tick']}: {len(tick['calls']) - self._next} recorded calls not made, "
-                                 f"next {left['port']}.{left['method']}")
-        got = _canonical(Encoder(opaque_ok=True).encode(outputs))
-        if got != _canonical(tick["outputs"]):
-            raise ReplayMismatch(f"tick {tick['tick']} outputs differ")
+            raise self.fail(f"tick {tick['tick']}: {len(tick['calls']) - self._next} recorded calls not made, "
+                            f"next {left['port']}.{left['method']}")
+        try:
+            got = self.encode(outputs, opaque_ok=False)
+        except TypeError as exc:
+            raise self.fail(f"tick {tick['tick']} outputs: {exc}") from None
+        if _canonical(got) != _canonical(tick["outputs"]):
+            raise self.fail(f"tick {tick['tick']} outputs differ")
         if list(branches) != tick["branches"]:
-            raise ReplayMismatch(f"tick {tick['tick']} branches {branches} != recorded {tick['branches']}")
+            raise self.fail(f"tick {tick['tick']} branches {branches} differ from {tick['branches']}")
         self.tick = None
         self.ticks_done += 1
 
     def finish(self) -> None:
+        if self.failure is not None:
+            raise ReplayMismatch(f"the replay failed earlier: {self.failure}")
         if self.tick is not None:
-            raise ReplayMismatch(f"the replay ended inside tick {self.tick['tick']}")
+            raise self.fail(f"the replay ended inside tick {self.tick['tick']}")
         left = next(self._ticks, None)
         if left is not None:
-            raise ReplayMismatch(f"the record has ticks left, from tick {left['tick']}")
+            raise self.fail(f"the record has ticks left, from tick {left['tick']}")
+        if self.ticks_done != self.meta.get("ticks"):
+            raise self.fail(f"{self.ticks_done} ticks replayed, the meta says {self.meta.get('ticks')}")
 
     # -- calls ---------------------------------------------------------------------------------------
     def peek(self) -> dict | None:
@@ -153,19 +217,23 @@ class ReplaySession:
         entry = self.peek()
         where = f"tick {self.tick['tick'] if self.tick else None} call {self._next}"
         if entry is None:
-            raise ReplayMismatch(f"{where}: {port}.{method} was not recorded here (no more calls)")
+            raise self.fail(f"{where}: {port}.{method} was not recorded here (no more calls)")
         if (entry["port"], entry["method"]) != (port, method):
-            raise ReplayMismatch(f"{where}: {port}.{method} != recorded {entry['port']}.{entry['method']}")
+            raise self.fail(f"{where}: {port}.{method} where {entry['port']}.{entry['method']} was recorded")
+        if _has_opaque(entry["request"]) and (port, method) not in self.allow_opaque:
+            raise self.fail(f"{where}: {port}.{method} was recorded with an opaque request value")
         if _canonical(request_node) != _canonical(entry["request"]):
-            raise ReplayMismatch(f"{where}: {port}.{method} request differs from the recorded one")
+            raise self.fail(f"{where}: {port}.{method} request differs from the recorded one")
+        if _has_opaque(entry.get("response")) or _has_opaque(entry.get("exception")):
+            raise self.fail(f"{where}: {port}.{method} answered with an opaque value (cannot be handed back)")
         self._next += 1
         return entry
 
 
 class ReplayGate:
     """In place of ``RecordingGate``: calls inside an open tick are answered from the record; outside a
-    tick (or nested inside an answered call, which never runs) nothing is recorded and nothing replayed --
-    the same rule the recording gate applied."""
+    tick (or nested inside an answered call, which never runs) nothing is replayed -- the rule the recording
+    gate applied."""
 
     def __init__(self, session: ReplaySession) -> None:
         self.session = session
@@ -179,82 +247,128 @@ class ReplayGate:
             watch=None):
         if not self.active:
             return fn(*args, **kwargs)
-        from forklift_core.mission.boundary_record import _hash_only
-
         raw = {"args": list(args), "kwargs": dict(kwargs)}
-        entry = self.session.take(port, method, Encoder(opaque_ok=True).encode(_hash_only(raw) if hash_only else raw))
+        entry = self.session.take(port, method, self.session.encode(raw, hash_arrays=hash_only))
         return self.answer(entry, args, kwargs, watch)
 
     def answer(self, entry: dict, args: tuple = (), kwargs: dict | None = None, watch=None):
-        changes = self.session.decode(entry["changes"]) if entry.get("changes") is not None else {}
-        if "request_after" in changes:
-            after = changes["request_after"]
-            for i, value in enumerate(after.get("args", [])):
-                if i < len(args):
-                    _apply_inplace(args[i], value)
-            for key, value in (after.get("kwargs") or {}).items():
-                if kwargs is not None and key in kwargs:
-                    _apply_inplace(kwargs[key], value)
-        if "watched" in changes:
-            if watch is None:
-                raise ReplayMismatch(f"{entry['port']}.{entry['method']}: recorded watched changes but no watch here")
-            for name, diff in changes["watched"].items():
-                target = watch.dicts.get(name)
+        session = self.session
+        where = f"{entry['port']}.{entry['method']}"
+        changes = entry.get("changes") or {}
+        if changes.get("response_aliases_request"):
+            raise session.fail(f"{where}: the response handed back an argument's own object (not replayable)")
+        try:
+            if "request_after" in changes:
+                after = session.decode(changes["request_after"])
+                for i, value in enumerate(after.get("args", [])):
+                    if i < len(args):
+                        apply_inplace(args[i], value, f"{where} argument {i}")
+                for key, value in (after.get("kwargs") or {}).items():
+                    if kwargs is not None and key in kwargs:
+                        apply_inplace(kwargs[key], value, f"{where} argument {key}")
+            for name, diff in (changes.get("watched") or {}).items():
+                target = None if watch is None else watch.dicts.get(name)
                 if target is None:
-                    raise ReplayMismatch(f"{entry['port']}.{entry['method']}: no watched dictionary {name}")
-                for key, value in diff.items():
-                    if isinstance(value, dict) and value.get("$deleted") is True and len(value) == 1:
+                    raise session.fail(f"{where}: recorded changes to {name} but no such watched dictionary here")
+                for key, change in diff.items():
+                    if change.get("deleted"):
                         target.pop(key, None)
-                    elif isinstance(value, dict) and set(value) == {"$append"}:
-                        target.setdefault(key, []).extend(value["$append"])
+                    elif "append" in change:
+                        target.setdefault(key, []).extend(session.decode(change["append"]))
                     else:
-                        target[key] = value
+                        value = session.decode(change["value"])
+                        target[key] = (apply_inplace(target[key], value, f"{where} {name}.{key}")
+                                       if key in target else value)
+        except Unsupported as exc:
+            raise session.fail(str(exc)) from None
         if "exception" in entry:
             raise self._exception(entry["exception"])
-        return self.session.decode(entry["response"])
+        return session.decode(entry["response"])
 
     def _exception(self, record: dict) -> BaseException:
-        cls = _resolve(record["type"]) if ":" in record["type"] else RuntimeError
-        exc = cls.__new__(cls)
-        BaseException.__init__(exc, record["message"])
-        for key, value in self.session.decode(record.get("attributes") or {}).items():
-            setattr(exc, key, value)
+        if ":" not in record["type"]:
+            raise self.session.fail(f"exception type {record['type']} is not qualified (format 1?)")
+        cls = _resolve(record["type"])
+        args = tuple(self.session.decode(record["args"])) if "args" in record else (record["message"],)
+        if "os_error" in record:  # errno, strerror, filename, winerror, filename2
+            args = tuple(self.session.decode(record["os_error"]))
+        try:
+            exc = cls(*args)
+        except Exception:  # a constructor with another signature: rebuild without it
+            exc = cls.__new__(cls)
+            exc.args = args
+        if "attributes" in record:
+            for key, value in self.session.decode(record["attributes"]).items():
+                try:
+                    setattr(exc, key, value)
+                except AttributeError:
+                    pass  # read-only native attributes come back through args
         return exc
 
 
 class ReplayProxy:
-    """In place of a ``RecordingProxy``: attribute reads and method calls answered from the record.
-    Whether a name is an attribute or a method is what the record says (an attribute read is recorded with
-    the request ``{"get": True}``)."""
+    """In place of a ``RecordingProxy``. ``spec`` is the service's class: a name that is a method on it is a
+    call, anything else an attribute read -- an attribute read that is not the next recorded entry fails at
+    once. ``child_ports`` as for the recording proxy; a child recorded as ``None`` (read with ``{"get":
+    True}``) comes back as ``None``."""
 
-    def __init__(self, port: str, gate: ReplayGate, *, child_ports=None, hash_only_requests=(), watches=None) -> None:
+    def __init__(self, port: str, gate: ReplayGate, *, spec: type, child_ports=None, child_specs=None,
+                 hash_only_requests=(), watches=None) -> None:
         object.__setattr__(self, "_port", port)
         object.__setattr__(self, "_gate", gate)
+        object.__setattr__(self, "_spec", spec)
         object.__setattr__(self, "_child_ports", dict(child_ports or {}))
+        object.__setattr__(self, "_child_specs", dict(child_specs or {}))
         object.__setattr__(self, "_children", {})
         object.__setattr__(self, "_hash_only", frozenset(hash_only_requests))
         object.__setattr__(self, "_watches", dict(watches or {}))
 
+    def _attribute_entry(self, name: str) -> dict | None:
+        gate = object.__getattribute__(self, "_gate")
+        entry = gate.session.peek() if gate.active else None
+        if entry is not None and (entry["port"], entry["method"]) == (object.__getattribute__(self, "_port"), name) \
+                and _canonical(entry["request"]) == _canonical(gate.session.encode({"get": True})):
+            return entry
+        return None
+
     def __getattr__(self, name: str):
         gate = object.__getattribute__(self, "_gate")
         port = object.__getattribute__(self, "_port")
+        session = gate.session
         child_port = object.__getattribute__(self, "_child_ports").get(name)
         if child_port is not None:
+            entry = self._attribute_entry(name)
+            if entry is not None:  # the child was None when recorded
+                session.take(port, name, entry["request"])
+                return gate.answer(entry)
             children = object.__getattribute__(self, "_children")
             if name not in children:
-                children[name] = ReplayProxy(child_port, gate)
+                spec = object.__getattribute__(self, "_child_specs").get(name, object)
+                children[name] = ReplayProxy(child_port, gate, spec=spec)
             return children[name]
-        entry = gate.session.peek() if gate.active else None
-        if entry is not None and (entry["port"], entry["method"]) == (port, name) \
-                and _canonical(entry["request"]) == _canonical(Encoder().encode({"get": True})):
-            gate.session.take(port, name, entry["request"])
+        spec = object.__getattribute__(self, "_spec")
+        static = None
+        for klass in getattr(spec, "__mro__", ()):
+            if name in vars(klass):
+                static = vars(klass)[name]
+                break
+        is_method = isinstance(static, (staticmethod, classmethod)) or (
+            callable(static) and not isinstance(static, property))
+        if not is_method:
+            if not gate.active:
+                raise session.fail(f"{port}.{name} read outside a recorded tick (no service to read)")
+            entry = self._attribute_entry(name)
+            if entry is None:
+                nxt = session.peek() or {}
+                raise session.fail(f"{port}.{name} read where {nxt.get('port')}.{nxt.get('method')} was recorded")
+            session.take(port, name, entry["request"])
             return gate.answer(entry)
         hash_only = name in object.__getattribute__(self, "_hash_only")
         watch = object.__getattribute__(self, "_watches").get(name)
 
         def method(*args, **kwargs):
             def unreachable(*a, **k):
-                raise ReplayMismatch(f"{port}.{name} called outside a recorded tick (no service to run)")
+                raise session.fail(f"{port}.{name} called outside a recorded tick (no service to run)")
             return gate.run(port, name, unreachable, args, kwargs, hash_only=hash_only, watch=watch)
 
         return method
@@ -262,5 +376,4 @@ class ReplayProxy:
     def __setattr__(self, name: str, value) -> None:
         gate = object.__getattribute__(self, "_gate")
         if gate.active:
-            gate.session.take(object.__getattribute__(self, "_port"), name,
-                              Encoder(opaque_ok=True).encode({"set": value}))
+            gate.session.take(object.__getattribute__(self, "_port"), name, gate.session.encode({"set": value}))
