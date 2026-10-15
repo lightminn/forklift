@@ -117,13 +117,18 @@ def refuse_recorded(runs) -> None:
     from forklift_core.mission.boundary_record import measurement_refusal
 
     for run in runs:
-        # The tables read meta.json and slam_log.npz, so the flag the runner writes into meta.json is checked
-        # (a meta without it predates the recorder); result.json's arguments too when it is there.
+        # The tables read meta.json and slam_log.npz, so the flag the runner writes into meta.json is checked;
+        # a meta without it was written before the flag (possibly by a recording runner), so result.json's
+        # arguments decide, and with neither the input cannot be verified and is refused.
         meta = json.loads((run / "meta.json").read_text())
-        reason = measurement_refusal({"arguments": {"record_boundary": meta.get("record_boundary", False)}})
         path = run / "result.json"
-        if reason is None and path.exists():
-            reason = measurement_refusal(json.loads(path.read_text()))
+        result = json.loads(path.read_text()) if path.exists() else None
+        if "record_boundary" not in meta and result is None:
+            raise SystemExit(f"{run}: no record_boundary in meta.json and no result.json -- cannot verify the run "
+                             "was not boundary-recorded")
+        reason = measurement_refusal({"arguments": {"record_boundary": meta.get("record_boundary", False)}})
+        if reason is None and result is not None:
+            reason = measurement_refusal(result)
         if reason is not None:
             raise SystemExit(f"{run}: {reason}")
 
