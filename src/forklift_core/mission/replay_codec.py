@@ -48,6 +48,11 @@ def _resolve(qualname: str) -> type:
     return obj
 
 
+def plain_value(value: Any) -> bool:
+    """A scalar this codec encodes by value (shared with the recorder's change check)."""
+    return value is None or isinstance(value, (bool, int, float, str, bytes, np.bool_, np.integer, np.floating))
+
+
 class Encoder:
     """One encoding scope: the array table and the alias graph are shared by everything it encodes.
 
@@ -118,12 +123,10 @@ class Encoder:
     def encode(self, value: Any) -> Any:
         if isinstance(value, np.ndarray):
             return self._shared(value, lambda: self.array_key(value))
-        if isinstance(value, np.bool_):
-            return bool(value)
-        if isinstance(value, np.integer):
-            return int(value)
-        if isinstance(value, np.floating):
-            value = float(value)
+        if isinstance(value, (np.bool_, np.integer, np.floating)):  # kept with its dtype
+            plain = value.item()
+            return {"$np": str(value.dtype),
+                    "v": {"$float": repr(plain)} if isinstance(plain, float) and not math.isfinite(plain) else plain}
         if isinstance(value, float) and not math.isfinite(value):
             return {"$float": repr(value)}
         if value is None or isinstance(value, (bool, int, float, str)):
@@ -204,6 +207,9 @@ def decode(node: Any, arrays: dict[str, np.ndarray]) -> Any:
             return array
         if "$float" in n:
             return float(n["$float"])
+        if "$np" in n:
+            v = n["v"]
+            return np.dtype(n["$np"]).type(float(v["$float"]) if isinstance(v, dict) else v)
         if "$bytes" in n:
             return base64.b64decode(n["$bytes"])
         if "$tuple" in n:

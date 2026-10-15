@@ -751,3 +751,21 @@ def test_bytes_are_values(tmp_path):
     rcore = {"payload": b"old"}
     replay_with(lambda f: f(0), watch_dicts_replay={"core": rcore})
     assert rcore["payload"] == b"new"
+
+
+def test_a_numpy_scalar_without_a_value_encoding_in_the_view_is_refused(tmp_path):
+    core = {"z": np.complex64(1 + 2j)}
+
+    def fn(_):
+        core["z"] = np.complex64(3 + 4j)
+
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    gate = RecordingGate(rec)
+    watch = DictWatch(rec, {"core": core})
+    rec.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    recorded_function(fn, "Svc", "f", gate, watch=watch)(0)
+    rec.tick_end(outputs={}, branches=[])
+    rec.close()
+    from forklift_core.mission.replay import read_ticks
+
+    assert "unsupported" in next(iter(read_ticks(tmp_path)))["calls"][0]["changes"]

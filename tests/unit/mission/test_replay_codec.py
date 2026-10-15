@@ -96,3 +96,11 @@ def test_a_dataclass_whose_post_init_copies_a_field_keeps_the_restored_alias():
     out = roundtrip({"fp": fp, "raw": fp.xyz_m})
     assert out["fp"].xyz_m is out["raw"] and isinstance(out["fp"], FramePoints)
     assert not out["raw"].flags.writeable  # read-only as recorded
+
+
+def test_numpy_scalars_keep_their_dtype_and_unencodable_ones_are_refused():
+    out = roundtrip({"f": np.float32(1.5), "i": np.int16(-3), "b": np.bool_(True), "n": np.float64("nan")})
+    assert out["f"].dtype == np.float32 and out["f"] == np.float32(1.5)
+    assert out["i"].dtype == np.int16 and out["b"].dtype == np.bool_ and np.isnan(out["n"])
+    with pytest.raises(TypeError, match="no value encoding"):
+        encode({"c": np.complex64(1 + 2j)})
