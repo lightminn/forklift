@@ -4303,6 +4303,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             now_s=lambda: world.current_time - initial_time,
             show_path=lambda path, label, color: add_path_display(stage, path, label, color),
             set_rear=set_rear,
+            # M-a1 slice 4a-iii: the cusp helpers (built further down run()) and truth.
+            cusp_monitor=lambda: cusp_monitor, cusp_heading_motion=lambda v: cusp_heading_motion(v),
+            cusp_stopped=lambda: cusp_stopped(), cusp_end_recovered=lambda goal: cusp_end_recovered(goal),
+            cusp_leg_checker=lambda: cusp_leg_checker(), cusp_sensors=lambda *a: cusp_sensors(*a),
+            truth_yaw_rate=lambda: robot.get_angular_velocity()[2],
+            near_tick=lambda *a: near_tick(*a),  # M-a1 slice 4a-iv
         ),
         near=near,
         options=SimpleNamespace(near_tracking_stop_at=args.near_tracking_stop_at, d7_docking=args.d7_docking,
@@ -4314,7 +4320,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 pickup_bounds=pickup_bounds, mission_stages=mission_stages,
                                 observation_waypoints=args.observation_waypoints, backoff_m=BACKOFF_M,
                                 backoff_speed_mps=BACKOFF_SPEED_MPS, backoff_per_leg=BACKOFF_PER_LEG,
-                                escape_per_leg=ESCAPE_PER_LEG, cusp_heading_hold_phases=CUSP_HEADING_HOLD_PHASES),
+                                escape_per_leg=ESCAPE_PER_LEG, cusp_heading_hold_phases=CUSP_HEADING_HOLD_PHASES,
+                                max_cusp_replans=max_cusp_replans, cusp_stop_needed=cusp_stop_needed,
+                                cusp_stop_yaw_rate_radps=cusp_stop_yaw_rate_radps,
+                                cusp_heading_hold_position_m=CUSP_HEADING_HOLD_POSITION_M,
+                                cusp_heading_hold_rad=CUSP_HEADING_HOLD_RAD,
+                                observe_replans_per_leg=OBSERVE_REPLANS_PER_LEG, dwell_d_end_m=dwell_d_end_m,
+                                observe_arrival_m=OBSERVE_ARRIVAL_M, observe_arrival_yaw_rad=OBSERVE_ARRIVAL_YAW_RAD),
     )
     transition = core.transition
 
@@ -6045,385 +6057,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 # M-a1 slice 4a-ii: the D7c docking stop, the SLAM goal heading miss and the stall replan.
                 stall_ = core.docking_and_stall(t, rear, tracking, signed_speed, dt, loaded)
                 tracking, rear, d7_docking_, d7_owned = stall_.tracking, stall_.rear, stall_.d7_docking_, stall_.d7_owned
-                if (
-                    tracking.status == "failed"
-                    and ms.phase == "transport"
-                    and tracking.failure == "endpoint_heading"
-                    and tracking.at_cusp
-                    and not tracking.off_path
-                    and (len(state["cusp_replans"]) < max_cusp_replans or d7_owned)
-                ):
-                    stopped = (
-                        slam["stop_now"]
-                        if slam is not None
-                        else (
-                            tracking.speed_mps == 0.0
-                            and float(np.linalg.norm(velocity[:2]))
-                            <= trackers[ms.phase].config.stop_speed_mps
-                            and abs(float(robot.get_angular_velocity()[2]))
-                            <= cusp_stop_yaw_rate_radps
-                        )
-                    )
-                    ms.cusp_stop_ticks = ms.cusp_stop_ticks + 1 if stopped else 0
-                    if ms.cusp_stop_ticks < cusp_stop_needed:
-                        # The failed tracker already commands zero; let it stop.
-                        tracking = replace(tracking, status="braking")
-                    elif d7_owned:
-                        # Plan D7c (c)/(d): a cusp after a docked straight or inside a
-                        # re-approach is a docking retry, not a cusp replan.
-                        ms.cusp_stop_ticks = 0
-                        start_docking_retry(
-                            t, "d" if d7_docking_.get("reapproach") else "c", "transport_recovery_after_docking"
-                        )
-                        rear = slam_rear(t)
-                        slam["control"][-1][1:4] = rear.tolist()
-                        tracking = trackers[ms.phase].update(rear, signed_speed, dt)
-                        ms.last_tracking = tracking
-                    else:
-                        ms.cusp_stop_ticks = 0
-                        require(
-                            not (slam is not None and slam["docking"].get("accepted_any")),
-                            "transport_recovery_after_docking",
-                        )
-                        replan_start = time.monotonic()
-                        replanned = plan_transport_leg(
-                            grid_world(slam.get("transport_scenario", scenario)
-                            if slam is not None
-                            else scenario),
-                            PlanningPose(float(rear[0]), float(rear[1]), float(rear[2])),
-                            planner_config,
-                            geometry=geometry,
-                            travel_config=travel_config,
-                            **grid_kwargs(None),
-                        )
-                        replan_wall_s = time.monotonic() - replan_start
-                        state["planning_wall_s"] = (
-                            state.get("planning_wall_s") or 0.0
-                        ) + replan_wall_s
-                        state["cusp_replans"].append(
-                            {
-                                "time_s": t,
-                                "loop_step": step,
-                                "rear_pose": rear.tolist(),
-                                "position_error_m": tracking.position_error_m,
-                                "yaw_error_rad": tracking.yaw_error_rad,
-                                "status": replanned.status,
-                                "planning_wall_s": replan_wall_s,
-                                "search_attempts": [
-                                    list(entry) for entry in replanned.search_attempts
-                                ],
-                                "path": path_record(replanned)
-                                if replanned.success
-                                else None,
-                                "replaced_path": path_record(paths[ms.phase]),
-                            }
-                        )
-                        if replanned.success:
-                            paths[ms.phase] = replanned
-                            # The active plan everywhere: record, file, display.
-                            state.setdefault("paths", {})[ms.phase] = path_record(replanned)
-                            (args.output / "paths.json").write_text(
-                                record_json(state["paths"], indent=2) + "\n"
-                            )
-                            add_path_display(
-                                stage, replanned, "Transport", (1.0, 0.65, 0.04)
-                            )
-                            trackers[ms.phase] = RearAxlePathTracker(
-                                replanned.poses,
-                                replanned.directions,
-                                replanned.curvatures_inv_m,
-                                trackers[ms.phase].config,
-                            )
-                            if slam is not None:
-                                arm_docking()
-                            if obstacle is not None:
-                                obstacle.setdefault("progress", {}).clear()  # plan D7d, as above
-                            ms.phase_started = t
-                            tracking = trackers[ms.phase].update(rear, signed_speed, dt)
-                            ms.last_tracking = tracking
-                # EPAL 6 fork spacing plan, fix A (observe) and A' (return): a cusp held for a
-                # heading miss of 0.05-0.08 rad (the tracker's cusp_pending). Standing, re-check the
-                # window, judge the next leg from here with this cusp's limits only, and release it;
-                # anything else latches the tracker's failure for the existing path (the observe
-                # replan below; a failed return ends the run as before).
-                hold_tracker = trackers[ms.phase]
-                if ms.phase in CUSP_HEADING_HOLD_PHASES and tracking.cusp_pending:
-                    hold = cusp_holds.held(
-                        t, [ms.phase, id(hold_tracker), hold_tracker.leg_index],
-                        {"rear": rear.tolist(), "position_error_m": tracking.position_error_m,
-                         "yaw_error_rad": tracking.yaw_error_rad, **cusp_heading_motion(signed_speed)},
-                        cusp_heading_end(tracking))
-                    decision = None
-                    if slam is not None and slam["tracker"].mode == "holding" and realign_active():
-                        decision = "realign_held"  # no recovery in a held realignment (S4c-3)
-                    elif cusp_stopped():
-                        if not (tracking.position_error_m <= CUSP_HEADING_HOLD_POSITION_M
-                                and hold_tracker.leg_remaining_m() <= hold_tracker.leg_end_window_m()):
-                            decision = "window"
-                        else:
-                            from forklift_core.control import escape as esc
-
-                            judged = CUSP_STALL.judge(
-                                hold_tracker, rear, tracking, {}, end_recovered=cusp_end_recovered,
-                                sweep_free=lambda trajectory_: esc.rectangles_sweep_free(cusp_leg_checker(), trajectory_),
-                                sensors=(lambda trajectory_, direction_, t_=t, rear_=rear: cusp_sensors(
-                                    t_, rear_, trajectory_, direction_)) if obstacle is not None else None,
-                                bounds=(CUSP_HEADING_HOLD_POSITION_M, CUSP_HEADING_HOLD_RAD),
-                            )
-                            hold["judgement"] = judged.record
-                            if not (judged.pose_ok and judged.sensor_ok and not judged.prefix_occupied):
-                                decision = "judged_out"
-                            elif hold_tracker.release_cusp(True):
-                                decision = "released"
-                            else:
-                                decision = "release_refused"
-                    if decision is not None:
-                        cusp_holds.decide(
-                            t, decision,
-                            {"decided_rear": rear.tolist(), "decided_position_error_m": tracking.position_error_m,
-                             "decided_yaw_error_rad": tracking.yaw_error_rad,
-                             "decided": cusp_heading_motion(signed_speed)},
-                            cusp_heading_end(tracking))
-                        if decision != "released":
-                            hold_tracker.fail_pending()
-                        tracking = hold_tracker.update(rear, signed_speed, dt)
-                        ms.last_tracking = tracking
-                        if decision == "released":
-                            # The new watch sees this tick's update too: the next leg's first command,
-                            # or its end reached at once (Codex fix A implementation review 3 P2).
-                            cusp_holds.tick(
-                                t, ms.phase, id(hold_tracker), hold_tracker.leg_index, cusp_heading_end(tracking),
-                                tracking.cusp_pending, tracking.speed_mps,
-                                cusp_heading_offset(hold_tracker, tracking.progress_m, rear))
-                # Under SLAM, an observe leg judged out of heading at a cusp or
-                # its end (S2 seed 1: -0.078 rad at a cusp of the near leg, three
-                # versions running): brake, then plan the leg again from the
-                # stop to the same target, at most twice per run.
-                # Also a stop at a cusp outside its tolerance (S3 seed 1: 44.5 mm,
-                # command 0, status tracking until the timeout) once it has
-                # stood for a second.
-                # Plan cusp position stall v7: not while the stall handling holds an observe stall (its
-                # sensor wait or hand-off) -- only once it has passed the stall to this rule.
-                observe_stalled = (
-                    slam is not None
-                    and ms.phase == "observe"
-                    and tracking.status == "tracking"
-                    and tracking.at_cusp
-                    and tracking.speed_mps == 0.0
-                    and slam["stop_now"]
-                    and not cusp_monitor.holds_observe()
-                )
-                ms.observe_stall_ticks = ms.observe_stall_ticks + 1 if observe_stalled else 0
-                if (
-                    slam is not None and ms.phase == "observe" and slam["tracker"].mode == "holding"
-                    and realign_active()
-                    and (
-                        (tracking.status == "failed" and tracking.failure == "endpoint_heading"
-                         and not tracking.off_path)
-                        or ms.observe_stall_ticks >= 120
-                    )
-                ):
-                    # Plan D8 S4c-3 stage 2: no recovery runs held in the realignment (the
-                    # S4c-2 failure's replan did) -- whatever its budget.
-                    require(False, "near_capture_realign_held_recovery")
-                observe_miss = (
-                    slam is not None
-                    and ms.phase == "observe"
-                    and (
-                        (
-                            tracking.status == "failed"
-                            and tracking.failure == "endpoint_heading"
-                            and not tracking.off_path
-                        )
-                        or ms.observe_stall_ticks >= 120
-                    )
-                    and len(state["observe_replans"]) - state["observe_replan_leg"]["start"]
-                    < OBSERVE_REPLANS_PER_LEG
-                )
-                if observe_miss:
-                    ms.observe_stall_ticks = 0
-                    tracking = replace(tracking, status="braking", speed_mps=0.0)
-                    if slam["stop_now"]:
-                        target = PlanningPose(*(float(v) for v in paths["observe"].poses[-1]))
-                        replan_start = time.monotonic()
-                        replanned = plan_observation_leg(
-                            grid_world(scenario),
-                            target,
-                            planner_config,
-                            geometry=geometry,
-                            start_rear=PlanningPose(float(rear[0]), float(rear[1]), float(rear[2])),
-                            pickup_bounds=pickup_bounds,
-                            extended=False,
-                            **grid_kwargs("observe"),
-                        )
-                        leg_ = state["observe_replan_leg"]
-                        state["observe_replans"].append(
-                            {
-                                "time_s": t,
-                                "rear_pose": rear.tolist(),
-                                "yaw_error_rad": ms.last_tracking.yaw_error_rad,
-                                "status": replanned.status,
-                                "planning_wall_s": time.monotonic() - replan_start,
-                                "leg_serial": leg_["serial"],
-                                "budget_left": OBSERVE_REPLANS_PER_LEG
-                                - (len(state["observe_replans"]) + 1 - leg_["start"]),
-                            }
-                        )
-                        require(replanned.success, f"observe_replan_failed:{replanned.status}")
-                        paths["observe"] = replanned
-                        state.setdefault("paths", {})["observe"] = path_record(replanned)
-                        (args.output / "paths.json").write_text(
-                            record_json(state["paths"], indent=2) + "\n"
-                        )
-                        add_path_display(stage, replanned, "Observe", (0.2, 0.8, 0.8))
-                        trackers["observe"] = RearAxlePathTracker(
-                            replanned.poses,
-                            replanned.directions,
-                            replanned.curvatures_inv_m,
-                            trackers["observe"].config,
-                        )
-                        ms.phase_started = t
-                        realign_install("observe_replan")  # Plan D8 S4c-3 stage 2
-                        tracking = trackers["observe"].update(rear, signed_speed, dt)
-                        ms.last_tracking = tracking
-                if tracking.status == "failed":
-                    dump_tracking("failed", tracking)
-                require(
-                    tracking.status != "failed",
-                    f"Tracking failed in {ms.phase}: pos={tracking.position_error_m:.4f},yaw={tracking.yaw_error_rad:.4f}",
-                )
-                requested_speed, curvature = (
-                    tracking.speed_mps,
-                    tracking.curvature_inv_m,
-                )
-                if slam is not None and not slam["tracker"].may_drive():
-                    requested_speed = 0.0  # warming up: hold still
-                if (
-                    dwells is not None and ms.phase == "approach"
-                    and state.get("near_capture", {}).get("status") == "done"
-                ):
-                    # Plan D8b calibration dwells (recording runs only): stand at the
-                    # straight's start, at each camera-face gap and after arriving.
-                    hold_, released_ = dwells.update(
-                        t, d_est_m=trackers["approach"].remaining_to_goal_m() + dwell_d_end_m,
-                        still=bool(slam["stop_now"]), arrived=tracking.status == "arrived",
-                    )
-                    if hold_:
-                        requested_speed = 0.0
-                        # Steering held too: turning at standstill shifted the body
-                        # 20 um per 0.1 s through a whole stand (matrix 1883 seed 3,
-                        # 0.18-0.25 rad of steering in every start dwell).
-                        dwell_hold = True
-                        # The wheels lock only once the truck has stopped: locked at the
-                        # trigger, while still braking, they sprang the body back ~0.8 mm
-                        # (diagnostic 1984).
-                        dwell_standing = dwells.active is not None and dwells.active["still_since_s"] is not None
-                        if tracking.status == "arrived":
-                            tracking = replace(tracking, status="tracking", speed_mps=0.0)
-                    elif released_:
-                        # Accelerate from the stop, not from the slew's held cruise.
-                        trackers["approach"].restart_speed_slew(0.0)
-                        requested_speed = 0.0
-                if (
-                    safety_stops is not None and ms.phase == "approach"
-                    and state.get("near_capture", {}).get("status") == "done"
-                ):
-                    # Plan D8 S4a-1 ⓪: the near-field tracker's safety stop, scheduled --
-                    # zero command, steering held (the dwell path), no wheel lock.
-                    hold_, released_ = safety_stops.update(
-                        t, d_est_m=trackers["approach"].remaining_to_goal_m() + dwell_d_end_m,
-                        still=bool(slam["stop_now"]),
-                    )
-                    if hold_:
-                        requested_speed = 0.0
-                        dwell_hold = True
-                        # A safety stop is a step to zero at the wheels, as the permission's
-                        # cap and the e-stop are (the stop the stopping model measured), not
-                        # the slewed braking of a dwell (Codex S4a-1 ⓪ review P1).
-                        safety_hold = True
-                        if tracking.status == "arrived":
-                            tracking = replace(tracking, status="tracking", speed_mps=0.0)
-                    elif released_:
-                        trackers["approach"].restart_speed_slew(0.0)
-                        requested_speed = 0.0
-                if near is not None and near["tracker"] is not None and ms.phase in ("approach", "insert"):
-                    # Plan D8 S4a ④: the near-field stop, before this tick's arrival --
-                    # zero command, steering held (the safety stop the drive terms were
-                    # measured with), arrival deferred; a restart only from standing.
-                    hold_, released_, arrive_ = near_tick(t, rear_stamp, rear, requested_speed, ms.phase, curvature,
-                                                          tracking.status == "arrived")
-                    if arrive_:
-                        # Plan D8 S4a-2 ③: the carriage-corner insertion end, standing: the
-                        # insertion's own arrival processing (insert -> lift) follows.
-                        requested_speed = 0.0
-                        dwell_hold = True
-                        safety_hold = True
-                        tracking = replace(tracking, status="arrived", speed_mps=0.0)
-                    elif hold_:
-                        requested_speed = 0.0
-                        dwell_hold = True
-                        safety_hold = True
-                        if tracking.status == "arrived":
-                            tracking = replace(tracking, status="tracking", speed_mps=0.0)
-                    elif released_:
-                        trackers[ms.phase].restart_speed_slew(0.0)
-                        requested_speed = 0.0
-                if (
-                    ms.phase == "observe" and tracking.status == "tracking"
-                    and trackers[ms.phase].remaining_to_goal_m() <= 1e-9 and abs(tracking.speed_mps) < 1e-12
-                    and (slam["stop_now"] if slam is not None else abs(signed_speed) < 0.01)
-                    and tracking.position_error_m <= OBSERVE_ARRIVAL_M
-                    and abs(tracking.yaw_error_rad) <= OBSERVE_ARRIVAL_YAW_RAD
-                ):
-                    # The tracker stops at a path end it missed sideways and never
-                    # arrives (L3c v38 seed 3: 6.1 cm off an arc's end). An
-                    # observation waypoint is a viewpoint, not a docking pose:
-                    # perception uses the pose the truck stands at. Standing 1 s
-                    # within OBSERVE_ARRIVAL_M is arrival there.
-                    loose = state.setdefault("observe_loose_arrival", {})
-                    loose.setdefault("since_s", t)
-                    if t - loose["since_s"] >= 1.0:
-                        state.setdefault("observe_loose_arrivals", []).append(
-                            {"time_s": t, "position_error_m": tracking.position_error_m,
-                             "yaw_error_rad": tracking.yaw_error_rad}
-                        )
-                        state.pop("observe_loose_arrival", None)
-                        tracking = replace(tracking, status="arrived")
-                else:
-                    state.pop("observe_loose_arrival", None)
-                if (
-                    tracking.status == "arrived" and obstacle is not None
-                    and obstacle.get("backoff", {}).get("phase") == ms.phase
-                ):
-                    # The end of a backoff is not the leg's arrival: stand and
-                    # replan the leg from here, each second until a replan is
-                    # accepted (D4 delta).
-                    back_ = obstacle["backoff"]
-                    if "end_s" not in back_:
-                        back_["end_s"] = t
-                        obstacle.setdefault("backoff_records", []).append(
-                            {"phase": ms.phase, "start_s": back_["time_s"], "end_s": t,
-                             "rear": [float(v) for v in rear], "escape": bool(back_.get("escape"))}
-                        )
-                    # Plan v4 E3: standing first -- then the hold released and the replan forced.
-                    standing_b = slam["stop_now"] if slam is not None else abs(signed_speed) < 0.01
-                    if standing_b and not back_.get("released"):
-                        back_["released"] = True
-                        # The stop's cause, read before the release refreshes the permission, for the
-                        # forced replan's record (Codex implementation review 2 P2).
-                        perm_b = obstacle["layer"].permission
-                        back_["stop_cause"] = {
-                            "path": getattr(perm_b.path_check, "blocked", None),
-                            "estop": getattr(getattr(perm_b, "last_estop", None), "blocked", None),
-                        }
-                        released_b = release_after_backoff(t, "release_after_backoff")
-                        if released_b is not None:
-                            rear = released_b
-                    if standing_b and t - back_.get("forced_s", -1e9) >= 1.0:
-                        back_["forced_s"] = t
-                        obstacle["force_replan"] = ms.phase
-                    tracking = replace(tracking, status="tracking", speed_mps=0.0)
-                    requested_speed = 0.0
+                # M-a1 slice 4a-iii: the cusp and observe-leg recoveries are the core's.
+                recover_ = core.cusp_and_observe_recovery(t, rear, tracking, signed_speed, dt, d7_docking_, d7_owned, step)
+                tracking, rear = recover_.tracking, recover_.rear
+                # M-a1 slice 4a-iv: the command and the stops before the arrival are the core's.
+                command_ = core.command(t, rear, rear_stamp, tracking, signed_speed, dwell_hold, dwell_standing,
+                                        safety_hold)
+                requested_speed, curvature, tracking, rear = (command_.requested_speed, command_.curvature,
+                                                              command_.tracking, command_.rear)
+                dwell_hold, dwell_standing, safety_hold = command_.dwell_hold, command_.dwell_standing, command_.safety_hold
                 if tracking.status == "arrived":
                     if args.use_perception and ms.phase == "observe":
                         attempt_number = len(state["observation_attempts"]) + 1

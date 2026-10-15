@@ -14,20 +14,34 @@ TRUTH = ("obstacles", "scenario.pickup", "truth_rear", "ppos", "pallet_yaw", "pi
 CORE_TREE = ast.parse((Path(__file__).resolve().parents[2] / "src/forklift_core/mission/core.py").read_text())
 
 
+def _hook_forwards(tree) -> set:
+    """The runner's hooks for the mission core: ``lambda *a, **k: f(*a, **k)`` -- a lambda whose whole body
+    is one call passing exactly the lambda's own *args / **kwargs on, nothing added (Codex slice-3/4a P3:
+    an argument shape alone, ``plan_transport(*obstacles)``, is not that)."""
+    ids = set()
+    for lam in ast.walk(tree):
+        if not isinstance(lam, ast.Lambda) or not isinstance(lam.body, ast.Call):
+            continue
+        call, a = lam.body, lam.args
+        star = a.vararg.arg if a.vararg else None
+        kw = a.kwarg.arg if a.kwarg else None
+        positional = [p.arg for p in a.args]
+        args_ok = [ast.unparse(x) for x in call.args] == positional + ([f"*{star}"] if star else [])
+        kws_ok = [(k.arg, ast.unparse(k.value)) for k in call.keywords] == ([(None, kw)] if kw else [])
+        if args_ok and kws_ok and (star or kw or positional):
+            ids.add(id(call))
+    return ids
+
+
 def _calls(prefix):
-    for node in [*ast.walk(TREE), *ast.walk(CORE_TREE)]:
-        if isinstance(node, ast.Call):
-            f = node.func
-            name = f.id if isinstance(f, ast.Name) else (f.attr if isinstance(f, ast.Attribute) else "")
-            if name.startswith(prefix) and not _pass_through(node):
-                yield node
-
-
-def _pass_through(call) -> bool:
-    """The runner's hook for the core, ``f(*a, **k)``: every argument passed straight on, nothing added
-    (Codex slice-3 P3: any starred argument was too wide)."""
-    return (bool(call.args) and all(isinstance(a, ast.Starred) and isinstance(a.value, ast.Name) for a in call.args)
-            and all(k.arg is None and isinstance(k.value, ast.Name) for k in call.keywords))
+    for tree in (TREE, CORE_TREE):
+        forwards = _hook_forwards(tree)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and id(node) not in forwards:
+                f = node.func
+                name = f.id if isinstance(f, ast.Name) else (f.attr if isinstance(f, ast.Attribute) else "")
+                if name.startswith(prefix):
+                    yield node
 
 
 def test_every_plan_sees_the_grid_world_without_props():

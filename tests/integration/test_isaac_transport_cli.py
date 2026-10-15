@@ -522,8 +522,9 @@ def test_d8b_every_read_is_recorded_before_the_d5_check_can_drop_it() -> None:
     assert "recorder.tick_error = " in functions["record_truth_tick"]
     source = SCRIPT.read_text()
     # The dwells restart the tracker's slew and hold the switch to the insertion.
-    assert "trackers[\"approach\"].restart_speed_slew(0.0)" in source
-    assert "tracking = replace(tracking, status=\"tracking\", speed_mps=0.0)" in source
+    command = CORE.read_text()  # the dwells moved to the mission core (M-a1 slice 4a-iv)
+    assert "trackers[\"approach\"].restart_speed_slew(0.0)" in command
+    assert "tracking = replace(tracking, status=\"tracking\", speed_mps=0.0)" in command
     # The recorder is written first in the finally block, guarded.
     finally_at = source.index("    finally:\n        if recorder is not None:")
     assert finally_at < source.index("state[\"pocket_recording\"] = recorder.close(") < source.index(
@@ -551,7 +552,8 @@ def test_d8b_custom_cruise_drives_the_straight_but_not_the_acceptance_dry_run() 
 def test_d8b_dwells_hold_the_steering_as_well_as_the_wheels() -> None:
     """Matrix 1883: steering turned 0.18-0.25 rad in every start dwell and the body crept."""
     source = SCRIPT.read_text()
-    block = source[source.index("hold_, released_ = dwells.update("):source.index("elif released_:")]
+    command = CORE.read_text()  # the dwells moved to the mission core (M-a1 slice 4a-iv)
+    block = command[command.index("hold_, released_ = dwells.update("):command.index("elif released_:")]
     assert "dwell_hold = True" in block
     # (A cusp position stall's hold, plan cusp stall v7, joins the same path.)
     assert "if estop_holding or obstacle_hold or dwell_hold or cusp_hold:" in source
@@ -560,7 +562,7 @@ def test_d8b_dwells_hold_the_steering_as_well_as_the_wheels() -> None:
     assert "wheel_curvature = kappa if (dwell_hold or cusp_hold) else curvature" in source
     assert "drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)" in source
     assert "ackermann_command(wheel_speed, curvature," not in source
-    assert source.index("dwell_hold = dwell_standing = False") < source.index("hold_, released_ = dwells.update(")
+    assert source.index("dwell_hold = dwell_standing = False") < source.index("command_ = core.command(")
 
 
 def test_d8b_dwells_lock_the_wheels_and_give_their_gains_back() -> None:
@@ -570,7 +572,7 @@ def test_d8b_dwells_lock_the_wheels_and_give_their_gains_back() -> None:
     assert "locked_kps[wheels] = DWELL_WHEEL_KP" in lock and "controller_.set_gains(kps=locked_kps, kds=kds_)" in lock
     assert 'elif not dwell_standing and wheel_lock["q"] is not None:' in lock
     # Locked once standing, never while braking (diagnostic 1984).
-    assert 'dwell_standing = dwells.active is not None and dwells.active["still_since_s"] is not None' in source
+    assert 'dwell_standing = dwells.active is not None and dwells.active["still_since_s"] is not None' in CORE.read_text()
     assert 'set_gains(kps=wheel_lock["gains"][0], kds=wheel_lock["gains"][1])' in lock
     assert 'joint_positions=wheel_lock["q"],' in lock
 
@@ -584,12 +586,13 @@ def test_s4_safety_stops_take_the_dwell_path_without_the_wheel_lock_and_record_t
     import ast
 
     source = SCRIPT.read_text()
-    block = source[source.index("safety_stops.update("):source.index("phase == \"observe\" and tracking.status")]
+    command = CORE.read_text()  # the safety stops moved to the mission core (M-a1 slice 4a-iv)
+    block = command[command.index("safety_stops.update("):command.index("phase == \"observe\" and tracking.status")]
     assert "dwell_hold = True" in block and "dwell_standing" not in block
     assert "safety_hold = True" in block
     assert "restart_speed_slew(0.0)" in block
     # Reset every loop tick, before the stop block can set it.
-    assert source.index("safety_hold = False") < source.index("safety_stops.update(")
+    assert source.index("safety_hold = False") < source.index("command_ = core.command(")
     # The zero comes after the slew and the permission cap, last before the drive command.
     slew = source.index("wheel_speed = previous + float(np.clip(target_speed - previous, -rate, rate))")
     zero = source.index("if estop_holding or safety_hold:\n                    wheel_speed = 0.0")
@@ -635,7 +638,11 @@ def test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival() -> 
     tree = ast.parse(source)
     parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
     guarded_calls = ("build_near_tracker", "feed_near_frame", "near_tick")
-    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and getattr(n.func, "id", None) in guarded_calls]
+    core_tree = ast.parse(CORE.read_text())  # the near tick moved to the mission core (M-a1 slice 4a-iv)
+    parents.update({child: node for node in ast.walk(core_tree) for child in ast.iter_child_nodes(node)})
+    calls = [n for t_ in (tree, core_tree) for n in ast.walk(t_) if isinstance(n, ast.Call)
+             and getattr(n.func, "id", None) in guarded_calls
+             and not (isinstance(parents.get(n), ast.Lambda) and [ast.unparse(a) for a in n.args] == ["*a"])]
     assert {c.func.id for c in calls} == set(guarded_calls)
     for call in calls:
         node, guarded = call, False
@@ -655,9 +662,11 @@ def test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival() -> 
     assert between_.startswith("        if boundary is not None:\n") and "require(" not in between_
     assert "until S4a-2" not in source
     # Decided after the scheduled safety stops and before the arrival transitions.
-    tick = source.index("hold_, released_, arrive_ = near_tick(t, rear_stamp, rear, requested_speed, ms.phase, curvature,")
-    assert source.index("safety_stops.update(") < tick < source.index("arrival_ = core.arrive(t, tracking)")
-    block = source[tick:source.index("phase == \"observe\" and tracking.status", tick)]
+    moved = CORE.read_text()
+    tick = moved.index("hold_, released_, arrive_ = near_tick(t, rear_stamp, rear, requested_speed, ms.phase, curvature,")
+    assert moved.index("safety_stops.update(") < tick
+    assert source.index("command_ = core.command(") < source.index("arrival_ = core.arrive(t, tracking)")
+    block = moved[tick:moved.index("phase == \"observe\" and tracking.status", tick)]
     for line in ("requested_speed = 0.0", "dwell_hold = True", "safety_hold = True",
                  "tracking = replace(tracking, status=\"tracking\", speed_mps=0.0)",
                  "trackers[ms.phase].restart_speed_slew(0.0)"):
@@ -802,7 +811,8 @@ def test_s4b_correction_points_are_decided_before_the_stop_and_install_at_once()
     assert tick_fn.index("near_redraw(latest_, rear_now)") < tick_fn.index("near_install(")
     assert "terminal = terminal or 'correction_missed'" in tick_fn and "terminal = 'replan_rejected'" in tick_fn
     assert "revision_used = near['path_revision']" in tick_fn and "'path_revision': revision_used" in tick_fn
-    assert 'tracking.status == "arrived")' in source[source.index("arrive_ = near_tick("):][:200]
+    moved = CORE.read_text()  # the near tick moved to the mission core (M-a1 slice 4a-iv)
+    assert 'tracking.status == "arrived")' in moved[moved.index("arrive_ = near_tick("):][:200]
     grid_fn = functions["correction_grid"]
     assert "docking_band(occupancy_, first_target) & docking_band(occupancy_, target)" in grid_fn
     redraw_fn = functions["near_redraw"]
@@ -908,9 +918,9 @@ def test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_in
     install = functions["realign_install"]
     assert "near_tracking.REALIGN_MAX_LENGTH_M" in install and "'slam_mode': slam['tracker'].mode" in install
     core = CORE.read_text()  # the obstacle replan's installs moved to the mission core (M-a1 slice 3c)
-    for site in ("near_leg", "observe_replan", "observe_candidate"):
+    for site in ("near_leg", "observe_candidate"):
         assert f'realign_install("{site}")' in source, site
-    for site in ("backoff", "obstacle_replan"):
+    for site in ("backoff", "obstacle_replan", "observe_replan"):
         assert f'realign_install("{site}")' in core, site
     assert source.count('"near_capture_realign_held_recovery"') + core.count('"near_capture_realign_held_recovery"') == 2
     branch = source.index("Plan D8 S4c-3 stage 2: once per pickup, instead of ending.")

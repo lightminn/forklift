@@ -485,7 +485,7 @@ def test_runtime_viewpoints_need_both_the_default_list_and_the_bay():
 
 
 def _cusp_replan_branch():
-    tree = ast.parse(SCRIPT.read_text())
+    tree = ast.parse(CORE.read_text())  # the cusp recoveries moved to the mission core (M-a1 slice 4a-iii)
     for node in ast.walk(tree):
         if isinstance(node, ast.If) and "max_cusp_replans" in ast.unparse(node.test):
             return node
@@ -514,13 +514,13 @@ def test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules():
     # Moving: keep braking, no plan yet. Stopped means zero command, planar
     # speed and yaw rate, held for 0.1 s -- not the forward speed alone.
     assert "tracking.speed_mps == 0.0" in branch
-    assert "np.linalg.norm(velocity[:2])" in branch
-    assert "robot.get_angular_velocity()[2]" in branch
+    assert "np.linalg.norm(hooks.truth_velocity()[:2])" in branch  # the runner's velocity, as a truth hook
+    assert "hooks.truth_yaw_rate()" in branch  # robot.get_angular_velocity()[2]
     assert "cusp_stop_ticks < cusp_stop_needed" in branch
     assert "replace(tracking, status='braking')" in branch
     # The replan is the active plan everywhere afterwards.
     assert "state.setdefault('paths', {})[ms.phase] = path_record(replanned)" in branch
-    assert "add_path_display(stage, replanned, 'Transport'" in branch
+    assert "hooks.show_path(replanned, 'Transport'" in branch
     assert "state['planning_wall_s'] = " in branch
     # Stopped: the transport leg alone, same planner config, from the measured rear pose.
     # Under SLAM after docking the corrected drop (online SLAM plan v3.8).
@@ -535,8 +535,10 @@ def test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules():
     assert "max_cusp_replans = 2" in source
     assert "cusp_stop_ticks, cusp_stop_needed = 0, 12" in source
     # A failure the branch does not clear still aborts as before.
-    after = source.index("< max_cusp_replans")
-    assert source.index('if tracking.status == "failed":\n                    dump_tracking("failed", tracking)', after) > after
+    after = source.index("recover_ = core.cusp_and_observe_recovery(")
+    assert source.index("command_ = core.command(", after) > after  # whose first rule is the failure dump (4a-iv)
+    command = CORE.read_text()[CORE.read_text().index("    def command("):]
+    assert 'if tracking.status == "failed":\n            dump_tracking("failed", tracking)' in command
 
 
 def test_the_extended_ladder_is_a_second_pass_for_the_first_observation_only():
@@ -703,7 +705,7 @@ def test_the_retry_limit_is_checked_after_the_same_path_test():
 
 
 def test_loose_arrival_only_at_observation_waypoints():
-    source = SCRIPT.read_text()
+    source = CORE.read_text()  # the loose observe arrival moved to the mission core (M-a1 slice 4a-iv)
     i = source.index("# The tracker stops at a path end it missed sideways")
     head = source[source.rindex("if (", 0, i) : i]
     assert 'phase == "observe"' in head and "OBSERVE_ARRIVAL_M" in head
@@ -741,9 +743,11 @@ def test_a_failed_replan_backs_off_a_bounded_distance_then_replans():
     assert 'phase in ("transport", "return_home")' in block and "backs.get(ms.phase, 0) < BACKOFF_PER_LEG" in block
     assert "d = -1 if leg_dir >= 0 else 1" in block  # against the leg's direction
     # The end of a backoff is never the leg's arrival; it forces a replan.
-    j = source.index("# The end of a backoff is not the leg's arrival")
-    assert j < source.index('if tracking.status == "arrived":\n                    if args.use_perception and ms.phase == "observe":')
-    assert 'obstacle["force_replan"] = ms.phase' in source[j : j + 2500]
+    moved = CORE.read_text()  # the backoff end moved to the mission core (M-a1 slice 4a-iv)
+    j = moved.index("# The end of a backoff is not the leg's arrival")
+    assert source.index("command_ = core.command(") < source.index(
+        'if tracking.status == "arrived":\n                    if args.use_perception and ms.phase == "observe":')
+    assert 'obstacle["force_replan"] = ms.phase' in moved[j : j + 2500]
     assert 'obstacle.pop("force_replan", None) == ms.phase' in source
     # Codex checkpoint 8: a backoff always acts under the permission, a forced
     # replan opens the obstacle block while standing, the leg direction is kept,
@@ -892,7 +896,7 @@ def test_replans_record_their_path_before_the_mission_plan_exists():
     source = SCRIPT.read_text()
     assert 'state["paths"]["observe"] = path_record(replanned)' not in source
     assert 'state["paths"][phase] = path_record(replanned)' not in source
-    assert 'state.setdefault("paths", {})["observe"] = path_record(replanned)' in source
+    assert 'state.setdefault("paths", {})["observe"] = path_record(replanned)' in CORE.read_text()  # (M-a1 slice 4a-iii)
 
 
 def test_every_path_replacement_restarts_the_no_progress_baseline():
@@ -904,8 +908,8 @@ def test_every_path_replacement_restarts_the_no_progress_baseline():
     stall = moved.index('require(replanned.success, f"stall_replan_failed:{replanned.status}")')
     window = moved[stall : stall + 2500]
     assert window.index("arm_docking()") < window.index('obstacle.setdefault("progress", {}).clear()')
-    cusp = source.index('"replaced_path": path_record(paths[ms.phase]),')
-    window = source[cusp : cusp + 1500]
+    cusp = moved.index('"replaced_path": path_record(paths[ms.phase]),')  # the cusp replan (slice 4a-iii)
+    window = moved[cusp : cusp + 1500]
     assert window.index("arm_docking()") < window.index('obstacle.setdefault("progress", {}).clear()')
     # ... and a D7c re-approach installed in place of the transport path (plan D7c ④).
     install = source.index("    def install_reapproach(")
@@ -1004,7 +1008,7 @@ def test_obstacle_recovery_v4_an_escape_end_bypasses_docking_stall_and_failure()
     follow = source.index("follow_ = core.follow(t, rear, signed_speed, dt)")
     docking = source.index("stall_ = core.docking_and_stall(")  # the docking stop and heading miss (slice 4a-ii)
     assert follow < docking and core.index("        dock_stop = (") < core.index("        goal_heading_miss = (")
-    assert follow < source.index('                require(\n                    tracking.status != "failed",')
+    assert follow < source.index("command_ = core.command(")  # the tracking-failure require (slice 4a-iv)
     window = core[e3 : e3 + 2000]
     assert '"end_s" in back_e or tracking.status == "arrived"' in window
     # An endpoint failure is the end only standing; rolling, it brakes (Codex implementation review P2-1).
@@ -1021,8 +1025,9 @@ def test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recove
     assert 'slam["tracker"].mode != "holding"' in fn and 'slam["tracker"].release(' in fn
     assert 'slam["docking"].get("accepted_any") or slam["docking"].get("reapproach")' in fn
     assert 'obstacle["layer"].refresh(' in fn  # the grid re-projected before any plan reads it
-    end = source.index("# The end of a backoff is not the leg's arrival")
-    end_block = source[end : end + 2500]
+    moved = CORE.read_text()  # the backoff end moved to the mission core (M-a1 slice 4a-iv)
+    end = moved.index("# The end of a backoff is not the leg's arrival")
+    end_block = moved[end : end + 2500]
     assert 'release_after_backoff(t, "release_after_backoff")' in end_block
     # Standing first, then the release and the forced replan (Codex implementation review P2-1).
     assert "if standing_b and not back_.get(\"released\"):" in end_block
@@ -1038,8 +1043,8 @@ def test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recove
     assert cause < core.index("released_ = release_and_carry(t)", cause)
     assert cause < core.index('release_after_backoff(t, "release_in_backoff_recovery")')
     # ... and at a backoff's end, which releases before the forced replan reads it (review 2 P2).
-    keep = source.index('back_["stop_cause"] = {')
-    assert keep < source.index('released_b = release_after_backoff(t, "release_after_backoff")')
+    keep = moved.index('back_["stop_cause"] = {')
+    assert keep < moved.index('released_b = release_after_backoff(t, "release_after_backoff")')
     assert 'obstacle["backoff"].pop("stop_cause", None)' in core
     assert "clearance_used_ = 0.0  # the candidates are planned tight" in core
     assert "clearance_used_ = mission_clearance_" in core
@@ -1059,7 +1064,7 @@ def test_cusp_position_stall_v7_is_wired_into_the_runner():
     assert core.index("raw_tracking_ = tracking  # the tracker's own result") < call
     assert core.index("escape_now_ = (") < call
     follow = source.index("follow_ = core.follow(t, rear, signed_speed, dt)")
-    for later in ("stall_ = core.docking_and_stall(", "                observe_stalled = ("):
+    for later in ("stall_ = core.docking_and_stall(", "recover_ = core.cusp_and_observe_recovery("):
         assert follow < source.index(later)
     # Exclusions: D7 transport whatever --d7-docking says, a held realignment, the legacy profile.
     fn = source[source.index("    def cusp_excluded(phase_)") :]
@@ -1115,7 +1120,7 @@ def test_cusp_position_stall_v7_is_wired_into_the_runner():
     assert "dump_tracking(result_.end, result_.tracking)\n            require(False, result_.end)" in tick
     assert "release_update=lambda: tracker_.update(rear_now, signed_speed, dt)" in tick
     # The observe stop rule waits while the stall handling holds an observe stall.
-    assert "and not cusp_monitor.holds_observe()" in source
+    assert "and not cusp_monitor.holds_observe()" in core  # the observe stall rule (M-a1 slice 4a-iii)
     # Zero command with the steering held.
     assert "cusp_hold = False  # plan cusp position stall v7 K3" in source
     assert "if estop_holding or obstacle_hold or dwell_hold or cusp_hold:" in source
@@ -1173,7 +1178,8 @@ def test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judge
     assert "CUSP_HEADING_HOLD_RAD = 0.08\n" in source and "CUSP_HEADING_HOLD_POSITION_M = 0.03\n" in source
     assert 'CUSP_HEADING_HOLD_PHASES = ("observe", "return_home")\n' in source
     assert "cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD if name in CUSP_HEADING_HOLD_PHASES else None," in source
-    block = source[source.index("if ms.phase in CUSP_HEADING_HOLD_PHASES and tracking.cusp_pending:"):]
+    moved = CORE.read_text()  # the cusp heading hold moved to the mission core (M-a1 slice 4a-iii)
+    block = moved[moved.index("if ms.phase in CUSP_HEADING_HOLD_PHASES and tracking.cusp_pending:"):]
     block = block[: block.index("# Under SLAM, an observe leg judged out of heading")]
     assert "bounds=(CUSP_HEADING_HOLD_POSITION_M, CUSP_HEADING_HOLD_RAD)" in block
     assert "hold_tracker.release_cusp(True)" in block and "hold_tracker.fail_pending()" in block
@@ -1187,7 +1193,7 @@ def test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judge
     first_rule = whole.index("retry_stand_ = near is not None")
     assert whole.index("cusp_holds.sync(") < whole.index("cusp_holds.tick(") < first_rule
     assert source.index("follow_ = core.follow(t, rear, signed_speed, dt)") < source.index(
-        "if ms.phase in CUSP_HEADING_HOLD_PHASES and tracking.cusp_pending:")
+        "recover_ = core.cusp_and_observe_recovery(")
     after_update = block[block.index("tracking = hold_tracker.update(rear, signed_speed, dt)") :]
     assert 'if decision == "released":' in after_update and "cusp_holds.tick(" in after_update
     # Every observe and return tracker holds: the first ones, the candidate re-route's, the ones built
@@ -1213,17 +1219,19 @@ def test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own():
     assert 'state["observe_replan_leg"] = {"serial": 0, "start": 0}' in source
     # No run-wide count of observe replans is left.
     assert 'len(state["observe_replans"]) < 2' not in source
-    miss = source.index("observe_miss = (")
-    assert source.index(
+    moved = CORE.read_text()  # the observe-miss replan moved to the mission core (M-a1 slice 4a-iii)
+    assert 'len(state["observe_replans"]) < 2' not in moved
+    miss = moved.index("observe_miss = (")
+    assert moved.index(
         'len(state["observe_replans"]) - state["observe_replan_leg"]["start"]', miss
-    ) < source.index("if observe_miss:", miss)
+    ) < moved.index("if observe_miss:", miss)
     # The held-realignment refusal is checked before the replan rule.
-    assert source.index('require(False, "near_capture_realign_held_recovery")') < miss
-    record = source.index('state["observe_replans"].append(', miss)
-    assert source.index('"leg_serial": leg_["serial"]', record) < source.index(
+    assert moved.index('require(False, "near_capture_realign_held_recovery")') < miss
+    record = moved.index('state["observe_replans"].append(', miss)
+    assert moved.index('"leg_serial": leg_["serial"]', record) < moved.index(
         "paths[\"observe\"] = replanned", record
     )
-    assert '"budget_left": OBSERVE_REPLANS_PER_LEG' in source[record:]
+    assert '"budget_left": OBSERVE_REPLANS_PER_LEG' in moved[record:]
     # The near leg resets the budget where it is installed, not inside realign_install (which
     # returns at once outside a realignment), and only there.
     near = source.index("if near_leg is not None:")
