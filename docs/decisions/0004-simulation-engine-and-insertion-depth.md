@@ -220,6 +220,8 @@ Isaac 에서 만들라고 강제하지 않는다.
 - **주장의 범위를 좁게 적는다.** 상한의 대상은 "정의한 Isaac 음성 분포" 이지 Isaac 음성 전체나
   실제 작업환경이 아니다. 반복 캡처나 같은 장면의 시드 반복을 독립 장면 수로 세지 않는다.
 
+**개정 (2026-10-15, 사용자 결정 — 팔레트 인식 일반화 설계 §13).** 데이터 계약을 **명시적으로 확장**한다: 스키마 판 2(`forklift_core.perception.recognition_dataset`)의 `tf.json` `origin` 은 `received_tf_static` · `isaac_render_pose` · `rig_render_pose` 중 하나이고, 렌더 출처는 `meta.render_source` 와 짝이 맞아야 한다. 렌더 자세에서 계산한 변환은 그 출처 이름으로 적고 `received_tf_static` 이라는 이름을 붙이지 않는다(위 금지는 그대로). `isaac_render_pose` 장면은 Isaac 모집단으로만, `rig_render_pose` 장면은 CPU 기구 회귀로만 쓰며 렌더 기반 판정 분모에 넣지 않는다. 판 1 로더(`scene_dataset.py`)는 바꾸지 않는다.
+
 ### D6 — 음성 모집단은 `grounded` 중심, 합격선은 신뢰상한, 분할은 70/30
 
 **사용자 결정 (2026-09-17).** D5 가 엔진을 정했고 이것은 그 모집단의 계약이다.
