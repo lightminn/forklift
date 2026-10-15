@@ -1,8 +1,8 @@
 # 콘솔 인터페이스 계약 초안 (`console/1`)
 
-작성: 2026-10-13 · 상태: **초안, 9절 항목은 메인 개발과 합의함(2026-10-13). 재개 절차 이름·사유는 잠정이며 M-a 설계 때 확정** · 설계: [개별 지게차 운용 콘솔 설계](../design/2026-10-13-operator-console.md)
+작성: 2026-10-13 · 상태: **초안, 9절 항목은 메인 개발과 합의함(2026-10-13), 10절 관찰 전용 프로파일도 합의함(2026-10-15). 재개 절차 이름·사유는 잠정이며 M-a 설계 때 확정** · 설계: [개별 지게차 운용 콘솔 설계](../design/2026-10-13-operator-console.md)
 
-이 문서는 웹 앱과 차량 쪽 게이트웨이 사이의 메시지(`console/1`)와, 그 뒤에서 차량 스택이 지켜야 할 의미를 적는다. ROS 2 msg/action 정의로 옮길 항목은 8절에 표시한다. 차량 쪽(중재기 M-b, 미션 실행부 M-a)이 생기기 전에는 웹 앱의 가짜 차량 백엔드만 이 형식을 쓴다.
+이 문서는 웹 앱과 차량 쪽 게이트웨이 사이의 메시지(`console/1`)와, 그 뒤에서 차량 스택이 지켜야 할 의미를 적는다. ROS 2 msg/action 정의로 옮길 항목은 8절에 표시한다. 차량 쪽(중재기 M-b, 미션 실행부 M-a)이 생기기 전에는 웹 앱의 가짜 차량 백엔드와, 10절의 관찰 전용 게이트웨이(C2a)가 이 형식을 쓴다.
 
 ## 1. 공통 규칙
 
@@ -85,6 +85,7 @@
 - `feedback`는 차량이 실제로 잴 수 있는 값이다. 잴 수 없는 항목에 의존하는 기능은 그 차량에서 쓸 수 없다. 예를 들어 바퀴 속도를 잴 수 없으면 재무장과 재개가 불가능하다(설계 4.3).
 - `camera_model`과 `chassis`는 화면 오버레이(예상 궤적, 바닥 투영)에만 쓴다. 안전 판단에는 쓰지 않는다. 위 숫자는 형식 예시이고 실제 값이 아니다.
 - `provisional_limits: true`는 속도 상한과 유효기한이 H3 실측 전의 잠정값이라는 뜻이다. 콘솔은 이를 화면에 표시한다.
+- `control`(없으면 `true`)과 `stop_instruction`: `control: false` 는 관찰 전용 연결이다(10절).
 
 ## 4. 텔레옵 명령과 신선도
 
@@ -149,7 +150,7 @@ lease 보유자는 `tick`을 받을 때마다 `{"t": "echo", "session_epoch", "l
 
 | 메시지 | 권한 | 주요 필드 | 차량 처리 |
 |---|---|---|---|
-| `stop` | **연결된 모든 클라이언트** | `request_id`, `source: console \| gamepad \| key` | 안전 선점 정지. 항상 실행하고 수락한다(1절 처리 순서 0). 권한을 좁히는 방향이라 관찰 기기에도 허용한다. 인증이 없으므로 AP 안의 아무 기기나 STOP을 반복해 작업을 멈출 수 있다. 이것은 안전한 쪽의 고장으로 적는다(더 큰 한계는 설계 7.4) |
+| `stop` | **연결된 모든 클라이언트** | `request_id`, `source: console \| gamepad \| key` | 안전 선점 정지. 항상 실행하고 수락한다(1절 처리 순서 0). 단, `control: false` 인 관찰 전용 연결은 예외로 `reject(unsupported)` 다(10절). 권한을 좁히는 방향이라 관찰 기기에도 허용한다. 인증이 없으므로 AP 안의 아무 기기나 STOP을 반복해 작업을 멈출 수 있다. 이것은 안전한 쪽의 고장으로 적는다(더 큰 한계는 설계 7.4) |
 | `rearm` | lease | `request_id`, `lease_id`, `control_gen` | 정지 완료(설계 4.3의 1단계) 확인 뒤 `STOPPED → PAUSED` |
 | `mode_request` | lease | `request_id`, `lease_id`, `control_gen`, `to: TELEOP \| PAUSED` | `STOPPED`에서는 모두 `reject(stopped_locked)`(나가는 길은 `rearm`뿐). 그 밖에서는 `to: PAUSED`를 어느 작업 단계에서나 받고, `to: TELEOP`만 상태 조건(설계 4.5)을 검사해 아니면 `reject(state_forbids_teleop)` |
 | `arm` / `disarm` | lease | `request_id`, `lease_id`, `control_gen` | TELEOP에서만. `arm`은 새 `arm_gen`을 돌려준다 |
@@ -256,3 +257,15 @@ lease 보유자는 `tick`을 받을 때마다 `{"t": "echo", "session_epoch", "l
 - M-b: 세대 4종, 처리 순서, 결과 저장 상한, STOP 예외, `STOPPED` 탈출은 `rearm`뿐, 영상 조종 만료는 둘 중 이른 쪽.
 - M-c: 실시간 배속 보고와 미달 시 텔레옵 차단, 촬영 단위 `frame_id`와 렌더 수신 단조 시각, 잡마다 새 `session_epoch`, 게이트웨이 노드·포트 파일, 판정 배치와 같은 GPU 동시 사용 금지, `camera_latency_bound_s` 측정.
 - H3: 바퀴 속도·조향·승강 피드백, 적용 명령 피드백, MCU 자체 시계 만료.
+
+## 10. 관찰 전용 프로파일 (C2a, 2026-10-15 메인 개발 동의)
+
+중재기(M-b)가 없는 관찰 전용 게이트웨이(C2a, [설계](../design/2026-10-15-console-gateway-monitor.md))를 위한 규칙이다. 중재기가 생긴 뒤 `control: true` 연결은 지금까지의 규칙(STOP 항상 수락 등)으로 돌아간다.
+
+- **우선순위.** 1절 처리 순서 0("STOP 은 세대와 상관없이 실행")과 2절 관찰 기기의 STOP 허용은 `control: true` 연결에 적용한다. `control: false` 연결에서는 이 절이 앞선다.
+- **`capabilities.control: false`.** 차량은 `request_id` 가 있는 모든 요청(조종 권한·STOP·모드·무장·작업·복구·대상 목록)을 `reject(unsupported)` 로 답하고, `request_id` 가 없는 최신값 메시지(`teleop`·`echo`·`input_state`)는 답 없이 버린다. **이 연결의 STOP 은 차량을 멈추지 않는다.** `mission`·`teleop_direct`·`teleop_video`·`lift` 는 모두 `false` 다. `chassis` 는 화면 그림용 외곽(뒤 차축 기준)으로 실을 수 있다.
+- **`capabilities.stop_instruction`(관찰 전용에서 필수).** STOP 대신 운용자가 할 일을 적은 문장이다. 콘솔은 STOP 자리에 눌러도 되는 '정지 불가' 버튼을 두고, 누르면 이 문장을 크게 보인다. 요청은 보내지 않는다. 실재하는 수단만 적는다(시뮬레이션은 실행기 정지, 실차는 그 차에 실제로 있는 차단 방법). 2026-10-15 기준 무선·물리 비상정지는 시험도 실기기도 없으므로, 실차 게이트웨이는 이 값 없이 시작하지 않는다.
+- **판정 범위.** 관찰 전용 판정은 지금 열린 제어 연결의 welcome 에만 따른다. 재연결 중(새 welcome 전)에 누른 STOP 은 1절대로 보관하고 재전송한다.
+- **상태.** `mode`·`stop_kind`·`armed`·`lease`·`permit`·`limits`·`command`·`applied`·`mission`·`drive_allowed`·`lift_allowed`·`teleop_allowed` 가 `null` 일 수 있고, 이때 `null` 은 '없음'이 아니라 '모름'이다. `pose` 는 `null` 이거나 `frame` 이 `map`·`odom` 이다. `pose.age_s` 는 상태를 보낼 때 그 자세가 이미 몇 초 묵었는지다(변환 stamp 의 나이와 변환이 멈춘 뒤 지난 시간 중 큰 쪽); 화면의 나이는 여기에 받은 뒤 지난 시간을 더한다. `freshness.scan_age_s` 를 더한다. `notes`(문자열 배열)는 운용자가 알아야 할 차량 쪽 사정이다.
+- **미디어.** 격자 머리글은 `origin_m`(왼쪽 아래 모서리, 회전 없음)과 `values` 를 반드시 싣고, 보낼 수 없는 지도로 바뀌면 `{"t": "grid", "withdrawn": true, "reason": …}`(본문 없음)를 보내 화면이 가진 지도를 지우게 한다. 스캔 머리글의 `pose` 는 레이저 2D 자세, `frame` 은 그 기준, `pose_at` 은 `scan_stamp`·`latest`, `pose_delay_s` 는 `latest` 일 때의 지연, `age_s` 는 차량이 받은 뒤 지난 시간이다. 카메라 `frame_id` 는 촬영 단위(같은 stamp 의 재전송은 같은 번호), `capture.domain` 은 stamp 의 시계(`sensor`·`sim`)다. `media_subscribe` 마다 차량은 현재 프레임을 다시 보낸다. 콘솔은 welcome 으로 epoch 를 안 뒤 구독하고, 새 epoch 면 다시 구독하며 이전 세션의 지도·스캔·상태·대상 목록을 지운다.
+- **조향·포크 높이·적재.** 지금 ROS 쪽 토픽이 없어 `null` 이다. 채우려면 메인이 `joint_states` 류를 내보낸다(필요할 때 요청).

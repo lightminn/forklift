@@ -26,7 +26,7 @@ C2(게이트웨이 노드) 가운데 메인 개발(M-a 미션 실행부, M-b 중
 | D8 | 카메라는 `sensor_msgs/CompressedImage` 의 JPEG 만 그대로 전달한다(다시 인코딩하지 않음). JPEG 판별은 `format` 문자열이 아니라 본문의 시작 바이트(`FF D8`)로 한다(`image_transport` 는 `"bgr8; jpeg compressed bgr8"` 같은 문자열을 쓴다). `frame_id` 는 촬영(stamp) 단위다 — 같은 stamp 로 다시 온 영상은 새 프레임이 아니다(계약 4.2). `capture.domain` 은 `use_sim_time` 이면 `sim`, 아니면 `sensor`. `camera_model` 은 C2a 에서 `null` | 오버레이(예상 궤적)는 수동 조종용이고 C2a 에는 수동 조종이 없다. Orin Nano 에 하드웨어 인코더가 없어(상위 설계 7.3) 원본 압축 영상을 넘기는 것이 가장 싸다 |
 | D9 | `state.mode` 는 `null`(판정 주체 없음), `stop_kind`·`armed`·`lease`·`permit`·`limits`·`command`·`applied`·`mission` 도 `null`. `freshness.slam_correction_age_s` 는 `map → odom` 을 마지막으로 센 뒤 지난 시간, `pose.correction_version` 은 게이트웨이가 센 `map → odom` 변경 횟수(마지막으로 센 값에서 1 mm 또는 1 mrad 넘게 움직이면 하나 센다 — 느린 누적 변화도 결국 센다; slam_toolbox 는 같은 변환을 짧은 주기로 다시 발행한다). 표시용 잠정 값이며 SLAM 이 정상이라는 증거가 아니다. M-b·위치 추정 모듈이 정식 버전을 정하면 교체 | 모드·정지·허가는 중재기가 판정한다(상위 설계 3절 계층표). 게이트웨이가 지어내지 않는다 |
 | D11 | 화면은 데이터가 끊긴 것을 '정지'로 보이게 두지 않는다. 브라우저가 마지막 `state` 를 받은 뒤 1 s 가 지나거나 `pose.age_s` 가 1 s 를 넘으면, 지도 위 차체를 흐리게 하고 "위치 n s 전 · 지금 위치가 아닐 수 있음" 띠를 띄운다 | 관찰 화면에서 가장 위험한 오해는 끊긴 화면의 차체를 '멈춘 차량'으로 읽는 것이다 |
-| D12 | 관찰 전용이면 STOP 자리에 **눌러도 되는** "정지 불가" 버튼을 둔다. 누르거나 Esc·게임패드 정지를 누르면 화면 전체에 "이 화면으로는 멈출 수 없습니다 · 물리 비상정지를 누르세요"를 크게 띄우고 이벤트에 남긴다. 요청은 보내지 않는다 | 반응 없는 비활성 버튼은 급한 순간에 운용자를 붙잡아 둔다. 눌렀을 때 곧바로 다음 행동을 알려 주는 쪽이 낫다 |
+| D12 | 관찰 전용이면 STOP 자리에 **눌러도 되는** "정지 불가" 버튼을 둔다. 누르거나 Esc·게임패드 정지를 누르면 화면 전체에 "이 화면으로는 멈출 수 없습니다"와 차량이 welcome 의 `stop_instruction` 으로 알린 실제 정지 방법을 크게 띄우고 이벤트에 남긴다. 요청은 보내지 않는다. Isaac 은 "시뮬레이션은 Isaac 실행기(잡)를 멈추세요"가 기본이고, 실차는 기본값이 없어 `--stop-instruction` 없이 시작하지 않는다(무선·물리 비상정지는 아직 시험도 실기기도 없다 — 메인 개발 답, 2026-10-15) | 반응 없는 비활성 버튼은 급한 순간에 운용자를 붙잡아 둔다. 눌렀을 때 곧바로 다음 행동을 알려 주는 쪽이 낫다 |
 | D13 | 화면은 세션과 프레임을 섞지 않는다. 새 `session_epoch` 의 welcome 을 받으면 지도·스캔·상태·대상 목록을 지운다. 미디어 구독은 welcome 으로 epoch 를 안 뒤에 보내고, 구독할 때마다 서버는 현재 프레임을 다시 보낸다(미디어가 welcome 보다 먼저 와 버려진 정적 지도를 다시 받는다). 자세·스캔은 격자와 같은 프레임일 때만 지도에 그리고, 다르면 그 사실을 적는다 | 두 연결은 독립이라 순서가 보장되지 않는다(Codex P2 셋) |
 | D14 | 관찰 전용에서 `null` 은 '없음'이 아니라 '모름'이다. 조종 기기·작업·목적지는 "모름 · 관찰 전용"으로, 통신 화면의 명령 유효기한·끊김 시 동작은 "해당 없음"으로 적는다 | 다른 경로로 차량이 작업 중이어도 "작업 없음"이라고 단정하면 안 된다(Codex P2) |
 | D10 | 의존성: 컨테이너 이미지는 기존 `forklift/ros2-dev:jazzy` 를 바꾸지 않고, 그 위에 `websockets` 만 더한 별도 이미지(`deploy/console/Dockerfile`)를 쓴다 | 메인 개발의 SLAM 재생 배치가 쓰는 이미지를 건드리지 않는다 |
@@ -56,7 +56,7 @@ deploy/console/Dockerfile # FROM forklift/ros2-dev:jazzy + websockets
 **1절 처리 순서·2절 관찰자 STOP.** 처리 순서 0("STOP 은 세대와 상관없이 실행")과 관찰 기기의 STOP 허용은 `control` 이 `true` 인 연결에 적용한다. `control: false` 연결에서는 3절의 관찰 전용 규칙이 이 둘보다 앞선다.
 
 **3절 `capabilities`.**
-- `control`(bool, 없으면 `true`): `false` 면 이 연결은 **관찰 전용**이다. 차량은 `request_id` 가 있는 모든 요청(조종 권한·STOP·모드·무장·작업·복구·대상 목록)을 `reject(unsupported)` 로 답하고, `request_id` 가 없는 최신값 메시지(`teleop`·`echo`·`input_state`)는 답 없이 버린다. **이 연결의 STOP 은 차량을 멈추지 않는다.** 콘솔은 STOP 자리에 눌러도 되는 '정지 불가' 버튼을 두고, 누르면 물리 비상정지를 쓰라고 크게 알린다. 요청은 보내지 않는다.
+- `control`(bool, 없으면 `true`): `false` 면 이 연결은 **관찰 전용**이다. 차량은 `request_id` 가 있는 모든 요청(조종 권한·STOP·모드·무장·작업·복구·대상 목록)을 `reject(unsupported)` 로 답하고, `request_id` 가 없는 최신값 메시지(`teleop`·`echo`·`input_state`)는 답 없이 버린다. **이 연결의 STOP 은 차량을 멈추지 않는다.** 콘솔은 STOP 자리에 눌러도 되는 '정지 불가' 버튼을 두고, 누르면 `stop_instruction`(차량이 알린 실제 정지 방법, 관찰 전용에서 필수)을 크게 보인다. 요청은 보내지 않는다.
 - 관찰 전용 판정은 **지금 열린 제어 연결의 welcome** 에만 따른다. 재연결 중(새 welcome 전)에 누른 STOP 은 지금처럼 보관하고 재전송한다.
 - 관찰 전용이면 `mission`·`teleop_direct`·`teleop_video`·`lift` 는 모두 `false` 다. `chassis` 는 화면 그림용 외곽(뒤 차축 기준)으로 실을 수 있다.
 
@@ -74,7 +74,7 @@ deploy/console/Dockerfile # FROM forklift/ros2-dev:jazzy + websockets
 - 카메라 `frame_id` 는 촬영 단위다. 같은 촬영(같은 stamp)을 다시 받아도 새 번호를 주지 않는다. `capture.domain` 은 stamp 의 시계(`sensor`·`sim`)다.
 - `media_subscribe` 를 받을 때마다 차량은 종류별 현재 프레임을 다시 보낸다. 콘솔은 welcome 으로 `session_epoch` 를 안 뒤에 구독하고, 새 epoch 의 welcome 을 받으면 다시 구독한다.
 
-이 추가는 메인 개발과 합의(I-1)할 대상이다. 합의 전에는 초안 표시를 단다.
+이 추가는 메인 개발이 동의했다(2026-10-15). 계약 초안 10절로 옮겼다. 정지 안내 문구는 메인 답(실차에 시험된 비상정지가 없음)에 따라 `stop_instruction` 으로 바꿨다.
 
 ## 5. ROS → console/1 대응
 
@@ -90,7 +90,7 @@ deploy/console/Dockerfile # FROM forklift/ros2-dev:jazzy + websockets
 
 ## 6. 웹 변경
 
-- `capabilities.control === false` 면: STOP 두 개를 "정지 불가 · 비상정지 사용" 버튼으로 바꾼다(D12). 하위 띠에 붉은 알림 "관찰 전용 연결 · 이 화면으로 차량을 멈출 수 없습니다 · 물리 비상정지를 쓰세요"를 늘 보인다. 조종 권한·작업 지정·수동 조종 탭을 끄고 이유를 보인다.
+- `capabilities.control === false` 면: STOP 두 개를 "정지 불가" 버튼으로 바꾼다(D12). 하위 띠에 붉은 알림 "관찰 전용 연결 · 이 화면으로 차량을 멈출 수 없습니다 · (stop_instruction)"을 늘 보인다. 조종 권한·작업 지정·수동 조종 탭을 끄고 이유를 보인다.
 - 데이터 끊김 표시(D11). 조향·포크 높이를 모르면 차체 그림 옆에 "조향·포크 높이 미측정"을 적는다. 범례에 "LiDAR 반사 없음은 빈 공간이 아님"을 적는다.
 - `state` 의 `null` 필드를 모두 견딘다(지금 `render` 는 `permit`·`limits`·`command` 가 있다고 가정한다).
 - 격자 `origin_m` 과 `values` 를 따른다(오늘 커밋에 반영).

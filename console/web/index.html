@@ -53,7 +53,7 @@
       <span class="legend-mode" data-m="TELEOP"><i></i>수동 조종</span>
       <span class="legend-mode" data-m="PAUSED"><i></i>대기</span>
       <span class="legend-mode" data-m="STOPPED"><i></i>정지됨</span>
-      <span class="monitor-alert" id="monitor-alert" hidden>관찰 전용 연결 · 이 화면으로 차량을 멈출 수 없습니다 · 물리 비상정지를 쓰세요</span>
+      <span class="monitor-alert" id="monitor-alert" hidden>관찰 전용 연결 · 이 화면으로 차량을 멈출 수 없습니다</span>
       <span class="draft" id="draft"><strong>가짜 차량</strong> console/1 계약을 흉내 낸 개발용 차량입니다. 수치 상한은 잠정값이고, 물리 비상정지는 이 화면과 독립된 하드웨어 경로입니다.</span>
       <span class="notes" id="notes" hidden></span>
       <span class="gens" id="gens">epoch — · control — · arm —</span>
@@ -254,7 +254,7 @@
   <div class="phone-stop"><button class="stop" id="stop2" type="button"><b>STOP</b><small>편의 정지 · 비상정지 아님</small></button></div>
 </div>
 
-<div class="nostop" id="nostop" role="alert" hidden><b>이 화면으로는 멈출 수 없습니다</b><span>물리 비상정지를 누르세요</span><small>이 연결은 관찰 전용입니다 · 눌러서 닫기</small></div>
+<div class="nostop" id="nostop" role="alert" hidden><b>이 화면으로는 멈출 수 없습니다</b><span id="nostop-how">차량에서 직접 멈추는 수단을 쓰세요</span><small>이 연결은 관찰 전용입니다 · 눌러서 닫기</small></div>
 
 <!-- task assignment wizard -->
 <div class="scrim" id="wizard" hidden>

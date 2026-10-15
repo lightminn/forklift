@@ -22,6 +22,10 @@ CORRECTION_STEP_RAD = 1e-3
 SPEED_MAX_AGE_S = 1.0
 SPEED_MAX_GAP_S = 0.5  # odom poses further apart than this give no speed
 BACKENDS = ("real", "isaac")
+# What the operator is told to do instead of STOP on a monitor-only link. A simulation
+# is stopped at its runner; a real truck has no default -- no physical e-stop has been
+# tested yet (2026-10-12), so the method that really exists must be given (design D12).
+ISAAC_STOP_INSTRUCTION = "시뮬레이션은 Isaac 실행기(잡)를 멈추세요"
 
 # Display-only outline of dls08_measured (sim/models/dls08_measured/parameters.yaml),
 # measured from the rear axle at base_link x -0.34 (an estimate kept fixed): fork tip
@@ -254,10 +258,18 @@ def _wrap(a: float) -> float:
 
 
 def welcome(
-    vehicle_id: str, backend: str, epoch: int, chassis: dict | None = None
+    vehicle_id: str,
+    backend: str,
+    epoch: int,
+    chassis: dict | None = None,
+    stop_instruction: str | None = None,
 ) -> dict:
     if backend not in BACKENDS:
         raise ValueError(f"backend must be one of {BACKENDS}")
+    if stop_instruction is None and backend == "isaac":
+        stop_instruction = ISAAC_STOP_INSTRUCTION
+    if not (stop_instruction or "").strip():
+        raise ValueError("a monitor-only link must say how the truck can be stopped")
     caps = {
         "control": False,  # monitor only: no lease, STOP, mode, teleop or task (design D1)
         "mission": False,
@@ -279,6 +291,7 @@ def welcome(
         "camera_model": None,
         "chassis": dict(chassis or DLS08_MEASURED_CHASSIS),
         "provisional_limits": True,
+        "stop_instruction": stop_instruction.strip(),
     }
     return {
         "t": "welcome",

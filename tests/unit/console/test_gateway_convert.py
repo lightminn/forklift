@@ -276,3 +276,12 @@ def test_scan_header_carries_its_age_so_a_resend_is_not_fresh():
     laser = PoseSample("map", 0.0, 0.0, 0.0, received_s=5.0)
     head, _ = convert.scan_frame(scan, laser, epoch=1, age_s=11.0)
     assert head["age_s"] == pytest.approx(11.0)
+
+
+def test_welcome_says_how_the_truck_can_actually_be_stopped():
+    w = convert.welcome(
+        "fl-1", "real", epoch=1, stop_instruction="주 전원 스위치를 끄세요"
+    )
+    assert w["capabilities"]["stop_instruction"] == "주 전원 스위치를 끄세요"
+    with pytest.raises(ValueError):
+        convert.welcome("fl-1", "real", epoch=1, stop_instruction="  ")

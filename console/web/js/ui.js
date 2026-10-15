@@ -1,7 +1,7 @@
 // Panel rendering from the latest vehicle state. Buttons are only enabled when the
 // request could be accepted; the vehicle still decides and may reject.
 
-import { controlProfile } from "./profile.js";
+import { controlProfile, stopInstruction } from "./profile.js";
 import { blockReason, currentDestination, missionProgress, PHASES, subtaskOf } from "./wizard.js";
 
 const MODE_KO = { AUTO: "자동 주행", TELEOP: "수동 조종", PAUSED: "대기", STOPPED: "정지됨" };
@@ -162,12 +162,17 @@ export function render(m) {
   const prof = controlProfile(w?.capabilities);
   const monitor = w?.capabilities?.control === false; // explicit only: before a welcome STOP still sends
   $("monitor-alert").hidden = !monitor;
+  if (monitor) {
+    const how = stopInstruction(w);
+    $("monitor-alert").textContent = `관찰 전용 연결 · 이 화면으로 차량을 멈출 수 없습니다 · ${how}`;
+    $("nostop-how").textContent = how;
+  }
   $("draft").hidden = w?.backend !== "mock";
   for (const id of ["stop", "stop2"]) {
     const b = $(id);
     b.classList.toggle("nostop-btn", monitor);
     b.querySelector("b").textContent = monitor ? "정지 불가" : "STOP";
-    b.querySelector("small").textContent = monitor ? "이 연결은 관찰 전용 · 비상정지 사용" : "편의 정지 · 비상정지 아님";
+    b.querySelector("small").textContent = monitor ? "이 연결은 관찰 전용" : "편의 정지 · 비상정지 아님";
   }
   $("lease").disabled = monitor;
   $("lease").title = monitor ? "관찰 전용 연결입니다" : "";
