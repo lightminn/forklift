@@ -1549,14 +1549,17 @@ class TrackerBook(dict):
 _BOUNDARY_RECORD: dict = {"gate": None, "time": None, "probe": None}
 
 
-def close_boundary_record(state: dict) -> None:
+def close_boundary_record(state: dict, exc: BaseException | None = None) -> None:
+    """``exc``: the exception propagating through the caller's finally (main() records it as the failure
+    reason only after the run's own finally has closed the record)."""
     gate = _BOUNDARY_RECORD.get("gate")
     if gate is None:
         return
     try:
         if gate.recorder.in_tick:  # a break, an early return or a failure inside a tick
             probe = _BOUNDARY_RECORD.get("probe")
-            gate.recorder.tick_end(outputs={"exit": state.get("phase"), "failure_reason": state.get("failure_reason")},
+            reason = state.get("failure_reason") or (str(exc) if exc is not None else None)
+            gate.recorder.tick_end(outputs={"exit": state.get("phase"), "failure_reason": reason},
                                    branches=probe() if probe is not None else [])
         gate.recorder.close()
     except Exception as exc:  # noqa: BLE001 -- a recording failure never replaces the run's own result
@@ -8775,7 +8778,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 # replacing a failure already raised (main() records that one).
                 state["success"] = False
                 state.setdefault("failure_reason", f"pocket_recording_close_failed: {exc!r}")
-        close_boundary_record(state)
+        close_boundary_record(state, sys.exc_info()[1])
         if tracker_book["book"] is not None:
             try:
                 tracker_book["book"].close()  # the leg switches not yet drained (V5 cusp arrivals)

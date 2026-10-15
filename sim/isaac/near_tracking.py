@@ -1065,8 +1065,10 @@ POST_MEASUREMENT_ARGUMENTS = {"return_turnaround": False, "repeat_at_near_captur
                               # 2026-10-15: M-a0 boundary record (recording only).
                               "record_boundary": False}
 # Arguments that only add records to a run (M-a0 boundary record, docs/plans/2026-10-15-m-a05-boundary.md
-# section 5): any value matches the measurement condition. Justified by record on/off comparisons that are
-# equal under tools/mission_ab_compare.py; an argument whose on/off runs differ is removed from this set.
+# section 5): any value matches the measurement condition. The recorder only reads (values are copied before
+# a call runs), so what it can change is wall-clock timing, to which runs are already sensitive (render
+# readiness, map callbacks, planning deadlines); a run with it on applies the bounds but is never a bounds
+# measurement run.
 RECORDING_ONLY_ARGUMENTS = frozenset({"record_boundary"})
 CONDITION_FIELDS = (
     "settings_synthetic",

@@ -1489,3 +1489,28 @@ def test_the_obstacle_layers_age_table_must_match_the_runs_odometry():
     assert problem(dict(team, odometry_wheel_radius_m=0.1245), run("team_spec_typical_inl", 0.1245)) is None
     source = SCRIPT.read_text()
     assert "table_problem_ = age_table_problem(age_table, args)" in source
+
+
+def test_the_boundary_record_closes_an_exit_tick_with_its_branches_and_the_propagating_failure(tmp_path):
+    """M-a0 (Codex round 3, P2): the run's finally closes the record before main() sets failure_reason, so
+    the closer takes the reason from the exception propagating through that finally."""
+    import json
+
+    from forklift_core.mission.boundary_record import BoundaryRecorder, RecordingGate, read_record
+
+    source = SCRIPT.read_text()
+    block = source[source.index("_BOUNDARY_RECORD: dict = "): source.index("def run(app, args")]
+    namespace: dict = {"time": object()}
+    exec(block, namespace)  # noqa: S102
+    gate = RecordingGate(BoundaryRecorder(tmp_path))
+    namespace["_BOUNDARY_RECORD"].update(gate=gate, probe=lambda: ["state.transitions+1"])
+    gate.recorder.tick_begin(7, tick_t=0.1, work_t=0.1, commands=[], stop_kind="none")
+    state = {"phase": "insert"}
+    namespace["close_boundary_record"](state, RuntimeError("near_field_unbounded"))
+    (tick,) = list(read_record(tmp_path))
+    assert tick["outputs"] == {"exit": "insert", "failure_reason": "near_field_unbounded"}
+    assert tick["branches"] == ["state.transitions+1"]
+    assert namespace["_BOUNDARY_RECORD"]["gate"] is None
+    assert json.loads((tmp_path / "boundary_meta.json").read_text())["ticks"] == 1
+    namespace["close_boundary_record"](state)  # a second close (main's finally) is a no-op
+    assert "close_boundary_record(state, sys.exc_info()[1])" in source
