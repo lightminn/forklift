@@ -92,6 +92,8 @@
 
 - **M-a1 0 단계(상태 끌어올리기, 2026-10-15)**: `phase`·`phase_started` 를 `MissionState` 로 옮겼다(참조 307 곳, AST 범위 분석으로 치환). 경계 기록 접두 비교(기준 `a8b4f66` 대 `ms` 판, ws1, 일반 seed 0·2·근접 seed 1·3): 네 실행 모두 **접두 일치** — 첫 캡처 응답(3) 또는 첫 격자 준비 응답(1)에서 끊김, 비교 구간 1,471–2,697 틱(관찰 단계 초반). 접두가 관찰 초반까지만 덮으므로 뒤쪽 단계를 옮기는 조각에서 접두 비교는 거의 증거가 되지 않는다 — 조각별 동작 시험과 마지막 재생이 실제 증거다(위 M-a1 판정).
 - **M-a1 1 조각(단계 전이, 2026-10-15)**: `transition`·`known_transition` 을 `forklift_core/mission/core.py` 의 `MissionCore` 로 옮겼다(문장 단위 그대로, 아직 옮기지 않은 기능은 훅). 조각 시험 6 개 추가, 실행기·미션 시험 90 개 ws1 통과. 경계 기록 접두 비교(기준 `a8b4f66` 대 `90c22b6`, ws1 잡 2813·2814, 같은 네 구성): 네 실행 모두 **접두 일치**·임무 성공 — 첫 캡처 응답(일반 seed 0·근접 seed 1) 또는 첫 격자 준비 변경(일반 seed 2·근접 seed 3)에서 끊김, 비교 구간 1,471–1,738 틱. 0 단계와 같은 이유로 관찰 이후의 전이는 조각 시험과 마지막 재생이 증거다.
+- **M-a1 2 조각(도착·승강·시간 전이, 2026-10-15)**: 추종 시간 한도·관찰(인식) 외 도착 전이·승강 목표 증가·lift/lower/settle/home_settle 시간 전이를 `MissionCore.tracking_limit`·`arrive`·`lift_and_timers` 로 옮겼다. `lift_command` 는 `MissionState.lift_command`. 참값(삽입 측정, 팔레트 대비 yaw, 팔레트 z, 승강 관절, 참 뒤차축)은 루프 표본을 호출 시점에 읽는 훅. Codex 구현 검토 수렴(P3 2 건 반영, `4dd06ca`). 경계 기록 접두 비교(ws1 잡 2817·2818, 같은 네 구성): 네 실행 모두 **접두 일치**·임무 성공(복귀까지) — 끊긴 지점·틱 수는 1 조각과 같다.
+- **M-a1 3 조각 분할(2026-10-15)**: 장애물 대응을 닫힌 묶음 셋으로 나눈다 — 3a 운반·복귀 시작의 실시간 경로와 재계획 대기(`live_leg`), 3b 허가 한 틱(`permission`: 재투영·한계·덤프·도킹 직선·포켓 검사·막힌 경로·N9 침묵·속도 상한·정체 감시, 뒤로 넘기는 값은 `allowed`·`why`·`acting`·`pocket_phase`·`obstacle_hold`·`requested_speed`), 3c 정지·재계획·재개(`blocked_replan`, 관찰 후보 커서는 `MissionState.next_candidate_index`). 정지 부피의 참값 충돌 평가는 평가 쪽이라 실행기에 남는다(D3). 3c 의 `realign_install("backoff")` 는 후퇴가 transport·return_home 에서만 일어나므로 원본에서도 닿지 않는 문장이다(그대로 옮김).
 
 ## 6. 열린 질문
 

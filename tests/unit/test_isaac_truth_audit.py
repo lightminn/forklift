@@ -10,13 +10,17 @@ SOURCE = SCRIPT.read_text()
 TRUTH = ("obstacles", "scenario.pickup", "truth_rear", "ppos", "pallet_yaw", "pickup_obstacle", "checked_obstacles")
 
 
+# The mission logic moved out of the runner (M-a1) plans through the same ports: its calls are audited too.
+CORE_TREE = ast.parse((Path(__file__).resolve().parents[2] / "src/forklift_core/mission/core.py").read_text())
+
+
 def _calls(prefix):
-    for node in ast.walk(TREE):
+    for node in [*ast.walk(TREE), *ast.walk(CORE_TREE)]:
         if isinstance(node, ast.Call):
             f = node.func
             name = f.id if isinstance(f, ast.Name) else (f.attr if isinstance(f, ast.Attribute) else "")
-            if name.startswith(prefix):
-                yield node
+            if name.startswith(prefix) and not any(isinstance(a, ast.Starred) for a in node.args):
+                yield node  # (a call passing *args straight through is the runner's hook for the core)
 
 
 def test_every_plan_sees_the_grid_world_without_props():

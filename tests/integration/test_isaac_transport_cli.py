@@ -474,7 +474,9 @@ def test_slam_runs_dock_on_a_scan_before_the_delivery_straight() -> None:
     # Plan D7c: the two obstacle replans of the transport now share transport_replan
     # (one lookup), and the docking retry's release and re-approach plan add three.
     # Obstacle recovery v4: the escape's leg (transport and return) looks them up as the replans do.
-    assert source.count('slam.get("transport_scenario", scenario)') == 12
+    # (the obstacle replan and the live leg moved to the mission core, M-a1 slices 3a/3c)
+    assert source.count('slam.get("transport_scenario", scenario)') + CORE.read_text().count(
+        'slam.get("transport_scenario", scenario)') == 12
 
 
 def test_d8b_recording_options_validate_before_startup(tmp_path) -> None:
@@ -904,9 +906,12 @@ def test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_in
     assert "realign_install('stand')" in realign
     install = functions["realign_install"]
     assert "near_tracking.REALIGN_MAX_LENGTH_M" in install and "'slam_mode': slam['tracker'].mode" in install
-    for site in ("near_leg", "observe_replan", "observe_candidate", "backoff", "obstacle_replan"):
+    core = CORE.read_text()  # the obstacle replan's installs moved to the mission core (M-a1 slice 3c)
+    for site in ("near_leg", "observe_replan", "observe_candidate"):
         assert f'realign_install("{site}")' in source, site
-    assert source.count('"near_capture_realign_held_recovery"') == 2
+    for site in ("backoff", "obstacle_replan"):
+        assert f'realign_install("{site}")' in core, site
+    assert source.count('"near_capture_realign_held_recovery"') + core.count('"near_capture_realign_held_recovery"') == 2
     branch = source.index("Plan D8 S4c-3 stage 2: once per pickup, instead of ending.")
     window = source[branch - 1500 : branch + 600]
     assert 'state["near_tracking"].get("realigns", 0) == 0' in window
