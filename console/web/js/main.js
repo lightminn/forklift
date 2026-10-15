@@ -10,7 +10,7 @@ import { createMapView, panBy, zoomAt, zoomPercent } from "./mapview.js";
 import { decodeScan, parseFrame } from "./media.js";
 import { API, createSession } from "./protocol.js";
 import { log, render, renderPallets, renderTemplates, renderWizard } from "./ui.js";
-import { controlProfile, staleness } from "./profile.js";
+import { controlProfile, staleness, stopIsRefused } from "./profile.js";
 import { blockReason, nextAllowed, templatesFor } from "./wizard.js";
 
 const TELEOP_MIN_INTERVAL_MS = 33; // ~30 Hz cap: a fast display must not flood ticks
@@ -76,6 +76,7 @@ const m = {
   layers: { grid: true, lidar: true, plan: true, sweep: true },
   wz: { open: false, step: 1, template: null, query: "", confirmed: null, note: "" },
   stateAt: null,
+  linkWelcome: null, // welcome of the control connection open now; null while reconnecting
 };
 const tok = {};
 function readTokens() {
@@ -125,6 +126,8 @@ try {
 
 m.session.subscribe((msg) => {
   if (msg.t === "welcome") {
+    m.linkWelcome = msg;
+    if (!stopIsRefused(msg)) $("nostop").hidden = true; // a vehicle that can stop: no stale notice
     frames.reset(msg.session_epoch);
     m.chassis = msg.capabilities?.chassis ?? null;
     m.cameraModel = msg.capabilities?.camera_model ?? null;
@@ -184,6 +187,7 @@ function connectControl() {
   ws.addEventListener("close", () => {
     m.link.up = false;
     m.session.onDisconnect(); // the old lease is not used again; the next welcome reclaims it
+    m.linkWelcome = null; // until the next welcome, STOP is queued and resent (C1 rule)
     if (control === ws) control = null;
     const wait = Math.max(1000, m.dropUntil - performance.now());
     setTimeout(connectControl, wait);
@@ -225,9 +229,8 @@ function connectMedia() {
 // Monitor-only connection (capabilities.control === false, gateway C2a): this page cannot
 // stop the truck. Say so loudly instead of sending a request that does nothing. Until a
 // welcome says so, STOP is sent as before (it is kept and resent until answered).
-const monitorOnly = () => m.session.welcome?.capabilities?.control === false;
 function pressStop(source) {
-  if (monitorOnly()) {
+  if (stopIsRefused(m.linkWelcome)) {
     $("nostop").hidden = false;
     log(`정지 불가 · 관찰 전용 연결 (${source})`, "crit");
     return;
@@ -389,10 +392,6 @@ for (const b of document.querySelectorAll(".rail-item")) b.onclick = () => showV
 
 function showTab(name) {
   const tele = name === "tele";
-  const tabsShown = getComputedStyle(document.querySelector(".tabs")).display !== "none"; // phones show both panes
-  if (!tele && tabsShown && !$("pane-tele").hidden) {
-    inputs.controlsHidden(); // the controls and their feedback leave the screen: release (C1 rule)
-  }
   $("tab-detail").setAttribute("aria-selected", String(!tele));
   $("tab-tele").setAttribute("aria-selected", String(tele));
   $("pane-detail").hidden = tele;
@@ -602,7 +601,17 @@ $("dest").addEventListener("change", () => {
 });
 
 // ------------------------------------------------------------------ loops
+// The teleop controls and their feedback must be on screen to drive: a tab switch, a view
+// or a width change that hides them releases every input (C1 rule), whatever caused it.
+let teleShown = true;
+function checkTeleVisible() {
+  const shown = $("pane-tele").getClientRects().length > 0;
+  if (teleShown && !shown) inputs.controlsHidden();
+  teleShown = shown;
+}
+
 function frame(now) {
+  checkTeleVisible();
   const st = m.session.state;
   const snap = readPad();
   inputs.setPad(snap);

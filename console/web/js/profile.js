@@ -25,3 +25,10 @@ export function staleness({ stateAgeS, poseAgeS }) {
   if (age <= STALE_S) return { stale: false, text: "" };
   return { stale: true, text: `위치 ${age.toFixed(1)} s 전 · 지금 위치가 아닐 수 있습니다` };
 }
+
+// linkWelcome is the welcome of the control connection that is open now (null while
+// reconnecting). Only that connection's own word turns STOP into the "cannot stop" notice;
+// an old monitor-only welcome must never swallow a STOP meant for a vehicle that can stop.
+export function stopIsRefused(linkWelcome) {
+  return linkWelcome?.capabilities?.control === false;
+}

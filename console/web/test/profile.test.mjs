@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { controlProfile, staleness } from "../js/profile.js";
+import { controlProfile, staleness, stopIsRefused } from "../js/profile.js";
 
 test("a vehicle without the control field is a full console (console/1 as before)", () => {
   const p = controlProfile({ mission: true, teleop_direct: true, teleop_video: true, lift: true });
@@ -33,4 +33,11 @@ test("the picture is stale when the state or the pose behind it is older than 1 
   assert.equal(staleness({ stateAgeS: 0.6, poseAgeS: 0.6 }).stale, true); // 1.2 s in all
   assert.equal(staleness({ stateAgeS: null, poseAgeS: null }).stale, true);
   assert.equal(staleness({ stateAgeS: 0.1, poseAgeS: null }).stale, false); // no age reported: judged by the state alone
+});
+
+test("STOP is refused only on a connection whose own welcome said control false", () => {
+  assert.equal(stopIsRefused(null), false); // reconnecting, no welcome yet: STOP is kept and resent
+  assert.equal(stopIsRefused({ capabilities: { control: false } }), true);
+  assert.equal(stopIsRefused({ capabilities: {} }), false);
+  assert.equal(stopIsRefused({ capabilities: { control: true } }), false);
 });
