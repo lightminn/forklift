@@ -769,3 +769,16 @@ def test_a_numpy_scalar_without_a_value_encoding_in_the_view_is_refused(tmp_path
     from forklift_core.mission.replay import read_ticks
 
     assert "unsupported" in next(iter(read_ticks(tmp_path)))["calls"][0]["changes"]
+
+
+def test_a_frozen_value_shared_between_an_argument_and_a_watched_key_is_fine(tmp_path):
+    """grid_kwargs stores the pose it was given as the pickup estimate: a frozen Pose2D, harmless to share."""
+    core = {"pickup_estimate": None}
+
+    def fn(target):
+        core["pickup_estimate"] = target
+
+    replay_with = one_call(tmp_path, fn, lambda f: f(Pose2D(1.0, 2.0, 0.1)), watch_dicts={"core": core})
+    rcore = {"pickup_estimate": None}
+    replay_with(lambda f: f(Pose2D(1.0, 2.0, 0.1)), watch_dicts_replay={"core": rcore})
+    assert rcore["pickup_estimate"] == Pose2D(1.0, 2.0, 0.1)

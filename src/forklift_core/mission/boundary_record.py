@@ -381,9 +381,26 @@ class RecordingGate:
         return out or None
 
 
+def _immutable(value: Any, depth: int = 0) -> bool:
+    """A value no one can change in place: scalars, and tuples / frozen dataclasses made only of such values
+    (sharing one is harmless, so the change model does not track its identity)."""
+    from forklift_core.mission.replay_codec import plain_value
+
+    if depth > 20:
+        return False
+    if plain_value(value):
+        return True
+    if isinstance(value, tuple):
+        return all(_immutable(v, depth + 1) for v in value)
+    if dataclasses.is_dataclass(value) and not isinstance(value, type) and value.__dataclass_params__.frozen:
+        return all(_immutable(getattr(value, f.name), depth + 1) for f in dataclasses.fields(value))
+    return False
+
+
 def _mutable(value: Any) -> bool:
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return not _immutable(value)
     return isinstance(value, (list, dict, np.ndarray)) or (
-        dataclasses.is_dataclass(value) and not isinstance(value, type)) or (
         hasattr(value, "__dict__") and not isinstance(value, type) and not callable(value))
 
 
@@ -399,7 +416,9 @@ def _walk(value: Any, path: tuple, out: dict, problems: list, stack=()) -> None:
     immutable values (the replay rebuilds them by value)."""
     from forklift_core.mission.replay_codec import plain_value
 
-    if not (_mutable(value) or plain_value(value) or isinstance(value, tuple) or callable(value)):
+    if _immutable(value):
+        return  # nothing in it can change or be shared harmfully
+    if not (_mutable(value) or isinstance(value, tuple) or callable(value)):
         problems.append(f"{path} holds a {type(value).__name__}, which has no value encoding")
         return
     if _mutable(value):
