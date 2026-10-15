@@ -153,3 +153,14 @@ def test_the_tick_forces_the_obstacle_replan_on_a_hand_off_and_ends_the_run_on_a
     with pytest.raises(RuntimeError, match="cusp_stall_unrecoverable"):
         core.cusp_tick(10.0, (0.5, 0, 0), "RAW", "TR", False)
     assert ("dump", "cusp_stall_unrecoverable") in calls
+
+
+def test_a_released_leg_is_updated_from_the_tick_pose_at_the_control_speed():
+    updates = []
+    monitor = SimpleNamespace(latch=None, tick=lambda *a, **k: SimpleNamespace(
+        force_replan=False, end=None, tracking=k["release_update"](), hold=False))
+    core, _, _ = make()
+    core.trackers["transport"] = SimpleNamespace(update=lambda rear, v, dt: updates.append((rear, v, dt)) or "UPD")
+    core.hooks.cusp_monitor = lambda: monitor
+    assert core.cusp_tick(10.0, (0.5, 0.1, 0.2), "RAW", "TR", False) == ("UPD", False)
+    assert updates == [((0.5, 0.1, 0.2), -0.05, 1 / 120)]  # signed_speed and dt from the runner
