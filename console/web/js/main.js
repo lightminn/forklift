@@ -133,6 +133,9 @@ m.session.subscribe((msg) => {
       m.grid = null;
       m.scan = null;
       m.mediaEpoch = msg.session_epoch;
+      m.cache.targetsRev = null; // the same revision number in a new session is a new list
+      $("pallet-list").innerHTML = "";
+      $("dest").innerHTML = "";
     }
     subscribeMedia(); // (re)subscribe now that the epoch is known: frames sent before it were dropped
     m.linkWelcome = msg;
@@ -234,7 +237,9 @@ function connectMedia() {
       drawCamera($("cam"), { ...m.camera, state: m.session.state, cameraModel: m.cameraModel, chassis: m.chassis }, tok);
       frames.drawn(head.session_epoch, head.frame_id);
     } else if (head.t === "scan") {
-      m.scan = { frame: head.frame ?? null, points: decodeScan(head, body), at: performance.now(), approx: head.pose_at === "latest" };
+      // age from the vehicle's own count: a scan resent on resubscribe is not fresh
+      const at = performance.now() - (Number.isFinite(head.age_s) ? head.age_s * 1000 : 0);
+      m.scan = { frame: head.frame ?? null, points: decodeScan(head, body), at, approx: head.pose_at === "latest" };
     } else if (head.t === "grid") {
       m.grid = head.withdrawn ? null : { head, cells: new Uint8Array(body) }; // withdrawn: drop the old map
     }

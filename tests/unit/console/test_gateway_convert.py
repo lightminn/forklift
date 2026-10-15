@@ -261,3 +261,18 @@ def test_camera_head_keeps_the_capture_domain():
     )
     assert head["capture"] == {"domain": "sim", "stamp_ns": 77}
     assert head["frame_id"] == 5 and head["jpeg_bytes"] == 10
+
+
+def test_speed_keeps_its_sign_across_the_pi_boundary():
+    # heading flips from pi-0.01 to -pi+0.01 while driving forward along -x
+    v = convert.speed_from_poses(
+        (1.0, 0.0, 0.0, math.pi - 0.01), (1.1, -0.03, 0.0, -math.pi + 0.01)
+    )
+    assert v == pytest.approx(0.3, abs=1e-3)
+
+
+def test_scan_header_carries_its_age_so_a_resend_is_not_fresh():
+    scan = ScanMessage(-1.0, 0.5, 0.1, 10.0, [1.0], received_s=5.0)
+    laser = PoseSample("map", 0.0, 0.0, 0.0, received_s=5.0)
+    head, _ = convert.scan_frame(scan, laser, epoch=1, age_s=11.0)
+    assert head["age_s"] == pytest.approx(11.0)

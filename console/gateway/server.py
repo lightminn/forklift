@@ -194,7 +194,8 @@ class Gateway(wire.ControlOutboxMixin, wire.MediaFanoutMixin):
             return wire.frame(head, body)
         if kind == "scan":
             scan, laser, pose_at, delay_s = value
-            out = convert.scan_frame(scan, laser, self.epoch, pose_at, delay_s)
+            age = self.clock() - scan.received_s
+            out = convert.scan_frame(scan, laser, self.epoch, pose_at, delay_s, age)
             return None if out is None else wire.frame(*out)
         # camera: JPEG passed through; one frame_id per capture (the store drops re-sends)
         head = convert.camera_head(
@@ -223,9 +224,12 @@ class Gateway(wire.ControlOutboxMixin, wire.MediaFanoutMixin):
         payload = self._payload(kind, value)
         if payload is None:
             return
-        for _, s in fresh:
-            s["sent_seq"][kind] = seq
-        await asyncio.gather(*(self._send_media(c, s, kind, payload) for c, s in fresh))
+        sent = await asyncio.gather(
+            *(self._send_media(c, s, kind, payload) for c, s in fresh)
+        )
+        for (_, s), ok in zip(fresh, sent, strict=True):
+            if ok:  # a frame dropped on a busy socket is tried again on the next tick
+                s["sent_seq"][kind] = seq
 
     async def _media_tick(self) -> None:
         for kind in ("grid", "scan", "camera_rgb"):

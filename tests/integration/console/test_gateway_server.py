@@ -260,3 +260,35 @@ def test_the_gateway_never_claims_to_be_the_fake(tmp_path, unused_tcp_port):
             await _start(Store(), unused_tcp_port, tmp_path, backend="mock")
 
     run(body())
+
+
+def test_a_frame_dropped_on_a_busy_socket_is_sent_again(tmp_path, unused_tcp_port):
+    async def body():
+        store = filled_store()
+        gw = await _start(store, unused_tcp_port, tmp_path)
+        real_send = gw._send_media
+        calls = []
+
+        async def flaky(conn_id, sub, kind, payload):
+            calls.append(kind)
+            if kind == "grid" and calls.count("grid") == 1:
+                return False  # the first grid send finds the socket busy
+            return await real_send(conn_id, sub, kind, payload)
+
+        gw._send_media = flaky
+        try:
+            m = await _open(unused_tcp_port, "/api/v1/media")
+            await m.send(
+                json.dumps(
+                    {"t": "media_subscribe", "client_id": "a", "grid": {"hz": 30}}
+                )
+            )
+            head, _ = await _media_until(m, "grid")
+            assert head["origin_m"] == [-1.0, -0.5]
+            assert calls.count("grid") >= 2
+        finally:
+            await _close_clients()
+            gw.close()
+            await gw.wait_closed()
+
+    run(body())

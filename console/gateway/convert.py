@@ -138,6 +138,7 @@ def scan_frame(
     epoch: int,
     pose_at: str = "scan_stamp",
     delay_s: float = 0.0,
+    age_s: float = 0.0,
 ):
     """None without a laser pose: the page could not place the points.
 
@@ -163,6 +164,7 @@ def scan_frame(
         "count": len(vals),
         "pose_at": pose_at,
         "pose_delay_s": delay_s,
+        "age_s": age_s,  # since the gateway received it: a resent scan is not fresh
     }
     return head, struct.pack(f"<{len(vals)}f", *vals)
 
@@ -209,9 +211,7 @@ def speed_from_poses(prev, cur):
     dt = cur[0] - prev[0]
     if not 0.0 < dt <= SPEED_MAX_GAP_S:
         return None
-    yaw = (
-        (prev[3] + cur[3]) / 2 if abs(_wrap(cur[3] - prev[3])) < math.pi / 2 else cur[3]
-    )
+    yaw = prev[3] + _wrap(cur[3] - prev[3]) / 2  # midpoint the short way round
     along = (cur[1] - prev[1]) * math.cos(yaw) + (cur[2] - prev[2]) * math.sin(yaw)
     return along / dt
 

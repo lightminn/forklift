@@ -195,8 +195,11 @@ class MediaFanoutMixin:
 
     async def _send_media(
         self, conn_id: str, sub: dict, kind: str, payload: bytes
-    ) -> None:
+    ) -> bool:
         """Latest-only: one send in flight per subscriber; a frame due while it is busy is dropped.
+
+        True when the frame went out (a send started); False when it was dropped or the
+        connection closed, so a caller that sends each frame once can try again.
 
         websockets' send() waits for the socket to drain, so a reader that stopped would
         otherwise hold frames back instead of filling the transport buffer.
@@ -208,19 +211,20 @@ class MediaFanoutMixin:
                 self._close_media(conn_id, ws)
             else:
                 self.media_drops += 1
-            return
+            return False
         buffered = ws.transport.get_write_buffer_size() if ws.transport else 0
         if buffered > MEDIA_CLOSE_BYTES:
             self._close_media(conn_id, ws)
-            return
+            return False
         if buffered > MEDIA_SKIP_BYTES:
             self.media_drops += 1
-            return
+            return False
         sub["last"][kind] = time.monotonic()
         sub.setdefault("pending_since", {})[kind] = time.monotonic()
         sub["pending"][kind] = asyncio.create_task(
             self._media_send_task(conn_id, ws, payload)
         )
+        return True
 
     async def _media_send_task(
         self, conn_id: str, ws: ServerConnection, payload: bytes
