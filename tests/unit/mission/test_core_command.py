@@ -61,6 +61,10 @@ class World:
             hooks=self.hooks, near=near,
             options=SimpleNamespace(dwells=dwells, safety_stops=safety, dwell_d_end_m=0.3, observe_arrival_m=0.10,
                                     observe_arrival_yaw_rad=0.10))
+        # Helpers moved into MissionCore (slices 6b/6c): this test's stand-ins go on the instance.
+        for name_ in ['dock_at_delivery_straight', 'arm_docking', 'release_and_carry', 'transport_replan', 'start_docking_retry', 'release_and_stand', 'release_after_backoff', 'slam_release', 'escape_leg', 'find_escape']:
+            if hasattr(self.hooks, name_):
+                setattr(self.core, name_, getattr(self.hooks, name_))
 
     def tick(self, tracking=Tracking(), t=50.0, speed=0.0, flags=(False, False, False)):
         return self.core.command(t, REAR, 49.99, tracking, speed, *flags)

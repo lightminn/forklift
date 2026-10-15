@@ -38,6 +38,10 @@ def make(*, slam=None, obstacle=None, act=True, near=None, steering=(0.0, 0.0)):
                        pocket={"check": None}, paths={}, trackers={}, geometry=None,
                        settings={"steering_command_rate_rad_s": 1.2}, pallet_geometry=None, hooks=hooks, near=near,
                        options=SimpleNamespace(drive_geometry=GEOMETRY, command_accel_mps2=0.8, obstacle_act=act))
+    # Helpers moved into MissionCore (slices 6b/6c): this test's stand-ins go on the instance.
+    for name_ in ['dock_at_delivery_straight', 'arm_docking', 'release_and_carry', 'transport_replan', 'start_docking_retry', 'release_and_stand', 'release_after_backoff', 'slam_release', 'escape_leg', 'find_escape']:
+        if hasattr(hooks, name_):
+            setattr(core, name_, getattr(hooks, name_))
     return core, state, calls
 
 

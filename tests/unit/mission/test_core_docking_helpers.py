@@ -69,6 +69,8 @@ class World:
             add_path_display=lambda stage, path, label, color: log_("show", label), stage=lambda: "STAGE",
             slam_odom_base=lambda: "ODOM", slam_rear=lambda t: poses["rear"].copy(), loaded=lambda: True,
             world=lambda: SimpleNamespace(current_time=57.0),
+            # The runner's Sink: the core writes no file itself (it has no output directory).
+            write_paths=lambda: (tmp_path / "paths.json").write_text(json.dumps(self.state["paths"])),
         )
         retry = SimpleNamespace(
             carry_on_release=lambda docking, before, after, withdraw_poses, destination: log_("carry", before, after) or {
@@ -85,7 +87,7 @@ class World:
             self.ms, state=self.state, obstacle=obstacle, slam=self.slam, pocket={"check": None}, paths=self.paths,
             trackers=self.trackers, geometry=SimpleNamespace(delivery_straight_m=1.5), settings={},
             pallet_geometry=None, hooks=self.hooks,
-            options=SimpleNamespace(DOCKING_RETRY=retry, scenario="SC", planner_config=Config(), output=tmp_path,
+            options=SimpleNamespace(DOCKING_RETRY=retry, scenario="SC", planner_config=Config(),
                                     initial_time=50.0))
 
     def log(self, name, *args, **kwargs):
@@ -164,7 +166,8 @@ def test_a_docking_retry_releases_plans_back_to_the_line_and_installs_the_reappr
     assert (d["status"], d["round"], d["reapproach"], d["retry_seed_goal"]) == ("armed", 1, True, [9.0, 0.0, 0.0])
     assert w.core.paths["transport"].length_m == 6.0 and w.ms.phase_started == 40.0
     assert "backoff" not in w.core.obstacle and w.core.obstacle["replan_wait"] == {} and w.core.obstacle["progress"] == {}
-    assert json.loads((tmp_path / "paths.json").read_text()) == {}  # the paths file is rewritten
+    assert json.loads((tmp_path / "paths.json").read_text()) == {  # the paths file is rewritten through the Sink
+        "transport": {"length_m": 6.0}, "withdraw": {"length_m": 0.4}}
     assert w.state["paths_replaced"][0]["by"] == "reapproach"
 
 
@@ -193,3 +196,132 @@ def test_an_obstacle_replan_during_a_reapproach_replans_the_reapproach(tmp_path)
     assert w.core.transport_replan(start, Config(), "TRAVEL").length_m == 2.0
     _, args, kwargs = [c for c in w.calls if c[0] == "plan_transport_leg"][0]
     assert args[0] == ("world", w.slam["transport_scenario"]) and kwargs["travel_config"] == "TRAVEL"
+
+
+@dataclass(frozen=True)
+class Place:
+    destination: Pose2D
+    bounds: tuple = (0.0, 0.0, 20.0, 10.0)
+
+
+def docking_world(tmp_path, monkeypatch, *, accepted=True, goal=(9.05, 0.02, 0.01), docking=None, straight=True,
+                  dry_status="arrived", swept=True, stop_ok=True, save_error=None, d7=True):
+    """A delivery match at the docking line: the scan matcher, the straight, its dry run and
+    the round-2 stop check are stand-ins; the method itself is the moved one."""
+    w = World(tmp_path, docking={"delivery_rear_prior": [9.0, 0.0, 0.0], "delivery_rear": [9.0, 0.0, 0.0],
+                                 **(docking or {})})
+    log_ = w.log
+    w.slam.update(last_scan_odom_base=(8.0, 0.0, 0.0), last_sent_ranges=np.array([1.0, np.inf, 2.0]),
+                  reference_points=np.zeros((2, 2)), transport_config=TrackerConfig(position_tolerance_m=0.03,
+                                                                                    yaw_tolerance_rad=0.05))
+    w.slam["tracker"].applied = ((0.0, 0.0, 0.0),)
+    w.slam["transport_scenario"] = Place(Pose2D(9.0, 0.0, 0.0))
+
+    def dock(reference, live, **k):
+        log_("dock", len(live), **k)
+        return SimpleNamespace(accepted=accepted, reason="ok" if accepted else "not_converged", correction=[0.0],
+                               starts=[(accepted, "ok", (0.0, 0.0, 0.0))], start_details=[{"iterations": 3}],
+                               goal_estimate=goal if accepted else None, relative_rear=(-1.0, 0.0, 0.0))
+
+    def save_npz(name, **arrays):
+        log_("save_npz", name)
+        if save_error:
+            raise save_error
+
+    def straight_from_pose(start, line_start, goal_, **k):
+        log_("straight", (line_start.x_m, line_start.y_m, line_start.yaw_rad), (goal_.x_m, goal_.y_m, goal_.yaw_rad))
+        return (leg(8.0, goal_.x_m - 8.0) if straight else None), {"lateral_m": 0.02}
+
+    hooks = w.hooks
+    hooks.dock, hooks.save_npz, hooks.straight_from_pose = dock, save_npz, straight_from_pose
+    hooks.beam_angles = lambda: np.array([-0.5, 0.0, 0.5])
+    hooks.laser_mount = lambda: SimpleNamespace(xyz_m=(0.3, 0.0, 0.2), yaw_rad=0.0)
+    hooks.truth_obstacles, hooks.rear = (lambda: ()), (lambda: np.array([8.0, 0.0, 0.0]))
+    hooks.truth_rear = lambda: (8.0, 0.01, 0.0)
+    hooks.bicycle_rollout = lambda *a: log_("rollout") or Dry(dry_status, trajectory=((8.0, 0.0, 0.0), (9.0, 0.0, 0.0)))
+    hooks.write_paths = lambda: log_("write_paths")
+    w.core.options.DOCKING_RETRY.round_two_stop_check = (
+        lambda straight_, rear, cfg, keep, clear: log_("stop_check", keep) or (stop_ok, {"status": "arrived"}))
+    opts = w.core.options
+    opts.rear_axle_offset_m, opts.d7_docking, opts.grid_planning, opts.ROUND2_KEEP_M = 0.0, d7, False, 0.6
+    opts.scenario = Place(Pose2D(9.0, 0.0, 0.0))
+    w.core.geometry = SimpleNamespace(delivery_straight_m=1.5, loaded_footprint="FP")
+    monkeypatch.setattr("forklift_core.mission.core.collision_free_pose", lambda *a: swept)
+    w.core.start_docking_retry = lambda t, trigger, reason: log_("retry", trigger, reason.split(":")[0])
+    return w
+
+
+def test_an_accepted_first_match_moves_the_goal_and_withdraw_installs_the_straight_and_arms_round_two(
+        tmp_path, monkeypatch):
+    w = docking_world(tmp_path, monkeypatch)
+    withdraw_before = w.core.paths["withdraw"].poses.copy()
+    w.core.dock_at_delivery_straight(12.0)
+    assert w.names() == ["dock", "save_npz", "straight", "rollout", "stop_check", "write_paths", "show", "prefix"]
+    assert w.calls[0][2]["delivery_rear"] == (9.0, 0.0, 0.0) and w.calls[0][1] == (2,)  # the finite beams only
+    assert w.calls[1][1] == ("delivery_match_1.npz",)
+    assert w.calls[2][1][0] == pytest.approx((9.05 - 1.5 * np.cos(0.01), 0.02 - 1.5 * np.sin(0.01), 0.01))  # line start 1.5 m back
+    d = w.slam["docking"]
+    assert d["accepted_any"] is True and d["previous_goal"] == [9.05, 0.02, 0.01] and d["goal_frame"] == "held"
+    assert (d["status"], d["round"], d["keep_m"]) == ("armed", 2, 0.6) and d["rounds"][0]["accepted"] is True
+    assert d["match_seed"] == "prior" and d["dry_run"]["swept_clear"] is True and "to_world" in d
+    assert not np.allclose(w.core.paths["withdraw"].poses, withdraw_before)  # moved once, before the straight
+    assert w.core.paths["transport"].length_m == pytest.approx(1.05) and w.ms.phase_started == 12.0
+    assert w.state["paths_replaced"][-1]["by"] == "delivery_straight" and w.state["delivery_docking"] is d
+    dest = w.slam["transport_scenario"].destination
+    assert (dest.x_m, dest.y_m) == pytest.approx((9.05, 0.02)) and dest.yaw_rad == pytest.approx(0.01)
+    assert w.core.trackers["transport"].config.position_tolerance_m == 0.03  # the round-2 prefix's stop
+
+
+def test_a_refused_second_match_keeps_the_first_rounds_goal(tmp_path, monkeypatch):
+    first = [9.05, 0.02, 0.01]
+    w = docking_world(tmp_path, monkeypatch, accepted=False,
+                      docking={"round": 2, "keep_m": 0.6, "previous_goal": first, "accepted_any": True,
+                               "to_world": [0.0, 0.0, 0.0]})
+    withdraw_before = w.core.paths["withdraw"].poses.copy()
+    w.core.dock_at_delivery_straight(20.0)
+    d = w.slam["docking"]
+    assert d["status"] == "done" and d["previous_goal"] == first and d["rounds"][-1]["accepted"] is False
+    assert d["goal_error_vs_truth"] is None and "stop_check" not in w.names()  # no round 3
+    assert w.calls[2][1][1] == tuple(first)  # the straight to the kept goal
+    np.testing.assert_allclose(w.core.paths["withdraw"].poses, withdraw_before, atol=1e-12)  # no step since the last round
+
+
+@pytest.mark.parametrize("refusal", ["straight", "dry_run", "swept", "round_two_stop"])
+def test_an_unaligned_straight_retries_from_the_committed_goal_with_its_partial_record(tmp_path, monkeypatch, refusal):
+    w = docking_world(tmp_path, monkeypatch, straight=refusal != "straight",
+                      dry_status="failed" if refusal == "dry_run" else "arrived", swept=refusal != "swept",
+                      stop_ok=refusal != "round_two_stop")
+    transport_before = w.core.paths["transport"]
+    w.core.dock_at_delivery_straight(12.0)
+    assert w.names()[-1] == "retry" and w.calls[-1][1] == ("b", "docking_unaligned")
+    d = w.slam["docking"]
+    assert d["previous_goal"] == [9.05, 0.02, 0.01] and d["goal_frame"] == "held"  # committed before the check
+    assert d["offsets_to_new_line"] == {"lateral_m": 0.02} and len(d["rounds"]) == 1
+    assert w.slam["transport_scenario"].destination.x_m == pytest.approx(9.05)  # the corrected drop is kept
+    assert w.core.paths["transport"] is transport_before and "write_paths" not in w.names()
+    if refusal == "swept":
+        assert d["dry_run"]["swept_clear"] is False
+
+
+def test_without_d7_an_unaligned_straight_ends_the_run(tmp_path, monkeypatch):
+    w = docking_world(tmp_path, monkeypatch, straight=False, d7=False)
+    with pytest.raises(RuntimeError, match="docking_unaligned"):
+        w.core.dock_at_delivery_straight(12.0)
+    assert "previous_goal" not in w.slam["docking"] and "match_seed" not in w.slam["docking"]
+
+
+def test_the_first_match_after_a_retry_must_be_accepted(tmp_path, monkeypatch):
+    w = docking_world(tmp_path, monkeypatch, accepted=False,
+                      docking={"await_retry_match": True, "retry_seed_goal": [9.02, 0.0, 0.0]})
+    with pytest.raises(RuntimeError, match="docking_retry_match_refused:not_converged"):
+        w.core.dock_at_delivery_straight(30.0)
+    d = w.slam["docking"]
+    assert w.calls[0][2]["delivery_rear"] == (9.02, 0.0, 0.0) and d["match_seed"] == "latest_goal"
+    assert "retry_seed_goal" not in d and d["rounds"][-1]["retry_match"] is True
+
+
+def test_a_failed_match_input_write_is_noted_and_the_match_goes_on(tmp_path, monkeypatch):
+    w = docking_world(tmp_path, monkeypatch, save_error=OSError("disk full"))
+    w.core.dock_at_delivery_straight(12.0)
+    assert w.slam["docking"]["match_input_errors"] == ["OSError: disk full"]
+    assert w.slam["docking"]["status"] == "armed"

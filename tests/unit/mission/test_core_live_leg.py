@@ -69,8 +69,8 @@ def make(phase="transport", *, statuses=("success",), slam=None, grid_planning=T
     core = MissionCore(ms, state=state, obstacle=obstacle, slam=slam, pocket={"check": None}, paths={},
                        trackers=trackers, geometry="G", settings={}, pallet_geometry=None, hooks=hooks,
                        options=options)
-    # Docking/withdrawal helpers are MissionCore methods since slice 6b; this test's stand-ins go on the instance.
-    for name_ in ['dock_at_delivery_straight', 'arm_docking', 'release_and_carry', 'transport_replan', 'start_docking_retry']:
+    # Docking/withdrawal helpers are MissionCore methods since slice 6b; this test's stand-ins go on the instance (6c: the release and escape helpers too).
+    for name_ in ['dock_at_delivery_straight', 'arm_docking', 'release_and_carry', 'transport_replan', 'start_docking_retry', 'release_and_stand', 'release_after_backoff', 'slam_release', 'escape_leg', 'find_escape']:
         if hasattr(hooks, name_):
             setattr(core, name_, getattr(hooks, name_))
     return core, ms, state, obstacle, calls, scenario

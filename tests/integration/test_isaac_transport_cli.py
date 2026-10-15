@@ -415,7 +415,7 @@ def test_every_physics_step_after_start_goes_through_step_world() -> None:
 def test_slam_release_replans_both_travel_legs_and_gates_on_a_stop() -> None:
     import ast
 
-    tree = ast.parse(SCRIPT.read_text())
+    tree = ast.parse(CORE.read_text())  # the SLAM release moved to the mission core (M-a1 slice 6c)
     release = next(
         node
         for node in ast.walk(tree)
@@ -774,6 +774,9 @@ def test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_captu
     source = SCRIPT.read_text()
     tree = ast.parse(source)
     functions = {n.name: ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    # The shared release-and-stand moved to the mission core (M-a1 slice 6c).
+    functions.update({n.name: ast.unparse(n) for n in ast.walk(ast.parse(CORE.read_text()))
+                      if isinstance(n, ast.FunctionDef) and n.name == "release_and_stand"})
     tick_fn = functions["near_tick"]
     retry = tick_fn.index("near_tracking.retry_allowed(")
     assert tick_fn.index("near.setdefault('terminal_standing_since', now_s)") < retry
@@ -927,6 +930,9 @@ def test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_in
     source = SCRIPT.read_text()
     tree = ast.parse(source)
     functions = {n.name: ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    # The shared release-and-stand moved to the mission core (M-a1 slice 6c).
+    functions.update({n.name: ast.unparse(n) for n in ast.walk(ast.parse(CORE.read_text()))
+                      if isinstance(n, ast.FunctionDef) and n.name == "release_and_stand"})
     shared = functions["release_and_stand"]
     for needed in ("slam['tracker'].release(", "obstacle['layer'].refresh(", "carried(pocket['planning_pickup'])",
                    "near['retry_stand'] = True", "'applied_before': applied_before_"):

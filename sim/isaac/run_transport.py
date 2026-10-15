@@ -3605,54 +3605,6 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         near["events"].append({"time_s": now_s, "event": "path_revision", "revision": revision_, "point_m": point_m})
         return entry_
 
-    def release_and_stand(now_s: float, hold_event: str) -> dict:
-        """Plan D8 S4c-2 / S4c-3 (shared): release the SLAM hold and re-project the grid,
-        carry the pickup estimate and planning target into the released frame, and install
-        the two-pose stand in observe -- its follower result, end hold and recoveries are
-        bypassed until the re-observation (near["retry_stand"]). Returns the release record."""
-        from forklift_core.localization.slam_pose import compose as pose_compose
-        from forklift_core.localization.slam_pose import invert as pose_invert
-        from forklift_core.planning.hybrid_astar import PlanResult as _PlanResult
-
-        before_ = slam_rear(now_s)
-        applied_before_ = [float(v) for v in slam["tracker"].applied[0]]
-        jump_m, jump_rad = slam["tracker"].release(odom_from_base=slam_odom_base())
-        after_ = slam_rear(now_s)
-        frame_change = pose_compose(tuple(float(v) for v in after_), pose_invert(tuple(float(v) for v in before_)))
-        slam["holds"].append({"phase": ms.phase, "time_s": now_s, "event": hold_event, "jump_m": jump_m,
-                              "jump_rad": jump_rad})
-        reprojected_ = None
-        if obstacle is not None and slam["tracker"].applied is not None:
-            # As a D7c release: the grid re-projected with the released correction before any
-            # plan reads it.
-            obstacle["applied"] = tuple(float(v) for v in slam["tracker"].applied[0])
-            obstacle["version"] += 1
-            obstacle["reprojections"] = obstacle.get("reprojections", 0) + 1
-            obstacle["layer"].refresh(now_s, obstacle["applied"], obstacle["version"],
-                                      current_pose=tuple(float(v) for v in after_),
-                                      path_ahead=np.array([after_]), loaded=loaded)
-            reprojected_ = {"version": obstacle["version"], "applied": list(obstacle["applied"]),
-                            "reprojections": obstacle["reprojections"]}
-
-        def carried(site_):
-            x_, y_, yaw_ = pose_compose(frame_change, (site_.x_m, site_.y_m, site_.yaw_rad))
-            return replace(site_, x_m=x_, y_m=y_, yaw_rad=yaw_)
-
-        if obstacle is not None and obstacle.get("pickup_estimate") is not None:
-            obstacle["pickup_estimate"] = carried(obstacle["pickup_estimate"])
-        if pocket.get("planning_pickup") is not None:
-            pocket["planning_pickup"] = carried(pocket["planning_pickup"])
-        heading_ = np.array([math.cos(float(after_[2])), math.sin(float(after_[2]))])
-        stand_ = np.array([[*(np.asarray(after_[:2], dtype=float) - near_tracking.RETRY_STAND_M * heading_),
-                            float(after_[2])], [float(after_[0]), float(after_[1]), float(after_[2])]])
-        paths["observe"] = _PlanResult(True, "success", stand_, np.ones(2, dtype=np.int8), np.zeros(2),
-                                       near_tracking.RETRY_STAND_M, 0)
-        trackers["observe"] = RearAxlePathTracker(stand_, np.ones(2), np.zeros(2), trackers["observe"].config)
-        near["retry_stand"] = True
-        return {"jump_m": jump_m, "jump_rad": jump_rad, "frame_change": list(frame_change),
-                "rear_before": [float(v) for v in before_], "rear_after": [float(v) for v in after_],
-                "applied_before": applied_before_, "reprojected": reprojected_}
-
     def start_pickup_retry(now_s: float, reason: str, face_distance_m: float, episode_: int) -> None:
         """Plan D8 S4c-2: end the episode, release the SLAM hold and re-project the grid,
         carry the old pickup estimate and target into the released frame, forget the near
@@ -3669,7 +3621,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         near["stop_state"] = near_tracking.StopState()
         near.pop("terminal_standing_since", None)
         state.setdefault("near_capture_history", []).append(state.pop("near_capture"))
-        retry_.update(release_and_stand(now_s, "release_pickup_retry"))
+        retry_.update(core.release_and_stand(now_s, "release_pickup_retry"))
         state["near_tracking"]["retry"] = retry_
         near["stand_record"] = "retry"
         transition("observe", now_s)
@@ -3712,7 +3664,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         state.setdefault("near_capture_refused", []).append(json.loads(record_json(state.pop("near_capture"))))
         record_ = {"time_s": now_s, "refused_attempt": attempt_, "installs": [], "end": None}
         state["near_tracking"]["realign"] = record_
-        record_.update(release_and_stand(now_s, "release_near_realign"))
+        record_.update(core.release_and_stand(now_s, "release_near_realign"))
         near["stand_record"] = "realign"
         realign_install("stand")
         transition("observe", now_s)
@@ -4413,11 +4365,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             save_npz=lambda name, **arrays: np.savez_compressed(args.output / name, **arrays),
             # M-a1 slice 3c: the blocked replan's releases, planners and recovery helpers (read when called).
             realign_active=lambda: realign_active(), realign_install=lambda reason: realign_install(reason),
-            release_after_backoff=lambda t_, event: release_after_backoff(t_, event),
             plan_observation_leg=lambda *a, **k: plan_observation_leg(*a, **k),
             plan_transport=lambda *a, **k: plan_transport(*a, **k),
-            find_escape=lambda *a: find_escape(*a),
-            escape_leg=lambda phase_: escape_leg(phase_),
             final_straight_prefix=lambda *a: final_straight_prefix(*a),
             apply_tracker_profile=lambda: apply_tracker_profile(), same_path=same_path, path_stats=path_stats,
             # M-a1 slice 4a: the follower rules' helpers and the cusp heading holds (built further down run()).
@@ -4460,7 +4409,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             perception_capture=lambda: perception_capture, detect_pockets=lambda *a: detect_pockets(*a),
             save_capture=save_capture,
             # M-a1 slice 5: the release at a stop, the measured steering.
-            slam_release=lambda t_: slam_release(t_), steering_position=lambda: robot.get_joint_positions()[steers],
+            steering_position=lambda: robot.get_joint_positions()[steers],
         ),
         near=near,
         options=SimpleNamespace(near_tracking_stop_at=args.near_tracking_stop_at, d7_docking=args.d7_docking,
@@ -4496,214 +4445,6 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 ROUND2_KEEP_M=ROUND2_KEEP_M),
     )
     transition = core.transition
-
-    def slam_release(t: float) -> None:
-        """Apply the received correction while stopped; replan the next leg
-        from the new estimate if it moved more than 2 cm or 0.02 rad."""
-        leg = "transport" if slam["pending_release"] == "transport" else "return_home"
-        slam["pending_release"] = None
-        before = slam_rear(t)
-        jump_m, jump_rad = slam["tracker"].release(odom_from_base=slam_odom_base())
-        after = slam_rear(t)
-        event = {
-            "phase": ms.phase,
-            "time_s": t,
-            "event": "release",
-            "jump_m": jump_m,
-            "jump_rad": jump_rad,
-            "rear_before": before.tolist(),
-            "rear_after": after.tolist(),
-            "replanned": False,
-        }
-        slam["holds"].append(event)
-        # After an accepted docking match the withdraw (and so the return's
-        # start) has moved: the return is replanned whatever the jump (Codex
-        # 8428113 P2: a 0 jump left the old return start 366 mm away).
-        docked_return = leg == "return_home" and slam["docking"].get("accepted_any")
-        if leg not in trackers or (
-            jump_m <= 0.02 and abs(jump_rad) <= 0.02 and not docked_return
-        ):
-            if leg == "transport":
-                core.arm_docking()
-            return
-        start = PlanningPose(float(after[0]), float(after[1]), float(after[2]))
-        released_ = (tuple(float(v) for v in slam["tracker"].applied[0])
-                     if slam["tracker"].applied is not None else None)
-        replan_start = time.monotonic()
-        if leg == "transport":
-            replanned = plan_transport_leg(
-                grid_world(scenario), start, planner_config, geometry=geometry, travel_config=travel_config,
-                **grid_kwargs(None, own=after, applied=released_),
-            )
-        else:
-            # The delivered pallet sits where docking put it -- right in the
-            # held frame. Carry it into the released frame with the same
-            # change of frame as the truck, T = after o before^-1, so the
-            # truck-pallet relation survives the release (S3 seed 1 on a351056:
-            # invalid_start against the nominal pallet after a docked drop).
-            return_scenario = slam.get("transport_scenario", scenario)
-            if slam["docking"].get("accepted_any"):
-                frame_change = compose(tuple(after), invert(tuple(before)))
-                site = return_scenario.destination
-                moved_site = compose(frame_change, (site.x_m, site.y_m, site.yaw_rad))
-                return_scenario = replace(
-                    return_scenario,
-                    destination=replace(
-                        site, x_m=moved_site[0], y_m=moved_site[1], yaw_rad=moved_site[2]
-                    ),
-                )
-                event["pallet_frame_change"] = list(frame_change)
-                slam["return_scenario"] = return_scenario  # later return recoveries too
-            replanned = plan_return_leg(
-                grid_world(return_scenario),
-                start,
-                return_to_pose,
-                planner_config,
-                geometry=geometry,
-                travel_config=travel_config,
-                **grid_kwargs(None, own=after, applied=released_),
-            )
-        if replanned.status == "invalid_start" and grid_planning:
-            # The released pose may sit inside the planning clearance of a grid
-            # mark (L3b seed 3: transport after the extract); as for the obstacle
-            # replans, once more with no clearance -- the grid's swelling holds
-            # the placement error and the permission guards every tick.
-            tight_cfg = replace(planner_config, clearance_m=0.0)
-            tight_travel_cfg = replace(travel_config, clearance_m=0.0) if travel_config is not None else None
-            if leg == "transport":
-                replanned = plan_transport_leg(
-                    grid_world(scenario), start, tight_cfg, geometry=geometry, travel_config=tight_travel_cfg,
-                    **grid_kwargs(None, own=after, applied=released_),
-                )
-            else:
-                replanned = plan_return_leg(
-                    grid_world(return_scenario), start, return_to_pose, tight_cfg, geometry=geometry,
-                    travel_config=tight_travel_cfg, **grid_kwargs(None, own=after, applied=released_),
-                )
-            event["tight_retry"] = True
-        event.update(
-            replaced_path=path_record(paths[leg]),
-            replanned=True,
-            replan_status=replanned.status,
-            planning_wall_s=time.monotonic() - replan_start,
-        )
-        require(replanned.success, f"slam_release_replan_failed: {replanned.status}")
-        paths[leg] = replanned
-        state.setdefault("paths", {})[leg] = path_record(replanned)
-        (args.output / "paths.json").write_text(record_json(state["paths"], indent=2) + "\n")
-        trackers[leg] = RearAxlePathTracker(
-            replanned.poses,
-            replanned.directions,
-            replanned.curvatures_inv_m,
-            trackers[leg].config,
-        )
-        add_path_display(
-            stage,
-            replanned,
-            "Transport" if leg == "transport" else "Return",
-            (1.0, 0.65, 0.04) if leg == "transport" else (0.55, 0.2, 0.85),
-        )
-        if leg == ms.phase:
-            ms.phase_started = t
-        if leg == "transport":
-            core.arm_docking()
-
-    def escape_leg(phase_):
-        """Obstacle recovery v4: (kind, the leg's grid_kwargs args, its rectangle checker, outline)
-        for transport or return_home -- the rectangles, outline and bounds its replan checks."""
-        from forklift_core.planning.grid_collision import FootprintCollisionChecker
-        from forklift_core.planning.pallet_mission import leg_obstacles
-
-        if phase_ == "transport":
-            sc_ = slam.get("transport_scenario", scenario) if slam is not None else scenario
-            kind_, args_ = "transport", (None, None)
-        else:
-            sc_ = scenario if slam is None else slam.get("return_scenario", slam.get("transport_scenario", scenario))
-            kind_, args_ = "return", ("return", sc_.destination)
-        rects_, footprint_, bounds_ = leg_obstacles(kind_, grid_world(sc_), geometry)
-        return kind_, args_, FootprintCollisionChecker(rects_, footprint_, bounds_), (rects_, footprint_, bounds_)
-
-    def find_escape(now_s, rear_now, leg_dir_, kappa_now):
-        """Obstacle recovery v4 E2: the straight escape for a stop inside the planning clearance --
-        (the chosen candidate or None, every candidate). The candidates' checks: the leg's planner
-        checker over the sweep (the permission's own-cell rule on the grid), the permission's path
-        check to the length plus the stop length (and with the extra margin ramping in), the stop arcs
-        at the held steering, and the end region on the grid rebuilt for the end pose."""
-        from forklift_core.control import escape as esc
-        from forklift_core.planning.grid_collision import make_checker
-
-        _, args_, rect_checker_, (rects_, footprint_, bounds_) = escape_leg(ms.phase)
-        pose_ = tuple(float(v) for v in rear_now)
-        occ_now_ = grid_kwargs(*args_, label="escape")["occupancy"]
-        layer_ = obstacle["layer"]
-        loaded_now_ = bool(loaded)
-        pconf_ = layer_.permission.config
-        stop_len_ = pconf_.stopping.distance_m(BACKOFF_SPEED_MPS) + pconf_.step_m
-        psi_ = float(layer_.error_table.at(layer_.grid_config.occupied_max_age_s)[1])
-        clearance_ = float((travel_config or planner_config).clearance_m)
-
-        def end_clearance(region):
-            # One grid per candidate for its whole end region: the remembered cells under the truck
-            # now come back once it has left them, and only the cells under every region pose stay
-            # out (the return band likewise) -- each pose's own grid is contained in it.
-            occ_end_ = grid_kwargs(*args_, own=list(region), band_pose=list(region), label="escape_end")["occupancy"]
-            checker_ = make_checker(rects_, footprint_, bounds_, occ_end_)
-            values_ = [esc.clearance_m(checker_.free, p_) for p_ in region]
-            return min(values_) >= 0.0, min(values_)
-
-        candidates_ = esc.evaluate(
-            pose_,
-            sweep_free=lambda poses, d: esc.rectangles_sweep_free(rect_checker_, poses)
-            and esc.grid_sweep_blocked(occ_now_, footprint_, pose_, d, poses) is None,
-            path_blocked=lambda poses, d, extra, ramp: layer_.check_candidate(
-                poses, current_pose=pose_, direction=d, loaded=loaded_now_, extra_margin_m=extra, extra_ramp_m=ramp
-            ).blocked,
-            arc_blocked=lambda k, d: layer_.check_arc_candidate(
-                current_pose=pose_, curvature_inv_m=k, direction=d, loaded=loaded_now_, cap_mps=BACKOFF_SPEED_MPS
-            ).blocked,
-            end_clearance=end_clearance,
-            kappa_now=float(kappa_now), stop_length_m=stop_len_, planner_clearance_m=clearance_, psi_rad=psi_,
-            cell_m=float(occ_now_.resolution_m),
-        )
-        choice_ = esc.choose(candidates_, int(leg_dir_))
-        dumps_ = obstacle.setdefault("recovery_dumps", 0)
-        if dumps_ < 6:
-            # Plan v4 D4: the inputs of the decision, for a CPU replay.
-            obstacle["recovery_dumps"] = dumps_ + 1
-            snap_ = layer_.snapshot
-            np.savez_compressed(
-                args.output / f"obstacle_recovery_{dumps_ + 1}.npz",
-                state=snap_.state, free_stamp=snap_.free_stamp, origin=[snap_.origin_x_m, snap_.origin_y_m],
-                res=snap_.resolution_m, planner_occupied=occ_now_.occupied,
-                planner_origin=[occ_now_.origin_x_m, occ_now_.origin_y_m], planner_res=occ_now_.resolution_m,
-                t=now_s, rear=np.asarray(pose_), kappa=float(kappa_now), leg_dir=int(leg_dir_), phase=ms.phase,
-                loaded=loaded_now_, candidates=json.dumps([c.record() for c in candidates_]),
-                chosen=json.dumps(None if choice_ is None else choice_.record()),
-            )
-        return choice_, candidates_
-
-    def release_after_backoff(now_s, event):
-        """Obstacle recovery v4 E3: a SLAM hold -- whenever it began -- released at a backoff's or
-        escape's end, or in a recovery during one, the way the stall replan does: the grid
-        re-projected before any plan reads it; returns the released rear. Not while the delivery
-        docking is accepted or re-approaching."""
-        if slam is None or slam["tracker"].mode != "holding":
-            return None
-        if ms.phase == "transport" and (slam["docking"].get("accepted_any") or slam["docking"].get("reapproach")):
-            return None
-        jump_m, jump_rad = slam["tracker"].release(odom_from_base=slam_odom_base())
-        slam["holds"].append({"phase": ms.phase, "time_s": now_s, "event": event, "jump_m": jump_m, "jump_rad": jump_rad})
-        rear_now = slam_rear(world.current_time - initial_time)
-        if obstacle is not None and slam["tracker"].applied is not None:
-            obstacle["applied"] = tuple(float(v) for v in slam["tracker"].applied[0])
-            obstacle["version"] += 1
-            obstacle["reprojections"] = obstacle.get("reprojections", 0) + 1
-            obstacle["layer"].refresh(
-                now_s, obstacle["applied"], obstacle["version"],
-                current_pose=tuple(float(v) for v in rear_now), path_ahead=np.array([rear_now]), loaded=loaded,
-            )
-        slam["control"][-1][1:4] = np.asarray(rear_now, dtype=float).tolist()
-        return np.asarray(rear_now, dtype=float)
 
     def held_kappa() -> float:
         """The curvature the wheels actually hold, from the steering joints."""

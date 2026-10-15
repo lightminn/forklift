@@ -892,8 +892,9 @@ def test_plans_project_with_the_grids_correction_and_a_release_passes_its_own():
     body = ast.get_source_segment(source, fn)
     assert '["tracker"].applied' not in body
     assert 'obstacle["applied"]' in body
-    rel = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "slam_release")
-    rel_src = ast.get_source_segment(source, rel)
+    core = CORE.read_text()  # the SLAM release moved to the mission core (M-a1 slice 6c)
+    rel = next(n for n in ast.walk(ast.parse(core)) if isinstance(n, ast.FunctionDef) and n.name == "slam_release")
+    rel_src = ast.get_source_segment(core, rel)
     assert rel_src.count("grid_kwargs(None, own=after, applied=released_)") == 4
     assert "grid_kwargs(None)" not in rel_src
 
@@ -1029,7 +1030,8 @@ def test_obstacle_recovery_v4_an_escape_end_bypasses_docking_stall_and_failure()
 
 def test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery():
     source = SCRIPT.read_text()
-    fn = source[source.index("    def release_after_backoff(") :]
+    moved_fn = CORE.read_text()  # release_after_backoff moved to the mission core (M-a1 slice 6c)
+    fn = moved_fn[moved_fn.index("    def release_after_backoff(") :]
     fn = fn[:2500]
     assert 'slam["tracker"].mode != "holding"' in fn and 'slam["tracker"].release(' in fn
     assert 'slam["docking"].get("accepted_any") or slam["docking"].get("reapproach")' in fn
@@ -1057,9 +1059,10 @@ def test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recove
     assert 'obstacle["backoff"].pop("stop_cause", None)' in core
     assert "clearance_used_ = 0.0  # the candidates are planned tight" in core
     assert "clearance_used_ = mission_clearance_" in core
-    assert 'args.output / f"obstacle_recovery_{dumps_ + 1}.npz"' in source
+    # find_escape moved to the mission core (M-a1 slice 6c); its dump goes through the runner's Sink.
+    assert 'save_npz(\n                f"obstacle_recovery_{dumps_ + 1}.npz"' in moved_fn
     assert "band_pose=None, label=None" in source and "band_poses_ = rear if band_pose is None else band_pose" in source
-    assert 'own=list(region), band_pose=list(region), label="escape_end"' in source
+    assert 'own=list(region), band_pose=list(region), label="escape_end"' in moved_fn
 
 
 def test_cusp_position_stall_v7_is_wired_into_the_runner():
@@ -1175,7 +1178,7 @@ def test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the
     block = core[start:core.index('obstacle["deadline"] = None', start)]
     assert 'slam.get("pending_release") is not None' in block.split("):", 1)[0]
     assert block.index('obstacle["layer"].refresh(') < block.index("**return_turnaround_kwargs()")
-    release = src[src.index("    def slam_release("):]
+    release = core[core.index("    def slam_release("):]  # moved to the mission core (M-a1 slice 6c)
     release = release[: release.index("\n    def ", 10)]
     assert "return_turnaround_kwargs" not in release and "plan_return_leg(" in release
     assert core.count("**return_turnaround_kwargs()") == 2  # the live return plan and its tight retry
