@@ -38,14 +38,12 @@ def _install_isaac_value_types() -> None:
     if "isaacsim.core.utils.types" in sys.modules:
         return
 
-    class ArticulationAction:  # noqa: D401 -- the SDK's value object, by attribute
-        def __init__(self, joint_positions=None, joint_velocities=None, joint_efforts=None, joint_indices=None,
-                     joint_names=None):
+    class ArticulationAction:  # noqa: D401 -- the SDK's value object: the public attributes it records
+        def __init__(self, joint_positions=None, joint_velocities=None, joint_efforts=None, joint_indices=None):
             self.joint_positions = joint_positions
             self.joint_velocities = joint_velocities
             self.joint_efforts = joint_efforts
             self.joint_indices = joint_indices
-            self.joint_names = joint_names
 
     ArticulationAction.__module__ = "isaacsim.core.utils.types"
     for name in ("isaacsim", "isaacsim.core", "isaacsim.core.utils"):
