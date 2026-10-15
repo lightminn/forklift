@@ -389,12 +389,11 @@ def test_the_20260921_profile_restores_the_old_observation_heading():
 
     from forklift_core.control.path_tracking import TrackerConfig
 
-    tree = ast.parse(SCRIPT.read_text())
-    function = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "apply_tracker_profile"
-    )
+    from forklift_core.mission.core import apply_tracker_profile_to  # a core function (M-a1 slice 6e)
+
+    source = SCRIPT.read_text()
+    first = source.index("apply_tracker_profile_to(trackers, args.tracker_profile)")
+    assert first < source.index("record_tracker_configs_in(state, trackers)") < source.index("    core = MissionCore(")
 
     def build(profile):
         trackers = {
@@ -405,16 +404,7 @@ def test_the_20260921_profile_restores_the_old_observation_heading():
                 config=TrackerConfig(position_tolerance_m=0.008, yaw_tolerance_rad=0.02)
             ),
         }
-        namespace = {
-            "args": SimpleNamespace(tracker_profile=profile),
-            "trackers": trackers,
-            "replace": replace,
-        }
-        exec(
-            compile(ast.Module(body=[function], type_ignores=[]), str(SCRIPT), "exec"),
-            namespace,
-        )
-        namespace["apply_tracker_profile"]()
+        apply_tracker_profile_to(trackers, profile)
         return trackers
 
     old = build("20260921")
@@ -927,8 +917,8 @@ def test_every_path_replacement_restarts_the_no_progress_baseline():
     near_install = moved.index("    def near_install(self, ")  # a MissionCore method since M-a1 slice 6d
     assert 'obstacle.setdefault("progress", {}).clear()' in moved[near_install : near_install + 3500]
     # ... and every observe path a plan D8 S4c-3 realignment installs.
-    realign = source.index("    def realign_install(")
-    assert 'obstacle.setdefault("progress", {}).clear()' in source[realign : realign + 2000]
+    realign = moved.index("    def realign_install(self")  # a MissionCore method since M-a1 slice 6e
+    assert 'obstacle.setdefault("progress", {}).clear()' in moved[realign : realign + 2000]
     # the obstacle replan's one moved to the mission core (M-a1 slice 3c)
     replan = CORE.read_text()
     assert 'obstacle.setdefault("progress", {}).clear()' in replan[replan.index("    def blocked_replan("):]
@@ -1223,8 +1213,8 @@ def test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judge
     assert "cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD," in candidate[: candidate.index("phase_started = t")]
     assert 'near_leg.curvatures_inv_m,\n                trackers["observe"].config,' in moved  # (M-a1 slice 4b-v)
     # The 2026-09-21 profile had neither cusp tolerances nor the hold.
-    profile = source[source.index("    def apply_tracker_profile() -> None:") :]
-    assert "cusp_heading_pending_rad=None," in profile[: profile.index("    def record_tracker_configs()")]
+    profile = moved[moved.index("def apply_tracker_profile_to(") :]  # a core function (M-a1 slice 6e)
+    assert "cusp_heading_pending_rad=None," in profile[: profile.index("def record_tracker_configs_in(")]
 
 
 def test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own():

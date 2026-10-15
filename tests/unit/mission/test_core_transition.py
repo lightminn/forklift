@@ -47,6 +47,10 @@ def make(phase="observe", *, slam_mode="tracking", with_slam=True, check=None, l
     geometry = SimpleNamespace(pallet_depth_m=0.6, pallet_width_m=0.8, axle_to_fork_tip_m=1.29, inserted_offset_m=0.3)
     core = MissionCore(ms, state=state, obstacle=obstacle, slam=slam, pocket=pocket, paths={}, trackers={},
                        geometry=geometry, settings={"withdraw_speed_mps": 0.12}, pallet_geometry=None, hooks=hooks)
+    # Moved into MissionCore (M-a1 slice 6e): this test's stand-ins go on the instance.
+    for name_ in ['control_correction', 'known_pallet', 'return_turnaround_kwargs', 'realign_active', 'realign_install', 'start_near_realign', 'apply_tracker_profile', 'record_tracker_configs', 'build_near_tracker']:
+        if hasattr(hooks, name_):
+            setattr(core, name_, getattr(hooks, name_))
     return core, ms, state, obstacle, pocket, slam, log
 
 
@@ -193,7 +197,7 @@ def test_an_uncertified_corridor_refuses_after_the_straight_and_the_certificate_
 def test_the_interim_uncertified_withdrawal_leaves_the_delivered_pallet_pending_and_is_refixed_where_it_stops():
     core, ms, state, obstacle, _, log, layer, certify_calls, old = withdraw_setup(mode="uncertified",
                                                                                  known_config={"e_w_full_m": 0.02})
-    core.hooks.control_correction = log.hook("control_correction", (0.1, 0.0, 0.0))
+    core.control_correction = log.hook("control_correction", (0.1, 0.0, 0.0))
     core.transition("withdraw", 50.0)
     assert certify_calls == [] and core.trackers["withdraw"] is old  # the planned straight, no permission
     pose, corr, released = obstacle["delivered_pending"]

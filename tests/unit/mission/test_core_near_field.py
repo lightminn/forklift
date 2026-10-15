@@ -113,6 +113,10 @@ def make(geom=None, *, tracker=None, phase="approach", standing=False, retries=0
                        options=SimpleNamespace(near_tracking=geom.module(), rear_axle_offset_m=0.35,
                                                near_drop_frames_from_m=drop_from,
                                                drive_geometry=SimpleNamespace(wheelbase_m=0.8, track_m=0.5)))
+    # Moved into MissionCore (M-a1 slice 6e): this test's stand-ins go on the instance.
+    for name_ in ['control_correction', 'known_pallet', 'return_turnaround_kwargs', 'realign_active', 'realign_install', 'start_near_realign', 'apply_tracker_profile', 'record_tracker_configs', 'build_near_tracker']:
+        if hasattr(hooks, name_):
+            setattr(core, name_, getattr(hooks, name_))
     # The moved neighbours near_tick calls: stand-ins on the instance, logged.
     core.near_redraw = lambda latest, rear: calls.append(("near_redraw",)) or core.test_redraw
     core.near_protection_prediction = lambda *a: calls.append(("prediction",)) or core.test_prediction
@@ -260,6 +264,10 @@ def install_core(tmp_path, *, obstacle=None):
                        obstacle=obstacle, slam=None, pocket={"check": None, "planning_pickup": Pose2D(5.0, 0.0, 0.0)},
                        paths=paths, trackers=trackers, geometry=None, settings={}, pallet_geometry=None, hooks=hooks,
                        near=near, options=SimpleNamespace(near_tracking=NT))
+    # Moved into MissionCore (M-a1 slice 6e): this test's stand-ins go on the instance.
+    for name_ in ['control_correction', 'known_pallet', 'return_turnaround_kwargs', 'realign_active', 'realign_install', 'start_near_realign', 'apply_tracker_profile', 'record_tracker_configs', 'build_near_tracker']:
+        if hasattr(hooks, name_):
+            setattr(core, name_, getattr(hooks, name_))
     return core, near, calls
 
 
@@ -328,6 +336,10 @@ def test_the_near_capture_redraw_checks_the_correction_points_on_the_trajectorie
                        trackers={}, geometry=geometry, settings={}, pallet_geometry=None, hooks=hooks, near={},
                        options=SimpleNamespace(near_tracking=nt, adapter=adapter, pickup_bounds="B", scenario="SC",
                                                planner_config="CFG", rear_axle_offset_m=0.35))
+    # Moved into MissionCore (M-a1 slice 6e): this test's stand-ins go on the instance.
+    for name_ in ['control_correction', 'known_pallet', 'return_turnaround_kwargs', 'realign_active', 'realign_install', 'start_near_realign', 'apply_tracker_profile', 'record_tracker_configs', 'build_near_tracker']:
+        if hasattr(hooks, name_):
+            setattr(core, name_, getattr(hooks, name_))
     trajs = [np.zeros((3, 3)), np.ones((3, 3))]
     core.test_response = ({"approach": leg()}, {"refused": None}, trajs)
     cfg_a, cfg_d = TrackerConfig(cruise_speed_mps=0.2), TrackerConfig(cruise_speed_mps=0.3)

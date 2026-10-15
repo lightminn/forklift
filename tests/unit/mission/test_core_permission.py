@@ -55,6 +55,10 @@ def make(phase="observe", *, limit=(0.5, "ok"), slam=None, remaining=5.0, truth_
                        trackers={phase: tracker}, geometry=SimpleNamespace(alignment_straight_m=1.0,
                                                                            delivery_straight_m=0.8),
                        settings={}, pallet_geometry=None, hooks=hooks, options=options)
+    # Moved into MissionCore (M-a1 slice 6e): this test's stand-ins go on the instance.
+    for name_ in ['control_correction', 'known_pallet', 'return_turnaround_kwargs', 'realign_active', 'realign_install', 'start_near_realign', 'apply_tracker_profile', 'record_tracker_configs', 'build_near_tracker']:
+        if hasattr(hooks, name_):
+            setattr(core, name_, getattr(hooks, name_))
     return core, obstacle, pocket, calls
 
 

@@ -73,7 +73,10 @@ class World:
                                     near_capture_box_yaw_rad=0.05, approach_straight_speed_mps=slow,
                                     near_capture_redraw=redraw, pocket_check=pocket))
         # near_capture_redraw moved into MissionCore (slice 6d): this test's stand-in goes on the instance.
-        self.core.near_capture_redraw = self.hooks.near_capture_redraw
+        for name_ in ('near_capture_redraw', 'start_near_realign', 'build_near_tracker', 'record_tracker_configs',
+                      'known_pallet', 'realign_install', 'apply_tracker_profile'):
+            if hasattr(self.hooks, name_):
+                setattr(self.core, name_, getattr(self.hooks, name_))
 
     def log(self, name, *args, **kwargs):
         self.calls.append((name, args, kwargs))

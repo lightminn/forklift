@@ -42,7 +42,7 @@ def make(phase="transport", *, slam=None, obstacle=None, profile="default", stat
                                                grid_planning=True, pickup_zone="ZONE", pickup_bounds="B",
                                                scenario="SC"))
     # Helpers moved into MissionCore (slices 6b/6c): this test's stand-ins go on the instance.
-    for name_ in ['dock_at_delivery_straight', 'arm_docking', 'release_and_carry', 'transport_replan', 'start_docking_retry', 'release_and_stand', 'release_after_backoff', 'slam_release', 'escape_leg', 'find_escape', 'hold_count', 'near_tick', 'near_redraw', 'near_capture_redraw', 'near_protection_prediction', 'near_install', 'start_pickup_retry']:
+    for name_ in ['dock_at_delivery_straight', 'arm_docking', 'release_and_carry', 'transport_replan', 'start_docking_retry', 'release_and_stand', 'release_after_backoff', 'slam_release', 'escape_leg', 'find_escape', 'hold_count', 'near_tick', 'near_redraw', 'near_capture_redraw', 'near_protection_prediction', 'near_install', 'start_pickup_retry', 'control_correction', 'known_pallet', 'return_turnaround_kwargs', 'realign_active', 'realign_install', 'start_near_realign', 'apply_tracker_profile', 'record_tracker_configs', 'build_near_tracker']:
         if hasattr(hooks, name_):
             setattr(core, name_, getattr(hooks, name_))
     return core, tracker, calls
@@ -55,7 +55,7 @@ def test_other_rules_own_a_cusp_stop_in_the_legacy_profile_the_d7_transport_and_
     assert core.cusp_excluded("transport") == "d7_transport" and core.cusp_excluded("return_home") is None
     slam = {"docking": {}, "tracker": SimpleNamespace(mode="holding")}
     core, _, _ = make("observe", slam=slam)
-    core.hooks.realign_active = lambda: True
+    core.realign_active = lambda: True
     assert core.cusp_excluded("observe") == "realign_held"
     assert make()[0].cusp_excluded("transport") is None
 

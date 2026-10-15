@@ -121,7 +121,7 @@ class World:
                                     cusp_heading_hold_position_m=0.03, cusp_heading_hold_rad=0.08,
                                     observe_replans_per_leg=2))
         # Docking/withdrawal helpers are MissionCore methods since slice 6b; this test's stand-ins go on the instance (6c: the release and escape helpers too).
-        for name_ in ['dock_at_delivery_straight', 'arm_docking', 'release_and_carry', 'transport_replan', 'start_docking_retry', 'release_and_stand', 'release_after_backoff', 'slam_release', 'escape_leg', 'find_escape', 'hold_count', 'near_tick', 'near_redraw', 'near_capture_redraw', 'near_protection_prediction', 'near_install', 'start_pickup_retry']:
+        for name_ in ['dock_at_delivery_straight', 'arm_docking', 'release_and_carry', 'transport_replan', 'start_docking_retry', 'release_and_stand', 'release_after_backoff', 'slam_release', 'escape_leg', 'find_escape', 'hold_count', 'near_tick', 'near_redraw', 'near_capture_redraw', 'near_protection_prediction', 'near_install', 'start_pickup_retry', 'control_correction', 'known_pallet', 'return_turnaround_kwargs', 'realign_active', 'realign_install', 'start_near_realign', 'apply_tracker_profile', 'record_tracker_configs', 'build_near_tracker']:
             if hasattr(self.hooks, name_):
                 setattr(self.core, name_, getattr(self.hooks, name_))
         # The cusp rules are MissionCore methods since slice 6a; stand-ins on the instance as before.

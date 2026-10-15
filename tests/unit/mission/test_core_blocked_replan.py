@@ -106,7 +106,7 @@ class World:
                                     alignment_straight_m=1.0), settings={}, pallet_geometry=None,
                                 hooks=self.hooks, options=options)
         # Docking/withdrawal helpers are MissionCore methods since slice 6b; this test's stand-ins go on the instance (6c: the release and escape helpers too).
-        for name_ in ['dock_at_delivery_straight', 'arm_docking', 'release_and_carry', 'transport_replan', 'start_docking_retry', 'release_and_stand', 'release_after_backoff', 'slam_release', 'escape_leg', 'find_escape', 'hold_count', 'near_tick', 'near_redraw', 'near_capture_redraw', 'near_protection_prediction', 'near_install', 'start_pickup_retry']:
+        for name_ in ['dock_at_delivery_straight', 'arm_docking', 'release_and_carry', 'transport_replan', 'start_docking_retry', 'release_and_stand', 'release_after_backoff', 'slam_release', 'escape_leg', 'find_escape', 'hold_count', 'near_tick', 'near_redraw', 'near_capture_redraw', 'near_protection_prediction', 'near_install', 'start_pickup_retry', 'control_correction', 'known_pallet', 'return_turnaround_kwargs', 'realign_active', 'realign_install', 'start_near_realign', 'apply_tracker_profile', 'record_tracker_configs', 'build_near_tracker']:
             if hasattr(self.hooks, name_):
                 setattr(self.core, name_, getattr(self.hooks, name_))
 
@@ -182,7 +182,7 @@ def test_the_return_replans_home_on_the_return_scenario():
 def test_a_held_realignment_refuses_the_recovery():
     slam = {"docking": {}, "tracker": SimpleNamespace(mode="holding")}
     w = World("observe", slam=slam)
-    w.hooks.realign_active = lambda: True
+    w.hooks.realign_active = w.core.realign_active = lambda: True
     with pytest.raises(RuntimeError, match="near_capture_realign_held_recovery"):
         w.replan()
     assert w.obstacle["blocked_ticks"] == 120 and w.obstacle["replans"] == []

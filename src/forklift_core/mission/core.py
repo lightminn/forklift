@@ -74,6 +74,38 @@ from forklift_core.planning import Pose2D as PlanningPose
 __all__ = ["MissionCore"]
 
 
+def apply_tracker_profile_to(trackers: dict, profile) -> None:
+    """The ``--tracker-profile`` followers (M-a1 slice 6e: a module function, because the runner applies it
+    to the first followers before the core exists and the core to the ones it installs later)."""
+    # The 2026-09-21 G2 baseline had no cusp or overshoot tolerances and
+    # stopped observation at 8 mm (git show 6f9fb82:sim/isaac/run_transport.py).
+    if profile != "20260921":
+        return
+    for name, tracker in trackers.items():
+        tracker.config = replace(
+            tracker.config,
+            cusp_position_tolerance_m=None,
+            cusp_yaw_tolerance_rad=None,
+            cusp_brake_window_m=None,
+            overshoot_tolerance_m=None,
+            position_tolerance_m=0.008,
+            # Nor the cusp heading hold (fix A / A'): with no cusp tolerance it would hold
+            # between 0.03 and 0.08 rad (Codex A' design review 1).
+            cusp_heading_pending_rad=None,
+        )
+        if name == "observe":
+            # It also judged observation stops at 0.03 rad (P3 is newer).
+            tracker.config = replace(tracker.config, yaw_tolerance_rad=0.03)
+
+
+def record_tracker_configs_in(state: dict, trackers: dict) -> None:
+    """Every tracker's full settings as built (G2 rerun plan, 2026-10-01) -- state the near-field contract
+    reads back (M-a1 slice 6e: a module function for the same reason)."""
+    state.setdefault("tracker_configs", {}).update(
+        {name: asdict(tracker.config) for name, tracker in trackers.items()}
+    )
+
+
 class MissionCore:
     def __init__(self, ms: MissionState, *, state: dict, obstacle: dict | None, slam: dict | None, pocket: dict,
                  paths: dict, trackers: dict, geometry, settings: dict, pallet_geometry, hooks: SimpleNamespace,
@@ -118,7 +150,7 @@ class MissionCore:
             # withdrawal stops, re-fixed at b_w + e_w_full (the measured release error and
             # four-corner drift to the stop).
             if obstacle.get("pallet_rel") is not None and rear_ is not None:
-                obstacle["delivered_pending"] = (grid_compose(rear_, obstacle["pallet_rel"]), hooks.control_correction(),
+                obstacle["delivered_pending"] = (grid_compose(rear_, obstacle["pallet_rel"]), self.control_correction(),
                                                  float(obstacle.get("last_stamp", t)))
             state.setdefault("known_pallets", []).append({"event": "withdraw_uncertified", "time_s": t})
         elif next_phase == "withdraw":
@@ -129,7 +161,7 @@ class MissionCore:
             rel_ = obstacle["pallet_rel"]
             kp_ = layer_.known_config
             r_fix_ = kp_.get("b_w_m") if kp_.get("b_w_m") is not None else kp_.get("r_fix_pickup_m", 0.05)
-            hooks.known_pallet(grid_compose(rear_, rel_), r_fix_, "delivered")
+            self.known_pallet(grid_compose(rear_, rel_), r_fix_, "delivered")
             blades_ = hooks.fork_blades()
             pg_ = self.pallet_geometry
             centre_ = sum(abs(y0 + y1) / 2 for _, _, y0, y1 in blades_) / len(blades_)
@@ -382,7 +414,7 @@ class MissionCore:
         ms, state, obstacle, slam, hooks, options = self.ms, self.state, self.obstacle, self.slam, self.hooks, self.options
         paths, trackers, geometry = self.paths, self.trackers, self.geometry
         planner_config, travel_config, scenario = options.planner_config, options.travel_config, options.scenario
-        grid_world, grid_kwargs, return_turnaround_kwargs = hooks.grid_world, hooks.grid_kwargs, hooks.return_turnaround_kwargs
+        grid_world, grid_kwargs, return_turnaround_kwargs = hooks.grid_world, hooks.grid_kwargs, self.return_turnaround_kwargs
         stand = False
         if (
             options.grid_planning
@@ -713,13 +745,13 @@ class MissionCore:
         require, wall, same_path, path_stats, path_record = (hooks.require, hooks.wall, hooks.same_path, hooks.path_stats,
                                                              hooks.path_record)
         realign_active, realign_install, release_and_carry, release_after_backoff, slam_rear = (
-            hooks.realign_active, hooks.realign_install, self.release_and_carry, self.release_after_backoff,
+            self.realign_active, self.realign_install, self.release_and_carry, self.release_after_backoff,
             hooks.slam_rear)
         grid_world, grid_kwargs, plan_observation_leg, plan_return_leg, plan_transport = (
             hooks.grid_world, hooks.grid_kwargs, hooks.plan_observation_leg, hooks.plan_return_leg, hooks.plan_transport)
         transport_replan, find_escape, escape_leg, final_straight_prefix = (
             self.transport_replan, self.find_escape, self.escape_leg, hooks.final_straight_prefix)
-        apply_tracker_profile, arm_docking = hooks.apply_tracker_profile, self.arm_docking
+        apply_tracker_profile, arm_docking = self.apply_tracker_profile, self.arm_docking
         # Plan D8 S4c-3 stage 2: as above, an obstacle recovery held in the realignment.
         require(not (ms.phase == "observe" and realign_active() and slam is not None
                      and slam["tracker"].mode == "holding"), "near_capture_realign_held_recovery")
@@ -1374,7 +1406,7 @@ class MissionCore:
             hooks.require, hooks.wall, hooks.path_record, self.start_docking_retry, hooks.slam_rear, self.arm_docking)
         grid_world, grid_kwargs, plan_transport_leg, plan_observation_leg = (
             hooks.grid_world, hooks.grid_kwargs, hooks.plan_transport_leg, hooks.plan_observation_leg)
-        realign_active, realign_install = hooks.realign_active, hooks.realign_install
+        realign_active, realign_install = self.realign_active, self.realign_install
         cusp_holds, cusp_monitor = hooks.cusp_holds(), hooks.cusp_monitor()
         cusp_heading_motion, cusp_heading_end, cusp_heading_offset = (
             hooks.cusp_heading_motion, self.cusp_heading_end, self.cusp_heading_offset)
@@ -1787,7 +1819,7 @@ class MissionCore:
         require, wall, grid_world, grid_kwargs, plan_observation_leg = (
             hooks.require, hooks.wall, hooks.grid_world, hooks.grid_kwargs, hooks.plan_observation_leg)
         apply_tracker_profile, realign_install, record_tracker_configs = (
-            hooks.apply_tracker_profile, hooks.realign_install, hooks.record_tracker_configs)
+            self.apply_tracker_profile, self.realign_install, self.record_tracker_configs)
         attempt["retry_reason"] = (
             f"perception_{observation.status}:{observation.reason}"
         )
@@ -1927,10 +1959,10 @@ class MissionCore:
         CUSP_HEADING_HOLD_RAD, CUSP_HEADING_HOLD_PHASES = options.cusp_heading_hold_rad, options.cusp_heading_hold_phases
         adapter, near_tracking, Pose2D = options.adapter, options.near_tracking, PlanningPose
         require, wall, path_record, record_json, known_pallet = (hooks.require, hooks.wall, hooks.path_record,
-                                                                 hooks.record_json, hooks.known_pallet)
+                                                                 hooks.record_json, self.known_pallet)
         grid_world, grid_kwargs, plan_transport, final_straight_prefix = (
             hooks.grid_world, hooks.grid_kwargs, hooks.plan_transport, hooks.final_straight_prefix)
-        apply_tracker_profile, record_tracker_configs = hooks.apply_tracker_profile, hooks.record_tracker_configs
+        apply_tracker_profile, record_tracker_configs = self.apply_tracker_profile, self.record_tracker_configs
         if options.repeat_captures and options.repeat_at_attempt is not None:
             # G2r took another path to a valid detection
             # before the requested attempt: no batch, no plan.
@@ -2165,11 +2197,11 @@ class MissionCore:
         paths, trackers, geometry, transition = self.paths, self.trackers, self.geometry, self.transition
         speeds, near_tracking, Pose2D = options.speeds, options.near_tracking, PlanningPose
         require, path_record, final_straight_prefix, realign_active, realign_install = (
-            hooks.require, hooks.path_record, hooks.final_straight_prefix, hooks.realign_active, hooks.realign_install)
+            hooks.require, hooks.path_record, hooks.final_straight_prefix, self.realign_active, self.realign_install)
         straight_from_pose, bicycle_rollout, near_capture_redraw, start_near_realign = (
-            hooks.straight_from_pose, hooks.bicycle_rollout, self.near_capture_redraw, hooks.start_near_realign)
+            hooks.straight_from_pose, hooks.bicycle_rollout, self.near_capture_redraw, self.start_near_realign)
         record_tracker_configs, build_pocket_check, build_near_tracker = (
-            hooks.record_tracker_configs, hooks.build_pocket_check, hooks.build_near_tracker)
+            self.record_tracker_configs, hooks.build_pocket_check, self.build_near_tracker)
         if near_leg is not None:
             # Fix (1): a near leg opens its own observe replan budget.
             state["observe_replan_leg"] = {
@@ -2592,7 +2624,7 @@ class MissionCore:
         """K2: where another rule owns a cusp stop -- D7 transport (docking accepted or re-approaching,
         whatever --d7-docking says), a held S4c-3 realignment, the legacy tracker profile."""
         options = self.options
-        realign_active = self.hooks.realign_active
+        realign_active = self.realign_active
         slam = self.slam
         if options.tracker_profile == "20260921":
             return "tracker_profile"
@@ -4098,7 +4130,7 @@ class MissionCore:
         near_tracking = self.options.near_tracking  # a runner module-level name
         path_record = self.hooks.path_record  # a runner module-level name
         add_path_display = self.hooks.add_path_display
-        known_pallet = self.hooks.known_pallet
+        known_pallet = self.known_pallet
         loaded = self.hooks.loaded()
         ms = self.ms
         near = self.near
@@ -4169,3 +4201,200 @@ class MissionCore:
         state["near_tracking"]["retry"] = retry_
         near["stand_record"] = "retry"
         transition("observe", now_s)
+
+    # --- M-a1 slice 6e: closures moved from run(), statement for statement ---
+    def control_correction(self):
+        """The correction control applies now (the one an estimate made now is expressed in)."""
+        slam = self.slam
+        try:
+            slam_ref_ = slam
+        except NameError:
+            slam_ref_ = None
+        if slam_ref_ is not None and slam_ref_["tracker"].applied is not None:
+            return tuple(float(v) for v in slam_ref_["tracker"].applied[0])
+        return (0.0, 0.0, 0.0)
+
+    def known_pallet(self, rect_xyyaw, r_fix_m: float, event: str) -> None:
+        """Replace the known pallet with a fresh fix (plan v10 D5: the age restarts).
+
+        Stored with the correction control applies at this instant -- the one the
+        estimate is in -- not the layer's last-scan copy, which lags a capture's
+        release (Codex stage-1 2nd P1-1: 0.30 m shown 0.30 m off).
+        """
+        control_correction = self.control_correction
+        geometry = self.geometry
+        obstacle = self.obstacle
+        state = self.state
+        from forklift_core.perception.known_obstacles import KnownRect
+
+        stamp_ = float(obstacle.get("last_stamp", 0.0))
+        applied_ = control_correction()
+        obstacle["layer"].known = [KnownRect(
+            (float(rect_xyyaw[0]), float(rect_xyyaw[1]), geometry.pallet_depth_m, geometry.pallet_width_m,
+             float(rect_xyyaw[2])),
+            fix_stamp_s=stamp_, r_fix_m=float(r_fix_m), rho_m=None, frame_correction=tuple(applied_))]
+        state.setdefault("known_pallets", []).append(
+            {"event": event, "time_s": stamp_, "rect": [float(v) for v in rect_xyyaw], "r_fix_m": float(r_fix_m)})
+
+    def return_turnaround_kwargs(self) -> dict:
+        """--return-turnaround: the plan_return_leg options for the return path the truck sets off
+        with -- the first live plan on the grid, which runs after the SLAM release and the obstacle
+        block's re-projection, so the arc check's snapshot and the plan's grid share one correction
+        (the release replan itself is replaced by it and passes none; Codex implementation review
+        2026-10-12 P2). Later return replans pass none. Each turnaround arc is checked on the drive
+        permission's snapshot before it is compared: the planner's grid takes UNKNOWN cells as free,
+        the permission does not enter them (Codex design review 2026-10-12)."""
+        options = self.options
+        grid_planning = self.options.grid_planning
+        obstacle = self.obstacle
+        slam = self.slam
+        if not options.return_turnaround:
+            return {}
+        try:  # as grid_kwargs: the first plans run before the SLAM link exists
+            slam_link_ = slam
+        except NameError:
+            slam_link_ = None
+        if slam_link_ is not None and slam_link_.get("pending_release") is not None:
+            return {}  # not before the release: the snapshot is re-projected after it
+
+        def arc_check(poses):
+            if not grid_planning:
+                return None
+            layer_ = obstacle["layer"]
+            if getattr(layer_, "snapshot", None) is None:
+                return "no_snapshot"
+            # The start part verified as the permission's own walk, no known occupied cell on the whole
+            # arc (ObstacleLayer.check_turnaround_arc; Codex implementation reviews 2026-10-12).
+            return layer_.check_turnaround_arc(poses, current_pose=tuple(float(v) for v in poses[0]))
+
+        return {"forward_turnaround": True, "turnaround_check": arc_check}
+
+    def realign_active(self) -> bool:
+        """Plan D8 S4c-3 stage 2: a realignment started and its re-capture not yet accepted."""
+        state = self.state
+        rec_ = (state.get("near_tracking") or {}).get("realign")
+        return rec_ is not None and rec_.get("end") is None
+
+    def realign_install(self, reason: str) -> None:
+        """Plan D8 S4c-3 stage 2: every observe path installed during the realignment, by
+        content and by its follower's copy, with the SLAM mode then; a path longer than
+        REALIGN_MAX_LENGTH_M ends the run (no recovery reaches past it)."""
+        near_tracking = self.options.near_tracking  # a runner module-level name
+        require = self.hooks.require  # a runner module-level name
+        initial_time = self.options.initial_time
+        obstacle = self.obstacle
+        paths = self.paths
+        realign_active = self.realign_active
+        slam = self.slam
+        state = self.state
+        trackers = self.trackers
+        world = self.hooks.world()  # the runner's, read when called
+        if not realign_active():
+            return
+        path_ = paths["observe"]
+        poses_ = np.asarray(path_.poses, dtype=float)
+        length_ = float(np.sum(np.hypot(*np.diff(poses_[:, :2], axis=0).T))) if len(poses_) > 1 else 0.0
+        installs_ = state["near_tracking"]["realign"]["installs"]
+        installs_.append({
+            "n": len(installs_), "time_s": world.current_time - initial_time, "reason": reason,
+            "slam_mode": slam["tracker"].mode, "length_m": length_, "poses": poses_.tolist(),
+            "directions": np.asarray(path_.directions).tolist(),
+            "curvatures_inv_m": np.asarray(path_.curvatures_inv_m).tolist(),
+            "sha256": near_tracking.path_digest(path_.poses, path_.directions, path_.curvatures_inv_m),
+            "tracker_sha256": near_tracking.path_digest(*trackers["observe"].path_arrays()),
+        })
+        if obstacle is not None:
+            obstacle.setdefault("progress", {}).clear()  # the no-progress watch restarts on it
+        require(length_ <= near_tracking.REALIGN_MAX_LENGTH_M + 1e-9, f"near_capture_realign_too_long:{length_:.3f}")
+
+    def start_near_realign(self, now_s: float, attempt_: int) -> None:
+        """Plan D8 S4c-3 stage 2: a near capture refused by its acceptance and by stage 1 --
+        once per pickup -- releases SLAM, re-projects the grid, carries the estimates, keeps
+        the refused capture apart (near_capture_refused, not near_capture_history) and stands
+        to re-observe here; the next valid capture is a far one and the normal flow follows.
+        No tracker exists yet: no retry event, no retry count, no episode closed."""
+        record_json = self.hooks.record_json  # a runner module-level name
+        core = self
+        near = self.near
+        realign_install = self.realign_install
+        state = self.state
+        transition = self.transition
+        state["near_tracking"]["realigns"] = state["near_tracking"].get("realigns", 0) + 1
+        state["near_capture"]["refused_attempt"] = attempt_
+        state.setdefault("near_capture_refused", []).append(json.loads(record_json(state.pop("near_capture"))))
+        record_ = {"time_s": now_s, "refused_attempt": attempt_, "installs": [], "end": None}
+        state["near_tracking"]["realign"] = record_
+        record_.update(core.release_and_stand(now_s, "release_near_realign"))
+        near["stand_record"] = "realign"
+        realign_install("stand")
+        transition("observe", now_s)
+
+    def apply_tracker_profile(self) -> None:
+        apply_tracker_profile_to(self.trackers, self.options.tracker_profile)
+
+    def record_tracker_configs(self) -> None:
+        record_tracker_configs_in(self.state, self.trackers)
+
+    def build_near_tracker(self, now_s: float) -> None:
+        """Plan D8 S4a ①: the D8c 3판 tracker from the near capture, in the SLAM hold that
+        follows it -- the capture's observation, the control base it was placed with and
+        t_before_capture_s. M-a1 slice 6e: the mission side (the hold and contract checks, the
+        episode, the injection latch, the tracker's state and records); the runner builds the
+        service -- NearFieldConfig and the detectors (near_tracker_config, reading the URDF),
+        the tracker and its recording proxy (near_tracker_create) and the fork geometry
+        (near_fork_geometry) -- in the order the closure did."""
+        near_tracking = self.options.near_tracking  # a runner module-level name
+        record_json = self.hooks.record_json  # a runner module-level name
+        require = self.hooks.require  # a runner module-level name
+        near, slam, state, pocket, trackers = self.near, self.slam, self.state, self.pocket, self.trackers
+        start = near["start"]
+        require(start is not None, "near_field_without_capture")
+        require(slam is not None and slam["tracker"].mode == "holding", "near_field_without_hold")
+        service = self.hooks.near_tracker_config()
+        config, frame_geo = service.config, service.frame_geo
+        # The followers as the measurement runs drove them (Codex S4a-1 2nd review P2):
+        # their configs exist only once the mission is planned, so they are checked here,
+        # standing at the near capture, before any near-field driving.
+        tracker_problems = near_tracking.tracker_config_problems(
+            near["terms"].condition.get("tracker_configs"), json.loads(record_json(state.get("tracker_configs")))
+        )
+        state["near_tracking"]["tracker_config_problems"] = tracker_problems
+        require(not tracker_problems, "near_field_contract:" + "; ".join(tracker_problems))
+        episode = self.hold_count()
+        near["injection_closed"] = True  # Plan D8 S4c-1: no capture after this one is biased
+        near["tracker"] = self.hooks.near_tracker_create(service, start, episode)
+        blades_, corners_ = self.hooks.near_fork_geometry()
+        near.update(episode=episode, fork_tip_x_m=frame_geo.fork_tip_x_m,
+                    last_stamp=start["capture_stamp_s"], last_fed_stamp=None,
+                    # Plan D8 S4a-2: the blades, the carriage front corners and the depth
+                    # past which the carriage meets the face first.
+                    blades=blades_, blade_y_max_m=max(max(abs(b_[2]), abs(b_[3])) for b_ in blades_),
+                    corners=corners_,
+                    carriage_limit_m=frame_geo.carriage_limit_m,
+                    protect=None, stop_state=near_tracking.StopState(), arrival=None,
+                    stale_waits={},
+                    # Plan D8 S4b: the correction points, from the mission the near capture planned.
+                    correction=near_tracking.CorrectionState(), first_target=pocket["planning_pickup"],
+                    # Plan D8 S4c-2: an episode's execution latches start clean; its records
+                    # (stop records, events, corrections, revisions, tick rows) accumulate.
+                    mismatch=False, unbounded=False, path_revision=0)
+        near.setdefault("stop_events", [])
+        near.pop("terminal_standing_since", None)
+        near["history"].clear()
+        state["near_tracking"]["start"] = {
+            "built_s": now_s,
+            "attempt": start["attempt"],
+            "pose": list(start["pose"]),
+            "aligned_s": start["aligned_s"],
+            "capture_stamp_s": start["capture_stamp_s"],
+            "episode": episode,
+            "gate_front_x_m": config.handoff_start_front_x_m,
+            "fork_tip_x_m": frame_geo.fork_tip_x_m,
+            "observation": asdict(start["observation"]),
+            # Plan D8 S4c-3: the paths the tracker starts on (path revision 0), by the followers'
+            # own copies.
+            "paths0": {name_: near_tracking.path_digest(*trackers[name_].path_arrays())
+                       for name_ in ("approach", "insert", "extract")},
+        }
+        state["near_tracking"].setdefault("starts", []).append(state["near_tracking"]["start"])
+        near["events"].append({"time_s": now_s, "event": "tracker_built", "episode": episode})

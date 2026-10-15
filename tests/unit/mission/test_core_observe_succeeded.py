@@ -91,6 +91,10 @@ class World:
                                     adapter=adapter, near_tracking=near_tracking, repeat_captures=repeat[0],
                                     repeat_at_attempt=repeat[1], extra_views=extra_views, near_inject=inject,
                                     near_inject_lateral_m=0.05, near_inject_yaw_rad=0.0, initial_time=10.0))
+        # Moved into MissionCore (M-a1 slice 6e): this test's stand-ins go on the instance.
+        for name_ in ['control_correction', 'known_pallet', 'return_turnaround_kwargs', 'realign_active', 'realign_install', 'start_near_realign', 'apply_tracker_profile', 'record_tracker_configs', 'build_near_tracker']:
+            if hasattr(self.hooks, name_):
+                setattr(self.core, name_, getattr(self.hooks, name_))
 
     def log(self, name, *args, **kwargs):
         self.calls.append((name, args, kwargs))

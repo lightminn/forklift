@@ -62,7 +62,7 @@ class World:
             options=SimpleNamespace(dwells=dwells, safety_stops=safety, dwell_d_end_m=0.3, observe_arrival_m=0.10,
                                     observe_arrival_yaw_rad=0.10))
         # Helpers moved into MissionCore (slices 6b/6c): this test's stand-ins go on the instance.
-        for name_ in ['dock_at_delivery_straight', 'arm_docking', 'release_and_carry', 'transport_replan', 'start_docking_retry', 'release_and_stand', 'release_after_backoff', 'slam_release', 'escape_leg', 'find_escape', 'hold_count', 'near_tick', 'near_redraw', 'near_capture_redraw', 'near_protection_prediction', 'near_install', 'start_pickup_retry']:
+        for name_ in ['dock_at_delivery_straight', 'arm_docking', 'release_and_carry', 'transport_replan', 'start_docking_retry', 'release_and_stand', 'release_after_backoff', 'slam_release', 'escape_leg', 'find_escape', 'hold_count', 'near_tick', 'near_redraw', 'near_capture_redraw', 'near_protection_prediction', 'near_install', 'start_pickup_retry', 'control_correction', 'known_pallet', 'return_turnaround_kwargs', 'realign_active', 'realign_install', 'start_near_realign', 'apply_tracker_profile', 'record_tracker_configs', 'build_near_tracker']:
             if hasattr(self.hooks, name_):
                 setattr(self.core, name_, getattr(self.hooks, name_))
 

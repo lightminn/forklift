@@ -60,6 +60,10 @@ class World:
             options=SimpleNamespace(planner_config=Config(), scenario="SC", pickup_bounds="B",
                                     speeds={"observe": 0.35}, cusp_heading_hold_rad=0.08,
                                     observation_waypoints=list(waypoints), repeat_captures=repeat))
+        # Moved into MissionCore (M-a1 slice 6e): this test's stand-ins go on the instance.
+        for name_ in ['control_correction', 'known_pallet', 'return_turnaround_kwargs', 'realign_active', 'realign_install', 'start_near_realign', 'apply_tracker_profile', 'record_tracker_configs', 'build_near_tracker']:
+            if hasattr(self.hooks, name_):
+                setattr(self.core, name_, getattr(self.hooks, name_))
 
     def names(self):
         return [c[0] for c in self.calls if c[0] != "require"]

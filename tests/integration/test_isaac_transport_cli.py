@@ -924,9 +924,9 @@ def test_s4c3_stage_one_redraws_a_refused_near_capture_before_ending() -> None:
     assert (
         moved.index('trackers["approach"] = RearAxlePathTracker(', branch) < installed
     )
-    assert (
+    assert (  # the tracker's build moved to the mission core (M-a1 slice 6e)
         '"paths0": {name_: near_tracking.path_digest(*trackers[name_].path_arrays())'
-        in source
+        in CORE.read_text()
     )
 
 

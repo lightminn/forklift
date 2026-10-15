@@ -63,6 +63,10 @@ def make(phase="transport", *, result=Tracking(), slam=None, near=None, obstacle
                        settings={"drive_acceleration_mps2": 0.5}, pallet_geometry=None, hooks=hooks, near=near,
                        options=SimpleNamespace(dwells=None, safety_stops=None,
                                                cusp_heading_hold_phases=("observe", "return_home")))
+    # Moved into MissionCore (M-a1 slice 6e): this test's stand-ins go on the instance.
+    for name_ in ['control_correction', 'known_pallet', 'return_turnaround_kwargs', 'realign_active', 'realign_install', 'start_near_realign', 'apply_tracker_profile', 'record_tracker_configs', 'build_near_tracker']:
+        if hasattr(hooks, name_):
+            setattr(core, name_, getattr(hooks, name_))
     # The cusp rules are MissionCore methods since slice 6a; stand-ins on the instance as before.
     core.cusp_heading_end = lambda tr: {"end": tr.status}
     core.cusp_heading_offset = log("offset", (0.01, 0.02))

@@ -99,6 +99,10 @@ class World:
             geometry=None, settings={}, pallet_geometry=None, hooks=self.hooks, near=near,
             options=SimpleNamespace(adapter=adapter, G2=G2, yaw_and_tilt=yaw_and_tilt, perception_max_attempts=4,
                                     rear_axle_offset_m=-0.4, pallet_prior_loaded=PRIOR, depth_quantize_mm=1))
+        # Moved into MissionCore (M-a1 slice 6e): this test's stand-ins go on the instance.
+        for name_ in ['control_correction', 'known_pallet', 'return_turnaround_kwargs', 'realign_active', 'realign_install', 'start_near_realign', 'apply_tracker_profile', 'record_tracker_configs', 'build_near_tracker']:
+            if hasattr(self.hooks, name_):
+                setattr(self.core, name_, getattr(self.hooks, name_))
 
     def log(self, name, *args, **kwargs):
         self.calls.append((name, args, kwargs))
