@@ -779,7 +779,7 @@ def danger_threshold_m(fit: FitResult) -> float:
 **해석 보충 (2026-10-15, 단계 1A 계획 검토):** ⑤ 의 "작업 지시의 값, 없으면 콘솔 확인"은 **비규격**에 적용한다(비규격은 질량·질량중심이 없으면 ③ 에서 이미 `support_unverified` 다). **알려진 형상은 지시에 질량이 없으면 빈 팔레트로 가정**하고 적재 사유를 내지 않되 결과에 그 가정(`payload_assumed_empty`)을 남긴다 — 그렇지 않으면 사용자 결정 ③(지시 없으면 가장 가까운 팔레트를 자율로)이 알려진 형상에서도 성립하지 않는다. 지시가 질량을 주면 알려진 형상도 그 값으로 검사한다.
 ```
 
-- [ ] **Step 5: 통과 확인** — Expected: 8 passed
+- [ ] **Step 5: 통과 확인** — Expected: 7 passed
 - [ ] **Step 6: 커밋** — `git add src/forklift_core/perception/fork_fit.py tests/unit/perception/test_fork_fit.py docs/design/2026-10-15-pallet-recognition-generality.md` · `git commit -m "perception: fork-fit truth with real blade margins, per-face lanes and layer reach, support precheck, five reason codes; design 9.3 clarification for known-shape payload"`
 
 **검토 A:** 작업 1–3 뒤 Codex — 초점: "알려진 형상 22 상자 일치, 면별 차선·포켓 띠, 날 여유 기준 쌍 선택, fork_fit 의 여유·세로·지지·적재 규칙이 설계 §3.1·§9.2·§9.3(보충 포함)과 같은가, 손상 범위·절단 위치". 수렴까지 반복.
@@ -895,7 +895,7 @@ def render_instances(instances: Sequence[Sequence[scene_rig.Box]], *, distractor
     return RenderedScene(scene, ids, points)
 ```
 
-- [ ] **Step 4: 통과 확인** — Expected: 7 passed
+- [ ] **Step 4: 통과 확인** — Expected: 4 passed
 - [ ] **Step 5: 커밋** — `git add tools/instance_rig.py tests/unit/test_instance_rig.py` · `git commit -m "tools: CPU instance renderer on scene_rig's slab intersection (scene_rig untouched) with per-pixel instance ids and hit points"`
 
 ### Task 5: 깊이 잡음 모델 `depth_noise`
