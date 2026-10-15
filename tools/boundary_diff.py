@@ -3,7 +3,9 @@
 Two records of the same configuration -- before and after a slice moved -- are compared in execution
 order: each tick's head, then its calls in sequence (port, method and request first, then the response,
 the exception and the changes the call returned), then its outputs and branches. Wall-clock fields
-(``*_wall_s``, ``wall_time_s``, ``elapsed_s``, ``wall_s_*``) are left out everywhere; nothing else is.
+(``*_wall_s``, ``wall_time_s``, ``elapsed_s``, ``wall_s_*``) are left out everywhere, and the value a
+wall-clock read returns (``Clock.monotonic``/``time``) is not compared -- its order and request are; nothing
+else is left out.
 
 - ``equal``: every tick matches.
 - ``prefix_equal``: they match until a known external difference -- the response of a call whose result
@@ -30,6 +32,9 @@ WALL_KEY = re.compile(r"(_wall_s$|^wall_time_s$|^elapsed_s$|^wall_s_)")
 # Calls whose response may legitimately differ between runs of one configuration (same request):
 # render readiness of a capture, the SLAM map version a grid preparation reads.
 KNOWN_EXTERNAL = {("Capture", "capture"), ("Planner", "grid_kwargs")}
+# Wall-clock reads (the Clock proxy of the runner's `time` module): the value differs on every run, so only
+# the call (its order and request) is compared. Simulation time (Clock.current_time) is compared in full.
+WALL_READS = {("Clock", "monotonic"), ("Clock", "time"), ("Clock", "perf_counter")}
 
 
 def _scrub(value):
@@ -88,6 +93,8 @@ def compare(record_a: Path, record_b: Path) -> dict:
                 cut = ("differ", {**where, "what": "request"})
                 break
             for part in ("response", "exception", "changes"):
+                if part == "response" and (ca.get("port"), ca.get("method")) in WALL_READS:
+                    continue
                 if not _same(ca.get(part), cb.get(part)):
                     known = (ca.get("port"), ca.get("method")) in KNOWN_EXTERNAL and part in ("response", "changes")
                     cut = ("prefix_equal" if known else "differ", {**where, "what": part})

@@ -75,3 +75,18 @@ def test_an_incomplete_record_is_never_equal(tmp_path):
     (tmp_path / "b" / "boundary_meta.json").unlink()
     rep = D.compare(a, tmp_path / "b")
     assert rep["status"] == "incomplete"
+
+
+def test_a_wall_clock_read_is_compared_by_order_and_request_not_by_value(tmp_path):
+    t = base()
+    t[0] = ([("Clock", "monotonic", {"args": []}, 1234.5)] + t[0][0], t[0][1], t[0][2])
+    u = base()
+    u[0] = ([("Clock", "monotonic", {"args": []}, 9999.0)] + u[0][0], u[0][1], u[0][2])
+    rep = D.compare(record(tmp_path / "a", t), record(tmp_path / "b", u))
+    assert rep["status"] == "equal"
+    v = base()
+    v[0] = ([("Clock", "current_time", {"get": True}, 2.0)] + v[0][0], v[0][1], v[0][2])  # simulation time
+    w = base()
+    w[0] = ([("Clock", "current_time", {"get": True}, 2.5)] + w[0][0], w[0][1], w[0][2])
+    rep = D.compare(record(tmp_path / "c", v), record(tmp_path / "d", w))
+    assert rep["status"] == "differ" and rep["first_difference"]["port"] == "Clock"
