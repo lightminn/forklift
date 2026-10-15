@@ -61,8 +61,11 @@ docker run -d --rm --name "$NAME" -p "127.0.0.1:$PORT:8765" --group-add 2000 \
         use_sim_time:=true autostart:=true > /dev/null 2>&1 &
       SLAM=\$!
       sleep 4
-      ros2 bag play /data/bag --clock 100 --rate 1.0 --topics /scan /tf /odom > /dev/null 2>&1
+      kill -0 \$SLAM 2>/dev/null || { echo 'slam_toolbox did not start'; exit 4; }
+      ros2 bag play /data/bag --clock 100 --rate 1.0 --topics /scan /tf /odom > /dev/null 2>&1 \
+        || { echo 'bag play failed'; kill \$SLAM; exit 5; }
       sleep 15   # the last map lands; then the pose goes stale on screen
+      kill -0 \$SLAM 2>/dev/null || { echo 'slam_toolbox died during the pass'; exit 4; }
       kill \$SLAM; wait \$SLAM 2>/dev/null
       echo \"pass \$pass end \$(date +%T)\"
     done
@@ -70,9 +73,10 @@ docker run -d --rm --name "$NAME" -p "127.0.0.1:$PORT:8765" --group-add 2000 \
     kill -0 \$GW 2>/dev/null || { echo 'gateway died'; exit 3; }
   " > /dev/null || { echo "container did not start (port $PORT taken?)" >&2; exit 1; }
 
-# Publish the port only once the gateway answers.
-for _ in $(seq 1 60); do
-  if curl -fs -o /dev/null "http://127.0.0.1:$PORT/"; then
+# Publish the port only once the gateway answers (60 s in all, 2 s per request).
+deadline=$((SECONDS + 60))
+while [ $SECONDS -lt $deadline ]; do
+  if curl -fs --max-time 2 -o /dev/null "http://127.0.0.1:$PORT/"; then
     echo "$PORT" > "$PORTFILE"
     echo "gateway ready: port $PORT"
     break
