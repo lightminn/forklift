@@ -2362,31 +2362,6 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     # can show the first plan and each replan on the live grid.
     overlay = {"plan_id": None, "plan_history": [], "grid_t": -1e9, "grids": []}
 
-    def record_video_overlay(t_now: float) -> None:
-        from forklift_core.perception.obstacle_grid import OCCUPIED as GRID_OCCUPIED
-
-        current = paths.get(ms.phase)
-        if current is not None and id(current) != overlay["plan_id"]:
-            overlay["plan_id"] = id(current)
-            why = "plan"
-            if obstacle.get("backoff", {}).get("phase") == ms.phase:
-                why = "backoff"
-            elif obstacle.get("replans") and abs(obstacle["replans"][-1]["time_s"] - t_now) < 0.6:
-                why = "replan"
-            elif obstacle.get("live_plans") and abs(obstacle["live_plans"][-1]["time_s"] - t_now) < 0.6:
-                why = "live"
-            poses = np.asarray(current.poses, dtype=float)
-            step_ = max(1, len(poses) // 400)
-            overlay["plan_history"].append(
-                {"time_s": float(t_now), "phase": ms.phase, "why": why,
-                 "poses": np.round(poses[::step_, :2], 3).tolist() + [np.round(poses[-1, :2], 3).tolist()]}
-            )
-        snap_ = obstacle["layer"].snapshot
-        if snap_ is not None and t_now - overlay["grid_t"] >= 0.5:
-            overlay["grid_t"] = t_now
-            cells_ = np.argwhere(snap_.state == GRID_OCCUPIED).astype(np.int32)
-            overlay["grids"].append((float(t_now), float(snap_.origin_x_m), float(snap_.origin_y_m),
-                                     float(snap_.resolution_m), cells_))
     new_obstacles = None
     # Priority-5 D5 depth pocket check: built at the near capture, fed 10 Hz
     # carriage frames on the approach straight and the insertion.
@@ -2455,6 +2430,347 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         geometry.approach_gap_m + geometry.axle_to_fork_tip_m
         - (float(perception_mount.translation_m[0]) + abs(args.rear_axle_offset_m))
     ) if args.record_pocket_frames else None
+
+
+
+
+
+
+
+
+    if args.new_obstacles is not None:
+        new_module = load_perception_module(
+            "run_transport_new_obstacles", Path(__file__).with_name("new_obstacles.py")
+        )
+        new_obstacles = {"schedule": new_module.Schedule(new_module.load_events(args.new_obstacles)), "rects": {}}
+        new_obstacles["band_overlaps"] = []
+        state["new_obstacles"] = {
+            "rules": str(args.new_obstacles),
+            "log": new_obstacles["schedule"].log,
+            # The shadow-band memory's scope excludes objects appearing inside
+            # the band (D4 delta 2026-10-05): a spawn whose collider meets the
+            # band's cells at spawn time is outside the scenario's validity.
+            "band_overlaps": new_obstacles["band_overlaps"],
+        }
+    if obstacle is not None:
+        import planar_lidar as obstacle_lidar
+
+        # The first obstacle scan, from the start pose, before any plan: the
+        # grid the first plan sees (priority-5 L3b). Start = map = odom.
+        prime_base, prime_q = robot.get_world_pose()
+        prime_raw = {}
+        for sensor in obstacle["layer"].sensors:
+            origin, directions = obstacle_lidar.laser_rays_world(
+                prime_base, prime_q, obstacle_lidar.LaserMount(sensor.xyz_m, sensor.yaw_rad),
+                obstacle["layer"].beam_angles,
+            )
+            prime_raw[sensor.name] = (
+                *obstacle_lidar.cast_scan_flags(
+                    origin, directions, obstacle["layer"].range_max_m, own_prefixes=(obstacle_lidar.SELF_PREFIX,)
+                ),
+                obstacle_module.beam_limits(origin, directions, band_top_m=obstacle["layer"].band_top_m,
+                                             band_bottom_m=obstacle["layer"].band_bottom_m),
+            )
+        start_pose = (scenario.start_rear.x_m, scenario.start_rear.y_m, scenario.start_rear.yaw_rad)
+        obstacle["layer"].add_scans(0.0, prime_raw, odom_rear=start_pose, loaded=False)
+        obstacle["last_stamp"] = 0.0
+        obstacle["applied"] = (0.0, 0.0, 0.0)
+        obstacle["replans"] = []
+        obstacle["plans"] = []
+    # Pickup-zone prior (plan D0): where the unrecognised pallet may stand --
+    # the layout's placement distribution (BAY_PICKUP_ZONE) grown by the pallet's
+    # half diagonal; never built from scenario.pickup (Codex v4 P3).
+    from forklift_core.planning.observation_viewpoints import BAY_PICKUP_ZONE as _ZONE
+
+    zone_grow = math.hypot(geometry.pallet_depth_m, geometry.pallet_width_m) / 2
+    pickup_zone = Rectangle(
+        (_ZONE.x_min_m + _ZONE.x_max_m) / 2,
+        (_ZONE.y_min_m + _ZONE.y_max_m) / 2,
+        _ZONE.x_max_m - _ZONE.x_min_m + 2 * zone_grow,
+        _ZONE.y_max_m - _ZONE.y_min_m + 2 * zone_grow,
+        0.0,
+    )
+
+    if obstacle is not None and obstacle["layer"].known_enabled:
+        # Plan v10 D5: the 1.05 m plane cannot see the pallet; before recognition
+        # its possible area is unknown to the permission too (prior, not truth).
+        from forklift_core.perception.known_obstacles import KnownRect
+
+        obstacle["layer"].known = [KnownRect(
+            (pickup_zone.x_m, pickup_zone.y_m, pickup_zone.length_m, pickup_zone.width_m, pickup_zone.yaw_rad),
+            fix_stamp_s=0.0, r_fix_m=0.0, rho_m=0.0, frame_correction=(0.0, 0.0, 0.0), kind="zone")]
+        state["known_pallets"] = [{"event": "pickup_zone", "time_s": 0.0}]
+
+
+
+
+
+
+
+
+
+    def spawn_box(path_, ox, oy, oyaw, osize) -> None:
+        """A new obstacle's collider prim (scenario injection): USD work the drive part asks for."""
+        from pxr import Gf as NGf, UsdGeom as NUsdGeom, UsdPhysics as NUsdPhysics
+
+        cube = NUsdGeom.Cube.Define(stage, path_)
+        cube.CreateSizeAttr(1.0)
+        xf = NUsdGeom.XformCommonAPI(cube)
+        xf.SetTranslate(NGf.Vec3d(float(ox), float(oy), float(osize[2]) / 2))
+        xf.SetRotate(NGf.Vec3f(0.0, 0.0, float(math.degrees(oyaw))))
+        xf.SetScale(NGf.Vec3f(*(float(v) for v in osize)))
+        NUsdPhysics.CollisionAPI.Apply(cube.GetPrim())
+
+    def cast_reference_scan(*a, **k):
+        """The delivery reference scan's ray cast (a USD scene query)."""
+        import planar_lidar as _planar_lidar
+
+        return _planar_lidar.cast_scan(*a, **k)
+
+    # M-a1 replay plan R2: the Isaac work after this point goes through these adapters (a replay supplies its own).
+    isaac = _Cells(
+        action=lambda **kw: ArticulationAction(**kw),
+        add_path_display=add_path_display,
+        export_scene=lambda: stage.GetRootLayer().Export(str(args.output / "scene.usda")),
+        spawn_box=spawn_box,
+        remove_prim=lambda path_: stage.RemovePrim(path_),
+        slam_link_client=lambda *a, **k: __import__("forklift_core.localization.slam_link",
+                                                    fromlist=["SlamLinkClient"]).SlamLinkClient(*a, **k),
+        cast_reference_scan=cast_reference_scan,
+    )
+    from types import SimpleNamespace as _Setup
+
+    return drive(_Setup(**locals()), isaac)
+
+
+def drive(S, isaac) -> None:
+    """The run from its initial plans on (M-a1 replay plan R2): every Isaac object it touches is in ``S``
+    (a service, recorded when recording) or behind ``isaac`` (adapters), so a replay can run it on CPU with
+    its own. ``S`` holds run()'s names as they were bound when the setup ended; a name the setup left
+    unbound stays unbound here, as it was."""
+    _bound = S.__dict__
+    if "ARC_POSES" in _bound:
+        ARC_POSES = _bound["ARC_POSES"]
+    if "CUSP_STALL" in _bound:
+        CUSP_STALL = _bound["CUSP_STALL"]
+    if "DetectorParams" in _bound:
+        DetectorParams = _bound["DetectorParams"]
+    if "Footprint" in _bound:
+        Footprint = _bound["Footprint"]
+    if "FootprintCollisionChecker" in _bound:
+        FootprintCollisionChecker = _bound["FootprintCollisionChecker"]
+    if "Gf" in _bound:
+        Gf = _bound["Gf"]
+    if "Image" in _bound:
+        Image = _bound["Image"]
+    if "PALLET_BOXES" in _bound:
+        PALLET_BOXES = _bound["PALLET_BOXES"]
+    if "PARTS_OF" in _bound:
+        PARTS_OF = _bound["PARTS_OF"]
+    if "Pose2D" in _bound:
+        Pose2D = _bound["Pose2D"]
+    if "RearAxlePathTracker" in _bound:
+        RearAxlePathTracker = _bound["RearAxlePathTracker"]
+    if "RecordingProxy" in _bound:
+        RecordingProxy = _bound["RecordingProxy"]
+    if "Rectangle" in _bound:
+        Rectangle = _bound["Rectangle"]
+    if "SHAPE_MEETS" in _bound:
+        SHAPE_MEETS = _bound["SHAPE_MEETS"]
+    if "TrackerConfig" in _bound:
+        TrackerConfig = _bound["TrackerConfig"]
+    if "adapter" in _bound:
+        adapter = _bound["adapter"]
+    if "args" in _bound:
+        args = _bound["args"]
+    if "bicycle_rollout" in _bound:
+        bicycle_rollout = _bound["bicycle_rollout"]
+    if "boundary" in _bound:
+        boundary = _bound["boundary"]
+    if "camera" in _bound:
+        camera = _bound["camera"]
+    if "cells" in _bound:
+        cells = _bound["cells"]
+    if "collision_free_pose" in _bound:
+        collision_free_pose = _bound["collision_free_pose"]
+    if "cusp_stop_needed" in _bound:
+        cusp_stop_needed = _bound["cusp_stop_needed"]
+    if "cusp_stop_yaw_rate_radps" in _bound:
+        cusp_stop_yaw_rate_radps = _bound["cusp_stop_yaw_rate_radps"]
+    if "detect_pockets" in _bound:
+        detect_pockets = _bound["detect_pockets"]
+    if "directions" in _bound:
+        directions = _bound["directions"]
+    if "dwell_d_end_m" in _bound:
+        dwell_d_end_m = _bound["dwell_d_end_m"]
+    if "dwells" in _bound:
+        dwells = _bound["dwells"]
+    if "estop" in _bound:
+        estop = _bound["estop"]
+    if "extra_cameras" in _bound:
+        extra_cameras = _bound["extra_cameras"]
+    if "factory" in _bound:
+        factory = _bound["factory"]
+    if "final_straight_prefix" in _bound:
+        final_straight_prefix = _bound["final_straight_prefix"]
+    if "geometry" in _bound:
+        geometry = _bound["geometry"]
+    if "grid_planning" in _bound:
+        grid_planning = _bound["grid_planning"]
+    if "initial_pallet" in _bound:
+        initial_pallet = _bound["initial_pallet"]
+    if "insertion_geometry" in _bound:
+        insertion_geometry = _bound["insertion_geometry"]
+    if "inset" in _bound:
+        inset = _bound["inset"]
+    if "inset_font" in _bound:
+        inset_font = _bound["inset_font"]
+    if "kds_" in _bound:
+        kds_ = _bound["kds_"]
+    if "kps_" in _bound:
+        kps_ = _bound["kps_"]
+    if "lift_index" in _bound:
+        lift_index = _bound["lift_index"]
+    if "max_cusp_replans" in _bound:
+        max_cusp_replans = _bound["max_cusp_replans"]
+    if "mission_stages" in _bound:
+        mission_stages = _bound["mission_stages"]
+    if "ms" in _bound:
+        ms = _bound["ms"]
+    if "n" in _bound:
+        n = _bound["n"]
+    if "name" in _bound:
+        name = _bound["name"]
+    if "near" in _bound:
+        near = _bound["near"]
+    if "new_obstacles" in _bound:
+        new_obstacles = _bound["new_obstacles"]
+    if "obstacle" in _bound:
+        obstacle = _bound["obstacle"]
+    if "obstacle_module" in _bound:
+        obstacle_module = _bound["obstacle_module"]
+    if "origin" in _bound:
+        origin = _bound["origin"]
+    if "overlay" in _bound:
+        overlay = _bound["overlay"]
+    if "pallet" in _bound:
+        pallet = _bound["pallet"]
+    if "path" in _bound:
+        path = _bound["path"]
+    if "perception_calibration" in _bound:
+        perception_calibration = _bound["perception_calibration"]
+    if "perception_camera" in _bound:
+        perception_camera = _bound["perception_camera"]
+    if "perception_capture" in _bound:
+        perception_capture = _bound["perception_capture"]
+    if "perception_display" in _bound:
+        perception_display = _bound["perception_display"]
+    if "perception_mount" in _bound:
+        perception_mount = _bound["perception_mount"]
+    if "pickup_bounds" in _bound:
+        pickup_bounds = _bound["pickup_bounds"]
+    if "pickup_zone" in _bound:
+        pickup_zone = _bound["pickup_zone"]
+    if "plan_docking_reapproach" in _bound:
+        plan_docking_reapproach = _bound["plan_docking_reapproach"]
+    if "plan_observation_leg" in _bound:
+        plan_observation_leg = _bound["plan_observation_leg"]
+    if "plan_return_leg" in _bound:
+        plan_return_leg = _bound["plan_return_leg"]
+    if "plan_transport" in _bound:
+        plan_transport = _bound["plan_transport"]
+    if "plan_transport_leg" in _bound:
+        plan_transport_leg = _bound["plan_transport_leg"]
+    if "planner_config" in _bound:
+        planner_config = _bound["planner_config"]
+    if "pocket" in _bound:
+        pocket = _bound["pocket"]
+    if "pocket_camera" in _bound:
+        pocket_camera = _bound["pocket_camera"]
+    if "q" in _bound:
+        q = _bound["q"]
+    if "read_fork_blades_m" in _bound:
+        read_fork_blades_m = _bound["read_fork_blades_m"]
+    if "recorded_function" in _bound:
+        recorded_function = _bound["recorded_function"]
+    if "recorder" in _bound:
+        recorder = _bound["recorder"]
+    if "redraw_docking" in _bound:
+        redraw_docking = _bound["redraw_docking"]
+    if "return_to_pose" in _bound:
+        return_to_pose = _bound["return_to_pose"]
+    if "robot" in _bound:
+        robot = _bound["robot"]
+    if "runtime_viewpoints" in _bound:
+        runtime_viewpoints = _bound["runtime_viewpoints"]
+    if "safety_stops" in _bound:
+        safety_stops = _bound["safety_stops"]
+    if "scenario" in _bound:
+        scenario = _bound["scenario"]
+    if "sensor" in _bound:
+        sensor = _bound["sensor"]
+    if "settings" in _bound:
+        settings = _bound["settings"]
+    if "site_poses" in _bound:
+        site_poses = _bound["site_poses"]
+    if "stage" in _bound:
+        stage = _bound["stage"]
+    if "state" in _bound:
+        state = _bound["state"]
+    if "steers" in _bound:
+        steers = _bound["steers"]
+    if "straight_from_pose" in _bound:
+        straight_from_pose = _bound["straight_from_pose"]
+    if "tracker_book" in _bound:
+        tracker_book = _bound["tracker_book"]
+    if "travel_config" in _bound:
+        travel_config = _bound["travel_config"]
+    if "truth_destination" in _bound:
+        truth_destination = _bound["truth_destination"]
+    if "unloaded_shape" in _bound:
+        unloaded_shape = _bound["unloaded_shape"]
+    if "v" in _bound:
+        v = _bound["v"]
+    if "wheel_lock" in _bound:
+        wheel_lock = _bound["wheel_lock"]
+    if "wheels" in _bound:
+        wheels = _bound["wheels"]
+    if "world" in _bound:
+        world = _bound["world"]
+    if "x0" in _bound:
+        x0 = _bound["x0"]
+    if "x1" in _bound:
+        x1 = _bound["x1"]
+    if "y0" in _bound:
+        y0 = _bound["y0"]
+    if "y1" in _bound:
+        y1 = _bound["y1"]
+
+    def record_video_overlay(t_now: float) -> None:
+        from forklift_core.perception.obstacle_grid import OCCUPIED as GRID_OCCUPIED
+
+        current = paths.get(ms.phase)
+        if current is not None and id(current) != overlay["plan_id"]:
+            overlay["plan_id"] = id(current)
+            why = "plan"
+            if obstacle.get("backoff", {}).get("phase") == ms.phase:
+                why = "backoff"
+            elif obstacle.get("replans") and abs(obstacle["replans"][-1]["time_s"] - t_now) < 0.6:
+                why = "replan"
+            elif obstacle.get("live_plans") and abs(obstacle["live_plans"][-1]["time_s"] - t_now) < 0.6:
+                why = "live"
+            poses = np.asarray(current.poses, dtype=float)
+            step_ = max(1, len(poses) // 400)
+            overlay["plan_history"].append(
+                {"time_s": float(t_now), "phase": ms.phase, "why": why,
+                 "poses": np.round(poses[::step_, :2], 3).tolist() + [np.round(poses[-1, :2], 3).tolist()]}
+            )
+        snap_ = obstacle["layer"].snapshot
+        if snap_ is not None and t_now - overlay["grid_t"] >= 0.5:
+            overlay["grid_t"] = t_now
+            cells_ = np.argwhere(snap_.state == GRID_OCCUPIED).astype(np.int32)
+            overlay["grids"].append((float(t_now), float(snap_.origin_x_m), float(snap_.origin_y_m),
+                                     float(snap_.resolution_m), cells_))
 
     def build_pocket_check(axis_yaw: float, rear_now, base_now) -> None:
         """The D5 pocket check, at the near (stand-off) capture: the final estimate,
@@ -2792,68 +3108,6 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 axis_yaw=check.axis_yaw,
             )
         pocket["frames_read"] += 1
-    if args.new_obstacles is not None:
-        new_module = load_perception_module(
-            "run_transport_new_obstacles", Path(__file__).with_name("new_obstacles.py")
-        )
-        new_obstacles = {"schedule": new_module.Schedule(new_module.load_events(args.new_obstacles)), "rects": {}}
-        new_obstacles["band_overlaps"] = []
-        state["new_obstacles"] = {
-            "rules": str(args.new_obstacles),
-            "log": new_obstacles["schedule"].log,
-            # The shadow-band memory's scope excludes objects appearing inside
-            # the band (D4 delta 2026-10-05): a spawn whose collider meets the
-            # band's cells at spawn time is outside the scenario's validity.
-            "band_overlaps": new_obstacles["band_overlaps"],
-        }
-    if obstacle is not None:
-        import planar_lidar as obstacle_lidar
-
-        # The first obstacle scan, from the start pose, before any plan: the
-        # grid the first plan sees (priority-5 L3b). Start = map = odom.
-        prime_base, prime_q = robot.get_world_pose()
-        prime_raw = {}
-        for sensor in obstacle["layer"].sensors:
-            origin, directions = obstacle_lidar.laser_rays_world(
-                prime_base, prime_q, obstacle_lidar.LaserMount(sensor.xyz_m, sensor.yaw_rad),
-                obstacle["layer"].beam_angles,
-            )
-            prime_raw[sensor.name] = (
-                *obstacle_lidar.cast_scan_flags(
-                    origin, directions, obstacle["layer"].range_max_m, own_prefixes=(obstacle_lidar.SELF_PREFIX,)
-                ),
-                obstacle_module.beam_limits(origin, directions, band_top_m=obstacle["layer"].band_top_m,
-                                             band_bottom_m=obstacle["layer"].band_bottom_m),
-            )
-        start_pose = (scenario.start_rear.x_m, scenario.start_rear.y_m, scenario.start_rear.yaw_rad)
-        obstacle["layer"].add_scans(0.0, prime_raw, odom_rear=start_pose, loaded=False)
-        obstacle["last_stamp"] = 0.0
-        obstacle["applied"] = (0.0, 0.0, 0.0)
-        obstacle["replans"] = []
-        obstacle["plans"] = []
-    # Pickup-zone prior (plan D0): where the unrecognised pallet may stand --
-    # the layout's placement distribution (BAY_PICKUP_ZONE) grown by the pallet's
-    # half diagonal; never built from scenario.pickup (Codex v4 P3).
-    from forklift_core.planning.observation_viewpoints import BAY_PICKUP_ZONE as _ZONE
-
-    zone_grow = math.hypot(geometry.pallet_depth_m, geometry.pallet_width_m) / 2
-    pickup_zone = Rectangle(
-        (_ZONE.x_min_m + _ZONE.x_max_m) / 2,
-        (_ZONE.y_min_m + _ZONE.y_max_m) / 2,
-        _ZONE.x_max_m - _ZONE.x_min_m + 2 * zone_grow,
-        _ZONE.y_max_m - _ZONE.y_min_m + 2 * zone_grow,
-        0.0,
-    )
-
-    if obstacle is not None and obstacle["layer"].known_enabled:
-        # Plan v10 D5: the 1.05 m plane cannot see the pallet; before recognition
-        # its possible area is unknown to the permission too (prior, not truth).
-        from forklift_core.perception.known_obstacles import KnownRect
-
-        obstacle["layer"].known = [KnownRect(
-            (pickup_zone.x_m, pickup_zone.y_m, pickup_zone.length_m, pickup_zone.width_m, pickup_zone.yaw_rad),
-            fix_stamp_s=0.0, r_fix_m=0.0, rho_m=0.0, frame_correction=(0.0, 0.0, 0.0), kind="zone")]
-        state["known_pallets"] = [{"event": "pickup_zone", "time_s": 0.0}]
 
     def grid_world(sc):
         """The scenario a grid plan sees: no ground-truth props (plan audit table)."""
@@ -3117,35 +3371,6 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
 
         return tracking_frame(args.forklift_urdf, args.pallet_geometry_loaded)
 
-    def spawn_box(path_, ox, oy, oyaw, osize) -> None:
-        """A new obstacle's collider prim (scenario injection): USD work the drive part asks for."""
-        from pxr import Gf as NGf, UsdGeom as NUsdGeom, UsdPhysics as NUsdPhysics
-
-        cube = NUsdGeom.Cube.Define(stage, path_)
-        cube.CreateSizeAttr(1.0)
-        xf = NUsdGeom.XformCommonAPI(cube)
-        xf.SetTranslate(NGf.Vec3d(float(ox), float(oy), float(osize[2]) / 2))
-        xf.SetRotate(NGf.Vec3f(0.0, 0.0, float(math.degrees(oyaw))))
-        xf.SetScale(NGf.Vec3f(*(float(v) for v in osize)))
-        NUsdPhysics.CollisionAPI.Apply(cube.GetPrim())
-
-    def cast_reference_scan(*a, **k):
-        """The delivery reference scan's ray cast (a USD scene query)."""
-        import planar_lidar as _planar_lidar
-
-        return _planar_lidar.cast_scan(*a, **k)
-
-    # M-a1 replay plan R2: the Isaac work after this point goes through these adapters (a replay supplies its own).
-    isaac = _Cells(
-        action=lambda **kw: ArticulationAction(**kw),
-        add_path_display=add_path_display,
-        export_scene=lambda: stage.GetRootLayer().Export(str(args.output / "scene.usda")),
-        spawn_box=spawn_box,
-        remove_prim=lambda path_: stage.RemovePrim(path_),
-        slam_link_client=lambda *a, **k: __import__("forklift_core.localization.slam_link",
-                                                    fromlist=["SlamLinkClient"]).SlamLinkClient(*a, **k),
-        cast_reference_scan=cast_reference_scan,
-    )
     state["phase"] = "planning"
     if boundary is not None:
         boundary.recorder.tick_begin(-1, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")  # the initial plans

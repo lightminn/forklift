@@ -24,6 +24,25 @@ SCRIPT = Path(__file__).resolve().parents[2] / "sim/isaac/run_transport.py"
 CORE = Path(__file__).resolve().parents[2] / "src/forklift_core/mission/core.py"  # moved mission logic (M-a1)
 
 
+
+def runner_run(tree):
+    """run() as one function again: its setup and then drive()'s statements (the M-a1 replay plan R2 split
+    them at the initial plans; drive's prologue that binds the setup's names is left out)."""
+    import copy
+
+    run = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "run")
+    drive = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "drive")
+    body = list(drive.body)
+    while body and (
+        (isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant))
+        or ast.unparse(body[0]).startswith("_bound = ")
+        or (isinstance(body[0], ast.If) and ast.unparse(body[0].test).endswith("in _bound"))
+    ):
+        body.pop(0)
+    merged = copy.copy(run)
+    merged.body = run.body[:-2] + body  # without the hand-over (import, return drive(...))
+    return merged
+
 def _pass_through(call) -> bool:
     """``f(*a, **k)``: the runner's hook for the core, every argument passed straight on."""
     return (bool(call.args) and all(isinstance(a, ast.Starred) and isinstance(a.value, ast.Name) for a in call.args)
@@ -39,11 +58,7 @@ def test_all_runner_planning_calls_use_the_recorded_config(
     monkeypatch, gap, clearance, approach_clearance, d7
 ):
     tree = ast.parse(SCRIPT.read_text())
-    run = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name == "run"
-    )
+    run = runner_run(tree)
     assignments = []
     for node in run.body:
         if not isinstance(node, ast.Assign) or len(node.targets) != 1:
@@ -851,7 +866,7 @@ def test_slam_ref_lives_only_inside_grid_kwargs():
     inside = {id(n) for n in ast.walk(fn)}
     stray = [n.lineno for n in ast.walk(tree) if isinstance(n, ast.Name) and n.id == "slam_ref" and id(n) not in inside]
     assert stray == []
-    run = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "run")
+    run = runner_run(tree)
     bound = [
         t.id
         for n in ast.walk(run)

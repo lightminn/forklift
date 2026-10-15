@@ -1,5 +1,6 @@
 """The optional simulator launcher must expose usage without starting Isaac Sim."""
 
+import ast
 import subprocess
 import sys
 from pathlib import Path
@@ -9,6 +10,25 @@ SCRIPT = ROOT / "sim/isaac/run_transport.py"
 CORE = ROOT / "src/forklift_core/mission/core.py"  # the mission logic moved out of the runner (M-a1)
 PROVISIONAL_URDF = ROOT / "sim/models/dls08_provisional/forklift.urdf"
 
+
+
+def runner_run(tree):
+    """run() as one function again: its setup and then drive()'s statements (the M-a1 replay plan R2 split
+    them at the initial plans; drive's prologue that binds the setup's names is left out)."""
+    import copy
+
+    run = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "run")
+    drive = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "drive")
+    body = list(drive.body)
+    while body and (
+        (isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant))
+        or ast.unparse(body[0]).startswith("_bound = ")
+        or (isinstance(body[0], ast.If) and ast.unparse(body[0].test).endswith("in _bound"))
+    ):
+        body.pop(0)
+    merged = copy.copy(run)
+    merged.body = run.body[:-2] + body  # without the hand-over (import, return drive(...))
+    return merged
 
 def runner_and_core_functions(tree) -> dict:
     """The runner's functions by name (unparsed), with the mission core's methods that moved out of
@@ -411,9 +431,7 @@ def test_every_physics_step_after_start_goes_through_step_world() -> None:
     for needle in ("world.step(", "slam['odometry'].update(", "slam['link'].exchange(",
                    "slam['tracker'].receive(", "slam['stop'].update(", "tick % scan_every"):
         assert needle in body, needle
-    run = next(
-        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "run"
-    )
+    run = runner_run(tree)
     loop = next(
         node
         for node in ast.walk(run)
