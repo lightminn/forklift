@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from forklift_core._validation import _finite_scalar
 from forklift_core.perception.fork_fit import AXIAL_DANGER_M, TIP_LEVER_M
 from forklift_core.perception.pocket_observation import yaw_difference_rad
 from forklift_core.perception.recognition_stats import allowed_failures, cp_upper
@@ -150,8 +151,13 @@ INSTRUCTION_KINDS = ("none", "ambiguous", "unambiguous")
 
 
 def _finite_vector(value, n) -> bool:
+    """Real, finite numbers only: bools and numeric strings are refused."""
     try:
-        return len(value) == n and all(np.isfinite(float(v)) for v in value)
+        if len(value) != n:
+            return False
+        for v in value:
+            _finite_scalar(v, "truth value")
+        return True
     except (TypeError, ValueError):
         return False
 

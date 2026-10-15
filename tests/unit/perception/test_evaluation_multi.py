@@ -145,6 +145,8 @@ def _broken(**changes):
     _broken(insertion_yaw_rad=float("inf")),
     _broken(fit={"reasons": []}),
     _broken(accessible="yes"),
+    _broken(danger_threshold_m=True),
+    _broken(left_m=[2.0, "0.186", 0.061]),
     {"eligible": False, "faces": []},
     {"instance_id": 0, "layer": 0, "faces": [_face([2.0, 0.186, 0.061], [2.0, -0.186, 0.061])]},
 ])
