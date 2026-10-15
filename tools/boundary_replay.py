@@ -46,6 +46,7 @@ def _install_isaac_value_types() -> None:
             self.joint_indices = joint_indices
 
     ArticulationAction.__module__ = "isaacsim.core.utils.types"
+    ArticulationAction.__qualname__ = "ArticulationAction"
     for name in ("isaacsim", "isaacsim.core", "isaacsim.core.utils"):
         sys.modules.setdefault(name, types.ModuleType(name))
     module = types.ModuleType("isaacsim.core.utils.types")
