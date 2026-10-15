@@ -203,6 +203,12 @@ def replay_run(run_dir: Path) -> dict:
     except Exception as exc:  # noqa: BLE001 -- the replayed run's own end (a require) is part of the record
         outcome["drive"] = f"{type(exc).__name__}: {exc}"
         outcome["traceback"] = traceback.format_exc()[-4000:]
+    if session.failure is None and outcome.get("drive") == "returned":
+        try:
+            session.finish()  # every recorded tick replayed, as many as the meta says
+            outcome["finish"] = "ok"
+        except ReplayMismatch as exc:
+            outcome["finish"] = str(exc)
     outcome["ticks_done"] = session.ticks_done
     outcome["failure"] = session.failure
     outcome["tick_open"] = session.tick["tick"] if session.tick else None
@@ -219,7 +225,7 @@ def main(argv=None) -> int:
     if args.json:
         args.json.write_text(text + "\n")
     print(text)
-    return 0 if out.get("failure") is None and out.get("drive") == "returned" else 1
+    return 0 if out.get("failure") is None and out.get("finish") == "ok" else 1
 
 
 if __name__ == "__main__":

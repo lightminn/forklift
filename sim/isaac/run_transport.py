@@ -5489,6 +5489,9 @@ def drive(S, isaac) -> None:
                     },
                     branches=branch_probe(),
                 )
+        if early_ports and not boundary.recorder.in_tick:
+            # Format 2: the loop ran out of time between ticks -- the end's own reads go in a closing tick.
+            boundary.recorder.tick_begin(-3, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
         if ms.phase in ("repeat_capture_done", "repeat_target_not_reached", "near_tracking_stopped"):
             return
         require(ms.phase == "complete", "Mission exceeded simulation time budget")
@@ -5570,7 +5573,8 @@ def drive(S, isaac) -> None:
                 # replacing a failure already raised (main() records that one).
                 state["success"] = False
                 state.setdefault("failure_reason", f"pocket_recording_close_failed: {exc!r}")
-        close_boundary_record(state, sys.exc_info()[1])
+        if not early_ports:
+            close_boundary_record(state, sys.exc_info()[1])
         if tracker_book["book"] is not None:
             try:
                 tracker_book["book"].close()  # the leg switches not yet drained (V5 cusp arrivals)
@@ -5739,6 +5743,8 @@ def drive(S, isaac) -> None:
         if not failing:
             for name, exit_code in video_results:
                 require(exit_code == 0, f"{name} video encoding failed")
+        if early_ports:  # format 2: closed last, so the summaries above read the services inside the exit tick
+            close_boundary_record(state, sys.exc_info()[1])
 
 
 def main() -> None:
