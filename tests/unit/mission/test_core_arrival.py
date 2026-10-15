@@ -126,10 +126,13 @@ def test_transport_arrival_docks_when_armed_and_rereads_the_pose_under_d7():
 
 def test_the_tracking_limit_adds_the_scheduled_standing_on_the_approach_only():
     tracker = SimpleNamespace(nominal_duration_s=lambda: 12.0)
-    held = SimpleNamespace(held_s=lambda t: t / 10)
-    core, ms, _, _ = make("approach", trackers={"approach": tracker, "transport": tracker}, dwells=held,
-                          safety_stops=held)
-    assert core.tracking_limit(50.0) == pytest.approx(46.0 + 5.0 + 5.0)
+    asked = []
+    dwells = SimpleNamespace(held_s=lambda t: asked.append(("dwells", t)) or t / 10)
+    stops = SimpleNamespace(held_s=lambda t: asked.append(("stops", t)) or t / 100)
+    core, ms, _, _ = make("approach", trackers={"approach": tracker, "transport": tracker}, dwells=dwells,
+                          safety_stops=stops)
+    assert core.tracking_limit(50.0) == pytest.approx(46.0 + 5.0 + 0.5)
+    assert asked == [("dwells", 50.0), ("stops", 50.0)]
     ms.phase = "transport"
     assert core.tracking_limit(50.0) == pytest.approx(46.0)
     tracker.nominal_duration_s = lambda: 1.0
@@ -157,6 +160,7 @@ def test_lift_and_lower_end_after_4_5_s_on_the_pallet_and_fork_checks():
     with pytest.raises(RuntimeError, match="Pallet was not lifted"):
         core.lift_and_timers(14.6, 0.01)
     assert ms.phase == "lift"
+    assert ms.lift_command == pytest.approx(0.06 * 0.01)  # this tick's ramp step comes before the refusal
     core, ms, _, log = make("lower", truth={"pallet_z": 0.002, "lift": 0.02})
     with pytest.raises(RuntimeError, match="Fork did not lower"):
         core.lift_and_timers(14.6, 0.01)
