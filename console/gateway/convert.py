@@ -22,10 +22,13 @@ CORRECTION_STEP_RAD = 1e-3
 SPEED_MAX_AGE_S = 1.0
 SPEED_MAX_GAP_S = 0.5  # odom poses further apart than this give no speed
 BACKENDS = ("real", "isaac")
-# What the operator is told to do instead of STOP on a monitor-only link. A simulation
-# is stopped at its runner; a real truck has no default -- no physical e-stop has been
-# tested yet (2026-10-12), so the method that really exists must be given (design D12).
-ISAAC_STOP_INSTRUCTION = "시뮬레이션은 Isaac 실행기(잡)를 멈추세요"
+# What the operator is told to do instead of STOP on a monitor-only link (design D12).
+# A simulation is stopped at its runner. The real truck has no tested physical e-stop
+# (2026-10-12); the user chose its main power switch as the method (2026-10-15).
+STOP_INSTRUCTIONS = {
+    "isaac": "시뮬레이션은 Isaac 실행기(잡)를 멈추세요",
+    "real": "주 전원 스위치를 끄세요",
+}
 
 # Display-only outline of dls08_measured (sim/models/dls08_measured/parameters.yaml),
 # measured from the rear axle at base_link x -0.34 (an estimate kept fixed): fork tip
@@ -266,8 +269,8 @@ def welcome(
 ) -> dict:
     if backend not in BACKENDS:
         raise ValueError(f"backend must be one of {BACKENDS}")
-    if stop_instruction is None and backend == "isaac":
-        stop_instruction = ISAAC_STOP_INSTRUCTION
+    if stop_instruction is None:
+        stop_instruction = STOP_INSTRUCTIONS[backend]
     if not (stop_instruction or "").strip():
         raise ValueError("a monitor-only link must say how the truck can be stopped")
     caps = {

@@ -285,3 +285,13 @@ def test_welcome_says_how_the_truck_can_actually_be_stopped():
     assert w["capabilities"]["stop_instruction"] == "주 전원 스위치를 끄세요"
     with pytest.raises(ValueError):
         convert.welcome("fl-1", "real", epoch=1, stop_instruction="  ")
+
+
+def test_welcome_defaults_name_the_stop_method_per_backend():
+    assert convert.welcome("fl-1", "real", epoch=1)["capabilities"][
+        "stop_instruction"
+    ] == ("주 전원 스위치를 끄세요")
+    assert (
+        "Isaac"
+        in convert.welcome("fl-1", "isaac", epoch=1)["capabilities"]["stop_instruction"]
+    )

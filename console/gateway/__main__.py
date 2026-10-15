@@ -12,7 +12,7 @@ import secrets
 from pathlib import Path
 
 from console.gateway import server
-from console.gateway.convert import ISAAC_STOP_INSTRUCTION
+from console.gateway.convert import STOP_INSTRUCTIONS
 from console.gateway.store import Store
 
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
@@ -46,7 +46,7 @@ async def _serve(store: Store, args, capture_domain: str) -> None:
 
 
 def parse_args(argv=None):
-    """(gateway options, the rest for rclpy). A real truck needs --stop-instruction."""
+    """(gateway options, the rest for rclpy)."""
     p = argparse.ArgumentParser(prog="python -m console.gateway")
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--port", type=int, default=8765)
@@ -57,13 +57,13 @@ def parse_args(argv=None):
     p.add_argument(
         "--stop-instruction",
         help="what the screen tells the operator to do instead of STOP "
-        "(required for --backend real: the stop method that really exists on it)",
+        "(default per backend: isaac stops the runner, real switches off main power)",
     )
     args, ros_args = p.parse_known_args(argv)
-    if args.stop_instruction is None and args.backend == "isaac":
-        args.stop_instruction = ISAAC_STOP_INSTRUCTION
-    if not (args.stop_instruction or "").strip():
-        p.error("--stop-instruction is required for --backend real")
+    if args.stop_instruction is None:
+        args.stop_instruction = STOP_INSTRUCTIONS[args.backend]
+    if not args.stop_instruction.strip():
+        p.error("--stop-instruction must say how the truck can be stopped")
     return args, ros_args
 
 
