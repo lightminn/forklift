@@ -12,6 +12,7 @@ import secrets
 from pathlib import Path
 
 from console.gateway import server
+from console.gateway.convert import ISAAC_STOP_INSTRUCTION
 from console.gateway.store import Store
 
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
@@ -30,6 +31,7 @@ async def _serve(store: Store, args, capture_domain: str) -> None:
         secrets.randbits(48) | 1,  # a new session for every start (contract 2)
         args.rear_axle_x,
         capture_domain=capture_domain,
+        stop_instruction=args.stop_instruction,
     )
     print(
         f"console gateway (monitor only): http://{args.host}:{args.port}/ "
@@ -43,7 +45,8 @@ async def _serve(store: Store, args, capture_domain: str) -> None:
         await gw.wait_closed()
 
 
-def main(argv=None) -> None:
+def parse_args(argv=None):
+    """(gateway options, the rest for rclpy). A real truck needs --stop-instruction."""
     p = argparse.ArgumentParser(prog="python -m console.gateway")
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--port", type=int, default=8765)
@@ -51,7 +54,21 @@ def main(argv=None) -> None:
     p.add_argument("--vehicle-id", default="forklift-1")
     p.add_argument("--backend", choices=("real", "isaac"), required=True)
     p.add_argument("--rear-axle-x", type=float, default=REAR_AXLE_X_M)
+    p.add_argument(
+        "--stop-instruction",
+        help="what the screen tells the operator to do instead of STOP "
+        "(required for --backend real: the stop method that really exists on it)",
+    )
     args, ros_args = p.parse_known_args(argv)
+    if args.stop_instruction is None and args.backend == "isaac":
+        args.stop_instruction = ISAAC_STOP_INSTRUCTION
+    if not (args.stop_instruction or "").strip():
+        p.error("--stop-instruction is required for --backend real")
+    return args, ros_args
+
+
+def main(argv=None) -> None:
+    args, ros_args = parse_args(argv)
 
     import rclpy
 

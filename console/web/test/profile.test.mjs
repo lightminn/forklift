@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { controlProfile, frameAgreement, scanDrawable, staleness, stopIsRefused } from "../js/profile.js";
+import { controlProfile, frameAgreement, scanDrawable, staleness, stopInstruction, stopIsRefused } from "../js/profile.js";
 
 test("a vehicle without the control field is a full console (console/1 as before)", () => {
   const p = controlProfile({ mission: true, teleop_direct: true, teleop_video: true, lift: true });
@@ -58,4 +58,11 @@ test("scan points older than 1 s are not drawn", () => {
   assert.equal(scanDrawable({ ageS: 0.3 }), true);
   assert.equal(scanDrawable({ ageS: 1.2 }), false);
   assert.equal(scanDrawable(null), false);
+});
+
+test("the 'cannot stop' notice tells the method the vehicle named, never an assumed e-stop", () => {
+  assert.equal(stopInstruction({ capabilities: { stop_instruction: "주 전원 스위치를 끄세요" } }), "주 전원 스위치를 끄세요");
+  // a link that names nothing gets a neutral line, not a device that may not exist
+  assert.equal(stopInstruction({ capabilities: {} }), "차량에서 직접 멈추는 수단을 쓰세요");
+  assert.equal(stopInstruction(null), "차량에서 직접 멈추는 수단을 쓰세요");
 });

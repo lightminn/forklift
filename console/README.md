@@ -25,6 +25,8 @@
         --ros-args -p use_sim_time:=true -p camera_topic:=/camera/color/image_raw/compressed
     # 브라우저: http://<호스트>:8765/
 
+실차는 `--backend real --stop-instruction "<그 차에 실제로 있는 정지 방법>"` 이 필수다. 관찰 전용 화면은 STOP 대신 이 문장을 보이며, 시험된 비상정지가 아직 없으므로 기본값을 두지 않는다(Isaac 은 실행기 정지가 기본).
+
 `forklift/ros2-console:jazzy` 는 `forklift/ros2-dev:jazzy` 에 `websockets` 만 더한 이미지다(개발 이미지는 바꾸지 않는다). 뒤 차축 위치는 `--rear-axle-x`(기본 −0.34 m, `dls08_measured`)로 바꾼다.
 
 ## 시험

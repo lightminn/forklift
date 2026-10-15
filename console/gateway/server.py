@@ -42,6 +42,7 @@ class Gateway(wire.ControlOutboxMixin, wire.MediaFanoutMixin):
         rear_axle_x_m: float,
         clock=time.monotonic,
         capture_domain: str = "sensor",
+        stop_instruction: str | None = None,
     ):
         self.store = store
         self.web_root = web_root
@@ -49,7 +50,9 @@ class Gateway(wire.ControlOutboxMixin, wire.MediaFanoutMixin):
         self.epoch = epoch
         self.rear_axle_x_m = rear_axle_x_m
         self.capture_domain = capture_domain  # "sim" when the stamps are sim time
-        self.welcome_msg = convert.welcome(vehicle_id, backend, epoch)
+        self.welcome_msg = convert.welcome(
+            vehicle_id, backend, epoch, stop_instruction=stop_instruction
+        )
         self.state_seq = 0
         self.server = None
         self.tasks: list[asyncio.Task] = []
@@ -246,6 +249,7 @@ async def start(
     epoch: int,
     rear_axle_x_m: float,
     capture_domain: str = "sensor",
+    stop_instruction: str | None = None,
 ) -> Gateway:
     gw = Gateway(
         store,
@@ -255,6 +259,7 @@ async def start(
         epoch,
         rear_axle_x_m,
         capture_domain=capture_domain,
+        stop_instruction=stop_instruction,
     )
     gw.server = await serve(
         gw.handler,

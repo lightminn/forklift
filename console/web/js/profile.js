@@ -47,3 +47,10 @@ export function frameAgreement({ gridFrame, poseFrame, scanFrame }) {
 export function scanDrawable(scan) {
   return Boolean(scan) && scan.ageS <= STALE_S;
 }
+
+// What to do instead of STOP on a monitor-only link: the vehicle says (gateway
+// --stop-instruction); without it, a neutral line rather than a device that may not exist.
+export function stopInstruction(linkWelcome) {
+  const text = linkWelcome?.capabilities?.stop_instruction;
+  return typeof text === "string" && text.trim() ? text.trim() : "차량에서 직접 멈추는 수단을 쓰세요";
+}
