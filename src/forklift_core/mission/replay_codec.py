@@ -123,7 +123,11 @@ class Encoder:
         return node
 
     def encode(self, value: Any) -> Any:
-        if isinstance(value, np.generic) and value.dtype.kind in "biufcmMSU":  # numpy scalars: dtype + bytes
+        if isinstance(value, np.str_):  # a str subclass: its own text, NULs and emptiness included
+            return {"$np_str": str.__str__(value)}  # str(np.str_) drops trailing NULs
+        if isinstance(value, np.bytes_):
+            return {"$np_bytes": base64.b64encode(bytes(value)).decode("ascii")}
+        if isinstance(value, np.generic) and value.dtype.kind in "biufcmM":  # numpy scalars: dtype + exact bytes
             return {"$np": value.dtype.str, "b": base64.b64encode(value.tobytes()).decode("ascii")}
         if isinstance(value, np.ndarray):
             return self._shared(value, lambda: self.array_key(value))
@@ -207,6 +211,10 @@ def decode(node: Any, arrays: dict[str, np.ndarray]) -> Any:
             return array
         if "$float" in n:
             return float(n["$float"])
+        if "$np_str" in n:
+            return np.str_(n["$np_str"])
+        if "$np_bytes" in n:
+            return np.bytes_(base64.b64decode(n["$np_bytes"]))
         if "$np" in n:
             return np.frombuffer(base64.b64decode(n["b"]), dtype=np.dtype(n["$np"]))[0].copy()
         if "$bytes" in n:
