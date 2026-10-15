@@ -260,7 +260,9 @@ def judge_scene(meta, truth, instruction_input, candidates: Sequence[CandidateVi
     return SceneVerdict(
         meta["scene_id"], meta["case"], meta["shape_key"], meta["split"], population,
         meta.get("render_source", "rig"), meta.get("noise") is not None,
-        miss, dangerous, len(pairs) < len(counted), bool(counted) if negative else None,
+        # In a negative scene, any counted candidate or any attempt to pick is a false positive.
+        miss, dangerous, len(pairs) < len(counted),
+        (bool(counted) or decision.status == "selected") if negative else None,
         target_error, deferred, fit_error, errors, meta["case"] in ("S4", "S7"), elapsed_s,
     )
 

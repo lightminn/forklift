@@ -175,3 +175,9 @@ def test_not_pickable_is_judged_on_the_face_the_candidate_matched():
     v = judge_scene(META, _truth([inst], "unambiguous", 0), instr, [on_y],
                     TargetDecision("not_pickable", "y", ("near_tracking_unavailable",)))
     assert v.target_error is False
+
+
+def test_any_selection_in_a_negative_scene_is_a_false_positive():
+    meta = {**META, "case": "N", "shape_key": "negative"}
+    v = judge_scene(meta, _truth([]), NONE_IN, [], TargetDecision("selected", "ghost", ()))
+    assert v.negative_fp
