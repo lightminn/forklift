@@ -1549,8 +1549,8 @@ def scene_truths(
   - `assert_disjoint(*recipe_lists)` — 시드가 겹치면 `ValueError`.
   - `catalogue() -> list[SceneRecipe]` — 설계 §3.4 의 평가 장면 전부(S1–S6 × 2 형상 × 61, S7 194, N 94) = 1,020.
 
-사례별 규칙은 설계 §5.1 그대로이고, 지시 배정은 **인덱스로 결정적**이다(무작위로 하면 eval 하한을 보장할 수 없다):
-- 알려진 형상: 장면 인덱스 i 의 지시 종류 = S2·S3·S4 는 `i % 5 ∈ {0, 1}` → 애매함, `{2, 3}` → 애매하지 않음, `4` → 없음; S1·S5·S6 은 `i % 4 ∈ {0, 1, 2}` → 애매하지 않음, `3` → 없음(애매함은 여러 개가 있어야 성립). S5 는 기반 배치가 S2·S3 이면 S2·S3 규칙.
+사례별 규칙은 설계 §5.1 그대로이고, 지시 배정은 **그 장면이 속한 분할(eval/dev/train) 안에서의 순위 r 로 결정적**이다(무작위나 전체 인덱스로 하면 eval 하한을 보장할 수 없다 — eval 은 순열로 뽑으므로):
+- 알려진 형상: 분할 안 순위 r 의 지시 종류 = S2·S3·S4 는 `r % 5 ∈ {0, 1}` → 애매함, `{2, 3}` → 애매하지 않음, `4` → 없음; S1·S6·S7 은 `r % 4 ∈ {0, 1, 2}` → 애매하지 않음, `3` → 없음. eval 19 장면이면 S2·S3·S4 각각 애매함 8·애매하지 않음 7, S1·S6 각각 애매하지 않음 15 → 형상별 eval 애매함 ≥ 24, 애매하지 않음 ≥ 51, 지시 ≥ 75(S5 는 기반 규칙에 따라 더해진다)(애매함은 여러 개가 있어야 성립). S5 는 기반 배치가 S2·S3 이면 S2·S3 규칙.
 - 애매한 지시: 대상과 다른 인스턴스가 모두 반경 안에 들어가게 반경 = 두 중심 거리 + 0.1 m.
 - 애매하지 않은 지시: 반경 = min(0.3, 다른 인스턴스까지 거리의 절반).
 
@@ -1905,11 +1905,17 @@ def generate(case: str, shape_key: str, count: int, *, band: str, first_seed: in
         raise ValueError(f"seeds {first_seed}+{count} leave the {band} band")
     order = np.random.default_rng(first_seed).permutation(count)
     eval_set = set(order[: eval_count(count)].tolist()) if band != "train" else set()
+    ranks, seen = {}, {"eval": 0, "dev": 0, "train": 0}
+    for i in range(count):
+        split = "train" if band == "train" else ("eval" if i in eval_set else "dev")
+        ranks[i] = (split, seen[split])
+        seen[split] += 1
     recipes = []
     for i in range(count):
         seed = first_seed + i
         instances, distractors, spacing, rule = _scene(case, shape_key, seed, i)
-        kind = _instruction_kind(rule, i)
+        split, rank = ranks[i]
+        kind = _instruction_kind(rule, rank)
         rng = np.random.default_rng(seed + 7)
         if kind == "ambiguous" and len(instances) < 2:
             kind = "unambiguous"
@@ -1918,7 +1924,6 @@ def generate(case: str, shape_key: str, count: int, *, band: str, first_seed: in
         if case == "S7" and target is None and instances:
             load = _load(rng, instances[0].spec, rng.random() < 0.85)
         instruction = _instruction(rng, kind, instances, target, load)
-        split = "train" if band == "train" else ("eval" if i in eval_set else "dev")
         recipes.append(
             SceneRecipe(
                 scene_id=f"{case.lower()}_{shape_key}_{seed}",
@@ -2314,7 +2319,11 @@ def test_asking_on_an_unambiguous_instruction_is_counted():
 
 def test_empty_population_never_passes():
     summary = summarize([])
-    assert all(not gate["pass"] for gate in summary["gates"].values())
+    assert summary["gates"] and all(not gate["pass"] for gate in summary["gates"].values())
+
+
+def test_known_populations_have_no_fit_gate():
+    assert not any(k.startswith("known") and k.endswith(":fit_error") for k in summarize([])["gates"])
 ```
 
 - [ ] **Step 2: 실패 확인** — `ImportError`
@@ -2354,6 +2363,12 @@ GATES = {
     "fit_error": 0.05,
 }
 POSE_P95 = {"lateral": 0.020, "axial": 0.020, "yaw": math.radians(2.0), "z": 0.005}
+APPLICABLE = {
+    "known:epal6": ("miss", "dangerous", "extra", "target_error", "asked_unambiguous"),
+    "known:t11_06": ("miss", "dangerous", "extra", "target_error", "asked_unambiguous"),
+    "nonstandard": ("miss", "dangerous", "extra", "target_error", "asked_unambiguous", "fit_error"),
+    "negative": ("negative_fp",),
+}
 
 
 @dataclass(frozen=True)
@@ -2514,10 +2529,9 @@ def summarize(verdicts: Sequence[SceneVerdict], *, split: str = "eval") -> dict:
     gates, pose, cells = {}, {}, {}
     for pop in populations:
         mine = [v for v in chosen if v.population == pop]
-        for name, bound in GATES.items():
-            gate = _gate([getattr(v, name) for v in mine], bound)
-            if gate["n"] or pop != "negative" or name == "negative_fp":
-                gates[f"{pop}:{name}"] = gate
+        for name in APPLICABLE[pop]:
+            # An applicable gate with no scenes reports n = 0 and fails.
+            gates[f"{pop}:{name}"] = _gate([getattr(v, name) for v in mine], GATES[name])
         if pop.startswith("known") or pop == "nonstandard":
             gates[f"{pop}:dangerous_observed_zero"] = {
                 "n": len(mine), "failures": sum(v.dangerous for v in mine), "bound": 0.0,
@@ -2530,12 +2544,12 @@ def summarize(verdicts: Sequence[SceneVerdict], *, split: str = "eval") -> dict:
             }
         for case in sorted({v.case for v in mine}):
             cell = [v for v in mine if v.case == case]
-            cells[f"{pop}:{case}"] = {name: _gate([getattr(v, name) for v in cell], bound) for name, bound in GATES.items()}
+            cells[f"{pop}:{case}"] = {name: _gate([getattr(v, name) for v in cell], GATES[name]) for name in APPLICABLE[pop]}
     return {"split": split, "scenes": len(chosen), "gates": gates, "pose_p95": pose, "cells": cells,
             "pose_targets": POSE_P95}
 ```
 
-- [ ] **Step 4: 통과 확인** — Expected: 9 passed
+- [ ] **Step 4: 통과 확인** — Expected: 10 passed
 - [ ] **Step 5: 커밋** — `git add src/forklift_core/perception/evaluation_multi.py tests/unit/perception/test_evaluation_multi.py` · `git commit -m "perception: multi-instance scene judgment (miss, dangerous with blade-tip projection, extra, target error, ask rate, fit error) and pooled Clopper-Pearson gates"`
 
 ### Task 11: 생성·평가 CLI
@@ -2737,37 +2751,48 @@ if __name__ == "__main__":
 - [ ] **Step 4: 통과 확인** — `git add tools/generate_recognition_scenes.py tools/evaluate_recognition.py tests/integration/test_recognition_cli.py && FORKLIFT_REPO=... ~/bin/forklift-ws1-pytest tests/integration/test_recognition_cli.py -q -p no:cacheprovider -W error` (백그라운드) · Expected: 1 passed
 - [ ] **Step 5: 커밋** — `git commit -m "tools: recognition scene generation (CPU rig, schema v2) and evaluation CLI with baseline and oracle candidates"`
 
-### Task 12: CPU 기준선 실행과 검증 기록
+### Task 12: CPU 기준선 실행과 검증 기록 (UBAI)
+
+CPU 전용 잡이므로 전역 지침대로 **UBAI(`gate1_External`) Slurm** 에서 돌린다. 저장소의 `tools/hpc_sweep.sh jobs.tsv [파티션] [코어]` 가 동기화 → 제출 → 대기 → 회수(`artifacts/hpc/<run-id>/out/<이름>.txt`)를 한 번에 한다(원격 venv `~/forklift-venv`, 원격 사본 `~/forklift`). SSH 왕복이 2분 넘으니 묶어서 보낸다.
 
 **Files:**
-- Create: `deploy/slurm/recognition_cpu_baseline.sbatch`, `docs/validation/2026-10-1x-recognition-stage1a-cpu-baseline.md`(실행 날짜로)
+- Create: `deploy/hpc/recognition_stage1a_generate.tsv`, `deploy/hpc/recognition_stage1a_evaluate.tsv`, `docs/validation/<실행일>-recognition-stage1a-cpu-baseline.md`
 
-- [ ] **Step 1: Slurm 스크립트 작성** (ws1 `compute`, CPU 4, 메모리 4G — 장면당 수십 MB 미만, 시간 한도 1시간; 짧은 CPU 잡이고 입력·산출이 ws1 에 있어 ws1 이 낫다 — 전역 지침 "ws1 ③")
+- [ ] **Step 1: 원격 환경 확인 묶음** — `deploy/hpc/recognition_stage1a_generate.tsv` 첫 줄에 Pillow 확인을 넣는다(없으면 설치; 병렬 줄과 겹치지 않게 **별도 sweep 으로 먼저** 1코어로 돌린다):
 
-```bash
-#!/bin/bash
-#SBATCH --job-name=recog_cpu_base
-#SBATCH --partition=compute
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=4G
-#SBATCH --time=01:00:00
-#SBATCH --output=%x_%j.log
-set -euo pipefail
-cd "${SRC:?}"
-export PYTHONPATH=$SRC/src PYTHONDONTWRITEBYTECODE=1
-PY=/home/projects/forklift/.venv/bin/python
-OUT=${OUT:?}
-$PY tools/generate_recognition_scenes.py --out "$OUT/data"
-for split in dev; do
-  $PY tools/evaluate_recognition.py --dataset "$OUT/data" --split $split --detector oracle --output "$OUT/oracle_$split"
-  $PY tools/evaluate_recognition.py --dataset "$OUT/data" --split $split --detector baseline --output "$OUT/baseline_$split"
-done
+```
+env	python -c "import PIL, numpy, yaml; print(PIL.__version__, numpy.__version__, yaml.__version__)" || ($HOME/forklift-venv/bin/pip install 'Pillow>=10' && python -c "import PIL; print(PIL.__version__)")
 ```
 
-- [ ] **Step 2: ws1 로 보내 실행** — `git ls-files` 묶음을 `ws1:/home/projects/forklift/recognition/<UTC>/src` 로 보내고 `sbatch --export=ALL,SRC=...,OUT=... deploy/slurm/recognition_cpu_baseline.sbatch`; 완료 대기는 `run_in_background` 로 `squeue` 폴링. **eval 은 돌리지 않는다**(기하 코어 확정 전 eval 을 읽으면 상한이 무효 — 설계 §5.3).
-- [ ] **Step 3: 결과 확인** — oracle: 모든 양성 모집단의 miss·extra·dangerous 실패 0(평가기 자기 점검). baseline: 사례별 놓침·추가 후보·위험 수를 표로 읽는다. 기대: S2(맞닿음·부분 가림)·S4·S5 에서 놓침, S6·N 에서 추가 후보·음성 오검출이 나타나야 설계 §1 의 한계 진단과 일치한다. 일치하지 않으면 그 사례를 반례로 따로 적는다.
-- [ ] **Step 4: 검증 기록 작성** — `docs/validation/<날짜>-recognition-stage1a-cpu-baseline.md`: 실행 조건(리비전, 데이터 해시, 잡음 모델, 장면 수, job ID), oracle 자기 점검 결과, baseline 사례별 표(dev 만), 해석 경계("CPU rig 기구 회귀이며 렌더 기반 모집단이 아니다 — Isaac 판정은 단계 1B").
-- [ ] **Step 5: 커밋·푸시** — `git add deploy/slurm/recognition_cpu_baseline.sbatch docs/validation/<파일>` · `git commit -m "validation: recognition stage 1A CPU baseline on dev (oracle self-check, current detector by case)"` · `git push`
+Run(로컬, worktree 에서, `run_in_background`): `printf 'env\t...\n' > /tmp/... ; tools/hpc_sweep.sh <그 파일> cpu1 1`
+
+- [ ] **Step 2: 생성 묶음** — 사례·형상마다 한 줄(병렬). 같은 `out/data` 아래 장면 디렉터리가 겹치지 않는다(장면 ID 에 사례·형상·시드):
+
+```
+gen_s1	python tools/generate_recognition_scenes.py --out hpc_data/stage1a --cases S1
+gen_s2	python tools/generate_recognition_scenes.py --out hpc_data/stage1a --cases S2
+gen_s3	python tools/generate_recognition_scenes.py --out hpc_data/stage1a --cases S3
+gen_s4	python tools/generate_recognition_scenes.py --out hpc_data/stage1a --cases S4
+gen_s5	python tools/generate_recognition_scenes.py --out hpc_data/stage1a --cases S5
+gen_s6	python tools/generate_recognition_scenes.py --out hpc_data/stage1a --cases S6
+gen_s7	python tools/generate_recognition_scenes.py --out hpc_data/stage1a --cases S7
+gen_n	python tools/generate_recognition_scenes.py --out hpc_data/stage1a --cases N
+```
+
+`--exclude='data/'` 때문에 출력은 `hpc_data/` 에 둔다(동기화 대상에서 빠지지 않는 이름이지만 원격에서만 생긴다). Run: `tools/hpc_sweep.sh deploy/hpc/recognition_stage1a_generate.tsv cpu1 8` (백그라운드).
+
+- [ ] **Step 3: 평가 묶음** — dev 만(**eval 은 돌리지 않는다** — 기하 코어 확정 전 eval 을 읽으면 상한이 무효, 설계 §5.3):
+
+```
+oracle_dev	python tools/evaluate_recognition.py --dataset hpc_data/stage1a --split dev --detector oracle --output hpc_data/stage1a_oracle_dev && cat hpc_data/stage1a_oracle_dev/metrics.json
+baseline_dev	python tools/evaluate_recognition.py --dataset hpc_data/stage1a --split dev --detector baseline --output hpc_data/stage1a_baseline_dev && cat hpc_data/stage1a_baseline_dev/metrics.json && cat hpc_data/stage1a_baseline_dev/verdicts.csv
+```
+
+Run: `tools/hpc_sweep.sh deploy/hpc/recognition_stage1a_evaluate.tsv cpu1 2` (백그라운드).
+
+- [ ] **Step 4: 결과 확인** — oracle: 모든 양성 모집단의 `miss`·`extra`·`dangerous_observed_zero` 실패 0(평가기 자기 점검; 하나라도 실패면 평가기나 정답의 결함이므로 고친 뒤 다시). baseline: 사례별 칸(`cells`)의 놓침·추가 후보·위험·음성 오검출을 표로 읽는다. 기대(설계 §1 진단): S2(맞닿음·부분 가림)·S4(위층)·S5(상판 결손)에서 놓침, S6·N 에서 추가 후보·음성 오검출. 기대와 다른 칸은 반례로 따로 적는다.
+- [ ] **Step 5: 검증 기록 작성** — `docs/validation/<실행일>-recognition-stage1a-cpu-baseline.md`: 실행 조건(리비전, `dataset_sha256`, 잡음 모델, 장면 수, UBAI run-id·job ID, numpy·Pillow 버전), oracle 자기 점검, baseline 사례별 표(dev 만), 해석 경계("`rig_render_pose` CPU 기구 회귀이며 렌더 기반 모집단이 아니다 — Isaac 판정은 단계 1B").
+- [ ] **Step 6: 커밋·푸시** — `git add deploy/hpc/recognition_stage1a_generate.tsv deploy/hpc/recognition_stage1a_evaluate.tsv docs/validation/<파일>` · `git commit -m "validation: recognition stage 1A CPU baseline on dev at UBAI (oracle self-check, current detector by case)"` · `git push`
 
 **검토 D:** 작업 10–12 뒤 Codex — 초점: "판정 규칙이 설계 §3.4 와 같은가(특히 위험·추가 후보·지시·끼움), 빈 모집단 처리, CLI 가 정답을 입력 경로로 흘리지 않는가, 기준선 결과 해석이 데이터로 지지되는가". 수렴까지 반복.
 
@@ -2785,3 +2810,4 @@ done
 2. **자리표시 점검:** 작성 중 남았던 S2 배치 중복 식과 S7 시험의 적재 인자를 바로잡았다. TBD·"적절히" 류 문구 없음.
 3. **타입 일관성:** `CandidateView`·`TargetDecision`(작업 10) ↔ CLI(작업 11) 일치. `scene_truths` 인자 순서 (spec, placement, damage, load) ↔ 작업 8·11 일치. `FitResult.reasons` 튜플 ↔ truth JSON 리스트.
 4. **Review Focus:** 다섯 항목 각각 작업 4·7·10·6·8 에 시험을 넣었다.
+5. **검토 ① (원자료 재계산, 작성 직후):** 끼움 시험값(EPAL 6 86.25 mm, T11 0.290 m 77.5 mm, 0.3725 m 에서 36.25 mm), 비규격 시험 형상의 개구·여유(86.25 mm)·지지(0.275 + 0.036 = 0.311 ≤ 0.330, 0.314 + 0.036 = 0.350 > 0.330)·천장(0.055 < 0.0575)·적재(11 > 10 kg), 적층 포켓 높이(0.144 + 0.022 + 0.039), 장면 수(1,020, eval 114/59/29)를 손으로 다시 계산해 일치를 확인했다. 그 과정에서 세 가지를 고쳤다 — 지시 종류를 전체 인덱스로 배정하면 순열로 뽑은 eval 에서 하한이 보장되지 않아 분할 안 순위로 바꿈, 적용되지 않는 관문(알려진 형상의 끼움 판정)이 실패로 집계되던 것을 모집단별 적용 목록으로 바꿈, CPU 전용 기준선을 ws1 대신 UBAI 로(전역 지침).
