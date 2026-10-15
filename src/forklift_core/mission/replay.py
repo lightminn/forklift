@@ -205,9 +205,20 @@ class ReplaySession:
         if recorded["tick"] != tick:
             raise self.fail(f"tick {tick}: the record's next tick is {recorded['tick']}")
         for key in ("tick_t", "work_t", "commands", "stop_kind"):
+            if key in head and head[key] is None and key in ("tick_t", "work_t"):
+                continue  # set later in the tick (tick_time), checked there
             if key in head and _canonical(self.encode(head[key])) != _canonical(recorded[key]):
                 raise self.fail(f"tick {tick} {key}: {head[key]!r} differs from the recorded one")
         self.tick, self._next = recorded, 0
+
+    def tick_time(self, *, tick_t: float, work_t: float) -> None:
+        """The head's times computed inside the tick, checked against the recorded head."""
+        tick = self.tick
+        if tick is None:
+            raise self.fail("tick_time outside a tick")
+        for key, value in (("tick_t", tick_t), ("work_t", work_t)):
+            if _canonical(self.encode(value)) != _canonical(tick[key]):
+                raise self.fail(f"tick {tick['tick']} {key}: {value!r} differs from the recorded head")
 
     def tick_end(self, *, outputs: Any, branches: list[str]) -> None:
         tick = self.tick

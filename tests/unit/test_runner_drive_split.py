@@ -36,7 +36,8 @@ def test_drive_imports_nothing_from_isaac_and_run_hands_over_at_the_initial_plan
     # drive begins where the initial plans begin (its moved helper closures first)
     statements = [ast.unparse(s) for s in drive.body if not isinstance(s, ast.FunctionDef)]
     begin = next(i for i, text in enumerate(statements) if text == "state['phase'] = 'planning'")
-    assert all(text.startswith(("'", '"', "_bound", "if '", "if boundary is not None")) for text in statements[:begin])
+    assert all(text.startswith(("'", '"', "_bound", "if '", "if boundary is not None", "early_ports = ", "if early_ports"))
+               for text in statements[:begin])
 
 
 def test_drive_reads_no_isaac_helper_names():

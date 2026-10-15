@@ -74,6 +74,9 @@ class SessionRecorder:
     def tick_end(self, *, outputs, branches):
         self.session.tick_end(outputs=outputs, branches=branches)
 
+    def tick_time(self, *, tick_t, work_t):
+        self.session.tick_time(tick_t=tick_t, work_t=work_t)
+
     def encode(self, value):
         return self.session.encode(value)
 
@@ -129,8 +132,12 @@ def build_inputs(run_dir: Path, gate: ReplayBoundary):
     specs_by_port = dict(specs)
 
     def proxy_factory(target, port, gate_, **kw):
-        spec = object.__getattribute__(target, "_spec") if isinstance(target, ReplayProxy) else specs_by_port.get(
-            port, type(target))
+        if isinstance(target, ReplayProxy):
+            spec = object.__getattribute__(target, "_spec")
+        elif isinstance(target, types.ModuleType):  # the runner's `time` module as the Clock port
+            spec = {"methods": sorted(n for n in dir(target) if callable(getattr(target, n, None)))}
+        else:
+            spec = specs_by_port.get(port, type(target))
         child_specs = {}
         return ReplayProxy(port, gate, spec=spec, child_ports=kw.get("child_ports"), child_specs=child_specs,
                            hash_only_requests=kw.get("hash_only_requests", ()), watches=kw.get("watches"))

@@ -3413,6 +3413,17 @@ def drive(S, isaac) -> None:
 
         return tracking_frame(args.forklift_urdf, args.pallet_geometry_loaded)
 
+    # M-a1 replay plan R3 (format 2 only; format 1 keeps the M-a0 call sequence): the services are ports from the
+    # hand-over on, so the initial plans, the bootstrap (SLAM link, followers, clock origin, reference scan) and
+    # every tick head read them through the record.
+    early_ports = boundary is not None and boundary.recorder.value_format == 2
+    if early_ports:
+        robot = RecordingProxy(robot, "Vehicle", boundary)
+        pallet = RecordingProxy(pallet, "SimTruth", boundary)
+        world = RecordingProxy(world, "Clock", boundary)
+        cells.world, cells.robot = world, robot
+        _BOUNDARY_RECORD["time"] = time
+        globals()["time"] = RecordingProxy(time, "Clock", boundary)
     state["phase"] = "planning"
     if boundary is not None:
         boundary.recorder.tick_begin(-1, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")  # the initial plans
@@ -3573,6 +3584,8 @@ def drive(S, isaac) -> None:
 
     if boundary is not None:
         boundary.recorder.tick_end(outputs={"setup": True, "paths": sorted(paths)}, branches=[])
+    if early_ports:  # format 2: the bootstrap, from the initial plans to the first control tick
+        boundary.recorder.tick_begin(-2, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
     drive_geometry = args.drive_geometry
     obstacles = [item.rectangle for item in scenario.props]
     pickup_obstacle = Rectangle(
@@ -4741,7 +4754,9 @@ def drive(S, isaac) -> None:
             ray_origin, ray_directions = planar_lidar.laser_rays_world(
                 base_d, quat_d, laser_mount, beam_angles
             )
-            ray_distances, ray_hits, ray_own = isaac.cast_reference_scan(
+            cast_reference_ = (recorded_function(isaac.cast_reference_scan, "SimTruth", "cast_reference_scan", boundary)
+                               if early_ports else isaac.cast_reference_scan)
+            ray_distances, ray_hits, ray_own = cast_reference_(
                 ray_origin, ray_directions, scan_pattern.range_max_m, ignore_self=True
             )
             reference_ranges = scan_pattern.ranges_from_hits(ray_distances, ray_hits)
@@ -4770,10 +4785,11 @@ def drive(S, isaac) -> None:
                       "obstacle": ["version", "last_stamp", "applied", "last_raw", "scans"]},
                 append_only={"records", "scans"},
             )
-            robot = RecordingProxy(robot, "Vehicle", boundary)
-            pallet = RecordingProxy(pallet, "SimTruth", boundary)
-            world = RecordingProxy(world, "Clock", boundary)
-            cells.world, cells.robot = world, robot  # the capture's callbacks read the proxies from here on
+            if not early_ports:  # format 2 made these ports at the hand-over
+                robot = RecordingProxy(robot, "Vehicle", boundary)
+                pallet = RecordingProxy(pallet, "SimTruth", boundary)
+                world = RecordingProxy(world, "Clock", boundary)
+                cells.world, cells.robot = world, robot  # the capture's callbacks read the proxies from here on
             if slam is not None:
                 slam["tracker"] = RecordingProxy(slam["tracker"], "Slam", boundary)
             if obstacle is not None:
@@ -4827,12 +4843,22 @@ def drive(S, isaac) -> None:
             branch_probe()  # the counts the loop starts from
             _BOUNDARY_RECORD["probe"] = branch_probe  # an exit tick closes with its branches too
             # Core-side wall-clock reads (planning deadlines) through a Clock proxy of this module's `time`.
-            _BOUNDARY_RECORD["time"] = time
-            globals()["time"] = RecordingProxy(time, "Clock", boundary)
+            if not early_ports:
+                _BOUNDARY_RECORD["time"] = time
+                globals()["time"] = RecordingProxy(time, "Clock", boundary)
+        if early_ports:
+            boundary.recorder.tick_end(outputs={"bootstrap": True}, branches=[])
         for step in range(int(120 * args.max_sim_seconds)):
-            t = world.current_time - initial_time
-            if boundary is not None:
-                boundary.recorder.tick_begin(step, tick_t=t, work_t=t, commands=[], stop_kind="none")
+            if early_ports:
+                # Format 2: the tick opens first, the clock is read inside it (recorded), then the head's times
+                # are set from that read (a replay checks them against the recorded head).
+                boundary.recorder.tick_begin(step, tick_t=None, work_t=None, commands=[], stop_kind="none")
+                t = world.current_time - initial_time
+                boundary.recorder.tick_time(tick_t=t, work_t=t)
+            else:
+                t = world.current_time - initial_time
+                if boundary is not None:
+                    boundary.recorder.tick_begin(step, tick_t=t, work_t=t, commands=[], stop_kind="none")
             book_clock["t"] = t
             rear_stamp = t  # the time of the control pose `rear` (a capture moves it on)
             dwell_hold = dwell_standing = False
