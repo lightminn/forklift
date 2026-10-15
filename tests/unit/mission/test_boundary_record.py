@@ -310,3 +310,19 @@ def test_a_method_watch_covers_what_nested_unrecorded_steps_change(tmp_path):
     (tick,) = list(read_record(tmp_path))
     assert [(c["port"], c["method"]) for c in tick["calls"]] == [("Capture", "capture")]
     assert tick["calls"][0]["changes"]["watched"] == {"slam": {"scan_id": 6, "stop_now": True}}
+
+
+def test_a_recorded_run_is_refused_as_measurement_evidence_at_every_entry_point():
+    """M-a0 (Codex rounds 4-5): bounds calibration and s4 drive terms (check_contract), observations and
+    the bounds export (check_calibration, check_supplement_run), the P0a tables and the gate bounds."""
+    from pathlib import Path
+
+    from forklift_core.mission.boundary_record import measurement_refusal
+
+    assert measurement_refusal({"arguments": {}}) is None
+    assert measurement_refusal({}) is None
+    assert "never measurement evidence" in measurement_refusal({"arguments": {"record_boundary": True}})
+    root = Path(__file__).resolve().parents[3]
+    assert "check_not_recorded(run)" in (root / "tools/export_near_field_bounds.py").read_text()
+    assert (root / "tools/p0a_measure.py").read_text().count("    refuse_recorded(args.run)\n") == 2
+    assert (root / "tools/gate_measure.py").read_text().count("        _refuse_recorded(run, result)\n") == 2

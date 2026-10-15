@@ -427,8 +427,11 @@ def check_not_recorded(run) -> None:
     """A boundary-recorded run (--record-boundary, M-a0) applies the near bounds but is never a bounds
     measurement run: the recorder can shift wall-clock timing (docs/plans/2026-10-15-m-a05-boundary.md
     section 5). A record without the argument predates it and was not recorded."""
-    if (run.result.get("arguments") or {}).get("record_boundary"):
-        raise ValueError(f"{run.key}: a boundary-recorded run (--record-boundary) is never a bounds measurement run")
+    from forklift_core.mission.boundary_record import measurement_refusal
+
+    reason = measurement_refusal(run.result)
+    if reason is not None:
+        raise ValueError(f"{run.key}: {reason} (never a bounds measurement run)")
 
 
 def check_contract(runs: list[Run]) -> dict:

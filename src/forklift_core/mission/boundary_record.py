@@ -22,7 +22,7 @@ from typing import Any, Iterator
 
 import numpy as np
 
-__all__ = ["BoundaryRecorder", "DictWatch", "RecordingGate", "RecordingProxy", "read_record", "recorded_function"]
+__all__ = ["BoundaryRecorder", "DictWatch", "measurement_refusal", "RecordingGate", "RecordingProxy", "read_record", "recorded_function"]
 
 
 class BoundaryRecorder:
@@ -193,6 +193,16 @@ def read_record(directory: Path) -> Iterator[dict]:
         for line in path.read_text().splitlines():
             if line:
                 yield decode(json.loads(line))
+
+
+def measurement_refusal(result: dict) -> str | None:
+    """Why a run may not be measurement evidence (a bounds, error-table or gate-bound input), or None: a
+    boundary-recorded run (``--record-boundary``) applies fixed bounds and may be judged against them, but
+    never produces new ones -- the recorder can shift wall-clock timing (docs/plans/2026-10-15-m-a05-
+    boundary.md section 5). A result without the argument predates it and was not recorded."""
+    if ((result or {}).get("arguments") or {}).get("record_boundary"):
+        return "a boundary-recorded run (--record-boundary) is never measurement evidence"
+    return None
 
 
 def _hash_only(value: Any) -> Any:
