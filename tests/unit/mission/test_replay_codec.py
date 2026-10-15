@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from forklift_core.control.path_tracking import TrackerConfig
-from forklift_core.mission.replay_codec import decode, encode
+from forklift_core.mission.replay_codec import Encoder, decode, encode
 from forklift_core.planning import PlanResult, Pose2D
 
 
@@ -111,3 +111,16 @@ def test_numpy_scalars_keep_their_dtype_and_unencodable_ones_are_refused():
         assert type(back) is type(value) and back == value and encode(back)[0] == encode(value)[0], repr(value)
     with pytest.raises(TypeError, match="no value encoding"):
         encode({"v": np.void(b"ab")})
+
+
+def test_paths_and_services_by_logical_id():
+    from pathlib import Path as P
+
+    svc = object()
+    node, arrays = Encoder(services={id(svc): "Slam"}).encode({"p": P("/a/b.yaml"), "s": svc, "t": (svc,)}), {}
+    assert node["$map"]["s"] == {"$service": "Slam"}
+    replay_svc = object()
+    out = decode(json.loads(json.dumps(node)), arrays, services={"Slam": replay_svc})
+    assert out["p"] == P("/a/b.yaml") and out["s"] is replay_svc and out["t"][0] is replay_svc
+    with pytest.raises(ValueError, match="no service supplied for Slam"):
+        decode(node, arrays)

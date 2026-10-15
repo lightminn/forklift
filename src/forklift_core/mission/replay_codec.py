@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import base64
 import dataclasses
+import pathlib
 import hashlib
 import importlib
 import math
@@ -52,7 +53,7 @@ def plain_value(value: Any) -> bool:
     """A scalar this codec encodes by value (shared with the recorder's change check)."""
     if isinstance(value, np.generic):
         return value.dtype.kind in "biufcmMSU"
-    return value is None or isinstance(value, (bool, int, float, str, bytes))
+    return value is None or isinstance(value, (bool, int, float, str, bytes, pathlib.PurePath))
 
 
 class Encoder:
@@ -64,7 +65,7 @@ class Encoder:
     alias graph are kept as usual."""
 
     def __init__(self, *, opaque_ok: bool = False, value_types=(), hash_arrays: bool = False,
-                 identity: bool = True) -> None:
+                 identity: bool = True, services=None) -> None:
         self.arrays: dict[str, np.ndarray] = {}
         self.opaque_ok = opaque_ok
         self.value_types = set(value_types)
@@ -72,6 +73,9 @@ class Encoder:
         # identity=False: a pure value encoding (no $id/$ref; an object met twice is written twice) -- for value
         # comparisons such as a run's final state, where object identity was already checked call by call.
         self.identity = identity
+        # Live service objects by identity -> their logical id, written as {"$service": id} (a replay supplies its
+        # own object for that id); checked before any other kind.
+        self.services = dict(services or {})
         self._stack: set[int] = set()
         self._seen: dict[int, list] = {}  # id(obj) -> [obj, encoded node, assigned id or None]
         self._next_id = 0
@@ -123,6 +127,10 @@ class Encoder:
         return node
 
     def encode(self, value: Any) -> Any:
+        if self.services and id(value) in self.services:
+            return {"$service": self.services[id(value)]}
+        if isinstance(value, pathlib.PurePath):
+            return {"$path": str(value), "kind": type(value).__name__}
         if isinstance(value, np.str_):  # a str subclass: its own text, NULs and emptiness included
             return {"$np_str": str.__str__(value)}  # str(np.str_) drops trailing NULs
         if isinstance(value, np.bytes_):
@@ -164,7 +172,7 @@ def encode(value: Any, *, opaque_ok: bool = False, value_types=()) -> tuple[Any,
     return encoder.encode(value), encoder.arrays
 
 
-def decode(node: Any, arrays: dict[str, np.ndarray]) -> Any:
+def decode(node: Any, arrays: dict[str, np.ndarray], services=None) -> Any:
     """The inverse of :func:`encode`; comparison-only payloads (``$opaque``, ``$sha256``) come back as their
     marker dictionaries. A reference to an object that is still being built (a cycle through a dataclass or a
     value object) is refused."""
@@ -176,6 +184,10 @@ def decode(node: Any, arrays: dict[str, np.ndarray]) -> Any:
             return [walk(v) for v in n]
         if not isinstance(n, dict):
             return n
+        if "$service" in n:
+            if services is None or n["$service"] not in services:
+                raise ValueError(f"no service supplied for {n['$service']}")
+            return services[n["$service"]]
         if "$ref" in n:
             obj = by_id[n["$ref"]]
             if obj is building:
@@ -211,6 +223,8 @@ def decode(node: Any, arrays: dict[str, np.ndarray]) -> Any:
             return array
         if "$float" in n:
             return float(n["$float"])
+        if "$path" in n:
+            return getattr(pathlib, n.get("kind", "Path"))(n["$path"])
         if "$np_str" in n:
             return np.str_(n["$np_str"])
         if "$np_bytes" in n:
