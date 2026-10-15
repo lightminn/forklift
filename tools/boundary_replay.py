@@ -111,7 +111,8 @@ def build_inputs(run_dir: Path, gate: ReplayBoundary):
     # Services that sat inside containers only (the obstacle layer): a proxy under their logical id.
     services.setdefault("Obstacles", ReplayProxy("Obstacles", gate, spec={}))
     values = {}
-    for name, item in snap["names"].items():
+    shared_ids: dict = {}  # one alias numbering across the snapshot's values (one Encoder wrote them in name order)
+    for name, item in sorted(snap["names"].items()):
         kind = item["kind"]
         if kind == "service":
             values[name] = services[item["id"]]
@@ -135,7 +136,7 @@ def build_inputs(run_dir: Path, gate: ReplayBoundary):
         elif kind == "port":
             values[name] = BR.recorded_function(_unrunnable(name), item["port"], item["method"], gate)
         elif kind == "value":
-            values[name] = decode(item["node"], arrays, services=services)
+            values[name] = decode(item["node"], arrays, services=services, by_id=shared_ids)
         elif kind in ("adapters", "excluded"):
             continue
         else:

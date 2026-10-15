@@ -172,11 +172,13 @@ def encode(value: Any, *, opaque_ok: bool = False, value_types=()) -> tuple[Any,
     return encoder.encode(value), encoder.arrays
 
 
-def decode(node: Any, arrays: dict[str, np.ndarray], services=None) -> Any:
+def decode(node: Any, arrays: dict[str, np.ndarray], services=None, *, by_id: dict | None = None) -> Any:
     """The inverse of :func:`encode`; comparison-only payloads (``$opaque``, ``$sha256``) come back as their
     marker dictionaries. A reference to an object that is still being built (a cycle through a dataclass or a
     value object) is refused."""
-    by_id: dict[int, Any] = {}
+    # ``by_id``: share it across several decodes of nodes one Encoder wrote in sequence (their alias ids are
+    # one numbering), decoding them in the order they were encoded.
+    by_id = {} if by_id is None else by_id
     building = object()
 
     def walk(n: Any) -> Any:
