@@ -1,6 +1,6 @@
 # 콘솔 인터페이스 계약 초안 (`console/1`)
 
-작성: 2026-10-13 · 상태: **초안, 9절 항목은 메인 개발과 합의함(2026-10-13), 10절 관찰 전용 프로파일도 합의함(2026-10-15). 재개 절차 이름·사유는 잠정이며 M-a 설계 때 확정** · 설계: [개별 지게차 운용 콘솔 설계](../design/2026-10-13-operator-console.md)
+작성: 2026-10-13 · 상태: **초안, 9절 항목은 메인 개발과 합의함(2026-10-13), 10절 관찰 전용 프로파일도 합의함(2026-10-15). 재개 절차 이름·사유는 M-a 설계에서 확정(2026-10-15, 6절)** · 설계: [개별 지게차 운용 콘솔 설계](../design/2026-10-13-operator-console.md)
 
 이 문서는 웹 앱과 차량 쪽 게이트웨이 사이의 메시지(`console/1`)와, 그 뒤에서 차량 스택이 지켜야 할 의미를 적는다. ROS 2 msg/action 정의로 옮길 항목은 8절에 표시한다. 차량 쪽(중재기 M-b, 미션 실행부 M-a)이 생기기 전에는 웹 앱의 가짜 차량 백엔드와, 10절의 관찰 전용 게이트웨이(C2a)가 이 형식을 쓴다.
 
@@ -198,7 +198,8 @@ lease 보유자는 `tick`을 받을 때마다 `{"t": "echo", "session_epoch", "l
 
 - 표시용 계획 경로는 `plan: {"revision": n, "poses": [[x_m, y_m, direction], …]}`로, 바뀔 때만 싣는다. 안전 판단에 쓰지 않는다.
 - `mission.status`: `accepted`, `running`, `paused`, `held`(수동 조종 등으로 보류), `resuming`, `done`, `failed`, `cancelled`. 실패·보류에는 `reason`을 붙인다.
-- `mission.resume_steps`: 재개 절차 진행 중일 때 단계별 `pending / ok / failed(reason)`. 단계 이름과 사유(잠정, M-a 설계 때 확정): `stop_confirmed`(`no_speed_feedback`, `not_stopped_timeout`) → `state_verified`(`pose_unbounded`, `load_unknown`, `load_changed`, `insertion_state_unknown`, `fork_in_pocket`, `lift_mismatch`) → `frame_reexpressed`(`reprojection_failed`) → `path_rechecked`(필요하면 재계획 포함; `path_blocked:<허가 reason>`, `replan_failed:<계획기 status>`, `reobserve_required`).
+- `mission.resume_steps`: 재개 절차 진행 중일 때 단계별 `pending / ok / failed(reason)`. 단계 이름과 사유(확정, 2026-10-15 — [M-a 경계 설계 2부](../plans/2026-10-15-m-a05-boundary.md) 8–9절): `stop_confirmed`(`no_speed_feedback`, `not_stopped_timeout`) → `state_verified`(`pose_unbounded`, `load_unknown`, `load_changed`, `insertion_state_unknown`, `fork_in_pocket`, `lift_mismatch`, `hold_episode_changed`, `hold_state_mismatch`, `near_stopped:<근접 정지 사유>`) → `frame_reexpressed`(`reprojection_failed`) → `path_rechecked`(필요하면 재계획 포함; `path_blocked:<허가 reason>`, `replan_failed:<계획기 status>`, `reobserve_required`, `rejoin_failed`). 근접 관측이 소실됐지만 실패로 고정되기 전이면 `state_verified` 는 `pending` 으로 재획득을 기다린다.
+- `mission.resume_result`: 재개 절차를 마치지 않고 다른 동작으로 넘어갈 때의 최종 결과 — `pickup_retry`(근접 불일치·재계획 거절이 기존 집기 재시도로 감), `recovery_only`(축을 따라 빼기만 허용), `no_resume`(재개 정책 표에 없는 조합, hold 중 재정렬, 재결합·재시도 불가). 어느 상태에서 어떤 결과가 나는지는 경계 설계 2부 8절의 표(R1–R15)가 정본이다.
 - `phase_elapsed_s`는 일시정지 동안 멈추는 작업 시간이다. `freshness`의 값들은 멈추지 않는다.
 - `command`는 텔레옵 비율에 현재 상한을 곱한 물리 명령이다. `applied`는 slew, 허가 상한, 안전 선점, Ackermann 바퀴 속도 한계, 조향 속도 한계까지 거친 값이다(배치 runner의 `applied_command` 지점과 같은 위치). 화면은 둘을 나란히 보여 준다.
 - `drive_allowed`·`lift_allowed`는 중재기가 **제어 주기마다** 현재 상태로 따로 판정한 결과다(설계 4.5). TELEOP 진입 때 한 번만 보는 것이 아니다.
@@ -248,7 +249,7 @@ lease 보유자는 `tick`을 받을 때마다 `{"t": "echo", "session_epoch", "l
    - 적재 footprint를 쓰고, `applied`를 정의한다.
 3. **관찰 기기의 STOP — 동의.** 반복 STOP으로 작업을 멈출 수 있는 점은 안전한 쪽의 고장으로 적는다(5절).
 4. **명령 형식 — 동의(비율).** 상태에 물리 명령(`command`)과 적용값(`applied`)을 함께 싣는다(6절).
-5. **재개 절차 단계·사유 — 잠정 동의.** 6절에 적은 이름과 사유이며, M-a 설계 때 실제 분기와 맞춰 확정한다.
+5. **재개 절차 단계·사유 — 확정(2026-10-15).** 6절에 적은 이름과 사유이며, M-a 경계 설계 2부(재개 정책 표 R1–R15)에서 실제 분기와 맞춰 확정했다. 잠정안의 이름은 바꾸지 않고 사유와 `resume_result` 만 더했다.
 6. **수치 예산 — 방법 동의, 측정 근거 수정.** 설계 5.4에 반영했다.
 7. **바퀴 속도 피드백이 없는 차량 — 재무장·재개 금지에 동의, 대안은 보류.** 지금 구현을 실차에 쓰려면 검증된 바퀴·조향 피드백이 필요하다. 수단은 H1/H3에서 확인한다. 스캔 정합이나 영상 정지 감지 같은 다른 정지 확인 수단은 그 결과를 보고 검증 대상으로만 둔다.
 
