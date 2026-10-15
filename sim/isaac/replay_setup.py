@@ -137,7 +137,14 @@ def write_setup_snapshot(names: dict, directory: Path, files: list[str], *, serv
             continue
         path = _import_path(value) if callable(value) or isinstance(value, types.ModuleType) else None
         if path is not None:
-            out[name] = {"kind": "import", "path": path}
+            module_ = sys.modules.get(path.partition(":")[0])
+            file_ = getattr(module_, "__file__", None)
+            if file_ and repo_root is not None:  # a module loaded by file under its own name (run_transport_*)
+                try:
+                    file_ = str(Path(file_).resolve().relative_to(Path(repo_root).resolve()))
+                except ValueError:
+                    pass
+            out[name] = {"kind": "import", "path": path, "file": file_}
             continue
         node = encoder.encode(value)
         text = json.dumps(node)

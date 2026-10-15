@@ -117,7 +117,18 @@ def build_inputs(run_dir: Path, gate: ReplayBoundary):
             values[name] = services[item["id"]]
         elif kind == "import":
             module, _, qual = item["path"].partition(":")
-            obj = importlib.import_module(module)
+            try:
+                obj = importlib.import_module(module)
+            except ModuleNotFoundError:
+                # A sibling module the runner loaded by file under its own name: load it the same way.
+                file_ = item.get("file")
+                if not file_:
+                    raise
+                path_ = Path(file_) if Path(file_).is_absolute() else ROOT / file_
+                spec_ = importlib.util.spec_from_file_location(module, path_)
+                obj = importlib.util.module_from_spec(spec_)
+                sys.modules[module] = obj
+                spec_.loader.exec_module(obj)
             for part in qual.split(".") if qual else ():
                 obj = getattr(obj, part)
             values[name] = obj
@@ -165,10 +176,12 @@ def replay_run(run_dir: Path) -> dict:
     _install_isaac_value_types()
     session = ReplaySession(run_dir / "boundary", allow_opaque={("Planner", "redraw_docking")})
     gate = ReplayBoundary(session)
-    S, adapters, snap = build_inputs(run_dir, gate)
+    # The runner module first: the sibling modules it loads by file (perception adapter, near tracking ...) are
+    # what the snapshot's imports name.
     spec = importlib.util.spec_from_file_location("run_transport_replay", ROOT / "sim/isaac/run_transport.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    S, adapters, snap = build_inputs(run_dir, gate)
     module._BOUNDARY_RECORD["gate"] = gate
     outcome = {"run_dir": str(run_dir), "ticks_done": 0}
     try:
