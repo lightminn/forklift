@@ -73,3 +73,17 @@ def test_a_missing_pallet_block_fails(tmp_path):
                             truth=record.truth, instruction=record.instruction)
     report = cmp.compare_scene(load_recognition_sample(tmp_path / recipe.scene_id), recipe, SETTINGS)
     assert report["targets"]["0"]["mismatch"] > cmp.MISMATCH_MAX and not report["pass"]
+
+
+def test_a_label_tie_at_equal_depth_is_counted_but_not_a_mismatch(tmp_path):
+    """Touching pallets share a face: at equal depth either label may win the pixel (s2_epal6_1000127)."""
+    def relabel_edge(d, i):
+        i = i.copy()
+        rows, cols = np.nonzero(i == 1)
+        take = slice(0, 40)
+        i[rows[take], cols[take]] = 0
+        return d, i
+
+    report = _as_isaac(tmp_path, edit=relabel_edge)
+    target = report["targets"]["1"]
+    assert target["mismatch"] == 0.0 and target["ties"] > 0 and report["pass"]

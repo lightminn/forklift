@@ -3,8 +3,10 @@
 
 Per target (instance or the distractor group): IoU, valid-depth fraction, depth error
 on pixels both renders give the target, and the mismatch fraction -- rig target pixels
-that Isaac labels differently, leaves without depth or puts more than 5 mm away -- which
-catches a missing or misplaced part whose pixels drop out of the same-id comparison. Background: distance of Isaac's back-projected points to the floor (z = 0)
+that Isaac leaves without depth or puts more than 5 mm away -- which catches a missing
+or misplaced part whose pixels drop out of the same-id comparison. A pixel Isaac gives
+another label at the same depth is a tie (touching pallets share a face, and either
+surface may win it); ties are counted, and IoU still bounds wrong labels. Background: distance of Isaac's back-projected points to the floor (z = 0)
 or the back wall (x = BACK_WALL_X_M). Plus the K convention and the camera pose.
 """
 
@@ -49,10 +51,11 @@ def _target(depth_a, depth_b, a, b) -> dict:
     both = a & b & np.isfinite(depth_a) & np.isfinite(depth_b)
     diff = np.abs(depth_a[both] - depth_b[both])
     with np.errstate(invalid="ignore"):
-        agree = a & np.isfinite(depth_a) & (np.abs(depth_a - depth_b) <= MISMATCH_DEPTH_M)
-    mismatch = float((b & ~agree).sum() / b.sum()) if b.any() else 0.0
+        same_depth = np.isfinite(depth_a) & (np.abs(depth_a - depth_b) <= MISMATCH_DEPTH_M)
+    mismatch = float((b & ~same_depth).sum() / b.sum()) if b.any() else 0.0
+    ties = float((b & same_depth & ~a).sum() / b.sum()) if b.any() else 0.0
     report = {"pixels": int(b.sum()), "iou": float(np.logical_and(a, b).sum() / union) if union else 1.0,
-              "valid": valid, "mismatch": mismatch, "depth_median_m": float(np.median(diff)) if diff.size else None,
+              "valid": valid, "mismatch": mismatch, "ties": ties, "depth_median_m": float(np.median(diff)) if diff.size else None,
               "depth_p95_m": float(np.percentile(diff, 95)) if diff.size else None}
     report["pass"] = bool(report["iou"] >= IOU_MIN and valid >= VALID_MIN and mismatch <= MISMATCH_MAX and diff.size
                           and report["depth_median_m"] <= DEPTH_MEDIAN_MAX_M
@@ -111,6 +114,7 @@ def main(argv=None):
         "iou_min": min((t["iou"] for t in targets), default=None),
         "valid_min": min((t["valid"] for t in targets), default=None),
         "mismatch_max": max((t["mismatch"] for t in targets), default=None),
+        "ties_max": max((t["ties"] for t in targets), default=None),
         "depth_p95_max_m": max((t["depth_p95_m"] or 0.0 for t in targets), default=None),
         "background_p95_max_m": max((r["background"]["surface_p95_m"] or 0.0 for r in reports.values()),
                                     default=None),
