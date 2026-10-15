@@ -2115,6 +2115,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 maintain_square_pixels=True,
             )
     world.reset()
+    from types import SimpleNamespace as _Cells
+
+    cells = _Cells(world=world, robot=robot, stepper=None)
 
     def body_velocities() -> dict:
         # Saved scene state could survive the reset; compare runs on values.
@@ -2205,6 +2208,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     adapter.read_isaac_intrinsics(perception_camera).integer_index
                 ),
             }
+        # M-a1 replay plan R2: the capture's callbacks read the run's current stepper, world and robot through
+        # this holder (the drive part rebinds them -- the stepper is made there, the proxies replace world and
+        # robot), as they read run()'s own names before the split.
+        cells.world, cells.robot = world, robot
         lift_guard = None
         if args.perception_mount != "legacy":
             lift_joint = list(robot.dof_names).index("fork_lift")
@@ -2212,7 +2219,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             def lift_guard():
                 # Every render step of a capture, not only before and after:
                 # a carriage camera's base<-optical holds at lift 0 only.
-                if abs(float(robot.get_joint_positions()[lift_joint])) > 0.001:
+                if abs(float(cells.robot.get_joint_positions()[lift_joint])) > 0.001:
                     raise adapter.CaptureFailure("lift_not_zero")
 
             # The mount as Isaac holds it must be the planned one.
@@ -2233,8 +2240,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             perception_mount,
             # Every physics step, capture included, goes through step_world
             # (SLAM plan: odometry, scans and the lockstep must see them all).
-            step_fn=lambda: stepper["fn"](True),
-            physics_time_fn=lambda: world.current_time,
+            step_fn=lambda: cells.stepper["fn"](True),
+            physics_time_fn=lambda: cells.world.current_time,
             pose_fn=robot.get_world_pose,
             guard_fn=lift_guard,
         )
@@ -3110,6 +3117,35 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
 
         return tracking_frame(args.forklift_urdf, args.pallet_geometry_loaded)
 
+    def spawn_box(path_, ox, oy, oyaw, osize) -> None:
+        """A new obstacle's collider prim (scenario injection): USD work the drive part asks for."""
+        from pxr import Gf as NGf, UsdGeom as NUsdGeom, UsdPhysics as NUsdPhysics
+
+        cube = NUsdGeom.Cube.Define(stage, path_)
+        cube.CreateSizeAttr(1.0)
+        xf = NUsdGeom.XformCommonAPI(cube)
+        xf.SetTranslate(NGf.Vec3d(float(ox), float(oy), float(osize[2]) / 2))
+        xf.SetRotate(NGf.Vec3f(0.0, 0.0, float(math.degrees(oyaw))))
+        xf.SetScale(NGf.Vec3f(*(float(v) for v in osize)))
+        NUsdPhysics.CollisionAPI.Apply(cube.GetPrim())
+
+    def cast_reference_scan(*a, **k):
+        """The delivery reference scan's ray cast (a USD scene query)."""
+        import planar_lidar as _planar_lidar
+
+        return _planar_lidar.cast_scan(*a, **k)
+
+    # M-a1 replay plan R2: the Isaac work after this point goes through these adapters (a replay supplies its own).
+    isaac = _Cells(
+        action=lambda **kw: ArticulationAction(**kw),
+        add_path_display=add_path_display,
+        export_scene=lambda: stage.GetRootLayer().Export(str(args.output / "scene.usda")),
+        spawn_box=spawn_box,
+        remove_prim=lambda path_: stage.RemovePrim(path_),
+        slam_link_client=lambda *a, **k: __import__("forklift_core.localization.slam_link",
+                                                    fromlist=["SlamLinkClient"]).SlamLinkClient(*a, **k),
+        cast_reference_scan=cast_reference_scan,
+    )
     state["phase"] = "planning"
     if boundary is not None:
         boundary.recorder.tick_begin(-1, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")  # the initial plans
@@ -3252,11 +3288,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         (args.output / "paths.json").write_text(
             record_json(state["paths"], indent=2) + "\n"
         )
-        add_path_display(stage, paths["approach"], "Approach", (0.05, 0.45, 1.0))
-        add_path_display(stage, paths["transport"], "Transport", (1.0, 0.65, 0.04))
+        isaac.add_path_display(stage, paths["approach"], "Approach", (0.05, 0.45, 1.0))
+        isaac.add_path_display(stage, paths["transport"], "Transport", (1.0, 0.65, 0.04))
         if "return_home" in paths:
-            add_path_display(stage, paths["return_home"], "Return", (0.55, 0.2, 0.85))
-        stage.GetRootLayer().Export(str(args.output / "scene.usda"))
+            isaac.add_path_display(stage, paths["return_home"], "Return", (0.55, 0.2, 0.85))
+        isaac.export_scene()
         print(
             "PLANNED",
             record_json(
@@ -3292,6 +3328,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     shared_scan = False  # plan v10: set with --record-slam when the layer shares the SLAM LiDAR
     # step_world replaces this before the main loop; captures call through it.
     stepper = {"fn": lambda render: world.step(render=render), "tick": 0}
+    cells.stepper = stepper
     if args.record_slam:
         import planar_lidar
         import yaml
@@ -3382,7 +3419,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             scenario.start_rear.yaw_rad,
         )
         slam = {
-            "link": slam_link.SlamLinkClient(
+            "link": isaac.slam_link_client(
                 str(args.slam_feedback), timeout_s=args.slam_reply_timeout
             ),
             "module": slam_link,
@@ -3787,7 +3824,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             dump_tracking=lambda reason, tracking_: dump_tracking(reason, tracking_),
             cusp_holds=lambda: cusp_holds,
             now_s=lambda: world.current_time - initial_time,
-            show_path=lambda path, label, color: add_path_display(stage, path, label, color),
+            show_path=lambda path, label, color: isaac.add_path_display(stage, path, label, color),
             set_rear=set_rear,
             # M-a1 slice 4a-iii: the cusp helpers (built further down run()) and truth.
             cusp_monitor=lambda: cusp_monitor, cusp_heading_motion=lambda v: cusp_heading_motion(v),
@@ -3801,7 +3838,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             rear=lambda: rear, world=lambda: world, stage=lambda: stage,
             truth_obstacles=lambda: obstacles, dock=lambda *a, **k: dock(*a, **k),
             plan_docking_reapproach=lambda *a, **k: plan_docking_reapproach(*a, **k),
-            add_path_display=lambda *a: add_path_display(*a),
+            add_path_display=lambda *a: isaac.add_path_display(*a),
             laser_mount=lambda: laser_mount, beam_angles=lambda: beam_angles,
             time_module=lambda: time,
             # M-a1 slice 4b: the video overlay's text (a Sink), the tracker config record.
@@ -3809,7 +3846,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             # M-a1 slice 4b-iv: the evaluation records, the planning target (truth under oracle), Sinks.
             record_capture_evaluation=record_capture_evaluation, set_inset_estimate=set_inset_estimate,
             planning_target=lambda target_: G2.planning_target(args.planning_target, target_, scenario.pickup),
-            export_scene=lambda: stage.GetRootLayer().Export(str(args.output / "scene.usda")),
+            export_scene=lambda: isaac.export_scene(),
             # M-a1 slice 4b-v: the near capture's straight, its acceptance and what it installs.
             set_inset_status=set_inset_status,
             straight_from_pose=lambda *a, **k: straight_from_pose(*a, **k),
@@ -4437,7 +4474,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             ray_origin, ray_directions = planar_lidar.laser_rays_world(
                 base_d, quat_d, laser_mount, beam_angles
             )
-            ray_distances, ray_hits, ray_own = planar_lidar.cast_scan(
+            ray_distances, ray_hits, ray_own = isaac.cast_reference_scan(
                 ray_origin, ray_directions, scan_pattern.range_max_m, ignore_self=True
             )
             reference_ranges = scan_pattern.ranges_from_hits(ray_distances, ray_hits)
@@ -4469,6 +4506,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             robot = RecordingProxy(robot, "Vehicle", boundary)
             pallet = RecordingProxy(pallet, "SimTruth", boundary)
             world = RecordingProxy(world, "Clock", boundary)
+            cells.world, cells.robot = world, robot  # the capture's callbacks read the proxies from here on
             if slam is not None:
                 slam["tracker"] = RecordingProxy(slam["tracker"], "Slam", boundary)
             if obstacle is not None:
@@ -4781,7 +4819,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                             # G2r: the original capture above is G2's; hold the
                             # wheels, capture again, then stop whatever is seen.
                             robot.apply_action(
-                                ArticulationAction(
+                                isaac.action(
                                     joint_velocities=np.zeros(len(wheels)),
                                     joint_indices=wheels,
                                 )
@@ -5013,17 +5051,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     sweep_test=n_sweep_test,
                 ):
                     if action[0] == "spawn":
-                        from pxr import Gf as NGf, UsdGeom as NUsdGeom, UsdPhysics as NUsdPhysics
-
                         _, oid, ox, oy, oyaw, osize = action
                         path_ = f"/World/NewObstacle_{oid}"
-                        cube = NUsdGeom.Cube.Define(stage, path_)
-                        cube.CreateSizeAttr(1.0)
-                        xf = NUsdGeom.XformCommonAPI(cube)
-                        xf.SetTranslate(NGf.Vec3d(float(ox), float(oy), float(osize[2]) / 2))
-                        xf.SetRotate(NGf.Vec3f(0.0, 0.0, float(math.degrees(oyaw))))
-                        xf.SetScale(NGf.Vec3f(*(float(v) for v in osize)))
-                        NUsdPhysics.CollisionAPI.Apply(cube.GetPrim())
+                        isaac.spawn_box(path_, ox, oy, oyaw, osize)
                         rect = Rectangle(float(ox), float(oy), float(osize[0]), float(osize[1]), float(oyaw))
                         new_obstacles["rects"][oid] = rect
                         obstacles.append(rect)  # ground truth for the evaluator only
@@ -5045,7 +5075,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 new_obstacles["band_overlaps"].append({"time_s": t, "event": oid})
                     elif action[0] == "remove":
                         oid = action[1]
-                        stage.RemovePrim(f"/World/NewObstacle_{oid}")
+                        isaac.remove_prim(f"/World/NewObstacle_{oid}")
                         rect = new_obstacles["rects"].pop(oid, None)
                         if rect in obstacles:
                             obstacles.remove(rect)
@@ -5083,19 +5113,19 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 wheel_lock["events"][-1]["release_s"] = float(t)
                 wheel_lock["q"] = None
             robot.apply_action(
-                ArticulationAction(
+                isaac.action(
                     joint_velocities=np.asarray(drive.wheel_rates_rad_s),
                     joint_positions=wheel_lock["q"],
                     joint_indices=wheels,
                 )
             )
             robot.apply_action(
-                ArticulationAction(
+                isaac.action(
                     joint_positions=steering_command, joint_indices=steers
                 )
             )
             robot.apply_action(
-                ArticulationAction(
+                isaac.action(
                     joint_positions=np.array([ms.lift_command]), joint_indices=lift_index
                 )
             )

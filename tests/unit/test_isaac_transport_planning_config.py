@@ -589,7 +589,7 @@ def test_the_carriage_mount_is_guarded_and_checked():
     source = SCRIPT.read_text()
     assert "guard_fn=lift_guard," in source
     assert 'raise adapter.CaptureFailure("lift_not_zero")' in source
-    assert "abs(float(robot.get_joint_positions()[lift_joint])) > 0.001" in source
+    assert "abs(float(cells.robot.get_joint_positions()[lift_joint])) > 0.001" in source
     assert '"Perception camera local pose differs from the planned mount"' in source
     for rule in (
         '"--perception-mount carriage_low needs --use-perception"',
