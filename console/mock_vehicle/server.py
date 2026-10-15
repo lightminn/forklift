@@ -1,16 +1,13 @@
 """WebSocket server for the fake vehicle (console/1 draft).
 
-Two connections per client: /api/v1/control (JSON) and /api/v1/media (binary frames:
-uint32 big-endian header length + UTF-8 JSON header + body). Static web files are served
-from web_root with module-friendly MIME types. Development aid only, no authentication.
+The transport (connections, framing, static files) is console/wire.py, shared with the
+gateway. Development aid only, no authentication.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import http
-import json
 import math
 import os
 import secrets
@@ -21,27 +18,15 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from websockets.asyncio.server import ServerConnection, serve
-from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request, Response
 
+from console import wire
 from console.mock_vehicle import camera
 from console.mock_vehicle.core import API, MockVehicle
 from console.mock_vehicle.world import raycast
+from console.wire import CONTROL_PATH, MEDIA_PATH
 
-CONTROL_PATH = "/api/v1/control"
-MEDIA_PATH = "/api/v1/media"
-MIME = {
-    ".html": "text/html; charset=utf-8",
-    ".js": "text/javascript; charset=utf-8",
-    ".css": "text/css; charset=utf-8",
-}
-CONTROL_SEND_TIMEOUT_S = 0.2
-CONTROL_OUTBOX_MAX = 256
-MAX_JSON_DEPTH = 8
-MEDIA_SEND_TIMEOUT_S = 1.0
-MEDIA_SKIP_BYTES = 512 * 1024
-MEDIA_CLOSE_BYTES = 4 * 1024 * 1024
 STEP_HZ = 120.0
 STATE_HZ = 10.0
 CAMERA_HZ = 15.0
@@ -51,83 +36,19 @@ SCAN_RAYS = 180
 SCAN_RANGE_M = 12.0
 GRID_RES_M = 0.05
 
-
-def _reject_constant(name: str):
-    raise ValueError(f"non-finite number {name}")
-
-
-def _finite_float(text: str) -> float:
-    value = float(text)
-    if not math.isfinite(value):  # 1e400 parses as inf without this check
-        raise ValueError(f"non-finite number {text}")
-    return value
-
-
-def _parse(text) -> dict | None:
-    if not isinstance(text, str):
-        return None
-    try:
-        msg = json.loads(
-            text, parse_constant=_reject_constant, parse_float=_finite_float
-        )
-    except (ValueError, RecursionError):
-        return None
-    if not isinstance(msg, dict) or _depth(msg) > MAX_JSON_DEPTH:
-        return None
-    return msg
-
-
-def _depth(value) -> int:
-    """Nesting depth without recursion (console/1 messages are shallow)."""
-    deepest, stack = 0, [(value, 1)]
-    while stack:
-        node, d = stack.pop()
-        deepest = max(deepest, d)
-        if d > MAX_JSON_DEPTH:
-            return d
-        if isinstance(node, dict):
-            children = node.values()
-        elif isinstance(node, list):
-            children = node
-        else:
-            children = ()
-        stack.extend((c, d + 1) for c in children if isinstance(c, (dict, list)))
-    return deepest
-
-
-def _encode(msg: dict) -> str | None:
-    """Standard JSON only (no NaN/Infinity), or None if the message cannot be sent."""
-    try:
-        return json.dumps(msg, allow_nan=False)
-    except (ValueError, RecursionError):
-        return None
+# the shared transport rules (console/wire.py), under the names the tests use
+_parse = wire.parse
+_encode = wire.encode
+_frame = wire.frame
 
 
 def _media_rates(msg: dict) -> dict[str, float]:
-    """Subscribed rates per kind, capped to the vehicle's; bad values drop that kind."""
-    caps = {"camera_rgb": CAMERA_HZ, "scan": SCAN_HZ, "grid": GRID_HZ}
-    rates = {}
-    for kind, cap in caps.items():
-        want = msg.get(kind)
-        if not isinstance(want, dict):
-            continue
-        hz = want.get("hz", cap)
-        if isinstance(hz, bool) or not isinstance(hz, (int, float)):
-            continue
-        if isinstance(hz, int) and not 0 < hz <= 1000:
-            continue  # refuses huge ints before any float conversion
-        if isinstance(hz, float) and not (math.isfinite(hz) and 0 < hz <= 1000):
-            continue
-        rates[kind] = min(float(hz), cap)
-    return rates
+    return wire.media_rates(
+        msg, {"camera_rgb": CAMERA_HZ, "scan": SCAN_HZ, "grid": GRID_HZ}
+    )
 
 
-def _frame(head: dict, body: bytes) -> bytes:
-    raw = json.dumps(head, separators=(",", ":")).encode("utf-8")
-    return struct.pack(">I", len(raw)) + raw + body
-
-
-class Handle:
+class Handle(wire.ControlOutboxMixin, wire.MediaFanoutMixin):
     """Running fake-vehicle server; close() cancels the server and every loop."""
 
     def __init__(self, vehicle: MockVehicle, web_root: Path, pad_bytes: int):
@@ -178,29 +99,7 @@ class Handle:
     def process_request(
         self, connection: ServerConnection, request: Request
     ) -> Response | None:
-        path = request.path.split("?", 1)[0]
-        if path in (CONTROL_PATH, MEDIA_PATH):
-            return None
-        if path in ("/", "/index.html"):
-            rel = "index.html"
-        elif path == "/app.css" or (
-            path.startswith("/js/") and path.endswith(".js") and ".." not in path
-        ):
-            rel = path.lstrip("/")
-        else:
-            return connection.respond(http.HTTPStatus.NOT_FOUND, "not found\n")
-        target = self.web_root / rel
-        if not target.is_file():
-            return connection.respond(http.HTTPStatus.NOT_FOUND, "not found\n")
-        body = target.read_bytes()
-        headers = Headers(
-            [
-                ("Content-Type", MIME[target.suffix]),
-                ("Content-Length", str(len(body))),
-                ("Cache-Control", "no-store"),
-            ]
-        )
-        return Response(200, "OK", headers, body)
+        return wire.static_response(connection, request, self.web_root)
 
     # ------------------------------------------------------------ connection
     async def handler(self, ws: ServerConnection) -> None:
@@ -209,45 +108,6 @@ class Handle:
             await self._control(ws)
         elif path == MEDIA_PATH:
             await self._media(ws)
-
-    def attach_control(self, conn_id: str, ws, client_id: str) -> None:
-        """Register a control connection with its own outbox and writer.
-
-        Every message to a connection goes through its queue, so one slow reader never
-        delays ticks or replies to the others; its writer aborts it on a stuck send.
-        """
-        self.control[conn_id] = (ws, client_id)
-        self.outbox[conn_id] = asyncio.Queue(maxsize=CONTROL_OUTBOX_MAX)
-        self.writers[conn_id] = asyncio.create_task(self._writer(conn_id, ws))
-
-    def detach_control(self, conn_id: str) -> None:
-        self.control.pop(conn_id, None)
-        self.outbox.pop(conn_id, None)
-        task = self.writers.pop(conn_id, None)
-        if task is not None:
-            task.cancel()
-
-    async def _writer(self, conn_id: str, ws) -> None:
-        queue = self.outbox[conn_id]
-        while True:
-            text = await queue.get()
-            try:
-                await asyncio.wait_for(ws.send(text), CONTROL_SEND_TIMEOUT_S)
-            except (TimeoutError, ConnectionClosed):
-                ws.transport.abort()  # its teleop expires; other clients are unaffected
-                return
-
-    def _send_control(self, conn_id: str, msg: dict) -> None:
-        queue = self.outbox.get(conn_id)
-        text = _encode(msg)
-        if queue is None or text is None:
-            return
-        try:
-            queue.put_nowait(text)
-        except asyncio.QueueFull:
-            ws, _ = self.control.get(conn_id, (None, None))
-            if ws is not None:
-                ws.transport.abort()
 
     async def _control(self, ws: ServerConnection) -> None:
         try:
@@ -299,85 +159,15 @@ class Handle:
         finally:
             self.media.pop(conn_id, None)
 
-    async def _send_media(
-        self, conn_id: str, sub: dict, kind: str, payload: bytes
-    ) -> None:
-        """Latest-only: one send in flight per subscriber; a frame due while it is busy is dropped.
-
-        websockets' send() waits for the socket to drain, so a reader that stopped would
-        otherwise hold frames back instead of filling the transport buffer.
-        """
-        ws = sub["ws"]
-        pending = sub.setdefault("pending", {}).get(kind)  # one in flight per kind
-        if pending is not None and not pending.done():
-            if time.monotonic() - sub["pending_since"][kind] > MEDIA_SEND_TIMEOUT_S:
-                self._close_media(conn_id, ws)
-            else:
-                self.media_drops += 1
-            return
-        buffered = ws.transport.get_write_buffer_size() if ws.transport else 0
-        if buffered > MEDIA_CLOSE_BYTES:
-            self._close_media(conn_id, ws)
-            return
-        if buffered > MEDIA_SKIP_BYTES:
-            self.media_drops += 1
-            return
-        sub["last"][kind] = time.monotonic()
-        sub.setdefault("pending_since", {})[kind] = time.monotonic()
-        sub["pending"][kind] = asyncio.create_task(
-            self._media_send_task(conn_id, ws, payload)
-        )
-
-    async def _media_send_task(
-        self, conn_id: str, ws: ServerConnection, payload: bytes
-    ) -> None:
-        try:
-            await asyncio.wait_for(ws.send(payload), MEDIA_SEND_TIMEOUT_S)
-        except (TimeoutError, ConnectionClosed):
-            self._close_media(conn_id, ws)
-
-    def _close_media(self, conn_id: str, ws: ServerConnection) -> None:
-        if self.media.pop(conn_id, None) is not None:
-            self.media_closed += 1
-        if ws.transport is not None:
-            ws.transport.abort()
-
-    def _due(self, kind: str) -> list[tuple[str, dict]]:
-        now = time.monotonic()
-        out = []
-        for conn_id, sub in list(self.media.items()):
-            hz = sub["rates"].get(kind)
-            if hz and now - sub["last"].get(kind, 0.0) >= 1.0 / hz - 1e-3:
-                out.append((conn_id, sub))
-        return out
-
     # ----------------------------------------------------------------- loops
     async def _every(self, hz: float, fn) -> None:
-        period = 1.0 / hz
-        nxt = time.monotonic()
-        while True:
-            try:
-                await fn()
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:  # one bad step must not end a shared loop
-                print(f"mock server: {fn.__name__} failed: {exc!r}", flush=True)
-            nxt += period
-            delay = nxt - time.monotonic()
-            if delay < -period:  # fell behind: skip, never burst
-                nxt = time.monotonic()
-                delay = 0.0
-            await asyncio.sleep(max(0.0, delay))
+        await wire.every(hz, fn, "mock server")
 
     async def _step(self) -> None:
         now = time.monotonic()
         dt = min(0.05, now - getattr(self, "_last_step", now)) or 1.0 / STEP_HZ
         self._last_step = now
         self.vehicle.step(dt)
-
-    async def _broadcast_control(self, msg: dict) -> None:
-        for conn_id in list(self.control):
-            self._send_control(conn_id, msg)
 
     async def _tick(self) -> None:
         if self.control:
