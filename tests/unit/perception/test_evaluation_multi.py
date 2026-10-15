@@ -102,3 +102,26 @@ def test_empty_population_never_passes_and_known_has_no_fit_gate():
     gates = summarize([], split="eval", render_source="isaac")["gates"]
     assert gates and all(not g["pass"] for g in gates.values())
     assert not any(k.startswith("known") and k.endswith(":fit_error") for k in gates)
+
+
+def test_opposite_pocket_errors_do_not_cancel():
+    # Left pocket +60 mm, right pocket -60 mm laterally: the pair's mean is exact.
+    c = CandidateView("a", 0.0, (2.0, 0.186 + 0.06, 0.071), (2.0, -0.186 - 0.06, 0.051), True, True, True, (), 0)
+    v = judge_scene(META, _truth([_inst(0, 0.0, thr=0.2)]), NONE_IN, [c], TargetDecision("selected", "a", ()))
+    lateral, _, _, z = v.errors[0]
+    assert lateral == pytest.approx(0.06) and z == pytest.approx(0.01)
+
+
+@pytest.mark.parametrize("truth", [{}, {"instances": [], "instruction_truth": {"kind": "none", "target": None}},
+                                   {"instances": [_inst(0, 0.0)]}])
+def test_a_positive_scene_with_missing_truth_is_refused(truth):
+    with pytest.raises(ValueError, match="truth"):
+        judge_scene(META, truth, NONE_IN, [], TargetDecision("none", None, ()))
+
+
+def test_instruction_input_must_agree_with_the_instruction_truth():
+    instr = {"present": True, "x_m": 2.3, "y_m": 0.0, "radius_m": 0.3, "layer": None}
+    with pytest.raises(ValueError, match="instruction"):
+        judge_scene(META, _truth([_inst(0, 0.0)]), instr, [], TargetDecision("none", None, ()))
+    with pytest.raises(ValueError, match="instruction"):
+        judge_scene(META, _truth([_inst(0, 0.0)], "unambiguous", 3), instr, [], TargetDecision("none", None, ()))

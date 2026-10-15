@@ -103,8 +103,10 @@ def _face_cost(c: CandidateView, face: dict):
         return None
     a = np.array([math.cos(face["insertion_yaw_rad"]), math.sin(face["insertion_yaw_rad"]), 0.0])
     n = np.array([-a[1], a[0], 0.0])
-    d = (dl + dr) / 2
-    return dist, (abs(float(d @ n)), abs(float(d @ a)), dyaw, abs(float(d[2])))
+    # Per pocket, per axis, worst of the two: opposite errors must not cancel.
+    lateral = max(abs(float(dl @ n)), abs(float(dr @ n)))
+    axial = max(abs(float(dl @ a)), abs(float(dr @ a)))
+    return dist, (lateral, axial, dyaw, max(abs(float(dl[2])), abs(float(dr[2]))))
 
 
 def _best_face(c, inst):
@@ -144,10 +146,31 @@ def _danger(errors, face) -> bool:
             or axial > AXIAL_DANGER_M)
 
 
+INSTRUCTION_KINDS = ("none", "ambiguous", "unambiguous")
+
+
+def _check_truth(population, truth, instruction_input) -> None:
+    """Refuse corrupt or inconsistent truth instead of scoring it as a clean scene."""
+    if not isinstance(truth, dict) or not isinstance(truth.get("instances"), list):
+        raise ValueError("truth must hold an instances list")
+    itruth = truth.get("instruction_truth")
+    if not isinstance(itruth, dict) or itruth.get("kind") not in INSTRUCTION_KINDS:
+        raise ValueError("truth must hold instruction_truth with a known kind")
+    if population != "negative" and not truth["instances"]:
+        raise ValueError("a positive scene's truth must list at least one instance")
+    present = bool(instruction_input.get("present"))
+    if present != (itruth["kind"] != "none"):
+        raise ValueError("instruction input and instruction truth disagree on whether there is an instruction")
+    target = itruth.get("target")
+    if itruth["kind"] != "none" and not (isinstance(target, int) and 0 <= target < len(truth["instances"])):
+        raise ValueError("instruction truth target must index an instance")
+
+
 def judge_scene(meta, truth, instruction_input, candidates: Sequence[CandidateView], decision: TargetDecision,
                 *, elapsed_s=None) -> SceneVerdict:
     population = population_of(meta)
-    instances = truth.get("instances", [])
+    _check_truth(population, truth, instruction_input)
+    instances = truth["instances"]
     counted = [c for c in candidates if c.counted]
     pairs, costs = _match(counted, instances)
     matched_inst = {i: c for c, i in pairs.items()}
@@ -168,7 +191,7 @@ def judge_scene(meta, truth, instruction_input, candidates: Sequence[CandidateVi
     negative = population == "negative"
     miss = None if negative else any(inst["eligible"] and k not in matched_inst for k, inst in enumerate(instances))
     target_error = deferred = fit_error = None
-    itruth = truth.get("instruction_truth", {"kind": "none", "target": None})
+    itruth = truth["instruction_truth"]
     target = itruth.get("target")
     by_id = {c.candidate_id: k for k, c in enumerate(counted)}
     if not negative and itruth["kind"] == "ambiguous":
