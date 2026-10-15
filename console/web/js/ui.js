@@ -153,7 +153,7 @@ export function render(m) {
   $("vehicle-id").textContent = w?.vehicle_id ?? "—";
   $("backend-label").textContent = backend;
   $("d-id").textContent = w?.vehicle_id ?? "—";
-  $("d-sub").textContent = w ? `${backend} · session ${w.session_epoch}${w.capabilities?.provisional_limits ? " · 잠정 상한" : ""}` : "연결 중";
+  $("d-sub").textContent = w ? `${backend} · session ${w.session_epoch}${w.capabilities?.provisional_limits && w.capabilities?.control !== false ? " · 잠정 상한" : ""}` : "연결 중";
   $("l-ep").textContent = `ws://${location.host}/api/v1/control`;
   chip($("link-chip"), m.link.up ? "ok" : "crit", m.link.up ? "연결됨" : "끊김");
   $("l-rtt").textContent = m.link.up && m.link.tickGapMs !== null ? `${Math.round(m.link.tickGapMs)} ms` : "—";
@@ -333,7 +333,7 @@ export function render(m) {
   banner.hidden = !(age !== null && age > 1.0);
   banner.textContent = "영상이 멈췄습니다 · 영상 조종은 차량이 거부합니다";
   $("cam-meta").textContent = m.camera.frameId ? `frame ${m.camera.frameId}` : "영상 대기 중";
-  $("map-meta").textContent = m.grid ? `${m.grid.head.resolution_m} m 격자 · 스캔 ${m.scan ? m.scan.points.length / 2 : 0}점` : "격자 대기 중";
+  $("map-meta").textContent = m.grid ? `${Number(m.grid.head.resolution_m.toPrecision(4))} m 격자 · 스캔 ${m.scan ? m.scan.points.length / 2 : 0}점` : "격자 대기 중";
   const notes = [...(st.notes ?? []), ...(m.frameNote ? [m.frameNote] : [])];
   $("notes").hidden = notes.length === 0;
   $("notes").textContent = notes.join(" · ");

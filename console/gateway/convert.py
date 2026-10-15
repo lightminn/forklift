@@ -129,7 +129,7 @@ def grid_frame(g: GridMessage, epoch: int, correction_version: int | None):
         "t": "grid",
         "session_epoch": epoch,
         "frame": g.frame,
-        "resolution_m": g.resolution_m,
+        "resolution_m": round(g.resolution_m, 6),  # float32 in the message
         "origin_m": [g.origin_x_m, g.origin_y_m],
         "width": g.width,
         "height": g.height,
@@ -293,7 +293,7 @@ def welcome(
         },
         "camera_model": None,
         "chassis": dict(chassis or DLS08_MEASURED_CHASSIS),
-        "provisional_limits": True,
+        "provisional_limits": False,  # no limits on a monitor-only link
         "stop_instruction": stop_instruction.strip(),
     }
     return {
