@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 > **이 계획의 실행 방식(사용자 결정 2026-10-15):** 이 세션에서 직접 구현(executing-plans), **각 작업 묶음(아래 "검토 지점")마다 Codex 검토를 받고 지적이 수렴한 뒤 다음 묶음으로 간다.**
-> **판:** 3판 — Codex 2판 재검토(P2 6 · P3 2)와 사용자 결정(알려진 형상의 질량 미상 → 현장 기본 적재 선언) 반영. 2판은 1판의 검토 ① 원자료 재계산, ② Codex 적대적 검토(P1 2 · P2 16 · P3 4), ③ 결론을 보지 않은 독립 검토(계획 코드를 실제로 실행, P1 4 · P2 8)를 반영. 처리 기록은 맨 끝 "자체 검토".
+> **판:** 4판 — Codex 3판 재검토(P2 2 · P3 1) 반영. 3판 — Codex 2판 재검토(P2 6 · P3 2)와 사용자 결정(알려진 형상의 질량 미상 → 현장 기본 적재 선언) 반영. 2판은 1판의 검토 ① 원자료 재계산, ② Codex 적대적 검토(P1 2 · P2 16 · P3 4), ③ 결론을 보지 않은 독립 검토(계획 코드를 실제로 실행, P1 4 · P2 8)를 반영. 처리 기록은 맨 끝 "자체 검토".
 
 **Goal:** 설계 §5·§3.3–3.4 의 장면 생성·정답·데이터 계약 판 2·통계·다중 인스턴스 평가기를 CPU 에서 끝까지 돌게 만들고, 지금 검출기의 기준선을 CPU 렌더 장면(dev)에서 기록한다.
 
@@ -571,7 +571,7 @@ def removed_volume_fraction(before: Sequence[PalletBox], after: Sequence[PalletB
 
 **Interfaces:**
 - Consumes: `PalletSpec`, `face_layout`, `choose_pocket_pair`, `pair_margin`, `target_insertion_depth_m` (`pallet_geometry.py:257`)
-- Produces: 상수(Global Constraints), `TEST_FORK_SPACING_M`, `ForkSetup`(`spacing_m`, `blade_width_m=0.055`, `blade_thickness_m=0.025`, `lowest_centre_m=0.040`, `carriage_limit_m=0.346`, `reserve_m=0.016`, `lift_travel_m=0.28`; 속성 `blade_top_m`, `blade_bottom_m`), `LoadDeclaration`(`pallet_mass_kg`, `load_mass_kg`, `com_x_max_m`, `com_y_max_m`; `to_json()`), `FitResult`(`pickable`, `reasons`, `axis`, `pair`, `min_lateral_margin_m`, `fork_centre_offset_m`, `insertion_target_m`, `load_source`; `to_json()`), `fork_fit(spec, axis, setup, load, *, load_source="instruction", support_z_m=0.0, m_req_m=M_REQ_PROVISIONAL_M) -> FitResult` — **모든 개구 쌍을 날 여유 큰 순으로 보고, 쌍에 따라 달라지는 조건(가로 여유·횡방향 지지)을 모두 만족하는 첫 쌍**을 고른다(없으면 여유가 가장 큰 쌍의 사유), `danger_threshold_m(fit) -> float`, `lane_reachable(spec, axis, setup, *, support_z_m) -> bool`, `load_site_defaults(path, specs) -> dict[str, LoadDeclaration]`
+- Produces: 상수(Global Constraints), `TEST_FORK_SPACING_M`, `ForkSetup`(`spacing_m`, `blade_width_m=0.055`, `blade_thickness_m=0.025`, `lowest_centre_m=0.040`, `carriage_limit_m=0.346`, `reserve_m=0.016`, `lift_travel_m=0.28`; 속성 `blade_top_m`, `blade_bottom_m`), `LoadDeclaration`(`pallet_mass_kg`, `load_mass_kg`, `com_x_max_m`, `com_y_max_m`, `source` ∈ `"instruction"`·`"site_default"`; 유한·음이 아님 검증; `to_json()`), `FitResult`(`pickable`, `reasons`, `axis`, `pair`, `min_lateral_margin_m`, `fork_centre_offset_m`, `insertion_target_m`, `load_source`; `to_json()`), `fork_fit(spec, axis, setup, load, *, support_z_m=0.0, m_req_m=M_REQ_PROVISIONAL_M) -> FitResult`(출처는 `load.source` 에서) — **모든 개구 쌍을 날 여유 큰 순으로 보고, 쌍에 따라 달라지는 조건(가로 여유·횡방향 지지)을 모두 만족하는 첫 쌍**을 고른다(없으면 여유가 가장 큰 쌍의 사유), `danger_threshold_m(fit) -> float`, `lane_reachable(spec, axis, setup, *, support_z_m) -> bool`, `load_site_defaults(path, specs) -> dict[str, LoadDeclaration]`
 - Create: `config/site_load_defaults.yaml`
 
 - [ ] **Step 1: 실패하는 시험 작성**
@@ -617,7 +617,7 @@ def _site(name):
 
 @pytest.mark.parametrize(("name", "margin"), [("epal6", 0.08625), ("t11_06", 0.0775)])
 def test_known_shapes_at_their_test_spacing_with_the_site_default(name, margin):
-    fit = fork_fit(_known(name), "x", ForkSetup(TEST_FORK_SPACING_M[name]), _site(name), load_source="site_default")
+    fit = fork_fit(_known(name), "x", ForkSetup(TEST_FORK_SPACING_M[name]), _site(name))
     assert fit.pickable and fit.reasons == () and fit.load_source == "site_default"
     assert fit.min_lateral_margin_m == pytest.approx(margin, abs=1e-9)
 
@@ -626,8 +626,14 @@ def test_known_shape_without_any_load_needs_confirmation():
     assert fork_fit(_known("epal6"), "x", ForkSetup(0.3725), None).reasons == ("support_unverified",)
 
 
+@pytest.mark.parametrize("mass", [float("nan"), -1.0, 0.0])
+def test_load_declarations_must_be_finite_and_positive(mass):
+    with pytest.raises(ValueError):
+        LoadDeclaration(mass, 0.0, 0.3, 0.0, "site_default")
+
+
 def test_t11_at_the_epal_spacing_needs_adjustment():
-    fit = fork_fit(_known("t11_06"), "x", ForkSetup(0.3725), _site("t11_06"), load_source="site_default")
+    fit = fork_fit(_known("t11_06"), "x", ForkSetup(0.3725), _site("t11_06"))
     assert fit.min_lateral_margin_m == pytest.approx(0.03625, abs=1e-9)
     assert fit.reasons == ("fork_spacing_adjust",)
 
@@ -638,7 +644,7 @@ def test_known_shape_with_a_declared_heavy_load_hits_the_payload_limit():
 
 
 def test_danger_threshold_is_margin_minus_tracking_allowance():
-    fit = fork_fit(_known("t11_06"), "x", ForkSetup(0.290), _site("t11_06"), load_source="site_default")
+    fit = fork_fit(_known("t11_06"), "x", ForkSetup(0.290), _site("t11_06"))
     assert danger_threshold_m(fit) == pytest.approx(0.0437)
 
 
@@ -666,7 +672,7 @@ def test_nonstandard_rules():
 
 def test_upper_layer_needs_lift_alignment_but_is_reachable():
     spec = _known("epal6")
-    fit = fork_fit(spec, "x", ForkSetup(0.3725), _site("epal6"), load_source="site_default", support_z_m=0.288)
+    fit = fork_fit(spec, "x", ForkSetup(0.3725), _site("epal6"), support_z_m=0.288)
     assert "lift_alignment_needed" in fit.reasons
     # Lane 0.288-0.388 m; blades lifted 0.28 m sit at 0.3075-0.3325 m.
     assert lane_reachable(spec, "x", ForkSetup(0.3725), support_z_m=0.288)
@@ -689,6 +695,7 @@ polygon or contact verification (ADR 0004 D3).
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from forklift_core._validation import _finite_scalar
 from forklift_core.perception.pallet_geometry import target_insertion_depth_m
 from forklift_core.perception.pallet_model import PalletSpec, face_layout, pair_margin
 
@@ -724,12 +731,25 @@ class ForkSetup:
         return self.lowest_centre_m - self.blade_thickness_m / 2
 
 
+LOAD_SOURCES = ("instruction", "site_default")
+
+
 @dataclass(frozen=True)
 class LoadDeclaration:
     pallet_mass_kg: float
     load_mass_kg: float
     com_x_max_m: float
     com_y_max_m: float
+    source: str = "instruction"
+
+    def __post_init__(self) -> None:
+        for name in ("pallet_mass_kg", "load_mass_kg", "com_x_max_m", "com_y_max_m"):
+            if _finite_scalar(getattr(self, name), name) < 0:
+                raise ValueError(f"{name} must be finite and nonnegative")
+        if self.pallet_mass_kg <= 0:
+            raise ValueError("pallet_mass_kg must be positive")
+        if self.source not in LOAD_SOURCES:
+            raise ValueError(f"source must be one of {LOAD_SOURCES}")
 
     def to_json(self) -> dict:
         return asdict(self)
@@ -763,8 +783,8 @@ def load_site_defaults(path, specs: dict) -> dict:
             continue
         if entry.get("com") != "centred":
             raise ValueError("site defaults support only a centred centre of mass")
-        out[name] = LoadDeclaration(float(entry["pallet_mass_kg"]), float(entry["load_mass_kg"]),
-                                    specs[name].overall_depth_m / 2, 0.0)
+        out[name] = LoadDeclaration(entry["pallet_mass_kg"], entry["load_mass_kg"],
+                                    specs[name].overall_depth_m / 2, 0.0, "site_default")
     return out
 
 
@@ -790,8 +810,7 @@ def _pair_reasons(spec, setup, load, margin, centre, target, m_req_m) -> set:
     return reasons
 
 
-def fork_fit(spec, axis, setup, load, *, load_source: str | None = "instruction", support_z_m: float = 0.0,
-             m_req_m: float = M_REQ_PROVISIONAL_M) -> FitResult:
+def fork_fit(spec, axis, setup, load, *, support_z_m: float = 0.0, m_req_m: float = M_REQ_PROVISIONAL_M) -> FitResult:
     layout, floor, ceiling = _lane(spec, axis, support_z_m)
     target = target_insertion_depth_m(layout.depth_m, setup.carriage_limit_m, setup.reserve_m)
     n = len(layout.opening_intervals_m)
@@ -809,9 +828,9 @@ def fork_fit(spec, axis, setup, load, *, load_source: str | None = "instruction"
     if (floor > setup.blade_bottom_m - VERTICAL_MARGIN_M + 1e-12
             or ceiling < setup.blade_top_m + VERTICAL_MARGIN_M - 1e-12):
         reasons.add("lift_alignment_needed")
+    load_source = None if load is None else load.source
     if load is None:
         reasons.add("support_unverified")  # mass unknown: confirm on the console
-        load_source = None
     elif load.pallet_mass_kg + load.load_mass_kg > PAYLOAD_LIMIT_KG:
         reasons.add("payload_limit")
     if not spec.known and spec.top_style != "boards":
@@ -844,7 +863,7 @@ shapes:
 **사용자 결정 (2026-10-15, 단계 1A 계획 검토):** ⑤ 의 질량이 작업 지시에 없을 때, **알려진 형상은 현장 기본 적재 선언**(`config/site_load_defaults.yaml` — 형상별 팔레트·짐 질량과 질량중심, 현장 정책값)으로 검사하고 결과·콘솔에 그 출처를 표시한다. 기본값도 없으면 콘솔 확인(`support_unverified`)이다. 비규격은 지시에 질량·질량중심이 없으면 지금처럼 `support_unverified` 다.
 ```
 
-- [ ] **Step 5: 통과 확인** — Expected: 9 passed
+- [ ] **Step 5: 통과 확인** — Expected: 12 passed
 - [ ] **Step 6: 커밋** — `git add src/forklift_core/perception/fork_fit.py tests/unit/perception/test_fork_fit.py config/site_load_defaults.yaml docs/design/2026-10-15-pallet-recognition-generality.md` · `git commit -m "perception: fork-fit truth with real blade margins, a pair search over every opening pair, per-face lanes and layer reach, support precheck, site default load for known shapes, five reason codes"`
 
 **검토 A:** 작업 1–3 뒤 Codex — 초점: "알려진 형상 22 상자 일치, 면별 차선·포켓 띠, 날 여유 기준 쌍 선택, fork_fit 의 여유·세로·지지·적재 규칙이 설계 §3.1·§9.2·§9.3(보충 포함)과 같은가, 손상 범위·절단 위치". 수렴까지 반복.
@@ -1235,7 +1254,7 @@ from tools import recognition_truth as rt
 from tools import scene_rig
 
 ROOT = Path(__file__).resolve().parents[2]
-SITE = LoadDeclaration(10.0, 0.0, 0.3, 0.0)  # the site default for EPAL 6 (config/site_load_defaults.yaml)
+SITE = LoadDeclaration(10.0, 0.0, 0.3, 0.0, "site_default")  # EPAL 6 site default (config/site_load_defaults.yaml)
 
 
 def _spec(name):
@@ -1275,6 +1294,7 @@ def test_stacked_layer_raises_the_pockets_and_needs_lift():
     front = up_t.faces[0]
     assert front.left_m[2] == pytest.approx(0.144 + 0.022 + 0.039)
     assert front.fit["reasons"] == ["lift_alignment_needed"] and up_t.lane_reachable
+    assert front.fit["load_source"] == "site_default"
     assert up_t.support_visible
 
 
@@ -1399,12 +1419,18 @@ def _face_mask(local, spec: PalletSpec, axis: str, sign: int):
     return np.abs(local[..., 1] - plane) <= FACE_PLANE_TOL_M
 
 
-def _top_visible(rendered, m, spec, placement, top_z) -> bool:
-    """Hits on the interior of instance m's top surface (not its face or side edges)."""
-    local = _local(rendered.points_base, placement)
-    inside = ((np.abs(local[..., 0]) < spec.overall_depth_m / 2 - SUPPORT_TOL_M)
-              & (np.abs(local[..., 1]) < spec.overall_width_m / 2 - SUPPORT_TOL_M))
-    on_top = np.abs(rendered.points_base[..., 2] - top_z) <= SUPPORT_TOL_M
+def _top_visible(rendered, m, boxes, top_z) -> bool:
+    """Hits on the interior of an upward face of one of instance m's boxes at top_z."""
+    pts = rendered.points_base
+    inside = np.zeros(pts.shape[:2], bool)
+    for box in boxes:
+        if abs(box.centre_m[2] + box.size_m[2] / 2 - top_z) > SUPPORT_TOL_M:
+            continue
+        c, s = math.cos(box.yaw_rad), math.sin(box.yaw_rad)
+        dx, dy = pts[..., 0] - box.centre_m[0], pts[..., 1] - box.centre_m[1]
+        lx, ly = c * dx + s * dy, -s * dx + c * dy
+        inside |= (np.abs(lx) < box.size_m[0] / 2 - SUPPORT_TOL_M) & (np.abs(ly) < box.size_m[1] / 2 - SUPPORT_TOL_M)
+    on_top = np.abs(pts[..., 2] - top_z) <= SUPPORT_TOL_M
     # An upward-facing surface can only be hit by a descending ray, so a camera at
     # or below it sees board sides there, never the surface itself.
     camera_z = float(rendered.scene.base_from_optical.translation_m[2])
@@ -1450,7 +1476,7 @@ def scene_truths(instances, setup: ForkSetup, *, distractors: Sequence[scene_rig
         faces = _faces(spec, placement, setup, load, _local(rendered.points_base, placement), rendered.instance_ids,
                        k, _local(solo.points_base, placement), solo.instance_ids)
         support_visible = layers[k] == 0 or any(
-            _top_visible(rendered, m, instances[m][0], instances[m][1], placement.support_z_m)
+            _top_visible(rendered, m, placed[m], placement.support_z_m)
             for m in range(len(instances)) if layers[m] == layers[k] - 1)
         first = next((f for f in faces if f.accessible), faces[0])
         truths.append(InstanceTruth(
@@ -2645,6 +2671,15 @@ def test_oracle_self_check_and_label_free_baseline(tmp_path):
     assert strip(_rows(tmp_path / "baseline")) == strip(_rows(out2))
 
 
+def test_known_shape_truth_records_the_site_default_source(tmp_path):
+    data = tmp_path / "data"
+    _run("tools/generate_recognition_scenes.py", "--out", str(data), "--cases", "S1", "--limit", "2", "--noise", "none")
+    for truth in data.glob("s1_*/truth.json"):
+        inst = json.loads(truth.read_text())["instances"][0]
+        assert {f["fit"]["load_source"] for f in inst["faces"]} <= {"site_default", "instruction"}
+        assert any(f["fit"]["load_source"] == "site_default" for f in inst["faces"])
+
+
 def test_digest_only_prints_the_catalogue_digest():
     out = _run("tools/generate_recognition_scenes.py", "--out", "/nonexistent", "--digest-only").stdout
     assert "catalogue_sha256" in out and "numpy" in out
@@ -2850,7 +2885,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 4: 통과 확인** — `git add tools/generate_recognition_scenes.py tools/evaluate_recognition.py tests/integration/test_recognition_cli.py`, ws1 래퍼(백그라운드) · Expected: 2 passed
+- [ ] **Step 4: 통과 확인** — `git add tools/generate_recognition_scenes.py tools/evaluate_recognition.py tests/integration/test_recognition_cli.py`, ws1 래퍼(백그라운드) · Expected: 3 passed
 - [ ] **Step 5: 커밋** — `git commit -m "tools: recognition scene generation (CPU rig, schema v2, render reuse, digest-only) and evaluation CLI (split-first loading, label-free baseline over both priors, oracle self-check, full-file dataset hash, source revision)"`
 
 ### Task 12: CPU 기준선 실행과 검증 기록 (UBAI)
@@ -2916,5 +2951,7 @@ Run: `tools/hpc_sweep.sh deploy/hpc/recognition_stage1a_evaluate.tsv cpu1 2` (�
    - ② Codex 적대적 검토(1판, P1 2 · P2 16 · P3 4)와 ③ 독립 검토(1판 코드를 실제로 실행, P1 4 · P2 8 · P3 다수) → 2판에서 처리: 접근 가능한 면만 대응(②1·③5), 대응되지 않은 집기 허용 후보도 위험 판정(②2), 자세 p95·S4/S7 높이 관문 구현(②3), 후보 유한성 검사(②4), 날 여유 기준 쌍 선택(②5), S7 층화로 집을 수 있는 형상 보장(②6·③3), 형상 생성을 구성으로 바꿔 무효 형상 제거(②7), 진입면 노출(②8·③6), S4 지시 재정의(②9·③8), 절대 층 없는 선택·재관측 처리(②10·③11), 정답 스키마에 형상 매개변수·받침 가시성·층 도달(②11·③9), 판 2 로더에 판 1 검증·출처 짝 강제(②12·②13), 분할 우선 로드(②14), 손상 절단 위치(②15), 시험 수집·대역 시험 수정(②16·③1·③2), 알려진 형상 적재 가정을 설계 해석 보충으로(②17), 전 파일 해시·소스 manifest(②18), 쿼터니언 Shepperd(②19), Pillow `mode=` 제거·판 고정(②20·③4), 렌더 재사용(②21), 거리 제곱 잡음 시험(②22), 맞닿음 행(③7), T11 y 면 높이(③10), 지시 입력/정답 분리·기준선이 형상 라벨을 안 씀(③12), 시드 스트림 분리·S3 가로 흔들림·flying pixel 방향·카탈로그 해시 대조(③ P3).
    - 2판 코드 실행 확인(2026-10-15, scratch 사본, 로컬): 작업 1–11 의 시험 전부 통과(장면 조리법 10개 36 s, CLI 통합 2개 32 s). 노출 시험의 가림판을 105 → 120 mm 로 올렸다(105 mm 에서 노출 0.502 로 문턱에 걸침). 예상 시험 수를 실제 수로 고쳤다.
    - Codex 2판 재검토(P2 6 · P3 2) → 3판: 알려진 형상의 질량 미상은 **사용자 결정(2026-10-15)으로 현장 기본 적재 선언**(`config/site_load_defaults.yaml`, 출처 표시, 없으면 콘솔 확인)으로 바꿈(②17), 면 노출을 면 평면 위 적중점만으로(허용 1 mm, 105 mm 가림판 시험 유지), `support_visible` 을 아래 팔레트 윗면 적중으로, 끼움에서 모든 개구 쌍을 조건까지 보고 고름(쌍 대안 반례 시험), S7 위반 치수를 설계 범위 안으로(범위 시험 추가), 판 2 메타 검증(clock·provenance·시각 형식), P3: `received_tf_static` ↔ `capture` 짝, 처리 시간 분포를 metrics 에 보존.
-   - 3판 코드 실행 확인(scratch 사본, 로컬): 작업 1–11 의 시험 91개 전부 통과. 받침면 판정은 처음 "받침 높이 근처 적중"으로 썼다가 판 옆면·앞면 모서리가 잡혀 실패했고, "아래 팔레트 윗면 안쪽 + 하강 광선"으로 고쳤다.
-   - 3판에 대한 Codex 재검토: (아래에 기록)
+   - 3판 코드 실행 확인(scratch 사본, 로컬): 작업 1–11 의 시험 87개 전부 통과. 받침면 판정은 처음 "받침 높이 근처 적중"으로 썼다가 판 옆면·앞면 모서리가 잡혀 실패했고, "아래 팔레트 윗면 안쪽 + 하강 광선"으로 고쳤다.
+   - Codex 3판 재검토(P2 2 · P3 1) → 4판: 적재 선언에 출처(`LoadDeclaration.source`)를 실어 정답까지 그대로 기록(생성 결과 시험 추가), 적재 선언의 유한·음이 아님·팔레트 질량 양수 검증, P3: 받침면 판정을 아래 팔레트의 상자별 윗면 안쪽으로.
+   - 4판 코드 실행 확인(scratch 사본, 로컬): 시험 91개 전부 통과.
+   - 4판에 대한 Codex 재검토: (아래에 기록)
