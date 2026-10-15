@@ -899,3 +899,31 @@ def test_a_held_cusp_stays_held_whatever_the_pose_does_until_the_caller_decides(
         assert tracker.leg_index == 0
     assert tracker.release_cusp(True) and tracker.leg_index == 1
     assert not tracker.update([1.0, 0.0, 0.0], 0.0, 0.02).cusp_pending
+
+
+def test_a_cusp_switch_is_recorded_with_the_error_of_the_update_that_made_it():
+    """Fork spacing plan V5: the cusp arrival error is the error at the switch, which the tracker
+    now keeps (leg_switches); control is unchanged."""
+    config = TrackerConfig(
+        **DOCKING, cusp_position_tolerance_m=0.03, cusp_yaw_tolerance_rad=0.05
+    )
+    tracker = RearAxlePathTracker(*CUSP_PATH, config)
+    reference = RearAxlePathTracker(*CUSP_PATH, config)
+    commands = drive_past_cusp_off_line(tracker)
+    assert [c for c in commands] == drive_past_cusp_off_line(reference)
+    assert len(tracker.leg_switches) == 1
+    event = tracker.leg_switches[0]
+    assert event["via"] == "arrival" and event["leg"] == 0
+    assert event["pose"][1] == 0.015
+    assert event["position_error_m"] == pytest.approx(0.015, abs=1e-9)
+    assert event["endpoint_pose"][0] == pytest.approx(1.0)
+
+
+def test_released_and_skipped_legs_are_recorded_as_such():
+    x = np.r_[np.linspace(0, 1, 51), np.linspace(0.98, 0.3, 35)]
+    poses = np.column_stack((x, np.zeros_like(x), np.zeros_like(x)))
+    directions = np.r_[np.ones(51), -np.ones(35)]
+    tracker = RearAxlePathTracker(poses, directions, np.zeros(len(x)))
+    tracker.skip_legs(1)
+    assert [e["via"] for e in tracker.leg_switches] == ["skip"]
+    assert tracker.leg_switches[0]["position_error_m"] is None

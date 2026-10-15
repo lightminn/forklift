@@ -1370,3 +1370,17 @@ def test_the_pocket_check_is_refused_with_a_team_spec_encoder_model():
     assert ('if pocket.get("await_still_frame") and record.get("new") and speed_now < 0.01 and yaw_rate_now < 0.01:'
             in source)
     assert "still_ = bool(slam.get" not in source
+
+
+def test_the_runner_stamps_every_leg_switch_and_the_plant_record_carries_friction():
+    """Fork spacing plan (Codex, batch R/C rules): the V5 cusp arrival is read at the switch; the
+    runner collects each tracker's new leg switches every tick with the time and phase, and V0's
+    collider census records the friction coefficients of every bound material."""
+    source = SCRIPT.read_text()
+    loop = source[source.index("for step in range(int(120 * args.max_sim_seconds)):"):]
+    harvest = loop[: loop.index('stepper["fn"](pocket_frames and step % 12 == 0)')]
+    assert 'state.setdefault("leg_switches", []).append({**event_, "time_s": t, "phase": phase})' in harvest
+    assert "tracker_._switches_kept = len(switches_)" in harvest
+    scene = (SCRIPT.parent / "scene.py").read_text()
+    assert 'value("physics:staticFriction"), value("physics:dynamicFriction"))' in scene
+    assert '"static_friction": k[5], "dynamic_friction": k[6]' in scene

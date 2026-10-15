@@ -403,7 +403,8 @@ def plant_readback(stage: Usd.Stage) -> dict:
 
             key = (path.split("/")[2] if path.count("/") >= 2 else path, str(mprim.GetPath()) if mprim else None,
                    value("physxMaterial:compliantContactStiffness"), value("physxMaterial:compliantContactDamping"),
-                   value("physxMaterial:compliantContactAccelerationSpring"))
+                   value("physxMaterial:compliantContactAccelerationSpring"),
+                   value("physics:staticFriction"), value("physics:dynamicFriction"))
             counts[key] = counts.get(key, 0) + 1
             if key[2]:
                 compliant.append(path)
@@ -417,7 +418,8 @@ def plant_readback(stage: Usd.Stage) -> dict:
             solver[path] = [physx.GetSolverPositionIterationCountAttr().Get(), physx.GetSolverVelocityIterationCountAttr().Get()]
     return {
         "materials": [{"root": k[0], "material": k[1], "compliant_stiffness": k[2], "compliant_damping": k[3],
-                       "acceleration_spring": k[4], "colliders": n} for k, n in sorted(counts.items(), key=str)],
+                       "acceleration_spring": k[4], "static_friction": k[5], "dynamic_friction": k[6],
+                       "colliders": n} for k, n in sorted(counts.items(), key=str)],
         "compliant_colliders": compliant,
         "massless_bodies": massless,
         "articulation_solver_iterations": solver,

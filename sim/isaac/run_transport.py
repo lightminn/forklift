@@ -8403,6 +8403,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 del pocket["history"][:-120]
                 # Plan D8b: the pose with its own time (D5 keeps its history as it was).
                 pocket["control_stamped"] = (rear_stamp, tuple(float(v) for v in rear))
+            # Leg switches the trackers made this tick, stamped (V5 cusp arrivals: the error at the
+            # switch, not the closest approach). A tracker replaced in the tick it switched is missed.
+            for tracker_ in list(trackers.values()):
+                switches_ = getattr(tracker_, "leg_switches", None)
+                if switches_:
+                    for event_ in switches_[getattr(tracker_, "_switches_kept", 0):]:
+                        state.setdefault("leg_switches", []).append({**event_, "time_s": t, "phase": phase})
+                    tracker_._switches_kept = len(switches_)
             stepper["fn"](pocket_frames and step % 12 == 0)
             if pocket_frames and step % 12 == 0:
                 read_pocket_frame()

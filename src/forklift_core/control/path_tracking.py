@@ -180,6 +180,10 @@ class RearAxlePathTracker:
         # A cusp held for the caller's judgement (cusp_heading_pending_rad): latched until
         # release_cusp() or fail_pending(), whatever the pose does meanwhile.
         self._pending = False
+        # Every leg switch with the pose and errors of the update that led to it (fork spacing plan,
+        # V5 cusp arrivals): the caller stamps and keeps them; control does not read them.
+        self.leg_switches: list[dict] = []
+        self._last_eval = None
 
     def _speed_profile(self) -> np.ndarray:
         """Largest speed on the segment arriving at each sample, braked ahead."""
@@ -262,7 +266,7 @@ class RearAxlePathTracker:
             or self.leg_remaining_m() > self.leg_end_window_m()
         ):
             return False
-        self._advance_leg()
+        self._advance_leg("release")
         self._command_speed = 0.0
         return True
 
@@ -279,13 +283,19 @@ class RearAxlePathTracker:
         for _ in range(int(count)):
             if self._leg_ends[self._leg] == len(self._poses) - 1:
                 raise ValueError("no further leg to start")
-            self._advance_leg()
+            self._advance_leg("skip")
         self._command_speed = 0.0
 
-    def _advance_leg(self) -> None:
+    def _advance_leg(self, via: str = "arrival") -> None:
         """The one leg switch: the next leg, from the end of this one."""
         self._pending = False
         endpoint = self._leg_ends[self._leg]
+        pose, position_error, yaw_error = self._last_eval or (None, None, None)
+        self.leg_switches.append({
+            "via": via, "leg": self._leg, "endpoint_index": int(endpoint),
+            "endpoint_pose": [float(v) for v in self._poses[endpoint]],
+            "pose": pose, "position_error_m": position_error, "yaw_error_rad": yaw_error,
+        })
         self._leg += 1
         self._segment = endpoint
         self._progress = float(self._distance[endpoint])
@@ -359,6 +369,7 @@ class RearAxlePathTracker:
         goal = self._poses[endpoint]
         position_error = float(np.linalg.norm(goal[:2] - pose[:2]))
         yaw_error = _angle(float(goal[2] - pose[2]))
+        self._last_eval = ([float(v) for v in pose], position_error, float(yaw_error))
 
         # Only walk adjacent segments; repeated spatial locations cannot select
         # a later leg. Bound projection advance to a local motion-sized window.
