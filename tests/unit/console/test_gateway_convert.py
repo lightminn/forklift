@@ -295,3 +295,18 @@ def test_welcome_defaults_name_the_stop_method_per_backend():
         "Isaac"
         in convert.welcome("fl-1", "isaac", epoch=1)["capabilities"]["stop_instruction"]
     )
+
+
+def test_float32_resolution_noise_is_rounded_away():
+    # OccupancyGrid carries float32: 0.05 arrives as 0.05000000074505806
+    head, _ = convert.grid_frame(
+        grid(resolution_m=0.05000000074505806), epoch=1, correction_version=0
+    )
+    assert head["resolution_m"] == 0.05
+
+
+def test_a_monitor_link_claims_no_limits():
+    assert (
+        convert.welcome("fl-1", "isaac", epoch=1)["capabilities"]["provisional_limits"]
+        is False
+    )

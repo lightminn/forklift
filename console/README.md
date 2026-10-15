@@ -29,6 +29,14 @@
 
 `forklift/ros2-console:jazzy` 는 `forklift/ros2-dev:jazzy` 에 `websockets` 만 더한 이미지다(개발 이미지는 바꾸지 않는다). 뒤 차축 위치는 `--rear-axle-x`(기본 −0.34 m, `dls08_measured`)로 바꾼다.
 
+### 기록된 Isaac SLAM bag 으로 보기 (Slurm, CPU)
+
+    sbatch deploy/console/replay_demo.sbatch <bag 디렉터리> [재생 횟수, 기본 3]
+    # 잡이 고른 포트: console-replay-<잡 번호>.port
+    ssh -N -L 8765:127.0.0.1:<포트> <계산 호스트>   # 그다음 http://localhost:8765/
+
+저장소 루트에서 낸다. bag 은 `python3 -m forklift_ros.slam_replay` 가 만든 것(`/scan`·`/tf`·`/odom`, sim 시각)이다. 재생마다 slam_toolbox(재생 매개변수)를 새로 띄우고 bag 을 `/clock` 과 함께 한 번 튼다. 게이트웨이는 계속 떠 있어서 재생이 끝나면 '위치 n s 전'이, 다음 재생에서는 시각이 뒤로 가는 경우가 화면에 보인다. 2026-10-15 에 공장 임무 bag(214 s)으로 지도·LiDAR·map 위치·후진 속도·끊김 표시·시각 되돌림을 확인했다.
+
 ## 시험
 
     python -m pytest tests/unit/console tests/integration/console -q -p no:cacheprovider -W error
