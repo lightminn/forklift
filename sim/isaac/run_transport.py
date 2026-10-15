@@ -4454,6 +4454,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             # port and the capture's dumps.
             perception_capture=lambda: perception_capture, detect_pockets=lambda *a: detect_pockets(*a),
             save_capture=save_capture,
+            # M-a1 slice 5: the release at a stop, the measured steering.
+            slam_release=lambda t_: slam_release(t_), steering_position=lambda: robot.get_joint_positions()[steers],
         ),
         near=near,
         options=SimpleNamespace(near_tracking_stop_at=args.near_tracking_stop_at, d7_docking=args.d7_docking,
@@ -4483,7 +4485,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 perception_max_attempts=args.perception_max_attempts,
                                 rear_axle_offset_m=args.rear_axle_offset_m,
                                 pallet_prior_loaded=args.pallet_prior_loaded,
-                                depth_quantize_mm=args.depth_quantize_mm),
+                                depth_quantize_mm=args.depth_quantize_mm, drive_geometry=drive_geometry,
+                                command_accel_mps2=COMMAND_ACCEL_MPS2),
     )
     transition = core.transition
 
@@ -6195,16 +6198,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         minima[side] = gap
             requested_speed, curvature = 0.0, 0.0
             tracking = None
-            releasing = slam is not None and slam.get("pending_release") is not None
-            if releasing:
-                waited = t - slam["release_wait_from"]
-                require(waited < 10.0, f"slam_release_no_stop after {waited:.1f} s")
-                if slam["stop_now"]:
-                    slam_release(t)
-                    releasing = False
-                    rear = slam_rear(t)  # the released estimate, this very tick
-                    slam["control"][-1][1:4] = rear.tolist()
-            warming = slam is not None and not slam["tracker"].may_drive()
+            # M-a1 slice 5: the release gate at the tick's start is the core's.
+            gate_ = core.release_gate(t, rear)
+            releasing, warming, rear = gate_.releasing, gate_.warming, gate_.rear
             if ms.phase in trackers and not releasing and not warming:
                 # Three times the path time at the tracker's own speed caps
                 # (length / cruise when there are none), plus 10 s.
@@ -6528,54 +6524,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     pallet_yaw,
                 ],
             )
-            if estop_holding or obstacle_hold or dwell_hold or cusp_hold:
-                # Zero every wheel target at once, steering held (plan D4; D8b dwells; a cusp stall).
-                requested_speed = 0.0
-            # A dwell's braking keeps the wheels on the curvature the held steering holds,
-            # not the tracker's, so the wheel speeds agree with the steering (Codex D8b
-            # confirmation review P2) -- here and in the applied command below.
-            wheel_curvature = kappa if (dwell_hold or cusp_hold) else curvature
-            drive = ackermann_command(requested_speed, wheel_curvature, drive_geometry)
-            target_steering = (
-                steering_command.copy() if (estop_holding or obstacle_hold or dwell_hold or cusp_hold)
-                else np.asarray(drive.steering_rad)
-            )
-            actual_steering = robot.get_joint_positions()[steers]
-            # Creep while steering catches up; log the measured physical response.
-            steering_error = float(np.max(np.abs(target_steering - actual_steering)))
-            creeping = steering_error > 0.05
-            wheel_speed = requested_speed * 0.25 if creeping else requested_speed
-            if obstacle is not None and args.obstacle_act:
-                # A step wheel target locked an odometry wheel (L3c v35/v36 seed 4:
-                # the held pose lost 1.85 and 2.80 cm). The final wheel speed is
-                # slewed -- braking at the stopping model's deceleration, pulling
-                # away at COMMAND_ACCEL_MPS2 -- and the permission's own limit (a
-                # sensor falling silent included) and the e-stop probe still cut
-                # it as a step, the stop their distances were measured with
-                # (Codex checkpoint 6 P1). The steering creep is slewed too: as a
-                # step from 0.6 m/s it skidded a rear wheel and the held pose
-                # fell 3 cm behind (L3c v43 seed 1, pocket_obstacle).
-                previous = state.get("command_speed", 0.0)
-                target_speed = wheel_speed
-                if previous * target_speed < 0:
-                    target_speed = 0.0
-                rate = (obstacle["layer"].permission.config.stopping.decel_mps2
-                        if abs(target_speed) < abs(previous) else COMMAND_ACCEL_MPS2) * dt
-                wheel_speed = previous + float(np.clip(target_speed - previous, -rate, rate))
-                cap = obstacle.get("permission_cap")
-                if cap is not None and cap[0] == t and abs(wheel_speed) > cap[1]:
-                    wheel_speed = math.copysign(cap[1], wheel_speed)
-                if estop_holding or safety_hold:
-                    wheel_speed = 0.0
-                state["command_speed"] = wheel_speed
-            drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)
-            rate = settings["steering_command_rate_rad_s"] * dt
-            steering_command += np.clip(target_steering - steering_command, -rate, rate)
-            # Plan D8 S4a-1 ⓪: what the wheels and steering run this tick, for the recorder --
-            # the speed after the Ackermann wheel-rate limit (Codex review P3).
-            state["applied_command"] = (float(drive.speed_mps), [float(v) for v in steering_command])
-            if near is not None and near["tracker"] is not None:
-                near["commands"].add(t + dt, drive.speed_mps)  # the interval [t, t + dt]
+            # M-a1 slice 5: the command assembly is the core's (the e-stop probe above stays the runner's, truth).
+            command_ = core.assemble_command(t, dt, requested_speed, curvature, kappa, steering_command, estop_holding,
+                                             obstacle_hold, dwell_hold, cusp_hold, safety_hold)
+            drive, steering_command, actual_steering = command_.drive, command_.steering_command, command_.actual_steering
+            requested_speed = command_.requested_speed
             if dwell_standing and wheel_lock["q"] is None:
                 # Plan D8b: hold the wheels where they stand for the dwell (DWELL_WHEEL_KP).
                 controller_ = robot.get_articulation_controller()

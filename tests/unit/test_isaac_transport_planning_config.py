@@ -683,9 +683,12 @@ def test_same_path_waits_do_not_count_as_retries():
 
 
 def test_wheel_target_brakes_at_the_stopping_model_deceleration():
-    source = SCRIPT.read_text()
-    # The flag is args.obstacle_act: the obstacle dict has no "act" key (L3c v37 never slewed).
-    i = source.index("if obstacle is not None and args.obstacle_act:\n                # A step wheel target")
+    runner = SCRIPT.read_text()
+    source = CORE.read_text()  # the command assembly moved to the mission core (M-a1 slice 5)
+    # The flag is args.obstacle_act (options.obstacle_act in the core): the obstacle dict has no "act" key
+    # (L3c v37 never slewed).
+    assert "obstacle_act=args.obstacle_act" in runner
+    i = source.index("if obstacle is not None and options.obstacle_act:\n            # A step wheel target")
     block = source[i : source.index("drive = ackermann_command(wheel_speed", i)]
     assert "permission.config.stopping.decel_mps2" in block
     assert "COMMAND_ACCEL_MPS2" in block
@@ -697,10 +700,10 @@ def test_wheel_target_brakes_at_the_stopping_model_deceleration():
     assert block.index("np.clip(target_speed - previous") < block.index('obstacle.get("permission_cap")')
     # The e-stop and the plan D8 S4 safety stop (scheduled or near-field) cut it last.
     assert block.index('obstacle.get("permission_cap")') < block.index("if estop_holding or safety_hold:")
-    core = CORE.read_text()  # the permission tick moved to the mission core (M-a1 slice 3b)
-    j = core.index('obstacle["permission_cap"] = ')
-    assert j < core.index('if obstacle["path_blocked_ticks"] >= 36 and allowed > 0.0:')
-    assert 'obstacle.get("act")' not in source and 'obstacle["act"]' not in source
+    j = source.index('obstacle["permission_cap"] = ')  # the permission tick (M-a1 slice 3b)
+    assert j < source.index('if obstacle["path_blocked_ticks"] >= 36 and allowed > 0.0:')
+    for text in (runner, source):
+        assert 'obstacle.get("act")' not in text and 'obstacle["act"]' not in text
 
 
 def test_the_retry_limit_is_checked_after_the_same_path_test():
@@ -733,7 +736,7 @@ def test_a_failed_blocked_replan_stands_and_retries():
     assert "failures < 5" in block and 'obstacle.setdefault("replan_wait", {})[ms.phase] = True' in block
     # Held on later ticks too, until a replan succeeds or the path clears (Codex checkpoint 7 P2).
     # The wait moved to the mission core with the live leg (M-a1 slice 3a); the runner stands on its answer.
-    assert source.index("if core.live_leg(t, rear, loaded):") < source.index("drive = ackermann_command(requested_speed")
+    assert source.index("if core.live_leg(t, rear, loaded):") < source.index("command_ = core.assemble_command(")
     j = core.index('if obstacle is not None and obstacle.get("replan_wait", {}).get(ms.phase):')
     assert "check_.blocked is None" in core[j : j + 600]  # a verified path, not a zero count
     assert 'if replanned.status in ("invalid_start", "no_path"):' in core
@@ -1128,9 +1131,10 @@ def test_cusp_position_stall_v7_is_wired_into_the_runner():
     assert "and not cusp_monitor.holds_observe()" in core  # the observe stall rule (M-a1 slice 4a-iii)
     # Zero command with the steering held.
     assert "cusp_hold = False  # plan cusp position stall v7 K3" in source
-    assert "if estop_holding or obstacle_hold or dwell_hold or cusp_hold:" in source
-    assert "wheel_curvature = kappa if (dwell_hold or cusp_hold) else curvature" in source
-    assert "steering_command.copy() if (estop_holding or obstacle_hold or dwell_hold or cusp_hold)" in source
+    assembly = CORE.read_text()  # the command assembly moved to the mission core (M-a1 slice 5)
+    assert "if estop_holding or obstacle_hold or dwell_hold or cusp_hold:" in assembly
+    assert "wheel_curvature = kappa if (dwell_hold or cusp_hold) else curvature" in assembly
+    assert "steering_command.copy() if (estop_holding or obstacle_hold or dwell_hold or cusp_hold)" in assembly
 
 
 def test_near_protection_prediction_screens_only_the_last_correction():

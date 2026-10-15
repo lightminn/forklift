@@ -100,6 +100,7 @@
 - **M-a1 4b 분할(2026-10-15)**: 관찰 도착(약 900 줄)을 4b-i 캡처·검출, 4b-ii 반복 캡처 진단(측정 전용), 4b-iii 인식 실패 시 다음 후보, 4b-iv 인식 성공 시 추정·참값 오차 기록·미션 계획, 4b-v 근접 구간 설치로 나눈다.
 - **M-a1 4a-iii·iv 결과(2026-10-15)**: 경계 기록 접두 비교(ws1 잡 2829·2830) 네 실행 모두 **접두 일치**·임무 성공. Codex 검토 새 P1/P2 없음, P3(근접 가드 시험의 예외)는 `MissionCore(...)` 에 넘기는 `near_tick=` 훅 하나로 좁혔다. 4b-iii 인식 실패 → 다음 후보(`observe_failed`): 영상 오버레이 문구(`inset_status`·`inset_detail`, 영상 클로저가 읽는다)는 Sink 훅 `set_inset` 으로 돌려준다.
 - **M-a1 4b(2026-10-15)**: 4b-iii 기록 비교(잡 2832·2833) 네 실행 모두 접두 일치·성공. Codex 4b 설계 상의(새 P1/P2 없음): 평가 기록 블록은 같은 시점에 부르는 실행기 함수로(`record_capture_evaluation`, `recorded_function` 으로 감싸지 않는다 — 안의 읽기가 기록에서 사라진다), 평가 입력은 명시적으로 넘긴다, 캡처 자세의 섞인 표본(`q` 는 수락 참값, `base/yaw/forward/rear` 는 추정)을 그대로 돌려준다, 4b-ii 반복 캡처 진단은 실행기에 남긴다. 4b-i 캡처·검출(`capture_and_detect`, 진단 덤프는 실행기 함수 `save_capture`), 4b-iv 인식 성공(`observe_succeeded`, `--planning-target` 의 참값은 `planning_target` 훅), 4b-v 근접 구간·근접 캡처 직선(`near_leg_or_recapture`). 4b-iv 의 observe 위치 허용치(`0.03 if name == "observe"`)는 같은 식이 observe 를 제외하므로 원본에서도 닿지 않는 식이다(그대로 옮김).
+- **M-a1 5 조각(2026-10-15)**: 경계 설계 1절의 명령 조립과 틱 시작 release 관문을 코어로 — `release_gate`(대기 중 release 는 정지를 10 s 까지 기다려 풀고 자세를 다시 읽는다, SLAM 예열), `assemble_command`(hold 0·Ackermann·조향 따라잡기 감속·바퀴 속도 slew·허가 상한·e-stop/안전 정지 계단·조향 변화율·적용 명령 기록; `steering_command` 는 실행기 배열을 제자리에서 바꾼다). 비상정지 탐침(참값)·바퀴 잠금·`apply_action`(구동 포트)은 실행기에 남는다.
 
 ## 6. 열린 질문
 

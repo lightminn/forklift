@@ -425,8 +425,9 @@ def test_slam_release_replans_both_travel_legs_and_gates_on_a_stop() -> None:
     assert "jump_m <= 0.02 and abs(jump_rad) <= 0.02" in body
     assert "plan_transport_leg(" in body and "plan_return_leg(" in body
     source = SCRIPT.read_text()
-    assert "if slam[\"stop_now\"]:\n                    slam_release(t)" in source
-    assert "rear = slam_rear(t)  # the released estimate" in source
+    gate = CORE.read_text()  # the release gate moved to the mission core (M-a1 slice 5)
+    assert "if slam[\"stop_now\"]:\n                slam_release(t)" in gate
+    assert "rear = slam_rear(t)  # the released estimate" in gate
     assert "if ms.phase in trackers and not releasing and not warming:" in source
 
 
@@ -557,12 +558,13 @@ def test_d8b_dwells_hold_the_steering_as_well_as_the_wheels() -> None:
     block = command[command.index("hold_, released_ = dwells.update("):command.index("elif released_:")]
     assert "dwell_hold = True" in block
     # (A cusp position stall's hold, plan cusp stall v7, joins the same path.)
-    assert "if estop_holding or obstacle_hold or dwell_hold or cusp_hold:" in source
-    assert "steering_command.copy() if (estop_holding or obstacle_hold or dwell_hold or cusp_hold)" in source
+    # (the command assembly moved to the mission core, M-a1 slice 5)
+    assert "if estop_holding or obstacle_hold or dwell_hold or cusp_hold:" in command
+    assert "steering_command.copy() if (estop_holding or obstacle_hold or dwell_hold or cusp_hold)" in command
     # The wheels brake on the held steering's curvature, in the command actually applied.
-    assert "wheel_curvature = kappa if (dwell_hold or cusp_hold) else curvature" in source
-    assert "drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)" in source
-    assert "ackermann_command(wheel_speed, curvature," not in source
+    assert "wheel_curvature = kappa if (dwell_hold or cusp_hold) else curvature" in command
+    assert "drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)" in command
+    assert "ackermann_command(wheel_speed, curvature," not in command and "ackermann_command(" not in source
     assert source.index("dwell_hold = dwell_standing = False") < source.index("command_ = core.command(")
 
 
@@ -595,16 +597,19 @@ def test_s4_safety_stops_take_the_dwell_path_without_the_wheel_lock_and_record_t
     # Reset every loop tick, before the stop block can set it.
     assert source.index("safety_hold = False") < source.index("command_ = core.command(")
     # The zero comes after the slew and the permission cap, last before the drive command.
-    slew = source.index("wheel_speed = previous + float(np.clip(target_speed - previous, -rate, rate))")
-    zero = source.index("if estop_holding or safety_hold:\n                    wheel_speed = 0.0")
-    assert slew < source.index("cap = obstacle.get(\"permission_cap\")") < zero
-    assert zero < source.index("drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)")
+    assembly = CORE.read_text()  # the command assembly moved to the mission core (M-a1 slice 5)
+    slew = assembly.index("wheel_speed = previous + float(np.clip(target_speed - previous, -rate, rate))")
+    zero = assembly.index("if estop_holding or safety_hold:\n                wheel_speed = 0.0")
+    assert slew < assembly.index("cap = obstacle.get(\"permission_cap\")") < zero
+    assert zero < assembly.index("drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)")
     tree = ast.parse(source)
     functions = {node.name: ast.unparse(node) for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
     assert "applied_speed_mps=state.get('applied_command'" in functions["record_truth_tick"]
-    recorded = source.index("state[\"applied_command\"] = (float(drive.speed_mps)")
-    assert source.index("drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)") < recorded
-    assert recorded < source.index("joint_velocities=np.asarray(drive.wheel_rates_rad_s)")
+    recorded = assembly.index("state[\"applied_command\"] = (float(drive.speed_mps)")
+    assert assembly.index("drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)") < recorded
+    # The runner applies the assembled command afterwards (M-a1 slice 5).
+    assert source.index("command_ = core.assemble_command(") < source.index(
+        "joint_velocities=np.asarray(drive.wheel_rates_rad_s)")
 
 
 def test_s4_near_tracking_options_validate_before_startup() -> None:

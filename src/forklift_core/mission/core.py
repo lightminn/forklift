@@ -60,7 +60,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from forklift_core.control import RearAxlePathTracker, TrackerConfig
+from forklift_core.control import RearAxlePathTracker, TrackerConfig, ackermann_command
 from forklift_core.control import cusp_stall as CUSP_STALL
 from forklift_core.mission.state import MissionState
 from forklift_core.perception.pocket_detector import DetectorParams
@@ -2500,3 +2500,85 @@ class MissionCore:
                                capture_diagnostics=capture_diagnostics, base=base, q=q, yaw=yaw, forward=forward,
                                rear=rear, rear_stamp=rear_stamp, prior=prior, params=params, detection=detection,
                                observation=observation)
+
+    def release_gate(self, t: float, rear) -> SimpleNamespace:
+        """At each control tick's start: a pending SLAM release waits for the truck to stand (10 s at most), then
+        releases and re-reads the control pose; SLAM warming up holds the follower. Returns ``releasing``,
+        ``warming`` and ``rear``."""
+        slam, hooks = self.slam, self.hooks
+        require, slam_release, slam_rear = hooks.require, hooks.slam_release, hooks.slam_rear
+        releasing = slam is not None and slam.get("pending_release") is not None
+        if releasing:
+            waited = t - slam["release_wait_from"]
+            require(waited < 10.0, f"slam_release_no_stop after {waited:.1f} s")
+            if slam["stop_now"]:
+                slam_release(t)
+                releasing = False
+                rear = slam_rear(t)  # the released estimate, this very tick
+                hooks.set_rear(rear)  # the runner's closures read its rear (Codex slice-3 P2)
+                slam["control"][-1][1:4] = rear.tolist()
+        warming = slam is not None and not slam["tracker"].may_drive()
+        return SimpleNamespace(releasing=releasing, warming=warming, rear=rear)
+
+    def assemble_command(self, t: float, dt: float, requested_speed: float, curvature: float, kappa: float,
+                         steering_command, estop_holding: bool, obstacle_hold: bool, dwell_hold: bool,
+                         cusp_hold: bool, safety_hold: bool) -> SimpleNamespace:
+        """The tick's command (boundary design section 1): a hold zeroes the wheels with the steering held, the
+        Ackermann command, the creep while the steering catches up, the wheel-speed slew with the permission's
+        own cap and the e-stop/safety step to zero, the steering rate limit (``steering_command`` is the
+        runner's array, changed in place) and the applied command record. Returns ``drive``,
+        ``steering_command``, ``actual_steering`` (the measured steering it compared) and the held
+        ``requested_speed``."""
+        state, obstacle, settings, hooks, options, near = (self.state, self.obstacle, self.settings, self.hooks,
+                                                           self.options, self.near)
+        drive_geometry, COMMAND_ACCEL_MPS2 = options.drive_geometry, options.command_accel_mps2
+        if estop_holding or obstacle_hold or dwell_hold or cusp_hold:
+            # Zero every wheel target at once, steering held (plan D4; D8b dwells; a cusp stall).
+            requested_speed = 0.0
+        # A dwell's braking keeps the wheels on the curvature the held steering holds,
+        # not the tracker's, so the wheel speeds agree with the steering (Codex D8b
+        # confirmation review P2) -- here and in the applied command below.
+        wheel_curvature = kappa if (dwell_hold or cusp_hold) else curvature
+        drive = ackermann_command(requested_speed, wheel_curvature, drive_geometry)
+        target_steering = (
+            steering_command.copy() if (estop_holding or obstacle_hold or dwell_hold or cusp_hold)
+            else np.asarray(drive.steering_rad)
+        )
+        actual_steering = hooks.steering_position()
+        # Creep while steering catches up; log the measured physical response.
+        steering_error = float(np.max(np.abs(target_steering - actual_steering)))
+        creeping = steering_error > 0.05
+        wheel_speed = requested_speed * 0.25 if creeping else requested_speed
+        if obstacle is not None and options.obstacle_act:
+            # A step wheel target locked an odometry wheel (L3c v35/v36 seed 4:
+            # the held pose lost 1.85 and 2.80 cm). The final wheel speed is
+            # slewed -- braking at the stopping model's deceleration, pulling
+            # away at COMMAND_ACCEL_MPS2 -- and the permission's own limit (a
+            # sensor falling silent included) and the e-stop probe still cut
+            # it as a step, the stop their distances were measured with
+            # (Codex checkpoint 6 P1). The steering creep is slewed too: as a
+            # step from 0.6 m/s it skidded a rear wheel and the held pose
+            # fell 3 cm behind (L3c v43 seed 1, pocket_obstacle).
+            previous = state.get("command_speed", 0.0)
+            target_speed = wheel_speed
+            if previous * target_speed < 0:
+                target_speed = 0.0
+            rate = (obstacle["layer"].permission.config.stopping.decel_mps2
+                    if abs(target_speed) < abs(previous) else COMMAND_ACCEL_MPS2) * dt
+            wheel_speed = previous + float(np.clip(target_speed - previous, -rate, rate))
+            cap = obstacle.get("permission_cap")
+            if cap is not None and cap[0] == t and abs(wheel_speed) > cap[1]:
+                wheel_speed = math.copysign(cap[1], wheel_speed)
+            if estop_holding or safety_hold:
+                wheel_speed = 0.0
+            state["command_speed"] = wheel_speed
+        drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)
+        rate = settings["steering_command_rate_rad_s"] * dt
+        steering_command += np.clip(target_steering - steering_command, -rate, rate)
+        # Plan D8 S4a-1 ⓪: what the wheels and steering run this tick, for the recorder --
+        # the speed after the Ackermann wheel-rate limit (Codex review P3).
+        state["applied_command"] = (float(drive.speed_mps), [float(v) for v in steering_command])
+        if near is not None and near["tracker"] is not None:
+            near["commands"].add(t + dt, drive.speed_mps)  # the interval [t, t + dt]
+        return SimpleNamespace(drive=drive, steering_command=steering_command, actual_steering=actual_steering,
+                               requested_speed=requested_speed)
