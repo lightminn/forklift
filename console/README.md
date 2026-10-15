@@ -35,7 +35,7 @@
     # 잡이 고른 포트: console-replay-<잡 번호>.port
     ssh -N -L 8765:127.0.0.1:<포트> <계산 호스트>   # 그다음 http://localhost:8765/
 
-저장소 루트에서 낸다. bag 은 `python3 -m forklift_ros.slam_replay` 가 만든 것(`/scan`·`/tf`·`/odom`, sim 시각)이다. 재생마다 slam_toolbox(재생 매개변수)를 새로 띄우고 bag 을 `/clock` 과 함께 한 번 튼다. 게이트웨이는 계속 떠 있어서 재생이 끝나면 '위치 n s 전'이, 다음 재생에서는 시각이 뒤로 가는 경우가 화면에 보인다. 2026-10-15 에 공장 임무 bag(214 s)으로 지도·LiDAR·map 위치·후진 속도·끊김 표시·시각 되돌림을 확인했다.
+저장소 루트에서 낸다. bag 은 `python3 -m forklift_ros.slam_replay` 가 만든 것(`/scan`·`/tf`·`/odom`, sim 시각)이다. 재생마다 slam_toolbox(재생 매개변수)를 새로 띄우고 bag 을 `/clock` 과 함께 한 번 튼다. 게이트웨이는 계속 떠 있어서 재생이 끝나면 '위치 n s 전'이, 다음 재생에서는 시각이 뒤로 가는 경우가 화면에 보인다. 컨테이너는 잡의 예약(CPU 1·메모리 512 MB)만큼으로 묶인다 — 도커는 Slurm cgroup 밖에서 돌기 때문이다. 같은 날 실측은 최대 0.23 코어·185 MiB 였다. 2026-10-15 에 공장 임무 bag(214 s)으로 지도·LiDAR·map 위치·후진 속도·끊김 표시·시각 되돌림을 확인했다.
 
 ## 시험
 

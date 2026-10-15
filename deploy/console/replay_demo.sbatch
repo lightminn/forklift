@@ -1,11 +1,13 @@
 #!/bin/bash
 #SBATCH --job-name=console_replay
 #SBATCH --partition=compute
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=3G
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=512M
 #SBATCH --time=00:30:00
 #SBATCH --output=slurm-console-replay-%j.log
 #SBATCH --signal=B:TERM@60
+# Reservation from a measured pass (ws1, 2026-10-15, factory mission bag): peak 0.23 core
+# and 185 MiB; memory has room for the map of a longer bag.
 # Monitor-only console on a recorded Isaac SLAM bag (C2a demo, CPU only).
 #
 #   sbatch deploy/console/replay_demo.sbatch <bag directory> [passes]
@@ -32,7 +34,7 @@ rm -f "$PORTFILE"
 # A free port for the host side of the published port. If another process takes it in
 # the meantime, `docker run -p` fails and so does this job -- nothing runs half-started.
 PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
-echo "host=$(hostname) job=$JOB bag=$BAG passes=$PASSES"
+echo "host=$(hostname) job=$JOB bag=$BAG passes=$PASSES cpus=${SLURM_CPUS_PER_TASK:-1} mem=${SLURM_MEM_PER_NODE:-512}M"
 
 # The container runs detached and the script waits with the interruptible `wait`
 # builtin: a foreground `docker run` delays the trap until it returns, and Slurm's kill
@@ -44,8 +46,13 @@ trap 'cleanup; exit 143' TERM INT
 
 # Own network namespace (bridge) + discovery on localhost only: the replay's ROS graph
 # (/clock, TF, scans) cannot mix with any other job's, whatever its domain id.
-# --group-add 2000: recorded files belong to the lab group.
+# Docker runs outside the job's cgroup, so the container is capped to the job's own
+# reservation (--cpus, --memory) -- otherwise its load could slow timing-sensitive jobs
+# next to it. --group-add 2000: recorded files belong to the lab group.
+CPUS=${SLURM_CPUS_PER_TASK:-1}
+MEM_MB=${SLURM_MEM_PER_NODE:-512}
 docker run -d --rm --name "$NAME" -p "127.0.0.1:$PORT:8765" --group-add 2000 \
+  --cpus="$CPUS" --memory="${MEM_MB}m" --memory-swap="${MEM_MB}m" \
   -e ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST \
   -v "$ROOT":/workspace -v "$BAG":/data/bag:ro -w /workspace \
   forklift/ros2-console:jazzy bash -c "
