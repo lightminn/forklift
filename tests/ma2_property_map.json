@@ -12113,6 +12113,44 @@
     ],
     "check_line": "E   AssertionError"
    }
+  },
+  {
+   "id": "B11:L1655-swap-2",
+   "class": "N",
+   "checks": [
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::1",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::2",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::3",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::4",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::5",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::6",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::7",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::8",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::9",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::10",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::11",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::12",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::13",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::14"
+   ],
+   "statement": "order: `realign_install('observe_replan') <-> tracking = trackers['observe'].update(rear, signed` (core.py line 1655) as written",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_observe.py::test_a_refused_realignment_install_leaves_the_new_observe_follower_unrun"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                realign_install(\"observe_replan\")  # Plan D8 S4c-3 stage 2\n                tracking = trackers[\"observe\"].update(rear, signed_speed, dt)\n",
+    "replace": "                tracking = trackers[\"observe\"].update(rear, signed_speed, dt)\n                realign_install(\"observe_replan\")  # Plan D8 S4c-3 stage 2\n",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_cusp_observe.py::test_a_refused_realignment_install_leaves_the_new_observe_follower_unrun"
+    ],
+    "check_line": "E   assert "
+   }
   }
  ]
 }

@@ -3,7 +3,7 @@
   3150,
   3166
  ],
- "rule": "A swap of two neighbouring statements is judged observable when (1) a hook or port call reads state the other statement writes, (2) a refusal (require, or a method that calls it) can end the call between them and the state left differs, (3) a callback run inside a call reads a name the other statement binds, or (4) a value is read before or after a state change it depends on. Exceptions the mission does not model (constructors and queries on well-formed planner output) and dict key order alone are not counted. The 11 swaps judged observable got behaviour tests (batch 11 and B8); these are the rest.",
+ "rule": "A swap of two neighbouring statements is judged observable when (1) a hook or port call reads state the other statement writes, (2) a refusal (require, or a method that calls it) can end the call between them and the state left differs, (3) a callback run inside a call reads a name the other statement binds, or (4) a value is read before or after a state change it depends on. Exceptions the mission does not model (constructors and queries on well-formed planner output) and dict key order alone are not counted. The 12 swaps judged observable (one more after Codex round 5: a refused realignment install leaves the new follower unrun) got behaviour tests (batch 11 and B8); these are the rest.",
  "swaps": [
   {
    "line": 176,
@@ -264,11 +264,6 @@
    "line": 1645,
    "swap": "state.setdefault('paths', {})['observe'] = path_record(repla <-> paths['observe'] = replanned",
    "category": "side-effect-free queries or records read before or after a write they do not read"
-  },
-  {
-   "line": 1655,
-   "swap": "realign_install('observe_replan') <-> tracking = trackers['observe'].update(rear, signed",
-   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
   },
   {
    "line": 1710,

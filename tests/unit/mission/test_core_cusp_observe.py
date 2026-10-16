@@ -428,3 +428,26 @@ def test_an_observe_replan_writes_the_new_path_and_restarts_the_phase_before_the
     with pytest.raises(RuntimeError, match="realign_too_long"):
         w.tick(OBSERVE_MISS)
     assert written and "observe" in written[0] and w.ms.phase_started == 50.0
+
+
+def test_a_refused_realignment_install_leaves_the_new_observe_follower_unrun(monkeypatch):
+    """M-a2 (Codex review round 5): the new follower's first update -- which moves its speed state -- comes after
+    the install; a refusing install leaves it unrun."""
+    updates = []
+
+    class Recording(core_module.RearAxlePathTracker):
+        def update(self, *a, **k):
+            updates.append(id(self))
+            return super().update(*a, **k)
+
+    monkeypatch.setattr(core_module, "RearAxlePathTracker", Recording)
+    w = World("observe", stop_now=True, plans=[plan()])
+    w.ms.last_tracking = OBSERVE_MISS
+
+    def refuse(reason):
+        raise RuntimeError("near_capture_realign_too_long:9.000")
+
+    w.core.realign_install = refuse
+    with pytest.raises(RuntimeError, match="realign_too_long"):
+        w.tick(OBSERVE_MISS)
+    assert id(w.core.trackers["observe"]) not in updates
