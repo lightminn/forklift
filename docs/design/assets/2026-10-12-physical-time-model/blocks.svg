@@ -1,0 +1,932 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="1152pt" height="648pt" viewBox="0 0 1152 648" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:date>2026-10-12T00:58:04.973169</dc:date>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.6.3, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 648 
+L 1152 648 
+L 1152 0 
+L 0 0 
+z
+" style="fill: #ffffff"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 36 190.8 
+L 223.2 190.8 
+L 223.2 133.2 
+L 36 133.2 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #ffffff; stroke: #274c67; stroke-width: 1.6; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_3">
+    <path d="M 254.00127 236.16 
+Q 262.802994 236.16 270.039472 236.16 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+    <path d="M 264.839472 233.56 
+L 270.039472 236.16 
+L 264.839472 238.76 
+L 264.839472 233.56 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #1f2d3d; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+   </g>
+   <g id="patch_4">
+    <path d="M 36 266.4 
+L 223.2 266.4 
+L 223.2 208.8 
+L 36 208.8 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #ffffff; stroke: #274c67; stroke-width: 1.6; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_5">
+    <path d="M 225.202588 237.6 
+Q 248.401384 237.6 270.034933 237.6 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+    <path d="M 264.834933 235 
+L 270.034933 237.6 
+L 264.834933 240.2 
+L 264.834933 235 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #1f2d3d; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+   </g>
+   <g id="patch_6">
+    <path d="M 36 342 
+L 223.2 342 
+L 223.2 284.4 
+L 36 284.4 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #ffffff; stroke: #274c67; stroke-width: 1.6; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_7">
+    <path d="M 254.00127 236.16 
+Q 262.802994 236.16 270.039472 236.16 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+    <path d="M 264.839472 233.56 
+L 270.039472 236.16 
+L 264.839472 238.76 
+L 264.839472 233.56 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #1f2d3d; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+   </g>
+   <g id="patch_8">
+    <path d="M 273.6 298.8 
+L 396 298.8 
+L 396 205.2 
+L 273.6 205.2 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #eef2f6; stroke: #274c67; stroke-width: 1.6; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_9">
+    <path d="M 439.2 183.6 
+L 669.6 183.6 
+L 669.6 124.56 
+L 439.2 124.56 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #ffffff; stroke: #274c67; stroke-width: 1.6; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_10">
+    <path d="M 419.60127 154.08 
+Q 428.402994 154.08 435.639472 154.08 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+    <path d="M 430.439472 151.48 
+L 435.639472 154.08 
+L 430.439472 156.68 
+L 430.439472 151.48 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #1f2d3d; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+   </g>
+   <g id="patch_11">
+    <path d="M 439.2 254.16 
+L 669.6 254.16 
+L 669.6 195.12 
+L 439.2 195.12 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #ffffff; stroke: #274c67; stroke-width: 1.6; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_12">
+    <path d="M 419.60127 224.64 
+Q 428.402994 224.64 435.639472 224.64 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+    <path d="M 430.439472 222.04 
+L 435.639472 224.64 
+L 430.439472 227.24 
+L 430.439472 222.04 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #1f2d3d; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+   </g>
+   <g id="patch_13">
+    <path d="M 439.2 324.72 
+L 669.6 324.72 
+L 669.6 265.68 
+L 439.2 265.68 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #ffffff; stroke: #274c67; stroke-width: 1.6; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_14">
+    <path d="M 419.60127 295.2 
+Q 428.402994 295.2 435.639472 295.2 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+    <path d="M 430.439472 292.6 
+L 435.639472 295.2 
+L 430.439472 297.8 
+L 430.439472 292.6 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #1f2d3d; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+   </g>
+   <g id="patch_15">
+    <path d="M 439.2 395.28 
+L 669.6 395.28 
+L 669.6 336.24 
+L 439.2 336.24 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #ffffff; stroke: #274c67; stroke-width: 1.6; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_16">
+    <path d="M 419.60127 365.76 
+Q 428.402994 365.76 435.639472 365.76 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+    <path d="M 430.439472 363.16 
+L 435.639472 365.76 
+L 430.439472 368.36 
+L 430.439472 363.16 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #1f2d3d; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+   </g>
+   <g id="patch_17">
+    <path d="M 439.2 465.84 
+L 669.6 465.84 
+L 669.6 406.8 
+L 439.2 406.8 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #ffffff; stroke: #274c67; stroke-width: 1.6; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_18">
+    <path d="M 419.60127 436.32 
+Q 428.402994 436.32 435.639472 436.32 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+    <path d="M 430.439472 433.72 
+L 435.639472 436.32 
+L 430.439472 438.92 
+L 430.439472 433.72 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #1f2d3d; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+   </g>
+   <g id="patch_19">
+    <path d="M 36 615.6 
+L 277.2 615.6 
+L 277.2 563.76 
+L 36 563.76 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #ffffff; stroke: #b0651c; stroke-width: 1.6; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_20">
+    <path d="M 291.6 615.6 
+L 532.8 615.6 
+L 532.8 563.76 
+L 291.6 563.76 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #ffffff; stroke: #b0651c; stroke-width: 1.6; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_21">
+    <path d="M 547.2 615.6 
+L 788.4 615.6 
+L 788.4 563.76 
+L 547.2 563.76 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #ffffff; stroke: #b0651c; stroke-width: 1.6; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_22">
+    <path d="M 741.6 248.4 
+L 820.8 248.4 
+L 820.8 133.2 
+L 741.6 133.2 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #eef2f6; stroke: #274c67; stroke-width: 1.6; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_23">
+    <path d="M 729.200391 190.8 
+Q 734.39969 190.8 738.033741 190.8 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+    <path d="M 732.833741 188.2 
+L 738.033741 190.8 
+L 732.833741 193.4 
+L 732.833741 188.2 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #1f2d3d; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+   </g>
+   <g id="patch_24">
+    <path d="M 729.200391 190.8 
+Q 734.39969 190.8 738.033741 190.8 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+    <path d="M 732.833741 188.2 
+L 738.033741 190.8 
+L 732.833741 193.4 
+L 732.833741 188.2 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #1f2d3d; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+   </g>
+   <g id="patch_25">
+    <path d="M 729.200391 190.8 
+Q 734.39969 190.8 738.033741 190.8 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+    <path d="M 732.833741 188.2 
+L 738.033741 190.8 
+L 732.833741 193.4 
+L 732.833741 188.2 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #1f2d3d; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+   </g>
+   <g id="patch_26">
+    <path d="M 729.200391 190.8 
+Q 734.39969 190.8 738.033741 190.8 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+    <path d="M 732.833741 188.2 
+L 738.033741 190.8 
+L 732.833741 193.4 
+L 732.833741 188.2 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #1f2d3d; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+   </g>
+   <g id="patch_27">
+    <path d="M 729.200391 190.8 
+Q 734.39969 190.8 738.033741 190.8 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+    <path d="M 732.833741 188.2 
+L 738.033741 190.8 
+L 732.833741 193.4 
+L 732.833741 188.2 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #1f2d3d; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+   </g>
+   <g id="patch_28">
+    <path d="M 781.2 530.799445 
+Q 781.2 390.601582 781.2 251.968967 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #b0651c; stroke-width: 1.4; stroke-linecap: round"/>
+    <path d="M 778.6 257.168967 
+L 781.2 251.968967 
+L 783.8 257.168967 
+L 778.6 257.168967 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #b0651c; stroke: #b0651c; stroke-width: 1.4; stroke-linecap: round"/>
+   </g>
+   <g id="patch_29">
+    <path d="M 846 172.8 
+L 1130.4 172.8 
+L 1130.4 113.76 
+L 846 113.76 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #ffffff; stroke: #274c67; stroke-width: 1.6; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_30">
+    <path d="M 833.600391 143.28 
+Q 838.79969 143.28 842.433741 143.28 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+    <path d="M 837.233741 140.68 
+L 842.433741 143.28 
+L 837.233741 145.88 
+L 837.233741 140.68 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #1f2d3d; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+   </g>
+   <g id="patch_31">
+    <path d="M 846 248.4 
+L 1130.4 248.4 
+L 1130.4 189.36 
+L 846 189.36 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #ffffff; stroke: #274c67; stroke-width: 1.6; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_32">
+    <path d="M 833.600391 218.88 
+Q 838.79969 218.88 842.433741 218.88 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+    <path d="M 837.233741 216.28 
+L 842.433741 218.88 
+L 837.233741 221.48 
+L 837.233741 216.28 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #1f2d3d; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+   </g>
+   <g id="patch_33">
+    <path d="M 741.6 414 
+L 918 414 
+L 918 338.4 
+L 741.6 338.4 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #eef2f6; stroke: #274c67; stroke-width: 1.6; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_34">
+    <path d="M 943.2 414 
+L 1130.4 414 
+L 1130.4 338.4 
+L 943.2 338.4 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #eef2f6; stroke: #274c67; stroke-width: 1.6; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_35">
+    <path d="M 828 293.602368 
+Q 828 315.001823 828 334.83603 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+    <path d="M 830.6 329.63603 
+L 828 334.83603 
+L 825.4 329.63603 
+L 830.6 329.63603 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #1f2d3d; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+   </g>
+   <g id="patch_36">
+    <path d="M 920.002588 375.84 
+Q 930.600283 375.84 939.63273 375.84 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+    <path d="M 934.43273 373.24 
+L 939.63273 375.84 
+L 934.43273 378.44 
+L 934.43273 373.24 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #1f2d3d; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+   </g>
+   <g id="patch_37">
+    <path d="M 741.6 504 
+L 1130.4 504 
+L 1130.4 439.2 
+L 741.6 439.2 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #ffffff; stroke: #274c67; stroke-width: 1.6; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_38">
+    <path d="M 1036.8 416.002588 
+Q 1036.8 426.600283 1036.8 435.63273 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+    <path d="M 1039.4 430.43273 
+L 1036.8 435.63273 
+L 1034.2 430.43273 
+L 1039.4 430.43273 
+z
+" clip-path="url(#pf7d38a9058)" style="fill: #1f2d3d; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: round"/>
+   </g>
+   <g id="line2d_1">
+    <path d="M 223.2 162 
+L 252 162 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_2">
+    <path d="M 252 162 
+L 252 236.16 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_3">
+    <path d="M 223.2 313.2 
+L 252 313.2 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_4">
+    <path d="M 252 313.2 
+L 252 236.16 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_5">
+    <path d="M 396 252 
+L 417.6 252 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_6">
+    <path d="M 417.6 252 
+L 417.6 154.08 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_7">
+    <path d="M 396 252 
+L 417.6 252 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_8">
+    <path d="M 417.6 252 
+L 417.6 224.64 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_9">
+    <path d="M 396 252 
+L 417.6 252 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_10">
+    <path d="M 417.6 252 
+L 417.6 295.2 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_11">
+    <path d="M 396 252 
+L 417.6 252 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_12">
+    <path d="M 417.6 252 
+L 417.6 365.76 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_13">
+    <path d="M 396 252 
+L 417.6 252 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_14">
+    <path d="M 417.6 252 
+L 417.6 436.32 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_15">
+    <path d="M 716.4 154.08 
+L 727.2 154.08 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_16">
+    <path d="M 727.2 154.08 
+L 727.2 190.8 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_17">
+    <path d="M 716.4 224.64 
+L 727.2 224.64 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_18">
+    <path d="M 727.2 224.64 
+L 727.2 190.8 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_19">
+    <path d="M 716.4 295.2 
+L 727.2 295.2 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_20">
+    <path d="M 727.2 295.2 
+L 727.2 190.8 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_21">
+    <path d="M 716.4 365.76 
+L 727.2 365.76 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_22">
+    <path d="M 727.2 365.76 
+L 727.2 190.8 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_23">
+    <path d="M 716.4 436.32 
+L 727.2 436.32 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_24">
+    <path d="M 727.2 436.32 
+L 727.2 190.8 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_25">
+    <path d="M 374.4 563.76 
+L 374.4 532.8 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #b0651c; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_26">
+    <path d="M 374.4 532.8 
+L 781.2 532.8 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #b0651c; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_27">
+    <path d="M 820.8 190.8 
+L 831.6 190.8 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_28">
+    <path d="M 831.6 190.8 
+L 831.6 143.28 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_29">
+    <path d="M 820.8 190.8 
+L 831.6 190.8 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_30">
+    <path d="M 831.6 190.8 
+L 831.6 218.88 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_31">
+    <path d="M 986.4 249.84 
+L 986.4 291.6 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_32">
+    <path d="M 986.4 291.6 
+L 828 291.6 
+" clip-path="url(#pf7d38a9058)" style="fill: none; stroke: #1f2d3d; stroke-width: 1.4; stroke-linecap: square"/>
+   </g>
+  </g>
+  <g id="text_1">
+   <text style="fill: #1f2d3d; font: 700 21px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="32.4" y="41.76" transform="rotate(-0 32.4 41.76)">지게차 시간 모델  |  짐이 무게중심을 옮기고, 한계가 시간 창을 정한다</text>
+  </g>
+  <g id="text_2">
+   <text style="fill: #5c6670; font: 11.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="32.4" y="73.44" transform="rotate(-0 32.4 73.44)">준정적 평면 모델(차체 좌표: x 앞, z 위). 파랑 = 물리 한계, 주황 = 제어·운영 설정. 오른쪽 숫자는 10 kg 팔레트를 0.2 m 들었을 때 [m/s²].</text>
+  </g>
+  <g id="text_3">
+   <text style="fill: #274c67; font: 700 13.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="36" y="118.8" transform="rotate(-0 36 118.8)">질량과 무게중심</text>
+  </g>
+  <g id="text_4">
+   <text style="fill: #274c67; font: 11.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="105.975" y="157.975" transform="rotate(-0 105.975 157.975)">차체 링크</text>
+  </g>
+  <g id="text_5">
+   <!-- $\Sigma m_i = 22.4$ -->
+   <g style="fill: #274c67" transform="translate(95.276527 174.075)">
+    <text>
+     <tspan style="font: 11.5px 'STIXGeneral'" x="0 19.885294 29.42338 35.17338 40.92338 43.79838" y="-0.21875">Σ=22.4</tspan>
+     <tspan style="font: italic 11.5px 'STIXGeneral'" x="7.175995" y="-0.21875">m</tspan>
+     <tspan style="font: italic 8.05px 'STIXGeneral'" x="15.478989" y="1.3046875">i</tspan>
+    </text>
+   </g>
+  </g>
+  <g id="text_6">
+   <text style="fill: #274c67; font: 11.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="146.013473" y="174.075" transform="rotate(-0 146.013473 174.075)"> kg</text>
+  </g>
+  <g id="text_7">
+   <text style="fill: #274c67; font: 11.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="113.265" y="233.575" transform="rotate(-0 113.265 233.575)">캐리지</text>
+  </g>
+  <g id="text_8">
+   <!-- $m_c = 1.6$ -->
+   <g style="fill: #274c67" transform="translate(78.216719 249.675)">
+    <text>
+     <tspan style="font: italic 11.5px 'STIXGeneral'" x="0" y="-0.140625">m</tspan>
+     <tspan style="font: italic 8.05px 'STIXGeneral'" x="8.302994" y="1.3828125">c</tspan>
+     <tspan style="font: 11.5px 'STIXGeneral'" x="14.045596 23.583682 29.333682 32.208682" y="-0.140625">=1.6</tspan>
+    </text>
+   </g>
+  </g>
+  <g id="text_9">
+   <text style="fill: #274c67; font: 11.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="117.217422" y="249.675" transform="rotate(-0 117.217422 249.675)"> kg,  </text>
+  </g>
+  <g id="text_10">
+   <!-- $z_c + z_{lift}$ -->
+   <g style="fill: #274c67" transform="translate(146.197422 249.675)">
+    <text>
+     <tspan style="font: italic 11.5px 'STIXGeneral'" x="0 19.754184" y="-0.703125">zz</tspan>
+     <tspan style="font: italic 8.05px 'STIXGeneral'" x="4.473495 24.227679 26.465573 28.703467 30.94136" y="0.8203125">clift</tspan>
+     <tspan style="font: 11.5px 'STIXGeneral'" x="10.216098" y="-0.703125">+</tspan>
+    </text>
+   </g>
+  </g>
+  <g id="text_11">
+   <text style="fill: #274c67; font: 11.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="103.32" y="309.175" transform="rotate(-0 103.32 309.175)">짐(팔레트)</text>
+  </g>
+  <g id="text_12">
+   <!-- $m_L$ -->
+   <g style="fill: #274c67" transform="translate(88.450299 325.275)">
+    <text>
+     <tspan style="font: italic 11.5px 'STIXGeneral'" x="0" y="-0.921875">m</tspan>
+     <tspan style="font: italic 8.05px 'STIXGeneral'" x="8.302994" y="0.6015625">L</tspan>
+    </text>
+   </g>
+  </g>
+  <g id="text_13">
+   <text style="fill: #274c67; font: 11.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="102.693513" y="325.275" transform="rotate(-0 102.693513 325.275)">,  </text>
+  </g>
+  <g id="text_14">
+   <!-- $(x_L,\ z_L(z_{lift}))$ -->
+   <g style="fill: #274c67" transform="translate(113.763513 325.275)">
+    <text>
+     <tspan style="font: 11.5px 'STIXGeneral'" x="0 13.919096 30.679438 48.441819 52.271317" y="-0.21875">(,())</tspan>
+     <tspan style="font: italic 11.5px 'STIXGeneral'" x="3.829498 21.222332 34.508936" y="-0.21875">xzz</tspan>
+     <tspan style="font: italic 8.05px 'STIXGeneral'" x="8.935486 25.695828 38.982432 41.220326 43.458219 45.696113" y="1.3046875">LLlift</tspan>
+    </text>
+   </g>
+  </g>
+  <g id="text_15">
+   <!-- $\Sigma\, m_i\,(x_i,\ z_i)\ /\ \Sigma\, m_i$ -->
+   <g style="fill: #274c67" transform="translate(293.036212 247.8)">
+    <text>
+     <tspan style="font: 12px 'STIXGeneral'" x="0 21.904917 34.093778 49.247397 56.131351 62.355316" y="-0.890625">Σ(,)/Σ</tspan>
+     <tspan style="font: italic 12px 'STIXGeneral'" x="8.932018 25.900904 41.714527 71.287334" y="-0.890625">mxzm</tspan>
+     <tspan style="font: italic 8.4px 'STIXGeneral'" x="17.596004 31.228892 46.382511 79.95132" y="0.6984375000000007">iiii</tspan>
+    </text>
+   </g>
+  </g>
+  <g id="text_16">
+   <!-- $\rightarrow (m,\ x_G,\ z_G)$ -->
+   <g style="fill: #274c67" transform="translate(299.519888 264.6)">
+    <text>
+     <tspan style="font: 12px 'STIXGeneral'" x="1.732797 14.577579 27.237552 46.780766 65.663976" y="-0.890625">→(,,)</tspan>
+     <tspan style="font: italic 12px 'STIXGeneral'" x="18.573566 34.8583 54.401514" y="-0.890625">mxz</tspan>
+     <tspan style="font: italic 8.4px 'STIXGeneral'" x="40.186288 59.069498" y="0.6984375000000007">GG</tspan>
+    </text>
+   </g>
+  </g>
+  <g id="text_17">
+   <!-- $m=34$ -->
+   <g style="fill: #274c67" transform="translate(238.249021 324)">
+    <text>
+     <tspan style="font: italic 10.5px 'STIXGeneral'" x="0" y="-0.90625">m</tspan>
+     <tspan style="font: 10.5px 'STIXGeneral'" x="9.097211 17.805917 23.055917" y="-0.90625">=34</tspan>
+    </text>
+   </g>
+  </g>
+  <g id="text_18">
+   <text style="fill: #274c67; font: 10.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="267.695913" y="324" transform="rotate(-0 267.695913 324)"> kg,  </text>
+  </g>
+  <g id="text_19">
+   <!-- $x_G=+0.257$ -->
+   <g style="fill: #274c67" transform="translate(294.065913 324)">
+    <text>
+     <tspan style="font: italic 10.5px 'STIXGeneral'" x="0" y="-0.78125">x</tspan>
+     <tspan style="font: italic 7.35px 'STIXGeneral'" x="4.662003" y="0.6062499999999993">G</tspan>
+     <tspan style="font: 10.5px 'STIXGeneral'" x="11.947411 22.172319 30.881026 36.131026 38.756026 44.006026 49.256026" y="-0.78125">=+0.257</tspan>
+    </text>
+   </g>
+  </g>
+  <g id="text_20">
+   <text style="fill: #274c67; font: 10.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="349.766758" y="324" transform="rotate(-0 349.766758 324)"> m,  </text>
+  </g>
+  <g id="text_21">
+   <!-- $z_G=0.256$ -->
+   <g style="fill: #274c67" transform="translate(373.166758 324)">
+    <text>
+     <tspan style="font: italic 10.5px 'STIXGeneral'" x="0" y="-0.78125">z</tspan>
+     <tspan style="font: italic 7.35px 'STIXGeneral'" x="4.084503" y="0.6062499999999993">G</tspan>
+     <tspan style="font: 10.5px 'STIXGeneral'" x="11.369911 20.078618 25.328618 27.953618 33.203618 38.453618" y="-0.78125">=0.256</tspan>
+    </text>
+   </g>
+  </g>
+  <g id="text_22">
+   <text style="fill: #274c67; font: 10.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="418.030979" y="324" transform="rotate(-0 418.030979 324)"> m</text>
+  </g>
+  <g id="text_23">
+   <text style="fill: #274c67; font: 700 13.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="439.2" y="118.8" transform="rotate(-0 439.2 118.8)">물리 한계 (기울어짐 · 미끄럼 · 구동)</text>
+  </g>
+  <g id="text_24">
+   <text style="fill: #274c67; font: 11px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="485.64" y="150.23" transform="rotate(-0 485.64 150.23)">앞 넘어짐 (앞으로 가다 제동)</text>
+  </g>
+  <g id="text_25">
+   <!-- $a^- \leq g\,(x_f - x_G)/z_G$ -->
+   <g style="fill: #274c67" transform="translate(513.10534 165.63)">
+    <text>
+     <tspan style="font: italic 11px 'STIXGeneral'" x="0 24.883569 35.370256 53.591037 71.239809" y="-0.5625">agxxz</tspan>
+     <tspan style="font: 7.7px 'STIXGeneral'" x="7.301007" y="-4.4375">−</tspan>
+     <tspan style="font: 11px 'STIXGeneral'" x="15.760165 31.707262 44.467633 64.518816 68.18181" y="-0.5625">≤(−)/</tspan>
+     <tspan style="font: italic 7.7px 'STIXGeneral'" x="40.254259 58.47504 75.518801" y="0.890625">fGG</tspan>
+    </text>
+   </g>
+  </g>
+  <g id="text_26">
+   <text style="fill: #274c67; font: 10.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="676.8" y="159.84" transform="rotate(-0 676.8 159.84)">2.41</text>
+  </g>
+  <g id="text_27">
+   <text style="fill: #274c67; font: 11px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="497.835" y="220.79" transform="rotate(-0 497.835 220.79)">뒤 넘어짐 (앞으로 가속)</text>
+  </g>
+  <g id="text_28">
+   <!-- $a^+ \leq g\,(x_G - x_r)/z_G$ -->
+   <g style="fill: #274c67" transform="translate(512.678002 236.19)">
+    <text>
+     <tspan style="font: italic 11px 'STIXGeneral'" x="0 24.883569 35.370256 57.009839 72.094504" y="-0.9140625">agxxz</tspan>
+     <tspan style="font: 7.7px 'STIXGeneral'" x="7.301007" y="-4.7890625">+</tspan>
+     <tspan style="font: 11px 'STIXGeneral'" x="15.760165 31.707262 47.886435 65.373511 69.036506" y="-0.9140625">≤(−)/</tspan>
+     <tspan style="font: italic 7.7px 'STIXGeneral'" x="40.254259 61.893842 76.373496" y="0.5390625">GrG</tspan>
+    </text>
+   </g>
+  </g>
+  <g id="text_29">
+   <text style="fill: #274c67; font: 10.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="676.8" y="230.4" transform="rotate(-0 676.8 230.4)">22.84</text>
+  </g>
+  <g id="text_30">
+   <text style="fill: #274c67; font: 11px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="515.25" y="291.35" transform="rotate(-0 515.25 291.35)">옆 넘어짐 (회전)</text>
+  </g>
+  <g id="text_31">
+   <!-- $a_y \leq g\,(b/2)/z_G$ -->
+   <g style="fill: #274c67" transform="translate(523.062513 306.75)">
+    <text>
+     <tspan style="font: italic 11px 'STIXGeneral'" x="0 20.125983 30.61267 51.391662" y="-0.484375">agbz</tspan>
+     <tspan style="font: italic 7.7px 'STIXGeneral'" x="5.511002 55.670654" y="0.96875">yG</tspan>
+     <tspan style="font: 11px 'STIXGeneral'" x="11.002579 26.949676 36.11267 39.170669 44.670669 48.333663" y="-0.484375">≤(/2)/</tspan>
+    </text>
+   </g>
+  </g>
+  <g id="text_32">
+   <text style="fill: #274c67; font: 10.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="676.8" y="300.96" transform="rotate(-0 676.8 300.96)">10.14</text>
+  </g>
+  <g id="text_33">
+   <text style="fill: #274c67; font: 11px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="503.055" y="361.91" transform="rotate(-0 503.055 361.91)">미끄럼 (네 바퀴 구동)</text>
+  </g>
+  <g id="text_34">
+   <!-- $|a| \leq \mu\, g$ -->
+   <g style="fill: #274c67" transform="translate(537.221023 377.31)">
+    <text>
+     <tspan style="font: 11px 'STIXGeneral'" x="0 7.710999 11.499396" y="-0.5625">||≤</tspan>
+     <tspan style="font: italic 11px 'STIXGeneral'" x="2.199997 20.6228 27.732489" y="-0.5625">aμg</tspan>
+    </text>
+   </g>
+  </g>
+  <g id="text_35">
+   <text style="fill: #274c67; font: 10.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="676.8" y="371.52" transform="rotate(-0 676.8 371.52)">7.85</text>
+  </g>
+  <g id="text_36">
+   <text style="fill: #274c67; font: 11px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="531.765" y="432.47" transform="rotate(-0 531.765 432.47)">바퀴 토크</text>
+  </g>
+  <g id="text_37">
+   <!-- $|a| \leq n\,\tau/(r\,m)$ -->
+   <g style="fill: #274c67" transform="translate(525.994654 447.87)">
+    <text>
+     <tspan style="font: 11px 'STIXGeneral'" x="0 7.710999 11.499396 31.956488 35.014486 52.222167" y="-0.5625">||≤/()</tspan>
+     <tspan style="font: italic 11px 'STIXGeneral'" x="2.199997 20.6228 27.446493 38.677481 44.280166" y="-0.5625">anτrm</tspan>
+    </text>
+   </g>
+  </g>
+  <g id="text_38">
+   <text style="fill: #274c67; font: 10.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="676.8" y="442.08" transform="rotate(-0 676.8 442.08)">2.82</text>
+  </g>
+  <g id="text_39">
+   <text style="fill: #b0651c; font: 700 13.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="36" y="543.6" transform="rotate(-0 36 543.6)">제어 · 운영 설정</text>
+  </g>
+  <g id="text_40">
+   <text style="fill: #b0651c; font: 11px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="80.409945" y="593.53" transform="rotate(-0 80.409945 593.53)">기울어짐 한계를 쓰는 몫  </text>
+  </g>
+  <g id="text_41">
+   <!-- $\eta=0.5$ -->
+   <g style="fill: #b0651c" transform="translate(202.359945 593.53)">
+    <text>
+     <tspan style="font: italic 11px 'STIXGeneral'" x="0" y="-0.4375">η</tspan>
+     <tspan style="font: 11px 'STIXGeneral'" x="6.80239 15.925793 21.425793 24.175793" y="-0.4375">=0.5</tspan>
+    </text>
+   </g>
+  </g>
+  <g id="text_42">
+   <text style="fill: #b0651c; font: 11px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="333.698457" y="593.53" transform="rotate(-0 333.698457 593.53)">추종기 가속 상한  </text>
+  </g>
+  <g id="text_43">
+   <!-- $a_{cap}=0.3$ -->
+   <g style="fill: #b0651c" transform="translate(420.818457 593.53)">
+    <text>
+     <tspan style="font: italic 11px 'STIXGeneral'" x="0" y="-0.5625">a</tspan>
+     <tspan style="font: italic 7.7px 'STIXGeneral'" x="5.511002 8.929803 12.787505" y="0.890625">cap</tspan>
+     <tspan style="font: 11px 'STIXGeneral'" x="18.741074 27.864478 33.364478 36.114478" y="-0.5625">=0.3</tspan>
+    </text>
+   </g>
+  </g>
+  <g id="text_44">
+   <text style="fill: #b0651c; font: 11px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="463.161543" y="593.53" transform="rotate(-0 463.161543 593.53)"> m/s²</text>
+  </g>
+  <g id="text_45">
+   <text style="fill: #b0651c; font: 11px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="618.290202" y="593.53" transform="rotate(-0 618.290202 593.53)">단계 순항 속도  </text>
+  </g>
+  <g id="text_46">
+   <!-- $v_{stage}$ -->
+   <g style="fill: #b0651c" transform="translate(694.970202 593.53)">
+    <text>
+     <tspan style="font: italic 11px 'STIXGeneral'" x="0" y="-0.15625">v</tspan>
+     <tspan style="font: italic 7.7px 'STIXGeneral'" x="4.884003 7.879297 10.019896 13.877597 17.727597" y="1.296875">stage</tspan>
+    </text>
+   </g>
+  </g>
+  <g id="text_47">
+   <text style="fill: #274c67; font: 700 13.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="741.6" y="118.8" transform="rotate(-0 741.6 118.8)">허용 운동</text>
+  </g>
+  <g id="text_48">
+   <text style="fill: #274c67; font: 16px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="765.99" y="196.4" transform="rotate(-0 765.99 196.4)">min</text>
+  </g>
+  <g id="text_49">
+   <!-- $a_{up}(\pm x),\ \ a_{brake}(\pm x)$ -->
+   <g style="fill: #274c67" transform="translate(944.525454 139.43)">
+    <text>
+     <tspan style="font: italic 11px 'STIXGeneral'" x="0 24.924168 43.10418 77.838154" y="-0.5625">axax</tspan>
+     <tspan style="font: italic 7.7px 'STIXGeneral'" x="5.511002 9.361002 48.615182 52.465182 55.460476 59.318177 62.736979" y="0.890625">upbrake</tspan>
+     <tspan style="font: 11px 'STIXGeneral'" x="13.72617 17.389165 29.808171 33.471165 66.640156 70.30315 82.722157" y="-0.5625">(±),(±)</tspan>
+    </text>
+   </g>
+  </g>
+  <g id="text_50">
+   <text style="fill: #274c67; font: 11px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="904.41" y="154.83" transform="rotate(-0 904.41 154.83)">짐 10 kg: 앞 0.30 · 뒤 0.30 m/s²</text>
+  </g>
+  <g id="text_51">
+   <!-- $v_{cap}(s) = \min(v_{stage},\ \omega_{max} r,\ \sqrt{a_y/\kappa})$ -->
+   <g style="fill: #274c67" transform="translate(910.526264 215.03)">
+    <text>
+     <tspan style="font: italic 11px 'STIXGeneral'" x="0 20.188669 59.621451 88.237932 109.104216 131.951924 144.424101" y="-0.6368749999999999 -0.6368749999999999 -0.6368749999999999 -0.6368749999999999 -0.6368749999999999 -0.875 -0.875">vsvωraκ</tspan>
+     <tspan style="font: italic 7.7px 'STIXGeneral'" x="4.884003 8.302805 12.160506 64.505453 67.500748 69.641347 73.499048 77.349048 95.783938 101.343338 105.20104 137.462925" y="0.8162500000000001 0.8162500000000001 0.8162500000000001 0.8162500000000001 0.8162500000000001 0.8162500000000001 0.8162500000000001 0.8162500000000001 0.8162500000000001 0.8162500000000001 0.8162500000000001 0.578125">capstagemaxy</tspan>
+     <tspan style="font: 11px 'STIXGeneral'" x="16.525674 24.467661 29.719055 38.842459 47.400458 50.458456 55.958456 81.252225 113.383208 120.368916 141.366102 150.683103" y="-0.6368749999999999 -0.6368749999999999 -0.6368749999999999 -0.6368749999999999 -0.6368749999999999 -0.6368749999999999 -0.6368749999999999 -0.6368749999999999 -0.6368749999999999 -0.6368749999999999 -0.875 -0.6368749999999999">()=min(,,√/)</tspan>
+    </text>
+    <rect x="130.576924" y="-11.625" width="20.10618" height="0.6875"/>
+   </g>
+  </g>
+  <g id="text_52">
+   <text style="fill: #274c67; font: 11px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="914.805" y="230.43" transform="rotate(-0 914.805 230.43)">빈 차: 앞 0.30 · 뒤 0.30 m/s²</text>
+  </g>
+  <g id="text_53">
+   <text style="fill: #274c67; font: 700 13.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="741.6" y="316.8" transform="rotate(-0 741.6 316.8)">시간 창</text>
+  </g>
+  <g id="text_54">
+   <text style="fill: #274c67; font: 11px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="807.165" y="372.35" transform="rotate(-0 807.165 372.35)">속도 단면</text>
+  </g>
+  <g id="text_55">
+   <text style="fill: #274c67; font: 11px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="761.895" y="387.75" transform="rotate(-0 761.895 387.75)">가속으로 쌓고 제동으로 깎기</text>
+  </g>
+  <g id="text_56">
+   <!-- $t(s)=\int ds\,/\,v(s)$ -->
+   <g style="fill: #274c67" transform="translate(1005.138741 372.35)">
+    <text>
+     <tspan style="font: italic 11px 'STIXGeneral'" x="0 6.720993 30.423779 35.923779 45.908156 54.455153" y="-0.9375">tsdsvs</tspan>
+     <tspan style="font: 11px 'STIXGeneral'" x="3.057999 10.999985 16.251379 25.374783 41.526464 50.792159 58.734145" y="-0.9375">()=∫/()</tspan>
+    </text>
+   </g>
+  </g>
+  <g id="text_57">
+   <text style="fill: #274c67; font: 11px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="981.045" y="387.75" transform="rotate(-0 981.045 387.75)">교차 들어감 · 나옴 시각</text>
+  </g>
+  <g id="text_58">
+   <text style="fill: #274c67; font: 11.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="830.766051" y="467.575" transform="rotate(-0 830.766051 467.575)">창 </text>
+  </g>
+  <g id="text_59">
+   <!-- $[t_{in},\ t_{out}]$ -->
+   <g style="fill: #274c67" transform="translate(845.346051 467.575)">
+    <text>
+     <tspan style="font: 11.5px 'STIXGeneral'" x="0 13.797195 35.093128" y="-0.390625">[,]</tspan>
+     <tspan style="font: italic 11.5px 'STIXGeneral'" x="3.829498 21.100431" y="-0.390625">tt</tspan>
+     <tspan style="font: italic 8.05px 'STIXGeneral'" x="7.026489 9.264383 24.297422 28.322422 32.347422" y="1.1328125">inout</tspan>
+    </text>
+   </g>
+  </g>
+  <g id="text_60">
+   <text style="fill: #274c67; font: 11.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="884.752428" y="467.575" transform="rotate(-0 884.752428 467.575)">,  정지 비용 </text>
+  </g>
+  <g id="text_61">
+   <!-- $v/(2a_{brake}) + v/(2a_{up})$ -->
+   <g style="fill: #274c67" transform="translate(946.762428 467.575)">
+    <text>
+     <tspan style="font: italic 11.5px 'STIXGeneral'" x="0 17.882477 57.517834 75.400311" y="-0.21875">vava</tspan>
+     <tspan style="font: 11.5px 'STIXGeneral'" x="5.105988 8.302979 12.132477 42.489651 47.979749 62.623822 65.820813 69.650311 89.751807" y="-0.21875">/(2)+/(2)</tspan>
+     <tspan style="font: italic 8.05px 'STIXGeneral'" x="23.643967 27.668967 30.800414 34.833456 38.407648 81.161801 85.186801" y="1.3046875">brakeup</tspan>
+    </text>
+   </g>
+  </g>
+  <g id="text_62">
+   <text style="fill: #274c67; font: 11.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="850.275" y="483.675" transform="rotate(-0 850.275 483.675)">→ 교차 순서 최적화 (가중 지연 합)</text>
+  </g>
+  <g id="text_63">
+   <text style="fill: #1f2d3d; font: 700 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="36" y="378" transform="rotate(-0 36 378)">읽는 법</text>
+  </g>
+  <g id="text_64">
+   <text style="fill: #1f2d3d; font: 11px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="36" y="410.4" transform="rotate(-0 36 410.4)">짐은 앞차축 너머 포크 위에 있다. 무거울수록 무게중심이 앞으로,</text>
+  </g>
+  <g id="text_65">
+   <text style="fill: #1f2d3d; font: 11px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="36" y="426.9" transform="rotate(-0 36 426.9)">들수록 위로 간다 → </text>
+  </g>
+  <g id="text_66">
+   <!-- $x_f - x_G$ -->
+   <g style="fill: #1f2d3d" transform="translate(132.3 426.9)">
+    <text>
+     <tspan style="font: italic 11px 'STIXGeneral'" x="0 18.220781" y="-0.15625">xx</tspan>
+     <tspan style="font: italic 7.7px 'STIXGeneral'" x="4.884003 23.104784" y="1.296875">fG</tspan>
+     <tspan style="font: 11px 'STIXGeneral'" x="9.097377" y="-0.15625">−</tspan>
+    </text>
+   </g>
+  </g>
+  <g id="text_67">
+   <text style="fill: #1f2d3d; font: 11px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="162.70251" y="426.9" transform="rotate(-0 162.70251 426.9)"> 가 줄고 </text>
+  </g>
+  <g id="text_68">
+   <!-- $z_G$ -->
+   <g style="fill: #1f2d3d" transform="translate(204.55251 426.9)">
+    <text>
+     <tspan style="font: italic 11px 'STIXGeneral'" x="0" y="-0.296875">z</tspan>
+     <tspan style="font: italic 7.7px 'STIXGeneral'" x="4.278992" y="1.15625">G</tspan>
+    </text>
+   </g>
+  </g>
+  <g id="text_69">
+   <text style="fill: #1f2d3d; font: 11px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="215.840138" y="426.9" transform="rotate(-0 215.840138 426.9)"> 가 커져</text>
+  </g>
+  <g id="text_70">
+   <text style="fill: #1f2d3d; font: 11px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="36" y="443.4" transform="rotate(-0 36 443.4)">앞으로 넘어지지 않고 낼 수 있는 제동이 줄어든다.</text>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="pf7d38a9058">
+   <rect x="0" y="0" width="1152" height="648"/>
+  </clipPath>
+ </defs>
+</svg>

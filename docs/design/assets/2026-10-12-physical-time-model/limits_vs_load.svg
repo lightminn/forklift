@@ -1,0 +1,994 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="1152pt" height="532.8pt" viewBox="0 0 1152 532.8" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:date>2026-10-12T00:58:08.046614</dc:date>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.6.3, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 532.8 
+L 1152 532.8 
+L 1152 0 
+L 0 0 
+z
+" style="fill: #ffffff"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 69.12 468.864 
+L 541.336216 468.864 
+L 541.336216 106.56 
+L 69.12 106.56 
+z
+" style="fill: #ffffff"/>
+   </g>
+   <g id="patch_3">
+    <path d="M 243.901327 468.864 
+L 243.901327 106.56 
+L 489.208452 106.56 
+L 489.208452 468.864 
+z
+" clip-path="url(#pbe12ec0fcb)" style="fill: #d9dee4; opacity: 0.45"/>
+   </g>
+   <g id="matplotlib.axis_1">
+    <g id="xtick_1">
+     <g id="line2d_1">
+      <path d="M 90.584373 468.864 
+L 90.584373 106.56 
+" clip-path="url(#pbe12ec0fcb)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_2">
+      <defs>
+       <path id="m3cd4848f79" d="M 0 0 
+L 0 3.5 
+" style="stroke: #000000; stroke-width: 0.8"/>
+      </defs>
+      <g>
+       <use xlink:href="#m3cd4848f79" x="90.584373" y="468.864" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_1">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: middle" x="90.584373" y="484.982125" transform="rotate(-0 90.584373 484.982125)">0</text>
+     </g>
+    </g>
+    <g id="xtick_2">
+     <g id="line2d_3">
+      <path d="M 151.911155 468.864 
+L 151.911155 106.56 
+" clip-path="url(#pbe12ec0fcb)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_4">
+      <g>
+       <use xlink:href="#m3cd4848f79" x="151.911155" y="468.864" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_2">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: middle" x="151.911155" y="484.982125" transform="rotate(-0 151.911155 484.982125)">2</text>
+     </g>
+    </g>
+    <g id="xtick_3">
+     <g id="line2d_5">
+      <path d="M 213.237936 468.864 
+L 213.237936 106.56 
+" clip-path="url(#pbe12ec0fcb)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_6">
+      <g>
+       <use xlink:href="#m3cd4848f79" x="213.237936" y="468.864" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_3">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: middle" x="213.237936" y="484.982125" transform="rotate(-0 213.237936 484.982125)">4</text>
+     </g>
+    </g>
+    <g id="xtick_4">
+     <g id="line2d_7">
+      <path d="M 274.564717 468.864 
+L 274.564717 106.56 
+" clip-path="url(#pbe12ec0fcb)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_8">
+      <g>
+       <use xlink:href="#m3cd4848f79" x="274.564717" y="468.864" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_4">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: middle" x="274.564717" y="484.982125" transform="rotate(-0 274.564717 484.982125)">6</text>
+     </g>
+    </g>
+    <g id="xtick_5">
+     <g id="line2d_9">
+      <path d="M 335.891499 468.864 
+L 335.891499 106.56 
+" clip-path="url(#pbe12ec0fcb)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_10">
+      <g>
+       <use xlink:href="#m3cd4848f79" x="335.891499" y="468.864" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_5">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: middle" x="335.891499" y="484.982125" transform="rotate(-0 335.891499 484.982125)">8</text>
+     </g>
+    </g>
+    <g id="xtick_6">
+     <g id="line2d_11">
+      <path d="M 397.21828 468.864 
+L 397.21828 106.56 
+" clip-path="url(#pbe12ec0fcb)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_12">
+      <g>
+       <use xlink:href="#m3cd4848f79" x="397.21828" y="468.864" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_6">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: middle" x="397.21828" y="484.982125" transform="rotate(-0 397.21828 484.982125)">10</text>
+     </g>
+    </g>
+    <g id="xtick_7">
+     <g id="line2d_13">
+      <path d="M 458.545061 468.864 
+L 458.545061 106.56 
+" clip-path="url(#pbe12ec0fcb)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_14">
+      <g>
+       <use xlink:href="#m3cd4848f79" x="458.545061" y="468.864" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_7">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: middle" x="458.545061" y="484.982125" transform="rotate(-0 458.545061 484.982125)">12</text>
+     </g>
+    </g>
+    <g id="xtick_8">
+     <g id="line2d_15">
+      <path d="M 519.871843 468.864 
+L 519.871843 106.56 
+" clip-path="url(#pbe12ec0fcb)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_16">
+      <g>
+       <use xlink:href="#m3cd4848f79" x="519.871843" y="468.864" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_8">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: middle" x="519.871843" y="484.982125" transform="rotate(-0 519.871843 484.982125)">14</text>
+     </g>
+    </g>
+    <g id="text_9">
+     <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: middle" x="305.228108" y="501.41525" transform="rotate(-0 305.228108 501.41525)">짐 질량 m_L [kg]</text>
+    </g>
+   </g>
+   <g id="matplotlib.axis_2">
+    <g id="ytick_1">
+     <g id="line2d_17">
+      <path d="M 69.12 423.59375 
+L 541.336216 423.59375 
+" clip-path="url(#pbe12ec0fcb)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_18">
+      <defs>
+       <path id="m46f3c93206" d="M 0 0 
+L -3.5 0 
+" style="stroke: #000000; stroke-width: 0.8"/>
+      </defs>
+      <g>
+       <use xlink:href="#m46f3c93206" x="69.12" y="423.59375" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_10">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: end" x="62.12" y="428.152813" transform="rotate(-0 62.12 428.152813)">0.00</text>
+     </g>
+    </g>
+    <g id="ytick_2">
+     <g id="line2d_19">
+      <path d="M 69.12 378.057171 
+L 541.336216 378.057171 
+" clip-path="url(#pbe12ec0fcb)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_20">
+      <g>
+       <use xlink:href="#m46f3c93206" x="69.12" y="378.057171" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_11">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: end" x="62.12" y="382.616234" transform="rotate(-0 62.12 382.616234)">0.05</text>
+     </g>
+    </g>
+    <g id="ytick_3">
+     <g id="line2d_21">
+      <path d="M 69.12 332.520593 
+L 541.336216 332.520593 
+" clip-path="url(#pbe12ec0fcb)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_22">
+      <g>
+       <use xlink:href="#m46f3c93206" x="69.12" y="332.520593" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_12">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: end" x="62.12" y="337.079655" transform="rotate(-0 62.12 337.079655)">0.10</text>
+     </g>
+    </g>
+    <g id="ytick_4">
+     <g id="line2d_23">
+      <path d="M 69.12 286.984014 
+L 541.336216 286.984014 
+" clip-path="url(#pbe12ec0fcb)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_24">
+      <g>
+       <use xlink:href="#m46f3c93206" x="69.12" y="286.984014" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_13">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: end" x="62.12" y="291.543076" transform="rotate(-0 62.12 291.543076)">0.15</text>
+     </g>
+    </g>
+    <g id="ytick_5">
+     <g id="line2d_25">
+      <path d="M 69.12 241.447435 
+L 541.336216 241.447435 
+" clip-path="url(#pbe12ec0fcb)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_26">
+      <g>
+       <use xlink:href="#m46f3c93206" x="69.12" y="241.447435" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_14">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: end" x="62.12" y="246.006498" transform="rotate(-0 62.12 246.006498)">0.20</text>
+     </g>
+    </g>
+    <g id="ytick_6">
+     <g id="line2d_27">
+      <path d="M 69.12 195.910856 
+L 541.336216 195.910856 
+" clip-path="url(#pbe12ec0fcb)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_28">
+      <g>
+       <use xlink:href="#m46f3c93206" x="69.12" y="195.910856" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_15">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: end" x="62.12" y="200.469919" transform="rotate(-0 62.12 200.469919)">0.25</text>
+     </g>
+    </g>
+    <g id="ytick_7">
+     <g id="line2d_29">
+      <path d="M 69.12 150.374278 
+L 541.336216 150.374278 
+" clip-path="url(#pbe12ec0fcb)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_30">
+      <g>
+       <use xlink:href="#m46f3c93206" x="69.12" y="150.374278" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_16">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: end" x="62.12" y="154.93334" transform="rotate(-0 62.12 154.93334)">0.30</text>
+     </g>
+    </g>
+    <g id="text_17">
+     <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: middle" x="28.905625" y="287.712" transform="rotate(-90 28.905625 287.712)">[m]</text>
+    </g>
+   </g>
+   <g id="line2d_31">
+    <path d="M 90.584373 452.395636 
+L 101.31656 439.545578 
+L 112.048747 427.059692 
+L 122.780934 414.922713 
+L 133.51312 403.120218 
+L 144.245307 391.638567 
+L 154.977494 380.464853 
+L 165.709681 369.586851 
+L 176.441867 358.992977 
+L 188.707224 347.219532 
+L 200.97258 335.787347 
+L 213.237936 324.681796 
+L 225.503292 313.889077 
+L 237.768649 303.396156 
+L 250.034005 293.190712 
+L 262.299361 283.261091 
+L 274.564717 273.59626 
+L 286.830074 264.185766 
+L 300.6286 253.890656 
+L 314.427125 243.891571 
+L 328.225651 234.175925 
+L 342.024177 224.731834 
+L 355.822703 215.54807 
+L 369.621229 206.614016 
+L 384.952924 196.967955 
+L 400.284619 187.604771 
+L 415.616314 178.512198 
+L 430.94801 169.678673 
+L 446.279705 161.093281 
+L 461.6114 152.745712 
+L 478.476265 143.826453 
+L 495.34113 135.170936 
+L 512.205995 126.767633 
+L 519.871843 123.028364 
+L 519.871843 123.028364 
+" clip-path="url(#pbe12ec0fcb)" style="fill: none; stroke: #274c67; stroke-width: 2; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_32">
+    <path d="M 90.584373 177.866987 
+L 130.446781 179.987453 
+L 173.375528 182.040107 
+L 219.370614 184.013214 
+L 269.965209 185.954592 
+L 325.159312 187.841602 
+L 384.952924 189.657708 
+L 450.879214 191.430439 
+L 519.871843 193.070812 
+L 519.871843 193.070812 
+" clip-path="url(#pbe12ec0fcb)" style="fill: none; stroke: #b0651c; stroke-width: 2; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_33">
+    <path d="M 90.584373 452.395636 
+L 101.31656 439.545578 
+L 112.048747 427.059692 
+L 122.780934 414.922713 
+L 133.51312 403.120218 
+L 144.245307 391.638567 
+L 154.977494 380.464853 
+L 165.709681 369.586851 
+L 176.441867 358.992977 
+L 188.707224 347.219532 
+L 200.97258 335.787347 
+L 213.237936 324.681796 
+L 225.503292 313.889077 
+L 237.768649 303.396156 
+L 250.034005 293.190712 
+L 262.299361 283.261091 
+L 274.564717 273.59626 
+L 286.830074 264.185766 
+L 300.6286 253.890656 
+L 314.427125 243.891571 
+L 328.225651 234.175925 
+L 342.024177 224.731834 
+L 355.822703 215.54807 
+L 369.621229 206.614016 
+L 384.952924 196.967955 
+L 400.284619 187.604771 
+L 415.616314 178.512198 
+L 430.94801 169.678673 
+L 446.279705 161.093281 
+L 461.6114 152.745712 
+L 478.476265 143.826453 
+L 495.34113 135.170936 
+L 512.205995 126.767633 
+L 519.871843 123.028364 
+L 519.871843 123.028364 
+" clip-path="url(#pbe12ec0fcb)" style="fill: none; stroke-dasharray: 7.4,3.2; stroke-dashoffset: 0; stroke: #274c67; stroke-width: 2"/>
+   </g>
+   <g id="line2d_34">
+    <path d="M 90.584373 190.010075 
+L 107.449238 194.743228 
+L 125.847273 199.670566 
+L 144.245307 204.368281 
+L 164.176511 209.216507 
+L 184.107715 213.831731 
+L 205.572088 218.560176 
+L 227.036462 223.055939 
+L 250.034005 227.633633 
+L 273.031548 231.98206 
+L 297.56226 236.386581 
+L 322.092973 240.567735 
+L 348.156855 244.783973 
+L 375.753907 249.013618 
+L 403.350958 253.02065 
+L 432.481179 257.027682 
+L 463.14457 261.018087 
+L 495.34113 264.977116 
+L 519.871843 267.846668 
+L 519.871843 267.846668 
+" clip-path="url(#pbe12ec0fcb)" style="fill: none; stroke-dasharray: 7.4,3.2; stroke-dashoffset: 0; stroke: #b0651c; stroke-width: 2"/>
+   </g>
+   <g id="line2d_35">
+    <path d="M 69.12 132.159646 
+L 541.336216 132.159646 
+" clip-path="url(#pbe12ec0fcb)" style="fill: none; stroke-dasharray: 1,1.65; stroke-dashoffset: 0; stroke: #1f2d3d"/>
+   </g>
+   <g id="line2d_36">
+    <path d="M 501.473808 468.864 
+L 501.473808 106.56 
+" clip-path="url(#pbe12ec0fcb)" style="fill: none; stroke: #aa3333; stroke-width: 1.2; stroke-linecap: square"/>
+   </g>
+   <g id="patch_4">
+    <path d="M 69.12 468.864 
+L 69.12 106.56 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_5">
+    <path d="M 541.336216 468.864 
+L 541.336216 106.56 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_6">
+    <path d="M 69.12 468.864 
+L 541.336216 468.864 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_7">
+    <path d="M 69.12 106.56 
+L 541.336216 106.56 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="text_18">
+    <text style="font: 11px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="96.717052" y="124.873793" transform="rotate(-0 96.717052 124.873793)">앞차축 x_f</text>
+   </g>
+   <g id="text_19">
+    <text style="font: 13px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: middle" x="305.228108" y="100.56" transform="rotate(-0 305.228108 100.56)">무게중심 위치</text>
+   </g>
+   <g id="legend_1">
+    <g id="patch_8">
+     <path d="M 76.12 174.385 
+L 188.474688 174.385 
+Q 190.474688 174.385 190.474688 172.385 
+L 190.474688 113.56 
+Q 190.474688 111.56 188.474688 111.56 
+L 76.12 111.56 
+Q 74.12 111.56 74.12 113.56 
+L 74.12 172.385 
+Q 74.12 174.385 76.12 174.385 
+z
+" style="fill: #ffffff; opacity: 0.8; stroke: #cccccc; stroke-linejoin: miter"/>
+    </g>
+    <g id="line2d_37">
+     <path d="M 78.12 119.658437 
+L 88.12 119.658437 
+L 98.12 119.658437 
+" style="fill: none; stroke: #274c67; stroke-width: 2; stroke-linecap: square"/>
+    </g>
+    <g id="text_20">
+     <text style="font: 10px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="106.12" y="123.158437" transform="rotate(-0 106.12 123.158437)">x_G (포크 0.2 m)</text>
+    </g>
+    <g id="line2d_38">
+     <path d="M 78.12 134.614688 
+L 88.12 134.614688 
+L 98.12 134.614688 
+" style="fill: none; stroke: #b0651c; stroke-width: 2; stroke-linecap: square"/>
+    </g>
+    <g id="text_21">
+     <text style="font: 10px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="106.12" y="138.114688" transform="rotate(-0 106.12 138.114688)">z_G (포크 0.2 m)</text>
+    </g>
+    <g id="line2d_39">
+     <path d="M 78.12 149.570938 
+L 88.12 149.570938 
+L 98.12 149.570938 
+" style="fill: none; stroke-dasharray: 7.4,3.2; stroke-dashoffset: 0; stroke: #274c67; stroke-width: 2"/>
+    </g>
+    <g id="text_22">
+     <text style="font: 10px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="106.12" y="153.070938" transform="rotate(-0 106.12 153.070938)">x_G (포크 0.0 m)</text>
+    </g>
+    <g id="line2d_40">
+     <path d="M 78.12 164.527187 
+L 88.12 164.527187 
+L 98.12 164.527187 
+" style="fill: none; stroke-dasharray: 7.4,3.2; stroke-dashoffset: 0; stroke: #b0651c; stroke-width: 2"/>
+    </g>
+    <g id="text_23">
+     <text style="font: 10px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="106.12" y="168.027187" transform="rotate(-0 106.12 168.027187)">z_G (포크 0.0 m)</text>
+    </g>
+   </g>
+  </g>
+  <g id="axes_2">
+   <g id="patch_9">
+    <path d="M 645.223784 468.864 
+L 1117.44 468.864 
+L 1117.44 106.56 
+L 645.223784 106.56 
+z
+" style="fill: #ffffff"/>
+   </g>
+   <g id="patch_10">
+    <path d="M 820.005111 468.864 
+L 820.005111 106.56 
+L 1065.312236 106.56 
+L 1065.312236 468.864 
+z
+" clip-path="url(#p3f3063c238)" style="fill: #d9dee4; opacity: 0.45"/>
+   </g>
+   <g id="matplotlib.axis_3">
+    <g id="xtick_9">
+     <g id="line2d_41">
+      <path d="M 666.688157 468.864 
+L 666.688157 106.56 
+" clip-path="url(#p3f3063c238)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_42">
+      <g>
+       <use xlink:href="#m3cd4848f79" x="666.688157" y="468.864" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_24">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: middle" x="666.688157" y="484.982125" transform="rotate(-0 666.688157 484.982125)">0</text>
+     </g>
+    </g>
+    <g id="xtick_10">
+     <g id="line2d_43">
+      <path d="M 728.014939 468.864 
+L 728.014939 106.56 
+" clip-path="url(#p3f3063c238)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_44">
+      <g>
+       <use xlink:href="#m3cd4848f79" x="728.014939" y="468.864" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_25">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: middle" x="728.014939" y="484.982125" transform="rotate(-0 728.014939 484.982125)">2</text>
+     </g>
+    </g>
+    <g id="xtick_11">
+     <g id="line2d_45">
+      <path d="M 789.34172 468.864 
+L 789.34172 106.56 
+" clip-path="url(#p3f3063c238)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_46">
+      <g>
+       <use xlink:href="#m3cd4848f79" x="789.34172" y="468.864" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_26">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: middle" x="789.34172" y="484.982125" transform="rotate(-0 789.34172 484.982125)">4</text>
+     </g>
+    </g>
+    <g id="xtick_12">
+     <g id="line2d_47">
+      <path d="M 850.668501 468.864 
+L 850.668501 106.56 
+" clip-path="url(#p3f3063c238)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_48">
+      <g>
+       <use xlink:href="#m3cd4848f79" x="850.668501" y="468.864" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_27">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: middle" x="850.668501" y="484.982125" transform="rotate(-0 850.668501 484.982125)">6</text>
+     </g>
+    </g>
+    <g id="xtick_13">
+     <g id="line2d_49">
+      <path d="M 911.995283 468.864 
+L 911.995283 106.56 
+" clip-path="url(#p3f3063c238)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_50">
+      <g>
+       <use xlink:href="#m3cd4848f79" x="911.995283" y="468.864" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_28">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: middle" x="911.995283" y="484.982125" transform="rotate(-0 911.995283 484.982125)">8</text>
+     </g>
+    </g>
+    <g id="xtick_14">
+     <g id="line2d_51">
+      <path d="M 973.322064 468.864 
+L 973.322064 106.56 
+" clip-path="url(#p3f3063c238)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_52">
+      <g>
+       <use xlink:href="#m3cd4848f79" x="973.322064" y="468.864" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_29">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: middle" x="973.322064" y="484.982125" transform="rotate(-0 973.322064 484.982125)">10</text>
+     </g>
+    </g>
+    <g id="xtick_15">
+     <g id="line2d_53">
+      <path d="M 1034.648845 468.864 
+L 1034.648845 106.56 
+" clip-path="url(#p3f3063c238)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_54">
+      <g>
+       <use xlink:href="#m3cd4848f79" x="1034.648845" y="468.864" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_30">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: middle" x="1034.648845" y="484.982125" transform="rotate(-0 1034.648845 484.982125)">12</text>
+     </g>
+    </g>
+    <g id="xtick_16">
+     <g id="line2d_55">
+      <path d="M 1095.975627 468.864 
+L 1095.975627 106.56 
+" clip-path="url(#p3f3063c238)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_56">
+      <g>
+       <use xlink:href="#m3cd4848f79" x="1095.975627" y="468.864" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_31">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: middle" x="1095.975627" y="484.982125" transform="rotate(-0 1095.975627 484.982125)">14</text>
+     </g>
+    </g>
+    <g id="text_32">
+     <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: middle" x="881.331892" y="501.41525" transform="rotate(-0 881.331892 501.41525)">짐 질량 m_L [kg]</text>
+    </g>
+   </g>
+   <g id="matplotlib.axis_4">
+    <g id="ytick_8">
+     <g id="line2d_57">
+      <path d="M 645.223784 468.864 
+L 1117.44 468.864 
+" clip-path="url(#p3f3063c238)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_58">
+      <g>
+       <use xlink:href="#m46f3c93206" x="645.223784" y="468.864" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_33">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: end" x="638.223784" y="473.423063" transform="rotate(-0 638.223784 473.423063)">0.0</text>
+     </g>
+    </g>
+    <g id="ytick_9">
+     <g id="line2d_59">
+      <path d="M 645.223784 426.735628 
+L 1117.44 426.735628 
+" clip-path="url(#p3f3063c238)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_60">
+      <g>
+       <use xlink:href="#m46f3c93206" x="645.223784" y="426.735628" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_34">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: end" x="638.223784" y="431.29469" transform="rotate(-0 638.223784 431.29469)">0.5</text>
+     </g>
+    </g>
+    <g id="ytick_10">
+     <g id="line2d_61">
+      <path d="M 645.223784 384.607256 
+L 1117.44 384.607256 
+" clip-path="url(#p3f3063c238)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_62">
+      <g>
+       <use xlink:href="#m46f3c93206" x="645.223784" y="384.607256" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_35">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: end" x="638.223784" y="389.166318" transform="rotate(-0 638.223784 389.166318)">1.0</text>
+     </g>
+    </g>
+    <g id="ytick_11">
+     <g id="line2d_63">
+      <path d="M 645.223784 342.478884 
+L 1117.44 342.478884 
+" clip-path="url(#p3f3063c238)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_64">
+      <g>
+       <use xlink:href="#m46f3c93206" x="645.223784" y="342.478884" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_36">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: end" x="638.223784" y="347.037946" transform="rotate(-0 638.223784 347.037946)">1.5</text>
+     </g>
+    </g>
+    <g id="ytick_12">
+     <g id="line2d_65">
+      <path d="M 645.223784 300.350512 
+L 1117.44 300.350512 
+" clip-path="url(#p3f3063c238)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_66">
+      <g>
+       <use xlink:href="#m46f3c93206" x="645.223784" y="300.350512" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_37">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: end" x="638.223784" y="304.909574" transform="rotate(-0 638.223784 304.909574)">2.0</text>
+     </g>
+    </g>
+    <g id="ytick_13">
+     <g id="line2d_67">
+      <path d="M 645.223784 258.22214 
+L 1117.44 258.22214 
+" clip-path="url(#p3f3063c238)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_68">
+      <g>
+       <use xlink:href="#m46f3c93206" x="645.223784" y="258.22214" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_38">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: end" x="638.223784" y="262.781202" transform="rotate(-0 638.223784 262.781202)">2.5</text>
+     </g>
+    </g>
+    <g id="ytick_14">
+     <g id="line2d_69">
+      <path d="M 645.223784 216.093767 
+L 1117.44 216.093767 
+" clip-path="url(#p3f3063c238)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_70">
+      <g>
+       <use xlink:href="#m46f3c93206" x="645.223784" y="216.093767" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_39">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: end" x="638.223784" y="220.65283" transform="rotate(-0 638.223784 220.65283)">3.0</text>
+     </g>
+    </g>
+    <g id="ytick_15">
+     <g id="line2d_71">
+      <path d="M 645.223784 173.965395 
+L 1117.44 173.965395 
+" clip-path="url(#p3f3063c238)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_72">
+      <g>
+       <use xlink:href="#m46f3c93206" x="645.223784" y="173.965395" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_40">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: end" x="638.223784" y="178.524458" transform="rotate(-0 638.223784 178.524458)">3.5</text>
+     </g>
+    </g>
+    <g id="ytick_16">
+     <g id="line2d_73">
+      <path d="M 645.223784 131.837023 
+L 1117.44 131.837023 
+" clip-path="url(#p3f3063c238)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.25; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_74">
+      <g>
+       <use xlink:href="#m46f3c93206" x="645.223784" y="131.837023" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_41">
+      <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: end" x="638.223784" y="136.396086" transform="rotate(-0 638.223784 136.396086)">4.0</text>
+     </g>
+    </g>
+    <g id="text_42">
+     <text style="font: 12px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: middle" x="612.644409" y="287.712" transform="rotate(-90 612.644409 287.712)">[m/s²]</text>
+    </g>
+   </g>
+   <g id="line2d_75">
+    <path d="M 703.990976 -1 
+L 714.216413 16.880663 
+L 724.9486 35.229223 
+L 735.680786 53.164716 
+L 746.412973 70.700933 
+L 757.14516 87.851061 
+L 767.877346 104.627712 
+L 780.142703 123.359165 
+L 792.408059 141.635752 
+L 804.673415 159.473843 
+L 816.938771 176.889031 
+L 829.204128 193.896179 
+L 841.469484 210.509462 
+L 853.73484 226.742406 
+L 866.000197 242.607923 
+L 878.265553 258.118348 
+L 890.530909 273.285472 
+L 902.796265 288.120567 
+L 915.061622 302.634418 
+L 927.326978 316.837347 
+L 941.125504 332.456286 
+L 954.924029 347.707663 
+L 968.722555 362.604304 
+L 982.521081 377.158441 
+L 996.319607 391.381754 
+L 1010.118133 405.285394 
+L 1023.916658 418.880019 
+L 1037.715184 432.175818 
+L 1051.51371 445.182537 
+L 1065.312236 457.909502 
+L 1076.044423 467.620572 
+L 1077.577592 468.864 
+L 1095.975627 468.864 
+L 1095.975627 468.864 
+" clip-path="url(#p3f3063c238)" style="fill: none; stroke: #274c67; stroke-width: 2.2; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_76">
+    <path d="M 0 0 
+" clip-path="url(#p3f3063c238)" style="fill: none; stroke: #4f7d4f; stroke-width: 1.6; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_77">
+    <path d="M 666.688157 131.837023 
+L 680.486683 138.039974 
+L 694.285209 144.018721 
+L 709.616904 150.413313 
+L 724.9486 156.56101 
+L 740.280295 162.475839 
+L 757.14516 168.728659 
+L 774.010025 174.731366 
+L 790.874889 180.498672 
+L 807.739754 186.044159 
+L 826.137789 191.855526 
+L 844.535823 197.432878 
+L 862.933857 202.790071 
+L 882.865061 208.360057 
+L 902.796265 213.70162 
+L 924.260639 219.214388 
+L 945.725012 224.493987 
+L 967.189386 229.554904 
+L 990.186929 234.749747 
+L 1013.184472 239.723846 
+L 1037.715184 244.801744 
+L 1062.245897 249.659462 
+L 1088.309779 254.595194 
+L 1095.975627 256.004857 
+L 1095.975627 256.004857 
+" clip-path="url(#p3f3063c238)" style="fill: none; stroke: #5c6670; stroke-width: 1.6; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_78">
+    <path d="M 0 0 
+" clip-path="url(#p3f3063c238)" style="fill: none; stroke-dasharray: 1.4,2.31; stroke-dashoffset: 0; stroke: #5c6670; stroke-width: 1.4"/>
+   </g>
+   <g id="line2d_79">
+    <path d="M 733.841524 -1 
+L 764.811007 43.048196 
+L 797.007568 88.472385 
+L 829.204128 133.524745 
+L 861.400688 178.209823 
+L 895.130418 224.633702 
+L 928.860147 270.664454 
+L 962.589877 316.30705 
+L 996.319607 361.566381 
+L 1030.049337 406.447253 
+L 1063.779066 450.954394 
+L 1076.044423 467.047058 
+L 1077.577592 468.864 
+L 1095.975627 468.864 
+L 1095.975627 468.864 
+" clip-path="url(#p3f3063c238)" style="fill: none; stroke-dasharray: 8.14,3.52; stroke-dashoffset: 0; stroke: #274c67; stroke-width: 2.2"/>
+   </g>
+   <g id="line2d_80">
+    <path d="M 645.223784 443.586977 
+L 1117.44 443.586977 
+" clip-path="url(#p3f3063c238)" style="fill: none; stroke-dasharray: 12.8,3.2,2,3.2; stroke-dashoffset: 0; stroke: #b0651c; stroke-width: 2"/>
+   </g>
+   <g id="line2d_81">
+    <path d="M 1077.577592 468.864 
+L 1077.577592 106.56 
+" clip-path="url(#p3f3063c238)" style="fill: none; stroke: #aa3333; stroke-width: 1.2; stroke-linecap: square"/>
+   </g>
+   <g id="patch_11">
+    <path d="M 645.223784 468.864 
+L 645.223784 106.56 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_12">
+    <path d="M 1117.44 468.864 
+L 1117.44 106.56 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_13">
+    <path d="M 645.223784 468.864 
+L 1117.44 468.864 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_14">
+    <path d="M 645.223784 106.56 
+L 1117.44 106.56 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="text_43">
+    <text style="fill: #b0651c; font: 11px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="672.820835" y="437.689005" transform="rotate(-0 672.820835 437.689005)">추종기 가속 상한 0.3 m/s² (제어 설정)</text>
+   </g>
+   <g id="text_44">
+    <text style="fill: #aa3333; font: 11px 'DejaVu Serif', 'NanumMyeongjo'" transform="translate(994.357347 152.320815)">서 있어도 앞으로</text>
+    <text style="fill: #aa3333; font: 11px 'DejaVu Serif', 'NanumMyeongjo'" transform="translate(985.251409 165.539721)">넘어짐 ≈ 13.4 kg</text>
+   </g>
+   <g id="text_45">
+    <text style="font: 13px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: middle" x="881.331892" y="100.56" transform="rotate(-0 881.331892 100.56)">가감속 한계</text>
+   </g>
+   <g id="legend_2">
+    <g id="patch_15">
+     <path d="M 897.574375 187.556406 
+L 1110.79 187.556406 
+Q 1112.69 187.556406 1112.69 185.656406 
+L 1112.69 113.21 
+Q 1112.69 111.31 1110.79 111.31 
+L 897.574375 111.31 
+Q 895.674375 111.31 895.674375 113.21 
+L 895.674375 185.656406 
+Q 895.674375 187.556406 897.574375 187.556406 
+z
+" style="fill: #ffffff; opacity: 0.8; stroke: #cccccc; stroke-linejoin: miter"/>
+    </g>
+    <g id="line2d_82">
+     <path d="M 899.474375 119.652188 
+L 908.974375 119.652188 
+L 918.474375 119.652188 
+" style="fill: none; stroke: #274c67; stroke-width: 2.2; stroke-linecap: square"/>
+    </g>
+    <g id="text_46">
+     <text style="font: 9.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="926.074375" y="122.977188" transform="rotate(-0 926.074375 122.977188)">앞 넘어짐 η·g(x_f−x_G)/z_G (포크 0.2 m)</text>
+    </g>
+    <g id="line2d_83">
+     <path d="M 899.474375 134.509297 
+L 908.974375 134.509297 
+L 918.474375 134.509297 
+" style="fill: none; stroke: #4f7d4f; stroke-width: 1.6; stroke-linecap: square"/>
+    </g>
+    <g id="text_47">
+     <text style="font: 9.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="926.074375" y="137.834297" transform="rotate(-0 926.074375 137.834297)">뒤 넘어짐 η·g(x_G−x_r)/z_G</text>
+    </g>
+    <g id="line2d_84">
+     <path d="M 899.474375 148.870625 
+L 908.974375 148.870625 
+L 918.474375 148.870625 
+" style="fill: none; stroke: #5c6670; stroke-width: 1.6; stroke-linecap: square"/>
+    </g>
+    <g id="text_48">
+     <text style="font: 9.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="926.074375" y="152.195625" transform="rotate(-0 926.074375 152.195625)">바퀴 토크 n·τ/(r·m)</text>
+    </g>
+    <g id="line2d_85">
+     <path d="M 899.474375 163.463516 
+L 908.974375 163.463516 
+L 918.474375 163.463516 
+" style="fill: none; stroke-dasharray: 1.4,2.31; stroke-dashoffset: 0; stroke: #5c6670; stroke-width: 1.4"/>
+    </g>
+    <g id="text_49">
+     <text style="font: 9.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="926.074375" y="166.788516" transform="rotate(-0 926.074375 166.788516)">미끄럼 μ·g</text>
+    </g>
+    <g id="line2d_86">
+     <path d="M 899.474375 178.191484 
+L 908.974375 178.191484 
+L 918.474375 178.191484 
+" style="fill: none; stroke-dasharray: 8.14,3.52; stroke-dashoffset: 0; stroke: #274c67; stroke-width: 2.2"/>
+    </g>
+    <g id="text_50">
+     <text style="font: 9.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="926.074375" y="181.516484" transform="rotate(-0 926.074375 181.516484)">앞 넘어짐 η·g(x_f−x_G)/z_G (포크 0.0 m)</text>
+    </g>
+   </g>
+  </g>
+  <g id="text_51">
+   <text style="fill: #1f2d3d; font: 700 19px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="69.12" y="37.296" transform="rotate(-0 69.12 37.296)">하중에 따른 무게중심과 가감속 한계  (측정 모델, 질량 분배는 추정)</text>
+  </g>
+  <g id="text_52">
+   <text style="fill: #5c6670; font: 11.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="69.12" y="66.6" transform="rotate(-0 69.12 66.6)">실선 = 포크 0.2 m (운반 높이), 점선 = 포크 0 m.  기울어짐 한계는 몫 </text>
+  </g>
+  <g id="text_53">
+   <!-- $\eta = 0.5$ -->
+   <g style="fill: #5c6670" transform="translate(429.12 66.6)">
+    <text>
+     <tspan style="font: italic 11.5px 'STIXGeneral'" x="0" y="-0.09375">η</tspan>
+     <tspan style="font: 11.5px 'STIXGeneral'" x="7.111588 16.649673 22.399673 25.274673" y="-0.09375">=0.5</tspan>
+    </text>
+   </g>
+  </g>
+  <g id="text_54">
+   <text style="fill: #5c6670; font: 11.5px 'DejaVu Serif', 'NanumMyeongjo'; text-anchor: start" x="460.830342" y="66.6" transform="rotate(-0 460.830342 66.6)"> 를 곱한 값.  회색 띠 = 평가에 쓸 하중 범위 (추정).</text>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="pbe12ec0fcb">
+   <rect x="69.12" y="106.56" width="472.216216" height="362.304"/>
+  </clipPath>
+  <clipPath id="p3f3063c238">
+   <rect x="645.223784" y="106.56" width="472.216216" height="362.304"/>
+  </clipPath>
+ </defs>
+</svg>
