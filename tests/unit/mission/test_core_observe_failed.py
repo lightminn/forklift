@@ -124,3 +124,21 @@ def test_the_search_stops_at_the_first_reachable_candidate():
     w.fail()
     assert w.ms.next_candidate_index == 1 and len(w.state["observation_candidates"]) == 1
     assert w.state["observation_waypoint_selected"] == [5.0, 1.0, 0.0]
+
+
+# M-a2 (docs/plans/2026-10-16-m-a2-source-tests-to-behaviour.md): the re-observation's follower and records, by rule.
+def test_the_re_observation_follower_repositions_and_releases_cusps_like_every_follower():
+    w = World(plans=[plan()])
+    w.fail()
+    c = w.core.trackers["observe"].config
+    assert (c.position_tolerance_m, c.yaw_tolerance_rad) == (0.03, 0.05)  # a repositioning move, not a docking goal
+    assert (c.cusp_position_tolerance_m, c.cusp_yaw_tolerance_rad, c.cusp_brake_window_m) == (0.03, 0.05, 0.008)
+
+
+def test_every_re_observation_candidate_record_keeps_its_start_status_and_searches():
+    w = World(plans=[plan(False, "invalid_goal"), plan()])
+    w.fail()
+    for record in w.state["observation_candidates"]:
+        assert {"search_attempts", "start_rear", "status"} <= set(record)
+    assert [r["status"] for r in w.state["observation_candidates"]] == ["invalid_goal", "success"]
+    assert w.state["observation_candidates"][0]["start_rear"] == pytest.approx([1.0, 2.0, 0.0])

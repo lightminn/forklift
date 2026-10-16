@@ -217,3 +217,32 @@ def test_a_mission_without_a_final_straight_cannot_open_the_near_capture():
     with pytest.raises(RuntimeError, match="near_capture_no_final_straight"):
         w.succeed()
     assert "near_capture" not in w.state
+
+
+# M-a2 (docs/plans/2026-10-16-m-a2-source-tests-to-behaviour.md): the followers built after a detection, by rule.
+def test_every_follower_built_after_a_detection_takes_its_stages_tolerances_cusp_and_speed_rules():
+    w = World()
+    w.plans.return_home = leg(9.0)
+    w.core.options.mission_stages = ["approach", "insert", "extract", "transport", "withdraw", "return_home"]
+    w.core.settings.update(max_lateral_acceleration_mps2=0.4, max_reverse_speed_mps=0.2)
+    kept = object()
+    w.core.trackers["observe"] = kept  # the observe follower is not rebuilt here
+    w.succeed()
+    trackers = w.core.trackers
+    assert trackers["observe"] is kept
+    for name in ("approach", "insert", "extract", "transport", "withdraw", "return_home"):
+        c = trackers[name].config
+        assert c.position_tolerance_m == 0.008, name
+        assert c.yaw_tolerance_rad == (0.03 if name == "return_home" else 0.02), name
+        # gear-change cusps released alike everywhere, braked and judged at 8 mm
+        assert (c.cusp_position_tolerance_m, c.cusp_yaw_tolerance_rad, c.cusp_brake_window_m) == (0.03, 0.05, 0.008)
+        assert c.overshoot_tolerance_m == (None if name == "insert" else 0.03), name
+        assert (c.max_lateral_acceleration_mps2, c.max_reverse_speed_mps) == (0.4, 0.2), name  # read from settings
+        assert c.cusp_heading_pending_rad == (0.08 if name == "return_home" else None), name
+
+
+def test_without_speed_caps_in_the_settings_the_followers_have_none():
+    w = World()
+    w.succeed()
+    c = w.core.trackers["transport"].config
+    assert c.max_lateral_acceleration_mps2 is None and c.max_reverse_speed_mps is None

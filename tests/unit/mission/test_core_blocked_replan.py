@@ -349,3 +349,14 @@ def test_after_a_release_the_runners_closures_see_the_released_pose():
     w.replan()
     (grid,) = [c for c in w.calls if c[0] == "grid_kwargs"]
     assert grid[2]["own_pose"] == (1.2, 2.0, 0.0)  # the re-approach release's pose
+
+
+# M-a2 (docs/plans/2026-10-16-m-a2-source-tests-to-behaviour.md): the obstacle fallback's candidate records.
+def test_every_obstacle_fallback_candidate_record_keeps_its_start_status_and_searches():
+    w = World("observe", plans=[plan("no_path"), plan("no_path"), plan("invalid_goal"), plan(length=4.0)],
+              waypoints=[(0, 0, 0), (5.0, 1.0, 0.0), (6.0, 1.0, 0.0), (7.0, 1.0, 0.0)])
+    w.ms.next_candidate_index = 1
+    w.replan()
+    records = w.state["observation_candidates"]
+    assert records and all({"search_attempts", "start_rear", "status"} <= set(r) for r in records)
+    assert [r["status"] for r in records] == ["invalid_goal", "success"]

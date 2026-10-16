@@ -1213,6 +1213,388 @@
     ],
     "check_line": "E   AssertionError"
    }
+  },
+  {
+   "id": "B2:R:test_all_runner_planning_calls_use_the_recorded_config",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::16",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::17",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::18",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::19",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::20",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::21",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::22",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::23",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::24"
+   ],
+   "statement": "the runner builds the planner config once, records it, and every planning call (runner and core) uses it",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config"
+   ],
+   "reason": "walks the runner and the core together: the runner's own construction sites and the cross-file wiring stay guarded by this test as written; the core's sites are behaviour-tested (the N properties beside it)"
+  },
+  {
+   "id": "B2:R:test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::8"
+   ],
+   "statement": "followers built per stage take 0.03/0.05 (observe), 0.008/0.03 (return) and 0.008/0.02 otherwise",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules"
+   ],
+   "reason": "walks the runner and the core together: the runner's own construction sites and the cross-file wiring stay guarded by this test as written; the core's sites are behaviour-tested (the N properties beside it)"
+  },
+  {
+   "id": "B2:R:test_the_re_observation_tracker_uses_the_repositioning_tolerances",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_re_observation_tracker_uses_the_repositioning_tolerances::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_re_observation_tracker_uses_the_repositioning_tolerances::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_re_observation_tracker_uses_the_repositioning_tolerances::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_re_observation_tracker_uses_the_repositioning_tolerances::4"
+   ],
+   "statement": "the re-observation follower uses the repositioning tolerances",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_re_observation_tracker_uses_the_repositioning_tolerances"
+   ],
+   "reason": "walks the runner and the core together: the runner's own construction sites and the cross-file wiring stay guarded by this test as written; the core's sites are behaviour-tested (the N properties beside it)"
+  },
+  {
+   "id": "B2:R:test_every_runner_tracker_releases_gear_change_cusps_the_same_way",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_releases_gear_change_cusps_the_same_way::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_releases_gear_change_cusps_the_same_way::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_releases_gear_change_cusps_the_same_way::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_releases_gear_change_cusps_the_same_way::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_releases_gear_change_cusps_the_same_way::5"
+   ],
+   "statement": "every follower releases gear-change cusps at 0.03 m / 0.05 rad and brakes at 8 mm",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_releases_gear_change_cusps_the_same_way"
+   ],
+   "reason": "walks the runner and the core together: the runner's own construction sites and the cross-file wiring stay guarded by this test as written; the core's sites are behaviour-tested (the N properties beside it)"
+  },
+  {
+   "id": "B2:R:test_every_runner_tracker_accepts_small_overshoot_except_insertion",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_accepts_small_overshoot_except_insertion::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_accepts_small_overshoot_except_insertion::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_accepts_small_overshoot_except_insertion::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_accepts_small_overshoot_except_insertion::4"
+   ],
+   "statement": "every follower accepts a 0.03 m overshoot except insertion",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_accepts_small_overshoot_except_insertion"
+   ],
+   "reason": "walks the runner and the core together: the runner's own construction sites and the cross-file wiring stay guarded by this test as written; the core's sites are behaviour-tested (the N properties beside it)"
+  },
+  {
+   "id": "B2:R:test_every_runner_tracker_reads_the_same_optional_speed_caps",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_reads_the_same_optional_speed_caps::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_reads_the_same_optional_speed_caps::2"
+   ],
+   "statement": "every follower reads the optional speed caps from the settings",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_reads_the_same_optional_speed_caps"
+   ],
+   "reason": "walks the runner and the core together: the runner's own construction sites and the cross-file wiring stay guarded by this test as written; the core's sites are behaviour-tested (the N properties beside it)"
+  },
+  {
+   "id": "B2:R:test_every_observation_candidate_record_keeps_its_search_attempts",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_observation_candidate_record_keeps_its_search_attempts::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_observation_candidate_record_keeps_its_search_attempts::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_observation_candidate_record_keeps_its_search_attempts::3"
+   ],
+   "statement": "every observation candidate record keeps its search attempts, start and status",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_observation_candidate_record_keeps_its_search_attempts"
+   ],
+   "reason": "walks the runner and the core together: the runner's own construction sites and the cross-file wiring stay guarded by this test as written; the core's sites are behaviour-tested (the N properties beside it)"
+  },
+  {
+   "id": "B2:N:detection-follower-tolerances",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::8"
+   ],
+   "statement": "the followers built after a detection: 0.008 m everywhere, 0.03 rad on the return, 0.02 rad otherwise",
+   "tests": [
+    "tests/unit/mission/test_core_observe_succeeded.py::test_every_follower_built_after_a_detection_takes_its_stages_tolerances_cusp_and_speed_rules"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "0.03 if name == \"observe\" else 0.008",
+    "replace": "0.03 if name == \"observe\" else 0.009"
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_observe_succeeded.py::test_every_follower_built_after_a_detection_takes_its_stages_tolerances_cusp_and_speed_rules"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B2:N:detection-follower-return-yaw",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::8"
+   ],
+   "statement": "the return follower built after a detection takes 0.03 rad",
+   "tests": [
+    "tests/unit/mission/test_core_observe_succeeded.py::test_every_follower_built_after_a_detection_takes_its_stages_tolerances_cusp_and_speed_rules"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                            else 0.03\n                            if name == \"return_home\"",
+    "replace": "                            else 0.02\n                            if name == \"return_home\""
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_observe_succeeded.py::test_every_follower_built_after_a_detection_takes_its_stages_tolerances_cusp_and_speed_rules"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B2:N:reobserve-follower-position",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_re_observation_tracker_uses_the_repositioning_tolerances::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_re_observation_tracker_uses_the_repositioning_tolerances::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_re_observation_tracker_uses_the_repositioning_tolerances::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_re_observation_tracker_uses_the_repositioning_tolerances::4"
+   ],
+   "statement": "the re-observation follower repositions to 0.03 m",
+   "tests": [
+    "tests/unit/mission/test_core_observe_failed.py::test_the_re_observation_follower_repositions_and_releases_cusps_like_every_follower"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "position_tolerance_m=0.03,\n                # Judged like a cusp in heading",
+    "replace": "position_tolerance_m=0.008,\n                # Judged like a cusp in heading"
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_observe_failed.py::test_the_re_observation_follower_repositions_and_releases_cusps_like_every_follower"
+    ],
+    "check_line": "E   assert "
+   }
+  },
+  {
+   "id": "B2:N:cusp-release-rule",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_releases_gear_change_cusps_the_same_way::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_releases_gear_change_cusps_the_same_way::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_releases_gear_change_cusps_the_same_way::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_releases_gear_change_cusps_the_same_way::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_releases_gear_change_cusps_the_same_way::5"
+   ],
+   "statement": "the core's followers brake and judge gear-change cusps at 8 mm",
+   "tests": [
+    "tests/unit/mission/test_core_observe_succeeded.py::test_every_follower_built_after_a_detection_takes_its_stages_tolerances_cusp_and_speed_rules",
+    "tests/unit/mission/test_core_observe_failed.py::test_the_re_observation_follower_repositions_and_releases_cusps_like_every_follower"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "cusp_brake_window_m=0.008,",
+    "replace": "cusp_brake_window_m=0.02,",
+    "count": 2
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_observe_succeeded.py::test_every_follower_built_after_a_detection_takes_its_stages_tolerances_cusp_and_speed_rules"
+    ],
+    "check_line": "E   assert "
+   }
+  },
+  {
+   "id": "B2:N:overshoot-except-insert",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_accepts_small_overshoot_except_insertion::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_accepts_small_overshoot_except_insertion::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_accepts_small_overshoot_except_insertion::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_accepts_small_overshoot_except_insertion::4"
+   ],
+   "statement": "the followers built after a detection accept a 0.03 m overshoot except insertion",
+   "tests": [
+    "tests/unit/mission/test_core_observe_succeeded.py::test_every_follower_built_after_a_detection_takes_its_stages_tolerances_cusp_and_speed_rules"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "else 0.03,\n                        stop_speed_mps",
+    "replace": "else 0.05,\n                        stop_speed_mps"
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_observe_succeeded.py::test_every_follower_built_after_a_detection_takes_its_stages_tolerances_cusp_and_speed_rules"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B2:N:speed-caps-from-settings",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_reads_the_same_optional_speed_caps::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_reads_the_same_optional_speed_caps::2"
+   ],
+   "statement": "the core's followers read the optional speed caps from the settings (absent = off)",
+   "tests": [
+    "tests/unit/mission/test_core_observe_succeeded.py::test_every_follower_built_after_a_detection_takes_its_stages_tolerances_cusp_and_speed_rules"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "max_reverse_speed_mps=settings.get(",
+    "replace": "max_reverse_speed_mps=0.1 or settings.get(",
+    "count": 2
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_observe_succeeded.py::test_every_follower_built_after_a_detection_takes_its_stages_tolerances_cusp_and_speed_rules"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B2:N:hold-phases-pending",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::8"
+   ],
+   "statement": "only the hold phases' followers hold a cusp heading miss for judgement",
+   "tests": [
+    "tests/unit/mission/test_core_observe_succeeded.py::test_every_follower_built_after_a_detection_takes_its_stages_tolerances_cusp_and_speed_rules"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "CUSP_HEADING_HOLD_RAD\n                        if name in CUSP_HEADING_HOLD_PHASES",
+    "replace": "CUSP_HEADING_HOLD_RAD\n                        if True"
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_observe_succeeded.py::test_every_follower_built_after_a_detection_takes_its_stages_tolerances_cusp_and_speed_rules"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B2:N:reobserve-candidate-record",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_observation_candidate_record_keeps_its_search_attempts::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_observation_candidate_record_keeps_its_search_attempts::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_observation_candidate_record_keeps_its_search_attempts::3"
+   ],
+   "statement": "a re-observation candidate record keeps its start, status and searches",
+   "tests": [
+    "tests/unit/mission/test_core_observe_failed.py::test_every_re_observation_candidate_record_keeps_its_start_status_and_searches"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                    \"start_rear\": rear.tolist(),\n",
+    "replace": ""
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_observe_failed.py::test_every_re_observation_candidate_record_keeps_its_start_status_and_searches"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B2:N:fallback-candidate-record",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_observation_candidate_record_keeps_its_search_attempts::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_observation_candidate_record_keeps_its_search_attempts::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_observation_candidate_record_keeps_its_search_attempts::3"
+   ],
+   "statement": "an obstacle-fallback candidate record keeps its start, status and searches",
+   "tests": [
+    "tests/unit/mission/test_core_blocked_replan.py::test_every_obstacle_fallback_candidate_record_keeps_its_start_status_and_searches"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "\"start_rear\": [float(v) for v in rear], \"success\": candidate_plan.success,",
+    "replace": "\"success\": candidate_plan.success,"
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_blocked_replan.py::test_every_obstacle_fallback_candidate_record_keeps_its_start_status_and_searches"
+    ],
+    "check_line": "E   AssertionError"
+   }
   }
  ]
 }
