@@ -305,3 +305,19 @@ def test_an_observe_replan_records_its_path_before_any_mission_plan_exists():
     w.ms.last_tracking = OBSERVE_MISS
     w.tick(OBSERVE_MISS)
     assert "observe" in w.state.get("paths", {})
+
+
+def test_a_held_cusp_heading_miss_in_a_held_realignment_is_decided_realign_held():
+    """M-a2: no recovery in a held realignment (S4c-3) -- the hold is decided realign_held and the miss latched."""
+    w = World("return_home", slam_mode="holding", realign=True)
+    w.tick(PENDING)
+    (decide,) = [c for c in w.calls if c[0] == "decide"]
+    assert decide[1][1] == "realign_held" and "fail_pending" in w.names() and "holds.tick" not in w.names()
+
+
+def test_the_observe_replan_budget_counts_only_the_replans_since_the_legs_start():
+    """M-a2: two replans spent on an earlier leg leave a new leg's budget whole."""
+    w = World("observe", observe_replans=2, plans=[plan()])
+    w.state["observe_replan_leg"] = {"start": 2, "serial": 8}  # this leg began after those two
+    w.tick(OBSERVE_MISS)
+    assert "plan_observation_leg" in w.names()

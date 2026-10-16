@@ -3334,6 +3334,494 @@
     "tests/unit/test_isaac_transport_planning_config.py::test_near_protection_prediction_screens_only_the_last_correction"
    ],
    "reason": "walks the runner and the core together: the runner's own sites, constants and cross-file order stay guarded by this test as written; the core's behaviour is guarded by the D/N properties beside it"
+  },
+  {
+   "id": "B5:R:test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::6"
+   ],
+   "statement": "the return turnaround runs on the first live return plan, only after the release",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release"
+   ],
+   "reason": "walks the runner and the core together: the runner's own sites, constants and cross-file order stay guarded by this test as written; the core's behaviour is guarded by the D/N properties beside it"
+  },
+  {
+   "id": "B5:turnaround-after-release",
+   "class": "D",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::6"
+   ],
+   "statement": "the live return plan waits for a pending release before it plans with the turnaround",
+   "tests": [
+    "tests/unit/mission/test_core_live_leg.py::test_the_turnaround_waits_for_the_release_and_reprojects_a_changed_correction_first"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                     and slam.get(\"pending_release\") is not None)\n        ):",
+    "replace": "                     and False)\n        ):",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_live_leg.py::test_the_turnaround_waits_for_the_release_and_reprojects_a_changed_correction_first"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B5:R:test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::14"
+   ],
+   "statement": "only the observe and return followers hold a cusp heading miss for judgement (constants in the runner)",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement"
+   ],
+   "reason": "walks the runner and the core together: the runner's own sites, constants and cross-file order stay guarded by this test as written; the core's behaviour is guarded by the D/N properties beside it"
+  },
+  {
+   "id": "B5:heading-hold-release",
+   "class": "D",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::14"
+   ],
+   "statement": "a judged-good held cusp heading miss is released on the follower",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_observe.py::test_a_held_cusp_heading_miss_is_judged_from_here_and_released_or_latched"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "hold_tracker.release_cusp(True)",
+    "replace": "hold_tracker.fail_pending()",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_cusp_observe.py::test_a_held_cusp_heading_miss_is_judged_from_here_and_released_or_latched[judged0-True-released]"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B5:heading-hold-realign",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::14"
+   ],
+   "statement": "a held cusp heading miss during a held realignment is decided as realign_held",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_observe.py::test_a_held_cusp_heading_miss_in_a_held_realignment_is_decided_realign_held"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "decision = \"realign_held\"",
+    "replace": "decision = \"released\"",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_cusp_observe.py::test_a_held_cusp_heading_miss_in_a_held_realignment_is_decided_realign_held"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B5:R:test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::11"
+   ],
+   "statement": "the observe replan budget is per leg and each near leg opens its own (constant in the runner)",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own"
+   ],
+   "reason": "walks the runner and the core together: the runner's own sites, constants and cross-file order stay guarded by this test as written; the core's behaviour is guarded by the D/N properties beside it"
+  },
+  {
+   "id": "B5:observe-budget-per-leg",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::11"
+   ],
+   "statement": "the observe replan budget counts the replans since the leg's start",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_observe.py::test_the_observe_replan_budget_counts_only_the_replans_since_the_legs_start"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "len(state[\"observe_replans\"]) - state[\"observe_replan_leg\"][\"start\"]",
+    "replace": "len(state[\"observe_replans\"])",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_cusp_observe.py::test_the_observe_replan_budget_counts_only_the_replans_since_the_legs_start"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B5:near-leg-opens-budget",
+   "class": "D",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::11"
+   ],
+   "statement": "a near leg opens its own observe replan budget",
+   "tests": [
+    "tests/unit/mission/test_core_near_capture.py::test_the_first_far_observation_drives_the_near_leg_with_its_own_replan_budget"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                \"start\": len(state[\"observe_replans\"]),",
+    "replace": "                \"start\": 0,",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_near_capture.py::test_the_first_far_observation_drives_the_near_leg_with_its_own_replan_budget"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B5:R:test_the_steering_probe_runs_after_the_spawn_checks_and_ends_the_run",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_steering_probe_runs_after_the_spawn_checks_and_ends_the_run::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_steering_probe_runs_after_the_spawn_checks_and_ends_the_run::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_steering_probe_runs_after_the_spawn_checks_and_ends_the_run::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_steering_probe_runs_after_the_spawn_checks_and_ends_the_run::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_steering_probe_runs_after_the_spawn_checks_and_ends_the_run::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_steering_probe_runs_after_the_spawn_checks_and_ends_the_run::6"
+   ],
+   "statement": "the steering probe runs after the spawn checks",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_steering_probe_runs_after_the_spawn_checks_and_ends_the_run"
+   ],
+   "reason": "the code it guards stays in the runner (the steering probe, the plant readback and settings, the encoder and odometry wiring, the tracker book, the leg-switch stamping, the boundary record's close)"
+  },
+  {
+   "id": "B5:R:test_the_probe_segments_cover_each_curvature_standing_forward_and_reverse",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_probe_segments_cover_each_curvature_standing_forward_and_reverse::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_probe_segments_cover_each_curvature_standing_forward_and_reverse::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_probe_segments_cover_each_curvature_standing_forward_and_reverse::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_probe_segments_cover_each_curvature_standing_forward_and_reverse::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_probe_segments_cover_each_curvature_standing_forward_and_reverse::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_probe_segments_cover_each_curvature_standing_forward_and_reverse::6"
+   ],
+   "statement": "the probe segments",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_probe_segments_cover_each_curvature_standing_forward_and_reverse"
+   ],
+   "reason": "the code it guards stays in the runner (the steering probe, the plant readback and settings, the encoder and odometry wiring, the tracker book, the leg-switch stamping, the boundary record's close)"
+  },
+  {
+   "id": "B5:R:test_the_long_probe_set_holds_each_run_long_enough_and_comes_back",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_long_probe_set_holds_each_run_long_enough_and_comes_back::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_long_probe_set_holds_each_run_long_enough_and_comes_back::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_long_probe_set_holds_each_run_long_enough_and_comes_back::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_long_probe_set_holds_each_run_long_enough_and_comes_back::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_long_probe_set_holds_each_run_long_enough_and_comes_back::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_long_probe_set_holds_each_run_long_enough_and_comes_back::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_long_probe_set_holds_each_run_long_enough_and_comes_back::7"
+   ],
+   "statement": "the long probe set",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_long_probe_set_holds_each_run_long_enough_and_comes_back"
+   ],
+   "reason": "the code it guards stays in the runner (the steering probe, the plant readback and settings, the encoder and odometry wiring, the tracker book, the leg-switch stamping, the boundary record's close)"
+  },
+  {
+   "id": "B5:R:test_the_probe_window_metrics_read_curvature_residual_and_rolling_ratio",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_probe_window_metrics_read_curvature_residual_and_rolling_ratio::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_probe_window_metrics_read_curvature_residual_and_rolling_ratio::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_probe_window_metrics_read_curvature_residual_and_rolling_ratio::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_probe_window_metrics_read_curvature_residual_and_rolling_ratio::4"
+   ],
+   "statement": "the probe window metrics",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_probe_window_metrics_read_curvature_residual_and_rolling_ratio"
+   ],
+   "reason": "the code it guards stays in the runner (the steering probe, the plant readback and settings, the encoder and odometry wiring, the tracker book, the leg-switch stamping, the boundary record's close)"
+  },
+  {
+   "id": "B5:R:test_the_plant_backend_readback_uses_the_isaac_5_1_body_getters",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_plant_backend_readback_uses_the_isaac_5_1_body_getters::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_plant_backend_readback_uses_the_isaac_5_1_body_getters::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_plant_backend_readback_uses_the_isaac_5_1_body_getters::3"
+   ],
+   "statement": "the plant readback getters",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_plant_backend_readback_uses_the_isaac_5_1_body_getters"
+   ],
+   "reason": "the code it guards stays in the runner (the steering probe, the plant readback and settings, the encoder and odometry wiring, the tracker book, the leg-switch stamping, the boundary record's close)"
+  },
+  {
+   "id": "B5:R:test_the_cause_separation_settings_are_probe_only_and_recorded",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_cause_separation_settings_are_probe_only_and_recorded::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_cause_separation_settings_are_probe_only_and_recorded::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_cause_separation_settings_are_probe_only_and_recorded::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_cause_separation_settings_are_probe_only_and_recorded::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_cause_separation_settings_are_probe_only_and_recorded::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_cause_separation_settings_are_probe_only_and_recorded::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_cause_separation_settings_are_probe_only_and_recorded::7"
+   ],
+   "statement": "the cause-separation settings",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_cause_separation_settings_are_probe_only_and_recorded"
+   ],
+   "reason": "the code it guards stays in the runner (the steering probe, the plant readback and settings, the encoder and odometry wiring, the tracker book, the leg-switch stamping, the boundary record's close)"
+  },
+  {
+   "id": "B5:R:test_the_reverse_first_long_set_swaps_each_pair_and_keeps_the_segments",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_reverse_first_long_set_swaps_each_pair_and_keeps_the_segments::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_reverse_first_long_set_swaps_each_pair_and_keeps_the_segments::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_reverse_first_long_set_swaps_each_pair_and_keeps_the_segments::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_reverse_first_long_set_swaps_each_pair_and_keeps_the_segments::4"
+   ],
+   "statement": "the reverse-first long set",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_reverse_first_long_set_swaps_each_pair_and_keeps_the_segments"
+   ],
+   "reason": "the code it guards stays in the runner (the steering probe, the plant readback and settings, the encoder and odometry wiring, the tracker book, the leg-switch stamping, the boundary record's close)"
+  },
+  {
+   "id": "B5:R:test_the_encoder_model_feeds_the_odometry_increments_and_is_part_of_the_contract",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_encoder_model_feeds_the_odometry_increments_and_is_part_of_the_contract::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_encoder_model_feeds_the_odometry_increments_and_is_part_of_the_contract::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_encoder_model_feeds_the_odometry_increments_and_is_part_of_the_contract::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_encoder_model_feeds_the_odometry_increments_and_is_part_of_the_contract::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_encoder_model_feeds_the_odometry_increments_and_is_part_of_the_contract::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_encoder_model_feeds_the_odometry_increments_and_is_part_of_the_contract::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_encoder_model_feeds_the_odometry_increments_and_is_part_of_the_contract::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_encoder_model_feeds_the_odometry_increments_and_is_part_of_the_contract::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_encoder_model_feeds_the_odometry_increments_and_is_part_of_the_contract::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_encoder_model_feeds_the_odometry_increments_and_is_part_of_the_contract::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_encoder_model_feeds_the_odometry_increments_and_is_part_of_the_contract::11"
+   ],
+   "statement": "the encoder model wiring",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_encoder_model_feeds_the_odometry_increments_and_is_part_of_the_contract"
+   ],
+   "reason": "the code it guards stays in the runner (the steering probe, the plant readback and settings, the encoder and odometry wiring, the tracker book, the leg-switch stamping, the boundary record's close)"
+  },
+  {
+   "id": "B5:R:test_the_pocket_check_is_refused_with_a_team_spec_encoder_model",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_pocket_check_is_refused_with_a_team_spec_encoder_model::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_pocket_check_is_refused_with_a_team_spec_encoder_model::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_pocket_check_is_refused_with_a_team_spec_encoder_model::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_pocket_check_is_refused_with_a_team_spec_encoder_model::4"
+   ],
+   "statement": "the pocket check refused with a team-spec encoder",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_pocket_check_is_refused_with_a_team_spec_encoder_model"
+   ],
+   "reason": "the code it guards stays in the runner (the steering probe, the plant readback and settings, the encoder and odometry wiring, the tracker book, the leg-switch stamping, the boundary record's close)"
+  },
+  {
+   "id": "B5:R:test_the_tracker_book_keeps_every_switch_with_its_owner_and_version",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_tracker_book_keeps_every_switch_with_its_owner_and_version::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_tracker_book_keeps_every_switch_with_its_owner_and_version::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_tracker_book_keeps_every_switch_with_its_owner_and_version::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_tracker_book_keeps_every_switch_with_its_owner_and_version::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_tracker_book_keeps_every_switch_with_its_owner_and_version::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_tracker_book_keeps_every_switch_with_its_owner_and_version::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_tracker_book_keeps_every_switch_with_its_owner_and_version::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_tracker_book_keeps_every_switch_with_its_owner_and_version::8"
+   ],
+   "statement": "the tracker book",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_tracker_book_keeps_every_switch_with_its_owner_and_version"
+   ],
+   "reason": "the code it guards stays in the runner (the steering probe, the plant readback and settings, the encoder and odometry wiring, the tracker book, the leg-switch stamping, the boundary record's close)"
+  },
+  {
+   "id": "B5:R:test_the_runner_stamps_every_leg_switch_and_the_plant_record_carries_friction",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_runner_stamps_every_leg_switch_and_the_plant_record_carries_friction::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_runner_stamps_every_leg_switch_and_the_plant_record_carries_friction::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_runner_stamps_every_leg_switch_and_the_plant_record_carries_friction::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_runner_stamps_every_leg_switch_and_the_plant_record_carries_friction::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_runner_stamps_every_leg_switch_and_the_plant_record_carries_friction::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_runner_stamps_every_leg_switch_and_the_plant_record_carries_friction::6"
+   ],
+   "statement": "leg-switch stamping, plant friction",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_runner_stamps_every_leg_switch_and_the_plant_record_carries_friction"
+   ],
+   "reason": "the code it guards stays in the runner (the steering probe, the plant readback and settings, the encoder and odometry wiring, the tracker book, the leg-switch stamping, the boundary record's close)"
+  },
+  {
+   "id": "B5:R:test_the_odometry_wheel_radius_is_the_odometrys_own_and_part_of_the_contract",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_odometry_wheel_radius_is_the_odometrys_own_and_part_of_the_contract::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_odometry_wheel_radius_is_the_odometrys_own_and_part_of_the_contract::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_odometry_wheel_radius_is_the_odometrys_own_and_part_of_the_contract::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_odometry_wheel_radius_is_the_odometrys_own_and_part_of_the_contract::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_odometry_wheel_radius_is_the_odometrys_own_and_part_of_the_contract::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_odometry_wheel_radius_is_the_odometrys_own_and_part_of_the_contract::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_odometry_wheel_radius_is_the_odometrys_own_and_part_of_the_contract::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_odometry_wheel_radius_is_the_odometrys_own_and_part_of_the_contract::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_odometry_wheel_radius_is_the_odometrys_own_and_part_of_the_contract::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_odometry_wheel_radius_is_the_odometrys_own_and_part_of_the_contract::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_odometry_wheel_radius_is_the_odometrys_own_and_part_of_the_contract::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_odometry_wheel_radius_is_the_odometrys_own_and_part_of_the_contract::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_odometry_wheel_radius_is_the_odometrys_own_and_part_of_the_contract::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_odometry_wheel_radius_is_the_odometrys_own_and_part_of_the_contract::14"
+   ],
+   "statement": "the odometry wheel radius",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_odometry_wheel_radius_is_the_odometrys_own_and_part_of_the_contract"
+   ],
+   "reason": "the code it guards stays in the runner (the steering probe, the plant readback and settings, the encoder and odometry wiring, the tracker book, the leg-switch stamping, the boundary record's close)"
+  },
+  {
+   "id": "B5:R:test_the_obstacle_layers_age_table_must_match_the_runs_odometry",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_obstacle_layers_age_table_must_match_the_runs_odometry::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_obstacle_layers_age_table_must_match_the_runs_odometry::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_obstacle_layers_age_table_must_match_the_runs_odometry::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_obstacle_layers_age_table_must_match_the_runs_odometry::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_obstacle_layers_age_table_must_match_the_runs_odometry::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_obstacle_layers_age_table_must_match_the_runs_odometry::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_obstacle_layers_age_table_must_match_the_runs_odometry::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_obstacle_layers_age_table_must_match_the_runs_odometry::8"
+   ],
+   "statement": "the age table must match the odometry",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_obstacle_layers_age_table_must_match_the_runs_odometry"
+   ],
+   "reason": "the code it guards stays in the runner (the steering probe, the plant readback and settings, the encoder and odometry wiring, the tracker book, the leg-switch stamping, the boundary record's close)"
+  },
+  {
+   "id": "B5:R:test_the_boundary_record_closes_an_exit_tick_with_its_branches_and_the_propagating_failure",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_boundary_record_closes_an_exit_tick_with_its_branches_and_the_propagating_failure::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_boundary_record_closes_an_exit_tick_with_its_branches_and_the_propagating_failure::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_boundary_record_closes_an_exit_tick_with_its_branches_and_the_propagating_failure::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_boundary_record_closes_an_exit_tick_with_its_branches_and_the_propagating_failure::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_boundary_record_closes_an_exit_tick_with_its_branches_and_the_propagating_failure::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_boundary_record_closes_an_exit_tick_with_its_branches_and_the_propagating_failure::6"
+   ],
+   "statement": "the record's exit tick",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_boundary_record_closes_an_exit_tick_with_its_branches_and_the_propagating_failure"
+   ],
+   "reason": "the code it guards stays in the runner (the steering probe, the plant readback and settings, the encoder and odometry wiring, the tracker book, the leg-switch stamping, the boundary record's close)"
   }
  ]
 }
