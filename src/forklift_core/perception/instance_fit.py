@@ -649,7 +649,7 @@ def read_parametric_face(face: FacePlane, pts_u, pts_h, rays, support_z: float, 
     if len(members) < 3 or len(openings) < 2:
         return None, f"layout:{len(members)}m{len(openings)}o"
     c = (umin + umax) / 2
-    deck = (rh > support_z + ceiling + 0.005) & (rh < top - 0.002)
+    deck = (rh > support_z + ceiling) & (rh < top)
     ends = []
     for edge, side in ((umin, -1.0), (umax, 1.0)):
         off = side * (ru - edge)
@@ -669,8 +669,11 @@ def read_parametric_face(face: FacePlane, pts_u, pts_h, rays, support_z: float, 
         # Occluded at deck height is not observed either (Codex review A round 3).
         missing = (deck & window & ((rc == UNOBSERVED) | (rc == FRONT))).sum()
         unseen = missing >= params.edge_min_hits and missing > seen_behind
+        # And open space must be seen at deck height: lane-height see-through alone can be a
+        # neighbour's openings beyond a cut (Codex review A round 4). Dev cost: 10-13 of ~125 true ends.
         ends.append(bool(((beyond & (rc == BEHIND)).sum() >= params.edge_min_hits)
                          and ((beyond & (rc == FRONT)).sum() < params.edge_min_hits)
+                         and seen_behind >= params.edge_min_hits
                          and not continued and not unseen))
     layout = FaceLayout("x", umax - umin, math.nan,
                         tuple((lo * b + umin - c, hi * b + umin - c) for lo, hi in members),

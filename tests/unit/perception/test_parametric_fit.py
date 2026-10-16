@@ -337,3 +337,14 @@ def test_a_non_standard_entry_axis_waits_for_the_near_range():
     cand, _ = _fit_spec(spec, rt.Placement(3.0, -0.9, math.radians(30.0), 0.0), 0.29,
                         load=lambda s: LoadDeclaration(2.0, 1.0, 0.2, 0.0))
     assert cand.pickable is not True and "entry_axis" in cand.pending
+
+
+def test_an_end_needs_open_space_seen_at_deck_height():
+    """Codex review A round 4: the touching cut also cut at z < 0.12 m leaves a 6.7 mm deck band with
+    no rays beyond the ends; lane-height see-through alone (the neighbour's openings) is not an end."""
+    out, xyz, mask = _touching_cut()
+    with np.errstate(invalid="ignore"):
+        low = mask & (xyz[..., 2] < 0.12)
+    cand = F.fit_instance(out.scene, InstanceProposal("p0", low, 1.0, "oracle"), specs=SPECS, setup=ForkSetup(0.3725),
+                          load_for=_load)
+    assert cand is None or not cand.counted, (cand.hypothesis, cand.geometry, cand.reasons)
