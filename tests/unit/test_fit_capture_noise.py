@@ -78,8 +78,8 @@ def test_levels_are_per_resolution_with_widths_at_one_source_fx():
 def test_each_level_is_checked_against_its_own_kind_of_variance():
     """Codex review 2026-10-17: the frame levels were compared with the temporal variances, which hid a
     one-third under-prediction. The reproduction check takes the variances of the level's own kind."""
-    steps = list(fc.fit.STEPS)
-    row = {"distance_m": 2.0, "shape": [120, 160], "fx": 388.8,
+    steps = list(fc.fit.STEPS) + list(fc.DIAGNOSTIC_STEPS)
+    row = {"distance_m": 2.0, "shape": [200, 260], "fx": 388.8,
            "var": {"temporal": {"u": {s: 1.0 for s in steps}, "v": {s: 1.0 for s in steps}},
                    "frame": {"u": {s: 2.0 for s in steps}, "v": {s: 2.0 for s in steps}}}}
     level = {"components": [{"k": 0.005, "correlation_px_source": [6.0, 4.0]}]}
@@ -120,3 +120,28 @@ def test_the_input_hash_covers_the_frames(tmp_path):
     before = fc._files_sha256([tmp_path / "c"])
     Image.fromarray(np.full((20, 30), 1001, np.uint16)).save(tmp_path / "c" / "z16_000001.png")
     assert fc._files_sha256([tmp_path / "c"]) != before
+
+
+def test_walls_are_chosen_within_a_tolerance_and_missing_ones_fail():
+    """Codex review 2026-10-17: a measured 2.003 m was dropped by an exact match, leaving no level."""
+    base = {"surface": "wall", "fx": 388.8, "mode": 640,
+            "temporal": {"short": [0.0006, [0.3, 0.0]], "long": [0.005, [5.7, 3.9]]},
+            "frame": {"short": [0.0008, [0.3, 0.0]], "long": [0.006, [6.2, 4.2]]}}
+    fits = [dict(base, label="a", distance_m=2.003), dict(base, label="b", distance_m=3.007)]
+    levels = fc.build_levels(fits, source_fx=388.8, distances=(2.0, 3.0))
+    assert levels["temporal_640"]["from"] == ["a", "b"]
+    with pytest.raises(ValueError, match="no wall capture"):
+        fc.build_levels([fits[0]], source_fx=388.8, distances=(2.0, 3.0))
+
+
+def test_the_reproduction_check_reports_unfitted_scales_and_the_plane_residual():
+    """Codex review 2026-10-17: a wide component the fit's steps (1-32) do not see passed the check;
+    steps 48 and 64 and the one-frame plane residual are compared too."""
+    steps = list(fc.fit.STEPS) + list(fc.DIAGNOSTIC_STEPS)
+    row = {"distance_m": 2.0, "shape": [200, 260], "fx": 388.8,
+           "var": {"temporal": {"u": {s: 1.0 for s in steps}, "v": {s: 1.0 for s in steps}}},
+           "plane_residual_m": {"temporal": 0.01}}
+    level = {"components": [{"k": 0.005, "correlation_px_source": [6.0, 4.0]}]}
+    r = fc.reproduction(level, row, kind="temporal", source_fx=388.8, frames=1)
+    assert r["steps"][-2:] == [48, 64] and len(r["ratio_u"]) == len(steps)
+    assert r["plane_residual_ratio"] > 0

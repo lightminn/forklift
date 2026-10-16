@@ -36,6 +36,8 @@ from forklift_core.perception.depth_noise import correlated_field  # noqa: E402
 
 DITHER_M = 0.0005
 PROVISIONAL_DROPOUT = 0.05028932548774274   # config/depth_noise_d435i.yaml, kept so only the components change
+DIAGNOSTIC_STEPS = (48, 64)   # scales the fit does not use, compared in the reproduction check
+DISTANCE_TOL_M = 0.25         # a capture belongs to a nominal distance within this (measured distances differ)
 
 
 def load_capture(folder: Path):
@@ -70,21 +72,32 @@ def temporal_frames(stack, distance_m: float):
     return 1.0 / (1.0 / distance_m + np.where(valid, resid, np.nan))
 
 
+def plane_residual(depth) -> float:
+    """Robust scale (1.4826 MAD) of the depth residual to a plane in pixel coordinates."""
+    v, u = np.nonzero(np.isfinite(depth))
+    z = depth[v, u]
+    a = np.column_stack((u, v, np.ones_like(u))).astype(float)
+    r = z - a @ np.linalg.lstsq(a, z, rcond=None)[0]
+    return float(1.4826 * np.median(np.abs(r - np.median(r))))
+
+
 def fit_frame(depth, z_range) -> dict:
-    """{'short': [k, [gu, gv]], 'long': [k, [gu, gv]], 'residual': r} for one frame."""
+    """{'short': [k, [gu, gv]], 'long': [k, [gu, gv]], 'residual': r, 'var_u'/'var_v': variances at the
+    fit's steps and the diagnostic ones, 'plane_residual_m'} for one frame."""
     valid = np.isfinite(depth)
     var = {axis: {s: fit.robust_variance(fit.second_differences(depth, axis=axis, step=s, z_range=z_range, valid=valid))
-                  for s in fit.STEPS} for axis in (0, 1)}
-    found = fit.fit_noise_components(var[1], var[0])
+                  for s in tuple(fit.STEPS) + DIAGNOSTIC_STEPS} for axis in (0, 1)}
+    found = fit.fit_noise_components({s: var[1][s] for s in fit.STEPS}, {s: var[0][s] for s in fit.STEPS})
     comps = [[float(k), [float(g) for g in w]] for k, w in found.components]
     while len(comps) < 2:
         comps.insert(0, [0.0, [0.0, 0.0]])
-    return {"short": comps[0], "long": comps[-1], "residual": float(found.rel_residual_rms), "var_u": var[1], "var_v": var[0]}
+    return {"short": comps[0], "long": comps[-1], "residual": float(found.rel_residual_rms), "var_u": var[1], "var_v": var[0],
+            "plane_residual_m": plane_residual(depth)}
 
 
 def _median_variances(rows) -> dict:
     """Per-step second-difference variances, median over the frames: {'u': {step: v}, 'v': {...}}."""
-    return {axis: {s: float(np.median([r[key][s] for r in rows])) for s in fit.STEPS}
+    return {axis: {s: float(np.median([r[key][s] for r in rows])) for s in tuple(fit.STEPS) + DIAGNOSTIC_STEPS}
             for axis, key in (("u", "var_u"), ("v", "var_v"))}
 
 
@@ -110,6 +123,8 @@ def capture_fit(folder: Path, *, seed: int = 0, frames=None) -> dict:
             "fx": float(meta["device"]["intrinsics"]["fx"]), "mode": int(st["width"]),
             "temporal": _median_components(t_rows), "frame": _median_components(f_rows),
             "var": {"temporal": _median_variances(t_rows), "frame": _median_variances(f_rows)},
+            "plane_residual_m": {"temporal": float(np.median([r["plane_residual_m"] for r in t_rows])),
+                                 "frame": float(np.median([r["plane_residual_m"] for r in f_rows]))},
             "shape": list(stack.shape[1:]),
             "temporal_tail_4sigma": tail_fraction(1.0 / temporal - 1.0 / dist),
             "frames": int(stack.shape[0])}
@@ -143,13 +158,22 @@ def surface_check(stack, *, min_pixels: int = 500) -> dict:
     return {"status": "measured", "face_m": face, "pixels": n, "sigma_m": sigma_w * face ** 2}
 
 
+def in_range(row, distances) -> bool:
+    return any(abs(row["distance_m"] - d) <= DISTANCE_TOL_M for d in distances)
+
+
 def build_levels(fits, *, source_fx: float, distances=(2.0, 3.0)) -> dict:
-    """Median components of the wall captures at the given distances, per resolution and kind."""
+    """Median components of the wall captures near the given distances, per resolution and kind. Fails
+    if a resolution has no wall capture in range or a distance is covered by none (Codex review)."""
+    walls = [f for f in fits if f["surface"] == "wall"]
+    for d in distances:
+        if not any(abs(f["distance_m"] - d) <= DISTANCE_TOL_M for f in walls):
+            raise ValueError(f"no wall capture at {d} m")
     levels = {}
-    for mode in sorted({f["mode"] for f in fits}):
-        rows = [f for f in fits if f["mode"] == mode and f["surface"] == "wall" and f["distance_m"] in distances]
+    for mode in sorted({f["mode"] for f in walls}):
+        rows = [f for f in walls if f["mode"] == mode and in_range(f, distances)]
         if not rows:
-            continue
+            raise ValueError(f"no wall capture in range for mode {mode}")
         for kind, name in (("temporal", "temporal"), ("frame", "frame")):
             comps = []
             for part in ("short", "long"):
@@ -169,7 +193,8 @@ def reproduction(level: dict, fit_row: dict, *, kind: str, source_fx: float, fra
     z = fit_row["distance_m"]
     shape = fit_row["shape"]
     ratio = fit_row["fx"] / source_fx
-    ratios_u, ratios_v, tails = [], [], []
+    ratios_u, ratios_v, tails, planes = [], [], [], []
+    steps = tuple(fit.STEPS) + DIAGNOSTIC_STEPS
     for i in range(frames):
         w = np.full(shape, 1.0 / z)
         for j, c in enumerate(level["components"]):
@@ -178,10 +203,14 @@ def reproduction(level: dict, fit_row: dict, *, kind: str, source_fx: float, fra
         depth = 1.0 / w
         for axis, store, measured in ((1, ratios_u, fit_row["var"][kind]["u"]), (0, ratios_v, fit_row["var"][kind]["v"])):
             store.append([fit.robust_variance(fit.second_differences(depth, axis=axis, step=s, z_range=(0.5 * z, 1.5 * z)))
-                          / measured[s] for s in fit.STEPS])
+                          / measured[s] for s in steps])
         tails.append(tail_fraction(w - 1.0 / z))
+        planes.append(plane_residual(depth))
+    measured_plane = (fit_row.get("plane_residual_m") or {}).get(kind)
     return {"ratio_u": np.median(ratios_u, axis=0).tolist(), "ratio_v": np.median(ratios_v, axis=0).tolist(),
-            "steps": list(fit.STEPS), "model_tail_4sigma": float(np.median(tails)),
+            "steps": list(steps), "fit_steps": list(fit.STEPS),
+            "plane_residual_ratio": float(np.median(planes) / measured_plane) if measured_plane else None,
+            "model_tail_4sigma": float(np.median(tails)),
             "measured_tail_4sigma": fit_row.get("temporal_tail_4sigma")}
 
 
@@ -215,7 +244,7 @@ def main(argv=None) -> int:
     repro = {}
     for name, level in levels.items():
         mode = int(name.split("_")[1])
-        for row in (f for f in fits if f["mode"] == mode and f["distance_m"] in (2.0, 3.0)):
+        for row in (f for f in fits if f["mode"] == mode and in_range(f, (2.0, 3.0))):
             repro[f"{name}@{row['label']}"] = reproduction(level, row, kind=name.split("_")[0], source_fx=source_fx)
     surfaces = {}
     for p in folders:
