@@ -425,6 +425,7 @@ class Arbiter:
                 self.mission.queue(HoldOn())
             elif self.mode != "TELEOP" and status == "held":
                 self.mission.queue(HoldOff())
+                status = "paused"  # what the lifecycle will be when the same tick's resume is judged (P2)
         for p in self.pending:
             if p["queued"]:
                 continue

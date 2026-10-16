@@ -268,3 +268,20 @@ def test_teleop_then_stop_in_one_batch_leaves_the_mission_paused_not_held():
     resume = r.msg("mission_resume", mission_id="m1")
     r.cycle(resume)
     assert r.reply(resume["request_id"])["t"] == "ack" and r.a.mode == "AUTO"
+
+
+
+def test_leaving_teleop_and_resuming_in_one_batch_resumes():
+    """Codex M-b review round 3 P2: the hold-off applies first in the same tick, so the resume is judged on paused."""
+    r = Rig()
+    auto(r)
+    r.cycle(r.msg("mode_request", to="PAUSED"))
+    r.stand()
+    r.cycle(r.msg("mode_request", to="TELEOP"))
+    assert r.m.status == "held"
+    r.stand()
+    leave = r.msg("mode_request", to="PAUSED")
+    resume = r.msg("mission_resume", mission_id="m1")
+    resume["control_gen"] += 1  # made after the leave's boundary
+    r.cycle(leave, resume)
+    assert r.reply(resume["request_id"])["t"] == "ack" and r.a.mode == "AUTO" and r.m.status == "resuming"
