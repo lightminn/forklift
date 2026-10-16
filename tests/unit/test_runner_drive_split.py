@@ -218,3 +218,30 @@ def test_a_c_backed_generator_is_projected_by_its_state_and_foreign_objects_refu
     assert a != b
     with pytest.raises(TypeError, match=r"near\['f'\]"):
         module.final_projection({"near": {"f": Fraction(1, 3)}}, MissionState(), tmp_path)
+
+
+def test_object_identities_in_the_containers_do_not_reach_the_projection(tmp_path):
+    from forklift_core.mission.state import MissionState
+
+    spec = importlib.util.spec_from_file_location("run_transport_projection6", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    def containers(t1, t2, rects):
+        state = {"cusp_heading_holds": [{"key": ["observe", t1, 0]}, {"key": ["transport", t2, 1]}],
+                 "cusp_heading_watch": {"tracker": t2, "hold": 1}}
+        new = {"pallet_frame": rects, "heights": {id(r): 0.3 + i for i, r in enumerate(rects)}}
+        return {"state": state, "new_obstacles": new}
+
+    from forklift_core.planning.geometry import Rectangle
+
+    ra = [Rectangle(1.0, 2.0, 0.5, 0.5, 0.0), Rectangle(3.0, 2.0, 0.5, 0.5, 0.0)]
+    rb = [Rectangle(1.0, 2.0, 0.5, 0.5, 0.0), Rectangle(3.0, 2.0, 0.5, 0.5, 0.0)]
+    a = module.final_projection(containers(111, 222, ra), MissionState(), tmp_path)
+    b = module.final_projection(containers(999, 555, rb), MissionState(), tmp_path)
+    assert a == b
+    c = module.final_projection(containers(111, 111, ra), MissionState(), tmp_path)  # one tracker, not two
+    assert c["containers"]["state"] != a["containers"]["state"]
+    live = containers(111, 222, ra)
+    module.final_projection(live, MissionState(), tmp_path)
+    assert live["state"]["cusp_heading_holds"][0]["key"][1] == 111  # the run's containers untouched
