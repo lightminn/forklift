@@ -31,8 +31,8 @@ D2_ITEMS = {
     "stall replan": [r"^state\.stall_replans", r"release_before_stall_replan"],
     "obstacle stop": [r"^obstacle\.backoff_records", r"^obstacle\.unpermitted"],
     "obstacle backoff": [r"^obstacle\.backoff_records", r"release_after_backoff"],
-    "obstacle escape": [r"^evidence:escape"],
-    "replan failure": [r"^obstacle\.replans\[.*status=(?!success)", r"^exit:obstacle_replan_failed"],
+    "obstacle escape": [r"^evidence:escape", r"^obstacle\.replans\[.*status=escape"],
+    "replan failure": [r"^obstacle\.replans\[.*status=(?!success|escape)", r"^exit:obstacle_replan_failed"],
     "certified withdrawal": [r"^evidence:withdraw=certified"],
     "docking": [r"^obstacle\.plans\[kind=docking", r"^state\.transitions\[from=approach,to=insert"],
     "return home": [r"^state\.transitions\[from=settle,to=return_home"],
@@ -52,8 +52,11 @@ def _evidence(run_dir: Path) -> list:
     if near_file.exists():
         near = json.loads(near_file.read_text())
         for c in near.get("corrections") or []:
-            redraw = (c or {}).get("redraw") or {}
-            out.append("evidence:correction=" + ("refused" if redraw.get("refused") else "accepted"))
+            accepted = (c or {}).get("accepted")  # True accepted, False refused, None still pending (not counted)
+            if accepted is True:
+                out.append("evidence:correction=accepted")
+            elif accepted is False:
+                out.append("evidence:correction=refused")
         if near.get("realign"):
             out.append("evidence:realign")
     result_file = Path(run_dir) / "result.json"
@@ -61,6 +64,9 @@ def _evidence(run_dir: Path) -> list:
         result = json.loads(result_file.read_text())
         if (result.get("near_tracking") or {}).get("realign"):
             out.append("evidence:realign")
+        for rec in ((result.get("obstacle_layer") or {}).get("replans") or []):  # an escape installed (Codex P2)
+            if isinstance(rec, dict) and rec.get("status") == "escape":
+                out.append("evidence:escape")
         for rec in ((result.get("obstacle_layer") or {}).get("backoff_records") or []):
             if isinstance(rec, dict) and rec.get("escape") and (rec["escape"] if not isinstance(rec["escape"], dict)
                                                                  else rec["escape"].get("chosen") is not None):

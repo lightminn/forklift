@@ -1,0 +1,576 @@
+{
+ "items": {
+  "observation candidate switch / re-observation": {
+   "covered": true,
+   "runs": {
+    "f_p2/seed_2_v0.055_plain_0/run": [
+     "state.observation_candidates[status=success]",
+     "state.observe_replans[status=success]"
+    ],
+    "f_n3/seed_3_v0.055_none_0/run": [
+     "state.observe_replans[status=success]"
+    ],
+    "r5c_cl/seed_8_v0.055_corr_lat_0.02/run": [
+     "state.observe_replans[status=success]"
+    ],
+    "r5c_ml/seed_3_v0.055_mis_lat_0.04/run": [
+     "state.observe_replans[status=success]",
+     "state.transitions[from=approach,to=observe]"
+    ],
+    "r5c_my/seed_5_v0.055_mis_yaw_0.03/run": [
+     "state.transitions[from=approach,to=observe]"
+    ],
+    "r5d_cl/seed_1_v0.055_corr_lat_0.06/run": [
+     "state.transitions[from=approach,to=observe]"
+    ],
+    "r5d_cy/seed_3_v0.055_corr_yaw_-0.04/run": [
+     "state.observe_replans[status=success]",
+     "state.transitions[from=approach,to=observe]"
+    ],
+    "r5d_ml/seed_1_v0.055_mis_lat_0.08/run": [
+     "state.transitions[from=approach,to=observe]"
+    ],
+    "r5d_my/seed_3_v0.055_mis_yaw_0.06/run": [
+     "state.observe_replans[status=success]",
+     "state.transitions[from=approach,to=observe]"
+    ],
+    "g_rl3/seed_3_v0.055_mis_lat_0.04/run": [
+     "state.observe_replans[status=success]",
+     "state.transitions[from=approach,to=observe]"
+    ],
+    "g_rl1/seed_1_v0.055_corr_lat_0.06/run": [
+     "state.transitions[from=approach,to=observe]"
+    ],
+    "g_ry3/seed_3_v0.055_mis_yaw_0.03/run": [
+     "state.observe_replans[status=success]"
+    ]
+   }
+  },
+  "near correction accepted": {
+   "covered": true,
+   "runs": {
+    "f_n1/seed_1_v0.055_none_0/run": [
+     "evidence:correction=accepted"
+    ],
+    "f_n3/seed_3_v0.055_none_0/run": [
+     "evidence:correction=accepted"
+    ],
+    "f_cy/seed_1_v0.055_corr_yaw_-0.015/run": [
+     "evidence:correction=accepted"
+    ],
+    "f_lo/seed_1_v0.055_lost_0.3/run": [
+     "evidence:correction=accepted"
+    ],
+    "r5c_cl/seed_8_v0.055_corr_lat_0.02/run": [
+     "evidence:correction=accepted"
+    ],
+    "r5c_ml/seed_3_v0.055_mis_lat_0.04/run": [
+     "evidence:correction=accepted"
+    ],
+    "r5c_my/seed_5_v0.055_mis_yaw_0.03/run": [
+     "evidence:correction=accepted"
+    ],
+    "r5d_cl/seed_1_v0.055_corr_lat_0.06/run": [
+     "evidence:correction=accepted"
+    ],
+    "r5d_cy/seed_3_v0.055_corr_yaw_-0.04/run": [
+     "evidence:correction=accepted"
+    ],
+    "r5d_ml/seed_1_v0.055_mis_lat_0.08/run": [
+     "evidence:correction=accepted"
+    ],
+    "r5d_my/seed_3_v0.055_mis_yaw_0.06/run": [
+     "evidence:correction=accepted"
+    ],
+    "g_rl3/seed_3_v0.055_mis_lat_0.04/run": [
+     "evidence:correction=accepted"
+    ],
+    "g_rl1/seed_1_v0.055_corr_lat_0.06/run": [
+     "evidence:correction=accepted"
+    ]
+   }
+  },
+  "near correction refused": {
+   "covered": true,
+   "runs": {
+    "r5d_cl/seed_1_v0.055_corr_lat_0.06/run": [
+     "evidence:correction=refused"
+    ],
+    "r5d_cy/seed_3_v0.055_corr_yaw_-0.04/run": [
+     "evidence:correction=refused"
+    ],
+    "g_rl1/seed_1_v0.055_corr_lat_0.06/run": [
+     "evidence:correction=refused"
+    ]
+   }
+  },
+  "observation lost": {
+   "covered": true,
+   "runs": {
+    "f_lo/seed_1_v0.055_lost_0.3/run": [
+     "near.events[event=drop_latch]",
+     "near.events[event=stop,reason=lost]"
+    ]
+   }
+  },
+  "near capture redraw / pickup retry": {
+   "covered": true,
+   "runs": {
+    "r5c_ml/seed_3_v0.055_mis_lat_0.04/run": [
+     "near.events[event=retry_start,reason=mismatch]",
+     "state.near_capture_history[status=done]"
+    ],
+    "r5c_my/seed_5_v0.055_mis_yaw_0.03/run": [
+     "near.events[event=retry_start,reason=mismatch]",
+     "state.near_capture_history[status=done]"
+    ],
+    "r5d_cl/seed_1_v0.055_corr_lat_0.06/run": [
+     "near.events[event=retry_start,reason=replan_rejected]",
+     "state.near_capture_history[status=done]"
+    ],
+    "r5d_cy/seed_3_v0.055_corr_yaw_-0.04/run": [
+     "near.events[event=retry_start,reason=replan_rejected]",
+     "state.near_capture_history[status=done]"
+    ],
+    "r5d_ml/seed_1_v0.055_mis_lat_0.08/run": [
+     "near.events[event=retry_start,reason=mismatch]",
+     "state.near_capture_history[status=done]"
+    ],
+    "r5d_my/seed_3_v0.055_mis_yaw_0.06/run": [
+     "near.events[event=retry_start,reason=mismatch]",
+     "state.near_capture_history[status=done]"
+    ],
+    "g_rl3/seed_3_v0.055_mis_lat_0.04/run": [
+     "near.events[event=retry_start,reason=mismatch]",
+     "state.near_capture_history[status=done]"
+    ],
+    "g_rl1/seed_1_v0.055_corr_lat_0.06/run": [
+     "near.events[event=retry_start,reason=replan_rejected]",
+     "state.near_capture_history[status=done]"
+    ]
+   }
+  },
+  "realignment": {
+   "covered": true,
+   "runs": {
+    "g_ry3/seed_3_v0.055_mis_yaw_0.03/run": [
+     "evidence:realign"
+    ],
+    "g_ry1/seed_1_v0.055_corr_yaw_-0.015/run": [
+     "evidence:realign"
+    ]
+   }
+  },
+  "D7 reapproach": {
+   "covered": true,
+   "runs": {
+    "f_n1/seed_1_v0.055_none_0/run": [
+     "slam.holds[event=release_docking_retry,phase=transport]",
+     "state.docking_retries"
+    ],
+    "r5d_cl/seed_1_v0.055_corr_lat_0.06/run": [
+     "state.docking_retries"
+    ],
+    "g_rl1/seed_1_v0.055_corr_lat_0.06/run": [
+     "state.docking_retries"
+    ]
+   }
+  },
+  "cusp replan / heading hold": {
+   "covered": true,
+   "runs": {
+    "f_p2/seed_2_v0.055_plain_0/run": [
+     "state.cusp_stalls[phase=observe]"
+    ],
+    "f_n3/seed_3_v0.055_none_0/run": [
+     "state.cusp_heading_holds",
+     "state.cusp_stalls[phase=observe]"
+    ],
+    "r5c_cl/seed_8_v0.055_corr_lat_0.02/run": [
+     "state.cusp_heading_holds",
+     "state.cusp_stalls[phase=observe]"
+    ],
+    "r5c_ml/seed_3_v0.055_mis_lat_0.04/run": [
+     "state.cusp_heading_holds",
+     "state.cusp_stalls[phase=observe]"
+    ],
+    "r5c_my/seed_5_v0.055_mis_yaw_0.03/run": [
+     "state.cusp_heading_holds"
+    ],
+    "r5d_cy/seed_3_v0.055_corr_yaw_-0.04/run": [
+     "state.cusp_stalls[phase=observe]",
+     "state.cusp_stalls[phase=transport]"
+    ],
+    "r5d_ml/seed_1_v0.055_mis_lat_0.08/run": [
+     "state.cusp_heading_holds"
+    ],
+    "r5d_my/seed_3_v0.055_mis_yaw_0.06/run": [
+     "state.cusp_stalls[phase=observe]"
+    ],
+    "g_rl3/seed_3_v0.055_mis_lat_0.04/run": [
+     "state.cusp_heading_holds",
+     "state.cusp_stalls[phase=observe]"
+    ],
+    "g_ry3/seed_3_v0.055_mis_yaw_0.03/run": [
+     "state.cusp_stalls[phase=observe]"
+    ]
+   }
+  },
+  "stall replan": {
+   "covered": true,
+   "runs": {
+    "r5c_my/seed_5_v0.055_mis_yaw_0.03/run": [
+     "slam.holds[event=release_before_stall_replan,phase=return_home]",
+     "state.stall_replans[phase=return_home,status=success]"
+    ],
+    "r5d_ml/seed_1_v0.055_mis_lat_0.08/run": [
+     "slam.holds[event=release_before_stall_replan,phase=return_home]",
+     "state.stall_replans[phase=return_home,status=success]"
+    ]
+   }
+  },
+  "obstacle stop": {
+   "covered": true,
+   "runs": {
+    "f_o07/seed_0_v0.055_plain_0/run": [
+     "obstacle.backoff_records[phase=transport]"
+    ],
+    "r5d_08/seed_0_v0.055_plain_0/run": [
+     "obstacle.backoff_records[phase=transport]"
+    ]
+   }
+  },
+  "obstacle backoff": {
+   "covered": true,
+   "runs": {
+    "f_o07/seed_0_v0.055_plain_0/run": [
+     "obstacle.backoff_records[phase=transport]",
+     "slam.holds[event=release_after_backoff,phase=transport]"
+    ],
+    "r5d_08/seed_0_v0.055_plain_0/run": [
+     "obstacle.backoff_records[phase=transport]",
+     "slam.holds[event=release_after_backoff,phase=transport]"
+    ]
+   }
+  },
+  "obstacle escape": {
+   "covered": false,
+   "runs": {}
+  },
+  "replan failure": {
+   "covered": true,
+   "runs": {
+    "f_o07/seed_0_v0.055_plain_0/run": [
+     "exit:obstacle_replan_failed in transport: timeout",
+     "obstacle.replans[phase=transport,status=timeout]"
+    ],
+    "r5d_08/seed_0_v0.055_plain_0/run": [
+     "exit:obstacle_replan_failed in transport: invalid_goal",
+     "obstacle.replans[phase=transport,status=invalid_goal]"
+    ]
+   }
+  },
+  "certified withdrawal": {
+   "covered": false,
+   "runs": {}
+  },
+  "docking": {
+   "covered": true,
+   "runs": {
+    "f_p0/seed_0_v0.055_plain_0/run": [
+     "obstacle.plans[kind=docking]",
+     "state.transitions[from=approach,to=insert]"
+    ],
+    "f_p2/seed_2_v0.055_plain_0/run": [
+     "obstacle.plans[kind=docking]",
+     "state.transitions[from=approach,to=insert]"
+    ],
+    "f_n1/seed_1_v0.055_none_0/run": [
+     "obstacle.plans[kind=docking]",
+     "state.transitions[from=approach,to=insert]"
+    ],
+    "f_n3/seed_3_v0.055_none_0/run": [
+     "obstacle.plans[kind=docking]",
+     "state.transitions[from=approach,to=insert]"
+    ],
+    "f_cy/seed_1_v0.055_corr_yaw_-0.015/run": [
+     "obstacle.plans[kind=docking]",
+     "state.transitions[from=approach,to=insert]"
+    ],
+    "r5c_cl/seed_8_v0.055_corr_lat_0.02/run": [
+     "obstacle.plans[kind=docking]",
+     "state.transitions[from=approach,to=insert]"
+    ],
+    "r5c_ml/seed_3_v0.055_mis_lat_0.04/run": [
+     "obstacle.plans[kind=docking]",
+     "state.transitions[from=approach,to=insert]"
+    ],
+    "r5c_my/seed_5_v0.055_mis_yaw_0.03/run": [
+     "obstacle.plans[kind=docking]",
+     "state.transitions[from=approach,to=insert]"
+    ],
+    "r5d_cl/seed_1_v0.055_corr_lat_0.06/run": [
+     "obstacle.plans[kind=docking]",
+     "state.transitions[from=approach,to=insert]"
+    ],
+    "r5d_cy/seed_3_v0.055_corr_yaw_-0.04/run": [
+     "obstacle.plans[kind=docking]",
+     "state.transitions[from=approach,to=insert]"
+    ],
+    "r5d_ml/seed_1_v0.055_mis_lat_0.08/run": [
+     "obstacle.plans[kind=docking]",
+     "state.transitions[from=approach,to=insert]"
+    ],
+    "r5d_my/seed_3_v0.055_mis_yaw_0.06/run": [
+     "obstacle.plans[kind=docking]",
+     "state.transitions[from=approach,to=insert]"
+    ],
+    "f_o01/seed_0_v0.055_plain_0/run": [
+     "obstacle.plans[kind=docking]",
+     "state.transitions[from=approach,to=insert]"
+    ],
+    "f_o04/seed_0_v0.055_plain_0/run": [
+     "obstacle.plans[kind=docking]",
+     "state.transitions[from=approach,to=insert]"
+    ],
+    "f_o06/seed_0_v0.055_plain_0/run": [
+     "obstacle.plans[kind=docking]",
+     "state.transitions[from=approach,to=insert]"
+    ],
+    "f_o07/seed_0_v0.055_plain_0/run": [
+     "state.transitions[from=approach,to=insert]"
+    ],
+    "f_o09/seed_0_v0.055_plain_0/run": [
+     "obstacle.plans[kind=docking]",
+     "state.transitions[from=approach,to=insert]"
+    ],
+    "r5o_12/seed_0_v0.055_plain_0/run": [
+     "state.transitions[from=approach,to=insert]"
+    ],
+    "r5o_14/seed_0_v0.055_plain_0/run": [
+     "state.transitions[from=approach,to=insert]"
+    ],
+    "r5d_02/seed_0_v0.055_plain_0/run": [
+     "obstacle.plans[kind=docking]",
+     "state.transitions[from=approach,to=insert]"
+    ],
+    "r5d_03/seed_0_v0.055_plain_0/run": [
+     "obstacle.plans[kind=docking]",
+     "state.transitions[from=approach,to=insert]"
+    ],
+    "r5d_08/seed_0_v0.055_plain_0/run": [
+     "state.transitions[from=approach,to=insert]"
+    ],
+    "r5d_10/seed_0_v0.055_plain_0/run": [
+     "obstacle.plans[kind=docking]",
+     "state.transitions[from=approach,to=insert]"
+    ],
+    "g_rl3/seed_3_v0.055_mis_lat_0.04/run": [
+     "obstacle.plans[kind=docking]",
+     "state.transitions[from=approach,to=insert]"
+    ],
+    "g_rl1/seed_1_v0.055_corr_lat_0.06/run": [
+     "obstacle.plans[kind=docking]",
+     "state.transitions[from=approach,to=insert]"
+    ],
+    "g_wc0/seed_0_v0.055_plain_0/run": [
+     "obstacle.plans[kind=docking]",
+     "state.transitions[from=approach,to=insert]"
+    ]
+   }
+  },
+  "return home": {
+   "covered": true,
+   "runs": {
+    "f_p0/seed_0_v0.055_plain_0/run": [
+     "state.transitions[from=settle,to=return_home]"
+    ],
+    "f_p2/seed_2_v0.055_plain_0/run": [
+     "state.transitions[from=settle,to=return_home]"
+    ],
+    "f_n1/seed_1_v0.055_none_0/run": [
+     "state.transitions[from=settle,to=return_home]"
+    ],
+    "f_n3/seed_3_v0.055_none_0/run": [
+     "state.transitions[from=settle,to=return_home]"
+    ],
+    "f_cy/seed_1_v0.055_corr_yaw_-0.015/run": [
+     "state.transitions[from=settle,to=return_home]"
+    ],
+    "r5c_cl/seed_8_v0.055_corr_lat_0.02/run": [
+     "state.transitions[from=settle,to=return_home]"
+    ],
+    "r5c_ml/seed_3_v0.055_mis_lat_0.04/run": [
+     "state.transitions[from=settle,to=return_home]"
+    ],
+    "r5c_my/seed_5_v0.055_mis_yaw_0.03/run": [
+     "state.transitions[from=settle,to=return_home]"
+    ],
+    "r5d_cl/seed_1_v0.055_corr_lat_0.06/run": [
+     "state.transitions[from=settle,to=return_home]"
+    ],
+    "r5d_cy/seed_3_v0.055_corr_yaw_-0.04/run": [
+     "state.transitions[from=settle,to=return_home]"
+    ],
+    "r5d_ml/seed_1_v0.055_mis_lat_0.08/run": [
+     "state.transitions[from=settle,to=return_home]"
+    ],
+    "r5d_my/seed_3_v0.055_mis_yaw_0.06/run": [
+     "state.transitions[from=settle,to=return_home]"
+    ],
+    "f_o01/seed_0_v0.055_plain_0/run": [
+     "state.transitions[from=settle,to=return_home]"
+    ],
+    "f_o04/seed_0_v0.055_plain_0/run": [
+     "state.transitions[from=settle,to=return_home]"
+    ],
+    "f_o06/seed_0_v0.055_plain_0/run": [
+     "state.transitions[from=settle,to=return_home]"
+    ],
+    "f_o09/seed_0_v0.055_plain_0/run": [
+     "state.transitions[from=settle,to=return_home]"
+    ],
+    "r5d_02/seed_0_v0.055_plain_0/run": [
+     "state.transitions[from=settle,to=return_home]"
+    ],
+    "r5d_03/seed_0_v0.055_plain_0/run": [
+     "state.transitions[from=settle,to=return_home]"
+    ],
+    "r5d_10/seed_0_v0.055_plain_0/run": [
+     "state.transitions[from=settle,to=return_home]"
+    ],
+    "g_rl3/seed_3_v0.055_mis_lat_0.04/run": [
+     "state.transitions[from=settle,to=return_home]"
+    ],
+    "g_rl1/seed_1_v0.055_corr_lat_0.06/run": [
+     "state.transitions[from=settle,to=return_home]"
+    ],
+    "g_wc0/seed_0_v0.055_plain_0/run": [
+     "state.transitions[from=settle,to=return_home]"
+    ]
+   }
+  },
+  "mission refusal": {
+   "covered": true,
+   "runs": {
+    "f_lo/seed_1_v0.055_lost_0.3/run": [
+     "exit:near_field_lost"
+    ],
+    "f_o07/seed_0_v0.055_plain_0/run": [
+     "exit:obstacle_replan_failed in transport: timeout"
+    ],
+    "r5d_08/seed_0_v0.055_plain_0/run": [
+     "exit:obstacle_replan_failed in transport: invalid_goal"
+    ]
+   }
+  }
+ },
+ "not_covered": [
+  "obstacle escape",
+  "certified withdrawal"
+ ],
+ "branches": {
+  "evidence:correction=accepted": 26,
+  "evidence:correction=refused": 3,
+  "evidence:realign": 2,
+  "exit:Actual truck/load footprint overlap in insert": 2,
+  "exit:near_capture_misaligned:{'along_m': 0.01891874011341637, 'lateral_m': -0.0009496": 1,
+  "exit:near_capture_realign_no_detection": 1,
+  "exit:near_field_lost": 1,
+  "exit:obstacle_replan_failed in transport: invalid_goal": 1,
+  "exit:obstacle_replan_failed in transport: timeout": 1,
+  "near.corrections": 29,
+  "near.events[event=armed]": 16,
+  "near.events[event=correction_trigger]": 29,
+  "near.events[event=drop_latch]": 1,
+  "near.events[event=insert_end_arrival]": 5,
+  "near.events[event=mismatch]": 5,
+  "near.events[event=path_revision]": 26,
+  "near.events[event=protect,phase=approach]": 12,
+  "near.events[event=release,reason=budget:budget]": 25,
+  "near.events[event=release,reason=correction:0.6]": 13,
+  "near.events[event=release,reason=correction:1.0]": 13,
+  "near.events[event=release,reason=insert_end_unconfirmed]": 1,
+  "near.events[event=retry_start,reason=mismatch]": 5,
+  "near.events[event=retry_start,reason=replan_rejected]": 3,
+  "near.events[event=stop,reason=budget:budget]": 26,
+  "near.events[event=stop,reason=correction:0.6]": 13,
+  "near.events[event=stop,reason=correction:1.0]": 16,
+  "near.events[event=stop,reason=insert_end]": 5,
+  "near.events[event=stop,reason=insert_end_unconfirmed]": 1,
+  "near.events[event=stop,reason=lost]": 1,
+  "near.events[event=stop,reason=mismatch]": 5,
+  "near.events[event=stop,reason=replan_rejected]": 3,
+  "near.events[event=terminal_standing,reason=lost]": 1,
+  "near.events[event=tracker_built]": 21,
+  "near.path_revisions": 26,
+  "near.stop_events[reason=budget:budget]": 26,
+  "near.stop_events[reason=correction:0.6]": 13,
+  "near.stop_events[reason=correction:1.0]": 16,
+  "near.stop_events[reason=insert_end]": 5,
+  "near.stop_events[reason=insert_end_unconfirmed]": 1,
+  "near.stop_events[reason=mismatch]": 5,
+  "obstacle.backoff_records[phase=transport]": 4,
+  "obstacle.live_plans[phase=return_home,status=success]": 22,
+  "obstacle.live_plans[phase=transport,status=success]": 24,
+  "obstacle.memory_events[event=retract_pickup]": 24,
+  "obstacle.plans": 91,
+  "obstacle.plans[kind=correction]": 30,
+  "obstacle.plans[kind=docking]": 45,
+  "obstacle.plans[kind=mission]": 76,
+  "obstacle.plans[kind=observe]": 12,
+  "obstacle.plans[kind=return]": 25,
+  "obstacle.replans[phase=return_home,status=success]": 3,
+  "obstacle.replans[phase=transport,status=invalid_goal]": 5,
+  "obstacle.replans[phase=transport,status=success]": 15,
+  "obstacle.replans[phase=transport,status=timeout]": 5,
+  "slam.holds[event=hold,phase=observe]": 68,
+  "slam.holds[event=hold,phase=return_home]": 24,
+  "slam.holds[event=hold,phase=transport]": 31,
+  "slam.holds[event=release,phase=settle]": 22,
+  "slam.holds[event=release,phase=transport]": 24,
+  "slam.holds[event=release_after_backoff,phase=transport]": 4,
+  "slam.holds[event=release_at_capture,phase=observe]": 30,
+  "slam.holds[event=release_before_stall_replan,phase=return_home]": 2,
+  "slam.holds[event=release_docking_retry,phase=transport]": 1,
+  "slam.holds[event=release_in_backoff_recovery,phase=transport]": 4,
+  "slam.holds[event=release_near_realign,phase=observe]": 2,
+  "slam.holds[event=release_pickup_retry,phase=approach]": 8,
+  "state.cusp_heading_holds": 6,
+  "state.cusp_stalls[phase=observe]": 10,
+  "state.cusp_stalls[phase=transport]": 1,
+  "state.docking_retries": 3,
+  "state.final_pallet_m": 66,
+  "state.leg_switches[phase=observe]": 80,
+  "state.leg_switches[phase=return_home]": 14,
+  "state.leg_switches[phase=transport]": 37,
+  "state.near_capture_history[status=done]": 8,
+  "state.near_capture_refused[status=pending]": 2,
+  "state.observation_attempts": 78,
+  "state.observation_candidates[status=success]": 1,
+  "state.observe_replans[status=success]": 11,
+  "state.paths_replaced": 45,
+  "state.planning_traces": 76,
+  "state.stall_replans[phase=return_home,status=success]": 2,
+  "state.tracker_versions[phase=approach]": 137,
+  "state.tracker_versions[phase=extract]": 103,
+  "state.tracker_versions[phase=insert]": 103,
+  "state.tracker_versions[phase=observe]": 60,
+  "state.tracker_versions[phase=return_home]": 125,
+  "state.tracker_versions[phase=transport]": 256,
+  "state.tracker_versions[phase=withdraw]": 122,
+  "state.transitions[from=approach,to=insert]": 26,
+  "state.transitions[from=approach,to=observe]": 8,
+  "state.transitions[from=extract,to=transport]": 24,
+  "state.transitions[from=home_settle,to=complete]": 22,
+  "state.transitions[from=insert,to=lift]": 24,
+  "state.transitions[from=lift,to=extract]": 24,
+  "state.transitions[from=lower,to=withdraw]": 22,
+  "state.transitions[from=observe,to=approach]": 35,
+  "state.transitions[from=observe,to=observe]": 2,
+  "state.transitions[from=return_home,to=home_settle]": 22,
+  "state.transitions[from=settle,to=return_home]": 22,
+  "state.transitions[from=transport,to=lower]": 22,
+  "state.transitions[from=withdraw,to=settle]": 22
+ }
+}

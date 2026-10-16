@@ -1,0 +1,715 @@
+{
+ "plan": "docs/plans/2026-10-16-m-a1-replay.md R5/R6",
+ "runs": [
+  {
+   "tag": "f_p0",
+   "group": "base",
+   "run": "f_p0/seed_0_v0.055_plain_0/run",
+   "seed": 0,
+   "near_inject": null,
+   "near_drop_frames_from_m": null,
+   "new_obstacles": null,
+   "near_capture_redraw": "on",
+   "obstacle_layer": "config/obstacle_layer_single.yaml",
+   "record_code": [
+    "ma1_rp_cd23f87"
+   ],
+   "replay_code": [
+    "ma1_rp_f0655d3"
+   ],
+   "mission_success": true,
+   "ending": {
+    "kind": "returned"
+   },
+   "ticks": 26557,
+   "replay_finish": "ok",
+   "replay_failure": null
+  },
+  {
+   "tag": "f_p2",
+   "group": "base",
+   "run": "f_p2/seed_2_v0.055_plain_0/run",
+   "seed": 2,
+   "near_inject": null,
+   "near_drop_frames_from_m": null,
+   "new_obstacles": null,
+   "near_capture_redraw": "on",
+   "obstacle_layer": "config/obstacle_layer_single.yaml",
+   "record_code": [
+    "ma1_rp_cd23f87"
+   ],
+   "replay_code": [
+    "ma1_rp_f0655d3"
+   ],
+   "mission_success": true,
+   "ending": {
+    "kind": "returned"
+   },
+   "ticks": 26576,
+   "replay_finish": "ok",
+   "replay_failure": null
+  },
+  {
+   "tag": "f_n1",
+   "group": "base",
+   "run": "f_n1/seed_1_v0.055_none_0/run",
+   "seed": 1,
+   "near_inject": null,
+   "near_drop_frames_from_m": null,
+   "new_obstacles": null,
+   "near_capture_redraw": "on",
+   "obstacle_layer": "config/obstacle_layer_single.yaml",
+   "record_code": [
+    "ma1_rp_cd23f87"
+   ],
+   "replay_code": [
+    "ma1_rp_f0655d3"
+   ],
+   "mission_success": true,
+   "ending": {
+    "kind": "returned"
+   },
+   "ticks": 36138,
+   "replay_finish": "ok",
+   "replay_failure": null
+  },
+  {
+   "tag": "f_n3",
+   "group": "base",
+   "run": "f_n3/seed_3_v0.055_none_0/run",
+   "seed": 3,
+   "near_inject": null,
+   "near_drop_frames_from_m": null,
+   "new_obstacles": null,
+   "near_capture_redraw": "on",
+   "obstacle_layer": "config/obstacle_layer_single.yaml",
+   "record_code": [
+    "ma1_rp_cd23f87"
+   ],
+   "replay_code": [
+    "ma1_rp_f0655d3"
+   ],
+   "mission_success": true,
+   "ending": {
+    "kind": "returned"
+   },
+   "ticks": 29878,
+   "replay_finish": "ok",
+   "replay_failure": null
+  },
+  {
+   "tag": "f_cy",
+   "group": "near_injection",
+   "run": "f_cy/seed_1_v0.055_corr_yaw_-0.015/run",
+   "seed": 1,
+   "near_inject": "correction",
+   "near_drop_frames_from_m": null,
+   "new_obstacles": null,
+   "near_capture_redraw": "on",
+   "obstacle_layer": "config/obstacle_layer_single.yaml",
+   "record_code": [
+    "ma1_rp_cd23f87"
+   ],
+   "replay_code": [
+    "ma1_rp_f0655d3"
+   ],
+   "mission_success": true,
+   "ending": {
+    "kind": "returned"
+   },
+   "ticks": 35501,
+   "replay_finish": "ok",
+   "replay_failure": null
+  },
+  {
+   "tag": "f_lo",
+   "group": "near_injection",
+   "run": "f_lo/seed_1_v0.055_lost_0.3/run",
+   "seed": 1,
+   "near_inject": null,
+   "near_drop_frames_from_m": 0.3,
+   "new_obstacles": null,
+   "near_capture_redraw": "on",
+   "obstacle_layer": "config/obstacle_layer_single.yaml",
+   "record_code": [
+    "ma1_rp_cd23f87"
+   ],
+   "replay_code": [
+    "ma1_rp_f0655d3"
+   ],
+   "mission_success": false,
+   "ending": {
+    "kind": "exception",
+    "type": "builtins:RuntimeError",
+    "message": "near_field_lost"
+   },
+   "ticks": 8212,
+   "replay_finish": "ok",
+   "replay_failure": null
+  },
+  {
+   "tag": "r5c_cl",
+   "group": "near_injection",
+   "run": "r5c_cl/seed_8_v0.055_corr_lat_0.02/run",
+   "seed": 8,
+   "near_inject": "correction",
+   "near_drop_frames_from_m": null,
+   "new_obstacles": null,
+   "near_capture_redraw": "on",
+   "obstacle_layer": "config/obstacle_layer_single.yaml",
+   "record_code": [
+    "ma1_rp_cd23f87"
+   ],
+   "replay_code": [
+    "ma1_rp_f0655d3"
+   ],
+   "mission_success": true,
+   "ending": {
+    "kind": "returned"
+   },
+   "ticks": 36328,
+   "replay_finish": "ok",
+   "replay_failure": null
+  },
+  {
+   "tag": "r5c_ml",
+   "group": "near_injection",
+   "run": "r5c_ml/seed_3_v0.055_mis_lat_0.04/run",
+   "seed": 3,
+   "near_inject": "mismatch",
+   "near_drop_frames_from_m": null,
+   "new_obstacles": null,
+   "near_capture_redraw": "on",
+   "obstacle_layer": "config/obstacle_layer_single.yaml",
+   "record_code": [
+    "ma1_rp_cd23f87"
+   ],
+   "replay_code": [
+    "ma1_rp_f0655d3"
+   ],
+   "mission_success": true,
+   "ending": {
+    "kind": "returned"
+   },
+   "ticks": 31955,
+   "replay_finish": "ok",
+   "replay_failure": null
+  },
+  {
+   "tag": "r5c_my",
+   "group": "near_injection",
+   "run": "r5c_my/seed_5_v0.055_mis_yaw_0.03/run",
+   "seed": 5,
+   "near_inject": "mismatch",
+   "near_drop_frames_from_m": null,
+   "new_obstacles": null,
+   "near_capture_redraw": "on",
+   "obstacle_layer": "config/obstacle_layer_single.yaml",
+   "record_code": [
+    "ma1_rp_cd23f87"
+   ],
+   "replay_code": [
+    "ma1_rp_f0655d3"
+   ],
+   "mission_success": true,
+   "ending": {
+    "kind": "returned"
+   },
+   "ticks": 31708,
+   "replay_finish": "ok",
+   "replay_failure": null
+  },
+  {
+   "tag": "r5d_cl",
+   "group": "near_injection",
+   "run": "r5d_cl/seed_1_v0.055_corr_lat_0.06/run",
+   "seed": 1,
+   "near_inject": "correction",
+   "near_drop_frames_from_m": null,
+   "new_obstacles": null,
+   "near_capture_redraw": "on",
+   "obstacle_layer": "config/obstacle_layer_single.yaml",
+   "record_code": [
+    "ma1_rp_cd23f87"
+   ],
+   "replay_code": [
+    "ma1_rp_f0655d3"
+   ],
+   "mission_success": true,
+   "ending": {
+    "kind": "returned"
+   },
+   "ticks": 37406,
+   "replay_finish": "ok",
+   "replay_failure": null
+  },
+  {
+   "tag": "r5d_cy",
+   "group": "near_injection",
+   "run": "r5d_cy/seed_3_v0.055_corr_yaw_-0.04/run",
+   "seed": 3,
+   "near_inject": "correction",
+   "near_drop_frames_from_m": null,
+   "new_obstacles": null,
+   "near_capture_redraw": "on",
+   "obstacle_layer": "config/obstacle_layer_single.yaml",
+   "record_code": [
+    "ma1_rp_cd23f87"
+   ],
+   "replay_code": [
+    "ma1_rp_f0655d3"
+   ],
+   "mission_success": true,
+   "ending": {
+    "kind": "returned"
+   },
+   "ticks": 34609,
+   "replay_finish": "ok",
+   "replay_failure": null
+  },
+  {
+   "tag": "r5d_ml",
+   "group": "near_injection",
+   "run": "r5d_ml/seed_1_v0.055_mis_lat_0.08/run",
+   "seed": 1,
+   "near_inject": "mismatch",
+   "near_drop_frames_from_m": null,
+   "new_obstacles": null,
+   "near_capture_redraw": "on",
+   "obstacle_layer": "config/obstacle_layer_single.yaml",
+   "record_code": [
+    "ma1_rp_cd23f87"
+   ],
+   "replay_code": [
+    "ma1_rp_f0655d3"
+   ],
+   "mission_success": true,
+   "ending": {
+    "kind": "returned"
+   },
+   "ticks": 39771,
+   "replay_finish": "ok",
+   "replay_failure": null
+  },
+  {
+   "tag": "r5d_my",
+   "group": "near_injection",
+   "run": "r5d_my/seed_3_v0.055_mis_yaw_0.06/run",
+   "seed": 3,
+   "near_inject": "mismatch",
+   "near_drop_frames_from_m": null,
+   "new_obstacles": null,
+   "near_capture_redraw": "on",
+   "obstacle_layer": "config/obstacle_layer_single.yaml",
+   "record_code": [
+    "ma1_rp_cd23f87"
+   ],
+   "replay_code": [
+    "ma1_rp_f0655d3"
+   ],
+   "mission_success": true,
+   "ending": {
+    "kind": "returned"
+   },
+   "ticks": 32215,
+   "replay_finish": "ok",
+   "replay_failure": null
+  },
+  {
+   "tag": "f_o01",
+   "group": "new_obstacles",
+   "run": "f_o01/seed_0_v0.055_plain_0/run",
+   "seed": 0,
+   "near_inject": null,
+   "near_drop_frames_from_m": null,
+   "new_obstacles": "config/p5_scenarios/n01_transport_box_tall.yaml",
+   "near_capture_redraw": "on",
+   "obstacle_layer": "config/obstacle_layer_single.yaml",
+   "record_code": [
+    "ma1_rp_cd23f87"
+   ],
+   "replay_code": [
+    "ma1_rp_f0655d3"
+   ],
+   "mission_success": true,
+   "ending": {
+    "kind": "returned"
+   },
+   "ticks": 28085,
+   "replay_finish": "ok",
+   "replay_failure": null
+  },
+  {
+   "tag": "f_o04",
+   "group": "new_obstacles",
+   "run": "f_o04/seed_0_v0.055_plain_0/run",
+   "seed": 0,
+   "near_inject": null,
+   "near_drop_frames_from_m": null,
+   "new_obstacles": "config/p5_scenarios/n04_reverse_box_tall.yaml",
+   "near_capture_redraw": "on",
+   "obstacle_layer": "config/obstacle_layer_single.yaml",
+   "record_code": [
+    "ma1_rp_cd23f87"
+   ],
+   "replay_code": [
+    "ma1_rp_f0655d3"
+   ],
+   "mission_success": true,
+   "ending": {
+    "kind": "returned"
+   },
+   "ticks": 29079,
+   "replay_finish": "ok",
+   "replay_failure": null
+  },
+  {
+   "tag": "f_o06",
+   "group": "new_obstacles",
+   "run": "f_o06/seed_0_v0.055_plain_0/run",
+   "seed": 0,
+   "near_inject": null,
+   "near_drop_frames_from_m": null,
+   "new_obstacles": "config/p5_scenarios/n06_close_box_tall.yaml",
+   "near_capture_redraw": "on",
+   "obstacle_layer": "config/obstacle_layer_single.yaml",
+   "record_code": [
+    "ma1_rp_cd23f87"
+   ],
+   "replay_code": [
+    "ma1_rp_f0655d3"
+   ],
+   "mission_success": true,
+   "ending": {
+    "kind": "returned"
+   },
+   "ticks": 26557,
+   "replay_finish": "ok",
+   "replay_failure": null
+  },
+  {
+   "tag": "f_o07",
+   "group": "new_obstacles",
+   "run": "f_o07/seed_0_v0.055_plain_0/run",
+   "seed": 0,
+   "near_inject": null,
+   "near_drop_frames_from_m": null,
+   "new_obstacles": "config/p5_scenarios/n07_wall_tall.yaml",
+   "near_capture_redraw": "on",
+   "obstacle_layer": "config/obstacle_layer_single.yaml",
+   "record_code": [
+    "ma1_rp_cd23f87"
+   ],
+   "replay_code": [
+    "ma1_rp_f0655d3"
+   ],
+   "mission_success": false,
+   "ending": {
+    "kind": "exception",
+    "type": "builtins:RuntimeError",
+    "message": "obstacle_replan_failed in transport: timeout"
+   },
+   "ticks": 8489,
+   "replay_finish": "ok",
+   "replay_failure": null
+  },
+  {
+   "tag": "f_o09",
+   "group": "new_obstacles",
+   "run": "f_o09/seed_0_v0.055_plain_0/run",
+   "seed": 0,
+   "near_inject": null,
+   "near_drop_frames_from_m": null,
+   "new_obstacles": "config/p5_scenarios/n09_sensor_silence.yaml",
+   "near_capture_redraw": "on",
+   "obstacle_layer": "config/obstacle_layer_single.yaml",
+   "record_code": [
+    "ma1_rp_cd23f87"
+   ],
+   "replay_code": [
+    "ma1_rp_f0655d3"
+   ],
+   "mission_success": true,
+   "ending": {
+    "kind": "returned"
+   },
+   "ticks": 26557,
+   "replay_finish": "ok",
+   "replay_failure": null
+  },
+  {
+   "tag": "r5o_12",
+   "group": "new_obstacles",
+   "run": "r5o_12/seed_0_v0.055_plain_0/run",
+   "seed": 0,
+   "near_inject": null,
+   "near_drop_frames_from_m": null,
+   "new_obstacles": "config/p5_scenarios/n12_face_bar.yaml",
+   "near_capture_redraw": "on",
+   "obstacle_layer": "config/obstacle_layer_single.yaml",
+   "record_code": [
+    "ma1_rp_cd23f87"
+   ],
+   "replay_code": [
+    "ma1_rp_f0655d3"
+   ],
+   "mission_success": false,
+   "ending": {
+    "kind": "exception",
+    "type": "builtins:RuntimeError",
+    "message": "Actual truck/load footprint overlap in insert"
+   },
+   "ticks": 3807,
+   "replay_finish": "ok",
+   "replay_failure": null
+  },
+  {
+   "tag": "r5o_14",
+   "group": "new_obstacles",
+   "run": "r5o_14/seed_0_v0.055_plain_0/run",
+   "seed": 0,
+   "near_inject": null,
+   "near_drop_frames_from_m": null,
+   "new_obstacles": "config/p5_scenarios/n14a_insert_bar_early.yaml",
+   "near_capture_redraw": "on",
+   "obstacle_layer": "config/obstacle_layer_single.yaml",
+   "record_code": [
+    "ma1_rp_cd23f87"
+   ],
+   "replay_code": [
+    "ma1_rp_f0655d3"
+   ],
+   "mission_success": false,
+   "ending": {
+    "kind": "exception",
+    "type": "builtins:RuntimeError",
+    "message": "Actual truck/load footprint overlap in insert"
+   },
+   "ticks": 3392,
+   "replay_finish": "ok",
+   "replay_failure": null
+  },
+  {
+   "tag": "r5d_02",
+   "group": "new_obstacles",
+   "run": "r5d_02/seed_0_v0.055_plain_0/run",
+   "seed": 0,
+   "near_inject": null,
+   "near_drop_frames_from_m": null,
+   "new_obstacles": "config/p5_scenarios/n02_return_box_tall.yaml",
+   "near_capture_redraw": "on",
+   "obstacle_layer": "config/obstacle_layer_single.yaml",
+   "record_code": [
+    "ma1_rp_cd23f87"
+   ],
+   "replay_code": [
+    "ma1_rp_f0655d3"
+   ],
+   "mission_success": true,
+   "ending": {
+    "kind": "returned"
+   },
+   "ticks": 27592,
+   "replay_finish": "ok",
+   "replay_failure": null
+  },
+  {
+   "tag": "r5d_03",
+   "group": "new_obstacles",
+   "run": "r5d_03/seed_0_v0.055_plain_0/run",
+   "seed": 0,
+   "near_inject": null,
+   "near_drop_frames_from_m": null,
+   "new_obstacles": "config/p5_scenarios/n03_side_box_tall.yaml",
+   "near_capture_redraw": "on",
+   "obstacle_layer": "config/obstacle_layer_single.yaml",
+   "record_code": [
+    "ma1_rp_cd23f87"
+   ],
+   "replay_code": [
+    "ma1_rp_f0655d3"
+   ],
+   "mission_success": true,
+   "ending": {
+    "kind": "returned"
+   },
+   "ticks": 26989,
+   "replay_finish": "ok",
+   "replay_failure": null
+  },
+  {
+   "tag": "r5d_08",
+   "group": "new_obstacles",
+   "run": "r5d_08/seed_0_v0.055_plain_0/run",
+   "seed": 0,
+   "near_inject": null,
+   "near_drop_frames_from_m": null,
+   "new_obstacles": "config/p5_scenarios/n08_destination_box_tall.yaml",
+   "near_capture_redraw": "on",
+   "obstacle_layer": "config/obstacle_layer_single.yaml",
+   "record_code": [
+    "ma1_rp_cd23f87"
+   ],
+   "replay_code": [
+    "ma1_rp_f0655d3"
+   ],
+   "mission_success": false,
+   "ending": {
+    "kind": "exception",
+    "type": "builtins:RuntimeError",
+    "message": "obstacle_replan_failed in transport: invalid_goal"
+   },
+   "ticks": 16632,
+   "replay_finish": "ok",
+   "replay_failure": null
+  },
+  {
+   "tag": "r5d_10",
+   "group": "new_obstacles",
+   "run": "r5d_10/seed_0_v0.055_plain_0/run",
+   "seed": 0,
+   "near_inject": null,
+   "near_drop_frames_from_m": null,
+   "new_obstacles": "config/p5_scenarios/n10_removed_box_tall.yaml",
+   "near_capture_redraw": "on",
+   "obstacle_layer": "config/obstacle_layer_single.yaml",
+   "record_code": [
+    "ma1_rp_cd23f87"
+   ],
+   "replay_code": [
+    "ma1_rp_f0655d3"
+   ],
+   "mission_success": true,
+   "ending": {
+    "kind": "returned"
+   },
+   "ticks": 27512,
+   "replay_finish": "ok",
+   "replay_failure": null
+  },
+  {
+   "tag": "g_rl3",
+   "group": "realign",
+   "run": "g_rl3/seed_3_v0.055_mis_lat_0.04/run",
+   "seed": 3,
+   "near_inject": "mismatch",
+   "near_drop_frames_from_m": null,
+   "new_obstacles": null,
+   "near_capture_redraw": "off",
+   "obstacle_layer": "config/obstacle_layer_single.yaml",
+   "record_code": [
+    "ma1_rp_7fd1a6d"
+   ],
+   "replay_code": [
+    "ma1_rp_ec542d5"
+   ],
+   "mission_success": true,
+   "ending": {
+    "kind": "returned"
+   },
+   "ticks": 31955,
+   "replay_finish": "ok",
+   "replay_failure": null
+  },
+  {
+   "tag": "g_rl1",
+   "group": "realign",
+   "run": "g_rl1/seed_1_v0.055_corr_lat_0.06/run",
+   "seed": 1,
+   "near_inject": "correction",
+   "near_drop_frames_from_m": null,
+   "new_obstacles": null,
+   "near_capture_redraw": "off",
+   "obstacle_layer": "config/obstacle_layer_single.yaml",
+   "record_code": [
+    "ma1_rp_7fd1a6d"
+   ],
+   "replay_code": [
+    "ma1_rp_ec542d5"
+   ],
+   "mission_success": true,
+   "ending": {
+    "kind": "returned"
+   },
+   "ticks": 37406,
+   "replay_finish": "ok",
+   "replay_failure": null
+  },
+  {
+   "tag": "g_ry3",
+   "group": "realign",
+   "run": "g_ry3/seed_3_v0.055_mis_yaw_0.03/run",
+   "seed": 3,
+   "near_inject": "mismatch",
+   "near_drop_frames_from_m": null,
+   "new_obstacles": null,
+   "near_capture_redraw": "off",
+   "obstacle_layer": "config/obstacle_layer_single.yaml",
+   "record_code": [
+    "ma1_rp_7fd1a6d"
+   ],
+   "replay_code": [
+    "ma1_rp_ec542d5"
+   ],
+   "mission_success": false,
+   "ending": {
+    "kind": "exception",
+    "type": "builtins:RuntimeError",
+    "message": "near_capture_realign_no_detection"
+   },
+   "ticks": 5185,
+   "replay_finish": "ok",
+   "replay_failure": null
+  },
+  {
+   "tag": "g_ry1",
+   "group": "realign",
+   "run": "g_ry1/seed_1_v0.055_corr_yaw_-0.015/run",
+   "seed": 1,
+   "near_inject": "correction",
+   "near_drop_frames_from_m": null,
+   "new_obstacles": null,
+   "near_capture_redraw": "off",
+   "obstacle_layer": "config/obstacle_layer_single.yaml",
+   "record_code": [
+    "ma1_rp_7fd1a6d"
+   ],
+   "replay_code": [
+    "ma1_rp_ec542d5"
+   ],
+   "mission_success": false,
+   "ending": {
+    "kind": "exception",
+    "type": "builtins:RuntimeError",
+    "message": "near_capture_misaligned:{'along_m': 0.01891874011341637, 'lateral_m': -0.0009496453772515806, 'yaw_rad': 0.01319247211926991, 'length_left_m': 2.0810812598865818}"
+   },
+   "ticks": 4164,
+   "replay_finish": "ok",
+   "replay_failure": null
+  },
+  {
+   "tag": "g_wc0",
+   "group": "certified_withdraw",
+   "run": "g_wc0/seed_0_v0.055_plain_0/run",
+   "seed": 0,
+   "near_inject": null,
+   "near_drop_frames_from_m": null,
+   "new_obstacles": null,
+   "near_capture_redraw": "on",
+   "obstacle_layer": "/home/projects/forklift/artifacts/20261013_fork_spacing/ma1audit/obstacle_layer_single_certified.yaml",
+   "record_code": [
+    "ma1_rp_7fd1a6d"
+   ],
+   "replay_code": [
+    "ma1_rp_ec542d5"
+   ],
+   "mission_success": true,
+   "ending": {
+    "kind": "returned"
+   },
+   "ticks": 26557,
+   "replay_finish": "ok",
+   "replay_failure": null
+  }
+ ]
+}
