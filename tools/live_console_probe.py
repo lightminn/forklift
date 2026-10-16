@@ -18,6 +18,7 @@ import struct
 import time
 from pathlib import Path
 
+import websockets
 from websockets.asyncio.client import connect
 
 API = "console/1"
@@ -371,7 +372,7 @@ async def marker_scenario(p: Probe, args):
 async def approach_scenario(p: Probe, args):
     """M-c completion 5: teleoperation up to an obstacle the 2D LiDAR sees. From the start pose (rear axle at
     x -2.34 facing +x) a slight right curve passes the pallet (it sits 1 m to the left; the 1.05 m scan plane does
-    not see it) towards the hall wall at x 4.7: the arc bundle permission must slow the truck and hold it short of
+    not see it -- nor does the teleoperation permission) towards the hall wall at x 4.7: the arc bundle permission must slow the truck and hold it short of
     the wall. Then reverse with the steering swung the other way (a steering change near the obstacle), then
     forward again straight at the wall. The runner's --live-test-permit-compare logs the bundle against a full
     check along the way."""
@@ -392,15 +393,18 @@ async def approach_scenario(p: Probe, args):
         return
     arm = await p.request("arm")
     p.arm_gen = (arm or {}).get("arm_gen", 0)
-    legs = (("forward_to_wall", 0.6, -0.15, args.approach_s), ("reverse_swing", -0.6, 0.4, args.approach_s / 4),
-            ("forward_again", 0.6, 0.0, args.approach_s))
+    legs = (("forward_to_wall", 0.6, args.approach_curvature, args.approach_s),
+            ("reverse_swing", -0.6, 0.4, args.approach_s / 4), ("forward_again", 0.6, 0.0, args.approach_s))
     p.report["approach"] = []
     for name, speed, curv, limit_s in legs:
         start = time.monotonic()
         still_since = None
         moved = False
         while time.monotonic() - start < limit_s and p.closed_code is None:
-            await p.teleop(speed, curv, True)
+            try:
+                await p.teleop(speed, curv, True)
+            except websockets.ConnectionClosed:
+                break  # the runner ended (its own checks stop a run): recorded below
             st = p.state or {}
             v = abs(st.get("rear_axle_speed_mps") or 0.0)
             moved = moved or v > 0.02
@@ -416,6 +420,8 @@ async def approach_scenario(p: Probe, args):
                                      "held": still_since is not None, "armed": st.get("armed"),
                                      "applied": st.get("applied"), "forbidden": st.get("teleop_forbidden")})
         p.event("leg_done", leg=name)
+        if p.closed_code is not None:
+            return
     await p.request("mode_request", to="PAUSED")
 
 
@@ -444,6 +450,9 @@ def main():
     ap.add_argument("--scenario", choices=("main", "slow", "marker", "approach"), default="main")
     ap.add_argument("--approach-s", type=float, default=600.0, help="approach scenario: wall seconds per leg at most")
     ap.add_argument("--held-s", type=float, default=15.0, help="approach scenario: standing this long ends a leg")
+    ap.add_argument("--approach-curvature", type=float, default=-0.3,
+                    help="approach scenario: the first leg's curvature ratio (-0.15 passed too close to the pallet the "
+                    "scan plane does not see, 2026-10-17)")
     ap.add_argument("--frames-dir", type=Path, default=None)
     ap.add_argument("--frames", type=int, default=300)
     ap.add_argument("--marker-s", type=float, default=600.0)
