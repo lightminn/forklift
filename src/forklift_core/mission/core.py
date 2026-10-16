@@ -2455,6 +2455,12 @@ class MissionCore:
             attempt["capture_diagnostics"] = asdict(exc.diagnostics)
             attempt["capture_attempts"] = exc.diagnostics.attempts
             require(False, f"perception_capture_failed:{exc.reason}")
+        live_abort = getattr(hooks, "live_abort", None)  # M-c: set only by the live runner
+        if live_abort is not None and live_abort():
+            # A STOP or an expiry at a physics step inside the capture (M-c plan C2): nothing after the raw capture
+            # runs -- no SLAM release, no detection, no re-observation state; the next tick pauses the mission.
+            attempt["aborted"] = "live_stop"
+            return SimpleNamespace(aborted=True)
         attempt["depth_sha256"] = G2.depth_sha256(scene_input.depth_m)
         pocket["capture"] = scene_input
         # Diagnostic dump for offline root-cause analysis (a Sink, the runner's statements).

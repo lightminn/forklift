@@ -4986,6 +4986,10 @@ def drive(S, isaac) -> None:
                 slam["odom_speed"] = float(np.mean(rates)) * odometry_wheel_radius(args)
             if slam is not None:
                 slam["odom_yaw_rate"] = (slam["odom_rear"][2] - previous_yaw) * 120.0
+                if args.live:
+                    # M-c (plan C2): the vehicle time the odometry sample was made, before the SLAM exchange below
+                    # waits (live only: a batch run's clock reads are recorded and replayed).
+                    slam["odom_mono"] = time.monotonic()
                 slam["stop_now"] = slam["stop"].update(
                     commanded_speed=slam.get("last_command", 0.0),
                     speed=slam["odom_speed"],
@@ -5194,6 +5198,7 @@ def drive(S, isaac) -> None:
                 host=args.live_host, web_root=args.live_web_root,
                 test_step_delay_s=args.live_test_step_delay_ms / 1000.0, camera_freeze=freeze_)
             live.start()
+            core.hooks.live_abort = lambda: live.stopped_in_tick  # the core stops right after a raw capture
 
             def live_step_world(render: bool) -> None:
                 sim_ = float(world.current_time - initial_time)
@@ -5202,11 +5207,13 @@ def drive(S, isaac) -> None:
                 step_world(render or camera_)
                 if slam is not None:
                     speed_, yaw_rate_ = slam.get("odom_speed"), float(slam.get("odom_yaw_rate", 0.0))
+                    made_ = slam.get("odom_mono")
                 else:
+                    made_ = live.clock()
                     rates_ = robot.get_joint_velocities()[wheels]
                     speed_, yaw_rate_ = float(np.mean(rates_[2:4])) * odometry_wheel_radius(args), 0.0
                 live.after_step(float(world.current_time - initial_time), odom_speed=speed_, yaw_rate=yaw_rate_,
-                                rendered=camera_, render_sim_time_of=lambda rt: rt - initial_time)
+                                odom_mono=made_, rendered=camera_, render_sim_time_of=lambda rt: rt - initial_time)
 
             def live_permit(curvatures, direction, check):
                 # The arbiter's own permission on the layer's latest grid, in the sim's time (plan C2: the world and
@@ -5626,16 +5633,18 @@ def drive(S, isaac) -> None:
                     if args.use_perception and ms.phase == "observe":
                         # M-a1 slice 4b-i: the capture and the detection are the core's (the capture itself a port).
                         captured_ = core.capture_and_detect(t, rear, step)
-                        attempt, attempt_number, scene_input = captured_.attempt, captured_.attempt_number, captured_.scene_input
-                        frame_diagnostics, capture_attempts = captured_.frame_diagnostics, captured_.capture_attempts
-                        capture_diagnostics, base, q, yaw = captured_.capture_diagnostics, captured_.base, captured_.q, captured_.yaw
-                        forward, rear = captured_.forward, captured_.rear
-                        if captured_.rear_stamp is not None:
-                            rear_stamp = captured_.rear_stamp
-                        prior, params, detection, observation = captured_.prior, captured_.params, captured_.detection, captured_.observation
                         # M-c (plan C2): a STOP or an expiry at a physics step inside the capture ends this tick's
-                        # mission work -- no observation handling, no transitions; the next tick pauses the mission.
-                        live_abort_ = live is not None and live.stopped_in_tick
+                        # mission work right after the raw capture (the core returns ``aborted``) -- no SLAM release,
+                        # no observation handling, no transitions; the next tick pauses the mission.
+                        live_abort_ = bool(getattr(captured_, "aborted", False))
+                        if not live_abort_:
+                            attempt, attempt_number, scene_input = captured_.attempt, captured_.attempt_number, captured_.scene_input
+                            frame_diagnostics, capture_attempts = captured_.frame_diagnostics, captured_.capture_attempts
+                            capture_diagnostics, base, q, yaw = captured_.capture_diagnostics, captured_.base, captured_.q, captured_.yaw
+                            forward, rear = captured_.forward, captured_.rear
+                            if captured_.rear_stamp is not None:
+                                rear_stamp = captured_.rear_stamp
+                            prior, params, detection, observation = captured_.prior, captured_.params, captured_.detection, captured_.observation
                         if live_abort_:
                             pass
                         elif (
@@ -5961,18 +5970,12 @@ def drive(S, isaac) -> None:
                 live_state["rear"] = tuple(float(v) for v in rear)
                 speed_now_ = live.feedback.rear_axle_speed_mps if live.feedback is not None else 0.0
                 target_steer_ = np.asarray(live_ackermann(1.0, live.arbiter.drive.kappa, args.drive_geometry).steering_rad)
+                live_safety_ = core.safety_state(t)
                 out_ = live.tick_end(
-                    t, applied_commands_, core.safety_state(t), (float(drive.speed_mps), float(drive.curvature_inv_m)),
+                    t, applied_commands_, live_safety_, (float(drive.speed_mps), float(drive.curvature_inv_m)),
                     {"measured_mps": float(speed_now_), "measured_kappa": float(kappa),
                      "steering_error_rad": float(np.max(np.abs(target_steer_ - actual_steering))),
-                     "permit": live_permit},
-                    pose={"frame": "map", "x_m": float(rear[0]), "y_m": float(rear[1]), "yaw_rad": float(rear[2]),
-                          "correction_version": None if obstacle is None else int(obstacle["version"]),
-                          "source": "slam" if slam is not None else "odom"},
-                    freshness=None,
-                    applied={"speed_mps": float(drive.speed_mps), "curvature_inv_m": float(drive.curvature_inv_m),
-                             "steering_rad": [float(v) for v in steering_command]},
-                    speed_mps=float(speed_now_))
+                     "permit": live_permit})
                 if out_.source == "teleop":
                     drive = live_ackermann(out_.speed_mps, out_.curvature_inv_m, args.drive_geometry)
                     rate_ = settings["steering_command_rate_rad_s"] * dt
@@ -5987,6 +5990,16 @@ def drive(S, isaac) -> None:
                     requested_speed = 0.0
                     state["command_speed"] = 0.0
                     state["applied_command"] = (0.0, [float(v) for v in steering_command])
+                # The state carries what is applied after the choice above (contract 6, Codex M-c round 5 P1).
+                live.publish(
+                    t, out_, live_safety_,
+                    pose={"frame": "map", "x_m": float(rear[0]), "y_m": float(rear[1]), "yaw_rad": float(rear[2]),
+                          "correction_version": None if obstacle is None else int(obstacle["version"]),
+                          "source": "slam" if slam is not None else "odom"},
+                    freshness=None,
+                    applied={"speed_mps": float(drive.speed_mps), "curvature_inv_m": float(drive.curvature_inv_m),
+                             "steering_rad": [float(v) for v in steering_command]},
+                    speed_mps=float(speed_now_))
             if dwell_standing and wheel_lock["q"] is None:
                 # Plan D8b: hold the wheels where they stand for the dwell (DWELL_WHEEL_KP).
                 controller_ = robot.get_articulation_controller()

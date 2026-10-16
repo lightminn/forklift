@@ -122,11 +122,14 @@ class LiveRuntime:
         self.link.log.clear()
         return stop_kind, records
 
-    def tick_end(self, t: float, records: list, safety: dict, candidate: tuple, drive: dict | None, *,
-                 pose: dict | None, freshness: dict | None, applied: dict | None, speed_mps: float | None):
-        """The output for this tick; the state, targets and log entries due."""
+    def tick_end(self, t: float, records: list, safety: dict, candidate: tuple, drive: dict | None):
+        """The output for this tick (the runner applies it, then calls ``publish`` with what it applied)."""
+        return self.link.end(self.clock(), records, safety, candidate, drive)
+
+    def publish(self, t: float, out, safety: dict, *, pose: dict | None, freshness: dict | None,
+                applied: dict | None, speed_mps: float | None) -> None:
+        """The state (with the command as finally applied), the targets and the log entry due this tick."""
         now = self.clock()
-        out = self.link.end(now, records, safety, candidate, drive)
         if self.link.state_due(now):
             msg = state_message(self.arbiter, out, safety, now_mono=now, rear_axle_speed_mps=speed_mps,
                                 applied=applied, pose=pose, freshness=freshness, pacing=self.pacer.report())
@@ -141,7 +144,6 @@ class LiveRuntime:
                   "speed_mps": out.speed_mps, "curvature_inv_m": out.curvature_inv_m, "armed": out.armed,
                   "deadline": None if self.arbiter.teleop is None else self.arbiter.teleop["deadline"],
                   "pacing_ok": self.pacer.ok, "step": self.step})
-        return out
 
     # --- per physics step ------------------------------------------------------------------------------------------
     def before_step(self, sim_t: float) -> bool:
@@ -165,7 +167,7 @@ class LiveRuntime:
         return zero
 
     def after_step(self, sim_t: float, *, odom_speed: float | None, yaw_rate: float, rendered: bool,
-                   render_sim_time_of=None) -> None:
+                   odom_mono: float | None = None, render_sim_time_of=None) -> None:
         """The step ended: its clock, the feedback it made, and the media."""
         if self.test_step_delay_s:
             self.sleep(self.test_step_delay_s)  # the slow-pacing test only
@@ -174,7 +176,10 @@ class LiveRuntime:
         self.step += 1
         self.step_start.append((sim_t, self._start_mono))
         if odom_speed is not None and math.isfinite(odom_speed):
-            self.feedback = Feedback(now, float(odom_speed), float(yaw_rate))  # stamped at the step that made it
+            # Stamped when the sample was made (the runner passes it; a SLAM exchange may have waited since --
+            # Codex M-c round 5 P1), else at this step's end.
+            made = now if odom_mono is None else float(odom_mono)
+            self.feedback = Feedback(made, float(odom_speed), float(yaw_rate))
         if rendered:
             self._camera(sim_t, render_sim_time_of)
         if self.step % 12 == 0:
@@ -195,8 +200,10 @@ class LiveRuntime:
         rgb, render_time = self.hooks.camera()
         if rgb is None or render_time is None or not math.isfinite(render_time):
             return
-        if render_time == self._last_render_time:
-            return  # the same capture again: no new id, its first acquisition time stands (contract 4.2)
+        if self._last_render_time is not None and render_time <= self._last_render_time:
+            # The same capture again, or an older one: no new id -- a seen capture keeps its first acquisition time
+            # and an older one is not made young (contract 4.2, Codex M-c round 5 P1).
+            return
         self._last_render_time = render_time
         acquired = self.clock()
         key = render_time if render_sim_time_of is None else render_sim_time_of(render_time)

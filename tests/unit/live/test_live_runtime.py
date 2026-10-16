@@ -102,3 +102,31 @@ def test_the_pacer_holds_the_declared_factor_through_the_runtime(tmp_path):
         assert clock.t - start == pytest.approx(119 * 2 * DT + 0.001, rel=0.01)
     finally:
         rt.close()
+
+
+
+def test_a_capture_seen_before_is_not_given_a_new_id(tmp_path):
+    """Codex M-c round 5 P1: render times 1, 2, 1 -- the old capture is not made young."""
+    rt, core, did, clock = runtime(tmp_path)
+    rt.start()
+    try:
+        for k, render in enumerate((1.0, 2.0, 1.0)):
+            did["render"] = render
+            step(rt, clock, 2.0 + k * DT, rendered=True)
+        assert rt.frame_id == 2
+    finally:
+        rt.close()
+
+
+def test_feedback_keeps_the_time_its_sample_was_made(tmp_path):
+    """Codex M-c round 5 P1: the odometry was made before a 0.5 s SLAM wait; its stamp is the earlier time."""
+    rt, core, did, clock = runtime(tmp_path)
+    rt.start()
+    try:
+        rt.before_step(0.0)
+        made = clock.t
+        clock.t += 0.5  # the exchange waits
+        rt.after_step(DT, odom_speed=0.1, yaw_rate=0.0, odom_mono=made, rendered=False)
+        assert rt.feedback.stamp_mono == made
+    finally:
+        rt.close()

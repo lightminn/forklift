@@ -193,3 +193,12 @@ def test_the_rear_axle_sits_behind_the_base_along_any_heading_and_the_detector_s
     out = w.run()
     np.testing.assert_allclose(out.rear, [3.0 - 0.4 * math.cos(yaw), 4.0 - 0.4 * math.sin(yaw), yaw])
     assert [c[1] for c in w.calls if c[0] == "detector_input"] == [(1,)]
+
+
+def test_a_live_stop_inside_the_capture_ends_the_work_right_after_the_raw_capture():
+    """M-c (Codex round 5 P2): a STOP at a physics step inside the capture -- no SLAM release, no detection."""
+    w = World(slam_mode="holding")
+    w.core.hooks.live_abort = lambda: True
+    out = w.run()
+    assert out.aborted is True and w.names() == ["capture"]
+    assert w.core.state["observation_attempts"][-1]["aborted"] == "live_stop"
