@@ -3822,6 +3822,125 @@
     "tests/unit/test_isaac_transport_planning_config.py::test_the_boundary_record_closes_an_exit_tick_with_its_branches_and_the_propagating_failure"
    ],
    "reason": "the code it guards stays in the runner (the steering probe, the plant readback and settings, the encoder and odometry wiring, the tracker book, the leg-switch stamping, the boundary record's close)"
+  },
+  {
+   "id": "B6:R:test_path_record_keeps_the_interval_through_the_straight_tail",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_path_record_keeps_the_interval_through_the_straight_tail::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_path_record_keeps_the_interval_through_the_straight_tail::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_path_record_keeps_the_interval_through_the_straight_tail::3"
+   ],
+   "statement": "path_record keeps the analytic interval",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_path_record_keeps_the_interval_through_the_straight_tail"
+   ],
+   "reason": "the code it guards stays in the runner (setup of the runtime viewpoints, path_record)"
+  },
+  {
+   "id": "B6:R:test_runtime_viewpoints_extend_the_default_list_before_any_candidate_is_planned",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_runtime_viewpoints_extend_the_default_list_before_any_candidate_is_planned::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_runtime_viewpoints_extend_the_default_list_before_any_candidate_is_planned::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_runtime_viewpoints_extend_the_default_list_before_any_candidate_is_planned::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_runtime_viewpoints_extend_the_default_list_before_any_candidate_is_planned::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_runtime_viewpoints_extend_the_default_list_before_any_candidate_is_planned::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_runtime_viewpoints_extend_the_default_list_before_any_candidate_is_planned::6"
+   ],
+   "statement": "runtime viewpoints extend the default list once, before any candidate is planned",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_runtime_viewpoints_extend_the_default_list_before_any_candidate_is_planned"
+   ],
+   "reason": "the code it guards stays in the runner (setup of the runtime viewpoints, path_record)"
+  },
+  {
+   "id": "B6:R:test_runtime_viewpoints_only_follow_the_default_bay_list",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_runtime_viewpoints_only_follow_the_default_bay_list::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_runtime_viewpoints_only_follow_the_default_bay_list::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_runtime_viewpoints_only_follow_the_default_bay_list::3"
+   ],
+   "statement": "runtime viewpoints only follow the default bay list",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_runtime_viewpoints_only_follow_the_default_bay_list"
+   ],
+   "reason": "the code it guards stays in the runner (setup of the runtime viewpoints, path_record)"
+  },
+  {
+   "id": "B6:R:test_runtime_viewpoints_see_the_pallet_only_as_an_unlabelled_rectangle",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_runtime_viewpoints_see_the_pallet_only_as_an_unlabelled_rectangle::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_runtime_viewpoints_see_the_pallet_only_as_an_unlabelled_rectangle::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_runtime_viewpoints_see_the_pallet_only_as_an_unlabelled_rectangle::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_runtime_viewpoints_see_the_pallet_only_as_an_unlabelled_rectangle::4"
+   ],
+   "statement": "runtime viewpoints see the pallet only as an unlabelled rectangle",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_runtime_viewpoints_see_the_pallet_only_as_an_unlabelled_rectangle"
+   ],
+   "reason": "the code it guards stays in the runner (setup of the runtime viewpoints, path_record)"
+  },
+  {
+   "id": "B6:R:test_runtime_viewpoints_need_both_the_default_list_and_the_bay",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_runtime_viewpoints_need_both_the_default_list_and_the_bay::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_runtime_viewpoints_need_both_the_default_list_and_the_bay::2"
+   ],
+   "statement": "runtime viewpoints need the default list and the bay",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_runtime_viewpoints_need_both_the_default_list_and_the_bay"
+   ],
+   "reason": "the code it guards stays in the runner (setup of the runtime viewpoints, path_record)"
+  },
+  {
+   "id": "B6:R:test_the_20260921_profile_restores_the_old_observation_heading",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_20260921_profile_restores_the_old_observation_heading::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_20260921_profile_restores_the_old_observation_heading::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_20260921_profile_restores_the_old_observation_heading::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_20260921_profile_restores_the_old_observation_heading::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_20260921_profile_restores_the_old_observation_heading::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_20260921_profile_restores_the_old_observation_heading::6"
+   ],
+   "statement": "the 2026-09-21 profile is applied before the configs are recorded and the core is built (runner order)",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_20260921_profile_restores_the_old_observation_heading"
+   ],
+   "reason": "the profile's application order in the runner's setup (Codex: a cross-file order a core test cannot see)"
+  },
+  {
+   "id": "B6:profile-observe-heading",
+   "class": "D",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_20260921_profile_restores_the_old_observation_heading::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_20260921_profile_restores_the_old_observation_heading::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_20260921_profile_restores_the_old_observation_heading::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_20260921_profile_restores_the_old_observation_heading::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_20260921_profile_restores_the_old_observation_heading::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_20260921_profile_restores_the_old_observation_heading::6"
+   ],
+   "statement": "the 2026-09-21 profile restores the old observation heading tolerance (0.03 rad)",
+   "tests": [
+    "tests/unit/mission/test_core_realign_and_setup.py::test_the_tracker_profile_and_its_record_are_shared_by_the_runner_and_the_core"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "tracker.config = replace(tracker.config, yaw_tolerance_rad=0.03)",
+    "replace": "tracker.config = replace(tracker.config, yaw_tolerance_rad=0.05)"
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_realign_and_setup.py::test_the_tracker_profile_and_its_record_are_shared_by_the_runner_and_the_core"
+    ],
+    "check_line": "E   assert "
+   }
   }
  ]
 }
