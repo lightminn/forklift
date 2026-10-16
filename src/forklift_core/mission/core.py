@@ -2580,7 +2580,13 @@ class MissionCore:
             t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
             direction=1 if truth_speed > 0 else -1, loaded=loaded, cap_mps=abs(truth_speed),
         )
-        acting = ms.phase in trackers and self.permission_acting()[0]
+        acting = False
+        if ms.phase in trackers:
+            acting, docking_straight = self.permission_acting()
+            # D5: the approach straight and the insertion act too (as in the permission tick) -- their pocket
+            # work does not run while paused, the layer's own cap does.
+            acting = acting or bool(options.pocket_check and (
+                ms.phase == "insert" or (ms.phase == "approach" and docking_straight)))
         obstacle["permission_cap"] = (t, float(allowed)) if (options.obstacle_act and acting) else None
         return SimpleNamespace(allowed=allowed, why=why, acting=acting,
                                obstacle_hold=bool(options.obstacle_act and acting and allowed == 0.0))
@@ -2632,6 +2638,14 @@ class MissionCore:
             check.update(rejoined=rejoined, blocked=blocked, silent=silent)
             if silent:
                 check["reason"] = "path_blocked:sensor_silent"
+                return rear
+            if blocked is not None and blocked != "occupied":
+                check["reason"] = f"path_blocked:{blocked}"  # unknown or edge ahead: wait for evidence, standing
+                return rear
+            if (not rejoined or blocked == "occupied") and ms.phase not in ("observe", "transport", "return_home"):
+                # The common obstacle recovery replans the free travel legs only (its last branch plans home);
+                # elsewhere the row's own rule decides (M-a3c) -- until then, no resume.
+                check["reason"] = "no_resume:" + ("rejoin_failed" if not rejoined else "path_blocked:occupied")
                 return rear
             if (not rejoined or blocked == "occupied") and obstacle is not None:
                 if t < cmds.resume_retry_s:

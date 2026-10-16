@@ -60,7 +60,7 @@ def make(phase="transport", *, speed=0.0, lift=0.07, layer=None, tracker=None, o
                        slam=None, pocket={"check": None}, paths={phase: SimpleNamespace(status="success")},
                        trackers=trackers, geometry=SimpleNamespace(alignment_straight_m=1.0, delivery_straight_m=1.5),
                        settings={"lift_target_m": 0.2, "lift_rate_mps": 0.05}, pallet_geometry=None, hooks=hooks,
-                       options=SimpleNamespace(obstacle_act=True, dt=1 / 120))
+                       options=SimpleNamespace(obstacle_act=True, dt=1 / 120, pocket_check=False))
     core.commands.queue(Submit("P", "D"))
     core.commands.apply(0.0)
     core.commands.start()
@@ -199,3 +199,33 @@ def test_a_resume_onto_a_recovery_path_runs_it():
     core.blocked_replan = backoff
     core.paused_tick(11.0, REAR, 0.0, True)
     assert core.commands.status == "running" and core.commands.resume_check["reason"] == "recovery_installed"
+
+
+def test_the_watch_keeps_the_pocket_checks_acting_phases_capped():
+    """Codex M-a3b review: with the D5 check the insertion acts, so a zero from the layer still caps a pause."""
+    core, obs, _ = make("insert", layer=Layer(allowed=0.0, why="sensor_silent:front"), speed=0.2,
+                        tracker=straight())
+    core.trackers = {"insert": core.trackers.get("insert") or straight()}
+    core.options.pocket_check = True
+    pause(core, 10.0)
+    out = core.paused_tick(10.0, REAR, 0.0, False)
+    assert obs["permission_cap"] == (10.0, 0.0) and out.obstacle_hold is True
+
+
+@pytest.mark.parametrize("blocked", ["unknown", "edge"])
+def test_a_resume_waits_while_the_path_ahead_is_unknown_or_at_an_edge(blocked):
+    core, _, _ = make(layer=Layer(blocked=blocked))
+    pause(core, 10.0)
+    resume(core, 11.0)
+    core.paused_tick(11.0, REAR, 0.0, True)
+    assert core.commands.status == "resuming" and core.commands.resume_check["reason"] == f"path_blocked:{blocked}"
+
+
+def test_a_resume_off_its_path_outside_the_free_travel_legs_is_not_replanned():
+    """Codex M-a3b review: the common recovery's last branch plans home -- not for an approach."""
+    core, _, _ = make("approach")
+    core.blocked_replan = lambda *a: pytest.fail("the common recovery ran on an approach")
+    pause(core, 10.0)
+    resume(core, 11.0)
+    core.paused_tick(11.0, np.array([0.0, 1.0, 0.0]), 0.0, False)
+    assert core.commands.status == "resuming" and core.commands.resume_check["reason"] == "no_resume:rejoin_failed"

@@ -5408,6 +5408,7 @@ def drive(S, isaac) -> None:
             gate_ = core.release_gate(t, rear)
             releasing, warming, rear = gate_.releasing, gate_.warming, gate_.rear
             paused_ = core.commands.stopped  # M-a3 (plan E3): paused, resuming or cancelling -- no mission work
+            cancel_stop_ = False
             if ms.phase in trackers and not releasing and not warming and not paused_:
                 # Three times the path time at the tracker's own speed caps
                 # (length / cruise when there are none), plus 10 s.
@@ -5643,8 +5644,7 @@ def drive(S, isaac) -> None:
                 rear, obstacle_hold = paused_tick_.rear, paused_tick_.obstacle_hold
                 requested_speed, curvature = 0.0, 0.0
                 dwell_hold = True  # the steering held where it is; the wheels brake on its curvature
-                if paused_tick_.stop:
-                    break
+                cancel_stop_ = paused_tick_.stop  # the loop ends after this tick's stop output is applied
             elif core.live_leg(t, rear, loaded):  # M-a1 slice 3a: the live travel leg and the replan wait
                 requested_speed = 0.0
             if new_obstacles is not None and ms.phase in trackers:
@@ -5779,6 +5779,8 @@ def drive(S, isaac) -> None:
                     joint_positions=np.array([ms.lift_command]), joint_indices=lift_index
                 )
             )
+            if cancel_stop_:
+                break  # M-a3 (plan E6): cancelled standing, its last stop output applied
             if "chase" in extra_cameras and step % fps_divisor == 0:
                 chase_eye, chase_target, chase_yaw = MISSION_VIEWS.chase_pose(
                     base, yaw, chase_yaw, fps_divisor / 120
