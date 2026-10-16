@@ -18,14 +18,21 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from forklift_core.perception.fork_fit import fork_fit
+from forklift_core.perception.fork_fit import (
+    M_REQ_PROVISIONAL_M, PAYLOAD_LIMIT_KG, REASON_CODES, SUPPORT_LATERAL_MARGIN_M, SUPPORT_LONGITUDINAL_MARGIN_M, fork_fit,
+)
 from forklift_core.perception.instance_proposals import InstanceProposal
-from forklift_core.perception.pallet_model import ObservedPalletShape, PalletSpec, face_layout, spec_boxes
+from forklift_core.perception.pallet_geometry import target_insertion_depth_m
+from forklift_core.perception.pallet_model import FaceLayout, ObservedPalletShape, PalletSpec, face_layout, pair_margin, spec_boxes
 from forklift_core.perception.pocket_candidate import PocketCandidate, PocketEstimate
 from forklift_core.perception.scene_dataset import SceneInput
 
 BEHIND, FACE, FRONT, UNOBSERVED = 0, 1, 2, 3
 HEIGHT_REASONS = ("lift_alignment_needed",)  # fork-fit reasons that read the support height
+# The far-range path never permits a pick: the near-range re-observation (§9.1) verifies these first.
+# A known template fills them, but a non-standard pallet can match a template's face and differ in
+# its lane height or top (S7 dev 2026-10-16: T11-like lanes 3-5 mm lower, EPAL-like flat tops).
+FAR_PENDING = ("depth", "lane_bounds", "top_layout")
 
 
 @dataclass(frozen=True)
@@ -60,6 +67,19 @@ class FitParams:
     peak_window_m: float = 0.02         # a local maximum beats every placement within this distance
     equivalence_m: float = 0.020
     equivalence_yaw_rad: float = math.radians(2.0)
+    parametric: bool = True              # read non-standard faces when no known shape explains them (§7.1)
+    parametric_row_fill: float = 0.65    # rows of the top band are at least this full (boards leave gaps)
+    parametric_member_fill: float = 0.5  # a member column is at least this full below the lane ceiling
+    parametric_top_skip_m: float = 0.03  # board ends (S7 top boards 12-25 mm, along x) and a ragged edge above the deck run
+    min_opening_m: float = 0.05          # narrower gaps are member splits, not fork lanes (a split block is 5-15 mm)
+    min_lane_ceiling_m: float = 0.03
+    end_window_m: tuple = (0.005, 0.03)  # rays this far beyond an end decide whether the end is physical
+    nonstandard_depth_m: tuple = (0.50, 1.20)  # depth range of non-standard pallets (design §5.1): unobserved here
+    # The far range stops a non-standard pick for fork spacing only below M_REQ minus this; in between
+    # the lane bounds wait for the near range, which applies M_REQ itself. An empirical dev margin
+    # (provisional noise, 2026-10-16: far margins read up to 42.5 mm low at the high level, pickable
+    # S7 pallets sit 4-6 mm above M_REQ), not a measured error bound -- revisit with the D435i noise.
+    parametric_spacing_slack_m: float = 0.030
     seed: int = 0
 
 
@@ -539,6 +559,211 @@ def _identity(proposal: InstanceProposal, threshold) -> str:
     return "unconfirmed"
 
 
+def _runs(flags):
+    out, start = [], None
+    for i, f in enumerate(list(flags) + [False]):
+        if f and start is None:
+            start = i
+        if not f and start is not None:
+            out.append((start, i))
+            start = None
+    return out
+
+
+@dataclass(frozen=True)
+class ParametricReading:
+    """A non-standard entry face read off the data (§7.1): member and opening layout across the
+    face, the lane ceiling above the support, and whether each end is the object's physical end.
+    The depth is not read, and the top layout is left to the near range: from the front it is a few
+    pixels this reader does not use (§3.2), not something that cannot be seen."""
+    layout: FaceLayout
+    u_centre: float
+    support_z: float
+    top_m: float
+    ends_physical: tuple
+
+
+def read_parametric_face(face: FacePlane, pts_u, pts_h, rays, support_z: float, params: FitParams, rows=None):
+    """Members and openings from the face's own points; ends from the raw rays it owns.
+
+    The top band is the contiguous run of rows from the top that are at least parametric_row_fill
+    full, counted on rows=(u, h) -- the proposal's un-eroded pixels on the face plane: erosion
+    removes most of a thin deck band at range (mixed-depth edge pixels fall off the plane anyway).
+    Below it, a column is a member if it is at least parametric_member_fill full, and a gap is
+    an opening only if it is min_opening_m wide and rays pass behind the face through it. Fork
+    lanes run down to the support (bottom boards only under the members), so the lane floor is
+    the support and the bottom-board thickness is not observable from the front. Returns
+    (reading, None) or (None, reason).
+    """
+    b = params.bin_m
+    ru, rh, rc, owned = rays
+    top = float(np.percentile(pts_h, 99))
+    on = owned & (rc == FACE) & (rh > support_z + 0.005) & (rh < top)
+    if on.sum() < 20:
+        return None, "few_face_rays"
+    umin, umax = float(np.percentile(ru[on], 0.5)), float(np.percentile(ru[on], 99.5))
+    nu, nh = int(math.ceil((umax - umin) / b)), int(math.ceil((top - support_z) / b))
+    if nu < 10 or nh < 4:
+        return None, "too_small"
+    occ = np.zeros((nh, nu), bool)
+    occ[np.clip(((pts_h - support_z) / b).astype(int), 0, nh - 1), np.clip(((pts_u - umin) / b).astype(int), 0, nu - 1)] = True
+    row_u, row_h = (pts_u, pts_h) if rows is None else rows
+    keep = (row_u >= umin) & (row_u <= umax) & (row_h >= support_z)
+    rocc = np.zeros((nh, nu), bool)
+    rocc[np.clip(((row_h[keep] - support_z) / b).astype(int), 0, nh - 1),
+         np.clip(((row_u[keep] - umin) / b).astype(int), 0, nu - 1)] = True
+    row_fill = rocc.mean(axis=1)
+    # Above the full deck run there can be rows that are not full: a ragged top edge (mixed-depth
+    # pixels, the 99th-percentile top cuts through a row) and, where top boards run along the
+    # insertion axis, their ends with gaps between them (S7 fill 0.64). Skip up to
+    # parametric_top_skip_m of them before the deck run starts, else the run is empty and the
+    # ceiling lands on the top, reading the whole deck as openings (dev 2026-10-16).
+    k = nh - 1
+    while k > 0 and row_fill[k] < params.parametric_row_fill and (nh - 1 - k) * b < params.parametric_top_skip_m:
+        k -= 1
+    if row_fill[k] < params.parametric_row_fill:
+        k = nh - 1
+    while k > 0 and row_fill[k] >= params.parametric_row_fill:
+        k -= 1
+    ceiling = (k + 1) * b
+    if ceiling < params.min_lane_ceiling_m:
+        return None, "no_lane_band"
+    col_fill = occ[1:k + 1].mean(axis=0) if k >= 1 else occ[:1].mean(axis=0)
+    band = (rh > support_z + 0.01) & (rh < support_z + ceiling - 0.005)
+    sel = band & (rc == BEHIND) & (ru >= umin) & (ru < umax)
+    behind = np.zeros(nu)
+    np.add.at(behind, np.clip(((ru[sel] - umin) / b).astype(int), 0, nu - 1), 1)
+    member = col_fill >= params.parametric_member_fill
+    openings = []
+    for lo, hi in _runs(~member):
+        if (hi - lo) * b >= params.min_opening_m and behind[lo:hi].sum() >= params.edge_min_hits:
+            openings.append((lo, hi))
+        else:
+            member[lo:hi] = True
+    members = _runs(member)
+    if len(members) < 3 or len(openings) < 2:
+        return None, f"layout:{len(members)}m{len(openings)}o"
+    c = (umin + umax) / 2
+    ends = []
+    for edge, side in ((umin, -1.0), (umax, 1.0)):
+        off = side * (ru - edge)
+        beyond = band & (off > params.end_window_m[0]) & (off < params.end_window_m[1])
+        ends.append(bool(((beyond & (rc == BEHIND)).sum() >= params.edge_min_hits)
+                         and ((beyond & (rc == FRONT)).sum() < params.edge_min_hits)))
+    layout = FaceLayout("x", umax - umin, math.nan,
+                        tuple((lo * b + umin - c, hi * b + umin - c) for lo, hi in members),
+                        tuple((lo * b + umin - c, hi * b + umin - c) for lo, hi in openings),
+                        (0.0, ceiling), 0.0, ceiling)
+    return ParametricReading(layout, c, support_z, top, (ends[0], ends[1])), None
+
+
+def _layout_raster(layout: FaceLayout, height: float, bin_m: float):
+    """Occupancy of a parametric face: members up to the lane ceiling, the full width above."""
+    nu, nh = int(round(layout.width_m / bin_m)), max(1, int(round(height / bin_m)))
+    uc = -layout.width_m / 2 + (np.arange(nu) + 0.5) * bin_m
+    hc = (np.arange(nh) + 0.5) * bin_m
+    occ = np.zeros((nh, nu), bool)
+    occ[hc >= layout.lane_ceiling_m, :] = True
+    for lo, hi in layout.member_intervals_m:
+        occ[:, (uc >= lo) & (uc <= hi)] = True
+    return occ
+
+
+def _parametric_fit(layout: FaceLayout, setup, load, depth_max_m: float,
+                    spacing_slack_m: float = FitParams.parametric_spacing_slack_m):
+    """What the face and the instruction decide (§9.3): the fork spacing, the support and the payload.
+
+    Each opening pair is judged on its lateral margin and its support together, like fork_fit: the
+    widest-margin pair may fail lateral support while another passes (Codex 2026-10-16). Only the
+    instruction's load counts: without it the support is unverified, as in fork_fit -- a non-standard
+    pallet has no template mass and the near range cannot supply one. The depth is not seen, so the
+    longitudinal support uses the largest insertion target any depth up to depth_max_m allows -- a
+    load centre beyond it fails at every depth. The lift is not decided: the
+    far reading's 5 mm rows do not bound the lane tightly enough for a 2.5 mm margin, so the lane
+    bounds wait for the near range (FAR_PENDING). The lateral margin stops the pick only below
+    M_REQ - spacing_slack_m: the far reading's margins can be well under the true ones, and between
+    the two the near range decides on M_REQ. Returns (pair, pickable False | None, reasons)."""
+    target_max = target_insertion_depth_m(depth_max_m, setup.carriage_limit_m, setup.reserve_m)
+    options = []
+    n = len(layout.opening_intervals_m)
+    for i in range(n):
+        for j in range(i + 1, n):
+            margin, centre = pair_margin(layout, (i, j), setup.spacing_m, setup.blade_width_m)
+            reasons = set()
+            if margin < M_REQ_PROVISIONAL_M - spacing_slack_m:
+                reasons.add("fork_spacing_adjust")
+            if load is None or load.source != "instruction" or (
+                    target_max < load.com_x_max_m + SUPPORT_LONGITUDINAL_MARGIN_M
+                    or abs(centre) + load.com_y_max_m > setup.spacing_m / 2 - SUPPORT_LATERAL_MARGIN_M):
+                reasons.add("support_unverified")
+            options.append(((-round(margin, 9), round(abs(centre), 9)), (i, j), reasons))
+    options.sort(key=lambda o: o[0])
+    _, pair, reasons = next((o for o in options if not o[2]), options[0])
+    if load is not None and load.pallet_mass_kg + load.load_mass_kg > PAYLOAD_LIMIT_KG:
+        reasons = reasons | {"payload_limit"}
+    ordered = tuple(code for code in REASON_CODES if code in reasons)
+    return pair, (False if ordered else None), ordered
+
+
+def _parametric_candidate(scene, proposal, cam, face, fi, pts_u, pts_h, rays_f, reading, setup, load_for, params,
+                          candidate_id, identity_threshold, competing, state, seen, extent):
+    layout = reading.layout
+    occ = _layout_raster(layout, reading.top_m - reading.support_z, params.bin_m)
+    # The top band was read as one block, but boards leave gaps the rays pass through: like the
+    # damageable band of a known shape, it is not checked for seen-through rays.
+    top_band = (np.arange(occ.shape[0]) + 0.5) * params.bin_m >= layout.lane_ceiling_m
+    placement = best_placement(occ, pts_u, pts_h, rays_f, params, reading.support_z, 1, top_band)
+    hyp = Hypothesis("parametric:x", None, "x", False, layout.member_intervals_m, layout.pocket_band_m, placement, fi)
+    reach = _reach(cam, face.centre_xy + face.left_xy * placement.u_centre)
+    geometry, reasons = "fitted", []
+    if placement.score < params.min_score:
+        geometry, reasons = "unfit", ["weak_fit"]
+    elif placement.score - placement.runner_up_score < params.ambiguity_margin:
+        geometry, reasons = "ambiguous", ["competing:parametric:x@shifted"]
+    elif pts_u.max() - pts_u.min() < params.min_face_span_m:
+        geometry, reasons = "ambiguous", ["yaw_unconstrained"]
+    elif observed_members(hyp, rays_f, params, max(params.edge_window_m, 4 * reach / scene.intrinsics.fx)) < 2:
+        geometry, reasons = "ambiguous", ["lateral_unconstrained"]
+    elif not all(reading.ends_physical):
+        # A non-standard reading must see both physical ends: the inner part of two touching
+        # pallets looks like one wide non-standard pallet (§7.4-5c).
+        geometry, reasons = "ambiguous", ["end_unobserved"]
+    pair, pickable, fit_reasons = _parametric_fit(layout, setup, load_for(None), params.nonstandard_depth_m[1],
+                                                  params.parametric_spacing_slack_m)
+    centre = face.centre_xy + face.left_xy * placement.u_centre
+    lats = sorted(((layout.opening_intervals_m[i][0] + layout.opening_intervals_m[i][1]) / 2,
+                   layout.opening_intervals_m[i][1] - layout.opening_intervals_m[i][0]) for i in pair)
+    # The lane floor is not read, so the pocket centre sits at the support + half the ceiling: below
+    # the truth convention (deck_bottom + ceiling) / 2 by deck_bottom / 2 (S7 dev height p95 12.8 mm
+    # against 5 mm, Codex 2026-10-16). The near range re-reads both lane bounds and regenerates the
+    # pockets (stage 4); until then lane_bounds is pending.
+    z = reading.support_z + layout.lane_ceiling_m / 2
+    right = PocketEstimate((*(centre + face.left_xy * lats[0][0]), z), lats[0][1], layout.lane_ceiling_m,
+                           "observed", "observed")
+    left = PocketEstimate((*(centre + face.left_xy * lats[1][0]), z), lats[1][1], layout.lane_ceiling_m,
+                          "observed", "observed")
+    d_lo, d_hi = params.nonstandard_depth_m
+    # The depth is not seen: the centre may lie anywhere on the segment from half the shallowest to
+    # half the deepest depth behind the face; selection tests the whole segment (Codex 2026-10-16:
+    # five samples missed an instruction between two of them).
+    pallet_centre = centre + face.insertion_xy * (d_lo + d_hi) / 4
+    segment = tuple((float(p[0]), float(p[1]), float(reading.support_z))
+                    for p in (centre + face.insertion_xy * d_lo / 2, centre + face.insertion_xy * d_hi / 2))
+    alternatives = tuple(competing) + segment
+    if state == "uncertain":
+        reasons = list(reasons) + ["support_uncertain"]
+    shape = ObservedPalletShape(None, layout, (("face", "observed"), ("depth", "unobserved"), ("top", "unobserved"),
+                                               ("support", "unobserved" if state == "uncertain" else "observed")))
+    yaw = math.atan2(face.insertion_xy[1], face.insertion_xy[0])
+    return PocketCandidate(
+        candidate_id, proposal.proposal_id, proposal.source, scene.stamp_ns, "parametric:x", "x", (), yaw,
+        (float(centre[0]), float(centre[1]), float(reading.support_z)),
+        (float(pallet_centre[0]), float(pallet_centre[1]), float(reading.support_z)), left, right,
+        reading.support_z, state, state == "visible" and abs(reading.support_z) <= params.support_window_m, reach,
+        placement.score, geometry, _identity(proposal, identity_threshold), tuple(reasons), pickable, fit_reasons,
+        shape, alternatives, (float(seen[0]), float(seen[1])), extent, FAR_PENDING, segment)
+
+
 def _decide(hyps, faces, evidence, pts, scene, setup, load_for, params):
     """Rank the hypotheses and apply every gate: weak fit, rivals, face span, member edges, shape."""
     cam = camera_xyz(scene)
@@ -635,12 +860,13 @@ def fit_instance(scene: SceneInput, proposal: InstanceProposal, *, specs: dict, 
         fixed[hyp.face] = measured
     hyp, fit, centre, left, right, yaw = best
     reach = _reach(cam, centre)
-    pickable, fit_reasons = fit.pickable, tuple(fit.reasons)
+    fit_reasons = tuple(fit.reasons)
     if state == "uncertain":
         # An unseen support may not decide anything that reads the height (§7.3).
         fit_reasons = tuple(r for r in fit_reasons if r not in HEIGHT_REASONS)
-        pickable = False if fit_reasons else None
         reasons = list(reasons) + ["support_uncertain"]
+    # Far range: a reason the face decides stops the pick; otherwise it waits for the near range.
+    pickable = False if fit_reasons else None
     layout = face_layout(hyp.spec, hyp.axis)
     pallet_centre = centre + face.insertion_xy * layout.depth_m / 2
     # Centres of the readings close enough to make this one ambiguous: the shifted placement of the
@@ -663,13 +889,33 @@ def fit_instance(scene: SceneInput, proposal: InstanceProposal, *, specs: dict, 
     zs = hyp.placement.support_z
     seen = np.median(pts[:, :2], axis=0)
     extent = float(np.max(np.hypot(*(pts[:, :2] - seen).T)))
+    if params.parametric and geometry != "fitted" and reasons and reasons[0].split(":")[0] in ("shape_mismatch", "weak_fit"):
+        # No known shape explains this object (shape mismatch or a weak fit): read the face as a
+        # non-standard pallet (§7.1), on the faces in order of evidence. A known reading that is only
+        # under-constrained (occluded member edges) or ambiguous between known shapes is left as it
+        # is -- trying the parametric reading there read partly hidden known pallets as narrower
+        # non-standard ones (dev 2026-10-16). The known reading's centre stays among the competing ones.
+        competing_all = tuple(competing) + ((float(pallet_centre[0]), float(pallet_centre[1]), float(zs)),)
+        raw, _ = proposal_points(scene, rays, proposal.mask, 0)
+        for fi in sorted(range(len(faces)), key=lambda k: -len(faces[k].index)):
+            f = faces[fi]
+            u_f, rays_f = evidence[fi]
+            h_f = pts[f.index, 2]
+            low = float(np.percentile(h_f, 2))
+            st, measured = support_state(scene, rays, proposal.mask, f, low, params)
+            on_plane = np.abs((raw[:, :2] - f.centre_xy) @ f.normal_xy) < max(params.ransac_tol_m, 2.5 * f.scale_m)
+            rows = face_coords(f, raw[on_plane])
+            reading, _ = read_parametric_face(f, u_f, h_f, rays_f, measured if measured is not None else low, params, rows)
+            if reading is not None:
+                return _parametric_candidate(scene, proposal, cam, f, fi, u_f, h_f, rays_f, reading, setup, load_for,
+                                             params, candidate_id, identity_threshold, competing_all, st, seen, extent)
     return PocketCandidate(
         candidate_id, proposal.proposal_id, proposal.source, scene.stamp_ns, hyp.label, hyp.axis,
         tuple((s[0].label, round(s[0].placement.score, 4)) for s in rivals[:3]), yaw,
         (float(centre[0]), float(centre[1]), float(zs)), (float(pallet_centre[0]), float(pallet_centre[1]), float(zs)),
         left, right, zs, state, state == "visible" and abs(zs) <= params.support_window_m, reach,
         hyp.placement.score, geometry, _identity(proposal, identity_threshold), tuple(reasons), pickable,
-        fit_reasons, shape, tuple(competing), (float(seen[0]), float(seen[1])), extent)
+        fit_reasons, shape, tuple(competing), (float(seen[0]), float(seen[1])), extent, FAR_PENDING)
 
 
 @dataclass(frozen=True)

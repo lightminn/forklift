@@ -92,7 +92,8 @@ def _known():
 def _load_for(instruction, site):
     given = instruction.get("load") if instruction.get("present") else None
     declared = None if given is None else LoadDeclaration(**given)
-    return lambda spec: declared if declared is not None else site.get(spec.name)
+    # A non-standard reading (spec None) has no site default: only an instructed load applies.
+    return lambda spec: declared if declared is not None else (None if spec is None else site.get(spec.name))
 
 
 def _oracle_fit(sample):
