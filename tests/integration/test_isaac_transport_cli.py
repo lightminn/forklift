@@ -821,7 +821,7 @@ def test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_captu
     assert positions == sorted(positions), order
     # The release and the stand, shared with the S4c-3 realignment.
     shared = functions["release_and_stand"]
-    order = ["slam['tracker'].release(", "obstacle['layer'].refresh(", "carried(obstacle['pickup_estimate'])",
+    order = ["self.release_slam(", "obstacle['layer'].refresh(", "carried(obstacle['pickup_estimate'])",
              "near['retry_stand'] = True"]
     positions = [shared.index(o) for o in order]
     assert positions == sorted(positions), order
@@ -843,7 +843,7 @@ def test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_captu
     # placed with the target the planner used.
     assert "'episode': near['episode']" in functions["feed_near_frame"]
     assert "'reprojected': reprojected_" in shared and "reprojected_ = {" in shared
-    assert shared.index("applied_before_ = [") < shared.index("slam['tracker'].release(")
+    assert shared.index("applied_before_ = [") < shared.index("self.release_slam(")
     moved = CORE.read_text()  # the observation's handling moved to the mission core (M-a1 slice 4b-iv)
     placed = moved.index("Plan D8 S4c-2 / S4c-3: the re-observation as placed and its target.")
     assert "capture_base=" in moved[placed : placed + 500] and "target=[target_pickup.x_m" in moved[placed : placed + 500]
@@ -961,7 +961,7 @@ def test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_in
     tree = ast.parse(source)
     functions = runner_and_core_functions(tree)
     shared = functions["release_and_stand"]
-    for needed in ("slam['tracker'].release(", "obstacle['layer'].refresh(", "carried(pocket['planning_pickup'])",
+    for needed in ("self.release_slam(", "obstacle['layer'].refresh(", "carried(pocket['planning_pickup'])",
                    "near['retry_stand'] = True", "'applied_before': applied_before_"):
         assert needed in shared, needed
     assert "release_and_stand(now_s, 'release_pickup_retry')" in functions["start_pickup_retry"]

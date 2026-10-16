@@ -89,8 +89,9 @@ class SessionRecorder:
     def tick_end(self, *, outputs, branches):
         self.session.tick_end(outputs=outputs, branches=branches)
 
-    def tick_time(self, *, tick_t, work_t):
-        self.session.tick_time(tick_t=tick_t, work_t=work_t)
+    def tick_time(self, *, tick_t, work_t, commands=None, stop_kind=None):
+        # M-a3d: the runner also passes the mission commands applied and the stop kind (None without commands).
+        self.session.tick_time(tick_t=tick_t, work_t=work_t, commands=commands, stop_kind=stop_kind)
 
     def encode(self, value):
         return self.session.encode(value)

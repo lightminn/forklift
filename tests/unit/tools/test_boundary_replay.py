@@ -128,3 +128,13 @@ def test_a_sibling_module_the_runner_loads_by_file_in_its_setup_resolves_on_repl
 
     assert _resolve("run_transport_new_obstacles:Schedule").__name__ == "Schedule"
     assert importlib.util.find_spec("run_transport_no_such_module") is None
+
+
+def test_the_replay_recorder_takes_every_argument_the_runner_and_the_recorder_do():
+    """The runner calls tick_time with the mission commands and the stop kind (M-a3d); the replay tool's wrapper
+    dropped them and every replay failed at its second tick."""
+    import inspect
+
+    wrapper = set(inspect.signature(H.SessionRecorder.tick_time).parameters) - {"self"}
+    for other in (BoundaryRecorder.tick_time, ReplaySession.tick_time):
+        assert wrapper == set(inspect.signature(other).parameters) - {"self"}

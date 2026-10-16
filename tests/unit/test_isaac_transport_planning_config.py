@@ -973,7 +973,7 @@ def test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recove
     moved_fn = CORE.read_text()  # release_after_backoff moved to the mission core (M-a1 slice 6c)
     fn = moved_fn[moved_fn.index("    def release_after_backoff(") :]
     fn = fn[:2500]
-    assert 'slam["tracker"].mode != "holding"' in fn and 'slam["tracker"].release(' in fn
+    assert 'slam["tracker"].mode != "holding"' in fn and "self.release_slam(" in fn  # M-a4: every release goes through the counting method
     assert 'slam["docking"].get("accepted_any") or slam["docking"].get("reapproach")' in fn
     assert 'obstacle["layer"].refresh(' in fn  # the grid re-projected before any plan reads it
     moved = CORE.read_text()  # the backoff end moved to the mission core (M-a1 slice 4a-iv)
