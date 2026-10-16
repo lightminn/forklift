@@ -2605,11 +2605,13 @@ class MissionCore:
         ``rear`` (a replan inside the resume may move it)."""
         ms, slam, obstacle, hooks, cmds = self.ms, self.slam, self.obstacle, self.hooks, self.commands
         standing = bool(slam["stop_now"]) if slam is not None else abs(float(hooks.truth_speed())) < 0.01
+        if cmds.pause_hold_count is None:  # M-a3c: the stop's hold, as it began (R3, R4n, R11, R9/R14)
+            cmds.pause_hold_count = self.hold_count()
+            cmds.pause_holding = slam is not None and slam["tracker"].mode == "holding"
+            cmds.pause_release_pending = slam is not None and slam.get("pending_release") is not None
         if standing and cmds.stop_seen_s is None:
             cmds.stop_seen_s = t
-        if cmds.pause_pose is None:  # M-a3c: where the stop began and in which hold episode (R3, R4n, R11)
-            cmds.pause_pose = tuple(float(v) for v in rear)
-            cmds.pause_hold_count = self.hold_count()
+            cmds.stop_pose = tuple(float(v) for v in rear)  # R11 measures a move from where it stood, not braking
         ms.lift_command = float(hooks.lift_position())  # E3: synchronised to where the lift is, not frozen
         obstacle_hold = False
         if obstacle is not None:
@@ -2626,72 +2628,78 @@ class MissionCore:
         return SimpleNamespace(requested_speed=0.0, obstacle_hold=obstacle_hold, stop=stop, rear=rear)
 
     def resume_step(self, t: float, rear, loaded: bool, standing: bool):
-        """The resume's checks this tick (E5): standing first, then -- on a phase with a follower -- the rejoin
-        (a copy of the follower updated once from here must not fail) and the path ahead (sensors alive, not
-        occupied); a failed rejoin or a blocked path is replanned here by the leg's own obstacle recovery before
-        the mission runs again. Returns the control pose (a replan's release may move it)."""
+        """The resume's checks this tick (E5), by the resume table's rows (M-a0.5 part 2, section 8): standing
+        first; a stop that began held keeps its hold (mode and episode) unless a pending release was due; a held
+        realignment does not resume (R3x); a docking straight moved off since the stop retries the docking or does
+        not resume (R11); a phase without a follower (lift, lower, settle) and a re-observation stand (R2a) resume
+        as they are; otherwise the follower must rejoin (a copy updated once from here must not fail) and, where
+        the permission acts, the path ahead must be clear and the sensors alive -- a free travel leg (R1, R2b, R10,
+        R12) is replanned from here by its obstacle recovery, a held one (R3, R4n) or one without a recovery (R8,
+        R13) does not resume; with the D5 check its own answer must allow the move. ``no_resume`` puts the mission
+        back to paused (a new resume is needed); a wait stays resuming. Returns the control pose."""
         import copy
 
         ms, obstacle, trackers, cmds, options = self.ms, self.obstacle, self.trackers, self.commands, self.options
-        slam = self.slam
+        slam, near, pocket = self.slam, self.near, self.pocket
         cmds.resume_check = check = {"time_s": t, "step": "stop_confirmed"}
         if not standing:
             return rear
-        # M-a3c: the rows of the resume table (M-a0.5 part 2, section 8) that a general check cannot decide.
+
+        def refuse(reason):
+            check["reason"] = reason
+            cmds.refuse_resume(t, reason)
+            return rear
+
         check["step"] = "state_verified"
-        holding_ = slam is not None and slam["tracker"].mode == "holding"
-        if ms.phase == "observe" and holding_ and self.realign_active():
-            check["reason"] = "no_resume:realign_held"  # R3x: no recovery runs held in a realignment
-            return rear
-        if holding_ and cmds.pause_hold_count is not None and self.hold_count() != cmds.pause_hold_count:
-            check["reason"] = "state_verified:hold_episode_changed"  # R3, R4n, R11: the held frame is not the paused one
-            return rear
+        holding_now = slam is not None and slam["tracker"].mode == "holding"
+        if cmds.pause_holding and not cmds.pause_release_pending:
+            if not holding_now:
+                return refuse("state_verified:hold_state_mismatch")
+            if self.hold_count() != cmds.pause_hold_count:
+                return refuse("state_verified:hold_episode_changed")
+        if ms.phase == "observe" and holding_now and self.realign_active():
+            return refuse("no_resume:realign_held")  # R3x: no recovery runs held in a realignment
         docking_ = slam["docking"] if slam is not None else {}
-        if (ms.phase == "transport" and holding_ and not docking_.get("reapproach")
-                and docking_.get("status") in ("armed", "done", "fallback") and cmds.pause_pose is not None):
-            # R11: the docking straight was dry-run and swept from where the match ran; moved since the pause,
-            # the straight is not that one -- a D7c docking retry from here (its budget first), or no resume.
-            dx_, dy_ = float(rear[0]) - cmds.pause_pose[0], float(rear[1]) - cmds.pause_pose[1]
-            dyaw_ = math.atan2(math.sin(float(rear[2]) - cmds.pause_pose[2]), math.cos(float(rear[2]) - cmds.pause_pose[2]))
+        straight_row = (ms.phase == "transport" and holding_now and not docking_.get("reapproach")
+                        and docking_.get("status") in ("armed", "done", "fallback"))
+        if straight_row and cmds.stop_pose is not None:
+            # R11: the docking straight was dry-run and swept from where the match ran; moved since the stop,
+            # it is not that straight -- a D7c docking retry from here (its budget first), or no resume.
+            dx_, dy_ = float(rear[0]) - cmds.stop_pose[0], float(rear[1]) - cmds.stop_pose[1]
+            dyaw_ = math.atan2(math.sin(float(rear[2]) - cmds.stop_pose[2]), math.cos(float(rear[2]) - cmds.stop_pose[2]))
             if math.hypot(dx_, dy_) > PAUSE_MOVED_M or abs(dyaw_) > PAUSE_MOVED_RAD:
-                counted_ = sum(1 for r_ in self.state.get("docking_retries", []) if r_.get("counted"))
                 if not options.d7_docking:
-                    check["reason"] = "no_resume:docking_moved"
-                    return rear
-                if counted_ >= 2:
-                    check["reason"] = "no_resume:docking_retry_budget"
-                    return rear
+                    return refuse("no_resume:docking_moved")
+                if sum(1 for r_ in self.state.get("docking_retries", []) if r_.get("counted")) >= 2:
+                    return refuse("no_resume:docking_retry_budget")
                 self.start_docking_retry(t, "resume", "docking_moved_while_paused")
                 rear = self.hooks.slam_rear(t)  # the retry released the correction
-                cmds.pause_pose = tuple(float(v) for v in rear)  # the re-approach starts here
+                cmds.stop_pose = tuple(float(v) for v in rear)  # the re-approach starts here
                 check["reason"] = "docking_retry"
                 return rear
-        if ms.phase in trackers:
+        retry_stand = near is not None and near.get("retry_stand") and ms.phase == "observe"
+        if ms.phase in trackers and not retry_stand:
             check["step"] = "path_rechecked"
             probe = copy.deepcopy(trackers[ms.phase])
             rejoined = probe.update(rear, 0.0, options.dt).status != "failed"
+            acting, docking_straight = self.permission_acting() if obstacle is not None else (False, False)
+            pocket_row = bool(options.pocket_check and (
+                ms.phase == "insert" or (ms.phase == "approach" and docking_straight)))
+            held_observe = ms.phase == "observe" and holding_now  # R3
+            free_leg = ms.phase in ("observe", "transport", "return_home") and not held_observe and not straight_row
             blocked, silent = None, False
-            if obstacle is not None:
-                layer_ = obstacle["layer"]
+            if obstacle is not None and acting and not straight_row:
                 silent = not self.cusp_alive(t)
                 leg_, dir_ = trackers[ms.phase].leg_ahead()
-                blocked = layer_.check_candidate(leg_, current_pose=tuple(float(v) for v in rear), direction=dir_,
-                                                 loaded=loaded).blocked
-            check.update(rejoined=rejoined, blocked=blocked, silent=silent)
+                blocked = obstacle["layer"].check_candidate(leg_, current_pose=tuple(float(v) for v in rear),
+                                                            direction=dir_, loaded=loaded).blocked
+            check.update(rejoined=rejoined, blocked=blocked, silent=silent, free_leg=free_leg)
             if silent:
                 check["reason"] = "path_blocked:sensor_silent"
                 return rear
-            if rejoined and blocked is not None and blocked != "occupied":
-                # Rejoined, but unknown or an edge ahead: wait for evidence, standing. (Not rejoined: the leg is
-                # replanned from here first -- the old path may stay hidden.)
-                check["reason"] = f"path_blocked:{blocked}"
-                return rear
-            if (not rejoined or blocked == "occupied") and ms.phase not in ("observe", "transport", "return_home"):
-                # The common obstacle recovery replans the free travel legs only (its last branch plans home);
-                # elsewhere the row's own rule decides (M-a3c) -- until then, no resume.
-                check["reason"] = "no_resume:" + ("rejoin_failed" if not rejoined else "path_blocked:occupied")
-                return rear
-            if (not rejoined or blocked == "occupied") and obstacle is not None:
+            if not rejoined or blocked == "occupied":
+                if not free_leg or obstacle is None:
+                    return refuse("no_resume:" + ("rejoin_failed" if not rejoined else "path_blocked:occupied"))
                 if t < cmds.resume_retry_s:
                     return rear  # a replan without a path waits a second (E5 (c))
                 before_path = self.paths.get(ms.phase)
@@ -2703,13 +2711,23 @@ class MissionCore:
                     check["reason"] = "replan_waiting"
                     return rear
                 if installed.status not in ("backoff", "escape"):
-                    # (a) a new path: it is rejoined and checked again next tick
-                    check["reason"] = "replanned"
+                    check["reason"] = "replanned"  # (a) a new path: rejoined and checked again next tick
                     return rear
                 check["reason"] = "recovery_installed"  # (b) the backoff machinery drives it from here
-            elif not rejoined:
-                check["reason"] = "rejoin_failed"
+            elif blocked is not None:
+                check["reason"] = f"path_blocked:{blocked}"  # unknown or an edge ahead: wait for evidence
                 return rear
+            elif pocket_row:
+                # R4n with D5: the depth check's own answer for the move from here.
+                if pocket["check"] is None or pocket.get("await_still_frame"):
+                    check["reason"] = "path_blocked:pocket_settle"
+                    return rear
+                lp_, wp_ = pocket["check"].limit(t, tuple(float(v) for v in rear), 0.0, 1,
+                                                 trackers[ms.phase].config.cruise_speed_mps,
+                                                 float(self.hooks.lift_position()))
+                if lp_ <= 0.0:
+                    check["reason"] = f"path_blocked:pocket:{wp_}"
+                    return rear
         length = cmds.resumed(t)
         check["step"] = "running"
         if obstacle is not None and "live_retry_after_s" in obstacle:

@@ -70,8 +70,10 @@ class MissionCommands:
         self.stop_seen_s: float | None = None  # the first standing tick of the current stop
         self.resume_check: dict | None = None  # the resume's last check (E5), for the safety state
         self.resume_retry_s = -1e9  # a resume's replan without a path tries again from here
-        self.pause_pose: tuple | None = None  # the control pose at the stop's first paused tick (M-a3c)
-        self.pause_hold_count: int | None = None  # the SLAM hold episode then
+        self.stop_pose: tuple | None = None  # the control pose where the stop was first seen standing (M-a3c R11)
+        self.pause_hold_count: int | None = None  # the SLAM hold episode at the stop's first paused tick
+        self.pause_holding = False  # SLAM was holding then
+        self.pause_release_pending = False  # a SLAM release was due then (R9, R14: it may happen while paused)
 
     # --- the queue ---------------------------------------------------------------------------------------------
     def queue(self, command) -> None:
@@ -144,8 +146,9 @@ class MissionCommands:
     def _stop_boundary(self, t: float) -> None:
         self.paused_since = t
         self.stop_seen_s = None
-        self.pause_pose = None
+        self.stop_pose = None
         self.pause_hold_count = None
+        self.pause_holding = self.pause_release_pending = False
         self.pauses.append([t, None])
         self.mission_gen += 1
 
@@ -163,6 +166,15 @@ class MissionCommands:
         self.status = "running"
         self.mission_gen += 1
         return length
+
+    def refuse_resume(self, t: float, reason: str) -> None:
+        """The resume cannot finish (E5 ``no_resume``): back to paused, the stop still open; a new resume is
+        needed (or a cancel)."""
+        if self.status != "resuming":
+            raise RuntimeError(f"refuse_resume from {self.status}")
+        self.status = "paused"
+        self.log.append({"t": t, "command": "resume", "accepted": False, "reason": reason,
+                         "mission_id": self.mission_id, "status": self.status})
 
     def cancelled(self, t: float) -> None:
         """Standing still confirmed after a cancel."""

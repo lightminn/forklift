@@ -228,7 +228,7 @@ def test_a_resume_off_its_path_outside_the_free_travel_legs_is_not_replanned():
     pause(core, 10.0)
     resume(core, 11.0)
     core.paused_tick(11.0, np.array([0.0, 1.0, 0.0]), 0.0, False)
-    assert core.commands.status == "resuming" and core.commands.resume_check["reason"] == "no_resume:rejoin_failed"
+    assert core.commands.status == "paused" and core.commands.resume_check["reason"] == "no_resume:rejoin_failed"
 
 
 def test_a_cancel_ends_only_once_the_wheels_are_commanded_to_zero():
@@ -268,7 +268,7 @@ def test_a_held_realignment_does_not_resume():
     pause(core, 10.0)
     resume(core, 11.0)
     core.paused_tick(11.0, REAR, 0.0, False)
-    assert core.commands.status == "resuming" and core.commands.resume_check["reason"] == "no_resume:realign_held"
+    assert core.commands.status == "paused" and core.commands.resume_check["reason"] == "no_resume:realign_held"
 
 
 def test_a_new_hold_episode_while_paused_does_not_resume():
@@ -307,7 +307,7 @@ def test_a_docking_straight_moved_while_paused_retries_the_docking_from_there():
     core.paused_tick(11.0, REAR + np.array([0.05, 0.0, 0.0]), 0.0, False)
     assert asked == [(11.0, "resume", "docking_moved_while_paused")]
     assert core.commands.status == "resuming" and core.commands.resume_check["reason"] == "docking_retry"
-    assert core.commands.pause_pose == (0.05, 0.0, 0.0)  # the re-approach starts here: not moved again
+    assert core.commands.stop_pose == (0.05, 0.0, 0.0)  # the re-approach starts here: not moved again
 
 
 @pytest.mark.parametrize("d7, retries, reason", [
@@ -318,3 +318,87 @@ def test_a_moved_docking_straight_without_d7_or_its_budget_does_not_resume(d7, r
     core, asked = docking_core(d7=d7, retries=retries)
     core.paused_tick(11.0, REAR + np.array([0.05, 0.0, 0.0]), 0.0, False)
     assert asked == [] and core.commands.resume_check["reason"] == reason
+
+
+
+# --- Codex M-a3c review: the rows' own scope ---
+class Pocket:
+    def __init__(self, allowed):
+        self.allowed = allowed
+
+    def limit(self, *a):
+        return self.allowed, "frame_old" if self.allowed == 0.0 else "ok"
+
+
+@pytest.mark.parametrize("allowed, status", [(0.0, "resuming"), (0.3, "running")])
+def test_r4n_with_the_depth_check_resumes_only_on_its_answer(allowed, status):
+    core, _, _ = make("approach", tracker=straight(0.0, 0.5))  # inside the 1 m alignment straight
+    core.options.pocket_check = True
+    core.pocket = {"check": Pocket(allowed)}
+    pause(core, 10.0)
+    resume(core, 11.0)
+    core.paused_tick(11.0, REAR, 0.0, False)
+    assert core.commands.status == status
+
+
+def test_a_refused_resume_waits_for_a_new_resume_even_when_the_cause_goes():
+    core, asked = docking_core(d7=False)
+    core.paused_tick(11.0, REAR + np.array([0.05, 0.0, 0.0]), 0.0, False)
+    assert core.commands.status == "paused"
+    core.paused_tick(11.5, REAR, 0.0, False)  # back where it stood: still paused, no resume without a command
+    assert core.commands.status == "paused"
+
+
+def test_a_stop_that_began_held_does_not_resume_once_the_hold_is_gone():
+    core, _, _ = make("approach")
+    slam = held(core)
+    pause(core, 10.0)
+    core.paused_tick(10.0, REAR, 0.0, False)
+    slam["tracker"].mode = "tracking"  # released while paused, no release was due
+    resume(core, 11.0)
+    core.paused_tick(11.0, REAR, 0.0, False)
+    assert core.commands.status == "paused"
+    assert core.commands.resume_check["reason"] == "state_verified:hold_state_mismatch"
+
+
+def test_a_due_release_during_the_pause_is_not_a_lost_hold():
+    core, _, _ = make("transport")
+    slam = held(core)
+    slam["pending_release"] = "transport"
+    pause(core, 10.0)
+    core.paused_tick(10.0, REAR, 0.0, False)
+    slam["tracker"].mode, slam["pending_release"] = "tracking", None  # the release gate released it
+    resume(core, 11.0)
+    core.paused_tick(11.0, REAR, 0.0, False)
+    assert core.commands.status == "running"
+
+
+def test_a_held_near_segment_blocked_ahead_is_not_replanned():
+    core, _, _ = make("observe", layer=Layer(blocked="occupied"))
+    held(core)
+    core.realign_active = lambda: False
+    core.blocked_replan = lambda *a: pytest.fail("a held observe segment was replanned")
+    pause(core, 10.0)
+    resume(core, 11.0)
+    core.paused_tick(11.0, REAR, 0.0, False)
+    assert core.commands.status == "paused" and core.commands.resume_check["reason"] == "no_resume:path_blocked:occupied"
+
+
+@pytest.mark.parametrize("phase", ["extract", "withdraw"])
+def test_a_leg_without_the_permission_resumes_whatever_the_grid_says(phase):
+    core, _, _ = make("transport", layer=Layer(blocked="unknown"))
+    core.trackers = {phase: straight()}
+    core.ms.phase = phase
+    pause(core, 10.0)
+    resume(core, 11.0)
+    core.paused_tick(11.0, REAR, 0.0, True)
+    assert core.commands.status == "running"
+
+
+def test_a_re_observation_stand_resumes_to_capture_again():
+    core, _, _ = make("observe", layer=Layer(blocked="unknown"))
+    core.near = {"retry_stand": True, "tracker": None}
+    pause(core, 10.0)
+    resume(core, 11.0)
+    core.paused_tick(11.0, REAR, 0.0, False)
+    assert core.commands.status == "running"
