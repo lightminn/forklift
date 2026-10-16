@@ -1619,7 +1619,10 @@ PROJECTION_RECORDED_ONLY = ("setup_snapshot",)
 # runs the SLAM bridge's odometry, stop detector and noise): a replay never runs them, so they are compared by
 # their logical id only -- their effects on the mission reach it through the watched keys (Codex P2).
 PROJECTION_SERVICE_OWNED = {"slam": {"link": "SlamLink", "module": "SlamModule", "stop": "SlamStop",
-                                     "odometry": "SlamOdometry", "noise": "SlamNoise", "range_model": "SlamRangeModel"}}
+                                     "odometry": "SlamOdometry", "noise": "SlamNoise", "range_model": "SlamRangeModel"},
+                            # The grid preparation's own cache: written and read only inside the Planner port's
+                            # grid_kwargs (the first whole replays: the only container key left different).
+                            "obstacle": {"plan_cache": "PlannerGridCache"}}
 
 
 _PROJECT_CLASSES: dict = {}
@@ -4996,12 +4999,16 @@ def drive(S, isaac) -> None:
             watched_log_ = early_ports and slam_log is not None
             step_watch = DictWatch(
                 boundary.recorder,
-                {"slam": slam, "obstacle": obstacle, **({"slam_log": slam_log} if watched_log_ else {})},
+                {"slam": slam, "obstacle": obstacle, **({"slam_log": slam_log} if watched_log_ else {}),
+                 # format 2: the tyre contact log the step appends to the state (an evaluation record)
+                 **({"state": state} if early_ports else {})},
                 keys={"slam": ["stop_now", "tracker_speed", "odom_speed", "odom_rear", "odom_yaw_rate", "scan_id",
                                "last_scan_odom_base", "last_scan_estimate_rear", "last_sent_ranges", "records"],
                       "obstacle": ["version", "last_stamp", "applied", "last_raw", "scans"],
-                      **({"slam_log": list(slam_log)} if watched_log_ else {})},
-                append_only={"records", "scans", *(slam_log if watched_log_ else ())},
+                      **({"slam_log": list(slam_log)} if watched_log_ else {}),
+                      **({"state": ["tyre_contact_rows"]} if early_ports else {})},
+                append_only={"records", "scans", *(slam_log if watched_log_ else ()),
+                             *(("tyre_contact_rows",) if early_ports else ())},
             )
             if not early_ports:  # format 2 made these ports at the hand-over
                 robot = RecordingProxy(robot, "Vehicle", boundary)
