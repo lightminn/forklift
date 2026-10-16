@@ -320,14 +320,44 @@ async def main_scenario(p: Probe, args):
 
 
 async def marker_scenario(p: Probe, args):
-    """Plan C5: only watch -- save the frames, the runner's marker tells when their pixels were drawn."""
+    """Plan C5: save the frames (the runner's marker tells when their pixels were drawn); then, with the runner's
+    camera freeze (--live-test-camera-freeze FROM:TO, sim s), hold TELEOP and send video-mode commands (dead man
+    released: nothing moves) across the freeze -- they must be refused stale_video and disarm."""
     args.frames_dir.mkdir(parents=True, exist_ok=True)
     p.save_frames = (args.frames_dir, args.frames)
     await p.open()
     await p.open_media()
+
+    def sim_now():
+        return p.frames[-1]["stamp_ns"] / 1e9 if p.frames and p.frames[-1].get("stamp_ns") else 0.0
+
     end = time.monotonic() + args.marker_s
     while time.monotonic() < end and len(p.frames) < args.frames and p.closed_code is None:
         await asyncio.sleep(0.2)
+    if args.freeze_from is None:
+        return
+    lease = await p.request("lease_request")
+    p.lease_id = (lease or {}).get("lease_id")
+    await p.until(p.standing, 30, label="standing")
+    for _ in range(40):
+        teleop = await p.request("mode_request", to="TELEOP")
+        if teleop is None or (teleop.get("reason") not in ("not_stopped", "no_feedback:rear_axle_speed")
+                              and teleop.get("detail") != "pacing"):
+            break
+        await asyncio.sleep(0.5)
+    arm = await p.request("arm")
+    p.arm_gen = (arm or {}).get("arm_gen", 0)
+    p.report["freeze"] = {"teleop": teleop, "arm": arm, "samples": []}
+    stop_at = time.monotonic() + args.marker_s
+    while time.monotonic() < stop_at and p.closed_code is None:
+        await p.teleop(0.0, 0.0, deadman=False, mode="video")
+        st = p.state or {}
+        p.report["freeze"]["samples"].append({"mono": time.monotonic(), "last_frame_sim": sim_now(),
+                                              "armed": st.get("armed"), "reject": st.get("last_teleop_reject")})
+        if not st.get("armed") and st.get("last_teleop_reject") == "stale_video":
+            p.event("stale_video_disarmed", last_frame_sim=sim_now())
+            break
+        await asyncio.sleep(0.05)
 
 
 async def slow_scenario(p: Probe, args):
@@ -356,6 +386,7 @@ def main():
     ap.add_argument("--frames-dir", type=Path, default=None)
     ap.add_argument("--frames", type=int, default=300)
     ap.add_argument("--marker-s", type=float, default=600.0)
+    ap.add_argument("--freeze-from", type=float, default=None, help="the runner's camera freeze start (sim s)")
     ap.add_argument("--old-session", type=Path, default=None)
     ap.add_argument("--observe-timeout-s", type=float, default=240.0)
     ap.add_argument("--expect-stop-in-capture", action="store_true",
