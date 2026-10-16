@@ -24,19 +24,40 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCES = ("sim/isaac/run_transport.py", "src/forklift_core/mission/core.py", "run_transport.py", "mission/core.py")
 
 
-def _source_handles(tree: ast.Module) -> set[str]:
-    """Module-level names bound to (something derived from) a runner/core source path, and module functions that
-    use one, to a fixpoint."""
-    handles: set[str] = set()
+SOURCE_CALLS = ("getsource", "getsourcelines")  # inspect on a runner/core object reads its source too
+
+
+def _reads_source_text(node: ast.AST) -> bool:
+    text = ast.unparse(node)
+    return any(s in text for s in SOURCES) or any(f"inspect.{c}" in text or f"{c}(" in text for c in SOURCE_CALLS)
+
+
+def _functions(tree: ast.Module):
+    """Module functions and class methods (a class-based test's methods count as tests)."""
     for node in tree.body:
-        if isinstance(node, ast.Assign):
-            text = ast.unparse(node.value)
-            if any(s in text for s in SOURCES):
-                handles.update(t.id for t in node.targets if isinstance(t, ast.Name))
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            yield node
+        elif isinstance(node, ast.ClassDef):
+            for item in node.body:
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    yield item
+
+
+def _source_handles(tree: ast.Module, imported: set[str] = frozenset()) -> set[str]:
+    """Names that lead to runner/core source: module constants built from a source path, helpers and fixtures whose
+    own body reads one (Codex P2: a helper reading the source in its body is a starting point too), anything using
+    those, to a fixpoint; ``imported`` adds handles of other test modules imported by name."""
+    handles: set[str] = set(imported)
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and _reads_source_text(node.value):
+            handles.update(t.id for t in node.targets if isinstance(t, ast.Name))
+    for fn in _functions(tree):
+        if not fn.name.startswith("test") and _reads_source_text(fn):
+            handles.add(fn.name)
     changed = True
     while changed:
         changed = False
-        for node in tree.body:
+        for node in [*tree.body, *_functions(tree)]:
             names = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
             if isinstance(node, ast.Assign) and names & handles:
                 new = {t.id for t in node.targets if isinstance(t, ast.Name)} - handles
@@ -50,44 +71,81 @@ def _source_handles(tree: ast.Module) -> set[str]:
     return handles
 
 
-def inventory(paths: list[Path]) -> list[dict]:
+def _conditions(fn, handles: set[str], helpers: dict) -> list[dict]:
+    """The checks a test makes: every ``assert``, every ``pytest.raises``/``pytest.warns`` (its type, match and the
+    block it covers), every call into a helper that holds checks of its own, and the test's normal completion (a test
+    whose only requirement is to run through -- Codex P2)."""
+    out = []
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Assert):
+            out.append(("assert", node.lineno, ast.unparse(node)))
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                text = ast.unparse(item.context_expr)
+                if text.startswith(("pytest.raises", "pytest.warns", "raises(", "warns(")):
+                    body = "\n".join(ast.unparse(b) for b in node.body)
+                    out.append(("raises", node.lineno, f"with {text}:\n{body}"))
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in helpers \
+                and helpers[node.func.id]:
+            out.append(("helper", node.lineno, f"{ast.unparse(node)}  # checks inside {node.func.id}"))
+    out.append(("completes", fn.lineno, f"{fn.name} runs to its end without an unexpected exception"))
+    return out
+
+
+def _test_names(tree: ast.Module):
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test"):
+            yield node, node.name
+        elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+            for item in node.body:
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name.startswith("test"):
+                    yield item, f"{node.name}::{item.name}"
+
+
+def inventory(paths: list[Path], cross: dict | None = None) -> list[dict]:
     rows = []
+    cross = cross or {}
     for path in paths:
         tree = ast.parse(path.read_text())
-        handles = _source_handles(tree)
+        imported = set()
+        for node in tree.body:  # helpers imported from other test modules that read source
+            if isinstance(node, ast.ImportFrom) and node.module:
+                imported |= {a.asname or a.name for a in node.names} & cross.get(node.module.split(".")[-1], set())
+        handles = _source_handles(tree, imported)
+        helpers = {fn.name: any(isinstance(n, (ast.Assert, ast.With)) for n in ast.walk(fn))
+                   for fn in _functions(tree) if not fn.name.startswith("test")}
         rel = str(path.relative_to(ROOT))
-        for fn in tree.body:
-            if not (isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name.startswith("test")):
+        for fn, name in _test_names(tree):
+            params = {a.arg for a in fn.args.args}
+            body_names = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)} | params  # fixtures by parameter
+            if not (body_names & handles or _reads_source_text(fn)):
                 continue
-            body_names = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)}
-            text = ast.unparse(fn)
-            direct = any(s in text for s in SOURCES)
-            if not (body_names & handles or direct):
-                continue
-            n = 0
-            for node in ast.walk(fn):
-                if isinstance(node, ast.Assert):
-                    n += 1
-                    rows.append({"id": f"{rel}::{fn.name}::{n}", "file": rel, "test": fn.name, "line": node.lineno,
-                                 "assert": ast.unparse(node)[:400],
-                                 "via": sorted(body_names & handles) or ["direct"]})
+            for n, (kind, line, text) in enumerate(_conditions(fn, handles, helpers), start=1):
+                rows.append({"id": f"{rel}::{name}::{n}", "file": rel, "test": name, "kind": kind, "line": line,
+                             "text_sha256": hashlib.sha256(text.encode()).hexdigest(), "preview": text[:200],
+                             "via": sorted(body_names & handles) or ["direct"]})
     return rows
 
 
 def candidate_files() -> list[Path]:
-    out = []
-    for path in sorted((ROOT / "tests").rglob("test_*.py")):
-        text = path.read_text()
-        if any(s in text for s in SOURCES):
-            out.append(path)
-    return out
+    """Test modules and conftest files that name a runner/core source, use inspect on one, or import a helper that
+    does from another test module."""
+    files = sorted({*(ROOT / "tests").rglob("test_*.py"), *(ROOT / "tests").rglob("conftest.py")})
+    reading = {p for p in files if any(s in p.read_text() for s in SOURCES) or "getsource" in p.read_text()}
+    return sorted(reading | {p for p in files if any(f"from {q.stem} import" in p.read_text() or f".{q.stem} import"
+                                                      in p.read_text() for q in reading)})
+
+
+def cross_handles(paths: list[Path]) -> dict:
+    return {p.stem: _source_handles(ast.parse(p.read_text())) for p in paths}
 
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--json", type=Path)
     args = parser.parse_args(argv)
-    rows = inventory(candidate_files())
+    files = candidate_files()
+    rows = inventory(files, cross_handles(files))
     rev = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
     out = {"base_revision": rev, "assertions": rows,
            "digest": hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()}
@@ -95,7 +153,10 @@ def main(argv=None) -> int:
     if args.json:
         args.json.write_text(text + "\n")
     tests = {(r["file"], r["test"]) for r in rows}
-    print(f"{len(rows)} assertions in {len(tests)} tests ({len({r['file'] for r in rows})} files), base {rev}")
+    import collections
+
+    kinds = dict(collections.Counter(r["kind"] for r in rows))
+    print(f"{len(rows)} conditions {kinds} in {len(tests)} tests ({len({r['file'] for r in rows})} files), base {rev}")
     return 0
 
 
