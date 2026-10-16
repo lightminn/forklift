@@ -319,17 +319,30 @@ class ReplaySession:
         opaque_at |= {k for k, node in kwargs_.items() if _has_opaque(node)}
         return opaque_at <= described
 
-    def take(self, port: str, method: str, request_node: Any) -> dict:
+    def peek_at(self, offset: int) -> dict | None:
+        if self.tick is None or self._next + offset >= len(self.tick["calls"]):
+            return None
+        return self.tick["calls"][self._next + offset]
+
+    def take(self, port: str, method: str, request_node: Any, *, drop_recorded_kwargs=()) -> dict:
+        """``drop_recorded_kwargs``: recorded keyword arguments left out of the comparison (only for the one
+        allowed source mapping, :meth:`ReplayGate._baseline_redraw`)."""
         entry = self.peek()
         where = f"tick {self.tick['tick'] if self.tick else None} call {self._next}"
         if entry is None:
             raise self.fail(f"{where}: {port}.{method} was not recorded here (no more calls)")
         if (entry["port"], entry["method"]) != (port, method):
             raise self.fail(f"{where}: {port}.{method} where {entry['port']}.{entry['method']} was recorded")
-        if _has_opaque(entry["request"]) and (port, method) not in self.allow_opaque \
+        recorded_request = entry["request"]
+        if drop_recorded_kwargs:
+            recorded_request = json.loads(json.dumps(recorded_request))
+            kwargs_ = recorded_request["$map"]["kwargs"]["$map"]
+            for key in drop_recorded_kwargs:
+                kwargs_.pop(key, None)
+        if _has_opaque(recorded_request) and (port, method) not in self.allow_opaque \
                 and not self._described(port, method):
             raise self.fail(f"{where}: {port}.{method} was recorded with an opaque request value")
-        got, want = _canonical(request_node), _canonical(entry["request"])
+        got, want = _canonical(request_node), _canonical(recorded_request)
         if got != want:
             at = next((i for i, (a, b) in enumerate(zip(got, want)) if a != b), min(len(got), len(want)))
             raise self.fail(f"{where}: {port}.{method} request differs from the recorded one "
@@ -359,9 +372,53 @@ class ReplayGate:
             watch=None):
         if not self.active:
             return fn(*args, **kwargs)
+        if self._baseline_bundle_ahead(port, method, args):
+            if method == "callback_spec":  # the descriptor names the call the baseline made
+                descriptor = dict(args[0], call="Planner.redraw_docking")
+                return self.answer(self.session.take(port, method, self.session.encode(
+                    {"args": [descriptor], "kwargs": dict(kwargs)})), (descriptor,), kwargs, watch)
+            return self._baseline_redraw(args, kwargs, hash_only, watch)
         raw = {"args": list(args), "kwargs": dict(kwargs)}
         entry = self.session.take(port, method, self.session.encode(raw, hash_arrays=hash_only))
         return self.answer(entry, args, kwargs, watch)
+
+    # -- the one source mapping (plan section 4): the baseline's stage-1 redraw bundle ---------------------------
+    def _baseline_bundle_ahead(self, port: str, method: str, args: tuple) -> bool:
+        """The moved code's ``redraw_docking_traced`` (and its descriptor) where the baseline recorded
+        ``Trace.callback_spec`` + ``Planner.redraw_docking`` + ``Trace.redraw_rollouts``."""
+        session = self.session
+        if (port, method) == ("Trace", "callback_spec"):
+            if not (args and isinstance(args[0], dict) and args[0].get("call") == "Planner.redraw_docking_traced"):
+                return False
+            ahead = [session.peek_at(i) for i in range(3)]
+        elif (port, method) == ("Planner", "redraw_docking_traced"):
+            ahead = [None, session.peek_at(0), session.peek_at(1)]
+        else:
+            return False
+        names = [None if e is None else (e["port"], e["method"]) for e in ahead]
+        return names[1:] == [("Planner", "redraw_docking"), ("Trace", "redraw_rollouts")] and (
+            method != "callback_spec" or names[0] == ("Trace", "callback_spec"))
+
+    def _baseline_redraw(self, args: tuple, kwargs: dict, hash_only: bool, watch):
+        """redraw_docking_traced answered from the baseline bundle: the request without the dry-run inputs (their
+        descriptor was compared just before) against redraw_docking's without its callbacks; the answer is
+        (plans, record) with the rollouts trace's trajectories; a recorded exception is raised after the trace is
+        consumed (the effects before it applied)."""
+        session = self.session
+        call_kwargs = {k: v for k, v in kwargs.items() if k not in ("start_rear", "dry_configs")}
+        request = session.encode({"args": list(args), "kwargs": call_kwargs}, hash_arrays=hash_only)
+        entry = session.take("Planner", "redraw_docking", request, drop_recorded_kwargs=("dry_runs",))
+        try:
+            answer = self.answer(entry, args, call_kwargs, watch)
+        finally:
+            rollouts = session.peek()
+            if rollouts is not None and (rollouts["port"], rollouts["method"]) == ("Trace", "redraw_rollouts"):
+                session._next += 1
+            elif session.failure is None:
+                raise session.fail("the baseline redraw bundle has no Trace.redraw_rollouts after its Planner call")
+        trajectories = session.decode(rollouts["request"])["args"][0]
+        plans, record = answer
+        return plans, record, list(trajectories)
 
     def answer(self, entry: dict, args: tuple = (), kwargs: dict | None = None, watch=None):
         session = self.session

@@ -1136,3 +1136,71 @@ def test_one_descriptor_does_not_let_an_undescribed_positional_callback_through(
     session.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
     with pytest.raises(ReplayMismatch, match="opaque request value"):
         recorded_function(lambda *a, **k: None, "Planner", "plan", rgate)(lambda w: w * 2.7, check=described)
+
+
+def _baseline_stage_one(tmp_path, *, fail=False):
+    """The baseline's stage-1 bundle: redraw_docking with described closures, then the rollouts trace (also when
+    the Planner call raised)."""
+    from forklift_core.mission.boundary_record import trace_entry
+
+    def redraw_docking(grid, pose, *, dry_runs, max_yaw_rad):
+        results = [run(pose) for run in dry_runs[:1]]  # the second dry run never ran (a refusal)
+        if fail:
+            raise Refused("no_plan")
+        return ["PLAN", grid], {"yaw": max_yaw_rad, "runs": len(results)}
+
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    gate = RecordingGate(rec)
+    rec.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    rollouts = []
+
+    def dry(speed):
+        def run(pose):
+            rollouts.append(np.array([pose, pose + speed]))
+            return rollouts[-1]
+        run.callback_spec = {"kind": "bicycle_rollout", "speed": speed, "start": [1.0]}
+        return run
+
+    try:
+        recorded_function(redraw_docking, "Planner", "redraw_docking", gate)(
+            "G", 1.0, dry_runs=(dry(0.2), dry(0.29)), max_yaw_rad=0.12)
+    except Refused:
+        pass
+    finally:
+        trace_entry(gate, "redraw_rollouts", list(rollouts))
+    rec.tick_end(outputs={}, branches=[])
+    rec.close()
+
+
+def _moved_stage_one(tmp_path, speeds=(0.2, 0.29), yaw=0.12):
+    session = ReplaySession(tmp_path)
+    gate = ReplayGate(session)
+    session.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    traced = recorded_function(
+        lambda *a, **k: None, "Planner", "redraw_docking_traced", gate,
+        callback_spec=lambda a, k: {"dry_runs": [{"kind": "bicycle_rollout", "speed": s, "start": list(k["start_rear"])}
+                                                 for s in k["dry_configs"]]})
+    try:
+        out = traced("G", 1.0, start_rear=(1.0,), dry_configs=speeds, max_yaw_rad=yaw)
+    except Refused as exc:
+        out = exc
+    session.tick_end(outputs={}, branches=[])
+    session.finish()
+    return out
+
+
+def test_the_baseline_stage_one_bundle_answers_the_moved_traced_redraw(tmp_path):
+    _baseline_stage_one(tmp_path)
+    plans, record, trajectories = _moved_stage_one(tmp_path)
+    assert plans == ["PLAN", "G"] and record == {"yaw": 0.12, "runs": 1}
+    assert len(trajectories) == 1 and np.array_equal(trajectories[0], [1.0, 1.2])
+    with pytest.raises(ReplayMismatch, match="Trace.callback_spec request differs"):
+        _moved_stage_one(tmp_path, speeds=(0.3, 0.39))  # the dry runs' settings changed
+    with pytest.raises(ReplayMismatch, match="Planner.redraw_docking request differs"):
+        _moved_stage_one(tmp_path, yaw=0.05)  # another Planner argument changed
+
+
+def test_a_baseline_stage_one_exception_is_raised_after_its_rollouts_are_consumed(tmp_path):
+    _baseline_stage_one(tmp_path, fail=True)
+    out = _moved_stage_one(tmp_path)
+    assert isinstance(out, Refused) and out.reason == "no_plan"
