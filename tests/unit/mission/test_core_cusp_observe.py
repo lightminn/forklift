@@ -372,3 +372,20 @@ def test_an_off_path_observe_miss_is_neither_replanned_nor_a_held_realignment_re
     except RuntimeError as exc:
         pytest.fail(f"an off-path failure was refused as a held realignment's recovery: {exc}")
     assert "plan_observation_leg" not in w.names()
+
+
+def test_without_slam_a_stop_at_exactly_the_stop_speed_and_yaw_rate_counts():
+    """M-a2 sweep (boundaries): the stop speed (0.015 m/s) and the yaw rate limit (0.02 rad/s) are included."""
+    for velocity, yaw_rate in (((0.015, 0.0), 0.0), ((0.0, 0.0), 0.02)):
+        w = World(slam=False, velocity=velocity, yaw_rate=yaw_rate)
+        w.tick(CUSP_MISS)
+        assert w.ms.cusp_stop_ticks == 1
+
+
+def test_a_failed_observe_replan_installs_nothing_before_it_ends_the_run():
+    """M-a2 sweep (order): the refusal comes before the failed plan would replace the leg."""
+    w = World("observe", plans=[plan(False)])
+    before = w.core.paths["observe"]
+    with pytest.raises(RuntimeError, match="observe_replan_failed:no_path"):
+        w.tick(OBSERVE_MISS)
+    assert w.core.paths["observe"] is before

@@ -617,3 +617,12 @@ def test_a_pickup_retry_moves_to_observe_only_after_the_release_and_stand():
     with pytest.raises(RuntimeError, match="release failed"):
         core.start_pickup_retry(12.0, "mismatch", 0.7, 1)
     assert core.ms.phase == "approach" and core.state["transitions"] == []
+
+
+def test_the_terminal_hold_ends_exactly_at_its_length():
+    """M-a2 sweep (boundaries): standing exactly TERMINAL_HOLD_S (less the 1e-9 slack) ends the hold."""
+    core, near, calls = make(Geometry(face_m=0.8), standing=True)
+    near["mismatch"] = True
+    tick(core, 0.0)
+    tick(core, NT.TERMINAL_HOLD_S - 1e-9)
+    assert ("retry", "mismatch") in calls

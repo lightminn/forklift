@@ -247,3 +247,25 @@ def test_the_cusp_monitors_prefix_check_reads_occupied_cells_walking_past_unknow
     latch = SimpleNamespace(prefix_trajectory="PREFIX", hand_direction=-1)
     assert seen["prefix_occupied"](latch) is occupied
     assert asked[-1][0] == "PREFIX" and asked[-1][1]["direction"] == -1 and asked[-1][1]["unknown_passes"] is True
+
+
+def test_a_scan_exactly_the_timeout_old_is_alive_and_evidence_exactly_the_age_limit_counts():
+    """M-a2 sweep (boundaries): sensor timeout 0.5 s and evidence age 2.0 s are included."""
+    lay = layer(scans={"front": 9.5}, check_candidate=lambda traj, unknown_passes=False, **k: Check(oldest_free_s=8.0))
+    core, _, _ = make(obstacle={"layer": lay})
+    assert core.cusp_alive(10.0) is True
+    ok, _, record = core.cusp_sensors(10.0, (0, 0, 0), "TRAJ", 1)
+    assert ok is True and record["silent"] == [] and record["evidence_age_s"] == 2.0
+
+
+def test_an_edge_within_the_stopping_distance_refuses_like_an_unknown_cell():
+    """M-a2 sweep (narrowing): unknown and edge both count."""
+    answers = {False: Check(blocked="edge", verified_m=0.3, oldest_free_s=9.0), True: Check()}
+    lay = layer(check_candidate=lambda traj, unknown_passes=False, **k: answers[unknown_passes])
+    core, _, _ = make(obstacle={"layer": lay})
+    assert core.cusp_sensors(10.0, (0, 0, 0), "TRAJ", 1)[0] is False
+
+
+def test_the_transport_legs_checker_is_its_escape_legs_too():
+    """M-a2 sweep (narrowing): both travel legs take their rectangles from the escape leg."""
+    assert make("transport")[0].cusp_leg_checker() == "RECTS"

@@ -205,3 +205,27 @@ def test_an_arrival_is_another_legs_backoff_end_only_on_that_leg():
     w = World("transport", obstacle=obstacle)
     out = w.tick(Tracking(status="arrived"))
     assert out.tracking.status == "arrived" and "end_s" not in obstacle["backoff"] and "force_replan" not in obstacle
+
+
+def test_an_observe_arrival_within_exactly_the_tolerance_counts():
+    """M-a2 sweep (boundaries): a position error of exactly OBSERVE_ARRIVAL_M (0.10 m) arrives."""
+    w = World("observe", remaining=0.0)
+    edge = Tracking(status="tracking", speed_mps=0.0, position_error_m=0.10, yaw_error_rad=0.0)
+    w.tick(edge, t=10.0)
+    assert w.tick(edge, t=11.0).tracking.status == "arrived"
+
+
+def test_a_backoffs_stop_cause_is_read_before_its_release():
+    """M-a2 sweep (order): the release may change what the permission saw; the cause is the one before it."""
+    layer = SimpleNamespace(permission=SimpleNamespace(path_check=SimpleNamespace(blocked="occupied"), last_estop=None))
+    obstacle = {"layer": layer, "backoff": {"phase": "transport", "time_s": 40.0}}
+    w = World("transport", obstacle=obstacle)
+    release = w.core.release_after_backoff
+
+    def release_clearing(t, event):
+        layer.permission.path_check = SimpleNamespace(blocked=None)  # the release's refresh sees a clear path
+        return release(t, event)
+
+    w.core.release_after_backoff = release_clearing
+    w.tick(Tracking(status="arrived"))
+    assert obstacle["backoff"]["stop_cause"] == {"path": "occupied", "estop": None}

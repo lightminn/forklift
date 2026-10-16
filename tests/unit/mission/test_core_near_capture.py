@@ -224,3 +224,10 @@ def test_the_stage_one_redraw_drives_its_custom_cruise_and_installs_the_insertio
     assert args[4].cruise_speed_mps == 0.4 and args[5].cruise_speed_mps == 0.2  # acceptance, driven
     for name in ("insert", "extract"):
         np.testing.assert_array_equal(w.core.trackers[name].path_arrays()[0], plans[name].poses)
+
+
+def test_a_recapture_straight_of_exactly_the_minimum_length_is_kept():
+    """M-a2 sweep (boundaries): REALIGN_MIN_LEFT_M (1.5 m) itself is long enough."""
+    w = World(realign=True, straight=leg(1.0, 1.5))
+    w.run()
+    assert "start_near_realign" not in w.names() and w.core.paths["approach"].length_m == 1.5

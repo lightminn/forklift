@@ -260,3 +260,14 @@ def test_the_mission_is_planned_with_the_recorded_planner_config_itself():
     w.succeed()
     (args,) = received
     assert args[1] is w.core.options.planner_config
+
+
+def test_the_tracker_profile_is_applied_to_the_followers_built_after_the_detection():
+    """M-a2 sweep (order): the profile rewrites the new followers, not the ones they replace."""
+    w = World()
+    old = dict(w.core.trackers)
+    seen = []
+    w.core.apply_tracker_profile = lambda: seen.append(dict(w.core.trackers))
+    w.succeed()
+    (at_call,) = seen
+    assert at_call["approach"] is w.core.trackers["approach"] and at_call["approach"] is not old.get("approach")

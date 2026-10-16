@@ -228,3 +228,10 @@ def test_blocked_and_standing_counts_towards_the_replan_and_no_progress_ends_the
     core.trackers["transport"].remaining_to_goal_m = lambda: 3.9  # a metre closer: the watch restarts
     core.permission(70.2, REAR, 0.0, 0.0, False, None)
     assert obstacle["progress"]["since_s"] == 70.2
+
+
+def test_without_slam_standing_is_below_10_mm_per_second():
+    """M-a2 sweep (boundaries): exactly 0.01 m/s is still moving -- no blocked-and-standing count."""
+    core, obstacle, _, _ = make("observe", limit=(0.0, "occupied"), velocity=(0.01, 0.0))
+    core.permission(10.0, REAR, 0.0, 0.0, False, None)
+    assert obstacle["blocked_ticks"] == 0

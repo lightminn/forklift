@@ -245,3 +245,12 @@ def test_a_new_tracker_starts_with_clean_latches_and_keeps_the_earlier_episodes_
     core.build_near_tracker(11.0)
     assert near["mismatch"] is False and near["unbounded"] is False
     assert near["stop_events"] == [earlier]
+
+
+def test_a_realignment_install_of_exactly_the_maximum_length_is_kept():
+    """M-a2 sweep (boundaries): REALIGN_MAX_LENGTH_M itself (with its 1e-9 slack) is allowed."""
+    slam = {"tracker": SimpleNamespace(mode="holding")}
+    core, calls = make(slam=slam, obstacle={"progress": {}}, state=realign_state())
+    core.paths["observe"] = leg(NT.REALIGN_MAX_LENGTH_M + 1e-9)
+    core.realign_install("backoff")
+    assert len(core.state["near_tracking"]["realign"]["installs"]) == 1

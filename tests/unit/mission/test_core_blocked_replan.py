@@ -446,7 +446,7 @@ def test_the_return_replan_retries_at_zero_clearance():
     assert w.obstacle["replans"][-1]["clearance_m"] == 0.0
 
 
-@pytest.mark.parametrize("phase, travel, expected", [("observe", 0.2, 0.3), ("transport", 0.2, 0.2)])
+@pytest.mark.parametrize("phase, travel, expected", [("observe", 0.2, 0.3), ("transport", 0.2, 0.2), ("return_home", 0.2, 0.2)])
 def test_the_recorded_clearance_is_the_travel_configs_on_the_travel_legs_only(phase, travel, expected):
     w = World(phase, plans=[plan()])
     w.core.options.travel_config = Config(clearance_m=travel)
@@ -483,3 +483,14 @@ def test_the_return_leg_escapes_an_invalid_start_too():
                   destination="D2")})
     w.replan()
     assert "find_escape" in w.names() and w.obstacle["escapes"] == {"return_home": 1}
+
+
+def test_a_refused_eleventh_leg_replan_leaves_the_no_progress_watch_alone():
+    """M-a2 sweep (order): the leg limit refuses before the watch restarts on a path that is not installed."""
+    w = World("observe", plans=[plan()] * 11)
+    for k in range(10):
+        w.replan(t=50.0 + 31.0 * k)
+    w.obstacle["progress"] = {"phase": "observe", "best_m": 2.0, "since_s": 300.0}
+    with pytest.raises(RuntimeError, match="obstacle_replan_limit in observe: 11"):
+        w.replan(t=50.0 + 310.0)
+    assert w.obstacle["progress"] == {"phase": "observe", "best_m": 2.0, "since_s": 300.0}
