@@ -2761,22 +2761,31 @@ class MissionCore:
 
     def refresh_targets(self) -> None:
         """M-a4 (plan D7): the targets list follows the mission each control tick, from what the core holds (no
-        port call): the correction version the poses are in, the pallet's estimate once seen, carried from the lift
-        to the lowering (no pose), put down at the delivery estimate after it."""
-        tb, ms, obstacle, slam, pocket = self.targets, self.ms, self.obstacle, self.slam, self.pocket
+        port call). The correction version counts the SLAM releases -- the frame changes the core re-expresses its
+        estimates across (while tracking, the correction moves with every scan and the map poses do not jump).
+        The destination follows the core's current estimate of it (a docking match, a release's re-expression);
+        the pallet takes its recognised estimate once seen, is carried from the lift to the lowering (no pose) and
+        is put down where that estimate stands, which it then follows."""
+        tb, ms, slam, pocket = self.targets, self.ms, self.slam, self.pocket
         mission = self.commands.mission
-        if mission is None or mission.pallet_id not in tb.pallets:
+        if mission is None or mission.pallet_id not in tb.pallets or mission.destination_id not in tb.destinations:
             return
-        pid = mission.pallet_id
-        if obstacle is not None:
-            tb.set_correction_version(int(obstacle["version"]))
+        pid, did = mission.pallet_id, mission.destination_id
+        if slam is not None:
+            tb.set_correction_version(sum(1 for e_ in slam["holds"] if e_.get("event") == "release"))
+        scenario_ = self.options.scenario
+        if slam is not None:
+            scenario_ = slam.get("return_scenario", slam.get("transport_scenario", scenario_))
+        site_ = scenario_.destination
+        site_pose = TargetPose(float(site_.x_m), float(site_.y_m), float(site_.yaw_rad))
+        tb.update_destination(did, site_pose)
         if ms.phase in ("lift", "extract", "transport", "lower"):
             tb.carried(pid)
         elif ms.phase in ("withdraw", "settle", "return_home", "home_settle", "complete"):
             if tb.pallets[pid].state == "carried":
-                scenario_ = slam.get("transport_scenario", self.options.scenario) if slam is not None else self.options.scenario
-                site_ = scenario_.destination
-                tb.put_down(pid, TargetPose(float(site_.x_m), float(site_.y_m), float(site_.yaw_rad)))
+                tb.put_down(pid, site_pose)
+            elif tb.pallets[pid].state == "delivered":
+                tb.update_pose(pid, site_pose)
         elif pocket.get("planning_pickup") is not None:
             site_ = pocket["planning_pickup"]
             tb.update_pose(pid, TargetPose(float(site_.x_m), float(site_.y_m), float(site_.yaw_rad)))

@@ -69,6 +69,14 @@ class TargetsBook:
             return False
         return self._set(pallet_id, pose=pose)
 
+    def update_destination(self, destination_id: str, pose: Pose) -> bool:
+        """A new estimate of a destination (a docking match, a frame change); the same pose changes nothing."""
+        if self.destinations[destination_id] == pose:
+            return False
+        self.destinations[destination_id] = pose
+        self.revision += 1
+        return True
+
     def carried(self, pallet_id: str) -> bool:
         return self._set(pallet_id, pose=None, state="carried")
 
