@@ -105,7 +105,10 @@ class MissionCommands:
             return "not_running"
         if context.near_tracker:
             return "near_tracking_active"
-        self._stop_boundary(t)
+        if self.paused_since is None:
+            self._stop_boundary(t)
+        else:  # paused again while resuming: the same stop goes on (one open interval), a new boundary
+            self.mission_gen += 1
         self.status = "paused"
         return None
 
@@ -128,6 +131,8 @@ class MissionCommands:
             return None
         if self.paused_since is None:
             self._stop_boundary(t)
+        else:  # cancelled while paused or resuming: the open stop goes on, the cancel is a boundary of its own
+            self.mission_gen += 1
         self.status = "cancelling"
         return None
 
@@ -158,11 +163,14 @@ class MissionCommands:
         self._close_pause(t)
         self.status = "cancelled"
 
-    def finish(self, outcome: str) -> None:
-        """The mission's own end (``done`` or ``failed``)."""
+    def finish(self, outcome: str, t: float | None) -> None:
+        """The mission's own end (``done`` or ``failed``) at loop time ``t``: an open pause closes there, so the
+        next mission's work clock does not stay stopped (``t`` None: before any tick -- the pause closes at its own
+        start)."""
         if outcome not in ("done", "failed"):
             raise ValueError(outcome)
         if self.status in ACTIVE:
+            self._close_pause(self.paused_since if t is None and self.paused_since is not None else t)
             self.status = outcome
 
     def _close_pause(self, t: float) -> float:

@@ -5783,7 +5783,6 @@ def drive(S, isaac) -> None:
             boundary.recorder.tick_begin(-3, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
         if ms.phase in ("repeat_capture_done", "repeat_target_not_reached", "near_tracking_stopped"):
             return
-        core.commands.finish("done" if ms.phase == "complete" else "failed")  # M-a3: the lifecycle's own end
         require(ms.phase == "complete", "Mission exceeded simulation time budget")
         final_pallet, _ = pallet.get_world_pose()
         destination = np.array([truth_destination.x_m, truth_destination.y_m])
@@ -5822,6 +5821,9 @@ def drive(S, isaac) -> None:
             }
         )
     finally:
+        # M-a3: the lifecycle ends with the run -- done only once every delivery check passed, failed on any
+        # refusal or error; the loop's own time (no new clock read: the replay compares every port call).
+        core.commands.finish("done" if state.get("success") is True else "failed", book_clock["t"])
         try:
             if recorder is not None:
                 # Plan D8b: first in the finally block, so neither an earlier record nor the

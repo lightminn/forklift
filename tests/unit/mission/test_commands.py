@@ -79,7 +79,7 @@ def test_same_tick_commands_apply_by_priority_not_arrival():
 def test_a_finished_mission_frees_the_slot_before_the_same_ticks_submit():
     """agy 1: the end is settled first (idle), then the queued submit is judged."""
     m = running()
-    m.finish("done")
+    m.finish("done", 4.0)
     m.queue(Submit("P2", "D2"))
     (rec,) = m.apply(5.0)
     assert rec["accepted"] and m.mission_id == "m2" and m.status == "accepted"
@@ -145,3 +145,40 @@ def test_resumed_returns_each_pauses_own_length_for_the_deadlines():
 def test_an_unknown_stop_kind_is_refused():
     with pytest.raises(ValueError):
         MissionCommands().apply(0.0, Context(stop_kind="halt"))
+
+
+def test_pausing_again_while_resuming_keeps_one_open_stop():
+    """Codex M-a3a review: pause(10), resume(12), pause(14), resumed(20) is one 10 s stop, not two overlapping."""
+    m = running()
+    for t, command in ((10.0, Pause()), (12.0, Resume()), (14.0, Pause()), (16.0, Resume())):
+        m.queue(command)
+        assert m.apply(t)[0]["accepted"]
+    assert m.mission_gen == 2  # two stop boundaries
+    assert m.resumed(20.0) == pytest.approx(10.0) and m.pauses == [[10.0, 20.0]]
+    assert m.work_elapsed(0.0, 25.0) == pytest.approx(15.0)
+
+
+def test_a_mission_ending_while_paused_closes_its_stop_for_the_next():
+    """Codex M-a3a review: pause(10), failed at 30, the next mission's work clock runs."""
+    m = running()
+    m.queue(Pause())
+    m.apply(10.0)
+    m.finish("failed", 30.0)
+    assert m.status == "failed" and m.pauses == [[10.0, 30.0]] and m.paused_since is None
+    m.queue(Submit("P2", "D2"))
+    m.apply(30.0)
+    m.start()
+    assert m.work_elapsed(30.0, 35.0) == pytest.approx(5.0)
+
+
+@pytest.mark.parametrize("before", [[Pause()], [Pause(), Resume()]])
+def test_a_cancel_while_stopped_is_a_generation_of_its_own(before):
+    m = running()
+    for k, command in enumerate(before):
+        m.queue(command)
+        m.apply(10.0 + k)
+    gen = m.mission_gen
+    m.queue(Cancel())
+    assert m.apply(20.0)[0]["accepted"] and m.mission_gen == gen + 1 and len(m.pauses) == 1
+    m.cancelled(21.0)
+    assert m.pauses == [[10.0, 21.0]]
