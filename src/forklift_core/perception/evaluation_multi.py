@@ -149,6 +149,22 @@ def _danger(errors, face) -> bool:
             or axial > AXIAL_DANGER_M)
 
 
+def candidate_danger(ci: int, cand: CandidateView, pairs: dict, costs: dict, instances) -> bool | None:
+    """Danger verdict of one counted candidate, as judge_scene uses it; None if it does not permit
+    a pick. A matched candidate is judged on its matched face; an unmatched one on its cheapest
+    matchable face; one that matches no face is dangerous."""
+    if cand.pickable is not True:
+        return None
+    if ci in pairs:
+        (_, err), face = costs[ci, pairs[ci]]
+    else:
+        options = [costs[ci, ii] for ii in range(len(instances)) if (ci, ii) in costs]
+        if not options:
+            return True
+        (_, err), face = min(options, key=lambda o: o[0][0])
+    return _danger(err, face)
+
+
 INSTRUCTION_KINDS = ("none", "ambiguous", "unambiguous")
 
 
@@ -209,19 +225,7 @@ def judge_scene(meta, truth, instruction_input, candidates: Sequence[CandidateVi
     pairs, costs = _match(counted, instances)
     matched_inst = {i: c for c, i in pairs.items()}
     errors = tuple(costs[c, i][0][1] for c, i in pairs.items())
-    dangerous = False
-    for ci, cand in enumerate(counted):
-        if cand.pickable is not True:
-            continue
-        if ci in pairs:
-            (_, err), face = costs[ci, pairs[ci]]
-        else:
-            options = [costs[ci, ii] for ii in range(len(instances)) if (ci, ii) in costs]
-            if not options:
-                dangerous = True
-                continue
-            (_, err), face = min(options, key=lambda o: o[0][0])
-        dangerous = dangerous or _danger(err, face)
+    dangerous = any(candidate_danger(ci, cand, pairs, costs, instances) for ci, cand in enumerate(counted))
     by_id = {c.candidate_id: k for k, c in enumerate(counted)}
     if decision.status == "selected" and decision.candidate_id not in by_id:
         # Auto-selection may only pick a fitted, identified candidate (design 7.5):

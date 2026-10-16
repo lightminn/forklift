@@ -3,7 +3,9 @@ import math
 
 import pytest
 
-from forklift_core.perception.evaluation_multi import CandidateView, TargetDecision, judge_scene, summarize
+from forklift_core.perception.evaluation_multi import (
+    CandidateView, TargetDecision, _match, candidate_danger, judge_scene, summarize,
+)
 
 
 def _face(left, right, yaw=0.0, accessible=True, sign=1, pickable=True, thr=0.0437):
@@ -199,3 +201,22 @@ def test_official_needs_isaac_and_the_official_noise_role():
     assert not summarize([_verdict({"k": 1})], split="dev", render_source="isaac")["official"]
     assert not summarize([_verdict(None)], split="dev", render_source="isaac")["official"]
     assert _verdict(official).noise_signature == "h:1.0:official:mid" and _verdict({"k": 1}).noise_signature == "legacy"
+
+
+def test_a_duplicate_of_a_matched_candidate_is_extra_but_not_dangerous():
+    """Codex 2026-10-16: an unmatched pick-permitted candidate that can match a face is judged on that
+    face, not flagged dangerous; candidate_danger gives exactly the answer judge_scene uses."""
+    truth = _truth([_inst(0, 0.0)])
+    cands = [_cand("a", 0.0), _cand("b", 0.0)]
+    v = judge_scene(META, truth, NONE_IN, cands, TargetDecision("selected", "a", ()))
+    assert v.extra and not v.dangerous
+    pairs, costs = _match(cands, truth["instances"])
+    assert [candidate_danger(i, c, pairs, costs, truth["instances"]) for i, c in enumerate(cands)] == [False, False]
+
+
+def test_candidate_danger_agrees_with_the_unmatched_far_duplicate():
+    truth = _truth([_inst(0, 0.0)])
+    cands = [_cand("a", 0.0), _cand("b", 0.0, dx=0.25)]
+    pairs, costs = _match(cands, truth["instances"])
+    assert [candidate_danger(i, c, pairs, costs, truth["instances"]) for i, c in enumerate(cands)] == [False, True]
+    assert candidate_danger(0, _cand("a", 0.0, pickable=None), pairs, costs, truth["instances"]) is None
