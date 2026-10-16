@@ -113,3 +113,25 @@ def test_bad_bed_or_plate_sizes_are_refused(tmp_path, args):
     with pytest.raises(SystemExit):
         ex.main([*args, "--out", str(tmp_path / "x")])
     assert not (tmp_path / "x").exists()
+
+
+def _read_stl(path):
+    data = path.read_bytes()
+    (n,) = struct.unpack("<I", data[80:84])
+    return np.array([struct.unpack("<12fH", data[84 + 50 * k:134 + 50 * k])[3:12] for k in range(n)]).reshape(-1, 3, 3)
+
+
+def test_planes_a_hair_apart_are_merged_before_meshing():
+    boxes = [PalletBox("a", (0.1, 0.1, 0.141949780534), (0.0, 0.0, 0.141949780534 / 2)),
+             PalletBox("b", (0.1, 0.1, 0.141949780535), (0.1, 0.0, 0.141949780535 / 2))]
+    same = [PalletBox("a", (0.1, 0.1, 0.141949780534), (0.0, 0.0, 0.141949780534 / 2)),
+            PalletBox("b", (0.1, 0.1, 0.141949780534), (0.1, 0.0, 0.141949780534 / 2))]
+    assert len(ex.union_mesh(boxes)) == len(ex.union_mesh(same))  # no 1e-12 m step face
+
+
+def test_the_saved_float32_stl_stays_manifold(tmp_path):
+    """Codex 2026-10-16: s7_nonstandard_1000887 had two top planes 1e-12 m apart that float32 mm merged."""
+    ex.main(["--recipe", "s7_nonstandard_1000887", "--out", str(tmp_path / "s7")])
+    manifest = json.loads((tmp_path / "s7" / "manifest.json").read_text())
+    for part in manifest["parts"]:
+        assert _edges_even(_read_stl(tmp_path / "s7" / part["file"]).astype(float))

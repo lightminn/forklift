@@ -51,6 +51,22 @@ def _intervals(boxes):
     return lo, hi
 
 
+MERGE_TOL_M = 1e-6  # planes closer than 1 um are one plane (float32 millimetres would merge them anyway)
+
+
+def _merge(values):
+    out = []
+    for v in np.sort(values):
+        if not out or v - out[-1] > MERGE_TOL_M:
+            out.append(float(v))
+    return np.array(out)
+
+
+def _snap(axis, value):
+    i = int(np.argmin(np.abs(axis - value)))
+    return i
+
+
 def _grid(boxes, bounds=None):
     lo, hi = _intervals(boxes)
     axes = []
@@ -58,15 +74,16 @@ def _grid(boxes, bounds=None):
         values = np.concatenate((lo[:, a], hi[:, a]))
         if bounds is not None:
             values = np.clip(np.concatenate((values, bounds[a])), *bounds[a])
-        axes.append(np.unique(np.round(values, 12)))
+        axes.append(_merge(values))
     occ = np.zeros(tuple(len(g) - 1 for g in axes), bool)
     for l, h in zip(lo, hi):
         idx = []
         for a in range(3):
             l_a, h_a = (l[a], h[a]) if bounds is None else (max(l[a], bounds[a][0]), min(h[a], bounds[a][1]))
-            if h_a <= l_a:
+            i0, i1 = _snap(axes[a], l_a), _snap(axes[a], h_a)
+            if i1 <= i0:
                 break
-            idx.append(slice(np.searchsorted(axes[a], round(l_a, 12)), np.searchsorted(axes[a], round(h_a, 12))))
+            idx.append(slice(i0, i1))
         else:
             occ[tuple(idx)] = True
     return axes, occ
@@ -192,6 +209,8 @@ def export(out: Path, boxes, *, scale: float, bed_m, split: str, source: dict) -
         parts = tile_meshes(boxes, bed_m=[lim / scale for lim in bed_m])
     if not parts:
         raise ValueError("nothing to print")
+    for part in parts:  # the file stores float32 millimetres: check what will actually be written
+        _check_manifold((part.triangles * 1000.0 * scale).astype(np.float32).astype(float))
     out.mkdir(parents=True, exist_ok=False)
     records = []
     for part in parts:
