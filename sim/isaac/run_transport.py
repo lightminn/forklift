@@ -670,9 +670,9 @@ def arguments() -> argparse.Namespace:
                         help="M-c tests only: a STOP arrives at a physics step inside the first capture (the path a "
                         "console STOP takes, at a moment a client cannot aim for)")
     parser.add_argument("--live-test-marker", action="store_true",
-                        help="M-c tests only (plan C5): a small red plate 0.5 m in front of the forward camera sweeps "
-                        "sideways once a sim second, so a frame's pixels tell the sim time they were drawn at -- "
-                        "for a run without a mission (it would sit in the perception's view)")
+                        help="M-c tests only (plan C5): the lift follows a 2 s sine wave so the carriage camera's "
+                        "horizon tells the sim time a frame's pixels were drawn at; the lift height is logged every "
+                        "physics step -- for a run without a mission")
     parser.add_argument("--live-test-camera-freeze", default=None,
                         help="M-c tests only: FROM:TO sim seconds with no new camera frames (the video-stall test)")
     parser.add_argument(
@@ -5223,45 +5223,19 @@ def drive(S, isaac) -> None:
 
             live_marker_ = None
             if args.live_test_marker and live_cam_ is not None:
-                import omni.usd
-                from pxr import Gf, UsdGeom
-
-                # In world coordinates before the camera as it stands at the start (the marker run has no mission, the
-                # truck does not move): as a child of the camera prim it was not seen (2026-10-17).
-                cam_p_, cam_q_ = live_cam_.get_world_pose(camera_axes="world")  # +X ahead, +Y left, +Z up
-                w_, x_, y_, z_ = (float(v) for v in cam_q_)
-                rot_ = np.array([[1 - 2 * (y_ * y_ + z_ * z_), 2 * (x_ * y_ - z_ * w_), 2 * (x_ * z_ + y_ * w_)],
-                                 [2 * (x_ * y_ + z_ * w_), 1 - 2 * (x_ * x_ + z_ * z_), 2 * (y_ * z_ - x_ * w_)],
-                                 [2 * (x_ * z_ - y_ * w_), 2 * (y_ * z_ + x_ * w_), 1 - 2 * (x_ * x_ + y_ * y_)]])
-                from pxr import Sdf, UsdShade
-
-                stage_ = omni.usd.get_context().get_stage()
-                cube_ = UsdGeom.Cube.Define(stage_, "/World/LiveMarker")
-                cube_.GetSizeAttr().Set(0.15)
-                cube_.GetDisplayColorAttr().Set([Gf.Vec3f(1.0, 0.0, 0.0)])
-                # An emissive red material, so the plate reads red whatever the scene's light (2026-10-17: a plain
-                # displayColor cube was not seen).
-                mat_ = UsdShade.Material.Define(stage_, "/World/LiveMarkerMaterial")
-                shader_ = UsdShade.Shader.Define(stage_, "/World/LiveMarkerMaterial/Shader")
-                shader_.CreateIdAttr("UsdPreviewSurface")
-                shader_.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(1.0, 0.0, 0.0))
-                shader_.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(1.0, 0.0, 0.0))
-                mat_.CreateSurfaceOutput().ConnectToSource(shader_.ConnectableAPI(), "surface")
-                UsdShade.MaterialBindingAPI.Apply(cube_.GetPrim()).Bind(mat_)
-                marker_api_ = UsdGeom.XformCommonAPI(cube_.GetPrim())
-                live.log({"marker_camera_pose": [list(map(float, cam_p_)), list(map(float, cam_q_))]})
-
+                # The camera rides the fork carriage: a lift moving on a known wave moves the picture's horizon, so a
+                # frame's pixels tell the lift height -- and so the sim time -- they were drawn at (plan C5). A plate
+                # added mid-run was either not rendered or crashed the renderer (2026-10-17). For a run that stays
+                # PAUSED: the wave overrides the mission's lift target and the gate's latch at every physics step.
                 def live_marker_(sim_s: float) -> None:
-                    # A sawtooth: 0.6 m ahead, from 0.15 m left to 0.15 m right across each sim second.
-                    local_ = np.array([1.0, 0.30 - 0.60 * (sim_s % 1.0), 0.0])
-                    world_ = np.asarray(cam_p_, dtype=float) + rot_ @ local_
-                    marker_api_.SetTranslate(Gf.Vec3d(*(float(v) for v in world_)))
+                    target_ = 0.06 + 0.04 * math.sin(2 * math.pi * sim_s / 2.0)
+                    robot.apply_action(isaac.action(joint_positions=np.array([target_]), joint_indices=lift_index))
 
             def live_step_world(render: bool) -> None:
                 sim_ = float(world.current_time - initial_time)
-                if live_marker_ is not None:
-                    live_marker_(sim_ + 1 / 120)  # where it stands when this step is drawn
                 live.before_step(sim_)
+                if live_marker_ is not None:
+                    live_marker_(sim_ + 1 / 120)  # after the gate: the wave also runs past a stopped step's lift latch
                 camera_ = live.camera_due() and live_cam_ is not None
                 step_world(render or camera_)
                 if slam is not None:
@@ -5273,6 +5247,9 @@ def drive(S, isaac) -> None:
                     speed_, yaw_rate_ = float(np.mean(rates_[2:4])) * args.drive_geometry.wheel_radius_m, 0.0
                 live.after_step(float(world.current_time - initial_time), odom_speed=speed_, yaw_rate=yaw_rate_,
                                 odom_mono=made_, rendered=camera_, render_sim_time_of=lambda rt: rt - initial_time)
+                if live_marker_ is not None:
+                    live.log({"lift_sim_t": float(world.current_time - initial_time),
+                              "lift_m": float(robot.get_joint_positions()[lift_index[0]])})
 
             def live_permit(curvatures, direction, check):
                 # The arbiter's own permission on the layer's latest grid, in the sim's time (plan C2: the world and
