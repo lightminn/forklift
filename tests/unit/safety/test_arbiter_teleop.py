@@ -113,3 +113,37 @@ def test_the_arbiter_drives_teleop_through_the_chain_from_the_measured_steering(
     assert out.source == "teleop" and out.speed_mps == pytest.approx(0.8 / 120)
     assert out.curvature_inv_m == pytest.approx(0.2 + 0.5 / 120) and asked[0][0] == 0.2
     assert out.permit == (1.0, "ok")
+
+
+def test_a_stale_frame_at_receipt_is_a_preempt_and_a_boundary_and_a_future_frame_is_stale():
+    """Codex M-b review round 2 P1 x2."""
+    a, base, t, arm_gen = teleop_rig()
+    a.register_frame(5, t)
+    tick = a.tick(t)
+    a.handle("op", command(a, base, arm_gen, tick, 1, mode="video", frame_echo={"frame_id": 5}), t)
+    assert a.teleop is not None
+    a.register_frame(6, t - 0.4)
+    gen = a.control_gen
+    a.handle("op", command(a, base, arm_gen, tick, 2, mode="video", frame_echo={"frame_id": 6}), t)
+    assert a.last_teleop_reject == "stale_video" and a.preempt_latch == "stale_video" and a.control_gen == gen + 1
+    b, base_b, tb, arm_b = teleop_rig()
+    b.register_frame(9, tb + 10.0)
+    tick_b = b.tick(tb)
+    b.handle("op", command(b, base_b, arm_b, tick_b, 1, mode="video", frame_echo={"frame_id": 9}), tb)
+    assert b.last_teleop_reject == "stale_video" and not b.armed
+
+
+def test_the_state_carries_the_applied_command_only_when_given_and_the_resume_steps_per_step():
+    from forklift_core.safety.state import resume_steps, state_message
+
+    a, base, t, arm_gen = teleop_rig()
+    out = a.step(t, SAFE, (0.0, 0.0))
+    assert state_message(a, out, SAFE, now_mono=t)["applied"] is None
+    applied = {"speed_mps": 0.18, "curvature_inv_m": 0.19, "steering_rad": [0.1, 0.09]}
+    assert state_message(a, out, SAFE, now_mono=t, applied=applied)["applied"]["speed_mps"] == 0.18
+    assert resume_steps({"step": "path_rechecked", "reason": "replanned"}, "resuming") == {
+        "stop_confirmed": "ok", "state_verified": "ok", "frame_reexpressed": "ok", "path_rechecked": "pending"}
+    assert resume_steps({"step": "state_verified", "reason": "state_verified:lift_mismatch"}, "paused")[
+        "state_verified"] == "failed(state_verified:lift_mismatch)"
+    held = dict(SAFE, mission={"id": "m1", "status": "held", "phase": "observe"})
+    assert state_message(a, out, held, now_mono=t)["mission"]["reason"] == "teleop"

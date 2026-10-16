@@ -4,8 +4,36 @@ never 0 or an estimate; the runner passes what it owns (pose, freshness, pacing)
 from __future__ import annotations
 
 
+RESUME_STEPS = ("stop_confirmed", "state_verified", "frame_reexpressed", "path_rechecked")
+
+
+def resume_steps(check: dict | None, status: str | None) -> dict | None:
+    """The core's last resume check as the contract's per-step ``pending / ok / failed(reason)`` (contract 6):
+    steps before the one it reached are ok, that one pending -- or failed with its reason once the resume was
+    refused (the mission back to paused); a finished resume is ok throughout."""
+    if not check:
+        return None
+    step = check.get("step")
+    reached = len(RESUME_STEPS) if step == "running" else (
+        RESUME_STEPS.index(step) if step in RESUME_STEPS else 0)
+    out = {}
+    for i, name in enumerate(RESUME_STEPS):
+        if i < reached:
+            out[name] = "ok"
+        elif i == reached:
+            reason = check.get("reason")
+            out[name] = f"failed({reason})" if status == "paused" and reason else "pending"
+        else:
+            out[name] = "pending"
+    return out
+
+
 def state_message(arbiter, out, safety: dict | None, *, now_mono: float, rear_axle_speed_mps: float | None = None,
-                  pose: dict | None = None, freshness: dict | None = None, pacing: dict | None = None) -> dict:
+                  applied: dict | None = None, pose: dict | None = None, freshness: dict | None = None,
+                  pacing: dict | None = None) -> dict:
+    """``applied`` is what the back end actually ran (after the Ackermann wheel-rate and steering-rate limits:
+    ``speed_mps``, ``curvature_inv_m``, ``steering_rad``); without it the field is null -- the arbiter's own output is
+    not the applied command (contract 6)."""
     a = arbiter
     lim = a.config.teleop_limits
     lease = a.lease
@@ -32,7 +60,7 @@ def state_message(arbiter, out, safety: dict | None, *, now_mono: float, rear_ax
         "rear_axle_speed_mps": rear_axle_speed_mps,
         "load": {"state": None if loaded is None else ("loaded" if loaded else "empty"), "basis": load.get("basis")},
         "command": command,
-        "applied": {"speed_mps": out.speed_mps, "curvature_inv_m": out.curvature_inv_m, "stop_kind": out.stop_kind},
+        "applied": None if applied is None else dict(applied, stop_kind=out.stop_kind),
         "permit": permit,
         "limits": {"forward_mps": lim.direct_forward_mps, "reverse_mps": lim.direct_reverse_mps,
                    "video_forward_mps": lim.video_forward_mps, "video_reverse_mps": lim.video_reverse_mps,
@@ -41,8 +69,9 @@ def state_message(arbiter, out, safety: dict | None, *, now_mono: float, rear_ax
         "teleop_allowed": out.policy.teleop_allowed, "teleop_forbidden_reason": out.policy.reason,
         "mission": None if not mission.get("id") else {
             "mission_id": mission.get("id"), "status": mission.get("status"), "phase": mission.get("phase"),
-            "reason": last.get("reason"), "phase_elapsed_s": mission.get("phase_elapsed_s"),
-            "resume_steps": mission.get("resume")},
+            "reason": "teleop" if mission.get("status") == "held" else last.get("reason"),
+            "phase_elapsed_s": mission.get("phase_elapsed_s"),
+            "resume_steps": resume_steps(mission.get("resume"), mission.get("status"))},
         "freshness": freshness, "pacing": pacing,
         "last_teleop_reject": a.last_teleop_reject, "stop_latch": a.preempt_latch,
     }

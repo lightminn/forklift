@@ -166,9 +166,6 @@ class Arbiter:
         if mode == self.mode:
             return
         self.events.append({"t": now_mono, "event": "mode", "from": self.mode, "to": mode, "reason": reason})
-        if self.mode == "TELEOP" and self.mission is not None:
-            # Queued, applied at the mission's tick in its own time -- never the vehicle clock (Codex M-b2 P2).
-            self.mission.queue(HoldOff())
         self.mode = mode
         self._drive_fresh = mode == "TELEOP"
         self._disarm(now_mono, reason)
@@ -312,8 +309,11 @@ class Arbiter:
             return "invalid"
         if mode == "video":
             acquired = self.frames.acquired_mono((msg.get("frame_echo") or {}).get("frame_id"))
-            if acquired is None or now_mono - acquired + self.config.camera_latency_bound_s > self.config.video_max_age_s:
-                self._disarm(now_mono, "stale_video")  # design 5.3: a stale picture disarms
+            # Unknown, not finite or from the future is stale too (Codex M-b review P1: a future time kept a frame
+            # young for a second).
+            if acquired is None or not math.isfinite(acquired) or acquired > now_mono or \
+                    now_mono - acquired + self.config.camera_latency_bound_s > self.config.video_max_age_s:
+                self._preempt(now_mono, "stale_video")  # design 5.3: a stale picture stops and disarms
                 return "stale_video"
             deadline = min(deadline, acquired + self.config.video_max_age_s - self.config.camera_latency_bound_s)
         if self.mode != "TELEOP" or not self.armed:
@@ -325,6 +325,12 @@ class Arbiter:
                        "lift_dir": int(msg.get("lift_dir") or 0), "expiry": "stale_video" if mode == "video" and
                        deadline < sent + self.config.command_max_age_s else "expired"}
         return None
+
+    def _preempt(self, now_mono: float, reason: str) -> None:
+        """A teleoperation safety preempt: disarmed, latched until standing, a control boundary (B2, B10)."""
+        self._disarm(now_mono, reason)
+        self.preempt_latch = reason
+        self._boundary(now_mono, reason)
 
     def register_frame(self, frame_id: int, acquired_mono: float) -> None:
         """A camera shot as the runner received it from the driver or renderer (vehicle time)."""
@@ -370,10 +376,7 @@ class Arbiter:
         self._expire(now_mono)
         if self.teleop is not None and now_mono > self.teleop["deadline"]:
             # B10: the absolute deadline, checked every cycle -- a stop with no packet arriving at all.
-            reason = self.teleop["expiry"]
-            self._disarm(now_mono, reason)
-            self.preempt_latch = reason
-            self._boundary(now_mono, reason)
+            self._preempt(now_mono, self.teleop["expiry"])
         fresh = _valid_feedback(feedback, now_mono, self.config.feedback_max_age_s)
         self.feedback_ok = fresh
         if fresh:
@@ -415,6 +418,13 @@ class Arbiter:
         queued submit or resume can be taken by the lifecycle as it stands (B5)."""
         status = self.mission.status if self.mission is not None else "idle"
         self.provisional_auto = False
+        if self.mission is not None:
+            # The hold follows the cycle's final mode, once, in the mission's own time (Codex M-b review P2/P2:
+            # queuing at each transition replayed TELEOP-then-STOP in the wrong order and the vehicle clock).
+            if self.mode == "TELEOP" and status in ("accepted", "running", "paused", "resuming"):
+                self.mission.queue(HoldOn())
+            elif self.mode != "TELEOP" and status == "held":
+                self.mission.queue(HoldOff())
         for p in self.pending:
             if p["queued"]:
                 continue
@@ -541,9 +551,7 @@ class Arbiter:
         policy = teleop_policy(self.last_safety, feedback_ok=self.feedback_ok, standing=self.stop_confirmed)
         if not policy.teleop_allowed:
             return self._reply("mode_request", request_id, "state_forbids_teleop", detail=policy.reason)
-        if self.mission is not None:
-            self.mission.queue(HoldOn())  # applied at the mission's tick in its own time
-        self._set_mode("TELEOP", now_mono, "mode_request")
+        self._set_mode("TELEOP", now_mono, "mode_request")  # the hold follows in mission_context
         return self._reply("mode_request", request_id, control_gen=self.control_gen)
 
     def _mission_request(self, client_id, request_id, kind, command):

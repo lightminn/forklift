@@ -94,18 +94,14 @@ class TeleopDrive:
         self.kappa += float(np.clip(kappa_target - self.kappa, -step_k, step_k))
         if teleop is None or not armed or not teleop["deadman"]:
             speed_target = 0.0
-        # The direction the truck actually moves (design 4.4): measured when it moves, else the request's, else
-        # the last applied, else forward.
-        if abs(measured_mps) > lim.stop_speed_mps:
-            direction = 1 if measured_mps > 0 else -1
-        elif speed_target != 0.0:
-            direction = 1 if speed_target > 0 else -1
-        elif last_applied_mps != 0.0:
-            direction = 1 if last_applied_mps > 0 else -1
-        else:
-            direction = 1
+        # Every direction the truck may move this cycle (design 4.4): the measured one when it moves, the last
+        # applied one (the slew keeps its sign until zero) and the request's. A sign change is checked both ways
+        # (Codex M-b review P1: forward checked while the output still ran -0.24 m/s).
+        directions = {1 if v > 0 else -1 for v in (measured_mps if abs(measured_mps) > lim.stop_speed_mps else 0.0,
+                                                    last_applied_mps, speed_target) if v != 0.0} or {1}
         check = max(abs(measured_mps), abs(last_applied_mps), abs(speed_target))
-        limit, why = permit(bundle(measured_kappa, self.kappa), direction, check)
+        limit, why = min((permit(bundle(measured_kappa, self.kappa), d, check) for d in sorted(directions)),
+                         key=lambda r: r[0])
         if not drive_allowed:
             limit, why = 0.0, "drive_forbidden"
         speed = slew_cap_stop(last_applied_mps, creep(speed_target, steering_error_rad), decel_mps2=self.decel_mps2,

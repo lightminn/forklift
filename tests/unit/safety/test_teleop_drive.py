@@ -123,3 +123,14 @@ def test_limits_scale_the_ratios_and_direct_cannot_exceed_video():
     assert d.target(cmd(speed=1.0, mode="video"), loaded=True)[0] == 0.30
     with pytest.raises(ValueError):
         TeleopLimits(direct_forward_mps=0.6)
+
+
+def test_a_reversing_output_is_checked_backwards_while_forward_is_asked_for():
+    """Codex M-b review round 2 P1: standing, last applied -0.25, forward asked -- the slew still outputs reverse;
+    an obstacle behind must cut it."""
+    snap = snapshot()
+    occupy(snap, -0.25, 0.0)  # just behind the rear (0.17 m)
+    permit, asked = permit_on(snap, pose=(0.0, 0.0, 0.0))
+    speed, _, (limit, why) = run(drive(), cmd(speed=1.0), permit, last=-0.25, measured=0.0)
+    assert {a[1] for a in asked} == {1, -1} and why == "occupied" and speed == pytest.approx(-limit)
+    assert abs(speed) < 0.25 - 1.5 * DT

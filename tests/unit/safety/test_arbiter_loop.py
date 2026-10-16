@@ -77,7 +77,9 @@ class Loop:
         a.resolve(self.t, records)
         out = a.step(self.t, SAFE, (0.0, 0.0), {"measured_mps": self.v, "measured_kappa": 0.0,
                                                  "steering_error_rad": 0.0, "permit": self.permit})
-        self.state = state_message(a, out, SAFE, now_mono=self.t, rear_axle_speed_mps=self.v)
+        # The point-mass back end runs the arbiter's output unchanged: that is its applied command.
+        applied = {"speed_mps": out.speed_mps, "curvature_inv_m": out.curvature_inv_m}
+        self.state = state_message(a, out, SAFE, now_mono=self.t, rear_axle_speed_mps=self.v, applied=applied)
         self.v += (out.speed_mps - self.v) * DT / 0.1
         self.x += self.v * DT
         return out, replies
@@ -108,11 +110,15 @@ def test_a_client_that_goes_silent_stops_the_truck_by_the_deadline_alone():
         loop.cycle(teleop={"deadman": True, "speed_ratio": 1.0, "curvature_ratio": 0.0})
     assert loop.v > 0.2
     loop.client_alive = False
-    silent_at = loop.t
+    last_echoed = loop.a.ticks._sent[loop.last_tick["state_seq"]][1]  # the last tick the client answered
+    first_zero = None
     for _ in range(int(0.40 / DT)):
         out, _ = loop.cycle()
-    assert out.speed_mps == 0.0 and not loop.a.armed  # within 0.30 s of the last echoed tick plus a cycle
-    assert loop.state["stop_latch"] in ("expired", None) and loop.t - silent_at < 0.45
+        if first_zero is None and out.speed_mps == 0.0:
+            first_zero = loop.t
+    # The first cycle past the deadline (that tick's send time + 0.30 s) outputs zero -- no packet needed.
+    assert first_zero is not None and first_zero <= last_echoed + 0.30 + DT + 1e-9
+    assert not loop.a.armed
 
 
 def test_stop_then_rearm_then_teleop_again():

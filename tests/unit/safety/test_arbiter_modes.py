@@ -251,3 +251,20 @@ def test_feedback_that_is_not_finite_or_not_from_the_recent_past_is_no_feedback(
     r = Rig()
     r.a.observe(1.0, feedback)
     assert not r.a.feedback_ok
+
+
+def test_teleop_then_stop_in_one_batch_leaves_the_mission_paused_not_held():
+    """Codex M-b review round 2 P2: the hold follows the cycle's final mode."""
+    r = Rig()
+    auto(r)
+    r.cycle(r.msg("mode_request", to="PAUSED"))
+    r.stand()
+    teleop = r.msg("mode_request", to="TELEOP")
+    r.cycle(teleop, {"t": "stop", "request_id": "S"})
+    assert r.a.mode == "STOPPED" and r.m.status == "paused"
+    r.stand()
+    r.cycle(r.msg("rearm"))
+    r.stand()
+    resume = r.msg("mission_resume", mission_id="m1")
+    r.cycle(resume)
+    assert r.reply(resume["request_id"])["t"] == "ack" and r.a.mode == "AUTO"
