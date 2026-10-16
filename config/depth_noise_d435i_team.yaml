@@ -1,7 +1,7 @@
 source: team RealSense D435i capture 2026-10-16 (tools/capture_d435i_noise.py)
 license: internal
 revision: '2026-10-16'
-files_sha256: e4ca3e317dfe125b7fd22d6a9a748a0d55ea43aa9e9a5cf47a6ee48527bfa62e
+files_sha256: 1731d444b4b122190488c7716cb86c3a397a14e9b597659db390e8e66627d2b9
 role: provisional
 method: 'Each capture is a folder of 30 raw Z16 frames with capture.json (tools/capture_d435i_noise.py).
   Every frame is dithered by +-0.5 mm (a seeded stream per frame) and turned to inverse
