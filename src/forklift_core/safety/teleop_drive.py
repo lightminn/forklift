@@ -1,0 +1,113 @@
+"""The teleoperated drive command (M-b plan B8; design 4.4): ratio to physical, the curvature rate limit, the dead-man
+switch, the shared speed chain (creep, slew, final permission cap, preempt) and the arc-bundle permission.
+
+The permission is asked on the arbiter's own ``DrivePermission`` (the mission's installed path is left alone): for
+every curvature from the measured steering to the output curvature, at most ``KAPPA_STEP`` apart, the arc is
+installed with ``update()`` and ``allowed_speed`` read at that curvature; the smallest limit counts. While the
+steering moves monotonically between the two, the swept path is taken to lie in that bundle -- an approximation
+whose gaps the permission's envelope offset is assumed to cover (plan section 6: to be verified).
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+
+import numpy as np
+
+from forklift_core.control.drive_permission import DrivePermission, arc_poses
+from forklift_core.control.speed_chain import creep, slew_cap_stop
+
+KAPPA_STEP = 0.05  # 1/m between the arcs of the bundle
+
+
+@dataclass(frozen=True)
+class TeleopLimits:
+    """Provisional until H3 (design 5.4). Video starts no lower than direct (design 5.3)."""
+
+    video_forward_mps: float = 0.5
+    video_reverse_mps: float = 0.25
+    direct_forward_mps: float = 0.5
+    direct_reverse_mps: float = 0.25
+    loaded_mps: float = 0.30
+    curvature_inv_m: float = 0.36
+    curvature_rate_inv_m_s: float = 0.5
+    accel_mps2: float = 0.8
+    stop_speed_mps: float = 0.012  # below this the measured direction is not trusted (the stop detector's gate)
+
+    def __post_init__(self):
+        if self.direct_forward_mps > self.video_forward_mps or self.direct_reverse_mps > self.video_reverse_mps:
+            raise ValueError("direct limits must not exceed video limits (design 5.3)")
+
+
+def bundle(kappa_from: float, kappa_to: float) -> list[float]:
+    """Curvatures from one to the other, both ends included, at most KAPPA_STEP apart."""
+    n = max(1, math.ceil(abs(kappa_to - kappa_from) / KAPPA_STEP))
+    return [float(k) for k in np.linspace(kappa_from, kappa_to, n + 1)]
+
+
+def arc_permit(permission: DrivePermission, snapshot, now_s: float, sensors_last_s: dict, *, pose, curvatures,
+               direction: int, check_speed_mps: float, footprint, own_footprint) -> tuple[float, str]:
+    """The smallest (limit, reason) over the bundle. Each arc is longer than the permission's walk so its end is
+    never reached -- a teleoperated drive has no goal to slow down for."""
+    cfg = permission.config
+    length = cfg.lookahead_m + cfg.stopping.distance_m(check_speed_mps) + cfg.step_m
+    best = (math.inf, "ok")
+    for kappa in curvatures:
+        path, _ = arc_poses(tuple(pose), kappa, direction, length, cfg.step_m)
+        permission.update(snapshot, path, footprint, own_footprint, current_pose=pose, direction=direction)
+        limit, why = permission.allowed_speed(now_s, sensors_last_s, current_pose=pose, curvature_inv_m=kappa,
+                                              direction=direction, footprint=footprint, own_footprint=own_footprint,
+                                              speed_cap_mps=check_speed_mps)
+        if limit < best[0]:
+            best = (limit, why)
+    return best
+
+
+class TeleopDrive:
+    def __init__(self, limits: TeleopLimits, decel_mps2: float, dt: float) -> None:
+        self.limits, self.decel_mps2, self.dt = limits, float(decel_mps2), float(dt)
+        self.kappa = 0.0  # the output curvature (rate limited)
+
+    def target(self, teleop: dict | None, *, loaded: bool) -> tuple[float, float]:
+        """(speed, curvature) the ratios ask for, before the dead-man switch and the chain."""
+        if teleop is None:
+            return 0.0, self.kappa
+        lim = self.limits
+        ratio = teleop["speed_ratio"]
+        if teleop["mode"] == "video":
+            cap = lim.video_forward_mps if ratio >= 0 else lim.video_reverse_mps
+        else:
+            cap = lim.direct_forward_mps if ratio >= 0 else lim.direct_reverse_mps
+        if loaded:
+            cap = min(cap, lim.loaded_mps)
+        return ratio * cap, teleop["curvature_ratio"] * lim.curvature_inv_m
+
+    def step(self, teleop: dict | None, *, armed: bool, drive_allowed: bool, loaded: bool, preempt: bool,
+             last_applied_mps: float, measured_mps: float, measured_kappa: float, steering_error_rad: float,
+             permit) -> tuple[float, float, tuple[float, str]]:
+        """(speed, curvature, (limit, reason)) for this cycle. ``permit(curvatures, direction, check_speed)`` asks
+        the arc bundle; ``steering_error_rad`` is how far the measured steering is from this cycle's target."""
+        lim = self.limits
+        speed_target, kappa_target = self.target(teleop, loaded=loaded)
+        step_k = lim.curvature_rate_inv_m_s * self.dt
+        self.kappa += float(np.clip(kappa_target - self.kappa, -step_k, step_k))
+        if teleop is None or not armed or not teleop["deadman"]:
+            speed_target = 0.0
+        # The direction the truck actually moves (design 4.4): measured when it moves, else the request's, else
+        # the last applied, else forward.
+        if abs(measured_mps) > lim.stop_speed_mps:
+            direction = 1 if measured_mps > 0 else -1
+        elif speed_target != 0.0:
+            direction = 1 if speed_target > 0 else -1
+        elif last_applied_mps != 0.0:
+            direction = 1 if last_applied_mps > 0 else -1
+        else:
+            direction = 1
+        check = max(abs(measured_mps), abs(last_applied_mps), abs(speed_target))
+        limit, why = permit(bundle(measured_kappa, self.kappa), direction, check)
+        if not drive_allowed:
+            limit, why = 0.0, "drive_forbidden"
+        speed = slew_cap_stop(last_applied_mps, creep(speed_target, steering_error_rad), decel_mps2=self.decel_mps2,
+                              accel_mps2=lim.accel_mps2, dt=self.dt, cap_mps=max(0.0, limit), stop=preempt)
+        return speed, self.kappa, (limit, why)

@@ -19,6 +19,7 @@ from forklift_core.mission.commands import FINAL, Cancel, Resume, Submit
 
 from .generations import PENDING, RequestBook
 from .ledger import FrameLedger, TickLedger
+from .teleop_drive import TeleopDrive, TeleopLimits
 from .teleop_policy import Policy, teleop_policy
 
 MODES = ("PAUSED", "AUTO", "TELEOP", "STOPPED")
@@ -42,6 +43,8 @@ class ArbiterConfig:
     feedback_max_age_s: float = 0.1
     not_stopped_s: float = 10.0  # the mission's E3 limit: not standing by then is a fault (B5)
     tick_s: float = 1 / 120  # the control cycle the stop detector counts in
+    teleop_limits: TeleopLimits = field(default_factory=TeleopLimits)
+    decel_mps2: float = 1.5  # the stopping model's (config/obstacle_layer.yaml), the slew's braking
 
     def __post_init__(self):
         if self.lease_timeout_s < self.command_max_age_s:
@@ -68,6 +71,7 @@ class Output:
     control_gen: int
     armed: bool
     reason: str | None = None
+    permit: tuple | None = None  # (limit, reason) of the teleoperated drive's arc bundle
 
 
 @dataclass
@@ -108,6 +112,8 @@ class Arbiter:
         self.teleop: dict | None = None  # the operator's latest accepted command with its absolute deadline (B10)
         self.teleop_seq = -1  # the last accepted seq within this arm generation
         self.last_teleop_reject: str | None = None
+        self.drive = TeleopDrive(config.teleop_limits, config.decel_mps2, config.tick_s)
+        self._drive_fresh = False  # TELEOP just entered: the output curvature starts from the measured one
 
     # --- connections and the lease ------------------------------------------------------------------------------
     def connect(self, client_id: str, now_mono: float, *, control: bool = True) -> dict:
@@ -162,6 +168,7 @@ class Arbiter:
         if self.mode == "TELEOP" and self.mission is not None:
             self.mission.hold_off(now_mono)
         self.mode = mode
+        self._drive_fresh = mode == "TELEOP"
         self._disarm(now_mono, reason)
         self._boundary(now_mono, reason)
 
@@ -453,12 +460,13 @@ class Arbiter:
         self.outbox.append(dict(reply, client_id=p["client_id"]))
 
     def step(self, now_mono: float, safety: dict | None, candidate: tuple[float, float],
-             teleop: tuple[float, float] = (0.0, 0.0)) -> Output:
+             drive: dict | None = None) -> Output:
         """The output (B11): the policy, the source and the speed. ``candidate`` is the core's (speed, curvature);
-        ``teleop`` the operator's command after its chain (M-b4)."""
+        ``drive`` what the teleoperated chain needs this cycle -- ``measured_mps``, ``measured_kappa``,
+        ``steering_error_rad`` and ``permit(curvatures, direction, check_speed)`` (B8). Without it TELEOP is 0."""
         self.last_safety = safety
         policy = teleop_policy(safety, feedback_ok=self.feedback_ok, standing=self.stop_confirmed)
-        speed, curvature = 0.0, float(candidate[1])
+        speed, curvature, permit = 0.0, float(candidate[1]), None
         if self.mode == "STOPPED" or self.preempt_latch is not None:
             source, stop_kind = "zero", "preempt"
         elif self.mode == "AUTO":
@@ -470,10 +478,19 @@ class Arbiter:
             speed = max(-abs(self.last_applied), min(abs(self.last_applied), float(candidate[0])))
         else:  # TELEOP
             source, stop_kind = "teleop", "none"
-            speed, curvature = (float(teleop[0]), float(teleop[1])) if policy.drive_allowed else (0.0, float(teleop[1]))
+            curvature = self.drive.kappa
+            if drive is not None and self._drive_fresh:
+                self.drive.kappa = float(drive["measured_kappa"])  # the operator starts from the steering as it is
+                self._drive_fresh = False
+            if drive is not None:
+                speed, curvature, permit = self.drive.step(
+                    self.teleop, armed=self.armed, drive_allowed=policy.drive_allowed, loaded=policy.loaded,
+                    preempt=False, last_applied_mps=self.last_applied, measured_mps=drive["measured_mps"],
+                    measured_kappa=drive["measured_kappa"], steering_error_rad=drive["steering_error_rad"],
+                    permit=drive["permit"])
         self.last_applied = speed
         return Output(self.mode, stop_kind, source, speed, curvature, policy, self.control_gen, self.armed,
-                      self.preempt_latch)
+                      self.preempt_latch, permit)
 
     # --- mode and mission requests (B5) --------------------------------------------------------------------------
     def _needs_stand(self, kind: str, request_id) -> dict | None:

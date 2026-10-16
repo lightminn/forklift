@@ -95,3 +95,21 @@ def test_ratios_are_clamped_and_garbage_is_zero():
     tick = a.tick(t)
     a.handle("op", command(a, base, arm_gen, tick, 1, speed_ratio=3.0, curvature_ratio="x"), t)
     assert a.teleop["speed_ratio"] == 1.0 and a.teleop["curvature_ratio"] == 0.0
+
+
+def test_the_arbiter_drives_teleop_through_the_chain_from_the_measured_steering():
+    a, base, t, arm_gen = teleop_rig()
+    tick = a.tick(t)
+    a.handle("op", command(a, base, arm_gen, tick, 1, curvature_ratio=1.0), t)
+    asked = []
+
+    def permit(curvatures, direction, check):
+        asked.append(curvatures)
+        return 1.0, "ok"
+
+    drive = {"measured_mps": 0.0, "measured_kappa": 0.2, "steering_error_rad": 0.0, "permit": permit}
+    a.observe(t + 0.01, Feedback(t + 0.01, 0.0))
+    out = a.step(t + 0.01, SAFE, (0.0, 0.0), drive)
+    assert out.source == "teleop" and out.speed_mps == pytest.approx(0.8 / 120)
+    assert out.curvature_inv_m == pytest.approx(0.2 + 0.5 / 120) and asked[0][0] == 0.2
+    assert out.permit == (1.0, "ok")
