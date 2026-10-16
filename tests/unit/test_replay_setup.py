@@ -56,3 +56,12 @@ def test_a_service_spec_takes_each_names_first_definition_in_the_mro():
 
     spec = RS.service_spec(Child())
     assert "value" in spec["methods"] and "value" not in spec["properties"]
+
+
+def test_an_absent_container_service_stays_none_in_the_snapshot(tmp_path):
+    layer = SimpleNamespace(memory=None)
+    RS.write_setup_snapshot({"maybe": None, "settings": {"memory": None}}, tmp_path, [],
+                            services={"Obstacles": layer, "Memory": None})
+    snap = json.loads((tmp_path / "setup_snapshot.json").read_text())
+    text = json.dumps(snap["names"])
+    assert "$service" not in text and "Memory" not in snap["service_specs"]

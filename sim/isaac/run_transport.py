@@ -5929,6 +5929,7 @@ def main() -> None:
         state["arguments"]["pallet_prior_loaded"] = asdict(args.pallet_prior_loaded)
     started = time.monotonic()
     app = None
+    failure_exc = None  # what left run(), for the boundary record's ending
     try:
         from isaacsim import SimulationApp
 
@@ -5943,12 +5944,15 @@ def main() -> None:
         )
         run(app, args, settings, state)
     except BaseException as exc:
+        failure_exc = exc
         state["success"] = False
         state["failure_reason"] = str(exc)
         (args.output / "failure.txt").write_text(traceback.format_exc())
         traceback.print_exc()
     finally:
-        close_boundary_record(state)  # failures before the mission loop's own finally (initial planning)
+        # Failures before the mission loop's own finally (initial planning, the bootstrap): the record's ending
+        # is that exception (Codex R3/R4 review P2).
+        close_boundary_record(state, failure_exc)
         state["wall_time_s"] = time.monotonic() - started
         if state.get("tyre_contact_rows") is not None:
             # (t, then per tyre FL FR RL RR: impulse x y z, contact count, mean contact x y)

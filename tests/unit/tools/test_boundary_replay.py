@@ -107,3 +107,15 @@ def test_a_port_called_outside_a_recorded_tick_fails_even_when_the_code_catches_
     except ReplayMismatch:
         pass
     assert "cast_reference_scan" in gate.session.failure
+
+
+def test_a_recorded_system_exit_or_early_failure_is_matched_against_the_recorded_ending(tmp_path):
+    boundary = _record(tmp_path, boundary_ending(SystemExit("bootstrap: no SLAM link")))
+    session = ReplaySession(boundary)
+    session.closed = True
+    H.check_ending(session, SystemExit("bootstrap: no SLAM link"))
+    assert session.failure is None
+    session = ReplaySession(boundary)
+    session.closed = True
+    H.check_ending(session, None)
+    assert "the replay ended" in session.failure

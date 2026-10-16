@@ -670,6 +670,8 @@ def callback_trace(gate, port: str, method: str, args: tuple, kwargs: dict, call
         callbacks = callback_spec(args, kwargs)
     else:
         callbacks = {k: _callback_description(v) for k, v in sorted(kwargs.items()) if _is_callback(v)}
+        # Positional callbacks by position ("#i"): a replay accepts a callable by type only where it is described.
+        callbacks.update({f"#{i}": _callback_description(v) for i, v in enumerate(args) if _is_callback(v)})
     if not callbacks:
         return
     gate.run("Trace", "callback_spec", lambda descriptor: None,

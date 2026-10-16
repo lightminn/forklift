@@ -1113,3 +1113,26 @@ def test_a_sink_effect_is_compared_by_path_and_payload_without_hiding_the_reads_
     session.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
     with pytest.raises(ReplayMismatch, match="SimTruth.pose where Sink.save_capture"):
         ReplayProxy("SimTruth", rgate, spec=Pallet).pose()  # the file write left out
+
+
+def test_one_descriptor_does_not_let_an_undescribed_positional_callback_through(tmp_path):
+    def plan(weight_fn, *, check):
+        return weight_fn(1.0) + check(0.0)
+
+    def described(x):
+        return x
+
+    described.callback_spec = {"kind": "check"}
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    gate = RecordingGate(rec)
+    rec.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    recorded_function(plan, "Planner", "plan", gate)(lambda w: w * 1.3, check=described)
+    rec.tick_end(outputs={}, branches=[])
+    rec.close()
+    calls = next(iter(read_ticks(tmp_path)))["calls"]
+    assert "unspecified" in json.dumps(calls[0]["request"])  # the positional callback is listed, undescribed
+    session = ReplaySession(tmp_path)
+    rgate = ReplayGate(session)
+    session.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    with pytest.raises(ReplayMismatch, match="opaque request value"):
+        recorded_function(lambda *a, **k: None, "Planner", "plan", rgate)(lambda w: w * 2.7, check=described)

@@ -306,7 +306,18 @@ class ReplaySession:
             return False
         if not isinstance(descriptor, dict) or descriptor.get("call") != f"{port}.{method}":
             return False
-        return '"unspecified"' not in json.dumps(descriptor.get("callbacks"))
+        described = {k for k, v in (descriptor.get("callbacks") or {}).items() if '"unspecified"' not in json.dumps(v)}
+        # Every argument holding a value by type only must be one of the described callbacks (Codex R3/R4 P2: one
+        # descriptor must not let an undescribed callback through).
+        request = self.peek()["request"]
+        try:
+            args_ = request["$map"]["args"]["$list"]
+            kwargs_ = request["$map"]["kwargs"]["$map"]
+        except (KeyError, TypeError):
+            return False
+        opaque_at = {f"#{i}" for i, node in enumerate(args_) if _has_opaque(node)}
+        opaque_at |= {k for k, node in kwargs_.items() if _has_opaque(node)}
+        return opaque_at <= described
 
     def take(self, port: str, method: str, request_node: Any) -> dict:
         entry = self.peek()

@@ -234,6 +234,10 @@ def final_state_differences(boundary: Path, session: ReplaySession, final_state)
     return out[:50]
 
 
+def _BOUNDARY_OPEN(module) -> bool:  # noqa: N802
+    return module._BOUNDARY_RECORD.get("gate") is not None
+
+
 def check_ending(session: ReplaySession, raised: BaseException | None) -> None:
     """The replayed code ends as the recorded one did -- returned, or the same exception (type and message) --
     and closed its record; otherwise the replay fails (latched)."""
@@ -278,10 +282,20 @@ def replay_run(run_dir: Path, output: Path | None = None) -> dict:
             outcome["context"] = f"{type(context).__name__}: {context}"
             outcome["context_traceback"] = "".join(
                 traceback.format_exception(type(context), context, context.__traceback__))[-4000:]
-    except Exception as exc:  # noqa: BLE001 -- the replayed run's own end (a require) is part of the record
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 -- the replayed run's own end is part of the record
         raised = exc
         outcome["drive"] = f"{type(exc).__name__}: {exc}"
         outcome["traceback"] = traceback.format_exc()[-4000:]
+    if not isinstance(raised, ReplayMismatch) and _BOUNDARY_OPEN(module):
+        # What main() does when run() raised before drive's own finally closed the record (the initial plans, the
+        # bootstrap): the failure reason in the state, then close with that exception as the ending.
+        try:
+            if raised is not None:
+                S.state["success"] = False
+                S.state["failure_reason"] = str(raised)
+            module.close_boundary_record(S.state, raised)
+        except ReplayMismatch:
+            pass  # latched in the session
     check_ending(session, raised)
     if session.failure is None:  # a recorded failure replayed exactly ends the same way: finish it too
         final_state = getattr(gate.recorder, "final_state", None)

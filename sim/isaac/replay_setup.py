@@ -122,7 +122,8 @@ def write_setup_snapshot(names: dict, directory: Path, files: list[str], *, serv
     directory.mkdir(parents=True, exist_ok=True)
     service_ids = {id(names[k]): v for k, v in SERVICES.items() if k in names and names[k] is not None}
     for logical, obj in (services or {}).items():
-        service_ids[id(obj)] = logical
+        if obj is not None:  # an absent service (no planning memory) stays None, never a service reference
+            service_ids[id(obj)] = logical
     encoder = Encoder(opaque_ok=True, value_types=VALUE_TYPES, services=service_ids, full_types=FULL_TYPES)
     out, opaque = {}, []
     for name, value in sorted(names.items()):

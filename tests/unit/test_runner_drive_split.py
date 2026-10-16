@@ -88,3 +88,11 @@ def test_the_stdout_observer_records_printed_lines_as_sink_echo_and_still_prints
     assert [(c["port"], c["method"]) for c in calls] == [("Sink", "echo")]
     out = capsys.readouterr()
     assert out.out == 'SAMPLE {"t": 1}\noutside a tick\n' and out.err == "to stderr\n"
+
+
+def test_main_closes_the_record_with_what_left_run_and_the_harness_does_the_same():
+    source = SCRIPT.read_text()
+    assert "close_boundary_record(state, failure_exc)" in source and "failure_exc = exc" in source
+    harness = (ROOT / "tools/boundary_replay.py").read_text()
+    assert "module.close_boundary_record(S.state, raised)" in harness
+    assert 'S.state["failure_reason"] = str(raised)' in harness
