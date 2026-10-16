@@ -123,3 +123,61 @@ def test_mixed_noise_levels_are_refused(tmp_path):
                            "--split", "dev", "--detector", "oracle", "--output", str(tmp_path / "out")],
                           cwd=ROOT, capture_output=True, text=True)
     assert proc.returncode != 0 and "exactly one noise configuration" in proc.stderr
+
+
+def _fit_fields(path):
+    """Everything the recogniser decided -- candidates with their pockets and yaw, the selection, the
+    failures -- and nothing the judge computed from truth (Codex 2026-10-16: compare pockets and the
+    decision too, or a fit that copied truth pockets or a selection that read the target would pass)."""
+    judged = {"case", "shape_key", "matched_instance", "errors", "truth_range_m", "dangerous"}
+    rows = [json.loads(line) for line in (path / "candidates.jsonl").read_text().splitlines()]
+    return [{k: v for k, v in r.items() if k not in judged} for r in rows]
+
+
+def test_oracle_fit_judges_a_rig_dataset_and_writes_diagnostics(tmp_path):
+    data = tmp_path / "data"
+    _run("tools/generate_recognition_scenes.py", "--out", str(data), "--cases", "S1,S2", "--limit", "2", "--noise", "none")
+    out = tmp_path / "fit"
+    _run("tools/evaluate_recognition.py", "--dataset", str(data), "--split", "dev", "--detector", "oracle-fit",
+         "--output", str(out), "--diagnostics")
+    metrics = json.loads((out / "metrics.json").read_text())
+    assert metrics["detector"] == "oracle-fit" and metrics["fit_params"]["bin_m"] == 0.005
+    rows = [json.loads(line) for line in (out / "candidates.jsonl").read_text().splitlines()]
+    cands = [r for r in rows if r["row"] == "candidate"]
+    assert cands and all(r["geometry"] in ("fitted", "ambiguous", "unfit") for r in cands)
+    matched = [r for r in cands if r["errors"] is not None]
+    assert matched and all(r["truth_range_m"] > 0 for r in matched)
+    assert max(r["errors"][0] for r in matched) <= 0.02   # clean rig scenes: lateral within 20 mm
+    dev = sum(json.loads(p.read_text())["split"] == "dev" for p in data.glob("*/scene.json"))
+    assert sum(r["row"] == "decision" for r in rows) == dev   # one decision per judged scene
+
+
+def test_oracle_fit_never_reads_truth_or_scene_labels(tmp_path):
+    """Corrupt truth.json, the instruction truth and the scene's case/shape labels: the fit and the
+    selection must not move (Codex 2026-10-16)."""
+    data = tmp_path / "data"
+    _run("tools/generate_recognition_scenes.py", "--out", str(data), "--cases", "S1,S2", "--limit", "2", "--noise", "none")
+    _run("tools/evaluate_recognition.py", "--dataset", str(data), "--split", "dev", "--detector", "oracle-fit",
+         "--output", str(tmp_path / "a"), "--diagnostics")
+    for scene_json in data.glob("*/scene.json"):
+        meta = json.loads(scene_json.read_text())
+        meta["shape_key"] = "t11_06" if meta["shape_key"] == "epal6" else "epal6"
+        meta["case"] = "S1" if meta["case"] == "S2" else "S2"
+        scene_json.write_text(json.dumps(meta))
+        truth_json = scene_json.parent / "truth.json"
+        truth = json.loads(truth_json.read_text())
+        itruth = truth["instruction_truth"]
+        if itruth["kind"] != "none" and len(truth["instances"]) > 1:
+            # Point the instruction truth at another valid instance and flip its kind: a selection
+            # that consults the target or the ambiguity label moves.
+            itruth["target"] = (itruth["target"] + 1) % len(truth["instances"])
+            itruth["kind"] = "ambiguous" if itruth["kind"] == "unambiguous" else "unambiguous"
+        for inst in truth["instances"]:
+            inst["spec"]["name"] = "x"
+            for face in inst["faces"]:
+                face["left_m"], face["right_m"] = [9.0, 9.0, 0.0], [9.0, 8.0, 0.0]
+        truth_json.write_text(json.dumps(truth))
+    _run("tools/evaluate_recognition.py", "--dataset", str(data), "--split", "dev", "--detector", "oracle-fit",
+         "--output", str(tmp_path / "b"), "--diagnostics")
+    a, b = _fit_fields(tmp_path / "a"), _fit_fields(tmp_path / "b")
+    assert a == b and any(r["row"] == "candidate" for r in a) and any(r["row"] == "decision" for r in a)
