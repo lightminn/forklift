@@ -236,7 +236,7 @@
 |---|---|---|
 | M-b1 | `c2205ac` | 토큰·프레임 기록, 요청 결과 저장소, 연결·lease·신뢰 요청 순서·STOP |
 | M-b2 | `6ae9095`, `49bef2d` | 미션 쪽 `held`·`near.active`·`frame.slam`, 중재기 주기(`observe` → `handle` → `mission_context` → 미션 틱 → `resolve` → `step`)·모드·정책 표 |
-| M-b3 | `66a7171` 이전 | 텔레옵 검증 순서·절대 만료·영상 신선도·무장 |
+| M-b3 | `4908e0a` | 텔레옵 검증 순서·절대 만료·영상 신선도·무장 |
 | M-b4 | `040d183`, `338de62` | 공유 속도 사슬(`control/speed_chain.py`), 원호 다발 허가, TELEOP 출력 |
 | M-b5 | `4f7ab97` | 상태 메시지, 점 질량 차체 폐루프 시나리오 |
 
