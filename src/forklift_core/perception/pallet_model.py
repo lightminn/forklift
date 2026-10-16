@@ -188,3 +188,25 @@ def choose_pocket_pair(layout: FaceLayout, spacing_m: float, blade_width_m: floa
             if best is None or key < best[0]:
                 best = (key, (i, j))
     return best[1]
+
+VALUE_SOURCES = ("observed", "known_shape", "instruction", "unobserved")
+
+
+@dataclass(frozen=True)
+class ObservedPalletShape:
+    """The 3D shape downstream code uses, with where each value came from (design §7.1).
+
+    spec is the known shape when the hypothesis is one, else None; face is the
+    entry-face layout actually used for the pockets.
+    """
+
+    spec: PalletSpec | None
+    face: FaceLayout
+    sources: tuple
+
+    def __post_init__(self) -> None:
+        sources = tuple(tuple(item) for item in self.sources)
+        for item in sources:
+            if len(item) != 2 or not isinstance(item[0], str) or item[1] not in VALUE_SOURCES:
+                raise ValueError(f"each source must be (name, one of {VALUE_SOURCES})")
+        object.__setattr__(self, "sources", sources)
