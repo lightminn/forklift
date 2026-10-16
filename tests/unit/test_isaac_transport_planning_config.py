@@ -982,7 +982,8 @@ def test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recove
     assert 'release_after_backoff(t, "release_after_backoff")' in end_block
     # Standing first, then the release and the forced replan (Codex implementation review P2-1).
     assert "if standing_b and not back_.get(\"released\"):" in end_block
-    assert 'if standing_b and t - back_.get("forced_s", -1e9) >= 1.0:' in end_block
+    # (M-a3: the second is work time -- a pause does not count, plan E4)
+    assert 'if standing_b and self.commands.work_elapsed(back_.get("forced_s", -1e9), t) >= 1.0:' in end_block
     core = CORE.read_text()  # the obstacle replan moved to the mission core (M-a1 slice 3c)
     rec = core.index('release_after_backoff(t, "release_in_backoff_recovery")')
     assert rec < core.index("start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))", rec)

@@ -380,10 +380,10 @@ class MissionCore:
                 settings["lift_rate_mps"] * dt,
             )
         )
-        if ms.phase == "lift" and t - ms.phase_started > 4.5:
+        if ms.phase == "lift" and self.commands.work_elapsed(ms.phase_started, t) > 4.5:
             hooks.require(hooks.pallet_z() > 0.06, "Pallet was not lifted")
             transition("extract", t)
-        if ms.phase == "lower" and t - ms.phase_started > 4.5:
+        if ms.phase == "lower" and self.commands.work_elapsed(ms.phase_started, t) > 4.5:
             hooks.require(
                 abs(hooks.pallet_z()) < 0.008, "Pallet did not settle onto destination floor"
             )
@@ -392,13 +392,13 @@ class MissionCore:
                 "Fork did not lower",
             )
             transition("withdraw", t)
-        if ms.phase == "settle" and t - ms.phase_started > 1.0:
+        if ms.phase == "settle" and self.commands.work_elapsed(ms.phase_started, t) > 1.0:
             if "return_home" in self.trackers:
                 transition("return_home", t)
             else:
                 transition("complete", t)
                 return True
-        if ms.phase == "home_settle" and t - ms.phase_started > 1.0:
+        if ms.phase == "home_settle" and self.commands.work_elapsed(ms.phase_started, t) > 1.0:
             truth_rear, home = hooks.truth_rear(), self.options.home_rear
             state["return_home_error"] = {
                 "position_m": float(
@@ -521,6 +521,29 @@ class MissionCore:
                 stand = True  # a blocked-path replan failed: stand until one succeeds
         return stand
 
+    def permission_acting(self) -> tuple[bool, bool]:
+        """Whether the permission acts on this phase's command, and whether the truck is on a docking straight
+        (the permission's own reading, shared by the permission tick and its watch while paused)."""
+        ms, obstacle, slam, trackers, geometry = self.ms, self.obstacle, self.slam, self.trackers, self.geometry
+        docking_straight = (ms.phase == "approach" and trackers[ms.phase].remaining_to_goal_m() <= geometry.alignment_straight_m) or (
+            ms.phase == "transport" and trackers[ms.phase].remaining_to_goal_m() <= geometry.delivery_straight_m
+        )
+        if obstacle.get("backoff", {}).get("phase") == ms.phase:
+            # A backoff is never the delivery straight, whatever its
+            # remaining length: the permission acts on it (Codex
+            # checkpoint 8 P1).
+            docking_straight = False
+        if slam is not None and slam["docking"].get("reapproach"):
+            # Nor is a D7c re-approach (Codex D7c review P1-2): the
+            # permission, and the safety evaluation, act on all of it.
+            docking_straight = False
+        acting = (
+            ms.phase in ("observe", "approach", "transport", "return_home")
+            or (ms.phase == "withdraw" and obstacle["layer"].known_enabled
+                and obstacle["layer"].known_config.get("withdraw_mode", "certified") == "certified")  # D5 corridor
+        ) and not docking_straight
+        return acting, docking_straight
+
     def permission(self, t: float, rear, kappa: float, requested_speed: float, loaded: bool, cusp_handed_) -> SimpleNamespace:
         """One tick of the obstacle permission while the truck follows a path (or a stall is handed over): the
         grid re-projected after a correction change, the permission's limit and its diagnostics dump, the
@@ -599,23 +622,7 @@ class MissionCore:
         ticks[ms.phase] = ticks.get(ms.phase, 0) + 1
         low = obstacle["min_allowed"]
         low[ms.phase] = min(low.get(ms.phase, float("inf")), allowed)
-        docking_straight = (ms.phase == "approach" and trackers[ms.phase].remaining_to_goal_m() <= geometry.alignment_straight_m) or (
-            ms.phase == "transport" and trackers[ms.phase].remaining_to_goal_m() <= geometry.delivery_straight_m
-        )
-        if obstacle.get("backoff", {}).get("phase") == ms.phase:
-            # A backoff is never the delivery straight, whatever its
-            # remaining length: the permission acts on it (Codex
-            # checkpoint 8 P1).
-            docking_straight = False
-        if slam is not None and slam["docking"].get("reapproach"):
-            # Nor is a D7c re-approach (Codex D7c review P1-2): the
-            # permission, and the safety evaluation, act on all of it.
-            docking_straight = False
-        acting = (
-            ms.phase in ("observe", "approach", "transport", "return_home")
-            or (ms.phase == "withdraw" and obstacle["layer"].known_enabled
-                and obstacle["layer"].known_config.get("withdraw_mode", "certified") == "certified")  # D5 corridor
-        ) and not docking_straight
+        acting, docking_straight = self.permission_acting()
         pocket_phase = options.pocket_check and (ms.phase == "insert" or (ms.phase == "approach" and docking_straight))
         if pocket_phase:
             # D5: the approach straight and the insertion run under the
@@ -666,7 +673,7 @@ class MissionCore:
             # 5 s, the check's reason ends the run.
             if allowed == 0.0:
                 pocket.setdefault("zero_since", t)
-                hooks.require(t - pocket["zero_since"] < 5.0, f"pocket_stop in {ms.phase}: {why}")
+                hooks.require(self.commands.work_elapsed(pocket["zero_since"], t) < 5.0, f"pocket_stop in {ms.phase}: {why}")
             else:
                 pocket.pop("zero_since", None)
         # Plan D4: an occupied cell on the path ahead stops the truck where
@@ -734,7 +741,7 @@ class MissionCore:
         if watch.get("phase") != ms.phase or not acting or progress_left < watch["best_m"] - 1.0:
             watch.update(phase=ms.phase, best_m=progress_left, since_s=t)
         hooks.require(
-            not (options.grid_planning and acting and t - watch["since_s"] > 60.0),
+            not (options.grid_planning and acting and self.commands.work_elapsed(watch["since_s"], t) > 60.0),
             f"obstacle_no_progress in {ms.phase}",
         )
         return SimpleNamespace(allowed=allowed, why=why, acting=acting, pocket_phase=pocket_phase,
@@ -1083,7 +1090,7 @@ class MissionCore:
             # Checked once the path is known to differ: a same-path wait
             # never counts (Codex checkpoint 6 P2).
             recent = [r for r in obstacle["replans"]
-                      if r["phase"] == ms.phase and t - r["time_s"] < 30.0
+                      if r["phase"] == ms.phase and self.commands.work_elapsed(r["time_s"], t) < 30.0
                       and not r.get("same_path") and not r.get("failed") and not r.get("escape")]
             require(len(recent) <= 3, f"obstacle_blocked in {ms.phase}: {len(recent)} replans in 30 s")
             leg_replans = sum(1 for r in obstacle["replans"] if r["phase"] == ms.phase and not r.get("same_path")
@@ -1121,9 +1128,9 @@ class MissionCore:
         slam_odom_base, slam_error = hooks.slam_odom_base, hooks.slam_error
         cusp_holds, CUSP_HEADING_HOLD_PHASES = hooks.cusp_holds(), options.cusp_heading_hold_phases
         limit = core.tracking_limit(t)  # M-a1 slice 2
-        if t - ms.phase_started >= limit:
+        if self.commands.work_elapsed(ms.phase_started, t) >= limit:
             dump_tracking("timeout", ms.last_tracking)
-        require(t - ms.phase_started < limit, f"Tracking timeout in {ms.phase}")
+        require(self.commands.work_elapsed(ms.phase_started, t) < limit, f"Tracking timeout in {ms.phase}")
         tracking = trackers[ms.phase].update(rear, signed_speed, dt)
         raw_tracking_ = tracking  # the tracker's own result, before any rule below rewrites it
         # Fix A / A' records (cusp_heading_hold): every tracker tick, on the tracker's own
@@ -1771,7 +1778,7 @@ class MissionCore:
             # within OBSERVE_ARRIVAL_M is arrival there.
             loose = state.setdefault("observe_loose_arrival", {})
             loose.setdefault("since_s", t)
-            if t - loose["since_s"] >= 1.0:
+            if self.commands.work_elapsed(loose["since_s"], t) >= 1.0:
                 state.setdefault("observe_loose_arrivals", []).append(
                     {"time_s": t, "position_error_m": tracking.position_error_m,
                      "yaw_error_rad": tracking.yaw_error_rad}
@@ -1809,7 +1816,7 @@ class MissionCore:
                 if released_b is not None:
                     rear = released_b
                     hooks.set_rear(rear)  # the runner's closures read its rear (Codex slice-3 P2)
-            if standing_b and t - back_.get("forced_s", -1e9) >= 1.0:
+            if standing_b and self.commands.work_elapsed(back_.get("forced_s", -1e9), t) >= 1.0:
                 back_["forced_s"] = t
                 obstacle["force_replan"] = ms.phase
             tracking = replace(tracking, status="tracking", speed_mps=0.0)
@@ -2548,6 +2555,114 @@ class MissionCore:
                                rear=rear, rear_stamp=rear_stamp, prior=prior, params=params, detection=detection,
                                observation=observation)
 
+    # --- M-a3: the paused tick and the resume (docs/plans/2026-10-16-m-a3-mission-commands.md E3-E6) ---
+    def permission_watch(self, t: float, rear, kappa: float, loaded: bool) -> SimpleNamespace:
+        """The permission while paused (E3): the grid re-projected after a correction change, the layer's limit
+        with its emergency stop and sensor silence, and the cap the command assembly steps to -- every tick,
+        whatever the speed. No work counter (path blocked, blocked and standing), no progress watch, no N9 end:
+        a silent sensor is reported and keeps the resume from finishing."""
+        ms, obstacle, slam, trackers, hooks, options = (self.ms, self.obstacle, self.slam, self.trackers, self.hooks,
+                                                        self.options)
+        truth_speed = hooks.truth_speed()
+        applied_now = (tuple(float(v) for v in slam["tracker"].applied[0])
+                       if slam is not None and slam["tracker"].applied is not None else (0.0, 0.0, 0.0))
+        if applied_now != obstacle["applied"]:
+            obstacle["version"] += 1
+            obstacle["applied"] = applied_now
+            obstacle["reprojections"] = obstacle.get("reprojections", 0) + 1
+            if ms.phase in trackers:
+                leg_now, leg_dir_now = trackers[ms.phase].leg_ahead()
+            else:  # no follower in this phase: the pose itself, as the physics-tick scan does
+                leg_now, leg_dir_now = np.array([tuple(float(v) for v in rear)]), 0
+            obstacle["layer"].refresh(t, applied_now, obstacle["version"], current_pose=tuple(float(v) for v in rear),
+                                      path_ahead=leg_now, loaded=loaded, direction=leg_dir_now)
+        allowed, why = obstacle["layer"].limit(
+            t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
+            direction=1 if truth_speed > 0 else -1, loaded=loaded, cap_mps=abs(truth_speed),
+        )
+        acting = ms.phase in trackers and self.permission_acting()[0]
+        obstacle["permission_cap"] = (t, float(allowed)) if (options.obstacle_act and acting) else None
+        return SimpleNamespace(allowed=allowed, why=why, acting=acting,
+                               obstacle_hold=bool(options.obstacle_act and acting and allowed == 0.0))
+
+    def paused_tick(self, t: float, rear, kappa: float, loaded: bool) -> SimpleNamespace:
+        """One control tick while the mission is paused, resuming or cancelling (E3, E5, E6): nothing of the
+        mission's own work runs (no follower, no arrival, no lift ramp, no replan); the permission watches, the
+        lift target follows the lift where it is, and the stop is watched. A cancel ends once standing; a resume
+        steps through its checks. Returns ``requested_speed`` (0), ``obstacle_hold``, ``stop`` (the run ends) and
+        ``rear`` (a replan inside the resume may move it)."""
+        ms, slam, obstacle, hooks, cmds = self.ms, self.slam, self.obstacle, self.hooks, self.commands
+        standing = bool(slam["stop_now"]) if slam is not None else abs(float(hooks.truth_speed())) < 0.01
+        if standing and cmds.stop_seen_s is None:
+            cmds.stop_seen_s = t
+        ms.lift_command = float(hooks.lift_position())  # E3: synchronised to where the lift is, not frozen
+        obstacle_hold = False
+        if obstacle is not None:
+            obstacle_hold = self.permission_watch(t, rear, kappa, loaded).obstacle_hold
+        stop = False
+        if cmds.status == "cancelling" and standing:
+            cmds.cancelled(t)
+            stop = True
+        elif cmds.status == "resuming":
+            rear = self.resume_step(t, rear, loaded, standing)
+        return SimpleNamespace(requested_speed=0.0, obstacle_hold=obstacle_hold, stop=stop, rear=rear)
+
+    def resume_step(self, t: float, rear, loaded: bool, standing: bool):
+        """The resume's checks this tick (E5): standing first, then -- on a phase with a follower -- the rejoin
+        (a copy of the follower updated once from here must not fail) and the path ahead (sensors alive, not
+        occupied); a failed rejoin or a blocked path is replanned here by the leg's own obstacle recovery before
+        the mission runs again. Returns the control pose (a replan's release may move it)."""
+        import copy
+
+        ms, obstacle, trackers, cmds, options = self.ms, self.obstacle, self.trackers, self.commands, self.options
+        cmds.resume_check = check = {"time_s": t, "step": "stop_confirmed"}
+        if not standing:
+            return rear
+        if ms.phase in trackers:
+            check["step"] = "path_rechecked"
+            probe = copy.deepcopy(trackers[ms.phase])
+            rejoined = probe.update(rear, 0.0, options.dt).status != "failed"
+            blocked, silent = None, False
+            if obstacle is not None:
+                layer_ = obstacle["layer"]
+                silent = not self.cusp_alive(t)
+                leg_, dir_ = trackers[ms.phase].leg_ahead()
+                blocked = layer_.check_candidate(leg_, current_pose=tuple(float(v) for v in rear), direction=dir_,
+                                                 loaded=loaded).blocked
+            check.update(rejoined=rejoined, blocked=blocked, silent=silent)
+            if silent:
+                check["reason"] = "path_blocked:sensor_silent"
+                return rear
+            if (not rejoined or blocked == "occupied") and obstacle is not None:
+                if t < cmds.resume_retry_s:
+                    return rear  # a replan without a path waits a second (E5 (c))
+                before_path = self.paths.get(ms.phase)
+                out = self.blocked_replan(t, rear, 0.0, 0.0)
+                rear = out.rear
+                installed = self.paths.get(ms.phase)
+                if installed is before_path:
+                    cmds.resume_retry_s = t + 1.0
+                    check["reason"] = "replan_waiting"
+                    return rear
+                if installed.status not in ("backoff", "escape"):
+                    # (a) a new path: it is rejoined and checked again next tick
+                    check["reason"] = "replanned"
+                    return rear
+                check["reason"] = "recovery_installed"  # (b) the backoff machinery drives it from here
+            elif not rejoined:
+                check["reason"] = "rejoin_failed"
+                return rear
+        length = cmds.resumed(t)
+        check["step"] = "running"
+        if obstacle is not None and "live_retry_after_s" in obstacle:
+            obstacle["live_retry_after_s"] += length  # E4: a deadline-type anchor moves by the pause
+        monitor = self.hooks.cusp_monitor() if hasattr(self.hooks, "cusp_monitor") else None
+        if monitor is not None:
+            monitor.shift_time(length)
+        if ms.phase in trackers:
+            trackers[ms.phase].restart_speed_slew(0.0)  # from standing, not from the held cruise
+        return rear
+
     def release_gate(self, t: float, rear) -> SimpleNamespace:
         """At each control tick's start: a pending SLAM release waits for the truck to stand (10 s at most), then
         releases and re-reads the control pose; SLAM warming up holds the follower. Returns ``releasing``,
@@ -2556,7 +2671,7 @@ class MissionCore:
         require, slam_release, slam_rear = hooks.require, self.slam_release, hooks.slam_rear
         releasing = slam is not None and slam.get("pending_release") is not None
         if releasing:
-            waited = t - slam["release_wait_from"]
+            waited = self.commands.work_elapsed(slam["release_wait_from"], t)
             require(waited < 10.0, f"slam_release_no_stop after {waited:.1f} s")
             if slam["stop_now"]:
                 slam_release(t)

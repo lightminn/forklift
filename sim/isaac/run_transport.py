@@ -202,6 +202,23 @@ def quarter_focal(value: str) -> float:
     return focal
 
 
+def load_mission_schedule(path: Path) -> list[tuple[float, str]]:
+    """M-a3: the command schedule file -- (loop time, command) sorted by time; only pause, resume and cancel
+    (the run submits its own mission; stop kinds come with M-a3d)."""
+    data = json.loads(Path(path).read_text())
+    if not isinstance(data, dict) or set(data) - {"commands"}:
+        raise ValueError("expected {\"commands\": [...]} (stop kinds are not supported yet)")
+    out = []
+    for row in data.get("commands", []):
+        t_, command_ = row.get("t"), row.get("command")
+        if not isinstance(t_, (int, float)) or not math.isfinite(t_) or t_ < 0:
+            raise ValueError(f"command time must be a finite loop time >= 0: {row}")
+        if command_ not in ("pause", "resume", "cancel"):
+            raise ValueError(f"command must be pause, resume or cancel: {row}")
+        out.append((float(t_), command_))
+    return sorted(out, key=lambda r: r[0])
+
+
 def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-scene", required=True)
@@ -621,6 +638,16 @@ def arguments() -> argparse.Namespace:
         help="The --steering-probe segment set: standard, or long steady-state runs (new plant diagnostic D-a).",
     )
     parser.add_argument(
+        "--mission-commands",
+        type=Path,
+        default=None,
+        help="M-a3: a JSON schedule of mission commands by loop time -- {\"commands\": [{\"t\": 30.0, \"command\": "
+        "\"pause\"}, ...]}, commands pause, resume and cancel -- applied at the first control tick at or after their "
+        "time (docs/plans/2026-10-16-m-a3-mission-commands.md). Needs --obstacle-act (a command stop decelerates on "
+        "the stopping model); not with the near-field tracker, the measurement runs' stops and dwells, the e-stop "
+        "probe or a boundary record. Off by default: the run submits its scenario's mission and nothing else.",
+    )
+    parser.add_argument(
         "--record-boundary",
         action="store_true",
         help="M-a0: record every control tick's boundary -- the calls the mission logic makes to the vehicle, "
@@ -807,6 +834,20 @@ def arguments() -> argparse.Namespace:
         parser.error("--near-tracking excludes the scheduled stops and dwells of the measurement runs")
     if args.near_tracking_stop_at is not None and not args.near_tracking:
         parser.error("--near-tracking-stop-at needs --near-tracking")
+    if args.mission_commands is not None:
+        # M-a3 (plan E4, E7, E9): command stops decelerate on the obstacle layer's stopping model; the near-field
+        # bounds were measured without pauses; scheduled stops, dwells and the e-stop probe keep their own clocks;
+        # a boundary record of a command run lands with the stop kinds (M-a3d).
+        if not args.obstacle_act:
+            parser.error("--mission-commands needs --obstacle-act")
+        if args.near_tracking or args.record_pocket_frames or args.measure_safety_stops_m is not None \
+                or args.estop_probe is not None or args.record_boundary:
+            parser.error("--mission-commands excludes --near-tracking, --record-pocket-frames, "
+                         "--measure-safety-stops-m, --estop-probe and --record-boundary")
+        try:
+            args.mission_schedule = load_mission_schedule(args.mission_commands)
+        except (OSError, ValueError) as exc:
+            parser.error(f"--mission-commands: {exc}")
     inject_sizes = (args.near_inject_lateral_m, args.near_inject_yaw_rad)
     if not all(math.isfinite(v) for v in inject_sizes):
         parser.error("--near-inject-lateral-m and --near-inject-yaw-rad must be finite")
@@ -4199,7 +4240,13 @@ def drive(S, isaac) -> None:
 
     from types import SimpleNamespace
 
+    from forklift_core.mission.commands import Cancel as MissionCancel
+    from forklift_core.mission.commands import Context as MissionContext
+    from forklift_core.mission.commands import Pause as MissionPause
+    from forklift_core.mission.commands import Resume as MissionResume
     from forklift_core.mission.commands import Submit as MissionSubmit
+
+    MISSION_COMMANDS = {"pause": MissionPause, "resume": MissionResume, "cancel": MissionCancel}
     from forklift_core.mission.core import MissionCore
 
     # M-a1 slice 1: the phase transition and the known-pallet bookkeeping it carries moved to the
@@ -4448,6 +4495,8 @@ def drive(S, isaac) -> None:
     )
     # M-a3 (docs/plans/2026-10-16-m-a3-mission-commands.md E1): the batch run submits its scenario's mission itself,
     # outside the loop -- the default path is a run with this one submit and no command in any tick.
+    # The schedule of a --mission-commands run (plan E2); None without one, and then nothing below applies a command.
+    mission_schedule = list(args.mission_schedule) if getattr(args, "mission_schedule", None) is not None else None
     core.commands.queue(MissionSubmit("scenario_pickup", "scenario_destination"))
     core.commands.apply(0.0)
     core.commands.start()
@@ -5141,6 +5190,11 @@ def drive(S, isaac) -> None:
                 if boundary is not None:
                     boundary.recorder.tick_begin(step, tick_t=t, work_t=t, commands=[], stop_kind="none")
             book_clock["t"] = t
+            if mission_schedule is not None:
+                # M-a3 (plan E2): the schedule's due commands, applied at this control tick's start.
+                while mission_schedule and mission_schedule[0][0] <= t:
+                    core.commands.queue(MISSION_COMMANDS[mission_schedule.pop(0)[1]]())
+                core.commands.apply(t, MissionContext(near_tracker=near is not None and near["tracker"] is not None))
             rear_stamp = t  # the time of the control pose `rear` (a capture moves it on)
             dwell_hold = dwell_standing = False
             cusp_hold = False  # plan cusp position stall v7 K3: zero command, steering held
@@ -5353,7 +5407,8 @@ def drive(S, isaac) -> None:
             # M-a1 slice 5: the release gate at the tick's start is the core's.
             gate_ = core.release_gate(t, rear)
             releasing, warming, rear = gate_.releasing, gate_.warming, gate_.rear
-            if ms.phase in trackers and not releasing and not warming:
+            paused_ = core.commands.stopped  # M-a3 (plan E3): paused, resuming or cancelling -- no mission work
+            if ms.phase in trackers and not releasing and not warming and not paused_:
                 # Three times the path time at the tracker's own speed caps
                 # (length / cruise when there are none), plus 10 s.
                 # M-a1 slice 4a-i: the follower's tick and the rules that rewrite its result are the core's.
@@ -5519,7 +5574,7 @@ def drive(S, isaac) -> None:
                             rear = arrival_.rear
                         if arrival_.stop:
                             break
-            if core.lift_and_timers(t, dt):  # M-a1 slice 2: the lift ramp and the timed transitions
+            if not paused_ and core.lift_and_timers(t, dt):  # M-a1 slice 2: the lift ramp and the timed transitions
                 break
             # The curvature the wheels actually hold: an emergency stop keeps it, so
             # the permission, the stop itself and the probe all use this one.
@@ -5530,7 +5585,7 @@ def drive(S, isaac) -> None:
             # Plan cusp position stall v7: a stall handed to the obstacle side keeps this block running
             # while it stands on a zero command.
             cusp_handed_ = cusp_monitor.handed(ms.phase) if obstacle is not None else None
-            if obstacle is not None and ms.phase in trackers and (
+            if not paused_ and obstacle is not None and ms.phase in trackers and (
                 requested_speed != 0.0 or abs(truth_speed) > 0.05 or obstacle.get("force_replan") == ms.phase
                 or cusp_handed_ is not None
             ):
@@ -5581,7 +5636,16 @@ def drive(S, isaac) -> None:
                                     {"time_s": t, "phase": ms.phase, "speed_mps": truth_speed, "allowed_mps": allowed,
                                      "reason": why, "object": oid}
                                 )
-            if core.live_leg(t, rear, loaded):  # M-a1 slice 3a: the live travel leg and the replan wait
+            if paused_:
+                # M-a3 (plan E3, E5, E6): the paused tick -- the permission watches every tick, the lift target
+                # follows the lift, the stop is watched; a cancel ends standing, a resume steps through its checks.
+                paused_tick_ = core.paused_tick(t, rear, kappa, loaded)
+                rear, obstacle_hold = paused_tick_.rear, paused_tick_.obstacle_hold
+                requested_speed, curvature = 0.0, 0.0
+                dwell_hold = True  # the steering held where it is; the wheels brake on its curvature
+                if paused_tick_.stop:
+                    break
+            elif core.live_leg(t, rear, loaded):  # M-a1 slice 3a: the live travel leg and the replan wait
                 requested_speed = 0.0
             if new_obstacles is not None and ms.phase in trackers:
                 leg, leg_direction = trackers[ms.phase].leg_ahead()
@@ -5783,6 +5847,9 @@ def drive(S, isaac) -> None:
             boundary.recorder.tick_begin(-3, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
         if ms.phase in ("repeat_capture_done", "repeat_target_not_reached", "near_tracking_stopped"):
             return
+        if core.commands.status == "cancelled":
+            state["mission_result"] = "cancelled"  # M-a3 (plan E6): an outcome of its own, not a time-out
+            require(False, "mission_cancelled")
         require(ms.phase == "complete", "Mission exceeded simulation time budget")
         final_pallet, _ = pallet.get_world_pose()
         destination = np.array([truth_destination.x_m, truth_destination.y_m])
@@ -5821,9 +5888,6 @@ def drive(S, isaac) -> None:
             }
         )
     finally:
-        # M-a3: the lifecycle ends with the run -- done only once every delivery check passed, failed on any
-        # refusal or error; the loop's own time (no new clock read: the replay compares every port call).
-        core.commands.finish("done" if state.get("success") is True else "failed", book_clock["t"])
         try:
             if recorder is not None:
                 # Plan D8b: first in the finally block, so neither an earlier record nor the
@@ -6037,6 +6101,14 @@ def drive(S, isaac) -> None:
                 for name, exit_code in video_results:
                     require(exit_code == 0, f"{name} video encoding failed")
         finally:
+            # M-a3: the lifecycle ends with the run, once every clean-up has run -- done only when the run
+            # succeeded and nothing is propagating, failed otherwise; the loop's own time (no new clock read: the
+            # replay compares every port call).
+            core.commands.finish("done" if state.get("success") is True and sys.exc_info()[1] is None else "failed",
+                                 book_clock["t"])
+            if mission_schedule is not None:
+                state["mission_commands"] = {"log": core.commands.log, "pauses": core.commands.pauses,
+                                             "status": core.commands.status, "generation": core.commands.mission_gen}
             if early_ports:  # format 2: closed last, so the summaries above read the services inside the exit tick
                 try:
                     locals_ = locals()
@@ -6119,6 +6191,8 @@ def main() -> None:
             )
             for k, v in vars(args).items()
             if (k != "extra_views" or v)
+            # M-a3 (plan E9): not recorded at its default, so a run without commands records what it always did
+            and (k != "mission_commands" or v is not None) and k != "mission_schedule"
             and (
                 k not in {"quarter_eye", "quarter_target", "quarter_focal"}
                 or (v is not None and (k != "quarter_focal" or v != 2.5))

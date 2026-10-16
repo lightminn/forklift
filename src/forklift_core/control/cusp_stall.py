@@ -285,6 +285,17 @@ class CuspStallMonitor:
         self._forced: set = set()
         self._count = 0
 
+
+    def shift_time(self, length_s: float) -> None:
+        """A mission pause of ``length_s`` ended (M-a3 E4): the latch's brake start and first stop move by it, so its
+        waits -- measured as time since them -- do not count the pause."""
+        latch = self.latch
+        if latch is None or length_s == 0.0:
+            return
+        latch.since_s += length_s
+        if latch.stopped_s is not None:
+            latch.stopped_s += length_s
+
     def serial(self, tracker: RearAxlePathTracker) -> int:
         """The tracker object's serial for this monitor (1 for the first it saw)."""
         found = self._serials.get(tracker)

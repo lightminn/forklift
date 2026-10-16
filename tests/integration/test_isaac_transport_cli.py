@@ -459,7 +459,8 @@ def test_slam_release_replans_both_travel_legs_and_gates_on_a_stop() -> None:
     gate = CORE.read_text()  # the release gate moved to the mission core (M-a1 slice 5)
     assert "if slam[\"stop_now\"]:\n                slam_release(t)" in gate
     assert "rear = slam_rear(t)  # the released estimate" in gate
-    assert "if ms.phase in trackers and not releasing and not warming:" in source
+    # (M-a3: nor while paused, resuming or cancelling, plan E3)
+    assert "if ms.phase in trackers and not releasing and not warming and not paused_:" in source
 
 
 def test_slam_runs_see_the_pallet_again_before_the_final_straight() -> None:
@@ -983,3 +984,30 @@ def test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_in
     assert window.index("near_tracking.REALIGN_MIN_LEFT_M") < window.index("start_near_realign(t, attempt_number)")
     assert window.index("start_near_realign(t, attempt_number)") < window.index("require(straight is not None, refusal)")
     assert 'if straight is None and near is not None and options.near_capture_redraw == "on":' in core
+
+
+def test_mission_commands_options_validate_before_startup(tmp_path) -> None:
+    """M-a3 (docs/plans/2026-10-16-m-a3-mission-commands.md E7, E9): a schedule needs the obstacle layer acting,
+    excludes the near tracker, the measurement runs' stops and a boundary record, and must be well formed."""
+    good = tmp_path / "commands.json"
+    good.write_text('{"commands": [{"t": 30.0, "command": "pause"}, {"t": 40.0, "command": "resume"}]}')
+    bad = tmp_path / "bad.json"
+    bad.write_text('{"commands": [{"t": 30.0, "command": "halt"}]}')
+    kinds = tmp_path / "kinds.json"
+    kinds.write_text('{"commands": [], "stop_kinds": []}')
+    layer = ["--record-slam", "--obstacle-layer", "config/obstacle_layer_single.yaml", "--obstacle-act"]
+    for flags, expected in (
+        (["--mission-commands", str(good)], "--mission-commands needs --obstacle-act"),
+        (["--mission-commands", str(good), *layer, "--record-boundary"], "--mission-commands excludes"),
+        (["--mission-commands", str(bad), *layer], "command must be pause, resume or cancel"),
+        (["--mission-commands", str(kinds), *layer], "stop kinds are not supported yet"),
+        (["--mission-commands", str(tmp_path / "missing.json"), *layer], "--mission-commands:"),
+    ):
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--base-scene", "unused.usda", "--pallet-urdf", "unused.urdf",
+             "--forklift-urdf", str(PROVISIONAL_URDF), "--pallet-geometry", "unused.yaml", "--settings",
+             "unused.yaml", "--output", "unused", "--seed", "2", *flags],
+            capture_output=True, text=True, check=False, cwd=ROOT,
+        )
+        assert result.returncode == 2, (flags, result.stderr[-400:])
+        assert expected in result.stderr, (flags, result.stderr[-400:])

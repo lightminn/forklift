@@ -67,6 +67,9 @@ class MissionCommands:
         self.log: list[dict] = []  # every command with its tick, outcome and reason
         self.pauses: list[list] = []  # [start, end-or-None] of every pause (the work clock's stops)
         self.paused_since: float | None = None
+        self.stop_seen_s: float | None = None  # the first standing tick of the current stop
+        self.resume_check: dict | None = None  # the resume's last check (E5), for the safety state
+        self.resume_retry_s = -1e9  # a resume's replan without a path tries again from here
 
     # --- the queue ---------------------------------------------------------------------------------------------
     def queue(self, command) -> None:
@@ -138,6 +141,7 @@ class MissionCommands:
 
     def _stop_boundary(self, t: float) -> None:
         self.paused_since = t
+        self.stop_seen_s = None
         self.pauses.append([t, None])
         self.mission_gen += 1
 

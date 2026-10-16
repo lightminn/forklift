@@ -1063,7 +1063,9 @@ POST_MEASUREMENT_ARGUMENTS = {"return_turnaround": False, "repeat_at_near_captur
                               # every earlier record integrated with.
                               "odometry_wheel_radius_m": None,
                               # 2026-10-15: M-a0 boundary record (recording only).
-                              "record_boundary": False}
+                              "record_boundary": False,
+                              # 2026-10-16: M-a3 mission commands; a run with a schedule is refused below.
+                              "mission_commands": None}
 # Arguments that only add records to a run (M-a0 boundary record, docs/plans/2026-10-15-m-a05-boundary.md
 # section 5): any value matches the measurement condition. The recorder only reads (values are copied before
 # a call runs), so what it can change is wall-clock timing, to which runs are already sensitive (render
