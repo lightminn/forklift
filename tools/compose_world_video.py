@@ -14,7 +14,9 @@ it treats as a wall, and a CC as a green ring. Runs with time-window tokens
 (plan 2026-10-11, windows.json) show each crossing whose token is out as a
 diamond in the colour of the truck that goes first (hollow: issued, filled:
 its grant is in) and a magenta ring for a while on a truck whose token expired;
-the rank badges are left out (no ranks).
+the rank badges are left out (no ranks). --planned-route draws each truck's
+route still ahead, to the end of its job, as a dashed line in its colour
+(routes.npz, moved back from the claim rects to the point the trail follows).
 """
 
 from __future__ import annotations
@@ -161,6 +163,24 @@ class Tablets:
         return {k: i + 1 for i, k in enumerate(sorted(busy, key=lambda k: ranks[k]))}
 
 
+def route_points(rects: np.ndarray, margin_m: float, footprints) -> np.ndarray:
+    """Reference points along route rects. Each rect is a footprint (front, rear,
+    half width) grown by the traffic margin, its centre (front - rear) / 2 ahead
+    of the reference point -- the point truth (and so the trail) follows."""
+    body = rects[:, 2] - margin_m
+    half_lengths = np.array([(front + rear) / 2 for front, rear, _ in footprints])
+    rear = np.array([rear for _, rear, _ in footprints])[np.argmin(np.abs(body[:, None] - half_lengths), axis=1)]
+    return rects[:, :2] - (body - rear)[:, None] * rects[:, 4:6]
+
+
+def dashed(draw: ImageDraw.ImageDraw, pts: np.ndarray, colour, width: int, on: int = 5, off: int = 4) -> None:
+    """A line through pts drawn on for `on` steps, off for `off` (route samples are 0.2 m apart)."""
+    for i in range(0, len(pts) - 1, on + off):
+        seg = pts[i : i + on + 1]
+        if len(seg) > 1:
+            draw.line([tuple(p) for p in seg], fill=colour, width=width)
+
+
 def paint_union(canvas: Image.Image, polys: list, colour, alpha: int) -> None:
     """Fill the union of polygons once (no darker overlaps) and outline it."""
     if not polys:
@@ -256,6 +276,7 @@ def main(argv=None) -> int:
     parser.add_argument("--max-s", type=float)
     parser.add_argument("--preview-png", type=Path)
     parser.add_argument("--preview-s", type=float, default=100.0)
+    parser.add_argument("--planned-route", action="store_true", help="dashed route still ahead of each truck")
     args = parser.parse_args(argv)
     camera = json.loads((args.run / "camera.json").read_text())
     result = json.loads((args.run / "result.json").read_text())
@@ -267,6 +288,8 @@ def main(argv=None) -> int:
     alert = log["alert"].astype(int) if "alert" in log else None
     real = log["pallets"] if "pallets" in log else None  # each truck's real pallet
     tablets = Tablets(args.run, log) if (args.run / "routes.npz").exists() and "granted" in log else None
+    if args.planned_route and tablets is None:
+        parser.error("--planned-route needs routes.npz and a log with 'granted'")
     windows = None
     if (args.run / "windows.json").exists():
         snapshots = json.loads((args.run / "windows.json").read_text())
@@ -276,6 +299,7 @@ def main(argv=None) -> int:
     width, height = camera["resolution"]
     fps = camera["fps"]
     fp_unloaded, fp_loaded = world["footprints"]["unloaded"], world["footprints"]["loaded"]
+    footprints, margin_m = (fp_unloaded, fp_loaded), result["arguments"]["margin_m"]
     n = truth.shape[1]
     title = args.title or (
         f"지게차 {n}대 · {STRUCTURE_KO.get(world['structure'], world['structure'])} "
@@ -337,6 +361,8 @@ def main(argv=None) -> int:
                 colour = COLOURS[k % len(COLOURS)]
                 held, ahead = tablets.claim(row, k)
                 paint_union(canvas, [project(rect_corners(r)) for r in held], colour, 95)
+                if args.planned_route:
+                    continue  # the dashed route below shows what lies ahead
                 for p in project(ahead) if len(ahead) else []:
                     draw.ellipse([p[0] - 2, p[1] - 2, p[0] + 2, p[1] + 2], fill=(*colour, 200))
         ra_now = {k: other for k, spans in in_ra.items() for t0, t1, other in spans if t0 <= t < t1}
@@ -345,6 +371,16 @@ def main(argv=None) -> int:
                 wall = tablets.remaining(row, other)
                 wall = wall[np.hypot(*(wall[:, :2] - truth[row, k, :2]).T) <= WALL_M][::3]
                 paint_union(canvas, [project(rect_corners(r)) for r in wall], RA_COLOUR, 60)
+        if args.planned_route:
+            for k in range(n):
+                rest = tablets.remaining(row, k)
+                if len(rest) < 2:  # idle: the route is the truck's own pose
+                    continue
+                colour = COLOURS[k % len(COLOURS)]
+                pts = project(np.vstack((truth[row, k, :2], route_points(rest, margin_m, footprints))))
+                dashed(draw, pts, (*colour, 235), 2)
+                end = pts[-1]
+                draw.ellipse([end[0] - 6, end[1] - 6, end[0] + 6, end[1] + 6], fill=(*colour, 255), outline=(0, 0, 0), width=2)
         cleared = {k for when, k in clears if 0.0 <= t - when < CC_SHOW_S}
         expired = {k for when, k in expiries if 0.0 <= t - when < CC_SHOW_S}
         if windows is not None:
@@ -423,14 +459,15 @@ def main(argv=None) -> int:
         recent = [line for line in ticker if line[0] <= t][-EVENT_ROWS:]
         for i, (when, text) in enumerate(recent):
             draw.text((x0, events_top + 30 + 28 * i), f"{when:5.0f} s  {text}", font=small, fill=(200, 205, 215))
+        rest_ko = "점선: 앞으로 갈 계획 경로(작업 끝까지, 점 = 끝)" if args.planned_route else "점: 남은 경로"
         if windows is not None:
-            draw.text((24, VIEW_H + TOP + 12), "색 띠: 점유 구간(그 트럭만 들어가 달릴 수 있는 곳) · 마름모: 교차 통표(색 = 먼저 지나갈 트럭, 빈 = 발급, 채움 = 들어감) · 점: 남은 경로", font=small, fill=(225, 228, 235))
+            draw.text((24, VIEW_H + TOP + 12), f"색 띠: 점유 구간(그 트럭만 들어가 달릴 수 있는 곳) · 마름모: 교차 통표(색 = 먼저 지나갈 트럭, 빈 = 발급, 채움 = 들어감) · {rest_ko}", font=small, fill=(225, 228, 235))
             draw.text((24, VIEW_H + TOP + 40), "주황 고리·선: 대기 — 누구 때문에 · 자홍 고리: 통표 만료(창 안에 못 들어감) · 빨간 고리·띠: RA · 초록 고리: CC", font=small, fill=(225, 228, 235))
         elif tablets is not None and alert is not None:
-            draw.text((24, VIEW_H + TOP + 12), "색 띠: 통표(그 트럭만 들어가 달릴 수 있는 구간) · 점: 남은 경로 · 동그라미 숫자: 순번(1 이 먼저)", font=small, fill=(225, 228, 235))
+            draw.text((24, VIEW_H + TOP + 12), f"색 띠: 통표(그 트럭만 들어가 달릴 수 있는 구간) · {rest_ko} · 동그라미 숫자: 순번(1 이 먼저)", font=small, fill=(225, 228, 235))
             draw.text((24, VIEW_H + TOP + 40), "주황 고리·선: TA — 누구 때문에 대기 · 빨간 고리·띠: RA — 후순위가 선순위 경로(빨간 띠)를 벽으로 보고 비킴 · 초록 고리: CC — 풀림", font=small, fill=(225, 228, 235))
         elif tablets is not None:
-            draw.text((24, VIEW_H + TOP + 12), "색 띠: 통표(점유 구간) — 그 트럭만 들어가 달릴 수 있는 곳 · 점: 남은 경로 · 동그라미 숫자: 순번(1 이 먼저) · 빨간 고리·선: 누구 때문에 대기", font=small, fill=(225, 228, 235))
+            draw.text((24, VIEW_H + TOP + 12), f"색 띠: 통표(점유 구간) — 그 트럭만 들어가 달릴 수 있는 곳 · {rest_ko} · 동그라미 숫자: 순번(1 이 먼저) · 빨간 고리·선: 누구 때문에 대기", font=small, fill=(225, 228, 235))
         else:
             draw.text((24, VIEW_H + TOP + 12), "외곽선: 트럭(실은 팔레트 포함) · 선: 최근 30 s 궤적 · 빨간 고리: 교통 관리로 대기 · 분홍 고리: 사람 앞 정지 · 분홍 점: 사람 · 노란 사각형: 쏟아진 짐", font=small, fill=(200, 205, 215))
         scene_note = (
