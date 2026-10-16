@@ -98,14 +98,24 @@ def analyse(report: dict, frames_dir: Path, log: list[dict]) -> dict:
         raise SystemExit(f"{len(rows)} frames with a stamp inside the lift log: too few to fit")
     # Trimmed fit: frames off the line by more than three times the noise (MAD) are left out and the fit is redone, so a
     # few late frames neither move the lag nor hide among the rest (they are listed below).
-    inlier = np.ones(len(rows), dtype=bool)
-    for _ in range(4):
+    # The set is iterated to a fixed point; the fit and every statistic below use the same set, and a cycle or the
+    # iteration limit is reported as not converged rather than hidden (Codex M-c round 18 P2).
+    inlier, seen, trim_converged, iterations = np.ones(len(rows), dtype=bool), set(), False, 0
+    while True:
+        iterations += 1
         tau, res = best_lag(stamps[inlier], rows[inlier], lift_t, lift_m, TAU_GRID)
         x = np.interp(stamps - tau, lift_t, lift_m)
         slope, intercept = np.polyfit(x[inlier], rows[inlier], 1)
         resid = rows - (slope * x + intercept)
         noise = 1.4826 * float(np.median(np.abs(resid[inlier] - np.median(resid[inlier]))))
-        inlier = np.abs(resid) <= max(3 * noise, 1.0)
+        proposed = np.abs(resid) <= max(3 * noise, 1.0)
+        if np.array_equal(proposed, inlier):
+            trim_converged = True
+            break
+        seen.add(inlier.tobytes())
+        if proposed.tobytes() in seen or iterations >= 20 or proposed.sum() < 20:
+            break  # the fit stays on the set it was made from
+        inlier = proposed
     # The second-best separate minimum: how much worse the best alias is (the wave is not periodic within the run).
     far = np.abs(TAU_GRID - tau) > 0.25
     rng = np.random.default_rng(0)
@@ -135,7 +145,8 @@ def analyse(report: dict, frames_dir: Path, log: list[dict]) -> dict:
         "fit_correlation": float(np.corrcoef(x[inlier], rows[inlier])[0, 1]),
         "alias_residual_ratio": float(res[far].min() / max(res.min(), 1e-12)),
         "lift_range_m": [float(lift_m.min()), float(lift_m.max())],
-        "noise_rows": noise, "nonconforming_frames": nonconforming,
+        "noise_rows": noise, "nonconforming_frames": nonconforming, "trim_converged": trim_converged,
+        "trim_iterations": iterations,
         "metadata_latency_s": quantiles(meta),
         "pixel_latency_wall_s_conforming_frames": quantiles(total),
         "tau_grid_s": [float(TAU_GRID[0]), float(TAU_GRID[-1]), 1 / 120],

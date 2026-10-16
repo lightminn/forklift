@@ -60,6 +60,7 @@ def test_frames_late_by_more_are_listed_as_nonconforming_not_given_a_lag(tmp_pat
     r = M.analyse(report, tmp_path, log)
     assert r["pixel_lag_sim_s"] == pytest.approx(0.05, abs=1 / 120 + 1e-9)
     assert "per_frame_lag_sim_s" not in r
+    assert r["trim_converged"]
     flagged = set(r["nonconforming_frames"])
     # every late frame whose picture differs from the on-time one by more than 3 rows is caught; no on-time frame is
     for k in range(300):
@@ -70,3 +71,15 @@ def test_frames_late_by_more_are_listed_as_nonconforming_not_given_a_lag(tmp_pat
                 assert k + 1 in flagged
             if k not in late:
                 assert k + 1 not in flagged
+
+
+def test_the_trimmed_fit_and_its_statistics_use_one_set(tmp_path):
+    rng = np.random.default_rng(3)
+    late = set(rng.choice(300, 30, replace=False).tolist())
+    report, log = make_run(tmp_path, lambda k: 0.05 + (rng.uniform(0.02, 0.4) if k in late else 0.0))
+    r = M.analyse(report, tmp_path, log)
+    assert r["trim_converged"] and r["pixel_lag_sim_s"] == pytest.approx(0.05, abs=1 / 120 + 1e-9)
+    # refitting the reported conforming set gives the reported lag back
+    keep = [f for f in report["frames"] if f["frame_id"] not in set(r["nonconforming_frames"])]
+    again = M.analyse({"frames": keep}, tmp_path, log)
+    assert again["pixel_lag_sim_s"] == pytest.approx(r["pixel_lag_sim_s"], abs=1 / 120 + 1e-9)
