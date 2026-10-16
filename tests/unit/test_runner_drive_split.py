@@ -65,3 +65,26 @@ def test_the_end_state_projection_hides_the_output_directory_and_lists_recorded_
     assert a["recorded_only"] == ["setup_snapshot"] and a["mission"] is ms
     c = module.final_projection({"video": "x", "lift": np.float64(0.2)}, ms, tmp_path / "a")
     assert c["result"]["lift"] != a["result"]["lift"]
+
+
+def test_the_stdout_observer_records_printed_lines_as_sink_echo_and_still_prints(tmp_path, capsys):
+    from forklift_core.mission.boundary_record import BoundaryRecorder, RecordingGate
+    from forklift_core.mission.replay import read_ticks
+
+    spec = importlib.util.spec_from_file_location("run_transport_print", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    gate = RecordingGate(rec)
+    module._BOUNDARY_RECORD.update(gate=gate, print=print)
+    rec.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    module._recording_print("SAMPLE", '{"t": 1}', flush=True)
+    module._recording_print("to stderr", file=sys.stderr)
+    rec.tick_end(outputs={}, branches=[])
+    module._recording_print("outside a tick")
+    rec.close()
+    module._BOUNDARY_RECORD.update(gate=None, print=None)
+    calls = next(iter(read_ticks(tmp_path)))["calls"]
+    assert [(c["port"], c["method"]) for c in calls] == [("Sink", "echo")]
+    out = capsys.readouterr()
+    assert out.out == 'SAMPLE {"t": 1}\noutside a tick\n' and out.err == "to stderr\n"

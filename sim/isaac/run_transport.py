@@ -1557,7 +1557,7 @@ class TrackerBook(dict):
 
 # The M-a0 boundary record of the running mission, closed by whichever exit comes first (the run's own
 # finally, or main()'s for failures before the mission loop's try).
-_BOUNDARY_RECORD: dict = {"gate": None, "time": None, "probe": None}
+_BOUNDARY_RECORD: dict = {"gate": None, "time": None, "probe": None, "print": None}
 
 
 def sink_effect(gate, method: str, path, payload) -> None:
@@ -1567,6 +1567,16 @@ def sink_effect(gate, method: str, path, payload) -> None:
     from forklift_core.mission.boundary_record import sink_effect as effect_
 
     effect_(gate, method, path, payload)
+
+
+def _recording_print(*values, sep=" ", end="\n", file=None, flush=False):
+    """Format 2's stdout observer (installed with the Clock proxy at the hand-over): each line printed to stdout
+    while a tick is open and no recorded call runs is a ``Sink.echo`` entry -- the prints of the moved core and of
+    the runner alike, wherever they stand."""
+    gate = _BOUNDARY_RECORD.get("gate")
+    if gate is not None and (file is None or file is sys.stdout):
+        sink_effect(gate, "echo", "stdout", (" " if sep is None else sep).join(str(v) for v in values))
+    return _BOUNDARY_RECORD["print"](*values, sep=sep, end=end, file=file, flush=flush)
 
 
 # Result keys a replay cannot reproduce from the record: written by run() after the setup snapshot was taken.
@@ -1623,6 +1633,9 @@ def close_boundary_record(state: dict, exc: BaseException | None = None, final_s
         if _BOUNDARY_RECORD.get("time") is not None:
             globals()["time"] = _BOUNDARY_RECORD["time"]  # the wall clock proxy (Clock) undone
             _BOUNDARY_RECORD["time"] = None
+        if _BOUNDARY_RECORD.get("print") is not None:
+            globals().pop("print", None)  # the stdout observer undone (the builtin again)
+            _BOUNDARY_RECORD["print"] = None
 
 
 def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
@@ -3476,6 +3489,8 @@ def drive(S, isaac) -> None:
         cells.world, cells.robot = world, robot
         _BOUNDARY_RECORD["time"] = time
         globals()["time"] = RecordingProxy(time, "Clock", boundary)
+        _BOUNDARY_RECORD["print"] = print
+        globals()["print"] = _recording_print  # stdout lines as Sink.echo (plan 3.5)
         if obstacle is not None:  # the planning memory's SLAM map and revision are read by the plan bundles
             obstacle["layer"] = RecordingProxy(obstacle["layer"], "Obstacles", boundary,
                                                child_ports={"permission": "Permission", "memory": "Memory"})
@@ -3628,14 +3643,16 @@ def drive(S, isaac) -> None:
         if "return_home" in paths:
             isaac.add_path_display(stage, paths["return_home"], "Return", (0.55, 0.2, 0.85))
         isaac.export_scene()
-        planned_line_ = "PLANNED " + record_json(
-            {
-                k: {"length_m": v.length_m, "expansions": v.expanded_nodes}
-                for k, v in paths.items()
-            }
+        print(
+            "PLANNED",
+            record_json(
+                {
+                    k: {"length_m": v.length_m, "expansions": v.expanded_nodes}
+                    for k, v in paths.items()
+                }
+            ),
+            flush=True,
         )
-        sink_effect(boundary, "echo", "stdout", planned_line_)
-        print(planned_line_, flush=True)
 
     if boundary is not None:
         boundary.recorder.tick_end(outputs={"setup": True, "paths": sorted(paths)}, branches=[])
@@ -4134,8 +4151,7 @@ def drive(S, isaac) -> None:
         ms, state=state, obstacle=obstacle, slam=slam, pocket=pocket, paths=paths, trackers=trackers,
         geometry=geometry, settings=settings, pallet_geometry=args.pallet_geometry_loaded,
         hooks=SimpleNamespace(
-            echo=lambda text: (sink_effect(boundary, "echo", "stdout", text), print(text, flush=True))[1],
-            record_json=record_json, snapshot=snapshot, require=require,
+            echo=lambda text: print(text, flush=True), record_json=record_json, snapshot=snapshot, require=require,
             slam_odom_base=slam_odom_base,
             slam_error=slam_error, fork_blades=lambda: read_fork_blades_m(args.forklift_urdf),
             # M-a1 slice 2. Truth (the plan's SimTruth list): the loop's own samples, read when called.
@@ -5545,9 +5561,7 @@ def drive(S, isaac) -> None:
                     sample["tracking"] = asdict(tracking)
                 state["samples"].append(sample)
                 if step % 240 == 0:
-                    sample_line_ = "SAMPLE " + record_json(sample)
-                    sink_effect(boundary, "echo", "stdout", sample_line_)
-                    print(sample_line_, flush=True)
+                    print("SAMPLE", record_json(sample), flush=True)
             if boundary is not None:
                 boundary.recorder.tick_end(
                     outputs={
