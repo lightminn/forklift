@@ -682,7 +682,8 @@ def arguments() -> argparse.Namespace:
                         "physics step -- for a run without a mission")
     parser.add_argument("--live-test-permit-compare", action="store_true",
                         help="M-c tests only (completion 5): every 12th teleoperation permission is also asked of a "
-                        "fresh full check on the same grid, pose and arcs, and both are logged")
+                        "fresh full check on the same grid, pose and arcs, and both are logged; the truth check stops "
+                        "using the hall bounds (0.76 m inside the wall) so the approach can reach the wall")
     parser.add_argument("--live-test-camera-freeze", default=None,
                         help="M-c tests only: FROM:TO sim seconds with no new camera frames (the video-stall test)")
     parser.add_argument(
@@ -5569,8 +5570,14 @@ def drive(S, isaac) -> None:
             # The real shape: unloaded, the body and the blades -- an object
             # between the blades is not a contact (plan D4, Codex L3c P2).
             truth_shape = footprint if loaded else unloaded_shape
+            truth_bounds = scenario.bounds
+            if getattr(args, "live_test_permit_compare", False):  # a recorded run's args predate it
+                # M-c completion 5 only: the hall bounds lie 0.76 m inside the wall the scan sees (x 4.7 against
+                # 5.46, 2026-10-17); the teleoperated approach is judged against that wall, not the planning area.
+                b_ = scenario.bounds
+                truth_bounds = type(b_)(b_.x_min_m - 3.0, b_.x_max_m + 3.0, b_.y_min_m - 3.0, b_.y_max_m + 3.0)
             require(
-                collision_free_pose(truth_rear, [], footprint, scenario.bounds)
+                collision_free_pose(truth_rear, [], footprint, truth_bounds)
                 and not any(SHAPE_MEETS(o, truth_shape, tuple(float(v) for v in truth_rear)) for o in checked_obstacles),
                 f"Actual truck/load footprint overlap in {ms.phase}",
             )
