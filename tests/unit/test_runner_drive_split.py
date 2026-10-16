@@ -47,3 +47,21 @@ def test_drive_reads_no_isaac_helper_names():
     drive = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "drive")
     names = {n.id for n in ast.walk(drive) if isinstance(n, ast.Name)}
     assert not names & {"Gf", "ArticulationAction", "UsdGeom", "UsdPhysics", "omni", "Camera", "World"}
+
+
+def test_the_end_state_projection_hides_the_output_directory_and_lists_recorded_only_keys(tmp_path):
+    import numpy as np
+
+    from forklift_core.mission.state import MissionState
+
+    spec = importlib.util.spec_from_file_location("run_transport_projection", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    ms = MissionState(phase="return_home")
+    a = module.final_projection({"video": str(tmp_path / "a" / "v.mp4"), "lift": np.float64(0.1),
+                                 "setup_snapshot": {"files": 3}}, ms, tmp_path / "a")
+    b = module.final_projection({"video": str(tmp_path / "b" / "v.mp4"), "lift": np.float64(0.1)}, ms, tmp_path / "b")
+    assert a["result"] == b["result"] and set(a["result"]) == {"video", "lift"}
+    assert a["recorded_only"] == ["setup_snapshot"] and a["mission"] is ms
+    c = module.final_projection({"video": "x", "lift": np.float64(0.2)}, ms, tmp_path / "a")
+    assert c["result"]["lift"] != a["result"]["lift"]

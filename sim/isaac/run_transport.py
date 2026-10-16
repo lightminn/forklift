@@ -1560,9 +1560,46 @@ class TrackerBook(dict):
 _BOUNDARY_RECORD: dict = {"gate": None, "time": None, "probe": None}
 
 
-def close_boundary_record(state: dict, exc: BaseException | None = None) -> None:
+def sink_effect(gate, method: str, path, payload) -> None:
+    """Format 2's output-effect entry (forklift_core.mission.boundary_record.sink_effect); nothing without a record."""
+    if gate is None:
+        return
+    from forklift_core.mission.boundary_record import sink_effect as effect_
+
+    effect_(gate, method, path, payload)
+
+
+# Result keys a replay cannot reproduce from the record: written by run() after the setup snapshot was taken.
+PROJECTION_RECORDED_ONLY = ("setup_snapshot",)
+
+
+def final_projection(state: dict, ms, output: Path) -> dict:
+    """Format 2's end state (M-a1 replay plan R3 (5)): the mission state's fields by value and every result key
+    by the digest of its result.json text (the run's output directory written as ``<output>``: a replay writes
+    elsewhere). Keys only the recorded run can have are listed, not compared."""
+    import hashlib
+
+    from forklift_core.mission.boundary_record import payload_digest
+
+    result = {}
+    for key, value in state.items():
+        if key in PROJECTION_RECORDED_ONLY:
+            continue
+        try:
+            text = record_json(value).replace(str(output), "<output>")
+            result[key] = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        except (TypeError, ValueError):
+            try:
+                result[key] = "codec:" + payload_digest(value)
+            except TypeError:
+                result[key] = f"unencodable:{type(value).__name__}"
+    return {"mission": ms, "result": result, "recorded_only": sorted(k for k in PROJECTION_RECORDED_ONLY if k in state)}
+
+
+def close_boundary_record(state: dict, exc: BaseException | None = None, final_state=None) -> None:
     """``exc``: the exception propagating through the caller's finally (main() records it as the failure
-    reason only after the run's own finally has closed the record)."""
+    reason only after the run's own finally has closed the record). ``final_state`` (format 2): drive's
+    end-state projection (:func:`final_projection`)."""
     gate = _BOUNDARY_RECORD.get("gate")
     if gate is None:
         return
@@ -1575,7 +1612,7 @@ def close_boundary_record(state: dict, exc: BaseException | None = None) -> None
         if gate.recorder.value_format == 2:  # how drive ended: a replay has to end the same way
             from forklift_core.mission.boundary_record import boundary_ending
 
-            gate.recorder.close(ending=boundary_ending(exc))
+            gate.recorder.close(final_state=final_state, ending=boundary_ending(exc))
         else:
             gate.recorder.close()
     except Exception as exc:  # noqa: BLE001 -- a recording failure never replaces the run's own result
@@ -3149,12 +3186,13 @@ def drive(S, isaac) -> None:
             # Diagnostics: the standing frames as the check saw them.
             k_still = pocket.setdefault("still_frames", 0) + 1
             pocket["still_frames"] = k_still
-            np.savez_compressed(
-                args.output / f"pocket_still_{k_still}.npz",
+            still_ = dict(
                 depth=np.asarray(depth, dtype=np.float32), raw=np.asarray(raw, dtype=np.float32), stamp=stamp,
                 rear=np.asarray(rear_at, dtype=float), estimate=np.asarray(check.estimate, dtype=float),
                 axis_yaw=check.axis_yaw,
             )
+            sink_effect(boundary, "save_npz", f"pocket_still_{k_still}.npz", still_)
+            np.savez_compressed(args.output / f"pocket_still_{k_still}.npz", **still_)
         pocket["frames_read"] += 1
 
     def grid_world(sc):
@@ -3351,12 +3389,13 @@ def drive(S, isaac) -> None:
                 geometry.axle_to_fork_tip_m - geometry.carriage_limit_m,
             )
             obstacle["plans"][-1]["docking_band_cells"] = int((occupancy.occupied & band).sum())
-            np.savez_compressed(
-                args.output / f"grid_mission_plan_{len(obstacle['plans'])}.npz",
+            grid_ = dict(
                 occupied=occupancy.occupied, docking=out["docking_occupancy"].forks.occupied,
                 origin=[occupancy.origin_x_m, occupancy.origin_y_m], res=res_g,
                 target=[target.x_m, target.y_m, target.yaw_rad],
             )
+            sink_effect(boundary, "save_npz", f"grid_mission_plan_{len(obstacle['plans'])}.npz", grid_)
+            np.savez_compressed(args.output / f"grid_mission_plan_{len(obstacle['plans'])}.npz", **grid_)
         return out
 
     if boundary is not None:
@@ -3581,24 +3620,22 @@ def drive(S, isaac) -> None:
         require(plans.success, f"Mission planning failed: {plans.status}")
         paths = {name: getattr(plans, name) for name in mission_stages}
         state["paths"] = {name: path_record(path) for name, path in paths.items()}
-        (args.output / "paths.json").write_text(
-            record_json(state["paths"], indent=2) + "\n"
-        )
+        paths_text_ = record_json(state["paths"], indent=2) + "\n"
+        sink_effect(boundary, "write_paths", "paths.json", paths_text_)  # format 2: the output effect (plan 3.5)
+        (args.output / "paths.json").write_text(paths_text_)
         isaac.add_path_display(stage, paths["approach"], "Approach", (0.05, 0.45, 1.0))
         isaac.add_path_display(stage, paths["transport"], "Transport", (1.0, 0.65, 0.04))
         if "return_home" in paths:
             isaac.add_path_display(stage, paths["return_home"], "Return", (0.55, 0.2, 0.85))
         isaac.export_scene()
-        print(
-            "PLANNED",
-            record_json(
-                {
-                    k: {"length_m": v.length_m, "expansions": v.expanded_nodes}
-                    for k, v in paths.items()
-                }
-            ),
-            flush=True,
+        planned_line_ = "PLANNED " + record_json(
+            {
+                k: {"length_m": v.length_m, "expansions": v.expanded_nodes}
+                for k, v in paths.items()
+            }
         )
+        sink_effect(boundary, "echo", "stdout", planned_line_)
+        print(planned_line_, flush=True)
 
     if boundary is not None:
         boundary.recorder.tick_end(outputs={"setup": True, "paths": sorted(paths)}, branches=[])
@@ -3956,6 +3993,8 @@ def drive(S, isaac) -> None:
     def save_capture(attempt_number, scene_input) -> None:
         """M-a1 slice 4b-i: the capture's diagnostic image and depth dumps, the runner's statements unchanged
         (a Sink the mission core calls where they stood)."""
+        sink_effect(boundary, "save_capture", f"perception_capture_{attempt_number}",
+                    {"rgb": scene_input.rgb, "depth_m": scene_input.depth_m})
         # Diagnostic dump for offline root-cause analysis; not part
         # of the perception contract itself.
         Image.fromarray(scene_input.rgb).save(
@@ -4087,11 +4126,16 @@ def drive(S, isaac) -> None:
         nonlocal rear
         rear = value
 
+    def write_text_sink(method_: str, name_: str, text_: str) -> None:
+        sink_effect(boundary, method_, name_, text_)  # format 2: the output effect (plan 3.5)
+        (args.output / name_).write_text(text_)
+
     core = MissionCore(
         ms, state=state, obstacle=obstacle, slam=slam, pocket=pocket, paths=paths, trackers=trackers,
         geometry=geometry, settings=settings, pallet_geometry=args.pallet_geometry_loaded,
         hooks=SimpleNamespace(
-            echo=lambda text: print(text, flush=True), record_json=record_json, snapshot=snapshot, require=require,
+            echo=lambda text: (sink_effect(boundary, "echo", "stdout", text), print(text, flush=True))[1],
+            record_json=record_json, snapshot=snapshot, require=require,
             slam_odom_base=slam_odom_base,
             slam_error=slam_error, fork_blades=lambda: read_fork_blades_m(args.forklift_urdf),
             # M-a1 slice 2. Truth (the plan's SimTruth list): the loop's own samples, read when called.
@@ -4109,10 +4153,11 @@ def drive(S, isaac) -> None:
             plan_transport_leg=lambda *a, **k: plan_transport_leg(*a, **k),
             plan_return_leg=lambda *a, **k: plan_return_leg(*a, **k),
             path_record=path_record,
-            write_paths=lambda: (args.output / "paths.json").write_text(record_json(state["paths"], indent=2) + "\n"),
+            write_paths=lambda: write_text_sink("write_paths", "paths.json", record_json(state["paths"], indent=2) + "\n"),
             # M-a1 slice 3b: truth (SimTruth list) and the permission's diagnostics dump.
             truth_speed=lambda: truth_speed, truth_velocity=lambda: velocity,
-            save_npz=lambda name, **arrays: np.savez_compressed(args.output / name, **arrays),
+            save_npz=lambda name, **arrays: (sink_effect(boundary, "save_npz", name, arrays),
+                                             np.savez_compressed(args.output / name, **arrays))[1],
             # M-a1 slice 3c: the blocked replan's releases, planners and recovery helpers (read when called).
             plan_observation_leg=lambda *a, **k: plan_observation_leg(*a, **k),
             plan_transport=lambda *a, **k: plan_transport(*a, **k),
@@ -5357,10 +5402,22 @@ def drive(S, isaac) -> None:
                     meets_line_ = any(not chk_.free(p_) for p_ in line_)
                     return meets_path_, meets_line_
 
-                for action in new_obstacles["schedule"].update(
+                due_ = new_obstacles["schedule"].update(
                     t, ms.phase, driven, leg, leg_direction=int(leg_direction), pallet_face=pallet_face,
                     sweep_test=n_sweep_test,
-                ):
+                )
+                if boundary is not None and boundary.recorder.value_format == 2:
+                    # The schedule has no port: its inputs (by digest -- the leg ahead is an array every tick) and
+                    # what it did with them, so a replay rerunning it from the same rules is checked (plan 6).
+                    from forklift_core.mission.boundary_record import payload_digest, trace_entry
+
+                    trace_entry(boundary, "schedule", {
+                        "inputs_sha256": payload_digest({
+                            "t": float(t), "phase": ms.phase, "driven": float(driven),
+                            "leg": None if leg is None else np.asarray(leg, dtype=float),
+                            "leg_direction": int(leg_direction), "pallet_face": pallet_face}),
+                        "actions": [list(a_) for a_ in due_]})
+                for action in due_:
                     if action[0] == "spawn":
                         _, oid, ox, oy, oyaw, osize = action
                         path_ = f"/World/NewObstacle_{oid}"
@@ -5488,7 +5545,9 @@ def drive(S, isaac) -> None:
                     sample["tracking"] = asdict(tracking)
                 state["samples"].append(sample)
                 if step % 240 == 0:
-                    print("SAMPLE", record_json(sample), flush=True)
+                    sample_line_ = "SAMPLE " + record_json(sample)
+                    sink_effect(boundary, "echo", "stdout", sample_line_)
+                    print(sample_line_, flush=True)
             if boundary is not None:
                 boundary.recorder.tick_end(
                     outputs={
@@ -5760,7 +5819,11 @@ def drive(S, isaac) -> None:
                     require(exit_code == 0, f"{name} video encoding failed")
         finally:
             if early_ports:  # format 2: closed last, so the summaries above read the services inside the exit tick
-                close_boundary_record(state, sys.exc_info()[1])
+                try:
+                    projection_ = final_projection(state, ms, args.output)
+                except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own end; the replay sees it
+                    projection_ = {"projection_error": repr(exc_)}
+                close_boundary_record(state, sys.exc_info()[1], final_state=projection_)
 
 
 def main() -> None:

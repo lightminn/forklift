@@ -82,6 +82,7 @@ class SessionRecorder:
     def close(self, final_state=None, ending=None):
         self.session.closed = True
         self.ending = ending
+        self.final_state = final_state
 
 
 class ReplayBoundary(ReplayGate):
@@ -211,6 +212,28 @@ def build_inputs(run_dir: Path, gate: ReplayBoundary, output: Path | None = None
     return types.SimpleNamespace(**values), adapters, snap
 
 
+def final_state_differences(boundary: Path, session: ReplaySession, final_state) -> list[str]:
+    """Where the replayed end-state projection differs from the recorded one (map keys, three levels down)."""
+    from forklift_core.mission.replay_codec import Encoder
+
+    recorded = json.loads((boundary / "final_state.json").read_text())
+    replayed = json.loads(json.dumps(Encoder(opaque_ok=True, value_types=session.value_types, hash_arrays=True,
+                                             identity=False).encode(final_state), sort_keys=True, allow_nan=True))
+    out: list[str] = []
+
+    def walk(a, b, path, depth):
+        if a == b:
+            return
+        if depth and isinstance(a, dict) and isinstance(b, dict):
+            for key in sorted(set(a) | set(b)):
+                walk(a.get(key), b.get(key), f"{path}.{key}", depth - 1)
+            return
+        out.append(path or ".")
+
+    walk(recorded, replayed, "", 6)
+    return out[:50]
+
+
 def check_ending(session: ReplaySession, raised: BaseException | None) -> None:
     """The replayed code ends as the recorded one did -- returned, or the same exception (type and message) --
     and closed its record; otherwise the replay fails (latched)."""
@@ -261,11 +284,15 @@ def replay_run(run_dir: Path, output: Path | None = None) -> dict:
         outcome["traceback"] = traceback.format_exc()[-4000:]
     check_ending(session, raised)
     if session.failure is None:  # a recorded failure replayed exactly ends the same way: finish it too
+        final_state = getattr(gate.recorder, "final_state", None)
         try:
-            session.finish()  # every recorded tick replayed, as many as the meta says
+            session.finish(final_state)  # every recorded tick replayed, as many as the meta says; the end state
             outcome["finish"] = "ok"
         except ReplayMismatch as exc:
             outcome["finish"] = str(exc)
+            if "final state" in str(exc):
+                outcome["final_state_differences"] = final_state_differences(run_dir / "boundary", session,
+                                                                             final_state)
     outcome["ticks_done"] = session.ticks_done
     outcome["failure"] = session.failure
     outcome["tick_open"] = session.tick["tick"] if session.tick else None

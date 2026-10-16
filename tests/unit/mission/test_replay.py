@@ -1073,3 +1073,43 @@ def test_an_append_to_a_deque_argument_is_recorded_and_replayed(tmp_path):
     assert list(r) == [1.0, 2.0] and r.maxlen == 3
     session.tick_end(outputs={}, branches=[])
     session.finish()
+
+
+def test_a_sink_effect_is_compared_by_path_and_payload_without_hiding_the_reads_inside_the_sink(tmp_path):
+    from forklift_core.mission.boundary_record import sink_effect
+
+    class Pallet:
+        def pose(self):
+            return (1.0, 2.0)
+
+    def save(gate, pallet, rgb):
+        sink_effect(gate, "save_capture", "perception_capture_1", {"rgb": rgb})
+        return pallet.pose()  # the sink body's own read stays a recorded call
+
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    gate = RecordingGate(rec)
+    pallet = RecordingProxy(Pallet(), "SimTruth", gate)
+    rec.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    save(gate, pallet, np.zeros((2, 2), dtype=np.uint8))
+    rec.tick_end(outputs={}, branches=[])
+    rec.close()
+    calls = next(iter(read_ticks(tmp_path)))["calls"]
+    assert [(c["port"], c["method"]) for c in calls] == [("Sink", "save_capture"), ("SimTruth", "pose")]
+
+    def replay(rgb):
+        session = ReplaySession(tmp_path)
+        rgate = ReplayGate(session)
+        session.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+        out = save(rgate, ReplayProxy("SimTruth", rgate, spec=Pallet), rgb)
+        session.tick_end(outputs={}, branches=[])
+        session.finish()
+        return out
+
+    assert replay(np.zeros((2, 2), dtype=np.uint8)) == (1.0, 2.0)
+    with pytest.raises(ReplayMismatch, match="Sink.save_capture request differs"):
+        replay(np.ones((2, 2), dtype=np.uint8))  # the payload changed
+    session = ReplaySession(tmp_path)
+    rgate = ReplayGate(session)
+    session.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    with pytest.raises(ReplayMismatch, match="SimTruth.pose where Sink.save_capture"):
+        ReplayProxy("SimTruth", rgate, spec=Pallet).pose()  # the file write left out

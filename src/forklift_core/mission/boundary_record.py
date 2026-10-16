@@ -610,6 +610,38 @@ def boundary_ending(exc: BaseException | None) -> dict:
     return {"kind": "exception", "type": f"{type(exc).__module__}:{type(exc).__qualname__}", "message": str(exc)}
 
 
+def payload_digest(payload) -> str:
+    """The sha256 of what a sink writes, by value: text as UTF-8, anything else through the codec with arrays by
+    content (a file's own bytes would carry the archive's timestamps, not the payload)."""
+    import hashlib
+
+    if isinstance(payload, str):
+        data = payload.encode("utf-8")
+    else:
+        from forklift_core.mission.replay_codec import Encoder
+
+        data = json.dumps(Encoder(opaque_ok=False, hash_arrays=True, identity=False).encode(payload), sort_keys=True,
+                          allow_nan=True).encode("utf-8")
+    return hashlib.sha256(data).hexdigest()
+
+
+def trace_entry(gate, method: str, descriptor) -> None:
+    """Format 2: a ``Trace.<method>`` entry -- what the code computed at a point no port records (e.g. the new
+    obstacle schedule's inputs and actions, plan section 6) -- compared on replay as a request."""
+    if gate is None or not gate.active or getattr(gate, "value_format", 1) != 2:
+        return
+    gate.run("Trace", method, lambda d: None, (descriptor,), {})
+
+
+def sink_effect(gate, method: str, path, payload) -> None:
+    """Format 2 (plan 3.5): an output effect -- a file the run writes, a line it prints -- as a ``Sink.<method>``
+    entry with its logical path (relative to the run's output) and the payload's digest, recorded where the write
+    happens. The write itself is not wrapped: the sink body's own port reads stay recorded at their depth."""
+    if gate is None or not gate.active or getattr(gate, "value_format", 1) != 2:
+        return
+    gate.run("Sink", method, lambda effect: None, ({"path": str(path), "sha256": payload_digest(payload)},), {})
+
+
 def _callback_description(value):
     """A callback's request descriptor: what it declares as ``callback_spec`` (the settings its body runs with),
     else its type -- a callback without one is still seen, never the settings inside it."""
