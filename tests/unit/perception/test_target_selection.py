@@ -12,7 +12,7 @@ EPAL = rs.known_spec("epal6")
 H = EPAL.overall_height_m
 
 
-def _c(cid, x, y, *, z=0.0, state=None, geometry="fitted", identity="confirmed", pickable=True, alt=()):
+def _c(cid, x, y, *, z=0.0, state=None, geometry="fitted", identity="confirmed", pickable=True, alt=(), seen=None):
     """A candidate whose pallet centre is (x, y); its face is 0.3 m nearer the camera (EPAL 6)."""
     state = state or ("visible" if z == 0.0 else "coplanar")
     shape = ObservedPalletShape(EPAL, face_layout(EPAL, "x"), (("face", "known_shape"),))
@@ -22,7 +22,7 @@ def _c(cid, x, y, *, z=0.0, state=None, geometry="fitted", identity="confirmed",
                            state == "visible" and z == 0.0, x - 0.3 - 0.75, 0.9, geometry, identity,
                            () if geometry == "fitted" else ("lateral_unconstrained",), pickable,
                            () if pickable is not False else ("fork_spacing_adjust",), shape,
-                           tuple((ax, ay, z) for ax, ay in alt))
+                           tuple((ax, ay, z) for ax, ay in alt), seen or (x - 0.3, y), 0.4)
 
 
 def _instr(x, y, r=0.3, layer=None):
@@ -153,6 +153,27 @@ def test_an_ambiguous_candidate_whose_rival_centre_is_in_the_radius_asks_for_ano
     cands = [_c("a", 2.0, -0.29, geometry="ambiguous", alt=((2.0, 0.0),)), _c("b", 3.2, 0.0)]
     s = select_target(cands, _instr(2.6, 0.0, r=0.62))
     assert s.status == "reobserve" and "uncertain_in_radius" in s.reasons
+
+
+def test_an_uncertain_candidate_is_placed_by_what_was_seen_not_by_its_rejected_fit():
+    """Codex review A round 4: a non-standard pallet came back shape_mismatch with a wrong EPAL centre
+    outside the radius and no rivals, so the other pallet was selected. An uncertain candidate is
+    judged like an unfitted object: by its visible points and the largest half-diagonal."""
+    rejected = _c("a", 1.78, -0.42, geometry="ambiguous", seen=(1.9, -0.4))
+    s = select_target([rejected, _c("b", 3.2, 0.4)], _instr(2.6, 0.0, r=0.73))
+    assert s.status == "reobserve" and "uncertain_in_radius" in s.reasons
+    far = _c("a", 1.78, -3.0, geometry="ambiguous", seen=(1.9, -3.0))
+    assert select_target([far, _c("b", 3.2, 0.4)], _instr(2.6, 0.0, r=0.73)).candidate_id == "b"
+
+
+def test_the_layer_filter_never_removes_an_uncertain_candidate():
+    """Codex review A round 4: an ambiguous candidate whose best placement was layer 2 but whose
+    competing placement was layer 3 was dropped by the layer filter and another layer-3 pallet won."""
+    cands = [_c("a", 3.0, 0.0), _c("b", 3.0, 0.0, z=H), _c("c", 3.0, 0.0, z=2 * H),
+             _c("x", 3.0, 0.3, z=H, geometry="ambiguous")]
+    s = select_target(cands, _instr(3.0, 0.0, r=0.5, layer=2))
+    assert s.status == "reobserve" and "uncertain_in_radius" in s.reasons
+    assert select_target(cands[:3], _instr(3.0, 0.0, r=0.5, layer=2)).candidate_id == "c"
 
 
 def test_no_candidates_is_none():

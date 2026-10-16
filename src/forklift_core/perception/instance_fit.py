@@ -661,13 +661,15 @@ def fit_instance(scene: SceneInput, proposal: InstanceProposal, *, specs: dict, 
     shape = ObservedPalletShape(hyp.spec, layout, (("face", "known_shape"), ("depth", "known_shape"),
                                                     ("support", "unobserved" if state == "uncertain" else "observed")))
     zs = hyp.placement.support_z
+    seen = np.median(pts[:, :2], axis=0)
+    extent = float(np.max(np.hypot(*(pts[:, :2] - seen).T)))
     return PocketCandidate(
         candidate_id, proposal.proposal_id, proposal.source, scene.stamp_ns, hyp.label, hyp.axis,
         tuple((s[0].label, round(s[0].placement.score, 4)) for s in rivals[:3]), yaw,
         (float(centre[0]), float(centre[1]), float(zs)), (float(pallet_centre[0]), float(pallet_centre[1]), float(zs)),
         left, right, zs, state, state == "visible" and abs(zs) <= params.support_window_m, reach,
         hyp.placement.score, geometry, _identity(proposal, identity_threshold), tuple(reasons), pickable,
-        fit_reasons, shape, tuple(competing))
+        fit_reasons, shape, tuple(competing), (float(seen[0]), float(seen[1])), extent)
 
 
 @dataclass(frozen=True)

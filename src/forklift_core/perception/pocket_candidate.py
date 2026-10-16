@@ -75,6 +75,8 @@ class PocketCandidate:
     fit_reasons: tuple
     shape: ObservedPalletShape
     alternative_centres_m: tuple = ()   # pallet centres of readings that compete with this one
+    observed_centre_xy: tuple | None = None  # median xy of the proposal's points: where the object was seen
+    observed_extent_m: float = 0.0           # largest distance of those points from observed_centre_xy
     def __post_init__(self) -> None:
         if self.geometry not in GEOMETRY_STATES:
             raise ValueError(f"geometry must be one of {GEOMETRY_STATES}")
@@ -96,6 +98,10 @@ class PocketCandidate:
         object.__setattr__(self, "pallet_centre_m", _vector(self.pallet_centre_m, 3, "pallet centre"))
         object.__setattr__(self, "alternative_centres_m",
                            tuple(_vector(c, 3, "alternative centre") for c in self.alternative_centres_m))
+        if self.observed_centre_xy is not None:
+            object.__setattr__(self, "observed_centre_xy", _vector(self.observed_centre_xy, 2, "observed centre"))
+        if _finite_scalar(self.observed_extent_m, "observed_extent_m") < 0:
+            raise ValueError("observed_extent_m must be nonnegative")
         for name in ("reasons", "fit_reasons", "alternatives"):
             object.__setattr__(self, name, tuple(getattr(self, name)))
         if not isinstance(self.on_floor, (bool, np.bool_)):

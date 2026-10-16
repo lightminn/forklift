@@ -329,6 +329,19 @@ def test_the_shifted_rival_keeps_the_target_ambiguous_through_selection(occluder
     assert select_target(out.candidates, instr, unresolved=out.failures).status != "selected"
 
 
+def test_a_rejected_shape_still_keeps_the_target_ambiguous_through_selection():
+    """Codex review A round 4: S7 dev shape s7_nonstandard_1000769 at (2, -0.4) and a T11 at
+    (3.2, 0.4), instruction (2.6, 0) r 0.73 -- both centres 0.721 m away -- selected the T11 because the
+    S7 candidate's rejected EPAL centre (1.779, -0.423) lay outside."""
+    from forklift_core.perception.target_selection import select_target
+    s7 = next(r for r in rs.catalogue() if r.scene_id == "s7_nonstandard_1000769").instances[0].spec
+    scene, ids = _render([(s7, rt.Placement(2.0, -0.4, 0.0, 0.0), ()), (T11, rt.Placement(3.2, 0.4, 0.0, 0.0), ())])
+    props = [InstanceProposal(f"p{k}", ids == k, 1.0, "oracle") for k in (0, 1) if (ids == k).any()]
+    out = F.fit_scene(scene, props, specs=SPECS, setup=ForkSetup(0.290), load_for=lambda s: SITE.get(s.name))
+    instr = {"present": True, "x_m": 2.6, "y_m": 0.0, "radius_m": 0.73, "layer": None, "load": None}
+    assert select_target(out.candidates, instr, unresolved=out.failures).status != "selected"
+
+
 def test_a_pallet_hidden_but_for_one_block_is_not_fitted():
     """An occluder, not a cut mask: raw rays would still see members hidden only from the mask."""
     occluder = scene_rig.Box((1.6, -0.15, 0.15), (0.1, 0.6, 0.3))   # silhouette reaches y = 0.272 at the face

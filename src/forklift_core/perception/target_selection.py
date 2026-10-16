@@ -82,37 +82,49 @@ def _nearest(cands):
     return min(cands, key=lambda c: (round(c.range_m, 3), c.pallet_centre_m[1]))
 
 
+def _could_be_inside(c, target, radius) -> bool:
+    """A fitted, confirmed candidate is where its fit says. Any other candidate is uncertain: it is
+    in the radius if its centre, a competing reading or -- conservatively, like an unfitted object --
+    its visible points within the largest half-diagonal could be (Codex review A round 4)."""
+    centres = [c.pallet_centre_m] + ([] if c.counted else list(c.alternative_centres_m))
+    if any(np.linalg.norm(np.asarray(p[:2]) - target) <= radius for p in centres):
+        return True
+    if c.counted:
+        return False
+    if c.observed_centre_xy is None:
+        return True
+    return np.linalg.norm(np.asarray(c.observed_centre_xy) - target) - c.observed_extent_m <= radius + MAX_HALF_DIAGONAL_M
+
+
 def select_target(candidates, instruction, *, reachable=None, unresolved=()) -> Selection:
     """unresolved: objects seen but not fitted (instance_fit.FitFailure). If such an object's
     centre could lie inside the instruction's radius -- its nearest visible point within radius +
     the largest half-diagonal, or its position unknown -- the instructed target may not be unique,
-    so the robot looks again (Codex 2026-10-16)."""
+    so the robot looks again (Codex 2026-10-16). Uncertain candidates are treated the same way and
+    the layer filter applies to confirmed fits only: an uncertain candidate can sit on any layer."""
     reachable = (lambda c: True) if reachable is None else reachable
     if instruction.get("present"):
         target = np.array([instruction["x_m"], instruction["y_m"]])
-        reach = instruction["radius_m"] + MAX_HALF_DIAGONAL_M
+        radius = instruction["radius_m"]
+        reach = radius + MAX_HALF_DIAGONAL_M
         if any(f.centre_xy is None or np.linalg.norm(np.asarray(f.centre_xy) - target) - f.extent_m <= reach
                for f in unresolved):
             return Selection("reobserve", None, ("unresolved_in_radius",))
-        def inside(c):
-            # An uncertain candidate is in the radius if any of its competing readings is.
-            centres = [c.pallet_centre_m] + ([] if c.counted else list(c.alternative_centres_m))
-            return any(np.linalg.norm(np.asarray(p[:2]) - target) <= instruction["radius_m"] for p in centres)
-
-        near = [c for c in candidates if inside(c)]
-        layer = instruction.get("layer")
-        if layer is not None and near:
-            layers = assign_layers(candidates)
-            if any(layers[c.candidate_id][1] is None for c in near):
-                return Selection("reobserve", None, ("layer_relative",))
-            near = [c for c in near if layers[c.candidate_id][1] == layer]
+        near = [c for c in candidates if _could_be_inside(c, target, radius)]
+        uncertain = [c for c in near if not c.counted]
         counted = [c for c in near if c.counted]
+        layer = instruction.get("layer")
+        if layer is not None and counted:
+            layers = assign_layers(candidates)
+            if any(layers[c.candidate_id][1] is None for c in counted):
+                return Selection("reobserve", None, ("layer_relative",))
+            counted = [c for c in counted if layers[c.candidate_id][1] == layer]
         if len(counted) >= 2:
             return Selection("ask_operator", None, ("multiple_in_radius",))
-        if len(counted) == 1:
-            if len(near) == 1:
-                return _decide(counted[0])
+        if uncertain:
             return Selection("reobserve", None, ("uncertain_in_radius",))
+        if len(counted) == 1:
+            return _decide(counted[0])
         return Selection("none", None, ("no_candidate_in_radius",))
     usable = [c for c in candidates if c.counted and reachable(c)]
     options = [c for c in usable if c.pickable is not False]
