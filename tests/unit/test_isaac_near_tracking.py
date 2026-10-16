@@ -232,7 +232,7 @@ def test_the_condition_names_every_argument_setting_and_input_that_differs(tmp_p
     # M-a0: a recording-only argument matches at any value (record on/off runs compare equal).
     recorded_on = {**result, "arguments": {**result["arguments"], "record_boundary": True}}
     assert NT.condition_problems(expected, NT.run_condition(recorded_on, tmp_path)) == []
-    assert NT.RECORDING_ONLY_ARGUMENTS == frozenset({"record_boundary"})
+    assert NT.RECORDING_ONLY_ARGUMENTS == frozenset({"record_boundary", "record_boundary_format"})
     changed = {
         **result,
         "arguments": {**result["arguments"], "slam_noise_spec": "3sigma", "seed": 5},
