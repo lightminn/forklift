@@ -368,6 +368,57 @@ async def marker_scenario(p: Probe, args):
         await asyncio.sleep(0.05)
 
 
+async def approach_scenario(p: Probe, args):
+    """M-c completion 5: teleoperation up to an obstacle the 2D LiDAR sees. From the start pose (rear axle at
+    x -2.34 facing +x) a slight right curve passes the pallet (it sits 1 m to the left; the 1.05 m scan plane does
+    not see it) towards the hall wall at x 4.7: the arc bundle permission must slow the truck and hold it short of
+    the wall. Then reverse with the steering swung the other way (a steering change near the obstacle), then
+    forward again straight at the wall. The runner's --live-test-permit-compare logs the bundle against a full
+    check along the way."""
+    await p.open()
+    await p.open_media()
+    lease = await p.request("lease_request")
+    p.lease_id = (lease or {}).get("lease_id")
+    await p.until(p.standing, 30, label="standing")
+    teleop = None
+    for _ in range(60):
+        teleop = await p.request("mode_request", to="TELEOP")
+        if teleop is None or (teleop.get("reason") not in ("not_stopped", "no_feedback:rear_axle_speed")
+                              and teleop.get("detail") != "pacing"):
+            break
+        await asyncio.sleep(0.5)
+    p.report["teleop_entry"] = teleop
+    if not teleop or teleop.get("t") != "ack":
+        return
+    arm = await p.request("arm")
+    p.arm_gen = (arm or {}).get("arm_gen", 0)
+    legs = (("forward_to_wall", 0.6, -0.15, args.approach_s), ("reverse_swing", -0.6, 0.4, args.approach_s / 4),
+            ("forward_again", 0.6, 0.0, args.approach_s))
+    p.report["approach"] = []
+    for name, speed, curv, limit_s in legs:
+        start = time.monotonic()
+        still_since = None
+        moved = False
+        while time.monotonic() - start < limit_s and p.closed_code is None:
+            await p.teleop(speed, curv, True)
+            st = p.state or {}
+            v = abs(st.get("rear_axle_speed_mps") or 0.0)
+            moved = moved or v > 0.02
+            if moved and v < 0.005:
+                still_since = still_since or time.monotonic()
+                if time.monotonic() - still_since > args.held_s and name != "reverse_swing":
+                    break  # held short of the obstacle with the command still asking to go
+            else:
+                still_since = None
+            await asyncio.sleep(0.05)
+        st = p.state or {}
+        p.report["approach"].append({"leg": name, "wall_s": time.monotonic() - start, "moved": moved,
+                                     "held": still_since is not None, "armed": st.get("armed"),
+                                     "applied": st.get("applied"), "forbidden": st.get("teleop_forbidden")})
+        p.event("leg_done", leg=name)
+    await p.request("mode_request", to="PAUSED")
+
+
 async def slow_scenario(p: Probe, args):
     await p.open()
     await p.open_media()
@@ -390,7 +441,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port-file", type=Path, required=True)
     ap.add_argument("--report", type=Path, required=True)
-    ap.add_argument("--scenario", choices=("main", "slow", "marker"), default="main")
+    ap.add_argument("--scenario", choices=("main", "slow", "marker", "approach"), default="main")
+    ap.add_argument("--approach-s", type=float, default=600.0, help="approach scenario: wall seconds per leg at most")
+    ap.add_argument("--held-s", type=float, default=15.0, help="approach scenario: standing this long ends a leg")
     ap.add_argument("--frames-dir", type=Path, default=None)
     ap.add_argument("--frames", type=int, default=300)
     ap.add_argument("--marker-s", type=float, default=600.0)
@@ -414,7 +467,8 @@ def main():
     report = {"port_file": info}
     p = Probe(info["port"], report)
     try:
-        scenario = {"main": main_scenario, "slow": slow_scenario, "marker": marker_scenario}[args.scenario]
+        scenario = {"main": main_scenario, "slow": slow_scenario, "marker": marker_scenario,
+                    "approach": approach_scenario}[args.scenario]
         asyncio.run(scenario(p, args))
     finally:
         report["frames"] = p.frames

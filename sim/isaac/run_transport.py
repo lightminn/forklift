@@ -680,6 +680,9 @@ def arguments() -> argparse.Namespace:
                         help="M-c tests only (plan C5): the lift follows a non-periodic wave so the carriage camera's "
                         "horizon tells the sim time a frame's pixels were drawn at; the lift height is logged every "
                         "physics step -- for a run without a mission")
+    parser.add_argument("--live-test-permit-compare", action="store_true",
+                        help="M-c tests only (completion 5): every 12th teleoperation permission is also asked of a "
+                        "fresh full check on the same grid, pose and arcs, and both are logged")
     parser.add_argument("--live-test-camera-freeze", default=None,
                         help="M-c tests only: FROM:TO sim seconds with no new camera frames (the video-stall test)")
     parser.add_argument(
@@ -5150,6 +5153,8 @@ def drive(S, isaac) -> None:
             from forklift_core.control.path_tracking import ackermann_command as live_ackermann
             from forklift_core.safety.arbiter import ArbiterConfig as LiveArbiterConfig
             from forklift_core.safety.teleop_drive import BundlePermit as LiveBundlePermit
+            from forklift_core.safety.teleop_drive import arc_permit as live_arc_permit
+            from forklift_core.control.drive_permission import DrivePermission as LiveDrivePermission
             repo_root_ = str(Path(__file__).resolve().parents[2])  # console/ lives at the repository's root
             if repo_root_ not in sys.path:
                 sys.path.insert(0, repo_root_)
@@ -5288,10 +5293,21 @@ def drive(S, isaac) -> None:
                 key_ = (id(snap_), float(snap_.stamp_s), obstacle["version"])
                 loaded_ = ms.phase in ("lift", "extract", "transport", "lower")
                 fp_, own_ = layer_.footprints(loaded_, direction)
-                return live_perm.limit(snap_, key_, now_, layer_.last_scan_s,
-                                       pose=tuple(float(v) for v in live_state["rear"]), curvatures=curvatures,
-                                       direction=direction, check_speed_mps=check, footprint=fp_,
-                                       own_footprint=own_)
+                pose_ = tuple(float(v) for v in live_state["rear"])
+                result_ = live_perm.limit(snap_, key_, now_, layer_.last_scan_s, pose=pose_, curvatures=curvatures,
+                                          direction=direction, check_speed_mps=check, footprint=fp_,
+                                          own_footprint=own_)
+                if args.live_test_permit_compare:
+                    live_state["permit_calls"] = live_state.get("permit_calls", 0) + 1
+                    if live_state["permit_calls"] % 12 == 0:
+                        full_ = live_arc_permit(LiveDrivePermission(obstacle["layer"].permission.config), snap_,
+                                                now_, layer_.last_scan_s, pose=pose_, curvatures=list(curvatures),
+                                                direction=direction, check_speed_mps=check, footprint=fp_,
+                                                own_footprint=own_)
+                        live.log({"permit_cmp": now_, "pose": pose_, "curvatures": list(curvatures),
+                                  "direction": direction, "check_mps": check, "bundle": list(result_),
+                                  "full": list(full_)})
+                return result_
 
         stepper["fn"] = step_world if live is None else live_step_world
         if slam is not None:
