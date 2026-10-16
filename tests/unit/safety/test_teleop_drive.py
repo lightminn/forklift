@@ -134,3 +134,36 @@ def test_a_reversing_output_is_checked_backwards_while_forward_is_asked_for():
     speed, _, (limit, why) = run(drive(), cmd(speed=1.0), permit, last=-0.25, measured=0.0)
     assert {a[1] for a in asked} == {1, -1} and why == "occupied" and speed == pytest.approx(-limit)
     assert abs(speed) < 0.25 - 1.5 * DT
+
+
+def test_the_bundle_permit_matches_the_full_check_at_install_and_follows_the_distance_driven():
+    from forklift_core.safety.teleop_drive import BundlePermit
+
+    snap = snapshot()
+    occupy(snap, 1.42, 0.0)  # close enough that the path ahead, not the stop arc, sets the limit
+    full, _ = permit_on(snap)
+    bp = BundlePermit(CONFIG)
+    kw = dict(pose=(0.0, 0.0, 0.0), curvatures=bundle(0.0, 0.0), direction=1, check_speed_mps=0.3, footprint=FOOT,
+              own_footprint=BODY)
+    first = bp.limit(snap, 1, 0.1, {"low": 0.1}, driven_m=0.0, **kw)
+    assert first == pytest.approx(full(bundle(0.0, 0.0), 1, 0.3))
+    later = bp.limit(snap, 1, 0.1, {"low": 0.1}, driven_m=0.05, **kw)  # same pose given, but 0.05 m driven
+    assert later[0] < first[0]  # the path left shrank
+    other = bp.limit(snap, 2, 0.1, {"low": 0.1}, driven_m=0.0, **kw)  # a new grid: installed again
+    assert other == pytest.approx(first)
+
+
+def test_the_bundle_permit_is_cheap_between_refreshes():
+    import time
+
+    from forklift_core.safety.teleop_drive import BundlePermit
+
+    snap = snapshot()
+    bp = BundlePermit(CONFIG)
+    kw = dict(pose=(0.0, 0.0, 0.0), curvatures=bundle(0.0, 0.36), direction=1, check_speed_mps=0.3,
+              footprint=FOOT, own_footprint=BODY)
+    bp.limit(snap, 1, 0.1, {"low": 0.1}, driven_m=0.0, **kw)
+    start = time.perf_counter()
+    for _ in range(10):
+        bp.limit(snap, 1, 0.1, {"low": 0.1}, driven_m=0.001, **kw)
+    assert (time.perf_counter() - start) / 10 < 0.02

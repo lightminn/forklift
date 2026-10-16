@@ -43,7 +43,7 @@ class Hooks:
 
 class LiveRuntime:
     def __init__(self, core, hooks: Hooks, *, output: Path, port_file: Path | None, dt: float, factor: float = 1.0,
-                 camera_hz: float = 10.0, host: str = "127.0.0.1", web_root: Path | None = None,
+                 camera_hz: float = 5.0, host: str = "127.0.0.1", web_root: Path | None = None,
                  config: ArbiterConfig | None = None, clock: Callable[[], float] = time.monotonic,
                  sleep: Callable[[float], None] = time.sleep, session_epoch: int | None = None,
                  test_step_delay_s: float = 0.0, camera_freeze: tuple | None = None,
@@ -57,7 +57,9 @@ class LiveRuntime:
         self.link = Link(self.arbiter, self.channels)
         self.store = MediaStore()
         self.pacer = Pacer(factor, dt)
-        self.camera_every = max(1, round(1.0 / (camera_hz * dt)))
+        # Frames by wall time: at a declared factor f, camera_hz frames a wall second is one every f/(hz dt) steps
+        # (by sim time 10 Hz was 2.2 Hz on the wall at f 0.25, older than the 0.5 s video limit -- 2026-10-17).
+        self.camera_every = max(1, round(factor / (camera_hz * dt)))
         self.welcome = {"t": "welcome", "api": "console/1", "vehicle_id": "isaac-forklift",
                         "session_epoch": self.session_epoch, "backend": "isaac", "capabilities": {
                             "control": True, "mission": True, "teleop_direct": True, "teleop_video": True,

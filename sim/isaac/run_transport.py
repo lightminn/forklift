@@ -5130,10 +5130,9 @@ def drive(S, isaac) -> None:
         live = None
         if args.live:
             # M-c (docs/plans/2026-10-17-m-c-isaac-live-runner.md): the arbiter, its console server and the pacing.
-            from forklift_core.control.drive_permission import DrivePermission as LivePermission
             from forklift_core.control.path_tracking import ackermann_command as live_ackermann
             from forklift_core.safety.arbiter import ArbiterConfig as LiveArbiterConfig
-            from forklift_core.safety.teleop_drive import arc_permit as live_arc_permit
+            from forklift_core.safety.teleop_drive import BundlePermit as LiveBundlePermit
             repo_root_ = str(Path(__file__).resolve().parents[2])  # console/ lives at the repository's root
             if repo_root_ not in sys.path:
                 sys.path.insert(0, repo_root_)
@@ -5198,7 +5197,7 @@ def drive(S, isaac) -> None:
                 a_, b_ = (float(v) for v in args.live_test_camera_freeze.split(":"))
                 freeze_ = (a_, b_)
             live_state = {"rear": None, "snapshot": None, "snapshot_key": None}
-            live_perm = LivePermission(obstacle["layer"].permission.config) if obstacle is not None else None
+            live_perm = LiveBundlePermit(obstacle["layer"].permission.config) if obstacle is not None else None
             live = LiveRuntime(
                 core, LiveHooks(zero_wheels=live_zero_wheels, hold_lift=live_hold_lift,
                                 lift_position=lambda: float(robot.get_joint_positions()[lift_index[0]]),
@@ -5239,10 +5238,10 @@ def drive(S, isaac) -> None:
                     live_state["snapshot_key"] = key_
                 loaded_ = ms.phase in ("lift", "extract", "transport", "lower")
                 fp_, own_ = layer_.footprints(loaded_, direction)
-                return live_arc_permit(live_perm, live_state["snapshot"], now_, layer_.last_scan_s,
+                return live_perm.limit(live_state["snapshot"], key_, now_, layer_.last_scan_s,
                                        pose=tuple(float(v) for v in live_state["rear"]), curvatures=curvatures,
                                        direction=direction, check_speed_mps=check, footprint=fp_,
-                                       own_footprint=own_)
+                                       own_footprint=own_, driven_m=live_state.get("driven_m", 0.0))
 
         stepper["fn"] = step_world if live is None else live_step_world
         if slam is not None:
@@ -5986,6 +5985,7 @@ def drive(S, isaac) -> None:
                 # a preempt: zero wheels, steering held. The applied command is written back for the core.
                 live_state["rear"] = tuple(float(v) for v in rear)
                 speed_now_ = live.feedback.rear_axle_speed_mps if live.feedback is not None else 0.0
+                live_state["driven_m"] = abs(float(speed_now_)) * dt  # this tick's travel, for the installed arcs
                 target_steer_ = np.asarray(live_ackermann(1.0, live.arbiter.drive.kappa, args.drive_geometry).steering_rad)
                 live_safety_ = core.safety_state(t)
                 out_ = live.tick_end(

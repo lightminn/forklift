@@ -107,3 +107,50 @@ class TeleopDrive:
         speed = slew_cap_stop(last_applied_mps, creep(speed_target, steering_error_rad), decel_mps2=self.decel_mps2,
                               accel_mps2=lim.accel_mps2, dt=self.dt, cap_mps=max(0.0, limit), stop=preempt)
         return speed, self.kappa, (limit, why)
+
+
+class BundlePermit:
+    """The arc bundle's permission at the batch runner's cost (M-c live runs): the arcs' path checks are installed
+    again only when the grid changed, the bundle (ends, direction) changed or the truck has driven ``refresh_m`` since;
+    between, each installed check is advanced by the distance driven, as the batch's obstacle layer does between
+    scans. Every cycle the two ends -- the measured and the output curvature -- are asked in full (their short
+    emergency-stop arcs, the sensor silence and the evidence age); the arcs between count by their advanced path
+    distance. Asking every arc in full every cycle cost 32 ms for two arcs and 150 ms for eight (2026-10-17), more
+    than a live physics step."""
+
+    def __init__(self, config, refresh_m: float = 0.25):
+        self.config, self.refresh_m = config, refresh_m
+        self._key = None
+        self._perms: list = []  # (kappa, DrivePermission) as installed
+        self._since_m = 0.0
+
+    def limit(self, snapshot, snapshot_key, now_s: float, sensors_last_s: dict, *, pose, curvatures, direction: int,
+              check_speed_mps: float, footprint, own_footprint, driven_m: float) -> tuple[float, str]:
+        cfg = self.config
+        ends = (round(curvatures[0] / KAPPA_STEP), round(curvatures[-1] / KAPPA_STEP))
+        key = (snapshot_key, direction, ends)
+        self._since_m += abs(driven_m)
+        if key != self._key or self._since_m > self.refresh_m:
+            length = cfg.lookahead_m + cfg.stopping.distance_m(check_speed_mps) + cfg.step_m
+            self._perms = []
+            for kappa in curvatures:
+                perm = DrivePermission(cfg)
+                path, _ = arc_poses(tuple(pose), kappa, direction, length, cfg.step_m)
+                perm.update(snapshot, path, footprint, own_footprint, current_pose=pose, direction=direction)
+                self._perms.append((kappa, perm))
+            self._key, self._since_m = key, 0.0
+        else:
+            for _, perm in self._perms:
+                perm.advance(driven_m)
+        best = (math.inf, "ok")
+        for index, (kappa, perm) in enumerate(self._perms):
+            if index in (0, len(self._perms) - 1):
+                result = perm.allowed_speed(now_s, sensors_last_s, current_pose=pose, curvature_inv_m=kappa,
+                                            direction=direction, footprint=footprint, own_footprint=own_footprint,
+                                            speed_cap_mps=check_speed_mps)
+            else:
+                left = perm.path_check.verified_m - perm._driven_since_m
+                result = (cfg.stopping.speed_for(left), perm.path_check.blocked or "ok")
+            if result[0] < best[0]:
+                best = result
+        return best
