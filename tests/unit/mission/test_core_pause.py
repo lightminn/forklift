@@ -402,3 +402,22 @@ def test_a_re_observation_stand_resumes_to_capture_again():
     resume(core, 11.0)
     core.paused_tick(11.0, REAR, 0.0, False)
     assert core.commands.status == "running"
+
+
+
+def test_after_its_own_docking_retry_the_resume_takes_the_release_as_expected():
+    """Codex M-a3c review: the retry releases the hold; the next tick must not call that a lost hold."""
+    core, _ = docking_core()
+    slam = core.slam
+
+    def retry(t, trigger, failure):
+        slam["tracker"].mode = "tracking"  # the retry released the correction
+        slam["holds"].append({"event": "release"})
+        slam["docking"]["reapproach"] = True
+
+    core.start_docking_retry = retry
+    core.paused_tick(11.0, REAR + np.array([0.05, 0.0, 0.0]), 0.0, False)
+    assert core.commands.resume_check["reason"] == "docking_retry"
+    core.paused_tick(11.1, np.array([0.05, 0.0, 0.0]), 0.0, False)
+    assert core.commands.resume_check.get("reason") != "state_verified:hold_state_mismatch"
+    assert core.commands.status in ("resuming", "running")

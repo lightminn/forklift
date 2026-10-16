@@ -2675,6 +2675,10 @@ class MissionCore:
                 self.start_docking_retry(t, "resume", "docking_moved_while_paused")
                 rear = self.hooks.slam_rear(t)  # the retry released the correction
                 cmds.stop_pose = tuple(float(v) for v in rear)  # the re-approach starts here
+                # The release the resume itself made is the expected state from here on (the re-approach is a
+                # free travel leg, R12): the hold checks take the new mode and episode as their reference.
+                cmds.pause_holding = slam["tracker"].mode == "holding"
+                cmds.pause_hold_count = self.hold_count()
                 check["reason"] = "docking_retry"
                 return rear
         retry_stand = near is not None and near.get("retry_stand") and ms.phase == "observe"
