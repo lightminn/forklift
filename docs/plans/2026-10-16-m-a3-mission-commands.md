@@ -73,7 +73,8 @@ M-a0 의 RT 줄 번호는 M-a1 이동 전 판이라 위 표는 이번 판에서 
 
 | 조각 | 내용 | 판정 |
 |---|---|---|
-| M-a3a | E1 명령·생명주기 모듈, E2 큐 적용, 실행기 `--mission-commands` 일정 파일(시각 → 명령·정지 종류), 근접 계약 `POST_MEASUREMENT_ARGUMENTS` 에 `None` 등록, 함께 못 쓰는 인자 거부(`--obstacle-act` 없이도 거부), 배치 자동 `submit`, E9 ① 인자 기록 호환 | 모듈 CPU 시험(우선순위·거절·mission_id·세대), 인자 검증 시험, 기본 경로 불변(명령 없는 실행의 `arguments` 가 지금과 같음 포함) |
+| M-a3a | E1 명령·생명주기 모듈(작업 시간 `work_elapsed` 포함), 코어가 명령 상태를 가짐(재생 비교 컨테이너 밖), 배치 자동 `submit` 과 생명주기 종료 | 모듈 CPU 시험(우선순위·거절·mission_id·세대·작업 시간), 기본 경로 불변(재생 29 건, ws1 전체 시험) |
+| M-a3b′ | 실행기 `--mission-commands` 일정 파일(시각 → 명령·정지 종류), E2 큐 적용, 근접 계약 `POST_MEASUREMENT_ARGUMENTS` 에 `None` 등록, 함께 못 쓰는 인자 거부(`--obstacle-act` 없이도 거부), E9 ① 인자 기록 호환 — 일시정지 틱(M-a3b)과 같은 커밋(그 전에는 받은 `pause` 를 실행할 틱이 없으므로) | 인자 검증 시험, 명령 없는 실행의 `arguments` 가 지금과 같음 |
 | M-a3b | E3 일시정지 틱(허가 감시 분리 포함), E4 작업 시간, E6 취소 | 가짜 포트 CPU 시험: 단계 묶음(관찰·approach·lift·transport·withdraw·settle)마다 일시정지 → 출력 0·조향 유지·승강 동기화·WT 정지·W 연장·전이 없음; 감속 중 비상정지 상한이 걸림; 허가 감시가 WT 카운터를 늘리지 않음; 동기 연산(캡처·계획) 중 들어온 정지가 다음 틱에 반영; 근접 추적기가 있을 때 `pause` 거절; 취소 종료(안전 상태 포함) |
 | M-a3c | E5 재개 절차(R1–R15 의 이번 판 범위) | 행마다 CPU 시험(사본 갱신 재결합 실패 → 강제 재계획·그 전 무이동, 경로 막힘, 센서 침묵에서 머묾, 재개 첫 틱에 `arrived` 가 나도 검사는 끝난 뒤, 도킹 중 이동 → 재시도/예산 소진/`no_resume`, hold episode 변경, 승강 불일치) |
 | M-a3d | E7 정지 종류, E9 ② 감시 목록 | CPU(가짜 `step_world`: preempt 의 즉시 0, controlled 감속이 한 번만, 캡처 안 preempt 의 기록 → 재생) + Isaac 시험 |
