@@ -1733,15 +1733,17 @@ def _identity_free(containers: dict) -> dict:
 
         state_ = dict(state_)
         holds = copy.deepcopy(state_.get("cusp_heading_holds"))
-        for hold in (holds or []) + [h for h in [copy.deepcopy(state_.get("cusp_heading_hold"))] if h]:
-            if isinstance(hold, dict) and isinstance(hold.get("key"), (list, tuple)) and len(hold["key"]) == 3:
-                hold["key"] = [hold["key"][0], ordinal(hold["key"][1]), hold["key"][2]]
+        for hold in holds or []:
+            for field in ("key", "cancelled_by"):  # [phase, id(tracker), leg] (Codex P2: the cancelled ones too)
+                if isinstance(hold, dict) and isinstance(hold.get(field), (list, tuple)) and len(hold[field]) == 3:
+                    hold[field] = [hold[field][0], ordinal(hold[field][1]), hold[field][2]]
         if "cusp_heading_holds" in state_:
             state_["cusp_heading_holds"] = holds
         if state_.get("cusp_heading_hold"):
             open_ = copy.deepcopy(state_["cusp_heading_hold"])
-            if isinstance(open_.get("key"), (list, tuple)) and len(open_["key"]) == 3:
-                open_["key"] = [open_["key"][0], ordinal(open_["key"][1]), open_["key"][2]]
+            for field in ("key", "cancelled_by"):
+                if isinstance(open_.get(field), (list, tuple)) and len(open_[field]) == 3:
+                    open_[field] = [open_[field][0], ordinal(open_[field][1]), open_[field][2]]
             state_["cusp_heading_hold"] = open_
         if state_.get("cusp_heading_watch"):
             watch = dict(state_["cusp_heading_watch"])
