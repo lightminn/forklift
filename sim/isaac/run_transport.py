@@ -4199,6 +4199,7 @@ def drive(S, isaac) -> None:
 
     from types import SimpleNamespace
 
+    from forklift_core.mission.commands import Submit as MissionSubmit
     from forklift_core.mission.core import MissionCore
 
     # M-a1 slice 1: the phase transition and the known-pallet bookkeeping it carries moved to the
@@ -4445,6 +4446,11 @@ def drive(S, isaac) -> None:
                                 tracker_profile=args.tracker_profile, DOCKING_RETRY=DOCKING_RETRY,
                                 ROUND2_KEEP_M=ROUND2_KEEP_M),
     )
+    # M-a3 (docs/plans/2026-10-16-m-a3-mission-commands.md E1): the batch run submits its scenario's mission itself,
+    # outside the loop -- the default path is a run with this one submit and no command in any tick.
+    core.commands.queue(MissionSubmit("scenario_pickup", "scenario_destination"))
+    core.commands.apply(0.0)
+    core.commands.start()
     transition = core.transition
 
     def held_kappa() -> float:
@@ -5777,6 +5783,7 @@ def drive(S, isaac) -> None:
             boundary.recorder.tick_begin(-3, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
         if ms.phase in ("repeat_capture_done", "repeat_target_not_reached", "near_tracking_stopped"):
             return
+        core.commands.finish("done" if ms.phase == "complete" else "failed")  # M-a3: the lifecycle's own end
         require(ms.phase == "complete", "Mission exceeded simulation time budget")
         final_pallet, _ = pallet.get_world_pose()
         destination = np.array([truth_destination.x_m, truth_destination.y_m])

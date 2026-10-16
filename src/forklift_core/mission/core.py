@@ -63,6 +63,7 @@ import numpy as np
 
 from forklift_core.control import RearAxlePathTracker, TrackerConfig, ackermann_command
 from forklift_core.control import cusp_stall as CUSP_STALL
+from forklift_core.mission.commands import MissionCommands
 from forklift_core.mission.state import MissionState
 from forklift_core.perception.pocket_detector import DetectorParams
 from forklift_core.localization.scan_docking import laser_points
@@ -130,6 +131,9 @@ class MissionCore:
         self.hooks = hooks
         self.near = near
         self.options = options
+        # M-a3: the mission lifecycle and its commands (docs/plans/2026-10-16-m-a3-mission-commands.md E1) --
+        # outside every container the replay compares; a run without commands only ever submits once.
+        self.commands = MissionCommands()
 
     def known_transition(self, from_phase: str, next_phase: str, t: float) -> None:
         """Known pallets across the mission (plan v10 D5)."""
