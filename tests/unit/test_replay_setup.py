@@ -65,3 +65,17 @@ def test_an_absent_container_service_stays_none_in_the_snapshot(tmp_path):
     snap = json.loads((tmp_path / "setup_snapshot.json").read_text())
     text = json.dumps(snap["names"])
     assert "$service" not in text and "Memory" not in snap["service_specs"]
+
+
+def test_a_new_obstacle_schedule_snapshot_decodes_with_its_sets(tmp_path):
+    sys.path.insert(0, str(ROOT / "sim/isaac"))
+    from forklift_core.mission.replay_codec import decode
+    from new_obstacles import Schedule
+
+    schedule = Schedule([])
+    schedule.silenced.add("pocket_camera")
+    RS.write_setup_snapshot({"new_obstacles": {"schedule": schedule, "rects": {}}}, tmp_path, [])
+    snap = json.loads((tmp_path / "setup_snapshot.json").read_text())
+    assert not snap["opaque"]
+    back = decode(snap["names"]["new_obstacles"]["node"], {})
+    assert type(back["schedule"]).__name__ == "Schedule" and back["schedule"].silenced == {"pocket_camera"}

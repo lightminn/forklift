@@ -297,6 +297,10 @@ def replay_run(run_dir: Path, output: Path | None = None) -> dict:
         except ReplayMismatch:
             pass  # latched in the session
     check_ending(session, raised)
+    recorded_final = run_dir / "boundary/final_state.json"
+    if session.failure is None and recorded_final.exists() and '"projection_error"' in recorded_final.read_text():
+        # The recorded run could not project its end state (a value without an encoding): nothing to compare.
+        session.fail(f"the record's end-state projection failed: {recorded_final.read_text()[:300]}")
     if session.failure is None:  # a recorded failure replayed exactly ends the same way: finish it too
         final_state = getattr(gate.recorder, "final_state", None)
         try:

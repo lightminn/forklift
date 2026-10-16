@@ -34,7 +34,7 @@ SERVICES = {
 # Value types kept by their attributes (plain objects without a dataclass encoding).
 VALUE_TYPES = {"Namespace", "SimpleNamespace"}
 # Helper objects the setup built, kept whole (private attributes included: their methods read them).
-FULL_TYPES = {"InsertionGeometry", "CommandWindow", "RearHistory"}
+FULL_TYPES = {"InsertionGeometry", "CommandWindow", "RearHistory", "Schedule"}
 # The recorded planner functions (recorded_function wrappers when recording): a replay supplies its own wrappers.
 PORT_FUNCTIONS = {name: "Planner" for name in (
     "bicycle_rollout", "final_straight_prefix", "plan_docking_reapproach", "plan_observation_leg", "plan_return_leg",

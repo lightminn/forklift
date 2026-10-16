@@ -1204,3 +1204,14 @@ def test_a_baseline_stage_one_exception_is_raised_after_its_rollouts_are_consume
     _baseline_stage_one(tmp_path, fail=True)
     out = _moved_stage_one(tmp_path)
     assert isinstance(out, Refused) and out.reason == "no_plan"
+
+
+def test_an_unreadable_rollouts_trace_fails_also_on_the_exception_path(tmp_path):
+    _baseline_stage_one(tmp_path, fail=True)
+    chunk = next(tmp_path.glob("boundary_*.jsonl"))
+    tick = json.loads(chunk.read_text().splitlines()[0])
+    assert tick["calls"][-1]["method"] == "redraw_rollouts"
+    tick["calls"][-1]["request"] = {"$opaque": "builtins:object"}
+    chunk.write_text(json.dumps(tick) + "\n")
+    with pytest.raises(ReplayMismatch, match="not a list of trajectories"):
+        _moved_stage_one(tmp_path)

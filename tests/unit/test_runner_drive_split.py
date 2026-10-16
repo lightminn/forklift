@@ -118,3 +118,35 @@ def test_main_closes_the_record_with_what_left_run_and_the_harness_does_the_same
     harness = (ROOT / "tools/boundary_replay.py").read_text()
     assert "module.close_boundary_record(S.state, raised)" in harness
     assert 'S.state["failure_reason"] = str(raised)' in harness
+
+
+def test_the_projection_encodes_cpu_state_by_value_refuses_unknown_objects_and_hides_both_output_roots(tmp_path):
+    import pytest
+
+    from forklift_core.mission.state import MissionState
+
+    spec = importlib.util.spec_from_file_location("run_transport_projection2", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    class RearHistory:  # by name, as the near-field helper
+        def __init__(self, rows):
+            self._rows = rows
+
+    ms = MissionState()
+    a = module.final_projection({"near": {"rear": RearHistory([1.0])}}, ms, tmp_path)
+    b = module.final_projection({"near": {"rear": RearHistory([2.0])}}, ms, tmp_path)
+    assert a["containers"]["near"]["rear"] != b["containers"]["near"]["rear"]
+    with pytest.raises(TypeError, match=r"near\['thing'\]"):
+        module.final_projection({"near": {"thing": object()}}, ms, tmp_path)
+    recorded = module.final_projection({"state": {"arguments": {"output": "/runs/a"}, "f": "/runs/a/x.json"}},
+                                       ms, Path("/runs/a"))
+    replayed = module.final_projection({"state": {"arguments": {"output": "/runs/a"}, "f": "/runs/a/x.json"}},
+                                       ms, Path("/tmp/replay_out"))
+    assert recorded == replayed
+
+
+def test_main_writes_failure_txt_outside_the_record_and_capture_images_are_sinks():
+    source = SCRIPT.read_text()
+    assert '(Path(str(args.output)) / "failure.txt").write_text(traceback.format_exc())' in source
+    assert source.count("save_image(Image.fromarray(") == 2

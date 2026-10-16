@@ -30,6 +30,7 @@ import dataclasses
 import pathlib
 import hashlib
 import importlib
+import json
 import math
 from typing import Any
 
@@ -183,6 +184,11 @@ class Encoder:
             return self._shared(value, lambda: {"$list": [self.encode(v) for v in value]})
         if isinstance(value, collections.deque):
             return self._shared(value, lambda: {"$deque": [self.encode(v) for v in value], "maxlen": value.maxlen})
+        if type(value) in (set, frozenset):  # members are hashable values: in a fixed order (by their encoding)
+            members = sorted((self.encode(v) for v in value), key=lambda n: json.dumps(n, sort_keys=True))
+            if type(value) is frozenset:
+                return {"$frozenset": members}
+            return self._shared(value, lambda: {"$set": members})
         if isinstance(value, dict):
             if all(isinstance(k, str) for k in value):
                 return self._shared(value, lambda: {"$map": {k: self.encode(v) for k, v in value.items()}})
@@ -233,6 +239,14 @@ def decode(node: Any, arrays: dict[str, np.ndarray], services=None, *, by_id: di
                 by_id[ident] = out
             out.extend(walk(v) for v in n["$list"])
             return out
+        if "$frozenset" in n:
+            return frozenset(walk(v) for v in n["$frozenset"])
+        if "$set" in n:
+            out_s: set = set()
+            if ident is not None:
+                by_id[ident] = out_s
+            out_s.update(walk(v) for v in n["$set"])
+            return out_s
         if "$deque" in n:
             out_q: collections.deque = collections.deque(maxlen=n.get("maxlen"))
             if ident is not None:
