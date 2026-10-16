@@ -671,10 +671,15 @@ def read_parametric_face(face: FacePlane, pts_u, pts_h, rays, support_z: float, 
         unseen = missing >= params.edge_min_hits and missing > seen_behind
         # And open space must be seen at deck height: lane-height see-through alone can be a
         # neighbour's openings beyond a cut (Codex review A round 4). Dev cost: 10-13 of ~125 true ends.
+        # Continuation and unseen rays are both evidence against an end: split between the two they
+        # must not outweigh the open space either (Codex review A round 5: behind 24, face 18,
+        # missing 18 passed each check alone).
+        against = cont.sum() + missing
         ends.append(bool(((beyond & (rc == BEHIND)).sum() >= params.edge_min_hits)
                          and ((beyond & (rc == FRONT)).sum() < params.edge_min_hits)
                          and seen_behind >= params.edge_min_hits
-                         and not continued and not unseen))
+                         and not continued and not unseen
+                         and not (against >= params.edge_min_hits and against > seen_behind)))
     layout = FaceLayout("x", umax - umin, math.nan,
                         tuple((lo * b + umin - c, hi * b + umin - c) for lo, hi in members),
                         tuple((lo * b + umin - c, hi * b + umin - c) for lo, hi in openings),

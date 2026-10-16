@@ -348,3 +348,23 @@ def test_an_end_needs_open_space_seen_at_deck_height():
     cand = F.fit_instance(out.scene, InstanceProposal("p0", low, 1.0, "oracle"), specs=SPECS, setup=ForkSetup(0.3725),
                           load_for=_load)
     assert cand is None or not cand.counted, (cand.hypothesis, cand.geometry, cand.reasons)
+
+
+def test_continuation_and_missing_depth_together_are_not_an_end():
+    """Codex review A round 5: the touching cut with the outer top boards removed and the depth beyond
+    the mask missing at 100-111 mm splits the negative evidence beyond each end (behind 24, face 18,
+    missing 18). Each alone is below the see-through count; together they outweigh it."""
+    boxes = []
+    for y, outer in ((0.4, "top_board_4"), (-0.4, "top_board_2")):
+        kept = [b for b in rt.instance_boxes(EPAL, ()) if b.name != outer]
+        boxes.append(rt.placed_boxes(kept, rt.Placement(3.0, y, 0.0, 0.0)))
+    out = instance_rig.render_instances(boxes)
+    rays = F.pixel_rays(out.scene)
+    with np.errstate(invalid="ignore"):
+        xyz = F.camera_xyz(out.scene) + out.scene.depth_m[..., None] * rays
+    mask = (out.instance_ids >= 0) & (np.abs(xyz[..., 1]) < 0.4525)
+    depth = out.scene.depth_m.copy()
+    depth[(out.instance_ids >= 0) & ~mask & (xyz[..., 2] > 0.100) & (xyz[..., 2] < 0.111)] = np.nan
+    cand = F.fit_instance(replace(out.scene, depth_m=depth), InstanceProposal("p0", mask, 1.0, "oracle"), specs=SPECS,
+                          setup=ForkSetup(0.3725), load_for=_load)
+    assert cand is None or not cand.counted, (cand.hypothesis, cand.geometry, cand.reasons)
