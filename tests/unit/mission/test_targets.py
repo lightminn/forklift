@@ -147,14 +147,18 @@ def test_the_destination_and_the_delivered_pallet_follow_the_cores_estimate():
     assert core.targets.pallets["P-1"].state == "delivered"
 
 
-def test_every_slam_release_in_the_core_counts_once():
-    """Codex M-a4 round 2: five release sites record five different events; each counts."""
-    import inspect
+def test_every_slam_release_goes_through_the_one_counting_method():
+    """Codex M-a4 rounds 2-3: six release sites, one of them spread over three lines; each must count. The tracker's
+    release is called in one place only, which counts it."""
+    import pathlib
+    import re
 
-    from forklift_core.mission.core import MissionCore
+    import forklift_core
 
-    source = inspect.getsource(MissionCore)
-    lines = source.split("\n")
-    after = [lines[i + 1].strip() for i, l in enumerate(lines) if ".release(odom_from_base=" in l]
-    assert len(after) == 5
-    assert all(a.startswith("self.slam_releases += 1") for a in after)
+    root = pathlib.Path(forklift_core.__file__).parent
+    sites = [(path.name, m.start()) for path in sorted(root.rglob("*.py")) if path.name != "slam_pose.py"
+             for m in re.finditer(r"\.release\s*\(", path.read_text())]
+    assert [name for name, _ in sites] == ["core.py"]
+    source = (root / "mission" / "core.py").read_text()
+    body = source[source.index("    def release_slam("):source.index("    def refresh_targets(")]
+    assert '.release(odom_from_base=odom_from_base)' in body and "self.slam_releases += 1" in body

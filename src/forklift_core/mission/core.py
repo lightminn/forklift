@@ -1339,8 +1339,7 @@ class MissionCore:
                 # fix at a 2 m radius is a full loop -- and must not run
                 # on dead reckoning (L3c v22 seed 1: 15 m held). The truck
                 # stands still: let SLAM back in first, as at a capture.
-                jump_m, jump_rad = slam["tracker"].release(odom_from_base=slam_odom_base())
-                self.slam_releases += 1  # M-a4: a frame change the targets list follows
+                jump_m, jump_rad = self.release_slam(slam_odom_base())
                 slam["holds"].append(
                     {"phase": ms.phase, "time_s": t, "event": "release_before_stall_replan",
                      "jump_m": jump_m, "jump_rad": jump_rad}
@@ -2484,9 +2483,7 @@ class MissionCore:
                 # near capture is followed by more driving, so let
                 # SLAM back in now, while the truck stands still
                 # for the capture (plan v3.6).
-                jump_m, jump_rad = slam["tracker"].release(
-                    odom_from_base=slam_odom_base()
-                )
+                jump_m, jump_rad = self.release_slam(slam_odom_base())
                 slam["holds"].append(
                     {
                         "phase": ms.phase,
@@ -2760,6 +2757,13 @@ class MissionCore:
         if ms.phase in trackers:
             trackers[ms.phase].restart_speed_slew(0.0)  # from standing, not from the held cruise
         return rear
+
+    def release_slam(self, odom_from_base):
+        """The one place the core releases a SLAM hold: applies the received correction and counts the frame change
+        the targets list follows (M-a4). Returns the tracker's (position, yaw) jump."""
+        jump = self.slam["tracker"].release(odom_from_base=odom_from_base)
+        self.slam_releases += 1
+        return jump
 
     def refresh_targets(self) -> None:
         """M-a4 (plan D7): the targets list follows the mission each control tick, from what the core holds (no
@@ -3288,8 +3292,7 @@ class MissionCore:
         if slam["tracker"].mode != "holding":
             return {"released": False}
         before = slam_rear(t)
-        jump_m, jump_rad = slam["tracker"].release(odom_from_base=slam_odom_base())
-        self.slam_releases += 1  # M-a4: a frame change the targets list follows
+        jump_m, jump_rad = self.release_slam(slam_odom_base())
         after = slam_rear(t)
         site = slam.get("transport_scenario", scenario).destination
         carry = DOCKING_RETRY.carry_on_release(
@@ -3702,8 +3705,7 @@ class MissionCore:
 
         before_ = slam_rear(now_s)
         applied_before_ = [float(v) for v in slam["tracker"].applied[0]]
-        jump_m, jump_rad = slam["tracker"].release(odom_from_base=slam_odom_base())
-        self.slam_releases += 1  # M-a4: a frame change the targets list follows
+        jump_m, jump_rad = self.release_slam(slam_odom_base())
         after_ = slam_rear(now_s)
         frame_change = pose_compose(tuple(float(v) for v in after_), pose_invert(tuple(float(v) for v in before_)))
         slam["holds"].append({"phase": ms.phase, "time_s": now_s, "event": hold_event, "jump_m": jump_m,
@@ -3757,8 +3759,7 @@ class MissionCore:
             return None
         if ms.phase == "transport" and (slam["docking"].get("accepted_any") or slam["docking"].get("reapproach")):
             return None
-        jump_m, jump_rad = slam["tracker"].release(odom_from_base=slam_odom_base())
-        self.slam_releases += 1  # M-a4: a frame change the targets list follows
+        jump_m, jump_rad = self.release_slam(slam_odom_base())
         slam["holds"].append({"phase": ms.phase, "time_s": now_s, "event": event, "jump_m": jump_m, "jump_rad": jump_rad})
         rear_now = slam_rear(world.current_time - initial_time)
         if obstacle is not None and slam["tracker"].applied is not None:
@@ -3801,8 +3802,7 @@ class MissionCore:
         leg = "transport" if slam["pending_release"] == "transport" else "return_home"
         slam["pending_release"] = None
         before = slam_rear(t)
-        jump_m, jump_rad = slam["tracker"].release(odom_from_base=slam_odom_base())
-        self.slam_releases += 1  # M-a4: a frame change the targets list follows
+        jump_m, jump_rad = self.release_slam(slam_odom_base())
         after = slam_rear(t)
         event = {
             "phase": ms.phase,
