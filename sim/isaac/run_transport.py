@@ -4258,6 +4258,7 @@ def drive(S, isaac) -> None:
     from forklift_core.mission.commands import Pause as MissionPause
     from forklift_core.mission.commands import Resume as MissionResume
     from forklift_core.mission.commands import Submit as MissionSubmit
+    from forklift_core.mission.targets import Pose as MissionTargetPose
 
     MISSION_COMMANDS = {"pause": MissionPause, "resume": MissionResume, "cancel": MissionCancel}
     from forklift_core.mission.core import MissionCore
@@ -4522,7 +4523,12 @@ def drive(S, isaac) -> None:
                 return kind_
         return "none"
 
-    core.commands.queue(MissionSubmit("scenario_pickup", "scenario_destination"))
+    # M-a4 (plan D7): the scenario's pallet and destination are the targets list; the submit names them.
+    core.targets.add_pallet("P-1", Path(args.pallet_geometry).stem, MissionTargetPose(
+        float(scenario.pickup.x_m), float(scenario.pickup.y_m), float(scenario.pickup.yaw_rad)))
+    core.targets.add_destination("D-1", MissionTargetPose(
+        float(scenario.destination.x_m), float(scenario.destination.y_m), float(scenario.destination.yaw_rad)))
+    core.commands.queue(MissionSubmit("P-1", "D-1", core.targets.revision))
     core.commands.apply(0.0)
     core.commands.start()
     transition = core.transition
@@ -5828,6 +5834,7 @@ def drive(S, isaac) -> None:
                     joint_positions=np.array([ms.lift_command]), joint_indices=lift_index
                 )
             )
+            core.refresh_targets()  # M-a4: the targets list follows the mission (no port call)
             if safety_file is not None:
                 safety_file.write(json.dumps(core.safety_state(t)) + "\n")  # M-a3 (plan E8): every control tick
             if cancel_stop_:

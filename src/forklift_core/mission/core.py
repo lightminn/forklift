@@ -64,6 +64,8 @@ import numpy as np
 from forklift_core.control import RearAxlePathTracker, TrackerConfig, ackermann_command
 from forklift_core.control import cusp_stall as CUSP_STALL
 from forklift_core.mission.commands import MissionCommands
+from forklift_core.mission.targets import Pose as TargetPose
+from forklift_core.mission.targets import TargetsBook
 from forklift_core.mission.state import MissionState
 from forklift_core.perception.pocket_detector import DetectorParams
 from forklift_core.localization.scan_docking import laser_points
@@ -141,7 +143,8 @@ class MissionCore:
         self.options = options
         # M-a3: the mission lifecycle and its commands (docs/plans/2026-10-16-m-a3-mission-commands.md E1) --
         # outside every container the replay compares; a run without commands only ever submits once.
-        self.commands = MissionCommands()
+        self.targets = TargetsBook()  # M-a4: the pallets and destinations a submit names (plan D7)
+        self.commands = MissionCommands(self.targets)
         self.last_permission: tuple | None = None  # (allowed, why) of the latest permission or watch (E8)
 
     def known_transition(self, from_phase: str, next_phase: str, t: float) -> None:
@@ -2755,6 +2758,28 @@ class MissionCore:
         if ms.phase in trackers:
             trackers[ms.phase].restart_speed_slew(0.0)  # from standing, not from the held cruise
         return rear
+
+    def refresh_targets(self) -> None:
+        """M-a4 (plan D7): the targets list follows the mission each control tick, from what the core holds (no
+        port call): the correction version the poses are in, the pallet's estimate once seen, carried from the lift
+        to the lowering (no pose), put down at the delivery estimate after it."""
+        tb, ms, obstacle, slam, pocket = self.targets, self.ms, self.obstacle, self.slam, self.pocket
+        mission = self.commands.mission
+        if mission is None or mission.pallet_id not in tb.pallets:
+            return
+        pid = mission.pallet_id
+        if obstacle is not None:
+            tb.set_correction_version(int(obstacle["version"]))
+        if ms.phase in ("lift", "extract", "transport", "lower"):
+            tb.carried(pid)
+        elif ms.phase in ("withdraw", "settle", "return_home", "home_settle", "complete"):
+            if tb.pallets[pid].state == "carried":
+                scenario_ = slam.get("transport_scenario", self.options.scenario) if slam is not None else self.options.scenario
+                site_ = scenario_.destination
+                tb.put_down(pid, TargetPose(float(site_.x_m), float(site_.y_m), float(site_.yaw_rad)))
+        elif pocket.get("planning_pickup") is not None:
+            site_ = pocket["planning_pickup"]
+            tb.update_pose(pid, TargetPose(float(site_.x_m), float(site_.y_m), float(site_.yaw_rad)))
 
     def safety_state(self, t: float | None) -> dict:
         """The mission's safety state for the arbiter (plan E8, M-a0.5 section 4), from what the core already holds

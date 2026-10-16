@@ -61,7 +61,11 @@ def make(phase="transport", *, speed=0.0, lift=0.07, layer=None, tracker=None, o
                        trackers=trackers, geometry=SimpleNamespace(alignment_straight_m=1.0, delivery_straight_m=1.5),
                        settings={"lift_target_m": 0.2, "lift_rate_mps": 0.05}, pallet_geometry=None, hooks=hooks,
                        options=SimpleNamespace(obstacle_act=True, dt=1 / 120, pocket_check=False))
-    core.commands.queue(Submit("P", "D"))
+    from forklift_core.mission.targets import Pose
+
+    core.targets.add_pallet("P", "epal6", Pose(5.0, 0.0, 0.0))
+    core.targets.add_destination("D", Pose(9.0, 0.0, 0.0))
+    core.commands.queue(Submit("P", "D", core.targets.revision))
     core.commands.apply(0.0)
     core.commands.start()
     return core, obs, calls

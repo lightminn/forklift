@@ -171,6 +171,8 @@ lease 보유자는 `tick`을 받을 때마다 `{"t": "echo", "session_epoch", "l
 - 보정 버전이 바뀌면 자세를 다시 표현하고 revision을 올린다.
 - 포크에 실린 팔레트(`state: carried`)는 `pose`를 `null`로 싣는다. 차체를 따라 매 주기 움직이는 자세를 대상 목록에 실으면 revision이 쉼 없이 오르기 때문이다. 내려놓으면 그 자리의 자세와 함께 revision을 올린다.
 
+**구현 상태(M-a4, 2026-10-16).** `forklift_core/mission/targets.py` 의 `TargetsBook` 이 위 규칙을 구현한다: 등록·자세·상태·보정 버전이 바뀌면 revision 이 오르고(같은 값이면 오르지 않음), `carried` 는 자세를 싣지 않으며 그동안의 자세 갱신은 무시하고, 내려놓으면 같은 ID 로 그 자리에 `delivered` 로 다시 싣는다. 보정 버전이 바뀌면 자세를 다시 표현하는 함수를 받아 모두 옮기고 revision 을 올린다(배치 실행기에서는 보정 버전만 따르고, 자세는 코어가 release 때 옮긴 추정치를 다음 틱에 싣는다). `mission_submit` 은 revision 이 다르면 `reject(stale_targets)`, 없는 ID 나 이미 실린 팔레트는 `reject(invalid)`. 배치 실행기는 시나리오의 팔레트·목적지를 `P-1`·`D-1` 로 등록해 스스로 제출한다.
+
 **거부 사유 코드(초안).** `no_lease`, `lease_reserved`, `stale_epoch`, `stale_lease`, `stale_control`, `stale_arm`, `stale_seq`, `bad_echo`, `expired`, `stale_video`, `not_armed`, `stopped_locked`, `state_forbids_teleop`, `stale_targets`, `permission_denied:<허가 reason>`, `no_feedback:<항목>`, `unsupported`, `busy`, `invalid`.
 
 ## 6. 상태 메시지
@@ -201,6 +203,7 @@ lease 보유자는 `tick`을 받을 때마다 `{"t": "echo", "session_epoch", "l
 - `mission.resume_steps`: 재개 절차 진행 중일 때 단계별 `pending / ok / failed(reason)`. 단계 이름과 사유(확정, 2026-10-15 — [M-a 경계 설계 2부](../plans/2026-10-15-m-a05-boundary.md) 8–9절): `stop_confirmed`(`no_speed_feedback`, `not_stopped_timeout`) → `state_verified`(`pose_unbounded`, `load_unknown`, `load_changed`, `insertion_state_unknown`, `fork_in_pocket`, `lift_mismatch`, `hold_episode_changed`, `hold_state_mismatch`, `near_stopped:<근접 정지 사유>`) → `frame_reexpressed`(`reprojection_failed`) → `path_rechecked`(필요하면 재계획 포함; `path_blocked:<허가 reason>`, `replan_failed:<계획기 status>`, `reobserve_required`, `rejoin_failed`). 근접 관측이 소실됐지만 실패로 고정되기 전이면 `state_verified` 는 `pending` 으로 재획득을 기다린다.
 - `mission.resume_result`: 재개 절차를 마치지 않고 다른 동작으로 넘어갈 때의 최종 결과 — `pickup_retry`(근접 불일치·재계획 거절이 기존 집기 재시도로 감), `recovery_only`(축을 따라 빼기만 허용), `no_resume`(재개 정책 표에 없는 조합, hold 중 재정렬, 재결합·재시도 불가). 어느 상태에서 어떤 결과가 나는지는 경계 설계 2부 8절의 표(R1–R15)가 정본이다.
 - `phase_elapsed_s`는 일시정지 동안 멈추는 작업 시간이다. `freshness`의 값들은 멈추지 않는다.
+- **구현 상태(M-a3, 2026-10-16).** 코어의 `safety_state()`(배치 실행기에서는 명령 일정이 있을 때 `mission_safety.jsonl` 로 매 제어 틱)가 이 절의 미션 쪽 값을 낸다: `mission`(`id`·`status`·`generation`·`phase`·작업 시간 `phase_elapsed_s`·재개의 마지막 검사 `resume`·`stop_seen_s`·`not_stopped`), `load`·`fork_in_pocket`(근거 `phase`), 승강 목표, 근접 정지, 보정 버전·hold, 적용 명령, 허가 상한과 사유. 재개 절차의 거절은 `reason` 에 `no_resume:<사유>`·`state_verified:<사유>` 로 싣고 미션은 `paused` 로 돌아간다(새 `mission_resume` 이 필요). 중재기의 정지 종류(`controlled`·`preempt`)는 미션을 일시정지로 넘기고, 해제 뒤에도 `mission_resume` 으로만 재개한다.
 - `command`는 텔레옵 비율에 현재 상한을 곱한 물리 명령이다. `applied`는 slew, 허가 상한, 안전 선점, Ackermann 바퀴 속도 한계, 조향 속도 한계까지 거친 값이다(배치 runner의 `applied_command` 지점과 같은 위치). 화면은 둘을 나란히 보여 준다.
 - `drive_allowed`·`lift_allowed`는 중재기가 **제어 주기마다** 현재 상태로 따로 판정한 결과다(설계 4.5). TELEOP 진입 때 한 번만 보는 것이 아니다.
 - `pacing`은 Isaac에서만 의미가 있다. 실시간 배속을 유지하지 못하면(`ok: false`) 수동 조종을 막는다. 기준은 M-c가 정한다.

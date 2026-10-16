@@ -57,7 +57,8 @@ class Context:
 
 
 class MissionCommands:
-    def __init__(self) -> None:
+    def __init__(self, targets=None) -> None:
+        self.targets = targets  # M-a4: a submit must name the current targets list (TargetsBook.check_submit)
         self.status = "idle"
         self.mission_id: str | None = None
         self.mission: Submit | None = None
@@ -115,6 +116,10 @@ class MissionCommands:
             return "stopping"
         if not context.clear_for_submit:
             return "recovery_required"
+        if self.targets is not None:
+            refused = self.targets.check_submit(command.pallet_id, command.destination_id, command.targets_revision)
+            if refused is not None:
+                return refused
         self._issued += 1
         self.mission_id, self.mission, self.status = f"m{self._issued}", command, "accepted"
         return None
