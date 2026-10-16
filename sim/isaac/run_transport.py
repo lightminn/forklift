@@ -6176,8 +6176,10 @@ def drive(S, isaac) -> None:
                     safety_file.write(json.dumps(core.safety_state(book_clock["t"])) + "\n")
                 except Exception as exc_:  # noqa: BLE001
                     state["mission_safety_error"] = repr(exc_)
-                finally:
-                    safety_file.close()
+                try:
+                    safety_file.close()  # a failed flush is recorded, never raised over the run's own end
+                except Exception as exc_:  # noqa: BLE001
+                    state.setdefault("mission_safety_error", repr(exc_))
             if early_ports:  # format 2: closed last, so the summaries above read the services inside the exit tick
                 try:
                     locals_ = locals()
