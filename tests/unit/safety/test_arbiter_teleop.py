@@ -141,13 +141,16 @@ def test_the_state_carries_the_applied_command_only_when_given_and_the_resume_st
     assert state_message(a, out, SAFE, now_mono=t)["applied"] is None
     applied = {"speed_mps": 0.18, "curvature_inv_m": 0.19, "steering_rad": [0.1, 0.09]}
     assert state_message(a, out, SAFE, now_mono=t, applied=applied)["applied"]["speed_mps"] == 0.18
-    assert resume_steps({"step": "path_rechecked", "reason": "replanned"}, None) == {
+    assert resume_steps({"step": "path_rechecked", "reason": "replanned"}) == {
         "stop_confirmed": "ok", "state_verified": "ok", "frame_reexpressed": "ok", "path_rechecked": "pending"}
-    refusal = {"command": "resume", "accepted": False, "reason": "state_verified:lift_mismatch"}
-    assert resume_steps({"step": "state_verified", "reason": "state_verified:lift_mismatch"}, refusal)[
-        "state_verified"] == "failed(state_verified:lift_mismatch)"
-    # A STOP during a resume pauses the mission too, but its last record is the stop, not a refusal (round 3 P1).
-    stopped = {"command": "stop_kind:preempt", "accepted": True, "reason": None}
-    assert resume_steps({"step": "path_rechecked", "reason": "replanned"}, stopped)["path_rechecked"] == "pending"
+    refused = {"step": "state_verified", "reason": "no_resume:near_tracking", "refused": True}
+    assert resume_steps(refused)["state_verified"] == "failed(no_resume:near_tracking)"
+    # A STOP mid-resume (no refusal on the check) is pending; a later unrelated record does not hide a failure.
+    assert resume_steps({"step": "path_rechecked", "reason": "replanned"})["path_rechecked"] == "pending"
+    a.mission = __import__("forklift_core.mission.commands", fromlist=["MissionCommands"]).MissionCommands()
+    a.mission.log.append({"command": "submit", "accepted": False, "reason": "mission_active"})
+    paused = dict(SAFE, mission={"id": "m1", "status": "paused", "phase": "approach", "resume": refused})
+    msg = state_message(a, out, paused, now_mono=t)["mission"]
+    assert msg["reason"] == "no_resume:near_tracking" and msg["resume_steps"]["state_verified"].startswith("failed")
     held = dict(SAFE, mission={"id": "m1", "status": "held", "phase": "observe"})
     assert state_message(a, out, held, now_mono=t)["mission"]["reason"] == "teleop"

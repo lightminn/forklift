@@ -2666,6 +2666,7 @@ class MissionCore:
 
         def refuse(reason):
             check["reason"] = reason
+            check["refused"] = True  # kept with the check: later commands must not hide that this resume failed
             cmds.refuse_resume(t, reason)
             return rear
 

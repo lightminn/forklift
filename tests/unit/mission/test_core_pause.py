@@ -543,6 +543,7 @@ def test_a_stop_inside_the_near_contract_is_not_resumed():
     resume(core, 11.0)
     core.paused_tick(11.0, REAR, 0.0, False)
     assert core.commands.status == "paused" and core.commands.log[-1]["reason"] == "no_resume:near_tracking"
+    assert core.safety_state(11.0)["mission"]["resume"]["refused"] is True  # kept with the check (M-b round 4)
 
 
 def test_a_held_mission_does_not_report_a_failed_stop_while_the_operator_drives():

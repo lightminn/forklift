@@ -7,11 +7,11 @@ from __future__ import annotations
 RESUME_STEPS = ("stop_confirmed", "state_verified", "frame_reexpressed", "path_rechecked")
 
 
-def resume_steps(check: dict | None, last_record: dict | None) -> dict | None:
+def resume_steps(check: dict | None) -> dict | None:
     """The core's last resume check as the contract's per-step ``pending / ok / failed(reason)`` (contract 6):
-    steps before the one it reached are ok, that one pending -- or failed with its reason when the lifecycle's last
-    record is that resume's refusal (a STOP during a resume also leaves it paused, but nothing failed: Codex M-b
-    review round 3 P1); a finished resume is ok throughout."""
+    steps before the one it reached are ok, that one pending -- or failed with its reason when the check itself
+    records the refusal (a STOP mid-resume leaves it paused without failing, Codex M-b review round 3 P1; a later
+    unrelated command does not hide the failure, round 4 P1); a finished resume is ok throughout."""
     if not check:
         return None
     step = check.get("step")
@@ -23,9 +23,7 @@ def resume_steps(check: dict | None, last_record: dict | None) -> dict | None:
             out[name] = "ok"
         elif i == reached:
             reason = check.get("reason")
-            refused = (last_record or {}).get("command") == "resume" and not (last_record or {}).get("accepted") \
-                and (last_record or {}).get("reason") == reason and reason is not None
-            out[name] = f"failed({reason})" if refused else "pending"
+            out[name] = f"failed({reason})" if check.get("refused") else "pending"
         else:
             out[name] = "pending"
     return out
@@ -72,9 +70,11 @@ def state_message(arbiter, out, safety: dict | None, *, now_mono: float, rear_ax
         "teleop_allowed": out.policy.teleop_allowed, "teleop_forbidden_reason": out.policy.reason,
         "mission": None if not mission.get("id") else {
             "mission_id": mission.get("id"), "status": mission.get("status"), "phase": mission.get("phase"),
-            "reason": "teleop" if mission.get("status") == "held" else last.get("reason"),
+            "reason": ("teleop" if mission.get("status") == "held"
+                       else (mission.get("resume") or {}).get("reason") if (mission.get("resume") or {}).get("refused")
+                       else last.get("reason")),
             "phase_elapsed_s": mission.get("phase_elapsed_s"),
-            "resume_steps": resume_steps(mission.get("resume"), last)},
+            "resume_steps": resume_steps(mission.get("resume"))},
         "freshness": freshness, "pacing": pacing,
         "last_teleop_reject": a.last_teleop_reject, "stop_latch": a.preempt_latch,
     }
