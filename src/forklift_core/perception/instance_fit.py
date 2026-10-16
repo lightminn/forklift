@@ -748,8 +748,8 @@ def _parametric_candidate(scene, proposal, cam, face, fi, pts_u, pts_h, rays_f, 
         # Nothing on a face says it is the entry face: a reading off a face that is not the
         # best-evidence one (s7 1000873, the front face did not read), or a second face that reads
         # as a pallet face too (a side face with openings, which can have more points than the
-        # entry face -- Codex review A round 2), leaves the entry face unknown. Dev cost: 7-10 of
-        # ~60 S7 matches, whose second face read; real 2-way pallets have solid sides that do not.
+        # entry face -- Codex review A round 2), leaves the entry face unknown. Dev cost: about 10
+        # S7 misses (block-style recipe sides read); real 2-way pallets have solid sides that do not.
         geometry, reasons = "ambiguous", ["entry_face_unresolved"]
     pair, pickable, fit_reasons = _parametric_fit(layout, setup, load_for(None), params.nonstandard_depth_m[1],
                                                   params.parametric_spacing_slack_m)
