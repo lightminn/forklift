@@ -995,12 +995,16 @@ def test_mission_commands_options_validate_before_startup(tmp_path) -> None:
     bad.write_text('{"commands": [{"t": 30.0, "command": "halt"}]}')
     kinds = tmp_path / "kinds.json"
     kinds.write_text('{"commands": [], "stop_kinds": [{"from": 10.0, "to": 12.0, "kind": "halt"}]}')
+    overlap = tmp_path / "overlap.json"
+    overlap.write_text('{"stop_kinds": [{"from": 0.0, "to": 3.0, "kind": "controlled"}, '
+                       '{"from": 1.0, "to": 2.0, "kind": "preempt"}]}')
     layer = ["--record-slam", "--obstacle-layer", "config/obstacle_layer_single.yaml", "--obstacle-act"]
     for flags, expected in (
         (["--mission-commands", str(good)], "--mission-commands needs --obstacle-act"),
         (["--mission-commands", str(good), *layer, "--record-boundary"], "--mission-commands excludes"),
         (["--mission-commands", str(bad), *layer], "command must be pause, resume or cancel"),
         (["--mission-commands", str(kinds), *layer], "stop kind must be controlled or preempt"),
+        (["--mission-commands", str(overlap), *layer], "stop kind intervals must not overlap"),
         (["--mission-commands", str(tmp_path / "missing.json"), *layer], "--mission-commands:"),
     ):
         result = subprocess.run(

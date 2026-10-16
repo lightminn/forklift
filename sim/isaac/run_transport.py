@@ -217,6 +217,10 @@ def load_mission_schedule(path: Path) -> tuple[list[tuple[float, str]], list[tup
         if kind_ not in ("controlled", "preempt"):
             raise ValueError(f"stop kind must be controlled or preempt: {row}")
         kinds.append((float(from_), float(to_), kind_))
+    kinds.sort()
+    for (_, end_a, _), (start_b, _, _) in zip(kinds, kinds[1:]):
+        if start_b < end_a:
+            raise ValueError("stop kind intervals must not overlap")
     out = []
     for row in data.get("commands", []):
         t_, command_ = row.get("t"), row.get("command")
@@ -4910,6 +4914,9 @@ def drive(S, isaac) -> None:
                 robot.apply_action(isaac.action(joint_velocities=np.zeros(len(wheels)), joint_indices=wheels))
                 state["applied_command"] = (0.0, list((state.get("applied_command") or (0.0, []))[1]))
                 state["command_speed"] = 0.0
+                # Seen by the next control tick even if it ended inside a capture's steps (watched: recorded and
+                # restored by a replay, which does not step).
+                state["preempt_seen_s"] = float(world.current_time - initial_time)
                 if slam is not None:
                     slam["last_command"] = 0.0
             world.step(render=render or frame_due)
@@ -5142,7 +5149,8 @@ def drive(S, isaac) -> None:
                       "obstacle": ["version", "last_stamp", "applied", "last_raw", "scans"],
                       **({"slam_log": list(slam_log)} if watched_log_ else {}),
                       # M-a3 (plan E9): a preempt sets the applied command and its slew inside the step
-                      **({"state": ["tyre_contact_rows", "applied_command", "command_speed"]} if early_ports else {})},
+                      **({"state": ["tyre_contact_rows", "applied_command", "command_speed", "preempt_seen_s"]}
+                         if early_ports else {})},
                 append_only={"records", "scans", *(slam_log if watched_log_ else ()),
                              *(("tyre_contact_rows",) if early_ports else ())},
             )
@@ -5228,6 +5236,8 @@ def drive(S, isaac) -> None:
                 while mission_schedule and mission_schedule[0][0] <= t:
                     core.commands.queue(MISSION_COMMANDS[mission_schedule.pop(0)[1]]())
                 stop_kind_ = stop_kind_at(t)
+                if state.pop("preempt_seen_s", None) is not None and stop_kind_ == "none":
+                    stop_kind_ = "preempt"  # a preempt that began and ended inside a capture still stops the mission
                 applied_commands_ = core.commands.apply(t, MissionContext(
                     stop_kind=stop_kind_, near_tracker=near is not None and near["tracker"] is not None))
             if early_ports:
