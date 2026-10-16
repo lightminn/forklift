@@ -1557,7 +1557,7 @@ class TrackerBook(dict):
 
 # The M-a0 boundary record of the running mission, closed by whichever exit comes first (the run's own
 # finally, or main()'s for failures before the mission loop's try).
-_BOUNDARY_RECORD: dict = {"gate": None, "time": None, "probe": None, "print": None}
+_BOUNDARY_RECORD: dict = {"gate": None, "time": None, "probe": None, "print": None, "np": None}
 
 
 def sink_effect(gate, method: str, path, payload) -> None:
@@ -1577,6 +1577,18 @@ def _recording_print(*values, sep=" ", end="\n", file=None, flush=False):
     if gate is not None and (file is None or file is sys.stdout):
         sink_effect(gate, "echo", "stdout", (" " if sep is None else sep).join(str(v) for v in values))
     return _BOUNDARY_RECORD["print"](*values, sep=sep, end=end, file=file, flush=flush)
+
+
+def install_output_observers(args) -> None:
+    """Format 2 (sim/isaac/replay_observers.py): the output directory and this module's ``np`` record their file
+    writes as Sink entries from here on (np undone at close; the observed directory only records while a record is
+    open)."""
+    from replay_observers import NumpyObserver, observed_output
+
+    gate_fn = lambda: _BOUNDARY_RECORD.get("gate")  # noqa: E731
+    args.output = observed_output(args.output, gate_fn)
+    _BOUNDARY_RECORD["np"] = globals()["np"]
+    globals()["np"] = NumpyObserver(_BOUNDARY_RECORD["np"], gate_fn, args.output)
 
 
 # Result keys a replay cannot reproduce from the record: written by run() after the setup snapshot was taken.
@@ -1636,6 +1648,9 @@ def close_boundary_record(state: dict, exc: BaseException | None = None, final_s
         if _BOUNDARY_RECORD.get("print") is not None:
             globals().pop("print", None)  # the stdout observer undone (the builtin again)
             _BOUNDARY_RECORD["print"] = None
+        if _BOUNDARY_RECORD.get("np") is not None:
+            globals()["np"] = _BOUNDARY_RECORD["np"]  # the file-writer observer undone
+            _BOUNDARY_RECORD["np"] = None
 
 
 def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
@@ -3199,13 +3214,12 @@ def drive(S, isaac) -> None:
             # Diagnostics: the standing frames as the check saw them.
             k_still = pocket.setdefault("still_frames", 0) + 1
             pocket["still_frames"] = k_still
-            still_ = dict(
+            np.savez_compressed(
+                args.output / f"pocket_still_{k_still}.npz",
                 depth=np.asarray(depth, dtype=np.float32), raw=np.asarray(raw, dtype=np.float32), stamp=stamp,
                 rear=np.asarray(rear_at, dtype=float), estimate=np.asarray(check.estimate, dtype=float),
                 axis_yaw=check.axis_yaw,
             )
-            sink_effect(boundary, "save_npz", f"pocket_still_{k_still}.npz", still_)
-            np.savez_compressed(args.output / f"pocket_still_{k_still}.npz", **still_)
         pocket["frames_read"] += 1
 
     def grid_world(sc):
@@ -3402,13 +3416,12 @@ def drive(S, isaac) -> None:
                 geometry.axle_to_fork_tip_m - geometry.carriage_limit_m,
             )
             obstacle["plans"][-1]["docking_band_cells"] = int((occupancy.occupied & band).sum())
-            grid_ = dict(
+            np.savez_compressed(
+                args.output / f"grid_mission_plan_{len(obstacle['plans'])}.npz",
                 occupied=occupancy.occupied, docking=out["docking_occupancy"].forks.occupied,
                 origin=[occupancy.origin_x_m, occupancy.origin_y_m], res=res_g,
                 target=[target.x_m, target.y_m, target.yaw_rad],
             )
-            sink_effect(boundary, "save_npz", f"grid_mission_plan_{len(obstacle['plans'])}.npz", grid_)
-            np.savez_compressed(args.output / f"grid_mission_plan_{len(obstacle['plans'])}.npz", **grid_)
         return out
 
     if boundary is not None:
@@ -3491,6 +3504,7 @@ def drive(S, isaac) -> None:
         globals()["time"] = RecordingProxy(time, "Clock", boundary)
         _BOUNDARY_RECORD["print"] = print
         globals()["print"] = _recording_print  # stdout lines as Sink.echo (plan 3.5)
+        install_output_observers(args)  # the output files as Sink entries (plan 3.5)
         if obstacle is not None:  # the planning memory's SLAM map and revision are read by the plan bundles
             obstacle["layer"] = RecordingProxy(obstacle["layer"], "Obstacles", boundary,
                                                child_ports={"permission": "Permission", "memory": "Memory"})
@@ -3635,9 +3649,9 @@ def drive(S, isaac) -> None:
         require(plans.success, f"Mission planning failed: {plans.status}")
         paths = {name: getattr(plans, name) for name in mission_stages}
         state["paths"] = {name: path_record(path) for name, path in paths.items()}
-        paths_text_ = record_json(state["paths"], indent=2) + "\n"
-        sink_effect(boundary, "write_paths", "paths.json", paths_text_)  # format 2: the output effect (plan 3.5)
-        (args.output / "paths.json").write_text(paths_text_)
+        (args.output / "paths.json").write_text(
+            record_json(state["paths"], indent=2) + "\n"
+        )
         isaac.add_path_display(stage, paths["approach"], "Approach", (0.05, 0.45, 1.0))
         isaac.add_path_display(stage, paths["transport"], "Transport", (1.0, 0.65, 0.04))
         if "return_home" in paths:
@@ -4010,8 +4024,6 @@ def drive(S, isaac) -> None:
     def save_capture(attempt_number, scene_input) -> None:
         """M-a1 slice 4b-i: the capture's diagnostic image and depth dumps, the runner's statements unchanged
         (a Sink the mission core calls where they stood)."""
-        sink_effect(boundary, "save_capture", f"perception_capture_{attempt_number}",
-                    {"rgb": scene_input.rgb, "depth_m": scene_input.depth_m})
         # Diagnostic dump for offline root-cause analysis; not part
         # of the perception contract itself.
         Image.fromarray(scene_input.rgb).save(
@@ -4143,10 +4155,6 @@ def drive(S, isaac) -> None:
         nonlocal rear
         rear = value
 
-    def write_text_sink(method_: str, name_: str, text_: str) -> None:
-        sink_effect(boundary, method_, name_, text_)  # format 2: the output effect (plan 3.5)
-        (args.output / name_).write_text(text_)
-
     core = MissionCore(
         ms, state=state, obstacle=obstacle, slam=slam, pocket=pocket, paths=paths, trackers=trackers,
         geometry=geometry, settings=settings, pallet_geometry=args.pallet_geometry_loaded,
@@ -4169,11 +4177,10 @@ def drive(S, isaac) -> None:
             plan_transport_leg=lambda *a, **k: plan_transport_leg(*a, **k),
             plan_return_leg=lambda *a, **k: plan_return_leg(*a, **k),
             path_record=path_record,
-            write_paths=lambda: write_text_sink("write_paths", "paths.json", record_json(state["paths"], indent=2) + "\n"),
+            write_paths=lambda: (args.output / "paths.json").write_text(record_json(state["paths"], indent=2) + "\n"),
             # M-a1 slice 3b: truth (SimTruth list) and the permission's diagnostics dump.
             truth_speed=lambda: truth_speed, truth_velocity=lambda: velocity,
-            save_npz=lambda name, **arrays: (sink_effect(boundary, "save_npz", name, arrays),
-                                             np.savez_compressed(args.output / name, **arrays))[1],
+            save_npz=lambda name, **arrays: np.savez_compressed(args.output / name, **arrays),
             # M-a1 slice 3c: the blocked replan's releases, planners and recovery helpers (read when called).
             plan_observation_leg=lambda *a, **k: plan_observation_leg(*a, **k),
             plan_transport=lambda *a, **k: plan_transport(*a, **k),
