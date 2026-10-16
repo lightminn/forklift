@@ -198,3 +198,23 @@ def test_service_owned_slam_state_is_compared_by_id_and_native_objects_refuse(tm
     assert a == b  # the step's own detector: by its logical id
     with open(SCRIPT, "rb") as fh, pytest.raises(TypeError, match=r"near\['file'\]"):
         module.final_projection({"near": {"file": fh}}, MissionState(), tmp_path)
+
+
+def test_a_c_backed_generator_is_projected_by_its_state_and_foreign_objects_refuse(tmp_path):
+    import random
+    from fractions import Fraction  # a Python class from outside the project
+
+    import pytest
+
+    from forklift_core.mission.state import MissionState
+
+    spec = importlib.util.spec_from_file_location("run_transport_projection5", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    rng = random.Random(3)
+    a = module.final_projection({"near": {"rng": rng}}, MissionState(), tmp_path)
+    rng.random()
+    b = module.final_projection({"near": {"rng": rng}}, MissionState(), tmp_path)
+    assert a != b
+    with pytest.raises(TypeError, match=r"near\['f'\]"):
+        module.final_projection({"near": {"f": Fraction(1, 3)}}, MissionState(), tmp_path)
