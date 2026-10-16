@@ -330,3 +330,70 @@ def test_a_failed_match_input_write_is_noted_and_the_match_goes_on(tmp_path, mon
     w.core.dock_at_delivery_straight(12.0)
     assert w.slam["docking"]["match_input_errors"] == ["OSError: disk full"]
     assert w.slam["docking"]["status"] == "armed"
+
+
+# M-a2 (docs/plans/2026-10-16-m-a2-source-tests-to-behaviour.md): the delivery docking's checks as behaviour.
+def _recording_stop_check(w, stop_ok=True):
+    seen = {}
+
+    def stop_check(straight_, rear, cfg, keep, clear):
+        seen.update(keep=keep, clear=clear)
+        w.log("stop_check", keep)
+        return stop_ok, {"status": "arrived"}
+
+    w.core.options.DOCKING_RETRY.round_two_stop_check = stop_check
+    return seen
+
+
+def test_the_round_two_stop_is_judged_with_the_same_pose_check_as_the_straights_sweep(tmp_path, monkeypatch):
+    w = docking_world(tmp_path, monkeypatch)
+    seen = _recording_stop_check(w)
+    swept_calls = []
+    monkeypatch.setattr("forklift_core.mission.core.collision_free_pose",
+                        lambda pose, obstacles, footprint, bounds: swept_calls.append(tuple(pose)) or False)
+    w.core.dock_at_delivery_straight(12.0)  # the sweep refuses: no stop check, a retry
+    assert "stop_check" not in w.names() and w.names()[-1] == "retry"
+    w = docking_world(tmp_path, monkeypatch)
+    seen = _recording_stop_check(w)
+    probes = []
+    monkeypatch.setattr("forklift_core.mission.core.collision_free_pose",
+                        lambda pose, obstacles, footprint, bounds: probes.append(tuple(np.round(pose, 6))) or True)
+    w.core.dock_at_delivery_straight(12.0)
+    assert seen["keep"] == 0.6
+    before = len(probes)
+    assert seen["clear"]((8.5, 0.0, 0.0)) is True and len(probes) == before + 1  # the sweep's own pose check
+
+
+def test_the_round_two_stop_check_runs_only_with_d7_docking_after_an_accepted_first_match(tmp_path, monkeypatch):
+    w = docking_world(tmp_path, monkeypatch, d7=False)
+    _recording_stop_check(w)
+    w.core.dock_at_delivery_straight(12.0)
+    assert "stop_check" not in w.names() and "write_paths" in w.names()  # the whole straight is driven
+    w = docking_world(tmp_path, monkeypatch, docking={"round": 2, "keep_m": 0.6, "previous_goal": [9.0, 0.0, 0.0],
+                                                      "accepted_any": True, "to_world": [0.0, 0.0, 0.0]})
+    _recording_stop_check(w)
+    w.core.dock_at_delivery_straight(20.0)  # a second round: judged as before, no stop check
+    assert "stop_check" not in w.names()
+
+
+def test_with_grid_planning_the_delivery_sweep_is_checked_on_the_docking_grid(tmp_path, monkeypatch):
+    import forklift_core.planning.grid_collision as gc
+
+    w = docking_world(tmp_path, monkeypatch)
+    w.core.options.grid_planning = True
+    built = []
+
+    class Checker:
+        def __init__(self, occupancy, footprint, bounds):
+            built.append((occupancy, footprint))
+
+        def free(self, pose):
+            return False  # the grid says occupied: the straight is refused
+
+    monkeypatch.setattr(gc, "GridFootprintChecker", Checker)
+    w.core.hooks.grid_kwargs = lambda kind=None, **k: w.log("grid_kwargs", kind) or {"occupancy": "DOCKING_GRID"}
+    monkeypatch.setattr("forklift_core.mission.core.collision_free_pose",
+                        lambda *a: (_ for _ in ()).throw(AssertionError("truth check used under grid planning")))
+    w.core.dock_at_delivery_straight(12.0)
+    assert built == [("DOCKING_GRID", "FP")] and ("grid_kwargs", ("docking",)) in [c[:2] for c in w.calls]
+    assert w.slam["docking"]["dry_run"]["swept_clear"] is False and w.names()[-1] == "retry"
