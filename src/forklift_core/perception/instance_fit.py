@@ -644,16 +644,23 @@ def read_parametric_face(face: FacePlane, pts_u, pts_h, rays, support_z: float, 
     if len(members) < 3 or len(openings) < 2:
         return None, f"layout:{len(members)}m{len(openings)}o"
     c = (umin + umax) / 2
+    deck = (rh > support_z + ceiling + 0.005) & (rh < top - 0.002)
     ends = []
     for edge, side in ((umin, -1.0), (umax, 1.0)):
         off = side * (ru - edge)
-        beyond = band & (off > params.end_window_m[0]) & (off < params.end_window_m[1])
-        # Physical: rays pass behind just beyond the end, nothing occludes it, and the face plane
-        # does not go on there under another owner -- a mask cut through touching pallets has
-        # members continuing in the plane beyond the cut (Codex review 2026-10-16).
+        window = (off > params.end_window_m[0]) & (off < params.end_window_m[1])
+        beyond = band & window
+        # The face plane must not go on beyond the end under another owner: a mask cut through
+        # touching pallets has the neighbour's deck continuing in the plane (Codex review
+        # 2026-10-16; rig: 54 face rays, none behind). It is judged at deck height, where a real
+        # end has far background -- in the lane band, floor hits just behind the plane read as
+        # face under noise (dev mid: up to 2.25 face per behind ray at true ends). Deck-band face
+        # rays outnumbering the see-through ones flagged 0 of 166 true ends clean, 2-4 of ~150 noisy.
+        cont = deck & window & (rc == FACE) & ~owned
+        continued = cont.sum() >= params.edge_min_hits and cont.sum() > (deck & window & (rc == BEHIND)).sum()
         ends.append(bool(((beyond & (rc == BEHIND)).sum() >= params.edge_min_hits)
                          and ((beyond & (rc == FRONT)).sum() < params.edge_min_hits)
-                         and ((beyond & (rc == FACE) & ~owned).sum() < params.edge_min_hits)))
+                         and not continued))
     layout = FaceLayout("x", umax - umin, math.nan,
                         tuple((lo * b + umin - c, hi * b + umin - c) for lo, hi in members),
                         tuple((lo * b + umin - c, hi * b + umin - c) for lo, hi in openings),
