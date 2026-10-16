@@ -143,3 +143,15 @@ def test_many_clients_are_closed_within_the_stop_budget():
         start = time.monotonic()
         assert s.server.stop(timeout_s=5.0) is True
         assert time.monotonic() - start < 4.0
+
+
+def test_a_client_connecting_later_gets_the_targets_after_the_welcome():
+    async def client(port):
+        async with connect(f"ws://127.0.0.1:{port}/api/v1/control") as ws:
+            await ws.send(json.dumps({"t": "hello", "api": "console/1", "client_id": "late"}))
+            assert json.loads(await ws.recv())["t"] == "welcome"
+            return json.loads(await ws.recv())
+
+    with StandIn() as s:
+        s.store.put("targets", 3, {"t": "targets", "targets_revision": 3, "pallets": [], "destinations": []})
+        assert asyncio.run(client(s.port))["targets_revision"] == 3

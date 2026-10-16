@@ -134,7 +134,9 @@ class LiveRuntime:
         targets = self.core.targets
         if targets.revision != self._targets_revision:
             self._targets_revision = targets.revision
-            self.channels.put(None, targets.message())
+            message = targets.message()
+            self.store.put("targets", targets.revision, message)  # a client connecting later gets it after welcome
+            self.channels.put(None, message)
         self.log({"tick_t": t, "mode": out.mode, "stop_kind": out.stop_kind, "source": out.source,
                   "speed_mps": out.speed_mps, "curvature_inv_m": out.curvature_inv_m, "armed": out.armed,
                   "deadline": None if self.arbiter.teleop is None else self.arbiter.teleop["deadline"],

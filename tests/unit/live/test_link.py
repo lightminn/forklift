@@ -47,9 +47,10 @@ def test_latest_values_keep_only_the_last_per_connection():
     m, a, ch, link = rig()
     ch.connect("A", "op")
     for k in range(5):
-        ch.message("A", "op", {"t": "echo", "k": k})
+        ch.message("A", "op", {"t": "echo", "session_epoch": EPOCH, "lease_id": "x",
+                               "echo": {"state_seq": k, "token": "t"}})
     _, _, _, latest = ch.take_cycle()
-    assert [msg["k"] for _, _, msg in latest] == [4]
+    assert [msg["echo"]["state_seq"] for _, _, msg in latest] == [4]
 
 
 def test_mission_replies_go_to_the_current_connection_and_an_old_close_is_ignored():
@@ -134,10 +135,11 @@ def test_a_mission_reply_goes_only_to_the_connection_that_asked():
 def test_a_bad_message_is_refused_and_logged_not_raised():
     m, a, ch, link = rig()
     ch.connect("A", "op")
-    ch.message("A", "op", {"t": "echo", "echo": "bad"})
-    ch.message("A", "op", {"t": "lease_request", "request_id": "L", "session_epoch": "41"})
+    assert ch.message("A", "op", {"t": "echo", "echo": "bad"}) is None  # a latest value: dropped
+    reply = ch.message("A", "op", {"t": "lease_request", "request_id": "L", "session_epoch": "41"})
+    assert (reply["t"], reply["reason"]) == ("reject", "invalid")  # refused at the channel's door
     cycle(m, link, 0.01)
-    assert [(r["t"], r.get("reason")) for c, r in ch.take_out() if c == "A"] == [("reject", "invalid")]
+    assert not [r for c, r in ch.take_out() if c == "A" and r.get("t") == "reject"]
 
 
 def test_a_malformed_duplicate_does_not_replace_a_valid_stop():
@@ -148,3 +150,16 @@ def test_a_malformed_duplicate_does_not_replace_a_valid_stop():
     assert ch.message("A", "op", {"t": "stop", "request_id": "S", "source": 0})["reason"] == "invalid"
     assert ch.message("A", "op", {"t": "stop", "request_id": []}) is None  # unhashable: refused, not raised
     assert link.gate(0.01) is True and a.mode == "STOPPED"
+
+
+def test_a_targets_request_gets_the_current_list():
+    from forklift_core.mission.targets import Pose, TargetsBook
+
+    m, a, ch, link = rig()
+    m.targets = TargetsBook()
+    m.targets.add_pallet("P-1", "epal6", Pose(1.0, 0.0, 0.0))
+    ch.connect("A", "op")
+    ch.message("A", "op", {"t": "targets_request", "request_id": "T", "session_epoch": EPOCH})
+    cycle(m, link, 0.01)
+    kinds = [r["t"] for c, r in ch.take_out() if c == "A"]
+    assert kinds == ["ack", "targets"]

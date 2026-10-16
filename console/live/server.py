@@ -107,6 +107,9 @@ class LiveHandle(wire.ControlOutboxMixin, wire.MediaFanoutMixin):
         self.channels.connect(conn_id, client_id, True)
         try:
             self._send_control(conn_id, self.welcome)
+            targets = self.store.get("targets")
+            if targets is not None:
+                self._send_control(conn_id, targets[1])  # the current list, as the fake vehicle does after welcome
             async for raw in ws:
                 msg = wire.parse(raw)
                 if msg is None:

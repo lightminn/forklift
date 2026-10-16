@@ -118,6 +118,9 @@ class Link:
                          "reply": None if reply is None else (reply.get("t"), reply.get("reason"))})
         if reply is not None:
             self.ch.put(conn_id, reply)
+            targets = getattr(self.a.mission, "targets", None)
+            if reply.get("t") == "ack" and msg.get("t") == "targets_request" and targets is not None:
+                self.ch.put(conn_id, targets.message())  # contract 5: the current list to the asker
 
     def _conn_event(self, kind, conn_id, client_id, extra, now, where):
         if kind == "connect":
