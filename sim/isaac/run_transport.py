@@ -1714,6 +1714,51 @@ def projection_node(value, services: dict, roots=(), _stack=()):
     raise TypeError(f"no projection for a {type(value).__module__}:{type(value).__qualname__}")
 
 
+def _identity_free(containers: dict) -> dict:
+    """The containers with the values that are object identities (``id()``, a process's memory addresses) made
+    independent of the process: the cusp heading-hold records key their tracker by ``id(tracker)`` -- replaced by
+    its first-seen ordinal, so "the same tracker" still compares -- and the new-obstacle heights are keyed by
+    ``id(rect)`` -- listed in the order of the pallet-frame rectangles they belong to (R5: two runs of the same
+    code differed only there). Shallow copies; the run's own containers are not changed."""
+    import copy
+
+    out = dict(containers)
+    state_ = containers.get("state")
+    if isinstance(state_, dict) and any(k in state_ for k in ("cusp_heading_holds", "cusp_heading_hold",
+                                                              "cusp_heading_watch")):
+        ordinals: dict = {}
+
+        def ordinal(tid):
+            return f"<tracker {ordinals.setdefault(tid, len(ordinals))}>"
+
+        state_ = dict(state_)
+        holds = copy.deepcopy(state_.get("cusp_heading_holds"))
+        for hold in (holds or []) + [h for h in [copy.deepcopy(state_.get("cusp_heading_hold"))] if h]:
+            if isinstance(hold, dict) and isinstance(hold.get("key"), (list, tuple)) and len(hold["key"]) == 3:
+                hold["key"] = [hold["key"][0], ordinal(hold["key"][1]), hold["key"][2]]
+        if "cusp_heading_holds" in state_:
+            state_["cusp_heading_holds"] = holds
+        if state_.get("cusp_heading_hold"):
+            open_ = copy.deepcopy(state_["cusp_heading_hold"])
+            if isinstance(open_.get("key"), (list, tuple)) and len(open_["key"]) == 3:
+                open_["key"] = [open_["key"][0], ordinal(open_["key"][1]), open_["key"][2]]
+            state_["cusp_heading_hold"] = open_
+        if state_.get("cusp_heading_watch"):
+            watch = dict(state_["cusp_heading_watch"])
+            if "tracker" in watch:
+                watch["tracker"] = ordinal(watch["tracker"])
+            state_["cusp_heading_watch"] = watch
+        out["state"] = state_
+    new_ = containers.get("new_obstacles")
+    if isinstance(new_, dict) and isinstance(new_.get("heights"), dict):
+        new_ = dict(new_)
+        heights = dict(new_["heights"])
+        ordered = [heights.pop(id(r), None) for r in new_.get("pallet_frame") or []]
+        new_["heights"] = {"by_pallet_frame_rect": ordered, "others": sorted(heights.values())}
+        out["new_obstacles"] = new_
+    return out
+
+
 def final_projection(containers: dict, ms, output: Path) -> dict:
     """Format 2's end state (M-a1 replay plan R3 (5), Codex P2): the mission state's fields by value and, for each
     core container, every key by the digest of its projection (:func:`projection_node`) -- the run's output
@@ -1728,6 +1773,7 @@ def final_projection(containers: dict, ms, output: Path) -> dict:
             for key_, logical in owned.items():
                 if container_.get(key_) is not None:
                     services[id(container_[key_])] = logical
+    containers = _identity_free(containers)
     state_ = containers.get("state") if isinstance(containers.get("state"), dict) else {}
     roots = sorted({str(output)} | {str(v) for v in [(state_.get("arguments") or {}).get("output")] if v},
                    key=len, reverse=True)
