@@ -663,6 +663,12 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--live-lease-timeout-s", type=float, default=5.0,
                         help="M-c: the control lease's timeout -- a tick cannot go out while a synchronous call holds "
                         "the control loop (the first live run lost a 1 s lease to a 1.2 s start-up tick)")
+    parser.add_argument("--live-camera-latency-bound-s", type=float, default=None,
+                        help="M-c: camera_latency_bound_s, wall seconds (default 0.11/f: the 2026-10-17 marker run "
+                        "measured 1.022 s at f 0.1 from the pixels' physics step to the frame's arrival)")
+    parser.add_argument("--live-camera-pixel-lag-s", type=float, default=11 / 120,
+                        help="M-c: sim seconds a frame's pixels lag its render metadata time (the 2026-10-17 marker "
+                        "run measured 11 physics steps); a frame older than the bound is registered as such")
     parser.add_argument("--live-web-root", type=Path, default=None, help="M-c: console/web to serve")
     parser.add_argument("--live-test-step-delay-ms", type=float, default=0.0,
                         help="M-c tests only: extra wall time per physics step (the slow-pacing test)")
@@ -881,6 +887,11 @@ def arguments() -> argparse.Namespace:
     if args.live and not 0 < args.live_factor <= 1:
         # The limits are divided by it (plan C4a); above 1 the 0.05 s tick would exceed a quarter of the command age.
         parser.error("--live-factor must be in (0, 1]")
+    if args.live_camera_latency_bound_s is not None and not (math.isfinite(args.live_camera_latency_bound_s)
+                                                           and args.live_camera_latency_bound_s > 0):
+        parser.error("--live-camera-latency-bound-s must be a positive finite number")
+    if not (math.isfinite(args.live_camera_pixel_lag_s) and args.live_camera_pixel_lag_s >= 0):
+        parser.error("--live-camera-pixel-lag-s must be a non-negative finite number")
     if args.mission_commands is not None:
         # M-a3 (plan E4, E7, E9): command stops decelerate on the obstacle layer's stopping model; the near-field
         # bounds were measured without pauses; scheduled stops, dwells and the e-stop probe keep their own clocks;
@@ -5214,7 +5225,12 @@ def drive(S, isaac) -> None:
                                          video_max_age_s=0.50 / args.live_factor,
                                          frame_window_s=max(5.0, 2 * 0.50 / args.live_factor),
                                          lease_timeout_s=max(args.live_lease_timeout_s, 0.30 / args.live_factor,
-                                                             0.50 / args.live_factor)),
+                                                             0.50 / args.live_factor),
+                                         # Measured, not scaled from a real camera: the pixels trail the render
+                                         # metadata by 11 physics steps, so the wall bound goes as 1/f (M-c evidence).
+                                         camera_latency_bound_s=(args.live_camera_latency_bound_s
+                                                                 or 0.11 / args.live_factor)),
+                camera_pixel_lag_s=args.live_camera_pixel_lag_s,
                 host=args.live_host, web_root=args.live_web_root,
                 test_step_delay_s=args.live_test_step_delay_ms / 1000.0, camera_freeze=freeze_,
                 test_stop_in_capture=args.live_test_stop_in_capture)

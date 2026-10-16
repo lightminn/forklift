@@ -105,6 +105,32 @@ def test_the_pacer_holds_the_declared_factor_through_the_runtime(tmp_path):
 
 
 
+def test_a_frame_older_than_the_bound_is_registered_as_old_as_its_pixels(tmp_path):
+    """A pacing stall in the pixels' steps (1.23 s once, 2026-10-17): the frame is registered and sent as acquired
+    `bound` after the step its pixels show began, so the arbiter's video age still covers it."""
+    from forklift_core.safety.arbiter import ArbiterConfig
+    rt, core, did, clock = runtime(tmp_path, camera_pixel_lag_s=11 * DT,
+                                   config=ArbiterConfig(tick_s=DT, camera_latency_bound_s=1.1))
+    rt.start()
+    try:
+        pixel_start = clock.t - 2.0  # the step the pixels show began 2 s ago (a stall since)
+        rt.step_start.append((1.0 - 11 * DT, pixel_start))
+        rt.step_start.append((1.0, clock.t - 0.05))
+        did["render"] = 1.0
+        step(rt, clock, 1.0 + DT, rendered=True)
+        acquired = rt.arbiter.frames.acquired_mono(1)
+        assert acquired == pytest.approx(pixel_start + 1.1)
+        assert rt.store.get("camera_rgb")[0] == 1 and rt.camera_backdated == 1
+        # on time: the pixels' step began 1.0 s ago, under the bound -- the frame keeps its arrival time
+        rt.step_start.append((2.0 - 11 * DT, clock.t - 1.0))
+        rt.step_start.append((2.0, clock.t - 0.05))
+        did["render"] = 2.0
+        step(rt, clock, 2.0 + DT, rendered=True)
+        assert rt.arbiter.frames.acquired_mono(2) == pytest.approx(clock.t) and rt.camera_backdated == 1
+    finally:
+        rt.close()
+
+
 def test_a_capture_seen_before_is_not_given_a_new_id(tmp_path):
     """Codex M-c round 5 P1: render times 1, 2, 1 -- the old capture is not made young."""
     rt, core, did, clock = runtime(tmp_path)
