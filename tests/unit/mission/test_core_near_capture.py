@@ -229,5 +229,8 @@ def test_the_stage_one_redraw_drives_its_custom_cruise_and_installs_the_insertio
 def test_a_recapture_straight_of_exactly_the_minimum_length_is_kept():
     """M-a2 sweep (boundaries): REALIGN_MIN_LEFT_M (1.5 m) itself is long enough."""
     w = World(realign=True, straight=leg(1.0, 1.5))
-    w.run()
+    try:
+        w.run()
+    except RuntimeError as exc:
+        pytest.fail(f"a straight of exactly the minimum was refused: {exc}")
     assert "start_near_realign" not in w.names() and w.core.paths["approach"].length_m == 1.5

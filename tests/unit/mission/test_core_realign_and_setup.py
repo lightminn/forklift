@@ -252,5 +252,8 @@ def test_a_realignment_install_of_exactly_the_maximum_length_is_kept():
     slam = {"tracker": SimpleNamespace(mode="holding")}
     core, calls = make(slam=slam, obstacle={"progress": {}}, state=realign_state())
     core.paths["observe"] = leg(NT.REALIGN_MAX_LENGTH_M + 1e-9)
-    core.realign_install("backoff")
+    try:
+        core.realign_install("backoff")
+    except RuntimeError as exc:
+        pytest.fail(f"an install of exactly the maximum was refused: {exc}")
     assert len(core.state["near_tracking"]["realign"]["installs"]) == 1
