@@ -10643,6 +10643,945 @@
     ],
     "check_line": "E   AssertionError"
    }
+  },
+  {
+   "id": "B10:L714-boundary",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::16"
+   ],
+   "statement": "operator sweep: boundary on `float(np.linalg.norm(hooks.truth_velocity()[:2])) < 0.01` (core.py line 714) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_permission.py::test_without_slam_standing_is_below_10_mm_per_second"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "        stopped_now = slam[\"stop_now\"] if slam is not None else float(np.linalg.norm(hooks.truth_velocity()[:2])) < 0.01\n",
+    "replace": "        stopped_now = slam[\"stop_now\"] if slam is not None else float(np.linalg.norm(hooks.truth_velocity()[:2])) <= 0.01\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L845-narrow",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::14"
+   ],
+   "statement": "operator sweep: narrow on `ms.phase in ('transport', 'return_home') -> 'transport'` (core.py line 845) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_blocked_replan.py::test_the_recorded_clearance_is_the_travel_configs_on_the_travel_legs_only[return_home-0.2-0.2]"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "            (travel_config if ms.phase in (\"transport\", \"return_home\") and travel_config is not None\n",
+    "replace": "            (travel_config if ms.phase == 'transport' and travel_config is not None\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L1087-swap",
+   "class": "N",
+   "checks": [
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::1",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::2",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::3",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::4",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::5",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::6",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::7",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::8",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::9",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::10",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::11",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::12",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::13",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::14"
+   ],
+   "statement": "operator sweep: swap on `require(leg_replans <= 10, f'obstacle_replan_limit in {ms.ph <-> obstacle.setdefault('progress', {}).clear()` (core.py line 1087) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_blocked_replan.py::test_a_refused_eleventh_leg_replan_leaves_the_no_progress_watch_alone"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "            require(leg_replans <= 10, f\"obstacle_replan_limit in {ms.phase}: {leg_replans}\")\n            obstacle.setdefault(\"progress\", {}).clear()\n",
+    "replace": "            obstacle.setdefault(\"progress\", {}).clear()\n            require(leg_replans <= 10, f\"obstacle_replan_limit in {ms.phase}: {leg_replans}\")\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L1088-swap",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_path_replacement_restarts_the_no_progress_baseline::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_path_replacement_restarts_the_no_progress_baseline::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_path_replacement_restarts_the_no_progress_baseline::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_path_replacement_restarts_the_no_progress_baseline::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_path_replacement_restarts_the_no_progress_baseline::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_path_replacement_restarts_the_no_progress_baseline::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_path_replacement_restarts_the_no_progress_baseline::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_path_replacement_restarts_the_no_progress_baseline::8"
+   ],
+   "statement": "operator sweep: swap on `obstacle.setdefault('progress', {}).clear() <-> require(leg_replans <= 10, f'obstacle_replan_limit` (core.py line 1088) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_blocked_replan.py::test_a_refused_eleventh_leg_replan_leaves_the_no_progress_watch_alone"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "            require(leg_replans <= 10, f\"obstacle_replan_limit in {ms.phase}: {leg_replans}\")\n            obstacle.setdefault(\"progress\", {}).clear()\n",
+    "replace": "            obstacle.setdefault(\"progress\", {}).clear()\n            require(leg_replans <= 10, f\"obstacle_replan_limit in {ms.phase}: {leg_replans}\")\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L1435-boundary",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::16"
+   ],
+   "statement": "operator sweep: boundary on `float(np.linalg.norm(hooks.truth_velocity()[:2])) <= trackers[ms.phase].config.stop_speed_mps` (core.py line 1435) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_observe.py::test_without_slam_a_stop_at_exactly_the_stop_speed_and_yaw_rate_counts"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                    and float(np.linalg.norm(hooks.truth_velocity()[:2]))\n                    <= trackers[ms.phase].config.stop_speed_mps\n",
+    "replace": "                    and float(np.linalg.norm(hooks.truth_velocity()[:2])) < trackers[ms.phase].config.stop_speed_mps\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L1436-boundary",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::16"
+   ],
+   "statement": "operator sweep: boundary on `float(np.linalg.norm(hooks.truth_velocity()[:2])) <= trackers[ms.phase].config.stop_speed_mps` (core.py line 1436) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_observe.py::test_without_slam_a_stop_at_exactly_the_stop_speed_and_yaw_rate_counts"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                    and float(np.linalg.norm(hooks.truth_velocity()[:2]))\n                    <= trackers[ms.phase].config.stop_speed_mps\n",
+    "replace": "                    and float(np.linalg.norm(hooks.truth_velocity()[:2])) < trackers[ms.phase].config.stop_speed_mps\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L1437-boundary",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::16"
+   ],
+   "statement": "operator sweep: boundary on `abs(float(hooks.truth_yaw_rate())) <= cusp_stop_yaw_rate_radps` (core.py line 1437) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_observe.py::test_without_slam_a_stop_at_exactly_the_stop_speed_and_yaw_rate_counts"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                    and abs(float(hooks.truth_yaw_rate()))\n                    <= cusp_stop_yaw_rate_radps\n",
+    "replace": "                    and abs(float(hooks.truth_yaw_rate())) < cusp_stop_yaw_rate_radps\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L1644-swap",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::11"
+   ],
+   "statement": "operator sweep: swap on `paths['observe'] = replanned <-> require(replanned.success, f'observe_replan_failed` (core.py line 1644) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_observe.py::test_a_failed_observe_replan_installs_nothing_before_it_ends_the_run"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                require(replanned.success, f\"observe_replan_failed:{replanned.status}\")\n                paths[\"observe\"] = replanned\n",
+    "replace": "                paths[\"observe\"] = replanned\n                require(replanned.success, f\"observe_replan_failed:{replanned.status}\")\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L1760-boundary",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_loose_arrival_only_at_observation_waypoints::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_loose_arrival_only_at_observation_waypoints::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_loose_arrival_only_at_observation_waypoints::3"
+   ],
+   "statement": "operator sweep: boundary on `tracking.position_error_m <= OBSERVE_ARRIVAL_M` (core.py line 1760) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_command.py::test_an_observe_arrival_within_exactly_the_tolerance_counts"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "            and tracking.position_error_m <= OBSERVE_ARRIVAL_M\n",
+    "replace": "            and tracking.position_error_m < OBSERVE_ARRIVAL_M\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L1804-swap",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::16",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::17",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::18"
+   ],
+   "statement": "operator sweep: swap on `released_b = release_after_backoff(t, 'release_after_backoff <-> back_['stop_cause'] = {'path': getattr(perm_b.path` (core.py line 1804) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_command.py::test_a_backoffs_stop_cause_is_read_before_its_release"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                back_[\"stop_cause\"] = {\n                    \"path\": getattr(perm_b.path_check, \"blocked\", None),\n                    \"estop\": getattr(getattr(perm_b, \"last_estop\", None), \"blocked\", None),\n                }\n                released_b = release_after_backoff(t, \"release_after_backoff\")\n",
+    "replace": "                released_b = release_after_backoff(t, \"release_after_backoff\")\n                back_[\"stop_cause\"] = {\n                    \"path\": getattr(perm_b.path_check, \"blocked\", None),\n                    \"estop\": getattr(getattr(perm_b, \"last_estop\", None), \"blocked\", None),\n                }\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L1804-swap-2",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::16",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::17",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::18"
+   ],
+   "statement": "operator sweep: swap on `released_b = release_after_backoff(t, 'release_after_backoff <-> back_['stop_cause'] = {'path': getattr(perm_b.path` (core.py line 1804) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_command.py::test_a_backoffs_stop_cause_is_read_before_its_release"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                back_[\"stop_cause\"] = {\n                    \"path\": getattr(perm_b.path_check, \"blocked\", None),\n                    \"estop\": getattr(getattr(perm_b, \"last_estop\", None), \"blocked\", None),\n                }\n                released_b = release_after_backoff(t, \"release_after_backoff\")\n",
+    "replace": "                released_b = release_after_backoff(t, \"release_after_backoff\")\n                back_[\"stop_cause\"] = {\n                    \"path\": getattr(perm_b.path_check, \"blocked\", None),\n                    \"estop\": getattr(getattr(perm_b, \"last_estop\", None), \"blocked\", None),\n                }\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L2103-swap",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_accepts_small_overshoot_except_insertion::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_accepts_small_overshoot_except_insertion::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_accepts_small_overshoot_except_insertion::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_accepts_small_overshoot_except_insertion::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_reads_the_same_optional_speed_caps::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_reads_the_same_optional_speed_caps::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::8"
+   ],
+   "statement": "operator sweep: swap on `trackers.update({name: RearAxlePathTracker(path.poses, path. <-> apply_tracker_profile()` (core.py line 2103) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_observe_succeeded.py::test_the_tracker_profile_is_applied_to_the_followers_built_after_the_detection"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "        trackers.update(\n            {\n                name: RearAxlePathTracker(\n                    path.poses,\n                    path.directions,\n                    path.curvatures_inv_m,\n                    TrackerConfig(\n                        cruise_speed_mps=speeds[name],\n                        max_curvature_inv_m=settings[\n                            \"tracker_curvature_inv_m\"\n                        ],\n                        max_acceleration_mps2=settings[\n                            \"drive_acceleration_mps2\"\n                        ],\n                        lookahead_m=0.28,\n                        # Same rule as the trackers built\n                        # without perception (observe is\n                        # excluded below and keeps its own\n                        # tracker; the return is 0.03 rad).\n                        position_tolerance_m=(\n                            0.03 if name == \"observe\" else 0.008\n                        ),\n                        yaw_tolerance_rad=(\n                            0.05\n                            if name == \"observe\"\n                            else 0.03\n                            if name == \"return_home\"\n                            else 0.02\n                        ),\n                        # Gear-change cusps are not goals (2026-09-26): the next leg\n                        # starts from the measured pose. Final goals keep the rules above.\n                        cusp_position_tolerance_m=0.03,\n                        cusp_yaw_tolerance_rad=0.05,\n                        # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad\n                        # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).\n                        cusp_brake_window_m=0.008,\n                        # The return holds a cusp heading miss of 0.05-0.08 rad for\n                        # judgement (EPAL 6 fork spacing plan, A').\n                        cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD\n                        if name in CUSP_HEADING_HOLD_PHASES\n                        else None,\n                        # Optional path speed caps; absent from the settings = off.\n                        max_lateral_acceleration_mps2=settings.get(\n                            \"max_lateral_acceleration_mps2\"\n                        ),\n                        max_reverse_speed_mps=settings.get(\n                            \"max_reverse_speed_mps\"\n                        ),\n                        # A stop just past the goal is fine except deeper into\n                        # the pallet: insertion keeps the round 8 mm.\n                        overshoot_tolerance_m=None\n                        if name == \"insert\"\n                        else 0.03,\n                        stop_speed_mps=0.012,\n                        max_cross_track_error_m=0.35,\n                    ),\n                )\n                for name, path in paths.items()\n                if name != \"observe\"\n            }\n        )\n        apply_tracker_profile()\n",
+    "replace": "        apply_tracker_profile()\n        trackers.update(\n            {\n                name: RearAxlePathTracker(\n                    path.poses,\n                    path.directions,\n                    path.curvatures_inv_m,\n                    TrackerConfig(\n                        cruise_speed_mps=speeds[name],\n                        max_curvature_inv_m=settings[\n                            \"tracker_curvature_inv_m\"\n                        ],\n                        max_acceleration_mps2=settings[\n                            \"drive_acceleration_mps2\"\n                        ],\n                        lookahead_m=0.28,\n                        # Same rule as the trackers built\n                        # without perception (observe is\n                        # excluded below and keeps its own\n                        # tracker; the return is 0.03 rad).\n                        position_tolerance_m=(\n                            0.03 if name == \"observe\" else 0.008\n                        ),\n                        yaw_tolerance_rad=(\n                            0.05\n                            if name == \"observe\"\n                            else 0.03\n                            if name == \"return_home\"\n                            else 0.02\n                        ),\n                        # Gear-change cusps are not goals (2026-09-26): the next leg\n                        # starts from the measured pose. Final goals keep the rules above.\n                        cusp_position_tolerance_m=0.03,\n                        cusp_yaw_tolerance_rad=0.05,\n                        # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad\n                        # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).\n                        cusp_brake_window_m=0.008,\n                        # The return holds a cusp heading miss of 0.05-0.08 rad for\n                        # judgement (EPAL 6 fork spacing plan, A').\n                        cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD\n                        if name in CUSP_HEADING_HOLD_PHASES\n                        else None,\n                        # Optional path speed caps; absent from the settings = off.\n                        max_lateral_acceleration_mps2=settings.get(\n                            \"max_lateral_acceleration_mps2\"\n                        ),\n                        max_reverse_speed_mps=settings.get(\n                            \"max_reverse_speed_mps\"\n                        ),\n                        # A stop just past the goal is fine except deeper into\n                        # the pallet: insertion keeps the round 8 mm.\n                        overshoot_tolerance_m=None\n                        if name == \"insert\"\n                        else 0.03,\n                        stop_speed_mps=0.012,\n                        max_cross_track_error_m=0.35,\n                    ),\n                )\n                for name, path in paths.items()\n                if name != \"observe\"\n            }\n        )\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L2128-swap",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_releases_gear_change_cusps_the_same_way::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_releases_gear_change_cusps_the_same_way::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_releases_gear_change_cusps_the_same_way::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_releases_gear_change_cusps_the_same_way::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_releases_gear_change_cusps_the_same_way::5"
+   ],
+   "statement": "operator sweep: swap on `trackers.update({name: RearAxlePathTracker(path.poses, path. <-> apply_tracker_profile()` (core.py line 2128) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_observe_succeeded.py::test_the_tracker_profile_is_applied_to_the_followers_built_after_the_detection"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "        trackers.update(\n            {\n                name: RearAxlePathTracker(\n                    path.poses,\n                    path.directions,\n                    path.curvatures_inv_m,\n                    TrackerConfig(\n                        cruise_speed_mps=speeds[name],\n                        max_curvature_inv_m=settings[\n                            \"tracker_curvature_inv_m\"\n                        ],\n                        max_acceleration_mps2=settings[\n                            \"drive_acceleration_mps2\"\n                        ],\n                        lookahead_m=0.28,\n                        # Same rule as the trackers built\n                        # without perception (observe is\n                        # excluded below and keeps its own\n                        # tracker; the return is 0.03 rad).\n                        position_tolerance_m=(\n                            0.03 if name == \"observe\" else 0.008\n                        ),\n                        yaw_tolerance_rad=(\n                            0.05\n                            if name == \"observe\"\n                            else 0.03\n                            if name == \"return_home\"\n                            else 0.02\n                        ),\n                        # Gear-change cusps are not goals (2026-09-26): the next leg\n                        # starts from the measured pose. Final goals keep the rules above.\n                        cusp_position_tolerance_m=0.03,\n                        cusp_yaw_tolerance_rad=0.05,\n                        # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad\n                        # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).\n                        cusp_brake_window_m=0.008,\n                        # The return holds a cusp heading miss of 0.05-0.08 rad for\n                        # judgement (EPAL 6 fork spacing plan, A').\n                        cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD\n                        if name in CUSP_HEADING_HOLD_PHASES\n                        else None,\n                        # Optional path speed caps; absent from the settings = off.\n                        max_lateral_acceleration_mps2=settings.get(\n                            \"max_lateral_acceleration_mps2\"\n                        ),\n                        max_reverse_speed_mps=settings.get(\n                            \"max_reverse_speed_mps\"\n                        ),\n                        # A stop just past the goal is fine except deeper into\n                        # the pallet: insertion keeps the round 8 mm.\n                        overshoot_tolerance_m=None\n                        if name == \"insert\"\n                        else 0.03,\n                        stop_speed_mps=0.012,\n                        max_cross_track_error_m=0.35,\n                    ),\n                )\n                for name, path in paths.items()\n                if name != \"observe\"\n            }\n        )\n        apply_tracker_profile()\n",
+    "replace": "        apply_tracker_profile()\n        trackers.update(\n            {\n                name: RearAxlePathTracker(\n                    path.poses,\n                    path.directions,\n                    path.curvatures_inv_m,\n                    TrackerConfig(\n                        cruise_speed_mps=speeds[name],\n                        max_curvature_inv_m=settings[\n                            \"tracker_curvature_inv_m\"\n                        ],\n                        max_acceleration_mps2=settings[\n                            \"drive_acceleration_mps2\"\n                        ],\n                        lookahead_m=0.28,\n                        # Same rule as the trackers built\n                        # without perception (observe is\n                        # excluded below and keeps its own\n                        # tracker; the return is 0.03 rad).\n                        position_tolerance_m=(\n                            0.03 if name == \"observe\" else 0.008\n                        ),\n                        yaw_tolerance_rad=(\n                            0.05\n                            if name == \"observe\"\n                            else 0.03\n                            if name == \"return_home\"\n                            else 0.02\n                        ),\n                        # Gear-change cusps are not goals (2026-09-26): the next leg\n                        # starts from the measured pose. Final goals keep the rules above.\n                        cusp_position_tolerance_m=0.03,\n                        cusp_yaw_tolerance_rad=0.05,\n                        # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad\n                        # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).\n                        cusp_brake_window_m=0.008,\n                        # The return holds a cusp heading miss of 0.05-0.08 rad for\n                        # judgement (EPAL 6 fork spacing plan, A').\n                        cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD\n                        if name in CUSP_HEADING_HOLD_PHASES\n                        else None,\n                        # Optional path speed caps; absent from the settings = off.\n                        max_lateral_acceleration_mps2=settings.get(\n                            \"max_lateral_acceleration_mps2\"\n                        ),\n                        max_reverse_speed_mps=settings.get(\n                            \"max_reverse_speed_mps\"\n                        ),\n                        # A stop just past the goal is fine except deeper into\n                        # the pallet: insertion keeps the round 8 mm.\n                        overshoot_tolerance_m=None\n                        if name == \"insert\"\n                        else 0.03,\n                        stop_speed_mps=0.012,\n                        max_cross_track_error_m=0.35,\n                    ),\n                )\n                for name, path in paths.items()\n                if name != \"observe\"\n            }\n        )\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L2129-swap",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_releases_gear_change_cusps_the_same_way::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_releases_gear_change_cusps_the_same_way::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_releases_gear_change_cusps_the_same_way::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_releases_gear_change_cusps_the_same_way::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_releases_gear_change_cusps_the_same_way::5"
+   ],
+   "statement": "operator sweep: swap on `trackers.update({name: RearAxlePathTracker(path.poses, path. <-> apply_tracker_profile()` (core.py line 2129) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_observe_succeeded.py::test_the_tracker_profile_is_applied_to_the_followers_built_after_the_detection"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "        trackers.update(\n            {\n                name: RearAxlePathTracker(\n                    path.poses,\n                    path.directions,\n                    path.curvatures_inv_m,\n                    TrackerConfig(\n                        cruise_speed_mps=speeds[name],\n                        max_curvature_inv_m=settings[\n                            \"tracker_curvature_inv_m\"\n                        ],\n                        max_acceleration_mps2=settings[\n                            \"drive_acceleration_mps2\"\n                        ],\n                        lookahead_m=0.28,\n                        # Same rule as the trackers built\n                        # without perception (observe is\n                        # excluded below and keeps its own\n                        # tracker; the return is 0.03 rad).\n                        position_tolerance_m=(\n                            0.03 if name == \"observe\" else 0.008\n                        ),\n                        yaw_tolerance_rad=(\n                            0.05\n                            if name == \"observe\"\n                            else 0.03\n                            if name == \"return_home\"\n                            else 0.02\n                        ),\n                        # Gear-change cusps are not goals (2026-09-26): the next leg\n                        # starts from the measured pose. Final goals keep the rules above.\n                        cusp_position_tolerance_m=0.03,\n                        cusp_yaw_tolerance_rad=0.05,\n                        # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad\n                        # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).\n                        cusp_brake_window_m=0.008,\n                        # The return holds a cusp heading miss of 0.05-0.08 rad for\n                        # judgement (EPAL 6 fork spacing plan, A').\n                        cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD\n                        if name in CUSP_HEADING_HOLD_PHASES\n                        else None,\n                        # Optional path speed caps; absent from the settings = off.\n                        max_lateral_acceleration_mps2=settings.get(\n                            \"max_lateral_acceleration_mps2\"\n                        ),\n                        max_reverse_speed_mps=settings.get(\n                            \"max_reverse_speed_mps\"\n                        ),\n                        # A stop just past the goal is fine except deeper into\n                        # the pallet: insertion keeps the round 8 mm.\n                        overshoot_tolerance_m=None\n                        if name == \"insert\"\n                        else 0.03,\n                        stop_speed_mps=0.012,\n                        max_cross_track_error_m=0.35,\n                    ),\n                )\n                for name, path in paths.items()\n                if name != \"observe\"\n            }\n        )\n        apply_tracker_profile()\n",
+    "replace": "        apply_tracker_profile()\n        trackers.update(\n            {\n                name: RearAxlePathTracker(\n                    path.poses,\n                    path.directions,\n                    path.curvatures_inv_m,\n                    TrackerConfig(\n                        cruise_speed_mps=speeds[name],\n                        max_curvature_inv_m=settings[\n                            \"tracker_curvature_inv_m\"\n                        ],\n                        max_acceleration_mps2=settings[\n                            \"drive_acceleration_mps2\"\n                        ],\n                        lookahead_m=0.28,\n                        # Same rule as the trackers built\n                        # without perception (observe is\n                        # excluded below and keeps its own\n                        # tracker; the return is 0.03 rad).\n                        position_tolerance_m=(\n                            0.03 if name == \"observe\" else 0.008\n                        ),\n                        yaw_tolerance_rad=(\n                            0.05\n                            if name == \"observe\"\n                            else 0.03\n                            if name == \"return_home\"\n                            else 0.02\n                        ),\n                        # Gear-change cusps are not goals (2026-09-26): the next leg\n                        # starts from the measured pose. Final goals keep the rules above.\n                        cusp_position_tolerance_m=0.03,\n                        cusp_yaw_tolerance_rad=0.05,\n                        # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad\n                        # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).\n                        cusp_brake_window_m=0.008,\n                        # The return holds a cusp heading miss of 0.05-0.08 rad for\n                        # judgement (EPAL 6 fork spacing plan, A').\n                        cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD\n                        if name in CUSP_HEADING_HOLD_PHASES\n                        else None,\n                        # Optional path speed caps; absent from the settings = off.\n                        max_lateral_acceleration_mps2=settings.get(\n                            \"max_lateral_acceleration_mps2\"\n                        ),\n                        max_reverse_speed_mps=settings.get(\n                            \"max_reverse_speed_mps\"\n                        ),\n                        # A stop just past the goal is fine except deeper into\n                        # the pallet: insertion keeps the round 8 mm.\n                        overshoot_tolerance_m=None\n                        if name == \"insert\"\n                        else 0.03,\n                        stop_speed_mps=0.012,\n                        max_cross_track_error_m=0.35,\n                    ),\n                )\n                for name, path in paths.items()\n                if name != \"observe\"\n            }\n        )\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L2132-swap",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_releases_gear_change_cusps_the_same_way::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_releases_gear_change_cusps_the_same_way::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_releases_gear_change_cusps_the_same_way::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_releases_gear_change_cusps_the_same_way::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_releases_gear_change_cusps_the_same_way::5"
+   ],
+   "statement": "operator sweep: swap on `trackers.update({name: RearAxlePathTracker(path.poses, path. <-> apply_tracker_profile()` (core.py line 2132) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_observe_succeeded.py::test_the_tracker_profile_is_applied_to_the_followers_built_after_the_detection"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "        trackers.update(\n            {\n                name: RearAxlePathTracker(\n                    path.poses,\n                    path.directions,\n                    path.curvatures_inv_m,\n                    TrackerConfig(\n                        cruise_speed_mps=speeds[name],\n                        max_curvature_inv_m=settings[\n                            \"tracker_curvature_inv_m\"\n                        ],\n                        max_acceleration_mps2=settings[\n                            \"drive_acceleration_mps2\"\n                        ],\n                        lookahead_m=0.28,\n                        # Same rule as the trackers built\n                        # without perception (observe is\n                        # excluded below and keeps its own\n                        # tracker; the return is 0.03 rad).\n                        position_tolerance_m=(\n                            0.03 if name == \"observe\" else 0.008\n                        ),\n                        yaw_tolerance_rad=(\n                            0.05\n                            if name == \"observe\"\n                            else 0.03\n                            if name == \"return_home\"\n                            else 0.02\n                        ),\n                        # Gear-change cusps are not goals (2026-09-26): the next leg\n                        # starts from the measured pose. Final goals keep the rules above.\n                        cusp_position_tolerance_m=0.03,\n                        cusp_yaw_tolerance_rad=0.05,\n                        # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad\n                        # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).\n                        cusp_brake_window_m=0.008,\n                        # The return holds a cusp heading miss of 0.05-0.08 rad for\n                        # judgement (EPAL 6 fork spacing plan, A').\n                        cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD\n                        if name in CUSP_HEADING_HOLD_PHASES\n                        else None,\n                        # Optional path speed caps; absent from the settings = off.\n                        max_lateral_acceleration_mps2=settings.get(\n                            \"max_lateral_acceleration_mps2\"\n                        ),\n                        max_reverse_speed_mps=settings.get(\n                            \"max_reverse_speed_mps\"\n                        ),\n                        # A stop just past the goal is fine except deeper into\n                        # the pallet: insertion keeps the round 8 mm.\n                        overshoot_tolerance_m=None\n                        if name == \"insert\"\n                        else 0.03,\n                        stop_speed_mps=0.012,\n                        max_cross_track_error_m=0.35,\n                    ),\n                )\n                for name, path in paths.items()\n                if name != \"observe\"\n            }\n        )\n        apply_tracker_profile()\n",
+    "replace": "        apply_tracker_profile()\n        trackers.update(\n            {\n                name: RearAxlePathTracker(\n                    path.poses,\n                    path.directions,\n                    path.curvatures_inv_m,\n                    TrackerConfig(\n                        cruise_speed_mps=speeds[name],\n                        max_curvature_inv_m=settings[\n                            \"tracker_curvature_inv_m\"\n                        ],\n                        max_acceleration_mps2=settings[\n                            \"drive_acceleration_mps2\"\n                        ],\n                        lookahead_m=0.28,\n                        # Same rule as the trackers built\n                        # without perception (observe is\n                        # excluded below and keeps its own\n                        # tracker; the return is 0.03 rad).\n                        position_tolerance_m=(\n                            0.03 if name == \"observe\" else 0.008\n                        ),\n                        yaw_tolerance_rad=(\n                            0.05\n                            if name == \"observe\"\n                            else 0.03\n                            if name == \"return_home\"\n                            else 0.02\n                        ),\n                        # Gear-change cusps are not goals (2026-09-26): the next leg\n                        # starts from the measured pose. Final goals keep the rules above.\n                        cusp_position_tolerance_m=0.03,\n                        cusp_yaw_tolerance_rad=0.05,\n                        # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad\n                        # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).\n                        cusp_brake_window_m=0.008,\n                        # The return holds a cusp heading miss of 0.05-0.08 rad for\n                        # judgement (EPAL 6 fork spacing plan, A').\n                        cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD\n                        if name in CUSP_HEADING_HOLD_PHASES\n                        else None,\n                        # Optional path speed caps; absent from the settings = off.\n                        max_lateral_acceleration_mps2=settings.get(\n                            \"max_lateral_acceleration_mps2\"\n                        ),\n                        max_reverse_speed_mps=settings.get(\n                            \"max_reverse_speed_mps\"\n                        ),\n                        # A stop just past the goal is fine except deeper into\n                        # the pallet: insertion keeps the round 8 mm.\n                        overshoot_tolerance_m=None\n                        if name == \"insert\"\n                        else 0.03,\n                        stop_speed_mps=0.012,\n                        max_cross_track_error_m=0.35,\n                    ),\n                )\n                for name, path in paths.items()\n                if name != \"observe\"\n            }\n        )\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L2135-swap",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::14"
+   ],
+   "statement": "operator sweep: swap on `trackers.update({name: RearAxlePathTracker(path.poses, path. <-> apply_tracker_profile()` (core.py line 2135) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_observe_succeeded.py::test_the_tracker_profile_is_applied_to_the_followers_built_after_the_detection"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "        trackers.update(\n            {\n                name: RearAxlePathTracker(\n                    path.poses,\n                    path.directions,\n                    path.curvatures_inv_m,\n                    TrackerConfig(\n                        cruise_speed_mps=speeds[name],\n                        max_curvature_inv_m=settings[\n                            \"tracker_curvature_inv_m\"\n                        ],\n                        max_acceleration_mps2=settings[\n                            \"drive_acceleration_mps2\"\n                        ],\n                        lookahead_m=0.28,\n                        # Same rule as the trackers built\n                        # without perception (observe is\n                        # excluded below and keeps its own\n                        # tracker; the return is 0.03 rad).\n                        position_tolerance_m=(\n                            0.03 if name == \"observe\" else 0.008\n                        ),\n                        yaw_tolerance_rad=(\n                            0.05\n                            if name == \"observe\"\n                            else 0.03\n                            if name == \"return_home\"\n                            else 0.02\n                        ),\n                        # Gear-change cusps are not goals (2026-09-26): the next leg\n                        # starts from the measured pose. Final goals keep the rules above.\n                        cusp_position_tolerance_m=0.03,\n                        cusp_yaw_tolerance_rad=0.05,\n                        # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad\n                        # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).\n                        cusp_brake_window_m=0.008,\n                        # The return holds a cusp heading miss of 0.05-0.08 rad for\n                        # judgement (EPAL 6 fork spacing plan, A').\n                        cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD\n                        if name in CUSP_HEADING_HOLD_PHASES\n                        else None,\n                        # Optional path speed caps; absent from the settings = off.\n                        max_lateral_acceleration_mps2=settings.get(\n                            \"max_lateral_acceleration_mps2\"\n                        ),\n                        max_reverse_speed_mps=settings.get(\n                            \"max_reverse_speed_mps\"\n                        ),\n                        # A stop just past the goal is fine except deeper into\n                        # the pallet: insertion keeps the round 8 mm.\n                        overshoot_tolerance_m=None\n                        if name == \"insert\"\n                        else 0.03,\n                        stop_speed_mps=0.012,\n                        max_cross_track_error_m=0.35,\n                    ),\n                )\n                for name, path in paths.items()\n                if name != \"observe\"\n            }\n        )\n        apply_tracker_profile()\n",
+    "replace": "        apply_tracker_profile()\n        trackers.update(\n            {\n                name: RearAxlePathTracker(\n                    path.poses,\n                    path.directions,\n                    path.curvatures_inv_m,\n                    TrackerConfig(\n                        cruise_speed_mps=speeds[name],\n                        max_curvature_inv_m=settings[\n                            \"tracker_curvature_inv_m\"\n                        ],\n                        max_acceleration_mps2=settings[\n                            \"drive_acceleration_mps2\"\n                        ],\n                        lookahead_m=0.28,\n                        # Same rule as the trackers built\n                        # without perception (observe is\n                        # excluded below and keeps its own\n                        # tracker; the return is 0.03 rad).\n                        position_tolerance_m=(\n                            0.03 if name == \"observe\" else 0.008\n                        ),\n                        yaw_tolerance_rad=(\n                            0.05\n                            if name == \"observe\"\n                            else 0.03\n                            if name == \"return_home\"\n                            else 0.02\n                        ),\n                        # Gear-change cusps are not goals (2026-09-26): the next leg\n                        # starts from the measured pose. Final goals keep the rules above.\n                        cusp_position_tolerance_m=0.03,\n                        cusp_yaw_tolerance_rad=0.05,\n                        # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad\n                        # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).\n                        cusp_brake_window_m=0.008,\n                        # The return holds a cusp heading miss of 0.05-0.08 rad for\n                        # judgement (EPAL 6 fork spacing plan, A').\n                        cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD\n                        if name in CUSP_HEADING_HOLD_PHASES\n                        else None,\n                        # Optional path speed caps; absent from the settings = off.\n                        max_lateral_acceleration_mps2=settings.get(\n                            \"max_lateral_acceleration_mps2\"\n                        ),\n                        max_reverse_speed_mps=settings.get(\n                            \"max_reverse_speed_mps\"\n                        ),\n                        # A stop just past the goal is fine except deeper into\n                        # the pallet: insertion keeps the round 8 mm.\n                        overshoot_tolerance_m=None\n                        if name == \"insert\"\n                        else 0.03,\n                        stop_speed_mps=0.012,\n                        max_cross_track_error_m=0.35,\n                    ),\n                )\n                for name, path in paths.items()\n                if name != \"observe\"\n            }\n        )\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L2139-swap",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_reads_the_same_optional_speed_caps::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_reads_the_same_optional_speed_caps::2"
+   ],
+   "statement": "operator sweep: swap on `trackers.update({name: RearAxlePathTracker(path.poses, path. <-> apply_tracker_profile()` (core.py line 2139) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_observe_succeeded.py::test_the_tracker_profile_is_applied_to_the_followers_built_after_the_detection"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "        trackers.update(\n            {\n                name: RearAxlePathTracker(\n                    path.poses,\n                    path.directions,\n                    path.curvatures_inv_m,\n                    TrackerConfig(\n                        cruise_speed_mps=speeds[name],\n                        max_curvature_inv_m=settings[\n                            \"tracker_curvature_inv_m\"\n                        ],\n                        max_acceleration_mps2=settings[\n                            \"drive_acceleration_mps2\"\n                        ],\n                        lookahead_m=0.28,\n                        # Same rule as the trackers built\n                        # without perception (observe is\n                        # excluded below and keeps its own\n                        # tracker; the return is 0.03 rad).\n                        position_tolerance_m=(\n                            0.03 if name == \"observe\" else 0.008\n                        ),\n                        yaw_tolerance_rad=(\n                            0.05\n                            if name == \"observe\"\n                            else 0.03\n                            if name == \"return_home\"\n                            else 0.02\n                        ),\n                        # Gear-change cusps are not goals (2026-09-26): the next leg\n                        # starts from the measured pose. Final goals keep the rules above.\n                        cusp_position_tolerance_m=0.03,\n                        cusp_yaw_tolerance_rad=0.05,\n                        # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad\n                        # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).\n                        cusp_brake_window_m=0.008,\n                        # The return holds a cusp heading miss of 0.05-0.08 rad for\n                        # judgement (EPAL 6 fork spacing plan, A').\n                        cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD\n                        if name in CUSP_HEADING_HOLD_PHASES\n                        else None,\n                        # Optional path speed caps; absent from the settings = off.\n                        max_lateral_acceleration_mps2=settings.get(\n                            \"max_lateral_acceleration_mps2\"\n                        ),\n                        max_reverse_speed_mps=settings.get(\n                            \"max_reverse_speed_mps\"\n                        ),\n                        # A stop just past the goal is fine except deeper into\n                        # the pallet: insertion keeps the round 8 mm.\n                        overshoot_tolerance_m=None\n                        if name == \"insert\"\n                        else 0.03,\n                        stop_speed_mps=0.012,\n                        max_cross_track_error_m=0.35,\n                    ),\n                )\n                for name, path in paths.items()\n                if name != \"observe\"\n            }\n        )\n        apply_tracker_profile()\n",
+    "replace": "        apply_tracker_profile()\n        trackers.update(\n            {\n                name: RearAxlePathTracker(\n                    path.poses,\n                    path.directions,\n                    path.curvatures_inv_m,\n                    TrackerConfig(\n                        cruise_speed_mps=speeds[name],\n                        max_curvature_inv_m=settings[\n                            \"tracker_curvature_inv_m\"\n                        ],\n                        max_acceleration_mps2=settings[\n                            \"drive_acceleration_mps2\"\n                        ],\n                        lookahead_m=0.28,\n                        # Same rule as the trackers built\n                        # without perception (observe is\n                        # excluded below and keeps its own\n                        # tracker; the return is 0.03 rad).\n                        position_tolerance_m=(\n                            0.03 if name == \"observe\" else 0.008\n                        ),\n                        yaw_tolerance_rad=(\n                            0.05\n                            if name == \"observe\"\n                            else 0.03\n                            if name == \"return_home\"\n                            else 0.02\n                        ),\n                        # Gear-change cusps are not goals (2026-09-26): the next leg\n                        # starts from the measured pose. Final goals keep the rules above.\n                        cusp_position_tolerance_m=0.03,\n                        cusp_yaw_tolerance_rad=0.05,\n                        # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad\n                        # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).\n                        cusp_brake_window_m=0.008,\n                        # The return holds a cusp heading miss of 0.05-0.08 rad for\n                        # judgement (EPAL 6 fork spacing plan, A').\n                        cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD\n                        if name in CUSP_HEADING_HOLD_PHASES\n                        else None,\n                        # Optional path speed caps; absent from the settings = off.\n                        max_lateral_acceleration_mps2=settings.get(\n                            \"max_lateral_acceleration_mps2\"\n                        ),\n                        max_reverse_speed_mps=settings.get(\n                            \"max_reverse_speed_mps\"\n                        ),\n                        # A stop just past the goal is fine except deeper into\n                        # the pallet: insertion keeps the round 8 mm.\n                        overshoot_tolerance_m=None\n                        if name == \"insert\"\n                        else 0.03,\n                        stop_speed_mps=0.012,\n                        max_cross_track_error_m=0.35,\n                    ),\n                )\n                for name, path in paths.items()\n                if name != \"observe\"\n            }\n        )\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L2140-swap",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_reads_the_same_optional_speed_caps::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_reads_the_same_optional_speed_caps::2"
+   ],
+   "statement": "operator sweep: swap on `trackers.update({name: RearAxlePathTracker(path.poses, path. <-> apply_tracker_profile()` (core.py line 2140) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_observe_succeeded.py::test_the_tracker_profile_is_applied_to_the_followers_built_after_the_detection"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "        trackers.update(\n            {\n                name: RearAxlePathTracker(\n                    path.poses,\n                    path.directions,\n                    path.curvatures_inv_m,\n                    TrackerConfig(\n                        cruise_speed_mps=speeds[name],\n                        max_curvature_inv_m=settings[\n                            \"tracker_curvature_inv_m\"\n                        ],\n                        max_acceleration_mps2=settings[\n                            \"drive_acceleration_mps2\"\n                        ],\n                        lookahead_m=0.28,\n                        # Same rule as the trackers built\n                        # without perception (observe is\n                        # excluded below and keeps its own\n                        # tracker; the return is 0.03 rad).\n                        position_tolerance_m=(\n                            0.03 if name == \"observe\" else 0.008\n                        ),\n                        yaw_tolerance_rad=(\n                            0.05\n                            if name == \"observe\"\n                            else 0.03\n                            if name == \"return_home\"\n                            else 0.02\n                        ),\n                        # Gear-change cusps are not goals (2026-09-26): the next leg\n                        # starts from the measured pose. Final goals keep the rules above.\n                        cusp_position_tolerance_m=0.03,\n                        cusp_yaw_tolerance_rad=0.05,\n                        # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad\n                        # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).\n                        cusp_brake_window_m=0.008,\n                        # The return holds a cusp heading miss of 0.05-0.08 rad for\n                        # judgement (EPAL 6 fork spacing plan, A').\n                        cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD\n                        if name in CUSP_HEADING_HOLD_PHASES\n                        else None,\n                        # Optional path speed caps; absent from the settings = off.\n                        max_lateral_acceleration_mps2=settings.get(\n                            \"max_lateral_acceleration_mps2\"\n                        ),\n                        max_reverse_speed_mps=settings.get(\n                            \"max_reverse_speed_mps\"\n                        ),\n                        # A stop just past the goal is fine except deeper into\n                        # the pallet: insertion keeps the round 8 mm.\n                        overshoot_tolerance_m=None\n                        if name == \"insert\"\n                        else 0.03,\n                        stop_speed_mps=0.012,\n                        max_cross_track_error_m=0.35,\n                    ),\n                )\n                for name, path in paths.items()\n                if name != \"observe\"\n            }\n        )\n        apply_tracker_profile()\n",
+    "replace": "        apply_tracker_profile()\n        trackers.update(\n            {\n                name: RearAxlePathTracker(\n                    path.poses,\n                    path.directions,\n                    path.curvatures_inv_m,\n                    TrackerConfig(\n                        cruise_speed_mps=speeds[name],\n                        max_curvature_inv_m=settings[\n                            \"tracker_curvature_inv_m\"\n                        ],\n                        max_acceleration_mps2=settings[\n                            \"drive_acceleration_mps2\"\n                        ],\n                        lookahead_m=0.28,\n                        # Same rule as the trackers built\n                        # without perception (observe is\n                        # excluded below and keeps its own\n                        # tracker; the return is 0.03 rad).\n                        position_tolerance_m=(\n                            0.03 if name == \"observe\" else 0.008\n                        ),\n                        yaw_tolerance_rad=(\n                            0.05\n                            if name == \"observe\"\n                            else 0.03\n                            if name == \"return_home\"\n                            else 0.02\n                        ),\n                        # Gear-change cusps are not goals (2026-09-26): the next leg\n                        # starts from the measured pose. Final goals keep the rules above.\n                        cusp_position_tolerance_m=0.03,\n                        cusp_yaw_tolerance_rad=0.05,\n                        # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad\n                        # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).\n                        cusp_brake_window_m=0.008,\n                        # The return holds a cusp heading miss of 0.05-0.08 rad for\n                        # judgement (EPAL 6 fork spacing plan, A').\n                        cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD\n                        if name in CUSP_HEADING_HOLD_PHASES\n                        else None,\n                        # Optional path speed caps; absent from the settings = off.\n                        max_lateral_acceleration_mps2=settings.get(\n                            \"max_lateral_acceleration_mps2\"\n                        ),\n                        max_reverse_speed_mps=settings.get(\n                            \"max_reverse_speed_mps\"\n                        ),\n                        # A stop just past the goal is fine except deeper into\n                        # the pallet: insertion keeps the round 8 mm.\n                        overshoot_tolerance_m=None\n                        if name == \"insert\"\n                        else 0.03,\n                        stop_speed_mps=0.012,\n                        max_cross_track_error_m=0.35,\n                    ),\n                )\n                for name, path in paths.items()\n                if name != \"observe\"\n            }\n        )\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L2142-swap",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_reads_the_same_optional_speed_caps::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_reads_the_same_optional_speed_caps::2"
+   ],
+   "statement": "operator sweep: swap on `trackers.update({name: RearAxlePathTracker(path.poses, path. <-> apply_tracker_profile()` (core.py line 2142) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_observe_succeeded.py::test_the_tracker_profile_is_applied_to_the_followers_built_after_the_detection"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "        trackers.update(\n            {\n                name: RearAxlePathTracker(\n                    path.poses,\n                    path.directions,\n                    path.curvatures_inv_m,\n                    TrackerConfig(\n                        cruise_speed_mps=speeds[name],\n                        max_curvature_inv_m=settings[\n                            \"tracker_curvature_inv_m\"\n                        ],\n                        max_acceleration_mps2=settings[\n                            \"drive_acceleration_mps2\"\n                        ],\n                        lookahead_m=0.28,\n                        # Same rule as the trackers built\n                        # without perception (observe is\n                        # excluded below and keeps its own\n                        # tracker; the return is 0.03 rad).\n                        position_tolerance_m=(\n                            0.03 if name == \"observe\" else 0.008\n                        ),\n                        yaw_tolerance_rad=(\n                            0.05\n                            if name == \"observe\"\n                            else 0.03\n                            if name == \"return_home\"\n                            else 0.02\n                        ),\n                        # Gear-change cusps are not goals (2026-09-26): the next leg\n                        # starts from the measured pose. Final goals keep the rules above.\n                        cusp_position_tolerance_m=0.03,\n                        cusp_yaw_tolerance_rad=0.05,\n                        # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad\n                        # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).\n                        cusp_brake_window_m=0.008,\n                        # The return holds a cusp heading miss of 0.05-0.08 rad for\n                        # judgement (EPAL 6 fork spacing plan, A').\n                        cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD\n                        if name in CUSP_HEADING_HOLD_PHASES\n                        else None,\n                        # Optional path speed caps; absent from the settings = off.\n                        max_lateral_acceleration_mps2=settings.get(\n                            \"max_lateral_acceleration_mps2\"\n                        ),\n                        max_reverse_speed_mps=settings.get(\n                            \"max_reverse_speed_mps\"\n                        ),\n                        # A stop just past the goal is fine except deeper into\n                        # the pallet: insertion keeps the round 8 mm.\n                        overshoot_tolerance_m=None\n                        if name == \"insert\"\n                        else 0.03,\n                        stop_speed_mps=0.012,\n                        max_cross_track_error_m=0.35,\n                    ),\n                )\n                for name, path in paths.items()\n                if name != \"observe\"\n            }\n        )\n        apply_tracker_profile()\n",
+    "replace": "        apply_tracker_profile()\n        trackers.update(\n            {\n                name: RearAxlePathTracker(\n                    path.poses,\n                    path.directions,\n                    path.curvatures_inv_m,\n                    TrackerConfig(\n                        cruise_speed_mps=speeds[name],\n                        max_curvature_inv_m=settings[\n                            \"tracker_curvature_inv_m\"\n                        ],\n                        max_acceleration_mps2=settings[\n                            \"drive_acceleration_mps2\"\n                        ],\n                        lookahead_m=0.28,\n                        # Same rule as the trackers built\n                        # without perception (observe is\n                        # excluded below and keeps its own\n                        # tracker; the return is 0.03 rad).\n                        position_tolerance_m=(\n                            0.03 if name == \"observe\" else 0.008\n                        ),\n                        yaw_tolerance_rad=(\n                            0.05\n                            if name == \"observe\"\n                            else 0.03\n                            if name == \"return_home\"\n                            else 0.02\n                        ),\n                        # Gear-change cusps are not goals (2026-09-26): the next leg\n                        # starts from the measured pose. Final goals keep the rules above.\n                        cusp_position_tolerance_m=0.03,\n                        cusp_yaw_tolerance_rad=0.05,\n                        # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad\n                        # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).\n                        cusp_brake_window_m=0.008,\n                        # The return holds a cusp heading miss of 0.05-0.08 rad for\n                        # judgement (EPAL 6 fork spacing plan, A').\n                        cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD\n                        if name in CUSP_HEADING_HOLD_PHASES\n                        else None,\n                        # Optional path speed caps; absent from the settings = off.\n                        max_lateral_acceleration_mps2=settings.get(\n                            \"max_lateral_acceleration_mps2\"\n                        ),\n                        max_reverse_speed_mps=settings.get(\n                            \"max_reverse_speed_mps\"\n                        ),\n                        # A stop just past the goal is fine except deeper into\n                        # the pallet: insertion keeps the round 8 mm.\n                        overshoot_tolerance_m=None\n                        if name == \"insert\"\n                        else 0.03,\n                        stop_speed_mps=0.012,\n                        max_cross_track_error_m=0.35,\n                    ),\n                )\n                for name, path in paths.items()\n                if name != \"observe\"\n            }\n        )\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L2143-swap",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_reads_the_same_optional_speed_caps::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_reads_the_same_optional_speed_caps::2"
+   ],
+   "statement": "operator sweep: swap on `trackers.update({name: RearAxlePathTracker(path.poses, path. <-> apply_tracker_profile()` (core.py line 2143) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_observe_succeeded.py::test_the_tracker_profile_is_applied_to_the_followers_built_after_the_detection"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "        trackers.update(\n            {\n                name: RearAxlePathTracker(\n                    path.poses,\n                    path.directions,\n                    path.curvatures_inv_m,\n                    TrackerConfig(\n                        cruise_speed_mps=speeds[name],\n                        max_curvature_inv_m=settings[\n                            \"tracker_curvature_inv_m\"\n                        ],\n                        max_acceleration_mps2=settings[\n                            \"drive_acceleration_mps2\"\n                        ],\n                        lookahead_m=0.28,\n                        # Same rule as the trackers built\n                        # without perception (observe is\n                        # excluded below and keeps its own\n                        # tracker; the return is 0.03 rad).\n                        position_tolerance_m=(\n                            0.03 if name == \"observe\" else 0.008\n                        ),\n                        yaw_tolerance_rad=(\n                            0.05\n                            if name == \"observe\"\n                            else 0.03\n                            if name == \"return_home\"\n                            else 0.02\n                        ),\n                        # Gear-change cusps are not goals (2026-09-26): the next leg\n                        # starts from the measured pose. Final goals keep the rules above.\n                        cusp_position_tolerance_m=0.03,\n                        cusp_yaw_tolerance_rad=0.05,\n                        # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad\n                        # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).\n                        cusp_brake_window_m=0.008,\n                        # The return holds a cusp heading miss of 0.05-0.08 rad for\n                        # judgement (EPAL 6 fork spacing plan, A').\n                        cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD\n                        if name in CUSP_HEADING_HOLD_PHASES\n                        else None,\n                        # Optional path speed caps; absent from the settings = off.\n                        max_lateral_acceleration_mps2=settings.get(\n                            \"max_lateral_acceleration_mps2\"\n                        ),\n                        max_reverse_speed_mps=settings.get(\n                            \"max_reverse_speed_mps\"\n                        ),\n                        # A stop just past the goal is fine except deeper into\n                        # the pallet: insertion keeps the round 8 mm.\n                        overshoot_tolerance_m=None\n                        if name == \"insert\"\n                        else 0.03,\n                        stop_speed_mps=0.012,\n                        max_cross_track_error_m=0.35,\n                    ),\n                )\n                for name, path in paths.items()\n                if name != \"observe\"\n            }\n        )\n        apply_tracker_profile()\n",
+    "replace": "        apply_tracker_profile()\n        trackers.update(\n            {\n                name: RearAxlePathTracker(\n                    path.poses,\n                    path.directions,\n                    path.curvatures_inv_m,\n                    TrackerConfig(\n                        cruise_speed_mps=speeds[name],\n                        max_curvature_inv_m=settings[\n                            \"tracker_curvature_inv_m\"\n                        ],\n                        max_acceleration_mps2=settings[\n                            \"drive_acceleration_mps2\"\n                        ],\n                        lookahead_m=0.28,\n                        # Same rule as the trackers built\n                        # without perception (observe is\n                        # excluded below and keeps its own\n                        # tracker; the return is 0.03 rad).\n                        position_tolerance_m=(\n                            0.03 if name == \"observe\" else 0.008\n                        ),\n                        yaw_tolerance_rad=(\n                            0.05\n                            if name == \"observe\"\n                            else 0.03\n                            if name == \"return_home\"\n                            else 0.02\n                        ),\n                        # Gear-change cusps are not goals (2026-09-26): the next leg\n                        # starts from the measured pose. Final goals keep the rules above.\n                        cusp_position_tolerance_m=0.03,\n                        cusp_yaw_tolerance_rad=0.05,\n                        # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad\n                        # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).\n                        cusp_brake_window_m=0.008,\n                        # The return holds a cusp heading miss of 0.05-0.08 rad for\n                        # judgement (EPAL 6 fork spacing plan, A').\n                        cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD\n                        if name in CUSP_HEADING_HOLD_PHASES\n                        else None,\n                        # Optional path speed caps; absent from the settings = off.\n                        max_lateral_acceleration_mps2=settings.get(\n                            \"max_lateral_acceleration_mps2\"\n                        ),\n                        max_reverse_speed_mps=settings.get(\n                            \"max_reverse_speed_mps\"\n                        ),\n                        # A stop just past the goal is fine except deeper into\n                        # the pallet: insertion keeps the round 8 mm.\n                        overshoot_tolerance_m=None\n                        if name == \"insert\"\n                        else 0.03,\n                        stop_speed_mps=0.012,\n                        max_cross_track_error_m=0.35,\n                    ),\n                )\n                for name, path in paths.items()\n                if name != \"observe\"\n            }\n        )\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L2147-swap",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_accepts_small_overshoot_except_insertion::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_accepts_small_overshoot_except_insertion::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_accepts_small_overshoot_except_insertion::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_every_runner_tracker_accepts_small_overshoot_except_insertion::4"
+   ],
+   "statement": "operator sweep: swap on `trackers.update({name: RearAxlePathTracker(path.poses, path. <-> apply_tracker_profile()` (core.py line 2147) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_observe_succeeded.py::test_the_tracker_profile_is_applied_to_the_followers_built_after_the_detection"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "        trackers.update(\n            {\n                name: RearAxlePathTracker(\n                    path.poses,\n                    path.directions,\n                    path.curvatures_inv_m,\n                    TrackerConfig(\n                        cruise_speed_mps=speeds[name],\n                        max_curvature_inv_m=settings[\n                            \"tracker_curvature_inv_m\"\n                        ],\n                        max_acceleration_mps2=settings[\n                            \"drive_acceleration_mps2\"\n                        ],\n                        lookahead_m=0.28,\n                        # Same rule as the trackers built\n                        # without perception (observe is\n                        # excluded below and keeps its own\n                        # tracker; the return is 0.03 rad).\n                        position_tolerance_m=(\n                            0.03 if name == \"observe\" else 0.008\n                        ),\n                        yaw_tolerance_rad=(\n                            0.05\n                            if name == \"observe\"\n                            else 0.03\n                            if name == \"return_home\"\n                            else 0.02\n                        ),\n                        # Gear-change cusps are not goals (2026-09-26): the next leg\n                        # starts from the measured pose. Final goals keep the rules above.\n                        cusp_position_tolerance_m=0.03,\n                        cusp_yaw_tolerance_rad=0.05,\n                        # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad\n                        # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).\n                        cusp_brake_window_m=0.008,\n                        # The return holds a cusp heading miss of 0.05-0.08 rad for\n                        # judgement (EPAL 6 fork spacing plan, A').\n                        cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD\n                        if name in CUSP_HEADING_HOLD_PHASES\n                        else None,\n                        # Optional path speed caps; absent from the settings = off.\n                        max_lateral_acceleration_mps2=settings.get(\n                            \"max_lateral_acceleration_mps2\"\n                        ),\n                        max_reverse_speed_mps=settings.get(\n                            \"max_reverse_speed_mps\"\n                        ),\n                        # A stop just past the goal is fine except deeper into\n                        # the pallet: insertion keeps the round 8 mm.\n                        overshoot_tolerance_m=None\n                        if name == \"insert\"\n                        else 0.03,\n                        stop_speed_mps=0.012,\n                        max_cross_track_error_m=0.35,\n                    ),\n                )\n                for name, path in paths.items()\n                if name != \"observe\"\n            }\n        )\n        apply_tracker_profile()\n",
+    "replace": "        apply_tracker_profile()\n        trackers.update(\n            {\n                name: RearAxlePathTracker(\n                    path.poses,\n                    path.directions,\n                    path.curvatures_inv_m,\n                    TrackerConfig(\n                        cruise_speed_mps=speeds[name],\n                        max_curvature_inv_m=settings[\n                            \"tracker_curvature_inv_m\"\n                        ],\n                        max_acceleration_mps2=settings[\n                            \"drive_acceleration_mps2\"\n                        ],\n                        lookahead_m=0.28,\n                        # Same rule as the trackers built\n                        # without perception (observe is\n                        # excluded below and keeps its own\n                        # tracker; the return is 0.03 rad).\n                        position_tolerance_m=(\n                            0.03 if name == \"observe\" else 0.008\n                        ),\n                        yaw_tolerance_rad=(\n                            0.05\n                            if name == \"observe\"\n                            else 0.03\n                            if name == \"return_home\"\n                            else 0.02\n                        ),\n                        # Gear-change cusps are not goals (2026-09-26): the next leg\n                        # starts from the measured pose. Final goals keep the rules above.\n                        cusp_position_tolerance_m=0.03,\n                        cusp_yaw_tolerance_rad=0.05,\n                        # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad\n                        # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).\n                        cusp_brake_window_m=0.008,\n                        # The return holds a cusp heading miss of 0.05-0.08 rad for\n                        # judgement (EPAL 6 fork spacing plan, A').\n                        cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD\n                        if name in CUSP_HEADING_HOLD_PHASES\n                        else None,\n                        # Optional path speed caps; absent from the settings = off.\n                        max_lateral_acceleration_mps2=settings.get(\n                            \"max_lateral_acceleration_mps2\"\n                        ),\n                        max_reverse_speed_mps=settings.get(\n                            \"max_reverse_speed_mps\"\n                        ),\n                        # A stop just past the goal is fine except deeper into\n                        # the pallet: insertion keeps the round 8 mm.\n                        overshoot_tolerance_m=None\n                        if name == \"insert\"\n                        else 0.03,\n                        stop_speed_mps=0.012,\n                        max_cross_track_error_m=0.35,\n                    ),\n                )\n                for name, path in paths.items()\n                if name != \"observe\"\n            }\n        )\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L2154-swap",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::8"
+   ],
+   "statement": "operator sweep: swap on `trackers.update({name: RearAxlePathTracker(path.poses, path. <-> apply_tracker_profile()` (core.py line 2154) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_observe_succeeded.py::test_the_tracker_profile_is_applied_to_the_followers_built_after_the_detection"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "        trackers.update(\n            {\n                name: RearAxlePathTracker(\n                    path.poses,\n                    path.directions,\n                    path.curvatures_inv_m,\n                    TrackerConfig(\n                        cruise_speed_mps=speeds[name],\n                        max_curvature_inv_m=settings[\n                            \"tracker_curvature_inv_m\"\n                        ],\n                        max_acceleration_mps2=settings[\n                            \"drive_acceleration_mps2\"\n                        ],\n                        lookahead_m=0.28,\n                        # Same rule as the trackers built\n                        # without perception (observe is\n                        # excluded below and keeps its own\n                        # tracker; the return is 0.03 rad).\n                        position_tolerance_m=(\n                            0.03 if name == \"observe\" else 0.008\n                        ),\n                        yaw_tolerance_rad=(\n                            0.05\n                            if name == \"observe\"\n                            else 0.03\n                            if name == \"return_home\"\n                            else 0.02\n                        ),\n                        # Gear-change cusps are not goals (2026-09-26): the next leg\n                        # starts from the measured pose. Final goals keep the rules above.\n                        cusp_position_tolerance_m=0.03,\n                        cusp_yaw_tolerance_rad=0.05,\n                        # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad\n                        # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).\n                        cusp_brake_window_m=0.008,\n                        # The return holds a cusp heading miss of 0.05-0.08 rad for\n                        # judgement (EPAL 6 fork spacing plan, A').\n                        cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD\n                        if name in CUSP_HEADING_HOLD_PHASES\n                        else None,\n                        # Optional path speed caps; absent from the settings = off.\n                        max_lateral_acceleration_mps2=settings.get(\n                            \"max_lateral_acceleration_mps2\"\n                        ),\n                        max_reverse_speed_mps=settings.get(\n                            \"max_reverse_speed_mps\"\n                        ),\n                        # A stop just past the goal is fine except deeper into\n                        # the pallet: insertion keeps the round 8 mm.\n                        overshoot_tolerance_m=None\n                        if name == \"insert\"\n                        else 0.03,\n                        stop_speed_mps=0.012,\n                        max_cross_track_error_m=0.35,\n                    ),\n                )\n                for name, path in paths.items()\n                if name != \"observe\"\n            }\n        )\n        apply_tracker_profile()\n",
+    "replace": "        apply_tracker_profile()\n        trackers.update(\n            {\n                name: RearAxlePathTracker(\n                    path.poses,\n                    path.directions,\n                    path.curvatures_inv_m,\n                    TrackerConfig(\n                        cruise_speed_mps=speeds[name],\n                        max_curvature_inv_m=settings[\n                            \"tracker_curvature_inv_m\"\n                        ],\n                        max_acceleration_mps2=settings[\n                            \"drive_acceleration_mps2\"\n                        ],\n                        lookahead_m=0.28,\n                        # Same rule as the trackers built\n                        # without perception (observe is\n                        # excluded below and keeps its own\n                        # tracker; the return is 0.03 rad).\n                        position_tolerance_m=(\n                            0.03 if name == \"observe\" else 0.008\n                        ),\n                        yaw_tolerance_rad=(\n                            0.05\n                            if name == \"observe\"\n                            else 0.03\n                            if name == \"return_home\"\n                            else 0.02\n                        ),\n                        # Gear-change cusps are not goals (2026-09-26): the next leg\n                        # starts from the measured pose. Final goals keep the rules above.\n                        cusp_position_tolerance_m=0.03,\n                        cusp_yaw_tolerance_rad=0.05,\n                        # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad\n                        # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).\n                        cusp_brake_window_m=0.008,\n                        # The return holds a cusp heading miss of 0.05-0.08 rad for\n                        # judgement (EPAL 6 fork spacing plan, A').\n                        cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD\n                        if name in CUSP_HEADING_HOLD_PHASES\n                        else None,\n                        # Optional path speed caps; absent from the settings = off.\n                        max_lateral_acceleration_mps2=settings.get(\n                            \"max_lateral_acceleration_mps2\"\n                        ),\n                        max_reverse_speed_mps=settings.get(\n                            \"max_reverse_speed_mps\"\n                        ),\n                        # A stop just past the goal is fine except deeper into\n                        # the pallet: insertion keeps the round 8 mm.\n                        overshoot_tolerance_m=None\n                        if name == \"insert\"\n                        else 0.03,\n                        stop_speed_mps=0.012,\n                        max_cross_track_error_m=0.35,\n                    ),\n                )\n                for name, path in paths.items()\n                if name != \"observe\"\n            }\n        )\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L2312-boundary",
+   "class": "N",
+   "checks": [
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::1",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::2",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::3",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::4",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::5",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::6",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::7",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::8",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::9",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::10",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::11",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::12",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::13",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::14"
+   ],
+   "statement": "operator sweep: boundary on `straight.length_m < near_tracking.REALIGN_MIN_LEFT_M` (core.py line 2312) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_near_capture.py::test_a_recapture_straight_of_exactly_the_minimum_length_is_kept"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                        straight.length_m < near_tracking.REALIGN_MIN_LEFT_M):\n",
+    "replace": "                        straight.length_m <= near_tracking.REALIGN_MIN_LEFT_M):\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L2676-boundary",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::16",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::17",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::18",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::19",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::20",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::21",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::22",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::23",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::24",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::25",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::26",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::27",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::28",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::29",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::30",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::31",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::32",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::33",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::34",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::35",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::36"
+   ],
+   "statement": "operator sweep: boundary on `now_s - last_ <= timeout_` (core.py line 2676) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_rules.py::test_a_scan_exactly_the_timeout_old_is_alive_and_evidence_exactly_the_age_limit_counts"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "        return all(now_s - last_ <= timeout_ for last_ in layer_.last_scan_s.values())\n",
+    "replace": "        return all(now_s - last_ < timeout_ for last_ in layer_.last_scan_s.values())\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L2733-narrow",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::14"
+   ],
+   "statement": "operator sweep: narrow on `ms.phase in ('transport', 'return_home') -> 'return_home'` (core.py line 2733) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_rules.py::test_the_transport_legs_checker_is_its_escape_legs_too"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "        if ms.phase in (\"transport\", \"return_home\"):\n",
+    "replace": "        if ms.phase == 'return_home':\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L2761-narrow",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::16",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::17",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::18",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::19",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::20",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::21",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::22",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::23",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::24",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::25",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::26",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::27",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::28",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::29",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::30",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::31",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::32",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::33",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::34",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::35",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::36"
+   ],
+   "statement": "operator sweep: narrow on `plain_.blocked in ('unknown', 'edge') -> 'unknown'` (core.py line 2761) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_rules.py::test_an_edge_within_the_stopping_distance_refuses_like_an_unknown_cell"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "        unknown_near_ = plain_.blocked in (\"unknown\", \"edge\") and plain_.verified_m < stop_need_\n",
+    "replace": "        unknown_near_ = plain_.blocked == 'unknown' and plain_.verified_m < stop_need_\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L2764-boundary",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::16",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::17",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::18",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::19",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::20",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::21",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::22",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::23",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::24",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::25",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::26",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::27",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::28",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::29",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::30",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::31",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::32",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::33",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::34",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::35",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::36"
+   ],
+   "statement": "operator sweep: boundary on `now_s - last_ > pconf_.sensor_timeout_s` (core.py line 2764) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_rules.py::test_a_scan_exactly_the_timeout_old_is_alive_and_evidence_exactly_the_age_limit_counts"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "        silent_ = sorted(n_ for n_, last_ in layer_.last_scan_s.items() if now_s - last_ > pconf_.sensor_timeout_s)\n",
+    "replace": "        silent_ = sorted(n_ for n_, last_ in layer_.last_scan_s.items() if now_s - last_ >= pconf_.sensor_timeout_s)\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L2766-boundary",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::16",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::17",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::18",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::19",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::20",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::21",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::22",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::23",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::24",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::25",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::26",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::27",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::28",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::29",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::30",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::31",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::32",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::33",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::34",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::35",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::36"
+   ],
+   "statement": "operator sweep: boundary on `age_ <= pconf_.evidence_max_age_s` (core.py line 2766) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_rules.py::test_a_scan_exactly_the_timeout_old_is_alive_and_evidence_exactly_the_age_limit_counts"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "        ok_ = not unknown_near_ and not occupied_ and age_ <= pconf_.evidence_max_age_s and not silent_\n",
+    "replace": "        ok_ = not unknown_near_ and not occupied_ and age_ < pconf_.evidence_max_age_s and not silent_\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L3954-boundary",
+   "class": "N",
+   "checks": [
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::1",
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::2",
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::3",
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::4",
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::5",
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::6",
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::7",
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::8",
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::9",
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::10",
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::11",
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::12",
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::13",
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::14",
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::15",
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::16",
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::17",
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::18",
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::19",
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::20",
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::21",
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::22",
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::23",
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::24",
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::25",
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::26",
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::27",
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::28",
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::29",
+    "tests/integration/test_isaac_transport_cli.py::test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival::30"
+   ],
+   "statement": "operator sweep: boundary on `now_s - since_ < near_tracking.TERMINAL_HOLD_S - 1e-09` (core.py line 3954) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_near_field.py::test_the_terminal_hold_ends_exactly_at_its_length"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "            if now_s - since_ < near_tracking.TERMINAL_HOLD_S - 1e-9:\n",
+    "replace": "            if now_s - since_ <= near_tracking.TERMINAL_HOLD_S - 1e-09:\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L4322-boundary",
+   "class": "N",
+   "checks": [
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::1",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::2",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::3",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::4",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::5",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::6",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::7",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::8",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::9",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::10",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::11",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::12",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::13",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::14"
+   ],
+   "statement": "operator sweep: boundary on `length_ <= near_tracking.REALIGN_MAX_LENGTH_M + 1e-09` (core.py line 4322) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_realign_and_setup.py::test_a_realignment_install_of_exactly_the_maximum_length_is_kept"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "        require(length_ <= near_tracking.REALIGN_MAX_LENGTH_M + 1e-9, f\"near_capture_realign_too_long:{length_:.3f}\")\n",
+    "replace": "        require(length_ < near_tracking.REALIGN_MAX_LENGTH_M + 1e-09, f\"near_capture_realign_too_long:{length_:.3f}\")\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B10:L1028-narrow",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::14"
+   ],
+   "statement": "operator sweep: narrow on `ms.phase in ('transport', 'return_home') -> 'transport' (backoff)` (core.py line 1028) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_blocked_replan.py::test_the_return_leg_backs_off_too"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "            if (ms.phase in (\"transport\", \"return_home\") and backs.get(ms.phase, 0) < BACKOFF_PER_LEG\n",
+    "replace": "            if (ms.phase == \"transport\" and backs.get(ms.phase, 0) < BACKOFF_PER_LEG\n",
+    "count": 1
+   }
   }
  ]
 }

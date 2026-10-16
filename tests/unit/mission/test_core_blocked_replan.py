@@ -494,3 +494,12 @@ def test_a_refused_eleventh_leg_replan_leaves_the_no_progress_watch_alone():
     with pytest.raises(RuntimeError, match="obstacle_replan_limit in observe: 11"):
         w.replan(t=50.0 + 310.0)
     assert w.obstacle["progress"] == {"phase": "observe", "best_m": 2.0, "since_s": 300.0}
+
+
+def test_the_return_leg_backs_off_too():
+    """M-a2 sweep (narrowing): both travel legs back off a failed replan."""
+    back = SimpleNamespace(destination="D2")
+    slam = {"return_scenario": back, "docking": {}, "tracker": SimpleNamespace(mode="tracking")}
+    w = World("return_home", plans=[plan("no_path")] * 2, slam=slam)
+    w.replan()
+    assert w.paths["return_home"].status == "backoff" and w.obstacle["backoffs"] == {"return_home": 1}
