@@ -32,6 +32,22 @@ from forklift_core.mission.replay import ReplayGate, ReplayMismatch, ReplayProxy
 from forklift_core.mission.replay_codec import decode  # noqa: E402
 
 
+class _SiblingFinder:
+    """The runner loads some sibling modules by file under ``run_transport_<stem>`` only inside its setup (the
+    new-obstacle schedule); a record's values name their classes by that module: found here the same way."""
+
+    @staticmethod
+    def find_spec(name, path=None, target=None):
+        if not name.startswith("run_transport_"):
+            return None
+        file_ = ROOT / "sim/isaac" / (name[len("run_transport_"):] + ".py")
+        return importlib.util.spec_from_file_location(name, file_) if file_.is_file() else None
+
+
+if not any(isinstance(f, _SiblingFinder) or f is _SiblingFinder for f in sys.meta_path):
+    sys.meta_path.append(_SiblingFinder)
+
+
 def _install_isaac_value_types() -> None:
     """The Isaac classes recorded by value, as CPU stand-ins under the same import path (decode resolves them,
     and the replayed code's own requests encode to the same qualified name)."""

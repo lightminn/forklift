@@ -119,3 +119,12 @@ def test_a_recorded_system_exit_or_early_failure_is_matched_against_the_recorded
     session.closed = True
     H.check_ending(session, None)
     assert "the replay ended" in session.failure
+
+
+def test_a_sibling_module_the_runner_loads_by_file_in_its_setup_resolves_on_replay():
+    import importlib
+
+    from forklift_core.mission.replay_codec import _resolve
+
+    assert _resolve("run_transport_new_obstacles:Schedule").__name__ == "Schedule"
+    assert importlib.util.find_spec("run_transport_no_such_module") is None
