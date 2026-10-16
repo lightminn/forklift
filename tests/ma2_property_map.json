@@ -1595,6 +1595,791 @@
     ],
     "check_line": "E   AssertionError"
    }
+  },
+  {
+   "id": "B3:R:test_only_a_transport_heading_failure_at_a_cusp_is_replanned",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::3"
+   ],
+   "statement": "only a transport heading failure at a cusp, on the path, within budget (or D7-owned), is replanned",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned"
+   ],
+   "reason": "walks the runner and the core together: the runner's own sites, constants and cross-file order stay guarded by this test as written; the core's behaviour is guarded by the D/N properties beside it"
+  },
+  {
+   "id": "B3:cusp-only-at-cusp",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::3"
+   ],
+   "statement": "a transport heading failure away from a cusp is not replanned",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_observe.py::test_only_a_transport_heading_failure_at_a_cusp_on_the_path_is_replanned"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "and tracking.failure == \"endpoint_heading\"\n            and tracking.at_cusp\n            and not tracking.off_path\n            and (len(state[\"cusp_replans\"])",
+    "replace": "and tracking.failure == \"endpoint_heading\"\n            and not tracking.off_path\n            and (len(state[\"cusp_replans\"])",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_cusp_observe.py::test_only_a_transport_heading_failure_at_a_cusp_on_the_path_is_replanned[miss0]"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B3:R:test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::16"
+   ],
+   "statement": "the cusp replan brakes until stopped for 12 ticks, then plans the transport leg with the leg's tracker rules",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules"
+   ],
+   "reason": "walks the runner and the core together: the runner's own sites, constants and cross-file order stay guarded by this test as written; the core's behaviour is guarded by the D/N properties beside it"
+  },
+  {
+   "id": "B3:cusp-waits-12",
+   "class": "D",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::16"
+   ],
+   "statement": "the cusp replan waits 12 standing ticks before planning",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_observe.py::test_a_transport_cusp_miss_brakes_until_stopped_for_12_ticks_then_replans_the_leg"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "cusp_stop_ticks < cusp_stop_needed",
+    "replace": "cusp_stop_ticks < 1",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_cusp_observe.py::test_a_transport_cusp_miss_brakes_until_stopped_for_12_ticks_then_replans_the_leg"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B3:cusp-brakes-while-moving",
+   "class": "D",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::16"
+   ],
+   "statement": "while not stopped the cusp miss keeps braking",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_observe.py::test_a_transport_cusp_miss_brakes_until_stopped_for_12_ticks_then_replans_the_leg"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "replace(tracking, status=\"braking\")",
+    "replace": "replace(tracking, status=\"failed\")",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_cusp_observe.py::test_a_transport_cusp_miss_brakes_until_stopped_for_12_ticks_then_replans_the_leg"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B3:R:test_the_extended_ladder_is_a_second_pass_for_the_first_observation_only",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_extended_ladder_is_a_second_pass_for_the_first_observation_only::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_extended_ladder_is_a_second_pass_for_the_first_observation_only::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_extended_ladder_is_a_second_pass_for_the_first_observation_only::3"
+   ],
+   "statement": "the extended ladder is a second pass of the first observation only; re-observation stays on the earlier ladder",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_extended_ladder_is_a_second_pass_for_the_first_observation_only"
+   ],
+   "reason": "walks the runner and the core together: the runner's own sites, constants and cross-file order stay guarded by this test as written; the core's behaviour is guarded by the D/N properties beside it"
+  },
+  {
+   "id": "B3:reobserve-earlier-ladder",
+   "class": "D",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_extended_ladder_is_a_second_pass_for_the_first_observation_only::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_extended_ladder_is_a_second_pass_for_the_first_observation_only::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_extended_ladder_is_a_second_pass_for_the_first_observation_only::3"
+   ],
+   "statement": "the re-observation plans its candidates on the earlier ladder",
+   "tests": [
+    "tests/unit/mission/test_core_observe_failed.py::test_the_first_reachable_candidate_is_installed_as_the_observe_leg"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                extended=False,\n                **grid_kwargs(\"observe\"),\n            )\n            state[\"observation_candidates\"].append(",
+    "replace": "                extended=True,\n                **grid_kwargs(\"observe\"),\n            )\n            state[\"observation_candidates\"].append(",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_observe_failed.py::test_the_first_reachable_candidate_is_installed_as_the_observe_leg"
+    ],
+    "check_line": "E   assert "
+   }
+  },
+  {
+   "id": "B3:R:test_the_legacy_mount_keeps_the_recorded_camera_exactly",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_legacy_mount_keeps_the_recorded_camera_exactly::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_legacy_mount_keeps_the_recorded_camera_exactly::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_legacy_mount_keeps_the_recorded_camera_exactly::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_legacy_mount_keeps_the_recorded_camera_exactly::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_legacy_mount_keeps_the_recorded_camera_exactly::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_legacy_mount_keeps_the_recorded_camera_exactly::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_legacy_mount_keeps_the_recorded_camera_exactly::7"
+   ],
+   "statement": "the legacy mount keeps the recorded camera",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_legacy_mount_keeps_the_recorded_camera_exactly"
+   ],
+   "reason": "the code it guards stays in the runner (camera mounts, new-obstacle rules, the truth evaluator, same_path)"
+  },
+  {
+   "id": "B3:R:test_both_cameras_use_the_same_parent_and_orientation",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_both_cameras_use_the_same_parent_and_orientation::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_both_cameras_use_the_same_parent_and_orientation::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_both_cameras_use_the_same_parent_and_orientation::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_both_cameras_use_the_same_parent_and_orientation::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_both_cameras_use_the_same_parent_and_orientation::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_both_cameras_use_the_same_parent_and_orientation::6"
+   ],
+   "statement": "the cameras share the mount parent and orientation",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_both_cameras_use_the_same_parent_and_orientation"
+   ],
+   "reason": "the code it guards stays in the runner (camera mounts, new-obstacle rules, the truth evaluator, same_path)"
+  },
+  {
+   "id": "B3:R:test_the_carriage_mount_is_guarded_and_checked",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_carriage_mount_is_guarded_and_checked::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_carriage_mount_is_guarded_and_checked::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_carriage_mount_is_guarded_and_checked::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_carriage_mount_is_guarded_and_checked::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_carriage_mount_is_guarded_and_checked::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_carriage_mount_is_guarded_and_checked::6"
+   ],
+   "statement": "the carriage mount is lift-guarded and checked",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_carriage_mount_is_guarded_and_checked"
+   ],
+   "reason": "the code it guards stays in the runner (camera mounts, new-obstacle rules, the truth evaluator, same_path)"
+  },
+  {
+   "id": "B3:R:test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount::9"
+   ],
+   "statement": "both detection paths round the depth only when asked; attempts record the mount and the quantisation",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount"
+   ],
+   "reason": "walks the runner and the core together: the runner's own sites, constants and cross-file order stay guarded by this test as written; the core's behaviour is guarded by the D/N properties beside it"
+  },
+  {
+   "id": "B3:detector-quantize",
+   "class": "D",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount::9"
+   ],
+   "statement": "the observe arrival's detection sees the depth rounded by the run's setting",
+   "tests": [
+    "tests/unit/mission/test_core_capture.py::test_the_rear_axle_sits_behind_the_base_along_any_heading_and_the_detector_sees_rounded_depth"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "scene_input, options.depth_quantize_mm",
+    "replace": "scene_input, 0",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_capture.py::test_the_rear_axle_sits_behind_the_base_along_any_heading_and_the_detector_sees_rounded_depth"
+    ],
+    "check_line": "E   assert "
+   }
+  },
+  {
+   "id": "B3:attempt-records-quantize",
+   "class": "D",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount::9"
+   ],
+   "statement": "an observation attempt records the depth quantisation",
+   "tests": [
+    "tests/unit/mission/test_core_capture.py::test_the_capture_is_recorded_dumped_and_its_accepted_pose_is_the_capture_base"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "attempt[\"depth_quantize_mm\"] = options.depth_quantize_mm",
+    "replace": "attempt[\"depth_quantize_mm\"] = 0",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_capture.py::test_the_capture_is_recorded_dumped_and_its_accepted_pose_is_the_capture_base"
+    ],
+    "check_line": "E   assert "
+   }
+  },
+  {
+   "id": "B3:R:test_same_path_is_the_remaining_part_again",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_is_the_remaining_part_again::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_is_the_remaining_part_again::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_is_the_remaining_part_again::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_is_the_remaining_part_again::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_is_the_remaining_part_again::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_is_the_remaining_part_again::6"
+   ],
+   "statement": "same_path is the remaining part of the current path again",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_is_the_remaining_part_again"
+   ],
+   "reason": "the code it guards stays in the runner (camera mounts, new-obstacle rules, the truth evaluator, same_path)"
+  },
+  {
+   "id": "B3:same-path-not-counted",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_waits_do_not_count_as_retries::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_waits_do_not_count_as_retries::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_waits_do_not_count_as_retries::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_waits_do_not_count_as_retries::4"
+   ],
+   "statement": "a same-path wait never counts towards the replan limits",
+   "tests": [
+    "tests/unit/mission/test_core_blocked_replan.py::test_same_path_waits_between_new_paths_never_reach_the_replan_limits"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "and not r.get(\"same_path\")",
+    "replace": "and True",
+    "count": 2
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_blocked_replan.py::test_same_path_waits_between_new_paths_never_reach_the_replan_limits"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B3:same-path-before-limit",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_retry_limit_is_checked_after_the_same_path_test::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_retry_limit_is_checked_after_the_same_path_test::2"
+   ],
+   "statement": "the replan limits are checked only after the same-path test (a same-path wait never ends the run)",
+   "tests": [
+    "tests/unit/mission/test_core_blocked_replan.py::test_same_path_waits_between_new_paths_never_reach_the_replan_limits"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "and not r.get(\"same_path\")",
+    "replace": "and True",
+    "count": 2
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_blocked_replan.py::test_same_path_waits_between_new_paths_never_reach_the_replan_limits"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B3:R:test_wheel_target_brakes_at_the_stopping_model_deceleration",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_wheel_target_brakes_at_the_stopping_model_deceleration::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_wheel_target_brakes_at_the_stopping_model_deceleration::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_wheel_target_brakes_at_the_stopping_model_deceleration::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_wheel_target_brakes_at_the_stopping_model_deceleration::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_wheel_target_brakes_at_the_stopping_model_deceleration::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_wheel_target_brakes_at_the_stopping_model_deceleration::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_wheel_target_brakes_at_the_stopping_model_deceleration::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_wheel_target_brakes_at_the_stopping_model_deceleration::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_wheel_target_brakes_at_the_stopping_model_deceleration::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_wheel_target_brakes_at_the_stopping_model_deceleration::10"
+   ],
+   "statement": "the wheel target brakes at the stopping model's deceleration, the creep is slewed, the cap and stops come after",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_wheel_target_brakes_at_the_stopping_model_deceleration"
+   ],
+   "reason": "walks the runner and the core together: the runner's own sites, constants and cross-file order stay guarded by this test as written; the core's behaviour is guarded by the D/N properties beside it"
+  },
+  {
+   "id": "B3:wheel-brake-decel",
+   "class": "D",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_wheel_target_brakes_at_the_stopping_model_deceleration::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_wheel_target_brakes_at_the_stopping_model_deceleration::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_wheel_target_brakes_at_the_stopping_model_deceleration::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_wheel_target_brakes_at_the_stopping_model_deceleration::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_wheel_target_brakes_at_the_stopping_model_deceleration::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_wheel_target_brakes_at_the_stopping_model_deceleration::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_wheel_target_brakes_at_the_stopping_model_deceleration::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_wheel_target_brakes_at_the_stopping_model_deceleration::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_wheel_target_brakes_at_the_stopping_model_deceleration::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_wheel_target_brakes_at_the_stopping_model_deceleration::10"
+   ],
+   "statement": "the slewed wheel target slows at the stopping model's deceleration",
+   "tests": [
+    "tests/unit/mission/test_core_command_assembly.py::test_the_wheel_speed_is_slewed_capped_by_the_permission_and_stepped_to_zero_by_a_stop"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "rate = (obstacle[\"layer\"].permission.config.stopping.decel_mps2",
+    "replace": "rate = (COMMAND_ACCEL_MPS2",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_command_assembly.py::test_the_wheel_speed_is_slewed_capped_by_the_permission_and_stepped_to_zero_by_a_stop"
+    ],
+    "check_line": "E   assert "
+   }
+  },
+  {
+   "id": "B3:loose-observe-arrival",
+   "class": "D",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_loose_arrival_only_at_observation_waypoints::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_loose_arrival_only_at_observation_waypoints::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_loose_arrival_only_at_observation_waypoints::3"
+   ],
+   "statement": "an observation waypoint accepts a loose arrival when standing at the path end",
+   "tests": [
+    "tests/unit/mission/test_core_command.py::test_an_observe_leg_standing_off_its_end_within_tolerance_arrives_after_a_second"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "and tracking.position_error_m <= OBSERVE_ARRIVAL_M",
+    "replace": "and tracking.position_error_m <= -1.0",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_command.py::test_an_observe_leg_standing_off_its_end_within_tolerance_arrives_after_a_second"
+    ],
+    "check_line": "tests/unit/mission/test_core_command.py:139"
+   }
+  },
+  {
+   "id": "B3:live-plan-retries",
+   "class": "D",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_live_plan_stands_and_retries::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_live_plan_stands_and_retries::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_live_plan_stands_and_retries::3"
+   ],
+   "statement": "a failed live plan stands, retries after a second and refuses on the fifth",
+   "tests": [
+    "tests/unit/mission/test_core_live_leg.py::test_a_failed_live_plan_retries_after_a_second_and_refuses_on_the_fifth"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "tries < 5",
+    "replace": "tries < 6",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_live_leg.py::test_a_failed_live_plan_retries_after_a_second_and_refuses_on_the_fifth"
+    ],
+    "check_line": "E   Failed: DID NOT RAISE"
+   }
+  },
+  {
+   "id": "B3:live-plan-retry-second",
+   "class": "D",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_live_plan_stands_and_retries::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_live_plan_stands_and_retries::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_live_plan_stands_and_retries::3"
+   ],
+   "statement": "a failed live plan retries after one second",
+   "tests": [
+    "tests/unit/mission/test_core_live_leg.py::test_a_failed_live_plan_retries_after_a_second_and_refuses_on_the_fifth"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "live_retry_after_s\"] = t + 1.0",
+    "replace": "live_retry_after_s\"] = t + 3.0",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_live_leg.py::test_a_failed_live_plan_retries_after_a_second_and_refuses_on_the_fifth"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B3:R:test_a_failed_blocked_replan_stands_and_retries",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_blocked_replan_stands_and_retries::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_blocked_replan_stands_and_retries::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_blocked_replan_stands_and_retries::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_blocked_replan_stands_and_retries::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_blocked_replan_stands_and_retries::5"
+   ],
+   "statement": "a failed blocked replan stands and retries; the live leg runs before the command assembly",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_blocked_replan_stands_and_retries"
+   ],
+   "reason": "walks the runner and the core together: the runner's own sites, constants and cross-file order stay guarded by this test as written; the core's behaviour is guarded by the D/N properties beside it"
+  },
+  {
+   "id": "B3:blocked-replan-fifth",
+   "class": "D",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_blocked_replan_stands_and_retries::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_blocked_replan_stands_and_retries::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_blocked_replan_stands_and_retries::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_blocked_replan_stands_and_retries::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_blocked_replan_stands_and_retries::5"
+   ],
+   "statement": "a failed blocked replan refuses on the fifth failure",
+   "tests": [
+    "tests/unit/mission/test_core_blocked_replan.py::test_a_failed_replan_waits_backs_off_against_the_leg_and_refuses_on_the_fifth_failure"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "failures < 5",
+    "replace": "failures < 6",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_blocked_replan.py::test_a_failed_replan_waits_backs_off_against_the_leg_and_refuses_on_the_fifth_failure"
+    ],
+    "check_line": "E   Failed: DID NOT RAISE"
+   }
+  },
+  {
+   "id": "B3:R:test_a_failed_replan_backs_off_a_bounded_distance_then_replans",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::14"
+   ],
+   "statement": "a failed replan backs off 0.30 m at 0.15 m/s, twice per leg, against the leg, then replans",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans"
+   ],
+   "reason": "walks the runner and the core together: the runner's own sites, constants and cross-file order stay guarded by this test as written; the core's behaviour is guarded by the D/N properties beside it"
+  },
+  {
+   "id": "B3:backoff-against-leg",
+   "class": "D",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::14"
+   ],
+   "statement": "the backoff drives against the leg's direction",
+   "tests": [
+    "tests/unit/mission/test_core_blocked_replan.py::test_a_failed_replan_waits_backs_off_against_the_leg_and_refuses_on_the_fifth_failure"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "d = -1 if leg_dir >= 0 else 1",
+    "replace": "d = 1 if leg_dir >= 0 else -1",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_blocked_replan.py::test_a_failed_replan_waits_backs_off_against_the_leg_and_refuses_on_the_fifth_failure"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B3:backoff-budget",
+   "class": "D",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::14"
+   ],
+   "statement": "the backoff budget is per leg",
+   "tests": [
+    "tests/unit/mission/test_core_blocked_replan.py::test_a_failed_replan_waits_backs_off_against_the_leg_and_refuses_on_the_fifth_failure"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "backs.get(ms.phase, 0) < BACKOFF_PER_LEG",
+    "replace": "backs.get(ms.phase, 0) < 99",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_blocked_replan.py::test_a_failed_replan_waits_backs_off_against_the_leg_and_refuses_on_the_fifth_failure"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B3:R:test_new_obstacle_rules_get_the_leg_direction_the_pallet_face_and_can_silence_the_depth_camera",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_new_obstacle_rules_get_the_leg_direction_the_pallet_face_and_can_silence_the_depth_camera::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_new_obstacle_rules_get_the_leg_direction_the_pallet_face_and_can_silence_the_depth_camera::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_new_obstacle_rules_get_the_leg_direction_the_pallet_face_and_can_silence_the_depth_camera::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_new_obstacle_rules_get_the_leg_direction_the_pallet_face_and_can_silence_the_depth_camera::4"
+   ],
+   "statement": "the new-obstacle rules get the leg direction and the pallet face and can silence the depth camera",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_new_obstacle_rules_get_the_leg_direction_the_pallet_face_and_can_silence_the_depth_camera"
+   ],
+   "reason": "the code it guards stays in the runner (camera mounts, new-obstacle rules, the truth evaluator, same_path)"
+  },
+  {
+   "id": "B3:R:test_pocket_bars_are_judged_against_the_block_columns_not_the_outline",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_pocket_bars_are_judged_against_the_block_columns_not_the_outline::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_pocket_bars_are_judged_against_the_block_columns_not_the_outline::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_pocket_bars_are_judged_against_the_block_columns_not_the_outline::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_pocket_bars_are_judged_against_the_block_columns_not_the_outline::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_pocket_bars_are_judged_against_the_block_columns_not_the_outline::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_pocket_bars_are_judged_against_the_block_columns_not_the_outline::6"
+   ],
+   "statement": "pocket bars are judged against the block columns, not the outline",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_pocket_bars_are_judged_against_the_block_columns_not_the_outline"
+   ],
+   "reason": "the code it guards stays in the runner (camera mounts, new-obstacle rules, the truth evaluator, same_path)"
+  },
+  {
+   "id": "B3:R:test_a_backoff_offers_no_leg_to_the_rules_and_silence_is_traced",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_backoff_offers_no_leg_to_the_rules_and_silence_is_traced::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_backoff_offers_no_leg_to_the_rules_and_silence_is_traced::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_backoff_offers_no_leg_to_the_rules_and_silence_is_traced::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_backoff_offers_no_leg_to_the_rules_and_silence_is_traced::4"
+   ],
+   "statement": "a backoff offers no leg to the rules and the sensor silence is traced",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_backoff_offers_no_leg_to_the_rules_and_silence_is_traced"
+   ],
+   "reason": "walks the runner and the core together: the runner's own sites, constants and cross-file order stay guarded by this test as written; the core's behaviour is guarded by the D/N properties beside it"
+  },
+  {
+   "id": "B3:silence-traced",
+   "class": "D",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_backoff_offers_no_leg_to_the_rules_and_silence_is_traced::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_backoff_offers_no_leg_to_the_rules_and_silence_is_traced::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_backoff_offers_no_leg_to_the_rules_and_silence_is_traced::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_backoff_offers_no_leg_to_the_rules_and_silence_is_traced::4"
+   ],
+   "statement": "the sensor silence trace records when the limit first went to zero",
+   "tests": [
+    "tests/unit/mission/test_core_permission.py::test_sensor_silence_ends_the_run_after_one_second_standing"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "trace.setdefault(\"first_zero_s\", t)",
+    "replace": "trace.setdefault(\"first_zero_s\", -1.0)",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_permission.py::test_sensor_silence_ends_the_run_after_one_second_standing"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B3:R:test_pocket_bars_meet_the_pallet_solids_exactly",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_pocket_bars_meet_the_pallet_solids_exactly::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_pocket_bars_meet_the_pallet_solids_exactly::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_pocket_bars_meet_the_pallet_solids_exactly::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_pocket_bars_meet_the_pallet_solids_exactly::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_pocket_bars_meet_the_pallet_solids_exactly::5"
+   ],
+   "statement": "pocket bars meet the pallet solids exactly",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_pocket_bars_meet_the_pallet_solids_exactly"
+   ],
+   "reason": "the code it guards stays in the runner (camera mounts, new-obstacle rules, the truth evaluator, same_path)"
+  },
+  {
+   "id": "B3:R:test_the_n3_straight_follows_the_leg_direction",
+   "class": "R",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_n3_straight_follows_the_leg_direction::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_n3_straight_follows_the_leg_direction::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_n3_straight_follows_the_leg_direction::3"
+   ],
+   "statement": "the N3 straight follows the leg direction",
+   "tests": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_n3_straight_follows_the_leg_direction"
+   ],
+   "reason": "the code it guards stays in the runner (camera mounts, new-obstacle rules, the truth evaluator, same_path)"
   }
  ]
 }

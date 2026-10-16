@@ -282,3 +282,17 @@ def test_an_observe_recovery_held_in_a_realignment_ends_the_run_and_a_failed_rep
     with pytest.raises(RuntimeError, match="observe_replan_failed:no_path"):
         w.tick(OBSERVE_MISS)
     assert w.state["observe_replans"][-1]["status"] == "no_path"
+
+
+# M-a2 (docs/plans/2026-10-16-m-a2-source-tests-to-behaviour.md): which transport failures the cusp replan takes.
+@pytest.mark.parametrize("miss", [
+    Tracking(status="failed", failure="endpoint_heading", at_cusp=False),           # not at a cusp
+    Tracking(status="failed", failure="endpoint_heading", at_cusp=True, off_path=True),  # off the path
+    Tracking(status="failed", failure="endpoint_position", at_cusp=True),           # a position failure
+])
+def test_only_a_transport_heading_failure_at_a_cusp_on_the_path_is_replanned(miss):
+    w = World(plans=[plan()])
+    for _ in range(13):
+        out = w.tick(miss)
+    assert "plan_transport_leg" not in w.names() and out.tracking.status == "failed"
+    assert w.state.get("cusp_replans", []) == []

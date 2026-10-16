@@ -360,3 +360,18 @@ def test_every_obstacle_fallback_candidate_record_keeps_its_start_status_and_sea
     records = w.state["observation_candidates"]
     assert records and all({"search_attempts", "start_rear", "status"} <= set(r) for r in records)
     assert [r["status"] for r in records] == ["invalid_goal", "success"]
+
+
+def test_same_path_waits_between_new_paths_never_reach_the_replan_limits():
+    """M-a2: a same-path wait is neither a 30 s replan nor a leg replan -- two new paths, five waits, one more new
+    path inside 30 s is three, under the limit."""
+    w = World("observe", plans=[plan()] * 8)
+    answers = iter([False, False, True, True, True, True, True, False])
+    w.hooks.same_path = lambda new, cur, rem: next(answers)
+    for k in range(8):
+        try:
+            w.replan(t=50.0 + k)
+        except RuntimeError as exc:  # a limit reached: a same-path wait was counted
+            raise AssertionError(f"replan {k} refused: {exc}") from exc
+    replans = w.obstacle["replans"]
+    assert [bool(r.get("same_path")) for r in replans] == [False, False, True, True, True, True, True, False]

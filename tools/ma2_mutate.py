@@ -47,6 +47,22 @@ def run_tests(tree: Path, nodeids: list[str]) -> tuple[int, str]:
     return proc.returncode, proc.stdout[-6000:] + proc.stderr[-2000:]
 
 
+def _failure_on_an_assert(tree: Path, out: str, nodeids: list[str]) -> str | None:
+    """The failing location when it is an ``assert`` statement of one of the guarding tests (an exception raised
+    while evaluating the assertion -- a missing key, an index -- is that check failing, Codex 2.3)."""
+    import ast
+
+    files = {n.split("::")[0] for n in nodeids}
+    for path, line in re.findall(r"^(\S+\.py):(\d+): \w+", out, re.M):
+        if path not in files:
+            continue
+        tree_ = ast.parse((tree / path).read_text())
+        for node in ast.walk(tree_):
+            if isinstance(node, ast.Assert) and node.lineno <= int(line) <= (node.end_lineno or node.lineno):
+                return f"{path}:{line}"
+    return None
+
+
 def evidence_for(tree: Path, prop: dict) -> dict:
     mutation, nodeids = prop["mutation"], prop["tests"]
     target = tree / mutation["file"]
@@ -69,13 +85,14 @@ def evidence_for(tree: Path, prop: dict) -> dict:
         mutated = "passed"
     elif NOT_A_CHECK.search(out) and not CHECK_FAILURE.search(out):
         mutated = "failed_not_on_check"
-    elif CHECK_FAILURE.search(out):
+    elif CHECK_FAILURE.search(out) or _failure_on_an_assert(tree, out, nodeids):
         mutated = "failed_on_check"
     else:
         mutated = "failed_other"
     failing = re.findall(r"^FAILED (\S+)", out, re.M)
     return {"baseline": "passed", "mutated": mutated, "failing_tests": failing[:5],
-            "check_line": (CHECK_FAILURE.search(out).group(0)[:200] if CHECK_FAILURE.search(out) else None)}
+            "check_line": (CHECK_FAILURE.search(out).group(0)[:200] if CHECK_FAILURE.search(out)
+                           else _failure_on_an_assert(tree, out, nodeids))}
 
 
 def main(argv=None) -> int:
