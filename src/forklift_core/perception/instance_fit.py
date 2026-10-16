@@ -663,23 +663,26 @@ def read_parametric_face(face: FacePlane, pts_u, pts_h, rays, support_z: float, 
         # rays outnumbering the see-through ones flagged 0 of 166 true ends clean, 2-4 of ~150 noisy.
         cont = deck & window & (rc == FACE) & ~owned
         seen_behind = (deck & window & (rc == BEHIND)).sum()
-        continued = cont.sum() >= params.edge_min_hits and cont.sum() > seen_behind
+        continued = cont.sum() >= params.edge_min_hits and cont.sum() >= seen_behind
         # Seeing nothing at deck height is not seeing an end: missing depth there could hide a
         # continuing deck (Codex review A round 2). Dev cost: 1 of ~490 true ends.
         # Occluded at deck height is not observed either (Codex review A round 3).
         missing = (deck & window & ((rc == UNOBSERVED) | (rc == FRONT))).sum()
-        unseen = missing >= params.edge_min_hits and missing > seen_behind
+        unseen = missing >= params.edge_min_hits and missing >= seen_behind
         # And open space must be seen at deck height: lane-height see-through alone can be a
         # neighbour's openings beyond a cut (Codex review A round 4). Dev cost: 10-13 of ~125 true ends.
         # Continuation and unseen rays are both evidence against an end: split between the two they
         # must not outweigh the open space either (Codex review A round 5: behind 24, face 18,
-        # missing 18 passed each check alone).
+        # missing 18 passed each check alone), and a tie is not an end (round 6: 30 against 30).
+        # No wider margin is possible from a single frame: under the provisional noise true ends
+        # reach 1.15-2.4 against per behind ray at the tail (dev 2026-10-16). Cut masks belong to the
+        # split hypothesis of design 7.4-3 (stage 2B-2, with the proposer that produces them).
         against = cont.sum() + missing
         ends.append(bool(((beyond & (rc == BEHIND)).sum() >= params.edge_min_hits)
                          and ((beyond & (rc == FRONT)).sum() < params.edge_min_hits)
                          and seen_behind >= params.edge_min_hits
                          and not continued and not unseen
-                         and not (against >= params.edge_min_hits and against > seen_behind)))
+                         and not (against >= params.edge_min_hits and against >= seen_behind)))
     layout = FaceLayout("x", umax - umin, math.nan,
                         tuple((lo * b + umin - c, hi * b + umin - c) for lo, hi in members),
                         tuple((lo * b + umin - c, hi * b + umin - c) for lo, hi in openings),
