@@ -11,18 +11,28 @@ Plan: `docs/plans/2026-10-16-m-a2-source-tests-to-behaviour.md` (2nd edition, se
   tests deleted). **No production change**: `git diff 5faf5e9..2032d1e -- src sim` is empty, so the section 2.6
   gate (M-a1 replay of the 29 records) does not apply.
 
-## Acceptance
+## Acceptance (final, `293c90f`)
 
 | Criterion | Result | Evidence |
 |---|---|---|
-| Every frozen check accounted for; every property D/N/R/S/X; D/N with mutation evidence | 306 properties, 920/920 checks, 0 problems | `python tools/ma2_property_check.py --complete` |
-| Mutation evidence re-run on the final tree | 154 D/N properties at `2032d1e` (the four added after the Codex review below have their own evidence from the same tool): baseline passed and the mutation failed on a check, 0 without valid evidence | ws1 Slurm job 3126 (`tools/ma2_mutate.py --write` on a clone of `2032d1e`), evidence written into the map |
-| Checker self-test | passes (a removed entry or erased evidence fails the checker) | `tests/unit/tools/test_ma2_property_map.py` |
-| ws1 full suite: the known failures, nothing new | 10 failed, 3502 passed, 19 skipped; the failed set equals `2026-10-16-m-a2-known-failures.txt` exactly | `~/bin/forklift-ws1-pytest -rfE tests` at `2032d1e` |
-| `core.py` coverage does not fall | 2121 statements, 650 branches: missed lines 25 -> 21, partial branches 41 -> 40 (97 % -> 98 %) | ws1 jobs 3121 (`f3d0812`) and 3125 (`2032d1e`), `pytest tests --ignore=tests/simulation --cov=forklift_core.mission --cov-branch` |
+| Every frozen check accounted for; every property D/N/R/S/X; D/N with mutation evidence | 405 properties, 920/920 checks, 0 problems | `python tools/ma2_property_check.py --complete` |
+| Mutation evidence re-run on the final tree | every D/N property (257): baseline passed and the mutation failed on a check | ws1 Slurm job 3174 (`tools/ma2_mutate.py --write` on a clone of `293c90f`), evidence written into the map |
+| Checker self-test | passes | `tests/unit/tools/test_ma2_property_map.py` |
+| ws1 full suite: the known failures, nothing new | 10 failed, 3572 passed, 19 skipped at `f30cc56` (`-rfE tests`); 10 failed, 3494 passed, 18 skipped at `293c90f` (`--ignore=tests/simulation`, with coverage); the failed set equals `2026-10-16-m-a2-known-failures.txt` both times | `~/bin/forklift-ws1-pytest -rfE tests`; ws1 job 3173 |
+| `core.py` coverage does not fall | 2121 statements, 650 branches: missed lines 25 -> 10, partial branches 41 -> 36 (97 % -> 98 %) | ws1 jobs 3121 (`f3d0812`) and 3173 (`293c90f`), `pytest tests --ignore=tests/simulation --cov=forklift_core.mission --cov-branch` |
+| Codex implementation review | converged at round 6 (no new P1/P2) | rounds 1-5: P2 5, 5, 3, 4, 1 -- see below |
 
-The coverage runs ignore `tests/simulation`; both sides do, so the comparison is like for like. Their own failure
-counts (14 at `f3d0812`, 10 at `2032d1e`) differ by the four planning-config source tests `5388e21` fixed.
+The coverage runs ignore `tests/simulation`; both sides do, so the comparison is like for like.
+
+## The core sweep
+
+Codex kept finding core-side conditions no behaviour test held, one sample at a time, so `tools/ma2_core_sweep.py`
+mutates every core place the frozen source tests read (each first line of an asserted string of 12+ characters,
+every occurrence up to ten; at the base revision, deleted tests included): drop an and/or operand, force an if test,
+`pass` a simple statement, and with `--operators` move a comparison across its boundary, narrow a membership, swap
+dependent neighbouring statements. Survivors got behaviour tests; `--emit` turns them into properties (batches 9-11).
+Final state: every survivor is either killed, the unreachable backoff site (X), or one of 138 swaps judged equivalent
+under the rule in `2026-10-16-m-a2-sweep-equivalent.json` (each with its category; Codex round 6 re-checked them).
 
 ## Classes
 
@@ -34,7 +44,7 @@ counts (14 at `f3d0812`, 10 at `2032d1e`) differ by the four planning-config sou
 | S | structural ban kept as an AST check | the test kept as written |
 | X | not a property (a path used as data, or unreachable code) | reason recorded |
 
-Counts in the final map: D 124, N 34, R 126, S 2, X 20 (`jq '[.properties[].class] | group_by(.) | map({(.[0]): length}) | add' tests/ma2_property_map.json`).
+Counts in the final map: D 124, N 133, R 126, S 2, X 20 (`jq '[.properties[].class] | group_by(.) | map({(.[0]): length}) | add' tests/ma2_property_map.json`).
 
 ## Notable decisions
 
@@ -57,3 +67,8 @@ Counts in the final map: D 124, N 34, R 126, S 2, X 20 (`jq '[.properties[].clas
   upper bound per leg. Each got a new behaviour test and a mutation that breaks exactly it (`B2:mission-plan-config`,
   `B3:failed-escape-not-counted`, `B3:same-path-before-limit` re-pointed, `B3:loose-arrival-observe-only`,
   `B4:escape-budget-bound`); the X verdict on the backoff site and the batch-0 X list were confirmed.
+- Rounds 2-6: P2 5 (each count and excluded kind, the cusp replan's leg and config, no escape in a re-approach, the
+  retry's order), 3 (the return leg's escape, the small jump's bound, the release's order), 4 (orders first judged
+  equivalent: the refusal before the wait, a callback's import, the paths file's payload, the release's poses), 1 (a
+  refused install leaves the new follower unrun), then none. Each became a behaviour test and a mutation that breaks
+  exactly it; from round 2 on the core sweep looked for the same kinds everywhere.
