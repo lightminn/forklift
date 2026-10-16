@@ -311,12 +311,16 @@ def test_a_placement_shifted_by_a_member_pitch_competes_with_the_true_one():
         assert cand is None or any(r.startswith("competing:") for r in cand.reasons) or cand.geometry != "fitted"
 
 
-def test_the_shifted_rival_keeps_the_target_ambiguous_through_selection():
+@pytest.mark.parametrize("occluders", [
+    [scene_rig.Box((1.2, 0.4, 0.2), (0.05, 0.77, 0.4)), scene_rig.Box((1.2, -0.5, 0.2), (0.05, 0.72, 0.4))],
+    # review A round 3: a third placement near the true centre (0.9696 against 0.9797) was dropped
+    [scene_rig.Box((1.2, 0.4, 0.1), (0.05, 0.75, 0.2)), scene_rig.Box((1.2, -0.4, 0.1), (0.05, 0.75, 0.2))],
+])
+def test_the_shifted_rival_keeps_the_target_ambiguous_through_selection(occluders):
     """Codex review A round 2: with a second T11 at (3.2, 0) and an instruction at (2.6, 0) r 0.62 both
     centres are inside, but the front candidate's wrong best centre (2.0, -0.286) fell outside and the
     back one was selected. The rival placement's centre travels with the candidate."""
     from forklift_core.perception.target_selection import select_target
-    occluders = [scene_rig.Box((1.2, 0.4, 0.2), (0.05, 0.77, 0.4)), scene_rig.Box((1.2, -0.5, 0.2), (0.05, 0.72, 0.4))]
     scene, ids = _render([(T11, rt.Placement(2.0, 0.0, 0.0, 0.0), ()), (T11, rt.Placement(3.2, 0.0, 0.0, 0.0), ())],
                          distractors=occluders)
     props = [InstanceProposal(f"p{k}", ids == k, 1.0, "oracle") for k in (0, 1) if (ids == k).any()]

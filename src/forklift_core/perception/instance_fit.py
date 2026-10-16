@@ -329,6 +329,8 @@ class Placement2D:
     support_z: float
     runner_up_score: float = -math.inf   # best separate local maximum of the same raster
     runner_up_u: float = math.nan
+    close_maxima: tuple = ()             # (score, u_centre, support_z) of every separate local maximum
+                                         # within ambiguity_margin of this placement's score
 
 
 def best_placement(occ, pts_u, pts_h, rays, params: FitParams, h_lo: float, n_shift: int,
@@ -370,9 +372,13 @@ def best_placement(occ, pts_u, pts_h, rays, params: FitParams, h_lo: float, n_sh
     far = np.abs(np.arange(len(profile)) - j) * b > params.separate_placement_m
     others = np.nonzero(local & far)[0]
     k = int(others[np.argmax(profile[others])]) if len(others) else None
+    # Every separate maximum within the ambiguity margin is kept, not only the runner-up (Codex
+    # review A round 3: a third placement near the true centre was lost and a target looked unique).
+    close = sorted(((float(profile[i]), u0 + (i + nu_t / 2) * b, h_lo + int(np.argmax(grid[:, i])) * b)
+                    for i in others if profile[i] >= profile[j] - params.ambiguity_margin), reverse=True)
     return Placement2D(float(profile[j]), u0 + (j + nu_t / 2) * b, h_lo + s * b,
                        float(profile[k]) if k is not None else -math.inf,
-                       u0 + (k + nu_t / 2) * b if k is not None else math.nan)
+                       u0 + (k + nu_t / 2) * b if k is not None else math.nan, tuple(close))
 
 
 @dataclass(frozen=True)
@@ -642,13 +648,16 @@ def fit_instance(scene: SceneInput, proposal: InstanceProposal, *, specs: dict, 
     # instruction's radius if any of them is (Codex review A round 2).
     competing = []
     close = hyp.placement.score - params.ambiguity_margin
-    if hyp.placement.runner_up_score >= close:
-        shifted = face.centre_xy + face.left_xy * hyp.placement.runner_up_u + face.insertion_xy * layout.depth_m / 2
-        competing.append((float(shifted[0]), float(shifted[1]), float(hyp.placement.support_z)))
-    for r in rivals[:3]:
-        if r[0].placement.score >= close:
-            rc = r[2] + faces[r[0].face].insertion_xy * face_layout(r[0].spec, r[0].axis).depth_m / 2
-            competing.append((float(rc[0]), float(rc[1]), float(r[0].placement.support_z)))
+    for h in [hyp] + [r[0] for r in rivals]:
+        depth = face_layout(h.spec, h.axis).depth_m
+        f = faces[h.face]
+        options = list(h.placement.close_maxima)
+        if h is not hyp:
+            options.append((h.placement.score, h.placement.u_centre, h.placement.support_z))
+        for score, u_c, z in options:
+            if score >= close:
+                c = f.centre_xy + f.left_xy * u_c + f.insertion_xy * depth / 2
+                competing.append((float(c[0]), float(c[1]), float(z)))
     shape = ObservedPalletShape(hyp.spec, layout, (("face", "known_shape"), ("depth", "known_shape"),
                                                     ("support", "unobserved" if state == "uncertain" else "observed")))
     zs = hyp.placement.support_z
