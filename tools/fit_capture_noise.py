@@ -44,8 +44,11 @@ def load_capture(folder: Path):
 
     meta = json.loads((folder / "capture.json").read_text())
     scale = float(meta["device"]["depth_scale_m"])
-    x0, y0, x1, y1 = meta["setup"]["roi"]
-    frames = [np.asarray(Image.open(folder / f["file"]), dtype=np.float64)[y0:y1, x0:x1] * scale for f in meta["frames"]]
+    roi = meta["setup"].get("roi")
+    frames = [np.asarray(Image.open(folder / f["file"]), dtype=np.float64) * scale for f in meta["frames"]]
+    if roi is not None:   # the capture tool stores null when --roi was left out: the whole frame
+        x0, y0, x1, y1 = roi
+        frames = [f[y0:y1, x0:x1] for f in frames]
     stack = np.stack(frames)
     stack[stack <= 0] = np.nan
     return stack, meta
@@ -183,9 +186,13 @@ def reproduction(level: dict, fit_row: dict, *, kind: str, source_fx: float, fra
 
 
 def _files_sha256(folders) -> str:
+    """capture.json and every frame it lists, by folder name and file name, in a fixed order."""
     h = hashlib.sha256()
-    for folder in sorted(folders):
-        h.update((folder / "capture.json").read_bytes())
+    for folder in sorted(folders, key=lambda p: p.name):
+        meta_bytes = (folder / "capture.json").read_bytes()
+        h.update(folder.name.encode() + b"/capture.json\0" + meta_bytes)
+        for f in sorted(fr["file"] for fr in json.loads(meta_bytes)["frames"]):
+            h.update(f"{folder.name}/{f}".encode() + b"\0" + (folder / f).read_bytes())
     return h.hexdigest()
 
 

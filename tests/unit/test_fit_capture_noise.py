@@ -86,3 +86,37 @@ def test_each_level_is_checked_against_its_own_kind_of_variance():
     t = fc.reproduction(level, row, kind="temporal", source_fx=388.8, frames=1)
     f = fc.reproduction(level, row, kind="frame", source_fx=388.8, frames=1)
     assert np.allclose(np.array(t["ratio_u"]) / np.array(f["ratio_u"]), 2.0)
+
+
+def _capture(folder, depth_mm, roi):
+    """A capture folder as tools/capture_d435i_noise.py writes it (two frames)."""
+    import json
+    from PIL import Image
+
+    folder.mkdir(parents=True)
+    frames = []
+    for i in range(2):
+        name = f"z16_{i:06d}.png"
+        Image.fromarray(depth_mm.astype(np.uint16)).save(folder / name)
+        frames.append({"file": name, "number": i, "timestamp_ms": float(i), "domain": "global"})
+    meta = {"device": {"depth_scale_m": 0.001, "stream": {"width": depth_mm.shape[1], "height": depth_mm.shape[0]},
+                       "intrinsics": {"fx": 100.0}},
+            "setup": {"label": folder.name, "distance_m": 1.0, "surface": "wall", "roi": roi}, "frames": frames}
+    (folder / "capture.json").write_text(json.dumps(meta))
+
+
+def test_a_capture_without_a_roi_uses_the_whole_frame(tmp_path):
+    """Codex review 2026-10-17: the capture tool stores roi null when --roi is left out."""
+    _capture(tmp_path / "c", np.full((20, 30), 1000), None)
+    stack, _ = fc.load_capture(tmp_path / "c")
+    assert stack.shape == (2, 20, 30)
+
+
+def test_the_input_hash_covers_the_frames(tmp_path):
+    """Codex review 2026-10-17: hashing capture.json alone missed a replaced depth frame."""
+    from PIL import Image
+
+    _capture(tmp_path / "c", np.full((20, 30), 1000), [0, 0, 30, 20])
+    before = fc._files_sha256([tmp_path / "c"])
+    Image.fromarray(np.full((20, 30), 1001, np.uint16)).save(tmp_path / "c" / "z16_000001.png")
+    assert fc._files_sha256([tmp_path / "c"]) != before
