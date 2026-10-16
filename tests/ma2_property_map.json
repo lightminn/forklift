@@ -9025,6 +9025,14 @@
     "find": "            options.grid_planning\n            and ms.phase in (\"transport\", \"return_home\")\n            and ms.phase in trackers\n",
     "replace": "            options.grid_planning\n            and True\n            and ms.phase in trackers\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_live_leg.py::test_no_live_plan_or_wait_on_a_leg_other_than_the_travel_legs"
+    ],
+    "check_line": "E   assert "
    }
   },
   {
@@ -9053,6 +9061,14 @@
     "find": "                    live = hooks.plan_return_leg(grid_world(sc_), start, options.return_to_pose,\n                                                 replace(planner_config, clearance_m=0.0), geometry=geometry,\n                                                 travel_config=replace(travel_config, clearance_m=0.0) if travel_config is not None else None,\n                                                 **grid_kwargs(\"return\", sc_.destination), **return_turnaround_kwargs())\n",
     "replace": "                    pass\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_live_leg.py::test_the_live_return_leg_retries_at_zero_clearance"
+    ],
+    "check_line": "E   assert "
    }
   },
   {
@@ -9075,6 +9091,14 @@
     "find": "                    live = hooks.plan_return_leg(grid_world(sc_), start, options.return_to_pose,\n                                                 replace(planner_config, clearance_m=0.0), geometry=geometry,\n                                                 travel_config=replace(travel_config, clearance_m=0.0) if travel_config is not None else None,\n                                                 **grid_kwargs(\"return\", sc_.destination), **return_turnaround_kwargs())\n",
     "replace": "                    pass\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_live_leg.py::test_the_live_return_leg_retries_at_zero_clearance"
+    ],
+    "check_line": "E   assert "
    }
   },
   {
@@ -9097,6 +9121,14 @@
     "find": "                    live = hooks.plan_return_leg(grid_world(sc_), start, options.return_to_pose,\n                                                 replace(planner_config, clearance_m=0.0), geometry=geometry,\n                                                 travel_config=replace(travel_config, clearance_m=0.0) if travel_config is not None else None,\n                                                 **grid_kwargs(\"return\", sc_.destination), **return_turnaround_kwargs())\n",
     "replace": "                    pass\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_live_leg.py::test_the_live_return_leg_retries_at_zero_clearance"
+    ],
+    "check_line": "E   assert "
    }
   },
   {
@@ -9127,6 +9159,14 @@
     "find": "            options.grid_planning and ms.phase in (\"transport\", \"return_home\") and ms.phase in trackers\n",
     "replace": "            options.grid_planning and True and ms.phase in trackers\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_live_leg.py::test_no_live_plan_or_wait_on_a_leg_other_than_the_travel_legs"
+    ],
+    "check_line": "tests/unit/mission/test_core_live_leg.py:190"
    }
   },
   {
@@ -9157,6 +9197,14 @@
     "find": "            replanned.status == \"invalid_start\" and ms.phase in (\"transport\", \"return_home\")\n",
     "replace": "            replanned.status == \"invalid_start\" and True\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_blocked_replan.py::test_an_observe_leg_neither_escapes_nor_backs_off"
+    ],
+    "check_line": "E   AssertionError"
    }
   },
   {
@@ -9187,6 +9235,14 @@
     "find": "            (travel_config if ms.phase in (\"transport\", \"return_home\") and travel_config is not None\n",
     "replace": "            (travel_config if True and travel_config is not None\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_blocked_replan.py::test_the_recorded_clearance_is_the_travel_configs_on_the_travel_legs_only[observe-0.2-0.3]"
+    ],
+    "check_line": "E   assert "
    }
   },
   {
@@ -9215,6 +9271,14 @@
     "find": "                replanned = plan_return_leg(\n                    grid_world(back), start, return_to_pose, tight, geometry=geometry,\n                    travel_config=tight_travel, **grid_kwargs(\"return\", back.destination),\n                )\n",
     "replace": "                pass\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_blocked_replan.py::test_the_return_replan_retries_at_zero_clearance"
+    ],
+    "check_line": "E   assert "
    }
   },
   {
@@ -9230,7 +9294,6 @@
    ],
    "statement": "core sweep: test_true on `ms.next_candidate_index < len(options.observation_waypoints)` (core.py line 892) fails a behaviour test",
    "tests": [
-    "tests/unit/mission/test_core_blocked_replan.py::test_an_observe_leg_neither_escapes_nor_backs_off",
     "tests/unit/mission/test_core_blocked_replan.py::test_when_every_remaining_candidate_fails_the_search_ends_with_the_leg_failed"
    ],
    "mutation": {
@@ -9238,6 +9301,14 @@
     "find": "            while ms.next_candidate_index < len(options.observation_waypoints):\n",
     "replace": "            while True:\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_blocked_replan.py::test_when_every_remaining_candidate_fails_the_search_ends_with_the_leg_failed"
+    ],
+    "check_line": "E   AssertionError"
    }
   },
   {
@@ -9268,6 +9339,14 @@
     "find": "            if (ms.phase in (\"transport\", \"return_home\") and backs.get(ms.phase, 0) < BACKOFF_PER_LEG\n",
     "replace": "            if (True and backs.get(ms.phase, 0) < BACKOFF_PER_LEG\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_blocked_replan.py::test_an_observe_leg_neither_escapes_nor_backs_off"
+    ],
+    "check_line": "E   AssertionError"
    }
   },
   {
@@ -9298,6 +9377,14 @@
     "find": "            obstacle is not None and obstacle.get(\"backoff\", {}).get(\"phase\") == ms.phase\n",
     "replace": "            obstacle is not None and True\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_follow.py::test_another_legs_escape_is_not_this_legs_backoff_end"
+    ],
+    "check_line": "E   AssertionError"
    }
   },
   {
@@ -9317,6 +9404,14 @@
     "find": "            and not tracking.at_cusp\n            and not tracking.off_path\n            and (\n",
     "replace": "            and not tracking.at_cusp\n            and True\n            and (\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_docking_stall.py::test_an_off_path_heading_miss_is_neither_a_docking_stop_nor_a_goal_heading_miss"
+    ],
+    "check_line": "E   AssertionError"
    }
   },
   {
@@ -9347,6 +9442,14 @@
     "find": "            and not dock_stop\n            and ms.phase in (\"transport\", \"return_home\")\n            and tracking.status == \"failed\"\n",
     "replace": "            and not dock_stop\n            and True\n            and tracking.status == \"failed\"\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_docking_stall.py::test_a_goal_heading_miss_brakes_on_the_travel_legs_only"
+    ],
+    "check_line": "E   AssertionError"
    }
   },
   {
@@ -9366,6 +9469,14 @@
     "find": "            and not tracking.at_cusp\n            and not tracking.off_path\n            and (len(state[\"stall_replans\"]) < 2 or d7_owned)\n",
     "replace": "            and not tracking.at_cusp\n            and True\n            and (len(state[\"stall_replans\"]) < 2 or d7_owned)\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_docking_stall.py::test_an_off_path_heading_miss_is_neither_a_docking_stop_nor_a_goal_heading_miss"
+    ],
+    "check_line": "E   AssertionError"
    }
   },
   {
@@ -9390,6 +9501,14 @@
     "find": "            # wait for the stop detector.\n            tracking = replace(tracking, status=\"braking\", speed_mps=0.0)\n        stalled = (\n",
     "replace": "            # wait for the stop detector.\n            pass\n        stalled = (\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_docking_stall.py::test_a_goal_heading_miss_brakes_on_the_travel_legs_only"
+    ],
+    "check_line": "E   AssertionError"
    }
   },
   {
@@ -9420,6 +9539,14 @@
     "find": "            slam is not None\n            and ms.phase in (\"transport\", \"return_home\")\n            and tracking.speed_mps == 0.0\n",
     "replace": "            slam is not None\n            and True\n            and tracking.speed_mps == 0.0\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_docking_stall.py::test_the_stall_replan_is_for_the_travel_legs_standing_on_a_zero_command"
+    ],
+    "check_line": "E   AssertionError"
    }
   },
   {
@@ -9452,6 +9579,14 @@
     "find": "            and ms.phase in (\"transport\", \"return_home\")\n            and tracking.speed_mps == 0.0\n            and slam[\"stop_now\"]\n",
     "replace": "            and ms.phase in (\"transport\", \"return_home\")\n            and True\n            and slam[\"stop_now\"]\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_docking_stall.py::test_the_stall_replan_is_for_the_travel_legs_standing_on_a_zero_command"
+    ],
+    "check_line": "E   AssertionError"
    }
   },
   {
@@ -9471,6 +9606,14 @@
     "find": "                    and tracking.at_cusp\n",
     "replace": "                    and True\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_docking_stall.py::test_a_reapproach_stalls_at_a_cusp_only"
+    ],
+    "check_line": "E   AssertionError"
    }
   },
   {
@@ -9523,6 +9666,14 @@
     "find": "        elif ms.slam_stall_ticks >= 120 and len(state[\"stall_replans\"]) < 2:\n",
     "replace": "        elif ms.slam_stall_ticks >= 120 and True:\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_docking_stall.py::test_a_plain_stall_without_a_stall_replan_left_does_not_replan"
+    ],
+    "check_line": "E   AssertionError"
    }
   },
   {
@@ -9553,6 +9704,14 @@
     "find": "            if obstacle is not None and obstacle.get(\"backoff\", {}).get(\"phase\") == ms.phase:\n",
     "replace": "            if obstacle is not None and True:\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_docking_stall.py::test_a_stall_replan_keeps_another_legs_backoff"
+    ],
+    "check_line": "tests/unit/mission/test_core_docking_stall.py:277"
    }
   },
   {
@@ -9605,6 +9764,14 @@
     "find": "            if slam is not None and slam[\"tracker\"].mode == \"holding\" and realign_active():\n",
     "replace": "            if slam is not None and True and realign_active():\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_cusp_observe.py::test_a_cusp_heading_miss_is_realign_held_only_while_slam_holds"
+    ],
+    "check_line": "E   assert "
    }
   },
   {
@@ -9624,6 +9791,14 @@
     "find": "            and tracking.status == \"tracking\"\n            and tracking.at_cusp\n            and tracking.speed_mps == 0.0\n",
     "replace": "            and tracking.status == \"tracking\"\n            and True\n            and tracking.speed_mps == 0.0\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_cusp_observe.py::test_an_observe_stall_counts_only_standing_at_a_cusp_on_a_zero_command"
+    ],
+    "check_line": "E   AssertionError"
    }
   },
   {
@@ -9656,6 +9831,14 @@
     "find": "            and tracking.at_cusp\n            and tracking.speed_mps == 0.0\n            and slam[\"stop_now\"]\n",
     "replace": "            and tracking.at_cusp\n            and True\n            and slam[\"stop_now\"]\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_cusp_observe.py::test_an_observe_stall_counts_only_standing_at_a_cusp_on_a_zero_command"
+    ],
+    "check_line": "E   AssertionError"
    }
   },
   {
@@ -9675,6 +9858,14 @@
     "find": "                 and not tracking.off_path)\n",
     "replace": "                 and True)\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_cusp_observe.py::test_an_off_path_observe_miss_is_neither_replanned_nor_a_held_realignment_refusal"
+    ],
+    "check_line": "E   Failed:"
    }
   },
   {
@@ -9694,6 +9885,14 @@
     "find": "                    and not tracking.off_path\n",
     "replace": "                    and True\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_cusp_observe.py::test_an_off_path_observe_miss_is_neither_replanned_nor_a_held_realignment_refusal"
+    ],
+    "check_line": "E   AssertionError"
    }
   },
   {
@@ -9724,6 +9923,14 @@
     "find": "            and obstacle.get(\"backoff\", {}).get(\"phase\") == ms.phase\n",
     "replace": "            and True\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_command.py::test_an_arrival_is_another_legs_backoff_end_only_on_that_leg"
+    ],
+    "check_line": "E   AssertionError"
    }
   },
   {
@@ -9764,6 +9971,14 @@
     "find": "                acceptance_config = trackers[\"approach\"].config\n                if options.approach_straight_speed_mps is not None:\n                    # Plan D8b: the baseline cruise, also when an earlier\n",
     "replace": "                acceptance_config = trackers[\"approach\"].config\n                if True:\n                    # Plan D8b: the baseline cruise, also when an earlier\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_near_capture.py::test_without_a_custom_straight_speed_the_acceptance_runs_the_followers_own_cruise"
+    ],
+    "check_line": "E   assert "
    }
   },
   {
@@ -9804,6 +10019,14 @@
     "find": "                acceptance_config = trackers[\"approach\"].config\n                if options.approach_straight_speed_mps is not None:\n                    # Plan D8b: the baseline cruise, also when an earlier\n",
     "replace": "                acceptance_config = trackers[\"approach\"].config\n                if False:\n                    # Plan D8b: the baseline cruise, also when an earlier\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_near_capture.py::test_with_a_custom_straight_speed_the_acceptance_runs_the_baseline_cruise_whatever_the_follower_runs"
+    ],
+    "check_line": "E   assert "
    }
   },
   {
@@ -9823,6 +10046,14 @@
     "find": "                    acceptance_config = replace(acceptance_config,\n                                                cruise_speed_mps=speeds[\"approach\"])\n",
     "replace": "                    pass\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_near_capture.py::test_with_a_custom_straight_speed_the_acceptance_runs_the_baseline_cruise_whatever_the_follower_runs"
+    ],
+    "check_line": "E   assert "
    }
   },
   {
@@ -9863,6 +10094,14 @@
     "find": "                    driven_config = acceptance_config\n                    if options.approach_straight_speed_mps is not None:\n                        driven_config = replace(acceptance_config,\n",
     "replace": "                    driven_config = acceptance_config\n                    if False:\n                        driven_config = replace(acceptance_config,\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_near_capture.py::test_the_stage_one_redraw_drives_its_custom_cruise_and_installs_the_insertion_and_extraction"
+    ],
+    "check_line": "E   assert "
    }
   },
   {
@@ -9903,6 +10142,14 @@
     "find": "                        driven_config = replace(acceptance_config,\n                                                cruise_speed_mps=options.approach_straight_speed_mps)\n",
     "replace": "                        pass\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_near_capture.py::test_the_stage_one_redraw_drives_its_custom_cruise_and_installs_the_insertion_and_extraction"
+    ],
+    "check_line": "E   assert "
    }
   },
   {
@@ -9932,6 +10179,14 @@
     "find": "                            trackers[name_] = RearAxlePathTracker(\n                                redraw_plans[name_].poses, redraw_plans[name_].directions,\n                                redraw_plans[name_].curvatures_inv_m, trackers[name_].config)\n",
     "replace": "                            pass\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_near_capture.py::test_the_stage_one_redraw_drives_its_custom_cruise_and_installs_the_insertion_and_extraction"
+    ],
+    "check_line": "E   AssertionError"
    }
   },
   {
@@ -9984,6 +10239,14 @@
     "find": "        if phase_ == \"observe\" and slam is not None and slam[\"tracker\"].mode == \"holding\" and realign_active():\n",
     "replace": "        if phase_ == \"observe\" and slam is not None and True and realign_active():\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_cusp_rules.py::test_a_realignment_owns_an_observe_cusp_stop_only_while_slam_holds"
+    ],
+    "check_line": "E   AssertionError"
    }
   },
   {
@@ -10015,6 +10278,14 @@
     "find": "        if ms.phase in (\"transport\", \"return_home\"):\n",
     "replace": "        if True:\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_cusp_rules.py::test_the_observe_legs_checker_takes_the_observe_rectangles_and_the_pickup_it_knows[None]"
+    ],
+    "check_line": "E   AssertionError"
    }
   },
   {
@@ -10065,9 +10336,17 @@
    ],
    "mutation": {
     "file": "src/forklift_core/mission/core.py",
-    "find": "        rects_, footprint_, bounds_ = leg_obstacles(\n            \"observe\", grid_world(scenario), geometry, pickup_obstacle=pickup_, pickup_bounds=pickup_bounds\n        )\n",
-    "replace": "        pass\n",
+    "find": "\"observe\", grid_world(scenario), geometry, pickup_obstacle=pickup_,",
+    "replace": "\"transport\", grid_world(scenario), geometry, pickup_obstacle=pickup_,",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_cusp_rules.py::test_the_observe_legs_checker_takes_the_observe_rectangles_and_the_pickup_it_knows[None]"
+    ],
+    "check_line": "E   AssertionError"
    }
   },
   {
@@ -10084,9 +10363,17 @@
    ],
    "mutation": {
     "file": "src/forklift_core/mission/core.py",
-    "find": "        rects_, footprint_, bounds_ = leg_obstacles(\n            \"observe\", grid_world(scenario), geometry, pickup_obstacle=pickup_, pickup_bounds=pickup_bounds\n        )\n",
-    "replace": "        pass\n",
+    "find": "geometry, pickup_obstacle=pickup_, pickup_bounds=pickup_bounds\n        )\n        return GridChecker",
+    "replace": "geometry, pickup_obstacle=None, pickup_bounds=pickup_bounds\n        )\n        return GridChecker",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_cusp_rules.py::test_the_observe_legs_checker_takes_the_observe_rectangles_and_the_pickup_it_knows[None]"
+    ],
+    "check_line": "E   AssertionError"
    }
   },
   {
@@ -10141,6 +10428,14 @@
     "find": "            return obstacle[\"layer\"].check_candidate(\n                latch_.prefix_trajectory, current_pose=pose_, direction=latch_.hand_direction, loaded=loaded,\n                unknown_passes=True,\n            ).blocked == \"occupied\"\n",
     "replace": "            pass\n",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_cusp_rules.py::test_the_cusp_monitors_prefix_check_reads_occupied_cells_walking_past_unknown[None-False]"
+    ],
+    "check_line": "E   AssertionError"
    }
   },
   {
@@ -10166,9 +10461,17 @@
    ],
    "mutation": {
     "file": "src/forklift_core/mission/core.py",
-    "find": "                replanned = plan_return_leg(\n                    grid_world(return_scenario), start, return_to_pose, tight_cfg, geometry=geometry,\n                    travel_config=tight_travel_cfg, **grid_kwargs(None, own=after, applied=released_),\n                )\n",
-    "replace": "                pass\n",
+    "find": "grid_world(return_scenario), start, return_to_pose, tight_cfg, geometry=geometry,",
+    "replace": "grid_world(return_scenario), start, return_to_pose, planner_config, geometry=geometry,",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_release.py::test_the_return_replan_after_a_release_is_retried_tight_on_the_carried_destination"
+    ],
+    "check_line": "E   AssertionError"
    }
   },
   {
@@ -10187,9 +10490,17 @@
    ],
    "mutation": {
     "file": "src/forklift_core/mission/core.py",
-    "find": "                replanned = plan_return_leg(\n                    grid_world(return_scenario), start, return_to_pose, tight_cfg, geometry=geometry,\n                    travel_config=tight_travel_cfg, **grid_kwargs(None, own=after, applied=released_),\n                )\n",
-    "replace": "                pass\n",
+    "find": "grid_world(return_scenario), start, return_to_pose, tight_cfg, geometry=geometry,",
+    "replace": "grid_world(scenario), start, return_to_pose, tight_cfg, geometry=geometry,",
     "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_release.py::test_the_return_replan_after_a_release_is_retried_tight_on_the_carried_destination"
+    ],
+    "check_line": "E   AssertionError"
    }
   }
  ]

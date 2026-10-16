@@ -367,5 +367,8 @@ def test_an_off_path_observe_miss_is_neither_replanned_nor_a_held_realignment_re
     w.tick(off)
     assert "plan_observation_leg" not in w.names()
     w = World("observe", slam_mode="holding", realign=True)
-    w.tick(off)  # no near_capture_realign_held_recovery refusal for an off-path failure
+    try:
+        w.tick(off)
+    except RuntimeError as exc:
+        pytest.fail(f"an off-path failure was refused as a held realignment's recovery: {exc}")
     assert "plan_observation_leg" not in w.names()
