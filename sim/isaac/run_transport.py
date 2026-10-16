@@ -11,6 +11,7 @@ import importlib.util
 import json
 import collections
 import math
+import random
 import os
 import subprocess
 import sys
@@ -1621,6 +1622,23 @@ PROJECTION_SERVICE_OWNED = {"slam": {"link": "SlamLink", "module": "SlamModule",
                                      "odometry": "SlamOdometry", "noise": "SlamNoise", "range_model": "SlamRangeModel"}}
 
 
+_PROJECT_CLASSES: dict = {}
+
+
+def _project_class(klass) -> bool:
+    """A class defined in this project's code: the forklift_core package, or a module file under the checkout
+    (the runner and its sibling modules, the tests)."""
+    known = _PROJECT_CLASSES.get(klass)
+    if known is None:
+        name = getattr(klass, "__module__", "") or ""
+        file_ = getattr(sys.modules.get(name), "__file__", None)
+        root = Path(__file__).resolve().parents[2]
+        known = name == "forklift_core" or name.startswith("forklift_core.") or bool(
+            file_ and Path(file_).resolve().is_relative_to(root))
+        _PROJECT_CLASSES[klass] = known
+    return known
+
+
 def projection_node(value, services: dict, roots=(), _stack=()):
     """One value of the end-state projection as plain JSON: services (recording/replay proxies, the SLAM link) by
     logical id, modules by name, random generators by their bit-generator state, arrays by dtype/shape/content hash,
@@ -1676,10 +1694,16 @@ def projection_node(value, services: dict, roots=(), _stack=()):
         return {"$object": f"{type(value).__module__}:{type(value).__qualname__}",
                 "attrs": {f.name: projection_node(getattr(value, f.name), services, roots, stack)
                           for f in dataclasses.fields(value)}}
+    if type(value) in (types_.SimpleNamespace, argparse.Namespace):  # plain attribute bags
+        return {"$object": type(value).__qualname__,
+                "attrs": {k: projection_node(v, services, roots, stack) for k, v in sorted(vars(value).items())}}
+    if isinstance(value, random.Random):  # a native generator: its state is getstate(), not its attributes
+        return {"$random": projection_node(value.getstate(), services, roots, _stack)}
     if hasattr(value, "__dict__") and not callable(value) and not isinstance(value, type) and all(
-            klass is object or klass.__flags__ & (1 << 9) for klass in type(value).__mro__):
-        # A Python-defined object (every class in its MRO a heap type): its attributes are its state. A native
-        # object (a file, a socket, a lock) has state its attributes do not show: refused below (Codex P2).
+            klass is object or _project_class(klass) for klass in type(value).__mro__):
+        # An object of this project's own classes (every class in its MRO defined in the project's code): its
+        # attributes are its state. Any other object (a file, a socket, a C-backed generator) may keep state its
+        # attributes do not show: refused below (Codex P2).
         return {"$object": f"{type(value).__module__}:{type(value).__qualname__}",
                 "attrs": {k: projection_node(v, services, roots, stack) for k, v in sorted(vars(value).items())}}
     if isinstance(value, type) or callable(value):  # code: compared by name (its behaviour is the replay's)
