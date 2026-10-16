@@ -633,13 +633,17 @@ def trace_entry(gate, method: str, descriptor) -> None:
     gate.run("Trace", method, lambda d: None, (descriptor,), {})
 
 
-def sink_effect(gate, method: str, path, payload) -> None:
+def sink_effect(gate, method: str, path, payload, write=None):
     """Format 2 (plan 3.5): an output effect -- a file the run writes, a line it prints -- as a ``Sink.<method>``
-    entry with its logical path (relative to the run's output) and the payload's digest, recorded where the write
-    happens. The write itself is not wrapped: the sink body's own port reads stay recorded at their depth."""
+    entry with its logical path (relative to the run's output) and the payload's digest, recorded where it happens.
+    ``write`` makes the effect inside the recorded call, so its exception (a full disk) is recorded with it and a
+    replay raises the same one at the same place (Codex P2); it makes no port calls of its own. A replay makes the
+    write too (``ReplayGate`` runs a Sink's write) and compares only what was recorded. Returns what ``write``
+    returned."""
     if gate is None or not gate.active or getattr(gate, "value_format", 1) != 2:
-        return
-    gate.run("Sink", method, lambda effect: None, ({"path": str(path), "sha256": payload_digest(payload)},), {})
+        return None if write is None else write()
+    return gate.run("Sink", method, lambda effect: None if write is None else write(),
+                    ({"path": str(path), "sha256": payload_digest(payload)},), {})
 
 
 def _callback_description(value):

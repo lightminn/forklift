@@ -1560,13 +1560,14 @@ class TrackerBook(dict):
 _BOUNDARY_RECORD: dict = {"gate": None, "time": None, "probe": None, "print": None, "np": None}
 
 
-def sink_effect(gate, method: str, path, payload) -> None:
-    """Format 2's output-effect entry (forklift_core.mission.boundary_record.sink_effect); nothing without a record."""
+def sink_effect(gate, method: str, path, payload, write=None):
+    """Format 2's output-effect entry (forklift_core.mission.boundary_record.sink_effect); without a record only
+    ``write``."""
     if gate is None:
-        return
+        return None if write is None else write()
     from forklift_core.mission.boundary_record import sink_effect as effect_
 
-    effect_(gate, method, path, payload)
+    return effect_(gate, method, path, payload, write)
 
 
 def _recording_print(*values, sep=" ", end="\n", file=None, flush=False):
@@ -1574,9 +1575,13 @@ def _recording_print(*values, sep=" ", end="\n", file=None, flush=False):
     while a tick is open and no recorded call runs is a ``Sink.echo`` entry -- the prints of the moved core and of
     the runner alike, wherever they stand."""
     gate = _BOUNDARY_RECORD.get("gate")
+    builtin = _BOUNDARY_RECORD["print"]
     if gate is not None and (file is None or file is sys.stdout):
-        sink_effect(gate, "echo", "stdout", (" " if sep is None else sep).join(str(v) for v in values))
-    return _BOUNDARY_RECORD["print"](*values, sep=sep, end=end, file=file, flush=flush)
+        # The text exactly as written, its end included (Codex P2), and the print inside the recorded call.
+        text = (" " if sep is None else sep).join(str(v) for v in values) + ("\n" if end is None else end)
+        return sink_effect(gate, "echo", "stdout", text,
+                           lambda: builtin(*values, sep=sep, end=end, file=file, flush=flush))
+    return builtin(*values, sep=sep, end=end, file=file, flush=flush)
 
 
 def install_output_observers(args) -> None:
@@ -1591,31 +1596,55 @@ def install_output_observers(args) -> None:
     globals()["np"] = NumpyObserver(_BOUNDARY_RECORD["np"], gate_fn, args.output)
 
 
-# Result keys a replay cannot reproduce from the record: written by run() after the setup snapshot was taken.
+# The core containers the end-state projection covers (drive's names; a name the run never bound is left out).
+PROJECTION_CONTAINERS = ("state", "near", "pocket", "obstacle", "slam", "paths", "new_obstacles")
+# Result keys only the recorded run has (written by run() after the setup snapshot was taken): never compared.
 PROJECTION_RECORDED_ONLY = ("setup_snapshot",)
 
 
-def final_projection(state: dict, ms, output: Path) -> dict:
-    """Format 2's end state (M-a1 replay plan R3 (5)): the mission state's fields by value and every result key
-    by the digest of its result.json text (the run's output directory written as ``<output>``: a replay writes
-    elsewhere). Keys only the recorded run can have are listed, not compared."""
+def final_projection(containers: dict, ms, output: Path) -> dict:
+    """Format 2's end state (M-a1 replay plan R3 (5), Codex P2): the mission state's fields by value and, for each
+    core container, every key by the digest of its value -- services (the recording or replay proxies, the SLAM
+    link) written as their logical ids, arrays by content, the run's output directory as ``<output>`` (a replay
+    writes elsewhere). Keys only the recorded run can have are not in it."""
     import hashlib
 
-    from forklift_core.mission.boundary_record import payload_digest
+    from forklift_core.mission.boundary_record import RecordingProxy
+    from forklift_core.mission.replay import ReplayProxy
+    from forklift_core.mission.replay_codec import Encoder
 
-    result = {}
-    for key, value in state.items():
-        if key in PROJECTION_RECORDED_ONLY:
+    services: dict = {}
+
+    def find(value, depth=0):
+        if isinstance(value, (RecordingProxy, ReplayProxy)):
+            services[id(value)] = object.__getattribute__(value, "_port")
+        elif depth < 6 and isinstance(value, dict):
+            for v in value.values():
+                find(v, depth + 1)
+        elif depth < 6 and isinstance(value, (list, tuple)):
+            for v in value:
+                find(v, depth + 1)
+
+    for value in containers.values():
+        find(value)
+    slam_ = containers.get("slam")
+    if isinstance(slam_, dict) and slam_.get("link") is not None:
+        services.setdefault(id(slam_["link"]), "SlamLink")
+    encoder = Encoder(opaque_ok=True, value_types={"Namespace", "SimpleNamespace"}, hash_arrays=True, identity=False,
+                      services=services)
+    out = {}
+    for name, container in containers.items():
+        if not isinstance(container, dict):
+            out[name] = None if container is None else f"not_a_dict:{type(container).__name__}"
             continue
-        try:
-            text = record_json(value).replace(str(output), "<output>")
-            result[key] = hashlib.sha256(text.encode("utf-8")).hexdigest()
-        except (TypeError, ValueError):
-            try:
-                result[key] = "codec:" + payload_digest(value)
-            except TypeError:
-                result[key] = f"unencodable:{type(value).__name__}"
-    return {"mission": ms, "result": result, "recorded_only": sorted(k for k in PROJECTION_RECORDED_ONLY if k in state)}
+        digests = {}
+        for key, value in container.items():
+            if name == "state" and key in PROJECTION_RECORDED_ONLY:
+                continue
+            text = json.dumps(encoder.encode(value), sort_keys=True, allow_nan=True).replace(str(output), "<output>")
+            digests[str(key)] = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        out[name] = digests
+    return {"mission": ms, "containers": out}
 
 
 def _rollout_callback_spec(config, start) -> dict:
@@ -9149,7 +9178,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         finally:
             if early_ports:  # format 2: closed last, so the summaries above read the services inside the exit tick
                 try:
-                    projection_ = final_projection(state, _baseline_mission_state(locals()), args.output)
+                    locals_ = locals()
+                    projection_ = final_projection(
+                        {n_: locals_[n_] for n_ in PROJECTION_CONTAINERS if n_ in locals_},
+                        _baseline_mission_state(locals_), args.output)
                 except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own end; the replay sees it
                     projection_ = {"projection_error": repr(exc_)}
                 close_boundary_record(state, sys.exc_info()[1], final_state=projection_)
