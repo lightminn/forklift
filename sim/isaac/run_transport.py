@@ -864,6 +864,8 @@ def arguments() -> argparse.Namespace:
         parser.error("--near-tracking-stop-at needs --near-tracking")
     if args.live and args.mission_commands is not None:
         parser.error("--live takes the operator's commands; not with --mission-commands")
+    if args.live and args.repeat_captures:
+        parser.error("--live does not take --repeat-captures (its captures bypass the stop boundary, plan C2)")
     if args.live and args.record_boundary:
         parser.error("--live is not replayed: not with --record-boundary (plan C4)")
     if args.live and args.live_factor <= 0:

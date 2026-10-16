@@ -202,3 +202,10 @@ def test_a_live_stop_inside_the_capture_ends_the_work_right_after_the_raw_captur
     out = w.run()
     assert out.aborted is True and w.names() == ["capture"]
     assert w.core.state["observation_attempts"][-1]["aborted"] == "live_stop"
+
+
+def test_a_live_stop_inside_a_failing_capture_pauses_instead_of_ending_the_run():
+    """Codex M-c round 6 P2."""
+    w = World(fail=True)
+    w.core.hooks.live_abort = lambda: True
+    assert w.run().aborted is True

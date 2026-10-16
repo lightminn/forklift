@@ -2454,6 +2454,11 @@ class MissionCore:
             attempt["capture_failure"] = exc.reason
             attempt["capture_diagnostics"] = asdict(exc.diagnostics)
             attempt["capture_attempts"] = exc.diagnostics.attempts
+            live_abort = getattr(hooks, "live_abort", None)
+            if live_abort is not None and live_abort():
+                # A STOP inside a failing capture (the truck stopped mid-capture) pauses, it does not end the run.
+                attempt["aborted"] = "live_stop"
+                return SimpleNamespace(aborted=True)
             require(False, f"perception_capture_failed:{exc.reason}")
         live_abort = getattr(hooks, "live_abort", None)  # M-c: set only by the live runner
         if live_abort is not None and live_abort():
