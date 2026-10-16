@@ -82,7 +82,7 @@ def test_the_face_decides_only_what_it_can_see():
     spec = recipe.instances[0].spec
     instructed = LoadDeclaration(2.0, 1.0, 0.2, 0.0)
     ok, truth = _fit_spec(spec, rt.Placement(2.9, 0.0, 0.0, 0.0), recipe.fork_spacing_m, load=lambda s: instructed)
-    assert ok.pickable is None and ok.fit_reasons == () and ok.pending == F.FAR_PENDING
+    assert ok.pickable is None and ok.fit_reasons == () and ok.pending == F.PARAMETRIC_PENDING
     wrong, _ = _fit_spec(spec, rt.Placement(2.9, 0.0, 0.0, 0.0), 0.60, load=lambda s: instructed)
     assert wrong.pickable is False and "fork_spacing_adjust" in wrong.fit_reasons
     heavy = LoadDeclaration(6.0, 6.0, 0.2, 0.0)
@@ -296,3 +296,44 @@ def test_a_side_face_with_more_points_than_the_entry_face_is_not_confirmed():
     cand, _ = _fit_spec(spec, rt.Placement(3.0, -0.8, math.radians(30.0), 0.0), 0.29,
                         load=lambda s: LoadDeclaration(2.0, 1.0, 0.2, 0.0))
     assert cand is None or not cand.counted, (cand.hypothesis, cand.geometry, cand.reasons, math.degrees(cand.insertion_yaw_rad))
+
+
+def _touching_cut(**render):
+    boxes = [rt.placed_boxes(rt.instance_boxes(EPAL, ()), rt.Placement(3.0, y, 0.0, 0.0)) for y in (0.4, -0.4)]
+    out = instance_rig.render_instances(boxes, **render)
+    rays = F.pixel_rays(out.scene)
+    with np.errstate(invalid="ignore"):
+        xyz = F.camera_xyz(out.scene) + out.scene.depth_m[..., None] * rays
+    return out, xyz, (out.instance_ids >= 0) & (np.abs(xyz[..., 1]) < 0.4525)
+
+
+def test_an_occluded_deck_beyond_a_cut_is_not_a_physical_end():
+    """Codex review A round 3: a thin box in front of the deck beyond each cut turns those rays to
+    front; occluded is not observed, so the cut is not a physical end."""
+    occluders = [scene_rig.Box((2.2, s * 0.475, 0.1675), (0.01, 0.27, 0.045)) for s in (1, -1)]
+    out, _, mask = _touching_cut(distractors=occluders)
+    cand = F.fit_instance(out.scene, InstanceProposal("p0", mask & (out.instance_ids >= 0), 1.0, "oracle"), specs=SPECS,
+                          setup=ForkSetup(0.3725), load_for=_load)
+    assert cand is None or not cand.counted, (cand.hypothesis, cand.geometry, cand.reasons)
+
+
+def test_a_face_without_a_deck_band_is_not_read():
+    """Codex review A round 3: the touching cut without its deck (z < 0.10 m) -- or three free posts --
+    has no full row at the top; the reader must not invent a ceiling at the top and confirm it."""
+    out, xyz, mask = _touching_cut()
+    with np.errstate(invalid="ignore"):
+        low = mask & (xyz[..., 2] < 0.10)
+    cand = F.fit_instance(out.scene, InstanceProposal("p0", low, 1.0, "oracle"), specs=SPECS, setup=ForkSetup(0.3725),
+                          load_for=_load)
+    assert cand is None or not cand.counted, (cand.hypothesis, cand.geometry, cand.reasons)
+
+
+def test_a_non_standard_entry_axis_waits_for_the_near_range():
+    """Codex review A round 3: at (3.0 m, -0.9 m, 30 deg) only the side face of s7 1000874's shape
+    reads, and it is read as the entry face (yaw -60 deg, the x axis is 30 deg). One far frame cannot
+    tell which face of a pallet with openings on two sides is the entry face, so a non-standard reading
+    lists the entry axis among what the near range must verify before any pick."""
+    spec = _recipe("s7_nonstandard_1000874").instances[0].spec
+    cand, _ = _fit_spec(spec, rt.Placement(3.0, -0.9, math.radians(30.0), 0.0), 0.29,
+                        load=lambda s: LoadDeclaration(2.0, 1.0, 0.2, 0.0))
+    assert cand.pickable is not True and "entry_axis" in cand.pending

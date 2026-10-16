@@ -21,10 +21,11 @@ GEOMETRY_STATES = ("fitted", "ambiguous", "unfit")
 IDENTITY_STATES = ("confirmed", "unconfirmed")
 SUPPORT_STATES = ("visible", "coplanar", "physical_edge", "uncertain")
 # What the near-range re-observation (§9.1) verifies before a pick is permitted: the depth, the
-# lane bounds (lateral and vertical, checked again against M_REQ and the blade margins) and the
-# top-board layout (near tracking), all filled from a template or left unknown at far range
-# (Codex 2026-10-16).
-PENDING_ITEMS = ("depth", "lane_bounds", "top_layout")
+# lane bounds (lateral and vertical, checked again against M_REQ and the blade margins), the
+# top-board layout (near tracking) and, for a non-standard pallet, the entry axis (which face is
+# the entry face -- the top boards run along it), all filled from a template or left unknown at
+# far range (Codex 2026-10-16).
+PENDING_ITEMS = ("depth", "lane_bounds", "top_layout", "entry_axis")
 
 
 def _vector(value, n, name):

@@ -33,6 +33,9 @@ HEIGHT_REASONS = ("lift_alignment_needed",)  # fork-fit reasons that read the su
 # A known template fills them, but a non-standard pallet can match a template's face and differ in
 # its lane height or top (S7 dev 2026-10-16: T11-like lanes 3-5 mm lower, EPAL-like flat tops).
 FAR_PENDING = ("depth", "lane_bounds", "top_layout")
+# A non-standard pallet with openings on two sides shows no far-range evidence of which face is the
+# entry face (Codex review A round 3): the near range checks it on the top-board direction.
+PARAMETRIC_PENDING = FAR_PENDING + ("entry_axis",)
 
 
 @dataclass(frozen=True)
@@ -622,7 +625,9 @@ def read_parametric_face(face: FacePlane, pts_u, pts_h, rays, support_z: float, 
     while k > 0 and row_fill[k] < params.parametric_row_fill and (nh - 1 - k) * b < params.parametric_top_skip_m:
         k -= 1
     if row_fill[k] < params.parametric_row_fill:
-        k = nh - 1
+        # No full row near the top: there is no deck band to bound the lanes. Inventing a ceiling
+        # at the top read free posts and a deck-less cut as a pallet (Codex review A round 3).
+        return None, "no_deck_band"
     while k > 0 and row_fill[k] >= params.parametric_row_fill:
         k -= 1
     ceiling = (k + 1) * b
@@ -661,7 +666,8 @@ def read_parametric_face(face: FacePlane, pts_u, pts_h, rays, support_z: float, 
         continued = cont.sum() >= params.edge_min_hits and cont.sum() > seen_behind
         # Seeing nothing at deck height is not seeing an end: missing depth there could hide a
         # continuing deck (Codex review A round 2). Dev cost: 1 of ~490 true ends.
-        missing = (deck & window & (rc == UNOBSERVED)).sum()
+        # Occluded at deck height is not observed either (Codex review A round 3).
+        missing = (deck & window & ((rc == UNOBSERVED) | (rc == FRONT))).sum()
         unseen = missing >= params.edge_min_hits and missing > seen_behind
         ends.append(bool(((beyond & (rc == BEHIND)).sum() >= params.edge_min_hits)
                          and ((beyond & (rc == FRONT)).sum() < params.edge_min_hits)
@@ -784,7 +790,7 @@ def _parametric_candidate(scene, proposal, cam, face, fi, pts_u, pts_h, rays_f, 
         (float(pallet_centre[0]), float(pallet_centre[1]), float(reading.support_z)), left, right,
         reading.support_z, state, state == "visible" and abs(reading.support_z) <= params.support_window_m, reach,
         placement.score, geometry, _identity(proposal, identity_threshold), tuple(reasons), pickable, fit_reasons,
-        shape, alternatives, (float(seen[0]), float(seen[1])), extent, FAR_PENDING, segment)
+        shape, alternatives, (float(seen[0]), float(seen[1])), extent, PARAMETRIC_PENDING, segment)
 
 
 def _decide(hyps, faces, evidence, pts, scene, setup, load_for, params):
