@@ -11830,6 +11830,289 @@
     ],
     "check_line": "E   AssertionError"
    }
+  },
+  {
+   "id": "B11:L1010-swap",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_blocked_replan_stands_and_retries::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_blocked_replan_stands_and_retries::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_blocked_replan_stands_and_retries::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_blocked_replan_stands_and_retries::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_blocked_replan_stands_and_retries::5"
+   ],
+   "statement": "order: `require(failures < 5, f'obstacle_replan_failed in {ms.phase} <-> obstacle.setdefault('replan_wait', {})[ms.phase] =` (core.py line 1010) as written",
+   "tests": [
+    "tests/unit/mission/test_core_blocked_replan.py::test_the_fifth_failed_replan_refuses_before_it_would_wait"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "            require(failures < 5, f\"obstacle_replan_failed in {ms.phase}: {replanned.status}\")\n            # Held until a replan succeeds (D4: stop, replan, resume\n            # only on a plan -- Codex checkpoint 7 P2).\n            obstacle.setdefault(\"replan_wait\", {})[ms.phase] = True\n",
+    "replace": "            obstacle.setdefault(\"replan_wait\", {})[ms.phase] = True\n            # Held until a replan succeeds (D4: stop, replan, resume\n            # only on a plan -- Codex checkpoint 7 P2).\n            require(failures < 5, f\"obstacle_replan_failed in {ms.phase}: {replanned.status}\")\n",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_blocked_replan.py::test_the_fifth_failed_replan_refuses_before_it_would_wait"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B11:L1542-swap",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::14"
+   ],
+   "statement": "order: `judged = CUSP_STALL.judge(hold_tracker, rear, tracking, {},  <-> from forklift_core.control import escape as esc` (core.py line 1542) as written",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_observe.py::test_the_cusp_judgement_can_run_its_sweep_check_while_judging"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                    from forklift_core.control import escape as esc\n\n                    judged = CUSP_STALL.judge(\n                        hold_tracker, rear, tracking, {}, end_recovered=cusp_end_recovered,\n                        sweep_free=lambda trajectory_: esc.rectangles_sweep_free(cusp_leg_checker(), trajectory_),\n                        sensors=(lambda trajectory_, direction_, t_=t, rear_=rear: cusp_sensors(\n                            t_, rear_, trajectory_, direction_)) if obstacle is not None else None,\n                        bounds=(CUSP_HEADING_HOLD_POSITION_M, CUSP_HEADING_HOLD_RAD),\n                    )\n",
+    "replace": "                    judged = CUSP_STALL.judge(\n                        hold_tracker, rear, tracking, {}, end_recovered=cusp_end_recovered,\n                        sweep_free=lambda trajectory_: esc.rectangles_sweep_free(cusp_leg_checker(), trajectory_),\n                        sensors=(lambda trajectory_, direction_, t_=t, rear_=rear: cusp_sensors(\n                            t_, rear_, trajectory_, direction_)) if obstacle is not None else None,\n                        bounds=(CUSP_HEADING_HOLD_POSITION_M, CUSP_HEADING_HOLD_RAD),\n                    )\n\n                    from forklift_core.control import escape as esc\n",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_cusp_observe.py::test_the_cusp_judgement_can_run_its_sweep_check_while_judging"
+    ],
+    "check_line": "E   Failed:"
+   }
+  },
+  {
+   "id": "B11:L1645-swap",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_replans_record_their_path_before_the_mission_plan_exists::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_replans_record_their_path_before_the_mission_plan_exists::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_replans_record_their_path_before_the_mission_plan_exists::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_replans_record_their_path_before_the_mission_plan_exists::4"
+   ],
+   "statement": "order: `state.setdefault('paths', {})['observe'] = path_record(repla <-> hooks.write_paths()` (core.py line 1645) as written",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_observe.py::test_an_observe_replan_writes_the_new_path_and_restarts_the_phase_before_the_realignment_record"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                state.setdefault(\"paths\", {})[\"observe\"] = path_record(replanned)\n                hooks.write_paths()\n",
+    "replace": "                hooks.write_paths()\n                state.setdefault(\"paths\", {})[\"observe\"] = path_record(replanned)\n",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_cusp_observe.py::test_an_observe_replan_writes_the_new_path_and_restarts_the_phase_before_the_realignment_record"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B11:L1655-swap",
+   "class": "N",
+   "checks": [
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::1",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::2",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::3",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::4",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::5",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::6",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::7",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::8",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::9",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::10",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::11",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::12",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::13",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::14"
+   ],
+   "statement": "order: `realign_install('observe_replan') <-> ms.phase_started = t` (core.py line 1655) as written",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_observe.py::test_an_observe_replan_writes_the_new_path_and_restarts_the_phase_before_the_realignment_record"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                ms.phase_started = t\n                realign_install(\"observe_replan\")  # Plan D8 S4c-3 stage 2\n",
+    "replace": "                realign_install(\"observe_replan\")\n                ms.phase_started = t  # Plan D8 S4c-3 stage 2\n",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_cusp_observe.py::test_an_observe_replan_writes_the_new_path_and_restarts_the_phase_before_the_realignment_record"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B11:L2161-swap",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules::8"
+   ],
+   "statement": "order: `state['paths'] = {name: path_record(path) for name, path in  <-> hooks.write_paths()` (core.py line 2161) as written",
+   "tests": [
+    "tests/unit/mission/test_core_observe_succeeded.py::test_the_paths_file_is_written_with_the_mission_just_planned"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "        state[\"paths\"] = {\n            name: path_record(path) for name, path in paths.items()\n        }\n        hooks.write_paths()\n",
+    "replace": "        hooks.write_paths()\n        state[\"paths\"] = {\n            name: path_record(path) for name, path in paths.items()\n        }\n",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_observe_succeeded.py::test_the_paths_file_is_written_with_the_mission_just_planned"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B11:L3009-swap",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::16",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::17",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery::18"
+   ],
+   "statement": "order: `jump_m, jump_rad = slam['tracker'].release(odom_from_base=sl <-> before = slam_rear(t)` (core.py line 3009) as written",
+   "tests": [
+    "tests/unit/mission/test_core_docking_helpers.py::test_a_release_carries_from_the_pose_before_it_to_the_pose_after_it"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "            return {\"released\": False}\n        before = slam_rear(t)\n        jump_m, jump_rad = slam[\"tracker\"].release(odom_from_base=slam_odom_base())\n        after = slam_rear(t)\n",
+    "replace": "            return {\"released\": False}\n        jump_m, jump_rad = slam[\"tracker\"].release(odom_from_base=slam_odom_base())\n        before = slam_rear(t)\n        after = slam_rear(t)\n",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_docking_helpers.py::test_a_release_carries_from_the_pose_before_it_to_the_pose_after_it"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B11:L4343-swap",
+   "class": "N",
+   "checks": [
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::1",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::2",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::3",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::4",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::5",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::6",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::7",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::8",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::9",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::10",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::11",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::12",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::13",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::14"
+   ],
+   "statement": "order: `realign_install('stand') <-> near['stand_record'] = 'realign'` (core.py line 4343) as written",
+   "tests": [
+    "tests/unit/mission/test_core_realign_and_setup.py::test_a_realignment_whose_stand_install_refuses_has_not_moved_to_observe"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "        near[\"stand_record\"] = \"realign\"\n        realign_install(\"stand\")\n",
+    "replace": "        realign_install(\"stand\")\n        near[\"stand_record\"] = \"realign\"\n",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_realign_and_setup.py::test_a_realignment_whose_stand_install_refuses_has_not_moved_to_observe"
+    ],
+    "check_line": "tests/unit/mission/test_core_realign_and_setup.py:275"
+   }
+  },
+  {
+   "id": "B11:L4343-swap-2",
+   "class": "N",
+   "checks": [
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::1",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::2",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::3",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::4",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::5",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::6",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::7",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::8",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::9",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::10",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::11",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::12",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::13",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_install::14"
+   ],
+   "statement": "order: `realign_install('stand') <-> transition('observe', now_s)` (core.py line 4343) as written",
+   "tests": [
+    "tests/unit/mission/test_core_realign_and_setup.py::test_a_realignment_whose_stand_install_refuses_has_not_moved_to_observe"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "        realign_install(\"stand\")\n        transition(\"observe\", now_s)\n",
+    "replace": "        transition(\"observe\", now_s)\n        realign_install(\"stand\")\n",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_realign_and_setup.py::test_a_realignment_whose_stand_install_refuses_has_not_moved_to_observe"
+    ],
+    "check_line": "E   AssertionError"
+   }
   }
  ]
 }
