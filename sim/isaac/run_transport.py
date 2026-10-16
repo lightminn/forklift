@@ -660,6 +660,9 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--live-port-file", type=Path, default=None, help="M-c: where to write host, port and epoch")
     parser.add_argument("--live-host", default="127.0.0.1", help="M-c: the console server's address")
     parser.add_argument("--live-factor", type=float, default=1.0, help="M-c: the declared real-time factor")
+    parser.add_argument("--live-lease-timeout-s", type=float, default=5.0,
+                        help="M-c: the control lease's timeout -- a tick cannot go out while a synchronous call holds "
+                        "the control loop (the first live run lost a 1 s lease to a 1.2 s start-up tick)")
     parser.add_argument("--live-web-root", type=Path, default=None, help="M-c: console/web to serve")
     parser.add_argument("--live-test-step-delay-ms", type=float, default=0.0,
                         help="M-c tests only: extra wall time per physics step (the slow-pacing test)")
@@ -5126,6 +5129,7 @@ def drive(S, isaac) -> None:
             # M-c (docs/plans/2026-10-17-m-c-isaac-live-runner.md): the arbiter, its console server and the pacing.
             from forklift_core.control.drive_permission import DrivePermission as LivePermission
             from forklift_core.control.path_tracking import ackermann_command as live_ackermann
+            from forklift_core.safety.arbiter import ArbiterConfig as LiveArbiterConfig
             from forklift_core.safety.teleop_drive import arc_permit as live_arc_permit
             repo_root_ = str(Path(__file__).resolve().parents[2])  # console/ lives at the repository's root
             if repo_root_ not in sys.path:
@@ -5197,6 +5201,7 @@ def drive(S, isaac) -> None:
                                 lift_position=lambda: float(robot.get_joint_positions()[lift_index[0]]),
                                 camera=live_camera, grid=live_grid, scan=live_scan),
                 output=Path(args.output), port_file=args.live_port_file, dt=1 / 120, factor=args.live_factor,
+                config=LiveArbiterConfig(tick_s=1 / 120, lease_timeout_s=args.live_lease_timeout_s),
                 host=args.live_host, web_root=args.live_web_root,
                 test_step_delay_s=args.live_test_step_delay_ms / 1000.0, camera_freeze=freeze_)
             live.start()

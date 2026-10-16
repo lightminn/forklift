@@ -118,6 +118,20 @@ class Probe:
 
     # --- requests -----------------------------------------------------------------------------------------------
     async def request(self, kind, timeout=5.0, **fields):
+        reply = await self._request(kind, timeout, **fields)
+        if reply is not None and reply.get("reason") in ("no_lease", "stale_lease") and kind != "lease_request":
+            # As the console would: the lease was lost (a long tick on the vehicle); take it again, ask once more.
+            self.event("lease_lost", kind=kind)
+            lease = await self._request("lease_request", timeout)
+            if lease is not None and lease.get("t") == "ack":
+                self.lease_id = lease["lease_id"]
+                self.control_gen = lease.get("control_gen", self.control_gen)
+                fields.pop("lease_id", None)
+                fields.pop("control_gen", None)
+                reply = await self._request(kind, timeout, **fields)
+        return reply
+
+    async def _request(self, kind, timeout=5.0, **fields):
         self.n += 1
         rid = f"r{self.n}"
         msg = {"t": kind, "request_id": rid, "session_epoch": self.epoch, **fields}
