@@ -228,7 +228,8 @@ def test_object_identities_in_the_containers_do_not_reach_the_projection(tmp_pat
     spec.loader.exec_module(module)
 
     def containers(t1, t2, rects):
-        state = {"cusp_heading_holds": [{"key": ["observe", t1, 0]}, {"key": ["transport", t2, 1]}],
+        state = {"cusp_heading_holds": [{"key": ["observe", t1, 0]}, {"key": ["transport", t2, 1]},
+                                        {"key": ["transport", t2, 2], "cancelled_by": ["transport", t1, 2]}],
                  "cusp_heading_watch": {"tracker": t2, "hold": 1}}
         new = {"pallet_frame": rects, "heights": {id(r): 0.3 + i for i, r in enumerate(rects)}}
         return {"state": state, "new_obstacles": new}

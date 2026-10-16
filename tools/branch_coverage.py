@@ -21,40 +21,54 @@ from pathlib import Path
 D2_ITEMS = {
     "observation candidate switch / re-observation": [r"^state\.observation_candidates", r"^state\.observe_replans",
                                                       r"^state\.transitions\[from=approach,to=observe"],
-    "near correction accepted": [r"^near\.events\[event=correction_trigger"],
-    "near correction refused": [r"^result:refused="],
+    "near correction accepted": [r"^evidence:correction=accepted"],
+    "near correction refused": [r"^evidence:correction=refused"],
     "observation lost": [r"^near\.events\[event=stop,reason=lost", r"^near\.events\[event=drop_latch"],
     "near capture redraw / pickup retry": [r"^state\.near_capture_history", r"event=retry_start"],
-    "realignment": [r"^result:realign="],
+    "realignment": [r"^evidence:realign"],
     "D7 reapproach": [r"^state\.docking_retries", r"release_docking_retry"],
     "cusp replan / heading hold": [r"^state\.cusp_(heading_holds|replans|stalls)"],
     "stall replan": [r"^state\.stall_replans", r"release_before_stall_replan"],
-    "obstacle stop": [r"^obstacle\.backoff_records", r"^obstacle\.unpermitted", r"^result:obstacle_stop="],
+    "obstacle stop": [r"^obstacle\.backoff_records", r"^obstacle\.unpermitted"],
     "obstacle backoff": [r"^obstacle\.backoff_records", r"release_after_backoff"],
-    "obstacle escape": [r"^result:escape="],
+    "obstacle escape": [r"^evidence:escape"],
     "replan failure": [r"^obstacle\.replans\[.*status=(?!success)", r"^exit:obstacle_replan_failed"],
-    "certified withdrawal": [r"^state\.transitions\[from=lower,to=withdraw"],
+    "certified withdrawal": [r"^evidence:withdraw=certified"],
     "docking": [r"^obstacle\.plans\[kind=docking", r"^state\.transitions\[from=approach,to=insert"],
     "return home": [r"^state\.transitions\[from=settle,to=return_home"],
-    "mission refusal": [r"^exit:"],
+    # The core's own refusals (MissionFailed reasons); an evaluation invariant (an "Actual ..." truth check) or any
+    # other exception is listed as an exit, not counted here (Codex P2).
+    "mission refusal": [r"^exit:(obstacle_|near_field_|Mission planning failed|withdraw_not_certified|docking_"
+                        r"|pickup_|observation_|mission_|observe_|transport_|return_)"],
 }
-# Branches recorded as dictionary values rather than as list growth (the tick probe sees only lists): read from the
-# run's result.json -- truthy values of these keys anywhere in it.
-RESULT_KEYS = {"escape": "escape", "escapes": "escape", "realign": "realign", "refused": "refused"}
 
 
-def _result_values(node, depth=0):
-    if depth > 12:
-        return
-    if isinstance(node, dict):
-        for k, v in node.items():
-            if k in RESULT_KEYS and v not in (None, False, 0, {}, [], ""):
-                if not (isinstance(v, dict) and not any(v.values())):
-                    yield k, v
-            yield from _result_values(v, depth + 1)
-    elif isinstance(node, list):
-        for v in node[:500]:
-            yield from _result_values(v, depth + 1)
+def _evidence(run_dir: Path) -> list:
+    """Branches the run's own records state as values (the tick probe sees only list growth): the near corrections'
+    redraw outcome, a realignment record, an obstacle escape, the withdrawal certificate (Codex P2: from these
+    decision fields, never from a key name alone)."""
+    out = []
+    near_file = Path(run_dir) / "near_tracking.json"
+    if near_file.exists():
+        near = json.loads(near_file.read_text())
+        for c in near.get("corrections") or []:
+            redraw = (c or {}).get("redraw") or {}
+            out.append("evidence:correction=" + ("refused" if redraw.get("refused") else "accepted"))
+        if near.get("realign"):
+            out.append("evidence:realign")
+    result_file = Path(run_dir) / "result.json"
+    if result_file.exists():
+        result = json.loads(result_file.read_text())
+        if (result.get("near_tracking") or {}).get("realign"):
+            out.append("evidence:realign")
+        for rec in ((result.get("obstacle_layer") or {}).get("backoff_records") or []):
+            if isinstance(rec, dict) and rec.get("escape") and (rec["escape"] if not isinstance(rec["escape"], dict)
+                                                                 else rec["escape"].get("chosen") is not None):
+                out.append("evidence:escape")
+        cert = result.get("withdraw_certificate")
+        if isinstance(cert, dict):
+            out.append("evidence:withdraw=" + ("certified" if cert.get("certified") else "not_certified"))
+    return out
 
 
 def run_branches(run_dir: Path) -> collections.Counter:
@@ -68,10 +82,7 @@ def run_branches(run_dir: Path) -> collections.Counter:
                 tick = json.loads(line)
                 for branch in tick.get("branches", []):
                     counts[re.sub(r",?time_s=[^,\]]*", "", branch)] += 1
-    result = Path(run_dir) / "result.json"
-    if result.exists():
-        for key, value in _result_values(json.loads(result.read_text())):
-            counts[f"result:{RESULT_KEYS[key]}={json.dumps(value)[:40]}"] += 1
+    counts.update(_evidence(run_dir))
     meta = json.loads((boundary / "boundary_meta.json").read_text())
     ending = meta.get("ending") or {}
     if ending.get("kind") == "exception":  # a mission refusal ends the run with its reason
