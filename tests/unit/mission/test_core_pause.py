@@ -81,13 +81,13 @@ def resume(core, t):
     assert core.commands.apply(t)[0]["accepted"]
 
 
-def test_the_paused_tick_asks_for_zero_follows_the_lift_and_keeps_the_permissions_cap():
+def test_the_paused_tick_asks_for_zero_keeps_a_carried_lift_and_the_permissions_cap():
     core, obs, _ = make(layer=Layer(allowed=0.0, why="occupied"), speed=0.3)
     pause(core, 10.0)
     core.ms.lift_command = 0.2
     out = core.paused_tick(10.0, REAR, 0.1, True)
     assert out.requested_speed == 0.0 and out.stop is False
-    assert core.ms.lift_command == 0.07  # synchronised to where the lift is, not frozen at the target
+    assert core.ms.lift_command == 0.2  # transport: the lift is not being moved, its target stays
     assert obs["permission_cap"] == (10.0, 0.0) and out.obstacle_hold is True  # an obstacle still steps to zero
     (_, limit_kwargs), = [c for c in obs["layer"].calls if c[0] == "limit"]
     assert limit_kwargs["cap_mps"] == pytest.approx(0.3) and limit_kwargs["direction"] == 1
@@ -501,3 +501,19 @@ def test_a_stop_not_seen_standing_for_ten_seconds_is_reported_and_the_reason_wit
 def test_the_safety_state_before_the_first_tick_has_no_work_time():
     core, _, _ = make()
     assert core.safety_state(None)["mission"]["phase_elapsed_s"] is None
+
+
+def test_a_lift_on_its_way_is_held_where_it_stood_and_a_sagging_load_does_not_ratchet_it_down():
+    """Isaac ma3_p_tr (M-a3 integration): synchronised every tick, a loaded lift sagging 2.8 mm below its target
+    lowered the target each tick until the pallet fell. Set once at the stop, the target holds."""
+    lift = {"z": 0.10}
+    core, _, _ = make("lift", obstacle=False)
+    core.hooks.lift_position = lambda: lift["z"]
+    pause(core, 10.0)
+    core.ms.lift_command = 0.12
+    core.paused_tick(10.0, REAR, 0.0, True)
+    assert core.ms.lift_command == 0.10
+    for k in range(1, 30):
+        lift["z"] = core.ms.lift_command - 0.0028  # the load sags below whatever target it is given
+        core.paused_tick(10.0 + k / 120, REAR, 0.0, True)
+    assert core.ms.lift_command == 0.10

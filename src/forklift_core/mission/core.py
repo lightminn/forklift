@@ -2606,8 +2606,8 @@ class MissionCore:
 
     def paused_tick(self, t: float, rear, kappa: float, loaded: bool) -> SimpleNamespace:
         """One control tick while the mission is paused, resuming or cancelling (E3, E5, E6): nothing of the
-        mission's own work runs (no follower, no arrival, no lift ramp, no replan); the permission watches, the
-        lift target follows the lift where it is, and the stop is watched. A cancel ends once standing; a resume
+        mission's own work runs (no follower, no arrival, no lift ramp, no replan); the permission watches, a
+        lift on its way is held where it stood at the stop's first tick, and the stop is watched. A cancel ends once standing; a resume
         steps through its checks. Returns ``requested_speed`` (0), ``obstacle_hold``, ``stop`` (the run ends) and
         ``rear`` (a replan inside the resume may move it)."""
         ms, slam, obstacle, hooks, cmds = self.ms, self.slam, self.obstacle, self.hooks, self.commands
@@ -2616,13 +2616,18 @@ class MissionCore:
             cmds.pause_hold_count = self.hold_count()
             cmds.pause_holding = slam is not None and slam["tracker"].mode == "holding"
             cmds.pause_release_pending = slam is not None and slam.get("pending_release") is not None
+            if ms.phase in ("lift", "lower"):
+                # E3/R7: a lift on its way stops where it is -- the target is set to the measured lift once, at the
+                # stop's first tick, and held. Synchronising every tick ratcheted a loaded lift down by its sag
+                # (Isaac ma3_p_tr: 2.8 mm a tick, the pallet dropped 0.27 s into a transport pause). A lift that is
+                # not being moved (transport and the rest) keeps its target.
+                ms.lift_command = float(hooks.lift_position())
         if standing and cmds.stop_seen_s is None:
             cmds.stop_seen_s = t
             cmds.stop_pose = tuple(float(v) for v in rear)  # R11 measures a move from where it stood, not braking
         # E3: not standing 10 s after the stop began -- reported for the arbiter (the run goes on).
         cmds.not_stopped = (cmds.stop_seen_s is None and cmds.paused_since is not None
                             and t - cmds.paused_since >= NOT_STOPPED_S)
-        ms.lift_command = float(hooks.lift_position())  # E3: synchronised to where the lift is, not frozen
         obstacle_hold = False
         if obstacle is not None:
             obstacle_hold = self.permission_watch(t, rear, kappa, loaded).obstacle_hold
