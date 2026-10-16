@@ -669,6 +669,10 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--live-test-stop-in-capture", action="store_true",
                         help="M-c tests only: a STOP arrives at a physics step inside the first capture (the path a "
                         "console STOP takes, at a moment a client cannot aim for)")
+    parser.add_argument("--live-test-marker", action="store_true",
+                        help="M-c tests only (plan C5): a small red plate 0.5 m in front of the forward camera sweeps "
+                        "sideways once a sim second, so a frame's pixels tell the sim time they were drawn at -- "
+                        "for a run without a mission (it would sit in the perception's view)")
     parser.add_argument("--live-test-camera-freeze", default=None,
                         help="M-c tests only: FROM:TO sim seconds with no new camera frames (the video-stall test)")
     parser.add_argument(
@@ -5217,8 +5221,24 @@ def drive(S, isaac) -> None:
             live.start()
             core.hooks.live_abort = lambda: live.stopped_in_tick  # the core stops right after a raw capture
 
+            live_marker_ = None
+            if args.live_test_marker and live_cam_ is not None:
+                import omni.usd
+                from pxr import Gf, UsdGeom
+
+                cube_ = UsdGeom.Cube.Define(omni.usd.get_context().get_stage(), live_cam_.prim_path + "/LiveMarker")
+                cube_.GetSizeAttr().Set(0.02)
+                cube_.GetDisplayColorAttr().Set([Gf.Vec3f(1.0, 0.0, 0.0)])
+                marker_api_ = UsdGeom.XformCommonAPI(cube_.GetPrim())
+
+                def live_marker_(sim_s: float) -> None:
+                    # A sawtooth: x from -0.12 to +0.12 m across each sim second, 0.5 m ahead (USD camera: -Z ahead).
+                    marker_api_.SetTranslate(Gf.Vec3d(-0.12 + 0.24 * (sim_s % 1.0), 0.0, -0.5))
+
             def live_step_world(render: bool) -> None:
                 sim_ = float(world.current_time - initial_time)
+                if live_marker_ is not None:
+                    live_marker_(sim_ + 1 / 120)  # where it stands when this step is drawn
                 live.before_step(sim_)
                 camera_ = live.camera_due() and live_cam_ is not None
                 step_world(render or camera_)

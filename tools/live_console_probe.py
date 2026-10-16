@@ -44,6 +44,7 @@ class Probe:
         self._reader = None
         self._media_reader = None
         self.closed_code = None
+        self.save_frames = None  # (directory, how many) for the marker scenario
 
     def event(self, name, **fields):
         self.report.setdefault("events", []).append({"mono": time.monotonic(), "event": name, **fields})
@@ -119,7 +120,9 @@ class Probe:
                 if head.get("t") == "camera":
                     self.frames.append({"mono": time.monotonic(), "frame_id": head["frame_id"],
                                         "acquired_mono_ns": head["acquired_mono_ns"], "jpeg": body[:2] == b"\xff\xd8",
-                                        "bytes": len(body)})
+                                        "bytes": len(body), "stamp_ns": head.get("capture", {}).get("stamp_ns")})
+                    if self.save_frames is not None and len(self.frames) <= self.save_frames[1]:
+                        (self.save_frames[0] / f"frame_{head['frame_id']:06d}.jpg").write_bytes(body)
         except Exception as exc:  # noqa: BLE001
             self.event("media_closed", error=repr(exc))
 
@@ -316,6 +319,17 @@ async def main_scenario(p: Probe, args):
     p.report["close_code"] = p.closed_code
 
 
+async def marker_scenario(p: Probe, args):
+    """Plan C5: only watch -- save the frames, the runner's marker tells when their pixels were drawn."""
+    args.frames_dir.mkdir(parents=True, exist_ok=True)
+    p.save_frames = (args.frames_dir, args.frames)
+    await p.open()
+    await p.open_media()
+    end = time.monotonic() + args.marker_s
+    while time.monotonic() < end and len(p.frames) < args.frames and p.closed_code is None:
+        await asyncio.sleep(0.2)
+
+
 async def slow_scenario(p: Probe, args):
     await p.open()
     await p.open_media()
@@ -338,7 +352,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port-file", type=Path, required=True)
     ap.add_argument("--report", type=Path, required=True)
-    ap.add_argument("--scenario", choices=("main", "slow"), default="main")
+    ap.add_argument("--scenario", choices=("main", "slow", "marker"), default="main")
+    ap.add_argument("--frames-dir", type=Path, default=None)
+    ap.add_argument("--frames", type=int, default=300)
+    ap.add_argument("--marker-s", type=float, default=600.0)
     ap.add_argument("--old-session", type=Path, default=None)
     ap.add_argument("--observe-timeout-s", type=float, default=240.0)
     ap.add_argument("--expect-stop-in-capture", action="store_true",
@@ -358,7 +375,8 @@ def main():
     report = {"port_file": info}
     p = Probe(info["port"], report)
     try:
-        asyncio.run((main_scenario if args.scenario == "main" else slow_scenario)(p, args))
+        scenario = {"main": main_scenario, "slow": slow_scenario, "marker": marker_scenario}[args.scenario]
+        asyncio.run(scenario(p, args))
     finally:
         report["frames"] = p.frames
         report["states"] = p.states

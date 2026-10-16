@@ -1069,7 +1069,8 @@ POST_MEASUREMENT_ARGUMENTS = {"return_turnaround": False, "repeat_at_near_captur
                               # 2026-10-17: M-c live runs -- off unless given; a live run is not a measurement run.
                               "live": False, "live_port_file": None, "live_host": "127.0.0.1", "live_factor": 1.0,
                               "live_lease_timeout_s": 5.0, "live_web_root": None, "live_test_step_delay_ms": 0.0,
-                              "live_test_stop_in_capture": False, "live_test_camera_freeze": None}
+                              "live_test_stop_in_capture": False, "live_test_camera_freeze": None,
+                              "live_test_marker": False}
 # Arguments that only add records to a run (M-a0 boundary record, docs/plans/2026-10-15-m-a05-boundary.md
 # section 5): any value matches the measurement condition. The recorder only reads (values are copied before
 # a call runs), so what it can change is wall-clock timing, to which runs are already sensitive (render
