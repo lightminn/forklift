@@ -68,6 +68,7 @@ class MissionCommands:
         self.pauses: list[list] = []  # [start, end-or-None] of every pause (the work clock's stops)
         self.paused_since: float | None = None
         self.stop_seen_s: float | None = None  # the first standing tick of the current stop
+        self.not_stopped = False  # the stop not seen standing within its limit (E3), for the safety state
         self.resume_check: dict | None = None  # the resume's last check (E5), for the safety state
         self.resume_retry_s = -1e9  # a resume's replan without a path tries again from here
         self.stop_pose: tuple | None = None  # the control pose where the stop was first seen standing (M-a3c R11)
@@ -157,6 +158,7 @@ class MissionCommands:
     def _stop_boundary(self, t: float) -> None:
         self.paused_since = t
         self.stop_seen_s = None
+        self.not_stopped = False
         self.stop_pose = None
         self.pause_hold_count = None
         self.pause_holding = self.pause_release_pending = False

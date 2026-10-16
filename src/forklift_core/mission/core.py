@@ -118,6 +118,8 @@ def record_tracker_configs_in(state: dict, trackers: dict) -> None:
 # from there) -- a stop that holds stays well inside it (the stop detector's 12 mm/s mean over 0.2 s).
 PAUSE_MOVED_M = 0.01
 PAUSE_MOVED_RAD = 0.01
+# M-a3 (E3): a stop not seen standing this long after it began is reported as not_stopped.
+NOT_STOPPED_S = 10.0
 
 
 class MissionCore:
@@ -140,6 +142,7 @@ class MissionCore:
         # M-a3: the mission lifecycle and its commands (docs/plans/2026-10-16-m-a3-mission-commands.md E1) --
         # outside every container the replay compares; a run without commands only ever submits once.
         self.commands = MissionCommands()
+        self.last_permission: tuple | None = None  # (allowed, why) of the latest permission or watch (E8)
 
     def known_transition(self, from_phase: str, next_phase: str, t: float) -> None:
         """Known pallets across the mission (plan v10 D5)."""
@@ -718,6 +721,7 @@ class MissionCore:
             hooks.require(not ("stopped_s" in trace and t - trace["stopped_s"] >= 1.0), "sensor_silence_stopped")
         if obstacle["path_blocked_ticks"] >= 36 and allowed > 0.0:
             allowed, why = 0.0, "occupied"
+        self.last_permission = (float(allowed), why)  # for the safety state's reason (E8)
         if abs(requested_speed) > allowed + 1e-9:
             obstacle["slowed"][ms.phase] = obstacle["slowed"].get(ms.phase, 0) + 1
             key = f"{ms.phase}:{why}"
@@ -2586,6 +2590,7 @@ class MissionCore:
             t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
             direction=1 if truth_speed > 0 else -1, loaded=loaded, cap_mps=abs(truth_speed),
         )
+        self.last_permission = (float(allowed), why)  # for the safety state's reason (E8)
         acting = False
         if ms.phase in trackers:
             acting, docking_straight = self.permission_acting()
@@ -2612,6 +2617,9 @@ class MissionCore:
         if standing and cmds.stop_seen_s is None:
             cmds.stop_seen_s = t
             cmds.stop_pose = tuple(float(v) for v in rear)  # R11 measures a move from where it stood, not braking
+        # E3: not standing 10 s after the stop began -- reported for the arbiter (the run goes on).
+        cmds.not_stopped = (cmds.stop_seen_s is None and cmds.paused_since is not None
+                            and t - cmds.paused_since >= NOT_STOPPED_S)
         ms.lift_command = float(hooks.lift_position())  # E3: synchronised to where the lift is, not frozen
         obstacle_hold = False
         if obstacle is not None:
@@ -2748,10 +2756,10 @@ class MissionCore:
             trackers[ms.phase].restart_speed_slew(0.0)  # from standing, not from the held cruise
         return rear
 
-    def safety_state(self, t: float) -> dict:
+    def safety_state(self, t: float | None) -> dict:
         """The mission's safety state for the arbiter (plan E8, M-a0.5 section 4), from what the core already holds
-        this tick -- no port call (the replay compares every one). ``basis`` says what a value rests on; a value
-        the tick did not read is ``unknown`` until M-b gives the vehicle state a port."""
+        this tick; its only port read is the SLAM mode (served from the record in a replay, which runs it too).
+        ``basis`` says what a value rests on. ``t`` None: before the first control tick (no work time yet)."""
         ms, state, slam, obstacle, near, cmds = self.ms, self.state, self.slam, self.obstacle, self.near, self.commands
         phase_ = ms.phase
         applied_ = state.get("applied_command")
@@ -2762,9 +2770,10 @@ class MissionCore:
             "t": t,
             "mission": {"id": cmds.mission_id, "status": cmds.status, "generation": cmds.mission_gen,
                         "phase": phase_,
-                        "phase_elapsed_s": cmds.work_elapsed(ms.phase_started, t) if phase_ is not None else None,
+                        "phase_elapsed_s": (cmds.work_elapsed(ms.phase_started, t)
+                                            if phase_ is not None and t is not None else None),
                         "resume": dict(cmds.resume_check) if cmds.resume_check else None,
-                        "stop_seen_s": cmds.stop_seen_s},
+                        "stop_seen_s": cmds.stop_seen_s, "not_stopped": cmds.not_stopped},
             "load": {"loaded": phase_ in ("lift", "extract", "transport", "lower"), "basis": "phase",
                      "lift_target_m": float(ms.lift_command)},
             "fork_in_pocket": {"value": phase_ in ("insert", "lift", "extract", "lower", "withdraw"), "basis": "phase"},
@@ -2777,7 +2786,8 @@ class MissionCore:
             "command": {"applied_speed_mps": None if applied_ is None else float(applied_[0]),
                         "steering_rad": None if applied_ is None else [float(v) for v in applied_[1]]},
             "blocked": {"cap": None if obstacle is None or obstacle.get("permission_cap") is None
-                        else float(obstacle["permission_cap"][1])},
+                        else float(obstacle["permission_cap"][1]),
+                        "reason": None if self.last_permission is None else self.last_permission[1]},
         }
 
     def release_gate(self, t: float, rear) -> SimpleNamespace:

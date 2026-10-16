@@ -466,7 +466,7 @@ def test_the_safety_state_reports_the_lifecycle_the_load_and_the_command_without
     assert out["load"] == {"loaded": True, "basis": "phase", "lift_target_m": 0.0}
     assert out["fork_in_pocket"] == {"value": False, "basis": "phase"}
     assert out["command"] == {"applied_speed_mps": 0.25, "steering_rad": [0.1, 0.12]}
-    assert out["blocked"] == {"cap": 0.4} and out["frame"]["correction_version"] == 1 and out["near"] is None
+    assert out["blocked"] == {"cap": 0.4, "reason": None} and out["frame"]["correction_version"] == 1 and out["near"] is None
     import json
 
     json.dumps(out)  # one JSON line
@@ -481,3 +481,19 @@ def test_the_safety_state_shows_a_refused_resume_and_the_pause_in_work_time():
     out = core.safety_state(12.0)
     assert out["mission"]["status"] == "resuming" and out["mission"]["resume"]["reason"] == "no_resume:x"
     assert out["mission"]["phase_elapsed_s"] == pytest.approx(10.0)  # 12 s, less the 2 s paused so far
+
+
+def test_a_stop_not_seen_standing_for_ten_seconds_is_reported_and_the_reason_with_the_cap():
+    """Codex M-a3d/e review: not_stopped and the permission's reason reach the safety state."""
+    core, _, _ = make(speed=0.2, layer=Layer(allowed=0.0, why="sensor_silent:front"))
+    pause(core, 10.0)
+    core.paused_tick(15.0, REAR, 0.0, True)
+    assert core.safety_state(15.0)["mission"]["not_stopped"] is False
+    core.paused_tick(20.0, REAR, 0.0, True)
+    out = core.safety_state(20.0)
+    assert out["mission"]["not_stopped"] is True and out["blocked"]["reason"] == "sensor_silent:front"
+
+
+def test_the_safety_state_before_the_first_tick_has_no_work_time():
+    core, _, _ = make()
+    assert core.safety_state(None)["mission"]["phase_elapsed_s"] is None

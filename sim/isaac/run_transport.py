@@ -5236,7 +5236,8 @@ def drive(S, isaac) -> None:
                 while mission_schedule and mission_schedule[0][0] <= t:
                     core.commands.queue(MISSION_COMMANDS[mission_schedule.pop(0)[1]]())
                 stop_kind_ = stop_kind_at(t)
-                if state.pop("preempt_seen_s", None) is not None and stop_kind_ == "none":
+                if (state.pop("preempt_seen_s", None) is not None and stop_kind_ == "none"
+                        and core.commands.status in ("running", "resuming")):
                     stop_kind_ = "preempt"  # a preempt that began and ended inside a capture still stops the mission
                 applied_commands_ = core.commands.apply(t, MissionContext(
                     stop_kind=stop_kind_, near_tracker=near is not None and near["tracker"] is not None))
@@ -6162,9 +6163,14 @@ def drive(S, isaac) -> None:
                 state["mission_commands"] = {"log": core.commands.log, "pauses": core.commands.pauses,
                                              "status": core.commands.status, "generation": core.commands.mission_gen}
             if safety_file is not None:
-                # The last line carries the lifecycle's end (done, failed, cancelled).
-                safety_file.write(json.dumps(core.safety_state(book_clock["t"])) + "\n")
-                safety_file.close()
+                # The last line carries the lifecycle's end (done, failed, cancelled); never in place of the run's
+                # own end, nor in the way of the record's close below.
+                try:
+                    safety_file.write(json.dumps(core.safety_state(book_clock["t"])) + "\n")
+                except Exception as exc_:  # noqa: BLE001
+                    state["mission_safety_error"] = repr(exc_)
+                finally:
+                    safety_file.close()
             if early_ports:  # format 2: closed last, so the summaries above read the services inside the exit tick
                 try:
                     locals_ = locals()
