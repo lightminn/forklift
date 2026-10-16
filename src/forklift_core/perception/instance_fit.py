@@ -270,3 +270,94 @@ def ray_samples(scene: SceneInput, rays, face: FacePlane, u_range, h_range, para
     cls[~np.isfinite(d)] = UNOBSERVED
     owned = np.zeros(len(tt), bool) if mask is None else np.asarray(mask, bool)[inside]
     return u[inside], h[inside], cls, owned
+
+
+def face_raster(spec: PalletSpec, axis: str, bin_m: float, *, mirror: bool = False):
+    """Occupancy of an entry face seen along its axis (every box projected through the depth).
+
+    Rows are h from 0 at the support surface; columns are u from -W/2 (right) to +W/2
+    (left). Entering an x face, left is +y; entering a y face, left is -x. Lanes are
+    through-holes, so the projection is what the face shows.
+    """
+    layout = face_layout(spec, axis)
+    width = layout.width_m
+    nu, nh = int(round(width / bin_m)), int(round(spec.overall_height_m / bin_m))
+    uc = -width / 2 + (np.arange(nu) + 0.5) * bin_m
+    hc = (np.arange(nh) + 0.5) * bin_m
+    occ = np.zeros((nh, nu), bool)
+    for box in spec_boxes(spec):
+        (cx, cy, cz), (sx, sy, sz) = box.centre_m, box.size_m
+        lo, hi = (cy - sy / 2, cy + sy / 2) if axis == "x" else (-cx - sx / 2, -cx + sx / 2)
+        rows = (hc >= cz - sz / 2) & (hc <= cz + sz / 2)
+        cols = (uc >= lo) & (uc <= hi)
+        occ[np.ix_(rows, cols)] = True
+    return occ[:, ::-1] if mirror else occ
+
+
+def damageable_rows(spec: PalletSpec, bin_m: float):
+    """Raster rows that allowed damage may empty: the top-deck band (design §5.2 removes 1-2 top
+    boards, edge boards included, or breaks one off). Seen-through rays there are not evidence of
+    a different shape; the blocks, stringers and bottom boards stay (chips and splits are small)."""
+    nh = int(round(spec.overall_height_m / bin_m))
+    hc = (np.arange(nh) + 0.5) * bin_m
+    return hc >= spec.overall_height_m - spec.top_thickness_m
+
+
+def _hist(u, h, u0, h0, nu, nh, bin_m):
+    iu = np.floor((u - u0) / bin_m).astype(int)
+    ih = np.floor((h - h0) / bin_m).astype(int)
+    ok = (iu >= 0) & (iu < nu) & (ih >= 0) & (ih < nh)
+    out = np.zeros((nh, nu))
+    np.add.at(out, (ih[ok], iu[ok]), 1.0)
+    return out
+
+
+def _correlate_rows(hist, kernel, row_shift):
+    total = None
+    for i in range(kernel.shape[0]):
+        row = np.correlate(hist[row_shift + i], kernel[i], mode="valid")
+        total = row if total is None else total + row
+    return total
+
+
+@dataclass(frozen=True)
+class Placement2D:
+    score: float
+    u_centre: float
+    support_z: float
+
+
+def best_placement(occ, pts_u, pts_h, rays, params: FitParams, h_lo: float, n_shift: int,
+                   damageable=None) -> Placement2D:
+    """Exhaustive search of a face raster over u and support height.
+
+    Per mask point: +1 on material, -hole_point_weight in a hole, -outside_weight outside
+    the raster. Per raw ray: -face_ray_weight if it stops on the face inside a hole,
+    -seen_through_weight if it passes behind the face where the raster has material outside the
+    damageable rows (a missing or broken top board is allowed damage, §5.2; §7.4 does not
+    penalise it).
+    Rays never add. The sum is divided by the number of face points. The support height
+    runs over h_lo + s * bin_m for s < n_shift.
+    """
+    b = params.bin_m
+    nh_t, nu_t = occ.shape
+    u0 = float(pts_u.min()) - nu_t * b
+    nu = int(math.ceil((float(pts_u.max()) - float(pts_u.min())) / b)) + 2 * nu_t + 1
+    nh = nh_t + n_shift + 8
+    ru, rh, rc = rays[0], rays[1], rays[2]
+    pm = _hist(pts_u, pts_h, u0, h_lo, nu, nh, b)
+    rb = _hist(ru[rc == BEHIND], rh[rc == BEHIND], u0, h_lo, nu, nh, b)
+    rf = _hist(ru[rc == FACE], rh[rc == FACE], u0, h_lo, nu, nh, b)
+    k_pts = np.where(occ, 1.0 + params.outside_weight, params.outside_weight - params.hole_point_weight)
+    solid = occ if damageable is None else occ & ~np.asarray(damageable)[:, None]
+    k_b = np.where(solid, -params.seen_through_weight, 0.0)
+    k_f = np.where(occ, 0.0, -params.face_ray_weight)
+    n_pts = len(pts_u)
+    best = None
+    for s in range(n_shift):
+        score = (_correlate_rows(pm, k_pts, s) + _correlate_rows(rb, k_b, s) + _correlate_rows(rf, k_f, s)
+                 - params.outside_weight * n_pts) / n_pts
+        j = int(np.argmax(score))
+        if best is None or score[j] > best.score:
+            best = Placement2D(float(score[j]), u0 + (j + nu_t / 2) * b, h_lo + s * b)
+    return best

@@ -130,3 +130,65 @@ def test_erode_shrinks_a_mask_by_its_radius():
     m = np.zeros((9, 9), bool)
     m[2:7, 2:7] = True
     assert F.erode(m, 1).sum() == 9 and F.erode(m, 2).sum() == 1 and not F.erode(m, 3).any()
+
+
+# ---- Task 3: rasters and the placement search ---------------------------------------------------
+
+def test_an_x_face_raster_has_open_lanes_down_to_the_support():
+    occ = F.face_raster(EPAL, "x", 0.005)
+    lane = occ[:int(0.10 / 0.005), int((0.4 + 0.18625) / 0.005)]       # left opening, below the ceiling
+    assert occ.shape == (round(EPAL.overall_height_m / 0.005), round(0.8 / 0.005))
+    assert not lane.any() and occ[int(0.11 / 0.005)].all()              # lane open to the floor, stringer row full
+    assert not occ[-1].all()                                            # the top deck shows the gaps between boards
+    assert occ[:, int(0.4 / 0.005)].all()                               # the middle column is solid
+
+
+def test_a_y_face_lane_reaches_up_to_the_top_deck():
+    occ = F.face_raster(T11, "y", 0.005)
+    col = occ[:, occ.shape[1] // 2 + int(0.145 / 0.005)]               # a y-face opening column (centre 0.145 m)
+    rows = np.nonzero(~col)[0] * 0.005
+    assert rows.min() == pytest.approx(T11.deck_bottom_m, abs=0.005)
+    assert rows.max() == pytest.approx(T11.deck_bottom_m + T11.opening_height_m + T11.stringer_m, abs=0.006)
+
+
+def _evidence(scene, ids, k=0):
+    p = F.FitParams()
+    rays = F.pixel_rays(scene)
+    pts, _ = F.proposal_points(scene, rays, ids == k, p.erode_px)
+    face = F.fit_faces(pts, F.camera_xyz(scene), p, np.random.default_rng(0))[0]
+    u, h = F.face_coords(face, pts[face.index])
+    h_lo = float(np.percentile(h, 2)) - p.support_window_m
+    rs_ = F.ray_samples(scene, rays, face, (u.min() - 0.9, u.max() + 0.9), (h_lo, h_lo + 0.4), p, mask=ids == k)
+    return face, u, h, rs_, h_lo
+
+
+def test_the_placement_search_finds_the_pallet_centre_and_support_height():
+    scene, ids = _render([(EPAL, rt.Placement(2.8, -0.2, 0.15, 0.0), ())])
+    face, u, h, rays, h_lo = _evidence(scene, ids)
+    best = F.best_placement(F.face_raster(EPAL, "x", 0.005), u, h, rays, F.FitParams(), h_lo, 13)
+    centre = np.array([2.8, -0.2]) - 0.3 * np.array([math.cos(0.15), math.sin(0.15)])
+    assert (face.centre_xy + face.left_xy * best.u_centre - centre) @ face.left_xy == pytest.approx(0.0, abs=0.005)
+    assert best.support_z == pytest.approx(0.0, abs=0.005) and best.score > 0.8
+
+
+def test_the_right_shape_scores_higher_than_the_wrong_one():
+    for spec, other in ((EPAL, T11), (T11, EPAL)):
+        scene, ids = _render([(spec, rt.Placement(2.6, 0.0, -0.1, 0.0), ())])
+        _, u, h, rays, h_lo = _evidence(scene, ids)
+        right = F.best_placement(F.face_raster(spec, "x", 0.005), u, h, rays, F.FitParams(), h_lo, 13)
+        wrong = F.best_placement(F.face_raster(other, "x", 0.005), u, h, rays, F.FitParams(), h_lo, 13)
+        assert right.score > wrong.score + 0.2
+
+
+@pytest.mark.parametrize("spec", [EPAL, T11])
+def test_rays_never_add_score(spec):
+    """Removing rays of either class can only raise the best score, so no placement can earn
+    score over empty background (Codex 2026-10-16: the first prototype rewarded BEHIND rays)."""
+    scene, ids = _render([(T11, rt.Placement(2.6, 0.0, 0.0, 0.0), ())])
+    _, u, h, rays, h_lo = _evidence(scene, ids)
+    occ = F.face_raster(spec, "x", 0.005)
+    full = F.best_placement(occ, u, h, rays, F.FitParams(), h_lo, 13).score
+    for cls in (F.BEHIND, F.FACE):
+        keep = rays[2] != cls
+        fewer = tuple(a[keep] for a in rays)
+        assert F.best_placement(occ, u, h, fewer, F.FitParams(), h_lo, 13).score >= full - 1e-12
