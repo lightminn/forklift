@@ -90,6 +90,20 @@ def check_levels(dirs: dict, scene_id: str) -> None:
                 raise RetruthError(f"{scene_id}: {name} differs at level {level}")
 
 
+def scene_ids(roots: dict, catalogue_ids) -> list:
+    """The scenes to rewrite: every level must hold the same scenes and they must be the whole catalogue,
+    so a scene missing from one level (a failed render or copy) cannot silently leave the population."""
+    sets = {lv: {p.name for p in root.iterdir() if p.is_dir()} for lv, root in roots.items()}
+    first = next(iter(sets.values()))
+    if any(s != first for s in sets.values()):
+        raise RetruthError("scene sets differ between levels: " + ", ".join(
+            f"{lv} lacks {sorted(first - s)[:3]} has extra {sorted(s - first)[:3]}" for lv, s in sets.items() if s != first))
+    if first != set(catalogue_ids):
+        raise RetruthError(f"scenes differ from the catalogue: missing {sorted(set(catalogue_ids) - first)[:3]}, "
+                           f"extra {sorted(first - set(catalogue_ids))[:3]}")
+    return sorted(first)
+
+
 def _intrinsics(camera_info: dict):
     import perception_camera as pc
 
@@ -110,11 +124,11 @@ def retruth(source: Path, out: Path, levels, *, revision: str = "") -> dict:
     site = load_site()
     catalogue = {r.scene_id: r for r in rs.catalogue()}
     roots = {lv: source / f"isaac_{lv}" for lv in levels}
-    scene_ids = sorted(p.name for p in roots[levels[0]].iterdir() if p.is_dir())
+    ids = scene_ids(roots, catalogue)
     manifest = {"source": str(source), "levels": list(levels), "revision": revision,
                 "rule": "S7 entry axes x and y; y faces judged with the face-relative load", "scenes": {}}
     counts = {"unchanged": 0, "s7_rewritten": 0, "eligible_changed": 0}
-    for sid in scene_ids:
+    for sid in ids:
         dirs = {lv: roots[lv] / sid for lv in levels}
         check_levels(dirs, sid)
         first = dirs[levels[0]]

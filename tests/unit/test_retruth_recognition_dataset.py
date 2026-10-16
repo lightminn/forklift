@@ -64,3 +64,27 @@ def test_noise_levels_must_share_the_truth_inputs(tmp_path):
     (dirs["mid"] / "camera_info.json").write_text('{"k": [1]}')
     with pytest.raises(rr.RetruthError):
         rr.check_levels(dirs, "s1_x")
+
+
+def _levels(tmp_path, scenes_by_level):
+    roots = {}
+    for lv, scenes in scenes_by_level.items():
+        roots[lv] = tmp_path / f"isaac_{lv}"
+        for sid in scenes:
+            (roots[lv] / sid).mkdir(parents=True)
+    return roots
+
+
+def test_every_level_must_hold_the_same_scenes(tmp_path):
+    """Codex review 2026-10-17: the scene list came from the first level only, so a scene missing there
+    silently left every level."""
+    roots = _levels(tmp_path, {"clean": ["a"], "mid": ["a", "b"]})
+    with pytest.raises(rr.RetruthError, match="scene sets differ"):
+        rr.scene_ids(roots, {"a", "b"})
+
+
+def test_the_scenes_must_be_the_whole_catalogue(tmp_path):
+    roots = _levels(tmp_path, {"clean": ["a"], "mid": ["a"]})
+    with pytest.raises(rr.RetruthError, match="catalogue"):
+        rr.scene_ids(roots, {"a", "b"})
+    assert rr.scene_ids(_levels(tmp_path / "ok", {"clean": ["a", "b"], "mid": ["b", "a"]}), {"a", "b"}) == ["a", "b"]
