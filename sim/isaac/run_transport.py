@@ -6048,12 +6048,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
 
             # What the physics step writes into the core's dictionaries (services updated per tick), and the
             # scans the core reads back (docking reads last_sent_ranges, the permission diagnostics last_raw).
+            # Format 2 also watches the SLAM log the step fills (its lists only grow; the run writes it at the end
+            # -- a replay that does not step must still hold it, M-a1 replay R5).
+            watched_log_ = early_ports and slam_log is not None
             step_watch = DictWatch(
-                boundary.recorder, {"slam": slam, "obstacle": obstacle},
+                boundary.recorder,
+                {"slam": slam, "obstacle": obstacle, **({"slam_log": slam_log} if watched_log_ else {})},
                 keys={"slam": ["stop_now", "tracker_speed", "odom_speed", "odom_rear", "odom_yaw_rate", "scan_id",
                                "last_scan_odom_base", "last_scan_estimate_rear", "last_sent_ranges", "records"],
-                      "obstacle": ["version", "last_stamp", "applied", "last_raw", "scans"]},
-                append_only={"records", "scans"},
+                      "obstacle": ["version", "last_stamp", "applied", "last_raw", "scans"],
+                      **({"slam_log": list(slam_log)} if watched_log_ else {})},
+                append_only={"records", "scans", *(slam_log if watched_log_ else ())},
             )
             if not early_ports:  # format 2 made these ports at the hand-over
                 robot = RecordingProxy(robot, "Vehicle", boundary)
