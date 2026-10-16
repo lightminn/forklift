@@ -242,7 +242,9 @@ class ReplaySession:
         tick = self.tick
         if tick is None:
             raise self.fail("tick_end without tick_begin")
-        if getattr(self, "_time_pending", False):
+        if getattr(self, "_time_pending", False) and (tick["tick_t"] is not None or tick["work_t"] is not None):
+            # Never set here but set in the record. (A tick the recorded run left before its times were known --
+            # an exception between the clock read and tick_time -- keeps them unset in the record as well.)
             raise self.fail(f"tick {tick['tick']}: its head times were never set (tick_time)")
         if self._next != len(tick["calls"]):
             left = tick["calls"][self._next]
@@ -290,6 +292,22 @@ class ReplaySession:
             return None
         return self.tick["calls"][self._next]
 
+    def _described(self, port: str, method: str) -> bool:
+        """The call just before this one, already compared, is a ``Trace.callback_spec`` describing every
+        callback of this call: only then may its request hold callbacks by type (plan 3.4)."""
+        if self.tick is None or self._next == 0:
+            return False
+        prev = self.tick["calls"][self._next - 1]
+        if (prev["port"], prev["method"]) != ("Trace", "callback_spec"):
+            return False
+        try:
+            descriptor = decode(prev["request"], self.arrays)["args"][0]
+        except (KeyError, IndexError, TypeError, ValueError):
+            return False
+        if not isinstance(descriptor, dict) or descriptor.get("call") != f"{port}.{method}":
+            return False
+        return '"unspecified"' not in json.dumps(descriptor.get("callbacks"))
+
     def take(self, port: str, method: str, request_node: Any) -> dict:
         entry = self.peek()
         where = f"tick {self.tick['tick'] if self.tick else None} call {self._next}"
@@ -297,7 +315,8 @@ class ReplaySession:
             raise self.fail(f"{where}: {port}.{method} was not recorded here (no more calls)")
         if (entry["port"], entry["method"]) != (port, method):
             raise self.fail(f"{where}: {port}.{method} where {entry['port']}.{entry['method']} was recorded")
-        if _has_opaque(entry["request"]) and (port, method) not in self.allow_opaque:
+        if _has_opaque(entry["request"]) and (port, method) not in self.allow_opaque \
+                and not self._described(port, method):
             raise self.fail(f"{where}: {port}.{method} was recorded with an opaque request value")
         got, want = _canonical(request_node), _canonical(entry["request"])
         if got != want:
@@ -322,6 +341,8 @@ class ReplayGate:
     @property
     def active(self) -> bool:
         return self.depth == 0 and self.session.in_tick
+
+    value_format = 2  # a replay reads format-2 records only
 
     def run(self, port: str, method: str, fn, args: tuple, kwargs: dict, *, hash_only: bool = False,
             watch=None):
@@ -407,7 +428,8 @@ class ReplayProxy:
     True}``) comes back as ``None``."""
 
     def __init__(self, port: str, gate: ReplayGate, *, spec: type, child_ports=None, child_specs=None,
-                 hash_only_requests=(), watches=None) -> None:
+                 hash_only_requests=(), watches=None, returns=None) -> None:
+        object.__setattr__(self, "_returns", dict(returns or {}))
         object.__setattr__(self, "_port", port)
         object.__setattr__(self, "_gate", gate)
         object.__setattr__(self, "_spec", spec)
@@ -463,10 +485,21 @@ class ReplayProxy:
         hash_only = name in object.__getattribute__(self, "_hash_only")
         watch = object.__getattribute__(self, "_watches").get(name)
 
+        returned_port = object.__getattribute__(self, "_returns").get(name)
+
         def method(*args, **kwargs):
             def unreachable(*a, **k):
                 raise session.fail(f"{port}.{name} called outside a recorded tick (no service to run)")
-            return gate.run(port, name, unreachable, args, kwargs, hash_only=hash_only, watch=watch)
+            answer = gate.run(port, name, unreachable, args, kwargs, hash_only=hash_only, watch=watch)
+            if returned_port is None:
+                return answer
+            from forklift_core.mission.boundary_record import ServiceRef
+
+            if answer is None:
+                return None
+            if not isinstance(answer, ServiceRef) or answer.port != returned_port:
+                raise session.fail(f"{port}.{name} was to hand back a {returned_port} service, recorded {answer!r}")
+            return ReplayProxy(answer.port, gate, spec={"methods": list(answer.methods)})
 
         return method
 

@@ -99,6 +99,19 @@ def test_the_return_turnaround_options_wait_for_the_release_and_check_arcs_on_th
     assert core.return_turnaround_kwargs()["turnaround_check"](np.zeros((2, 3))) is None
 
 
+def test_the_turnaround_check_and_the_dry_runs_describe_their_settings():
+    from forklift_core.mission.core import rollout_callback_spec
+
+    layer = SimpleNamespace(snapshot="SNAP", check_turnaround_arc=lambda poses, current_pose: None)
+    core, _ = make(slam={"pending_release": None}, obstacle={"layer": layer, "version": 7})
+    assert core.return_turnaround_kwargs()["turnaround_check"].callback_spec == {
+        "kind": "turnaround_arc", "grid_planning": True, "obstacle_version": 7}
+    spec = rollout_callback_spec(TrackerConfig(cruise_speed_mps=0.2), np.array([1.0, 2.0, 0.5]))
+    assert spec["kind"] == "bicycle_rollout" and spec["start"] == [1.0, 2.0, 0.5]
+    assert spec["config"]["cruise_speed_mps"] == 0.2
+    assert spec != rollout_callback_spec(TrackerConfig(cruise_speed_mps=0.3), np.array([1.0, 2.0, 0.5]))
+
+
 def realign_state(end=None):
     return {"near_tracking": {"realign": {"installs": [], "end": end}}}
 

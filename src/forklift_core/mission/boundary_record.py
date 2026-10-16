@@ -167,10 +167,11 @@ class BoundaryRecorder:
         if len(self._lines) >= self.chunk_ticks:
             self._flush()
 
-    def close(self, final_state: Any = None) -> None:
+    def close(self, final_state: Any = None, ending: dict | None = None) -> None:
         """``final_state`` (format 2): the core's containers as the run ended -- written beside the record so a
         replay can compare its own end state (changes a call made that its record entry does not carry, e.g.
-        to an already-logged item, show up there)."""
+        to an already-logged item, show up there). ``ending`` (format 2, :func:`boundary_ending`): how the
+        recorded code left -- returned, or the exception it raised -- which a replay must end with too."""
         if self._closed:
             return
         self._final_state = False
@@ -191,7 +192,7 @@ class BoundaryRecorder:
             "bytes": self._bytes, "stopped_at_tick": self.stopped_at_tick, "stopped_reason": self.stopped_reason,
             "opaque_values": self.opaque_values,
         } | ({"format": "forklift_boundary_record/2", "value_types": sorted(self.value_types),
-              "final_state": self._final_state}
+              "final_state": self._final_state, "ending": ending}
              if self.value_format == 2 else {}), indent=1) + "\n")
 
     # -- internals ---------------------------------------------------------------------------------
@@ -319,6 +320,10 @@ class RecordingGate:
     def active(self) -> bool:
         return self.depth == 0 and self.recorder.in_tick
 
+    @property
+    def value_format(self) -> int:
+        return self.recorder.value_format
+
     @contextlib.contextmanager
     def suspended(self):
         self.depth += 1
@@ -416,7 +421,7 @@ def _walk(value: Any, path: tuple, out: dict, problems: list, stack=()) -> None:
             problems.append(f"{path} closes a reference cycle")
             return
         stack = stack + (id(value),)
-        if (not isinstance(value, (list, dict, np.ndarray)) and not dataclasses.is_dataclass(value)
+        if (not isinstance(value, (list, dict, np.ndarray, collections.deque)) and not dataclasses.is_dataclass(value)
                 and type(value).__name__ not in getattr(_walk, "value_types", ())):
             # Not encoded by value (recorded as opaque): its changes cannot be seen or replayed.
             problems.append(f"{path} holds a {type(value).__name__} with no value encoding")
@@ -598,13 +603,56 @@ def _shares_objects(response: Any, raw: dict) -> bool:
     return bool(inner & _identities(response, set()))
 
 
+def boundary_ending(exc: BaseException | None) -> dict:
+    """How the recorded code ended, for the record's meta: returned, or the exception's type and message."""
+    if exc is None:
+        return {"kind": "returned"}
+    return {"kind": "exception", "type": f"{type(exc).__module__}:{type(exc).__qualname__}", "message": str(exc)}
+
+
+def _callback_description(value):
+    """A callback's request descriptor: what it declares as ``callback_spec`` (the settings its body runs with),
+    else its type -- a callback without one is still seen, never the settings inside it."""
+    if isinstance(value, (list, tuple)):
+        return [_callback_description(v) for v in value]
+    spec = getattr(value, "callback_spec", None)
+    if spec is not None:
+        return spec
+    return {"unspecified": f"{getattr(value, '__module__', None)}:{getattr(value, '__qualname__', type(value).__qualname__)}"}
+
+
+def _is_callback(value) -> bool:
+    if isinstance(value, (list, tuple)):
+        return bool(value) and all(_is_callback(v) for v in value)
+    return callable(value) and not isinstance(value, type)
+
+
+def callback_trace(gate, port: str, method: str, args: tuple, kwargs: dict, callback_spec=None) -> None:
+    """Format 2 (plan 3.4): before a call that hands callbacks to a port -- whose request records them by type only
+    -- a ``Trace.callback_spec`` entry with each callback's descriptor, whether the port runs it or not.
+    ``callback_spec(args, kwargs)`` builds the descriptors of a call whose callbacks the port makes itself
+    (redraw_docking_traced: its dry runs from ``dry_configs``)."""
+    if gate is None or not gate.active or getattr(gate, "value_format", 1) != 2:
+        return
+    if callback_spec is not None:
+        callbacks = callback_spec(args, kwargs)
+    else:
+        callbacks = {k: _callback_description(v) for k, v in sorted(kwargs.items()) if _is_callback(v)}
+    if not callbacks:
+        return
+    gate.run("Trace", "callback_spec", lambda descriptor: None,
+             ({"call": f"{port}.{method}", "callbacks": callbacks},), {})
+
+
 def recorded_function(fn, port: str, method: str, gate: RecordingGate, *, hash_only: bool = False,
-                      watch: "DictWatch | None" = None):
+                      watch: "DictWatch | None" = None, callback_spec=None):
     """``fn`` with each call recorded through ``gate`` (the result and exceptions pass through);
-    ``watch`` records what the call changed in core dictionaries."""
+    ``watch`` records what the call changed in core dictionaries. Format 2 puts a ``Trace.callback_spec``
+    entry before a call that passes callbacks (:func:`callback_trace`)."""
 
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
+        callback_trace(gate, port, method, args, kwargs, callback_spec)
         return gate.run(port, method, fn, args, kwargs, hash_only=hash_only, watch=watch)
 
     return wrapper
@@ -694,6 +742,27 @@ class DictWatch:
         return out
 
 
+@dataclasses.dataclass(frozen=True)
+class ServiceRef:
+    """What a recorded call answered when it handed back a service object (a ``returns`` method): the port
+    its own calls are recorded under and its methods (a replay builds a proxy of it without its class)."""
+
+    port: str
+    methods: tuple
+
+
+def _method_names(obj) -> tuple:
+    names, seen = set(), set()
+    for klass in type(obj).__mro__:
+        for key, value in vars(klass).items():
+            if key in seen:
+                continue
+            seen.add(key)
+            if not isinstance(value, property) and (callable(value) or isinstance(value, (staticmethod, classmethod))):
+                names.add(key)
+    return tuple(sorted(names))
+
+
 class RecordingProxy:
     """A service object whose method calls, attribute reads and attribute writes are recorded through
     ``gate``; every value returned is the real object's. ``hash_only_requests`` names methods whose
@@ -702,8 +771,11 @@ class RecordingProxy:
     under: reading such an attribute returns a proxy of it instead of recording an opaque object."""
 
     def __init__(self, target, port: str, gate: RecordingGate, *, hash_only_requests=(), child_ports=None,
-                 watches=None) -> None:
+                 watches=None, returns=None) -> None:
         object.__setattr__(self, "_target", target)
+        # Methods that hand back a service object: method name -> the port that object's calls go under; the call
+        # is recorded as answering a ServiceRef and the caller gets a proxy of the object.
+        object.__setattr__(self, "_returns", dict(returns or {}))
         object.__setattr__(self, "_port", port)
         object.__setattr__(self, "_gate", gate)
         object.__setattr__(self, "_hash_only", frozenset(hash_only_requests))
@@ -728,6 +800,20 @@ class RecordingProxy:
         if callable(value):
             hash_only = name in object.__getattribute__(self, "_hash_only")
             watch = object.__getattribute__(self, "_watches").get(name)
+            returned_port = object.__getattribute__(self, "_returns").get(name)
+            if returned_port is not None:
+                def method(*args, **kwargs):
+                    real = []
+
+                    def call(*a, **k):
+                        obj = value(*a, **k)
+                        real.append(obj)
+                        return None if obj is None else ServiceRef(returned_port, _method_names(obj))
+
+                    gate.run(port, name, call, args, kwargs, hash_only=hash_only, watch=watch)
+                    return None if real[0] is None else RecordingProxy(real[0], returned_port, gate)
+
+                return method
 
             def method(*args, **kwargs):
                 return gate.run(port, name, value, args, kwargs, hash_only=hash_only, watch=watch)

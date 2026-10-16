@@ -2,6 +2,8 @@
 run against the record gets the recorded answers, argument changes, watched changes and exceptions, and any
 difference in the calls it makes fails at that call."""
 
+import gzip
+import json
 from dataclasses import dataclass
 
 import numpy as np
@@ -14,7 +16,7 @@ from forklift_core.mission.boundary_record import (
     RecordingProxy,
     recorded_function,
 )
-from forklift_core.mission.replay import ReplayGate, ReplayMismatch, ReplayProxy, ReplaySession
+from forklift_core.mission.replay import ReplayGate, ReplayMismatch, ReplayProxy, ReplaySession, read_ticks
 from forklift_core.planning import Pose2D
 
 
@@ -886,5 +888,188 @@ def test_a_frozen_value_shared_by_an_argument_and_a_watched_key_replays_as_value
     q = Pose2D(1.0, 2.0, 0.0)
     recorded_function(lambda x: None, "Svc", "store", rgate, watch=rwatch)(q)
     assert recorded_function(lambda a, b: None, "Svc", "use", rgate)(q, rcore["pose"]) is True
+    session.tick_end(outputs={}, branches=[])
+    session.finish()
+
+
+def test_a_service_a_call_hands_back_is_recorded_and_replayed_as_its_own_port(tmp_path):
+    class Controller:
+        def __init__(self):
+            self.kps = np.array([1.0, 2.0])
+
+        def get_gains(self):
+            return self.kps.copy()
+
+        def set_gains(self, kps):
+            self.kps = np.asarray(kps, dtype=float)
+
+    class Robot:
+        def __init__(self):
+            self.controller = Controller()
+
+        def get_articulation_controller(self):
+            return self.controller
+
+    def use(robot, factor):
+        c = robot.get_articulation_controller()
+        gains = c.get_gains()
+        c.set_gains(kps=gains * factor)
+        return robot.get_articulation_controller().get_gains()
+
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    gate = RecordingGate(rec)
+    robot = RecordingProxy(Robot(), "Vehicle", gate, returns={"get_articulation_controller": "Controller"})
+    rec.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    assert np.array_equal(use(robot, 2.0), [2.0, 4.0])
+    rec.tick_end(outputs={}, branches=[])
+    rec.close()
+    assert rec.opaque_values == 0
+
+    def replay(factor):
+        session = ReplaySession(tmp_path)
+        proxy = ReplayProxy("Vehicle", ReplayGate(session), spec=Robot,
+                            returns={"get_articulation_controller": "Controller"})
+        session.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+        out = use(proxy, factor)
+        session.tick_end(outputs={}, branches=[])
+        session.finish()
+        return out
+
+    assert np.array_equal(replay(2.0), [2.0, 4.0])
+    with pytest.raises(ReplayMismatch, match="Controller.set_gains"):
+        replay(3.0)
+    # Without the handle contract the replay cannot stand in for the controller.
+    session = ReplaySession(tmp_path)
+    proxy = ReplayProxy("Vehicle", ReplayGate(session), spec=Robot)
+    session.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    with pytest.raises((ReplayMismatch, AttributeError)):
+        use(proxy, 2.0)
+
+
+def test_a_memory_child_port_records_its_reads_and_calls(tmp_path):
+    class Memory:
+        def __init__(self):
+            self.revision = 3
+
+        def set_slam(self, index):
+            self.revision += index
+
+    class Layer:
+        def __init__(self):
+            self.memory = Memory()
+
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    gate = RecordingGate(rec)
+    layer = RecordingProxy(Layer(), "Obstacles", gate, child_ports={"memory": "Memory"})
+    rec.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    assert layer.memory is not None
+    layer.memory.set_slam(2)
+    assert layer.memory.revision == 5
+    rec.tick_end(outputs={}, branches=[])
+    rec.close()
+    assert rec.opaque_values == 0
+    session = ReplaySession(tmp_path)
+    proxy = ReplayProxy("Obstacles", ReplayGate(session), spec=Layer, child_ports={"memory": "Memory"},
+                        child_specs={"memory": Memory})
+    session.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    assert proxy.memory is not None
+    proxy.memory.set_slam(2)
+    assert proxy.memory.revision == 5
+    session.tick_end(outputs={}, branches=[])
+    session.finish()
+
+
+def test_a_callback_descriptor_is_recorded_before_the_call_and_compared(tmp_path):
+    from forklift_core.mission.boundary_record import recorded_function as rf
+
+    def redraw(goal, *, dry_runs):
+        return [run(goal) for run in dry_runs]
+
+    def dry(speed):
+        run = lambda goal: goal * speed  # noqa: E731
+        run.callback_spec = {"kind": "rollout", "speed": speed}
+        return run
+
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    gate = RecordingGate(rec)
+    rec.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    assert rf(redraw, "Planner", "redraw", gate)(2.0, dry_runs=(dry(0.2), dry(0.29))) == [0.4, 0.58]
+    rec.tick_end(outputs={}, branches=[])
+    rec.close()
+    calls = next(iter(read_ticks(tmp_path)))["calls"]
+    assert [(c["port"], c["method"]) for c in calls] == [("Trace", "callback_spec"), ("Planner", "redraw")]
+
+    def replay(speeds):
+        session = ReplaySession(tmp_path)
+        rgate = ReplayGate(session)
+        session.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+        out = rf(lambda *a, **k: None, "Planner", "redraw", rgate)(2.0, dry_runs=tuple(dry(s) for s in speeds))
+        session.tick_end(outputs={}, branches=[])
+        session.finish()
+        return out
+
+    assert replay((0.2, 0.29)) == [0.4, 0.58]
+    # The same request by type (two callables), different settings inside them: refused at the descriptor.
+    with pytest.raises(ReplayMismatch, match="Trace.callback_spec"):
+        replay((0.3, 0.39))
+
+
+def test_format_1_records_no_callback_descriptor(tmp_path):
+    rec = BoundaryRecorder(tmp_path, value_format=1)
+    gate = RecordingGate(rec)
+    rec.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    recorded_function(lambda *, check: 1, "Planner", "plan", gate)(check=lambda p: None)
+    rec.tick_end(outputs={}, branches=[])
+    rec.close()
+    lines = [json.loads(line) for f in sorted(tmp_path.glob("boundary_*.jsonl*"))
+             for line in (gzip.open(f, "rt") if f.suffix == ".gz" else open(f))]
+    assert [c["method"] for t in lines for c in t["calls"]] == ["plan"]
+
+
+def test_a_tick_left_by_an_exception_before_its_times_were_known_replays(tmp_path):
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    gate = RecordingGate(rec)
+    rec.tick_begin(0, tick_t=None, work_t=None, commands=[], stop_kind="none")
+    recorded_function(lambda: 1.5, "Clock", "now", gate)()
+    rec.tick_end(outputs={"exit": "failed"}, branches=[])  # the time computation raised: tick_time never ran
+    rec.close()
+    session = ReplaySession(tmp_path)
+    session.tick_begin(0, tick_t=None, work_t=None, commands=[], stop_kind="none")
+    recorded_function(lambda: None, "Clock", "now", ReplayGate(session))()
+    session.tick_end(outputs={"exit": "failed"}, branches=[])
+    session.finish()
+    # A tick whose recorded head times were set still needs tick_time.
+    rec_dir = tmp_path / "set"
+    rec = BoundaryRecorder(rec_dir, value_format=2)
+    rec.tick_begin(0, tick_t=None, work_t=None, commands=[], stop_kind="none")
+    rec.tick_time(tick_t=0.5, work_t=0.5)
+    rec.tick_end(outputs={}, branches=[])
+    rec.close()
+    session = ReplaySession(rec_dir)
+    session.tick_begin(0, tick_t=None, work_t=None, commands=[], stop_kind="none")
+    with pytest.raises(ReplayMismatch, match="never set"):
+        session.tick_end(outputs={}, branches=[])
+
+
+def test_an_append_to_a_deque_argument_is_recorded_and_replayed(tmp_path):
+    from collections import deque
+
+    def push(history, x):
+        history.append(x)
+        return len(history)
+
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    gate = RecordingGate(rec)
+    rec.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    h = deque([1.0], maxlen=3)
+    assert recorded_function(push, "Svc", "push", gate)(h, 2.0) == 2
+    rec.tick_end(outputs={}, branches=[])
+    rec.close()
+    assert "unsupported" not in json.dumps(next(iter(read_ticks(tmp_path)))["calls"][0].get("changes"))
+    session = ReplaySession(tmp_path)
+    session.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    r = deque([1.0], maxlen=3)
+    assert recorded_function(lambda *a: None, "Svc", "push", ReplayGate(session))(r, 2.0) == 2
+    assert list(r) == [1.0, 2.0] and r.maxlen == 3
     session.tick_end(outputs={}, branches=[])
     session.finish()

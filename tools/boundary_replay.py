@@ -79,8 +79,9 @@ class SessionRecorder:
     def encode(self, value):
         return self.session.encode(value)
 
-    def close(self, final_state=None):
+    def close(self, final_state=None, ending=None):
         self.session.closed = True
+        self.ending = ending
 
 
 class ReplayBoundary(ReplayGate):
@@ -135,10 +136,11 @@ def build_inputs(run_dir: Path, gate: ReplayBoundary, output: Path | None = None
     for logical, spec_ in (snap.get("service_specs") or {}).items():
         specs.setdefault(logical, spec_)
     for logical, spec_ in (snap.get("service_specs") or {}).items():
-        if logical not in services and logical != "Permission":
-            services[logical] = ReplayProxy(logical, gate, spec=spec_,
-                                            child_ports={"permission": "Permission"} if logical == "Obstacles" else None,
-                                            child_specs={"permission": specs.get("Permission", {})})
+        if logical not in services and logical not in ("Permission", "Memory"):
+            services[logical] = ReplayProxy(
+                logical, gate, spec=spec_,
+                child_ports={"permission": "Permission", "memory": "Memory"} if logical == "Obstacles" else None,
+                child_specs={"permission": specs.get("Permission", {}), "memory": specs.get("Memory", {})})
     values = {}
     shared_ids: dict = {}  # one alias numbering across the snapshot's values (one Encoder wrote them in name order)
     for name, item in sorted(snap["names"].items()):
@@ -185,7 +187,8 @@ def build_inputs(run_dir: Path, gate: ReplayBoundary, output: Path | None = None
             spec = specs_by_port.get(port, type(target))
         child_specs = {name: specs_by_port.get(child, {}) for name, child in (kw.get("child_ports") or {}).items()}
         return ReplayProxy(port, gate, spec=spec, child_ports=kw.get("child_ports"), child_specs=child_specs,
-                           hash_only_requests=kw.get("hash_only_requests", ()), watches=kw.get("watches"))
+                           hash_only_requests=kw.get("hash_only_requests", ()), watches=kw.get("watches"),
+                           returns=kw.get("returns"))
 
     if output is not None and "args" in values:  # the replay writes its own outputs, never the evidence's
         values["args"].output = Path(output)
@@ -208,10 +211,25 @@ def build_inputs(run_dir: Path, gate: ReplayBoundary, output: Path | None = None
     return types.SimpleNamespace(**values), adapters, snap
 
 
+def check_ending(session: ReplaySession, raised: BaseException | None) -> None:
+    """The replayed code ends as the recorded one did -- returned, or the same exception (type and message) --
+    and closed its record; otherwise the replay fails (latched)."""
+    if session.failure is not None:
+        return
+    recorded = session.meta.get("ending")
+    if recorded is None:
+        session.fail("the record does not say how the recorded run ended (meta 'ending')")
+    elif BR.boundary_ending(raised) != recorded:
+        session.fail(f"the replay ended {BR.boundary_ending(raised)}, the recorded run {recorded}")
+    elif not getattr(session, "closed", False):
+        session.fail("the replayed run never closed its record")
+
+
 def replay_run(run_dir: Path, output: Path | None = None) -> dict:
     run_dir = Path(run_dir)
     _install_isaac_value_types()
-    session = ReplaySession(run_dir / "boundary", allow_opaque={("Planner", "redraw_docking")})
+    # Callbacks by type in a Planner request only behind their Trace.callback_spec (ReplaySession._described).
+    session = ReplaySession(run_dir / "boundary")
     gate = ReplayBoundary(session)
     # The runner module first: the sibling modules it loads by file (perception adapter, near tracking ...) are
     # what the snapshot's imports name.
@@ -225,10 +243,12 @@ def replay_run(run_dir: Path, output: Path | None = None) -> dict:
     S, adapters, snap = build_inputs(run_dir, gate, output)
     module._BOUNDARY_RECORD["gate"] = gate
     outcome = {"run_dir": str(run_dir), "ticks_done": 0}
+    raised = None
     try:
         module.drive(S, adapters)
         outcome["drive"] = "returned"
     except ReplayMismatch as exc:
+        raised = exc
         outcome["drive"] = f"mismatch: {exc}"
         context = exc.__context__
         if context is not None:  # what the replayed run raised first (a require, a crash) before this mismatch
@@ -236,8 +256,10 @@ def replay_run(run_dir: Path, output: Path | None = None) -> dict:
             outcome["context_traceback"] = "".join(
                 traceback.format_exception(type(context), context, context.__traceback__))[-4000:]
     except Exception as exc:  # noqa: BLE001 -- the replayed run's own end (a require) is part of the record
+        raised = exc
         outcome["drive"] = f"{type(exc).__name__}: {exc}"
         outcome["traceback"] = traceback.format_exc()[-4000:]
+    check_ending(session, raised)
     if session.failure is None:  # a recorded failure replayed exactly ends the same way: finish it too
         try:
             session.finish()  # every recorded tick replayed, as many as the meta says

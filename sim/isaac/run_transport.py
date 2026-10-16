@@ -1572,7 +1572,12 @@ def close_boundary_record(state: dict, exc: BaseException | None = None) -> None
             reason = state.get("failure_reason") or (str(exc) if exc is not None else None)
             gate.recorder.tick_end(outputs={"exit": state.get("phase"), "failure_reason": reason},
                                    branches=probe() if probe is not None else [])
-        gate.recorder.close()
+        if gate.recorder.value_format == 2:  # how drive ended: a replay has to end the same way
+            from forklift_core.mission.boundary_record import boundary_ending
+
+            gate.recorder.close(ending=boundary_ending(exc))
+        else:
+            gate.recorder.close()
     except Exception as exc:  # noqa: BLE001 -- a recording failure never replaces the run's own result
         state["boundary_record_error"] = repr(exc)
     finally:
@@ -2581,8 +2586,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             # what the setup opened, and the files the arguments name (main() read some before run())
             setup_files.stop() + [str(v_) for v_ in vars(args).values()
                                   if isinstance(v_, (str, Path)) and len(str(v_)) < 4096 and Path(v_).is_file()],
-            services=({"Obstacles": obstacle["layer"], "Permission": obstacle["layer"].permission}
-                      if obstacle is not None else None),
+            services=({"Obstacles": obstacle["layer"], "Permission": obstacle["layer"].permission,
+                       "Memory": obstacle["layer"].memory} if obstacle is not None else None),
             repo_root=Path(__file__).resolve().parents[2],
             wanted=set(__import__("replay_setup").drive_inputs(drive)))
     return drive(_Setup(**locals()), isaac)
@@ -3406,7 +3411,13 @@ def drive(S, isaac) -> None:
         return plans_, record_, trajectories_
 
     if boundary is not None:
-        redraw_docking_traced = recorded_function(redraw_docking_traced, "Planner", "redraw_docking_traced", boundary)
+        from forklift_core.mission.core import rollout_callback_spec
+
+        # Format 2: the dry runs this port makes are described as redraw_docking's closures describe themselves.
+        redraw_docking_traced = recorded_function(
+            redraw_docking_traced, "Planner", "redraw_docking_traced", boundary,
+            callback_spec=lambda a_, k_: {"dry_runs": [rollout_callback_spec(c_, k_["start_rear"])
+                                                       for c_ in k_["dry_configs"]]})
 
     def near_tracking_frame():
         """The near field's chassis/pallet frame (fork tip x, carriage limit), read from the URDF."""
@@ -3419,15 +3430,16 @@ def drive(S, isaac) -> None:
     # every tick head read them through the record.
     early_ports = boundary is not None and boundary.recorder.value_format == 2
     if early_ports:
-        robot = RecordingProxy(robot, "Vehicle", boundary)
+        # The wheel lock reads and sets the drive gains on the articulation controller the robot hands back.
+        robot = RecordingProxy(robot, "Vehicle", boundary, returns={"get_articulation_controller": "Controller"})
         pallet = RecordingProxy(pallet, "SimTruth", boundary)
         world = RecordingProxy(world, "Clock", boundary)
         cells.world, cells.robot = world, robot
         _BOUNDARY_RECORD["time"] = time
         globals()["time"] = RecordingProxy(time, "Clock", boundary)
-        if obstacle is not None:
+        if obstacle is not None:  # the planning memory's SLAM map and revision are read by the plan bundles
             obstacle["layer"] = RecordingProxy(obstacle["layer"], "Obstacles", boundary,
-                                               child_ports={"permission": "Permission"})
+                                               child_ports={"permission": "Permission", "memory": "Memory"})
         if recorder is not None:  # the pocket frames recorder: its phase, its closing statistics
             recorder = RecordingProxy(recorder, "PocketRecorder", boundary)
     state["phase"] = "planning"

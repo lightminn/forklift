@@ -532,4 +532,4 @@ def test_the_runners_traced_redraw_returns_its_dry_runs_trajectories_in_call_ord
         "SC", "POSE", "TARGET", "CFG", start_rear=(1.0, 2.0, 0.0), dry_configs=("A", "D"), max_yaw_rad=0.12)
     assert plans == ("PLANS", ["T1", "T2"]) and record == {"record": 1} and trajectories == ["T1", "T2"]
     assert rolled == [("A", (1.0, 2.0, 0.0)), ("D", (1.0, 2.0, 0.0))]
-    assert 'recorded_function(redraw_docking_traced, "Planner", "redraw_docking_traced", boundary)' in source
+    assert 'redraw_docking_traced, "Planner", "redraw_docking_traced", boundary,' in source

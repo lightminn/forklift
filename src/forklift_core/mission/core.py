@@ -74,6 +74,13 @@ from forklift_core.planning import Pose2D as PlanningPose
 __all__ = ["MissionCore"]
 
 
+def rollout_callback_spec(config, start) -> dict:
+    """The request descriptor of a dry-run callback (``Trace.callback_spec``, M-a1 replay plan 3.4): the follower
+    settings and the start pose it rolls a straight out with. redraw_docking's closures and
+    redraw_docking_traced's dry configs describe themselves the same way."""
+    return {"kind": "bicycle_rollout", "config": asdict(config), "start": [float(v) for v in np.ravel(start)]}
+
+
 def apply_tracker_profile_to(trackers: dict, profile) -> None:
     """The ``--tracker-profile`` followers (M-a1 slice 6e: a module function, because the runner applies it
     to the first followers before the core exists and the core to the ones it installs later)."""
@@ -3993,7 +4000,9 @@ class MissionCore:
         start_ = np.asarray(rear_now, dtype=float)
 
         def dry(config_):
-            return lambda st_: bicycle_rollout(st_.poses, st_.directions, st_.curvatures_inv_m, config_, start_)
+            run_ = lambda st_: bicycle_rollout(st_.poses, st_.directions, st_.curvatures_inv_m, config_, start_)  # noqa: E731
+            run_.callback_spec = rollout_callback_spec(config_, start_)
+            return run_
 
         plans_, record_ = redraw_docking(
             grid_world(scenario), PlanningPose(*(float(v) for v in rear_now)), target_, planner_config,
@@ -4266,6 +4275,11 @@ class MissionCore:
             # The start part verified as the permission's own walk, no known occupied cell on the whole
             # arc (ObstacleLayer.check_turnaround_arc; Codex implementation reviews 2026-10-12).
             return layer_.check_turnaround_arc(poses, current_pose=tuple(float(v) for v in poses[0]))
+
+        # What the check runs with, without asking the layer anything (M-a1 replay plan 3.4): the grid switch and
+        # the obstacle snapshot's version the arcs are checked on.
+        arc_check.callback_spec = {"kind": "turnaround_arc", "grid_planning": bool(grid_planning),
+                                   "obstacle_version": obstacle.get("version") if obstacle is not None else None}
 
         return {"forward_turnaround": True, "turnaround_check": arc_check}
 
