@@ -296,3 +296,12 @@ def test_only_a_transport_heading_failure_at_a_cusp_on_the_path_is_replanned(mis
         out = w.tick(miss)
     assert "plan_transport_leg" not in w.names() and out.tracking.status == "failed"
     assert w.state.get("cusp_replans", []) == []
+
+
+def test_an_observe_replan_records_its_path_before_any_mission_plan_exists():
+    """M-a2: the observe leg's replan is recorded in state["paths"] even when no mission plan was made yet."""
+    w = World("observe", stop_now=True, plans=[plan()])
+    w.state.pop("paths", None)
+    w.ms.last_tracking = OBSERVE_MISS
+    w.tick(OBSERVE_MISS)
+    assert "observe" in w.state.get("paths", {})

@@ -49,6 +49,7 @@ class World:
         def answer(name):
             def call(*args, **kwargs):
                 log(name, *args, **kwargs)
+                assert self.plans, f"an unexpected planning call: {name}"  # the fake port expects its calls
                 return self.plans.pop(0)
             return call
 

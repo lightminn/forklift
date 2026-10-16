@@ -533,3 +533,13 @@ def test_the_runners_traced_redraw_returns_its_dry_runs_trajectories_in_call_ord
     assert plans == ("PLANS", ["T1", "T2"]) and record == {"record": 1} and trajectories == ["T1", "T2"]
     assert rolled == [("A", (1.0, 2.0, 0.0)), ("D", (1.0, 2.0, 0.0))]
     assert 'redraw_docking_traced, "Planner", "redraw_docking_traced", boundary,' in source
+
+
+def test_a_correction_before_the_last_point_is_not_screened_by_the_protection_prediction():
+    """M-a2: only the last correction point (near_tracking.PREDICT_POINT_M) asks the protection prediction."""
+    core, near, calls = make(Geometry(face_m=0.95), standing=True, correction=NT.CorrectionState(0, 1.0, 9.0, 9.0))
+    near["corrections"].append({"point_m": 1.0, "standing_s": [9.0], "moved_s": [], "accepted": None})
+    core.test_prediction = {"disposition": "refused"}
+    tick(core, 10.0)
+    assert "prediction" not in [c[0] for c in calls]
+    assert near["corrections"][-1]["accepted"] is True

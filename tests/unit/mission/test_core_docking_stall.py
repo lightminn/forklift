@@ -36,6 +36,11 @@ def plan(success=True):
                       np.zeros(2), 1.0, 0)
 
 
+def _next_plan(plans_, name):
+    assert plans_, f"an unexpected planning call: {name}"  # the fake port expects its calls (M-a2)
+    return plans_.pop(0)
+
+
 class World:
     def __init__(self, phase="transport", *, docking=None, mode="holding", stop_now=True, remaining=0.0,
                  stall_replans=0, plans=(), obstacle=None):
@@ -67,8 +72,8 @@ class World:
             arm_docking=log("arm_docking"), now_s=lambda: 77.0, grid_world=lambda sc: ("world", sc),
             grid_kwargs=lambda *a: self.calls.append(("grid_kwargs", a, {"own_pose": tuple(self.runner_rear)})) or {},
             set_rear=lambda value: setattr(self, "runner_rear", value),
-            plan_transport_leg=lambda *a, **k: self.calls.append(("plan_transport_leg", a, k)) or plans_.pop(0),
-            plan_return_leg=lambda *a, **k: self.calls.append(("plan_return_leg", a, k)) or plans_.pop(0),
+            plan_transport_leg=lambda *a, **k: self.calls.append(("plan_transport_leg", a, k)) or _next_plan(plans_, "plan_transport_leg"),
+            plan_return_leg=lambda *a, **k: self.calls.append(("plan_return_leg", a, k)) or _next_plan(plans_, "plan_return_leg"),
         )
         self.tracker = SimpleNamespace(config=TrackerConfig(), remaining_to_goal_m=lambda: remaining,
                                        update=lambda rear, v, dt: self.calls.append(("update", (tuple(rear),), {}))
