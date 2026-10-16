@@ -269,3 +269,30 @@ def test_a_side_face_read_when_the_front_face_does_not_read_is_not_confirmed():
     cand = F.fit_instance(out.scene, InstanceProposal("p0", out.instance_ids == 0, 1.0, "oracle"), specs=SPECS,
                           setup=ForkSetup(recipe.fork_spacing_m), load_for=lambda s: LoadDeclaration(2.0, 1.0, 0.2, 0.0))
     assert not cand.counted and cand.reasons[0] == "entry_face_unresolved"
+
+
+def test_an_unobserved_deck_beyond_a_cut_is_not_a_physical_end():
+    """Codex review A round 2: the touching-pallet cut again, with the depth beyond the mask missing
+    at deck height. Seeing nothing there is not seeing an end: the reading must not be confirmed."""
+    boxes = [rt.placed_boxes(rt.instance_boxes(EPAL, ()), rt.Placement(3.0, y, 0.0, 0.0)) for y in (0.4, -0.4)]
+    out = instance_rig.render_instances(boxes)
+    rays = F.pixel_rays(out.scene)
+    with np.errstate(invalid="ignore"):
+        xyz = F.camera_xyz(out.scene) + out.scene.depth_m[..., None] * rays
+    mask = (out.instance_ids >= 0) & (np.abs(xyz[..., 1]) < 0.4525)
+    depth = out.scene.depth_m.copy()
+    depth[(out.instance_ids >= 0) & ~mask & (xyz[..., 2] > 0.09)] = np.nan
+    scene = replace(out.scene, depth_m=depth)
+    cand = F.fit_instance(scene, InstanceProposal("p0", mask, 1.0, "oracle"), specs=SPECS, setup=ForkSetup(0.3725),
+                          load_for=_load)
+    assert cand is None or not cand.counted, (cand.hypothesis, cand.geometry, cand.reasons)
+
+
+def test_a_side_face_with_more_points_than_the_entry_face_is_not_confirmed():
+    """Codex review A round 2: s7_nonstandard_1000874's shape at (3 m, -0.8 m, 30 deg) shows its side
+    face with more points (3462) than its x entry face (1611); both read as pallet faces, so which one
+    is the entry face is not known and the reading stays ambiguous."""
+    spec = _recipe("s7_nonstandard_1000874").instances[0].spec
+    cand, _ = _fit_spec(spec, rt.Placement(3.0, -0.8, math.radians(30.0), 0.0), 0.29,
+                        load=lambda s: LoadDeclaration(2.0, 1.0, 0.2, 0.0))
+    assert cand is None or not cand.counted, (cand.hypothesis, cand.geometry, cand.reasons, math.degrees(cand.insertion_yaw_rad))

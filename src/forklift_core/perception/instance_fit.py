@@ -657,10 +657,15 @@ def read_parametric_face(face: FacePlane, pts_u, pts_h, rays, support_z: float, 
         # face under noise (dev mid: up to 2.25 face per behind ray at true ends). Deck-band face
         # rays outnumbering the see-through ones flagged 0 of 166 true ends clean, 2-4 of ~150 noisy.
         cont = deck & window & (rc == FACE) & ~owned
-        continued = cont.sum() >= params.edge_min_hits and cont.sum() > (deck & window & (rc == BEHIND)).sum()
+        seen_behind = (deck & window & (rc == BEHIND)).sum()
+        continued = cont.sum() >= params.edge_min_hits and cont.sum() > seen_behind
+        # Seeing nothing at deck height is not seeing an end: missing depth there could hide a
+        # continuing deck (Codex review A round 2). Dev cost: 1 of ~490 true ends.
+        missing = (deck & window & (rc == UNOBSERVED)).sum()
+        unseen = missing >= params.edge_min_hits and missing > seen_behind
         ends.append(bool(((beyond & (rc == BEHIND)).sum() >= params.edge_min_hits)
                          and ((beyond & (rc == FRONT)).sum() < params.edge_min_hits)
-                         and not continued))
+                         and not continued and not unseen))
     layout = FaceLayout("x", umax - umin, math.nan,
                         tuple((lo * b + umin - c, hi * b + umin - c) for lo, hi in members),
                         tuple((lo * b + umin - c, hi * b + umin - c) for lo, hi in openings),
@@ -740,8 +745,11 @@ def _parametric_candidate(scene, proposal, cam, face, fi, pts_u, pts_h, rays_f, 
         # pallets looks like one wide non-standard pallet (§7.4-5c).
         geometry, reasons = "ambiguous", ["end_unobserved"]
     elif not best_face:
-        # The face with the most evidence did not read; a reading off another face (a side face)
-        # does not show which face is the entry face (Codex review 2026-10-16, s7 1000873).
+        # Nothing on a face says it is the entry face: a reading off a face that is not the
+        # best-evidence one (s7 1000873, the front face did not read), or a second face that reads
+        # as a pallet face too (a side face with openings, which can have more points than the
+        # entry face -- Codex review A round 2), leaves the entry face unknown. Dev cost: 7-10 of
+        # ~60 S7 matches, whose second face read; real 2-way pallets have solid sides that do not.
         geometry, reasons = "ambiguous", ["entry_face_unresolved"]
     pair, pickable, fit_reasons = _parametric_fit(layout, setup, load_for(None), params.nonstandard_depth_m[1],
                                                   params.parametric_spacing_slack_m)
@@ -913,6 +921,7 @@ def fit_instance(scene: SceneInput, proposal: InstanceProposal, *, specs: dict, 
         competing_all = tuple(competing) + ((float(pallet_centre[0]), float(pallet_centre[1]), float(zs)),)
         raw, _ = proposal_points(scene, rays, proposal.mask, 0)
         order = sorted(range(len(faces)), key=lambda k: -len(faces[k].index))
+        readings = []
         for fi in order:
             f = faces[fi]
             u_f, rays_f = evidence[fi]
@@ -923,9 +932,15 @@ def fit_instance(scene: SceneInput, proposal: InstanceProposal, *, specs: dict, 
             rows = face_coords(f, raw[on_plane])
             reading, _ = read_parametric_face(f, u_f, h_f, rays_f, measured if measured is not None else low, params, rows)
             if reading is not None:
-                return _parametric_candidate(scene, proposal, cam, f, fi, u_f, h_f, rays_f, reading, setup, load_for,
-                                             params, candidate_id, identity_threshold, competing_all, st, seen, extent,
-                                             fi == order[0])
+                readings.append((fi, f, u_f, h_f, rays_f, reading, st))
+        if readings:
+            fi, f, u_f, h_f, rays_f, reading, st = readings[0]
+            # Any second face that reads as a pallet layout counts, whether or not its ends are
+            # physical: the corner it shares with the side face often is not (Codex A round 2 case).
+            others = len(readings) > 1
+            return _parametric_candidate(scene, proposal, cam, f, fi, u_f, h_f, rays_f, reading, setup, load_for,
+                                         params, candidate_id, identity_threshold, competing_all, st, seen, extent,
+                                         fi == order[0] and not others)
     return PocketCandidate(
         candidate_id, proposal.proposal_id, proposal.source, scene.stamp_ns, hyp.label, hyp.axis,
         tuple((s[0].label, round(s[0].placement.score, 4)) for s in rivals[:3]), yaw,
