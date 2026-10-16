@@ -64,3 +64,46 @@ PROPERTIES = [
          '        retry_.update(core.release_and_stand(now_s, "release_pickup_retry"))\n'
          '        state["near_tracking"]["retry"] = retry_\n        near["stand_record"] = "retry"'),
 ]
+
+# The core sweep (tools/ma2_core_sweep.py on 91f77aa, ws1 job 3131): 188 core places the kept source tests read,
+# 180 killed by the behaviour tests; the eight survivors below each got a behaviour test.
+CR, CA, NC = M + "test_core_cusp_rules.py::", M + "test_core_command.py::", M + "test_core_near_capture.py::"
+CUSP_WIRED = [PC + "test_cusp_position_stall_v7_is_wired_into_the_runner::*"]
+PROPERTIES += [
+    prop("observe-replan-installs-path", [PC + "test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::*"],
+         "an observe replan installs its path",
+         [CO + "test_an_observe_heading_miss_brakes_and_once_stopped_replans_the_leg_to_the_same_target"],
+         '                paths["observe"] = replanned\n                state.setdefault("paths", {})["observe"]',
+         '                pass\n                state.setdefault("paths", {})["observe"]'),
+    prop("near-tick-phases",
+         [PC + "test_new_obstacle_rules_get_the_leg_direction_the_pallet_face_and_can_silence_the_depth_camera::*"],
+         "the near tick runs only in the approach and the insertion",
+         [CA + "test_the_near_tick_runs_only_in_the_approach_and_the_insertion[transport]",
+          CA + "test_the_near_tick_runs_only_in_the_approach_and_the_insertion[observe]"],
+         'if near is not None and near["tracker"] is not None and ms.phase in ("approach", "insert"):',
+         'if near is not None and near["tracker"] is not None and True:'),
+    prop("near-leg-follower", [PC + "test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::*"],
+         "the near leg is followed by a new observe follower on its path",
+         [NC + "test_the_first_far_observation_drives_the_near_leg_with_its_own_replan_budget"],
+         "            trackers[\"observe\"] = RearAxlePathTracker(\n                near_leg.poses,\n"
+         "                near_leg.directions,\n                near_leg.curvatures_inv_m,\n"
+         "                trackers[\"observe\"].config,\n            )\n",
+         "            pass\n"),
+    prop("cusp-sensor-unknown-only", CUSP_WIRED, "a short verified walk refuses only at unknown or edge",
+         [CR + "test_the_sensor_check_counts_only_unknown_or_edge_as_short_evidence_and_ages_the_free_cells"],
+         'unknown_near_ = plain_.blocked in ("unknown", "edge") and plain_.verified_m < stop_need_',
+         "unknown_near_ = True and plain_.verified_m < stop_need_"),
+    prop("cusp-sensor-evidence-age", CUSP_WIRED, "FREE evidence past the permission's age limit refuses",
+         [CR + "test_the_sensor_check_counts_only_unknown_or_edge_as_short_evidence_and_ages_the_free_cells"],
+         "and age_ <= pconf_.evidence_max_age_s and", "and True and"),
+    prop("cusp-return-cusp-not-recovered", CUSP_WIRED, "a return cusp is never recovered by the stall replan",
+         [CR + "test_a_return_cusp_is_never_recovered_by_the_stall_replan"],
+         'if ms.phase in ("transport", "return_home") and goal and slam is not None:',
+         'if ms.phase in ("transport", "return_home") and True and slam is not None:'),
+    prop("cusp-replan-pending-this-leg", CUSP_WIRED, "the cusp monitor sees a pending replan of this leg only",
+         [CR + "test_the_cusp_monitor_sees_a_pending_replan_of_this_leg_only[obstacle_state1-False]"],
+         'obstacle.get("force_replan") == ms.phase or', 'obstacle.get("force_replan") is not None or'),
+    prop("cusp-replan-pending-wait", CUSP_WIRED, "a waiting replan of this leg is a pending replan",
+         [CR + "test_the_cusp_monitor_sees_a_pending_replan_of_this_leg_only[obstacle_state2-True]"],
+         'or bool(obstacle.get("replan_wait", {}).get(ms.phase))', "or False"),
+]

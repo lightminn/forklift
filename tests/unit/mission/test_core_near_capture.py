@@ -96,6 +96,7 @@ def test_the_first_far_observation_drives_the_near_leg_with_its_own_replan_budge
     assert w.names() == ["set_inset_status", "realign_install"] and w.calls[-1][1] == ("near_leg",)
     assert w.state["observe_replan_leg"] == {"serial": 3, "start": 1}
     assert w.core.paths["observe"] is near_leg and w.core.trackers["observe"].config is observe_config
+    np.testing.assert_array_equal(w.core.trackers["observe"].path_arrays()[0], near_leg.poses)  # it follows the leg
     assert w.state["observation_waypoint_selected"] == [2.5, 2.0, 0.0] and w.ms.phase_started == 30.0
     assert w.state["near_capture"]["waypoint"] == [2.5, 2.0, 0.0]
     assert w.ms.phase == "observe"  # still observing: the near capture follows

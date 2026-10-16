@@ -188,3 +188,11 @@ def test_the_loose_arrival_is_only_for_an_observation_leg():
     w.tick(stopped, t=10.0)
     out = w.tick(stopped, t=11.5)
     assert out.tracking.status == "tracking" and "observe_loose_arrival" not in w.state
+
+
+@pytest.mark.parametrize("phase", ["transport", "observe"])
+def test_the_near_tick_runs_only_in_the_approach_and_the_insertion(phase):
+    """M-a2 core sweep: a built near tracker is asked nothing outside the approach and the insertion."""
+    w = World(phase, near={"tracker": object()}, near_answer=(True, False, False))
+    w.tick()
+    assert "near_tick" not in [c[0] for c in w.calls]

@@ -2,7 +2,7 @@
 
 For every frozen test that some R property keeps, the string constants its ``assert`` statements (and the ``for``
 loops feeding them) look for in ``src/forklift_core/mission/core.py`` -- a constant of at least 12 characters whose
-first line occurs exactly once there -- name a place in the core. Each place gets the mutations that break what a
+first line occurs at most ten times there (each occurrence) -- name a place in the core. Each place gets the mutations that break what a
 source test reading it could have meant:
 
 - ``drop_operand``: the innermost ``and``/``or`` operand holding it becomes ``True``/``False`` (a condition removed);
@@ -34,6 +34,7 @@ FROZEN = ROOT / "docs/validation/2026-10-16-m-a2-assertions.json"
 sys.path.insert(0, str(ROOT / "tools"))
 from ma2_mutate import copy_tree  # noqa: E402
 
+MAX_OCCURRENCES = 10  # a constant found more often names no place in particular
 COMPOUND = (ast.If, ast.For, ast.AsyncFor, ast.While, ast.With, ast.AsyncWith, ast.Try, ast.FunctionDef,
             ast.AsyncFunctionDef, ast.ClassDef, ast.Match)
 
@@ -51,8 +52,21 @@ def kept_tests() -> dict:
     return kept
 
 
-def asserted_constants(path: Path, test: str) -> set[str]:
-    tree = ast.parse(path.read_text())
+def all_tests() -> dict:
+    """Every frozen test (kept or not), read at the frozen list's base revision."""
+    frozen = json.loads(FROZEN.read_text())
+    return {(r["file"], r["test"]): {"frozen"} for r in frozen["assertions"]}
+
+
+def test_source(file_: str, base: str | None) -> str:
+    if base is None:
+        return (ROOT / file_).read_text()
+    return subprocess.run(["git", "-C", str(ROOT), "show", f"{base}:{file_}"], capture_output=True, text=True,
+                          check=True).stdout
+
+
+def asserted_constants(source: str, test: str) -> set[str]:
+    tree = ast.parse(source)
     name = test.split("::")[-1]
     out = set()
     for node in ast.walk(tree):
@@ -113,17 +127,22 @@ class Source:
         return out
 
 
-def places(src: Source, kept: dict) -> dict:
+def places(src: Source, kept: dict, base: str | None = None) -> dict:
     found: dict[int, dict] = {}
+    sources: dict = {}
     for (file_, test), _props in sorted(kept.items()):
-        for const in asserted_constants(ROOT / file_, test):
+        if file_ not in sources:
+            sources[file_] = test_source(file_, base)
+        for const in asserted_constants(sources[file_], test):
             probe = const.split("\n")[0].strip()
-            if len(probe) < 12 or src.text.count(probe) != 1:
+            if len(probe) < 12 or not 1 <= src.text.count(probe) <= MAX_OCCURRENCES:
                 continue
-            offset = len(src.text[: src.text.index(probe)].encode())
-            entry = found.setdefault(offset, {"probe": probe[:120], "line": src.text.count("\n", 0, src.text.index(probe)) + 1,
-                                              "tests": []})
-            entry["tests"].append(f"{file_}::{test}")
+            at = -1
+            while (at := src.text.find(probe, at + 1)) >= 0:  # every occurrence: the test may mean any of them
+                offset = len(src.text[:at].encode())
+                entry = found.setdefault(offset, {"probe": probe[:120], "line": src.text.count("\n", 0, at) + 1,
+                                                  "tests": []})
+                entry["tests"].append(f"{file_}::{test}")
     return found
 
 
@@ -142,10 +161,15 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--out", type=Path, default=Path("ma2_core_sweep.json"))
     parser.add_argument("--tests", default="tests/unit/mission")
+    parser.add_argument("--all", action="store_true",
+                        help="every frozen test at the frozen base revision, not only the kept (R) ones")
     args = parser.parse_args(argv)
     core_text = (ROOT / CORE).read_text()
     src = Source(core_text)
-    found = places(src, kept_tests())
+    if args.all:
+        found = places(src, all_tests(), json.loads(FROZEN.read_text())["base_revision"])
+    else:
+        found = places(src, kept_tests())
     results = []
     with tempfile.TemporaryDirectory(prefix="ma2_sweep_") as tmp:
         tree = Path(tmp)

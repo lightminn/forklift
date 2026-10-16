@@ -8594,6 +8594,408 @@
     ],
     "check_line": "E   AssertionError"
    }
+  },
+  {
+   "id": "B8:observe-replan-installs-path",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own::11"
+   ],
+   "statement": "an observe replan installs its path",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_observe.py::test_an_observe_heading_miss_brakes_and_once_stopped_replans_the_leg_to_the_same_target"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                paths[\"observe\"] = replanned\n                state.setdefault(\"paths\", {})[\"observe\"]",
+    "replace": "                pass\n                state.setdefault(\"paths\", {})[\"observe\"]",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_cusp_observe.py::test_an_observe_heading_miss_brakes_and_once_stopped_replans_the_leg_to_the_same_target"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B8:near-tick-phases",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_new_obstacle_rules_get_the_leg_direction_the_pallet_face_and_can_silence_the_depth_camera::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_new_obstacle_rules_get_the_leg_direction_the_pallet_face_and_can_silence_the_depth_camera::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_new_obstacle_rules_get_the_leg_direction_the_pallet_face_and_can_silence_the_depth_camera::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_new_obstacle_rules_get_the_leg_direction_the_pallet_face_and_can_silence_the_depth_camera::4"
+   ],
+   "statement": "the near tick runs only in the approach and the insertion",
+   "tests": [
+    "tests/unit/mission/test_core_command.py::test_the_near_tick_runs_only_in_the_approach_and_the_insertion[transport]",
+    "tests/unit/mission/test_core_command.py::test_the_near_tick_runs_only_in_the_approach_and_the_insertion[observe]"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "if near is not None and near[\"tracker\"] is not None and ms.phase in (\"approach\", \"insert\"):",
+    "replace": "if near is not None and near[\"tracker\"] is not None and True:",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_command.py::test_the_near_tick_runs_only_in_the_approach_and_the_insertion[transport]"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B8:near-leg-follower",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement::14"
+   ],
+   "statement": "the near leg is followed by a new observe follower on its path",
+   "tests": [
+    "tests/unit/mission/test_core_near_capture.py::test_the_first_far_observation_drives_the_near_leg_with_its_own_replan_budget"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "            trackers[\"observe\"] = RearAxlePathTracker(\n                near_leg.poses,\n                near_leg.directions,\n                near_leg.curvatures_inv_m,\n                trackers[\"observe\"].config,\n            )\n",
+    "replace": "            pass\n",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_near_capture.py::test_the_first_far_observation_drives_the_near_leg_with_its_own_replan_budget"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B8:cusp-sensor-unknown-only",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::16",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::17",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::18",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::19",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::20",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::21",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::22",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::23",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::24",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::25",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::26",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::27",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::28",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::29",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::30",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::31",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::32",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::33",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::34",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::35",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::36"
+   ],
+   "statement": "a short verified walk refuses only at unknown or edge",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_rules.py::test_the_sensor_check_counts_only_unknown_or_edge_as_short_evidence_and_ages_the_free_cells"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "unknown_near_ = plain_.blocked in (\"unknown\", \"edge\") and plain_.verified_m < stop_need_",
+    "replace": "unknown_near_ = True and plain_.verified_m < stop_need_",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_cusp_rules.py::test_the_sensor_check_counts_only_unknown_or_edge_as_short_evidence_and_ages_the_free_cells"
+    ],
+    "check_line": "E   assert "
+   }
+  },
+  {
+   "id": "B8:cusp-sensor-evidence-age",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::16",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::17",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::18",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::19",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::20",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::21",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::22",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::23",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::24",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::25",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::26",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::27",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::28",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::29",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::30",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::31",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::32",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::33",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::34",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::35",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::36"
+   ],
+   "statement": "FREE evidence past the permission's age limit refuses",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_rules.py::test_the_sensor_check_counts_only_unknown_or_edge_as_short_evidence_and_ages_the_free_cells"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "and age_ <= pconf_.evidence_max_age_s and",
+    "replace": "and True and",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_cusp_rules.py::test_the_sensor_check_counts_only_unknown_or_edge_as_short_evidence_and_ages_the_free_cells"
+    ],
+    "check_line": "E   assert "
+   }
+  },
+  {
+   "id": "B8:cusp-return-cusp-not-recovered",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::16",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::17",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::18",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::19",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::20",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::21",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::22",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::23",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::24",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::25",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::26",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::27",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::28",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::29",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::30",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::31",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::32",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::33",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::34",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::35",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::36"
+   ],
+   "statement": "a return cusp is never recovered by the stall replan",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_rules.py::test_a_return_cusp_is_never_recovered_by_the_stall_replan"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "if ms.phase in (\"transport\", \"return_home\") and goal and slam is not None:",
+    "replace": "if ms.phase in (\"transport\", \"return_home\") and True and slam is not None:",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_cusp_rules.py::test_a_return_cusp_is_never_recovered_by_the_stall_replan"
+    ],
+    "check_line": "E   assert "
+   }
+  },
+  {
+   "id": "B8:cusp-replan-pending-this-leg",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::16",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::17",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::18",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::19",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::20",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::21",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::22",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::23",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::24",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::25",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::26",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::27",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::28",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::29",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::30",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::31",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::32",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::33",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::34",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::35",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::36"
+   ],
+   "statement": "the cusp monitor sees a pending replan of this leg only",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_rules.py::test_the_cusp_monitor_sees_a_pending_replan_of_this_leg_only[obstacle_state1-False]"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "obstacle.get(\"force_replan\") == ms.phase or",
+    "replace": "obstacle.get(\"force_replan\") is not None or",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_cusp_rules.py::test_the_cusp_monitor_sees_a_pending_replan_of_this_leg_only[obstacle_state1-False]"
+    ],
+    "check_line": "E   assert "
+   }
+  },
+  {
+   "id": "B8:cusp-replan-pending-wait",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::16",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::17",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::18",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::19",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::20",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::21",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::22",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::23",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::24",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::25",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::26",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::27",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::28",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::29",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::30",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::31",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::32",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::33",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::34",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::35",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::36"
+   ],
+   "statement": "a waiting replan of this leg is a pending replan",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_rules.py::test_the_cusp_monitor_sees_a_pending_replan_of_this_leg_only[obstacle_state2-True]"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "or bool(obstacle.get(\"replan_wait\", {}).get(ms.phase))",
+    "replace": "or False",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_cusp_rules.py::test_the_cusp_monitor_sees_a_pending_replan_of_this_leg_only[obstacle_state2-True]"
+    ],
+    "check_line": "E   assert "
+   }
   }
  ]
 }

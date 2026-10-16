@@ -248,7 +248,8 @@ OBSERVE_MISS = Tracking(status="failed", failure="endpoint_heading")
 
 
 def test_an_observe_heading_miss_brakes_and_once_stopped_replans_the_leg_to_the_same_target():
-    w = World("observe", stop_now=False, plans=[plan()])
+    replanned = plan()
+    w = World("observe", stop_now=False, plans=[replanned])
     out = w.tick(OBSERVE_MISS)
     assert out.tracking.status == "braking" and out.tracking.speed_mps == 0.0 and w.names() == []
     w.slam["stop_now"] = True
@@ -261,6 +262,7 @@ def test_an_observe_heading_miss_brakes_and_once_stopped_replans_the_leg_to_the_
                                              "status": "success", "planning_wall_s": 1.0, "leg_serial": 7,
                                              "budget_left": 1}
     assert w.ms.phase_started == 50.0 and w.calls[-1][1] == ("observe_replan",)
+    assert w.core.paths["observe"] is replanned  # the path the realignment record and the next replan read
 
 
 def test_an_observe_cusp_stall_counts_120_standing_ticks_and_the_budget_is_two_per_leg():

@@ -168,3 +168,38 @@ def test_a_released_leg_is_updated_from_the_tick_pose_at_the_control_speed():
     core.hooks.cusp_monitor = lambda: monitor
     assert core.cusp_tick(10.0, (0.5, 0.1, 0.2), "RAW", "TR", False) == ("UPD", False)
     assert updates == [((0.5, 0.1, 0.2), -0.05, 1 / 120)]  # signed_speed and dt from the runner
+
+
+def test_the_sensor_check_counts_only_unknown_or_edge_as_short_evidence_and_ages_the_free_cells():
+    """M-a2 core sweep: a short verified length is a refusal only when the walk stopped at unknown or edge; FREE
+    evidence older than the permission's age limit refuses."""
+    answers = {False: Check(blocked=None, verified_m=0.3, oldest_free_s=9.0), True: Check()}
+    lay = layer(check_candidate=lambda traj, unknown_passes=False, **k: answers[unknown_passes])
+    core, _, _ = make(obstacle={"layer": lay})
+    assert core.cusp_sensors(10.0, (0, 0, 0), "TRAJ", 1)[0] is True  # nothing unknown: the short walk is the path end
+    answers[False] = Check(blocked=None, verified_m=5.0, oldest_free_s=7.9)  # 2.1 s old, past the 2.0 s limit
+    ok, _, record = core.cusp_sensors(10.0, (0, 0, 0), "TRAJ", 1)
+    assert ok is False and record["evidence_age_s"] == pytest.approx(2.1)
+
+
+def test_a_return_cusp_is_never_recovered_by_the_stall_replan():
+    """M-a2 core sweep: on the return leg only a missed goal goes to the stall replan; a missed cusp does not."""
+    core, _, _ = make("return_home", slam={"docking": {}})
+    assert core.cusp_end_recovered(True) is True and core.cusp_end_recovered(False) is False
+
+
+@pytest.mark.parametrize("obstacle_state, pending", [({"force_replan": "transport"}, True),
+                                                     ({"force_replan": "observe"}, False),
+                                                     ({"replan_wait": {"transport": True}}, True), ({}, False)])
+def test_the_cusp_monitor_sees_a_pending_replan_of_this_leg_only(obstacle_state, pending):
+    seen = {}
+
+    def tick(now_s, phase, tracker, raw, tracking, **k):
+        seen.update(k)
+        return SimpleNamespace(force_replan=False, end=None, tracking="T", hold=False)
+
+    obstacle = {"layer": layer(check_candidate=lambda *a, **k: Check()), **obstacle_state}
+    core, _, _ = make(obstacle=obstacle)
+    core.hooks.cusp_monitor = lambda: SimpleNamespace(tick=tick, latch=None)
+    core.cusp_tick(10.0, (0.5, 0, 0), "RAW", "TR", False)
+    assert seen["replan_pending"]() is pending
