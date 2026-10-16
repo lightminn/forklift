@@ -74,7 +74,7 @@ class PocketCandidate:
     pickable: bool | None
     fit_reasons: tuple
     shape: ObservedPalletShape
-
+    alternative_centres_m: tuple = ()   # pallet centres of readings that compete with this one
     def __post_init__(self) -> None:
         if self.geometry not in GEOMETRY_STATES:
             raise ValueError(f"geometry must be one of {GEOMETRY_STATES}")
@@ -94,6 +94,8 @@ class PocketCandidate:
             _finite_scalar(getattr(self, name), name)
         object.__setattr__(self, "face_centre_m", _vector(self.face_centre_m, 3, "face centre"))
         object.__setattr__(self, "pallet_centre_m", _vector(self.pallet_centre_m, 3, "pallet centre"))
+        object.__setattr__(self, "alternative_centres_m",
+                           tuple(_vector(c, 3, "alternative centre") for c in self.alternative_centres_m))
         for name in ("reasons", "fit_reasons", "alternatives"):
             object.__setattr__(self, name, tuple(getattr(self, name)))
         if not isinstance(self.on_floor, (bool, np.bool_)):

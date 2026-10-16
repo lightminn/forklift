@@ -94,8 +94,12 @@ def select_target(candidates, instruction, *, reachable=None, unresolved=()) -> 
         if any(f.centre_xy is None or np.linalg.norm(np.asarray(f.centre_xy) - target) - f.extent_m <= reach
                for f in unresolved):
             return Selection("reobserve", None, ("unresolved_in_radius",))
-        near = [c for c in candidates
-                if np.linalg.norm(np.asarray(c.pallet_centre_m[:2]) - target) <= instruction["radius_m"]]
+        def inside(c):
+            # An uncertain candidate is in the radius if any of its competing readings is.
+            centres = [c.pallet_centre_m] + ([] if c.counted else list(c.alternative_centres_m))
+            return any(np.linalg.norm(np.asarray(p[:2]) - target) <= instruction["radius_m"] for p in centres)
+
+        near = [c for c in candidates if inside(c)]
         layer = instruction.get("layer")
         if layer is not None and near:
             layers = assign_layers(candidates)

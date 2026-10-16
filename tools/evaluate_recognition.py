@@ -31,7 +31,6 @@ from forklift_core.perception.target_selection import assign_layers, select_targ
 
 ROOT = Path(__file__).resolve().parents[1]
 PRIORS = ("config/pallet_prior_epal6.yaml", "config/pallet_prior_t11_06.yaml")
-MIN_PROPOSAL_PX = 50   # smaller fragments cannot reach the 60 eroded points a face needs
 
 
 def _baseline(sample):
@@ -106,8 +105,9 @@ def _oracle_fit(sample):
     """
     specs, site = _known()
     ids = sample.instance_ids
-    proposals = [InstanceProposal(f"i{k}", ids == k, 1.0, "oracle")
-                 for k in sorted(int(v) for v in np.unique(ids) if v >= 0) if (ids == k).sum() >= MIN_PROPOSAL_PX]
+    # Every visible instance is proposed, however small: one too small to fit still leaves a
+    # failure that keeps an instruction ambiguous (Codex review A round 2).
+    proposals = [InstanceProposal(f"i{k}", ids == k, 1.0, "oracle") for k in sorted(int(v) for v in np.unique(ids) if v >= 0)]
     fitted = fit_scene(sample.input.scene, proposals, specs=specs, setup=ForkSetup(sample.meta["fork_spacing_m"]),
                        load_for=_load_for(sample.input.instruction, site))
     layers = assign_layers(fitted.candidates)

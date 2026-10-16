@@ -181,3 +181,27 @@ def test_oracle_fit_never_reads_truth_or_scene_labels(tmp_path):
          "--output", str(tmp_path / "b"), "--diagnostics")
     a, b = _fit_fields(tmp_path / "a"), _fit_fields(tmp_path / "b")
     assert a == b and any(r["row"] == "candidate" for r in a) and any(r["row"] == "decision" for r in a)
+
+
+def test_oracle_fit_proposes_every_instance_however_small(monkeypatch):
+    """Codex review A round 2: masks under 50 px were dropped before the fit, so a mostly hidden pallet
+    left no failure behind and the unresolved check could not see it."""
+    from types import SimpleNamespace
+    sys.path.insert(0, str(ROOT))
+    from tools import evaluate_recognition as ev
+    from forklift_core.perception.instance_fit import SceneFit
+
+    ids = np.full((10, 10), -1, np.int32)
+    ids[0:8, 0:8] = 0
+    ids[9, 9] = 1                                    # a one-pixel visible part of a second pallet
+    seen = []
+
+    def fake_fit(scene, proposals, **kw):
+        seen.extend(p.proposal_id for p in proposals)
+        return SceneFit((), ())
+
+    monkeypatch.setattr(ev, "fit_scene", fake_fit)
+    sample = SimpleNamespace(instance_ids=ids, meta={"fork_spacing_m": 0.3725},
+                             input=SimpleNamespace(scene=None, instruction={"present": False}))
+    ev._oracle_fit(sample)
+    assert seen == ["i0", "i1"]

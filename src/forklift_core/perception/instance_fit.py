@@ -637,6 +637,18 @@ def fit_instance(scene: SceneInput, proposal: InstanceProposal, *, specs: dict, 
         reasons = list(reasons) + ["support_uncertain"]
     layout = face_layout(hyp.spec, hyp.axis)
     pallet_centre = centre + face.insertion_xy * layout.depth_m / 2
+    # Centres of the readings close enough to make this one ambiguous: the shifted placement of the
+    # same raster and the rival hypotheses. Target selection treats an ambiguous candidate as in an
+    # instruction's radius if any of them is (Codex review A round 2).
+    competing = []
+    close = hyp.placement.score - params.ambiguity_margin
+    if hyp.placement.runner_up_score >= close:
+        shifted = face.centre_xy + face.left_xy * hyp.placement.runner_up_u + face.insertion_xy * layout.depth_m / 2
+        competing.append((float(shifted[0]), float(shifted[1]), float(hyp.placement.support_z)))
+    for r in rivals[:3]:
+        if r[0].placement.score >= close:
+            rc = r[2] + faces[r[0].face].insertion_xy * face_layout(r[0].spec, r[0].axis).depth_m / 2
+            competing.append((float(rc[0]), float(rc[1]), float(r[0].placement.support_z)))
     shape = ObservedPalletShape(hyp.spec, layout, (("face", "known_shape"), ("depth", "known_shape"),
                                                     ("support", "unobserved" if state == "uncertain" else "observed")))
     zs = hyp.placement.support_z
@@ -646,7 +658,7 @@ def fit_instance(scene: SceneInput, proposal: InstanceProposal, *, specs: dict, 
         (float(centre[0]), float(centre[1]), float(zs)), (float(pallet_centre[0]), float(pallet_centre[1]), float(zs)),
         left, right, zs, state, state == "visible" and abs(zs) <= params.support_window_m, reach,
         hyp.placement.score, geometry, _identity(proposal, identity_threshold), tuple(reasons), pickable,
-        fit_reasons, shape)
+        fit_reasons, shape, tuple(competing))
 
 
 @dataclass(frozen=True)

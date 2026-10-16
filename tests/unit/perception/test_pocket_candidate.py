@@ -17,7 +17,8 @@ def _candidate(**kw):
                 axis="x", alternatives=(), insertion_yaw_rad=0.1, face_centre_m=(2.0, 0.0, 0.0),
                 pallet_centre_m=(2.3, 0.03, 0.0), left=pocket, right=replace(pocket, centre_m=(2.0, -0.2, 0.061)),
                 support_z_m=0.0, support_state="visible", on_floor=True, range_m=1.25, score=0.9,
-                geometry="fitted", identity="confirmed", reasons=(), pickable=True, fit_reasons=(), shape=shape)
+                geometry="fitted", identity="confirmed", reasons=(), pickable=True, fit_reasons=(), shape=shape,
+                alternative_centres_m=((2.3, 0.33, 0.0),))
     return PocketCandidate(**{**base, **kw})
 
 
@@ -35,6 +36,7 @@ def test_only_fitted_and_confirmed_candidates_are_counted():
     ({"pallet_centre_m": (1.0, 2.0)}, "pallet centre"),
     ({"geometry": "ambiguous"}, "reason"),
     ({"pickable": "yes"}, "pickable"),
+    ({"alternative_centres_m": ((1.0, 2.0),)}, "alternative centre"),
 ])
 def test_bad_candidates_are_refused(kw, match):
     with pytest.raises(ValueError, match=match):

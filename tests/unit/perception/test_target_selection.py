@@ -12,7 +12,7 @@ EPAL = rs.known_spec("epal6")
 H = EPAL.overall_height_m
 
 
-def _c(cid, x, y, *, z=0.0, state=None, geometry="fitted", identity="confirmed", pickable=True):
+def _c(cid, x, y, *, z=0.0, state=None, geometry="fitted", identity="confirmed", pickable=True, alt=()):
     """A candidate whose pallet centre is (x, y); its face is 0.3 m nearer the camera (EPAL 6)."""
     state = state or ("visible" if z == 0.0 else "coplanar")
     shape = ObservedPalletShape(EPAL, face_layout(EPAL, "x"), (("face", "known_shape"),))
@@ -21,7 +21,8 @@ def _c(cid, x, y, *, z=0.0, state=None, geometry="fitted", identity="confirmed",
                            replace(p, centre_m=(x - 0.3, y - 0.18625, z + 0.061)), z, state,
                            state == "visible" and z == 0.0, x - 0.3 - 0.75, 0.9, geometry, identity,
                            () if geometry == "fitted" else ("lateral_unconstrained",), pickable,
-                           () if pickable is not False else ("fork_spacing_adjust",), shape)
+                           () if pickable is not False else ("fork_spacing_adjust",), shape,
+                           tuple((ax, ay, z) for ax, ay in alt))
 
 
 def _instr(x, y, r=0.3, layer=None):
@@ -144,6 +145,14 @@ def test_a_failed_fit_is_judged_by_its_nearest_visible_point():
     assert select_target(cands, instr, unresolved=(spread,)).status == "reobserve"
     point = FitFailure("p1", "no_face", (3.0, 1.5), 0.0)
     assert select_target(cands, instr, unresolved=(point,)).candidate_id == "a"
+
+
+def test_an_ambiguous_candidate_whose_rival_centre_is_in_the_radius_asks_for_another_look():
+    """Codex review A round 2: an ambiguous candidate's best centre was pushed out of the radius by a
+    wrong placement, so the other pallet was selected although both centres were inside."""
+    cands = [_c("a", 2.0, -0.29, geometry="ambiguous", alt=((2.0, 0.0),)), _c("b", 3.2, 0.0)]
+    s = select_target(cands, _instr(2.6, 0.0, r=0.62))
+    assert s.status == "reobserve" and "uncertain_in_radius" in s.reasons
 
 
 def test_no_candidates_is_none():
