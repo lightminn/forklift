@@ -184,7 +184,12 @@ class Encoder:
             return self._shared(value, lambda: {"$list": [self.encode(v) for v in value]})
         if isinstance(value, collections.deque):
             return self._shared(value, lambda: {"$deque": [self.encode(v) for v in value], "maxlen": value.maxlen})
-        if type(value) in (set, frozenset):  # members are hashable values: in a fixed order (by their encoding)
+        if type(value) in (set, frozenset):  # members: plain scalars or tuples of them, in a fixed order
+            # (no member can carry an identity -- sorting would move a $ref before its $id; Codex P2)
+            if not all(_plain_member(v) for v in value):
+                if self.opaque_ok:
+                    return {"$opaque": _qualname(type(value))}
+                raise TypeError(f"a {type(value).__name__} member without a plain value encoding")
             members = sorted((self.encode(v) for v in value), key=lambda n: json.dumps(n, sort_keys=True))
             if type(value) is frozenset:
                 return {"$frozenset": members}
@@ -201,6 +206,12 @@ class Encoder:
         if self.opaque_ok:
             return {"$opaque": _qualname(type(value))}
         raise TypeError(f"no value encoding for a {_qualname(type(value))}")
+
+
+def _plain_member(value: Any) -> bool:
+    if type(value) in (type(None), bool, int, str) or (type(value) is float):
+        return True
+    return type(value) is tuple and all(_plain_member(v) for v in value)
 
 
 def encode(value: Any, *, opaque_ok: bool = False, value_types=()) -> tuple[Any, dict[str, np.ndarray]]:

@@ -1215,3 +1215,28 @@ def test_an_unreadable_rollouts_trace_fails_also_on_the_exception_path(tmp_path)
     chunk.write_text(json.dumps(tick) + "\n")
     with pytest.raises(ReplayMismatch, match="not a list of trajectories"):
         _moved_stage_one(tmp_path)
+
+
+def test_a_rollouts_trace_with_extra_arguments_fails(tmp_path):
+    _baseline_stage_one(tmp_path, fail=True)
+    chunk = next(tmp_path.glob("boundary_*.jsonl"))
+    tick = json.loads(chunk.read_text().splitlines()[0])
+    tick["calls"][-1]["request"]["$map"]["args"]["$list"].append("extra")
+    chunk.write_text(json.dumps(tick) + "\n")
+    with pytest.raises(ReplayMismatch, match="up to two trajectories"):
+        _moved_stage_one(tmp_path)
+
+
+def test_a_set_member_with_an_identity_is_refused_not_misordered():
+    from forklift_core.mission.replay_codec import Encoder
+
+    @dataclass(frozen=True, eq=True)
+    class Key:
+        name: str
+
+        def __hash__(self):
+            return hash(self.name)
+
+    assert Encoder().encode({("a", 1), ("b", 2)})["$set"] == [{"$tuple": ["a", 1]}, {"$tuple": ["b", 2]}]
+    with pytest.raises(TypeError, match="plain value"):
+        Encoder().encode({Key("a")})

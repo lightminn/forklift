@@ -150,3 +150,31 @@ def test_main_writes_failure_txt_outside_the_record_and_capture_images_are_sinks
     source = SCRIPT.read_text()
     assert '(Path(str(args.output)) / "failure.txt").write_text(traceback.format_exc())' in source
     assert source.count("save_image(Image.fromarray(") == 2
+
+
+def test_the_projection_handles_the_slam_container_and_refuses_a_socket(tmp_path):
+    import socket
+
+    import numpy as np
+    import pytest
+
+    from forklift_core.mission.state import MissionState
+
+    spec = importlib.util.spec_from_file_location("run_transport_projection3", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    class Odometry:
+        def __init__(self, x):
+            self.pose = np.array([x, 0.0])
+            self.callback = print
+
+    slam = {"module": np, "noise": np.random.default_rng(3), "odometry": Odometry(1.0), "link": object(),
+            "holds": {("a", 1)}}
+    a = module.final_projection({"slam": slam}, MissionState(), tmp_path)
+    slam["odometry"] = Odometry(2.0)
+    b = module.final_projection({"slam": slam}, MissionState(), tmp_path)
+    assert a["containers"]["slam"]["module"] == b["containers"]["slam"]["module"]
+    assert a["containers"]["slam"]["odometry"] != b["containers"]["slam"]["odometry"]
+    with socket.socket() as sock, pytest.raises(TypeError, match=r"slam\['sock'\]"):
+        module.final_projection({"slam": {"sock": sock}}, MissionState(), tmp_path)
