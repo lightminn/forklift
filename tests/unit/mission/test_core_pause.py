@@ -100,7 +100,7 @@ def test_the_permission_watch_counts_no_work():
 
 def test_a_correction_change_while_paused_without_a_follower_reprojects_at_the_pose():
     core, obs, _ = make("settle")
-    core.slam = {"tracker": SimpleNamespace(applied=(np.array([0.1, 0.0, 0.0]),))}
+    core.slam = {"tracker": SimpleNamespace(applied=(np.array([0.1, 0.0, 0.0]),), mode="tracking"), "holds": []}
     core.slam["stop_now"] = True
     pause(core, 10.0)
     core.paused_tick(10.0, REAR, 0.0, False)
@@ -252,3 +252,69 @@ def test_a_resume_off_its_path_replans_even_when_the_old_path_is_hidden():
                                                                                               requested_speed=0.0)
     core.paused_tick(11.0, np.array([0.0, 1.0, 0.0]), 0.0, True)
     assert asked == [11.0]
+
+
+# --- M-a3c: the resume table's rows a general check cannot decide (M-a0.5 part 2, section 8) ---
+def held(core, *, holds=1, docking=None):
+    core.slam = {"tracker": SimpleNamespace(mode="holding", applied=None), "holds": [{"event": "hold"}] * holds,
+                 "stop_now": True, "docking": dict(docking or {})}
+    return core.slam
+
+
+def test_a_held_realignment_does_not_resume():
+    core, _, _ = make("observe")
+    held(core)
+    core.realign_active = lambda: True
+    pause(core, 10.0)
+    resume(core, 11.0)
+    core.paused_tick(11.0, REAR, 0.0, False)
+    assert core.commands.status == "resuming" and core.commands.resume_check["reason"] == "no_resume:realign_held"
+
+
+def test_a_new_hold_episode_while_paused_does_not_resume():
+    core, _, _ = make("approach")
+    slam = held(core, holds=1)
+    pause(core, 10.0)
+    core.paused_tick(10.0, REAR, 0.0, False)  # the stop's first tick records hold episode 1
+    slam["holds"] = slam["holds"] + [{"event": "release"}, {"event": "hold"}]
+    resume(core, 11.0)
+    core.paused_tick(11.0, REAR, 0.0, False)
+    assert core.commands.resume_check["reason"] == "state_verified:hold_episode_changed"
+
+
+def docking_core(*, d7=True, retries=()):
+    core, _, _ = make("transport")
+    held(core, docking={"status": "armed"})
+    core.options.d7_docking = d7
+    core.state["docking_retries"] = list(retries)
+    asked = []
+    core.start_docking_retry = lambda t, trigger, failure: asked.append((t, trigger, failure))
+    core.hooks.slam_rear = lambda t: np.array([0.05, 0.0, 0.0])
+    pause(core, 10.0)
+    core.paused_tick(10.0, REAR, 0.0, False)
+    resume(core, 11.0)
+    return core, asked
+
+
+def test_a_docking_straight_resumes_where_it_stopped():
+    core, asked = docking_core()
+    core.paused_tick(11.0, REAR + np.array([0.005, 0.0, 0.0]), 0.0, False)  # within the stop's tolerance
+    assert asked == [] and core.commands.status == "running"
+
+
+def test_a_docking_straight_moved_while_paused_retries_the_docking_from_there():
+    core, asked = docking_core()
+    core.paused_tick(11.0, REAR + np.array([0.05, 0.0, 0.0]), 0.0, False)
+    assert asked == [(11.0, "resume", "docking_moved_while_paused")]
+    assert core.commands.status == "resuming" and core.commands.resume_check["reason"] == "docking_retry"
+    assert core.commands.pause_pose == (0.05, 0.0, 0.0)  # the re-approach starts here: not moved again
+
+
+@pytest.mark.parametrize("d7, retries, reason", [
+    (False, (), "no_resume:docking_moved"),
+    (True, ({"counted": True}, {"counted": True}), "no_resume:docking_retry_budget"),
+])
+def test_a_moved_docking_straight_without_d7_or_its_budget_does_not_resume(d7, retries, reason):
+    core, asked = docking_core(d7=d7, retries=retries)
+    core.paused_tick(11.0, REAR + np.array([0.05, 0.0, 0.0]), 0.0, False)
+    assert asked == [] and core.commands.resume_check["reason"] == reason

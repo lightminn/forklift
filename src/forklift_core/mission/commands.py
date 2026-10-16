@@ -70,6 +70,8 @@ class MissionCommands:
         self.stop_seen_s: float | None = None  # the first standing tick of the current stop
         self.resume_check: dict | None = None  # the resume's last check (E5), for the safety state
         self.resume_retry_s = -1e9  # a resume's replan without a path tries again from here
+        self.pause_pose: tuple | None = None  # the control pose at the stop's first paused tick (M-a3c)
+        self.pause_hold_count: int | None = None  # the SLAM hold episode then
 
     # --- the queue ---------------------------------------------------------------------------------------------
     def queue(self, command) -> None:
@@ -142,6 +144,8 @@ class MissionCommands:
     def _stop_boundary(self, t: float) -> None:
         self.paused_since = t
         self.stop_seen_s = None
+        self.pause_pose = None
+        self.pause_hold_count = None
         self.pauses.append([t, None])
         self.mission_gen += 1
 

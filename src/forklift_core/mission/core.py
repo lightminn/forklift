@@ -114,6 +114,12 @@ def record_tracker_configs_in(state: dict, trackers: dict) -> None:
     )
 
 
+# M-a3c (R11): a pause that moved the truck more than this from where it stopped (the docking straight was checked
+# from there) -- a stop that holds stays well inside it (the stop detector's 12 mm/s mean over 0.2 s).
+PAUSE_MOVED_M = 0.01
+PAUSE_MOVED_RAD = 0.01
+
+
 class MissionCore:
     def __init__(self, ms: MissionState, *, state: dict, obstacle: dict | None, slam: dict | None, pocket: dict,
                  paths: dict, trackers: dict, geometry, settings: dict, pallet_geometry, hooks: SimpleNamespace,
@@ -2601,6 +2607,9 @@ class MissionCore:
         standing = bool(slam["stop_now"]) if slam is not None else abs(float(hooks.truth_speed())) < 0.01
         if standing and cmds.stop_seen_s is None:
             cmds.stop_seen_s = t
+        if cmds.pause_pose is None:  # M-a3c: where the stop began and in which hold episode (R3, R4n, R11)
+            cmds.pause_pose = tuple(float(v) for v in rear)
+            cmds.pause_hold_count = self.hold_count()
         ms.lift_command = float(hooks.lift_position())  # E3: synchronised to where the lift is, not frozen
         obstacle_hold = False
         if obstacle is not None:
@@ -2624,9 +2633,39 @@ class MissionCore:
         import copy
 
         ms, obstacle, trackers, cmds, options = self.ms, self.obstacle, self.trackers, self.commands, self.options
+        slam = self.slam
         cmds.resume_check = check = {"time_s": t, "step": "stop_confirmed"}
         if not standing:
             return rear
+        # M-a3c: the rows of the resume table (M-a0.5 part 2, section 8) that a general check cannot decide.
+        check["step"] = "state_verified"
+        holding_ = slam is not None and slam["tracker"].mode == "holding"
+        if ms.phase == "observe" and holding_ and self.realign_active():
+            check["reason"] = "no_resume:realign_held"  # R3x: no recovery runs held in a realignment
+            return rear
+        if holding_ and cmds.pause_hold_count is not None and self.hold_count() != cmds.pause_hold_count:
+            check["reason"] = "state_verified:hold_episode_changed"  # R3, R4n, R11: the held frame is not the paused one
+            return rear
+        docking_ = slam["docking"] if slam is not None else {}
+        if (ms.phase == "transport" and holding_ and not docking_.get("reapproach")
+                and docking_.get("status") in ("armed", "done", "fallback") and cmds.pause_pose is not None):
+            # R11: the docking straight was dry-run and swept from where the match ran; moved since the pause,
+            # the straight is not that one -- a D7c docking retry from here (its budget first), or no resume.
+            dx_, dy_ = float(rear[0]) - cmds.pause_pose[0], float(rear[1]) - cmds.pause_pose[1]
+            dyaw_ = math.atan2(math.sin(float(rear[2]) - cmds.pause_pose[2]), math.cos(float(rear[2]) - cmds.pause_pose[2]))
+            if math.hypot(dx_, dy_) > PAUSE_MOVED_M or abs(dyaw_) > PAUSE_MOVED_RAD:
+                counted_ = sum(1 for r_ in self.state.get("docking_retries", []) if r_.get("counted"))
+                if not options.d7_docking:
+                    check["reason"] = "no_resume:docking_moved"
+                    return rear
+                if counted_ >= 2:
+                    check["reason"] = "no_resume:docking_retry_budget"
+                    return rear
+                self.start_docking_retry(t, "resume", "docking_moved_while_paused")
+                rear = self.hooks.slam_rear(t)  # the retry released the correction
+                cmds.pause_pose = tuple(float(v) for v in rear)  # the re-approach starts here
+                check["reason"] = "docking_retry"
+                return rear
         if ms.phase in trackers:
             check["step"] = "path_rechecked"
             probe = copy.deepcopy(trackers[ms.phase])
