@@ -874,8 +874,9 @@ def arguments() -> argparse.Namespace:
         parser.error("--live does not take --repeat-captures (its captures bypass the stop boundary, plan C2)")
     if args.live and args.record_boundary:
         parser.error("--live is not replayed: not with --record-boundary (plan C4)")
-    if args.live and args.live_factor <= 0:
-        parser.error("--live-factor must be positive")
+    if args.live and not 0 < args.live_factor <= 1:
+        # The limits are divided by it (plan C4a); above 1 the 0.05 s tick would exceed a quarter of the command age.
+        parser.error("--live-factor must be in (0, 1]")
     if args.mission_commands is not None:
         # M-a3 (plan E4, E7, E9): command stops decelerate on the obstacle layer's stopping model; the near-field
         # bounds were measured without pauses; scheduled stops, dwells and the e-stop probe keep their own clocks;
@@ -5208,7 +5209,9 @@ def drive(S, isaac) -> None:
                 # distance as L does on a real truck. The lease is administrative and only kept above the command age.
                 config=LiveArbiterConfig(tick_s=1 / 120, command_max_age_s=0.30 / args.live_factor,
                                          video_max_age_s=0.50 / args.live_factor,
-                                         lease_timeout_s=max(args.live_lease_timeout_s, 0.30 / args.live_factor)),
+                                         frame_window_s=max(5.0, 2 * 0.50 / args.live_factor),
+                                         lease_timeout_s=max(args.live_lease_timeout_s, 0.30 / args.live_factor,
+                                                             0.50 / args.live_factor)),
                 host=args.live_host, web_root=args.live_web_root,
                 test_step_delay_s=args.live_test_step_delay_ms / 1000.0, camera_freeze=freeze_,
                 test_stop_in_capture=args.live_test_stop_in_capture)
