@@ -5167,10 +5167,9 @@ def drive(S, isaac) -> None:
                 return rgb_, float(rendered_)
 
             def live_grid():
-                if obstacle is None:
+                if obstacle is None or obstacle["layer"].snapshot is None:
                     return None
-                snap_ = obstacle["layer"].grid.snapshot(world.current_time - initial_time, obstacle["applied"],
-                                                        obstacle["version"])
+                snap_ = obstacle["layer"].snapshot  # the local window the permission reads
                 cells_ = np.ascontiguousarray(snap_.state.T).astype(np.uint8)  # rows of y, as the console reads
                 return {"cells": cells_.tobytes(), "width": int(snap_.state.shape[0]),
                         "height": int(snap_.state.shape[1]), "resolution_m": float(snap_.resolution_m),
@@ -5240,13 +5239,16 @@ def drive(S, isaac) -> None:
                     return 0.0, "no_permission"
                 layer_ = obstacle["layer"]
                 now_ = float(world.current_time - initial_time)
-                key_ = (tuple(sorted(layer_.last_scan_s.items())), obstacle["version"])
-                if live_state["snapshot_key"] != key_:
-                    live_state["snapshot"] = layer_.grid.snapshot(now_, obstacle["applied"], obstacle["version"])
-                    live_state["snapshot_key"] = key_
+                # The layer's own latest snapshot -- the one the mission's permission reads, with its shadow band and
+                # known obstacles applied, made once per scan (a separate whole-map snapshot here cost more than a
+                # live step and missed that processing).
+                snap_ = layer_.snapshot
+                if snap_ is None:
+                    return 0.0, "no_snapshot"
+                key_ = (id(snap_), float(snap_.stamp_s), obstacle["version"])
                 loaded_ = ms.phase in ("lift", "extract", "transport", "lower")
                 fp_, own_ = layer_.footprints(loaded_, direction)
-                return live_perm.limit(live_state["snapshot"], key_, now_, layer_.last_scan_s,
+                return live_perm.limit(snap_, key_, now_, layer_.last_scan_s,
                                        pose=tuple(float(v) for v in live_state["rear"]), curvatures=curvatures,
                                        direction=direction, check_speed_mps=check, footprint=fp_,
                                        own_footprint=own_)

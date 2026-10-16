@@ -56,7 +56,7 @@ def run(d, teleop, permit, *, last=0.0, measured=0.0, kappa=0.0, armed=True, all
 def test_the_bundle_covers_measured_to_output_curvature_at_most_a_step_apart():
     ks = bundle(-0.1, 0.12)
     assert ks[0] == -0.1 and ks[-1] == pytest.approx(0.12) and max(np.diff(ks)) <= 0.05 + 1e-12
-    assert bundle(0.2, 0.2) == [0.2, 0.2]
+    assert bundle(0.2, 0.2) == [0.2]  # one arc, not the same arc twice
 
 
 def test_a_free_corridor_lets_the_slew_pull_away_and_the_arc_never_reaches_its_end():

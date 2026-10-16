@@ -41,7 +41,9 @@ class TeleopLimits:
 
 
 def bundle(kappa_from: float, kappa_to: float) -> list[float]:
-    """Curvatures from one to the other, both ends included, at most KAPPA_STEP apart."""
+    """Curvatures from one to the other, both ends included, at most KAPPA_STEP apart (one arc when they agree)."""
+    if kappa_from == kappa_to:
+        return [float(kappa_from)]
     n = max(1, math.ceil(abs(kappa_to - kappa_from) / KAPPA_STEP))
     return [float(k) for k in np.linspace(kappa_from, kappa_to, n + 1)]
 
