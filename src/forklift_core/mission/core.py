@@ -2912,12 +2912,16 @@ class MissionCore:
             # (Codex checkpoint 6 P1). The steering creep is slewed too: as a
             # step from 0.6 m/s it skidded a rear wheel and the held pose
             # fell 3 cm behind (L3c v43 seed 1, pocket_obstacle).
-            cap = obstacle.get("permission_cap")
+            # The deceleration is read only on a braking tick and the cap after the slew, as before the
+            # extraction: both are recorded reads and a replay compares their order.
             wheel_speed = slew_cap_stop(state.get("command_speed", 0.0), wheel_speed,
-                                        decel_mps2=obstacle["layer"].permission.config.stopping.decel_mps2,
-                                        accel_mps2=COMMAND_ACCEL_MPS2, dt=dt,
-                                        cap_mps=cap[1] if cap is not None and cap[0] == t else None,
-                                        stop=estop_holding or safety_hold)
+                                        decel_mps2=lambda: obstacle["layer"].permission.config.stopping.decel_mps2,
+                                        accel_mps2=COMMAND_ACCEL_MPS2, dt=dt, cap_mps=None)
+            cap = obstacle.get("permission_cap")
+            if cap is not None and cap[0] == t and abs(wheel_speed) > cap[1]:
+                wheel_speed = math.copysign(cap[1], wheel_speed)
+            if estop_holding or safety_hold:
+                wheel_speed = 0.0
             state["command_speed"] = wheel_speed
         drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)
         rate = settings["steering_command_rate_rad_s"] * dt

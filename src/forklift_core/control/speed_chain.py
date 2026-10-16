@@ -21,13 +21,18 @@ def creep(target_mps: float, steering_error_rad: float) -> float:
     return target_mps * CREEP_FACTOR if steering_error_rad > CREEP_STEERING_ERROR_RAD else target_mps
 
 
-def slew_cap_stop(previous_mps: float, target_mps: float, *, decel_mps2: float, accel_mps2: float, dt: float,
+def slew_cap_stop(previous_mps: float, target_mps: float, *, decel_mps2, accel_mps2: float, dt: float,
                   cap_mps: float | None = None, stop: bool = False) -> float:
-    """One tick of the slew from ``previous_mps`` toward ``target_mps``, then the cap (a step), then the stop."""
+    """One tick of the slew from ``previous_mps`` toward ``target_mps``, then the cap (a step), then the stop.
+    ``decel_mps2`` may be a callable read only when braking -- the core's is a recorded port read, made only on a
+    braking tick, and a replay compares every read."""
     target = target_mps
     if previous_mps * target < 0:
         target = 0.0
-    rate = (decel_mps2 if abs(target) < abs(previous_mps) else accel_mps2) * dt
+    if abs(target) < abs(previous_mps):
+        rate = (decel_mps2() if callable(decel_mps2) else decel_mps2) * dt
+    else:
+        rate = accel_mps2 * dt
     speed = previous_mps + float(np.clip(target - previous_mps, -rate, rate))
     if cap_mps is not None and abs(speed) > cap_mps:
         speed = math.copysign(cap_mps, speed)

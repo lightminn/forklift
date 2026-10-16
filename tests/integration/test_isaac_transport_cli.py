@@ -632,7 +632,7 @@ def test_s4_safety_stops_take_the_dwell_path_without_the_wheel_lock_and_record_t
     assert source.index("safety_hold = False") < source.index("command_ = core.command(")
     # The zero comes after the slew and the permission cap, last before the drive command.
     assembly = CORE.read_text()  # the command assembly moved to the mission core (M-a1 slice 5)
-    slew = assembly.index("wheel_speed = previous + float(np.clip(target_speed - previous, -rate, rate))")
+    slew = assembly.index("wheel_speed = slew_cap_stop(")  # its arithmetic: control/speed_chain.py (M-b4)
     zero = assembly.index("if estop_holding or safety_hold:\n                wheel_speed = 0.0")
     assert slew < assembly.index("cap = obstacle.get(\"permission_cap\")") < zero
     assert zero < assembly.index("drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)")
