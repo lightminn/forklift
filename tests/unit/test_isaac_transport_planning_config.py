@@ -779,7 +779,7 @@ def test_a_failed_replan_backs_off_a_bounded_distance_then_replans():
 
 def test_new_obstacle_rules_get_the_leg_direction_the_pallet_face_and_can_silence_the_depth_camera():
     source = SCRIPT.read_text()
-    i = source.index('for action in new_obstacles["schedule"].update(')
+    i = source.index('due_ = new_obstacles["schedule"].update(')  # the call, assigned before its trace (M-a1 R3)
     call = source[i : i + 200]
     assert "leg_direction=int(leg_direction)" in call and "pallet_face=pallet_face" in call
     head = source[source.rindex("pallet_face = None", 0, i) : i]
@@ -802,7 +802,7 @@ def test_pocket_bars_are_judged_against_the_block_columns_not_the_outline():
 
 def test_a_backoff_offers_no_leg_to_the_rules_and_silence_is_traced():
     source = SCRIPT.read_text()
-    i = source.index('for action in new_obstacles["schedule"].update(')
+    i = source.index('due_ = new_obstacles["schedule"].update(')  # the call, assigned before its trace (M-a1 R3)
     assert "leg_direction = 0  # a backoff is not a leg of the phase" in source[i - 2500 : i]
     core = CORE.read_text()  # the permission tick moved to the mission core (M-a1 slice 3b)
     assert 'trace.setdefault("first_zero_s", t)' in core and '"silence_trace": obstacle.get("silence_trace")' in source
@@ -1434,7 +1434,7 @@ def test_the_pocket_check_is_refused_with_a_team_spec_encoder_model():
 
 def _tracker_book_class():
     source = SCRIPT.read_text()
-    namespace = {}
+    namespace = {"Path": Path}  # the replay helpers in the slice annotate with Path (M-a1 R3)
     exec(source[source.index("class TrackerBook(dict):"): source.index("def run(app, args")], namespace)  # noqa: S102
     return namespace["TrackerBook"]
 
@@ -1560,7 +1560,7 @@ def test_the_boundary_record_closes_an_exit_tick_with_its_branches_and_the_propa
 
     source = SCRIPT.read_text()
     block = source[source.index("_BOUNDARY_RECORD: dict = "): source.index("def run(app, args")]
-    namespace: dict = {"time": object()}
+    namespace: dict = {"time": object(), "Path": Path}  # the replay helpers in the slice annotate with Path
     exec(block, namespace)  # noqa: S102
     gate = RecordingGate(BoundaryRecorder(tmp_path))
     namespace["_BOUNDARY_RECORD"].update(gate=gate, probe=lambda: ["state.transitions+1"])
