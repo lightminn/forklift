@@ -62,3 +62,9 @@ def test_each_mutation_changes_the_copy_at_the_reported_place_and_never_the_orig
             orig = _calls(tmp_path / "orig", 1)[1][2]["request"]
             assert calls[2]["request"] != orig
     assert (tmp_path / "orig/boundary/boundary_00000.jsonl").read_text() == before
+
+
+def test_an_injection_without_a_clean_control_replay_proves_nothing(tmp_path):
+    out = I.inject(tmp_path, "ending", control_outcome={"passed": False, "failure": "final state differs"})
+    assert out["passed"] is False and "proves nothing" in out["why"]
+    assert I.inject(tmp_path, "ending", control_outcome=None)["passed"] is False

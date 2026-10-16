@@ -49,22 +49,29 @@ def test_drive_reads_no_isaac_helper_names():
     assert not names & {"Gf", "ArticulationAction", "UsdGeom", "UsdPhysics", "omni", "Camera", "World"}
 
 
-def test_the_end_state_projection_hides_the_output_directory_and_lists_recorded_only_keys(tmp_path):
+def test_the_end_state_projection_covers_the_containers_by_logical_service_and_hides_the_output(tmp_path):
     import numpy as np
 
+    from forklift_core.mission.boundary_record import BoundaryRecorder, RecordingGate, RecordingProxy
     from forklift_core.mission.state import MissionState
 
     spec = importlib.util.spec_from_file_location("run_transport_projection", SCRIPT)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     ms = MissionState(phase="return_home")
-    a = module.final_projection({"video": str(tmp_path / "a" / "v.mp4"), "lift": np.float64(0.1),
-                                 "setup_snapshot": {"files": 3}}, ms, tmp_path / "a")
-    b = module.final_projection({"video": str(tmp_path / "b" / "v.mp4"), "lift": np.float64(0.1)}, ms, tmp_path / "b")
-    assert a["result"] == b["result"] and set(a["result"]) == {"video", "lift"}
-    assert a["recorded_only"] == ["setup_snapshot"] and a["mission"] is ms
-    c = module.final_projection({"video": "x", "lift": np.float64(0.2)}, ms, tmp_path / "a")
-    assert c["result"]["lift"] != a["result"]["lift"]
+    gate = RecordingGate(BoundaryRecorder(tmp_path / "b", value_format=2))
+
+    def containers(out, tick_value, link):
+        return {"state": {"video": str(out / "v.mp4"), "lift": np.float64(0.1), "setup_snapshot": {"files": 3}},
+                "near": {"ticks": [{"d": tick_value}], "tracker": RecordingProxy(object(), "NearTracking", gate)},
+                "slam": {"link": link}, "paths": None}
+
+    a = module.final_projection(containers(tmp_path / "a", 1.0, object()), ms, tmp_path / "a")
+    b = module.final_projection(containers(tmp_path / "b", 1.0, object()), ms, tmp_path / "b")
+    assert a == b and "setup_snapshot" not in a["containers"]["state"] and a["containers"]["paths"] is None
+    c = module.final_projection(containers(tmp_path / "a", 2.0, object()), ms, tmp_path / "a")
+    assert c["containers"]["near"]["ticks"] != a["containers"]["near"]["ticks"]  # an old log item changed
+    assert c["containers"]["near"]["tracker"] == a["containers"]["near"]["tracker"]
 
 
 def test_the_stdout_observer_records_printed_lines_as_sink_echo_and_still_prints(tmp_path, capsys):
@@ -88,6 +95,21 @@ def test_the_stdout_observer_records_printed_lines_as_sink_echo_and_still_prints
     assert [(c["port"], c["method"]) for c in calls] == [("Sink", "echo")]
     out = capsys.readouterr()
     assert out.out == 'SAMPLE {"t": 1}\noutside a tick\n' and out.err == "to stderr\n"
+
+
+def test_a_print_whose_end_changed_is_a_different_sink_payload(tmp_path):
+    from forklift_core.mission.boundary_record import payload_digest
+
+    spec = importlib.util.spec_from_file_location("run_transport_print_end", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    seen = []
+    module.sink_effect = lambda gate, method, path, payload, write=None: (seen.append(payload), write())[1]
+    module._BOUNDARY_RECORD.update(gate=object(), print=lambda *a, **k: None)
+    module._recording_print("SAMPLE")
+    module._recording_print("SAMPLE", end="")
+    module._BOUNDARY_RECORD.update(gate=None, print=None)
+    assert seen == ["SAMPLE\n", "SAMPLE"] and payload_digest(seen[0]) != payload_digest(seen[1])
 
 
 def test_main_closes_the_record_with_what_left_run_and_the_harness_does_the_same():

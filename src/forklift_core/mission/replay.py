@@ -380,6 +380,16 @@ class ReplayGate:
             return self._baseline_redraw(args, kwargs, hash_only, watch)
         raw = {"args": list(args), "kwargs": dict(kwargs)}
         entry = self.session.take(port, method, self.session.encode(raw, hash_arrays=hash_only))
+        if port == "Sink" and "exception" not in entry:
+            # An output effect the record says succeeded: compared above, then made here too (the replay's own
+            # output directory) -- a write that fails only here is a difference.
+            self.depth += 1
+            try:
+                return fn(*args, **kwargs)
+            except Exception as exc:  # noqa: BLE001
+                raise self.session.fail(f"Sink.{method} failed in the replay, not in the record: {exc!r}") from None
+            finally:
+                self.depth -= 1
         return self.answer(entry, args, kwargs, watch)
 
     # -- the one source mapping (plan section 4): the baseline's stage-1 redraw bundle ---------------------------

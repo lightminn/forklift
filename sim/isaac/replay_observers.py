@@ -27,19 +27,17 @@ def observed_output(output: Path, gate_fn):
     root = Path(output)
     base = type(root)
 
-    def _sink(method, path, payload):
+    def _sink(method, path, payload, write):
         from forklift_core.mission.boundary_record import sink_effect
 
-        sink_effect(gate_fn(), method, _logical(path, root), payload)
+        return sink_effect(gate_fn(), method, _logical(path, root), payload, write)
 
     class ObservedPath(base):  # noqa: D401 -- a pathlib path; joined paths keep this type
         def write_text(self, data, *args, **kwargs):
-            _sink("write_text", self, data)
-            return super().write_text(data, *args, **kwargs)
+            return _sink("write_text", self, data, lambda: base.write_text(self, data, *args, **kwargs))
 
         def write_bytes(self, data):
-            _sink("write_bytes", self, bytes(data))
-            return super().write_bytes(data)
+            return _sink("write_bytes", self, bytes(data), lambda: base.write_bytes(self, data))
 
     return ObservedPath(root)
 
@@ -56,20 +54,21 @@ class NumpyObserver(types.ModuleType):
     def __getattr__(self, name):
         return getattr(object.__getattribute__(self, "_np"), name)
 
-    def _sink(self, method, file, payload) -> None:
+    def _sink(self, method, file, payload, write):
         from forklift_core.mission.boundary_record import sink_effect
 
-        sink_effect(object.__getattribute__(self, "_gate_fn")(), method,
-                    _logical(file, object.__getattribute__(self, "_root")), payload)
+        return sink_effect(object.__getattribute__(self, "_gate_fn")(), method,
+                           _logical(file, object.__getattribute__(self, "_root")), payload, write)
 
     def save(self, file, arr, *args, **kwargs):
-        self._sink("np_save", file, {"array": object.__getattribute__(self, "_np").asarray(arr)})
-        return object.__getattribute__(self, "_np").save(file, arr, *args, **kwargs)
+        np_ = object.__getattribute__(self, "_np")
+        return self._sink("np_save", file, {"array": np_.asarray(arr)}, lambda: np_.save(file, arr, *args, **kwargs))
 
     def savez(self, file, *args, **kwds):
-        self._sink("np_savez", file, {"args": list(args), "kwds": kwds})
-        return object.__getattribute__(self, "_np").savez(file, *args, **kwds)
+        np_ = object.__getattribute__(self, "_np")
+        return self._sink("np_savez", file, {"args": list(args), "kwds": kwds}, lambda: np_.savez(file, *args, **kwds))
 
     def savez_compressed(self, file, *args, **kwds):
-        self._sink("np_savez_compressed", file, {"args": list(args), "kwds": kwds})
-        return object.__getattribute__(self, "_np").savez_compressed(file, *args, **kwds)
+        np_ = object.__getattribute__(self, "_np")
+        return self._sink("np_savez_compressed", file, {"args": list(args), "kwds": kwds},
+                          lambda: np_.savez_compressed(file, *args, **kwds))

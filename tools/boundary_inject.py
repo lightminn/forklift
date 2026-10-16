@@ -5,7 +5,7 @@ call is the code making an extra call, duplicating one is a call left unmade, an
 a copy (the original is never written) and the copy is replayed with tools/boundary_replay.py; the injection
 passes when the replay fails, and for the exact mutations when it fails at the mutated call.
 
-    python tools/boundary_inject.py RUN_DIR --mutation drop [--tick N] [--json OUT]
+    python tools/boundary_inject.py RUN_DIR --mutation drop [--mutation sink ...] [--tick N] [--json OUT]
 """
 
 from __future__ import annotations
@@ -158,7 +158,21 @@ def make_copy(run_dir: Path, work: Path, mutation: str, after: int) -> dict:
     raise SystemExit(f"no place for {mutation} at or after tick {after}")
 
 
-def inject(run_dir: Path, mutation: str, after: int = 0) -> dict:
+def control(run_dir: Path) -> dict:
+    """The unmutated record replayed by the same code: an injection counts only when this passes (Codex P2 -- a
+    record that already fails would make every injection look detected)."""
+    harness = _load_harness()
+    with tempfile.TemporaryDirectory(prefix="boundary_control_") as tmp:
+        outcome = harness.replay_run(Path(run_dir), Path(tmp) / "out")
+    return {"passed": outcome.get("failure") is None and outcome.get("finish") == "ok",
+            "failure": outcome.get("failure"), "finish": outcome.get("finish"), "ticks_done": outcome.get("ticks_done")}
+
+
+def inject(run_dir: Path, mutation: str, after: int = 0, control_outcome: dict | None = None) -> dict:
+    """``control_outcome``: :func:`control`'s result for this record and code (run once per record; required)."""
+    if control_outcome is None or not control_outcome.get("passed"):
+        return {"mutation": mutation, "passed": False, "control": control_outcome,
+                "why": "the unmutated record does not replay cleanly with this code: an injection proves nothing"}
     harness = _load_harness()
     with tempfile.TemporaryDirectory(prefix="boundary_inject_") as tmp:
         where = make_copy(Path(run_dir), Path(tmp), mutation, after)
@@ -175,11 +189,14 @@ def inject(run_dir: Path, mutation: str, after: int = 0) -> dict:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("run_dir", type=Path)
-    parser.add_argument("--mutation", choices=sorted(MUTATIONS), required=True)
+    parser.add_argument("--mutation", choices=sorted(MUTATIONS), action="append", required=True,
+                        help="repeatable; the unmutated control replay runs once first")
     parser.add_argument("--tick", type=int, default=0, help="mutate the first suitable call at or after this tick")
     parser.add_argument("--json", type=Path)
     args = parser.parse_args(argv)
-    out = inject(args.run_dir, args.mutation, args.tick)
+    control_ = control(args.run_dir)
+    results = [inject(args.run_dir, m, args.tick, control_) for m in args.mutation]
+    out = {"control": control_, "injections": results, "passed": control_["passed"] and all(r["passed"] for r in results)}
     text = json.dumps(out, indent=1)
     if args.json:
         args.json.write_text(text + "\n")

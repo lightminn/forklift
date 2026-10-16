@@ -44,3 +44,51 @@ def test_a_different_payload_has_a_different_digest(tmp_path):
 
     assert payload_digest({"kwds": {"a": np.ones(2)}}) != payload_digest({"kwds": {"a": np.zeros(2)}})
     assert payload_digest("x\n") == payload_digest("x\n")
+
+
+def test_a_failed_write_is_recorded_and_raised_again_at_the_same_place_on_replay(tmp_path):
+    from forklift_core.mission.replay import ReplayGate, ReplayMismatch, ReplaySession
+
+    out = tmp_path / "run"
+    (out / "blocked.json").mkdir(parents=True)  # writing a file over a directory fails
+    rec = BoundaryRecorder(tmp_path / "boundary", value_format=2)
+    gate = RecordingGate(rec)
+    output = O.observed_output(out, lambda: gate)
+    rec.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    try:
+        (output / "blocked.json").write_text("{}")
+    except OSError:
+        pass
+    (output / "ok.json").write_text("{}")
+    rec.tick_end(outputs={}, branches=[])
+    rec.close()
+    calls = next(iter(read_ticks(tmp_path / "boundary")))["calls"]
+    assert "exception" in calls[0] and "exception" not in calls[1]
+
+    def replay(replay_out):
+        session = ReplaySession(tmp_path / "boundary")
+        rgate = ReplayGate(session)
+        routput = O.observed_output(replay_out, lambda: rgate)
+        session.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+        raised = None
+        try:
+            (routput / "blocked.json").write_text("{}")
+        except OSError as exc:
+            raised = exc
+        (routput / "ok.json").write_text("{}")
+        session.tick_end(outputs={}, branches=[])
+        session.finish()
+        return raised
+
+    fresh = tmp_path / "replay"
+    fresh.mkdir()
+    assert isinstance(replay(fresh), OSError)  # raised from the record although this directory could be written
+    assert (fresh / "ok.json").read_text() == "{}" and not (fresh / "blocked.json").exists()
+    bad = tmp_path / "replay_bad"
+    (bad / "ok.json").mkdir(parents=True)  # the write the record says succeeded fails here
+    try:
+        replay(bad)
+    except ReplayMismatch as exc:
+        assert "failed in the replay, not in the record" in str(exc)
+    else:
+        raise AssertionError("a write failing only in the replay passed")
