@@ -117,10 +117,10 @@ def test_a_slam_release_is_a_new_correction_version_without_an_obstacle_layer():
     core.obstacle = None
     core.refresh_targets()
     revision = core.targets.revision
-    slam["holds"].append({"event": "hold"})
+    slam["holds"].append({"event": "release_after_backoff"})  # the event's name is not what counts
     core.refresh_targets()
     assert core.targets.correction_version == 0 and core.targets.revision == revision
-    slam["holds"].append({"event": "release"})
+    core.slam_releases += 1  # what every tracker.release in the core does (Codex M-a4 round 2)
     core.refresh_targets()
     assert core.targets.correction_version == 1 and core.targets.revision == revision + 1
     assert core.commands.targets.check_submit("P-1", "D-1", revision) == "stale_targets"
@@ -139,9 +139,22 @@ def test_the_destination_and_the_delivered_pallet_follow_the_cores_estimate():
         core.ms.phase = phase
         core.refresh_targets()
     assert core.targets.pallets["P-1"].pose == Pose(9.05, 0.02, 0.01)
-    slam["holds"].append({"event": "release"})
+    core.slam_releases += 1
     slam["return_scenario"] = SimpleNamespace(destination=SimpleNamespace(x_m=9.1, y_m=0.0, yaw_rad=0.0))
     core.ms.phase = "return_home"
     core.refresh_targets()
     assert core.targets.pallets["P-1"].pose == Pose(9.1, 0.0, 0.0) == core.targets.destinations["D-1"]
     assert core.targets.pallets["P-1"].state == "delivered"
+
+
+def test_every_slam_release_in_the_core_counts_once():
+    """Codex M-a4 round 2: five release sites record five different events; each counts."""
+    import inspect
+
+    from forklift_core.mission.core import MissionCore
+
+    source = inspect.getsource(MissionCore)
+    lines = source.split("\n")
+    after = [lines[i + 1].strip() for i, l in enumerate(lines) if ".release(odom_from_base=" in l]
+    assert len(after) == 5
+    assert all(a.startswith("self.slam_releases += 1") for a in after)

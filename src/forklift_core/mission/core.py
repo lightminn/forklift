@@ -144,6 +144,7 @@ class MissionCore:
         # M-a3: the mission lifecycle and its commands (docs/plans/2026-10-16-m-a3-mission-commands.md E1) --
         # outside every container the replay compares; a run without commands only ever submits once.
         self.targets = TargetsBook()  # M-a4: the pallets and destinations a submit names (plan D7)
+        self.slam_releases = 0  # every SLAM release the core made (the targets list's correction version)
         self.commands = MissionCommands(self.targets)
         self.last_permission: tuple | None = None  # (allowed, why) of the latest permission or watch (E8)
 
@@ -1339,6 +1340,7 @@ class MissionCore:
                 # on dead reckoning (L3c v22 seed 1: 15 m held). The truck
                 # stands still: let SLAM back in first, as at a capture.
                 jump_m, jump_rad = slam["tracker"].release(odom_from_base=slam_odom_base())
+                self.slam_releases += 1  # M-a4: a frame change the targets list follows
                 slam["holds"].append(
                     {"phase": ms.phase, "time_s": t, "event": "release_before_stall_replan",
                      "jump_m": jump_m, "jump_rad": jump_rad}
@@ -2761,7 +2763,8 @@ class MissionCore:
 
     def refresh_targets(self) -> None:
         """M-a4 (plan D7): the targets list follows the mission each control tick, from what the core holds (no
-        port call). The correction version counts the SLAM releases -- the frame changes the core re-expresses its
+        port call). The correction version counts the SLAM releases (every ``tracker.release`` the core makes, whatever event
+        records it) -- the frame changes the core re-expresses its
         estimates across (while tracking, the correction moves with every scan and the map poses do not jump).
         The destination follows the core's current estimate of it (a docking match, a release's re-expression);
         the pallet takes its recognised estimate once seen, is carried from the lift to the lowering (no pose) and
@@ -2771,8 +2774,7 @@ class MissionCore:
         if mission is None or mission.pallet_id not in tb.pallets or mission.destination_id not in tb.destinations:
             return
         pid, did = mission.pallet_id, mission.destination_id
-        if slam is not None:
-            tb.set_correction_version(sum(1 for e_ in slam["holds"] if e_.get("event") == "release"))
+        tb.set_correction_version(self.slam_releases)
         scenario_ = self.options.scenario
         if slam is not None:
             scenario_ = slam.get("return_scenario", slam.get("transport_scenario", scenario_))
@@ -3287,6 +3289,7 @@ class MissionCore:
             return {"released": False}
         before = slam_rear(t)
         jump_m, jump_rad = slam["tracker"].release(odom_from_base=slam_odom_base())
+        self.slam_releases += 1  # M-a4: a frame change the targets list follows
         after = slam_rear(t)
         site = slam.get("transport_scenario", scenario).destination
         carry = DOCKING_RETRY.carry_on_release(
@@ -3700,6 +3703,7 @@ class MissionCore:
         before_ = slam_rear(now_s)
         applied_before_ = [float(v) for v in slam["tracker"].applied[0]]
         jump_m, jump_rad = slam["tracker"].release(odom_from_base=slam_odom_base())
+        self.slam_releases += 1  # M-a4: a frame change the targets list follows
         after_ = slam_rear(now_s)
         frame_change = pose_compose(tuple(float(v) for v in after_), pose_invert(tuple(float(v) for v in before_)))
         slam["holds"].append({"phase": ms.phase, "time_s": now_s, "event": hold_event, "jump_m": jump_m,
@@ -3754,6 +3758,7 @@ class MissionCore:
         if ms.phase == "transport" and (slam["docking"].get("accepted_any") or slam["docking"].get("reapproach")):
             return None
         jump_m, jump_rad = slam["tracker"].release(odom_from_base=slam_odom_base())
+        self.slam_releases += 1  # M-a4: a frame change the targets list follows
         slam["holds"].append({"phase": ms.phase, "time_s": now_s, "event": event, "jump_m": jump_m, "jump_rad": jump_rad})
         rear_now = slam_rear(world.current_time - initial_time)
         if obstacle is not None and slam["tracker"].applied is not None:
@@ -3797,6 +3802,7 @@ class MissionCore:
         slam["pending_release"] = None
         before = slam_rear(t)
         jump_m, jump_rad = slam["tracker"].release(odom_from_base=slam_odom_base())
+        self.slam_releases += 1  # M-a4: a frame change the targets list follows
         after = slam_rear(t)
         event = {
             "phase": ms.phase,
