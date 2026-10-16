@@ -105,6 +105,9 @@ class Arbiter:
         self.pending: list[dict] = []  # mission requests waiting for this cycle's lifecycle verdict (B3)
         self.provisional_auto = False
         self.outbox: list[dict] = []  # replies settled outside handle (mission requests), sent by resolve
+        self.teleop: dict | None = None  # the operator's latest accepted command with its absolute deadline (B10)
+        self.teleop_seq = -1  # the last accepted seq within this arm generation
+        self.last_teleop_reject: str | None = None
 
     # --- connections and the lease ------------------------------------------------------------------------------
     def connect(self, client_id: str, now_mono: float, *, control: bool = True) -> dict:
@@ -124,6 +127,7 @@ class Arbiter:
                             "reason": reason})
 
     def _disarm(self, now_mono: float, reason: str) -> None:
+        self.teleop = None  # a disarm drops the operator's command with it
         if self.armed:
             self.armed = False
             self.events.append({"t": now_mono, "event": "disarm", "reason": reason})
@@ -259,9 +263,76 @@ class Arbiter:
 
     # --- latest-value messages -------------------------------------------------------------------------------------
     def _latest_value(self, client_id: str, kind: str, msg: dict, now_mono: float) -> None:
-        if kind == "echo" and self.clients.get(client_id):
+        if not self.clients.get(client_id):
+            return None  # an observe-only connection: dropped without an answer (contract 10)
+        if kind == "echo":
             self._renew(client_id, msg)
+        elif kind == "teleop":
+            reason = self._teleop(client_id, msg, now_mono)
+            if reason is not None:
+                self.last_teleop_reject = reason
+        elif kind == "input_state":
+            if self.lease is not None and self.lease.client_id == client_id and \
+                    msg.get("session_epoch") == self.session_epoch and msg.get("lease_id") == self.lease.lease_id:
+                self._disarm(now_mono, f"input_state:{msg.get('state', 'lost')}")
         return None
+
+    def _teleop(self, client_id: str, msg: dict, now_mono: float) -> str | None:
+        """One teleoperation command, checked in the plan's order (B10); None when accepted. Never answered: a
+        dropped command shows as ``last_teleop_reject`` in the state."""
+        if msg.get("session_epoch") != self.session_epoch:
+            return "stale_epoch"
+        if self.lease is None or self.lease.client_id != client_id or msg.get("lease_id") != self.lease.lease_id:
+            return "stale_lease"
+        if msg.get("control_gen") != self.control_gen:
+            return "stale_control"
+        if msg.get("arm_gen") != self.arm_gen:
+            return "stale_arm"
+        seq = msg.get("seq")
+        if not isinstance(seq, int) or seq <= self.teleop_seq:
+            return "stale_seq"
+        echo = msg.get("echo") or {}
+        sent = self.ticks.sent_mono(echo.get("state_seq"), echo.get("token"))
+        if sent is None:
+            return "bad_echo"
+        deadline = sent + self.config.command_max_age_s
+        if now_mono > deadline:
+            return "expired"
+        mode = msg.get("mode")
+        if mode not in ("direct", "video"):
+            return "invalid"
+        if mode == "video":
+            acquired = self.frames.acquired_mono((msg.get("frame_echo") or {}).get("frame_id"))
+            if acquired is None or now_mono - acquired + self.config.camera_latency_bound_s > self.config.video_max_age_s:
+                self._disarm(now_mono, "stale_video")  # design 5.3: a stale picture disarms
+                return "stale_video"
+            deadline = min(deadline, acquired + self.config.video_max_age_s - self.config.camera_latency_bound_s)
+        if self.mode != "TELEOP" or not self.armed:
+            return "not_armed"
+        self.teleop_seq = seq
+        self.lease.renewed_mono = max(self.lease.renewed_mono, sent)  # its echo renews the lease too
+        self.teleop = {"deadline": deadline, "mode": mode, "deadman": bool(msg.get("deadman")),
+                       "speed_ratio": _ratio(msg.get("speed_ratio")), "curvature_ratio": _ratio(msg.get("curvature_ratio")),
+                       "lift_dir": int(msg.get("lift_dir") or 0), "expiry": "stale_video" if mode == "video" and
+                       deadline < sent + self.config.command_max_age_s else "expired"}
+        return None
+
+    def register_frame(self, frame_id: int, acquired_mono: float) -> None:
+        """A camera shot as the runner received it from the driver or renderer (vehicle time)."""
+        self.frames.register(frame_id, acquired_mono)
+
+    def _on_arm(self, client_id, request_id, msg, now_mono):
+        if self.mode != "TELEOP" or self.preempt_latch is not None:
+            return self._reply("arm", request_id, "invalid")
+        self.arm_gen += 1
+        self.armed = True
+        self.teleop, self.teleop_seq = None, -1
+        self.events.append({"t": now_mono, "event": "arm", "arm_gen": self.arm_gen})
+        return self._reply("arm", request_id, arm_gen=self.arm_gen)
+
+    def _on_disarm(self, client_id, request_id, msg, now_mono):
+        self._disarm(now_mono, "disarm")
+        return self._reply("disarm", request_id)
 
     def _renew(self, client_id: str, msg: dict) -> bool:
         """A valid reply from the lease holder renews the lease from the time its tick was sent."""
@@ -288,6 +359,12 @@ class Arbiter:
         """First in the cycle: this cycle's feedback, the stop detector (once a cycle), the expiries, the latch and
         the stop failure -- so every transition this cycle judges uses this cycle's stop confirmation."""
         self._expire(now_mono)
+        if self.teleop is not None and now_mono > self.teleop["deadline"]:
+            # B10: the absolute deadline, checked every cycle -- a stop with no packet arriving at all.
+            reason = self.teleop["expiry"]
+            self._disarm(now_mono, reason)
+            self.preempt_latch = reason
+            self._boundary(now_mono, reason)
         fresh = (feedback is not None and feedback.rear_axle_speed_mps is not None
                  and now_mono - feedback.stamp_mono <= self.config.feedback_max_age_s)
         self.feedback_ok = fresh
@@ -485,3 +562,12 @@ class Arbiter:
             return self._reply("mission_cancel", request_id, "stopped_locked" if self.mode == "STOPPED" else "invalid")
         return self._mission_request(client_id, request_id, "mission_cancel",
                                      Cancel(msg.get("mission_id"), request_id=request_id))
+
+
+def _ratio(value) -> float:
+    """A -1..1 ratio; anything else is 0 (never a larger command)."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(-1.0, min(1.0, v)) if v == v else 0.0
