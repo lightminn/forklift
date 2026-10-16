@@ -666,6 +666,9 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--live-web-root", type=Path, default=None, help="M-c: console/web to serve")
     parser.add_argument("--live-test-step-delay-ms", type=float, default=0.0,
                         help="M-c tests only: extra wall time per physics step (the slow-pacing test)")
+    parser.add_argument("--live-test-stop-in-capture", action="store_true",
+                        help="M-c tests only: a STOP arrives at a physics step inside the first capture (the path a "
+                        "console STOP takes, at a moment a client cannot aim for)")
     parser.add_argument("--live-test-camera-freeze", default=None,
                         help="M-c tests only: FROM:TO sim seconds with no new camera frames (the video-stall test)")
     parser.add_argument(
@@ -5203,7 +5206,8 @@ def drive(S, isaac) -> None:
                 output=Path(args.output), port_file=args.live_port_file, dt=1 / 120, factor=args.live_factor,
                 config=LiveArbiterConfig(tick_s=1 / 120, lease_timeout_s=args.live_lease_timeout_s),
                 host=args.live_host, web_root=args.live_web_root,
-                test_step_delay_s=args.live_test_step_delay_ms / 1000.0, camera_freeze=freeze_)
+                test_step_delay_s=args.live_test_step_delay_ms / 1000.0, camera_freeze=freeze_,
+                test_stop_in_capture=args.live_test_stop_in_capture)
             live.start()
             core.hooks.live_abort = lambda: live.stopped_in_tick  # the core stops right after a raw capture
 
@@ -5639,7 +5643,13 @@ def drive(S, isaac) -> None:
                 if tracking.status == "arrived":
                     if args.use_perception and ms.phase == "observe":
                         # M-a1 slice 4b-i: the capture and the detection are the core's (the capture itself a port).
-                        captured_ = core.capture_and_detect(t, rear, step)
+                        if live is not None:
+                            live.capturing = True
+                        try:
+                            captured_ = core.capture_and_detect(t, rear, step)
+                        finally:
+                            if live is not None:
+                                live.capturing = False
                         # M-c (plan C2): a STOP or an expiry at a physics step inside the capture ends this tick's
                         # mission work right after the raw capture (the core returns ``aborted``) -- no SLAM release,
                         # no observation handling, no transitions; the next tick pauses the mission.

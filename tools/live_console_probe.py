@@ -199,8 +199,10 @@ class Probe:
             if self.state is not None and pred(self.state):
                 self.event("reached", label=label)
                 return True
-            await self.echo()
-            await asyncio.sleep(1 / hz)
+            if self.closed_code is not None:
+                self.event("closed_while_waiting", label=label, code=self.closed_code)
+                return False
+            await asyncio.sleep(1 / hz)  # the background echo answers the ticks
         self.event("timeout", label=label)
         return False
 
@@ -229,10 +231,12 @@ async def main_scenario(p: Probe, args):
     await p.until(lambda s: s.get("mode") == "AUTO", 5, label="auto")
     # STOP while the mission stands at its observation point (a capture runs there): it must have driven there first.
     await p.until(lambda s: abs(s.get("rear_axle_speed_mps") or 0.0) > 0.05, 60, label="moving")
-    await p.until(lambda s: (s.get("mission") or {}).get("phase") == "observe" and p.standing(s)
-                  and s.get("mode") == "AUTO", args.observe_timeout_s, label="observe_standing")
-    await asyncio.sleep(0.2)
-    await p.request("stop", source="key")
+    await p.until(lambda s: ((s.get("mission") or {}).get("phase") == "observe" and p.standing(s)
+                             and s.get("mode") == "AUTO") or s.get("mode") == "STOPPED",
+                  args.observe_timeout_s, label="observe_standing")
+    if p.state.get("mode") != "STOPPED":  # else the runner's in-capture STOP test already stopped it
+        await asyncio.sleep(0.2)
+        await p.request("stop", source="key")
     await p.until(lambda s: s.get("mode") == "STOPPED", 3, label="stopped")
     await p.until(p.standing, 10, label="standing_after_stop")
     await asyncio.sleep(0.5)
@@ -293,7 +297,6 @@ async def main_scenario(p: Probe, args):
                   or s.get("mode") == "STOPPED", args.mission_timeout_s, label="mission_end")
     end = time.monotonic() + 60
     while p.closed_code is None and time.monotonic() < end:
-        await p.echo()
         await asyncio.sleep(0.05)
     p.report["close_code"] = p.closed_code
 

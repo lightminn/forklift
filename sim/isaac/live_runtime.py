@@ -46,7 +46,8 @@ class LiveRuntime:
                  camera_hz: float = 10.0, host: str = "127.0.0.1", web_root: Path | None = None,
                  config: ArbiterConfig | None = None, clock: Callable[[], float] = time.monotonic,
                  sleep: Callable[[float], None] = time.sleep, session_epoch: int | None = None,
-                 test_step_delay_s: float = 0.0, camera_freeze: tuple | None = None):
+                 test_step_delay_s: float = 0.0, camera_freeze: tuple | None = None,
+                 test_stop_in_capture: bool = False):
         self.core, self.hooks, self.clock, self.sleep = core, hooks, clock, sleep
         self.dt = dt
         self.session_epoch = session_epoch if session_epoch is not None else secrets.randbits(48)  # a job, an epoch
@@ -80,6 +81,8 @@ class LiveRuntime:
         self._targets_revision = None
         self.test_step_delay_s = test_step_delay_s
         self.camera_freeze = camera_freeze  # (from, to) sim seconds: no new frames (the video-stall test)
+        self.capturing = False  # the runner marks a capture in progress
+        self._test_stop_in_capture = test_stop_in_capture  # tests only: one STOP at the first capture's steps
         self.camera_latency: list[float] = []
         self._events_logged = 0
         self._next_status = 0.0
@@ -173,6 +176,10 @@ class LiveRuntime:
         now = self.clock()
         self.pacer.started(now)
         self._start_mono = now
+        if self._test_stop_in_capture and self.capturing:
+            self._test_stop_in_capture = False
+            self.log({"test": "stop_in_capture", "step": self.step, "sim_t": sim_t})
+            self.arbiter.stop(now, "stop:test_in_capture")  # what a console STOP does at this step's gate
         zero = self.link.gate(now)
         if zero:
             self.stopped_in_tick = True
