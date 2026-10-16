@@ -20,6 +20,14 @@ def kept(test, statement):
 PROPERTIES = [
     kept("test_all_runner_planning_calls_use_the_recorded_config",
          "the runner builds the planner config once, records it, and every planning call (runner and core) uses it"),
+    {"id": "B2:mission-plan-config", "class": "N",
+     "checks": [PC + "test_all_runner_planning_calls_use_the_recorded_config::*"],
+     "statement": "the core's mission plan after a detection uses the run's planner config object (Codex M-a2 review P2)",
+     "tests": ["tests/unit/mission/test_core_observe_succeeded.py::test_the_mission_is_planned_with_the_recorded_planner_config_itself"],
+     "mutation": {"file": "src/forklift_core/mission/core.py",
+                  "find": "        plans = plan_transport(\n            grid_world(scenario),\n            planner_config,\n",
+                  "replace": "        plans = plan_transport(\n            grid_world(scenario),\n"
+                             "            replace(planner_config, clearance_m=0.0),\n"}},
     kept("test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules",
          "followers built per stage take 0.03/0.05 (observe), 0.008/0.03 (return) and 0.008/0.02 otherwise"),
     kept("test_the_re_observation_tracker_uses_the_repositioning_tolerances",

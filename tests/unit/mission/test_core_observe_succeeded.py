@@ -248,3 +248,15 @@ def test_without_speed_caps_in_the_settings_the_followers_have_none():
     w.succeed()
     c = w.core.trackers["transport"].config
     assert c.max_lateral_acceleration_mps2 is None and c.max_reverse_speed_mps is None
+
+
+def test_the_mission_is_planned_with_the_recorded_planner_config_itself():
+    """M-a2 (Codex review P2): the mission plan after a detection gets the run's planner config object -- the one
+    the run records -- not a copy with other settings."""
+    w = World()
+    received = []
+    plans = w.hooks.plan_transport
+    w.hooks.plan_transport = lambda *a, **k: received.append(a) or plans(*a, **k)
+    w.succeed()
+    (args,) = received
+    assert args[1] is w.core.options.planner_config

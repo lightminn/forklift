@@ -178,3 +178,13 @@ def test_a_loose_observe_arrival_needs_the_heading_within_its_tolerance_too():
     w = World("observe", remaining=0.0)
     w.tick(Tracking(status="tracking", speed_mps=0.0, position_error_m=0.05, yaw_error_rad=-0.11), t=10.0)
     assert "observe_loose_arrival" not in w.state
+
+
+def test_the_loose_arrival_is_only_for_an_observation_leg():
+    """M-a2 (Codex review P2): standing off a path end within the observe tolerance arrives only on an observe
+    leg -- an insertion standing 60 mm off its end keeps tracking."""
+    w = World("insert", remaining=0.0)
+    stopped = Tracking(status="tracking", speed_mps=0.0, position_error_m=0.06, yaw_error_rad=0.05)
+    w.tick(stopped, t=10.0)
+    out = w.tick(stopped, t=11.5)
+    assert out.tracking.status == "tracking" and "observe_loose_arrival" not in w.state

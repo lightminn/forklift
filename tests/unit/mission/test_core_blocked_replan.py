@@ -376,3 +376,41 @@ def test_same_path_waits_between_new_paths_never_reach_the_replan_limits():
             raise AssertionError(f"replan {k} refused: {exc}") from exc
     replans = w.obstacle["replans"]
     assert [bool(r.get("same_path")) for r in replans] == [False, False, True, True, True, True, True, False]
+
+
+def test_failed_and_escape_replans_never_count_towards_the_replan_limits():
+    """M-a2 (Codex review P2): only new paths count -- a failed replan and an escape are neither 30 s replans
+    nor leg replans."""
+    w = World("observe", plans=[plan()])
+    w.obstacle["replans"] = ([{"phase": "observe", "time_s": 49.0, "failed": True}] * 6
+                             + [{"phase": "observe", "time_s": 49.5, "escape": {"e": 1}}] * 6)
+    try:
+        w.replan(t=50.0)
+    except RuntimeError as exc:
+        raise AssertionError(f"a failed or escape replan was counted: {exc}") from exc
+    assert w.paths["observe"].status == "success" and w.names()[-1] == "realign_install"
+
+
+def test_the_same_path_is_judged_before_the_replan_limits():
+    """M-a2 (Codex review P2): three new paths inside 30 s, then the same path again -- a wait, not a fourth
+    replan that would end the run."""
+    w = World("observe", plans=[plan()] * 4)
+    answers = iter([False, False, False, True])
+    w.hooks.same_path = lambda new, cur, rem: next(answers)
+    for k in range(4):
+        try:
+            w.replan(t=50.0 + k)
+        except RuntimeError as exc:
+            raise AssertionError(f"replan {k} refused: {exc}") from exc
+    assert w.obstacle["replans"][-1]["same_path"] is True
+
+
+@pytest.mark.parametrize("used, tried", [({"transport": 2}, False), ({"transport": 1}, True),
+                                         ({"return_home": 2}, True)])
+def test_the_escape_budget_is_two_per_leg(used, tried):
+    """M-a2 (Codex review P2): a leg that has used its two escapes replans at zero clearance instead; another
+    leg's escapes do not count."""
+    w = World("transport", plans=[plan("invalid_start"), plan()], escape=None)
+    w.obstacle["escapes"] = dict(used)
+    w.replan()
+    assert ("find_escape" in w.names()) is tried

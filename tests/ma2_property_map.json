@@ -1250,6 +1250,53 @@
    "reason": "walks the runner and the core together: the runner's own construction sites and the cross-file wiring stay guarded by this test as written; the core's sites are behaviour-tested (the N properties beside it)"
   },
   {
+   "id": "B2:mission-plan-config",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::16",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::17",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::18",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::19",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::20",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::21",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::22",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::23",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::24"
+   ],
+   "statement": "the core's mission plan after a detection uses the run's planner config object (Codex M-a2 review P2)",
+   "tests": [
+    "tests/unit/mission/test_core_observe_succeeded.py::test_the_mission_is_planned_with_the_recorded_planner_config_itself"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "        plans = plan_transport(\n            grid_world(scenario),\n            planner_config,\n",
+    "replace": "        plans = plan_transport(\n            grid_world(scenario),\n            replace(planner_config, clearance_m=0.0),\n"
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_observe_succeeded.py::test_the_mission_is_planned_with_the_recorded_planner_config_itself"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
    "id": "B2:R:test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules",
    "class": "R",
    "checks": [
@@ -1969,6 +2016,34 @@
    }
   },
   {
+   "id": "B3:failed-escape-not-counted",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_waits_do_not_count_as_retries::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_waits_do_not_count_as_retries::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_waits_do_not_count_as_retries::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_waits_do_not_count_as_retries::4"
+   ],
+   "statement": "a failed replan and an escape never count towards the replan limits (Codex M-a2 review P2)",
+   "tests": [
+    "tests/unit/mission/test_core_blocked_replan.py::test_failed_and_escape_replans_never_count_towards_the_replan_limits"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "and not r.get(\"failed\") and not r.get(\"escape\")",
+    "replace": "",
+    "count": 2
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_blocked_replan.py::test_failed_and_escape_replans_never_count_towards_the_replan_limits"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
    "id": "B3:same-path-before-limit",
    "class": "N",
    "checks": [
@@ -1977,19 +2052,19 @@
    ],
    "statement": "the replan limits are checked only after the same-path test (a same-path wait never ends the run)",
    "tests": [
-    "tests/unit/mission/test_core_blocked_replan.py::test_same_path_waits_between_new_paths_never_reach_the_replan_limits"
+    "tests/unit/mission/test_core_blocked_replan.py::test_the_same_path_is_judged_before_the_replan_limits"
    ],
    "mutation": {
     "file": "src/forklift_core/mission/core.py",
-    "find": "and not r.get(\"same_path\")",
-    "replace": "and True",
-    "count": 2
+    "find": "        elif same_path(replanned, paths[ms.phase], trackers[ms.phase].remaining_to_goal_m()):",
+    "replace": "        elif len([r for r in obstacle[\"replans\"] if r[\"phase\"] == ms.phase and t - r[\"time_s\"] < 30.0 and not r.get(\"same_path\") and not r.get(\"failed\") and not r.get(\"escape\")]) <= 3 and same_path(replanned, paths[ms.phase], trackers[ms.phase].remaining_to_goal_m()):",
+    "count": 1
    },
    "evidence": {
     "baseline": "passed",
     "mutated": "failed_on_check",
     "failing_tests": [
-     "tests/unit/mission/test_core_blocked_replan.py::test_same_path_waits_between_new_paths_never_reach_the_replan_limits"
+     "tests/unit/mission/test_core_blocked_replan.py::test_the_same_path_is_judged_before_the_replan_limits"
     ],
     "check_line": "E   AssertionError"
    }
@@ -2074,6 +2149,33 @@
      "tests/unit/mission/test_core_command.py::test_an_observe_leg_standing_off_its_end_within_tolerance_arrives_after_a_second"
     ],
     "check_line": "tests/unit/mission/test_core_command.py:141"
+   }
+  },
+  {
+   "id": "B3:loose-arrival-observe-only",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_loose_arrival_only_at_observation_waypoints::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_loose_arrival_only_at_observation_waypoints::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_loose_arrival_only_at_observation_waypoints::3"
+   ],
+   "statement": "only an observation leg arrives loosely (Codex M-a2 review P2)",
+   "tests": [
+    "tests/unit/mission/test_core_command.py::test_the_loose_arrival_is_only_for_an_observation_leg"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "ms.phase == \"observe\" and tracking.status == \"tracking\"",
+    "replace": "tracking.status == \"tracking\"",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_command.py::test_the_loose_arrival_is_only_for_an_observation_leg"
+    ],
+    "check_line": "E   AssertionError"
    }
   },
   {
@@ -2765,6 +2867,44 @@
     "mutated": "failed_on_check",
     "failing_tests": [
      "tests/unit/mission/test_core_blocked_replan.py::test_an_invalid_start_tries_an_escape_straight_first_and_drives_it_on_the_backoff_machinery"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B4:escape-budget-bound",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::14"
+   ],
+   "statement": "a leg's escapes stop at its budget of two, per leg (Codex M-a2 review P2)",
+   "tests": [
+    "tests/unit/mission/test_core_blocked_replan.py::test_the_escape_budget_is_two_per_leg"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "obstacle.setdefault(\"escapes\", {}).get(ms.phase, 0) < ESCAPE_PER_LEG",
+    "replace": "obstacle.setdefault(\"escapes\", {}).get(ms.phase, 0) < 999",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_blocked_replan.py::test_the_escape_budget_is_two_per_leg[used0-False]"
     ],
     "check_line": "E   AssertionError"
    }
