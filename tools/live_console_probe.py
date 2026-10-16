@@ -283,7 +283,7 @@ async def main_scenario(p: Probe, args):
         # Silence: echo only, no command -- the command must expire on the vehicle's clock.
         silent_at = time.monotonic()
         p.report["silence_start_mono"] = silent_at
-        await p.until(lambda s: not s.get("armed"), 2.0, label="expired_disarmed")
+        await p.until(lambda s: not s.get("armed"), 15.0, label="expired_disarmed")  # the age limit is 0.3/f in Isaac
         await p.request("mode_request", to="PAUSED")
     # Reconnect within the grace: a new lease id; the old one no longer counts.
     old_lease = p.lease_id
