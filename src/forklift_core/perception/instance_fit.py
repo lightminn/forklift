@@ -674,9 +674,10 @@ def read_parametric_face(face: FacePlane, pts_u, pts_h, rays, support_z: float, 
         # Continuation and unseen rays are both evidence against an end: split between the two they
         # must not outweigh the open space either (Codex review A round 5: behind 24, face 18,
         # missing 18 passed each check alone), and a tie is not an end (round 6: 30 against 30).
-        # No wider margin is possible from a single frame: under the provisional noise true ends
-        # reach 1.15-2.4 against per behind ray at the tail (dev 2026-10-16). Cut masks belong to the
-        # split hypothesis of design 7.4-3 (stage 2B-2, with the proposer that produces them).
+        # With these ray counts a wider margin costs true ends: under the provisional noise they
+        # reach 1.15-2.4 against per behind ray at the tail (dev 2026-10-16) -- a trade-off of this
+        # statistic, not a limit of every single-frame method. Cut masks belong to the split
+        # hypothesis of design 7.4-3 (stage 2B-2, with the proposer that produces them).
         against = cont.sum() + missing
         ends.append(bool(((beyond & (rc == BEHIND)).sum() >= params.edge_min_hits)
                          and ((beyond & (rc == FRONT)).sum() < params.edge_min_hits)
