@@ -2650,6 +2650,12 @@ class MissionCore:
             cmds.refuse_resume(t, reason)
             return rear
 
+        def accept_hold_state():
+            # A release the resume's own recovery made (a docking retry, a re-approach or backoff replan) is the
+            # expected state from here on: the hold checks take its mode and episode as their reference.
+            cmds.pause_holding = slam is not None and slam["tracker"].mode == "holding"
+            cmds.pause_hold_count = self.hold_count()
+
         check["step"] = "state_verified"
         holding_now = slam is not None and slam["tracker"].mode == "holding"
         if cmds.pause_holding and not cmds.pause_release_pending:
@@ -2660,8 +2666,9 @@ class MissionCore:
         if ms.phase == "observe" and holding_now and self.realign_active():
             return refuse("no_resume:realign_held")  # R3x: no recovery runs held in a realignment
         docking_ = slam["docking"] if slam is not None else {}
+        recovering_ = obstacle is not None and obstacle.get("backoff", {}).get("phase") == ms.phase
         straight_row = (ms.phase == "transport" and holding_now and not docking_.get("reapproach")
-                        and docking_.get("status") in ("armed", "done", "fallback"))
+                        and docking_.get("status") in ("armed", "done", "fallback") and not recovering_)
         if straight_row and cmds.stop_pose is not None:
             # R11: the docking straight was dry-run and swept from where the match ran; moved since the stop,
             # it is not that straight -- a D7c docking retry from here (its budget first), or no resume.
@@ -2675,10 +2682,7 @@ class MissionCore:
                 self.start_docking_retry(t, "resume", "docking_moved_while_paused")
                 rear = self.hooks.slam_rear(t)  # the retry released the correction
                 cmds.stop_pose = tuple(float(v) for v in rear)  # the re-approach starts here
-                # The release the resume itself made is the expected state from here on (the re-approach is a
-                # free travel leg, R12): the hold checks take the new mode and episode as their reference.
-                cmds.pause_holding = slam["tracker"].mode == "holding"
-                cmds.pause_hold_count = self.hold_count()
+                accept_hold_state()
                 check["reason"] = "docking_retry"
                 return rear
         retry_stand = near is not None and near.get("retry_stand") and ms.phase == "observe"
@@ -2709,6 +2713,7 @@ class MissionCore:
                 before_path = self.paths.get(ms.phase)
                 out = self.blocked_replan(t, rear, 0.0, 0.0)
                 rear = out.rear
+                accept_hold_state()  # a release the recovery made (re-approach, backoff) is expected from here
                 installed = self.paths.get(ms.phase)
                 if installed is before_path:
                     cmds.resume_retry_s = t + 1.0

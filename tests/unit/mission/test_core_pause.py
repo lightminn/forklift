@@ -421,3 +421,34 @@ def test_after_its_own_docking_retry_the_resume_takes_the_release_as_expected():
     core.paused_tick(11.1, np.array([0.05, 0.0, 0.0]), 0.0, False)
     assert core.commands.resume_check.get("reason") != "state_verified:hold_state_mismatch"
     assert core.commands.status in ("resuming", "running")
+
+
+
+def test_a_release_the_resumes_replan_makes_is_not_a_lost_hold():
+    """Codex M-a3c review: a re-approach or backoff replan inside the resume releases the hold on purpose."""
+    core, _, _ = make("transport")
+    slam = held(core, docking={"reapproach": True})
+    pause(core, 10.0)
+    core.paused_tick(10.0, REAR, 0.0, False)
+    resume(core, 11.0)
+
+    def replan(t, rear, kappa, requested):
+        slam["tracker"].mode = "tracking"
+        slam["holds"].append({"event": "release"})
+        core.paths["transport"] = SimpleNamespace(status="success")
+        core.trackers["transport"] = straight(0.0, 4.0)
+        core.trackers["transport"]._poses[:, 1] = 1.0
+        return SimpleNamespace(rear=rear, requested_speed=0.0)
+
+    core.blocked_replan = replan
+    core.paused_tick(11.0, np.array([0.0, 1.0, 0.0]), 0.0, False)  # off its path: replanned
+    core.paused_tick(11.1, np.array([0.0, 1.0, 0.0]), 0.0, False)
+    assert core.commands.status == "running"
+
+
+def test_a_backoff_on_the_transport_is_not_the_docking_straight():
+    """Codex M-a3c review: an active backoff with the docking still armed is a free leg (R10), not R11."""
+    core, asked = docking_core(d7=False)
+    core.obstacle["backoff"] = {"phase": "transport"}
+    core.paused_tick(11.0, REAR + np.array([0.05, 0.0, 0.0]), 0.0, False)
+    assert core.commands.resume_check.get("reason") != "no_resume:docking_moved"
