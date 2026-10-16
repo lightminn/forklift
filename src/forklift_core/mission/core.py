@@ -64,6 +64,7 @@ import numpy as np
 from forklift_core.control import RearAxlePathTracker, TrackerConfig, ackermann_command
 from forklift_core.control import cusp_stall as CUSP_STALL
 from forklift_core.mission.commands import MissionCommands
+from forklift_core.control.speed_chain import creep, slew_cap_stop
 from forklift_core.mission.targets import Pose as TargetPose
 from forklift_core.mission.targets import TargetsBook
 from forklift_core.mission.state import MissionState
@@ -2900,8 +2901,7 @@ class MissionCore:
         actual_steering = hooks.steering_position()
         # Creep while steering catches up; log the measured physical response.
         steering_error = float(np.max(np.abs(target_steering - actual_steering)))
-        creeping = steering_error > 0.05
-        wheel_speed = requested_speed * 0.25 if creeping else requested_speed
+        wheel_speed = creep(requested_speed, steering_error)
         if obstacle is not None and options.obstacle_act:
             # A step wheel target locked an odometry wheel (L3c v35/v36 seed 4:
             # the held pose lost 1.85 and 2.80 cm). The final wheel speed is
@@ -2912,18 +2912,12 @@ class MissionCore:
             # (Codex checkpoint 6 P1). The steering creep is slewed too: as a
             # step from 0.6 m/s it skidded a rear wheel and the held pose
             # fell 3 cm behind (L3c v43 seed 1, pocket_obstacle).
-            previous = state.get("command_speed", 0.0)
-            target_speed = wheel_speed
-            if previous * target_speed < 0:
-                target_speed = 0.0
-            rate = (obstacle["layer"].permission.config.stopping.decel_mps2
-                    if abs(target_speed) < abs(previous) else COMMAND_ACCEL_MPS2) * dt
-            wheel_speed = previous + float(np.clip(target_speed - previous, -rate, rate))
             cap = obstacle.get("permission_cap")
-            if cap is not None and cap[0] == t and abs(wheel_speed) > cap[1]:
-                wheel_speed = math.copysign(cap[1], wheel_speed)
-            if estop_holding or safety_hold:
-                wheel_speed = 0.0
+            wheel_speed = slew_cap_stop(state.get("command_speed", 0.0), wheel_speed,
+                                        decel_mps2=obstacle["layer"].permission.config.stopping.decel_mps2,
+                                        accel_mps2=COMMAND_ACCEL_MPS2, dt=dt,
+                                        cap_mps=cap[1] if cap is not None and cap[0] == t else None,
+                                        stop=estop_holding or safety_hold)
             state["command_speed"] = wheel_speed
         drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)
         rate = settings["steering_command_rate_rad_s"] * dt
