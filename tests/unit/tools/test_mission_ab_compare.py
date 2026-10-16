@@ -76,3 +76,14 @@ def test_arrays_compare_bit_for_bit_and_missing_files_count(tmp_path):
     (b / "paths.json").unlink()
     rep = M.compare(a, b)
     assert "paths.json: only in A" in rep["differences"]
+
+
+def test_a_format_2_recording_runs_own_keys_are_skipped(tmp_path):
+    a, b = tmp_path / "a" / "run", tmp_path / "b" / "run"
+    for run, extra in ((a, {"setup_snapshot": {"files": 3}, "boundary_record_error": None}), (b, {})):
+        run.mkdir(parents=True)
+        (run / "result.json").write_text(json.dumps({
+            "success": True, "arguments": {"record_boundary": bool(extra), "record_boundary_format": 2 if extra else 1},
+            **extra}))
+    out = M.compare(a, b)
+    assert out["differences"] == []

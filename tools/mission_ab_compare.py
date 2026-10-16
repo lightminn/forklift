@@ -13,8 +13,9 @@ every recorded file matches after normalisation:
   bookkeeping of a capture, and the renderer frame numbers of pocket frame reads) are reported under
   ``nondeterministic``, not as differences;
 - source provenance (``source_sha256``, ``script_sha256``) is reported under ``provenance``;
-- the boundary record directory (``boundary/``) and recording-only arguments (``record_boundary``, in
-  ``arguments`` and at the top of ``meta.json``) are skipped;
+- the boundary record directory (``boundary/``), recording-only arguments (``record_boundary``,
+  ``record_boundary_format``, in ``arguments`` and at the top of ``meta.json``) and the recording-only result keys
+  (``setup_snapshot``, ``boundary_record_error``) are skipped;
 - JSON is compared by value (key order ignored, floats exactly); arrays (``.npz`` / ``.npy``) bit for
   bit (dtype, shape and bytes); other files byte for byte; scene exports and images are skipped.
 
@@ -33,7 +34,10 @@ import numpy as np
 
 SKIP_SUFFIXES = {".usd", ".usda", ".usdc", ".png", ".jpg", ".mp4", ".log", ".txt"}
 SKIP_DIRS = ("boundary/",)
-RECORDING_ONLY_ARGUMENTS = {"record_boundary"}  # arguments that only add records  # the M-a0 boundary record is a record of the run, not its output
+RECORDING_ONLY_ARGUMENTS = {"record_boundary", "record_boundary_format"}  # arguments that only add records  # the M-a0 boundary record is a record of the run, not its output
+# Result keys only a boundary-recording run writes (M-a1 replay plan R3: the setup snapshot's audit, a recording
+# failure note) -- skipped like the record itself.
+RECORDING_ONLY_RESULT_KEYS = {"setup_snapshot", "boundary_record_error"}
 WALL_KEY = re.compile(r"(_wall_s$|^wall_time_s$|^elapsed_s$|^wall_s_)")
 PROVENANCE_KEYS = {"source_sha256", "script_sha256"}
 NONDETERMINISTIC = (
@@ -61,6 +65,8 @@ def _walk(a, b, path: str, run_a: Path, run_b: Path, out: dict, name: str) -> No
         for key in sorted(set(a) | set(b), key=str):
             sub = f"{path}.{key}" if path else str(key)
             if WALL_KEY.search(str(key)) or (path in ("", "arguments") and key in RECORDING_ONLY_ARGUMENTS):
+                continue
+            if path == "" and name == "result.json" and key in RECORDING_ONLY_RESULT_KEYS:
                 continue
             if key in PROVENANCE_KEYS:
                 if a.get(key) != b.get(key):
