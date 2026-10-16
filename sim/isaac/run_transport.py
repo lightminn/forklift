@@ -5241,7 +5241,7 @@ def drive(S, isaac) -> None:
                 return live_perm.limit(live_state["snapshot"], key_, now_, layer_.last_scan_s,
                                        pose=tuple(float(v) for v in live_state["rear"]), curvatures=curvatures,
                                        direction=direction, check_speed_mps=check, footprint=fp_,
-                                       own_footprint=own_, driven_m=live_state.get("driven_m", 0.0))
+                                       own_footprint=own_)
 
         stepper["fn"] = step_world if live is None else live_step_world
         if slam is not None:
@@ -5985,7 +5985,16 @@ def drive(S, isaac) -> None:
                 # a preempt: zero wheels, steering held. The applied command is written back for the core.
                 live_state["rear"] = tuple(float(v) for v in rear)
                 speed_now_ = live.feedback.rear_axle_speed_mps if live.feedback is not None else 0.0
-                live_state["driven_m"] = abs(float(speed_now_)) * dt  # this tick's travel, for the installed arcs
+                # The sim distance driven since the last tick, for the installed arcs: the odometry's own motion
+                # (Codex M-c round 10 P2: the end speed times dt missed a braking interval's travel).
+                odom_now_ = tuple(float(v) for v in slam["odom_rear"][:2]) if slam is not None else None
+                if live_perm is not None:
+                    prev_ = live_state.get("odom_prev")
+                    if odom_now_ is not None and prev_ is not None:
+                        live_perm.advance(math.hypot(odom_now_[0] - prev_[0], odom_now_[1] - prev_[1]))
+                    elif odom_now_ is None:
+                        live_perm.advance(abs(float(speed_now_)) * dt)
+                live_state["odom_prev"] = odom_now_
                 target_steer_ = np.asarray(live_ackermann(1.0, live.arbiter.drive.kappa, args.drive_geometry).steering_rad)
                 live_safety_ = core.safety_state(t)
                 out_ = live.tick_end(

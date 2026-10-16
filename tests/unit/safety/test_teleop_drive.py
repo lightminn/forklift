@@ -8,7 +8,7 @@ import pytest
 from forklift_core.control.drive_permission import DrivePermission, PermissionConfig, StoppingModel
 from forklift_core.perception.obstacle_grid import FREE, OCCUPIED, GridSnapshot
 from forklift_core.planning.geometry import Footprint
-from forklift_core.safety.teleop_drive import TeleopDrive, TeleopLimits, arc_permit, bundle
+from forklift_core.safety.teleop_drive import TeleopDrive, TeleopLimits, arc_permit, bundle  # noqa: F401
 
 FOOT = Footprint(1.29, 0.17, 0.36)
 BODY = Footprint(0.75, 0.17, 0.36)
@@ -145,11 +145,12 @@ def test_the_bundle_permit_matches_the_full_check_at_install_and_follows_the_dis
     bp = BundlePermit(CONFIG)
     kw = dict(pose=(0.0, 0.0, 0.0), curvatures=bundle(0.0, 0.0), direction=1, check_speed_mps=0.3, footprint=FOOT,
               own_footprint=BODY)
-    first = bp.limit(snap, 1, 0.1, {"low": 0.1}, driven_m=0.0, **kw)
+    first = bp.limit(snap, 1, 0.1, {"low": 0.1}, **kw)
     assert first == pytest.approx(full(bundle(0.0, 0.0), 1, 0.3))
-    later = bp.limit(snap, 1, 0.1, {"low": 0.1}, driven_m=0.05, **kw)  # same pose given, but 0.05 m driven
+    bp.advance(0.05)
+    later = bp.limit(snap, 1, 0.1, {"low": 0.1}, **kw)  # same pose given, but 0.05 m driven
     assert later[0] < first[0]  # the path left shrank
-    other = bp.limit(snap, 2, 0.1, {"low": 0.1}, driven_m=0.0, **kw)  # a new grid: installed again
+    other = bp.limit(snap, 2, 0.1, {"low": 0.1}, **kw)  # a new grid: installed again
     assert other == pytest.approx(first)
 
 
@@ -162,8 +163,55 @@ def test_the_bundle_permit_is_cheap_between_refreshes():
     bp = BundlePermit(CONFIG)
     kw = dict(pose=(0.0, 0.0, 0.0), curvatures=bundle(0.0, 0.36), direction=1, check_speed_mps=0.3,
               footprint=FOOT, own_footprint=BODY)
-    bp.limit(snap, 1, 0.1, {"low": 0.1}, driven_m=0.0, **kw)
+    bp.limit(snap, 1, 0.1, {"low": 0.1}, **kw)
     start = time.perf_counter()
     for _ in range(10):
-        bp.limit(snap, 1, 0.1, {"low": 0.1}, driven_m=0.001, **kw)
+        bp.advance(0.001)
+        bp.limit(snap, 1, 0.1, {"low": 0.1}, **kw)
     assert (time.perf_counter() - start) / 10 < 0.02
+
+
+
+def test_the_ends_are_asked_at_the_current_curvature_not_the_cached_one():
+    """Codex M-c round 10 P1: +0.024 and -0.024 round to one key; the stop arc must use the current one."""
+    from forklift_core.safety.teleop_drive import BundlePermit
+
+    snap = snapshot()
+    occupy(snap, 1.45, 0.45)
+    bp = BundlePermit(CONFIG)
+    kw = dict(pose=(0.0, 0.0, 0.0), direction=1, check_speed_mps=0.4, footprint=FOOT, own_footprint=BODY)
+    bp.limit(snap, 1, 0.1, {"low": 0.1}, curvatures=bundle(-0.024, -0.024), **kw)
+    cached = bp.limit(snap, 1, 0.1, {"low": 0.1}, curvatures=bundle(0.024, 0.024), **kw)
+    perm = DrivePermission(CONFIG)
+    direct = arc_permit(perm, snap, 0.1, {"low": 0.1}, curvatures=bundle(0.024, 0.024), **kw)
+    assert cached[0] <= direct[0] + 1e-9
+
+
+def test_stale_evidence_under_a_middle_arc_stops():
+    """Codex M-c round 10 P1: the ends' evidence is fresh, a middle arc's is not."""
+    from forklift_core.safety.teleop_drive import BundlePermit
+
+    snap = snapshot()
+    bp = BundlePermit(CONFIG)
+    kw = dict(pose=(0.0, 0.0, 0.0), direction=1, check_speed_mps=0.3, footprint=FOOT, own_footprint=BODY)
+    curv = bundle(0.0, 0.36)
+    bp.limit(snap, 1, 0.1, {"low": 0.1}, curvatures=curv, **kw)
+    _, perm = bp._cache[1]["perms"][len(curv) // 2]
+    perm.path_check.oldest_free_s = -1.0  # only this middle arc relies on old FREE evidence
+    assert bp.limit(snap, 1, 0.1, {"low": 0.1}, curvatures=curv, **kw) == (0.0, "evidence_stale")
+
+
+def test_a_reversal_keeps_a_cache_per_direction():
+    """Codex M-c round 10 P2: alternating directions must not reinstall every cycle."""
+    from forklift_core.safety.teleop_drive import BundlePermit
+
+    snap = snapshot()
+    bp = BundlePermit(CONFIG)
+    kw = dict(pose=(0.0, 0.0, 0.0), curvatures=bundle(0.0, 0.0), check_speed_mps=0.3, footprint=FOOT,
+              own_footprint=BODY)
+    for d in (1, -1):
+        bp.limit(snap, 1, 0.1, {"low": 0.1}, direction=d, **kw)
+    installed = {d: id(bp._cache[d]["perms"][0][1]) for d in (1, -1)}
+    for d in (1, -1, 1, -1):
+        bp.limit(snap, 1, 0.1, {"low": 0.1}, direction=d, **kw)
+    assert {d: id(bp._cache[d]["perms"][0][1]) for d in (1, -1)} == installed

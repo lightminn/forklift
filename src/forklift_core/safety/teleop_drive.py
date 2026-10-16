@@ -110,44 +110,50 @@ class TeleopDrive:
 
 
 class BundlePermit:
-    """The arc bundle's permission at the batch runner's cost (M-c live runs): the arcs' path checks are installed
-    again only when the grid changed, the bundle (ends, direction) changed or the truck has driven ``refresh_m`` since;
-    between, each installed check is advanced by the distance driven, as the batch's obstacle layer does between
-    scans. Every cycle the two ends -- the measured and the output curvature -- are asked in full (their short
-    emergency-stop arcs, the sensor silence and the evidence age); the arcs between count by their advanced path
-    distance. Asking every arc in full every cycle cost 32 ms for two arcs and 150 ms for eight (2026-10-17), more
-    than a live physics step."""
+    """The arc bundle's permission at the batch runner's cost (M-c live runs, plan C4a): per direction, the arcs'
+    path checks are installed again only when the grid changed, the bundle's ends moved by a step or the truck has
+    driven ``refresh_m`` since; between, each installed check is advanced by the distance driven, as the batch's
+    obstacle layer does between scans. Every cycle: the two ends are asked in full at the **current** curvatures
+    (their emergency-stop arcs, the sensor silence, the evidence age), and every arc between by its advanced path
+    distance and its FREE evidence's age (Codex M-c round 10 P1 x2). Asking every arc in full every cycle cost 32 ms
+    for two arcs and 150 ms for eight (2026-10-17), more than a live physics step."""
 
     def __init__(self, config, refresh_m: float = 0.25):
         self.config, self.refresh_m = config, refresh_m
-        self._key = None
-        self._perms: list = []  # (kappa, DrivePermission) as installed
-        self._since_m = 0.0
+        self._cache: dict = {}  # direction -> {"key", "perms": [(kappa, DrivePermission)], "since_m"}
+
+    def advance(self, driven_m: float) -> None:
+        """Distance driven since the last call (sim distance, both directions count), for every installed arc."""
+        for entry in self._cache.values():
+            entry["since_m"] += abs(driven_m)
+            for _, perm in entry["perms"]:
+                perm.advance(driven_m)
 
     def limit(self, snapshot, snapshot_key, now_s: float, sensors_last_s: dict, *, pose, curvatures, direction: int,
-              check_speed_mps: float, footprint, own_footprint, driven_m: float) -> tuple[float, str]:
+              check_speed_mps: float, footprint, own_footprint) -> tuple[float, str]:
         cfg = self.config
         ends = (round(curvatures[0] / KAPPA_STEP), round(curvatures[-1] / KAPPA_STEP))
-        key = (snapshot_key, direction, ends)
-        self._since_m += abs(driven_m)
-        if key != self._key or self._since_m > self.refresh_m:
+        key = (snapshot_key, ends)
+        entry = self._cache.get(direction)
+        if entry is None or entry["key"] != key or entry["since_m"] > self.refresh_m:
             length = cfg.lookahead_m + cfg.stopping.distance_m(check_speed_mps) + cfg.step_m
-            self._perms = []
+            perms = []
             for kappa in curvatures:
                 perm = DrivePermission(cfg)
                 path, _ = arc_poses(tuple(pose), kappa, direction, length, cfg.step_m)
                 perm.update(snapshot, path, footprint, own_footprint, current_pose=pose, direction=direction)
-                self._perms.append((kappa, perm))
-            self._key, self._since_m = key, 0.0
-        else:
-            for _, perm in self._perms:
-                perm.advance(driven_m)
+                perms.append((kappa, perm))
+            entry = self._cache[direction] = {"key": key, "perms": perms, "since_m": 0.0}
         best = (math.inf, "ok")
-        for index, (kappa, perm) in enumerate(self._perms):
-            if index in (0, len(self._perms) - 1):
-                result = perm.allowed_speed(now_s, sensors_last_s, current_pose=pose, curvature_inv_m=kappa,
+        perms = entry["perms"]
+        for index, (_, perm) in enumerate(perms):
+            if index in (0, len(perms) - 1):
+                kappa_now = curvatures[0] if index == 0 else curvatures[-1]
+                result = perm.allowed_speed(now_s, sensors_last_s, current_pose=pose, curvature_inv_m=kappa_now,
                                             direction=direction, footprint=footprint, own_footprint=own_footprint,
                                             speed_cap_mps=check_speed_mps)
+            elif now_s - perm.path_check.oldest_free_s > cfg.evidence_max_age_s:
+                result = (0.0, "evidence_stale")
             else:
                 left = perm.path_check.verified_m - perm._driven_since_m
                 result = (cfg.stopping.speed_for(left), perm.path_check.blocked or "ok")
