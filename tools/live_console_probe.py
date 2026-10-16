@@ -44,6 +44,7 @@ class Probe:
         self._reader = None
         self._media_reader = None
         self.closed_code = None
+        self.last_teleop = None
         self.save_frames = None  # (directory, how many) for the marker scenario
 
     def event(self, name, **fields):
@@ -189,6 +190,13 @@ class Probe:
         if mode == "video" and self.frames:
             msg["frame_echo"] = {"frame_id": self.frames[-1]["frame_id"]}
         await self.ws.send(json.dumps(msg))
+        if (speed, curvature, deadman) != self.last_teleop:
+            # The control round trip (plan completion 2, agy G2) is read from these against the states' applied
+            # command: same client clock at both ends.
+            self.last_teleop = (speed, curvature, deadman)
+            self.report.setdefault("teleop_sent", []).append(
+                {"mono": time.monotonic(), "seq": self.seq, "speed_ratio": speed, "curvature_ratio": curvature,
+                 "deadman": deadman, "mode": mode})
 
     async def keep_alive(self, seconds, hz=20):
         end = time.monotonic() + seconds
