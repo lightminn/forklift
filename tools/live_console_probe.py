@@ -229,13 +229,14 @@ async def main_scenario(p: Probe, args):
         await asyncio.sleep(0.5)
     mission_id = (submit or {}).get("mission_id")
     await p.until(lambda s: s.get("mode") == "AUTO", 5, label="auto")
-    # STOP while the mission stands at its observation point (a capture runs there): it must have driven there first.
+    # A STOP inside the first capture: the runner's test option stops it there (a client cannot aim for those
+    # steps); without that option the probe sends its own STOP once the mission has driven and stands.
     await p.until(lambda s: abs(s.get("rear_axle_speed_mps") or 0.0) > 0.05, 60, label="moving")
-    await p.until(lambda s: ((s.get("mission") or {}).get("phase") == "observe" and p.standing(s)
-                             and s.get("mode") == "AUTO") or s.get("mode") == "STOPPED",
-                  args.observe_timeout_s, label="observe_standing")
-    if p.state.get("mode") != "STOPPED":  # else the runner's in-capture STOP test already stopped it
-        await asyncio.sleep(0.2)
+    if args.expect_stop_in_capture:
+        await p.until(lambda s: s.get("mode") == "STOPPED", args.observe_timeout_s, label="stopped_in_capture")
+    else:
+        await p.until(lambda s: (s.get("mission") or {}).get("phase") == "observe" and p.standing(s),
+                      args.observe_timeout_s, label="observe_standing")
         await p.request("stop", source="key")
     await p.until(lambda s: s.get("mode") == "STOPPED", 3, label="stopped")
     await p.until(p.standing, 10, label="standing_after_stop")
@@ -250,7 +251,13 @@ async def main_scenario(p: Probe, args):
     await p.request("mode_request", to="PAUSED")
     await p.until(p.standing, 15, label="standing_paused")
     await asyncio.sleep(0.5)
-    teleop = await p.request_until_standing("mode_request", to="TELEOP")
+    teleop = None
+    for _ in range(40):  # pacing turns ok only after a held second without a stall; standing is the vehicle's call
+        teleop = await p.request("mode_request", to="TELEOP")
+        if teleop is None or (teleop.get("reason") not in ("not_stopped", "no_feedback:rear_axle_speed")
+                              and teleop.get("detail") != "pacing"):
+            break
+        await asyncio.sleep(0.5)
     p.report["teleop_entry"] = teleop
     if teleop and teleop["t"] == "ack":
         arm = await p.request("arm")
@@ -293,8 +300,16 @@ async def main_scenario(p: Probe, args):
     await p.until(p.standing, 10, label="standing_before_final_resume")
     await asyncio.sleep(0.5)
     await p.request_until_standing("mission_resume", mission_id=mission_id)
-    await p.until(lambda s: (s.get("mission") or {}).get("status") in ("done", "failed", "cancelled")
-                  or s.get("mode") == "STOPPED", args.mission_timeout_s, label="mission_end")
+    end_by = time.monotonic() + args.mission_timeout_s
+    while time.monotonic() < end_by and p.closed_code is None:
+        await p.until(lambda s: (s.get("mission") or {}).get("status") in ("done", "failed", "cancelled")
+                      or s.get("mode") == "STOPPED", end_by - time.monotonic(), label="mission_end_or_stop")
+        if p.state is None or p.state.get("mode") != "STOPPED" or p.closed_code is not None:
+            break
+        # Stopped on the way (a STOP inside a later capture, a fault): stand, rearm and resume, as an operator would.
+        await p.until(p.standing, 20, label="standing_again")
+        await p.request_until_standing("rearm")
+        await p.request_until_standing("mission_resume", mission_id=mission_id)
     end = time.monotonic() + 60
     while p.closed_code is None and time.monotonic() < end:
         await asyncio.sleep(0.05)
@@ -326,6 +341,8 @@ def main():
     ap.add_argument("--scenario", choices=("main", "slow"), default="main")
     ap.add_argument("--old-session", type=Path, default=None)
     ap.add_argument("--observe-timeout-s", type=float, default=240.0)
+    ap.add_argument("--expect-stop-in-capture", action="store_true",
+                    help="the runner has --live-test-stop-in-capture: wait for that stop instead of sending one")
     ap.add_argument("--auto-s", type=float, default=15.0)
     ap.add_argument("--mission-timeout-s", type=float, default=900.0)
     ap.add_argument("--wait-port-s", type=float, default=900.0)
