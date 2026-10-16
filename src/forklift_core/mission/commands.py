@@ -28,22 +28,26 @@ class Submit:
     pallet_id: str
     destination_id: str
     targets_revision: int = 0
+    request_id: str | None = None  # the arbiter's reliable request this came from (M-b B3), kept in the record
     kind: str = field(default="submit", init=False)
 
 
 @dataclass(frozen=True)
 class Pause:
+    request_id: str | None = None
     kind: str = field(default="pause", init=False)
 
 
 @dataclass(frozen=True)
 class Resume:
+    request_id: str | None = None
     kind: str = field(default="resume", init=False)
 
 
 @dataclass(frozen=True)
 class Cancel:
     mission_id: str | None = None  # None: the active mission
+    request_id: str | None = None
     kind: str = field(default="cancel", init=False)
 
 
@@ -105,6 +109,8 @@ class MissionCommands:
             reason = getattr(self, f"_{command.kind}")(t, command, context)
             record = {"t": t, "command": command.kind, "accepted": reason is None, "reason": reason,
                       "mission_id": self.mission_id, "status": self.status}
+            if command.request_id is not None:
+                record["request_id"] = command.request_id
             records.append(record)
             self.log.append(record)
         return records

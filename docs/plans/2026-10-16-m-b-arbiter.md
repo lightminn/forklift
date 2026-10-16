@@ -1,6 +1,6 @@
 # M-b 중재기 (`forklift_core/safety/`) 계획
 
-작성: 2026-10-16 · 상태: **4판 — Codex 3회차까지 반영, 재검토 중** · 근거: [운용 콘솔 설계](../design/2026-10-13-operator-console.md) 3절·4.1–4.5·5.1–5.4, [콘솔 계약 초안](../interfaces/2026-10-13-operator-console-contract-draft.md) 1–6·9절, [M-a 계획](2026-10-15-m-a-mission-core.md) D6, [M-a3 계획](2026-10-16-m-a3-mission-commands.md)
+작성: 2026-10-16 · 상태: **4판 — 검토 수렴(Codex 4회차 "new P1/P2 없음", agy 반영)** · 근거: [운용 콘솔 설계](../design/2026-10-13-operator-console.md) 3절·4.1–4.5·5.1–5.4, [콘솔 계약 초안](../interfaces/2026-10-13-operator-console-contract-draft.md) 1–6·9절, [M-a 계획](2026-10-15-m-a-mission-core.md) D6, [M-a3 계획](2026-10-16-m-a3-mission-commands.md)
 
 ## 1. 범위
 
@@ -149,7 +149,7 @@
 - `tick(now)`: `state_seq` +1, `token_source` 의 토큰을 `(state_seq, token) -> sent_mono` 로 기록. 기록은 시간으로만 지운다: `now − sent_mono > max(command_max_age_s, lease_timeout_s)` 인 것.
 - 텔레옵 명령 검증 순서와 버릴 때의 사유(응답 없음, 상태의 `last_teleop_reject`): `stale_epoch` → `stale_lease` → `stale_control` → `stale_arm` → `stale_seq`(같은 `arm_gen` 안에서 같거나 작은 `seq`) → `bad_echo` → `expired` → `stale_video` → `not_armed`(TELEOP 이 아니거나 무장이 아님).
 - 만료 시각: `sent_mono(echo) + command_max_age_s`. 영상 모드면 `acquired_mono(frame_id) + video_max_age_s − camera_latency_bound_s` 와의 최솟값.
-- `step()` 머리에서 현재 명령의 만료를 검사한다. 지났으면 선점 래치, 무장 해제, `control_gen` +1, 사유 `expired`(또는 `stale_video`). 무장 뒤 아직 명령이 없으면 만료 시각이 없고 출력은 0 이다 — 첫 명령도 회신 만료를 거치므로 오래 묵은 명령이 될 수 없다.
+- `observe()`(주기 첫 단계)에서 현재 명령의 만료를 검사한다. 지났으면 선점 래치, 무장 해제, `control_gen` +1, 사유 `expired`(또는 `stale_video`). 무장 뒤 아직 명령이 없으면 만료 시각이 없고 출력은 0 이다 — 첫 명령도 회신 만료를 거치므로 오래 묵은 명령이 될 수 없다.
 - `input_state`(가림·포커스·패드 분리)는 무장만 푼다.
 - 프레임 기록: 같은 `frame_id` 의 재등록은 처음 시각을 지킨다. `frame_id` 는 세션 안에서 증가만 하므로(계약 1절) 지금까지 본 가장 큰 번호 이하인데 기록에 없는 번호(창 밖으로 지운 것)는 등록하지 않는다 — 지운 촬영을 다시 등록해 나이를 0 으로 되돌릴 수 없다.
 
@@ -228,3 +228,4 @@
 - **② Codex 적대적 검토 1회차(P1 7·P2 4·P3 2, 모두 반영).** PAUSED 정지가 근접 추적 중 미션 `pause` 거절에 막힘 → 미션에 `controlled` 를 넘기는 불변식 + 근접 중 PAUSED 거절(B5). 주행 금지가 slew 전 목표만 0 → 최종 상한 0(B7·B8). 반복 STOP 이 세대를 안 올림 → 올림(B3 0, 초안 코드 수정). 보류 미션 요청·AUTO 예약이 경계를 넘음 → 한 틱 안 확정(B3). 정지 확인이 이양·제출에 없고 정지 실패 처리 없음 → B5. 조향 전환 구간 의무 누락 → 곡률 변화율 제한 + 원호 다발(B8), 출력 경계(B8). `FrameLedger` 가 지운 번호를 다시 받음 → 거부(B10, 초안 코드 수정). `tracker_built` 가 근접 종료 뒤에도 참 → `near.active`(B7). TELEOP 을 떠나는 경로에 `hold_off` 누락 → 모든 경로(B5). PAUSED 감속 경로 없음 → 코어 후보 + 적용 값 되쓰기(B11). SLAM 유무를 알 수 없음 → `frame.slam`(B7). P3: 육안·영상 상한 방향, 검사 속도 규칙 정정(3절·B8).
 - **② Codex 2회차(P1 4·P2 2·P3 1, 모두 반영).** 제출·재개 주기의 `none` 예외가 아직 `running` 인 미션을 풀어 줌(같은 배치의 PAUSED 요청 뒤 제출) → 생명주기 상태가 그 요청을 받을 수 있을 때만 `none`(B5). TELEOP 구동 출력까지 `controlled` 로 적음 → 구동 `none`·미션 `controlled` 로 나눔(B5 표). 되쓰기 대상에 SLAM 정지 판정기의 `last_command` 누락 → 추가, M-c 경계 한정(B11). 검사 속도에서 직전 적용 명령 누락 → 셋의 최댓값(B8). 수락 기록만 보고 AUTO 확정 → 틱 뒤 미션 상태로 판정, 이후 재개 실패도 PAUSED 복귀(B5). 조향 따라잡기를 slew 뒤로 옮김 → 코어와 같은 속도 사슬 함수를 공유(B8). P3: 첫 상한 0.108 의 조건(3절). 반례 두 건(반복 STOP, 지운 프레임 재등록)은 닫힘 확인.
 - **② Codex 3회차(P1 1, 반영).** 정지 확인 갱신이 마지막 `step()` 에 있어 전이 승인·`none` 선택이 지난 주기 판정을 씀(이전 참 → 제출 수락·running → 현재 거짓) → 주기 첫 단계 `observe` 로 옮겨 한 번만 갱신(B3 0, B11). 2회차 지적 6건은 반영 확인.
+- **② Codex 4회차 — 수렴(new P1/P2 없음).** P3 1건(B10 의 만료 검사 위치를 `observe()` 로) 반영. 판정은 계획·호출 순서에 한정한다.
