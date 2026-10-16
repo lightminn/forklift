@@ -92,6 +92,8 @@ class Arbiter:
         self.frames = FrameLedger(config.frame_window_s)
         self.requests = RequestBook(config.request_capacity)
         self.clients: dict[str, bool] = {}  # connected client -> its connection may control (contract 10)
+        self.conns: dict[str, str | None] = {}  # connected client -> its current connection
+        self.pacing_ok = True  # the live runner's pacing (M-c plan C2): TELEOP drives only while it holds
         self.lease: Lease | None = None
         self.reserved: tuple[str, float] | None = None  # (client_id, until) during the reconnection grace
         self.mode = "PAUSED"
@@ -117,14 +119,21 @@ class Arbiter:
         self._drive_fresh = False  # TELEOP just entered: the output curvature starts from the measured one
 
     # --- connections and the lease ------------------------------------------------------------------------------
-    def connect(self, client_id: str, now_mono: float, *, control: bool = True) -> dict:
+    def connect(self, client_id: str, now_mono: float, *, control: bool = True, conn_id: str | None = None) -> dict:
+        """A client's connection; with ``conn_id`` it becomes that client's current connection (M-c plan C2)."""
         self._expire(now_mono)
         self.clients[client_id] = bool(control)
+        self.conns[client_id] = conn_id
         return {"t": "welcome", "api": "console/1", "session_epoch": self.session_epoch}
 
-    def disconnect(self, client_id: str, now_mono: float) -> None:
+    def disconnect(self, client_id: str, now_mono: float, conn_id: str | None = None) -> None:
+        """A connection closed. An earlier connection of the same client closing late changes nothing (Codex M-c
+        plan review P1: it removed the new one and that one's STOP went unanswered)."""
         self._expire(now_mono)
+        if conn_id is not None and self.conns.get(client_id) != conn_id:
+            return
         self.clients.pop(client_id, None)
+        self.conns.pop(client_id, None)
         if self.lease is not None and self.lease.client_id == client_id:
             self._lose_lease(now_mono, "disconnected", reserve=True)
 
@@ -172,13 +181,16 @@ class Arbiter:
         self._boundary(now_mono, reason)
 
     # --- reliable requests (contract section 1, the handling order) ---------------------------------------------
-    def handle(self, client_id: str, msg: dict, now_mono: float) -> dict | None:
+    def handle(self, client_id: str, msg: dict, now_mono: float, conn_id: str | None = None) -> dict | None:
         """One message from a client. Reliable requests are answered (ack or reject); latest-value messages
-        (teleop, echo, input_state) are not. A mission request may be answered later (``resolve``)."""
+        (teleop, echo, input_state) are not. A mission request may be answered later (``resolve``). With
+        ``conn_id``, only the client's current connection counts -- except a STOP, which only narrows."""
         self._expire(now_mono)
         kind = msg.get("t")
         if client_id not in self.clients:
             return None  # not connected: nothing it says counts
+        if conn_id is not None and self.conns.get(client_id) != conn_id and kind != "stop":
+            return None
         if kind not in RELIABLE:
             return self._latest_value(client_id, kind, msg, now_mono)
         request_id = msg.get("request_id")
@@ -326,6 +338,19 @@ class Arbiter:
                        deadline < sent + self.config.command_max_age_s else "expired"}
         return None
 
+    def _check_deadline(self, now_mono: float) -> None:
+        """B10: the operator command's absolute deadline -- a stop with no packet arriving at all."""
+        if self.teleop is not None and now_mono > self.teleop["deadline"]:
+            self._preempt(now_mono, self.teleop["expiry"])
+
+    def gate(self, now_mono: float) -> bool:
+        """Before every physics step (M-c plan C2), a capture's inner steps included: the lease and the command
+        deadline are checked; True when this step's wheels must be zero (STOPPED or a preempt latched). STOPs
+        queued meanwhile are handed in by the caller through ``handle`` first -- a STOP only narrows."""
+        self._expire(now_mono)
+        self._check_deadline(now_mono)
+        return self.mode == "STOPPED" or self.preempt_latch is not None
+
     def _preempt(self, now_mono: float, reason: str) -> None:
         """A teleoperation safety preempt: disarmed, latched until standing, a control boundary (B2, B10)."""
         self._disarm(now_mono, reason)
@@ -374,9 +399,7 @@ class Arbiter:
         """First in the cycle: this cycle's feedback, the stop detector (once a cycle), the expiries, the latch and
         the stop failure -- so every transition this cycle judges uses this cycle's stop confirmation."""
         self._expire(now_mono)
-        if self.teleop is not None and now_mono > self.teleop["deadline"]:
-            # B10: the absolute deadline, checked every cycle -- a stop with no packet arriving at all.
-            self._preempt(now_mono, self.teleop["expiry"])
+        self._check_deadline(now_mono)
         fresh = _valid_feedback(feedback, now_mono, self.config.feedback_max_age_s)
         self.feedback_ok = fresh
         if fresh:
@@ -481,7 +504,9 @@ class Arbiter:
         ``drive`` what the teleoperated chain needs this cycle -- ``measured_mps``, ``measured_kappa``,
         ``steering_error_rad`` and ``permit(curvatures, direction, check_speed)`` (B8). Without it TELEOP is 0."""
         self.last_safety = safety
-        policy = teleop_policy(safety, feedback_ok=self.feedback_ok, standing=self.stop_confirmed)
+        self._expire(now_mono)
+        self._check_deadline(now_mono)  # the mission's tick may have run long since observe (Codex M-c P1)
+        policy = self._policy(safety)
         speed, curvature, permit = 0.0, float(candidate[1]), None
         if self.mode == "STOPPED" or self.preempt_latch is not None:
             source, stop_kind = "zero", "preempt"
@@ -507,6 +532,12 @@ class Arbiter:
         self.last_applied = speed
         return Output(self.mode, stop_kind, source, speed, curvature, policy, self.control_gen, self.armed,
                       self.preempt_latch, permit)
+
+    def _policy(self, safety) -> Policy:
+        policy = teleop_policy(safety, feedback_ok=self.feedback_ok, standing=self.stop_confirmed)
+        if policy.drive_allowed and not self.pacing_ok:
+            return Policy(False, False, "pacing", loaded=policy.loaded)  # M-c: no real time, no hands on
+        return policy
 
     # --- mode and mission requests (B5) --------------------------------------------------------------------------
     def _needs_stand(self, kind: str, request_id) -> dict | None:
@@ -549,7 +580,7 @@ class Arbiter:
         refused = self._needs_stand("mode_request", request_id)
         if refused is not None:
             return refused
-        policy = teleop_policy(self.last_safety, feedback_ok=self.feedback_ok, standing=self.stop_confirmed)
+        policy = self._policy(self.last_safety)
         if not policy.teleop_allowed:
             return self._reply("mode_request", request_id, "state_forbids_teleop", detail=policy.reason)
         self._set_mode("TELEOP", now_mono, "mode_request")  # the hold follows in mission_context

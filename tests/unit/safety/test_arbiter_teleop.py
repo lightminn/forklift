@@ -154,3 +154,49 @@ def test_the_state_carries_the_applied_command_only_when_given_and_the_resume_st
     assert msg["reason"] == "no_resume:near_tracking" and msg["resume_steps"]["state_verified"].startswith("failed")
     held = dict(SAFE, mission={"id": "m1", "status": "held", "phase": "observe"})
     assert state_message(a, out, held, now_mono=t)["mission"]["reason"] == "teleop"
+
+
+def test_step_rechecks_the_deadline_after_a_long_mission_tick():
+    """Codex M-c plan round 1 P1: observe at 0.29 s after the tick, step at 0.49 s -- the command has expired."""
+    a, base, t, arm_gen = teleop_rig()
+    tick = a.tick(t)
+    a.handle("op", command(a, base, arm_gen, tick, 1), t)
+    a.observe(t + 0.29, Feedback(t + 0.29, 0.2))
+    assert a.armed
+    out = a.step(t + 0.49, SAFE, (0.0, 0.0), {"measured_mps": 0.2, "measured_kappa": 0.0, "steering_error_rad": 0.0,
+                                              "permit": lambda *k: (1.0, "ok")})
+    assert out.speed_mps == 0.0 and out.stop_kind == "preempt" and not a.armed
+
+
+def test_the_physics_step_gate_sees_an_expired_command_and_a_stop():
+    a, base, t, arm_gen = teleop_rig()
+    tick = a.tick(t)
+    a.handle("op", command(a, base, arm_gen, tick, 1), t)
+    assert a.gate(t + 0.30) is False
+    assert a.gate(t + 0.31) is True and a.preempt_latch == "expired"
+    b, base_b, tb, _ = teleop_rig()
+    b.handle("op", {"t": "stop", "request_id": "S"}, tb)
+    assert b.gate(tb) is True and b.mode == "STOPPED"
+
+
+def test_a_late_disconnect_of_an_old_connection_leaves_the_new_one():
+    """Codex M-c plan round 1 P1: A and B of one client; A's late close must not remove B (B's STOP is answered)."""
+    import itertools
+
+    counter = itertools.count(1)
+    a = Arbiter(EPOCH, ArbiterConfig(), lambda: f"tok{next(counter)}")
+    a.connect("op", 0.0, conn_id="A")
+    a.connect("op", 0.1, conn_id="B")
+    a.disconnect("op", 0.2, conn_id="A")
+    assert a.handle("op", {"t": "stop", "request_id": "S"}, 0.3, conn_id="B")["t"] == "ack"
+    lease = a.handle("op", {"t": "lease_request", "request_id": "L", "session_epoch": EPOCH}, 0.4, conn_id="A")
+    assert lease is None  # the old connection's requests do not count
+    a.disconnect("op", 0.5, conn_id="B")
+    assert "op" not in a.clients
+
+
+def test_without_real_time_there_is_no_teleop_drive():
+    a, base, t, arm_gen = teleop_rig()
+    a.pacing_ok = False
+    out = a.step(t, SAFE, (0.0, 0.0))
+    assert not out.policy.drive_allowed and out.policy.reason == "pacing"
