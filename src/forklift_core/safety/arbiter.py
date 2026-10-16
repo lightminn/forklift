@@ -49,6 +49,11 @@ class ArbiterConfig:
     decel_mps2: float = 1.5  # the stopping model's (config/obstacle_layer.yaml), the slew's braking
 
     def __post_init__(self):
+        for name in ("command_max_age_s", "lease_timeout_s", "grace_s", "video_max_age_s", "camera_latency_bound_s",
+                     "feedback_max_age_s", "not_stopped_s", "tick_s", "decel_mps2", "frame_window_s"):
+            value = getattr(self, name)
+            if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be a positive finite number (a NaN or inf would disable its expiry)")
         if self.lease_timeout_s < self.command_max_age_s:
             raise ValueError("lease_timeout_s must be at least command_max_age_s (design 5.4)")
 

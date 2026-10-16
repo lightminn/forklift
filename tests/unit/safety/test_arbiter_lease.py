@@ -132,3 +132,16 @@ def test_recovery_is_not_offered_yet():
     a = arbiter()
     lease_id = lease(a)
     assert leased(a, "laptop", lease_id, "recovery", "X1", 0.1, action="withdraw_straight")["reason"] == "unsupported"
+
+
+
+def test_a_config_that_would_disable_an_expiry_is_refused():
+    import math
+
+    import pytest
+
+    for bad in (math.nan, math.inf, -1.0, 0.0):
+        with pytest.raises(ValueError):
+            ArbiterConfig(lease_timeout_s=bad)
+    with pytest.raises(ValueError):
+        ArbiterConfig(lease_timeout_s=0.2)  # below the command age

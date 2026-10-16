@@ -283,7 +283,8 @@ async def main_scenario(p: Probe, args):
     p.lease_id = (lease or {}).get("lease_id")
     p.report["reconnect"] = {"old_lease": old_lease, "new_lease": p.lease_id}
     p.lease_id, saved = old_lease, p.lease_id
-    p.report["old_lease_after_reconnect"] = await p.request("mode_request", to="PAUSED")
+    # A negative test: the first answer is the evidence, no lease recovery (Codex M-c round 8 P2).
+    p.report["old_lease_after_reconnect"] = await p._request("mode_request", to="PAUSED")
     p.lease_id = saved
     await p.until(p.standing, 10, label="standing_before_final_resume")
     await asyncio.sleep(0.5)
