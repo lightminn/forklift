@@ -43,7 +43,7 @@ def test_a_known_lag_is_read_back_and_turned_into_wall_time(tmp_path):
     r = M.analyse(report, tmp_path, log)
     assert r["pixel_lag_sim_s"] == pytest.approx(0.05, abs=1 / 120 + 1e-9)
     # wall = metadata latency + the lag through the step table (0.05 sim s at f 0.1 = 0.5 s), not a declared factor
-    assert r["pixel_latency_wall_s_at_fitted_tau"]["median"] == pytest.approx(0.05 + 0.5, abs=0.1)
+    assert r["pixel_latency_wall_s_conforming_frames"]["median"] == pytest.approx(0.05 + 0.5, abs=0.1)
     assert r["alias_residual_ratio"] > 5
 
 
@@ -54,8 +54,19 @@ def test_a_lag_over_a_sine_period_is_not_read_as_a_small_one(tmp_path, lag):
     assert r["pixel_lag_sim_s"] == pytest.approx(lag, abs=1 / 120 + 1e-9)
 
 
-def test_frames_far_late_are_undetermined_not_a_clipped_maximum(tmp_path):
-    report, log = make_run(tmp_path, lambda k: 0.55 if k % 10 == 0 else 0.05)
+def test_frames_late_by_more_are_listed_as_nonconforming_not_given_a_lag(tmp_path):
+    late = {k for k in range(300) if k % 10 == 0}
+    report, log = make_run(tmp_path, lambda k: 0.55 if k in late else 0.05)
     r = M.analyse(report, tmp_path, log)
-    assert r["per_frame_undetermined"] > 0
-    assert r["per_frame_lag_sim_s"]["max"] < r["per_frame_window_s"][1]
+    assert r["pixel_lag_sim_s"] == pytest.approx(0.05, abs=1 / 120 + 1e-9)
+    assert "per_frame_lag_sim_s" not in r
+    flagged = set(r["nonconforming_frames"])
+    # every late frame whose picture differs from the on-time one by more than 3 rows is caught; no on-time frame is
+    for k in range(300):
+        stamp = 4.0 + k * 0.1
+        visible = 100 * abs(wave(stamp - 0.55) - wave(stamp - 0.05)) > 3
+        if k + 1 in {f["frame_id"] for f in report["frames"]} and stamp > 3.5 and stamp < 37.0:
+            if k in late and visible:
+                assert k + 1 in flagged
+            if k not in late:
+                assert k + 1 not in flagged
