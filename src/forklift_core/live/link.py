@@ -13,6 +13,8 @@ import threading
 from collections import OrderedDict, deque
 from typing import Callable
 
+from forklift_core.safety.validate import problem
+
 LATEST = ("teleop", "echo", "input_state")
 
 
@@ -39,11 +41,19 @@ class Channels:
                 del self._latest[key]
 
     def message(self, conn_id: str, client_id: str, msg: dict) -> dict | None:
-        """Put one message in; returns an immediate reply only when the ordered channel is full (``busy``)."""
+        """Put one message in; returns an immediate reply when it is malformed (``invalid``) or the ordered channel
+        is full (``busy``). The shape is checked before anything is merged or queued, and a repeated STOP keeps the
+        first one (Codex M-c review round 4 P1: a malformed duplicate replaced a valid STOP)."""
+        if problem(msg) is not None:
+            kind = msg.get("t") if isinstance(msg, dict) else None
+            rid = msg.get("request_id") if isinstance(msg, dict) else None
+            if isinstance(rid, str) and rid:
+                return {"t": "reject", "of": kind, "request_id": rid, "reason": "invalid"}
+            return None
         kind = msg.get("t")
         with self._lock:
             if kind == "stop":
-                self._stops[(conn_id, msg.get("request_id"))] = (client_id, msg)
+                self._stops.setdefault((conn_id, msg.get("request_id")), (client_id, msg))
                 return None
             if kind in LATEST:
                 self._latest[(conn_id, kind)] = (client_id, msg)

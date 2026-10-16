@@ -138,3 +138,13 @@ def test_a_bad_message_is_refused_and_logged_not_raised():
     ch.message("A", "op", {"t": "lease_request", "request_id": "L", "session_epoch": "41"})
     cycle(m, link, 0.01)
     assert [(r["t"], r.get("reason")) for c, r in ch.take_out() if c == "A"] == [("reject", "invalid")]
+
+
+def test_a_malformed_duplicate_does_not_replace_a_valid_stop():
+    """Codex M-c review round 4 P1."""
+    m, a, ch, link = rig()
+    ch.connect("A", "op")
+    ch.message("A", "op", {"t": "stop", "request_id": "S", "source": "key"})
+    assert ch.message("A", "op", {"t": "stop", "request_id": "S", "source": 0})["reason"] == "invalid"
+    assert ch.message("A", "op", {"t": "stop", "request_id": []}) is None  # unhashable: refused, not raised
+    assert link.gate(0.01) is True and a.mode == "STOPPED"
