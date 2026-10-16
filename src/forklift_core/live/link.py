@@ -21,6 +21,7 @@ class Channels:
         self.capacity = capacity
         self._lock = threading.Lock()
         self._stops: OrderedDict = OrderedDict()
+        self._conns: deque = deque()  # connections and disconnections: never refused, taken before the STOPs
         self._ordered: deque = deque()
         self._latest: dict = {}
         self._out: deque = deque()
@@ -29,11 +30,11 @@ class Channels:
     # --- the server thread ------------------------------------------------------------------------------------------
     def connect(self, conn_id: str, client_id: str, control: bool = True) -> None:
         with self._lock:
-            self._ordered.append(("connect", conn_id, client_id, control))  # never refused: a session must start
+            self._conns.append(("connect", conn_id, client_id, control))
 
     def disconnect(self, conn_id: str, client_id: str) -> None:
         with self._lock:
-            self._ordered.append(("disconnect", conn_id, client_id, None))
+            self._conns.append(("disconnect", conn_id, client_id, None))
             for key in [k for k in self._latest if k[0] == conn_id]:
                 del self._latest[key]
 
@@ -47,7 +48,7 @@ class Channels:
             if kind in LATEST:
                 self._latest[(conn_id, kind)] = (client_id, msg)
                 return None
-            if sum(1 for e in self._ordered if e[0] == "request") >= self.capacity:
+            if len(self._ordered) >= self.capacity:
                 return {"t": "reject", "of": kind, "request_id": msg.get("request_id"), "reason": "busy"}
             self._ordered.append(("request", conn_id, client_id, msg))
             return None
@@ -58,18 +59,22 @@ class Channels:
         return out
 
     # --- the control thread ---------------------------------------------------------------------------------------
-    def take_stops(self) -> list:
+    def take_stops(self) -> tuple[list, list]:
+        """The connection events, then the STOPs -- a STOP sent right after the welcome finds its client known
+        (Codex M-c round 2 P1)."""
         with self._lock:
+            conns, self._conns = list(self._conns), deque()
             stops, self._stops = list(self._stops.items()), OrderedDict()
-        return [(conn_id, client_id, msg) for (conn_id, _), (client_id, msg) in stops]
+        return conns, [(conn_id, client_id, msg) for (conn_id, _), (client_id, msg) in stops]
 
-    def take_cycle(self) -> tuple[list, list, list]:
-        """Everything for a cycle's start: the STOPs, the ordered entries, the latest values."""
+    def take_cycle(self) -> tuple[list, list, list, list]:
+        """Everything for a cycle's start: connection events, STOPs, ordered requests, latest values."""
         with self._lock:
+            conns, self._conns = list(self._conns), deque()
             stops, self._stops = list(self._stops.items()), OrderedDict()
             ordered, self._ordered = list(self._ordered), deque()
             latest, self._latest = list(self._latest.items()), {}
-        return ([(c, cl, m) for (c, _), (cl, m) in stops], ordered,
+        return (conns, [(c, cl, m) for (c, _), (cl, m) in stops], ordered,
                 [(conn_id, client_id, msg) for (conn_id, _), (client_id, msg) in latest])
 
     def put(self, conn_id: str | None, msg: dict) -> None:
@@ -98,8 +103,23 @@ class Link:
         if reply is not None:
             self.ch.put(conn_id, reply)
 
+    def _conn_event(self, kind, conn_id, client_id, extra, now, where):
+        if kind == "connect":
+            welcome = self.a.connect(client_id, now, control=bool(extra), conn_id=conn_id)
+            self.conn_of[client_id] = conn_id
+            self.log.append({"mono": now, "where": where, "conn": conn_id, "t": "connect",
+                             "epoch": welcome["session_epoch"]})
+        else:
+            self.a.disconnect(client_id, now, conn_id=conn_id)
+            if self.conn_of.get(client_id) == conn_id:
+                del self.conn_of[client_id]
+            self.log.append({"mono": now, "where": where, "conn": conn_id, "t": "disconnect"})
+
     def stops(self, now: float, where: str) -> None:
-        for conn_id, client_id, msg in self.ch.take_stops():
+        conns, stops = self.ch.take_stops()
+        for kind, conn_id, client_id, extra in conns:
+            self._conn_event(kind, conn_id, client_id, extra, now, where)
+        for conn_id, client_id, msg in stops:
             self._handle(conn_id, client_id, msg, now, where)
 
     def gate(self, now: float) -> bool:
@@ -110,22 +130,13 @@ class Link:
     def begin(self, now: float, feedback) -> str:
         """The cycle's start; returns the stop kind to give the mission."""
         self.a.observe(now, feedback)
-        stops, ordered, latest = self.ch.take_cycle()
+        conns, stops, ordered, latest = self.ch.take_cycle()
+        for kind, conn_id, client_id, extra in conns:
+            self._conn_event(kind, conn_id, client_id, extra, now, "cycle")
         for conn_id, client_id, msg in stops:
             self._handle(conn_id, client_id, msg, now, "cycle")
-        for kind, conn_id, client_id, extra in ordered:
-            if kind == "connect":
-                welcome = self.a.connect(client_id, now, control=bool(extra), conn_id=conn_id)
-                self.conn_of[client_id] = conn_id
-                self.log.append({"mono": now, "where": "cycle", "conn": conn_id, "t": "connect",
-                                 "epoch": welcome["session_epoch"]})
-            elif kind == "disconnect":
-                self.a.disconnect(client_id, now, conn_id=conn_id)
-                if self.conn_of.get(client_id) == conn_id:
-                    del self.conn_of[client_id]
-                self.log.append({"mono": now, "where": "cycle", "conn": conn_id, "t": "disconnect"})
-            else:
-                self._handle(conn_id, client_id, extra, now, "cycle")
+        for _, conn_id, client_id, msg in ordered:
+            self._handle(conn_id, client_id, msg, now, "cycle")
         for conn_id, client_id, msg in latest:
             self._handle(conn_id, client_id, msg, now, "cycle")
         return self.a.mission_context(now)

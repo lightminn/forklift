@@ -285,3 +285,14 @@ def test_leaving_teleop_and_resuming_in_one_batch_resumes():
     resume["control_gen"] += 1  # made after the leave's boundary
     r.cycle(leave, resume)
     assert r.reply(resume["request_id"])["t"] == "ack" and r.a.mode == "AUTO" and r.m.status == "resuming"
+
+
+
+def test_a_stop_inside_the_missions_tick_is_not_undone_by_the_submit_it_overtook():
+    """Codex M-c round 2 P1: submit accepted at the tick's start, STOP at a physics step inside it -- resolve must
+    not promote to AUTO."""
+    r = Rig()
+    r.stand()
+    submit = r.msg("mission_submit", pallet_id="P", destination_id="D", targets_revision=0)
+    r.cycle(submit, after_tick=lambda: r.a.stop(r.t, "stop:gate"))
+    assert r.a.mode == "STOPPED" and r.out.speed_mps == 0.0 and r.out.stop_kind == "preempt"

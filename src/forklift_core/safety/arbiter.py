@@ -111,6 +111,7 @@ class Arbiter:
         self.last_safety: dict | None = None  # the mission's safety state from the last step
         self.pending: list[dict] = []  # mission requests waiting for this cycle's lifecycle verdict (B3)
         self.provisional_auto = False
+        self._context_gen = 0
         self.outbox: list[dict] = []  # replies settled outside handle (mission requests), sent by resolve
         self.teleop: dict | None = None  # the operator's latest accepted command with its absolute deadline (B10)
         self.teleop_seq = -1  # the last accepted seq within this arm generation
@@ -122,6 +123,12 @@ class Arbiter:
     def connect(self, client_id: str, now_mono: float, *, control: bool = True, conn_id: str | None = None) -> dict:
         """A client's connection; with ``conn_id`` it becomes that client's current connection (M-c plan C2)."""
         self._expire(now_mono)
+        previous = self.conns.get(client_id)
+        if (conn_id is not None and client_id in self.clients and previous != conn_id and self.lease is not None
+                and self.lease.client_id == client_id):
+            # A new connection of the lease holder replaces the old one: the lease goes (a new lease_id must be
+            # asked for, contract 2) and a teleop stops and disarms -- nothing carries over (Codex M-c round 2 P1).
+            self._lose_lease(now_mono, "reconnected", reserve=True)
         self.clients[client_id] = bool(control)
         self.conns[client_id] = conn_id
         return {"t": "welcome", "api": "console/1", "session_epoch": self.session_epoch}
@@ -188,7 +195,9 @@ class Arbiter:
         self._expire(now_mono)
         kind = msg.get("t")
         if client_id not in self.clients:
-            return None  # not connected: nothing it says counts
+            if kind == "stop":
+                self.stop(now_mono, f"stop:{msg.get('source', 'console')}")  # a STOP only narrows: it always acts
+            return None  # not connected: nothing else it says counts, and there is no one to answer
         if conn_id is not None and self.conns.get(client_id) != conn_id and kind != "stop":
             return None
         if kind not in RELIABLE:
@@ -441,6 +450,7 @@ class Arbiter:
         queued submit or resume can be taken by the lifecycle as it stands (B5)."""
         status = self.mission.status if self.mission is not None else "idle"
         self.provisional_auto = False
+        self._context_gen = self.control_gen
         if self.mission is not None:
             # The hold follows the cycle's final mode, once, in the mission's own time (Codex M-b review P2/P2:
             # queuing at each transition replayed TELEOP-then-STOP in the wrong order and the vehicle clock).
@@ -484,7 +494,10 @@ class Arbiter:
             self._settle(p, reply)
         self.pending = []
         status = self.mission.status if self.mission is not None else "idle"
-        if took_auto and self.provisional_auto and status in AUTO_STATUSES:
+        if (took_auto and self.provisional_auto and status in AUTO_STATUSES and self.mode == "PAUSED"
+                and self.control_gen == self._context_gen):
+            # Only with no boundary since mission_context: a STOP at a physics step inside the mission's tick
+            # (the gate) is not undone by the submit it overtook (Codex M-c round 2 P1).
             self._set_mode("AUTO", now_mono, "mission")
         elif self.mode == "AUTO" and status not in AUTO_STATUSES:
             last = self.mission.log[-1] if self.mission is not None and self.mission.log else {}

@@ -48,7 +48,7 @@ def test_latest_values_keep_only_the_last_per_connection():
     ch.connect("A", "op")
     for k in range(5):
         ch.message("A", "op", {"t": "echo", "k": k})
-    _, _, latest = ch.take_cycle()
+    _, _, _, latest = ch.take_cycle()
     assert [msg["k"] for _, _, msg in latest] == [4]
 
 
@@ -59,9 +59,13 @@ def test_mission_replies_go_to_the_current_connection_and_an_old_close_is_ignore
         cycle(m, link, 0.01 * (k + 1))
     ch.message("A", "op", {"t": "lease_request", "request_id": "L", "session_epoch": EPOCH})
     cycle(m, link, 0.5)
-    lease_id = next(r for r in out_for(ch, "A") if r.get("of") == "lease_request")["lease_id"]
-    ch.connect("B", "op")  # the same client reconnects
+    assert next(r for r in out_for(ch, "A") if r.get("of") == "lease_request")["t"] == "ack"
+    ch.connect("B", "op")  # the same client reconnects: the old lease goes with the old connection
     ch.disconnect("A", "op")  # the old socket closes late
+    ch.message("B", "op", {"t": "lease_request", "request_id": "L2", "session_epoch": EPOCH})
+    cycle(m, link, 0.505)
+    lease_id = next(r for r in out_for(ch, "B") if r.get("of") == "lease_request")["lease_id"]
+    assert a.conns["op"] == "B"
     ch.message("B", "op", {"t": "mission_submit", "request_id": "M", "session_epoch": EPOCH, "lease_id": lease_id,
                            "control_gen": a.control_gen, "pallet_id": "P", "destination_id": "D",
                            "targets_revision": 0})
@@ -85,3 +89,22 @@ def test_ticks_are_broadcast_at_their_period():
         cycle(m, link, 0.01 * (k + 1))
     ticks = [msg for c, msg in ch.take_out() if c is None and msg["t"] == "tick"]
     assert len(ticks) == 3  # about 0.01, 0.06, 0.11 (or the cycle just after)
+
+
+
+def test_a_stop_right_after_the_welcome_finds_its_client():
+    """Codex M-c round 2 P1: the connection is registered before the STOP channel is taken."""
+    m, a, ch, link = rig()
+    ch.connect("A", "op")
+    ch.message("A", "op", {"t": "stop", "request_id": "S"})
+    assert link.gate(0.01) is True
+    assert [r["t"] for c, r in ch.take_out() if c == "A"] == ["ack"]
+
+
+def test_a_full_ordered_channel_still_takes_connections():
+    m, a, ch, link = rig(capacity=1)
+    ch.connect("A", "op")
+    ch.message("A", "op", {"t": "lease_request", "request_id": "L", "session_epoch": EPOCH})
+    ch.connect("B", "pad")
+    cycle(m, link, 0.01)
+    assert set(a.clients) == {"op", "pad"}

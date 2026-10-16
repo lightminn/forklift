@@ -200,3 +200,20 @@ def test_without_real_time_there_is_no_teleop_drive():
     a.pacing_ok = False
     out = a.step(t, SAFE, (0.0, 0.0))
     assert not out.policy.drive_allowed and out.policy.reason == "pacing"
+
+
+
+def test_a_new_connection_of_the_holder_takes_the_lease_and_the_teleop_with_it():
+    """Codex M-c round 2 P1: A armed, B connects -- nothing carries over; B asks for a new lease."""
+    a, base, t, arm_gen = teleop_rig()
+    a.conns["op"] = "A"
+    assert a.armed and a.lease is not None
+    a.connect("op", t, conn_id="B")
+    assert a.lease is None and not a.armed and a.mode == "PAUSED" and a.preempt_latch == "reconnected"
+    reply = a.handle("op", {"t": "lease_request", "request_id": "L9", "session_epoch": EPOCH}, t, conn_id="B")
+    assert reply["t"] == "ack" and reply["lease_id"] != base["lease_id"]
+
+
+def test_a_stop_from_an_unknown_client_still_stops():
+    a, base, t, arm_gen = teleop_rig()
+    assert a.handle("ghost", {"t": "stop", "request_id": "S"}, t) is None and a.mode == "STOPPED"
