@@ -651,6 +651,21 @@ def arguments() -> argparse.Namespace:
         help="The --steering-probe segment set: standard, or long steady-state runs (new plant diagnostic D-a).",
     )
     parser.add_argument(
+        "--live",
+        action="store_true",
+        help="M-c: run live -- paced to wall time, a console/1 server inside the run (docs/plans/"
+        "2026-10-17-m-c-isaac-live-runner.md), the arbiter deciding the drive; the mission is submitted by the operator. "
+        "Not with --mission-commands or a boundary record.",
+    )
+    parser.add_argument("--live-port-file", type=Path, default=None, help="M-c: where to write host, port and epoch")
+    parser.add_argument("--live-host", default="127.0.0.1", help="M-c: the console server's address")
+    parser.add_argument("--live-factor", type=float, default=1.0, help="M-c: the declared real-time factor")
+    parser.add_argument("--live-web-root", type=Path, default=None, help="M-c: console/web to serve")
+    parser.add_argument("--live-test-step-delay-ms", type=float, default=0.0,
+                        help="M-c tests only: extra wall time per physics step (the slow-pacing test)")
+    parser.add_argument("--live-test-camera-freeze", default=None,
+                        help="M-c tests only: FROM:TO sim seconds with no new camera frames (the video-stall test)")
+    parser.add_argument(
         "--mission-commands",
         type=Path,
         default=None,
@@ -847,6 +862,12 @@ def arguments() -> argparse.Namespace:
         parser.error("--near-tracking excludes the scheduled stops and dwells of the measurement runs")
     if args.near_tracking_stop_at is not None and not args.near_tracking:
         parser.error("--near-tracking-stop-at needs --near-tracking")
+    if args.live and args.mission_commands is not None:
+        parser.error("--live takes the operator's commands; not with --mission-commands")
+    if args.live and args.record_boundary:
+        parser.error("--live is not replayed: not with --record-boundary (plan C4)")
+    if args.live and args.live_factor <= 0:
+        parser.error("--live-factor must be positive")
     if args.mission_commands is not None:
         # M-a3 (plan E4, E7, E9): command stops decelerate on the obstacle layer's stopping model; the near-field
         # bounds were measured without pauses; scheduled stops, dwells and the e-stop probe keep their own clocks;
@@ -4528,9 +4549,10 @@ def drive(S, isaac) -> None:
         float(scenario.pickup.x_m), float(scenario.pickup.y_m), float(scenario.pickup.yaw_rad)))
     core.targets.add_destination("D-1", MissionTargetPose(
         float(scenario.destination.x_m), float(scenario.destination.y_m), float(scenario.destination.yaw_rad)))
-    core.commands.queue(MissionSubmit("P-1", "D-1", core.targets.revision))
-    core.commands.apply(0.0)
-    core.commands.start()
+    if not args.live:  # M-c: live, the operator submits (the targets list is offered)
+        core.commands.queue(MissionSubmit("P-1", "D-1", core.targets.revision))
+        core.commands.apply(0.0)
+        core.commands.start()
     transition = core.transition
 
     def held_kappa() -> float:
@@ -5093,7 +5115,118 @@ def drive(S, isaac) -> None:
                 # After this scan's reply: the correction control applies now.
                 obstacle_scan(stamp_now, now_base, now_q, shared_raw)
 
-        stepper["fn"] = step_world
+        live = None
+        if args.live:
+            # M-c (docs/plans/2026-10-17-m-c-isaac-live-runner.md): the arbiter, its console server and the pacing.
+            from forklift_core.control.drive_permission import DrivePermission as LivePermission
+            from forklift_core.control.path_tracking import ackermann_command as live_ackermann
+            from forklift_core.safety.teleop_drive import arc_permit as live_arc_permit
+            repo_root_ = str(Path(__file__).resolve().parents[2])  # console/ lives at the repository's root
+            if repo_root_ not in sys.path:
+                sys.path.insert(0, repo_root_)
+            from live_runtime import Hooks as LiveHooks, LiveRuntime  # a sibling, as the runner's other modules
+
+            def live_zero_wheels() -> None:
+                # As a scheduled preempt (M-a3 E7): the wheels stop at this step, the steering stays; the applied
+                # command, its slew and the stop detector's command say so.
+                robot.apply_action(isaac.action(joint_velocities=np.zeros(len(wheels)), joint_indices=wheels))
+                state["applied_command"] = (0.0, list((state.get("applied_command") or (0.0, []))[1]))
+                state["command_speed"] = 0.0
+                if slam is not None:
+                    slam["last_command"] = 0.0
+
+            def live_hold_lift(position: float) -> None:
+                robot.apply_action(isaac.action(joint_positions=np.array([position]), joint_indices=lift_index))
+
+            live_cam_ = _bound.get("perception_camera")  # unbound without --use-perception: no video
+
+            def live_camera():
+                if live_cam_ is None:
+                    return None, None
+                rgba_ = live_cam_.get_rgba()
+                frame_ = live_cam_.get_current_frame()
+                rendered_ = frame_.get("rendering_time") if isinstance(frame_, dict) else None
+                if rgba_ is None or rgba_.ndim != 3 or rgba_.size == 0 or rendered_ is None:
+                    return None, None
+                rgb_ = np.asarray(rgba_[:, :, :3], dtype=np.uint8)
+                while rgb_.shape[1] > 640:
+                    rgb_ = rgb_[::2, ::2]
+                return rgb_, float(rendered_)
+
+            def live_grid():
+                if obstacle is None:
+                    return None
+                snap_ = obstacle["layer"].grid.snapshot(world.current_time - initial_time, obstacle["applied"],
+                                                        obstacle["version"])
+                cells_ = np.ascontiguousarray(snap_.state.T).astype(np.uint8)  # rows of y, as the console reads
+                return {"cells": cells_.tobytes(), "width": int(snap_.state.shape[0]),
+                        "height": int(snap_.state.shape[1]), "resolution_m": float(snap_.resolution_m),
+                        "origin_m": (float(snap_.origin_x_m), float(snap_.origin_y_m)), "frame": "map",
+                        "correction_version": int(obstacle["version"])}
+
+            def live_scan():
+                if slam_log is None or not slam_log["scan_ranges_m"]:
+                    return None
+                rear_ = live_state.get("rear")
+                if rear_ is None:
+                    return None
+                ahead_ = abs(args.rear_axle_offset_m) + float(laser_mount.xyz_m[0])
+                c_, s_ = math.cos(float(rear_[2])), math.sin(float(rear_[2]))
+                pose_ = {"x_m": float(rear_[0]) + c_ * ahead_ - s_ * float(laser_mount.xyz_m[1]),
+                         "y_m": float(rear_[1]) + s_ * ahead_ + c_ * float(laser_mount.xyz_m[1]),
+                         "yaw_rad": float(rear_[2]) + float(laser_mount.yaw_rad)}
+                return {"ranges": slam_log["scan_ranges_m"][-1].tolist(), "angle_min_rad": scan_pattern.angle_min_rad,
+                        "angle_increment_rad": scan_pattern.angle_increment_rad,
+                        "range_max_m": scan_pattern.range_max_m, "pose": pose_, "frame": "map",
+                        "age_s": float(world.current_time - initial_time) - float(slam_log["scan_stamps_s"][-1])}
+
+            freeze_ = None
+            if args.live_test_camera_freeze:
+                a_, b_ = (float(v) for v in args.live_test_camera_freeze.split(":"))
+                freeze_ = (a_, b_)
+            live_state = {"rear": None, "snapshot": None, "snapshot_key": None}
+            live_perm = LivePermission(obstacle["layer"].permission.config) if obstacle is not None else None
+            live = LiveRuntime(
+                core, LiveHooks(zero_wheels=live_zero_wheels, hold_lift=live_hold_lift,
+                                lift_position=lambda: float(robot.get_joint_positions()[lift_index[0]]),
+                                camera=live_camera, grid=live_grid, scan=live_scan),
+                output=Path(args.output), port_file=args.live_port_file, dt=1 / 120, factor=args.live_factor,
+                host=args.live_host, web_root=args.live_web_root,
+                test_step_delay_s=args.live_test_step_delay_ms / 1000.0, camera_freeze=freeze_)
+            live.start()
+
+            def live_step_world(render: bool) -> None:
+                sim_ = float(world.current_time - initial_time)
+                live.before_step(sim_)
+                camera_ = live.camera_due() and live_cam_ is not None
+                step_world(render or camera_)
+                if slam is not None:
+                    speed_, yaw_rate_ = slam.get("odom_speed"), float(slam.get("odom_yaw_rate", 0.0))
+                else:
+                    rates_ = robot.get_joint_velocities()[wheels]
+                    speed_, yaw_rate_ = float(np.mean(rates_[2:4])) * odometry_wheel_radius(args), 0.0
+                live.after_step(float(world.current_time - initial_time), odom_speed=speed_, yaw_rate=yaw_rate_,
+                                rendered=camera_, render_sim_time_of=lambda rt: rt - initial_time)
+
+            def live_permit(curvatures, direction, check):
+                # The arbiter's own permission on the layer's latest grid, in the sim's time (plan C2: the world and
+                # its sensors move in sim time); the snapshot is taken again only when a new scan came in.
+                if live_perm is None:
+                    return 0.0, "no_permission"
+                layer_ = obstacle["layer"]
+                now_ = float(world.current_time - initial_time)
+                key_ = (tuple(sorted(layer_.last_scan_s.items())), obstacle["version"])
+                if live_state["snapshot_key"] != key_:
+                    live_state["snapshot"] = layer_.grid.snapshot(now_, obstacle["applied"], obstacle["version"])
+                    live_state["snapshot_key"] = key_
+                loaded_ = ms.phase in ("lift", "extract", "transport", "lower")
+                fp_, own_ = layer_.footprints(loaded_, direction)
+                return live_arc_permit(live_perm, live_state["snapshot"], now_, layer_.last_scan_s,
+                                       pose=tuple(float(v) for v in live_state["rear"]), curvatures=curvatures,
+                                       direction=direction, check_speed_mps=check, footprint=fp_,
+                                       own_footprint=own_)
+
+        stepper["fn"] = step_world if live is None else live_step_world
         if slam is not None:
             # The taught station, fixed before the mission moves (Codex v3.8
             # impl P2): the planned delivery rear pose, the start's base height,
@@ -5236,7 +5369,12 @@ def drive(S, isaac) -> None:
                     boundary.recorder.tick_begin(step, tick_t=t, work_t=t, commands=[], stop_kind="none")
             book_clock["t"] = t
             applied_commands_, stop_kind_ = [], "none"
-            if mission_schedule is not None:
+            live_abort_ = False  # M-c: the stop gate stopped the wheels inside this tick (plan C2)
+            if live is not None:
+                stop_kind_, applied_commands_ = live.tick_start(t, core.near_active())
+                if core.commands.status == "accepted":
+                    core.commands.start()  # the operator's submit: the mission runs from this tick
+            elif mission_schedule is not None:
                 # M-a3 (plan E2, E7): the schedule's due commands and the stop kind in force, applied at this
                 # control tick's start.
                 while mission_schedule and mission_schedule[0][0] <= t:
@@ -5463,6 +5601,8 @@ def drive(S, isaac) -> None:
             gate_ = core.release_gate(t, rear)
             releasing, warming, rear = gate_.releasing, gate_.warming, gate_.rear
             paused_ = core.commands.stopped  # M-a3 (plan E3): paused, resuming or cancelling -- no mission work
+            if live is not None and core.commands.status in ("idle", "accepted", "done", "failed", "cancelled"):
+                paused_ = True  # M-c: no mission yet (or over): its work does not run
             cancel_stop_ = False
             if ms.phase in trackers and not releasing and not warming and not paused_:
                 # Three times the path time at the tracker's own speed caps
@@ -5493,7 +5633,12 @@ def drive(S, isaac) -> None:
                         if captured_.rear_stamp is not None:
                             rear_stamp = captured_.rear_stamp
                         prior, params, detection, observation = captured_.prior, captured_.params, captured_.detection, captured_.observation
-                        if (
+                        # M-c (plan C2): a STOP or an expiry at a physics step inside the capture ends this tick's
+                        # mission work -- no observation handling, no transitions; the next tick pauses the mission.
+                        live_abort_ = live is not None and live.stopped_in_tick
+                        if live_abort_:
+                            pass
+                        elif (
                             args.repeat_captures
                             and (
                                 attempt_number == args.repeat_at_attempt
@@ -5610,7 +5755,9 @@ def drive(S, isaac) -> None:
                             }
                             transition("repeat_capture_done", t)
                             break
-                        if observation.status != "valid":
+                        if live_abort_:
+                            pass
+                        elif observation.status != "valid":
                             # M-a1 slice 4b-iii: an observation without a detection goes to the next candidate (the core's).
                             if core.observe_failed(t, rear, attempt, attempt_number, observation):
                                 break
@@ -5630,7 +5777,9 @@ def drive(S, isaac) -> None:
                             rear = arrival_.rear
                         if arrival_.stop:
                             break
-            if not paused_ and core.lift_and_timers(t, dt):  # M-a1 slice 2: the lift ramp and the timed transitions
+            if live_abort_:
+                requested_speed, curvature = 0.0, 0.0
+            if not paused_ and not live_abort_ and core.lift_and_timers(t, dt):  # M-a1 slice 2: the lift ramp, timers
                 break
             # The curvature the wheels actually hold: an emergency stop keeps it, so
             # the permission, the stop itself and the probe all use this one.
@@ -5641,7 +5790,7 @@ def drive(S, isaac) -> None:
             # Plan cusp position stall v7: a stall handed to the obstacle side keeps this block running
             # while it stands on a zero command.
             cusp_handed_ = cusp_monitor.handed(ms.phase) if obstacle is not None else None
-            if not paused_ and obstacle is not None and ms.phase in trackers and (
+            if not paused_ and not live_abort_ and obstacle is not None and ms.phase in trackers and (
                 requested_speed != 0.0 or abs(truth_speed) > 0.05 or obstacle.get("force_replan") == ms.phase
                 or cusp_handed_ is not None
             ):
@@ -5800,10 +5949,44 @@ def drive(S, isaac) -> None:
                 ],
             )
             # M-a1 slice 5: the command assembly is the core's (the e-stop probe above stays the runner's, truth).
+            steer_before_ = steering_command.copy() if live is not None else None
             command_ = core.assemble_command(t, dt, requested_speed, curvature, kappa, steering_command, estop_holding,
                                              obstacle_hold, dwell_hold, cusp_hold, safety_hold)
             drive, steering_command, actual_steering = command_.drive, command_.steering_command, command_.actual_steering
             requested_speed = command_.requested_speed
+            if live is not None:
+                # M-c (plan C2): the arbiter decides what drives. AUTO and PAUSED: the core's command as assembled.
+                # TELEOP: the operator's speed and curvature through the same back end (Ackermann, steering rate);
+                # a preempt: zero wheels, steering held. The applied command is written back for the core.
+                live_state["rear"] = tuple(float(v) for v in rear)
+                speed_now_ = live.feedback.rear_axle_speed_mps if live.feedback is not None else 0.0
+                target_steer_ = np.asarray(live_ackermann(1.0, live.arbiter.drive.kappa, args.drive_geometry).steering_rad)
+                out_ = live.tick_end(
+                    t, applied_commands_, core.safety_state(t), (float(drive.speed_mps), float(drive.curvature_inv_m)),
+                    {"measured_mps": float(speed_now_), "measured_kappa": float(kappa),
+                     "steering_error_rad": float(np.max(np.abs(target_steer_ - actual_steering))),
+                     "permit": live_permit},
+                    pose={"frame": "map", "x_m": float(rear[0]), "y_m": float(rear[1]), "yaw_rad": float(rear[2]),
+                          "correction_version": None if obstacle is None else int(obstacle["version"]),
+                          "source": "slam" if slam is not None else "odom"},
+                    freshness=None,
+                    applied={"speed_mps": float(drive.speed_mps), "curvature_inv_m": float(drive.curvature_inv_m),
+                             "steering_rad": [float(v) for v in steering_command]},
+                    speed_mps=float(speed_now_))
+                if out_.source == "teleop":
+                    drive = live_ackermann(out_.speed_mps, out_.curvature_inv_m, args.drive_geometry)
+                    rate_ = settings["steering_command_rate_rad_s"] * dt
+                    steering_command[:] = steer_before_ + np.clip(np.asarray(drive.steering_rad) - steer_before_,
+                                                                  -rate_, rate_)
+                    requested_speed = float(drive.speed_mps)
+                    state["command_speed"] = float(out_.speed_mps)
+                    state["applied_command"] = (float(drive.speed_mps), [float(v) for v in steering_command])
+                elif out_.stop_kind == "preempt":
+                    drive = live_ackermann(0.0, kappa, args.drive_geometry)
+                    steering_command[:] = steer_before_
+                    requested_speed = 0.0
+                    state["command_speed"] = 0.0
+                    state["applied_command"] = (0.0, [float(v) for v in steering_command])
             if dwell_standing and wheel_lock["q"] is None:
                 # Plan D8b: hold the wheels where they stand for the dwell (DWELL_WHEEL_KP).
                 controller_ = robot.get_articulation_controller()
@@ -6161,6 +6344,12 @@ def drive(S, isaac) -> None:
                 for name, exit_code in video_results:
                     require(exit_code == 0, f"{name} video encoding failed")
         finally:
+            live = locals().get("live")  # unbound when the setup failed before the live runtime was made
+            if live is not None:
+                try:
+                    live.close()  # M-c: close frames to every client, the port file says ended (or stop_failed)
+                except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own end
+                    state["live_close_error"] = repr(exc_)
             # M-a3: the lifecycle ends with the run, once every clean-up has run -- done only when the run
             # succeeded and nothing is propagating, failed otherwise; the loop's own time (no new clock read: the
             # replay compares every port call).
