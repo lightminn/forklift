@@ -602,3 +602,18 @@ def test_each_tick_row_carries_the_path_revision_its_follower_ran_on():
     near["tracker"].latest.stamp_s = 9.95
     tick(core, 10.0)
     assert near["corrections"][-1]["revision"] == 3 and near["ticks"][-1]["path_revision"] == 2
+
+
+def test_a_pickup_retry_moves_to_observe_only_after_the_release_and_stand():
+    """M-a2 (Codex review P2): a release that fails leaves the mission where it was, not already in observe."""
+    core, near, _ = make()
+    core.state["near_capture"] = {"status": "accepted"}
+
+    def release(now, event):
+        raise RuntimeError("release failed")
+
+    core.release_and_stand = release
+    del core.start_pickup_retry
+    with pytest.raises(RuntimeError, match="release failed"):
+        core.start_pickup_retry(12.0, "mismatch", 0.7, 1)
+    assert core.ms.phase == "approach" and core.state["transitions"] == []

@@ -2016,34 +2016,6 @@
    }
   },
   {
-   "id": "B3:failed-escape-not-counted",
-   "class": "N",
-   "checks": [
-    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_waits_do_not_count_as_retries::1",
-    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_waits_do_not_count_as_retries::2",
-    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_waits_do_not_count_as_retries::3",
-    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_waits_do_not_count_as_retries::4"
-   ],
-   "statement": "a failed replan and an escape never count towards the replan limits (Codex M-a2 review P2)",
-   "tests": [
-    "tests/unit/mission/test_core_blocked_replan.py::test_failed_and_escape_replans_never_count_towards_the_replan_limits"
-   ],
-   "mutation": {
-    "file": "src/forklift_core/mission/core.py",
-    "find": "and not r.get(\"failed\") and not r.get(\"escape\")",
-    "replace": "",
-    "count": 2
-   },
-   "evidence": {
-    "baseline": "passed",
-    "mutated": "failed_on_check",
-    "failing_tests": [
-     "tests/unit/mission/test_core_blocked_replan.py::test_failed_and_escape_replans_never_count_towards_the_replan_limits"
-    ],
-    "check_line": "E   AssertionError"
-   }
-  },
-  {
    "id": "B3:same-path-before-limit",
    "class": "N",
    "checks": [
@@ -8324,6 +8296,304 @@
    ],
    "statement": "a backoff install in a realignment is recorded",
    "reason": "unreachable: the call sits under `if ms.phase == \"observe\"` inside the backoff branch, which only runs in transport and return_home (core.py, blocked_replan); a backoff never happens in observe, so no behaviour can show it -- carried over from the runner as dead code, left for a production change with its own gate (plan 2.6)"
+  },
+  {
+   "id": "B8:30s-skips-failed",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_waits_do_not_count_as_retries::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_waits_do_not_count_as_retries::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_waits_do_not_count_as_retries::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_waits_do_not_count_as_retries::4"
+   ],
+   "statement": "a failed replan is not a 30 s replan",
+   "tests": [
+    "tests/unit/mission/test_core_blocked_replan.py::test_failed_and_escape_replans_never_count_towards_the_replan_limits[30 s-failed]"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "and not r.get(\"same_path\") and not r.get(\"failed\") and not r.get(\"escape\")]",
+    "replace": "and not r.get(\"same_path\") and not r.get(\"escape\")]",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_blocked_replan.py::test_failed_and_escape_replans_never_count_towards_the_replan_limits[30"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B8:30s-skips-escape",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_waits_do_not_count_as_retries::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_waits_do_not_count_as_retries::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_waits_do_not_count_as_retries::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_waits_do_not_count_as_retries::4"
+   ],
+   "statement": "an escape is not a 30 s replan",
+   "tests": [
+    "tests/unit/mission/test_core_blocked_replan.py::test_failed_and_escape_replans_never_count_towards_the_replan_limits[30 s-escape]"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "and not r.get(\"same_path\") and not r.get(\"failed\") and not r.get(\"escape\")]",
+    "replace": "and not r.get(\"same_path\") and not r.get(\"failed\")]",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_blocked_replan.py::test_failed_and_escape_replans_never_count_towards_the_replan_limits[30"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B8:leg-skips-failed",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_waits_do_not_count_as_retries::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_waits_do_not_count_as_retries::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_waits_do_not_count_as_retries::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_waits_do_not_count_as_retries::4"
+   ],
+   "statement": "a failed replan is not a leg replan",
+   "tests": [
+    "tests/unit/mission/test_core_blocked_replan.py::test_failed_and_escape_replans_never_count_towards_the_replan_limits[leg-failed]"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "and not r.get(\"failed\") and not r.get(\"escape\"))",
+    "replace": "and not r.get(\"escape\"))",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_blocked_replan.py::test_failed_and_escape_replans_never_count_towards_the_replan_limits[leg-failed]"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B8:leg-skips-escape",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_waits_do_not_count_as_retries::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_waits_do_not_count_as_retries::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_waits_do_not_count_as_retries::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_same_path_waits_do_not_count_as_retries::4"
+   ],
+   "statement": "an escape is not a leg replan",
+   "tests": [
+    "tests/unit/mission/test_core_blocked_replan.py::test_failed_and_escape_replans_never_count_towards_the_replan_limits[leg-escape]"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "and not r.get(\"failed\") and not r.get(\"escape\"))",
+    "replace": "and not r.get(\"failed\"))",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_blocked_replan.py::test_failed_and_escape_replans_never_count_towards_the_replan_limits[leg-escape]"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B8:cusp-replan-transport-only",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::3"
+   ],
+   "statement": "only the transport replans a heading failure at a cusp",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_observe.py::test_the_cusp_heading_replan_is_the_transports_only"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "            tracking.status == \"failed\"\n            and ms.phase == \"transport\"\n            and tracking.failure == \"endpoint_heading\"",
+    "replace": "            tracking.status == \"failed\"\n            and ms.phase in (\"transport\", \"return_home\")\n            and tracking.failure == \"endpoint_heading\"",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_cusp_observe.py::test_the_cusp_heading_replan_is_the_transports_only"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B8:cusp-replan-keeps-config",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::16"
+   ],
+   "statement": "the cusp replan follows the new path with the leg's own tracker config",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_observe.py::test_the_cusp_replan_keeps_the_legs_tracker_config"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                    hooks.show_path(replanned, \"Transport\", (1.0, 0.65, 0.04))\n                    trackers[ms.phase] = RearAxlePathTracker(\n                        replanned.poses,\n                        replanned.directions,\n                        replanned.curvatures_inv_m,\n                        trackers[ms.phase].config,",
+    "replace": "                    hooks.show_path(replanned, \"Transport\", (1.0, 0.65, 0.04))\n                    trackers[ms.phase] = RearAxlePathTracker(\n                        replanned.poses,\n                        replanned.directions,\n                        replanned.curvatures_inv_m,\n                        TrackerConfig(),",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_cusp_observe.py::test_the_cusp_replan_keeps_the_legs_tracker_config"
+    ],
+    "check_line": "E   assert "
+   }
+  },
+  {
+   "id": "B8:no-escape-in-reapproach",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::14"
+   ],
+   "statement": "no escape on the transport during a docking re-approach",
+   "tests": [
+    "tests/unit/mission/test_core_blocked_replan.py::test_no_escape_on_the_transport_after_a_docking_match_or_during_a_reapproach[docking0]"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "(slam[\"docking\"].get(\"reapproach\") or slam[\"docking\"].get(\"accepted_any\"))",
+    "replace": "(slam[\"docking\"].get(\"accepted_any\"))",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_blocked_replan.py::test_no_escape_on_the_transport_after_a_docking_match_or_during_a_reapproach[docking0]"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B8:no-escape-after-match",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::14"
+   ],
+   "statement": "no escape on the transport after an accepted docking match",
+   "tests": [
+    "tests/unit/mission/test_core_blocked_replan.py::test_no_escape_on_the_transport_after_a_docking_match_or_during_a_reapproach[docking1]"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "(slam[\"docking\"].get(\"reapproach\") or slam[\"docking\"].get(\"accepted_any\"))",
+    "replace": "(slam[\"docking\"].get(\"reapproach\"))",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_blocked_replan.py::test_no_escape_on_the_transport_after_a_docking_match_or_during_a_reapproach[docking1]"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B8:retry-observe-after-release",
+   "class": "N",
+   "checks": [
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::1",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::2",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::3",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::4",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::5",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::6",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::7",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::8",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::9",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::10",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::11",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::12",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::13",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::14",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::15",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::16",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::17",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::18",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::19"
+   ],
+   "statement": "a pickup retry moves to observe only after the release and stand",
+   "tests": [
+    "tests/unit/mission/test_core_near_field.py::test_a_pickup_retry_moves_to_observe_only_after_the_release_and_stand"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "        retry_.update(core.release_and_stand(now_s, \"release_pickup_retry\"))\n        state[\"near_tracking\"][\"retry\"] = retry_\n        near[\"stand_record\"] = \"retry\"\n        transition(\"observe\", now_s)",
+    "replace": "        transition(\"observe\", now_s)\n        retry_.update(core.release_and_stand(now_s, \"release_pickup_retry\"))\n        state[\"near_tracking\"][\"retry\"] = retry_\n        near[\"stand_record\"] = \"retry\"",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_near_field.py::test_a_pickup_retry_moves_to_observe_only_after_the_release_and_stand"
+    ],
+    "check_line": "E   AssertionError"
+   }
   }
  ]
 }

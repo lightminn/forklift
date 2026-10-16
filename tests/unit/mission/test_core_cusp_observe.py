@@ -325,3 +325,21 @@ def test_the_observe_replan_budget_counts_only_the_replans_since_the_legs_start(
     w.state["observe_replan_leg"] = {"start": 2, "serial": 8}  # this leg began after those two
     w.tick(OBSERVE_MISS)
     assert "plan_observation_leg" in w.names()
+
+
+def test_the_cusp_heading_replan_is_the_transports_only():
+    """M-a2 (Codex review P2): a heading failure at a cusp on the return leg is not replanned as the transport's."""
+    w = World("return_home", plans=[plan()])
+    for _ in range(13):
+        w.tick(CUSP_MISS)
+    assert "plan_transport_leg" not in w.names() and w.state.get("cusp_replans", []) == []
+
+
+def test_the_cusp_replan_keeps_the_legs_tracker_config():
+    """M-a2 (Codex review P2): the replanned transport leg is followed with the leg's own tracker config."""
+    w = World(plans=[plan()])
+    w.tracker.config = TrackerConfig(cruise_speed_mps=0.47)
+    for _ in range(12):
+        w.tick(CUSP_MISS)
+    assert w.core.trackers["transport"] is not w.tracker
+    assert w.core.trackers["transport"].config.cruise_speed_mps == 0.47

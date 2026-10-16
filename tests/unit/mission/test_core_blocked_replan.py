@@ -378,16 +378,19 @@ def test_same_path_waits_between_new_paths_never_reach_the_replan_limits():
     assert [bool(r.get("same_path")) for r in replans] == [False, False, True, True, True, True, True, False]
 
 
-def test_failed_and_escape_replans_never_count_towards_the_replan_limits():
+@pytest.mark.parametrize("kind", ["failed", "escape"])
+@pytest.mark.parametrize("window", ["30 s", "leg"])
+def test_failed_and_escape_replans_never_count_towards_the_replan_limits(kind, window):
     """M-a2 (Codex review P2): only new paths count -- a failed replan and an escape are neither 30 s replans
-    nor leg replans."""
+    nor leg replans; each kind and each count on its own."""
     w = World("observe", plans=[plan()])
-    w.obstacle["replans"] = ([{"phase": "observe", "time_s": 49.0, "failed": True}] * 6
-                             + [{"phase": "observe", "time_s": 49.5, "escape": {"e": 1}}] * 6)
+    entry = {"phase": "observe", "time_s": 49.0 if window == "30 s" else 1.0,
+             kind: True if kind == "failed" else {"e": 1}}
+    w.obstacle["replans"] = [dict(entry) for _ in range(4 if window == "30 s" else 11)]
     try:
         w.replan(t=50.0)
     except RuntimeError as exc:
-        raise AssertionError(f"a failed or escape replan was counted: {exc}") from exc
+        raise AssertionError(f"a {kind} replan was counted ({window}): {exc}") from exc
     assert w.paths["observe"].status == "success" and w.names()[-1] == "realign_install"
 
 
@@ -414,3 +417,17 @@ def test_the_escape_budget_is_two_per_leg(used, tried):
     w.obstacle["escapes"] = dict(used)
     w.replan()
     assert ("find_escape" in w.names()) is tried
+
+
+@pytest.mark.parametrize("docking", [{"reapproach": True}, {"accepted_any": True}])
+def test_no_escape_on_the_transport_after_a_docking_match_or_during_a_reapproach(docking):
+    """M-a2 (Codex review P2): an invalid start on the transport with a docking re-approach under way or after an
+    accepted match replans without looking for an escape."""
+    w = World("transport", plans=[plan("invalid_start"), plan()], escape=None,
+              slam={"docking": dict(docking), "tracker": SimpleNamespace(mode="tracking"), "control": [[0.0] * 4]})
+    try:
+        w.replan()
+    except Exception:  # what follows the refusal of an escape is not this test's subject
+        pass
+    assert "transport_replan" in w.names()  # the escape rule was reached
+    assert "find_escape" not in w.names() and w.obstacle.get("escapes", {}).get("transport", 0) == 0
