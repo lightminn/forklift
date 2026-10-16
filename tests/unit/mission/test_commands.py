@@ -198,3 +198,28 @@ def test_an_arbiter_stop_pauses_the_mission_until_a_resume_after_it(kind):
     assert m.apply(13.0)[0:] == [] and m.status == "paused"  # lifted: still paused until a resume
     m.queue(Resume())
     assert m.apply(14.0)[0]["accepted"] and m.status == "resuming"
+
+
+def test_hold_stops_the_work_clock_until_a_resume_after_hold_off():
+    """M-b B6: TELEOP holds the mission; handing back leaves it paused, and only a resume moves it."""
+    m = running()
+    assert m.hold_on(10.0) and m.status == "held" and m.stopped and m.pauses == [[10.0, None]]
+    gen = m.mission_gen
+    for command, reason in ((Pause(), "held"), (Resume(), "held")):
+        m.queue(command)
+        assert m.apply(11.0)[0]["reason"] == reason
+    assert m.hold_off(20.0) and m.status == "paused" and m.mission_gen == gen + 1 and m.pauses == [[10.0, None]]
+    m.queue(Resume())
+    assert m.apply(21.0)[0]["accepted"] and m.status == "resuming"
+    assert m.resumed(22.0) == pytest.approx(12.0) and m.work_elapsed(0.0, 25.0) == pytest.approx(13.0)
+    assert [r["command"] for r in m.log if r["command"].startswith("hold")] == ["hold_on", "hold_off"]
+
+
+def test_a_held_mission_can_be_cancelled_and_a_paused_one_held_keeps_its_stop():
+    m = running()
+    m.queue(Pause())
+    m.apply(5.0)
+    assert m.hold_on(6.0) and m.pauses == [[5.0, None]]
+    m.queue(Cancel())
+    assert m.apply(7.0)[0]["accepted"] and m.status == "cancelling"
+    assert not MissionCommands().hold_on(0.0) and not running().hold_off(0.0)

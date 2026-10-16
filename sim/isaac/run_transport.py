@@ -5246,7 +5246,7 @@ def drive(S, isaac) -> None:
                         and core.commands.status in ("running", "resuming")):
                     stop_kind_ = "preempt"  # a preempt that began and ended inside a capture still stops the mission
                 applied_commands_ = core.commands.apply(t, MissionContext(
-                    stop_kind=stop_kind_, near_tracker=near is not None and near["tracker"] is not None))
+                    stop_kind=stop_kind_, near_tracker=core.near_active()))  # M-b B7: the contract applies now
             if early_ports:
                 boundary.recorder.tick_time(tick_t=t, work_t=core.commands.work_elapsed(0.0, t),
                                             commands=applied_commands_, stop_kind=stop_kind_)

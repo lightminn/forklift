@@ -2626,8 +2626,8 @@ class MissionCore:
             cmds.stop_seen_s = t
             cmds.stop_pose = tuple(float(v) for v in rear)  # R11 measures a move from where it stood, not braking
         # E3: not standing 10 s after the stop began -- reported for the arbiter (the run goes on).
-        cmds.not_stopped = (cmds.stop_seen_s is None and cmds.paused_since is not None
-                            and t - cmds.paused_since >= NOT_STOPPED_S)
+        cmds.not_stopped = (cmds.status != "held" and cmds.stop_seen_s is None and cmds.paused_since is not None
+                            and t - cmds.paused_since >= NOT_STOPPED_S)  # held: the operator drives (M-b B6)
         obstacle_hold = False
         if obstacle is not None:
             obstacle_hold = self.permission_watch(t, rear, kappa, loaded).obstacle_hold
@@ -2672,6 +2672,10 @@ class MissionCore:
             cmds.pause_hold_count = self.hold_count()
 
         check["step"] = "state_verified"
+        if self.near_active():
+            # M-b B5: a stop inside the near-field contract (an arbiter STOP; a pause is refused there) is not resumed
+            # -- pausing near tracking (R4-R6) is not built; what follows is a recovery action.
+            return refuse("no_resume:near_tracking")
         holding_now = slam is not None and slam["tracker"].mode == "holding"
         if cmds.pause_holding and not cmds.pause_release_pending:
             if not holding_now:
@@ -2763,6 +2767,12 @@ class MissionCore:
             trackers[ms.phase].restart_speed_slew(0.0)  # from standing, not from the held cruise
         return rear
 
+    def near_active(self) -> bool:
+        """The near-field contract applies this tick: a near tracker exists and the phase is one ``near_tick`` runs in
+        (approach, insert)."""
+        near = self.near
+        return near is not None and near.get("tracker") is not None and self.ms.phase in ("approach", "insert")
+
     def release_slam(self, odom_from_base):
         """The one place the core releases a SLAM hold: applies the received correction and counts the frame change
         the targets list follows (M-a4). Returns the tracker's (position, yaw) jump."""
@@ -2824,10 +2834,14 @@ class MissionCore:
             "fork_in_pocket": {"value": phase_ in ("insert", "lift", "extract", "lower", "withdraw"), "basis": "phase"},
             "near": None if near is None else {
                 "tracker_built": near.get("tracker") is not None,
+                # M-b B7: the near-field contract applies now (the condition the core runs near_tick under);
+                # tracker_built stays true after a normal near-field end.
+                "active": self.near_active(),
                 "stop_reason": getattr(near.get("stop_state"), "reason", None),
                 "terminal": bool(getattr(near.get("stop_state"), "terminal", False)),
                 "protect": near.get("protect") is not None},
-            "frame": {"correction_version": None if obstacle is None else obstacle.get("version"), "hold": hold_},
+            "frame": {"correction_version": None if obstacle is None else obstacle.get("version"), "hold": hold_,
+                      "slam": slam is not None},
             "command": {"applied_speed_mps": None if applied_ is None else float(applied_[0]),
                         "steering_rad": None if applied_ is None else [float(v) for v in applied_[1]]},
             "blocked": {"cap": None if obstacle is None or obstacle.get("permission_cap") is None

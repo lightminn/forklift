@@ -8,7 +8,7 @@ import pytest
 
 from forklift_core.control import RearAxlePathTracker
 from forklift_core.control.path_tracking import TrackerConfig
-from forklift_core.mission.commands import Cancel, Pause, Resume, Submit
+from forklift_core.mission.commands import Cancel, Context, Pause, Resume, Submit
 from forklift_core.mission.core import MissionCore
 from forklift_core.mission.state import MissionState
 
@@ -517,3 +517,34 @@ def test_a_lift_on_its_way_is_held_where_it_stood_and_a_sagging_load_does_not_ra
         lift["z"] = core.ms.lift_command - 0.0028  # the load sags below whatever target it is given
         core.paused_tick(10.0 + k / 120, REAR, 0.0, True)
     assert core.ms.lift_command == 0.10
+
+
+def test_the_safety_state_says_whether_the_near_contract_applies_now_and_whether_slam_exists():
+    """M-b B7: tracker_built stays true after a normal near-field end; active does not."""
+    core, _, _ = make("approach", obstacle=False)
+    core.near = {"tracker": object(), "stop_state": None, "protect": None}
+    assert core.safety_state(1.0)["near"]["active"] is True
+    core.ms.phase = "transport"
+    state = core.safety_state(1.0)
+    assert state["near"]["tracker_built"] is True and state["near"]["active"] is False
+    assert state["frame"]["slam"] is False
+
+
+def test_a_stop_inside_the_near_contract_is_not_resumed():
+    """M-b B5: an arbiter STOP pauses a near-tracked mission (a pause request is refused there); its resume is not
+    built (R4-R6), so it is refused and the mission stays paused."""
+    core, _, _ = make("approach", obstacle=False)
+    core.near = {"tracker": object(), "stop_state": None, "protect": None}
+    core.commands.apply(10.0, Context(stop_kind="preempt"))
+    assert core.commands.status == "paused"
+    core.paused_tick(10.0, REAR, 0.0, False)
+    resume(core, 11.0)
+    core.paused_tick(11.0, REAR, 0.0, False)
+    assert core.commands.status == "paused" and core.commands.log[-1]["reason"] == "no_resume:near_tracking"
+
+
+def test_a_held_mission_does_not_report_a_failed_stop_while_the_operator_drives():
+    core, _, _ = make(obstacle=False, speed=0.4)
+    core.commands.hold_on(10.0)
+    core.paused_tick(25.0, REAR, 0.0, False)
+    assert core.commands.not_stopped is False

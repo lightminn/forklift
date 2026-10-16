@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-ACTIVE = ("accepted", "running", "paused", "resuming", "cancelling")
+ACTIVE = ("accepted", "running", "paused", "resuming", "held", "cancelling")
 FINAL = ("done", "failed", "cancelled")
 STOP_KINDS = ("none", "controlled", "preempt")
 PRIORITY = {"cancel": 0, "pause": 1, "resume": 2, "submit": 2}
@@ -125,6 +125,8 @@ class MissionCommands:
         return None
 
     def _pause(self, t, command: Pause, context: Context):
+        if self.status == "held":
+            return "held"
         if self.status not in ("running", "resuming"):
             return "not_running"
         if context.near_tracker:
@@ -137,6 +139,8 @@ class MissionCommands:
         return None
 
     def _resume(self, t, command: Resume, context: Context):
+        if self.status == "held":
+            return "held"
         if self.status != "paused":
             return "not_paused"
         if context.stop_kind != "none":
@@ -169,6 +173,35 @@ class MissionCommands:
         self.pause_holding = self.pause_release_pending = False
         self.pauses.append([t, None])
         self.mission_gen += 1
+
+    # --- the arbiter's hold (M-b B6) ------------------------------------------------------------------------------
+    def hold_on(self, t: float) -> bool:
+        """The operator takes over (TELEOP): an active mission is held -- its work clock stops (one open stop), a
+        new generation, a resume's checks dropped. Held is left only by ``hold_off`` (to paused) or a cancel."""
+        if self.status not in ("accepted", "running", "paused", "resuming"):
+            return False
+        if self.paused_since is None:
+            self._stop_boundary(t)
+        else:
+            self.mission_gen += 1
+        self.status = "held"
+        self.resume_check = None
+        self._record(t, "hold_on")
+        return True
+
+    def hold_off(self, t: float) -> bool:
+        """The operator hands back: held becomes paused, the stop stays open and a resume is needed (its checks see
+        that the truck was moved)."""
+        if self.status != "held":
+            return False
+        self.status = "paused"
+        self.mission_gen += 1
+        self._record(t, "hold_off")
+        return True
+
+    def _record(self, t: float, command: str) -> None:
+        self.log.append({"t": t, "command": command, "accepted": True, "reason": None, "mission_id": self.mission_id,
+                         "status": self.status})
 
     # --- transitions the core makes ------------------------------------------------------------------------------
     def start(self) -> None:
@@ -222,8 +255,8 @@ class MissionCommands:
     # --- the work clock ------------------------------------------------------------------------------------------
     @property
     def stopped(self) -> bool:
-        """Paused, resuming or cancelling: the mission's work does not run this tick."""
-        return self.status in ("paused", "resuming", "cancelling")
+        """Paused, resuming, held or cancelling: the mission's work does not run this tick."""
+        return self.status in ("paused", "resuming", "held", "cancelling")
 
     def work_elapsed(self, since: float, now: float) -> float:
         """``now - since`` without the pauses inside that interval; exactly ``now - since`` before any pause."""
