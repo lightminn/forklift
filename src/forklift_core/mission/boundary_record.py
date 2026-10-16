@@ -185,6 +185,7 @@ class BoundaryRecorder:
             self._final_state = True
         if self._tick is not None:
             raise RuntimeError("close inside a tick")
+        log_changes = [p for w in self.__dict__.get("_watches", []) for p in w.final_problems()]
         self._closed = True
         self._flush()
         (self.directory / "boundary_meta.json").write_text(json.dumps({
@@ -192,7 +193,7 @@ class BoundaryRecorder:
             "bytes": self._bytes, "stopped_at_tick": self.stopped_at_tick, "stopped_reason": self.stopped_reason,
             "opaque_values": self.opaque_values,
         } | ({"format": "forklift_boundary_record/2", "value_types": sorted(self.value_types),
-              "final_state": self._final_state, "ending": ending}
+              "final_state": self._final_state, "ending": ending, "log_changes": log_changes}
              if self.value_format == 2 else {}), indent=1) + "\n")
 
     # -- internals ---------------------------------------------------------------------------------
@@ -474,11 +475,13 @@ class _State:
                 if not isinstance(k, str):
                     self.problems.append(f"watched {name} has a {type(k).__name__} key")
                 if k in watch.append_only and isinstance(v, list):
-                    self.appends[(name, k)] = (v, list(v))  # the list and its items (kept alive)
-                    # The last logged item by content (an edit to it is checked per call); every item's objects
-                    # by identity (cached per list, items are never re-walked once seen).
-                    ids = watch.logged_ids(name, k, v)
-                    self.log_ids = getattr(self, "log_ids", set()) | ids
+                    # The list, its length and its last item (nothing copied: a long log made every call O(n),
+                    # Codex P2); every logged item's objects by identity and position, cached per list and walked
+                    # once (watch.logged_index); an older item replaced in place is caught when the record closes
+                    # (DictWatch.final_problems), the last item per call by content (log_last).
+                    self.appends[(name, k)] = (v, len(v), v[-1] if v else _NO_ITEM)
+                    self.log_index = getattr(self, "log_index", {})
+                    self.log_index[(name, k)] = watch.logged_index(name, k, v)
                     self.problems += [f"log {name}.{k} item {q}" for q in watch.logged_problems(name, k)]
                     if v and texts:
                         self.log_last = getattr(self, "log_last", {})
@@ -488,6 +491,9 @@ class _State:
         # Comparison only: arrays by hash (nothing stored in the record).
         self.texts = {q: _compare_text(recorder, o) for q, o in self.paths.items()} if texts else None
         self.recorder = recorder
+
+
+_NO_ITEM = object()  # an empty log's "last item"
 
 
 def check_state(before: "_State", after: "_State") -> tuple[list, str | None]:
@@ -501,10 +507,14 @@ def check_state(before: "_State", after: "_State") -> tuple[list, str | None]:
     replaced paths, None) or ([], why not)."""
     if after.problems or before.problems:
         return [], "; ".join(sorted(set(before.problems + after.problems)))
-    before_ids = {id(o) for o in before.paths.values()} | getattr(before, "log_ids", set())
-    for lst, items in before.appends.values():
-        before_ids.add(id(lst))
-        before_ids.update(id(x) for x in items)
+    before_small = {id(o) for o in before.paths.values()} | {id(lst) for lst, _, _ in before.appends.values()}
+    log_index = getattr(before, "log_index", {})
+
+    class _Existed:  # `id in before_ids`: the view's objects, the logs, and every logged item's objects so far
+        def __contains__(self, i):
+            return i in before_small or any(d.get(i, n) < n for d, n in log_index.values())
+
+    before_ids = _Existed()
     for key, (item, text) in getattr(before, "log_last", {}).items():
         if _compare_text(before.recorder, item) != text:
             return [], f"append-only {key}: its last logged item was changed"
@@ -515,7 +525,7 @@ def check_state(before: "_State", after: "_State") -> tuple[list, str | None]:
             if id(lst) in before_ids or id(lst) in seen:
                 return [], f"append-only {key} is new and holds an object that existed or is held elsewhere"
             seen[id(lst)] = ("new log", key)
-            before.appends[key] = (lst, [])
+            before.appends[key] = (lst, 0, _NO_ITEM)
     differ = [q for q, o in after.paths.items() if q in before.paths and before.paths[q] is not o]
     differ.sort(key=lambda q: (len(q), repr(q)))
     replaced = [q for q in differ if not any(q[:len(r)] == r for r in differ if len(r) < len(q))]
@@ -536,15 +546,14 @@ def check_state(before: "_State", after: "_State") -> tuple[list, str | None]:
             return [], f"{q} and {seen[id(o)]} now hold one new object"
         seen[id(o)] = q
     view_ids = {id(o) for o in before.paths.values()}
-    log_lists = {id(lst) for lst, _ in before.appends.values()}
-    for key, (lst, items) in before.appends.items():
+    log_lists = {id(lst) for lst, _, _ in before.appends.values()}
+    for key, (lst, count, last) in before.appends.items():
         now = after.appends.get(key)
         if now is None or now[0] is not lst:
             return [], f"append-only {key} was replaced or removed"
-        cur = now[1]
-        if len(cur) < len(items) or any(a is not b for a, b in zip(cur, items)):
+        if now[1] < count or (count and lst[count - 1] is not last):
             return [], f"append-only {key} changed its existing items"
-        for x in cur[len(items):]:
+        for x in lst[count:now[1]]:
             inner: dict = {}
             problems: list = []
             _walk(x, (), inner, problems)
@@ -705,28 +714,44 @@ class DictWatch:
         self.recorder = recorder
         self.dicts = dicts
         self.append_only = set(append_only)
+        if recorder is not None:  # its logs are checked once more when the record closes
+            recorder.__dict__.setdefault("_watches", []).append(self)
         self.skip = set(skip)
         # Per dictionary, the only keys compared (None: all but ``skip``) -- keeps a per-physics-tick watch cheap.
         self.keys = {name: set(k) for name, k in (keys or {}).items()}
 
-    def logged_ids(self, name: str, key, lst: list) -> set:
-        """The ids of every mutable object inside an append-only list's items (format 2's change check),
-        cached per list: an item is walked once, when first seen."""
+    def logged_index(self, name: str, key, lst: list) -> tuple[dict, int]:
+        """(id -> first position, item count) for the objects inside an append-only list's items and the items
+        themselves (format 2's change check), cached per list: an item is walked once, when first seen. The
+        dict is shared and only grows: a caller holding an older count reads only the positions below it."""
         cache = self.__dict__.setdefault("_logged", {})
         entry = cache.get((name, key))
         if entry is None or entry[0] is not lst or entry[1] > len(lst):
-            entry = [lst, 0, set(), []]  # the list, items seen, ids, the items (kept alive)
+            entry = [lst, 0, {}, [], []]  # the list, items seen, id -> position, the items (kept alive), problems
             cache[(name, key)] = entry
-        problems = entry[4] if len(entry) > 4 else []
-        if len(entry) == 4:
-            entry.append(problems)
         for item in lst[entry[1]:]:
+            position = len(entry[3])
             inner: dict = {}
-            _walk(item, (len(entry[3]),), inner, problems)
-            entry[2].update(id(o) for o in inner.values())
+            _walk(item, (position,), inner, entry[4])
+            entry[2].setdefault(id(item), position)
+            for o in inner.values():
+                entry[2].setdefault(id(o), position)
             entry[3].append(item)
         entry[1] = len(lst)
-        return set(entry[2])
+        return entry[2], entry[1]
+
+    def logged_ids(self, name: str, key, lst: list) -> set:
+        index, _ = self.logged_index(name, key, lst)
+        return set(index)
+
+    def final_problems(self) -> list:
+        """Logged items replaced in place since they were first seen (checked once, when the record closes)."""
+        out = []
+        for (name, key), entry in self.__dict__.get("_logged", {}).items():
+            lst, items = entry[0], entry[3]
+            if len(lst) < len(items) or any(a is not b for a, b in zip(lst, items)):
+                out.append(f"append-only {name}.{key} changed an item already logged")
+        return out
 
     def logged_problems(self, name: str, key) -> list:
         entry = self.__dict__.get("_logged", {}).get((name, key))

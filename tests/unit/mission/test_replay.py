@@ -1240,3 +1240,42 @@ def test_a_set_member_with_an_identity_is_refused_not_misordered():
     assert Encoder().encode({("a", 1), ("b", 2)})["$set"] == [{"$tuple": ["a", 1]}, {"$tuple": ["b", 2]}]
     with pytest.raises(TypeError, match="plain value"):
         Encoder().encode({Key("a")})
+
+
+def test_an_older_logged_item_replaced_in_place_is_caught_when_the_record_closes(tmp_path):
+    log = {"records": [{"i": 0}, {"i": 1}, {"i": 2}]}
+
+    def step(n):
+        log["records"].append({"i": n})
+        if n == 5:
+            log["records"][0] = {"i": "replaced"}  # an old item, not the last one
+
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    gate = RecordingGate(rec)
+    watch = DictWatch(rec, {"log": log}, append_only={"records"})
+    for n in range(3, 7):
+        rec.tick_begin(n, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+        recorded_function(step, "Vehicle", "step", gate, watch=watch)(n)
+        rec.tick_end(outputs={}, branches=[])
+    rec.close()
+    with pytest.raises(ValueError, match="changed in place"):
+        ReplaySession(tmp_path)
+
+
+def test_a_watched_call_on_a_long_log_costs_no_pass_over_the_log(tmp_path):
+    import time
+
+    log = {"records": [np.zeros(3) for _ in range(20000)]}
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    gate = RecordingGate(rec)
+    watch = DictWatch(rec, {"log": log}, append_only={"records"})
+    step = recorded_function(lambda: log["records"].append(np.zeros(3)), "Vehicle", "step", gate, watch=watch)
+    rec.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    step()  # the first call walks the existing items once
+    start = time.perf_counter()
+    for _ in range(300):
+        step()
+    per_call = (time.perf_counter() - start) / 300
+    rec.tick_end(outputs={}, branches=[])
+    rec.close()
+    assert per_call < 2e-3, per_call  # a pass over 20k items per call took several ms

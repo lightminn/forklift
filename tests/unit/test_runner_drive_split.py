@@ -170,11 +170,31 @@ def test_the_projection_handles_the_slam_container_and_refuses_a_socket(tmp_path
             self.callback = print
 
     slam = {"module": np, "noise": np.random.default_rng(3), "odometry": Odometry(1.0), "link": object(),
-            "holds": {("a", 1)}}
+            "holds": {("a", 1)}, "estimate": Odometry(1.0), "rng": np.random.default_rng(4)}
     a = module.final_projection({"slam": slam}, MissionState(), tmp_path)
-    slam["odometry"] = Odometry(2.0)
+    slam["estimate"] = Odometry(2.0)
     b = module.final_projection({"slam": slam}, MissionState(), tmp_path)
     assert a["containers"]["slam"]["module"] == b["containers"]["slam"]["module"]
-    assert a["containers"]["slam"]["odometry"] != b["containers"]["slam"]["odometry"]
+    assert a["containers"]["slam"]["estimate"] != b["containers"]["slam"]["estimate"]
     with socket.socket() as sock, pytest.raises(TypeError, match=r"slam\['sock'\]"):
         module.final_projection({"slam": {"sock": sock}}, MissionState(), tmp_path)
+
+
+def test_service_owned_slam_state_is_compared_by_id_and_native_objects_refuse(tmp_path):
+    import pytest
+
+    from forklift_core.mission.state import MissionState
+
+    spec = importlib.util.spec_from_file_location("run_transport_projection4", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    class Stop:
+        def __init__(self, n):
+            self.count = n
+
+    a = module.final_projection({"slam": {"stop": Stop(1), "stop_now": False}}, MissionState(), tmp_path)
+    b = module.final_projection({"slam": {"stop": Stop(9), "stop_now": False}}, MissionState(), tmp_path)
+    assert a == b  # the step's own detector: by its logical id
+    with open(SCRIPT, "rb") as fh, pytest.raises(TypeError, match=r"near\['file'\]"):
+        module.final_projection({"near": {"file": fh}}, MissionState(), tmp_path)
