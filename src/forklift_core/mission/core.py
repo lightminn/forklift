@@ -2720,12 +2720,13 @@ class MissionCore:
                 ms.phase == "insert" or (ms.phase == "approach" and docking_straight)))
             held_observe = ms.phase == "observe" and holding_now  # R3
             free_leg = ms.phase in ("observe", "transport", "return_home") and not held_observe and not straight_row
-            blocked, silent = None, False
+            blocked, silent, verified_m = None, False, None
             if obstacle is not None and acting and not straight_row:
                 silent = not self.cusp_alive(t)
                 leg_, dir_ = trackers[ms.phase].leg_ahead()
-                blocked = obstacle["layer"].check_candidate(leg_, current_pose=tuple(float(v) for v in rear),
-                                                            direction=dir_, loaded=loaded).blocked
+                check_ = obstacle["layer"].check_candidate(leg_, current_pose=tuple(float(v) for v in rear),
+                                                           direction=dir_, loaded=loaded)
+                blocked, verified_m = check_.blocked, check_.verified_m
             check.update(rejoined=rejoined, blocked=blocked, silent=silent, free_leg=free_leg)
             if silent:
                 check["reason"] = "path_blocked:sensor_silent"
@@ -2748,8 +2749,12 @@ class MissionCore:
                     check["reason"] = "replanned"  # (a) a new path: rejoined and checked again next tick
                     return rear
                 check["reason"] = "recovery_installed"  # (b) the backoff machinery drives it from here
-            elif blocked is not None:
-                check["reason"] = f"path_blocked:{blocked}"  # unknown or an edge ahead: wait for evidence
+            elif blocked is not None and obstacle["layer"].permission.config.stopping.speed_for(verified_m) <= 0.0:
+                # Unknown or an edge so close that the permission would allow nothing: wait for evidence. Farther
+                # out it resumes as a running leg drives -- up to the verified distance, the permission slowing it
+                # (Isaac ma3b_p_tr: a carried pallet hides the floor ahead, standing never sees it, and a resume
+                # waiting for the whole leg to be known waited 300 s).
+                check["reason"] = f"path_blocked:{blocked}"
                 return rear
             elif pocket_row:
                 # R4n with D5: the depth check's own answer for the move from here.

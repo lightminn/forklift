@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from forklift_core.control import RearAxlePathTracker
+from forklift_core.control.drive_permission import StoppingModel
 from forklift_core.control.path_tracking import TrackerConfig
 from forklift_core.mission.commands import Cancel, Context, Pause, Resume, Submit
 from forklift_core.mission.core import MissionCore
@@ -22,11 +23,12 @@ def straight(x0=0.0, length=4.0):
 
 
 class Layer:
-    def __init__(self, allowed=0.5, why="ok", blocked=None, scans=None, timeout=100.0):
-        self.allowed, self.why, self.blocked = allowed, why, blocked
+    def __init__(self, allowed=0.5, why="ok", blocked=None, scans=None, timeout=100.0, verified_m=0.0):
+        self.allowed, self.why, self.blocked, self.verified_m = allowed, why, blocked, verified_m
         self.calls = []
         self.last_scan_s = scans if scans is not None else {"front": 9.9}
-        self.permission = SimpleNamespace(config=SimpleNamespace(sensor_timeout_s=timeout))
+        self.permission = SimpleNamespace(config=SimpleNamespace(sensor_timeout_s=timeout,
+                                                                 stopping=StoppingModel(0.15, 1.5, 0.05)))
         self.known_enabled, self.known_config = False, {}
 
     def limit(self, t, **k):
@@ -38,7 +40,7 @@ class Layer:
 
     def check_candidate(self, leg, **k):
         self.calls.append(("check_candidate", k))
-        return SimpleNamespace(blocked=self.blocked)
+        return SimpleNamespace(blocked=self.blocked, verified_m=self.verified_m)
 
 
 def make(phase="transport", *, speed=0.0, lift=0.07, layer=None, tracker=None, obstacle=True, monitor=None):
@@ -564,3 +566,15 @@ def test_a_lift_resumes_only_near_the_target_held_since_the_stop(measured, outco
     assert core.commands.status == outcome
     if outcome == "paused":
         assert core.commands.log[-1]["reason"] == "state_verified:lift_mismatch"
+
+
+
+@pytest.mark.parametrize("verified_m, outcome", [(0.04, "resuming"), (1.0, "running")])  # 0.04 < the 0.05 m margin
+def test_unknown_far_ahead_resumes_like_a_running_leg_and_close_ahead_waits(verified_m, outcome):
+    """Isaac ma3b_p_tr: a carried pallet hides the floor ahead and standing never sees it. Unknown beyond the distance
+    the permission would allow a move in resumes (the running permission slows it); within it, waits."""
+    core, _, _ = make("transport", layer=Layer(blocked="unknown", verified_m=verified_m))
+    pause(core, 10.0)
+    resume(core, 11.0)
+    core.paused_tick(11.0, REAR, 0.0, True)
+    assert core.commands.status == outcome
