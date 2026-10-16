@@ -216,7 +216,7 @@ def places(src: Source, kept: dict, base: str | None = None) -> dict:
     for (file_, test), _props in sorted(kept.items()):
         if file_ not in sources:
             sources[file_] = test_source(file_, base)
-        for const in asserted_constants(sources[file_], test):
+        for const in sorted(asserted_constants(sources[file_], test)):  # sorted: the same names every run
             probe = const.split("\n")[0].strip()
             if len(probe) < 12 or not 1 <= src.text.count(probe) <= MAX_OCCURRENCES:
                 continue
@@ -334,7 +334,9 @@ def emit_batch(sweep_json: Path, out_json: Path, tests: str, operators: bool = F
             alive = [m for m in entry["mutations"] if m["outcome"] == "survived"]
             if not alive:
                 continue
-            offset = by_line[(entry["line"], entry["probe"])]
+            offset = by_line.get((entry["line"], entry["probe"]))
+            if offset is None:  # a sweep from before the names were sorted: the place on that line
+                offset = next(o for (line_, _), o in sorted(by_line.items()) if line_ == entry["line"])
             for kind, what, text in src.mutations(offset):
                 if not any(m["kind"] == kind and m["what"] == what for m in alive):
                     continue
