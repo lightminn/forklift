@@ -682,8 +682,12 @@ def arguments() -> argparse.Namespace:
                         "physics step -- for a run without a mission")
     parser.add_argument("--live-test-permit-compare", action="store_true",
                         help="M-c tests only (completion 5): every 12th teleoperation permission is also asked of a "
-                        "fresh full check on the same grid, pose and arcs, and both are logged; the truth check stops "
-                        "using the hall bounds (0.76 m inside the wall) so the approach can reach the wall")
+                        "fresh full check on the same grid, pose and arcs, and both are logged with the measured path "
+                        "curvature; the truth check's hall bounds (0.76 m inside the wall) are widened so the approach "
+                        "can reach the wall")
+    parser.add_argument("--live-test-scan-silence", default=None,
+                        help="M-c tests only (completion 5): FROM:TO sim seconds in which the obstacle layer gets no "
+                        "scans (the teleoperation permission must stop the truck on the silence and the aging evidence)")
     parser.add_argument("--live-test-camera-freeze", default=None,
                         help="M-c tests only: FROM:TO sim seconds with no new camera frames (the video-stall test)")
     parser.add_argument(
@@ -889,6 +893,8 @@ def arguments() -> argparse.Namespace:
         parser.error("--live does not take --repeat-captures (its captures bypass the stop boundary, plan C2)")
     if args.live and args.record_boundary:
         parser.error("--live is not replayed: not with --record-boundary (plan C4)")
+    if not args.live and (args.live_test_permit_compare or args.live_test_scan_silence):
+        parser.error("--live-test-permit-compare and --live-test-scan-silence are for --live runs only")
     if args.live and not 0 < args.live_factor <= 1:
         # The limits are divided by it (plan C4a); above 1 the 0.05 s tick would exceed a quarter of the command age.
         parser.error("--live-factor must be in (0, 1]")
@@ -4872,6 +4878,12 @@ def drive(S, isaac) -> None:
             if state["frames"] == 1:
                 snapshot("start")
 
+        silence_ = getattr(args, "live_test_scan_silence", None)  # a recorded run's args predate it
+        silence_ = tuple(float(v) for v in silence_.split(":")) if silence_ else None
+
+        def scan_silenced(stamp: float) -> bool:
+            return silence_ is not None and silence_[0] <= stamp < silence_[1]
+
         def obstacle_scan(stamp: float, base, q, shared_raw: dict | None = None) -> None:
             """Cast the obstacle LiDARs, feed the grid, refresh the path check.
 
@@ -5074,7 +5086,7 @@ def drive(S, isaac) -> None:
             slam_log["laser_pose_world"].append(
                 planar_lidar.laser_pose_2d(now_base, now_q, laser_mount)
             )
-            if obstacle is not None and slam is None:
+            if obstacle is not None and slam is None and not scan_silenced(stamp_now):
                 obstacle_scan(stamp_now, now_base, now_q, shared_raw)
             if slam is None:
                 return
@@ -5144,7 +5156,7 @@ def drive(S, isaac) -> None:
                 }
             )
             slam["scan_id"] += 1
-            if obstacle is not None:
+            if obstacle is not None and not scan_silenced(stamp_now):
                 # After this scan's reply: the correction control applies now.
                 obstacle_scan(stamp_now, now_base, now_q, shared_raw)
 
@@ -5305,9 +5317,16 @@ def drive(S, isaac) -> None:
                                                 now_, layer_.last_scan_s, pose=pose_, curvatures=list(curvatures),
                                                 direction=direction, check_speed_mps=check, footprint=fp_,
                                                 own_footprint=own_)
+                        # The measured path curvature (odometry yaw rate over speed): the bundle assumes it stays
+                        # between its end arcs while the steering turns.
+                        v_ = (slam or {}).get("odom_speed")
+                        w_ = (slam or {}).get("odom_yaw_rate")
+                        k_ = (float(w_) / float(v_) if v_ is not None and w_ is not None and abs(float(v_)) > 0.05
+                              else None)
                         live.log({"permit_cmp": now_, "pose": pose_, "curvatures": list(curvatures),
                                   "direction": direction, "check_mps": check, "bundle": list(result_),
-                                  "full": list(full_)})
+                                  "full": list(full_), "measured_kappa": k_,
+                                  "silenced": scan_silenced(now_)})
                 return result_
 
         stepper["fn"] = step_world if live is None else live_step_world
@@ -5571,9 +5590,10 @@ def drive(S, isaac) -> None:
             # between the blades is not a contact (plan D4, Codex L3c P2).
             truth_shape = footprint if loaded else unloaded_shape
             truth_bounds = scenario.bounds
-            if getattr(args, "live_test_permit_compare", False):  # a recorded run's args predate it
-                # M-c completion 5 only: the hall bounds lie 0.76 m inside the wall the scan sees (x 4.7 against
-                # 5.46, 2026-10-17); the teleoperated approach is judged against that wall, not the planning area.
+            if getattr(args, "live", False) and getattr(args, "live_test_permit_compare", False):
+                # M-c completion 5 only (a recorded run's args predate these): the hall bounds lie 0.76 m inside the
+                # wall the scan sees (x 4.7 against 5.46, 2026-10-17), so the planning-area check is widened; the
+                # stop before the wall is judged from the end pose and the scanned wall, not by this check.
                 b_ = scenario.bounds
                 truth_bounds = type(b_)(b_.x_min_m - 3.0, b_.x_max_m + 3.0, b_.y_min_m - 3.0, b_.y_max_m + 3.0)
             require(

@@ -95,7 +95,8 @@ class Probe:
                                         "applied": msg.get("applied"), "speed": msg.get("rear_axle_speed_mps"),
                                         "mission": msg.get("mission"), "pacing": msg.get("pacing"),
                                         "latch": msg.get("stop_latch"), "reject": msg.get("last_teleop_reject"),
-                                        "teleop_forbidden": msg.get("teleop_forbidden_reason")})
+                                        "teleop_forbidden": msg.get("teleop_forbidden_reason"),
+                                        "permit": msg.get("permit")})
                 elif t == "targets":
                     self.targets = msg
                 elif t in ("ack", "reject"):
@@ -407,8 +408,9 @@ async def approach_scenario(p: Probe, args):
                 break  # the runner ended (its own checks stop a run): recorded below
             st = p.state or {}
             v = abs(st.get("rear_axle_speed_mps") or 0.0)
-            moved = moved or v > 0.02
-            if moved and v < 0.005:
+            moved = moved or v > 0.05
+            applied_ = abs((st.get("applied") or {}).get("speed_mps") or 0.0)
+            if moved and applied_ == 0.0 and v < 0.03:  # the vehicle holds it (the measured speed jitters ~0.02)
                 still_since = still_since or time.monotonic()
                 if time.monotonic() - still_since > args.held_s and name != "reverse_swing":
                     break  # held short of the obstacle with the command still asking to go
@@ -418,7 +420,8 @@ async def approach_scenario(p: Probe, args):
         st = p.state or {}
         p.report["approach"].append({"leg": name, "wall_s": time.monotonic() - start, "moved": moved,
                                      "held": still_since is not None, "armed": st.get("armed"),
-                                     "applied": st.get("applied"), "forbidden": st.get("teleop_forbidden")})
+                                     "applied": st.get("applied"), "permit": st.get("permit"),
+                                     "forbidden": st.get("teleop_forbidden_reason")})
         p.event("leg_done", leg=name)
         if p.closed_code is not None:
             return
