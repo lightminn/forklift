@@ -5203,7 +5203,12 @@ def drive(S, isaac) -> None:
                                 lift_position=lambda: float(robot.get_joint_positions()[lift_index[0]]),
                                 camera=live_camera, grid=live_grid, scan=live_scan),
                 output=Path(args.output), port_file=args.live_port_file, dt=1 / 120, factor=args.live_factor,
-                config=LiveArbiterConfig(tick_s=1 / 120, lease_timeout_s=args.live_lease_timeout_s),
+                # The human and network time limits scaled by the declared factor f (plan C4a): the truck in the sim
+                # moves f metres of sim for a wall metre's worth, so a wall limit of L/f bounds the same sim
+                # distance as L does on a real truck. The lease is administrative and only kept above the command age.
+                config=LiveArbiterConfig(tick_s=1 / 120, command_max_age_s=0.30 / args.live_factor,
+                                         video_max_age_s=0.50 / args.live_factor,
+                                         lease_timeout_s=max(args.live_lease_timeout_s, 0.30 / args.live_factor)),
                 host=args.live_host, web_root=args.live_web_root,
                 test_step_delay_s=args.live_test_step_delay_ms / 1000.0, camera_freeze=freeze_,
                 test_stop_in_capture=args.live_test_stop_in_capture)
