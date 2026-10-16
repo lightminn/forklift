@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import collections
 import math
 import os
 import subprocess
@@ -1615,42 +1616,83 @@ PROJECTION_CONTAINERS = ("state", "near", "pocket", "obstacle", "slam", "paths",
 PROJECTION_RECORDED_ONLY = ("setup_snapshot",)
 
 
-def final_projection(containers: dict, ms, output: Path) -> dict:
-    """Format 2's end state (M-a1 replay plan R3 (5), Codex P2): the mission state's fields by value and, for each
-    core container, every key by the digest of its value -- services (the recording or replay proxies, the SLAM
-    link) written as their logical ids, arrays by content, the run's output directory as ``<output>`` (a replay
-    writes elsewhere). Keys only the recorded run can have are not in it."""
+def projection_node(value, services: dict, roots=(), _stack=()):
+    """One value of the end-state projection as plain JSON: services (recording/replay proxies, the SLAM link) by
+    logical id, modules by name, random generators by their bit-generator state, arrays by dtype/shape/content hash,
+    dataclasses and plain objects by all their attributes (CPU state is compared by value), containers by their
+    items; an object with none of these (a socket, a file) raises TypeError -- the projection fails and the replay
+    refuses the record (Codex P2)."""
+    import dataclasses
     import hashlib
+    import types as types_
 
     from forklift_core.mission.boundary_record import RecordingProxy
     from forklift_core.mission.replay import ReplayProxy
-    from forklift_core.mission.replay_codec import Encoder
+
+    if id(value) in services:
+        return {"$service": services[id(value)]}
+    if isinstance(value, (RecordingProxy, ReplayProxy)):
+        return {"$service": object.__getattribute__(value, "_port")}
+    if value is None or type(value) in (bool, int):
+        return value
+    if type(value) is float:
+        return value if math.isfinite(value) else {"$float": repr(value)}
+    if type(value) is str:
+        for root in roots:
+            value = value.replace(root, "<output>")
+        return value
+    if isinstance(value, (Path,)):
+        return {"$path": projection_node(str(value), services, roots)}
+    if isinstance(value, np.generic):
+        return {"$np": value.dtype.str, "v": projection_node(value.item(), services, roots)}
+    if isinstance(value, np.ndarray):
+        digest = hashlib.sha256(value.dtype.str.encode() + repr(value.shape).encode()
+                                + np.ascontiguousarray(value).tobytes()).hexdigest()
+        return {"$array": digest}
+    if isinstance(value, bytes):
+        return {"$bytes": value.hex()}
+    if isinstance(value, types_.ModuleType):
+        return {"$module": value.__name__}
+    if isinstance(value, np.random.Generator):
+        return {"$rng": projection_node(value.bit_generator.state, services, roots, _stack)}
+    if id(value) in _stack:
+        return {"$cycle": type(value).__qualname__}
+    stack = _stack + (id(value),)
+    if isinstance(value, (list, tuple, collections.deque)):
+        return {"$" + type(value).__name__: [projection_node(v, services, roots, stack) for v in value]}
+    if isinstance(value, (set, frozenset)):
+        items = [projection_node(v, services, roots, stack) for v in value]
+        return {"$set": sorted(items, key=lambda n: json.dumps(n, sort_keys=True))}
+    if isinstance(value, dict):
+        items = [[projection_node(k, services, roots, stack), projection_node(v, services, roots, stack)]
+                 for k, v in value.items()]
+        return {"$dict": sorted(items, key=lambda kv: json.dumps(kv[0], sort_keys=True))}
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return {"$object": f"{type(value).__module__}:{type(value).__qualname__}",
+                "attrs": {f.name: projection_node(getattr(value, f.name), services, roots, stack)
+                          for f in dataclasses.fields(value)}}
+    if hasattr(value, "__dict__") and not callable(value) and not isinstance(value, type):
+        return {"$object": f"{type(value).__module__}:{type(value).__qualname__}",
+                "attrs": {k: projection_node(v, services, roots, stack) for k, v in sorted(vars(value).items())}}
+    if isinstance(value, type) or callable(value):  # code: compared by name (its behaviour is the replay's)
+        return {"$callable": f"{getattr(value, '__module__', None)}:{getattr(value, '__qualname__', type(value).__qualname__)}"}
+    raise TypeError(f"no projection for a {type(value).__module__}:{type(value).__qualname__}")
+
+
+def final_projection(containers: dict, ms, output: Path) -> dict:
+    """Format 2's end state (M-a1 replay plan R3 (5), Codex P2): the mission state's fields by value and, for each
+    core container, every key by the digest of its projection (:func:`projection_node`) -- the run's output
+    directory, as the run sees it and as its arguments record it, written as ``<output>`` (a replay writes
+    elsewhere). Keys only the recorded run can have are not in it."""
+    import hashlib
 
     services: dict = {}
-
-    def find(value, depth=0):
-        if isinstance(value, (RecordingProxy, ReplayProxy)):
-            services[id(value)] = object.__getattribute__(value, "_port")
-        elif depth < 6 and isinstance(value, dict):
-            for v in value.values():
-                find(v, depth + 1)
-        elif depth < 6 and isinstance(value, (list, tuple)):
-            for v in value:
-                find(v, depth + 1)
-
-    for value in containers.values():
-        find(value)
     slam_ = containers.get("slam")
     if isinstance(slam_, dict) and slam_.get("link") is not None:
-        services.setdefault(id(slam_["link"]), "SlamLink")
-    # Values only (Codex P2): CPU state objects by their attributes, anything else without a value encoding refused
-    # -- the record then carries the projection error, which a replay refuses.
-    encoder = Encoder(opaque_ok=False, value_types={"Namespace", "SimpleNamespace"}, hash_arrays=True, identity=False,
-                      services=services, full_types={"InsertionGeometry", "CommandWindow", "RearHistory", "Schedule"})
-    # The output directory as the run sees it and as its arguments record it (a replay's state keeps the recorded
-    # run's arguments while it writes elsewhere -- Codex P2).
+        services[id(slam_["link"])] = "SlamLink"
     state_ = containers.get("state") if isinstance(containers.get("state"), dict) else {}
-    roots = {str(output)} | {str(v) for v in [(state_.get("arguments") or {}).get("output")] if v}
+    roots = sorted({str(output)} | {str(v) for v in [(state_.get("arguments") or {}).get("output")] if v},
+                   key=len, reverse=True)
     out = {}
     for name, container in containers.items():
         if not isinstance(container, dict):
@@ -1661,11 +1703,10 @@ def final_projection(containers: dict, ms, output: Path) -> dict:
             if name == "state" and key in PROJECTION_RECORDED_ONLY:
                 continue
             try:
-                text = json.dumps(encoder.encode(value), sort_keys=True, allow_nan=True)
+                node = projection_node(value, services, roots)
             except TypeError as exc:
                 raise TypeError(f"{name}[{key!r}]: {exc}") from None
-            for root in sorted(roots, key=len, reverse=True):
-                text = text.replace(root, "<output>")
+            text = json.dumps(node, sort_keys=True, allow_nan=True)
             digests[str(key)] = hashlib.sha256(text.encode("utf-8")).hexdigest()
         out[name] = digests
     return {"mission": ms, "containers": out}

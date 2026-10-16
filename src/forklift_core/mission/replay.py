@@ -437,7 +437,9 @@ class ReplayGate:
         try:
             request = session.decode(rollouts["request"])
             trajectories = request["args"][0]
-            ok = (isinstance(trajectories, list) and len(trajectories) <= 2 and not request["kwargs"]
+            ok = (isinstance(request, dict) and set(request) == {"args", "kwargs"} and len(request["args"]) == 1
+                  and isinstance(request["kwargs"], dict) and not request["kwargs"]
+                  and isinstance(trajectories, list) and len(trajectories) <= 2
                   and all(isinstance(t, (tuple, list, np.ndarray)) for t in trajectories))  # BicycleRollout.trajectory
         except Exception as exc:  # noqa: BLE001
             raise session.fail(f"the baseline redraw bundle's rollouts trace does not decode: {exc!r}") from None
