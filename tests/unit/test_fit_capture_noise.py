@@ -73,3 +73,16 @@ def test_levels_are_per_resolution_with_widths_at_one_source_fx():
     assert long848["k"] == pytest.approx(0.006)
     assert long848["correlation_px_source"] == pytest.approx([6.0 * 388.8 / 429.3, 4.0 * 388.8 / 429.3])
     assert all(lv["k_iid"] == 0.0 for lv in levels.values())
+
+
+def test_each_level_is_checked_against_its_own_kind_of_variance():
+    """Codex review 2026-10-17: the frame levels were compared with the temporal variances, which hid a
+    one-third under-prediction. The reproduction check takes the variances of the level's own kind."""
+    steps = list(fc.fit.STEPS)
+    row = {"distance_m": 2.0, "shape": [120, 160], "fx": 388.8,
+           "var": {"temporal": {"u": {s: 1.0 for s in steps}, "v": {s: 1.0 for s in steps}},
+                   "frame": {"u": {s: 2.0 for s in steps}, "v": {s: 2.0 for s in steps}}}}
+    level = {"components": [{"k": 0.005, "correlation_px_source": [6.0, 4.0]}]}
+    t = fc.reproduction(level, row, kind="temporal", source_fx=388.8, frames=1)
+    f = fc.reproduction(level, row, kind="frame", source_fx=388.8, frames=1)
+    assert np.allclose(np.array(t["ratio_u"]) / np.array(f["ratio_u"]), 2.0)

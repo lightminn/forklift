@@ -79,6 +79,12 @@ def fit_frame(depth, z_range) -> dict:
     return {"short": comps[0], "long": comps[-1], "residual": float(found.rel_residual_rms), "var_u": var[1], "var_v": var[0]}
 
 
+def _median_variances(rows) -> dict:
+    """Per-step second-difference variances, median over the frames: {'u': {step: v}, 'v': {...}}."""
+    return {axis: {s: float(np.median([r[key][s] for r in rows])) for s in fit.STEPS}
+            for axis, key in (("u", "var_u"), ("v", "var_v"))}
+
+
 def _median_components(rows):
     def med(key):
         return [float(np.median([r[key][0] for r in rows])),
@@ -100,6 +106,8 @@ def capture_fit(folder: Path, *, seed: int = 0, frames=None) -> dict:
     return {"label": meta["setup"]["label"], "surface": meta["setup"]["surface"], "distance_m": dist,
             "fx": float(meta["device"]["intrinsics"]["fx"]), "mode": int(st["width"]),
             "temporal": _median_components(t_rows), "frame": _median_components(f_rows),
+            "var": {"temporal": _median_variances(t_rows), "frame": _median_variances(f_rows)},
+            "shape": list(stack.shape[1:]),
             "temporal_tail_4sigma": tail_fraction(1.0 / temporal - 1.0 / dist),
             "frames": int(stack.shape[0])}
 
@@ -151,9 +159,10 @@ def build_levels(fits, *, source_fx: float, distances=(2.0, 3.0)) -> dict:
     return levels
 
 
-def reproduction(level: dict, fit_row: dict, *, source_fx: float, frames: int = 5, seed: int = 0) -> dict:
+def reproduction(level: dict, fit_row: dict, *, kind: str, source_fx: float, frames: int = 5, seed: int = 0) -> dict:
     """Regenerate a flat plane at the capture's distance, size and fx with the level's components and
-    compare the second-difference variances and the temporal tail with the capture's measurements."""
+    compare the second-difference variances with the capture's variances of the same kind (temporal or
+    frame, median over its frames), and the tail with the measured temporal tail."""
     z = fit_row["distance_m"]
     shape = fit_row["shape"]
     ratio = fit_row["fx"] / source_fx
@@ -164,7 +173,7 @@ def reproduction(level: dict, fit_row: dict, *, source_fx: float, frames: int = 
             g = [v * ratio for v in c["correlation_px_source"]]
             w = w + c["k"] * correlated_field(shape, g, np.random.default_rng([seed, i, j]))
         depth = 1.0 / w
-        for axis, store, measured in ((1, ratios_u, fit_row["var_u"]), (0, ratios_v, fit_row["var_v"])):
+        for axis, store, measured in ((1, ratios_u, fit_row["var"][kind]["u"]), (0, ratios_v, fit_row["var"][kind]["v"])):
             store.append([fit.robust_variance(fit.second_differences(depth, axis=axis, step=s, z_range=(0.5 * z, 1.5 * z)))
                           / measured[s] for s in fit.STEPS])
         tails.append(tail_fraction(w - 1.0 / z))
@@ -193,29 +202,20 @@ def main(argv=None) -> int:
     walls = [p for p in folders if json.loads((p / "capture.json").read_text())["setup"]["surface"] == "wall"]
     fits = []
     for p in walls:
-        row = capture_fit(p)
-        stack, _ = load_capture(p)
-        row["shape"] = list(stack.shape[1:])
-        # per-step variances of the median frame fit, for the reproduction check
-        d = dither(stack, 0)
-        dist = row["distance_m"]
-        t = temporal_frames(d, dist)
-        f0 = fit_frame(t[0], (0.5 * dist, 1.5 * dist))
-        row["var_u"], row["var_v"] = f0["var_u"], f0["var_v"]
-        fits.append(row)
+        fits.append(capture_fit(p))
     source_fx = a.source_fx or next(f["fx"] for f in fits if f["mode"] == 640)
     levels = build_levels(fits, source_fx=source_fx)
     repro = {}
     for name, level in levels.items():
         mode = int(name.split("_")[1])
         for row in (f for f in fits if f["mode"] == mode and f["distance_m"] in (2.0, 3.0)):
-            repro[f"{name}@{row['label']}"] = reproduction(level, row, source_fx=source_fx)
+            repro[f"{name}@{row['label']}"] = reproduction(level, row, kind=name.split("_")[0], source_fx=source_fx)
     surfaces = {}
     for p in folders:
         meta = json.loads((p / "capture.json").read_text())
         stack, _ = load_capture(p)
         surfaces[meta["setup"]["label"]] = surface_check(stack)
-    report = {"captures": [{k: v for k, v in f.items() if k not in ("var_u", "var_v")} for f in fits],
+    report = {"captures": fits,
               "levels": levels, "reproduction": repro, "surfaces": surfaces, "source_fx": source_fx}
     a.report.write_text(json.dumps(report, indent=1) + "\n")
     config = {
