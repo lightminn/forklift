@@ -56,6 +56,8 @@ class FitParams:
     shape_outside_max: float = 0.08    # face points outside the shape's rectangle (dev 2026-10-16)
     shape_seen_through_max: float = 0.12  # rays passing through the shape's material (dev 2026-10-16)
     ambiguity_margin: float = 0.05
+    separate_placement_m: float = 0.05  # another local maximum this far along the face is a different placement
+    peak_window_m: float = 0.02         # a local maximum beats every placement within this distance
     equivalence_m: float = 0.020
     equivalence_yaw_rad: float = math.radians(2.0)
     seed: int = 0
@@ -325,6 +327,8 @@ class Placement2D:
     score: float
     u_centre: float
     support_z: float
+    runner_up_score: float = -math.inf   # best separate local maximum of the same raster
+    runner_up_u: float = math.nan
 
 
 def best_placement(occ, pts_u, pts_h, rays, params: FitParams, h_lo: float, n_shift: int,
@@ -353,14 +357,22 @@ def best_placement(occ, pts_u, pts_h, rays, params: FitParams, h_lo: float, n_sh
     k_b = np.where(solid, -params.seen_through_weight, 0.0)
     k_f = np.where(occ, 0.0, -params.face_ray_weight)
     n_pts = len(pts_u)
-    best = None
-    for s in range(n_shift):
-        score = (_correlate_rows(pm, k_pts, s) + _correlate_rows(rb, k_b, s) + _correlate_rows(rf, k_f, s)
-                 - params.outside_weight * n_pts) / n_pts
-        j = int(np.argmax(score))
-        if best is None or score[j] > best.score:
-            best = Placement2D(float(score[j]), u0 + (j + nu_t / 2) * b, h_lo + s * b)
-    return best
+    grid = np.array([(_correlate_rows(pm, k_pts, s) + _correlate_rows(rb, k_b, s) + _correlate_rows(rf, k_f, s)
+                      - params.outside_weight * n_pts) / n_pts for s in range(n_shift)])
+    profile = grid.max(axis=0)                     # best support height for each lateral placement
+    j = int(np.argmax(profile))
+    s = int(np.argmax(grid[:, j]))
+    # The same raster can fit nearly as well one member pitch away (Codex review A 2026-10-16:
+    # 0.7173 against 0.7154, 286 mm apart): keep the best separate local maximum as a rival.
+    w = max(1, int(round(params.peak_window_m / b)))
+    padded = np.pad(profile, w, constant_values=-np.inf)
+    local = np.array([profile[i] >= padded[i:i + 2 * w + 1].max() for i in range(len(profile))])
+    far = np.abs(np.arange(len(profile)) - j) * b > params.separate_placement_m
+    others = np.nonzero(local & far)[0]
+    k = int(others[np.argmax(profile[others])]) if len(others) else None
+    return Placement2D(float(profile[j]), u0 + (j + nu_t / 2) * b, h_lo + s * b,
+                       float(profile[k]) if k is not None else -math.inf,
+                       u0 + (k + nu_t / 2) * b if k is not None else math.nan)
 
 
 @dataclass(frozen=True)
@@ -554,6 +566,8 @@ def _decide(hyps, faces, evidence, pts, scene, setup, load_for, params):
         geometry, reasons = "unfit", ["weak_fit"]
     elif rivals and hyp.placement.score - rivals[0][0].placement.score < params.ambiguity_margin:
         geometry, reasons = "ambiguous", [f"competing:{rivals[0][0].label}"]
+    elif hyp.placement.score - hyp.placement.runner_up_score < params.ambiguity_margin:
+        geometry, reasons = "ambiguous", [f"competing:{hyp.label}@shifted"]
     elif u.max() - u.min() < params.min_face_span_m:
         geometry, reasons = "ambiguous", ["yaw_unconstrained"]
     elif observed_members(hyp, rays_f, params, max(params.edge_window_m, 4 * reach / scene.intrinsics.fx)) < 2:
@@ -656,6 +670,9 @@ def fit_scene(scene: SceneInput, proposals, *, specs: dict, setup, load_for, par
     rays = pixel_rays(scene)
     candidates, failures = [], []
     for k, proposal in enumerate(proposals):
+        if proposal.mask.shape != scene.depth_m.shape:
+            failures.append(FitFailure(proposal.proposal_id, "bad_mask:shape", None))
+            continue
         try:
             cand = fit_instance(scene, proposal, specs=specs, setup=setup, load_for=load_for, params=params,
                                 rng=rng, candidate_id=f"c{k}", rays=rays, identity_threshold=identity_threshold)
@@ -665,7 +682,10 @@ def fit_scene(scene: SceneInput, proposals, *, specs: dict, setup, load_for, par
         if cand is not None:
             candidates.append(cand)
             continue
-        pts, _ = proposal_points(scene, rays, proposal.mask, 0)
+        try:
+            pts, _ = proposal_points(scene, rays, proposal.mask, 0)
+        except Exception:  # noqa: BLE001 -- a failure must never stop the scene (Codex review A)
+            pts = np.zeros((0, 3))
         if len(pts):
             c = np.median(pts[:, :2], axis=0)
             failures.append(FitFailure(proposal.proposal_id, reason, (float(c[0]), float(c[1])),

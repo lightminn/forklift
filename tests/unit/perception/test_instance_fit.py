@@ -298,6 +298,19 @@ def test_a_switch_to_the_other_face_gets_that_faces_support_too():
     assert cand.fit_reasons == ("near_tracking_unavailable",) and cand.pickable is False
 
 
+def test_a_placement_shifted_by_a_member_pitch_competes_with_the_true_one():
+    """Codex review A 2026-10-16: two occluders leave a T11 face where the raster shifted by one block
+    scores 0.7173 against 0.7154 at the true place; keeping only the best placement per shape fitted
+    the wrong one, 286 mm off, as pickable."""
+    occluders = [scene_rig.Box((1.2, 0.4, 0.2), (0.05, 0.77, 0.4)), scene_rig.Box((1.2, -0.5, 0.2), (0.05, 0.72, 0.4))]
+    cand, truth = _fit([(T11, rt.Placement(2.0, 0.0, 0.0, 0.0), ())], distractors=occluders)
+    if cand is not None and cand.geometry == "fitted":
+        lateral, *_ = _errors(cand, truth)
+        assert lateral <= 0.02
+    else:
+        assert cand is None or any(r.startswith("competing:") for r in cand.reasons) or cand.geometry != "fitted"
+
+
 def test_a_pallet_hidden_but_for_one_block_is_not_fitted():
     """An occluder, not a cut mask: raw rays would still see members hidden only from the mask."""
     occluder = scene_rig.Box((1.6, -0.15, 0.15), (0.1, 0.6, 0.3))   # silhouette reaches y = 0.272 at the face
@@ -436,3 +449,14 @@ def test_fit_scene_keeps_proposal_order_and_records_failures(monkeypatch):
     assert failed["a"].reason == "exception:FloatingPointError"
     # The failed pallet keeps an approximate position (its visible surface) for target selection
     assert failed["a"].centre_xy == pytest.approx((2.3, -0.6), abs=0.15)
+
+
+def test_a_proposal_on_the_wrong_grid_fails_alone():
+    """Codex review A 2026-10-16: a 2 x 2 mask raised again while its failure position was computed
+    and stopped the scene, so the next (valid) proposal was never fitted."""
+    scene, ids = _render([(EPAL, rt.Placement(2.6, 0.0, 0.0, 0.0), ())])
+    props = [InstanceProposal("w", np.ones((2, 2), bool), 1.0, "oracle"), InstanceProposal("a", ids == 0, 1.0, "oracle")]
+    out = F.fit_scene(scene, props, specs=SPECS, setup=ForkSetup(0.3725), load_for=lambda s: SITE.get(s.name))
+    assert [c.proposal_id for c in out.candidates] == ["a"]
+    (failure,) = out.failures
+    assert failure.proposal_id == "w" and failure.reason.startswith("bad_mask") and failure.centre_xy is None
