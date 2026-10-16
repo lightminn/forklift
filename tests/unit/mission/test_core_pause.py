@@ -229,3 +229,26 @@ def test_a_resume_off_its_path_outside_the_free_travel_legs_is_not_replanned():
     resume(core, 11.0)
     core.paused_tick(11.0, np.array([0.0, 1.0, 0.0]), 0.0, False)
     assert core.commands.status == "resuming" and core.commands.resume_check["reason"] == "no_resume:rejoin_failed"
+
+
+def test_a_cancel_ends_only_once_the_wheels_are_commanded_to_zero():
+    """Codex M-a3b review: standing is not enough while the slew still steps down."""
+    core, _, _ = make()
+    core.state["applied_command"] = (0.05, [0.0, 0.0])
+    core.commands.queue(Cancel())
+    core.commands.apply(10.0)
+    assert core.paused_tick(10.0, REAR, 0.0, True).stop is False and core.commands.status == "cancelling"
+    core.state["applied_command"] = (0.0, [0.0, 0.0])
+    assert core.paused_tick(10.1, REAR, 0.0, True).stop is True and core.commands.status == "cancelled"
+
+
+def test_a_resume_off_its_path_replans_even_when_the_old_path_is_hidden():
+    """Codex M-a3b review: an unknown old path does not keep a displaced truck from replanning from here."""
+    core, _, _ = make(layer=Layer(blocked="unknown"))
+    pause(core, 10.0)
+    resume(core, 11.0)
+    asked = []
+    core.blocked_replan = lambda t, rear, kappa, requested: asked.append(t) or SimpleNamespace(rear=rear,
+                                                                                              requested_speed=0.0)
+    core.paused_tick(11.0, np.array([0.0, 1.0, 0.0]), 0.0, True)
+    assert asked == [11.0]

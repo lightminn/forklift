@@ -2606,7 +2606,10 @@ class MissionCore:
         if obstacle is not None:
             obstacle_hold = self.permission_watch(t, rear, kappa, loaded).obstacle_hold
         stop = False
-        if cmds.status == "cancelling" and standing:
+        applied_zero = abs(float((self.state.get("applied_command") or (0.0,))[0])) < 1e-12
+        if cmds.status == "cancelling" and standing and applied_zero:
+            # Cancelled once standing and the wheels already commanded to zero (the slew may still be stepping
+            # down while the stop detector reads standing): this tick's output is zero too.
             cmds.cancelled(t)
             stop = True
         elif cmds.status == "resuming":
@@ -2639,8 +2642,10 @@ class MissionCore:
             if silent:
                 check["reason"] = "path_blocked:sensor_silent"
                 return rear
-            if blocked is not None and blocked != "occupied":
-                check["reason"] = f"path_blocked:{blocked}"  # unknown or edge ahead: wait for evidence, standing
+            if rejoined and blocked is not None and blocked != "occupied":
+                # Rejoined, but unknown or an edge ahead: wait for evidence, standing. (Not rejoined: the leg is
+                # replanned from here first -- the old path may stay hidden.)
+                check["reason"] = f"path_blocked:{blocked}"
                 return rear
             if (not rejoined or blocked == "occupied") and ms.phase not in ("observe", "transport", "return_home"):
                 # The common obstacle recovery replans the free travel legs only (its last branch plans home);
