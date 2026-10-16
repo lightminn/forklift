@@ -1,6 +1,6 @@
 # M-b 중재기 (`forklift_core/safety/`) 계획
 
-작성: 2026-10-16 · 상태: **2판 — Codex 1회차·agy 반영, Codex 재검토 중** · 근거: [운용 콘솔 설계](../design/2026-10-13-operator-console.md) 3절·4.1–4.5·5.1–5.4, [콘솔 계약 초안](../interfaces/2026-10-13-operator-console-contract-draft.md) 1–6·9절, [M-a 계획](2026-10-15-m-a-mission-core.md) D6, [M-a3 계획](2026-10-16-m-a3-mission-commands.md)
+작성: 2026-10-16 · 상태: **3판 — Codex 2회차까지 반영, 재검토 중** · 근거: [운용 콘솔 설계](../design/2026-10-13-operator-console.md) 3절·4.1–4.5·5.1–5.4, [콘솔 계약 초안](../interfaces/2026-10-13-operator-console-contract-draft.md) 1–6·9절, [M-a 계획](2026-10-15-m-a-mission-core.md) D6, [M-a3 계획](2026-10-16-m-a3-mission-commands.md)
 
 ## 1. 범위
 
@@ -71,14 +71,16 @@
 
 **B5 모드, 정지 종류, 미션에 넘기는 정지.** 중재기는 매 주기 두 값을 낸다.
 
-| 상태 | 출력 정지 종류 | 미션 `Context.stop_kind` |
+| 상태 | 구동 출력 정지 종류 | 미션 `Context.stop_kind` |
 |---|---|---|
 | `STOPPED`, 또는 선점 래치(만료·lease 상실·끊김·피드백 상실, 정지 확인 전) | `preempt` | `preempt` |
-| `PAUSED`·`TELEOP` | `controlled` | `controlled` |
+| `PAUSED` | `controlled` | `controlled` |
+| `TELEOP` | `none`(조종자 명령이 움직인다. 주행 금지는 B8 의 최종 상한 0) | `controlled`(미션은 `held`) |
 | `AUTO` | `none` | `none` |
 
 - **불변식: 미션은 AUTO 에서만 돈다.** `PAUSED`·`TELEOP`·`STOPPED` 에서는 미션에 정지를 넘기므로 생명주기가 `running`·`resuming` 이면 그 주기에 `paused` 로 넘어간다(M-a3d). 승강 램프·단계 전이·추종이 함께 멈춘다(설계 4.2). 미션의 `pause` 수락 여부에 기대지 않는다.
-- 재개·제출은 미션에 `none` 을 넘겨야 받는다(생명주기는 정지 중 `resume`·`submit` 을 `stopping` 으로 거절한다). 그래서 `mission_submit`·`mission_resume` 을 ② 에 넣는 주기에는 미션에 `none` 을 넘기고(잠정 AUTO), ④ 에서 수락되면 AUTO 로 확정, 거절되면 원래 모드로 둔다. 거절된 주기에도 미션은 `running` 이 아니므로(거절 = 상태 그대로) 움직이지 않는다.
+- 재개·제출은 미션에 `none` 을 넘겨야 받는다(생명주기는 정지 중 `resume`·`submit` 을 `stopping` 으로 거절한다). 그래서 ② 는 **미션 상태가 그 요청을 받을 수 있을 때만** `none` 을 넘긴다: `mission_resume` 은 생명주기가 `paused` 일 때, `mission_submit` 은 `idle`·종료 상태일 때. 그 밖에는 `controlled` 를 넘기고(그러면 `running` 인 미션은 그 주기에 멈춘다) 요청은 생명주기의 거절 사유로 확정된다. `none` 을 넘긴 주기에도 미션이 움직이기 시작하는 것은 수락된 요청 하나 때문뿐이다.
+- **AUTO 유지 조건은 틱이 끝난 뒤의 미션 상태다.** ④·⑤ 에서 미션 상태가 `accepted`·`running`·`resuming`·`cancelling` 이면 AUTO, `paused`(재개 절차 거절 포함 — 수락 기록 뒤 같은 틱의 `resume_step` 이 `no_resume` 을 낼 수 있다)·`idle`·종료 상태면 `PAUSED` 로 돌아간다(`control_gen` +1, 사유는 미션의 마지막 기록). 그래서 중재기 AUTO 와 미션 `paused` 가 같이 남지 않는다.
 - **근접 추적 중 일시정지.** 근접 추적 중(`near.active`, B7) 미션의 일시정지·재개는 아직 구현되지 않았다(M-a3 제외 범위 R4–R6). 그래서 그동안 `mode_request to: PAUSED`·`mission_pause` 는 `reject(near_tracking_active)` 로 거절하고 AUTO 를 유지한다(설계 4.1 "어느 단계에서나 받는다"의 예외, 6절 계약 델타). STOP 은 언제나 받는다: 미션은 `preempt` 로 일시정지되고, 근접 추적 중에 멈춘 미션의 재개는 미션이 `no_resume:near_tracking` 으로 거절한다(M-b2 에서 코어에 더함). 그 뒤는 복구 동작 몫이다.
 
 전이(괄호 안은 요청자). **`PAUSED` 에서 나가는 전이(AUTO·TELEOP)는 모두 정지 확인(B9)을 요구한다** — 아니면 `reject(not_stopped)`(설계 4.2 "실측 정지가 끝나기 전에는 모드를 넘기거나 재개하지 않는다"). AUTO → TELEOP 직행은 없다: 먼저 `PAUSED`.
@@ -126,20 +128,18 @@
 1. 비율 → 물리량: `speed = speed_ratio × 상한`(모드 `direct`·`video`, 전진·후진, 적재별 설정). 목표 곡률 `κ* = curvature_ratio × teleop_curvature_inv_m`.
 2. 곡률 변화율 제한: 출력 곡률 `κ` 는 `κ*` 를 향해 주기당 `teleop_curvature_rate × dt` 만 움직인다(조향 전환 구간을 덮는 운용 제한, 설계 4.4 보장 범위 — 아래 원호 질의와 함께).
 3. deadman 이 거짓이거나 무장이 아니면 목표 속도 0.
-4. slew: 감속은 정지 모델 `decel_mps2`, 가속은 `command_accel_mps2`(0.8 m/s²). 부호가 바뀌는 요청은 먼저 0 으로(코어 `assemble_command` 와 같은 규칙). 시작값은 직전 **적용** 속도(피드백으로 받은 `applied`)다.
-5. 최종 허가 상한: 원호 질의의 상한, 그리고 `drive_allowed` 가 거짓이면 0. 넘으면 계단식으로 자른다.
-6. 선점이면 0.
+4. 속도 사슬 — 코어 `assemble_command` 의 속도 계산과 **같은 함수**(M-b4 에서 코어에서 뽑아 둘이 함께 쓴다; 재생 29건으로 같음을 확인): 조향 따라잡기(목표 조향과 실측 조향 차 > 0.05 rad 이면 목표 속도 ×¼) → slew(감속은 정지 모델 `decel_mps2`, 가속 `command_accel_mps2` 0.8 m/s², 부호가 바뀌면 먼저 0) → 최종 허가 상한(원호 질의의 상한, `drive_allowed` 가 거짓이면 0; 넘으면 계단식으로 자름) → 선점이면 0. 시작값은 직전 **적용** 속도다. 따라잡기를 slew 뒤에 두면 감속 한계를 넘는 계단이 생긴다(0.5 m/s 에서 0.125 대 0.4875).
 
 원호 질의: 중재기 전용 `DrivePermission` 인스턴스(미션의 허가 상태를 건드리지 않는다)에 같은 snapshot 을 쓴다.
 
 - 조향 전환 덮기: 실측 조향 곡률 `κ_m` 부터 출력 곡률 `κ` 까지를 0.05 m⁻¹ 이하 간격으로 나눈 곡률마다 원호를 `update()` 로 설치하고 `allowed_speed`(정지 호 곡률도 같은 값)를 읽어 **가장 작은 상한**을 쓴다. 조향이 그 사이를 단조로 움직이는 동안의 궤적은 이 원호들의 다발 안에 든다는 근사이며, 간격 사이의 틈은 허가 설정의 envelope 여유가 덮는다고 본다(검증 대상, 6절).
 - 방향: 실측 속도 크기가 정지 문턱보다 크면 실측 이동 방향, 아니면 요청 방향(요청 0 이면 직전 적용 방향, 그것도 0 이면 전진).
 - 원호 길이: `lookahead_m + stopping.distance_m(검사 속도) + step_m` — 허가 검사 길이보다 길어 `reached_end` 가 서지 않는다(수동 조종에는 목표점이 없다).
-- 검사 속도: `max(|실측 속도|, |이번 요청 속도|)` — 코어가 허가를 부를 때(`core.py` 의 `cap_mps`)와 같은 규칙.
+- 검사 속도: `max(|실측 속도|, |직전 적용 명령|, |이번 요청 속도|)` — 계약 9절 2 의 "남은 속도와 직전 적용 명령을 모두 덮는 값"에 코어가 허가를 부를 때 쓰는 이번 요청을 더한 것. 예: 직전 0.5·실측 0.4·요청 0 이면 0.5(정지 거리 0.208 m), 직전 값을 빼면 0.4(0.163 m)로 줄어든다.
 - 센서 침묵과 증거 나이: 장애물 층이 미션에 넘기는 것과 같은 `sensors_last_s` 를 넘긴다. 격자가 낡으면 허가가 0 을 낸다.
 - footprint: 적재면 `footprints(loaded=True)`, 아니면 빈 차체.
 
-**출력 경계.** 중재기의 TELEOP 출력은 바퀴 속도(사슬 뒤)와 곡률이다. 실행기는 이것을 코어와 같은 뒷단(Ackermann 바퀴 목표, 조향 따라잡는 동안의 저속, 조향 속도 제한)에 넣고, 그 결과(`applied`)를 다음 주기 피드백으로 중재기에 돌려준다. 이 뒷단은 속도를 줄이기만 하고, 조향이 늦게 따라오는 구간은 위 원호 다발이 덮는다.
+**출력 경계.** 중재기의 TELEOP 출력은 사슬을 마친 바퀴 속도와 곡률이다. 실행기는 이것을 Ackermann 바퀴 목표와 조향 속도 제한에만 넣는다(따라잡기·slew 는 이미 사슬 안에서 했다). 그 결과(`applied`)는 다음 주기 피드백으로 중재기에 돌아간다. 조향이 늦게 따라오는 구간은 위 원호 다발이 덮는다.
 
 **B9 정지 확인과 피드백.** 중재기가 자기 `StopDetector`(`forklift_core/localization/slam_pose.py`, 코어 재개 1단계와 같은 판정기, 기본값)를 가진다. 입력은 직전 적용 속도, 바퀴 속도 피드백, 요 각속도다. 피드백은 측정 시각(`vehicle_mono`)을 함께 받고, `feedback_max_age_s` 보다 낡았으면 없는 것으로 본다. 피드백이 없으면 정지 확인은 언제나 거짓이다 — 그런 차량은 `rearm`·재개·TELEOP 진입을 받지 않는다(설계 4.3).
 
@@ -157,7 +157,7 @@
 - 입력: `now_mono`, 피드백(바퀴 속도와 측정 시각, 요 각속도, 조향, 승강, 직전 `applied`), 코어 `safety_state()`, 코어 후보(코어 `assemble_command` 가 낸 바퀴 속도·곡률), 허가 질의(snapshot·자세·footprint·`sensors_last_s`).
 - 출력: `mode`, `stop_kind`, `source`(`auto`·`teleop`·`core_stop`), 바퀴 속도·곡률, `permit`(상한·사유), `drive_allowed`·`lift_allowed`·`teleop_allowed`·사유, 세대, `armed`, lease 요약.
 - 순서: ① 만료·lease 만료 → ② 정지 확인 갱신, 래치 해제(정지 확인되면)·정지 실패 판정 → ③ 정책(B7) → ④ 출처: AUTO 면 코어 후보 그대로. `PAUSED` 면 코어 후보(코어가 일시정지 틱에서 감속시키는 값)를 쓰되 크기가 직전 적용 속도를 넘지 못하게 자른다. TELEOP 이면 B8. → ⑤ `preempt` 면 0.
-- **감속의 소유자는 하나다.** 실행기는 최종 적용 값을 코어 상태(`command_speed`·`applied_command`)에 되써서, 다음 주기 코어의 slew 가 실제로 나간 값에서 시작하게 한다. 그래서 TELEOP 에서 `PAUSED` 로 넘어가면 코어가 실제 속도에서 감속한다.
+- **감속의 소유자는 하나다.** 출처가 코어가 아닌 주기(TELEOP, 선점 0)에 M-c 실행기는 최종 적용 값을 코어가 읽는 명령 상태 셋에 되쓴다: `command_speed`(코어 slew 시작값), `applied_command`(정지·cusp 판정), `slam["last_command"]`(SLAM 정지 판정기의 명령 입력 — 이것이 0 으로 남으면 TELEOP 중 움직이는 차를 '정지'로 판정해 release·재개가 잘못 일어난다). 그래서 TELEOP 에서 `PAUSED` 로 넘어가면 코어가 실제 속도에서 감속한다. AUTO·PAUSED 에서는 출력이 코어 후보와 같으므로 되쓸 것이 없고, 배치 실행기(중재기 없음)는 바뀌지 않는다.
 - AUTO 에서 코어 후보를 다시 slew·허가하지 않는다. 코어가 이미 같은 사슬을 적용했고, 다시 거르면 배치 실행과 달라진다.
 
 **B12 상태 메시지.** `state_message(...)` 가 계약 6절의 중재기 몫(`mode`·`stop_kind`·`control_gen`·`armed`·`arm_gen`·`lease`·`command`·`applied`·`permit`·`limits`·`drive_allowed`·`lift_allowed`·`mission`·`teleop_allowed`·`teleop_forbidden_reason`)을 만든다. 잴 수 없는 값은 `null`. `pose`·`freshness`·`pacing` 은 실행기가 넘긴다.
@@ -185,7 +185,7 @@
 | `not_stopped_s` | 10 | 미션 E3 |
 | 결과 저장 상한 | 4096 | 정책값 |
 
-재계산(검토 ①): 0.5 m/s 에서 정지 거리 = 0.5·0.15 + 0.25/3 + 0.05 = 0.208 m, 0.25 m/s 0.108 m, 0.30 m/s 0.125 m. 정지 상태에서 허가가 내주는 첫 상한은 `speed_for(0.07)` = 0.108 m/s 이다(원호 길이 = 여유 0.05 + 표본 간격 0.02). 설계 4.4 의 slew 예시(0.5 → 0.4975 m/s)는 감속 0.3 m/s² 기준이고, 코어가 실제로 쓰는 감속 1.5 m/s² 로는 0.4875 m/s 다 — 어느 쪽이든 새 상한 0.1 을 넘으므로 slew 뒤 허가 상한을 두는 순서의 근거는 같다.
+재계산(검토 ①): 0.5 m/s 에서 정지 거리 = 0.5·0.15 + 0.25/3 + 0.05 = 0.208 m, 0.25 m/s 0.108 m, 0.30 m/s 0.125 m. 검사 속도가 0 이면(정지 중, 요청 0) 정지 호 길이는 여유 0.05 + 표본 간격 0.02 = 0.07 m 이고 그 상한은 `speed_for(0.07)` = 0.108 m/s 다. 요청이 있으면 검사 속도에 들어가 정지 호가 그만큼 길어진다. 설계 4.4 의 slew 예시(0.5 → 0.4975 m/s)는 감속 0.3 m/s² 기준이고, 코어가 실제로 쓰는 감속 1.5 m/s² 로는 0.4875 m/s 다 — 어느 쪽이든 새 상한 0.1 을 넘으므로 slew 뒤 허가 상한을 두는 순서의 근거는 같다.
 
 ## 4. 조각
 
@@ -194,7 +194,7 @@
 | M-b1 | `generations.py`·`ledger.py`, 연결·lease·신뢰 요청 처리 순서·저장 상한·STOP | 단위 |
 | M-b2 | 모드·정지 종류·`rearm`·정지 확인·정지 실패, 한 틱 순서(②·④), `MissionCommands.hold_on/off`, 코어의 `held`·`near.active`·`frame.slam`·근접 중 정지의 `no_resume`, 배치 실행기 `Context.near_tracker` 정정 | 단위 + 코어 시험, 재생 29건·ws1 전체 시험 |
 | M-b3 | 텔레옵 검증·만료·영상 신선도·무장·입력 상태 | 단위 |
-| M-b4 | `teleop_policy`·`teleop_drive`(사슬, 원호 다발 허가) | 단위(합성 격자) |
+| M-b4 | 코어 `assemble_command` 의 속도 사슬을 순수 함수로 뽑기(코어와 중재기가 공유), `teleop_policy`·`teleop_drive`(사슬, 원호 다발 허가) | 단위(합성 격자), 재생 29건 |
 | M-b5 | `state_message`, 가짜 차량 루프 시나리오(만료 정지, lease 유예, STOP→rearm, TELEOP 진입 거부, 적재 운반 텔레옵, PAUSED 감속, 정지 실패) | 통합(CPU) |
 
 각 조각마다 Codex 구현 리뷰를 수렴까지 받는다.
@@ -221,6 +221,8 @@
 
 ## 7. 자체 검토 기록
 
+
 - **① 재계산(Claude).** 3절 끝. 정지 확인은 코어와 같은 `StopDetector` 로 바꿨다. 설계 slew 예시의 감속값 차이를 적었다.
 - **③ agy 독립 검토(Claude Opus 4.6 Thinking, 결론 미공개).** 반영: `handle`·`step` 직렬 실행(B3), 피드백 신선도(B9), TELEOP 중 피드백 상실 → 주행 거부·선점(B7), STOP 이 미확정 AUTO 전이를 남기지 않음(B3 ②·④), TELEOP 진입은 정지 확인 뒤(B5), 허가의 센서 침묵·증거 나이 입력(B8), 구동 지연·프로세스 정지·다중 인스턴스·적재 제동은 경계 밖 전제로 명시(B13). 반영 안 함: 무장 뒤 첫 명령 제한 시간 — 첫 명령도 회신 만료(0.3 s)를 거치므로 묵은 명령이 될 수 없다.
 - **② Codex 적대적 검토 1회차(P1 7·P2 4·P3 2, 모두 반영).** PAUSED 정지가 근접 추적 중 미션 `pause` 거절에 막힘 → 미션에 `controlled` 를 넘기는 불변식 + 근접 중 PAUSED 거절(B5). 주행 금지가 slew 전 목표만 0 → 최종 상한 0(B7·B8). 반복 STOP 이 세대를 안 올림 → 올림(B3 0, 초안 코드 수정). 보류 미션 요청·AUTO 예약이 경계를 넘음 → 한 틱 안 확정(B3). 정지 확인이 이양·제출에 없고 정지 실패 처리 없음 → B5. 조향 전환 구간 의무 누락 → 곡률 변화율 제한 + 원호 다발(B8), 출력 경계(B8). `FrameLedger` 가 지운 번호를 다시 받음 → 거부(B10, 초안 코드 수정). `tracker_built` 가 근접 종료 뒤에도 참 → `near.active`(B7). TELEOP 을 떠나는 경로에 `hold_off` 누락 → 모든 경로(B5). PAUSED 감속 경로 없음 → 코어 후보 + 적용 값 되쓰기(B11). SLAM 유무를 알 수 없음 → `frame.slam`(B7). P3: 육안·영상 상한 방향, 검사 속도 규칙 정정(3절·B8).
+- **② Codex 2회차(P1 4·P2 2·P3 1, 모두 반영).** 제출·재개 주기의 `none` 예외가 아직 `running` 인 미션을 풀어 줌(같은 배치의 PAUSED 요청 뒤 제출) → 생명주기 상태가 그 요청을 받을 수 있을 때만 `none`(B5). TELEOP 구동 출력까지 `controlled` 로 적음 → 구동 `none`·미션 `controlled` 로 나눔(B5 표). 되쓰기 대상에 SLAM 정지 판정기의 `last_command` 누락 → 추가, M-c 경계 한정(B11). 검사 속도에서 직전 적용 명령 누락 → 셋의 최댓값(B8). 수락 기록만 보고 AUTO 확정 → 틱 뒤 미션 상태로 판정, 이후 재개 실패도 PAUSED 복귀(B5). 조향 따라잡기를 slew 뒤로 옮김 → 코어와 같은 속도 사슬 함수를 공유(B8). P3: 첫 상한 0.108 의 조건(3절). 반례 두 건(반복 STOP, 지운 프레임 재등록)은 닫힘 확인.
