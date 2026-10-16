@@ -103,7 +103,32 @@ def union_mesh(boxes, *, bounds=None) -> np.ndarray:
                     q = q[::-1]
                 out.append([q[0], q[1], q[2]])
                 out.append([q[0], q[2], q[3]])
-    return np.array(out, dtype=float).reshape(-1, 3, 3)
+    tri = np.array(out, dtype=float).reshape(-1, 3, 3)
+    _check_manifold(tri)
+    return tri
+
+
+def _check_manifold(tri) -> None:
+    """Refuse meshes a slicer cannot trust: boxes touching only along an edge or at a corner."""
+    keys = [tuple(tuple(v) for v in np.round(t, 12)) for t in tri]
+    directed = {}
+    for a, b, c in keys:
+        for edge in ((a, b), (b, c), (c, a)):
+            directed[edge] = directed.get(edge, 0) + 1
+    if any(n != 1 or directed.get((e[1], e[0])) != 1 for e, n in directed.items()):
+        raise ValueError("non-manifold mesh: boxes touch only along an edge")
+    links = {}
+    for a, b, c in keys:
+        for v, (p, q) in ((a, (b, c)), (b, (c, a)), (c, (a, b))):
+            links.setdefault(v, []).append((p, q))
+    for v, edges in links.items():
+        nxt = dict(edges)
+        start = edges[0][0]
+        node, steps = nxt[start], 1
+        while node != start and steps <= len(edges):
+            node, steps = nxt[node], steps + 1
+        if steps != len(edges):
+            raise ValueError("non-manifold mesh: boxes touch only at a corner")
 
 
 def union_volume(boxes, bounds=None) -> float:
@@ -157,7 +182,6 @@ def _part_record(path: Path, part: Part, scale: float) -> dict:
 
 
 def export(out: Path, boxes, *, scale: float, bed_m, split: str, source: dict) -> dict:
-    out.mkdir(parents=True, exist_ok=False)
     if split == "members":
         parts = []
         for b in boxes:  # members longer than the bed are cut along their length
@@ -166,6 +190,9 @@ def export(out: Path, boxes, *, scale: float, bed_m, split: str, source: dict) -
                       for piece in pieces]
     else:
         parts = tile_meshes(boxes, bed_m=[lim / scale for lim in bed_m])
+    if not parts:
+        raise ValueError("nothing to print")
+    out.mkdir(parents=True, exist_ok=False)
     records = []
     for part in parts:
         path = out / f"{part.name}.stl"
@@ -177,11 +204,23 @@ def export(out: Path, boxes, *, scale: float, bed_m, split: str, source: dict) -
                 "overall_mm": [round(float(v) * 1000.0 * scale, 3) for v in hi - lo],
                 "volume_cm3": union_volume(boxes) * 1e6 * scale ** 3,
                 "parts": records,
-                "notes": "Members positions are in the pallet frame (x along the depth, y across, z up). Tiles are "
+                "geometry": "nominal design geometry; measure the printed and assembled pallet (overall and pocket "
+                    "sizes, joint gaps, flatness) before using it as truth",
+        "notes": "Members positions are in the pallet frame (x along the depth, y across, z up). Tiles are "
                          "cut evenly in x and y and glue side by side. Print in a matte, light filament: the "
                          "D435i's infrared pattern leaves holes on glossy, black or translucent plastic."}
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1))
     return manifest
+
+
+def _sizes_m(text: str, flag: str) -> list:
+    try:
+        values = [float(v) for v in text.split(",")]
+    except ValueError:
+        raise SystemExit(f"{flag} needs three numbers in mm") from None
+    if len(values) != 3 or not all(math.isfinite(v) and v > 0 for v in values):
+        raise SystemExit(f"{flag} needs three finite positive sizes in mm")
+    return [v / 1000.0 for v in values]
 
 
 def main(argv=None):
@@ -198,9 +237,9 @@ def main(argv=None):
     a = p.parse_args(argv)
     if not (math.isfinite(a.scale) and a.scale > 0):
         raise SystemExit("--scale must be positive")
-    bed_m = [float(v) / 1000.0 for v in a.bed.split(",")]
+    bed_m = _sizes_m(a.bed, "--bed")
     if a.plate:
-        w, d, t = (float(v) / 1000.0 for v in a.plate.split(","))
+        w, d, t = _sizes_m(a.plate, "--plate")
         boxes, source = [PalletBox("plate", (w, d, t), (0.0, 0.0, t / 2))], {"name": "plate", "plate_mm": a.plate}
     else:
         from tools import recognition_scenes as rs
@@ -217,7 +256,10 @@ def main(argv=None):
                       "case": recipe.case, "damage": [d.to_json() for d in damage]}
         source["spec"] = spec.to_json()
         boxes = pallet_boxes(spec, damage)
-    manifest = export(a.out, boxes, scale=a.scale, bed_m=bed_m, split=a.split, source=source)
+    try:
+        manifest = export(a.out, boxes, scale=a.scale, bed_m=bed_m, split=a.split, source=source)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from None
     print(json.dumps({"parts": len(manifest["parts"]), "overall_mm": manifest["overall_mm"],
                       "volume_cm3": round(manifest["volume_cm3"], 1)}))
 

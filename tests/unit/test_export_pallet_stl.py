@@ -16,11 +16,12 @@ def _volume(tri):
 
 
 def _edges_even(tri):
-    count = Counter()
-    for t in tri:
+    """Every undirected edge used by exactly two triangles, in opposite directions."""
+    directed = Counter()
+    for tr in tri:
         for a, b in ((0, 1), (1, 2), (2, 0)):
-            count[tuple(sorted((tuple(np.round(t[a], 9)), tuple(np.round(t[b], 9)))))] += 1
-    return all(n % 2 == 0 for n in count.values())
+            directed[(tuple(np.round(tr[a], 9)), tuple(np.round(tr[b], 9)))] += 1
+    return all(n == 1 and directed.get((b, a)) == 1 for (a, b), n in directed.items())
 
 
 def test_a_box_becomes_a_closed_outward_mesh():
@@ -97,3 +98,18 @@ def test_a_filament_test_plate(tmp_path):
     ex.main(["--plate", "200,200,5", "--out", str(tmp_path / "plate")])
     manifest = json.loads((tmp_path / "plate" / "manifest.json").read_text())
     assert manifest["parts"][0]["size_mm"] == [200.0, 200.0, 5.0]
+
+
+@pytest.mark.parametrize("second", [(0.1, 0.1, 0.05), (0.1, 0.1, 0.15)])
+def test_boxes_touching_only_along_an_edge_or_a_corner_are_refused(second):
+    boxes = [PalletBox("a", (0.1, 0.1, 0.1), (0.0, 0.0, 0.05)), PalletBox("b", (0.1, 0.1, 0.1), second)]
+    with pytest.raises(ValueError, match="manifold"):
+        ex.union_mesh(boxes)
+
+
+@pytest.mark.parametrize("args", [["--shape", "epal6", "--bed=-256,256,256"], ["--shape", "epal6", "--bed", "256,256"],
+                                  ["--plate", "200,200,0"], ["--plate", "200,nan,5"]])
+def test_bad_bed_or_plate_sizes_are_refused(tmp_path, args):
+    with pytest.raises(SystemExit):
+        ex.main([*args, "--out", str(tmp_path / "x")])
+    assert not (tmp_path / "x").exists()
