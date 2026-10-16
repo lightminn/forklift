@@ -182,3 +182,19 @@ def test_a_cancel_while_stopped_is_a_generation_of_its_own(before):
     assert m.apply(20.0)[0]["accepted"] and m.mission_gen == gen + 1 and len(m.pauses) == 1
     m.cancelled(21.0)
     assert m.pauses == [[10.0, 21.0]]
+
+
+
+@pytest.mark.parametrize("kind", ["controlled", "preempt"])
+def test_an_arbiter_stop_pauses_the_mission_until_a_resume_after_it(kind):
+    """M-a3d (plan E7): a stop kind is a pause; resume is refused while it lasts and needed after it."""
+    m = running()
+    (rec,) = m.apply(10.0, Context(stop_kind=kind))
+    assert rec["command"] == f"stop_kind:{kind}" and m.status == "paused" and m.pauses == [[10.0, None]]
+    m.apply(11.0, Context(stop_kind=kind))
+    assert len(m.pauses) == 1  # one stop while it lasts
+    m.queue(Resume())
+    assert m.apply(12.0, Context(stop_kind=kind))[0]["reason"] == "stopping"
+    assert m.apply(13.0)[0:] == [] and m.status == "paused"  # lifted: still paused until a resume
+    m.queue(Resume())
+    assert m.apply(14.0)[0]["accepted"] and m.status == "resuming"

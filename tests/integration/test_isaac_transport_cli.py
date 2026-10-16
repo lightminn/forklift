@@ -994,13 +994,13 @@ def test_mission_commands_options_validate_before_startup(tmp_path) -> None:
     bad = tmp_path / "bad.json"
     bad.write_text('{"commands": [{"t": 30.0, "command": "halt"}]}')
     kinds = tmp_path / "kinds.json"
-    kinds.write_text('{"commands": [], "stop_kinds": []}')
+    kinds.write_text('{"commands": [], "stop_kinds": [{"from": 10.0, "to": 12.0, "kind": "halt"}]}')
     layer = ["--record-slam", "--obstacle-layer", "config/obstacle_layer_single.yaml", "--obstacle-act"]
     for flags, expected in (
         (["--mission-commands", str(good)], "--mission-commands needs --obstacle-act"),
         (["--mission-commands", str(good), *layer, "--record-boundary"], "--mission-commands excludes"),
         (["--mission-commands", str(bad), *layer], "command must be pause, resume or cancel"),
-        (["--mission-commands", str(kinds), *layer], "stop kinds are not supported yet"),
+        (["--mission-commands", str(kinds), *layer], "stop kind must be controlled or preempt"),
         (["--mission-commands", str(tmp_path / "missing.json"), *layer], "--mission-commands:"),
     ):
         result = subprocess.run(

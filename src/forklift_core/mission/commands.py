@@ -88,6 +88,17 @@ class MissionCommands:
         commands = sorted(self._queue, key=lambda c: PRIORITY[c.kind])  # sorted() is stable: same rank keeps order
         self._queue = []
         records = []
+        if context.stop_kind != "none" and self.status in ("running", "resuming"):
+            # E7: the arbiter's stop is a pause of the mission (resumed only by a resume once it is lifted).
+            if self.paused_since is None:
+                self._stop_boundary(t)
+            else:
+                self.mission_gen += 1
+            self.status = "paused"
+            record = {"t": t, "command": f"stop_kind:{context.stop_kind}", "accepted": True, "reason": None,
+                      "mission_id": self.mission_id, "status": self.status}
+            records.append(record)
+            self.log.append(record)
         for command in commands:
             reason = getattr(self, f"_{command.kind}")(t, command, context)
             record = {"t": t, "command": command.kind, "accepted": reason is None, "reason": reason,

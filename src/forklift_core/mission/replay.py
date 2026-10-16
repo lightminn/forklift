@@ -226,16 +226,25 @@ class ReplaySession:
             if key in head and head[key] is None and key in ("tick_t", "work_t"):
                 self._time_pending = True  # set later in the tick (tick_time), required before it ends
                 continue
+            if key in head and head[key] is None:
+                continue  # M-a3: commands and stop kind set later in the tick (tick_time) and checked there
             if key in head and _canonical(self.encode(head[key])) != _canonical(recorded[key]):
                 raise self.fail(f"tick {tick} {key}: {head[key]!r} differs from the recorded one")
         self.tick, self._next = recorded, 0
 
-    def tick_time(self, *, tick_t: float, work_t: float) -> None:
-        """The head's times computed inside the tick, checked against the recorded head."""
+    def tick_time(self, *, tick_t: float, work_t: float, commands: list | None = None,
+                  stop_kind: str | None = None) -> None:
+        """The head's times computed inside the tick -- and, with mission commands (M-a3), the commands applied
+        and the stop kind -- checked against the recorded head."""
         tick = self.tick
         if tick is None:
             raise self.fail("tick_time outside a tick")
-        for key, value in (("tick_t", tick_t), ("work_t", work_t)):
+        checks = [("tick_t", tick_t), ("work_t", work_t)]
+        if commands is not None:
+            checks.append(("commands", commands))
+        if stop_kind is not None:
+            checks.append(("stop_kind", stop_kind))
+        for key, value in checks:
             if _canonical(self.encode(value)) != _canonical(tick[key]):
                 raise self.fail(f"tick {tick['tick']} {key}: {value!r} differs from the recorded head")
         self._time_pending = False

@@ -202,12 +202,21 @@ def quarter_focal(value: str) -> float:
     return focal
 
 
-def load_mission_schedule(path: Path) -> list[tuple[float, str]]:
-    """M-a3: the command schedule file -- (loop time, command) sorted by time; only pause, resume and cancel
-    (the run submits its own mission; stop kinds come with M-a3d)."""
+def load_mission_schedule(path: Path) -> tuple[list[tuple[float, str]], list[tuple[float, float, str]]]:
+    """M-a3: the command schedule file -- (loop time, command) sorted by time, only pause, resume and cancel (the
+    run submits its own mission); and the stop kinds by loop-time interval [from, to), controlled or preempt, as the
+    arbiter will give them (plan E7)."""
     data = json.loads(Path(path).read_text())
-    if not isinstance(data, dict) or set(data) - {"commands"}:
-        raise ValueError("expected {\"commands\": [...]} (stop kinds are not supported yet)")
+    if not isinstance(data, dict) or set(data) - {"commands", "stop_kinds"}:
+        raise ValueError("expected {\"commands\": [...], \"stop_kinds\": [...]}")
+    kinds = []
+    for row in data.get("stop_kinds", []):
+        from_, to_, kind_ = row.get("from"), row.get("to"), row.get("kind")
+        if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in (from_, to_)) or not 0 <= from_ < to_:
+            raise ValueError(f"a stop kind needs finite loop times 0 <= from < to: {row}")
+        if kind_ not in ("controlled", "preempt"):
+            raise ValueError(f"stop kind must be controlled or preempt: {row}")
+        kinds.append((float(from_), float(to_), kind_))
     out = []
     for row in data.get("commands", []):
         t_, command_ = row.get("t"), row.get("command")
@@ -216,7 +225,7 @@ def load_mission_schedule(path: Path) -> list[tuple[float, str]]:
         if command_ not in ("pause", "resume", "cancel"):
             raise ValueError(f"command must be pause, resume or cancel: {row}")
         out.append((float(t_), command_))
-    return sorted(out, key=lambda r: r[0])
+    return sorted(out, key=lambda r: r[0]), sorted(kinds)
 
 
 def arguments() -> argparse.Namespace:
@@ -841,11 +850,11 @@ def arguments() -> argparse.Namespace:
         if not args.obstacle_act:
             parser.error("--mission-commands needs --obstacle-act")
         if args.near_tracking or args.record_pocket_frames or args.measure_safety_stops_m is not None \
-                or args.estop_probe is not None or args.record_boundary:
+                or args.estop_probe is not None or (args.record_boundary and args.record_boundary_format != 2):
             parser.error("--mission-commands excludes --near-tracking, --record-pocket-frames, "
-                         "--measure-safety-stops-m, --estop-probe and --record-boundary")
+                         "--measure-safety-stops-m, --estop-probe and a format-1 --record-boundary")
         try:
-            args.mission_schedule = load_mission_schedule(args.mission_commands)
+            args.mission_schedule, args.mission_stop_kinds = load_mission_schedule(args.mission_commands)
         except (OSError, ValueError) as exc:
             parser.error(f"--mission-commands: {exc}")
     inject_sizes = (args.near_inject_lateral_m, args.near_inject_yaw_rad)
@@ -4497,6 +4506,15 @@ def drive(S, isaac) -> None:
     # outside the loop -- the default path is a run with this one submit and no command in any tick.
     # The schedule of a --mission-commands run (plan E2); None without one, and then nothing below applies a command.
     mission_schedule = list(args.mission_schedule) if getattr(args, "mission_schedule", None) is not None else None
+    mission_stop_kinds = list(getattr(args, "mission_stop_kinds", None) or [])
+
+    def stop_kind_at(time_s: float) -> str:
+        """M-a3 (plan E7): the stop kind the schedule gives at loop time ``time_s`` (the arbiter's, later)."""
+        for start_, end_, kind_ in mission_stop_kinds:
+            if start_ <= time_s < end_:
+                return kind_
+        return "none"
+
     core.commands.queue(MissionSubmit("scenario_pickup", "scenario_destination"))
     core.commands.apply(0.0)
     core.commands.start()
@@ -4883,6 +4901,14 @@ def drive(S, isaac) -> None:
             tick = stepper["tick"]
             stepper["tick"] = tick + 1
             frame_due = args.video and tick % fps_divisor == 0
+            if mission_stop_kinds and stop_kind_at(world.current_time - initial_time) == "preempt":
+                # M-a3 (plan E7): a preempt stops the wheels at this physics step, a capture's steps included; the
+                # steering stays where it is. The applied command, its slew and the stop detector's command say so.
+                robot.apply_action(isaac.action(joint_velocities=np.zeros(len(wheels)), joint_indices=wheels))
+                state["applied_command"] = (0.0, list((state.get("applied_command") or (0.0, []))[1]))
+                state["command_speed"] = 0.0
+                if slam is not None:
+                    slam["last_command"] = 0.0
             world.step(render=render or frame_due)
             stamp_now = world.current_time - initial_time
             if args.tyre_contact_log and tick % 12 == 0:
@@ -5108,10 +5134,12 @@ def drive(S, isaac) -> None:
                  # format 2: the tyre contact log the step appends to the state (an evaluation record)
                  **({"state": state} if early_ports else {})},
                 keys={"slam": ["stop_now", "tracker_speed", "odom_speed", "odom_rear", "odom_yaw_rate", "scan_id",
-                               "last_scan_odom_base", "last_scan_estimate_rear", "last_sent_ranges", "records"],
+                               "last_scan_odom_base", "last_scan_estimate_rear", "last_sent_ranges", "records",
+                               "last_command"],  # M-a3 (plan E9): a preempt sets it inside the step
                       "obstacle": ["version", "last_stamp", "applied", "last_raw", "scans"],
                       **({"slam_log": list(slam_log)} if watched_log_ else {}),
-                      **({"state": ["tyre_contact_rows"]} if early_ports else {})},
+                      # M-a3 (plan E9): a preempt sets the applied command and its slew inside the step
+                      **({"state": ["tyre_contact_rows", "applied_command", "command_speed"]} if early_ports else {})},
                 append_only={"records", "scans", *(slam_log if watched_log_ else ()),
                              *(("tyre_contact_rows",) if early_ports else ())},
             )
@@ -5182,19 +5210,26 @@ def drive(S, isaac) -> None:
             if early_ports:
                 # Format 2: the tick opens first, the clock is read inside it (recorded), then the head's times
                 # are set from that read (a replay checks them against the recorded head).
-                boundary.recorder.tick_begin(step, tick_t=None, work_t=None, commands=[], stop_kind="none")
+                # (M-a3: the commands applied and the stop kind follow the clock read, so they are set with the times.)
+                boundary.recorder.tick_begin(step, tick_t=None, work_t=None, commands=None, stop_kind=None)
                 t = world.current_time - initial_time
-                boundary.recorder.tick_time(tick_t=t, work_t=t)
             else:
                 t = world.current_time - initial_time
                 if boundary is not None:
                     boundary.recorder.tick_begin(step, tick_t=t, work_t=t, commands=[], stop_kind="none")
             book_clock["t"] = t
+            applied_commands_, stop_kind_ = [], "none"
             if mission_schedule is not None:
-                # M-a3 (plan E2): the schedule's due commands, applied at this control tick's start.
+                # M-a3 (plan E2, E7): the schedule's due commands and the stop kind in force, applied at this
+                # control tick's start.
                 while mission_schedule and mission_schedule[0][0] <= t:
                     core.commands.queue(MISSION_COMMANDS[mission_schedule.pop(0)[1]]())
-                core.commands.apply(t, MissionContext(near_tracker=near is not None and near["tracker"] is not None))
+                stop_kind_ = stop_kind_at(t)
+                applied_commands_ = core.commands.apply(t, MissionContext(
+                    stop_kind=stop_kind_, near_tracker=near is not None and near["tracker"] is not None))
+            if early_ports:
+                boundary.recorder.tick_time(tick_t=t, work_t=core.commands.work_elapsed(0.0, t),
+                                            commands=applied_commands_, stop_kind=stop_kind_)
             rear_stamp = t  # the time of the control pose `rear` (a capture moves it on)
             dwell_hold = dwell_standing = False
             cusp_hold = False  # plan cusp position stall v7 K3: zero command, steering held
@@ -6194,7 +6229,7 @@ def main() -> None:
             for k, v in vars(args).items()
             if (k != "extra_views" or v)
             # M-a3 (plan E9): not recorded at its default, so a run without commands records what it always did
-            and (k != "mission_commands" or v is not None) and k != "mission_schedule"
+            and (k != "mission_commands" or v is not None) and k not in ("mission_schedule", "mission_stop_kinds")
             and (
                 k not in {"quarter_eye", "quarter_target", "quarter_focal"}
                 or (v is not None and (k != "quarter_focal" or v != 2.5))

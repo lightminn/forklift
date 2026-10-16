@@ -70,11 +70,17 @@ class BoundaryRecorder:
         self._tick = {"tick": int(tick), "tick_t": self._encode(tick_t), "work_t": self._encode(work_t),
                       "commands": self._encode(commands), "stop_kind": stop_kind, "calls": []}
 
-    def tick_time(self, *, tick_t: float, work_t: float) -> None:
-        """Format 2's two-step tick head: the times, read inside the open tick, set after it began."""
+    def tick_time(self, *, tick_t: float, work_t: float, commands: list | None = None,
+                  stop_kind: str | None = None) -> None:
+        """Format 2's two-step tick head: the times, read inside the open tick, set after it began -- and, with
+        mission commands (M-a3), the commands this tick applied and the stop kind it ran under."""
         if self._tick is None:
             raise RuntimeError("tick_time outside a tick")
         self._tick["tick_t"], self._tick["work_t"] = self._encode(tick_t), self._encode(work_t)
+        if commands is not None:
+            self._tick["commands"] = self._encode(commands)
+        if stop_kind is not None:
+            self._tick["stop_kind"] = stop_kind
 
     def encode(self, value: Any) -> Any:
         """``value`` encoded now (arrays copied): for recording a request before the call runs."""

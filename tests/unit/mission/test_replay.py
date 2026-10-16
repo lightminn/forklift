@@ -1279,3 +1279,44 @@ def test_a_watched_call_on_a_long_log_costs_no_pass_over_the_log(tmp_path):
     rec.tick_end(outputs={}, branches=[])
     rec.close()
     assert per_call < 2e-3, per_call  # a pass over 20k items per call took several ms
+
+
+# --- M-a3d (docs/plans/2026-10-16-m-a3-mission-commands.md E2, E7, E9) ---------------------------------------
+def test_a_format_2_head_carries_the_commands_and_stop_kind_set_with_its_times(tmp_path):
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    rec.tick_begin(0, tick_t=None, work_t=None, commands=None, stop_kind=None)
+    rec.tick_time(tick_t=1.0, work_t=0.5, commands=[{"command": "pause", "accepted": True}], stop_kind="preempt")
+    rec.tick_end(outputs={}, branches=[])
+    rec.close()
+
+    def replay(commands, kind):
+        session = ReplaySession(tmp_path)
+        session.tick_begin(0, tick_t=None, work_t=None, commands=None, stop_kind=None)
+        session.tick_time(tick_t=1.0, work_t=0.5, commands=commands, stop_kind=kind)
+        session.tick_end(outputs={}, branches=[])
+        session.finish()
+
+    replay([{"command": "pause", "accepted": True}], "preempt")
+    with pytest.raises(ReplayMismatch, match="commands"):
+        replay([{"command": "resume", "accepted": True}], "preempt")
+    with pytest.raises(ReplayMismatch, match="stop_kind"):
+        replay([{"command": "pause", "accepted": True}], "none")
+
+
+def test_a_physics_step_that_zeroes_the_command_is_restored_in_the_replay(tmp_path):
+    """E9: a preempt inside a capture changes the applied command, its slew and the stop detector's command in the
+    step itself; the watch records it and the replay, which does not step, restores it."""
+    state = {"applied_command": (0.3, [0.1, 0.1]), "command_speed": 0.3}
+    slam = {"last_command": 0.3}
+
+    def step(_):
+        state["applied_command"] = (0.0, [0.1, 0.1])
+        state["command_speed"] = 0.0
+        slam["last_command"] = 0.0
+
+    replay_with = one_call(tmp_path, step, lambda f: f(1),
+                           watch_dicts={"state": state, "slam": slam})
+    state_r = {"applied_command": (0.3, [0.1, 0.1]), "command_speed": 0.3}
+    slam_r = {"last_command": 0.3}
+    replay_with(lambda f: f(1), watch_dicts_replay={"state": state_r, "slam": slam_r})
+    assert state_r == {"applied_command": (0.0, [0.1, 0.1]), "command_speed": 0.0} and slam_r == {"last_command": 0.0}
