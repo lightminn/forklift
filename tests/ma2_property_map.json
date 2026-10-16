@@ -8996,6 +8996,1201 @@
     ],
     "check_line": "E   assert "
    }
+  },
+  {
+   "id": "B9:L428-drop_operand",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::14"
+   ],
+   "statement": "core sweep: drop_operand on `ms.phase in ('transport', 'return_home')` (core.py line 428) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_live_leg.py::test_no_live_plan_or_wait_on_a_leg_other_than_the_travel_legs"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "            options.grid_planning\n            and ms.phase in (\"transport\", \"return_home\")\n            and ms.phase in trackers\n",
+    "replace": "            options.grid_planning\n            and True\n            and ms.phase in trackers\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L475-pass",
+   "class": "N",
+   "checks": [
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::1",
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::2",
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::3",
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::4",
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::5",
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::6"
+   ],
+   "statement": "core sweep: pass on `live = hooks.plan_return_leg(grid_world(sc_), start, options.return_to_pose, replace(planner_config, clearance_m=0.0), g` (core.py line 475) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_live_leg.py::test_the_live_return_leg_retries_at_zero_clearance"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                    live = hooks.plan_return_leg(grid_world(sc_), start, options.return_to_pose,\n                                                 replace(planner_config, clearance_m=0.0), geometry=geometry,\n                                                 travel_config=replace(travel_config, clearance_m=0.0) if travel_config is not None else None,\n                                                 **grid_kwargs(\"return\", sc_.destination), **return_turnaround_kwargs())\n",
+    "replace": "                    pass\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L478-pass",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::6"
+   ],
+   "statement": "core sweep: pass on `live = hooks.plan_return_leg(grid_world(sc_), start, options.return_to_pose, replace(planner_config, clearance_m=0.0), g` (core.py line 478) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_live_leg.py::test_the_live_return_leg_retries_at_zero_clearance"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                    live = hooks.plan_return_leg(grid_world(sc_), start, options.return_to_pose,\n                                                 replace(planner_config, clearance_m=0.0), geometry=geometry,\n                                                 travel_config=replace(travel_config, clearance_m=0.0) if travel_config is not None else None,\n                                                 **grid_kwargs(\"return\", sc_.destination), **return_turnaround_kwargs())\n",
+    "replace": "                    pass\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L478-pass-2",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::6"
+   ],
+   "statement": "core sweep: pass on `live = hooks.plan_return_leg(grid_world(sc_), start, options.return_to_pose, replace(planner_config, clearance_m=0.0), g` (core.py line 478) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_live_leg.py::test_the_live_return_leg_retries_at_zero_clearance"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                    live = hooks.plan_return_leg(grid_world(sc_), start, options.return_to_pose,\n                                                 replace(planner_config, clearance_m=0.0), geometry=geometry,\n                                                 travel_config=replace(travel_config, clearance_m=0.0) if travel_config is not None else None,\n                                                 **grid_kwargs(\"return\", sc_.destination), **return_turnaround_kwargs())\n",
+    "replace": "                    pass\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L502-drop_operand",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::14"
+   ],
+   "statement": "core sweep: drop_operand on `ms.phase in ('transport', 'return_home')` (core.py line 502) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_live_leg.py::test_no_live_plan_or_wait_on_a_leg_other_than_the_travel_legs"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "            options.grid_planning and ms.phase in (\"transport\", \"return_home\") and ms.phase in trackers\n",
+    "replace": "            options.grid_planning and True and ms.phase in trackers\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L822-drop_operand",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::14"
+   ],
+   "statement": "core sweep: drop_operand on `ms.phase in ('transport', 'return_home')` (core.py line 822) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_blocked_replan.py::test_an_observe_leg_neither_escapes_nor_backs_off"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "            replanned.status == \"invalid_start\" and ms.phase in (\"transport\", \"return_home\")\n",
+    "replace": "            replanned.status == \"invalid_start\" and True\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L845-drop_operand",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::14"
+   ],
+   "statement": "core sweep: drop_operand on `ms.phase in ('transport', 'return_home')` (core.py line 845) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_blocked_replan.py::test_the_recorded_clearance_is_the_travel_configs_on_the_travel_legs_only[observe-0.2-0.3]"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "            (travel_config if ms.phase in (\"transport\", \"return_home\") and travel_config is not None\n",
+    "replace": "            (travel_config if True and travel_config is not None\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L862-pass",
+   "class": "N",
+   "checks": [
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::1",
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::2",
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::3",
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::4",
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::5",
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::6"
+   ],
+   "statement": "core sweep: pass on `replanned = plan_return_leg(grid_world(back), start, return_to_pose, tight, geometry=geometry, travel_config=tight_trave` (core.py line 862) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_blocked_replan.py::test_the_return_replan_retries_at_zero_clearance"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                replanned = plan_return_leg(\n                    grid_world(back), start, return_to_pose, tight, geometry=geometry,\n                    travel_config=tight_travel, **grid_kwargs(\"return\", back.destination),\n                )\n",
+    "replace": "                pass\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L892-test_true",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_runtime_viewpoints_extend_the_default_list_before_any_candidate_is_planned::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_runtime_viewpoints_extend_the_default_list_before_any_candidate_is_planned::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_runtime_viewpoints_extend_the_default_list_before_any_candidate_is_planned::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_runtime_viewpoints_extend_the_default_list_before_any_candidate_is_planned::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_runtime_viewpoints_extend_the_default_list_before_any_candidate_is_planned::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_runtime_viewpoints_extend_the_default_list_before_any_candidate_is_planned::6"
+   ],
+   "statement": "core sweep: test_true on `ms.next_candidate_index < len(options.observation_waypoints)` (core.py line 892) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_blocked_replan.py::test_an_observe_leg_neither_escapes_nor_backs_off",
+    "tests/unit/mission/test_core_blocked_replan.py::test_when_every_remaining_candidate_fails_the_search_ends_with_the_leg_failed"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "            while ms.next_candidate_index < len(options.observation_waypoints):\n",
+    "replace": "            while True:\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L1028-drop_operand",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::14"
+   ],
+   "statement": "core sweep: drop_operand on `ms.phase in ('transport', 'return_home')` (core.py line 1028) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_blocked_replan.py::test_an_observe_leg_neither_escapes_nor_backs_off"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "            if (ms.phase in (\"transport\", \"return_home\") and backs.get(ms.phase, 0) < BACKOFF_PER_LEG\n",
+    "replace": "            if (True and backs.get(ms.phase, 0) < BACKOFF_PER_LEG\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L1145-drop_operand",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::14"
+   ],
+   "statement": "core sweep: drop_operand on `obstacle.get('backoff', {}).get('phase') == ms.phase` (core.py line 1145) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_follow.py::test_another_legs_escape_is_not_this_legs_backoff_end"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "            obstacle is not None and obstacle.get(\"backoff\", {}).get(\"phase\") == ms.phase\n",
+    "replace": "            obstacle is not None and True\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L1219-drop_operand",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::3"
+   ],
+   "statement": "core sweep: drop_operand on `not tracking.off_path` (core.py line 1219) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_docking_stall.py::test_an_off_path_heading_miss_is_neither_a_docking_stop_nor_a_goal_heading_miss"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "            and not tracking.at_cusp\n            and not tracking.off_path\n            and (\n",
+    "replace": "            and not tracking.at_cusp\n            and True\n            and (\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L1249-drop_operand",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::14"
+   ],
+   "statement": "core sweep: drop_operand on `ms.phase in ('transport', 'return_home')` (core.py line 1249) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_docking_stall.py::test_a_goal_heading_miss_brakes_on_the_travel_legs_only"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "            and not dock_stop\n            and ms.phase in (\"transport\", \"return_home\")\n            and tracking.status == \"failed\"\n",
+    "replace": "            and not dock_stop\n            and True\n            and tracking.status == \"failed\"\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L1253-drop_operand",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::3"
+   ],
+   "statement": "core sweep: drop_operand on `not tracking.off_path` (core.py line 1253) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_docking_stall.py::test_an_off_path_heading_miss_is_neither_a_docking_stop_nor_a_goal_heading_miss"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "            and not tracking.at_cusp\n            and not tracking.off_path\n            and (len(state[\"stall_replans\"]) < 2 or d7_owned)\n",
+    "replace": "            and not tracking.at_cusp\n            and True\n            and (len(state[\"stall_replans\"]) < 2 or d7_owned)\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L1260-pass",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_an_escape_end_bypasses_docking_stall_and_failure::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_an_escape_end_bypasses_docking_stall_and_failure::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_an_escape_end_bypasses_docking_stall_and_failure::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_an_escape_end_bypasses_docking_stall_and_failure::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_an_escape_end_bypasses_docking_stall_and_failure::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_an_escape_end_bypasses_docking_stall_and_failure::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_an_escape_end_bypasses_docking_stall_and_failure::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_an_escape_end_bypasses_docking_stall_and_failure::8"
+   ],
+   "statement": "core sweep: pass on `tracking = replace(tracking, status='braking', speed_mps=0.0)` (core.py line 1260) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_docking_stall.py::test_a_goal_heading_miss_brakes_on_the_travel_legs_only"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "            # wait for the stop detector.\n            tracking = replace(tracking, status=\"braking\", speed_mps=0.0)\n        stalled = (\n",
+    "replace": "            # wait for the stop detector.\n            pass\n        stalled = (\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L1263-drop_operand",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::14"
+   ],
+   "statement": "core sweep: drop_operand on `ms.phase in ('transport', 'return_home')` (core.py line 1263) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_docking_stall.py::test_the_stall_replan_is_for_the_travel_legs_standing_on_a_zero_command"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "            slam is not None\n            and ms.phase in (\"transport\", \"return_home\")\n            and tracking.speed_mps == 0.0\n",
+    "replace": "            slam is not None\n            and True\n            and tracking.speed_mps == 0.0\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L1264-drop_operand",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::16"
+   ],
+   "statement": "core sweep: drop_operand on `tracking.speed_mps == 0.0` (core.py line 1264) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_docking_stall.py::test_the_stall_replan_is_for_the_travel_legs_standing_on_a_zero_command"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "            and ms.phase in (\"transport\", \"return_home\")\n            and tracking.speed_mps == 0.0\n            and slam[\"stop_now\"]\n",
+    "replace": "            and ms.phase in (\"transport\", \"return_home\")\n            and True\n            and slam[\"stop_now\"]\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L1277-drop_operand",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::3"
+   ],
+   "statement": "core sweep: drop_operand on `tracking.at_cusp` (core.py line 1277) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_docking_stall.py::test_a_reapproach_stalls_at_a_cusp_only"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                    and tracking.at_cusp\n",
+    "replace": "                    and True\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L1296-drop_operand",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::16",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::17",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::18",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::19",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::20",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::21",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::22",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::23",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::24",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::25",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::26",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::27",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::28",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::29",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::30",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::31",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::32",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::33",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::34",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::35",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::36"
+   ],
+   "statement": "core sweep: drop_operand on `len(state['stall_replans']) < 2` (core.py line 1296) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_docking_stall.py::test_a_plain_stall_without_a_stall_replan_left_does_not_replan"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "        elif ms.slam_stall_ticks >= 120 and len(state[\"stall_replans\"]) < 2:\n",
+    "replace": "        elif ms.slam_stall_ticks >= 120 and True:\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L1373-drop_operand",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::14"
+   ],
+   "statement": "core sweep: drop_operand on `obstacle.get('backoff', {}).get('phase') == ms.phase` (core.py line 1373) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_docking_stall.py::test_a_stall_replan_keeps_another_legs_backoff"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "            if obstacle is not None and obstacle.get(\"backoff\", {}).get(\"phase\") == ms.phase:\n",
+    "replace": "            if obstacle is not None and True:\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L1528-drop_operand",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::16",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::17",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::18",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::19",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::20",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::21",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::22",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::23",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::24",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::25",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::26",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::27",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::28",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::29",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::30",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::31",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::32",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::33",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::34",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::35",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::36"
+   ],
+   "statement": "core sweep: drop_operand on `slam['tracker'].mode == 'holding'` (core.py line 1528) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_observe.py::test_a_cusp_heading_miss_is_realign_held_only_while_slam_holds"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "            if slam is not None and slam[\"tracker\"].mode == \"holding\" and realign_active():\n",
+    "replace": "            if slam is not None and True and realign_active():\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L1582-drop_operand",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::3"
+   ],
+   "statement": "core sweep: drop_operand on `tracking.at_cusp` (core.py line 1582) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_observe.py::test_an_observe_stall_counts_only_standing_at_a_cusp_on_a_zero_command"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "            and tracking.status == \"tracking\"\n            and tracking.at_cusp\n            and tracking.speed_mps == 0.0\n",
+    "replace": "            and tracking.status == \"tracking\"\n            and True\n            and tracking.speed_mps == 0.0\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L1583-drop_operand",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::16"
+   ],
+   "statement": "core sweep: drop_operand on `tracking.speed_mps == 0.0` (core.py line 1583) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_observe.py::test_an_observe_stall_counts_only_standing_at_a_cusp_on_a_zero_command"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "            and tracking.at_cusp\n            and tracking.speed_mps == 0.0\n            and slam[\"stop_now\"]\n",
+    "replace": "            and tracking.at_cusp\n            and True\n            and slam[\"stop_now\"]\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L1593-drop_operand",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::3"
+   ],
+   "statement": "core sweep: drop_operand on `not tracking.off_path` (core.py line 1593) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_observe.py::test_an_off_path_observe_miss_is_neither_replanned_nor_a_held_realignment_refusal"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                 and not tracking.off_path)\n",
+    "replace": "                 and True)\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L1607-drop_operand",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::3"
+   ],
+   "statement": "core sweep: drop_operand on `not tracking.off_path` (core.py line 1607) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_observe.py::test_an_off_path_observe_miss_is_neither_replanned_nor_a_held_realignment_refusal"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                    and not tracking.off_path\n",
+    "replace": "                    and True\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L1781-drop_operand",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::14"
+   ],
+   "statement": "core sweep: drop_operand on `obstacle.get('backoff', {}).get('phase') == ms.phase` (core.py line 1781) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_command.py::test_an_arrival_is_another_legs_backoff_end_only_on_that_leg"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "            and obstacle.get(\"backoff\", {}).get(\"phase\") == ms.phase\n",
+    "replace": "            and True\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L2268-test_true",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::16",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::17",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::18",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::19",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::20",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::21",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::22",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::23",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::24"
+   ],
+   "statement": "core sweep: test_true on `options.approach_straight_speed_mps is not None` (core.py line 2268) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_near_capture.py::test_without_a_custom_straight_speed_the_acceptance_runs_the_followers_own_cruise"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                acceptance_config = trackers[\"approach\"].config\n                if options.approach_straight_speed_mps is not None:\n                    # Plan D8b: the baseline cruise, also when an earlier\n",
+    "replace": "                acceptance_config = trackers[\"approach\"].config\n                if True:\n                    # Plan D8b: the baseline cruise, also when an earlier\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L2268-test_false",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::16",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::17",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::18",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::19",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::20",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::21",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::22",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::23",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::24"
+   ],
+   "statement": "core sweep: test_false on `options.approach_straight_speed_mps is not None` (core.py line 2268) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_near_capture.py::test_with_a_custom_straight_speed_the_acceptance_runs_the_baseline_cruise_whatever_the_follower_runs"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                acceptance_config = trackers[\"approach\"].config\n                if options.approach_straight_speed_mps is not None:\n                    # Plan D8b: the baseline cruise, also when an earlier\n",
+    "replace": "                acceptance_config = trackers[\"approach\"].config\n                if False:\n                    # Plan D8b: the baseline cruise, also when an earlier\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L2272-pass",
+   "class": "N",
+   "checks": [
+    "tests/integration/test_isaac_transport_cli.py::test_d8b_custom_cruise_drives_the_straight_but_not_the_acceptance_dry_run::1",
+    "tests/integration/test_isaac_transport_cli.py::test_d8b_custom_cruise_drives_the_straight_but_not_the_acceptance_dry_run::2",
+    "tests/integration/test_isaac_transport_cli.py::test_d8b_custom_cruise_drives_the_straight_but_not_the_acceptance_dry_run::3"
+   ],
+   "statement": "core sweep: pass on `acceptance_config = replace(acceptance_config, cruise_speed_mps=speeds['approach'])` (core.py line 2272) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_near_capture.py::test_with_a_custom_straight_speed_the_acceptance_runs_the_baseline_cruise_whatever_the_follower_runs"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                    acceptance_config = replace(acceptance_config,\n                                                cruise_speed_mps=speeds[\"approach\"])\n",
+    "replace": "                    pass\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L2296-test_false",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::16",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::17",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::18",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::19",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::20",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::21",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::22",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::23",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::24"
+   ],
+   "statement": "core sweep: test_false on `options.approach_straight_speed_mps is not None` (core.py line 2296) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_near_capture.py::test_the_stage_one_redraw_drives_its_custom_cruise_and_installs_the_insertion_and_extraction"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                    driven_config = acceptance_config\n                    if options.approach_straight_speed_mps is not None:\n                        driven_config = replace(acceptance_config,\n",
+    "replace": "                    driven_config = acceptance_config\n                    if False:\n                        driven_config = replace(acceptance_config,\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L2298-pass",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::16",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::17",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::18",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::19",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::20",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::21",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::22",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::23",
+    "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::24"
+   ],
+   "statement": "core sweep: pass on `driven_config = replace(acceptance_config, cruise_speed_mps=options.approach_straight_speed_mps)` (core.py line 2298) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_near_capture.py::test_the_stage_one_redraw_drives_its_custom_cruise_and_installs_the_insertion_and_extraction"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                        driven_config = replace(acceptance_config,\n                                                cruise_speed_mps=options.approach_straight_speed_mps)\n",
+    "replace": "                        pass\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L2307-pass",
+   "class": "N",
+   "checks": [
+    "tests/integration/test_isaac_transport_cli.py::test_s4b_correction_points_are_decided_before_the_stop_and_install_at_once::1",
+    "tests/integration/test_isaac_transport_cli.py::test_s4b_correction_points_are_decided_before_the_stop_and_install_at_once::2",
+    "tests/integration/test_isaac_transport_cli.py::test_s4b_correction_points_are_decided_before_the_stop_and_install_at_once::3",
+    "tests/integration/test_isaac_transport_cli.py::test_s4b_correction_points_are_decided_before_the_stop_and_install_at_once::4",
+    "tests/integration/test_isaac_transport_cli.py::test_s4b_correction_points_are_decided_before_the_stop_and_install_at_once::5",
+    "tests/integration/test_isaac_transport_cli.py::test_s4b_correction_points_are_decided_before_the_stop_and_install_at_once::6",
+    "tests/integration/test_isaac_transport_cli.py::test_s4b_correction_points_are_decided_before_the_stop_and_install_at_once::7",
+    "tests/integration/test_isaac_transport_cli.py::test_s4b_correction_points_are_decided_before_the_stop_and_install_at_once::8",
+    "tests/integration/test_isaac_transport_cli.py::test_s4b_correction_points_are_decided_before_the_stop_and_install_at_once::9",
+    "tests/integration/test_isaac_transport_cli.py::test_s4b_correction_points_are_decided_before_the_stop_and_install_at_once::10",
+    "tests/integration/test_isaac_transport_cli.py::test_s4b_correction_points_are_decided_before_the_stop_and_install_at_once::11",
+    "tests/integration/test_isaac_transport_cli.py::test_s4b_correction_points_are_decided_before_the_stop_and_install_at_once::12",
+    "tests/integration/test_isaac_transport_cli.py::test_s4b_correction_points_are_decided_before_the_stop_and_install_at_once::13"
+   ],
+   "statement": "core sweep: pass on `trackers[name_] = RearAxlePathTracker(redraw_plans[name_].poses, redraw_plans[name_].directions, redraw_plans[name_].cur` (core.py line 2307) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_near_capture.py::test_the_stage_one_redraw_drives_its_custom_cruise_and_installs_the_insertion_and_extraction"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                            trackers[name_] = RearAxlePathTracker(\n                                redraw_plans[name_].poses, redraw_plans[name_].directions,\n                                redraw_plans[name_].curvatures_inv_m, trackers[name_].config)\n",
+    "replace": "                            pass\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L2642-drop_operand",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::16",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::17",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::18",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::19",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::20",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::21",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::22",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::23",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::24",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::25",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::26",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::27",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::28",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::29",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::30",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::31",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::32",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::33",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::34",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::35",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::36"
+   ],
+   "statement": "core sweep: drop_operand on `slam['tracker'].mode == 'holding'` (core.py line 2642) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_rules.py::test_a_realignment_owns_an_observe_cusp_stop_only_while_slam_holds"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "        if phase_ == \"observe\" and slam is not None and slam[\"tracker\"].mode == \"holding\" and realign_active():\n",
+    "replace": "        if phase_ == \"observe\" and slam is not None and True and realign_active():\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L2733-test_true",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::14"
+   ],
+   "statement": "core sweep: test_true on `ms.phase in ('transport', 'return_home')` (core.py line 2733) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_rules.py::test_the_observe_legs_checker_takes_the_observe_rectangles_and_the_pickup_it_knows[None]",
+    "tests/unit/mission/test_core_cusp_rules.py::test_the_observe_legs_checker_takes_the_observe_rectangles_and_the_pickup_it_knows[estimate1]"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "        if ms.phase in (\"transport\", \"return_home\"):\n",
+    "replace": "        if True:\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L2741-pass",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::16",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::17",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::18",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::19",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::20",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::21",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::22",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::23",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::24",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::25",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::26",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::27",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::28",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::29",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::30",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::31",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::32",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::33",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::34",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::35",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::36"
+   ],
+   "statement": "core sweep: pass on `rects_, footprint_, bounds_ = leg_obstacles('observe', grid_world(scenario), geometry, pickup_obstacle=pickup_, pickup_b` (core.py line 2741) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_rules.py::test_the_observe_legs_checker_takes_the_observe_rectangles_and_the_pickup_it_knows[None]",
+    "tests/unit/mission/test_core_cusp_rules.py::test_the_observe_legs_checker_takes_the_observe_rectangles_and_the_pickup_it_knows[estimate1]"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "        rects_, footprint_, bounds_ = leg_obstacles(\n            \"observe\", grid_world(scenario), geometry, pickup_obstacle=pickup_, pickup_bounds=pickup_bounds\n        )\n",
+    "replace": "        pass\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L2742-pass",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_truth_audit.py::test_no_plan_takes_a_ground_truth_argument::1",
+    "tests/unit/test_isaac_truth_audit.py::test_no_plan_takes_a_ground_truth_argument::2"
+   ],
+   "statement": "core sweep: pass on `rects_, footprint_, bounds_ = leg_obstacles('observe', grid_world(scenario), geometry, pickup_obstacle=pickup_, pickup_b` (core.py line 2742) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_rules.py::test_the_observe_legs_checker_takes_the_observe_rectangles_and_the_pickup_it_knows[None]",
+    "tests/unit/mission/test_core_cusp_rules.py::test_the_observe_legs_checker_takes_the_observe_rectangles_and_the_pickup_it_knows[estimate1]"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "        rects_, footprint_, bounds_ = leg_obstacles(\n            \"observe\", grid_world(scenario), geometry, pickup_obstacle=pickup_, pickup_bounds=pickup_bounds\n        )\n",
+    "replace": "        pass\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L2831-pass",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::14",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::15",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::16",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::17",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::18",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::19",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::20",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::21",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::22",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::23",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::24",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::25",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::26",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::27",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::28",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::29",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::30",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::31",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::32",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::33",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::34",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::35",
+    "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::36"
+   ],
+   "statement": "core sweep: pass on `return obstacle['layer'].check_candidate(latch_.prefix_trajectory, current_pose=pose_, direction=latch_.hand_direction, ` (core.py line 2831) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_cusp_rules.py::test_the_cusp_monitors_prefix_check_reads_occupied_cells_walking_past_unknown[None-False]",
+    "tests/unit/mission/test_core_cusp_rules.py::test_the_cusp_monitors_prefix_check_reads_occupied_cells_walking_past_unknown[occupied-True]",
+    "tests/unit/mission/test_core_cusp_rules.py::test_the_cusp_monitors_prefix_check_reads_occupied_cells_walking_past_unknown[unknown-False]"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "            return obstacle[\"layer\"].check_candidate(\n                latch_.prefix_trajectory, current_pose=pose_, direction=latch_.hand_direction, loaded=loaded,\n                unknown_passes=True,\n            ).blocked == \"occupied\"\n",
+    "replace": "            pass\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L3592-pass",
+   "class": "N",
+   "checks": [
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::1",
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::2",
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::3",
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::4",
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::5",
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::6"
+   ],
+   "statement": "core sweep: pass on `replanned = plan_return_leg(grid_world(return_scenario), start, return_to_pose, tight_cfg, geometry=geometry, travel_con` (core.py line 3592) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_release.py::test_the_return_replan_after_a_release_is_retried_tight_on_the_carried_destination"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                replanned = plan_return_leg(\n                    grid_world(return_scenario), start, return_to_pose, tight_cfg, geometry=geometry,\n                    travel_config=tight_travel_cfg, **grid_kwargs(None, own=after, applied=released_),\n                )\n",
+    "replace": "                pass\n",
+    "count": 1
+   }
+  },
+  {
+   "id": "B9:L3594-pass",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_plans_project_with_the_grids_correction_and_a_release_passes_its_own::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_plans_project_with_the_grids_correction_and_a_release_passes_its_own::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_plans_project_with_the_grids_correction_and_a_release_passes_its_own::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_plans_project_with_the_grids_correction_and_a_release_passes_its_own::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_plans_project_with_the_grids_correction_and_a_release_passes_its_own::5"
+   ],
+   "statement": "core sweep: pass on `replanned = plan_return_leg(grid_world(return_scenario), start, return_to_pose, tight_cfg, geometry=geometry, travel_con` (core.py line 3594) fails a behaviour test",
+   "tests": [
+    "tests/unit/mission/test_core_release.py::test_the_return_replan_after_a_release_is_retried_tight_on_the_carried_destination"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "                replanned = plan_return_leg(\n                    grid_world(return_scenario), start, return_to_pose, tight_cfg, geometry=geometry,\n                    travel_config=tight_travel_cfg, **grid_kwargs(None, own=after, applied=released_),\n                )\n",
+    "replace": "                pass\n",
+    "count": 1
+   }
   }
  ]
 }

@@ -1,0 +1,518 @@
+[
+ {
+  "line": 428,
+  "kind": "drop_operand",
+  "what": "ms.phase in ('transport', 'return_home')",
+  "find": "            options.grid_planning\n            and ms.phase in (\"transport\", \"return_home\")\n            and ms.phase in trackers\n",
+  "replace": "            options.grid_planning\n            and True\n            and ms.phase in trackers\n",
+  "guards": [
+   "tests/unit/mission/test_core_live_leg.py::test_no_live_plan_or_wait_on_a_leg_other_than_the_travel_legs"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::*"
+  ]
+ },
+ {
+  "line": 475,
+  "kind": "pass",
+  "what": "live = hooks.plan_return_leg(grid_world(sc_), start, options.return_to_pose, replace(planner_config, clearance_m=0.0), g",
+  "find": "                    live = hooks.plan_return_leg(grid_world(sc_), start, options.return_to_pose,\n                                                 replace(planner_config, clearance_m=0.0), geometry=geometry,\n                                                 travel_config=replace(travel_config, clearance_m=0.0) if travel_config is not None else None,\n                                                 **grid_kwargs(\"return\", sc_.destination), **return_turnaround_kwargs())\n",
+  "replace": "                    pass\n",
+  "guards": [
+   "tests/unit/mission/test_core_live_leg.py::test_the_live_return_leg_retries_at_zero_clearance"
+  ],
+  "checks": [
+   "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::*",
+   "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::*"
+  ]
+ },
+ {
+  "line": 478,
+  "kind": "pass",
+  "what": "live = hooks.plan_return_leg(grid_world(sc_), start, options.return_to_pose, replace(planner_config, clearance_m=0.0), g",
+  "find": "                    live = hooks.plan_return_leg(grid_world(sc_), start, options.return_to_pose,\n                                                 replace(planner_config, clearance_m=0.0), geometry=geometry,\n                                                 travel_config=replace(travel_config, clearance_m=0.0) if travel_config is not None else None,\n                                                 **grid_kwargs(\"return\", sc_.destination), **return_turnaround_kwargs())\n",
+  "replace": "                    pass\n",
+  "guards": [
+   "tests/unit/mission/test_core_live_leg.py::test_the_live_return_leg_retries_at_zero_clearance"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::*"
+  ]
+ },
+ {
+  "line": 478,
+  "kind": "pass",
+  "what": "live = hooks.plan_return_leg(grid_world(sc_), start, options.return_to_pose, replace(planner_config, clearance_m=0.0), g",
+  "find": "                    live = hooks.plan_return_leg(grid_world(sc_), start, options.return_to_pose,\n                                                 replace(planner_config, clearance_m=0.0), geometry=geometry,\n                                                 travel_config=replace(travel_config, clearance_m=0.0) if travel_config is not None else None,\n                                                 **grid_kwargs(\"return\", sc_.destination), **return_turnaround_kwargs())\n",
+  "replace": "                    pass\n",
+  "guards": [
+   "tests/unit/mission/test_core_live_leg.py::test_the_live_return_leg_retries_at_zero_clearance"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::*"
+  ]
+ },
+ {
+  "line": 502,
+  "kind": "drop_operand",
+  "what": "ms.phase in ('transport', 'return_home')",
+  "find": "            options.grid_planning and ms.phase in (\"transport\", \"return_home\") and ms.phase in trackers\n",
+  "replace": "            options.grid_planning and True and ms.phase in trackers\n",
+  "guards": [
+   "tests/unit/mission/test_core_live_leg.py::test_no_live_plan_or_wait_on_a_leg_other_than_the_travel_legs"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::*"
+  ]
+ },
+ {
+  "line": 822,
+  "kind": "drop_operand",
+  "what": "ms.phase in ('transport', 'return_home')",
+  "find": "            replanned.status == \"invalid_start\" and ms.phase in (\"transport\", \"return_home\")\n",
+  "replace": "            replanned.status == \"invalid_start\" and True\n",
+  "guards": [
+   "tests/unit/mission/test_core_blocked_replan.py::test_an_observe_leg_neither_escapes_nor_backs_off"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::*"
+  ]
+ },
+ {
+  "line": 845,
+  "kind": "drop_operand",
+  "what": "ms.phase in ('transport', 'return_home')",
+  "find": "            (travel_config if ms.phase in (\"transport\", \"return_home\") and travel_config is not None\n",
+  "replace": "            (travel_config if True and travel_config is not None\n",
+  "guards": [
+   "tests/unit/mission/test_core_blocked_replan.py::test_the_recorded_clearance_is_the_travel_configs_on_the_travel_legs_only[observe-0.2-0.3]"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::*"
+  ]
+ },
+ {
+  "line": 862,
+  "kind": "pass",
+  "what": "replanned = plan_return_leg(grid_world(back), start, return_to_pose, tight, geometry=geometry, travel_config=tight_trave",
+  "find": "                replanned = plan_return_leg(\n                    grid_world(back), start, return_to_pose, tight, geometry=geometry,\n                    travel_config=tight_travel, **grid_kwargs(\"return\", back.destination),\n                )\n",
+  "replace": "                pass\n",
+  "guards": [
+   "tests/unit/mission/test_core_blocked_replan.py::test_the_return_replan_retries_at_zero_clearance"
+  ],
+  "checks": [
+   "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::*",
+   "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::*"
+  ]
+ },
+ {
+  "line": 892,
+  "kind": "test_true",
+  "what": "ms.next_candidate_index < len(options.observation_waypoints)",
+  "find": "            while ms.next_candidate_index < len(options.observation_waypoints):\n",
+  "replace": "            while True:\n",
+  "guards": [
+   "tests/unit/mission/test_core_blocked_replan.py::test_an_observe_leg_neither_escapes_nor_backs_off",
+   "tests/unit/mission/test_core_blocked_replan.py::test_when_every_remaining_candidate_fails_the_search_ends_with_the_leg_failed"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_runtime_viewpoints_extend_the_default_list_before_any_candidate_is_planned::*"
+  ]
+ },
+ {
+  "line": 1028,
+  "kind": "drop_operand",
+  "what": "ms.phase in ('transport', 'return_home')",
+  "find": "            if (ms.phase in (\"transport\", \"return_home\") and backs.get(ms.phase, 0) < BACKOFF_PER_LEG\n",
+  "replace": "            if (True and backs.get(ms.phase, 0) < BACKOFF_PER_LEG\n",
+  "guards": [
+   "tests/unit/mission/test_core_blocked_replan.py::test_an_observe_leg_neither_escapes_nor_backs_off"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::*"
+  ]
+ },
+ {
+  "line": 1145,
+  "kind": "drop_operand",
+  "what": "obstacle.get('backoff', {}).get('phase') == ms.phase",
+  "find": "            obstacle is not None and obstacle.get(\"backoff\", {}).get(\"phase\") == ms.phase\n",
+  "replace": "            obstacle is not None and True\n",
+  "guards": [
+   "tests/unit/mission/test_core_follow.py::test_another_legs_escape_is_not_this_legs_backoff_end"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::*"
+  ]
+ },
+ {
+  "line": 1219,
+  "kind": "drop_operand",
+  "what": "not tracking.off_path",
+  "find": "            and not tracking.at_cusp\n            and not tracking.off_path\n            and (\n",
+  "replace": "            and not tracking.at_cusp\n            and True\n            and (\n",
+  "guards": [
+   "tests/unit/mission/test_core_docking_stall.py::test_an_off_path_heading_miss_is_neither_a_docking_stop_nor_a_goal_heading_miss"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::*"
+  ]
+ },
+ {
+  "line": 1249,
+  "kind": "drop_operand",
+  "what": "ms.phase in ('transport', 'return_home')",
+  "find": "            and not dock_stop\n            and ms.phase in (\"transport\", \"return_home\")\n            and tracking.status == \"failed\"\n",
+  "replace": "            and not dock_stop\n            and True\n            and tracking.status == \"failed\"\n",
+  "guards": [
+   "tests/unit/mission/test_core_docking_stall.py::test_a_goal_heading_miss_brakes_on_the_travel_legs_only"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::*"
+  ]
+ },
+ {
+  "line": 1253,
+  "kind": "drop_operand",
+  "what": "not tracking.off_path",
+  "find": "            and not tracking.at_cusp\n            and not tracking.off_path\n            and (len(state[\"stall_replans\"]) < 2 or d7_owned)\n",
+  "replace": "            and not tracking.at_cusp\n            and True\n            and (len(state[\"stall_replans\"]) < 2 or d7_owned)\n",
+  "guards": [
+   "tests/unit/mission/test_core_docking_stall.py::test_an_off_path_heading_miss_is_neither_a_docking_stop_nor_a_goal_heading_miss"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::*"
+  ]
+ },
+ {
+  "line": 1260,
+  "kind": "pass",
+  "what": "tracking = replace(tracking, status='braking', speed_mps=0.0)",
+  "find": "            # wait for the stop detector.\n            tracking = replace(tracking, status=\"braking\", speed_mps=0.0)\n        stalled = (\n",
+  "replace": "            # wait for the stop detector.\n            pass\n        stalled = (\n",
+  "guards": [
+   "tests/unit/mission/test_core_docking_stall.py::test_a_goal_heading_miss_brakes_on_the_travel_legs_only"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_an_escape_end_bypasses_docking_stall_and_failure::*"
+  ]
+ },
+ {
+  "line": 1263,
+  "kind": "drop_operand",
+  "what": "ms.phase in ('transport', 'return_home')",
+  "find": "            slam is not None\n            and ms.phase in (\"transport\", \"return_home\")\n            and tracking.speed_mps == 0.0\n",
+  "replace": "            slam is not None\n            and True\n            and tracking.speed_mps == 0.0\n",
+  "guards": [
+   "tests/unit/mission/test_core_docking_stall.py::test_the_stall_replan_is_for_the_travel_legs_standing_on_a_zero_command"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::*"
+  ]
+ },
+ {
+  "line": 1264,
+  "kind": "drop_operand",
+  "what": "tracking.speed_mps == 0.0",
+  "find": "            and ms.phase in (\"transport\", \"return_home\")\n            and tracking.speed_mps == 0.0\n            and slam[\"stop_now\"]\n",
+  "replace": "            and ms.phase in (\"transport\", \"return_home\")\n            and True\n            and slam[\"stop_now\"]\n",
+  "guards": [
+   "tests/unit/mission/test_core_docking_stall.py::test_the_stall_replan_is_for_the_travel_legs_standing_on_a_zero_command"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::*"
+  ]
+ },
+ {
+  "line": 1277,
+  "kind": "drop_operand",
+  "what": "tracking.at_cusp",
+  "find": "                    and tracking.at_cusp\n",
+  "replace": "                    and True\n",
+  "guards": [
+   "tests/unit/mission/test_core_docking_stall.py::test_a_reapproach_stalls_at_a_cusp_only"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::*"
+  ]
+ },
+ {
+  "line": 1296,
+  "kind": "drop_operand",
+  "what": "len(state['stall_replans']) < 2",
+  "find": "        elif ms.slam_stall_ticks >= 120 and len(state[\"stall_replans\"]) < 2:\n",
+  "replace": "        elif ms.slam_stall_ticks >= 120 and True:\n",
+  "guards": [
+   "tests/unit/mission/test_core_docking_stall.py::test_a_plain_stall_without_a_stall_replan_left_does_not_replan"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::*"
+  ]
+ },
+ {
+  "line": 1373,
+  "kind": "drop_operand",
+  "what": "obstacle.get('backoff', {}).get('phase') == ms.phase",
+  "find": "            if obstacle is not None and obstacle.get(\"backoff\", {}).get(\"phase\") == ms.phase:\n",
+  "replace": "            if obstacle is not None and True:\n",
+  "guards": [
+   "tests/unit/mission/test_core_docking_stall.py::test_a_stall_replan_keeps_another_legs_backoff"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::*"
+  ]
+ },
+ {
+  "line": 1528,
+  "kind": "drop_operand",
+  "what": "slam['tracker'].mode == 'holding'",
+  "find": "            if slam is not None and slam[\"tracker\"].mode == \"holding\" and realign_active():\n",
+  "replace": "            if slam is not None and True and realign_active():\n",
+  "guards": [
+   "tests/unit/mission/test_core_cusp_observe.py::test_a_cusp_heading_miss_is_realign_held_only_while_slam_holds"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::*"
+  ]
+ },
+ {
+  "line": 1582,
+  "kind": "drop_operand",
+  "what": "tracking.at_cusp",
+  "find": "            and tracking.status == \"tracking\"\n            and tracking.at_cusp\n            and tracking.speed_mps == 0.0\n",
+  "replace": "            and tracking.status == \"tracking\"\n            and True\n            and tracking.speed_mps == 0.0\n",
+  "guards": [
+   "tests/unit/mission/test_core_cusp_observe.py::test_an_observe_stall_counts_only_standing_at_a_cusp_on_a_zero_command"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::*"
+  ]
+ },
+ {
+  "line": 1583,
+  "kind": "drop_operand",
+  "what": "tracking.speed_mps == 0.0",
+  "find": "            and tracking.at_cusp\n            and tracking.speed_mps == 0.0\n            and slam[\"stop_now\"]\n",
+  "replace": "            and tracking.at_cusp\n            and True\n            and slam[\"stop_now\"]\n",
+  "guards": [
+   "tests/unit/mission/test_core_cusp_observe.py::test_an_observe_stall_counts_only_standing_at_a_cusp_on_a_zero_command"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::*"
+  ]
+ },
+ {
+  "line": 1593,
+  "kind": "drop_operand",
+  "what": "not tracking.off_path",
+  "find": "                 and not tracking.off_path)\n",
+  "replace": "                 and True)\n",
+  "guards": [
+   "tests/unit/mission/test_core_cusp_observe.py::test_an_off_path_observe_miss_is_neither_replanned_nor_a_held_realignment_refusal"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::*"
+  ]
+ },
+ {
+  "line": 1607,
+  "kind": "drop_operand",
+  "what": "not tracking.off_path",
+  "find": "                    and not tracking.off_path\n",
+  "replace": "                    and True\n",
+  "guards": [
+   "tests/unit/mission/test_core_cusp_observe.py::test_an_off_path_observe_miss_is_neither_replanned_nor_a_held_realignment_refusal"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_only_a_transport_heading_failure_at_a_cusp_is_replanned::*"
+  ]
+ },
+ {
+  "line": 1781,
+  "kind": "drop_operand",
+  "what": "obstacle.get('backoff', {}).get('phase') == ms.phase",
+  "find": "            and obstacle.get(\"backoff\", {}).get(\"phase\") == ms.phase\n",
+  "replace": "            and True\n",
+  "guards": [
+   "tests/unit/mission/test_core_command.py::test_an_arrival_is_another_legs_backoff_end_only_on_that_leg"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::*"
+  ]
+ },
+ {
+  "line": 2268,
+  "kind": "test_true",
+  "what": "options.approach_straight_speed_mps is not None",
+  "find": "                acceptance_config = trackers[\"approach\"].config\n                if options.approach_straight_speed_mps is not None:\n                    # Plan D8b: the baseline cruise, also when an earlier\n",
+  "replace": "                acceptance_config = trackers[\"approach\"].config\n                if True:\n                    # Plan D8b: the baseline cruise, also when an earlier\n",
+  "guards": [
+   "tests/unit/mission/test_core_near_capture.py::test_without_a_custom_straight_speed_the_acceptance_runs_the_followers_own_cruise"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::*"
+  ]
+ },
+ {
+  "line": 2268,
+  "kind": "test_false",
+  "what": "options.approach_straight_speed_mps is not None",
+  "find": "                acceptance_config = trackers[\"approach\"].config\n                if options.approach_straight_speed_mps is not None:\n                    # Plan D8b: the baseline cruise, also when an earlier\n",
+  "replace": "                acceptance_config = trackers[\"approach\"].config\n                if False:\n                    # Plan D8b: the baseline cruise, also when an earlier\n",
+  "guards": [
+   "tests/unit/mission/test_core_near_capture.py::test_with_a_custom_straight_speed_the_acceptance_runs_the_baseline_cruise_whatever_the_follower_runs"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::*"
+  ]
+ },
+ {
+  "line": 2272,
+  "kind": "pass",
+  "what": "acceptance_config = replace(acceptance_config, cruise_speed_mps=speeds['approach'])",
+  "find": "                    acceptance_config = replace(acceptance_config,\n                                                cruise_speed_mps=speeds[\"approach\"])\n",
+  "replace": "                    pass\n",
+  "guards": [
+   "tests/unit/mission/test_core_near_capture.py::test_with_a_custom_straight_speed_the_acceptance_runs_the_baseline_cruise_whatever_the_follower_runs"
+  ],
+  "checks": [
+   "tests/integration/test_isaac_transport_cli.py::test_d8b_custom_cruise_drives_the_straight_but_not_the_acceptance_dry_run::*"
+  ]
+ },
+ {
+  "line": 2296,
+  "kind": "test_false",
+  "what": "options.approach_straight_speed_mps is not None",
+  "find": "                    driven_config = acceptance_config\n                    if options.approach_straight_speed_mps is not None:\n                        driven_config = replace(acceptance_config,\n",
+  "replace": "                    driven_config = acceptance_config\n                    if False:\n                        driven_config = replace(acceptance_config,\n",
+  "guards": [
+   "tests/unit/mission/test_core_near_capture.py::test_the_stage_one_redraw_drives_its_custom_cruise_and_installs_the_insertion_and_extraction"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::*"
+  ]
+ },
+ {
+  "line": 2298,
+  "kind": "pass",
+  "what": "driven_config = replace(acceptance_config, cruise_speed_mps=options.approach_straight_speed_mps)",
+  "find": "                        driven_config = replace(acceptance_config,\n                                                cruise_speed_mps=options.approach_straight_speed_mps)\n",
+  "replace": "                        pass\n",
+  "guards": [
+   "tests/unit/mission/test_core_near_capture.py::test_the_stage_one_redraw_drives_its_custom_cruise_and_installs_the_insertion_and_extraction"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_all_runner_planning_calls_use_the_recorded_config::*"
+  ]
+ },
+ {
+  "line": 2307,
+  "kind": "pass",
+  "what": "trackers[name_] = RearAxlePathTracker(redraw_plans[name_].poses, redraw_plans[name_].directions, redraw_plans[name_].cur",
+  "find": "                            trackers[name_] = RearAxlePathTracker(\n                                redraw_plans[name_].poses, redraw_plans[name_].directions,\n                                redraw_plans[name_].curvatures_inv_m, trackers[name_].config)\n",
+  "replace": "                            pass\n",
+  "guards": [
+   "tests/unit/mission/test_core_near_capture.py::test_the_stage_one_redraw_drives_its_custom_cruise_and_installs_the_insertion_and_extraction"
+  ],
+  "checks": [
+   "tests/integration/test_isaac_transport_cli.py::test_s4b_correction_points_are_decided_before_the_stop_and_install_at_once::*"
+  ]
+ },
+ {
+  "line": 2642,
+  "kind": "drop_operand",
+  "what": "slam['tracker'].mode == 'holding'",
+  "find": "        if phase_ == \"observe\" and slam is not None and slam[\"tracker\"].mode == \"holding\" and realign_active():\n",
+  "replace": "        if phase_ == \"observe\" and slam is not None and True and realign_active():\n",
+  "guards": [
+   "tests/unit/mission/test_core_cusp_rules.py::test_a_realignment_owns_an_observe_cusp_stop_only_while_slam_holds"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::*"
+  ]
+ },
+ {
+  "line": 2733,
+  "kind": "test_true",
+  "what": "ms.phase in ('transport', 'return_home')",
+  "find": "        if ms.phase in (\"transport\", \"return_home\"):\n",
+  "replace": "        if True:\n",
+  "guards": [
+   "tests/unit/mission/test_core_cusp_rules.py::test_the_observe_legs_checker_takes_the_observe_rectangles_and_the_pickup_it_knows[None]",
+   "tests/unit/mission/test_core_cusp_rules.py::test_the_observe_legs_checker_takes_the_observe_rectangles_and_the_pickup_it_knows[estimate1]"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_a_failed_replan_backs_off_a_bounded_distance_then_replans::*"
+  ]
+ },
+ {
+  "line": 2741,
+  "kind": "pass",
+  "what": "rects_, footprint_, bounds_ = leg_obstacles('observe', grid_world(scenario), geometry, pickup_obstacle=pickup_, pickup_b",
+  "find": "        rects_, footprint_, bounds_ = leg_obstacles(\n            \"observe\", grid_world(scenario), geometry, pickup_obstacle=pickup_, pickup_bounds=pickup_bounds\n        )\n",
+  "replace": "        pass\n",
+  "guards": [
+   "tests/unit/mission/test_core_cusp_rules.py::test_the_observe_legs_checker_takes_the_observe_rectangles_and_the_pickup_it_knows[None]",
+   "tests/unit/mission/test_core_cusp_rules.py::test_the_observe_legs_checker_takes_the_observe_rectangles_and_the_pickup_it_knows[estimate1]"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::*"
+  ]
+ },
+ {
+  "line": 2742,
+  "kind": "pass",
+  "what": "rects_, footprint_, bounds_ = leg_obstacles('observe', grid_world(scenario), geometry, pickup_obstacle=pickup_, pickup_b",
+  "find": "        rects_, footprint_, bounds_ = leg_obstacles(\n            \"observe\", grid_world(scenario), geometry, pickup_obstacle=pickup_, pickup_bounds=pickup_bounds\n        )\n",
+  "replace": "        pass\n",
+  "guards": [
+   "tests/unit/mission/test_core_cusp_rules.py::test_the_observe_legs_checker_takes_the_observe_rectangles_and_the_pickup_it_knows[None]",
+   "tests/unit/mission/test_core_cusp_rules.py::test_the_observe_legs_checker_takes_the_observe_rectangles_and_the_pickup_it_knows[estimate1]"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_truth_audit.py::test_no_plan_takes_a_ground_truth_argument::*"
+  ]
+ },
+ {
+  "line": 2831,
+  "kind": "pass",
+  "what": "return obstacle['layer'].check_candidate(latch_.prefix_trajectory, current_pose=pose_, direction=latch_.hand_direction, ",
+  "find": "            return obstacle[\"layer\"].check_candidate(\n                latch_.prefix_trajectory, current_pose=pose_, direction=latch_.hand_direction, loaded=loaded,\n                unknown_passes=True,\n            ).blocked == \"occupied\"\n",
+  "replace": "            pass\n",
+  "guards": [
+   "tests/unit/mission/test_core_cusp_rules.py::test_the_cusp_monitors_prefix_check_reads_occupied_cells_walking_past_unknown[None-False]",
+   "tests/unit/mission/test_core_cusp_rules.py::test_the_cusp_monitors_prefix_check_reads_occupied_cells_walking_past_unknown[occupied-True]",
+   "tests/unit/mission/test_core_cusp_rules.py::test_the_cusp_monitors_prefix_check_reads_occupied_cells_walking_past_unknown[unknown-False]"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_cusp_position_stall_v7_is_wired_into_the_runner::*"
+  ]
+ },
+ {
+  "line": 3592,
+  "kind": "pass",
+  "what": "replanned = plan_return_leg(grid_world(return_scenario), start, return_to_pose, tight_cfg, geometry=geometry, travel_con",
+  "find": "                replanned = plan_return_leg(\n                    grid_world(return_scenario), start, return_to_pose, tight_cfg, geometry=geometry,\n                    travel_config=tight_travel_cfg, **grid_kwargs(None, own=after, applied=released_),\n                )\n",
+  "replace": "                pass\n",
+  "guards": [
+   "tests/unit/mission/test_core_release.py::test_the_return_replan_after_a_release_is_retried_tight_on_the_carried_destination"
+  ],
+  "checks": [
+   "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::*",
+   "tests/unit/test_isaac_transport_planning_config.py::test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the_release::*"
+  ]
+ },
+ {
+  "line": 3594,
+  "kind": "pass",
+  "what": "replanned = plan_return_leg(grid_world(return_scenario), start, return_to_pose, tight_cfg, geometry=geometry, travel_con",
+  "find": "                replanned = plan_return_leg(\n                    grid_world(return_scenario), start, return_to_pose, tight_cfg, geometry=geometry,\n                    travel_config=tight_travel_cfg, **grid_kwargs(None, own=after, applied=released_),\n                )\n",
+  "replace": "                pass\n",
+  "guards": [
+   "tests/unit/mission/test_core_release.py::test_the_return_replan_after_a_release_is_retried_tight_on_the_carried_destination"
+  ],
+  "checks": [
+   "tests/unit/test_isaac_transport_planning_config.py::test_plans_project_with_the_grids_correction_and_a_release_passes_its_own::*"
+  ]
+ }
+]
