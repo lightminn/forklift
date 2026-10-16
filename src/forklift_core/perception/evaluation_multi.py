@@ -88,6 +88,12 @@ class SceneVerdict:
     errors: tuple
     z_judged: bool
     elapsed_s: float | None
+    # Diagnostic (stage 2B, Codex 2026-10-16): the pose part of the danger rule on every counted
+    # candidate that is not stopped, whether or not it is permitted yet; None if none was checked.
+    pose_dangerous: bool | None = None
+    pose_checked: int = 0
+    pose_unmatched: int = 0
+    pose_excluded: int = 0      # not stopped, but matched to a truth face that cannot be picked
 
 
 def population_of(meta: dict) -> str:
@@ -143,10 +149,13 @@ def _match(cands, instances):
     return {}, costs
 
 
-def _danger(errors, face) -> bool:
+def _pose_danger(errors, face) -> bool:
     lateral, axial, dyaw, _ = errors
-    return (not face["fit"]["pickable"] or lateral + TIP_LEVER_M * math.tan(dyaw) > face["danger_threshold_m"]
-            or axial > AXIAL_DANGER_M)
+    return lateral + TIP_LEVER_M * math.tan(dyaw) > face["danger_threshold_m"] or axial > AXIAL_DANGER_M
+
+
+def _danger(errors, face) -> bool:
+    return not face["fit"]["pickable"] or _pose_danger(errors, face)
 
 
 def candidate_danger(ci: int, cand: CandidateView, pairs: dict, costs: dict, instances) -> bool | None:
@@ -163,6 +172,26 @@ def candidate_danger(ci: int, cand: CandidateView, pairs: dict, costs: dict, ins
             return True
         (_, err), face = min(options, key=lambda o: o[0][0])
     return _danger(err, face)
+
+
+def candidate_pose_danger(ci: int, cand: CandidateView, pairs: dict, costs: dict, instances) -> bool | None:
+    """The pose part of candidate_danger for a counted candidate that is not stopped (pickable True
+    or None): a pick waiting for the near-range re-observation still shows its pose risk. A truth
+    face that cannot be picked is the fork-fit decision, not a pose error (its threshold can be
+    negative, Codex 2026-10-16), so it is left out. None if stopped or left out; a candidate that
+    matches no face is dangerous, as in candidate_danger."""
+    if cand.pickable is False:
+        return None
+    if ci in pairs:
+        (_, err), face = costs[ci, pairs[ci]]
+    else:
+        options = [costs[ci, ii] for ii in range(len(instances)) if (ci, ii) in costs]
+        if not options:
+            return True
+        (_, err), face = min(options, key=lambda o: o[0][0])
+    if not face["fit"]["pickable"]:
+        return None
+    return _pose_danger(err, face)
 
 
 INSTRUCTION_KINDS = ("none", "ambiguous", "unambiguous")
@@ -226,6 +255,12 @@ def judge_scene(meta, truth, instruction_input, candidates: Sequence[CandidateVi
     matched_inst = {i: c for c, i in pairs.items()}
     errors = tuple(costs[c, i][0][1] for c, i in pairs.items())
     dangerous = any(candidate_danger(ci, cand, pairs, costs, instances) for ci, cand in enumerate(counted))
+    pose = [(ci, candidate_pose_danger(ci, cand, pairs, costs, instances)) for ci, cand in enumerate(counted)]
+    # A candidate that is not stopped but yields no verdict sits on a truth face that cannot be
+    # picked: counted, so the exclusion is visible (independent review 2026-10-16).
+    pose_excluded = sum(d is None and counted[ci].pickable is not False for ci, d in pose)
+    pose = [(ci, d) for ci, d in pose if d is not None]
+    pose_dangerous = any(d for _, d in pose) if pose else None
     by_id = {c.candidate_id: k for k, c in enumerate(counted)}
     if decision.status == "selected" and decision.candidate_id not in by_id:
         # Auto-selection may only pick a fitted, identified candidate (design 7.5):
@@ -276,6 +311,7 @@ def judge_scene(meta, truth, instruction_input, candidates: Sequence[CandidateVi
         miss, dangerous, len(pairs) < len(counted),
         (bool(counted) or decision.status == "selected") if negative else None,
         target_error, deferred, fit_error, errors, meta["case"] in ("S4", "S7"), elapsed_s,
+        pose_dangerous, len(pose), sum(ci not in pairs for ci, _ in pose), pose_excluded,
     )
 
 
@@ -295,7 +331,7 @@ def _p95_gate(samples, target):
 
 def summarize(verdicts: Sequence[SceneVerdict], *, split: str, render_source: str) -> dict:
     chosen = [v for v in verdicts if v.split == split and v.render_source == render_source]
-    gates, cells = {}, {}
+    gates, cells, diagnostics = {}, {}, {}
     for pop, names in APPLICABLE.items():
         mine = [v for v in chosen if v.population == pop]
         for name in names:
@@ -307,9 +343,20 @@ def summarize(verdicts: Sequence[SceneVerdict], *, split: str, render_source: st
             for j, axis in enumerate(("lateral", "axial", "yaw")):
                 gates[f"{pop}:pose_{axis}_p95"] = _p95_gate([e[j] for e in errs], POSE_P95[axis])
             gates[f"{pop}:pose_z_p95"] = _p95_gate([e[3] for v in mine if v.z_judged for e in v.errors], POSE_P95["z"])
+        checked = [v for v in mine if v.pose_dangerous is not None]
+        diagnostics[pop] = {"pose_dangerous": {
+            "n": len(checked), "failures": sum(bool(v.pose_dangerous) for v in checked),
+            "checked_candidates": sum(v.pose_checked for v in mine),
+            "unmatched_candidates": sum(v.pose_unmatched for v in mine),
+            "excluded_candidates": sum(v.pose_excluded for v in mine)}}
+        if pop == "nonstandard":
+            # Fork-fit decisions made (True/False) and left for the near range (None), so a gate
+            # passed by waiting is not read as a finished fork-fit judgement.
+            diagnostics[pop]["fit_decided"] = {"decided": sum(v.fit_error is not None for v in mine),
+                                               "scenes": len(mine)}
         for case in sorted({v.case for v in mine}):
             cell = [v for v in mine if v.case == case]
             cells[f"{pop}:{case}"] = {name: _gate([getattr(v, name) for v in cell], GATES[name]) for name in names}
     return {"split": split, "render_source": render_source, "scenes": len(chosen),
             "official": render_source == "isaac" and bool(chosen) and all(v.noise_role == "official" for v in chosen),
-            "gates": gates, "cells": cells}
+            "gates": gates, "cells": cells, "diagnostics": diagnostics}

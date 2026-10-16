@@ -6,6 +6,7 @@ confirmed candidate may be selected automatically. Unlike PocketObservation,
 a non-fitted candidate keeps its pose so the console and the tracker can show it.
 pickable None means the fork-fit decision waits for more evidence (an unseen
 support, or the near-range re-observation of §9.1); it never means "insert".
+pending lists what is still unverified; pickable True needs it empty.
 """
 
 from dataclasses import dataclass
@@ -19,6 +20,11 @@ from forklift_core.perception.pallet_model import VALUE_SOURCES, ObservedPalletS
 GEOMETRY_STATES = ("fitted", "ambiguous", "unfit")
 IDENTITY_STATES = ("confirmed", "unconfirmed")
 SUPPORT_STATES = ("visible", "coplanar", "physical_edge", "uncertain")
+# What the near-range re-observation (§9.1) verifies before a pick is permitted: the depth, the
+# lane bounds (lateral and vertical, checked again against M_REQ and the blade margins) and the
+# top-board layout (near tracking), all filled from a template or left unknown at far range
+# (Codex 2026-10-16).
+PENDING_ITEMS = ("depth", "lane_bounds", "top_layout")
 
 
 def _vector(value, n, name):
@@ -77,6 +83,8 @@ class PocketCandidate:
     alternative_centres_m: tuple = ()   # pallet centres of readings that compete with this one
     observed_centre_xy: tuple | None = None  # median xy of the proposal's points: where the object was seen
     observed_extent_m: float = 0.0           # largest distance of those points from observed_centre_xy
+    pending: tuple = ()                      # unverified items (PENDING_ITEMS) the pick still waits for
+    centre_segment_m: tuple = ()             # (start, end): where the centre may lie when the depth is unseen
     def __post_init__(self) -> None:
         if self.geometry not in GEOMETRY_STATES:
             raise ValueError(f"geometry must be one of {GEOMETRY_STATES}")
@@ -98,12 +106,21 @@ class PocketCandidate:
         object.__setattr__(self, "pallet_centre_m", _vector(self.pallet_centre_m, 3, "pallet centre"))
         object.__setattr__(self, "alternative_centres_m",
                            tuple(_vector(c, 3, "alternative centre") for c in self.alternative_centres_m))
+        if self.centre_segment_m:
+            if len(self.centre_segment_m) != 2:
+                raise ValueError("centre_segment_m must be empty or two points")
+            object.__setattr__(self, "centre_segment_m",
+                               tuple(_vector(p, 3, "centre segment point") for p in self.centre_segment_m))
         if self.observed_centre_xy is not None:
             object.__setattr__(self, "observed_centre_xy", _vector(self.observed_centre_xy, 2, "observed centre"))
         if _finite_scalar(self.observed_extent_m, "observed_extent_m") < 0:
             raise ValueError("observed_extent_m must be nonnegative")
-        for name in ("reasons", "fit_reasons", "alternatives"):
+        for name in ("reasons", "fit_reasons", "alternatives", "pending"):
             object.__setattr__(self, name, tuple(getattr(self, name)))
+        if any(item not in PENDING_ITEMS for item in self.pending):
+            raise ValueError(f"pending items must be in {PENDING_ITEMS}")
+        if self.pickable is True and self.pending:
+            raise ValueError("a pick cannot be permitted while anything is pending")
         if not isinstance(self.on_floor, (bool, np.bool_)):
             raise ValueError("on_floor must be a bool")
         object.__setattr__(self, "on_floor", bool(self.on_floor))
