@@ -20,10 +20,12 @@ def _run(base: Path, branches, ending=None) -> Path:
 
 
 def test_items_are_covered_by_the_runs_that_show_them_and_a_refusal_counts_from_the_ending(tmp_path):
-    a = _run(tmp_path / "a", ["state.transitions[from=settle,to=return_home,time_s=3.5]", "obstacle.backoffs"])
+    a = _run(tmp_path / "a", ["state.transitions[from=settle,to=return_home,time_s=3.5]", "obstacle.backoff_records[phase=transport]"])
+    (a / "result.json").write_text('{"obstacle_layer": {"backoff_records": [{"escape": {"chosen": 1}}, {"escape": false}]}}')
     b = _run(tmp_path / "b", [], ending=RuntimeError("Mission planning failed: no_path"))
     out = C.coverage([a, b])
     assert out["items"]["return home"]["covered"] and out["items"]["obstacle backoff"]["covered"]
     assert out["items"]["mission refusal"]["covered"] and str(b) in out["items"]["mission refusal"]["runs"]
-    assert "stall replan" in out["not_covered"]
+    assert out["items"]["obstacle escape"]["covered"] and "stall replan" in out["not_covered"]
+    assert "realignment" in out["not_covered"]
     assert "state.transitions[from=settle,to=return_home]" in out["branches"]

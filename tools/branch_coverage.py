@@ -19,23 +19,42 @@ from pathlib import Path
 
 # D2 required branches (docs/plans/2026-10-15-m-a-mission-core.md, D2 "분기 통과 목록") as branch-id patterns.
 D2_ITEMS = {
-    "observation candidate switch / re-observation": [r"^state\.observation_attempts", r"candidate", r"reobserv"],
-    "near correction accepted": [r"^near\.events\[event=correction_trigger", r"^near\.corrections"],
-    "near correction refused": [r"refus", r"reject"],
-    "observation lost": [r"lost", r"drop"],
-    "re-capture / realignment": [r"realign", r"recapture", r"near_capture"],
-    "D7 reapproach": [r"reapproach", r"docking_retries", r"release_docking_retry"],
-    "cusp replan / heading hold": [r"cusp"],
-    "stall replan": [r"stall"],
-    "obstacle stop": [r"obstacle\.(events|stops)", r"event=stop", r"unpermitted"],
-    "obstacle backoff": [r"backoff"],
-    "obstacle escape": [r"escape"],
-    "replan failure": [r"status=(?!success)", r"replan.*fail"],
-    "certified withdrawal": [r"to=withdraw", r"withdraw"],
-    "docking": [r"plans\[kind=docking", r"to=insert"],
-    "return home": [r"to=return_home", r"live_plans\[phase=return_home"],
+    "observation candidate switch / re-observation": [r"^state\.observation_candidates", r"^state\.observe_replans",
+                                                      r"^state\.transitions\[from=approach,to=observe"],
+    "near correction accepted": [r"^near\.events\[event=correction_trigger"],
+    "near correction refused": [r"^result:refused="],
+    "observation lost": [r"^near\.events\[event=stop,reason=lost", r"^near\.events\[event=drop_latch"],
+    "near capture redraw / pickup retry": [r"^state\.near_capture_history", r"event=retry_start"],
+    "realignment": [r"^result:realign="],
+    "D7 reapproach": [r"^state\.docking_retries", r"release_docking_retry"],
+    "cusp replan / heading hold": [r"^state\.cusp_(heading_holds|replans|stalls)"],
+    "stall replan": [r"^state\.stall_replans", r"release_before_stall_replan"],
+    "obstacle stop": [r"^obstacle\.backoff_records", r"^obstacle\.unpermitted", r"^result:obstacle_stop="],
+    "obstacle backoff": [r"^obstacle\.backoff_records", r"release_after_backoff"],
+    "obstacle escape": [r"^result:escape="],
+    "replan failure": [r"^obstacle\.replans\[.*status=(?!success)", r"^exit:obstacle_replan_failed"],
+    "certified withdrawal": [r"^state\.transitions\[from=lower,to=withdraw"],
+    "docking": [r"^obstacle\.plans\[kind=docking", r"^state\.transitions\[from=approach,to=insert"],
+    "return home": [r"^state\.transitions\[from=settle,to=return_home"],
     "mission refusal": [r"^exit:"],
 }
+# Branches recorded as dictionary values rather than as list growth (the tick probe sees only lists): read from the
+# run's result.json -- truthy values of these keys anywhere in it.
+RESULT_KEYS = {"escape": "escape", "escapes": "escape", "realign": "realign", "refused": "refused"}
+
+
+def _result_values(node, depth=0):
+    if depth > 12:
+        return
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k in RESULT_KEYS and v not in (None, False, 0, {}, [], ""):
+                if not (isinstance(v, dict) and not any(v.values())):
+                    yield k, v
+            yield from _result_values(v, depth + 1)
+    elif isinstance(node, list):
+        for v in node[:500]:
+            yield from _result_values(v, depth + 1)
 
 
 def run_branches(run_dir: Path) -> collections.Counter:
@@ -49,6 +68,10 @@ def run_branches(run_dir: Path) -> collections.Counter:
                 tick = json.loads(line)
                 for branch in tick.get("branches", []):
                     counts[re.sub(r",?time_s=[^,\]]*", "", branch)] += 1
+    result = Path(run_dir) / "result.json"
+    if result.exists():
+        for key, value in _result_values(json.loads(result.read_text())):
+            counts[f"result:{RESULT_KEYS[key]}={json.dumps(value)[:40]}"] += 1
     meta = json.loads((boundary / "boundary_meta.json").read_text())
     ending = meta.get("ending") or {}
     if ending.get("kind") == "exception":  # a mission refusal ends the run with its reason
