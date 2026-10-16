@@ -39,6 +39,8 @@ def check_format(directory: Path) -> dict:
     meta = json.loads((Path(directory) / "boundary_meta.json").read_text())
     if meta.get("format") != "forklift_boundary_record/2":
         raise ValueError(f"not a format-2 boundary record: {meta.get('format')}")
+    if meta.get("log_changes"):  # a logged item was replaced in place: outside the change model
+        raise ValueError(f"the record's logs were changed in place: {meta['log_changes'][:3]}")
     if meta.get("stopped_at_tick") is not None:
         raise ValueError(f"the record stopped at tick {meta['stopped_at_tick']} ({meta.get('stopped_reason')})")
     return meta

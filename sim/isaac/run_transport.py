@@ -1614,6 +1614,11 @@ def install_output_observers(args) -> None:
 PROJECTION_CONTAINERS = ("state", "near", "pocket", "obstacle", "slam", "paths", "new_obstacles")
 # Result keys only the recorded run has (written by run() after the setup snapshot was taken): never compared.
 PROJECTION_RECORDED_ONLY = ("setup_snapshot",)
+# Objects a container holds for a service, which the service changes inside its recorded calls (the physics step
+# runs the SLAM bridge's odometry, stop detector and noise): a replay never runs them, so they are compared by
+# their logical id only -- their effects on the mission reach it through the watched keys (Codex P2).
+PROJECTION_SERVICE_OWNED = {"slam": {"link": "SlamLink", "module": "SlamModule", "stop": "SlamStop",
+                                     "odometry": "SlamOdometry", "noise": "SlamNoise", "range_model": "SlamRangeModel"}}
 
 
 def projection_node(value, services: dict, roots=(), _stack=()):
@@ -1671,7 +1676,10 @@ def projection_node(value, services: dict, roots=(), _stack=()):
         return {"$object": f"{type(value).__module__}:{type(value).__qualname__}",
                 "attrs": {f.name: projection_node(getattr(value, f.name), services, roots, stack)
                           for f in dataclasses.fields(value)}}
-    if hasattr(value, "__dict__") and not callable(value) and not isinstance(value, type):
+    if hasattr(value, "__dict__") and not callable(value) and not isinstance(value, type) and all(
+            klass is object or klass.__flags__ & (1 << 9) for klass in type(value).__mro__):
+        # A Python-defined object (every class in its MRO a heap type): its attributes are its state. A native
+        # object (a file, a socket, a lock) has state its attributes do not show: refused below (Codex P2).
         return {"$object": f"{type(value).__module__}:{type(value).__qualname__}",
                 "attrs": {k: projection_node(v, services, roots, stack) for k, v in sorted(vars(value).items())}}
     if isinstance(value, type) or callable(value):  # code: compared by name (its behaviour is the replay's)
@@ -1687,9 +1695,12 @@ def final_projection(containers: dict, ms, output: Path) -> dict:
     import hashlib
 
     services: dict = {}
-    slam_ = containers.get("slam")
-    if isinstance(slam_, dict) and slam_.get("link") is not None:
-        services[id(slam_["link"])] = "SlamLink"
+    for name_, owned in PROJECTION_SERVICE_OWNED.items():
+        container_ = containers.get(name_)
+        if isinstance(container_, dict):
+            for key_, logical in owned.items():
+                if container_.get(key_) is not None:
+                    services[id(container_[key_])] = logical
     state_ = containers.get("state") if isinstance(containers.get("state"), dict) else {}
     roots = sorted({str(output)} | {str(v) for v in [(state_.get("arguments") or {}).get("output")] if v},
                    key=len, reverse=True)
