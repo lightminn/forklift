@@ -2,7 +2,8 @@
 known wave, so the picture moves up and down with the lift height at the time its pixels were drawn. Each frame's
 vertical shift against the first (row-brightness profile, best correlation) is fitted linearly to the logged lift
 height at (stamp - tau) for every tau on a grid, and the tau with the smallest residual is the pixel lag behind
-the frame's stamp (the render metadata's sim time).
+the frame's stamp (the render metadata's sim time). A bootstrap over the frames gives its spread, and the frames on the
+steep half of the wave give a per-frame lag (each frame's own best shift against the fitted line).
 
   python tools/live_marker_lag.py --report RUN/probe.json --frames-dir RUN/frames --live-log RUN/run/live_log.jsonl \
       --factor 0.1
@@ -85,9 +86,29 @@ def main() -> None:
     tau, residuals = best_lag(stamps, rows, lift_t, lift_m, taus)
     x = np.interp(stamps - tau, lift_t, lift_m)
     corr = float(np.corrcoef(x, rows)[0, 1])
+    slope, intercept = np.polyfit(x, rows, 1)
+    rng = np.random.default_rng(0)
+    boot = []
+    for _ in range(200):  # the frames resampled: how sharply the data pin tau down
+        k = rng.integers(0, len(rows), len(rows))
+        boot.append(best_lag(stamps[k], rows[k], lift_t, lift_m, taus)[0])
+    # Per frame, where the wave is steep: the shift tau that puts the fitted row closest to the observed one.
+    rate = np.gradient(lift_m, lift_t)
+    per_frame, cand = [], np.arange(-0.2, 0.4 + 1e-9, 1 / 240)
+    for s_, row_ in zip(stamps, rows):
+        if abs(slope * np.interp(s_ - tau, lift_t, rate)) < 0.5 * abs(slope) * np.percentile(np.abs(rate), 95):
+            continue
+        per_frame.append(float(cand[np.argmin(np.abs(slope * np.interp(s_ - cand, lift_t, lift_m) + intercept - row_))]))
+    residual_rows = float(np.std(rows - (slope * x + intercept)))
     result = {"frames": int(len(rows)), "pixel_lag_sim_s": tau, "pixel_lag_wall_s": tau / args.factor,
               "fit_correlation": corr, "lift_range_m": [float(lift_m.min()), float(lift_m.max())],
-              "row_range": [float(rows.min()), float(rows.max())], "factor": args.factor,
+              "row_range": [float(rows.min()), float(rows.max())], "rows_per_m": float(slope),
+              "residual_rows_rms": residual_rows,
+              "bootstrap_tau_sim_s": {"p5": float(np.percentile(boot, 5)), "p95": float(np.percentile(boot, 95))},
+              "per_frame_lag_sim_s": None if not per_frame else {
+                  "n": len(per_frame), **{f"p{q}": float(np.percentile(per_frame, q)) for q in (5, 50, 95)},
+                  "max": float(np.max(per_frame))},
+              "factor": args.factor,
               "tau_grid_s": [float(taus[0]), float(taus[-1]), 1 / 120]}
     print(json.dumps(result, indent=1))
     if args.out is not None:

@@ -5225,10 +5225,10 @@ def drive(S, isaac) -> None:
             if args.live_test_marker and live_cam_ is not None:
                 # The camera rides the fork carriage: a lift moving on a known wave moves the picture's horizon, so a
                 # frame's pixels tell the lift height -- and so the sim time -- they were drawn at (plan C5). A plate
-                # added mid-run was either not rendered or crashed the renderer (2026-10-17). For a run that stays
+                # added mid-run did not show in the frames (2026-10-17). For a run that stays
                 # PAUSED: the wave overrides the mission's lift target and the gate's latch at every physics step.
                 def live_marker_(sim_s: float) -> None:
-                    target_ = 0.06 + 0.04 * math.sin(2 * math.pi * sim_s / 2.0)
+                    target_ = 0.14 + 0.12 * math.sin(2 * math.pi * sim_s / 2.0)  # within the joint's 0-0.28 m, 1 m/s
                     robot.apply_action(isaac.action(joint_positions=np.array([target_]), joint_indices=lift_index))
 
             def live_step_world(render: bool) -> None:
