@@ -144,6 +144,7 @@ class MissionCommands:
                 return refused
         self._issued += 1
         self.mission_id, self.mission, self.status = f"m{self._issued}", command, "accepted"
+        self.resume_check = None  # the last mission's resume is not this one's (Codex M-b review round 5 P1)
         return None
 
     def _pause(self, t, command: Pause, context: Context):

@@ -223,3 +223,12 @@ def test_a_held_mission_can_be_cancelled_and_a_paused_one_held_keeps_its_stop():
     m.queue(Cancel())
     assert m.apply(7.0)[0]["accepted"] and m.status == "cancelling"
     assert not MissionCommands().hold_on(0.0) and not running().hold_off(0.0)
+
+
+
+def test_a_new_mission_does_not_carry_the_last_ones_resume_check():
+    m = running()
+    m.resume_check = {"step": "path_rechecked", "reason": "no_resume:rejoin_failed", "refused": True}
+    m.finish("failed", 5.0)
+    m.queue(Submit("P2", "D2"))
+    assert m.apply(6.0)[0]["accepted"] and m.resume_check is None
