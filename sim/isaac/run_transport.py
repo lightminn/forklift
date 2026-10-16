@@ -5226,14 +5226,23 @@ def drive(S, isaac) -> None:
                 import omni.usd
                 from pxr import Gf, UsdGeom
 
-                cube_ = UsdGeom.Cube.Define(omni.usd.get_context().get_stage(), live_cam_.prim_path + "/LiveMarker")
-                cube_.GetSizeAttr().Set(0.02)
+                # In world coordinates before the camera as it stands at the start (the marker run has no mission, the
+                # truck does not move): as a child of the camera prim it was not seen (2026-10-17).
+                cam_p_, cam_q_ = live_cam_.get_world_pose(camera_axes="world")  # +X ahead, +Y left, +Z up
+                w_, x_, y_, z_ = (float(v) for v in cam_q_)
+                rot_ = np.array([[1 - 2 * (y_ * y_ + z_ * z_), 2 * (x_ * y_ - z_ * w_), 2 * (x_ * z_ + y_ * w_)],
+                                 [2 * (x_ * y_ + z_ * w_), 1 - 2 * (x_ * x_ + z_ * z_), 2 * (y_ * z_ - x_ * w_)],
+                                 [2 * (x_ * z_ - y_ * w_), 2 * (y_ * z_ + x_ * w_), 1 - 2 * (x_ * x_ + y_ * y_)]])
+                cube_ = UsdGeom.Cube.Define(omni.usd.get_context().get_stage(), "/World/LiveMarker")
+                cube_.GetSizeAttr().Set(0.05)
                 cube_.GetDisplayColorAttr().Set([Gf.Vec3f(1.0, 0.0, 0.0)])
                 marker_api_ = UsdGeom.XformCommonAPI(cube_.GetPrim())
 
                 def live_marker_(sim_s: float) -> None:
-                    # A sawtooth: x from -0.12 to +0.12 m across each sim second, 0.5 m ahead (USD camera: -Z ahead).
-                    marker_api_.SetTranslate(Gf.Vec3d(-0.12 + 0.24 * (sim_s % 1.0), 0.0, -0.5))
+                    # A sawtooth: 0.6 m ahead, from 0.15 m left to 0.15 m right across each sim second.
+                    local_ = np.array([0.6, 0.15 - 0.30 * (sim_s % 1.0), 0.0])
+                    world_ = np.asarray(cam_p_, dtype=float) + rot_ @ local_
+                    marker_api_.SetTranslate(Gf.Vec3d(*(float(v) for v in world_)))
 
             def live_step_world(render: bool) -> None:
                 sim_ = float(world.current_time - initial_time)

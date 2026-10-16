@@ -20,7 +20,8 @@ from PIL import Image
 
 def plate_column(path: Path) -> float | None:
     rgb = np.asarray(Image.open(path).convert("RGB"), dtype=np.int16)
-    red = (rgb[:, :, 0] > 150) & (rgb[:, :, 1] < 80) & (rgb[:, :, 2] < 80)
+    r, g, b = rgb[:, :, 0], rgb[:, :, 1], rgb[:, :, 2]
+    red = (r > 90) & (r > 1.6 * g) & (r > 1.6 * b)  # red under the scene's light, not a fixed shade
     if red.sum() < 4:
         return None
     return float(np.nonzero(red)[1].mean())
