@@ -174,7 +174,7 @@ def test_the_projection_handles_the_slam_container_and_refuses_a_socket(tmp_path
     a = module.final_projection({"slam": slam}, MissionState(), tmp_path)
     slam["estimate"] = Odometry(2.0)
     b = module.final_projection({"slam": slam}, MissionState(), tmp_path)
-    assert a["containers"]["slam"]["module"] == b["containers"]["slam"]["module"]
+    assert "module" not in a["containers"]["slam"] and a["containers"]["slam"]["rng"] == b["containers"]["slam"]["rng"]
     assert a["containers"]["slam"]["estimate"] != b["containers"]["slam"]["estimate"]
     with socket.socket() as sock, pytest.raises(TypeError, match=r"slam\['sock'\]"):
         module.final_projection({"slam": {"sock": sock}}, MissionState(), tmp_path)
@@ -195,7 +195,7 @@ def test_service_owned_slam_state_is_compared_by_id_and_native_objects_refuse(tm
 
     a = module.final_projection({"slam": {"stop": Stop(1), "stop_now": False}}, MissionState(), tmp_path)
     b = module.final_projection({"slam": {"stop": Stop(9), "stop_now": False}}, MissionState(), tmp_path)
-    assert a == b  # the step's own detector: by its logical id
+    assert a == b and "stop" not in a["containers"]["slam"]  # the step's own detector: not compared
     with open(SCRIPT, "rb") as fh, pytest.raises(TypeError, match=r"near\['file'\]"):
         module.final_projection({"near": {"file": fh}}, MissionState(), tmp_path)
 

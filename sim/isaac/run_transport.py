@@ -1740,6 +1740,8 @@ def final_projection(containers: dict, ms, output: Path) -> dict:
         for key, value in container.items():
             if name == "state" and key in PROJECTION_RECORDED_ONLY:
                 continue
+            if key in PROJECTION_SERVICE_OWNED.get(name, {}):
+                continue  # a port's own object: never compared (a replay may not even hold it)
             try:
                 node = projection_node(value, services, roots)
             except TypeError as exc:
