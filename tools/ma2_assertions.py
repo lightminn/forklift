@@ -92,6 +92,39 @@ def _conditions(fn, handles: set[str], helpers: dict) -> list[dict]:
     return out
 
 
+def _is_fixture(fn) -> tuple[bool, bool]:
+    """(a pytest fixture, autouse)."""
+    for dec in fn.decorator_list:
+        text = ast.unparse(dec)
+        if "fixture" in text:
+            return True, "autouse=True" in text
+    return False, False
+
+
+def _fixture_checks(tree: ast.Module) -> dict:
+    """Per fixture: (autouse, the checks inside it -- its own asserts/raises and those of the test doubles it defines
+    and installs; Codex P2: a selected test's autouse fixture checks the runner's calls too)."""
+    out = {}
+    for fn in _functions(tree):
+        fixture, autouse = _is_fixture(fn)
+        if not fixture:
+            continue
+        checks = [(f"fixture:{fn.name}", node.lineno, ast.unparse(node))
+                  for node in ast.walk(fn) if isinstance(node, ast.Assert)]
+        out[fn.name] = (autouse, checks)
+    return out
+
+
+def _conftest_fixtures(path: Path) -> dict:
+    """Fixtures of the conftest files above ``path``."""
+    out = {}
+    for parent in reversed(path.parents):
+        conf = parent / "conftest.py"
+        if conf.is_file() and ROOT in conf.parents:
+            out.update(_fixture_checks(ast.parse(conf.read_text())))
+    return out
+
+
 def _test_names(tree: ast.Module):
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test"):
@@ -112,6 +145,7 @@ def inventory(paths: list[Path], cross: dict | None = None) -> list[dict]:
             if isinstance(node, ast.ImportFrom) and node.module:
                 imported |= {a.asname or a.name for a in node.names} & cross.get(node.module.split(".")[-1], set())
         handles = _source_handles(tree, imported)
+        fixtures = {**_conftest_fixtures(path), **_fixture_checks(tree)}
         helpers = {fn.name: any(isinstance(n, (ast.Assert, ast.With)) for n in ast.walk(fn))
                    for fn in _functions(tree) if not fn.name.startswith("test")}
         rel = str(path.relative_to(ROOT))
@@ -120,7 +154,11 @@ def inventory(paths: list[Path], cross: dict | None = None) -> list[dict]:
             body_names = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)} | params  # fixtures by parameter
             if not (body_names & handles or _reads_source_text(fn)):
                 continue
-            for n, (kind, line, text) in enumerate(_conditions(fn, handles, helpers), start=1):
+            conditions = _conditions(fn, handles, helpers)
+            for fx, (autouse, checks) in sorted(fixtures.items()):  # autouse and requested fixtures' own checks
+                if autouse or fx in params:
+                    conditions += checks
+            for n, (kind, line, text) in enumerate(conditions, start=1):
                 rows.append({"id": f"{rel}::{name}::{n}", "file": rel, "test": name, "kind": kind, "line": line,
                              "text_sha256": hashlib.sha256(text.encode()).hexdigest(), "preview": text[:200],
                              "via": sorted(body_names & handles) or ["direct"]})

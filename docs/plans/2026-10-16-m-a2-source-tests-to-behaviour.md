@@ -2,13 +2,13 @@
 
 상위 계획: `docs/plans/2026-10-15-m-a-mission-core.md` 의 M-a2 행 — "남은 실행기 소스 문자열 시험을 코어 동작 시험으로 옮김(지키는 성질 목록 유지)", 합격 "성질 목록 대조표, 빠진 성질 없음". M-a1 은 2026-10-16 범위를 제한한 판정으로 닫혔다(`docs/plans/2026-10-16-m-a1-replay.md`).
 
-**2판에서 바뀐 것(Codex 적대 검토 P2 4·P3 1, agy 독립 검토 — 7 절)**: 대상을 문자열 위치가 아니라 **소스를 읽는 모든 시험의 모든 assert** 로 동결한다; 성질마다 변이 증거(기존 시험이든 새 시험이든)를 남긴다; 구조 성질(S)·실행기 연결·순서 성질(R)을 따로 둔다; 보존 게이트를 production 코드 수정 전체로 넓힌다; 알려진 실패는 nodeid 로 고정한다. 규모는 1판 추정(시험 52 개, 2–3 일)보다 크다 — 검증 조건 900 개를 성질로 묶고 성질마다 변이를 돌린다.
+**2판에서 바뀐 것(Codex 적대 검토 P2 4·P3 1, agy 독립 검토 — 7 절)**: 대상을 문자열 위치가 아니라 **소스를 읽는 모든 시험의 모든 assert** 로 동결한다; 성질마다 변이 증거(기존 시험이든 새 시험이든)를 남긴다; 구조 성질(S)·실행기 연결·순서 성질(R)을 따로 둔다; 보존 게이트를 production 코드 수정 전체로 넓힌다; 알려진 실패는 nodeid 로 고정한다. 규모는 1판 추정(시험 52 개, 2–3 일)보다 크다 — 검증 조건 920 개를 성질로 묶고 성질마다 변이를 돌린다.
 
 ## 1. 대상 — 검증 조건 단위 동결
 
-`tools/ma2_assertions.py` 가 실행기(`sim/isaac/run_transport.py`)나 코어(`src/forklift_core/mission/core.py`) 소스를 읽는 시험을 찾는다. 출발점: 시험·보조 함수·fixture 본문이 소스 경로를 직접 쓰거나 `inspect.getsource` 를 부르는 것, 그 경로로 만든 모듈 상수(`SCRIPT`, `CORE`, 파싱한 `TREE` …); 그 이름을 쓰는 보조 함수·상수는 전이적으로 포함(보조 함수가 자기 본문에서 소스를 읽는 `_grid_kwargs_harness` 형 — Codex 2판 P2-1). 클래스 기반 시험의 메서드, fixture 매개변수, 다른 시험 모듈에서 import 한 보조 함수도 다룬다. **동결 단위는 검증 조건**이다 — `assert` 마다, `pytest.raises`/`pytest.warns` 마다(예외 타입·match·덮는 구간 포함), 검사를 품은 보조 함수 호출마다, 그리고 시험마다 "예외 없이 끝까지 실행"(정상 완료만 요구하는 시험이 있다 — Codex 2판 P2-2). 조건 본문은 전체 정규화 텍스트의 sha256 으로 남기고 표시용 미리보기만 자른다(Codex P3).
+`tools/ma2_assertions.py` 가 실행기(`sim/isaac/run_transport.py`)나 코어(`src/forklift_core/mission/core.py`) 소스를 읽는 시험을 찾는다. 출발점: 시험·보조 함수·fixture 본문이 소스 경로를 직접 쓰거나 `inspect.getsource` 를 부르는 것, 그 경로로 만든 모듈 상수(`SCRIPT`, `CORE`, 파싱한 `TREE` …); 그 이름을 쓰는 보조 함수·상수는 전이적으로 포함(보조 함수가 자기 본문에서 소스를 읽는 `_grid_kwargs_harness` 형 — Codex 2판 P2-1). 클래스 기반 시험의 메서드, fixture 매개변수, 다른 시험 모듈에서 import 한 보조 함수도 다룬다. **동결 단위는 검증 조건**이다 — `assert` 마다, `pytest.raises`/`pytest.warns` 마다(예외 타입·match·덮는 구간 포함), 검사를 품은 보조 함수 호출마다, 그 시험에 걸리는 fixture(모듈·conftest 의 autouse, 매개변수로 받는 것)와 그 fixture 가 설치하는 대역 안의 assert 마다(카메라 계약 시험의 `render_stage` 가 실행기의 prim 경로·속성 조회를 검사한다 — Codex 3판 P2), 그리고 시험마다 "예외 없이 끝까지 실행"(정상 완료만 요구하는 시험이 있다 — Codex 2판 P2-2). 조건 본문은 전체 정규화 텍스트의 sha256 으로 남기고 표시용 미리보기만 자른다(Codex P3).
 
-기준 revision `a438c3a` 의 동결 결과: **17 개 파일, 시험 156 개, 검증 조건 900 개**(assert 733, raises 11, 정상 완료 156) — `docs/validation/2026-10-16-m-a2-assertions.json`(digest 포함). 미지원 형태 감사(같은 revision): conftest 2 개는 실행기·코어 소스를 읽지 않는다; `Test*` 클래스 시험 0; 시험 모듈 간 보조 함수 import 0; `inspect.getsource` 사용 1 곳(`test_d8b_observations.py`, 도구 모듈 `observe_run` — 실행기·코어가 아니므로 대조표에서 X). 실행기 모듈을 파일로 import 하는 시험(`test_runner_drive_split.py`, `test_replay_setup.py`)은 경로 문자열로 잡힌다. 소스 경로를 자료로만 쓰는 시험도 목록에 들어오며 대조표에서 X 로 사유를 적는다.
+기준 revision `f3d0812` 의 동결 결과: **17 개 파일, 시험 156 개, 검증 조건 920 개**(assert 733, raises 11, 정상 완료 156, fixture 검사 20) — `docs/validation/2026-10-16-m-a2-assertions.json`(digest 포함). 미지원 형태 감사(같은 revision): conftest 2 개는 실행기·코어 소스를 읽지 않는다; `Test*` 클래스 시험 0; 시험 모듈 간 보조 함수 import 0; `inspect.getsource` 사용 1 곳(`test_d8b_observations.py`, 도구 모듈 `observe_run` — 실행기·코어가 아니므로 대조표에서 X). autouse fixture 는 5 개 파일에 있고, 대상 파일 안의 것은 `test_isaac_camera_contract.py` 의 `render_stage`(검사 2 개 × 대상 시험 10 개)와 `test_s4_drive_terms.py` 의 두 개(검사 없음)뿐이다. 실행기 모듈을 파일로 import 하는 시험(`test_runner_drive_split.py`, `test_replay_setup.py`)은 경로 문자열로 잡힌다. 소스 경로를 자료로만 쓰는 시험도 목록에 들어오며 대조표에서 X 로 사유를 적는다.
 
 ## 2. 방법
 
@@ -25,7 +25,7 @@
 
 ## 3. 합격
 
-- 동결된 검증 조건 900 개가 모두 성질에 대응되고, 모든 성질이 D/N/R/S/X 중 하나이며 D/N 은 변이 증거가 있다(검사 시험 통과, 검사기 자체 시험 통과).
+- 동결된 검증 조건 920 개가 모두 성질에 대응되고, 모든 성질이 D/N/R/S/X 중 하나이며 D/N 은 변이 증거가 있다(검사 시험 통과, 검사기 자체 시험 통과).
 - ws1 전체 시험: 기준 revision `cda3ee2` 의 알려진 실패(nodeid 목록 — 착수 때 ws1 에서 다시 확인해 `docs/validation/2026-10-16-m-a2-known-failures.txt` 로 고정, 실패 양상 포함)와 **같은 집합**이고 새 실패가 없다(Codex P3, agy 10).
 - `core.py` 줄·분기 커버리지가 줄지 않는다(줄면 사유) — 원 소스 시험은 커버리지를 만들지 않으므로 주로 새 시험이 늘린다(agy A7).
 - production 코드를 바꿨다면 2 절 6 의 게이트 통과.

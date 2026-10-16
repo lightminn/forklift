@@ -1,5 +1,5 @@
 {
- "base_revision": "a438c3a",
+ "base_revision": "f3d0812",
  "assertions": [
   {
    "id": "tests/integration/test_isaac_transport_cli.py::test_isaac_transport_help_does_not_require_simulator_sdk::1",
@@ -3469,6 +3469,30 @@
    ]
   },
   {
+   "id": "tests/unit/test_isaac_camera_contract.py::test_getter_accepts_matching_intrinsics_and_records_readback_path::9",
+   "file": "tests/unit/test_isaac_camera_contract.py",
+   "test": "test_getter_accepts_matching_intrinsics_and_records_readback_path",
+   "kind": "fixture:render_stage",
+   "line": 44,
+   "text_sha256": "c6ba5b5fa75ac897ed4850954acfb5e191b1dc3866188299af08d9803f79d46f",
+   "preview": "assert name == 'resolution'",
+   "via": [
+    "RUNNER"
+   ]
+  },
+  {
+   "id": "tests/unit/test_isaac_camera_contract.py::test_getter_accepts_matching_intrinsics_and_records_readback_path::10",
+   "file": "tests/unit/test_isaac_camera_contract.py",
+   "test": "test_getter_accepts_matching_intrinsics_and_records_readback_path",
+   "kind": "fixture:render_stage",
+   "line": 49,
+   "text_sha256": "4a4489078ce8d60c86fd4139db398cadb8fbebda1d97a634633ad1e49d058f24",
+   "preview": "assert path == '/Render/PerceptionCamera'",
+   "via": [
+    "RUNNER"
+   ]
+  },
+  {
    "id": "tests/unit/test_isaac_camera_contract.py::test_g1a_compares_and_records_raw_and_integer_index_conventions::1",
    "file": "tests/unit/test_isaac_camera_contract.py",
    "test": "test_g1a_compares_and_records_raw_and_integer_index_conventions",
@@ -3577,6 +3601,30 @@
    ]
   },
   {
+   "id": "tests/unit/test_isaac_camera_contract.py::test_g1a_compares_and_records_raw_and_integer_index_conventions::10",
+   "file": "tests/unit/test_isaac_camera_contract.py",
+   "test": "test_g1a_compares_and_records_raw_and_integer_index_conventions",
+   "kind": "fixture:render_stage",
+   "line": 44,
+   "text_sha256": "c6ba5b5fa75ac897ed4850954acfb5e191b1dc3866188299af08d9803f79d46f",
+   "preview": "assert name == 'resolution'",
+   "via": [
+    "RUNNER"
+   ]
+  },
+  {
+   "id": "tests/unit/test_isaac_camera_contract.py::test_g1a_compares_and_records_raw_and_integer_index_conventions::11",
+   "file": "tests/unit/test_isaac_camera_contract.py",
+   "test": "test_g1a_compares_and_records_raw_and_integer_index_conventions",
+   "kind": "fixture:render_stage",
+   "line": 49,
+   "text_sha256": "4a4489078ce8d60c86fd4139db398cadb8fbebda1d97a634633ad1e49d058f24",
+   "preview": "assert path == '/Render/PerceptionCamera'",
+   "via": [
+    "RUNNER"
+   ]
+  },
+  {
    "id": "tests/unit/test_isaac_camera_contract.py::test_render_product_mismatch_is_refused_even_when_camera_cache_matches::1",
    "file": "tests/unit/test_isaac_camera_contract.py",
    "test": "test_render_product_mismatch_is_refused_even_when_camera_cache_matches",
@@ -3637,6 +3685,30 @@
    ]
   },
   {
+   "id": "tests/unit/test_isaac_camera_contract.py::test_render_product_mismatch_is_refused_even_when_camera_cache_matches::6",
+   "file": "tests/unit/test_isaac_camera_contract.py",
+   "test": "test_render_product_mismatch_is_refused_even_when_camera_cache_matches",
+   "kind": "fixture:render_stage",
+   "line": 44,
+   "text_sha256": "c6ba5b5fa75ac897ed4850954acfb5e191b1dc3866188299af08d9803f79d46f",
+   "preview": "assert name == 'resolution'",
+   "via": [
+    "RUNNER"
+   ]
+  },
+  {
+   "id": "tests/unit/test_isaac_camera_contract.py::test_render_product_mismatch_is_refused_even_when_camera_cache_matches::7",
+   "file": "tests/unit/test_isaac_camera_contract.py",
+   "test": "test_render_product_mismatch_is_refused_even_when_camera_cache_matches",
+   "kind": "fixture:render_stage",
+   "line": 49,
+   "text_sha256": "4a4489078ce8d60c86fd4139db398cadb8fbebda1d97a634633ad1e49d058f24",
+   "preview": "assert path == '/Render/PerceptionCamera'",
+   "via": [
+    "RUNNER"
+   ]
+  },
+  {
    "id": "tests/unit/test_isaac_camera_contract.py::test_render_product_readback_missing_fails_closed::1",
    "file": "tests/unit/test_isaac_camera_contract.py",
    "test": "test_render_product_readback_missing_fails_closed",
@@ -3668,6 +3740,30 @@
    "line": 111,
    "text_sha256": "d1fd06cdbd9fe9142d8702dbe2bcd7566b5d3ea7b2bff158d1be166a0bf9be7e",
    "preview": "test_render_product_readback_missing_fails_closed runs to its end without an unexpected exception",
+   "via": [
+    "RUNNER"
+   ]
+  },
+  {
+   "id": "tests/unit/test_isaac_camera_contract.py::test_render_product_readback_missing_fails_closed::4",
+   "file": "tests/unit/test_isaac_camera_contract.py",
+   "test": "test_render_product_readback_missing_fails_closed",
+   "kind": "fixture:render_stage",
+   "line": 44,
+   "text_sha256": "c6ba5b5fa75ac897ed4850954acfb5e191b1dc3866188299af08d9803f79d46f",
+   "preview": "assert name == 'resolution'",
+   "via": [
+    "RUNNER"
+   ]
+  },
+  {
+   "id": "tests/unit/test_isaac_camera_contract.py::test_render_product_readback_missing_fails_closed::5",
+   "file": "tests/unit/test_isaac_camera_contract.py",
+   "test": "test_render_product_readback_missing_fails_closed",
+   "kind": "fixture:render_stage",
+   "line": 49,
+   "text_sha256": "4a4489078ce8d60c86fd4139db398cadb8fbebda1d97a634633ad1e49d058f24",
+   "preview": "assert path == '/Render/PerceptionCamera'",
    "via": [
     "RUNNER"
    ]
@@ -3709,6 +3805,30 @@
    ]
   },
   {
+   "id": "tests/unit/test_isaac_camera_contract.py::test_getter_refuses_out_of_tolerance_and_retains_failure::4",
+   "file": "tests/unit/test_isaac_camera_contract.py",
+   "test": "test_getter_refuses_out_of_tolerance_and_retains_failure",
+   "kind": "fixture:render_stage",
+   "line": 44,
+   "text_sha256": "c6ba5b5fa75ac897ed4850954acfb5e191b1dc3866188299af08d9803f79d46f",
+   "preview": "assert name == 'resolution'",
+   "via": [
+    "RUNNER"
+   ]
+  },
+  {
+   "id": "tests/unit/test_isaac_camera_contract.py::test_getter_refuses_out_of_tolerance_and_retains_failure::5",
+   "file": "tests/unit/test_isaac_camera_contract.py",
+   "test": "test_getter_refuses_out_of_tolerance_and_retains_failure",
+   "kind": "fixture:render_stage",
+   "line": 49,
+   "text_sha256": "4a4489078ce8d60c86fd4139db398cadb8fbebda1d97a634633ad1e49d058f24",
+   "preview": "assert path == '/Render/PerceptionCamera'",
+   "via": [
+    "RUNNER"
+   ]
+  },
+  {
    "id": "tests/unit/test_isaac_camera_contract.py::test_getter_refuses_either_resolution_mismatch::1",
    "file": "tests/unit/test_isaac_camera_contract.py",
    "test": "test_getter_refuses_either_resolution_mismatch",
@@ -3733,6 +3853,30 @@
    ]
   },
   {
+   "id": "tests/unit/test_isaac_camera_contract.py::test_getter_refuses_either_resolution_mismatch::3",
+   "file": "tests/unit/test_isaac_camera_contract.py",
+   "test": "test_getter_refuses_either_resolution_mismatch",
+   "kind": "fixture:render_stage",
+   "line": 44,
+   "text_sha256": "c6ba5b5fa75ac897ed4850954acfb5e191b1dc3866188299af08d9803f79d46f",
+   "preview": "assert name == 'resolution'",
+   "via": [
+    "RUNNER"
+   ]
+  },
+  {
+   "id": "tests/unit/test_isaac_camera_contract.py::test_getter_refuses_either_resolution_mismatch::4",
+   "file": "tests/unit/test_isaac_camera_contract.py",
+   "test": "test_getter_refuses_either_resolution_mismatch",
+   "kind": "fixture:render_stage",
+   "line": 49,
+   "text_sha256": "4a4489078ce8d60c86fd4139db398cadb8fbebda1d97a634633ad1e49d058f24",
+   "preview": "assert path == '/Render/PerceptionCamera'",
+   "via": [
+    "RUNNER"
+   ]
+  },
+  {
    "id": "tests/unit/test_isaac_camera_contract.py::test_getter_accepts_values_just_inside_limits::1",
    "file": "tests/unit/test_isaac_camera_contract.py",
    "test": "test_getter_accepts_values_just_inside_limits",
@@ -3740,6 +3884,30 @@
    "line": 151,
    "text_sha256": "85c43e9eb2e62c06d02e87cfaed9b98688ee150baf35eed9c6d7281547742ec2",
    "preview": "test_getter_accepts_values_just_inside_limits runs to its end without an unexpected exception",
+   "via": [
+    "RUNNER"
+   ]
+  },
+  {
+   "id": "tests/unit/test_isaac_camera_contract.py::test_getter_accepts_values_just_inside_limits::2",
+   "file": "tests/unit/test_isaac_camera_contract.py",
+   "test": "test_getter_accepts_values_just_inside_limits",
+   "kind": "fixture:render_stage",
+   "line": 44,
+   "text_sha256": "c6ba5b5fa75ac897ed4850954acfb5e191b1dc3866188299af08d9803f79d46f",
+   "preview": "assert name == 'resolution'",
+   "via": [
+    "RUNNER"
+   ]
+  },
+  {
+   "id": "tests/unit/test_isaac_camera_contract.py::test_getter_accepts_values_just_inside_limits::3",
+   "file": "tests/unit/test_isaac_camera_contract.py",
+   "test": "test_getter_accepts_values_just_inside_limits",
+   "kind": "fixture:render_stage",
+   "line": 49,
+   "text_sha256": "4a4489078ce8d60c86fd4139db398cadb8fbebda1d97a634633ad1e49d058f24",
+   "preview": "assert path == '/Render/PerceptionCamera'",
    "via": [
     "RUNNER"
    ]
@@ -3781,6 +3949,30 @@
    ]
   },
   {
+   "id": "tests/unit/test_isaac_camera_contract.py::test_source_hashes_cover_transitive_core_and_preserve_repository_paths::4",
+   "file": "tests/unit/test_isaac_camera_contract.py",
+   "test": "test_source_hashes_cover_transitive_core_and_preserve_repository_paths",
+   "kind": "fixture:render_stage",
+   "line": 44,
+   "text_sha256": "c6ba5b5fa75ac897ed4850954acfb5e191b1dc3866188299af08d9803f79d46f",
+   "preview": "assert name == 'resolution'",
+   "via": [
+    "RUNNER"
+   ]
+  },
+  {
+   "id": "tests/unit/test_isaac_camera_contract.py::test_source_hashes_cover_transitive_core_and_preserve_repository_paths::5",
+   "file": "tests/unit/test_isaac_camera_contract.py",
+   "test": "test_source_hashes_cover_transitive_core_and_preserve_repository_paths",
+   "kind": "fixture:render_stage",
+   "line": 49,
+   "text_sha256": "4a4489078ce8d60c86fd4139db398cadb8fbebda1d97a634633ad1e49d058f24",
+   "preview": "assert path == '/Render/PerceptionCamera'",
+   "via": [
+    "RUNNER"
+   ]
+  },
+  {
    "id": "tests/unit/test_isaac_camera_contract.py::test_getter_limits_are_inclusive_at_exact_authored_bounds::1",
    "file": "tests/unit/test_isaac_camera_contract.py",
    "test": "test_getter_limits_are_inclusive_at_exact_authored_bounds",
@@ -3800,6 +3992,30 @@
    "line": 203,
    "text_sha256": "ec71425fc5f26fc848ae6914dae504a4a192a58c86f121e5dbaed05d3fa23290",
    "preview": "test_getter_limits_are_inclusive_at_exact_authored_bounds runs to its end without an unexpected exception",
+   "via": [
+    "RUNNER"
+   ]
+  },
+  {
+   "id": "tests/unit/test_isaac_camera_contract.py::test_getter_limits_are_inclusive_at_exact_authored_bounds::3",
+   "file": "tests/unit/test_isaac_camera_contract.py",
+   "test": "test_getter_limits_are_inclusive_at_exact_authored_bounds",
+   "kind": "fixture:render_stage",
+   "line": 44,
+   "text_sha256": "c6ba5b5fa75ac897ed4850954acfb5e191b1dc3866188299af08d9803f79d46f",
+   "preview": "assert name == 'resolution'",
+   "via": [
+    "RUNNER"
+   ]
+  },
+  {
+   "id": "tests/unit/test_isaac_camera_contract.py::test_getter_limits_are_inclusive_at_exact_authored_bounds::4",
+   "file": "tests/unit/test_isaac_camera_contract.py",
+   "test": "test_getter_limits_are_inclusive_at_exact_authored_bounds",
+   "kind": "fixture:render_stage",
+   "line": 49,
+   "text_sha256": "4a4489078ce8d60c86fd4139db398cadb8fbebda1d97a634633ad1e49d058f24",
+   "preview": "assert path == '/Render/PerceptionCamera'",
    "via": [
     "RUNNER"
    ]
@@ -3848,6 +4064,30 @@
    "line": 221,
    "text_sha256": "321c6f0762c287700c94773a9cea2db8a8c869b8181e2d4b74be637fc4c052d8",
    "preview": "test_getter_v11_boundary_in_both_directions runs to its end without an unexpected exception",
+   "via": [
+    "RUNNER"
+   ]
+  },
+  {
+   "id": "tests/unit/test_isaac_camera_contract.py::test_getter_v11_boundary_in_both_directions::5",
+   "file": "tests/unit/test_isaac_camera_contract.py",
+   "test": "test_getter_v11_boundary_in_both_directions",
+   "kind": "fixture:render_stage",
+   "line": 44,
+   "text_sha256": "c6ba5b5fa75ac897ed4850954acfb5e191b1dc3866188299af08d9803f79d46f",
+   "preview": "assert name == 'resolution'",
+   "via": [
+    "RUNNER"
+   ]
+  },
+  {
+   "id": "tests/unit/test_isaac_camera_contract.py::test_getter_v11_boundary_in_both_directions::6",
+   "file": "tests/unit/test_isaac_camera_contract.py",
+   "test": "test_getter_v11_boundary_in_both_directions",
+   "kind": "fixture:render_stage",
+   "line": 49,
+   "text_sha256": "4a4489078ce8d60c86fd4139db398cadb8fbebda1d97a634633ad1e49d058f24",
+   "preview": "assert path == '/Render/PerceptionCamera'",
    "via": [
     "RUNNER"
    ]
@@ -11430,5 +11670,5 @@
    ]
   }
  ],
- "digest": "5985c0e762d71f8b05cb7f50898f22aa952b6cac572878fbbc16e7f189da473c"
+ "digest": "19f9f7636eba72d21e5537c157ced764e85085c1056ba732db2a962ce0234c1f"
 }
