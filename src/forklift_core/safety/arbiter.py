@@ -11,11 +11,12 @@ movement ban. What it does not: the mission's progress (``forklift_core.mission`
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Callable
 
 from forklift_core.localization.slam_pose import StopDetector
-from forklift_core.mission.commands import FINAL, Cancel, Resume, Submit
+from forklift_core.mission.commands import FINAL, Cancel, HoldOff, HoldOn, Resume, Submit
 
 from .generations import PENDING, RequestBook
 from .ledger import FrameLedger, TickLedger
@@ -166,7 +167,8 @@ class Arbiter:
             return
         self.events.append({"t": now_mono, "event": "mode", "from": self.mode, "to": mode, "reason": reason})
         if self.mode == "TELEOP" and self.mission is not None:
-            self.mission.hold_off(now_mono)
+            # Queued, applied at the mission's tick in its own time -- never the vehicle clock (Codex M-b2 P2).
+            self.mission.queue(HoldOff())
         self.mode = mode
         self._drive_fresh = mode == "TELEOP"
         self._disarm(now_mono, reason)
@@ -372,18 +374,21 @@ class Arbiter:
             self._disarm(now_mono, reason)
             self.preempt_latch = reason
             self._boundary(now_mono, reason)
-        fresh = (feedback is not None and feedback.rear_axle_speed_mps is not None
-                 and now_mono - feedback.stamp_mono <= self.config.feedback_max_age_s)
+        fresh = _valid_feedback(feedback, now_mono, self.config.feedback_max_age_s)
         self.feedback_ok = fresh
         if fresh:
             self.stop_confirmed = self.detector.update(commanded_speed=self.last_applied,
                                                        speed=float(feedback.rear_axle_speed_mps),
                                                        yaw_rate=float(feedback.yaw_rate_radps))
         else:
+            # A gap breaks the detector's history: standing must be seen again from fresh measurements (Codex
+            # M-b2 P1 -- the zero-command count ran on across the gap and released the latch 8 ms after it).
+            self.detector = StopDetector(tick_s=self.config.tick_s)
             self.stop_confirmed = False
             if self.mode == "TELEOP" and self.preempt_latch is None:
                 self._disarm(now_mono, "no_feedback")
                 self.preempt_latch = "no_feedback"
+                self._boundary(now_mono, "no_feedback")  # a safety preempt is a control boundary (B2)
         if self.preempt_latch is not None and self.stop_confirmed:
             self.events.append({"t": now_mono, "event": "latch_released", "reason": self.preempt_latch})
             self.preempt_latch = None
@@ -537,7 +542,7 @@ class Arbiter:
         if not policy.teleop_allowed:
             return self._reply("mode_request", request_id, "state_forbids_teleop", detail=policy.reason)
         if self.mission is not None:
-            self.mission.hold_on(now_mono)
+            self.mission.queue(HoldOn())  # applied at the mission's tick in its own time
         self._set_mode("TELEOP", now_mono, "mode_request")
         return self._reply("mode_request", request_id, control_gen=self.control_gen)
 
@@ -588,3 +593,13 @@ def _ratio(value) -> float:
     except (TypeError, ValueError):
         return 0.0
     return max(-1.0, min(1.0, v)) if v == v else 0.0
+
+
+def _valid_feedback(feedback, now_mono: float, max_age_s: float) -> bool:
+    """Measured, finite and from the recent past (not the future): anything else is no feedback (NaN is unknown)."""
+    if feedback is None or feedback.rear_axle_speed_mps is None:
+        return False
+    values = (feedback.stamp_mono, feedback.rear_axle_speed_mps, feedback.yaw_rate_radps)
+    if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in values):
+        return False
+    return 0.0 <= now_mono - feedback.stamp_mono <= max_age_s

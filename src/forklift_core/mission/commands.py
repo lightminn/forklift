@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 ACTIVE = ("accepted", "running", "paused", "resuming", "held", "cancelling")
 FINAL = ("done", "failed", "cancelled")
 STOP_KINDS = ("none", "controlled", "preempt")
-PRIORITY = {"cancel": 0, "pause": 1, "resume": 2, "submit": 2}
+PRIORITY = {"hold_off": -1, "cancel": 0, "hold_on": 1, "pause": 1, "resume": 2, "submit": 2}
 
 
 @dataclass(frozen=True)
@@ -49,6 +49,22 @@ class Cancel:
     mission_id: str | None = None  # None: the active mission
     request_id: str | None = None
     kind: str = field(default="cancel", init=False)
+
+
+@dataclass(frozen=True)
+class HoldOn:
+    """The arbiter's TELEOP entry (M-b B6), applied at the tick's start in the core's own time."""
+
+    request_id: str | None = None
+    kind: str = field(default="hold_on", init=False)
+
+
+@dataclass(frozen=True)
+class HoldOff:
+    """The arbiter leaves TELEOP: held -> paused, before a resume queued in the same tick."""
+
+    request_id: str | None = None
+    kind: str = field(default="hold_off", init=False)
 
 
 @dataclass(frozen=True)
@@ -180,8 +196,14 @@ class MissionCommands:
         self.pauses.append([t, None])
         self.mission_gen += 1
 
+    def _hold_on(self, t, command: HoldOn, context: Context):
+        return None if self.hold_on(t, record=False) else "not_running"
+
+    def _hold_off(self, t, command: HoldOff, context: Context):
+        return None if self.hold_off(t, record=False) else "not_held"
+
     # --- the arbiter's hold (M-b B6) ------------------------------------------------------------------------------
-    def hold_on(self, t: float) -> bool:
+    def hold_on(self, t: float, *, record: bool = True) -> bool:
         """The operator takes over (TELEOP): an active mission is held -- its work clock stops (one open stop), a
         new generation, a resume's checks dropped. Held is left only by ``hold_off`` (to paused) or a cancel."""
         if self.status not in ("accepted", "running", "paused", "resuming"):
@@ -192,17 +214,19 @@ class MissionCommands:
             self.mission_gen += 1
         self.status = "held"
         self.resume_check = None
-        self._record(t, "hold_on")
+        if record:
+            self._record(t, "hold_on")
         return True
 
-    def hold_off(self, t: float) -> bool:
+    def hold_off(self, t: float, *, record: bool = True) -> bool:
         """The operator hands back: held becomes paused, the stop stays open and a resume is needed (its checks see
         that the truck was moved)."""
         if self.status != "held":
             return False
         self.status = "paused"
         self.mission_gen += 1
-        self._record(t, "hold_off")
+        if record:
+            self._record(t, "hold_off")
         return True
 
     def _record(self, t: float, command: str) -> None:

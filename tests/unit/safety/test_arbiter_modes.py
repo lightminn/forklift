@@ -2,6 +2,8 @@
 
 import itertools
 
+import pytest
+
 from forklift_core.mission.commands import Context, MissionCommands
 from forklift_core.safety.arbiter import Arbiter, ArbiterConfig, Feedback
 
@@ -18,6 +20,7 @@ class Rig:
         self.a = Arbiter(EPOCH, ArbiterConfig(), lambda: f"tok{next(counter)}", mission=self.m)
         self.t = 0.0
         self.speed = 0.0
+        self.auto_speed = 0.3  # what the core asks for while its mission runs
         self.safety = dict(SAFE)
         self.a.connect("op", 0.0)
         reply = self.a.handle("op", {"t": "lease_request", "request_id": "L", "session_epoch": EPOCH}, 0.0)
@@ -48,7 +51,7 @@ class Rig:
         if after_tick is not None:
             after_tick()
         self.replies = a.resolve(self.t, self.records)
-        self.out = a.step(self.t, self.safety, (0.3 if m.status == "running" else 0.0, 0.0))
+        self.out = a.step(self.t, self.safety, (self.auto_speed if m.status == "running" else 0.0, 0.0))
         return out
 
     def stand(self, cycles=40):
@@ -141,8 +144,11 @@ def test_teleop_holds_the_mission_and_losing_the_lease_stops_and_hands_it_back()
     assert reply["t"] == "ack" and r.a.mode == "TELEOP" and r.m.status == "held"
     assert r.out.stop_kind == "none" and r.a.mission_stop_kind() == "controlled"
     r.a._expire(r.t + 5.0)  # the holder went quiet
-    assert r.a.mode == "PAUSED" and r.a.preempt_latch == "lease_expired" and r.m.status == "paused"
-    assert r.a.mission_stop_kind() == "preempt"
+    assert r.a.mode == "PAUSED" and r.a.preempt_latch == "lease_expired" and r.a.mission_stop_kind() == "preempt"
+    r.speed = 0.2  # still rolling: the latch holds
+    r.a.observe = lambda *a, **k: None
+    r.cycle()  # the queued hold_off applies at the mission's tick
+    assert r.m.status == "paused"
 
 
 def test_no_direct_auto_to_teleop_and_teleop_needs_a_confirmed_stop_and_the_state():
@@ -194,3 +200,54 @@ def test_a_pause_is_refused_inside_the_near_contract():
     r.safety = dict(SAFE, near={"active": True})
     r.cycle()
     assert r.cycle(r.msg("mode_request", to="PAUSED"))[0]["reason"] == "near_tracking_active" and r.a.mode == "AUTO"
+
+
+
+def test_the_hold_runs_on_the_missions_clock_not_the_vehicles():
+    """Codex M-b2 review P2: vehicle time near 1000 s, the core's near 10 s -- the hold's stop interval is the
+    core's, so the work clock and the resume's pause length stay sane."""
+    r = Rig()
+    core_t = {"t": 0.0}
+    original = r.m.apply
+
+    def apply_in_core_time(t, context):
+        core_t["t"] = t - 990.0
+        return original(core_t["t"], context)
+
+    r.t = 990.0
+    r.a._expire(r.t)  # the first lease ran out over the jump; take a new one
+    r.lease = r.a.handle("op", {"t": "lease_request", "request_id": "L2", "session_epoch": EPOCH}, r.t)["lease_id"]
+    r.m.apply = apply_in_core_time
+    auto(r)
+    r.auto_speed = 0.0
+    r.stand()  # standing in AUTO with the mission still running (it asks for nothing this moment)
+    pause, teleop = r.msg("mode_request", to="PAUSED"), r.msg("mode_request", to="TELEOP")
+    teleop["control_gen"] += 1  # made after the pause's boundary, in the same batch
+    replies = r.cycle(pause, teleop)
+    assert [x["t"] for x in replies] == ["ack", "ack"], replies
+    assert r.m.status == "held"
+    assert r.m.pauses and all(start < 100.0 for start, _ in r.m.pauses)  # the core's clock
+
+
+def test_a_feedback_gap_breaks_the_stop_history_and_is_a_boundary():
+    """Codex M-b2 review P1 x2: after a gap, standing is seen again from fresh measurements; the preempt moves the
+    control generation."""
+    r = Rig()
+    r.stand()
+    r.cycle(r.msg("mode_request", to="TELEOP"))
+    gen = r.a.control_gen
+    r.cycle(feedback=False)
+    assert r.a.control_gen == gen + 1 and r.a.preempt_latch == "no_feedback"
+    r.cycle()
+    assert not r.a.stop_confirmed and r.a.preempt_latch == "no_feedback"  # one fresh sample is not a stand
+    r.stand(40)
+    assert r.a.preempt_latch is None
+
+
+@pytest.mark.parametrize("feedback", [
+    Feedback(1.0, float("nan")), Feedback(float("inf"), 0.0), Feedback(1.0, 0.0, float("nan")),
+    Feedback(1.05, 0.0)])  # from the future
+def test_feedback_that_is_not_finite_or_not_from_the_recent_past_is_no_feedback(feedback):
+    r = Rig()
+    r.a.observe(1.0, feedback)
+    assert not r.a.feedback_ok
