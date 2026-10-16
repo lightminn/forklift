@@ -302,3 +302,46 @@ def test_a_route_planned_again_keeps_clear_of_where_the_other_trucks_stand():
     ranks = _manager(routes, mode="rank")
     ranks.update(0.0, {n: r[0] for n, r in routes.items()}, {"a": 0.0, "b": 0.0})
     assert np.array_equal(ranks.replan_keepout("a", 0.15), ranks.stop_keepout("a", 0.15))
+
+
+@pytest.mark.parametrize("mode", ["windows", "queues"])
+def test_a_route_planned_again_keeps_clear_of_what_the_other_trucks_hold(mode):
+    # b holds the lane ahead of it: a route of a through there would meet b driving on.
+    routes = {"a": _line(0, 0, 12, 0), "b": _line(6, -8, 6, 8)}
+    manager = _manager(routes, mode=mode)
+    for now in (0.0, 0.1):
+        manager.update(now, {n: r[0] for n, r in routes.items()}, {"a": 0.0, "b": 0.0})
+    b = manager.trucks["b"]
+    assert b.granted_m > 2.0
+    keep = manager.replan_keepout("a", 0.15)
+    assert overlap_matrix(b.claim[-1:], keep).any()  # the far end of b's claim, not only its body
+
+
+def test_stopping_a_truck_that_brakes_and_starts_slowly_costs_more():
+    # Two trucks reach one crossing at the same time; making the one with the
+    # larger stop cost (a heavy load: weak braking and starting) wait costs
+    # its stop on top of the wait, so it should go first.
+    g = np.arange(60) * 0.2
+    trucks = {
+        n: SimpleNamespace(name=n, rank=k, g=g, eta=g / 0.5, progress_m=0.0, granted_m=0.0, waiting_since_s=None,
+                           restart=np.zeros(60), stopcost=np.full(60, cost), moving=True)
+        for k, (n, cost) in enumerate((("light", 1.0), ("heavy", 6.0)))
+    }
+    w = Windows(sample_m=0.2, lookahead_m=3.0)
+    need = np.full(6, g[25])
+    crossings = {0: Crossing(0, "light", "heavy", (20, 25), (20, 25), need.copy(), need.copy(), "light")}
+    light_first = w.cost(crossings, trucks, 0.0)
+    crossings[0].first = "heavy"
+    heavy_first = w.cost(crossings, trucks, 0.0)
+    assert heavy_first < light_first
+    assert light_first - heavy_first == pytest.approx(5.0, abs=1e-6)  # same wait, 6 s vs 1 s stop
+
+
+def test_a_standing_truck_needs_time_to_get_going():
+    g = np.arange(60) * 0.2
+    t = SimpleNamespace(name="a", rank=0, g=g, eta=g / 0.5, progress_m=2.0, granted_m=2.0, waiting_since_s=None,
+                        restart=np.full(60, 1.5), stopcost=np.zeros(60), moving=True)
+    w = Windows(sample_m=0.2, lookahead_m=3.0)
+    assert w._free(t, 6.0) == pytest.approx(8.0)
+    t.moving = False
+    assert w._free(t, 6.0) == pytest.approx(9.5)

@@ -14,7 +14,12 @@ leave no lock-free order waits at its holding place (retried every 5 s, given
 up after HOLD_MAX_S), and a TA or RA path that would is turned down. A truck
 its protective field has held for ``--yield-s`` backs straight away from it by up
 to ``--yield-back-m`` and comes back, so that a person it stopped for can get out
-(plan 2026-10-11 (h); both traffic modes). Trucks follow
+(plan 2026-10-11 (h); both traffic modes).
+``--vehicle physics`` (docs/plans/2026-10-12-fleet-physical-time-windows.md)
+gives each job a load (``--load-kg`` range) and drives under fleet_physics'
+load-dependent limits (speed caps braking toward each stop, speeding up and
+braking with the limit of the force's direction); ``--eta physics`` gives the
+windows the same profile. Otherwise trucks follow
 their paths perfectly (0.1 s steps, a stop at each gear change, 4.5 s to lift
 and to lower); what they believe and where they are differ only under pose
 noise. Conditions (the plan's table):
@@ -42,6 +47,7 @@ from pathlib import Path
 import numpy as np
 import yaml
 
+from forklift_core.planning.fleet_physics import Chassis, Load, limits, speed_caps
 from forklift_core.planning.fleet_traffic import (
     TrafficManager,
     arc_lengths,
@@ -149,6 +155,13 @@ class Truck:
             "to_holding": settings["approach_speed_mps"],
         }
         self.accel = settings["drive_acceleration_mps2"]
+        self.physics = None  # (chassis, tip share, accel cap, lift while loaded): physics vehicle or timing
+        self.drive_physics = False  # --vehicle physics
+        self.eta_physics = False
+        self.load_kg = 0.0
+        self.lims = None  # (empty, loaded) fleet_physics.Limits for this job's load
+        self._caps_key, self._caps = None, None
+        self.stops = 0
         self.state = "idle"
         self.idle_until = 0.0
         self.job: Job | None = None
@@ -163,6 +176,7 @@ class Truck:
         self.offsets: dict[str, float] = {}
         self.route_end_m = 0.0
         self.granted_m = 0.0
+        self.pace_mps = None  # queues mode with --pace: the permit's speed cap
         self.route_version = 0  # permits and reports for an older route are ignored
         self.route_start = self.pose.copy()
         self.error = np.zeros(3)  # truth - believed (pose noise)
@@ -204,6 +218,16 @@ class Truck:
                 items.append(("wait", "lower", LIFT_S))
         return items
 
+    def set_load(self, kg):
+        """This job's load and the limits it gives (physics vehicle or timing)."""
+        self.load_kg = kg
+        if self.physics is not None:
+            chassis, share, cap, lift = self.physics
+            self.lims = (limits(chassis, None, 0.0, share, cap), limits(chassis, Load(kg), lift, share, cap))
+
+    def limits_for(self, stage):
+        return self.lims[1 if stage in LOADED_STAGES else 0]
+
     def start_job(self, job, plan, now, manager, rank):
         self.job, self.state, self.job_started = job, "job", now
         self.items = self.job_items(plan)
@@ -221,7 +245,8 @@ class Truck:
                 pause += payload
                 continue
             footprint = g.loaded_footprint if stage in LOADED_STAGES else g.unloaded_footprint
-            out.append((np.asarray(payload.poses), footprint, self.speeds[stage], pause))
+            timing = (self.speeds[stage], pause) + ((self.limits_for(stage),) if self.eta_physics else ())
+            out.append((np.asarray(payload.poses), footprint, *timing))
             paths.append((stage, payload))
             pause = 0.0
         return out, paths
@@ -232,6 +257,7 @@ class Truck:
         self.offsets = dict(zip((s for s, _ in paths), offsets, strict=True))
         self.route_end_m = offsets[-1] + float(arc_lengths(paths[-1][1].poses)[-1])
         self.granted_m = 0.0
+        self.pace_mps = None
         self.route_version += 1
         self.route_start = self.pose.copy()
 
@@ -242,6 +268,7 @@ class Truck:
             self.name, [(self.pose.reshape(1, 3), self.footprint())], rank=IDLE_RANK + self.k
         )
         self.granted_m = 0.0
+        self.pace_mps = None
         self.route_version += 1
         self.route_start = self.pose.copy()
 
@@ -299,14 +326,29 @@ class Truck:
         room = min(remaining, allowed)
         end_limited = allowed >= remaining - 1e-9
         speed = self.speeds[stage]
-        target = min(speed, math.sqrt(2 * self.accel * max(room - 0.01, 0.0)))
+        moving_before = self.v > 0.05
+        if not self.drive_physics:
+            target = min(speed, math.sqrt(2 * self.accel * max(room - 0.01, 0.0)))
+            up = self.accel
+        else:
+            lim = self.limits_for(stage)
+            direction = self.segments[self.segment][1]
+            key = (self.segment, stage)  # with the segments list itself, so its id cannot be reused
+            if self._caps_key is None or self._caps_key[0] is not self.segments or self._caps_key[1:] != key:
+                self._caps_key, self._caps = (self.segments, *key), speed_caps(poses, speed, lim)
+            up, down = lim.along(direction, True), lim.along(direction, False)
+            cap = float(np.interp(self.progress, *self._caps))
+            target = min(cap, math.sqrt(2 * down * max(room - 0.01, 0.0)))
+        if self.pace_mps is not None:
+            target = min(target, self.pace_mps)
         if end_limited:
             target = max(target, min(speed, 0.05))
-        self.v = min(self.v + self.accel * DT_S, target)
+        self.v = min(self.v + up * DT_S, target)
         advance = min(self.v * DT_S, room)
         if end_limited and remaining - advance < 0.002:
             advance = remaining
         if advance <= 1e-6 and room < remaining:
+            self.stops += moving_before
             self.waiting_s += DT_S
             if person_block_m is not None:
                 self.person_stops_s += DT_S
@@ -363,6 +405,16 @@ def run(structure, seed, trucks_n, condition, args, settings, geometry, configs,
     world = make_world(structure, seed, geometry=geometry, trucks=trucks_n)
     dispatcher = Dispatcher(world, np.random.default_rng([seed, trucks_n, 11]))
     places = dispatcher.spawn(trucks_n)
+    cap = args.accel_cap if args.accel_cap is not None else settings["drive_acceleration_mps2"]
+    physics = None
+    if args.vehicle == "physics" or args.eta == "physics":
+        chassis = Chassis.from_urdf(
+            args.forklift_urdf, wheel_torque_nm=settings["wheel_torque_nm"],
+            wheel_speed_radps=settings["max_wheel_rate_rad_s"], friction=settings["static_friction"],
+        )
+        physics = (chassis, args.tip_share, cap, settings["lift_target_m"])
+    load_lo, load_hi = map(float, args.load_kg.split(","))
+    load_rng = np.random.default_rng([seed, trucks_n, list(CONDITIONS).index(condition), 23])
     manager = TrafficManager(
         margin_m=args.margin_m,
         lookahead_m=args.lookahead_m,
@@ -377,9 +429,21 @@ def run(structure, seed, trucks_n, condition, args, settings, geometry, configs,
         window_evals=args.window_evals,
         age_s=args.age_s,
         park_s=args.park_s,
-        accel_mps2=settings["drive_acceleration_mps2"],
+        accel_mps2=cap,
+        pace=args.pace,
+        pace_min_mps=args.pace_min_mps,
+        queue_opt=args.queue_opt,
+        opt_period_s=args.opt_period_s,
+        node_limit=args.node_limit,
     )
     trucks = [Truck(k, p, world, geometry, settings) for k, p in enumerate(places)]
+    for t in trucks:
+        t.accel = cap
+        t.physics = physics
+        t.drive_physics = args.vehicle == "physics"
+        t.eta_physics = args.eta == "physics"
+        t.set_load(0.0)
+    loads = []
     named = {t.name: t for t in trucks}
     for t in trucks:
         manager.add(t.name, IDLE_RANK + t.k, t.pose, t.footprint())
@@ -618,7 +682,7 @@ def run(structure, seed, trucks_n, condition, args, settings, geometry, configs,
         for t in trucks:
             if t.state == "idle" and now >= t.idle_until and t.name not in dead:
                 if t.held is not None:
-                    job, result, since = t.held
+                    job, result, since, load = t.held
                 else:
                     job = dispatcher.next_job(t.k, t.place)
                     if job is None:
@@ -631,6 +695,8 @@ def run(structure, seed, trucks_n, condition, args, settings, geometry, configs,
                         job_log.append({"job": job.number, "truck": t.k, "status": "plan_failed", "why": result.status, "t_s": round(now, 1)})
                         continue
                     since = now
+                    load = float(load_rng.uniform(load_lo, load_hi))
+                t.set_load(load)  # the windows' timing of the trial needs it
                 if manager.windows is not None and not manager.trial_route(t.name, t.chunks(t.job_items(result), 0)[0]):
                     t.idle_until = now + 5.0
                     if now - since >= HOLD_MAX_S:
@@ -640,9 +706,10 @@ def run(structure, seed, trucks_n, condition, args, settings, geometry, configs,
                     else:
                         if t.held is None:
                             events.append({"t_s": round(now, 1), "kind": "job_held", "truck": t.name, "job": job.number})
-                        t.held = (job, result, since)
+                        t.held = (job, result, since, load)
                     continue
                 t.held = None
+                loads.append(load)
                 t.place = job.home
                 t.start_job(job, result, now, manager, dispatcher.next_rank())
                 preconditions(t, "job")
@@ -669,13 +736,14 @@ def run(structure, seed, trucks_n, condition, args, settings, geometry, configs,
         for name, permit in permits.items():
             if flags.get("comm") and rng.random() < COMM_LOSS:
                 continue
-            inbox.append((now + delay, name, permit.granted_m, by_name[name].route_version))
+            inbox.append((now + delay, name, permit.granted_m, by_name[name].route_version, permit.pace_mps))
         due = [m for m in inbox if m[0] <= now + 1e-9]
         inbox = [m for m in inbox if m[0] > now + 1e-9]
-        for _, name, granted, version in due:
+        for _, name, granted, version, pace in due:
             t = by_name[name]
             if version == t.route_version:  # a permit for the current route only
                 t.granted_m = max(t.granted_m, granted)
+                t.pace_mps = pace
         for name, blocker in manager.deadlocks(now):
             episode = (name, blocker, manager.trucks[name].waiting_since_s)
             if episode not in reported:
@@ -793,6 +861,13 @@ def run(structure, seed, trucks_n, condition, args, settings, geometry, configs,
         "stranded": sum(e["kind"] == "stranded" for e in events),
         "fills_held": len(dispatcher.held_back),
         "traffic": args.traffic,
+        "vehicle": args.vehicle,
+        "eta": args.eta,
+        "pace": args.pace,
+        "queue_opt": args.queue_opt if args.traffic == "queues" else None,
+        "accel_cap": cap,
+        "load_kg_mean": round(float(np.mean(loads)), 2) if loads else None,
+        "stops": sum(t.stops for t in trucks),
         "windows": manager.windows.summary() if manager.windows is not None else None,
         "jobs_held": sum(e["kind"] == "job_held" for e in events),
         "jobs_held_out": sum(j["status"] == "held_out" for j in job_log),
@@ -886,13 +961,25 @@ def main(argv=None) -> int:
     parser.add_argument("--yield-s", type=float, default=20.0)
     parser.add_argument("--yield-back-m", type=float, default=2.5)
     # Time-window tokens (plan 2026-10-11).
-    parser.add_argument("--traffic", default="rank", choices=("rank", "windows"))
+    parser.add_argument("--traffic", default="rank", choices=("rank", "windows", "queues"))
     parser.add_argument("--issue-s", type=float, default=30.0)
     parser.add_argument("--slack-s", type=float, default=10.0)
     parser.add_argument("--window-period-s", type=float, default=1.0)
     parser.add_argument("--window-evals", type=int, default=30)
     parser.add_argument("--age-s", type=float, default=120.0)
     parser.add_argument("--park-s", type=float, default=10.0)
+    # Crossing queues (plan 2026-10-16): --traffic queues, then these.
+    parser.add_argument("--pace", action="store_true", help="speed cap to reach a held place as it clears")
+    parser.add_argument("--pace-min-mps", type=float, default=0.1)
+    parser.add_argument("--queue-opt", default="local", choices=("local", "global"))
+    parser.add_argument("--opt-period-s", type=float, default=5.0)
+    parser.add_argument("--node-limit", type=int, default=2000)
+    # Physical model (plan 2026-10-12).
+    parser.add_argument("--vehicle", default="kinematic", choices=("kinematic", "physics"))
+    parser.add_argument("--eta", default="simple", choices=("simple", "physics"))
+    parser.add_argument("--accel-cap", type=float, default=None, help="tracker acceleration cap (default: the settings')")
+    parser.add_argument("--load-kg", default="5,13", help="load range per job, kg (estimate)")
+    parser.add_argument("--tip-share", type=float, default=0.5)
     parser.add_argument("--sim-s", type=float, default=1800.0)
     args = parser.parse_args(argv)
     fleet = _fleet_tool()
@@ -908,7 +995,7 @@ def main(argv=None) -> int:
         out = args.output / f"{args.structure}_{seed}_{args.condition}_{args.trucks}"
         start = time.perf_counter()
         result = run(args.structure, seed, args.trucks, args.condition, args, settings, geometry, (config, travel), out)
-        line = {k: result[k] for k in ("structure", "seed", "trucks", "condition", "traffic", "status", "sim_s", "jobs_done", "jobs_per_hour", "plan_failed", "contacts", "cycles", "stalls", "preconditions", "replans", "waiting_share", "resolution", "waits")}
+        line = {k: result[k] for k in ("structure", "seed", "trucks", "condition", "traffic", "vehicle", "eta", "pace", "queue_opt", "status", "sim_s", "jobs_done", "jobs_per_hour", "plan_failed", "contacts", "cycles", "stalls", "preconditions", "replans", "waiting_share", "resolution", "waits")}
         line["wall_s"] = round(time.perf_counter() - start, 1)
         print(json.dumps(line, ensure_ascii=False), flush=True)
     return 0

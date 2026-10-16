@@ -101,13 +101,23 @@ def arguments() -> argparse.Namespace:
     # Making room for a person (plan 2026-10-11 (h)); a non-positive time turns it off.
     parser.add_argument("--yield-s", type=float, default=20.0)
     parser.add_argument("--yield-back-m", type=float, default=2.5)
-    parser.add_argument("--traffic", default="rank", choices=("rank", "windows"))
+    parser.add_argument("--traffic", default="rank", choices=("rank", "windows", "queues"))
     parser.add_argument("--issue-s", type=float, default=30.0)
     parser.add_argument("--slack-s", type=float, default=10.0)
     parser.add_argument("--window-period-s", type=float, default=1.0)
     parser.add_argument("--window-evals", type=int, default=30)
     parser.add_argument("--age-s", type=float, default=120.0)
     parser.add_argument("--park-s", type=float, default=10.0)
+    # Crossing queues (plan 2026-10-16): --traffic queues, then these. --pace
+    # caps the tracker's speed command (the one change to the tracker).
+    parser.add_argument("--pace", action="store_true", help="speed cap to reach a held place as it clears")
+    parser.add_argument("--pace-min-mps", type=float, default=0.1)
+    parser.add_argument("--queue-opt", default="local", choices=("local", "global"))
+    parser.add_argument("--opt-period-s", type=float, default=5.0)
+    parser.add_argument("--node-limit", type=int, default=2000)
+    # Physical timing for the windows (plan 2026-10-12); the tracker is unchanged.
+    parser.add_argument("--eta", default="simple", choices=("simple", "physics"))
+    parser.add_argument("--tip-share", type=float, default=0.5)
     parser.add_argument("--video", action="store_true")
     parser.add_argument(
         "--dress", action="store_true", help="NVIDIA props over the (hidden) collider boxes; looks only"
@@ -220,7 +230,10 @@ class Truck:
                 pause += self.ctx["lift_s"]
                 continue
             footprint = g.loaded_footprint if stage in loaded else g.unloaded_footprint
-            out.append((np.asarray(result.poses), footprint, self.ctx["stage_speed"](stage), pause))
+            timing = (self.ctx["stage_speed"](stage), pause)
+            if self.ctx["limits"] is not None:  # --eta physics: the load-dependent profile
+                timing += (self.ctx["limits"][stage in loaded],)
+            out.append((np.asarray(result.poses), footprint, *timing))
             paths.append((stage, result))
             pause = 0.0
         return out, paths
@@ -599,6 +612,11 @@ def run(app, args, settings, state) -> None:
         age_s=args.age_s,
         park_s=args.park_s,
         accel_mps2=settings["drive_acceleration_mps2"],
+        pace=args.pace,
+        pace_min_mps=args.pace_min_mps,
+        queue_opt=args.queue_opt,
+        opt_period_s=args.opt_period_s,
+        node_limit=args.node_limit,
     )
     log_stages = ("idle", *STAGES, "lift", "lower", "broken")
     ctx = {
@@ -607,6 +625,7 @@ def run(app, args, settings, state) -> None:
         "stage_speed": lambda stage_name: settings[speeds[stage_name]],
         # Lift or lower: the fork's travel at its rate, and the 1 s settle after a lower.
         "lift_s": settings["lift_target_m"] / settings["lift_rate_mps"] + 1.0,
+        "limits": physical_limits(args, settings),
         "tracker_config": tracker_config,
         "loaded_stages": LOADED_STAGES,
         "log_stages": log_stages,
@@ -1073,6 +1092,8 @@ def run(app, args, settings, state) -> None:
                         if abs(requested) > cap:
                             requested = math.copysign(cap, requested)
                             t.waited_s += dt if cap < 0.02 else 0.0
+                    if permit is not None and permit.pace_mps is not None and abs(requested) > permit.pace_mps:
+                        requested = math.copysign(permit.pace_mps, requested)  # --pace
                     block = blocks.get(t.name)
                     held = False
                     if block is not None:
@@ -1150,6 +1171,9 @@ def run(app, args, settings, state) -> None:
         replans=sum(e["kind"] == "replan" for e in events),
         fills_held=len(dispatcher.held_back),
         traffic=args.traffic,
+        eta=args.eta,
+        pace=args.pace,
+        queue_opt=args.queue_opt if args.traffic == "queues" else None,
         windows=traffic.windows.summary() if traffic.windows is not None else None,
         jobs_held=sum(e["kind"] == "job_held" for e in events),
         resolution=resolution_counts(events),
@@ -1183,6 +1207,24 @@ def run(app, args, settings, state) -> None:
         args.output / "world_log.npz",
         people=np.asarray(people_log, dtype=float),
         **{k: np.asarray(v, dtype=float) for k, v in log.items()},
+    )
+
+
+def physical_limits(args, settings):
+    """(empty, loaded) fleet_physics.Limits for --eta physics: the pallet's
+    mass at the transport lift, the tracker's acceleration as the cap."""
+    if args.eta != "physics":
+        return None
+    from forklift_core.planning.fleet_physics import Chassis, Load, limits
+
+    chassis = Chassis.from_urdf(
+        args.forklift_urdf, wheel_torque_nm=settings["wheel_torque_nm"],
+        wheel_speed_radps=settings["max_wheel_rate_rad_s"], friction=settings["static_friction"],
+    )
+    cap = settings["drive_acceleration_mps2"]
+    return (
+        limits(chassis, None, 0.0, args.tip_share, cap),
+        limits(chassis, Load(settings["pallet_mass_kg"]), settings["lift_target_m"], args.tip_share, cap),
     )
 
 

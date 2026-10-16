@@ -75,6 +75,7 @@ class Crossing:
     need_b: np.ndarray
     first: str
     entered: bool = False
+    planned_s: float | None = None  # when the token was issued: the planned grant entry
     issued_s: float | None = None
     deadline_s: float | None = None
     close_s: float | None = None
@@ -210,6 +211,7 @@ class Windows:
         self._next_id = 0
         self._last_step = -np.inf
         self._seconds: dict | None = None  # truck -> crossings it goes second in
+        self.eta_errors: list[float] = []  # actual - planned grant entry, per issued token used
         self.wall_s = 0.0
 
     # -- building ------------------------------------------------------------
@@ -219,6 +221,16 @@ class Windows:
         then turned over where that is what makes the orders feasible. Returns
         whether they are; with dry, nothing is kept."""
         crossings = copy.deepcopy(self.crossings) if dry else self.crossings
+        fresh, clash = self._renew(crossings, name, groups, trucks)
+        ok = self._repair(crossings, trucks, fresh) and not clash
+        if not dry:
+            self.last_feasible = ok
+            self._seconds = None
+        return ok
+
+    def _renew(self, crossings, name: str, groups: dict, trucks) -> tuple[list[int], bool]:
+        """Replace name's crossings in crossings by groups' -> (the new ids,
+        whether one has both trucks already in it)."""
         for cid in [c.id for c in crossings.values() if name in (c.a, c.b)]:
             del crossings[cid]
         fresh, clash = [], False
@@ -238,11 +250,7 @@ class Windows:
                         c.first = other
                 crossings[c.id] = c
                 fresh.append(c.id)
-        ok = self._repair(crossings, trucks, fresh) and not clash
-        if not dry:
-            self.last_feasible = ok
-            self._seconds = None
-        return ok
+        return fresh, clash
 
     def drop(self, name: str) -> None:
         """name no longer takes part (it stands for good, e.g. parked)."""
@@ -283,9 +291,21 @@ class Windows:
 
     def _free(self, truck, g_value: float) -> float:
         """Free-flow time from now for truck to reach arc length g_value (held_s
-        later for a held truck)."""
+        later for a held truck); a truck standing waiting first has to get going
+        again (physics timing)."""
         base = max(self._eta(truck, g_value) - self._eta(truck, truck.progress_m), 0.0)
-        return base + getattr(truck, "held_s", 0.0) if g_value > truck.progress_m + _TOL else base
+        if g_value <= truck.progress_m + _TOL:
+            return base
+        base += getattr(truck, "held_s", 0.0)
+        restart = getattr(truck, "restart", None)
+        if restart is not None and not getattr(truck, "moving", True):
+            base += self._at(truck, restart, truck.progress_m)
+        return base
+
+    @staticmethod
+    def _at(truck, values, g_value: float) -> float:
+        k = int(np.searchsorted(truck.g, g_value + _TOL, side="right")) - 1
+        return float(values[min(max(k, 0), len(values) - 1)])
 
     def limit(self, truck, first: int, stop: int, trucks) -> tuple[int, str | None]:
         """The first sample index in [first, stop) truck may not hold a grant
@@ -364,7 +384,8 @@ class Windows:
                     base = self._free(lead, release) + self.park_s
                 else:
                     base = self._free(lead, release)
-                points[n].append((at, f, release, self._free(mine, at), base))
+                stop = self._at(mine, mine.stopcost, at) if getattr(mine, "stopcost", None) is not None else 0.0
+                points[n].append((at, f, release, self._free(mine, at), base, stop))
         for n in points:
             points[n].sort(key=lambda p: p[0])
         gs = {n: np.array([p[0] for p in pts]) for n, pts in points.items()}
@@ -381,7 +402,7 @@ class Windows:
                     stack.pop()
                     continue
                 n, i = node
-                _, f, release, mine, base = points[n][i]
+                _, f, release, mine, base, stop = points[n][i]
                 k = int(np.searchsorted(gs[f], release, side="right"))
                 todo = [d for d in ((n, i - 1) if i else None, (f, k - 1) if k else None) if d is not None and d not in value]
                 if todo:
@@ -392,7 +413,9 @@ class Windows:
                     continue
                 before = value[(n, i - 1)] if i else 0.0
                 lead = value[(f, k - 1)] if k else 0.0
-                value[node] = max(before, base + lead - mine, 0.0)
+                late = base + lead - mine
+                # Held there: it also has to stop and get going again.
+                value[node] = late + stop if late > before + 1e-9 else before
                 open_.discard(node)
                 stack.pop()
         return {n: (gs[n], np.array([value[(n, i)] for i in range(len(pts))])) for n, pts in points.items()}
@@ -435,6 +458,8 @@ class Windows:
             if not c.entered and any(self._in(c, n, trucks) for n in (c.a, c.b)):
                 c.entered = True
                 self.counts["entered"] += 1
+                if c.planned_s is not None:
+                    self.eta_errors.append(now - c.planned_s)
             if c.entered and c.close_s is not None and not c.overrun and now > c.close_s:
                 c.overrun = True
                 self.counts["overrun"] += 1
@@ -474,7 +499,7 @@ class Windows:
             self.counts["expired_turned" if turned else "expired_kept"] += 1
             if turned:  # a kept one is only counted: a truck held elsewhere renews many
                 self.events.append({"t_s": round(now, 1), "kind": "window_expired", "truck": c.second, "other": c.first, "turned": True})
-            c.issued_s = c.deadline_s = c.close_s = None
+            c.issued_s = c.deadline_s = c.close_s = c.planned_s = None
 
     def _optimise(self, now, trucks) -> None:
         delay = self.timed(self.crossings, trucks, now)
@@ -507,7 +532,13 @@ class Windows:
             if enter - now > self.issue_s:
                 continue
             c.issued_s, c.deadline_s, c.close_s = now, enter + self.slack_s, leave + self.slack_s
+            c.planned_s = enter
             self.counts["issued"] += 1
 
     def summary(self) -> dict:
-        return {**dict(self.counts), "wall_s": round(self.wall_s, 1)}
+        out = {**dict(self.counts), "wall_s": round(self.wall_s, 1)}
+        if self.eta_errors:
+            e = np.asarray(self.eta_errors)
+            out["eta_error_s"] = {"n": len(e), "mean": round(float(e.mean()), 2), "median_abs": round(float(np.median(np.abs(e))), 2),
+                                  "p90_abs": round(float(np.percentile(np.abs(e), 90)), 2)}
+        return out
