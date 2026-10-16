@@ -215,3 +215,19 @@ def test_a_reversal_keeps_a_cache_per_direction():
     for d in (1, -1, 1, -1):
         bp.limit(snap, 1, 0.1, {"low": 0.1}, direction=d, **kw)
     assert {d: id(bp._cache[d]["perms"][0][1]) for d in (1, -1)} == installed
+
+
+
+def test_steering_away_from_a_single_arc_installs_the_output_curvature():
+    """Codex M-c round 14 P1: [0] installed, then [0, -0.024] (the same rounded ends) must check -0.024."""
+    from forklift_core.safety.teleop_drive import BundlePermit
+
+    snap = snapshot()
+    occupy(snap, 0.8, -0.65)
+    bp = BundlePermit(CONFIG)
+    kw = dict(pose=(0.0, 0.034, 0.0), direction=1, check_speed_mps=0.5, footprint=FOOT, own_footprint=BODY)
+    bp.limit(snap, 1, 0.1, {"low": 0.1}, curvatures=bundle(0.0, 0.0), **kw)
+    cached = bp.limit(snap, 1, 0.1, {"low": 0.1}, curvatures=bundle(0.0, -0.024), **kw)
+    assert [k for k, _ in bp._cache[1]["perms"]] == pytest.approx(bundle(0.0, -0.024))
+    direct = arc_permit(DrivePermission(CONFIG), snap, 0.1, {"low": 0.1}, curvatures=bundle(0.0, -0.024), **kw)
+    assert cached == pytest.approx(direct)

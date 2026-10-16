@@ -135,7 +135,7 @@ class BundlePermit:
               check_speed_mps: float, footprint, own_footprint) -> tuple[float, str]:
         cfg = self.config
         ends = (round(curvatures[0] / KAPPA_STEP), round(curvatures[-1] / KAPPA_STEP))
-        key = (snapshot_key, ends)
+        key = (snapshot_key, ends, len(curvatures))  # one arc -> two (steering starts) installs again (Codex r14)
         entry = self._cache.get(direction)
         if entry is None or entry["key"] != key or entry["since_m"] > self.refresh_m:
             length = cfg.lookahead_m + cfg.stopping.distance_m(check_speed_mps) + cfg.step_m
