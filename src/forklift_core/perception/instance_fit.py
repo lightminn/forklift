@@ -361,3 +361,315 @@ def best_placement(occ, pts_u, pts_h, rays, params: FitParams, h_lo: float, n_sh
         if best is None or score[j] > best.score:
             best = Placement2D(float(score[j]), u0 + (j + nu_t / 2) * b, h_lo + s * b)
     return best
+
+
+@dataclass(frozen=True)
+class Hypothesis:
+    label: str             # "<shape>:<axis>" with ":m" for a mirrored raster
+    spec: PalletSpec
+    axis: str
+    mirror: bool
+    members: tuple         # (lo, hi) in u relative to the face centre, left = +u
+    band: tuple            # pocket band (z0, z1) above the support
+    placement: Placement2D
+    face: int
+
+
+def _mirrored(intervals, mirror):
+    return tuple(sorted((-hi, -lo) for lo, hi in intervals)) if mirror else tuple(intervals)
+
+
+def known_hypotheses(specs: dict, face_index: int, pts_u, pts_h, rays, params, h_lo, n_shift):
+    out = []
+    for name in sorted(specs):
+        spec = specs[name]
+        for axis in spec.entry_axes:
+            layout = face_layout(spec, axis)
+            base = face_raster(spec, axis, params.bin_m)
+            for mirror in ((False,) if np.array_equal(base, base[:, ::-1]) else (False, True)):
+                occ = base[:, ::-1] if mirror else base
+                out.append(Hypothesis(
+                    f"{spec.name}:{axis}" + (":m" if mirror else ""), spec, axis, mirror,
+                    _mirrored(layout.member_intervals_m, mirror), layout.pocket_band_m,
+                    best_placement(occ, pts_u, pts_h, rays, params, h_lo, n_shift,
+                                   damageable_rows(spec, params.bin_m)), face_index))
+    return out
+
+
+def observed_members(hyp: Hypothesis, rays, params: FitParams, window_m: float) -> int:
+    """Members with a side edge seen in the pocket band: rays owned by the proposal stop on
+    the face inside the member, raw rays pass behind it just outside (§7.2: a neighbour's
+    face pixels are not this instance's evidence)."""
+    zs = hyp.placement.support_z
+    ru, rh, rc, owned = rays[:4]
+    band = (rh >= zs + hyp.band[0]) & (rh <= zs + hyp.band[1])
+    on_face, behind = band & (rc == FACE) & owned, band & (rc == BEHIND)
+    seen = 0
+    for lo, hi in hyp.members:
+        edges = 0
+        for edge, inward in ((hyp.placement.u_centre + lo, 1.0), (hyp.placement.u_centre + hi, -1.0)):
+            off = inward * (ru - edge)
+            inside = on_face & (off >= 0) & (off <= window_m)
+            outside = behind & (off < 0) & (off >= -window_m)
+            edges += int(inside.sum() >= params.edge_min_hits and outside.sum() >= params.edge_min_hits)
+        seen += edges > 0
+    return seen
+
+
+def support_state(scene: SceneInput, rays, mask, face: FacePlane, support_z: float, params: FitParams):
+    """How the surface under the object's lower edge was seen (design §7.3).
+
+    Only columns whose lowest object pixel lies on the face at the support height are used
+    (under an open lane the lowest pixel is a lane wall behind the face). Two pixels below that
+    edge and five pixels below it are compared: on a horizontal surface the height stays the
+    same, on a vertical one (a stacked pallet's face) it drops by the pixel step times the range.
+    visible -- a level surface at the support height, seen from above it (its measured height
+      is returned, §7.3: a visible support gives z_s);
+    coplanar -- the face continues down below the edge: the edge may be a stack joint;
+    physical_edge -- the rays pass behind the face (nothing under the edge in view);
+    uncertain -- too few rays, or something nearer hides the edge.
+    Returns (state, measured height or None). Codex 2026-10-16: at 1.3 m the floor just below the
+    edge is only 22 mm in front of the face, so a distance band alone took it for the face.
+    """
+    cam = camera_xyz(scene)
+    margin = _margin(params, _reach(cam, face.centre_xy))
+    near_rows, far_rows = [], []
+    for c in np.nonzero(mask.any(axis=0))[0]:
+        bottom = int(np.nonzero(mask[:, c])[0].max())
+        d0 = scene.depth_m[bottom, c]
+        if not np.isfinite(d0) or bottom + 6 >= mask.shape[0] or mask[bottom + 2:bottom + 7, c].any():
+            continue
+        p0 = cam + d0 * rays[bottom, c]
+        if abs(p0[2] - support_z) > params.support_window_m or abs((p0[:2] - face.centre_xy) @ face.normal_xy) > margin:
+            continue
+        near_rows.append((bottom + 2, c))
+        far_rows.append((bottom + 6, c))
+    if len(near_rows) < 5:
+        return "uncertain", None
+    (v1, c1), (v2, c2) = np.array(near_rows).T, np.array(far_rows).T
+    d1, d2 = scene.depth_m[v1, c1], scene.depth_m[v2, c2]
+    ok = np.isfinite(d1) & np.isfinite(d2)
+    if ok.mean() < 0.5:
+        return "uncertain", None
+    p1 = cam + d1[ok, None] * rays[v1[ok], c1[ok]]
+    p2 = cam + d2[ok, None] * rays[v2[ok], c2[ok]]
+    ahead = (p1[:, :2] - face.centre_xy) @ face.normal_xy
+    drop = p1[:, 2] - p2[:, 2]                                   # height lost over four pixel rows
+    vertical_drop = 4.0 * _reach(cam, face.centre_xy) / scene.intrinsics.fy
+    level = np.abs(p1[:, 2] - support_z) <= params.support_window_m
+    horizontal = np.median(np.abs(drop)) < 0.4 * vertical_drop
+    if horizontal and level.mean() > 0.5 and np.median(ahead) > -margin and cam[2] > support_z + params.support_window_m:
+        return "visible", float(np.median(p1[level, 2]))
+    if np.median(np.abs(ahead)) <= margin:
+        return "coplanar", None
+    if np.median(ahead) < -margin:
+        return "physical_edge", None
+    return "uncertain", None
+
+
+def shape_evidence(hyp: Hypothesis, pts_u, pts_h, rays, params: FitParams) -> dict:
+    """How well a known shape explains the face beyond its score (design §7.4-4, §7.5).
+
+    outside: share of face points outside the shape's face rectangle;
+    top_gap_m: observed top of the face (98th percentile of h) minus the shape's top (recorded);
+    seen_through: share of the classified rays on the shape's material that pass behind it, the
+      damageable top-deck band left out (missing or broken top boards are allowed damage, §5.2;
+      Codex 2026-10-16: a missing edge board, or two, must not read as another shape).
+    On the stage 1B Isaac dev scenes (fitted candidates), known shapes stayed at outside p99
+    <= 0.06 and seen_through p99 <= 0.09 up to the mid noise level (damaged S5 included),
+    while 70 % of the non-standard S7 pallets fitted as a known shape exceeded the limits.
+    """
+    layout = face_layout(hyp.spec, hyp.axis)
+    zs, uc = hyp.placement.support_z, hyp.placement.u_centre
+    du = pts_u - uc
+    w, top = layout.width_m, zs + hyp.spec.overall_height_m
+    outside = float(((np.abs(du) > w / 2 + 2 * params.bin_m) | (pts_h > top + 0.02)).mean())
+    occ = face_raster(hyp.spec, hyp.axis, params.bin_m, mirror=hyp.mirror)
+    ru, rh, rc = rays[0], rays[1], rays[2]
+    occ = occ & ~damageable_rows(hyp.spec, params.bin_m)[:, None]
+    iu = np.floor((ru - (uc - w / 2)) / params.bin_m).astype(int)
+    ih = np.floor((rh - zs) / params.bin_m).astype(int)
+    ok = (iu >= 0) & (iu < occ.shape[1]) & (ih >= 0) & (ih < occ.shape[0]) & ((rc == FACE) | (rc == BEHIND))
+    mat = np.zeros(len(ru), bool)
+    mat[ok] = occ[ih[ok], iu[ok]]
+    seen = int(mat.sum())
+    return {"outside": outside, "top_gap_m": float(np.percentile(pts_h, 98)) - top,
+            "seen_through": float((mat & (rc == BEHIND)).sum() / seen) if seen else 1.0}
+
+
+def _pockets(hyp: Hypothesis, face: FacePlane, setup, load):
+    fit = fork_fit(hyp.spec, hyp.axis, setup, load, support_z_m=max(hyp.placement.support_z, 0.0))
+    layout = face_layout(hyp.spec, hyp.axis)
+    pockets = []
+    for i in fit.pair:
+        lo, hi = layout.opening_intervals_m[i]
+        pockets.append(((-(lo + hi) if hyp.mirror else (lo + hi)) / 2, hi - lo))
+    (r_lat, r_w), (l_lat, l_w) = sorted(pockets)
+    centre = face.centre_xy + face.left_xy * hyp.placement.u_centre
+    z = hyp.placement.support_z + (hyp.band[0] + hyp.band[1]) / 2
+    height = hyp.band[1] - hyp.band[0]
+    left = PocketEstimate((*(centre + face.left_xy * l_lat), z), l_w, height, "known_shape", "known_shape")
+    right = PocketEstimate((*(centre + face.left_xy * r_lat), z), r_w, height, "known_shape", "known_shape")
+    return fit, centre, left, right
+
+
+def _identity(proposal: InstanceProposal, threshold) -> str:
+    if proposal.source == "oracle":
+        return "confirmed"
+    if proposal.source == "learned" and threshold is not None and proposal.score >= threshold:
+        return "confirmed"
+    return "unconfirmed"
+
+
+def _decide(hyps, faces, evidence, pts, scene, setup, load_for, params):
+    """Rank the hypotheses and apply every gate: weak fit, rivals, face span, member edges, shape."""
+    cam = camera_xyz(scene)
+    scored = []
+    for hyp in hyps:
+        face = faces[hyp.face]
+        fit, centre, left, right = _pockets(hyp, face, setup, load_for(hyp.spec))
+        scored.append((hyp, fit, centre, left, right, math.atan2(face.insertion_xy[1], face.insertion_xy[0])))
+    # Faces compete by total evidence (a face with few points must not win on a normalised
+    # score); readings of the same face compete by normalised score.
+    sizes = [len(f.index) for f in faces]
+    scored.sort(key=lambda s: -s[0].placement.score * sizes[s[0].face])
+    best = scored[0]
+
+    def equivalent(a, b):
+        # Only the same reading of the same face merges: an x and a y reading of a square T11
+        # face act differently (lane height, near tracking) and must compete (design §7.4-7).
+        d = max(np.linalg.norm(np.subtract(a[3].centre_m, b[3].centre_m)),
+                np.linalg.norm(np.subtract(a[4].centre_m, b[4].centre_m)))
+        dyaw = abs((a[5] - b[5] + math.pi) % (2 * math.pi) - math.pi)
+        return (a[0].axis == b[0].axis and a[1].reasons == b[1].reasons
+                and d <= params.equivalence_m and dyaw <= params.equivalence_yaw_rad)
+
+    rivals = sorted((s for s in scored[1:] if s[0].face == best[0].face and not equivalent(best, s)),
+                    key=lambda s: -s[0].placement.score)
+    hyp = best[0]
+    u, rays_f = evidence[hyp.face]
+    reach = _reach(cam, best[2])
+    geometry, reasons = "fitted", []
+    if hyp.placement.score < params.min_score:
+        geometry, reasons = "unfit", ["weak_fit"]
+    elif rivals and hyp.placement.score - rivals[0][0].placement.score < params.ambiguity_margin:
+        geometry, reasons = "ambiguous", [f"competing:{rivals[0][0].label}"]
+    elif u.max() - u.min() < params.min_face_span_m:
+        geometry, reasons = "ambiguous", ["yaw_unconstrained"]
+    elif observed_members(hyp, rays_f, params, max(params.edge_window_m, 4 * reach / scene.intrinsics.fx)) < 2:
+        geometry, reasons = "ambiguous", ["lateral_unconstrained"]
+    else:
+        ev = shape_evidence(hyp, u, pts[faces[hyp.face].index, 2], rays_f, params)
+        if ev["outside"] > params.shape_outside_max or ev["seen_through"] > params.shape_seen_through_max:
+            # The best known shape does not explain this face: a candidate for the parametric
+            # (non-standard) reading of stage 2B, never a confident known-shape fit.
+            geometry, reasons = "ambiguous", ["shape_mismatch"]
+    return best, rivals, geometry, reasons
+
+
+def fit_instance(scene: SceneInput, proposal: InstanceProposal, *, specs: dict, setup, load_for,
+                 params: FitParams = FitParams(), rng=None, candidate_id: str = "c0", rays=None,
+                 identity_threshold=None) -> PocketCandidate | None:
+    """Best known-shape hypothesis for one proposal, or None when no face can be fitted.
+
+    When the support under the chosen face is seen, its measured height fixes z_s (§7.3) and the
+    whole decision -- every hypothesis on that face, the ranking and all gates -- is made again
+    on it, so the returned placement and its verdict always belong together (Codex 2026-10-16);
+    if the new decision moves to another face, that face's support is fixed in turn.
+    """
+    rng = np.random.default_rng(params.seed) if rng is None else rng
+    rays = pixel_rays(scene) if rays is None else rays
+    cam = camera_xyz(scene)
+    pts, _ = proposal_points(scene, rays, proposal.mask, params.erode_px)
+    faces = fit_faces(pts, cam, params, rng)
+    if not faces:
+        return None
+    wmax = max(face_layout(s, a).width_m for s in specs.values() for a in s.entry_axes)
+    hmax = max(s.overall_height_m for s in specs.values())
+    n_shift = int(round(2 * params.support_window_m / params.bin_m)) + 1
+    evidence, lows = [], []
+    for face in faces:
+        u, h = face_coords(face, pts[face.index])
+        h_lo = float(np.percentile(h, 2)) - params.support_window_m
+        rays_f = ray_samples(scene, rays, face, (u.min() - wmax - 0.05, u.max() + wmax + 0.05),
+                             (h_lo, h_lo + hmax + 2 * params.support_window_m + 0.1), params, mask=proposal.mask)
+        evidence.append((u, rays_f))
+        lows.append(h_lo)
+    fixed = {}
+    # Each pass fixes the support of the face it chose; it ends when the chosen face is already
+    # fixed or has no measured support. A face is fixed at most once, so len(faces) + 1 passes
+    # always end on a decision made with every fix applied (Codex 2026-10-16: with two passes a
+    # switch to the other face returned that face uncorrected, 90 deg off and the wrong fork fit).
+    for _ in range(len(faces) + 1):
+        hyps = []
+        for fi, face in enumerate(faces):
+            u, rays_f = evidence[fi]
+            h_lo, shifts = (fixed[fi], 1) if fi in fixed else (lows[fi], n_shift)
+            hyps += known_hypotheses(specs, fi, u, pts[face.index, 2], rays_f, params, h_lo, shifts)
+        best, rivals, geometry, reasons = _decide(hyps, faces, evidence, pts, scene, setup, load_for, params)
+        hyp = best[0]
+        face = faces[hyp.face]
+        state, measured = support_state(scene, rays, proposal.mask, face, hyp.placement.support_z, params)
+        if hyp.face in fixed or measured is None or abs(measured - hyp.placement.support_z) <= params.bin_m / 2:
+            break
+        fixed[hyp.face] = measured
+    hyp, fit, centre, left, right, yaw = best
+    reach = _reach(cam, centre)
+    pickable, fit_reasons = fit.pickable, tuple(fit.reasons)
+    if state == "uncertain":
+        # An unseen support may not decide anything that reads the height (§7.3).
+        fit_reasons = tuple(r for r in fit_reasons if r not in HEIGHT_REASONS)
+        pickable = False if fit_reasons else None
+        reasons = list(reasons) + ["support_uncertain"]
+    layout = face_layout(hyp.spec, hyp.axis)
+    pallet_centre = centre + face.insertion_xy * layout.depth_m / 2
+    shape = ObservedPalletShape(hyp.spec, layout, (("face", "known_shape"), ("depth", "known_shape"),
+                                                    ("support", "unobserved" if state == "uncertain" else "observed")))
+    zs = hyp.placement.support_z
+    return PocketCandidate(
+        candidate_id, proposal.proposal_id, proposal.source, scene.stamp_ns, hyp.label, hyp.axis,
+        tuple((s[0].label, round(s[0].placement.score, 4)) for s in rivals[:3]), yaw,
+        (float(centre[0]), float(centre[1]), float(zs)), (float(pallet_centre[0]), float(pallet_centre[1]), float(zs)),
+        left, right, zs, state, state == "visible" and abs(zs) <= params.support_window_m, reach,
+        hyp.placement.score, geometry, _identity(proposal, identity_threshold), tuple(reasons), pickable,
+        fit_reasons, shape)
+
+
+@dataclass(frozen=True)
+class FitFailure:
+    proposal_id: str
+    reason: str                  # no_face, or exception:<type> (§10)
+    centre_xy: tuple | None      # median base-frame xy of the proposal's depth points, if any
+    extent_m: float = 0.0        # largest distance of those points from centre_xy
+
+
+@dataclass(frozen=True)
+class SceneFit:
+    candidates: tuple
+    failures: tuple              # FitFailure: an object that was seen but not fitted
+
+
+def fit_scene(scene: SceneInput, proposals, *, specs: dict, setup, load_for, params: FitParams = FitParams(),
+              identity_threshold=None) -> SceneFit:
+    """Fit every proposal; one proposal's failure never stops the others."""
+    rng = np.random.default_rng(params.seed)
+    rays = pixel_rays(scene)
+    candidates, failures = [], []
+    for k, proposal in enumerate(proposals):
+        try:
+            cand = fit_instance(scene, proposal, specs=specs, setup=setup, load_for=load_for, params=params,
+                                rng=rng, candidate_id=f"c{k}", rays=rays, identity_threshold=identity_threshold)
+            reason = None if cand is not None else "no_face"
+        except Exception as exc:  # noqa: BLE001 -- isolated per proposal by design (§10)
+            cand, reason = None, f"exception:{type(exc).__name__}"
+        if cand is not None:
+            candidates.append(cand)
+            continue
+        pts, _ = proposal_points(scene, rays, proposal.mask, 0)
+        if len(pts):
+            c = np.median(pts[:, :2], axis=0)
+            failures.append(FitFailure(proposal.proposal_id, reason, (float(c[0]), float(c[1])),
+                                       float(np.max(np.hypot(*(pts[:, :2] - c).T)))))
+        else:
+            failures.append(FitFailure(proposal.proposal_id, reason, None))
+    return SceneFit(tuple(candidates), tuple(failures))

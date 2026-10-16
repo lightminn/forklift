@@ -192,3 +192,247 @@ def test_rays_never_add_score(spec):
         keep = rays[2] != cls
         fewer = tuple(a[keep] for a in rays)
         assert F.best_placement(occ, u, h, fewer, F.FitParams(), h_lo, 13).score >= full - 1e-12
+
+
+# ---- Task 4: hypotheses, support, candidates ----------------------------------------------------
+
+def _fit(items, k=0, *, source="oracle", noise=None, distractors=(), depth=None, spacing=None):
+    scene, ids = _render(items, noise=noise, distractors=distractors, depth=depth)
+    spec = items[k][0]
+    setup = ForkSetup(spacing or SPACING[spec.name])
+    cand = F.fit_instance(scene, InstanceProposal("p0", ids == k, 1.0, source), specs=SPECS, setup=setup,
+                          load_for=lambda s: SITE.get(s.name))
+    truths = rt.scene_truths([(s, p, d, SITE[s.name]) for s, p, d in items], setup)[0]
+    return cand, truths[k]
+
+
+def _errors(cand, truth):
+    best = None
+    for face in truth.faces:
+        if not face.accessible:
+            continue
+        a = np.array([math.cos(face.insertion_yaw_rad), math.sin(face.insertion_yaw_rad), 0.0])
+        n = np.array([-a[1], a[0], 0.0])
+        dl = np.subtract(cand.left.centre_m, face.left_m)
+        dr = np.subtract(cand.right.centre_m, face.right_m)
+        yaw = abs((cand.insertion_yaw_rad - face.insertion_yaw_rad + math.pi) % (2 * math.pi) - math.pi)
+        e = (max(abs(dl @ n), abs(dr @ n)), max(abs(dl @ a), abs(dr @ a)), yaw, max(abs(dl[2]), abs(dr[2])))
+        if best is None or sum(e[:2]) < sum(best[:2]):
+            best = e
+    return best
+
+
+@pytest.mark.parametrize("spec, placement", [
+    (EPAL, rt.Placement(3.0, 0.4, 0.3, 0.0)),
+    (EPAL, rt.Placement(2.2, -0.5, -0.45, 0.0)),
+    (T11, rt.Placement(2.6, 0.0, 0.2, 0.0)),
+    (T11, rt.Placement(2.4, 0.3, math.pi / 2 + 0.2, 0.0)),   # the y face toward the camera
+])
+def test_a_clean_known_pallet_is_fitted_within_the_pocket_tolerances(spec, placement):
+    cand, truth = _fit([(spec, placement, ())])
+    assert cand.geometry == "fitted" and cand.counted and cand.hypothesis.startswith(spec.name)
+    lateral, axial, yaw, z = _errors(cand, truth)
+    assert lateral <= 0.010 and axial <= 0.010 and yaw <= math.radians(0.5) and z <= 0.006
+    assert cand.support_state == "visible" and cand.on_floor
+    assert cand.pallet_centre_m[:2] == pytest.approx((placement.x_m, placement.y_m), abs=0.01)
+    # T11 entered through a y face has no roof board edges along the forks: near_tracking_unavailable
+    assert cand.pickable == any(f.fit["pickable"] for f in truth.faces if f.accessible and f.axis == cand.axis)
+
+
+def test_left_is_the_larger_lateral_pocket():
+    cand, _ = _fit([(EPAL, rt.Placement(2.8, 0.0, 0.0, 0.0), ())])
+    assert cand.left.centre_m[1] > cand.right.centre_m[1]
+
+
+def test_a_damaged_pallet_is_still_fitted():
+    damage = (DamageOp("top_board_missing", "top_board_0", ()), DamageOp("top_board_missing", "top_board_3", ()))
+    cand, truth = _fit([(EPAL, rt.Placement(2.7, 0.1, 0.2, 0.0), damage)])
+    assert cand.geometry == "fitted"
+    lateral, axial, yaw, _ = _errors(cand, truth)
+    assert lateral <= 0.010 and axial <= 0.010 and yaw <= math.radians(0.5)
+
+
+@pytest.mark.parametrize("x_m, boards", [(2.6, ("top_board_6",)), (2.6, ("top_board_5", "top_board_6")),
+                                         (2.04, ("top_board_5", "top_board_6"))])
+def test_missing_edge_boards_are_damage_not_a_different_shape(x_m, boards):
+    """Codex 2026-10-16: a T11 seen through its y face with its edge board missing read as
+    shape_mismatch (seen-through 0.278), with two adjacent boards missing as well (0.238), and
+    the vertical search drifted 12 mm, adding a false lift_alignment_needed; at 2.04 m the floor
+    just below the edge is only 22 mm in front of the face and was taken for the face. Allowed damage
+    (design §5.2: 1-2 top boards, edge boards included) must fit like an intact pallet."""
+    damage = tuple(DamageOp("top_board_missing", b, ()) for b in boards)
+    cand, truth = _fit([(T11, rt.Placement(x_m, 0.0, math.pi / 2, 0.0), damage)])
+    assert cand.geometry == "fitted" and cand.axis == "y" and cand.support_state == "visible"
+    lateral, axial, yaw, z = _errors(cand, truth)
+    assert lateral <= 0.010 and axial <= 0.010 and yaw <= math.radians(0.5) and z <= 0.006
+    assert cand.support_z_m == pytest.approx(0.0, abs=0.006) and cand.on_floor
+    face = next(f for f in truth.faces if f.accessible and f.axis == "y")
+    assert cand.fit_reasons == tuple(face.fit["reasons"])
+
+
+def test_the_verdict_belongs_to_the_returned_placement():
+    """Codex 2026-10-16: the support correction moved the placement after the gates had run, so a
+    shape_mismatch (or a pass of min_score) of the old placement came back with the new one."""
+    from dataclasses import replace
+    damage = (DamageOp("top_board_missing", "top_board_5", ()), DamageOp("top_board_missing", "top_board_6", ()))
+    noisy, _ = _fit([(T11, rt.Placement(4.0, 0.2, math.pi / 2, 0.0), damage)], noise=_mid_noise(3))
+    assert noisy.geometry != "ambiguous" or "shape_mismatch" not in noisy.reasons
+    scene, ids = _render([(T11, rt.Placement(4.0, 0.0, math.pi / 2, 0.0), damage)])
+    strict = replace(F.FitParams(), min_score=0.6)
+    cand = F.fit_instance(scene, InstanceProposal("p0", ids == 0, 1.0, "oracle"), specs=SPECS,
+                          setup=ForkSetup(0.290), load_for=lambda s: SITE.get(s.name), params=strict)
+    assert (cand.geometry == "unfit") == (cand.score < 0.6)
+
+
+def test_a_switch_to_the_other_face_gets_that_faces_support_too():
+    """Codex 2026-10-16: the first pass chose the y face (support 5.7 mm), fixing it moved the choice
+    to the x face (3.2 mm uncorrected) and the second pass stopped there -- the x face came back
+    pickable at 0.80 rad although every face fixed gives the y face, not pickable, at -0.77 rad."""
+    damage = (DamageOp("top_board_missing", "top_board_5", ()), DamageOp("top_board_missing", "top_board_6", ()))
+    cand, truth = _fit([(T11, rt.Placement(2.6, -0.2, 0.8, 0.0), damage)])
+    # The expected end state is stated outright: matching the truth of whatever axis came back
+    # would accept the wrong face (Codex 2026-10-16, round 6).
+    assert cand.geometry == "fitted" and cand.axis == "y" and cand.support_state == "visible"
+    assert cand.insertion_yaw_rad == pytest.approx(-0.7708, abs=0.02)
+    assert cand.support_z_m == pytest.approx(0.0, abs=0.002)
+    assert cand.fit_reasons == ("near_tracking_unavailable",) and cand.pickable is False
+
+
+def test_a_pallet_hidden_but_for_one_block_is_not_fitted():
+    """An occluder, not a cut mask: raw rays would still see members hidden only from the mask."""
+    occluder = scene_rig.Box((1.6, -0.15, 0.15), (0.1, 0.6, 0.3))   # silhouette reaches y = 0.272 at the face
+    cand, _ = _fit([(EPAL, rt.Placement(2.5, 0.0, 0.0, 0.0), ())], distractors=[occluder])
+    assert cand is None or cand.geometry != "fitted"
+
+
+@pytest.mark.parametrize("seen, geometry", [(1, "ambiguous"), (2, "fitted")])
+def test_fewer_than_two_members_with_a_seen_edge_leave_the_lateral_position_unconstrained(monkeypatch, seen, geometry):
+    """The gate itself (Codex 2026-10-16: the occluder test passes on other gates even when
+    observed_members always says 99)."""
+    monkeypatch.setattr(F, "observed_members", lambda *a, **k: seen)
+    cand, _ = _fit([(EPAL, rt.Placement(2.6, 0.0, 0.0, 0.0), ())])
+    assert cand.geometry == geometry and (geometry == "fitted" or "lateral_unconstrained" in cand.reasons)
+
+
+def test_a_member_edge_counts_only_with_the_proposals_own_face_rays():
+    hyp = F.Hypothesis("t:x", EPAL, "x", False, ((-0.1, 0.0), (0.2, 0.3)), (0.0, 0.1),
+                       F.Placement2D(1.0, 0.0, 0.0), 0)
+    u = np.array([-0.095, -0.094, -0.093, -0.105, -0.106, -0.107, 0.205, 0.206, 0.207, 0.195, 0.194, 0.193])
+    h = np.full(u.shape, 0.05)
+    cls = np.array([F.FACE] * 3 + [F.BEHIND] * 3 + [F.FACE] * 3 + [F.BEHIND] * 3, np.int8)
+    for owned, expected in ((np.zeros(u.shape, bool), 0), (np.ones(u.shape, bool), 2)):
+        assert F.observed_members(hyp, (u, h, cls, owned), F.FitParams(), 0.015) == expected
+    far = u + np.where(u < 0.05, -0.05, 0.05) * (cls == F.BEHIND)   # behind rays 50 mm outside the window
+    assert F.observed_members(hyp, (far, h, cls, np.ones(u.shape, bool)), F.FitParams(), 0.015) == 0
+
+
+def test_a_hidden_lower_edge_leaves_the_support_uncertain_and_the_fit_undecided():
+    """Codex 2026-10-16: a low front occluder lifted the support search to 10.8 mm and the
+    candidate still came out pickable."""
+    occluder = scene_rig.Box((1.8, 0.0, 0.06), (0.05, 1.5, 0.12))
+    cand, _ = _fit([(EPAL, rt.Placement(2.8, 0.0, 0.0, 0.0), ())], distractors=[occluder])
+    assert cand.support_state == "uncertain" and "support_uncertain" in cand.reasons
+    assert cand.pickable is None and not cand.on_floor
+
+
+def test_a_stack_reports_support_heights_and_how_each_edge_was_seen():
+    H = EPAL.overall_height_m
+    items = [(EPAL, rt.Placement(2.8, 0.0, 0.0, 0.0), ()), (EPAL, rt.Placement(2.8, 0.0, 0.0, H), ()),
+             (EPAL, rt.Placement(2.8, 0.0, 0.0, 2 * H), ())]
+    states = []
+    for k in range(3):
+        cand, _ = _fit(items, k)
+        assert cand.support_z_m == pytest.approx(k * H, abs=0.006)
+        states.append(cand.support_state)
+    # The top support (0.288 m) is above the camera (0.27 m): its surface cannot be seen (truth: support_visible False)
+    assert states == ["visible", "coplanar", "coplanar"]
+
+
+def test_x_and_y_readings_of_a_t11_face_compete_instead_of_merging():
+    """Codex 2026-10-16: with depth only in 20-55 mm the x and y readings scored 0.940 / 0.943 and
+    their pockets were 17.5 mm apart; merging them hid a choice between different fork fits."""
+    def band_only(out):
+        d = out.scene.depth_m.copy()
+        z = out.points_base[..., 2]
+        d[(out.instance_ids == 0) & ((z < 0.020) | (z > 0.055))] = np.nan
+        return d
+    cand, _ = _fit([(T11, rt.Placement(2.6, 0.0, math.pi / 2, 0.0), ())], depth=band_only)
+    assert cand.geometry == "ambiguous" and any(r.startswith("competing:") for r in cand.reasons)
+    clean, _ = _fit([(T11, rt.Placement(2.6, 0.0, math.pi / 2, 0.0), ())])
+    assert clean.geometry == "fitted" and clean.axis == "y"
+
+
+@pytest.mark.parametrize("scene_id", ["s7_nonstandard_1000738", "s7_nonstandard_1000759"])
+def test_a_non_standard_pallet_is_not_fitted_as_a_known_shape(scene_id):
+    """Rig renders of S7 dev recipes (0.77 m wide with four blocks; 0.99 m wide) that the EPAL raster
+    fits when the shape check is off (ws1 dev 2026-10-16: 76 of 135 S7 pallets came out fitted)."""
+    from dataclasses import replace
+    recipe = next(r for r in rs.catalogue() if r.scene_id == scene_id)
+    out = instance_rig.render_instances([rs.recipe_boxes(recipe, 0)])
+    proposal = InstanceProposal("p0", out.instance_ids == 0, 1.0, "oracle")
+    kw = dict(specs=SPECS, setup=ForkSetup(recipe.fork_spacing_m), load_for=lambda s: SITE.get(s.name))
+    off = replace(F.FitParams(), shape_outside_max=9.0, shape_seen_through_max=9.0)
+    assert F.fit_instance(out.scene, proposal, params=off, **kw).geometry == "fitted"
+    cand = F.fit_instance(out.scene, proposal, **kw)
+    assert cand.geometry == "ambiguous" and "shape_mismatch" in cand.reasons
+
+
+def test_a_geometric_proposal_stays_unconfirmed():
+    cand, _ = _fit([(EPAL, rt.Placement(2.8, 0.0, 0.0, 0.0), ())], source="geometric")
+    assert cand.geometry == "fitted" and cand.identity == "unconfirmed" and not cand.counted
+
+
+def test_pickability_follows_the_fork_fit_of_the_fitted_shape():
+    cand, _ = _fit([(T11, rt.Placement(2.6, 0.0, 0.0, 0.0), ())], spacing=0.3725)
+    assert cand.pickable is False and "fork_spacing_adjust" in cand.fit_reasons
+
+
+def test_noise_far_away_still_gives_a_candidate_with_the_right_shape():
+    cand, _ = _fit([(T11, rt.Placement(3.6, 0.2, 0.1, 0.0), ())], noise=_mid_noise(5))
+    assert cand is not None and cand.hypothesis.startswith(T11.name)
+
+
+def test_an_over_segmented_mask_is_still_fitted():
+    """A learned mask spills a few pixels onto the floor and background (Gemini review 2026-10-16).
+    Dev check: masks dilated by 4 px gave the same fitted counts and errors on Isaac S1/S2/S5."""
+    def dilate(mask, r=4):
+        for _ in range(r):
+            m = mask.copy()
+            m[1:] |= mask[:-1]
+            m[:-1] |= mask[1:]
+            m[:, 1:] |= mask[:, :-1]
+            m[:, :-1] |= mask[:, 1:]
+            mask = m
+        return mask
+    placement = rt.Placement(2.9, 0.2, 0.2, 0.0)
+    scene, ids = _render([(EPAL, placement, ())])
+    cand = F.fit_instance(scene, InstanceProposal("p0", dilate(ids == 0), 1.0, "oracle"), specs=SPECS,
+                          setup=ForkSetup(0.3725), load_for=lambda s: SITE.get(s.name))
+    truth = rt.scene_truths([(EPAL, placement, (), SITE[EPAL.name])], ForkSetup(0.3725))[0][0]
+    lateral, axial, yaw, z = _errors(cand, truth)
+    assert cand.geometry == "fitted" and lateral <= 0.010 and axial <= 0.010 and z <= 0.006
+
+
+def test_fit_scene_keeps_proposal_order_and_records_failures(monkeypatch):
+    scene, ids = _render([(EPAL, rt.Placement(2.6, -0.6, 0.0, 0.0), ()), (EPAL, rt.Placement(2.6, 0.6, 0.0, 0.0), ())])
+    tiny = np.zeros(ids.shape, bool)
+    tiny[0, 0] = True
+    props = [InstanceProposal("a", ids == 0, 1.0, "oracle"), InstanceProposal("b", tiny, 1.0, "oracle"),
+             InstanceProposal("c", ids == 1, 1.0, "oracle")]
+    out = F.fit_scene(scene, props, specs=SPECS, setup=ForkSetup(0.3725), load_for=lambda s: SITE.get(s.name))
+    assert [(c.candidate_id, c.proposal_id) for c in out.candidates] == [("c0", "a"), ("c2", "c")]
+    assert [(f.proposal_id, f.reason) for f in out.failures] == [("b", "no_face")]
+    real = F.fit_instance
+
+    def boom(scene, proposal, **kw):
+        if proposal.proposal_id == "a":
+            raise FloatingPointError("injected")
+        return real(scene, proposal, **kw)
+
+    monkeypatch.setattr(F, "fit_instance", boom)
+    out = F.fit_scene(scene, props, specs=SPECS, setup=ForkSetup(0.3725), load_for=lambda s: SITE.get(s.name))
+    assert [c.proposal_id for c in out.candidates] == ["c"]
+    failed = {f.proposal_id: f for f in out.failures}
+    assert failed["a"].reason == "exception:FloatingPointError"
+    # The failed pallet keeps an approximate position (its visible surface) for target selection
+    assert failed["a"].centre_xy == pytest.approx((2.3, -0.6), abs=0.15)
