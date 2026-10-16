@@ -740,7 +740,7 @@ def _parametric_fit(layout: FaceLayout, setup, load, depth_max_m: float,
 
 
 def _parametric_candidate(scene, proposal, cam, face, fi, pts_u, pts_h, rays_f, reading, setup, load_for, params,
-                          candidate_id, identity_threshold, competing, state, seen, extent, best_face=True):
+                          candidate_id, identity_threshold, competing, state, seen, extent):
     layout = reading.layout
     occ = _layout_raster(layout, reading.top_m - reading.support_z, params.bin_m)
     # The top band was read as one block, but boards leave gaps the rays pass through: like the
@@ -762,13 +762,6 @@ def _parametric_candidate(scene, proposal, cam, face, fi, pts_u, pts_h, rays_f, 
         # A non-standard reading must see both physical ends: the inner part of two touching
         # pallets looks like one wide non-standard pallet (§7.4-5c).
         geometry, reasons = "ambiguous", ["end_unobserved"]
-    elif not best_face:
-        # Nothing on a face says it is the entry face: a reading off a face that is not the
-        # best-evidence one (s7 1000873, the front face did not read), or a second face that reads
-        # as a pallet face too (a side face with openings, which can have more points than the
-        # entry face -- Codex review A round 2), leaves the entry face unknown. Dev cost: about 10
-        # S7 misses (block-style recipe sides read); real 2-way pallets have solid sides that do not.
-        geometry, reasons = "ambiguous", ["entry_face_unresolved"]
     pair, pickable, fit_reasons = _parametric_fit(layout, setup, load_for(None), params.nonstandard_depth_m[1],
                                                   params.parametric_spacing_slack_m)
     centre = face.centre_xy + face.left_xy * placement.u_centre
@@ -952,13 +945,14 @@ def fit_instance(scene: SceneInput, proposal: InstanceProposal, *, specs: dict, 
             if reading is not None:
                 readings.append((fi, f, u_f, h_f, rays_f, reading, st))
         if readings:
+            # The first reading in order of evidence. Which face is the entry face is not known at far
+            # range: every non-standard candidate leaves entry_axis to the near range (user decision
+            # 2026-10-17 -- approach allowed, pick only after the axis is confirmed), so a side face that
+            # reads is not refused here (the S7 sides are entry faces; a blocked side that reads as one
+            # is still stopped by the fork fit and the near-range check).
             fi, f, u_f, h_f, rays_f, reading, st = readings[0]
-            # Any second face that reads as a pallet layout counts, whether or not its ends are
-            # physical: the corner it shares with the side face often is not (Codex A round 2 case).
-            others = len(readings) > 1
             return _parametric_candidate(scene, proposal, cam, f, fi, u_f, h_f, rays_f, reading, setup, load_for,
-                                         params, candidate_id, identity_threshold, competing_all, st, seen, extent,
-                                         fi == order[0] and not others)
+                                         params, candidate_id, identity_threshold, competing_all, st, seen, extent)
     return PocketCandidate(
         candidate_id, proposal.proposal_id, proposal.source, scene.stamp_ns, hyp.label, hyp.axis,
         tuple((s[0].label, round(s[0].placement.score, 4)) for s in rivals[:3]), yaw,

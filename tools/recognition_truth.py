@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 
 import numpy as np
 
@@ -110,12 +110,26 @@ def _top_visible(rendered, m, boxes, top_z) -> bool:
     return bool(((rendered.instance_ids == m) & inside & on_top & descending).any())
 
 
+def face_load(spec, axis: str, load):
+    """The load declaration as seen from the face it is judged on.
+
+    A declaration is measured from the x face: the centre of mass lies at most com_x from it and at
+    most com_y to the side. From a y face of a non-standard pallet that is up to width/2 + com_y along
+    the forks and up to max(depth/2, com_x - depth/2) to the side -- the declaration gives no lower
+    bound on the x distance. Masses and source are kept (dropping the load lost payload_limit, Codex
+    2026-10-17). Known shapes are exempt from the support check, so their load is left as given."""
+    if load is None or axis == "x" or spec.known:
+        return load
+    return replace(load, com_x_max_m=spec.overall_width_m / 2 + load.com_y_max_m,
+                   com_y_max_m=max(spec.overall_depth_m / 2, load.com_x_max_m - spec.overall_depth_m / 2))
+
+
 def _faces(spec, placement, setup, load, scene_local, scene_ids, k, solo_local, solo_ids):
     camera = np.asarray(instance_rig.PERCEPTION_CAMERA.xyz_m, dtype=float)
     out = []
     for axis in spec.entry_axes:
         layout = face_layout(spec, axis)
-        fit = fork_fit(spec, axis, setup, load, support_z_m=placement.support_z_m)
+        fit = fork_fit(spec, axis, setup, face_load(spec, axis, load), support_z_m=placement.support_z_m)
         intervals = [layout.opening_intervals_m[i] for i in fit.pair]
         z0, z1 = layout.pocket_band_m
         z = placement.support_z_m + (z0 + z1) / 2

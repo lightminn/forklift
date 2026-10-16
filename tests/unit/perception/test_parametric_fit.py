@@ -258,17 +258,25 @@ def test_a_fitted_non_standard_pallet_is_not_selected_through_a_rejected_reading
     assert select_target([cand], at_rejected).status == "none"
 
 
-def test_a_side_face_read_when_the_front_face_does_not_read_is_not_confirmed():
-    """Codex review 2026-10-16: s7_nonstandard_1000873 is cut by the image edge; its front (entry)
-    face has the most points but does not read, and the side face does -- it was fitted at -67.5 deg
-    against the entry yaw 22.5 deg. Nothing on the side face says it is an entry face, so a reading
-    off any face but the best-evidence one stays ambiguous (Isaac dev: every correct match was on
-    that face; 1000873, 1000802 and 1000828 were not)."""
+def _side_entry_check(cand, recipe_or_spec_truth):
+    """A side reading is confirmed as the S7 y face it is (user decision 2026-10-17: the sides are entry
+    faces), keeps the entry axis for the near range and never permits a pick."""
+    assert cand.counted and cand.hypothesis == "parametric:x" and "entry_axis" in cand.pending
+    assert cand.pickable is not True
+    ys = [f for f in recipe_or_spec_truth.faces if f.axis == "y" and f.accessible]
+    dyaw = min(abs((cand.insertion_yaw_rad - f.insertion_yaw_rad + math.pi) % (2 * math.pi) - math.pi) for f in ys)
+    assert dyaw <= math.radians(2.0)
+
+
+def test_a_side_face_read_when_the_front_face_does_not_read_is_an_entry_face():
+    """s7_nonstandard_1000873 is cut by the image edge; its front face does not read and its side face
+    does (-67.5 deg). The S7 sides are entry faces, so the reading stands with the axis left pending."""
     recipe = _recipe("s7_nonstandard_1000873")
     out = instance_rig.render_instances([rs.recipe_boxes(recipe, k) for k in range(len(recipe.instances))])
     cand = F.fit_instance(out.scene, InstanceProposal("p0", out.instance_ids == 0, 1.0, "oracle"), specs=SPECS,
                           setup=ForkSetup(recipe.fork_spacing_m), load_for=lambda s: LoadDeclaration(2.0, 1.0, 0.2, 0.0))
-    assert not cand.counted and cand.reasons[0] == "entry_face_unresolved"
+    truth = rt.scene_truths([(i.spec, i.placement, i.damage, None) for i in recipe.instances], ForkSetup(recipe.fork_spacing_m))[0][0]
+    _side_entry_check(cand, truth)
 
 
 def test_an_unobserved_deck_beyond_a_cut_is_not_a_physical_end():
@@ -288,14 +296,14 @@ def test_an_unobserved_deck_beyond_a_cut_is_not_a_physical_end():
     assert cand is None or not cand.counted, (cand.hypothesis, cand.geometry, cand.reasons)
 
 
-def test_a_side_face_with_more_points_than_the_entry_face_is_not_confirmed():
-    """Codex review A round 2: s7_nonstandard_1000874's shape at (3 m, -0.8 m, 30 deg) shows its side
-    face with more points (3462) than its x entry face (1611); both read as pallet faces, so which one
-    is the entry face is not known and the reading stays ambiguous."""
+def test_a_side_face_with_more_points_than_the_entry_face_is_an_entry_face():
+    """s7 1000874's shape at (3 m, -0.8 m, 30 deg) shows its side face with more points than its x face;
+    both read. The side face is an entry face too: the reading stands with the axis left pending."""
     spec = _recipe("s7_nonstandard_1000874").instances[0].spec
-    cand, _ = _fit_spec(spec, rt.Placement(3.0, -0.8, math.radians(30.0), 0.0), 0.29,
-                        load=lambda s: LoadDeclaration(2.0, 1.0, 0.2, 0.0))
-    assert cand is None or not cand.counted, (cand.hypothesis, cand.geometry, cand.reasons, math.degrees(cand.insertion_yaw_rad))
+    placement = rt.Placement(3.0, -0.8, math.radians(30.0), 0.0)
+    cand, _ = _fit_spec(spec, placement, 0.29, load=lambda s: LoadDeclaration(2.0, 1.0, 0.2, 0.0))
+    truth = rt.scene_truths([(spec, placement, (), None)], ForkSetup(0.29))[0][0]
+    _side_entry_check(cand, truth)
 
 
 def _touching_cut(**render):

@@ -91,3 +91,41 @@ def test_truth_can_be_computed_at_another_camera_k():
     shifted = gen.recipe_record(recipe, gen.load_site(), intrinsics=replace(k, cx=k.cx - 0.5, cy=k.cy - 0.5))
     assert shifted.rendered.scene.intrinsics.cx == k.cx - 0.5
     assert [f.exposure for t in base.truths for f in t.faces] != [f.exposure for t in shifted.truths for f in t.faces]
+
+
+def _recipe(scene_id):
+    from tools import recognition_scenes as rs
+    return next(r for r in rs.catalogue() if r.scene_id == scene_id)
+
+
+def test_a_declared_load_is_moved_to_the_face_it_is_judged_on():
+    """The declaration is measured from the x face (centre of mass at most com_x from it, at most com_y
+    to the side). Seen from a y face of a non-standard pallet the distance along the forks is up to
+    width/2 + com_y and the side offset up to max(depth/2, com_x - depth/2); masses and source stay
+    (Codex 2026-10-17: dropping the load lost payload_limit)."""
+    spec = _recipe("s7_nonstandard_1000742").instances[0].spec
+    load = LoadDeclaration(8.0, 4.5, 0.27, 0.01)
+    assert rt.face_load(spec, "x", load) == load
+    moved = rt.face_load(spec, "y", load)
+    assert (moved.pallet_mass_kg, moved.load_mass_kg, moved.source) == (8.0, 4.5, "instruction")
+    assert moved.com_x_max_m == pytest.approx(spec.overall_width_m / 2 + 0.01)
+    assert moved.com_y_max_m == pytest.approx(max(spec.overall_depth_m / 2, 0.27 - spec.overall_depth_m / 2))
+    assert rt.face_load(spec, "y", None) is None
+    _, epal = _spec("epal6")
+    assert rt.face_load(epal, "y", load) == load  # known shapes are exempt from the support check
+
+
+def test_s7_side_faces_are_entry_faces():
+    """User decision 2026-10-17: the S7 recipe's sides are open between the rows, so its y faces are
+    entry faces; with the load moved to them their support is unverified and an overweight pallet keeps
+    payload_limit on every face."""
+    r = _recipe("s7_nonstandard_1000742")
+    assert r.instances[0].spec.entry_axes == ("x", "y")
+    t = _truth([(i.spec, i.placement, i.damage, r.instruction.load) for i in r.instances], spacing=r.fork_spacing_m)[0]
+    ys = [f for f in t.faces if f.axis == "y"]
+    assert len(ys) == 2 and len(t.faces) == 4
+    for f in ys:
+        assert "support_unverified" in f.fit["reasons"] and "payload_limit" in f.fit["reasons"]
+        assert f.fit["load_source"] == "instruction" and not f.fit["pickable"]
+    front = next(f for f in t.faces if f.axis == "x" and f.sign == 1)
+    assert "payload_limit" in front.fit["reasons"]

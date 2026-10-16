@@ -143,7 +143,9 @@ def _s7_spec(rng, rank: int, index: int):
         top_thickness_m=float(rng.uniform(0.012, 0.025)), column_centres_y_m=centres, column_widths_m=widths,
         row_centres_x_m=(-(depth - row) / 2, 0.0, (depth - row) / 2), row_depth_m=row,
         top_style="flat" if violation == "near_tracking_unavailable" else "boards",
-        top_board_count=max(2, min(9, int(width / (board * 1.4)))), top_board_width_m=board, entry_axes=("x",),
+        # The sides are open between the rows from the bottom deck to the top boards (no box crosses a
+        # y lane), so both axes are entry faces (user decision 2026-10-17).
+        top_board_count=max(2, min(9, int(width / (board * 1.4)))), top_board_width_m=board, entry_axes=("x", "y"),
     )
     if violation == "payload_limit":
         pallet, load_mass = float(rng.uniform(3.0, 5.0)), float(rng.uniform(7.5, 9.0))

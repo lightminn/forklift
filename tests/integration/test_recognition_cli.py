@@ -72,15 +72,18 @@ def test_source_revision_outside_a_git_checkout_is_recorded_as_unknown(tmp_path,
     assert source["revision"] is None and "no git checkout" in source["reason"]
 
 
-GOLDEN = {  # measured with the pre-refactor generator (stage 1B task 4, step 1)
+# Measured with the pre-refactor generator (stage 1B task 4, step 1). The two S7 entries were re-pinned on
+# 2026-10-17 for the truth contract change (S7 side faces are entry faces): with truth.json left out, the
+# digest of the same scene is identical before (286ecb3) and after (63d47d90... default, 7d1040b0... none).
+GOLDEN = {
     ('default', 'n_negative_1000926'): '3c240092ca9418a25630c9ee135b960b25ad2e045dc312618485eb1347f0487d',
     ('default', 's2_epal6_1000122'): 'adcd96d2a651afcc9746690d56a8e6278f365722d4561cff7edc7335a5cb530c',
     ('default', 's2_t11_06_1000183'): '831d4bf609d3abc5da1bb7718b5578354998d0f8f9cf890d29a3284217f133fd',
-    ('default', 's7_nonstandard_1000732'): 'd82400922a204843aa03227f08238a0d3560204d84fb7255de9405f1314b6940',
+    ('default', 's7_nonstandard_1000732'): '24cd3696342b11761e0c4956e51d38e693a7ca0da2158e715d3012f160bccc79',
     ('none', 'n_negative_1000926'): 'da6bdd6fe32590cadb91134598197cca64eb4de0a098ecd17217bf2a4d0cce13',
     ('none', 's2_epal6_1000122'): '9cb68ab0272be408b8627939692bc8811c523eb15326e924a7c34568701f063c',
     ('none', 's2_t11_06_1000183'): 'a34b33e77410a0e9b4941e8f274f1869507d5f9cf0b858a816988493208cc15f',
-    ('none', 's7_nonstandard_1000732'): '9c613ae1a4e47c894612130ac8b3724a6a8612bc1c8341157e5b435399de7109',
+    ('none', 's7_nonstandard_1000732'): '09b1d47614e45fe0e3a9c514ce3617f135fc92b04efc1c1a86e03f66fa945396',
 }
 
 
