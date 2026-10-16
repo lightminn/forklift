@@ -165,7 +165,7 @@ class Probe:
         reply = None
         for _ in range(tries):
             reply = await self.request(kind, **fields)
-            if reply is None or reply.get("reason") != "not_stopped":
+            if reply is None or reply.get("reason") not in ("not_stopped", "no_feedback:rear_axle_speed"):
                 return reply
             await asyncio.sleep(0.5)
         return reply
@@ -222,7 +222,7 @@ async def main_scenario(p: Probe, args):
     for _ in range(20):  # the vehicle confirms standing on its own detector: a not_stopped is asked again
         submit = await p.request("mission_submit", pallet_id="P-1", destination_id="D-1",
                                  targets_revision=p.targets["targets_revision"])
-        if submit is None or submit.get("reason") != "not_stopped":
+        if submit is None or submit.get("reason") not in ("not_stopped", "no_feedback:rear_axle_speed"):
             break
         await asyncio.sleep(0.5)
     mission_id = (submit or {}).get("mission_id")
