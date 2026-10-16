@@ -452,3 +452,32 @@ def test_a_backoff_on_the_transport_is_not_the_docking_straight():
     core.obstacle["backoff"] = {"phase": "transport"}
     core.paused_tick(11.0, REAR + np.array([0.05, 0.0, 0.0]), 0.0, False)
     assert core.commands.resume_check.get("reason") != "no_resume:docking_moved"
+
+
+# --- M-a3e: the safety state (plan E8) ---
+def test_the_safety_state_reports_the_lifecycle_the_load_and_the_command_without_a_port_call():
+    core, obs, _ = make("transport")
+    core.hooks = SimpleNamespace()  # any port call would fail
+    core.state["applied_command"] = (0.25, [0.1, 0.12])
+    obs["permission_cap"] = (10.0, 0.4)
+    out = core.safety_state(10.0)
+    assert out["mission"]["status"] == "running" and out["mission"]["id"] == "m1"
+    assert out["mission"]["phase"] == "transport" and out["mission"]["phase_elapsed_s"] == 10.0
+    assert out["load"] == {"loaded": True, "basis": "phase", "lift_target_m": 0.0}
+    assert out["fork_in_pocket"] == {"value": False, "basis": "phase"}
+    assert out["command"] == {"applied_speed_mps": 0.25, "steering_rad": [0.1, 0.12]}
+    assert out["blocked"] == {"cap": 0.4} and out["frame"]["correction_version"] == 1 and out["near"] is None
+    import json
+
+    json.dumps(out)  # one JSON line
+
+
+def test_the_safety_state_shows_a_refused_resume_and_the_pause_in_work_time():
+    core, _, _ = make()
+    pause(core, 10.0)
+    core.paused_tick(10.0, REAR, 0.0, True)
+    resume(core, 11.0)
+    core.commands.resume_check = {"time_s": 11.0, "step": "state_verified", "reason": "no_resume:x"}
+    out = core.safety_state(12.0)
+    assert out["mission"]["status"] == "resuming" and out["mission"]["resume"]["reason"] == "no_resume:x"
+    assert out["mission"]["phase_elapsed_s"] == pytest.approx(10.0)  # 12 s, less the 2 s paused so far

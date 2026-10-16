@@ -2748,6 +2748,38 @@ class MissionCore:
             trackers[ms.phase].restart_speed_slew(0.0)  # from standing, not from the held cruise
         return rear
 
+    def safety_state(self, t: float) -> dict:
+        """The mission's safety state for the arbiter (plan E8, M-a0.5 section 4), from what the core already holds
+        this tick -- no port call (the replay compares every one). ``basis`` says what a value rests on; a value
+        the tick did not read is ``unknown`` until M-b gives the vehicle state a port."""
+        ms, state, slam, obstacle, near, cmds = self.ms, self.state, self.slam, self.obstacle, self.near, self.commands
+        phase_ = ms.phase
+        applied_ = state.get("applied_command")
+        hold_ = "none"
+        if slam is not None and slam["tracker"].mode == "holding":
+            hold_ = ("docking" if phase_ == "transport" else phase_ if phase_ in ("approach", "insert") else "held")
+        return {
+            "t": t,
+            "mission": {"id": cmds.mission_id, "status": cmds.status, "generation": cmds.mission_gen,
+                        "phase": phase_,
+                        "phase_elapsed_s": cmds.work_elapsed(ms.phase_started, t) if phase_ is not None else None,
+                        "resume": dict(cmds.resume_check) if cmds.resume_check else None,
+                        "stop_seen_s": cmds.stop_seen_s},
+            "load": {"loaded": phase_ in ("lift", "extract", "transport", "lower"), "basis": "phase",
+                     "lift_target_m": float(ms.lift_command)},
+            "fork_in_pocket": {"value": phase_ in ("insert", "lift", "extract", "lower", "withdraw"), "basis": "phase"},
+            "near": None if near is None else {
+                "tracker_built": near.get("tracker") is not None,
+                "stop_reason": getattr(near.get("stop_state"), "reason", None),
+                "terminal": bool(getattr(near.get("stop_state"), "terminal", False)),
+                "protect": near.get("protect") is not None},
+            "frame": {"correction_version": None if obstacle is None else obstacle.get("version"), "hold": hold_},
+            "command": {"applied_speed_mps": None if applied_ is None else float(applied_[0]),
+                        "steering_rad": None if applied_ is None else [float(v) for v in applied_[1]]},
+            "blocked": {"cap": None if obstacle is None or obstacle.get("permission_cap") is None
+                        else float(obstacle["permission_cap"][1])},
+        }
+
     def release_gate(self, t: float, rear) -> SimpleNamespace:
         """At each control tick's start: a pending SLAM release waits for the truck to stand (10 s at most), then
         releases and re-reads the control pose; SLAM warming up holds the follower. Returns ``releasing``,

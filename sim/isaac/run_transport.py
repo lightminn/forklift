@@ -4507,6 +4507,9 @@ def drive(S, isaac) -> None:
     # The schedule of a --mission-commands run (plan E2); None without one, and then nothing below applies a command.
     mission_schedule = list(args.mission_schedule) if getattr(args, "mission_schedule", None) is not None else None
     mission_stop_kinds = list(getattr(args, "mission_stop_kinds", None) or [])
+    # M-a3 (plan E8): the safety state for the arbiter, one JSON line per control tick, written through an open file
+    # (not the observed Path writers -- no new recorded effect) and only by a run with a schedule.
+    safety_file = (Path(args.output) / "mission_safety.jsonl").open("w") if mission_schedule is not None else None
 
     def stop_kind_at(time_s: float) -> str:
         """M-a3 (plan E7): the stop kind the schedule gives at loop time ``time_s`` (the arbiter's, later)."""
@@ -5814,6 +5817,8 @@ def drive(S, isaac) -> None:
                     joint_positions=np.array([ms.lift_command]), joint_indices=lift_index
                 )
             )
+            if safety_file is not None:
+                safety_file.write(json.dumps(core.safety_state(t)) + "\n")  # M-a3 (plan E8): every control tick
             if cancel_stop_:
                 break  # M-a3 (plan E6): cancelled standing, its last stop output applied
             if "chase" in extra_cameras and step % fps_divisor == 0:
@@ -6146,6 +6151,10 @@ def drive(S, isaac) -> None:
             if mission_schedule is not None:
                 state["mission_commands"] = {"log": core.commands.log, "pauses": core.commands.pauses,
                                              "status": core.commands.status, "generation": core.commands.mission_gen}
+            if safety_file is not None:
+                # The last line carries the lifecycle's end (done, failed, cancelled).
+                safety_file.write(json.dumps(core.safety_state(book_clock["t"])) + "\n")
+                safety_file.close()
             if early_ports:  # format 2: closed last, so the summaries above read the services inside the exit tick
                 try:
                     locals_ = locals()
