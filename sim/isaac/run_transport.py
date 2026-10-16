@@ -670,7 +670,7 @@ def arguments() -> argparse.Namespace:
                         help="M-c tests only: a STOP arrives at a physics step inside the first capture (the path a "
                         "console STOP takes, at a moment a client cannot aim for)")
     parser.add_argument("--live-test-marker", action="store_true",
-                        help="M-c tests only (plan C5): the lift follows a 2 s sine wave so the carriage camera's "
+                        help="M-c tests only (plan C5): the lift follows a non-periodic wave so the carriage camera's "
                         "horizon tells the sim time a frame's pixels were drawn at; the lift height is logged every "
                         "physics step -- for a run without a mission")
     parser.add_argument("--live-test-camera-freeze", default=None,
@@ -5228,7 +5228,9 @@ def drive(S, isaac) -> None:
                 # added mid-run did not show in the frames (2026-10-17). For a run that stays
                 # PAUSED: the wave overrides the mission's lift target and the gate's latch at every physics step.
                 def live_marker_(sim_s: float) -> None:
-                    target_ = 0.14 + 0.12 * math.sin(2 * math.pi * sim_s / 2.0)  # within the joint's 0-0.28 m, 1 m/s
+                    # Two sines of 2.0 and 3.1 s: no shift under 62 s maps the wave onto itself, so a lag cannot be
+                    # read as a period off (Codex M-c round 16 P2). Within the joint's 0-0.28 m and 1 m/s.
+                    target_ = 0.14 + 0.06 * (math.sin(2 * math.pi * sim_s / 2.0) + math.sin(2 * math.pi * sim_s / 3.1))
                     robot.apply_action(isaac.action(joint_positions=np.array([target_]), joint_indices=lift_index))
 
             def live_step_world(render: bool) -> None:
@@ -5249,7 +5251,8 @@ def drive(S, isaac) -> None:
                                 odom_mono=made_, rendered=camera_, render_sim_time_of=lambda rt: rt - initial_time)
                 if live_marker_ is not None:
                     live.log({"lift_sim_t": float(world.current_time - initial_time),
-                              "lift_m": float(robot.get_joint_positions()[lift_index[0]])})
+                              "lift_m": float(robot.get_joint_positions()[lift_index[0]]),
+                              "step_start_mono": live.step_start[-1][1]})  # sim -> wall for the lag (round 16 P1)
 
             def live_permit(curvatures, direction, check):
                 # The arbiter's own permission on the layer's latest grid, in the sim's time (plan C2: the world and
