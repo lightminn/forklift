@@ -2073,7 +2073,7 @@
     "failing_tests": [
      "tests/unit/mission/test_core_command.py::test_an_observe_leg_standing_off_its_end_within_tolerance_arrives_after_a_second"
     ],
-    "check_line": "tests/unit/mission/test_core_command.py:139"
+    "check_line": "tests/unit/mission/test_core_command.py:141"
    }
   },
   {
@@ -3002,7 +3002,7 @@
     "failing_tests": [
      "tests/unit/mission/test_core_command.py::test_a_backoffs_end_stands_releases_once_and_forces_a_replan_each_second"
     ],
-    "check_line": "tests/unit/mission/test_core_command.py:169"
+    "check_line": "tests/unit/mission/test_core_command.py:171"
    }
   },
   {
@@ -6908,7 +6908,7 @@
     "failing_tests": [
      "tests/unit/mission/test_core_observe_succeeded.py::test_a_re_observation_stand_records_where_it_stood_and_its_planned_target"
     ],
-    "check_line": "tests/unit/mission/test_core_observe_succeeded.py:167"
+    "check_line": "tests/unit/mission/test_core_observe_succeeded.py:169"
    }
   },
   {
