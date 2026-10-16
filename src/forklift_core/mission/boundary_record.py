@@ -761,7 +761,7 @@ class DictWatch:
             before, now = marks[name], self._snapshot(d, name)
             diff = {}
             for k in set(before) | set(now):
-                if before.get(k) == now.get(k) and (name, k) not in force:
+                if _same_snapshot(before.get(k), now.get(k)) and (name, k) not in force:
                     continue
                 if k not in d:
                     diff[k] = {"$deleted": True}
@@ -778,6 +778,14 @@ class DictWatch:
             if diff:
                 out[name] = diff
         return out
+
+
+def _same_snapshot(a, b) -> bool:
+    """Two snapshot entries alike: an append-only list by its length and object, never by its items (comparing a
+    long log item by item every physics step made recording quadratic in the run length)."""
+    if isinstance(a, tuple) and isinstance(b, tuple) and a and b and a[0] == b[0] == "$len":
+        return a[1] == b[1] and len(a) == len(b) and (len(a) == 2 or a[2] is b[2])
+    return a == b
 
 
 @dataclasses.dataclass(frozen=True)
