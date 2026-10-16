@@ -4557,7 +4557,7 @@ def drive(S, isaac) -> None:
         float(scenario.pickup.x_m), float(scenario.pickup.y_m), float(scenario.pickup.yaw_rad)))
     core.targets.add_destination("D-1", MissionTargetPose(
         float(scenario.destination.x_m), float(scenario.destination.y_m), float(scenario.destination.yaw_rad)))
-    if not args.live:  # M-c: live, the operator submits (the targets list is offered)
+    if not getattr(args, "live", False):  # M-c: live, the operator submits (a record from before M-c has no flag)
         core.commands.queue(MissionSubmit("P-1", "D-1", core.targets.revision))
         core.commands.apply(0.0)
         core.commands.start()
@@ -4994,7 +4994,7 @@ def drive(S, isaac) -> None:
                 slam["odom_speed"] = float(np.mean(rates)) * odometry_wheel_radius(args)
             if slam is not None:
                 slam["odom_yaw_rate"] = (slam["odom_rear"][2] - previous_yaw) * 120.0
-                if args.live:
+                if getattr(args, "live", False):
                     # M-c (plan C2): the vehicle time the odometry sample was made, before the SLAM exchange below
                     # waits (live only: a batch run's clock reads are recorded and replayed).
                     slam["odom_mono"] = time.monotonic()
@@ -5128,7 +5128,7 @@ def drive(S, isaac) -> None:
                 obstacle_scan(stamp_now, now_base, now_q, shared_raw)
 
         live = None
-        if args.live:
+        if getattr(args, "live", False):
             # M-c (docs/plans/2026-10-17-m-c-isaac-live-runner.md): the arbiter, its console server and the pacing.
             from forklift_core.control.path_tracking import ackermann_command as live_ackermann
             from forklift_core.safety.arbiter import ArbiterConfig as LiveArbiterConfig
@@ -5221,7 +5221,7 @@ def drive(S, isaac) -> None:
                 else:
                     made_ = live.clock()
                     rates_ = robot.get_joint_velocities()[wheels]
-                    speed_, yaw_rate_ = float(np.mean(rates_[2:4])) * odometry_wheel_radius(args), 0.0
+                    speed_, yaw_rate_ = float(np.mean(rates_[2:4])) * args.drive_geometry.wheel_radius_m, 0.0
                 live.after_step(float(world.current_time - initial_time), odom_speed=speed_, yaw_rate=yaw_rate_,
                                 odom_mono=made_, rendered=camera_, render_sim_time_of=lambda rt: rt - initial_time)
 
