@@ -122,6 +122,9 @@ PAUSE_MOVED_M = 0.01
 PAUSE_MOVED_RAD = 0.01
 # M-a3 (E3): a stop not seen standing this long after it began is reported as not_stopped.
 NOT_STOPPED_S = 10.0
+# R7: a lift or lower resumes only with the lift near the target held since the stop. Provisional: a loaded lift
+# sags about 2.8 mm below its target in Isaac (ma3_p_tr); real sensor noise is set at the vehicle readiness gate.
+LIFT_RESUME_TOL_M = 0.01
 
 
 class MissionCore:
@@ -2676,6 +2679,8 @@ class MissionCore:
             # M-b B5: a stop inside the near-field contract (an arbiter STOP; a pause is refused there) is not resumed
             # -- pausing near tracking (R4-R6) is not built; what follows is a recovery action.
             return refuse("no_resume:near_tracking")
+        if ms.phase in ("lift", "lower") and abs(float(self.hooks.lift_position()) - float(ms.lift_command)) > LIFT_RESUME_TOL_M:
+            return refuse("state_verified:lift_mismatch")  # R7: the lift is not where the stop held it
         holding_now = slam is not None and slam["tracker"].mode == "holding"
         if cmds.pause_holding and not cmds.pause_release_pending:
             if not holding_now:

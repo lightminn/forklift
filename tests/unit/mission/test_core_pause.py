@@ -548,3 +548,19 @@ def test_a_held_mission_does_not_report_a_failed_stop_while_the_operator_drives(
     core.commands.hold_on(10.0)
     core.paused_tick(25.0, REAR, 0.0, False)
     assert core.commands.not_stopped is False
+
+
+@pytest.mark.parametrize("measured, outcome", [(0.0975, "running"), (0.02, "paused")])
+def test_a_lift_resumes_only_near_the_target_held_since_the_stop(measured, outcome):
+    """Codex 2b9aab7 review P2 (R7): a normal sag passes, a lift that fell is a mismatch."""
+    lift = {"z": 0.10}
+    core, _, _ = make("lift", obstacle=False)
+    core.hooks.lift_position = lambda: lift["z"]
+    pause(core, 10.0)
+    core.paused_tick(10.0, REAR, 0.0, True)
+    lift["z"] = measured
+    resume(core, 11.0)
+    core.paused_tick(11.0, REAR, 0.0, True)
+    assert core.commands.status == outcome
+    if outcome == "paused":
+        assert core.commands.log[-1]["reason"] == "state_verified:lift_mismatch"
