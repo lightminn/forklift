@@ -675,18 +675,6 @@ def test_same_path_is_the_remaining_part_again():
     assert same_path(shifted, coarse, remaining_m=2.475)
 
 
-def test_same_path_waits_do_not_count_as_retries():
-    source = CORE.read_text()  # the obstacle replan moved to the mission core (M-a1 slice 3c)
-    assert 'and not r.get("same_path") and not r.get("failed") and not r.get("escape")]' in source
-    assert (
-        'if r["phase"] == ms.phase and not r.get("same_path")\n'
-        '                              and not r.get("failed") and not r.get("escape"))'
-    ) in source
-    i = source.index("if same_path(replanned, paths[ms.phase]")
-    wait = source[i : source.index("else:", i)]
-    assert "RearAxlePathTracker" not in wait and '"progress"' not in wait
-
-
 def test_wheel_target_brakes_at_the_stopping_model_deceleration():
     runner = SCRIPT.read_text()
     source = CORE.read_text()  # the command assembly moved to the mission core (M-a1 slice 5)
@@ -709,28 +697,6 @@ def test_wheel_target_brakes_at_the_stopping_model_deceleration():
     assert j < source.index('if obstacle["path_blocked_ticks"] >= 36 and allowed > 0.0:')
     for text in (runner, source):
         assert 'obstacle.get("act")' not in text and 'obstacle["act"]' not in text
-
-
-def test_the_retry_limit_is_checked_after_the_same_path_test():
-    source = CORE.read_text()  # the obstacle replan moved to the mission core (M-a1 slice 3c)
-    same = source.index("if same_path(replanned, paths[ms.phase]")
-    assert source.index('f"obstacle_blocked in {ms.phase}') > same
-
-
-def test_loose_arrival_only_at_observation_waypoints():
-    source = CORE.read_text()  # the loose observe arrival moved to the mission core (M-a1 slice 4a-iv)
-    i = source.index("# The tracker stops at a path end it missed sideways")
-    head = source[source.rindex("if (", 0, i) : i]
-    assert 'phase == "observe"' in head and "OBSERVE_ARRIVAL_M" in head
-    assert 'slam["stop_now"]' in head  # standing, not just a zero command (Codex checkpoint 6 P2)
-
-
-def test_a_failed_live_plan_stands_and_retries():
-    source = CORE.read_text()  # the live travel leg moved to the mission core (M-a1 slice 3a)
-    i = source.index("# Standing, the grid keeps updating")
-    block = source[i : source.index("waiting to retry the live plan: stand", i)]
-    assert "tries < 5" in block and 'obstacle["live_retry_after_s"] = t + 1.0' in block
-    assert 'and t >= obstacle.get("live_retry_after_s", 0.0)' in source
 
 
 def test_a_failed_blocked_replan_stands_and_retries():
@@ -877,16 +843,6 @@ def test_slam_ref_lives_only_inside_grid_kwargs():
     assert bound.count("slam") >= 2  # slam = None, then the link
 
 
-def test_the_pickup_retraction_covers_the_estimate_and_the_range_noise():
-    # Codex re-review 4 P2: a pallet endpoint at -0.059 m noise outlived a
-    # 0.05 m retraction and blocked the loaded start. The transition moved to the mission core (M-a1 slice 1).
-    source = (SCRIPT.parents[2] / "src/forklift_core/mission/core.py").read_text()
-    i = source.index("retract_endpoints(est_.x_m")
-    block = source[i - 900 : i + 200]
-    assert 'grow_ = 0.05 + obstacle["layer"].noise_cut_m' in block
-    assert "est_.yaw_rad, grow_)" in block
-
-
 def test_plans_project_with_the_grids_correction_and_a_release_passes_its_own():
     # l5_exp_A/B (2026-10-06): the tracker's applied correction moves between
     # scans; planning on it shifted the grid from the permission's. A release
@@ -902,15 +858,6 @@ def test_plans_project_with_the_grids_correction_and_a_release_passes_its_own():
     rel_src = ast.get_source_segment(core, rel)
     assert rel_src.count("grid_kwargs(None, own=after, applied=released_)") == 4
     assert "grid_kwargs(None)" not in rel_src
-
-
-def test_replans_record_their_path_before_the_mission_plan_exists():
-    # l6_spec_mission seed 1: an observe replan under SLAM ran before the
-    # perception branch created state["paths"] -> KeyError.
-    source = SCRIPT.read_text()
-    assert 'state["paths"]["observe"] = path_record(replanned)' not in source
-    assert 'state["paths"][phase] = path_record(replanned)' not in source
-    assert 'state.setdefault("paths", {})["observe"] = path_record(replanned)' in CORE.read_text()  # (M-a1 slice 4a-iii)
 
 
 def test_every_path_replacement_restarts_the_no_progress_baseline():
@@ -939,18 +886,6 @@ def test_every_path_replacement_restarts_the_no_progress_baseline():
     assert 'obstacle.setdefault("progress", {}).clear()' in replan[replan.index("    def blocked_replan("):]
     assert source.count('obstacle.setdefault("progress", {}).clear()') + replan.count(
         'obstacle.setdefault("progress", {}).clear()') == 6
-
-
-def test_d7c_docking_branches_are_inert_without_the_flag():
-    # Plan D7c: flag-off runs drive and record as before.
-    source = SCRIPT.read_text()
-    core = CORE.read_text()  # the D7c docking stop moved to the mission core (M-a1 slice 4a-ii)
-    assert 'd7_docking_ = slam["docking"] if (options.d7_docking and slam is not None) else {}' in core
-    # (the delivery docking is a MissionCore method since M-a1 slice 6b)
-    assert "        if options.d7_docking and result.accepted:\n" in core  # the early goal commit
-    assert "        if path is None and options.d7_docking:\n" in core  # (b) instead of docking_unaligned
-    # Without the flag the stall and cusp branches are the old ones (d7_owned is False).
-    assert "d7_owned = ms.phase == \"transport\" and bool(" in core
 
 
 def test_d7c_reapproach_is_under_the_permission_and_kept_by_obstacle_replans():

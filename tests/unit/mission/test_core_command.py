@@ -127,6 +127,8 @@ def test_the_near_field_stop_decides_before_this_ticks_arrival(answer, status, s
 def test_a_hold_defers_an_arrival_and_without_a_near_tracker_nothing_is_asked():
     w = World("approach", near={"tracker": object()}, near_answer=(True, False, False))
     assert w.tick(Tracking(status="arrived")).tracking.status == "tracking"
+    (_, args, _), = [c for c in w.calls if c[0] == "near_tick"]
+    assert args[-1] is True  # the near tick is told this tick's arrival
     w = World("approach", near={"tracker": None})
     w.tick()
     assert "near_tick" not in [c[0] for c in w.calls]

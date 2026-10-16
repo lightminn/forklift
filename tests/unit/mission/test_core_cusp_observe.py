@@ -73,6 +73,10 @@ class World:
                  velocity=(0.0, 0.0), yaw_rate=0.0):
         self.calls = []
         plans_ = list(plans)
+
+        def next_plan():
+            assert plans_, "an unexpected planning call"  # the fake port expects its calls
+            return plans_.pop(0)
         clock = iter(range(1000, 2000))
         self.runner_rear = REAR
 
@@ -97,8 +101,8 @@ class World:
             set_rear=lambda v: setattr(self, "runner_rear", v), arm_docking=log("arm_docking"),
             grid_world=lambda sc: ("world", sc),
             grid_kwargs=lambda *a: self.calls.append(("grid_kwargs", a, {"own": tuple(self.runner_rear)})) or {},
-            plan_transport_leg=lambda *a, **k: self.calls.append(("plan_transport_leg", a, k)) or plans_.pop(0),
-            plan_observation_leg=lambda *a, **k: self.calls.append(("plan_observation_leg", a, k)) or plans_.pop(0),
+            plan_transport_leg=lambda *a, **k: self.calls.append(("plan_transport_leg", a, k)) or next_plan(),
+            plan_observation_leg=lambda *a, **k: self.calls.append(("plan_observation_leg", a, k)) or next_plan(),
             realign_active=lambda: realign, realign_install=log("realign_install"),
             cusp_holds=lambda: self.holds,
             cusp_monitor=lambda: SimpleNamespace(holds_observe=lambda: holds_observe),

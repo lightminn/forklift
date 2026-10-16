@@ -331,9 +331,10 @@ def test_the_near_capture_redraw_checks_the_correction_points_on_the_trajectorie
     nt.correction_points_check = lambda trajs, start, fd: checked.append(trajs) or ([{"m": 1.0}], len(trajs) == 2)
     adapter = SimpleNamespace(estimate_pallet_center_m=lambda obs, depth: (1.0, 0.0),
                               estimate_world_pallet_site=lambda xy, yaw, base, base_yaw: Pose2D(5.0, 0.0, 0.0))
-    asked = []
+    asked, grids = [], []
     hooks = SimpleNamespace(
-        grid_world=lambda sc: ("world", sc), correction_grid=lambda first, target, rear: {"occupancy": "GRID"},
+        grid_world=lambda sc: ("world", sc),
+        correction_grid=lambda first, target, rear: grids.append((first, target, rear)) or {"occupancy": "GRID"},
         tracking_frame=lambda: SimpleNamespace(fork_tip_x_m=0.9),
         redraw_docking_traced=lambda *a, **k: asked.append((a, k)) or core.test_response,
     )
@@ -364,6 +365,8 @@ def test_the_near_capture_redraw_checks_the_correction_points_on_the_trajectorie
         assert args[0] == ("world", "SC") and kwargs["dry_configs"] == (cfg_a, cfg_d)
         assert kwargs["start_rear"] == (4.0, 0.0, 0.0) and kwargs["occupancy"] == "GRID"
         assert entry["fork_tip_x_m"] == 0.9 and entry["dry_run_cruise_mps"] == [0.2, 0.3]
+        # The grid clears this capture's own band only: the first target is the target being drawn.
+        assert grids[0][0] is grids[0][1] and grids[0][2] == (4.0, 0.0, 0.0)
         core.test_response = ({"approach": leg()}, {"refused": None}, trajs[:1])  # one rollout: outside the box
         plans, entry = core.near_capture_redraw((4.0, 0.0, 0.0), (3.9, 0.0, 0.0), obs, 3, cfg_a, cfg_d, 14.0)
         assert plans is None and entry["record"]["refused"] == "correction_point" and entry["accepted"] is False
@@ -543,3 +546,59 @@ def test_a_correction_before_the_last_point_is_not_screened_by_the_protection_pr
     tick(core, 10.0)
     assert "prediction" not in [c[0] for c in calls]
     assert near["corrections"][-1]["accepted"] is True
+
+
+def test_a_terminal_hold_restarts_when_the_truck_moves_before_it_ends():
+    core, near, calls = make(Geometry(face_m=0.8), standing=True)
+    near["mismatch"] = True
+    tick(core, 10.0)
+    assert near["terminal_standing_since"] == 10.0
+    core.slam["stop_now"] = False  # not standing: no end this tick, the hold starts over
+    tick(core, 10.2)
+    assert "terminal_standing_since" not in near
+    core.slam["stop_now"] = True
+    tick(core, 10.0 + NT.TERMINAL_HOLD_S)
+    assert near["terminal_standing_since"] == 10.0 + NT.TERMINAL_HOLD_S and "retry" not in [c[0] for c in calls]
+
+
+def test_a_latched_terminal_stop_decides_no_correction_while_it_stands():
+    core, near, calls = make(Geometry(face_m=0.95), standing=True, correction=NT.CorrectionState(0, 1.0, 9.0, 9.0),
+                             stop_state=NT.StopState("mismatch", True, 9.5, False))
+    near["corrections"].append({"point_m": 1.0, "standing_s": [9.0], "moved_s": [], "accepted": None})
+    near["tracker"].latest.stamp_s = 9.95  # an observation that would decide the open point
+    tick(core, 10.0)
+    assert "near_redraw" not in [c[0] for c in calls] and "install" not in [c[0] for c in calls]
+    assert near["corrections"][-1]["accepted"] is None and near["correction"] == NT.CorrectionState(0, 1.0, 9.0, 9.0)
+    assert near["stop_state"].reason == "mismatch"
+
+
+def test_the_held_steering_command_bounds_the_wheel_curvature():
+    core, near, _ = make(Geometry(face_m=2.0))
+    core.hooks.steering_command = lambda: np.array([0.3, 0.3])  # the measured steering stays at zero
+    tick(core, 10.0)
+    t_ = np.tan(0.3)
+    assert near["ticks"][-1]["kappa_b"] == pytest.approx(max(t_ / (0.8 + t_ * 0.25), t_ / (0.8 - t_ * 0.25)))
+
+
+def test_the_frame_drop_does_not_latch_before_its_distance():
+    core, near, _ = make(Geometry(face_m=1.2), drop_from=1.1)
+    tick(core, 10.0)
+    assert near.get("drop_latch") is None
+    core.options.near_tracking = Geometry(face_m=1.1).module()
+    tick(core, 10.1)
+    assert near["drop_latch"]["face_distance_m"] == 1.1
+
+
+def test_each_tick_row_carries_the_path_revision_its_follower_ran_on():
+    core, near, calls = make(Geometry(face_m=0.95), standing=True, correction=NT.CorrectionState(0, 1.0, 9.0, 9.0))
+    near["corrections"].append({"point_m": 1.0, "standing_s": [9.0], "moved_s": [], "accepted": None})
+    near["path_revision"] = 2
+
+    def install(now, plans, target, point, rear):
+        near["path_revision"] = 3  # this tick's install comes after the follower ran on revision 2
+        return {"revision": 3}
+
+    core.near_install = install
+    near["tracker"].latest.stamp_s = 9.95
+    tick(core, 10.0)
+    assert near["corrections"][-1]["revision"] == 3 and near["ticks"][-1]["path_revision"] == 2

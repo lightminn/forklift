@@ -139,3 +139,10 @@ def test_a_dwell_brakes_its_wheels_on_the_held_steerings_curvature():
     assert still_rolling == pytest.approx(0.4 - 2.0 * 0.01)  # braking on the slew, not a step
     expected = ackermann_command(still_rolling, 0.3, GEOMETRY)  # kappa, not the tracker's curvature (0.0)
     np.testing.assert_allclose(out.drive.wheel_rates_rad_s, expected.wheel_rates_rad_s)
+
+
+def test_the_applied_command_recorded_is_the_wheel_rate_limited_one():
+    target = ackermann_command(6.0, 0.2, GEOMETRY)
+    core, state, _ = make(act=False, steering=tuple(target.steering_rad))  # at the target: no creep
+    out, _ = assemble(core, speed=6.0)  # past the 50 rad/s wheel rate at 0.1 m: Ackermann limits it
+    assert out.drive.speed_mps < 6.0 and state["applied_command"][0] == pytest.approx(out.drive.speed_mps)

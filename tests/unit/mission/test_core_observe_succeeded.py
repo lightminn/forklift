@@ -144,6 +144,8 @@ def test_the_first_far_observation_under_slam_opens_the_near_capture():
     w = World(slam=True)
     out, _ = w.succeed()
     assert out.near_leg is not None and out.near_leg.length_m == 0.6
+    # Where the approach's final alignment straight begins (its length, 1.0 m here).
+    assert [c for c in w.calls if c[0] == "final_straight_prefix"] == [("final_straight_prefix", (1.0,), {})]
     assert w.state["near_capture"] == {"status": "pending", "far_attempt": 2,
                                        "far_estimate_m": {"x_m": 3.5, "y_m": 2.0, "yaw_rad": 0.1},
                                        "far_error": {"position_m": 0.01}}

@@ -397,3 +397,22 @@ def test_with_grid_planning_the_delivery_sweep_is_checked_on_the_docking_grid(tm
     w.core.dock_at_delivery_straight(12.0)
     assert built == [("DOCKING_GRID", "FP")] and ("grid_kwargs", ("docking",)) in [c[:2] for c in w.calls]
     assert w.slam["docking"]["dry_run"]["swept_clear"] is False and w.names()[-1] == "retry"
+
+
+def test_without_d7_an_accepted_match_moves_the_withdraw_once_the_straight_is_installed(tmp_path, monkeypatch):
+    w = docking_world(tmp_path, monkeypatch, d7=False)
+    withdraw_before = w.core.paths["withdraw"].poses.copy()
+    w.core.dock_at_delivery_straight(12.0)
+    from forklift_core.localization.slam_pose import compose, invert
+
+    step = compose((9.05, 0.02, 0.01), invert((9.0, 0.0, 0.0)))  # not committed before the straight: moved after it
+    np.testing.assert_allclose(w.core.paths["withdraw"].poses, [compose(step, tuple(p)) for p in withdraw_before],
+                               atol=1e-12)
+    assert "goal_frame" not in w.slam["docking"]
+
+
+def test_every_match_round_keeps_its_own_starts_and_their_details(tmp_path, monkeypatch):
+    w = docking_world(tmp_path, monkeypatch)
+    w.core.dock_at_delivery_straight(12.0)
+    (round_,) = w.slam["docking"]["rounds"]
+    assert round_["starts"] == [[True, "ok", [0.0, 0.0, 0.0]]] and round_["start_details"] == [{"iterations": 3}]

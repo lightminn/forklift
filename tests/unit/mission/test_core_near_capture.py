@@ -149,8 +149,13 @@ def test_no_straight_in_the_box_refuses_and_no_prefix_refuses_first():
 def test_a_refused_straight_is_redrawn_under_s4c3_and_its_install_recorded():
     plans = {"approach": leg(1.0, 2.5), "insert": leg(3.5, 0.3), "extract": leg(3.8, -0.3)}
     w = World(near={"tracker": None}, dry=Dry(status="failed"), redraw="on", redraw_plans=plans)
-    w.run()
-    (_, args, _), = [c for c in w.calls if c[0] == "near_capture_redraw"]
+    try:
+        w.run()
+    except RuntimeError as exc:
+        pytest.fail(f"a refusal the re-draw accepts ended the run: {exc}")
+    redraws = [c for c in w.calls if c[0] == "near_capture_redraw"]
+    assert len(redraws) == 1  # the refused capture is re-drawn before anything ends or realigns
+    (_, args, _), = redraws
     assert args[0] is REAR and args[1:4] == ((1.5, 2.0, 0.0), "OBS", 3) and args[6] == 30.0
     assert args[4].cruise_speed_mps == 0.4 and args[5] is args[4]  # no slow cruise: driven = acceptance
     assert w.core.paths["approach"] is plans["approach"] and w.core.paths["insert"] is plans["insert"]

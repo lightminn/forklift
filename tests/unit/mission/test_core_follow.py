@@ -149,3 +149,14 @@ def test_the_cusp_rule_may_hold_the_leg():
     core, *_ = make(cusp=lambda raw, tracking: (replace(tracking, speed_mps=0.0), True))
     out = core.follow(5.0, REAR, 0.3, 1 / 120)
     assert out.cusp_hold is True and out.tracking.speed_mps == 0.0
+
+
+def test_a_re_observation_stand_takes_no_slam_hold():
+    holds = []
+    slam = {"tracker": SimpleNamespace(mode="tracking", hold=lambda **k: holds.append(k)), "holds": [], "stop_now": True}
+    core, *_ = make("observe", slam=slam, near={"retry_stand": True}, remaining=0.1)
+    core.follow(5.0, REAR, 0.0, 1 / 120)
+    assert holds == [] and slam["holds"] == []  # standing to re-observe: the capture follows at once
+    core, *_ = make("observe", slam=slam, near={"retry_stand": False}, remaining=0.1)
+    core.follow(5.0, REAR, 0.0, 1 / 120)
+    assert holds == [{"odom_from_base": "ODOM"}]  # the same leg without the stand holds

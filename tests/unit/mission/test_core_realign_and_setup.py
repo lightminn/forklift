@@ -235,3 +235,13 @@ def test_a_near_tracker_without_a_capture_a_hold_or_with_unmatched_followers_is_
     assert [c[0] for c in rec.calls] == ["config", "check"]  # the service read, then the refusal
     assert core.state["near_tracking"]["tracker_config_problems"] == ["observe: yaw_tolerance_rad"]
     assert "injection_closed" not in near and "tracker" not in near
+
+
+def test_a_new_tracker_starts_with_clean_latches_and_keeps_the_earlier_episodes_stop_records(monkeypatch):
+    core, near, _ = near_build()
+    monkeypatch.setattr("forklift_core.mission.core.asdict", lambda v: {"obs": 1})
+    earlier = {"start_s": 3.0, "episode": 1, "reason": "mismatch"}
+    near.update(mismatch=True, unbounded=True, stop_events=[earlier])  # left by the episode a retry closed
+    core.build_near_tracker(11.0)
+    assert near["mismatch"] is False and near["unbounded"] is False
+    assert near["stop_events"] == [earlier]
