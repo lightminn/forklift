@@ -82,7 +82,8 @@ def asserted_constants(source: str, test: str) -> set[str]:
 class Source:
     """The core's text with byte offsets (ast columns are UTF-8 byte offsets)."""
 
-    def __init__(self, text: str):
+    def __init__(self, text: str, operators: bool = False):
+        self.operators = operators  # also boundaries, narrowing and order (Codex M-a2 review round 3)
         self.text, self.data = text, text.encode()
         self.line_starts = [0]
         for i, b in enumerate(self.data):
@@ -124,7 +125,89 @@ class Source:
             out.append(("test_false", ast.unparse(test[1])[:120], self.replace(test[0], "False")))
         if stmt is not None:
             out.append(("pass", ast.unparse(stmt[1]).split("\n")[0][:120], self.replace(stmt[0], "pass")))
+        if self.operators:
+            out += self.boundary_mutations(offset) + self.order_mutations(offset)
         return out
+
+    BOUNDARY = {ast.LtE: "<", ast.Lt: "<=", ast.GtE: ">", ast.Gt: ">=", ast.Eq: "!=", ast.NotEq: "=="}
+
+    def boundary_mutations(self, offset: int) -> list[tuple[str, str, str]]:
+        """The innermost comparison holding ``offset``: each operator moved across its boundary, and a membership
+        in a literal tuple narrowed to each of its members (a condition strengthened)."""
+        best = None
+        for node in ast.walk(self.tree):
+            if isinstance(node, ast.Compare):
+                a, b = self.span(node)
+                if a <= offset < b and (best is None or b - a < best[0][1] - best[0][0]):
+                    best = ((a, b), node)
+        if best is None or len(best[1].ops) != 1:
+            return []
+        span_, cmp_ = best
+        op, right = cmp_.ops[0], cmp_.comparators[0]
+        left = ast.unparse(cmp_.left)
+        out = []
+        if type(op) in self.BOUNDARY:
+            new = f"{left} {self.BOUNDARY[type(op)]} {ast.unparse(right)}"
+            out.append(("boundary", ast.unparse(cmp_)[:120], self.replace(span_, new)))
+        if isinstance(op, ast.In) and isinstance(right, (ast.Tuple, ast.List, ast.Set)) and len(right.elts) > 1:
+            for elt in right.elts:
+                out.append(("narrow", f"{ast.unparse(cmp_)[:100]} -> {ast.unparse(elt)}",
+                            self.replace(span_, f"{left} == {ast.unparse(elt)}")))
+        return out
+
+    def order_mutations(self, offset: int) -> list[tuple[str, str, str]]:
+        """The innermost simple statement holding ``offset`` swapped with each simple neighbour in its block."""
+        out = []
+        for node in ast.walk(self.tree):
+            for name in ("body", "orelse", "finalbody"):
+                block = getattr(node, name, None)
+                if not isinstance(block, list):
+                    continue
+                for i, stmt in enumerate(block):
+                    if isinstance(stmt, COMPOUND) or not isinstance(stmt, ast.stmt):
+                        continue
+                    a, b = self.span(stmt)
+                    if not a <= offset < b:
+                        continue
+                    for j in (i - 1, i + 1):
+                        if 0 <= j < len(block) and not isinstance(block[j], COMPOUND) \
+                                and not independent(stmt, block[j]):
+                            (a1, b1), (a2, b2) = sorted([self.span(stmt), self.span(block[j])])
+                            d = self.data
+                            text = (d[:a1] + d[a2:b2] + d[b1:a2] + d[a1:b1] + d[b2:]).decode()
+                            try:
+                                ast.parse(text)
+                            except SyntaxError:
+                                continue
+                            out.append(("swap", f"{ast.unparse(stmt).split(chr(10))[0][:60]} <-> "
+                                                f"{ast.unparse(block[j]).split(chr(10))[0][:50]}", text))
+        return out
+
+
+def _written(stmt) -> set:
+    """Names and subscript/attribute roots a statement assigns."""
+    out = set()
+    targets = stmt.targets if isinstance(stmt, ast.Assign) else [getattr(stmt, "target", None)]
+    for t in targets:
+        if t is None:
+            continue
+        node = t
+        while isinstance(node, (ast.Subscript, ast.Attribute)):
+            node = node.value
+        out |= {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+    return out
+
+
+def _read(stmt) -> set:
+    return {n.id for n in ast.walk(stmt) if isinstance(n, ast.Name)}
+
+
+def independent(s1, s2) -> bool:
+    """Two statements whose order cannot matter: no call in either (no port, no side effect, no exception
+    between them that a partial state could show) and neither assigns a name the other reads."""
+    if any(isinstance(n, ast.Call) for st in (s1, s2) for n in ast.walk(st)):
+        return False
+    return not (_written(s1) & _read(s2) or _written(s2) & _read(s1))
 
 
 def places(src: Source, kept: dict, base: str | None = None) -> dict:
@@ -161,15 +244,17 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--out", type=Path, default=Path("ma2_core_sweep.json"))
     parser.add_argument("--tests", default="tests/unit/mission")
+    parser.add_argument("--operators", action="store_true",
+                        help="add comparison boundaries, membership narrowing and adjacent-statement swaps")
     parser.add_argument("--all", action="store_true",
                         help="every frozen test at the frozen base revision, not only the kept (R) ones")
     parser.add_argument("--emit", type=Path, help="a sweep's JSON: write the find/replace and failing tests of its "
                                                   "survivors to --out instead of sweeping")
     args = parser.parse_args(argv)
     if args.emit:
-        return emit_batch(args.emit, args.out, args.tests)
+        return emit_batch(args.emit, args.out, args.tests, args.operators)
     core_text = (ROOT / CORE).read_text()
-    src = Source(core_text)
+    src = Source(core_text, operators=args.operators)
     if args.all:
         found = places(src, all_tests(), json.loads(FROZEN.read_text())["base_revision"])
     else:
@@ -180,14 +265,18 @@ def main(argv=None) -> int:
         copy_tree(tree)
         target = tree / CORE
         assert run(tree, args.tests) == "survived", "the behaviour tests must pass unmutated"
+        seen: dict = {}  # a mutated text already run (two places can make the same one)
         for offset, entry in sorted(found.items()):
             entry["mutations"] = []
             for kind, what, text in src.mutations(offset):
-                target.write_text(text)
-                try:
-                    outcome = run(tree, args.tests)
-                finally:
-                    target.write_text(core_text)
+                if text in seen:
+                    outcome = seen[text]
+                else:
+                    target.write_text(text)
+                    try:
+                        outcome = seen[text] = run(tree, args.tests)
+                    finally:
+                        target.write_text(core_text)
                 entry["mutations"].append({"kind": kind, "what": what, "outcome": outcome})
                 print(f"{entry['line']:5d} {kind:12s} {outcome:9s} {what[:90]}", flush=True)
             results.append(entry)
@@ -223,11 +312,11 @@ def failing_tests(tree: Path, tests: str) -> list[str]:
     return sorted({line.split()[1] for line in proc.stdout.splitlines() if line.startswith("FAILED ")})
 
 
-def emit_batch(sweep_json: Path, out_json: Path, tests: str) -> int:
+def emit_batch(sweep_json: Path, out_json: Path, tests: str, operators: bool = False) -> int:
     """For every mutation a sweep left alive: the find/replace that makes it, and the behaviour tests that now fail
     on it (written as JSON for tools/ma2/batch_09_sweep.py)."""
     core_text = (ROOT / CORE).read_text()
-    src = Source(core_text)
+    src = Source(core_text, operators=operators)
     found = places(src, all_tests(), json.loads(FROZEN.read_text())["base_revision"])
     by_line = {}
     for offset, entry in found.items():

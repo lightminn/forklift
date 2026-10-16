@@ -473,3 +473,13 @@ def test_when_every_remaining_candidate_fails_the_search_ends_with_the_leg_faile
         assert isinstance(exc, RuntimeError), repr(exc)
     assert w.ms.next_candidate_index == 3
     assert [c["candidate_index"] for c in w.state["observation_candidates"]] == [1, 2]
+
+
+def test_the_return_leg_escapes_an_invalid_start_too():
+    """M-a2 (Codex review round 3): both travel legs look for an escape."""
+    escape = SimpleNamespace(direction=-1, length_m=0.2, record=lambda: {"escape": 1})
+    w = World("return_home", plans=[plan("invalid_start")], escape=escape, candidates=[Cand(-1, 0.30, False)],
+              slam={"docking": {}, "tracker": SimpleNamespace(mode="tracking"), "return_scenario": SimpleNamespace(
+                  destination="D2")})
+    w.replan()
+    assert "find_escape" in w.names() and w.obstacle["escapes"] == {"return_home": 1}

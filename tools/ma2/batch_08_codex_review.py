@@ -107,3 +107,31 @@ PROPERTIES += [
          [CR + "test_the_cusp_monitor_sees_a_pending_replan_of_this_leg_only[obstacle_state2-True]"],
          'or bool(obstacle.get("replan_wait", {}).get(ms.phase))', "or False"),
 ]
+
+# Codex implementation review round 3 (b0ea955): a strengthened condition, a boundary value and an order -- kinds
+# the first sweep did not generate (tools/ma2_core_sweep.py --operators adds them).
+REL = M + "test_core_release.py::"
+PROPERTIES += [
+    prop("return-leg-escapes", [PC + "test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::*"],
+         "the return leg looks for an escape too", [BR + "test_the_return_leg_escapes_an_invalid_start_too"],
+         'replanned.status == "invalid_start" and ms.phase in ("transport", "return_home")',
+         'replanned.status == "invalid_start" and ms.phase == "transport"'),
+    prop("small-jump-bound-m", [CLI + "test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::*"],
+         "a 20 mm jump is still small", [REL + "test_a_jump_of_exactly_20_mm_or_0_02_rad_is_still_small[jump0]"],
+         "jump_m <= 0.02 and abs(jump_rad) <= 0.02 and not docked_return",
+         "jump_m < 0.02 and abs(jump_rad) <= 0.02 and not docked_return"),
+    prop("small-jump-bound-rad", [CLI + "test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::*"],
+         "a 0.02 rad jump is still small", [REL + "test_a_jump_of_exactly_20_mm_or_0_02_rad_is_still_small[jump1]"],
+         "jump_m <= 0.02 and abs(jump_rad) <= 0.02 and not docked_return",
+         "jump_m <= 0.02 and abs(jump_rad) < 0.02 and not docked_return"),
+    prop("release-reprojects-before-carrying",
+         [CLI + "test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::*"],
+         "the release re-projects the grid before the estimates ride along",
+         [REL + "test_a_release_whose_reprojection_fails_has_not_carried_the_estimates_yet"],
+         "        reprojected_ = None\n        if obstacle is not None and slam[\"tracker\"].applied is not None:\n",
+         "        reprojected_ = None\n"
+         "        if obstacle is not None and obstacle.get(\"pickup_estimate\") is not None:\n"
+         "            obstacle[\"pickup_estimate\"] = replace(obstacle[\"pickup_estimate\"],"
+         " x_m=obstacle[\"pickup_estimate\"].x_m + frame_change[0])  # carried before the refresh\n"
+         "        if obstacle is not None and slam[\"tracker\"].applied is not None:\n"),
+]

@@ -8998,6 +8998,147 @@
    }
   },
   {
+   "id": "B8:return-leg-escapes",
+   "class": "N",
+   "checks": [
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::1",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::2",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::3",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::4",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::5",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::6",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::7",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::8",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::9",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::10",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::11",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::12",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::13",
+    "tests/unit/test_isaac_transport_planning_config.py::test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan::14"
+   ],
+   "statement": "the return leg looks for an escape too",
+   "tests": [
+    "tests/unit/mission/test_core_blocked_replan.py::test_the_return_leg_escapes_an_invalid_start_too"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "replanned.status == \"invalid_start\" and ms.phase in (\"transport\", \"return_home\")",
+    "replace": "replanned.status == \"invalid_start\" and ms.phase == \"transport\"",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_blocked_replan.py::test_the_return_leg_escapes_an_invalid_start_too"
+    ],
+    "check_line": "E   AssertionError"
+   }
+  },
+  {
+   "id": "B8:small-jump-bound-m",
+   "class": "N",
+   "checks": [
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::1",
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::2",
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::3",
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::4",
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::5",
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::6"
+   ],
+   "statement": "a 20 mm jump is still small",
+   "tests": [
+    "tests/unit/mission/test_core_release.py::test_a_jump_of_exactly_20_mm_or_0_02_rad_is_still_small[jump0]"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "jump_m <= 0.02 and abs(jump_rad) <= 0.02 and not docked_return",
+    "replace": "jump_m < 0.02 and abs(jump_rad) <= 0.02 and not docked_return",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_release.py::test_a_jump_of_exactly_20_mm_or_0_02_rad_is_still_small[jump0]"
+    ],
+    "check_line": "E   Failed:"
+   }
+  },
+  {
+   "id": "B8:small-jump-bound-rad",
+   "class": "N",
+   "checks": [
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::1",
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::2",
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::3",
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::4",
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::5",
+    "tests/integration/test_isaac_transport_cli.py::test_slam_release_replans_both_travel_legs_and_gates_on_a_stop::6"
+   ],
+   "statement": "a 0.02 rad jump is still small",
+   "tests": [
+    "tests/unit/mission/test_core_release.py::test_a_jump_of_exactly_20_mm_or_0_02_rad_is_still_small[jump1]"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "jump_m <= 0.02 and abs(jump_rad) <= 0.02 and not docked_return",
+    "replace": "jump_m <= 0.02 and abs(jump_rad) < 0.02 and not docked_return",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_release.py::test_a_jump_of_exactly_20_mm_or_0_02_rad_is_still_small[jump1]"
+    ],
+    "check_line": "E   Failed:"
+   }
+  },
+  {
+   "id": "B8:release-reprojects-before-carrying",
+   "class": "N",
+   "checks": [
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::1",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::2",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::3",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::4",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::5",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::6",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::7",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::8",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::9",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::10",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::11",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::12",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::13",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::14",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::15",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::16",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::17",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::18",
+    "tests/integration/test_isaac_transport_cli.py::test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_capture::19"
+   ],
+   "statement": "the release re-projects the grid before the estimates ride along",
+   "tests": [
+    "tests/unit/mission/test_core_release.py::test_a_release_whose_reprojection_fails_has_not_carried_the_estimates_yet"
+   ],
+   "mutation": {
+    "file": "src/forklift_core/mission/core.py",
+    "find": "        reprojected_ = None\n        if obstacle is not None and slam[\"tracker\"].applied is not None:\n",
+    "replace": "        reprojected_ = None\n        if obstacle is not None and obstacle.get(\"pickup_estimate\") is not None:\n            obstacle[\"pickup_estimate\"] = replace(obstacle[\"pickup_estimate\"], x_m=obstacle[\"pickup_estimate\"].x_m + frame_change[0])  # carried before the refresh\n        if obstacle is not None and slam[\"tracker\"].applied is not None:\n",
+    "count": 1
+   },
+   "evidence": {
+    "baseline": "passed",
+    "mutated": "failed_on_check",
+    "failing_tests": [
+     "tests/unit/mission/test_core_release.py::test_a_release_whose_reprojection_fails_has_not_carried_the_estimates_yet"
+    ],
+    "check_line": "E   assert "
+   }
+  },
+  {
    "id": "B9:L428-drop_operand",
    "class": "N",
    "checks": [

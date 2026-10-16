@@ -292,3 +292,28 @@ def test_the_return_replan_after_a_release_is_retried_tight_on_the_carried_desti
     plans = [c for c in w.calls if c[0] == "plan_return_leg"]
     assert len(plans) == 2 and plans[1][1][3].clearance_m == 0.0 and w.slam["holds"][-1]["tight_retry"] is True
     assert plans[1][1][0] == ("world", w.slam["return_scenario"]) and plans[1][1][2] == "HOME"
+
+
+@pytest.mark.parametrize("jump", [(0.02, 0.0, 0.0), (0.0, 0.0, 0.02)])
+def test_a_jump_of_exactly_20_mm_or_0_02_rad_is_still_small(jump):
+    """M-a2 (Codex review round 3): the small-jump bound includes its value."""
+    w = World(phase="transport", jump=jump)
+    try:
+        w.core.slam_release(30.0)
+    except Exception as exc:  # the fake world plans nothing: a replan here is the jump judged large
+        pytest.fail(f"a jump on the bound was replanned: {exc!r}")
+    assert w.names() == ["release", "arm_docking"] and w.slam["holds"][-1]["replanned"] is False
+
+
+def test_a_release_whose_reprojection_fails_has_not_carried_the_estimates_yet():
+    """M-a2 (Codex review round 3): the grid is re-projected before the estimates ride along -- a refresh that
+    raises leaves the pickup estimate and the planning target where they were."""
+    w = World(phase="approach")
+
+    def refresh(*a, **k):
+        raise RuntimeError("refresh failed")
+
+    w.obstacle["layer"].refresh = refresh
+    with pytest.raises(RuntimeError, match="refresh failed"):
+        w.core.release_and_stand(12.0, "release_pickup_retry")
+    assert w.obstacle["pickup_estimate"].x_m == 5.0 and w.core.pocket["planning_pickup"].x_m == pytest.approx(5.1)
