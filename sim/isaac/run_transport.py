@@ -664,11 +664,12 @@ def arguments() -> argparse.Namespace:
                         help="M-c: the control lease's timeout -- a tick cannot go out while a synchronous call holds "
                         "the control loop (the first live run lost a 1 s lease to a 1.2 s start-up tick)")
     parser.add_argument("--live-camera-latency-bound-s", type=float, default=None,
-                        help="M-c: camera_latency_bound_s, wall seconds (default 0.11/f: the 2026-10-17 marker run "
-                        "measured 1.022 s at f 0.1 from the pixels' physics step to the frame's arrival)")
-    parser.add_argument("--live-camera-pixel-lag-s", type=float, default=11 / 120,
-                        help="M-c: sim seconds a frame's pixels lag its render metadata time (the 2026-10-17 marker "
-                        "run measured 11 physics steps); a frame older than the bound is registered as such")
+                        help="M-c: camera_latency_bound_s, wall seconds (default 0.21/f: the assumed pixel lag below "
+                        "plus a physics step, at the declared factor)")
+    parser.add_argument("--live-camera-pixel-lag-s", type=float, default=0.2,
+                        help="M-c: sim seconds a frame's pixels are assumed to trail its render metadata time; the "
+                        "arbiter also ages the frame from that step's start (2026-10-17 marker runs: 11 physics "
+                        "steps, about one render of the 10 Hz camera; the default adds a render of margin)")
     parser.add_argument("--live-web-root", type=Path, default=None, help="M-c: console/web to serve")
     parser.add_argument("--live-test-step-delay-ms", type=float, default=0.0,
                         help="M-c tests only: extra wall time per physics step (the slow-pacing test)")
@@ -5226,10 +5227,11 @@ def drive(S, isaac) -> None:
                                          frame_window_s=max(5.0, 2 * 0.50 / args.live_factor),
                                          lease_timeout_s=max(args.live_lease_timeout_s, 0.30 / args.live_factor,
                                                              0.50 / args.live_factor),
-                                         # Measured, not scaled from a real camera: the pixels trail the render
-                                         # metadata by 11 physics steps, so the wall bound goes as 1/f (M-c evidence).
+                                         # The pixels trail the render metadata in sim steps, so the wall bound
+                                         # goes as 1/f (M-c evidence); the per-frame pixel age is checked as well.
                                          camera_latency_bound_s=(args.live_camera_latency_bound_s
-                                                                 or 0.11 / args.live_factor)),
+                                                                 or (args.live_camera_pixel_lag_s + 1 / 120)
+                                                                 / args.live_factor)),
                 camera_pixel_lag_s=args.live_camera_pixel_lag_s,
                 host=args.live_host, web_root=args.live_web_root,
                 test_step_delay_s=args.live_test_step_delay_ms / 1000.0, camera_freeze=freeze_,

@@ -89,7 +89,7 @@ class LiveRuntime:
         self.camera_latency: list[float] = []
         self.camera_pixel_lag_s = camera_pixel_lag_s  # sim s the pixels trail the render metadata (plan C5)
         self.camera_pixel_latency: list[float] = []
-        self.camera_backdated = 0
+        self.camera_pixel_unknown = 0
         self._events_logged = 0
         self._next_status = 0.0
 
@@ -115,7 +115,7 @@ class LiveRuntime:
         self.log({"event": "end", "server_ended": ended, "pacing": self.pacer.report(),
                   "camera_latency_s": _quantiles(self.camera_latency),
                   "camera_pixel_latency_s": _quantiles(self.camera_pixel_latency),
-                  "camera_backdated": self.camera_backdated})
+                  "camera_pixel_unknown": self.camera_pixel_unknown})
         self._log.close()
 
     def log(self, entry: dict) -> None:
@@ -245,26 +245,23 @@ class LiveRuntime:
         start = next((m for s, m in reversed(self.step_start) if abs(s - key) < 0.5 * self.dt), None)
         if start is not None:
             self.camera_latency.append(acquired - start)
-        # The step whose state the pixels show started at `pixel`. A frame older than the bound covers (a pacing
-        # stall in its steps: 1.23 s once, 2026-10-17) is registered and sent as acquired `bound` after that start,
-        # so now - acquired + bound still covers its pixels' age (contract 4.2, conservative).
+        # The step whose state the pixels show started at `pixel` (plan C5: the pixels trail the render metadata,
+        # measured 11 physics steps; the assumed lag carries a render of margin). The arbiter checks that age as well
+        # as acquired + bound, and a frame whose step is not in the table is never fresh enough to drive by (Codex
+        # M-c round 20). The frame is sent with its real arrival time (contract 4.2).
         pixel = next((m for s, m in reversed(self.step_start)
                       if abs(s - (key - self.camera_pixel_lag_s)) < 0.5 * self.dt), None)
-        bound = self.arbiter.config.camera_latency_bound_s
-        stamped = acquired
         if pixel is not None:
             self.camera_pixel_latency.append(acquired - pixel)
-            if acquired - pixel > bound:
-                stamped = pixel + bound
-                self.camera_backdated += 1
+        else:
+            self.camera_pixel_unknown += 1
         self.frame_id += 1
-        self.arbiter.register_frame(self.frame_id, stamped)
+        self.arbiter.register_frame(self.frame_id, acquired, -math.inf if pixel is None else pixel)
         self.store.put("camera_rgb", self.frame_id,
-                       camera_item(self.frame_id, np.ascontiguousarray(rgb), stamped, key, self.session_epoch))
+                       camera_item(self.frame_id, np.ascontiguousarray(rgb), acquired, key, self.session_epoch))
         self.log({"camera": self.frame_id, "render_time": render_time, "sim_t": sim_t,
                   "latency_s": None if start is None else acquired - start,
-                  "pixel_latency_s": None if pixel is None else acquired - pixel,
-                  "backdated_s": acquired - stamped if stamped != acquired else None})
+                  "pixel_latency_s": None if pixel is None else acquired - pixel})
 
 
 def _quantiles(values: list) -> dict | None:

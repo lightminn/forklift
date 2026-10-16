@@ -60,9 +60,10 @@ class FrameLedger:
             raise ValueError("window_s must be positive")
         self.window_s = float(window_s)
         self._acquired: OrderedDict = OrderedDict()
+        self._pixel: dict = {}
         self._max_id: int | None = None
 
-    def register(self, frame_id: int, acquired_mono: float) -> None:
+    def register(self, frame_id: int, acquired_mono: float, pixel_mono: float | None = None) -> None:
         """Frame ids only grow within a session (contract section 1): an id at or below the largest seen that is
         not held any more was dropped from the window and is not taken again -- re-registering it would make an
         old picture young (Codex M-b plan review P1)."""
@@ -70,11 +71,19 @@ class FrameLedger:
             return
         self._max_id = frame_id
         self._acquired[frame_id] = float(acquired_mono)
+        if pixel_mono is not None:
+            self._pixel[frame_id] = float(pixel_mono)
         while self._acquired:
             fid, t = next(iter(self._acquired.items()))
             if acquired_mono - t <= self.window_s:
                 break
             del self._acquired[fid]
+            self._pixel.pop(fid, None)
 
     def acquired_mono(self, frame_id: int) -> float | None:
         return self._acquired.get(frame_id)
+
+    def pixel_mono(self, frame_id: int) -> float | None:
+        """When the scene in the frame's pixels was current, if the source knows it (the Isaac runner's step table;
+        -inf when it could not tell -- such a frame is never fresh enough to drive by). None: not given."""
+        return self._pixel.get(frame_id)

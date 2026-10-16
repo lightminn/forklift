@@ -81,6 +81,25 @@ def test_a_stale_video_frame_drops_and_disarms_and_the_deadline_is_the_earlier()
     assert a2.last_teleop_reject == "stale_video" and not a2.armed
 
 
+def test_the_pixel_age_holds_too_when_the_source_knows_it():
+    """Codex M-c round 20: the Isaac runner also gives when the frame's pixels were current; the stricter age holds,
+    an unknown one (-inf) never drives, and a source that gives none keeps the contract's rule alone."""
+    a, base, t, arm_gen = teleop_rig()
+    a.register_frame(5, t - 0.05, t - 0.30)  # arrived 50 ms ago, its pixels 0.30 s old
+    tick = a.tick(t)
+    a.handle("op", command(a, base, arm_gen, tick, 1, mode="video", frame_echo={"frame_id": 5}), t)
+    assert a.teleop["deadline"] == pytest.approx(t - 0.30 + 0.5)  # the pixels' age comes first
+    for pixel in (t - 0.51, float("-inf"), t + 1.0):  # too old, unknown, from the future
+        b, base_b, tb, arm_b = teleop_rig()
+        b.register_frame(5, tb - 0.05, pixel - t + tb if pixel != float("-inf") else pixel)
+        b.handle("op", command(b, base_b, arm_b, b.tick(tb), 1, mode="video", frame_echo={"frame_id": 5}), tb)
+        assert b.last_teleop_reject == "stale_video" and not b.armed
+    c, base_c, tc, arm_c = teleop_rig()
+    c.register_frame(5, tc - 0.05)  # no pixel time: the contract's rule alone
+    c.handle("op", command(c, base_c, arm_c, c.tick(tc), 1, mode="video", frame_echo={"frame_id": 5}), tc)
+    assert c.teleop["deadline"] == pytest.approx(tc - 0.05 + 0.5 - 0.15)
+
+
 def test_a_late_command_from_an_old_arm_generation_does_not_rearm():
     a, base, t, arm_gen = teleop_rig()
     a.handle("op", {**base, "t": "input_state", "state": "hidden"}, t)

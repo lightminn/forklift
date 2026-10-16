@@ -105,28 +105,25 @@ def test_the_pacer_holds_the_declared_factor_through_the_runtime(tmp_path):
 
 
 
-def test_a_frame_older_than_the_bound_is_registered_as_old_as_its_pixels(tmp_path):
-    """A pacing stall in the pixels' steps (1.23 s once, 2026-10-17): the frame is registered and sent as acquired
-    `bound` after the step its pixels show began, so the arbiter's video age still covers it."""
-    from forklift_core.safety.arbiter import ArbiterConfig
-    rt, core, did, clock = runtime(tmp_path, camera_pixel_lag_s=11 * DT,
-                                   config=ArbiterConfig(tick_s=DT, camera_latency_bound_s=1.1))
+def test_a_frame_is_sent_with_its_arrival_and_registered_with_its_pixels_time(tmp_path):
+    """Codex M-c round 20: the frame keeps its real arrival time (contract 4.2); the arbiter also gets the start of
+    the step its pixels show (a pacing stall in between makes that old), and -inf when the table does not have it."""
+    import math
+    rt, core, did, clock = runtime(tmp_path, camera_pixel_lag_s=24 * DT)
     rt.start()
     try:
-        pixel_start = clock.t - 2.0  # the step the pixels show began 2 s ago (a stall since)
-        rt.step_start.append((1.0 - 11 * DT, pixel_start))
+        pixel_start = clock.t - 2.0  # a stall since
+        rt.step_start.append((1.0 - 24 * DT, pixel_start))
         rt.step_start.append((1.0, clock.t - 0.05))
         did["render"] = 1.0
         step(rt, clock, 1.0 + DT, rendered=True)
-        acquired = rt.arbiter.frames.acquired_mono(1)
-        assert acquired == pytest.approx(pixel_start + 1.1)
-        assert rt.store.get("camera_rgb")[0] == 1 and rt.camera_backdated == 1
-        # on time: the pixels' step began 1.0 s ago, under the bound -- the frame keeps its arrival time
-        rt.step_start.append((2.0 - 11 * DT, clock.t - 1.0))
-        rt.step_start.append((2.0, clock.t - 0.05))
-        did["render"] = 2.0
-        step(rt, clock, 2.0 + DT, rendered=True)
-        assert rt.arbiter.frames.acquired_mono(2) == pytest.approx(clock.t) and rt.camera_backdated == 1
+        assert rt.arbiter.frames.acquired_mono(1) == pytest.approx(clock.t)
+        assert rt.arbiter.frames.pixel_mono(1) == pytest.approx(pixel_start)
+        assert rt.store.get("camera_rgb")[0] == 1
+        did["render"] = 50.0  # a render time whose pixels' step is not in the table
+        rt.step_start.append((50.0, clock.t - 0.05))
+        step(rt, clock, 50.0 + DT, rendered=True)
+        assert rt.arbiter.frames.pixel_mono(2) == -math.inf and rt.camera_pixel_unknown == 1
     finally:
         rt.close()
 

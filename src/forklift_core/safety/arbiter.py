@@ -344,14 +344,21 @@ class Arbiter:
         if mode not in ("direct", "video"):
             return "invalid"
         if mode == "video":
-            acquired = self.frames.acquired_mono((msg.get("frame_echo") or {}).get("frame_id"))
+            frame_id = (msg.get("frame_echo") or {}).get("frame_id")
+            acquired = self.frames.acquired_mono(frame_id)
             # Unknown, not finite or from the future is stale too (Codex M-b review P1: a future time kept a frame
-            # young for a second).
+            # young for a second). Where the source also knows when its pixels' scene was current (the Isaac
+            # runner), that age is checked too -- the stricter of the two holds (M-c evidence, Codex M-c round 20).
+            pixel = self.frames.pixel_mono(frame_id)
             if acquired is None or not math.isfinite(acquired) or acquired > now_mono or \
-                    now_mono - acquired + self.config.camera_latency_bound_s > self.config.video_max_age_s:
+                    now_mono - acquired + self.config.camera_latency_bound_s > self.config.video_max_age_s or \
+                    (pixel is not None and (not math.isfinite(pixel) or pixel > now_mono
+                                            or now_mono - pixel > self.config.video_max_age_s)):
                 self._preempt(now_mono, "stale_video")  # design 5.3: a stale picture stops and disarms
                 return "stale_video"
             deadline = min(deadline, acquired + self.config.video_max_age_s - self.config.camera_latency_bound_s)
+            if pixel is not None:
+                deadline = min(deadline, pixel + self.config.video_max_age_s)
         if self.mode != "TELEOP" or not self.armed:
             return "not_armed"
         self.teleop_seq = seq
@@ -381,9 +388,10 @@ class Arbiter:
         self.preempt_latch = reason
         self._boundary(now_mono, reason)
 
-    def register_frame(self, frame_id: int, acquired_mono: float) -> None:
-        """A camera shot as the runner received it from the driver or renderer (vehicle time)."""
-        self.frames.register(frame_id, acquired_mono)
+    def register_frame(self, frame_id: int, acquired_mono: float, pixel_mono: float | None = None) -> None:
+        """A camera shot as the runner received it from the driver or renderer (vehicle time); `pixel_mono`, when
+        the source knows it, is when the scene in its pixels was current (-inf: it could not tell)."""
+        self.frames.register(frame_id, acquired_mono, pixel_mono)
 
     def _on_arm(self, client_id, request_id, msg, now_mono):
         if self.mode != "TELEOP" or self.preempt_latch is not None:
