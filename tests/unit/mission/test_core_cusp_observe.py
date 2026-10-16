@@ -389,3 +389,42 @@ def test_a_failed_observe_replan_installs_nothing_before_it_ends_the_run():
     with pytest.raises(RuntimeError, match="observe_replan_failed:no_path"):
         w.tick(OBSERVE_MISS)
     assert w.core.paths["observe"] is before
+
+
+def test_the_cusp_judgement_can_run_its_sweep_check_while_judging(monkeypatch):
+    """M-a2 sweep (order, Codex round 4): the judge runs the sweep check during the call, so what it needs is bound
+    before it."""
+    from forklift_core.control import escape as esc
+
+    swept = []
+    monkeypatch.setattr(esc, "rectangles_sweep_free", lambda checker, trajectory: swept.append(trajectory) or True)
+
+    def judge(tracker, rear, tracking, extra, **k):
+        k["sweep_free"]("TRAJ")  # the real judge calls it inside (cusp_stall.py:210)
+        return SimpleNamespace(pose_ok=True, sensor_ok=True, prefix_occupied=False, record={})
+
+    monkeypatch.setattr(core_module.CUSP_STALL, "judge", judge)
+    w = World("return_home")
+    w.core.cusp_leg_checker = lambda: "CHECKER"
+    try:
+        w.tick(PENDING)
+    except NameError as exc:
+        pytest.fail(f"the sweep check ran before its module was bound: {exc}")
+    assert swept == ["TRAJ"]
+
+
+def test_an_observe_replan_writes_the_new_path_and_restarts_the_phase_before_the_realignment_record():
+    """M-a2 sweep (order, Codex round 4): the paths file is written with the new observe leg in the record, and a
+    realignment install that refuses finds the phase clock already restarted."""
+    w = World("observe", stop_now=True, plans=[plan()])
+    written = []
+    w.core.hooks.write_paths = lambda: written.append(dict(w.state["paths"]))
+    w.ms.last_tracking = OBSERVE_MISS
+
+    def refuse(reason):
+        raise RuntimeError("near_capture_realign_too_long:9.000")
+
+    w.core.realign_install = refuse
+    with pytest.raises(RuntimeError, match="realign_too_long"):
+        w.tick(OBSERVE_MISS)
+    assert written and "observe" in written[0] and w.ms.phase_started == 50.0

@@ -503,3 +503,15 @@ def test_the_return_leg_backs_off_too():
     w = World("return_home", plans=[plan("no_path")] * 2, slam=slam)
     w.replan()
     assert w.paths["return_home"].status == "backoff" and w.obstacle["backoffs"] == {"return_home": 1}
+
+
+def test_the_fifth_failed_replan_refuses_before_it_would_wait():
+    """M-a2 sweep (order, Codex round 4): four failures, a success, a fifth failure -- the refusal leaves no wait."""
+    w = World("observe", plans=[plan("no_path")] * 8 + [plan()] + [plan("no_path")] * 2)
+    for k in range(4):
+        w.replan(t=50.0 + k)
+    w.replan(t=55.0)  # a new path: the wait ends
+    assert w.obstacle.get("replan_wait", {}) == {}
+    with pytest.raises(RuntimeError, match="obstacle_replan_failed in observe"):
+        w.replan(t=56.0)
+    assert w.obstacle.get("replan_wait", {}) == {}

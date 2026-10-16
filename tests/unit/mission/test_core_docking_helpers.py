@@ -416,3 +416,13 @@ def test_every_match_round_keeps_its_own_starts_and_their_details(tmp_path, monk
     w.core.dock_at_delivery_straight(12.0)
     (round_,) = w.slam["docking"]["rounds"]
     assert round_["starts"] == [[True, "ok", [0.0, 0.0, 0.0]]] and round_["start_details"] == [{"iterations": 3}]
+
+
+def test_a_release_carries_from_the_pose_before_it_to_the_pose_after_it(tmp_path):
+    """M-a2 sweep (order, Codex round 4): the goal is carried by the release's own change of frame."""
+    obstacle = {"applied": (0, 0, 0), "version": 1, "layer": SimpleNamespace(refresh=lambda *a, **k: None)}
+    w = World(tmp_path, obstacle=obstacle)
+    w.core.release_and_carry(30.0)
+    (_, (before, after), _), = [c for c in w.calls if c[0] == "carry"]
+    np.testing.assert_allclose(before, [1.0, 2.0, 0.0])
+    np.testing.assert_allclose(after, [1.1, 2.0, 0.01])

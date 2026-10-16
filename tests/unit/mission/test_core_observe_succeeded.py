@@ -271,3 +271,13 @@ def test_the_tracker_profile_is_applied_to_the_followers_built_after_the_detecti
     w.succeed()
     (at_call,) = seen
     assert at_call["approach"] is w.core.trackers["approach"] and at_call["approach"] is not old.get("approach")
+
+
+def test_the_paths_file_is_written_with_the_mission_just_planned():
+    """M-a2 sweep (order, Codex round 4): the write reads the paths record, so the record is updated first."""
+    w = World()
+    w.state["paths"] = {"observe": {"old": True}}
+    written = []
+    w.hooks.write_paths = lambda: written.append(dict(w.state["paths"]))
+    w.succeed()
+    assert written and set(written[0]) >= {"approach", "insert", "extract", "transport", "withdraw"}

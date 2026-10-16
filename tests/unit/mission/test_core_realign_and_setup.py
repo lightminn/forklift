@@ -257,3 +257,19 @@ def test_a_realignment_install_of_exactly_the_maximum_length_is_kept():
     except RuntimeError as exc:
         pytest.fail(f"an install of exactly the maximum was refused: {exc}")
     assert len(core.state["near_tracking"]["realign"]["installs"]) == 1
+
+
+def test_a_realignment_whose_stand_install_refuses_has_not_moved_to_observe():
+    """M-a2 sweep (order, Codex round 4): the stand is labelled first, the install may refuse, the phase moves last."""
+    core, _ = make(slam={"tracker": SimpleNamespace(mode="holding")}, state={"near_tracking": {},
+                                                                              "near_capture": {"status": "refused"}},
+                   phase="approach")
+    core.release_and_stand = lambda now, event: {"jump_m": 0.0}
+
+    def refuse(reason):
+        raise RuntimeError("near_capture_realign_too_long:9.000")
+
+    core.realign_install = refuse
+    with pytest.raises(RuntimeError, match="realign_too_long"):
+        core.start_near_realign(15.0, 3)
+    assert core.near["stand_record"] == "realign" and core.ms.phase == "approach"
