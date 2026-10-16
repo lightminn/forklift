@@ -5233,14 +5233,27 @@ def drive(S, isaac) -> None:
                 rot_ = np.array([[1 - 2 * (y_ * y_ + z_ * z_), 2 * (x_ * y_ - z_ * w_), 2 * (x_ * z_ + y_ * w_)],
                                  [2 * (x_ * y_ + z_ * w_), 1 - 2 * (x_ * x_ + z_ * z_), 2 * (y_ * z_ - x_ * w_)],
                                  [2 * (x_ * z_ - y_ * w_), 2 * (y_ * z_ + x_ * w_), 1 - 2 * (x_ * x_ + y_ * y_)]])
-                cube_ = UsdGeom.Cube.Define(omni.usd.get_context().get_stage(), "/World/LiveMarker")
-                cube_.GetSizeAttr().Set(0.05)
+                from pxr import Sdf, UsdShade
+
+                stage_ = omni.usd.get_context().get_stage()
+                cube_ = UsdGeom.Cube.Define(stage_, "/World/LiveMarker")
+                cube_.GetSizeAttr().Set(0.15)
                 cube_.GetDisplayColorAttr().Set([Gf.Vec3f(1.0, 0.0, 0.0)])
+                # An emissive red material, so the plate reads red whatever the scene's light (2026-10-17: a plain
+                # displayColor cube was not seen).
+                mat_ = UsdShade.Material.Define(stage_, "/World/LiveMarkerMaterial")
+                shader_ = UsdShade.Shader.Define(stage_, "/World/LiveMarkerMaterial/Shader")
+                shader_.CreateIdAttr("UsdPreviewSurface")
+                shader_.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(1.0, 0.0, 0.0))
+                shader_.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(1.0, 0.0, 0.0))
+                mat_.CreateSurfaceOutput().ConnectToSource(shader_.ConnectableAPI(), "surface")
+                UsdShade.MaterialBindingAPI.Apply(cube_.GetPrim()).Bind(mat_)
                 marker_api_ = UsdGeom.XformCommonAPI(cube_.GetPrim())
+                live.log({"marker_camera_pose": [list(map(float, cam_p_)), list(map(float, cam_q_))]})
 
                 def live_marker_(sim_s: float) -> None:
                     # A sawtooth: 0.6 m ahead, from 0.15 m left to 0.15 m right across each sim second.
-                    local_ = np.array([0.6, 0.15 - 0.30 * (sim_s % 1.0), 0.0])
+                    local_ = np.array([1.0, 0.30 - 0.60 * (sim_s % 1.0), 0.0])
                     world_ = np.asarray(cam_p_, dtype=float) + rot_ @ local_
                     marker_api_.SetTranslate(Gf.Vec3d(*(float(v) for v in world_)))
 
