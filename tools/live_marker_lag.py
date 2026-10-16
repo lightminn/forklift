@@ -28,9 +28,10 @@ from PIL import Image
 TAU_GRID = np.arange(-0.5, 3.0 + 1e-9, 1 / 120)  # wide enough that a whole-period alias would show as its own minimum
 
 
-def row_profile(path: Path) -> np.ndarray:
-    """The picture's mean brightness per row, as a vertical gradient (the parts that move with the camera)."""
-    grey = np.asarray(Image.open(path).convert("L"), dtype=float)
+def row_profile(path: Path, max_row: int | None = None) -> np.ndarray:
+    """The picture's mean brightness per row, as a vertical gradient (the parts that move with the camera); rows
+    from `max_row` down are left out (the unrendered band at the bottom, whose edge moves on its own)."""
+    grey = np.asarray(Image.open(path).convert("L"), dtype=float)[:max_row]
     return np.diff(grey.mean(axis=1))
 
 
@@ -75,7 +76,7 @@ def quantiles(values) -> dict | None:
     return {"n": int(len(v)), "median": float(np.median(v)), "p99": float(np.percentile(v, 99)), "max": float(v.max())}
 
 
-def analyse(report: dict, frames_dir: Path, log: list[dict]) -> dict:
+def analyse(report: dict, frames_dir: Path, log: list[dict], max_row: int | None = None) -> dict:
     lift = [e for e in log if "lift_sim_t" in e]
     lift_t = np.array([e["lift_sim_t"] for e in lift])
     lift_m = np.array([e["lift_m"] for e in lift])
@@ -85,7 +86,7 @@ def analyse(report: dict, frames_dir: Path, log: list[dict]) -> dict:
     for f in report["frames"]:
         path = frames_dir / f"frame_{f['frame_id']:06d}.jpg"
         if path.exists() and f.get("stamp_ns") is not None:
-            profile = row_profile(path)
+            profile = row_profile(path, max_row)
             if reference is None:
                 reference = profile
             stamps.append(f["stamp_ns"] / 1e9)
@@ -159,10 +160,11 @@ def main() -> None:
     ap.add_argument("--frames-dir", type=Path, required=True)
     ap.add_argument("--live-log", type=Path, required=True)
     ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument("--max-row", type=int, default=None, help="use the rows above this one only")
     args = ap.parse_args()
     log = [json.loads(line) for line in args.live_log.read_text().splitlines()
            if '"lift_sim_t"' in line or '"camera"' in line]
-    result = analyse(json.loads(args.report.read_text()), args.frames_dir, log)
+    result = analyse(json.loads(args.report.read_text()), args.frames_dir, log, args.max_row)
     print(json.dumps(result, indent=1))
     if args.out is not None:
         args.out.write_text(json.dumps(result, indent=1))
