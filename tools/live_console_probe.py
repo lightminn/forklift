@@ -50,12 +50,15 @@ class Probe:
 
     # --- connection ---------------------------------------------------------------------------------------------
     async def open(self):
+        if self._reader is not None:
+            self._reader.cancel()  # the previous connection's reader must not write this one's state
+        self.closed_code = None
         self.ws = await connect(f"ws://127.0.0.1:{self.port}/api/v1/control", max_size=None)
         await self.ws.send(json.dumps({"t": "hello", "api": API, "client_id": self.client_id}))
         welcome = json.loads(await self.ws.recv())
         self.epoch = welcome["session_epoch"]
         self.event("welcome", session_epoch=self.epoch, capabilities=welcome.get("capabilities"))
-        self._reader = asyncio.create_task(self._read())
+        self._reader = asyncio.create_task(self._read(self.ws))
         if getattr(self, "_echoer", None) is None:
             self._echoer = asyncio.create_task(self._echo_loop())
 
@@ -74,9 +77,9 @@ class Probe:
                                           "scan": {"max_hz": 10}, "grid": {"max_hz": 1}}))
         self._media_reader = asyncio.create_task(self._read_media())
 
-    async def _read(self):
+    async def _read(self, ws):
         try:
-            async for raw in self.ws:
+            async for raw in ws:
                 msg = json.loads(raw)
                 t = msg.get("t")
                 if t == "tick":
@@ -94,12 +97,16 @@ class Probe:
                     self.targets = msg
                 elif t in ("ack", "reject"):
                     self.replies[msg.get("request_id")] = (time.monotonic(), msg)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:  # noqa: BLE001
-            self.closed_code = getattr(self.ws, "close_code", None)
-            self.event("control_closed", code=self.closed_code, error=repr(exc))
+            if ws is self.ws:
+                self.closed_code = getattr(ws, "close_code", None)
+            self.event("control_closed", code=getattr(ws, "close_code", None), error=repr(exc), current=ws is self.ws)
         else:
-            self.closed_code = self.ws.close_code
-            self.event("control_closed", code=self.closed_code)
+            if ws is self.ws:
+                self.closed_code = ws.close_code
+            self.event("control_closed", code=ws.close_code, current=ws is self.ws)
 
     async def _read_media(self):
         try:
