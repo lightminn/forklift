@@ -56,6 +56,17 @@ class Probe:
         self.epoch = welcome["session_epoch"]
         self.event("welcome", session_epoch=self.epoch, capabilities=welcome.get("capabilities"))
         self._reader = asyncio.create_task(self._read())
+        if getattr(self, "_echoer", None) is None:
+            self._echoer = asyncio.create_task(self._echo_loop())
+
+    async def _echo_loop(self):
+        """As the web console: answer every tick while connected, whatever the scenario is waiting on."""
+        while True:
+            try:
+                await self.echo()
+            except Exception:  # noqa: BLE001 -- a closed socket during a reconnect
+                pass
+            await asyncio.sleep(0.05)
 
     async def open_media(self):
         self.media = await connect(f"ws://127.0.0.1:{self.port}/api/v1/media", max_size=None)
@@ -128,6 +139,16 @@ class Probe:
         self.event("reply_timeout", kind=kind, request_id=rid)
         return None
 
+    async def request_until_standing(self, kind, tries=20, **fields):
+        """A request the vehicle refuses until its own detector confirms standing (not_stopped): asked again."""
+        reply = None
+        for _ in range(tries):
+            reply = await self.request(kind, **fields)
+            if reply is None or reply.get("reason") != "not_stopped":
+                return reply
+            await asyncio.sleep(0.5)
+        return reply
+
     async def echo(self):
         if self.tick is not None and self.lease_id is not None:
             await self.ws.send(json.dumps({"t": "echo", "session_epoch": self.epoch, "lease_id": self.lease_id,
@@ -176,8 +197,13 @@ async def main_scenario(p: Probe, args):
     p.report["session"] = {"session_epoch": p.epoch, "lease_id": p.lease_id}
     await p.until(lambda s: p.targets is not None, 10, label="targets")
     await p.until(p.standing, 20, label="standing_at_start")
-    submit = await p.request("mission_submit", pallet_id="P-1", destination_id="D-1",
-                             targets_revision=p.targets["targets_revision"])
+    submit = None
+    for _ in range(20):  # the vehicle confirms standing on its own detector: a not_stopped is asked again
+        submit = await p.request("mission_submit", pallet_id="P-1", destination_id="D-1",
+                                 targets_revision=p.targets["targets_revision"])
+        if submit is None or submit.get("reason") != "not_stopped":
+            break
+        await asyncio.sleep(0.5)
     mission_id = (submit or {}).get("mission_id")
     await p.until(lambda s: s.get("mode") == "AUTO", 5, label="auto")
     # STOP while the mission stands at its observation point (a capture runs there): it must have driven there first.
@@ -189,17 +215,17 @@ async def main_scenario(p: Probe, args):
     await p.until(lambda s: s.get("mode") == "STOPPED", 3, label="stopped")
     await p.until(p.standing, 10, label="standing_after_stop")
     await asyncio.sleep(0.5)
-    await p.request("rearm")
+    await p.request_until_standing("rearm")
     await p.until(p.standing, 5, label="standing_before_resume")
     await asyncio.sleep(0.4)
-    await p.request("mission_resume", mission_id=mission_id)
+    await p.request_until_standing("mission_resume", mission_id=mission_id)
     await p.until(lambda s: s.get("mode") == "AUTO", 5, label="auto_again")
     # Let it drive, then pause and take it by hand.
     await p.keep_alive(args.auto_s)
     await p.request("mode_request", to="PAUSED")
     await p.until(p.standing, 15, label="standing_paused")
     await asyncio.sleep(0.5)
-    teleop = await p.request("mode_request", to="TELEOP")
+    teleop = await p.request_until_standing("mode_request", to="TELEOP")
     p.report["teleop_entry"] = teleop
     if teleop and teleop["t"] == "ack":
         arm = await p.request("arm")
@@ -240,7 +266,7 @@ async def main_scenario(p: Probe, args):
     p.lease_id = saved
     await p.until(p.standing, 10, label="standing_before_final_resume")
     await asyncio.sleep(0.5)
-    await p.request("mission_resume", mission_id=mission_id)
+    await p.request_until_standing("mission_resume", mission_id=mission_id)
     await p.until(lambda s: (s.get("mission") or {}).get("status") in ("done", "failed", "cancelled")
                   or s.get("mode") == "STOPPED", args.mission_timeout_s, label="mission_end")
     end = time.monotonic() + 60
@@ -264,7 +290,7 @@ async def slow_scenario(p: Probe, args):
     p.lease_id = (lease or {}).get("lease_id")
     await p.until(p.standing, 20, label="standing")
     await p.keep_alive(3.0)
-    p.report["teleop_entry_slow"] = await p.request("mode_request", to="TELEOP")
+    p.report["teleop_entry_slow"] = await p.request_until_standing("mode_request", to="TELEOP")
     await p.keep_alive(args.auto_s)
 
 

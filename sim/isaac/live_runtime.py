@@ -81,6 +81,8 @@ class LiveRuntime:
         self.test_step_delay_s = test_step_delay_s
         self.camera_freeze = camera_freeze  # (from, to) sim seconds: no new frames (the video-stall test)
         self.camera_latency: list[float] = []
+        self._events_logged = 0
+        self._next_status = 0.0
 
     # --- lifecycle -------------------------------------------------------------------------------------------------
     def start(self) -> int:
@@ -117,10 +119,28 @@ class LiveRuntime:
         self.arbiter.pacing_ok = self.pacer.ok
         stop_kind = self.link.begin(now, self.feedback)
         records = self.core.commands.apply(t, Context(stop_kind=stop_kind, near_tracker=near_active))
+        self._flush(t)
+        return stop_kind, records
+
+    def _flush(self, t: float) -> None:
+        """The link's message log and the arbiter's boundary events (mode, lease, disarm, generation reasons), and
+        once a second the stop detector and the feedback it judged."""
         for entry in self.link.log:
             self._log.write(json.dumps(entry) + "\n")
         self.link.log.clear()
-        return stop_kind, records
+        for event in self.arbiter.events[self._events_logged:]:
+            self.log(dict(event, arbiter=True, tick_t=t))
+        self._events_logged = len(self.arbiter.events)
+        now = self.clock()
+        if now >= self._next_status:
+            self._next_status = now + 1.0
+            fb = self.feedback
+            self.log({"status": True, "tick_t": t, "feedback_ok": self.arbiter.feedback_ok,
+                      "stop_confirmed": self.arbiter.stop_confirmed,
+                      "feedback": None if fb is None else [fb.stamp_mono, fb.rear_axle_speed_mps, fb.yaw_rate_radps],
+                      "lease": None if self.arbiter.lease is None else
+                      [self.arbiter.lease.client_id, self.arbiter.lease.renewed_mono],
+                      "pacing": self.pacer.report()})
 
     def tick_end(self, t: float, records: list, safety: dict, candidate: tuple, drive: dict | None):
         """The output for this tick (the runner applies it, then calls ``publish`` with what it applied)."""
