@@ -1584,6 +1584,18 @@ def _recording_print(*values, sep=" ", end="\n", file=None, flush=False):
     return builtin(*values, sep=sep, end=end, file=file, flush=flush)
 
 
+def save_image(image, path) -> None:
+    """A diagnostic image written to the run's output -- a Sink entry by its pixels while a format-2 record is open
+    (PIL writes through its own file handle, past the output-path observer; Codex P2)."""
+    gate = _BOUNDARY_RECORD.get("gate")
+    if gate is None:
+        return image.save(path)
+    from replay_observers import _logical
+
+    return sink_effect(gate, "image_save", _logical(path, _BOUNDARY_RECORD.get("output_root") or Path(str(path)).parent),
+                       {"mode": image.mode, "pixels": np.asarray(image)}, lambda: image.save(path))
+
+
 def install_output_observers(args) -> None:
     """Format 2 (sim/isaac/replay_observers.py): the output directory and this module's ``np`` record their file
     writes as Sink entries from here on (np undone at close; the observed directory only records while a record is
@@ -1592,6 +1604,7 @@ def install_output_observers(args) -> None:
 
     gate_fn = lambda: _BOUNDARY_RECORD.get("gate")  # noqa: E731
     args.output = observed_output(args.output, gate_fn)
+    _BOUNDARY_RECORD["output_root"] = args.output
     _BOUNDARY_RECORD["np"] = globals()["np"]
     globals()["np"] = NumpyObserver(_BOUNDARY_RECORD["np"], gate_fn, args.output)
 
@@ -1630,8 +1643,14 @@ def final_projection(containers: dict, ms, output: Path) -> dict:
     slam_ = containers.get("slam")
     if isinstance(slam_, dict) and slam_.get("link") is not None:
         services.setdefault(id(slam_["link"]), "SlamLink")
-    encoder = Encoder(opaque_ok=True, value_types={"Namespace", "SimpleNamespace"}, hash_arrays=True, identity=False,
-                      services=services)
+    # Values only (Codex P2): CPU state objects by their attributes, anything else without a value encoding refused
+    # -- the record then carries the projection error, which a replay refuses.
+    encoder = Encoder(opaque_ok=False, value_types={"Namespace", "SimpleNamespace"}, hash_arrays=True, identity=False,
+                      services=services, full_types={"InsertionGeometry", "CommandWindow", "RearHistory", "Schedule"})
+    # The output directory as the run sees it and as its arguments record it (a replay's state keeps the recorded
+    # run's arguments while it writes elsewhere -- Codex P2).
+    state_ = containers.get("state") if isinstance(containers.get("state"), dict) else {}
+    roots = {str(output)} | {str(v) for v in [(state_.get("arguments") or {}).get("output")] if v}
     out = {}
     for name, container in containers.items():
         if not isinstance(container, dict):
@@ -1641,7 +1660,12 @@ def final_projection(containers: dict, ms, output: Path) -> dict:
         for key, value in container.items():
             if name == "state" and key in PROJECTION_RECORDED_ONLY:
                 continue
-            text = json.dumps(encoder.encode(value), sort_keys=True, allow_nan=True).replace(str(output), "<output>")
+            try:
+                text = json.dumps(encoder.encode(value), sort_keys=True, allow_nan=True)
+            except TypeError as exc:
+                raise TypeError(f"{name}[{key!r}]: {exc}") from None
+            for root in sorted(roots, key=len, reverse=True):
+                text = text.replace(root, "<output>")
             digests[str(key)] = hashlib.sha256(text.encode("utf-8")).hexdigest()
         out[name] = digests
     return {"mission": ms, "containers": out}
@@ -3643,12 +3667,18 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             run_.callback_spec = _rollout_callback_spec(config_, start_)  # recording only (plan 3.4)
             return run_
 
+        # The call's arguments in their original order, outside the trace's try: a failure there is not a Planner
+        # call (Codex P2 -- the moved code then makes no traced call either).
+        grid_ = grid_world(scenario)
+        pose_ = PlanningPose(*(float(v) for v in rear_now))
+        dry_runs_ = (dry(acceptance_), dry(driven_))
+        correction_ = correction_grid(target_, target_, rear_now)
         try:
             plans_, record_ = redraw_docking(
-                grid_world(scenario), PlanningPose(*(float(v) for v in rear_now)), target_, planner_config,
-                geometry=geometry, pickup_bounds=pickup_bounds, dry_runs=(dry(acceptance_), dry(driven_)),
+                grid_, pose_, target_, planner_config,
+                geometry=geometry, pickup_bounds=pickup_bounds, dry_runs=dry_runs_,
                 max_yaw_rad=near_tracking.CORRECTION_MAX_YAW_RAD,
-                **correction_grid(target_, target_, rear_now),
+                **correction_,
             )
         finally:
             # Recording only (plan 4, the baseline's stage-1 bundle): the dry runs' trajectories as they ran inside
@@ -6995,9 +7025,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                         pocket["capture"] = scene_input
                         # Diagnostic dump for offline root-cause analysis; not part
                         # of the perception contract itself.
-                        Image.fromarray(scene_input.rgb).save(
-                            args.output / f"perception_capture_{attempt_number}_rgb.png"
-                        )
+                        save_image(Image.fromarray(scene_input.rgb),
+                            args.output / f"perception_capture_{attempt_number}_rgb.png")
                         np.save(
                             args.output
                             / f"perception_capture_{attempt_number}_depth_m.npy",
@@ -7018,10 +7047,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 1,
                             )
                             normalized = np.nan_to_num(normalized, nan=0.0)
-                            Image.fromarray((normalized * 255).astype(np.uint8)).save(
+                            save_image(Image.fromarray((normalized * 255).astype(np.uint8)),
                                 args.output
-                                / f"perception_capture_{attempt_number}_depth_vis.png"
-                            )
+                                / f"perception_capture_{attempt_number}_depth_vis.png")
                         # Use the accepted end pose as the stationary acquisition
                         # representative; no timestamp interpolation is implied.
                         capture_diagnostics = perception_capture.state.diagnostics
@@ -9294,7 +9322,8 @@ def main() -> None:
         failure_exc = exc
         state["success"] = False
         state["failure_reason"] = str(exc)
-        (args.output / "failure.txt").write_text(traceback.format_exc())
+        # Plain path: the traceback names this source's own lines, never a recorded output (M-a1 replay).
+        (Path(str(args.output)) / "failure.txt").write_text(traceback.format_exc())
         traceback.print_exc()
     finally:
         # Failures before the mission loop's own finally (initial planning, the bootstrap): the record's ending

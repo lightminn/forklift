@@ -421,14 +421,30 @@ class ReplayGate:
         try:
             answer = self.answer(entry, args, call_kwargs, watch)
         finally:
-            rollouts = session.peek()
-            if rollouts is not None and (rollouts["port"], rollouts["method"]) == ("Trace", "redraw_rollouts"):
-                session._next += 1
-            elif session.failure is None:
-                raise session.fail("the baseline redraw bundle has no Trace.redraw_rollouts after its Planner call")
-        trajectories = session.decode(rollouts["request"])["args"][0]
+            # The rollouts trace is consumed and checked before the answer or the recorded exception goes back
+            # (Codex P2: an exception path must not skip it unread).
+            trajectories = self._baseline_rollouts()
         plans, record = answer
-        return plans, record, list(trajectories)
+        return plans, record, trajectories
+
+    def _baseline_rollouts(self) -> list:
+        session = self.session
+        rollouts = session.peek()
+        if rollouts is None or (rollouts["port"], rollouts["method"]) != ("Trace", "redraw_rollouts"):
+            raise session.fail("the baseline redraw bundle has no Trace.redraw_rollouts after its Planner call")
+        if _has_opaque(rollouts["request"]) or "exception" in rollouts:
+            raise session.fail("the baseline redraw bundle's Trace.redraw_rollouts is not a list of trajectories")
+        try:
+            request = session.decode(rollouts["request"])
+            trajectories = request["args"][0]
+            ok = (isinstance(trajectories, list) and len(trajectories) <= 2 and not request["kwargs"]
+                  and all(isinstance(t, (tuple, list, np.ndarray)) for t in trajectories))  # BicycleRollout.trajectory
+        except Exception as exc:  # noqa: BLE001
+            raise session.fail(f"the baseline redraw bundle's rollouts trace does not decode: {exc!r}") from None
+        if not ok:
+            raise session.fail("the baseline redraw bundle's Trace.redraw_rollouts is not up to two trajectories")
+        session._next += 1
+        return list(trajectories)
 
     def answer(self, entry: dict, args: tuple = (), kwargs: dict | None = None, watch=None):
         session = self.session
