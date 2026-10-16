@@ -431,3 +431,45 @@ def test_no_escape_on_the_transport_after_a_docking_match_or_during_a_reapproach
         pass
     assert "transport_replan" in w.names()  # the escape rule was reached
     assert "find_escape" not in w.names() and w.obstacle.get("escapes", {}).get("transport", 0) == 0
+
+
+# M-a2 core sweep (tools/ma2_core_sweep.py --all): conditions the kept source tests read that no behaviour test held.
+def test_the_return_replan_retries_at_zero_clearance():
+    back = SimpleNamespace(destination="D2")
+    slam = {"return_scenario": back, "docking": {}, "tracker": SimpleNamespace(mode="tracking")}
+    w = World("return_home", plans=[plan("no_path"), plan()], slam=slam)
+    w.core.options.travel_config = Config(clearance_m=0.2)
+    w.replan()
+    calls = [c for c in w.calls if c[0] == "plan_return_leg"]
+    assert [c[1][3] for c in calls] == [Config(), Config(clearance_m=0.0)]
+    assert calls[1][2]["travel_config"] == Config(clearance_m=0.0)
+    assert w.obstacle["replans"][-1]["clearance_m"] == 0.0
+
+
+@pytest.mark.parametrize("phase, travel, expected", [("observe", 0.2, 0.3), ("transport", 0.2, 0.2)])
+def test_the_recorded_clearance_is_the_travel_configs_on_the_travel_legs_only(phase, travel, expected):
+    w = World(phase, plans=[plan()])
+    w.core.options.travel_config = Config(clearance_m=travel)
+    w.replan()
+    assert w.obstacle["replans"][-1]["clearance_m"] == expected
+
+
+def test_an_observe_leg_neither_escapes_nor_backs_off():
+    w = World("observe", plans=[plan("invalid_start"), plan("no_path"), plan("no_path"), plan("no_path")],
+              escape=SimpleNamespace(direction=-1, length_m=0.2, record=lambda: {}))
+    for _ in range(2):
+        w.replan()
+    assert "find_escape" not in w.names() and w.paths["observe"].status not in ("backoff", "escape")
+    assert w.obstacle.get("backoffs", {}).get("observe", 0) == 0
+
+
+def test_when_every_remaining_candidate_fails_the_search_ends_with_the_leg_failed():
+    w = World("observe", plans=[plan("no_path"), plan("no_path"), plan("no_path"), plan("no_path")],
+              waypoints=[(0, 0, 0), (5.0, 1.0, 0.0), (6.0, 1.0, 0.0)])
+    w.ms.next_candidate_index = 1
+    try:
+        w.replan()
+    except Exception as exc:  # the leg's own refusal is fine; running past the list is not
+        assert isinstance(exc, RuntimeError), repr(exc)
+    assert w.ms.next_candidate_index == 3
+    assert [c["candidate_index"] for c in w.state["observation_candidates"]] == [1, 2]

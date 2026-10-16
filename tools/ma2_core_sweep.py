@@ -163,7 +163,11 @@ def main(argv=None) -> int:
     parser.add_argument("--tests", default="tests/unit/mission")
     parser.add_argument("--all", action="store_true",
                         help="every frozen test at the frozen base revision, not only the kept (R) ones")
+    parser.add_argument("--emit", type=Path, help="a sweep's JSON: write the find/replace and failing tests of its "
+                                                  "survivors to --out instead of sweeping")
     args = parser.parse_args(argv)
+    if args.emit:
+        return emit_batch(args.emit, args.out, args.tests)
     core_text = (ROOT / CORE).read_text()
     src = Source(core_text)
     if args.all:
@@ -193,6 +197,68 @@ def main(argv=None) -> int:
         for m in r["mutations"]:
             counts[m["outcome"]] = counts.get(m["outcome"], 0) + 1
     print(counts)
+    return 0
+
+
+
+def unique_block(text: str, mutated: str) -> tuple[str, str]:
+    """The smallest run of whole lines around the change that occurs once in ``text`` -- a find/replace pair."""
+    a, b = text.split("\n"), mutated.split("\n")
+    first = next(i for i in range(min(len(a), len(b))) if a[i] != b[i])
+    tail = 0
+    while tail < min(len(a), len(b)) - first and a[len(a) - 1 - tail] == b[len(b) - 1 - tail]:
+        tail += 1
+    lo, hi_a, hi_b = first, len(a) - tail, len(b) - tail
+    while True:
+        find = "\n".join(a[lo:hi_a]) + "\n"
+        if text.count(find) == 1:
+            return find, "\n".join(b[lo:hi_b]) + "\n"
+        lo, hi_a, hi_b = max(lo - 1, 0), hi_a + 1, hi_b + 1
+
+
+def failing_tests(tree: Path, tests: str) -> list[str]:
+    env = dict(os.environ, PYTHONPATH=str(tree / "src"), PYTHONDONTWRITEBYTECODE="1")
+    proc = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-rf", tests], cwd=tree,
+                          env=env, capture_output=True, text=True, timeout=900)
+    return sorted({line.split()[1] for line in proc.stdout.splitlines() if line.startswith("FAILED ")})
+
+
+def emit_batch(sweep_json: Path, out_json: Path, tests: str) -> int:
+    """For every mutation a sweep left alive: the find/replace that makes it, and the behaviour tests that now fail
+    on it (written as JSON for tools/ma2/batch_09_sweep.py)."""
+    core_text = (ROOT / CORE).read_text()
+    src = Source(core_text)
+    found = places(src, all_tests(), json.loads(FROZEN.read_text())["base_revision"])
+    by_line = {}
+    for offset, entry in found.items():
+        by_line.setdefault((entry["line"], entry["probe"]), offset)
+    frozen = json.loads(FROZEN.read_text())
+    ids_by_test = {}
+    for r in frozen["assertions"]:
+        ids_by_test.setdefault(f"{r['file']}::{r['test']}", r["id"].rsplit("::", 1)[0] + "::*")
+    out = []
+    with tempfile.TemporaryDirectory(prefix="ma2_emit_") as tmp:
+        tree = Path(tmp)
+        copy_tree(tree)
+        target = tree / CORE
+        for entry in json.loads(sweep_json.read_text()):
+            alive = [m for m in entry["mutations"] if m["outcome"] == "survived"]
+            if not alive:
+                continue
+            offset = by_line[(entry["line"], entry["probe"])]
+            for kind, what, text in src.mutations(offset):
+                if not any(m["kind"] == kind and m["what"] == what for m in alive):
+                    continue
+                find, replace_ = unique_block(core_text, text)
+                target.write_text(text)
+                try:
+                    guards = failing_tests(tree, tests)
+                finally:
+                    target.write_text(core_text)
+                out.append({"line": entry["line"], "kind": kind, "what": what, "find": find, "replace": replace_,
+                            "guards": guards, "checks": sorted({ids_by_test[t] for t in entry["tests"]})})
+                print(f"{entry['line']:5d} {kind:12s} {len(guards)} guards  {what[:80]}", flush=True)
+    out_json.write_text(json.dumps(out, indent=1, ensure_ascii=False) + "\n")
     return 0
 
 

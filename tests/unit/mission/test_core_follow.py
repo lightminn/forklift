@@ -160,3 +160,11 @@ def test_a_re_observation_stand_takes_no_slam_hold():
     core, *_ = make("observe", slam=slam, near={"retry_stand": False}, remaining=0.1)
     core.follow(5.0, REAR, 0.0, 1 / 120)
     assert holds == [{"odom_from_base": "ODOM"}]  # the same leg without the stand holds
+
+
+def test_another_legs_escape_is_not_this_legs_backoff_end():
+    """M-a2 core sweep: only the leg the escape belongs to takes an arrival as its end."""
+    obstacle = {"backoff": {"phase": "return_home", "escape": True, "end_s": 1.0}}
+    core, *_ = make(result=Tracking(status="tracking"), obstacle=obstacle, remaining=1.0)
+    out = core.follow(5.0, REAR, 0.3, 1 / 120)
+    assert out.tracking.status == "tracking" and "stand_ticks" not in obstacle["backoff"]

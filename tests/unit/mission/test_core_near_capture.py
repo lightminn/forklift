@@ -193,3 +193,34 @@ def test_a_slow_approach_cruise_keeps_the_baseline_acceptance_and_records_the_dr
     assert [c[1][0] for c in w.calls if c[0] == "bicycle_rollout"] == [0.4, 0.2]
     assert w.core.trackers["approach"].config.cruise_speed_mps == 0.2
     assert "dry_run_driven" in w.state["near_capture"] and "record_tracker_configs" in w.names()
+
+
+# M-a2 core sweep (tools/ma2_core_sweep.py --all): the acceptance and driven cruises when the approach follower
+# already runs another cruise (an earlier near capture left a custom one), and the stage-1 installs.
+def _custom_cruise(w, cruise):
+    for name in w.core.trackers:
+        w.core.trackers[name].config = TrackerConfig(cruise_speed_mps=cruise)
+
+
+def test_with_a_custom_straight_speed_the_acceptance_runs_the_baseline_cruise_whatever_the_follower_runs():
+    w = World(slow=0.2)
+    _custom_cruise(w, 0.25)  # an earlier near capture's slow follower
+    w.run()
+    assert [c[1][0] for c in w.calls if c[0] == "bicycle_rollout"] == [0.4, 0.2]
+
+
+def test_without_a_custom_straight_speed_the_acceptance_runs_the_followers_own_cruise():
+    w = World(slow=None)
+    _custom_cruise(w, 0.33)
+    w.run()
+    assert [c[1][0] for c in w.calls if c[0] == "bicycle_rollout"] == [0.33]
+
+
+def test_the_stage_one_redraw_drives_its_custom_cruise_and_installs_the_insertion_and_extraction():
+    plans = {"approach": leg(1.0, 2.5), "insert": leg(3.5, 0.3), "extract": leg(3.8, -0.3)}
+    w = World(near={"tracker": None}, dry=Dry(status="failed"), redraw="on", redraw_plans=plans, slow=0.2)
+    w.run()
+    (_, args, _), = [c for c in w.calls if c[0] == "near_capture_redraw"]
+    assert args[4].cruise_speed_mps == 0.4 and args[5].cruise_speed_mps == 0.2  # acceptance, driven
+    for name in ("insert", "extract"):
+        np.testing.assert_array_equal(w.core.trackers[name].path_arrays()[0], plans[name].poses)

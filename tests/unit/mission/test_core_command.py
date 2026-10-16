@@ -196,3 +196,12 @@ def test_the_near_tick_runs_only_in_the_approach_and_the_insertion(phase):
     w = World(phase, near={"tracker": object()}, near_answer=(True, False, False))
     w.tick()
     assert "near_tick" not in [c[0] for c in w.calls]
+
+
+def test_an_arrival_is_another_legs_backoff_end_only_on_that_leg():
+    """M-a2 core sweep: a backoff kept for another leg does not turn this leg's arrival into a backoff end."""
+    layer = SimpleNamespace(permission=SimpleNamespace(path_check=SimpleNamespace(blocked="occupied"), last_estop=None))
+    obstacle = {"layer": layer, "backoff": {"phase": "return_home", "time_s": 40.0}}
+    w = World("transport", obstacle=obstacle)
+    out = w.tick(Tracking(status="arrived"))
+    assert out.tracking.status == "arrived" and "end_s" not in obstacle["backoff"] and "force_replan" not in obstacle

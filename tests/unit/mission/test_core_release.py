@@ -281,3 +281,14 @@ def test_a_failed_escape_dump_propagates_after_the_dump_count_moved():
         with pytest.raises(OSError, match="disk full"):
             w.core.find_escape(25.0, (2.0, 1.0, 0.0), 1, 0.0)
     assert w.obstacle["recovery_dumps"] == 1
+
+
+def test_the_return_replan_after_a_release_is_retried_tight_on_the_carried_destination():
+    """M-a2 core sweep: the return leg's invalid start is retried at zero clearance, on the return scenario."""
+    w = World(phase="return_home", jump=(0.05, 0.0, 0.0), docking={"accepted_any": True},
+              plans=[leg(success=False, status="invalid_start"), leg(2.0, 4.0)])
+    w.slam["transport_scenario"] = w.scenario
+    w.core.slam_release(40.0)
+    plans = [c for c in w.calls if c[0] == "plan_return_leg"]
+    assert len(plans) == 2 and plans[1][1][3].clearance_m == 0.0 and w.slam["holds"][-1]["tight_retry"] is True
+    assert plans[1][1][0] == ("world", w.slam["return_scenario"]) and plans[1][1][2] == "HOME"

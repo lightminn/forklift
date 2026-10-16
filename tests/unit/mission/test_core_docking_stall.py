@@ -219,3 +219,60 @@ def test_the_held_stall_replans_grid_sees_the_released_pose():
     (grid,) = [c for c in w.calls if c[0] == "grid_kwargs"]
     assert grid[2]["own_pose"] == (3.0, 4.0, 0.1)
     np.testing.assert_array_equal(w.runner_rear, [3.0, 4.0, 0.1])
+
+
+# M-a2 core sweep (tools/ma2_core_sweep.py --all): conditions the kept source tests read that no behaviour test held.
+def test_an_off_path_heading_miss_is_neither_a_docking_stop_nor_a_goal_heading_miss():
+    off = Tracking(status="failed", failure="endpoint_heading", off_path=True)
+    w = World(docking={"status": "armed"})
+    out = w.tick(off)
+    assert out.tracking.status == "failed" and w.ms.dock_stop_ticks == 0
+    w = World("return_home", mode="tracking")
+    out = w.tick(off)
+    assert out.tracking.status == "failed" and w.ms.slam_stall_ticks == 0
+
+
+def test_a_goal_heading_miss_brakes_on_the_travel_legs_only():
+    w = World("return_home", mode="tracking", stop_now=False)
+    out = w.tick(MISS)
+    assert (out.tracking.status, out.tracking.speed_mps) == ("braking", 0.0)  # brakes, waits for the stop
+    w = World("observe", mode="tracking", stop_now=False)
+    assert w.tick(MISS).tracking.status == "failed"  # an observe leg's miss is another rule's
+
+
+def test_the_stall_replan_is_for_the_travel_legs_standing_on_a_zero_command():
+    w = World("observe", mode="tracking")
+    for _ in range(121):
+        w.tick(Tracking(status="tracking", speed_mps=0.0))
+    assert w.names() == [] and w.ms.slam_stall_ticks == 0
+    w = World("transport", mode="tracking")
+    for _ in range(121):
+        w.tick(Tracking(status="tracking", speed_mps=0.1))  # standing, but still commanded to move: no stall
+    assert w.names() == [] and w.ms.slam_stall_ticks == 0
+
+
+def test_a_reapproach_stalls_at_a_cusp_only():
+    w = World(docking={"reapproach": True}, mode="tracking", remaining=1.0)
+    for _ in range(121):
+        w.tick(Tracking(status="tracking", speed_mps=0.0))  # standing mid-leg, not at a cusp
+    assert "start_docking_retry" not in w.names() and w.ms.slam_stall_ticks == 0
+
+
+def test_a_plain_stall_without_a_stall_replan_left_does_not_replan():
+    w = World(mode="tracking", stall_replans=2)
+    for _ in range(121):
+        w.tick(Tracking(status="tracking", speed_mps=0.0))
+    assert "plan_transport_leg" not in w.names()
+
+
+def test_a_stall_replan_keeps_another_legs_backoff():
+    from forklift_core.control.path_tracking import TrackerConfig as TC
+
+    backoff = {"phase": "return_home", "config": TC(cruise_speed_mps=0.15)}
+    w = World(mode="tracking", plans=[plan()], obstacle={"backoff": dict(backoff)})
+    w.tracker.config = TC(cruise_speed_mps=0.5)
+    for _ in range(120):
+        w.tick(Tracking(status="tracking", speed_mps=0.0))
+    assert "plan_transport_leg" in w.names()
+    assert w.obstacle["backoff"]["phase"] == "return_home"  # not this leg's: neither popped nor used
+    assert w.core.trackers["transport"].config.cruise_speed_mps == 0.5

@@ -171,3 +171,22 @@ def test_a_waiting_replan_resumes_once_the_path_ahead_verifies_and_stands_until_
     assert core.live_leg(20.2, REAR, False) is True
     obstacle["backoff"] = {"phase": "observe"}
     assert core.live_leg(20.3, REAR, False) is False and obstacle["replan_wait"] == {}
+
+
+# M-a2 core sweep (tools/ma2_core_sweep.py --all): conditions the kept source tests read that no behaviour test held.
+def test_the_live_return_leg_retries_at_zero_clearance():
+    slam = {"return_scenario": SimpleNamespace(destination="D2"), "transport_scenario": "SC_T",
+            "pending_release": None, "tracker": SimpleNamespace(applied=None)}
+    core, _, _, _, calls, _ = make("return_home", statuses=("invalid_start", "success"), slam=slam)
+    core.live_leg(30.0, REAR, False)
+    plans = [c for c in calls if c[0] == "return"]
+    assert [p[1][3] for p in plans] == [Config(), Config(clearance_m=0.0)]
+    assert plans[1][2]["travel_config"] == Config(clearance_m=0.0)
+
+
+def test_no_live_plan_or_wait_on_a_leg_other_than_the_travel_legs():
+    core, _, _, obstacle, calls, _ = make("observe")
+    core.trackers["observe"] = SimpleNamespace(config=TrackerConfig(), leg_ahead=lambda: ("LEG", 1))
+    assert core.live_leg(20.0, REAR, False) is False and [c for c in calls if c[0] in ("transport", "return")] == []
+    obstacle["live_retry_after_s"] = 99.0  # a pending retry would make a travel leg stand
+    assert core.live_leg(20.0, REAR, False) is False

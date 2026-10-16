@@ -203,3 +203,47 @@ def test_the_cusp_monitor_sees_a_pending_replan_of_this_leg_only(obstacle_state,
     core.hooks.cusp_monitor = lambda: SimpleNamespace(tick=tick, latch=None)
     core.cusp_tick(10.0, (0.5, 0, 0), "RAW", "TR", False)
     assert seen["replan_pending"]() is pending
+
+
+def test_a_realignment_owns_an_observe_cusp_stop_only_while_slam_holds():
+    slam = {"docking": {}, "tracker": SimpleNamespace(mode="tracking")}
+    core, _, _ = make("observe", slam=slam)
+    core.realign_active = lambda: True
+    assert core.cusp_excluded("observe") is None
+
+
+@pytest.mark.parametrize("estimate", [None, SimpleNamespace(x_m=4.0, y_m=1.0, yaw_rad=0.1)])
+def test_the_observe_legs_checker_takes_the_observe_rectangles_and_the_pickup_it_knows(monkeypatch, estimate):
+    seen = {}
+    monkeypatch.setattr("forklift_core.planning.pallet_mission.leg_obstacles",
+                        lambda leg, world, geometry, pickup_obstacle, pickup_bounds:
+                        seen.update(leg=leg, world=world, pickup=pickup_obstacle, bounds=pickup_bounds) or ("R", "F", "B"))
+    monkeypatch.setattr("forklift_core.planning.grid_collision.FootprintCollisionChecker", lambda *a: ("CHECKER", a))
+    core, _, _ = make("observe", obstacle={"pickup_estimate": estimate})
+    core.geometry = SimpleNamespace(pallet_depth_m=1.2, pallet_width_m=0.8)
+    assert core.cusp_leg_checker() == ("CHECKER", ("R", "F", "B"))
+    assert (seen["leg"], seen["world"], seen["bounds"]) == ("observe", "SC", "B")
+    if estimate is None:
+        assert seen["pickup"] == "ZONE"
+    else:
+        assert (seen["pickup"].x_m, seen["pickup"].y_m, seen["pickup"].length_m) == (4.0, 1.0, 1.2)
+
+
+@pytest.mark.parametrize("blocked, occupied", [("occupied", True), ("unknown", False), (None, False)])
+def test_the_cusp_monitors_prefix_check_reads_occupied_cells_walking_past_unknown(blocked, occupied):
+    seen, asked = {}, []
+
+    def tick(now_s, phase, tracker, raw, tracking, **k):
+        seen.update(k)
+        return SimpleNamespace(force_replan=False, end=None, tracking="T", hold=False)
+
+    def check(traj, **k):
+        asked.append((traj, k))
+        return Check(blocked=blocked)
+
+    core, _, _ = make(obstacle={"layer": layer(check_candidate=check)})
+    core.hooks.cusp_monitor = lambda: SimpleNamespace(tick=tick, latch=None)
+    core.cusp_tick(10.0, (0.5, 0, 0), "RAW", "TR", False)
+    latch = SimpleNamespace(prefix_trajectory="PREFIX", hand_direction=-1)
+    assert seen["prefix_occupied"](latch) is occupied
+    assert asked[-1][0] == "PREFIX" and asked[-1][1]["direction"] == -1 and asked[-1][1]["unknown_passes"] is True

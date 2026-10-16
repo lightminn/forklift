@@ -345,3 +345,27 @@ def test_the_cusp_replan_keeps_the_legs_tracker_config():
         w.tick(CUSP_MISS)
     assert w.core.trackers["transport"] is not w.tracker
     assert w.core.trackers["transport"].config.cruise_speed_mps == 0.47
+
+
+# M-a2 core sweep (tools/ma2_core_sweep.py --all): conditions the kept source tests read that no behaviour test held.
+def test_a_cusp_heading_miss_is_realign_held_only_while_slam_holds():
+    w = World("return_home", slam_mode="tracking", realign=True, stopped=False)  # not yet stopped: no judgement
+    w.tick(PENDING)
+    assert all(c[1][1] != "realign_held" for c in w.calls if c[0] == "decide") and "fail_pending" not in w.names()
+
+
+def test_an_observe_stall_counts_only_standing_at_a_cusp_on_a_zero_command():
+    w = World("observe", plans=[plan()])
+    for stall in (Tracking(status="tracking", at_cusp=False), Tracking(status="tracking", at_cusp=True, speed_mps=0.1)):
+        w.tick(stall)
+        assert w.ms.observe_stall_ticks == 0
+
+
+def test_an_off_path_observe_miss_is_neither_replanned_nor_a_held_realignment_refusal():
+    w = World("observe", plans=[plan()])
+    off = Tracking(status="failed", failure="endpoint_heading", off_path=True)
+    w.tick(off)
+    assert "plan_observation_leg" not in w.names()
+    w = World("observe", slam_mode="holding", realign=True)
+    w.tick(off)  # no near_capture_realign_held_recovery refusal for an off-path failure
+    assert "plan_observation_leg" not in w.names()
