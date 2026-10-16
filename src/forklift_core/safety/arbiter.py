@@ -22,6 +22,7 @@ from .generations import PENDING, RequestBook
 from .ledger import FrameLedger, TickLedger
 from .teleop_drive import TeleopDrive, TeleopLimits
 from .teleop_policy import Policy, teleop_policy
+from .validate import problem
 
 MODES = ("PAUSED", "AUTO", "TELEOP", "STOPPED")
 LEASED = ("rearm", "mode_request", "arm", "disarm", "mission_submit", "mission_pause", "mission_resume",
@@ -112,6 +113,7 @@ class Arbiter:
         self.pending: list[dict] = []  # mission requests waiting for this cycle's lifecycle verdict (B3)
         self.provisional_auto = False
         self._context_gen = 0
+        self._handling_conn: str | None = None
         self.outbox: list[dict] = []  # replies settled outside handle (mission requests), sent by resolve
         self.teleop: dict | None = None  # the operator's latest accepted command with its absolute deadline (B10)
         self.teleop_seq = -1  # the last accepted seq within this arm generation
@@ -193,6 +195,13 @@ class Arbiter:
         (teleop, echo, input_state) are not. A mission request may be answered later (``resolve``). With
         ``conn_id``, only the client's current connection counts -- except a STOP, which only narrows."""
         self._expire(now_mono)
+        if problem(msg) is not None:
+            kind = msg.get("t") if isinstance(msg, dict) else None
+            if kind in RELIABLE:
+                request_id = msg.get("request_id")
+                return self._reply(kind, request_id if isinstance(request_id, str) else None, "invalid")
+            self.last_teleop_reject = "invalid" if kind == "teleop" else self.last_teleop_reject
+            return None
         kind = msg.get("t")
         if client_id not in self.clients:
             if kind == "stop":
@@ -200,6 +209,7 @@ class Arbiter:
             return None  # not connected: nothing else it says counts, and there is no one to answer
         if conn_id is not None and self.conns.get(client_id) != conn_id and kind != "stop":
             return None
+        self._handling_conn = conn_id  # a mission request answers the connection that asked (Codex M-c r3 P2)
         if kind not in RELIABLE:
             return self._latest_value(client_id, kind, msg, now_mono)
         request_id = msg.get("request_id")
@@ -341,7 +351,7 @@ class Arbiter:
             return "not_armed"
         self.teleop_seq = seq
         self.lease.renewed_mono = max(self.lease.renewed_mono, sent)  # its echo renews the lease too
-        self.teleop = {"deadline": deadline, "mode": mode, "deadman": bool(msg.get("deadman")),
+        self.teleop = {"deadline": deadline, "mode": mode, "deadman": msg.get("deadman") is True,
                        "speed_ratio": _ratio(msg.get("speed_ratio")), "curvature_ratio": _ratio(msg.get("curvature_ratio")),
                        "lift_dir": int(msg.get("lift_dir") or 0), "expiry": "stale_video" if mode == "video" and
                        deadline < sent + self.config.command_max_age_s else "expired"}
@@ -509,7 +519,7 @@ class Arbiter:
     def _settle(self, p: dict, reply: dict) -> None:
         p["settled"] = True
         self.requests.put(p["client_id"], p["request_id"], reply)
-        self.outbox.append(dict(reply, client_id=p["client_id"]))
+        self.outbox.append(dict(reply, client_id=p["client_id"], conn_id=p.get("conn_id")))
 
     def step(self, now_mono: float, safety: dict | None, candidate: tuple[float, float],
              drive: dict | None = None) -> Output:
@@ -602,8 +612,8 @@ class Arbiter:
     def _mission_request(self, client_id, request_id, kind, command):
         if self.mission is None:
             return self._reply(kind, request_id, "unsupported")
-        self.pending.append({"client_id": client_id, "request_id": request_id, "kind": kind, "command": command,
-                             "control_gen": self.control_gen, "queued": False})
+        self.pending.append({"client_id": client_id, "conn_id": self._handling_conn, "request_id": request_id,
+                             "kind": kind, "command": command, "control_gen": self.control_gen, "queued": False})
         return None  # answered by resolve, this cycle
 
     def _on_mission_submit(self, client_id, request_id, msg, now_mono):

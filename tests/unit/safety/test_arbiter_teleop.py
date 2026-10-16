@@ -90,11 +90,17 @@ def test_a_late_command_from_an_old_arm_generation_does_not_rearm():
     assert a.last_teleop_reject == "not_armed" and a.teleop is None
 
 
-def test_ratios_are_clamped_and_garbage_is_zero():
+def test_malformed_commands_are_dropped_before_anything_reads_them():
+    """Codex M-c review round 3 P1: deadman "false" drove; a string echo crashed the link."""
     a, base, t, arm_gen = teleop_rig()
     tick = a.tick(t)
-    a.handle("op", command(a, base, arm_gen, tick, 1, speed_ratio=3.0, curvature_ratio="x"), t)
-    assert a.teleop["speed_ratio"] == 1.0 and a.teleop["curvature_ratio"] == 0.0
+    for k, bad in enumerate(({"speed_ratio": 3.0}, {"curvature_ratio": "x"}, {"deadman": "false"},
+                             {"echo": "bad"}, {"lift_dir": True}), start=1):
+        a.handle("op", command(a, base, arm_gen, tick, k, **bad), t)
+        assert a.last_teleop_reject == "invalid" and a.teleop is None
+    reply = a.handle("op", {"t": "mission_submit", "request_id": "M", **base, "control_gen": a.control_gen,
+                            "pallet_id": ["P"], "destination_id": "D", "targets_revision": 0}, t)
+    assert reply["reason"] == "invalid"
 
 
 def test_the_arbiter_drives_teleop_through_the_chain_from_the_measured_steering():

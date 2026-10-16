@@ -96,7 +96,13 @@ class Link:
         self.conn_of: dict[str, str] = {}  # client_id -> current conn_id, for the mission replies
 
     def _handle(self, conn_id, client_id, msg, now, where):
-        reply = self.a.handle(client_id, msg, now, conn_id=conn_id)
+        try:
+            reply = self.a.handle(client_id, msg, now, conn_id=conn_id)
+        except Exception as exc:  # noqa: BLE001 -- one bad message never ends the run; it is logged and refused
+            self.log.append({"mono": now, "where": where, "conn": conn_id, "error": repr(exc)})
+            reply = None
+            if isinstance(msg, dict) and isinstance(msg.get("request_id"), str):
+                reply = {"t": "reject", "of": msg.get("t"), "request_id": msg["request_id"], "reason": "invalid"}
         self.log.append({"mono": now, "where": where, "conn": conn_id, "client": client_id, "t": msg.get("t"),
                          "request_id": msg.get("request_id"),
                          "reply": None if reply is None else (reply.get("t"), reply.get("reason"))})
@@ -144,9 +150,9 @@ class Link:
     def end(self, now: float, records: list, safety, candidate, drive=None):
         """After the mission's tick: the mission replies, the output, and the tick/state due."""
         for reply in self.a.resolve(now, records):
-            conn_id = self.conn_of.get(reply.pop("client_id", None))
-            if conn_id is not None:  # the asking connection is gone: dropped; a resend gets the stored result
-                self.ch.put(conn_id, reply)
+            client_id, conn_id = reply.pop("client_id", None), reply.pop("conn_id", None)
+            if conn_id is not None and self.conn_of.get(client_id) == conn_id:
+                self.ch.put(conn_id, reply)  # else the asking connection is gone: a resend gets the stored result
         out = self.a.step(now, safety, candidate, drive)
         if self._next_tick is None or now >= self._next_tick:
             self.ch.put(None, self.a.tick(now))

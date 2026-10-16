@@ -120,6 +120,26 @@ def test_stopping_the_server_closes_connections_with_1001():
         assert stopped.wait(3)
         s._stop.set()
         s.thread.join(2)
-        s.server.stop()
+        assert s.server.stop() is True
         t.join(5)
     assert result["code"] == 1001
+
+
+def test_many_clients_are_closed_within_the_stop_budget():
+    async def clients(port, n, ready):
+        conns = [await connect(f"ws://127.0.0.1:{port}/api/v1/control") for _ in range(n)]
+        for k, ws in enumerate(conns):
+            await ws.send(json.dumps({"t": "hello", "api": "console/1", "client_id": f"c{k}"}))
+            await ws.recv()
+        ready.set()
+        await asyncio.sleep(10)  # never read again: closes must not wait on them one by one
+
+    with StandIn() as s:
+        ready = threading.Event()
+        threading.Thread(target=lambda: asyncio.run(clients(s.port, 20, ready)), daemon=True).start()
+        assert ready.wait(5)
+        s._stop.set()
+        s.thread.join(2)
+        start = time.monotonic()
+        assert s.server.stop(timeout_s=5.0) is True
+        assert time.monotonic() - start < 4.0

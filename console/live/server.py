@@ -229,21 +229,33 @@ class LiveServer:
         self._stopping = asyncio.Event()
         self._ready.set()
         await self._stopping.wait()
-        for ws, _ in list(h.control.values()):
+        sockets = [ws for ws, _ in list(h.control.values())] + [sub["ws"] for sub in list(h.media.values())]
+
+        async def close(ws):
             with contextlib.suppress(Exception):
-                await asyncio.wait_for(ws.close(1001, "runner ended"), 1.0)
-        for sub in list(h.media.values()):
-            with contextlib.suppress(Exception):
-                await asyncio.wait_for(sub["ws"].close(1001, "runner ended"), 1.0)
+                await ws.close(1001, "runner ended")
+
+        # Every connection at once, under one budget (Codex M-c review round 3 P2: one by one, 20 slow
+        # closes outlived the join); whatever is left is aborted.
+        if sockets:
+            _, late = await asyncio.wait([asyncio.create_task(close(ws)) for ws in sockets], timeout=1.5)
+            for task in late:
+                task.cancel()
+            for ws in sockets:
+                if ws.transport is not None and not ws.transport.is_closing():
+                    ws.transport.abort()
         h.close()
         with contextlib.suppress(Exception):
             await asyncio.wait_for(h.server.wait_closed(), 2.0)
         h.executor.shutdown(wait=False, cancel_futures=True)
 
-    def stop(self, timeout_s: float = 5.0) -> None:
+    def stop(self, timeout_s: float = 5.0) -> bool:
+        """True once the server thread has ended; False when it outlived ``timeout_s`` (the caller must not report
+        the server ended)."""
         if self.loop is not None and self._thread is not None and self._thread.is_alive():
             self.loop.call_soon_threadsafe(self._stopping.set)
             self._thread.join(timeout_s)
+        return self._thread is None or not self._thread.is_alive()
 
 
 def camera_item(frame_id: int, rgb, acquired_mono: float, stamp_sim_s: float, session_epoch: int, *,

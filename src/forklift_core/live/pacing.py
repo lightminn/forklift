@@ -29,21 +29,22 @@ class Pacer:
         self.lag_s = 0.0
         self.stalls = 0
 
-    def before_step(self, wall_mono: float) -> float:
-        """Seconds to sleep before the next physics step (0 when it is already due). The step is taken to start
-        at ``wall_mono`` plus that sleep; a late start is not made up."""
+    def wait_s(self, wall_mono: float) -> float:
+        """Seconds to sleep before the next physics step may start (0 when it is already due)."""
         if self._last_start is None:
-            self._last_start = wall_mono
             return 0.0
-        due = self._last_start + self.spacing_s
-        start = max(wall_mono, due)
-        gap = start - self._last_start
-        self.lag_s = max(0.0, gap - self.spacing_s)
-        if gap > self.stall_s:
-            self.stalls += 1
-            self._fail()
-        self._last_start = start
-        return start - wall_mono
+        return max(0.0, self._last_start + self.spacing_s - wall_mono)
+
+    def started(self, wall_mono: float) -> None:
+        """The step really starts now (after the sleep, however late it woke): the next one is spaced from here
+        (Codex M-c review round 3 P2: spacing from the planned start let a late wake squeeze the next steps)."""
+        if self._last_start is not None:
+            gap = wall_mono - self._last_start
+            self.lag_s = max(0.0, gap - self.spacing_s)
+            if gap > self.stall_s:
+                self.stalls += 1
+                self._fail()
+        self._last_start = wall_mono
 
     def after_step(self, wall_mono: float) -> None:
         """A physics step ended at ``wall_mono``: update the factor and ``ok``."""

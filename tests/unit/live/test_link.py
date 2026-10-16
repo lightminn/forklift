@@ -108,3 +108,33 @@ def test_a_full_ordered_channel_still_takes_connections():
     ch.connect("B", "pad")
     cycle(m, link, 0.01)
     assert set(a.clients) == {"op", "pad"}
+
+
+def test_a_mission_reply_goes_only_to_the_connection_that_asked():
+    """Codex M-c review round 3 P2: A asked, B replaced A before the verdict -- B does not get A's answer."""
+    m, a, ch, link = rig()
+    ch.connect("A", "op")
+    for k in range(40):
+        cycle(m, link, 0.01 * (k + 1))
+    ch.message("A", "op", {"t": "lease_request", "request_id": "L", "session_epoch": EPOCH})
+    cycle(m, link, 0.5)
+    lease_id = next(r for r in out_for(ch, "A") if r.get("of") == "lease_request")["lease_id"]
+    ch.message("A", "op", {"t": "mission_submit", "request_id": "M", "session_epoch": EPOCH, "lease_id": lease_id,
+                           "control_gen": a.control_gen, "pallet_id": "P", "destination_id": "D",
+                           "targets_revision": 0})
+    stop_kind = link.begin(0.51, Feedback(0.51, 0.0))  # A's submit queued for this tick
+    records = m.apply(0.51, Context(stop_kind=stop_kind))
+    ch.connect("B", "op")  # B arrives during the mission's tick
+    link.stops(0.511, "gate")
+    link.end(0.512, records, SAFE, (0.0, 0.0))
+    assert not any(r.get("of") == "mission_submit" for c, r in ch.take_out() if c in ("A", "B"))
+    assert a.requests.get("op", "M")["t"] == "ack"  # stored: A's resend gets it
+
+
+def test_a_bad_message_is_refused_and_logged_not_raised():
+    m, a, ch, link = rig()
+    ch.connect("A", "op")
+    ch.message("A", "op", {"t": "echo", "echo": "bad"})
+    ch.message("A", "op", {"t": "lease_request", "request_id": "L", "session_epoch": "41"})
+    cycle(m, link, 0.01)
+    assert [(r["t"], r.get("reason")) for c, r in ch.take_out() if c == "A"] == [("reject", "invalid")]
