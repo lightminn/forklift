@@ -38,6 +38,10 @@ def test_only_fitted_and_confirmed_candidates_are_counted():
     ({"pickable": "yes"}, "pickable"),
     ({"alternative_centres_m": ((1.0, 2.0),)}, "alternative centre"),
     ({"observed_extent_m": -0.1}, "observed_extent_m"),
+    ({"pending": ("weather",)}, "pending"),
+    ({"pending": ("depth",)}, "pending"),          # a pick may not be permitted with anything unverified
+    ({"centre_segment_m": ((2.3, 0.0, 0.0),)}, "centre_segment"),
+    ({"centre_segment_m": ((2.3, 0.0, 0.0), (2.6, 0.0))}, "centre segment point"),
 ])
 def test_bad_candidates_are_refused(kw, match):
     with pytest.raises(ValueError, match=match):
@@ -50,3 +54,10 @@ def test_value_sources_are_checked():
     spec = rs.known_spec("epal6")
     with pytest.raises(ValueError, match="source"):
         ObservedPalletShape(spec, face_layout(spec, "x"), (("face", "measured"),))
+
+
+def test_a_waiting_candidate_lists_what_the_near_range_must_verify():
+    c = _candidate(pickable=None, pending=("depth", "lane_bounds", "top_layout"))
+    assert c.pending == ("depth", "lane_bounds", "top_layout") and c.counted
+    stopped = _candidate(pickable=False, fit_reasons=("fork_spacing_adjust",), pending=("depth",))
+    assert stopped.pending == ("depth",)  # a stop keeps its other unverified items

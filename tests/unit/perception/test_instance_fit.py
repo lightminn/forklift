@@ -21,6 +21,11 @@ SITE = {s.name: LoadDeclaration(10.0, 0.0, s.overall_depth_m / 2, 0.0, "site_def
 SPACING = {EPAL.name: 0.3725, T11.name: 0.290}
 
 
+def _load(spec):
+    """Site default load for a known shape; a non-standard reading (spec None) has none."""
+    return None if spec is None else SITE.get(spec.name)
+
+
 def _render(items, *, noise=None, distractors=(), depth=None):
     """items: (spec, Placement, damage) -> scene, instance ids; depth(rendered) may edit the depth."""
     placed = [rt.placed_boxes(rt.instance_boxes(s, d), p) for s, p, d in items]
@@ -201,7 +206,7 @@ def _fit(items, k=0, *, source="oracle", noise=None, distractors=(), depth=None,
     spec = items[k][0]
     setup = ForkSetup(spacing or SPACING[spec.name])
     cand = F.fit_instance(scene, InstanceProposal("p0", ids == k, 1.0, source), specs=SPECS, setup=setup,
-                          load_for=lambda s: SITE.get(s.name))
+                          load_for=_load)
     truths = rt.scene_truths([(s, p, d, SITE[s.name]) for s, p, d in items], setup)[0]
     return cand, truths[k]
 
@@ -235,8 +240,12 @@ def test_a_clean_known_pallet_is_fitted_within_the_pocket_tolerances(spec, place
     assert lateral <= 0.010 and axial <= 0.010 and yaw <= math.radians(0.5) and z <= 0.006
     assert cand.support_state == "visible" and cand.on_floor
     assert cand.pallet_centre_m[:2] == pytest.approx((placement.x_m, placement.y_m), abs=0.01)
-    # T11 entered through a y face has no roof board edges along the forks: near_tracking_unavailable
-    assert cand.pickable == any(f.fit["pickable"] for f in truth.faces if f.accessible and f.axis == cand.axis)
+    # T11 entered through a y face has no roof board edges along the forks: near_tracking_unavailable.
+    # A face that passes still waits for the near-range re-observation (§9.1): pickable None, never
+    # True, with the unverified items listed (Codex 2026-10-16: a known template is not a measurement).
+    truth_ok = any(f.fit["pickable"] for f in truth.faces if f.accessible and f.axis == cand.axis)
+    assert cand.pickable is (None if truth_ok else False)
+    assert cand.pending == F.FAR_PENDING
 
 
 def test_left_is_the_larger_lateral_pocket():
@@ -280,7 +289,7 @@ def test_the_verdict_belongs_to_the_returned_placement():
     scene, ids = _render([(T11, rt.Placement(4.0, 0.0, math.pi / 2, 0.0), damage)])
     strict = replace(F.FitParams(), min_score=0.6)
     cand = F.fit_instance(scene, InstanceProposal("p0", ids == 0, 1.0, "oracle"), specs=SPECS,
-                          setup=ForkSetup(0.290), load_for=lambda s: SITE.get(s.name), params=strict)
+                          setup=ForkSetup(0.290), load_for=_load, params=strict)
     assert (cand.geometry == "unfit") == (cand.score < 0.6)
 
 
@@ -324,7 +333,7 @@ def test_the_shifted_rival_keeps_the_target_ambiguous_through_selection(occluder
     scene, ids = _render([(T11, rt.Placement(2.0, 0.0, 0.0, 0.0), ()), (T11, rt.Placement(3.2, 0.0, 0.0, 0.0), ())],
                          distractors=occluders)
     props = [InstanceProposal(f"p{k}", ids == k, 1.0, "oracle") for k in (0, 1) if (ids == k).any()]
-    out = F.fit_scene(scene, props, specs=SPECS, setup=ForkSetup(0.290), load_for=lambda s: SITE.get(s.name))
+    out = F.fit_scene(scene, props, specs=SPECS, setup=ForkSetup(0.290), load_for=_load)
     instr = {"present": True, "x_m": 2.6, "y_m": 0.0, "radius_m": 0.62, "layer": None, "load": None}
     assert select_target(out.candidates, instr, unresolved=out.failures).status != "selected"
 
@@ -337,7 +346,7 @@ def test_a_rejected_shape_still_keeps_the_target_ambiguous_through_selection():
     s7 = next(r for r in rs.catalogue() if r.scene_id == "s7_nonstandard_1000769").instances[0].spec
     scene, ids = _render([(s7, rt.Placement(2.0, -0.4, 0.0, 0.0), ()), (T11, rt.Placement(3.2, 0.4, 0.0, 0.0), ())])
     props = [InstanceProposal(f"p{k}", ids == k, 1.0, "oracle") for k in (0, 1) if (ids == k).any()]
-    out = F.fit_scene(scene, props, specs=SPECS, setup=ForkSetup(0.290), load_for=lambda s: SITE.get(s.name))
+    out = F.fit_scene(scene, props, specs=SPECS, setup=ForkSetup(0.290), load_for=_load)
     instr = {"present": True, "x_m": 2.6, "y_m": 0.0, "radius_m": 0.73, "layer": None, "load": None}
     assert select_target(out.candidates, instr, unresolved=out.failures).status != "selected"
 
@@ -409,16 +418,22 @@ def test_x_and_y_readings_of_a_t11_face_compete_instead_of_merging():
 @pytest.mark.parametrize("scene_id", ["s7_nonstandard_1000738", "s7_nonstandard_1000759"])
 def test_a_non_standard_pallet_is_not_fitted_as_a_known_shape(scene_id):
     """Rig renders of S7 dev recipes (0.77 m wide with four blocks; 0.99 m wide) that the EPAL raster
-    fits when the shape check is off (ws1 dev 2026-10-16: 76 of 135 S7 pallets came out fitted)."""
+    fits when the shape check is off (ws1 dev 2026-10-16: 76 of 135 S7 pallets came out fitted).
+    With the parametric reading off the shape check leaves them ambiguous; with it on (stage 2B)
+    they are read as non-standard, never as a known shape."""
     from dataclasses import replace
     recipe = next(r for r in rs.catalogue() if r.scene_id == scene_id)
     out = instance_rig.render_instances([rs.recipe_boxes(recipe, 0)])
     proposal = InstanceProposal("p0", out.instance_ids == 0, 1.0, "oracle")
-    kw = dict(specs=SPECS, setup=ForkSetup(recipe.fork_spacing_m), load_for=lambda s: SITE.get(s.name))
-    off = replace(F.FitParams(), shape_outside_max=9.0, shape_seen_through_max=9.0)
+    kw = dict(specs=SPECS, setup=ForkSetup(recipe.fork_spacing_m), load_for=_load)
+    known_only = replace(F.FitParams(), parametric=False)
+    off = replace(known_only, shape_outside_max=9.0, shape_seen_through_max=9.0)
     assert F.fit_instance(out.scene, proposal, params=off, **kw).geometry == "fitted"
-    cand = F.fit_instance(out.scene, proposal, **kw)
+    cand = F.fit_instance(out.scene, proposal, params=known_only, **kw)
     assert cand.geometry == "ambiguous" and "shape_mismatch" in cand.reasons
+    full = F.fit_instance(out.scene, proposal, **kw)
+    # 1000759 sits at 1.07 m with its right end out of the image: unreadable, so never a confident fit
+    assert full.hypothesis == "parametric:x" or full.geometry != "fitted"
 
 
 def test_a_geometric_proposal_stays_unconfirmed():
@@ -451,7 +466,7 @@ def test_an_over_segmented_mask_is_still_fitted():
     placement = rt.Placement(2.9, 0.2, 0.2, 0.0)
     scene, ids = _render([(EPAL, placement, ())])
     cand = F.fit_instance(scene, InstanceProposal("p0", dilate(ids == 0), 1.0, "oracle"), specs=SPECS,
-                          setup=ForkSetup(0.3725), load_for=lambda s: SITE.get(s.name))
+                          setup=ForkSetup(0.3725), load_for=_load)
     truth = rt.scene_truths([(EPAL, placement, (), SITE[EPAL.name])], ForkSetup(0.3725))[0][0]
     lateral, axial, yaw, z = _errors(cand, truth)
     assert cand.geometry == "fitted" and lateral <= 0.010 and axial <= 0.010 and z <= 0.006
@@ -463,7 +478,7 @@ def test_fit_scene_keeps_proposal_order_and_records_failures(monkeypatch):
     tiny[0, 0] = True
     props = [InstanceProposal("a", ids == 0, 1.0, "oracle"), InstanceProposal("b", tiny, 1.0, "oracle"),
              InstanceProposal("c", ids == 1, 1.0, "oracle")]
-    out = F.fit_scene(scene, props, specs=SPECS, setup=ForkSetup(0.3725), load_for=lambda s: SITE.get(s.name))
+    out = F.fit_scene(scene, props, specs=SPECS, setup=ForkSetup(0.3725), load_for=_load)
     assert [(c.candidate_id, c.proposal_id) for c in out.candidates] == [("c0", "a"), ("c2", "c")]
     assert [(f.proposal_id, f.reason) for f in out.failures] == [("b", "no_face")]
     real = F.fit_instance
@@ -474,7 +489,7 @@ def test_fit_scene_keeps_proposal_order_and_records_failures(monkeypatch):
         return real(scene, proposal, **kw)
 
     monkeypatch.setattr(F, "fit_instance", boom)
-    out = F.fit_scene(scene, props, specs=SPECS, setup=ForkSetup(0.3725), load_for=lambda s: SITE.get(s.name))
+    out = F.fit_scene(scene, props, specs=SPECS, setup=ForkSetup(0.3725), load_for=_load)
     assert [c.proposal_id for c in out.candidates] == ["c"]
     failed = {f.proposal_id: f for f in out.failures}
     assert failed["a"].reason == "exception:FloatingPointError"
@@ -487,7 +502,7 @@ def test_a_proposal_on_the_wrong_grid_fails_alone():
     and stopped the scene, so the next (valid) proposal was never fitted."""
     scene, ids = _render([(EPAL, rt.Placement(2.6, 0.0, 0.0, 0.0), ())])
     props = [InstanceProposal("w", np.ones((2, 2), bool), 1.0, "oracle"), InstanceProposal("a", ids == 0, 1.0, "oracle")]
-    out = F.fit_scene(scene, props, specs=SPECS, setup=ForkSetup(0.3725), load_for=lambda s: SITE.get(s.name))
+    out = F.fit_scene(scene, props, specs=SPECS, setup=ForkSetup(0.3725), load_for=_load)
     assert [c.proposal_id for c in out.candidates] == ["a"]
     (failure,) = out.failures
     assert failure.proposal_id == "w" and failure.reason.startswith("bad_mask") and failure.centre_xy is None

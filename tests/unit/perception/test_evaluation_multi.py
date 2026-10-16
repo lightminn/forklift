@@ -220,3 +220,55 @@ def test_candidate_danger_agrees_with_the_unmatched_far_duplicate():
     pairs, costs = _match(cands, truth["instances"])
     assert [candidate_danger(i, c, pairs, costs, truth["instances"]) for i, c in enumerate(cands)] == [False, True]
     assert candidate_danger(0, _cand("a", 0.0, pickable=None), pairs, costs, truth["instances"]) is None
+
+
+def test_a_pick_waiting_for_near_range_still_shows_its_pose_risk():
+    """Stage 2B gate (Codex 2026-10-16): far-range candidates wait for the near-range re-observation
+    (pickable None), so `dangerous` cannot see their pose errors; `pose_dangerous` judges the pose
+    part of the same rule on every counted candidate that is not stopped."""
+    truth = _truth([_inst(0, 0.0)])
+    off = _cand("a", 0.0, dy=0.035, yaw=math.radians(3.9), pickable=None)  # 57.5 mm > 43.7
+    v = judge_scene(META, truth, NONE_IN, [off], TargetDecision("selected", "a", ()))
+    assert not v.dangerous and v.pose_dangerous and (v.pose_checked, v.pose_unmatched) == (1, 0)
+    ok = judge_scene(META, truth, NONE_IN, [_cand("a", 0.0, pickable=None)], TargetDecision("selected", "a", ()))
+    assert ok.pose_dangerous is False and ok.pose_checked == 1
+
+
+def test_pose_danger_matches_the_existing_rule_on_pickable_candidates():
+    truth = _truth([_inst(0, 0.0)])
+    for c in (_cand("a", 0.0, dy=0.035, yaw=math.radians(3.9)), _cand("a", 0.0), _cand("a", 0.0, dx=0.05)):
+        v = judge_scene(META, truth, NONE_IN, [c], TargetDecision("selected", "a", ()))
+        assert v.pose_dangerous == v.dangerous
+
+
+def test_pose_danger_skips_stopped_candidates_and_counts_unmatched_ones():
+    truth = _truth([_inst(0, 0.0)])
+    stopped = judge_scene(META, truth, NONE_IN, [_cand("a", 0.0, dy=0.035, yaw=0.1, pickable=False)],
+                          TargetDecision("not_pickable", "a", ("fork_spacing_adjust",)))
+    assert stopped.pose_dangerous is None and stopped.pose_checked == 0
+    far = judge_scene(META, truth, NONE_IN, [_cand("a", 0.0, pickable=None), _cand("b", 0.0, dx=0.25, pickable=None)],
+                      TargetDecision("selected", "a", ()))
+    assert far.pose_dangerous and (far.pose_checked, far.pose_unmatched) == (2, 1)
+
+
+@pytest.mark.parametrize("thr", [0.05, -0.0475])
+def test_pose_danger_leaves_out_a_truth_face_that_cannot_be_picked(thr):
+    """Whether the truth face can be picked is the fork-fit decision, not a pose error: an exact pose
+    on a face with a negative threshold (fork spacing) must not read as a pose danger (Codex 2026-10-16)."""
+    meta = {**META, "case": "S7", "shape_key": "nonstandard"}
+    truth = _truth([_inst(0, 0.0, pickable=False, thr=thr)])
+    v = judge_scene(meta, truth, NONE_IN, [_cand("a", 0.0, pickable=None)], TargetDecision("selected", "a", ()))
+    assert not v.dangerous and v.pose_dangerous is None and v.pose_checked == 0 and v.fit_error is None
+    # ... but it is counted, not hidden (independent review 2026-10-16)
+    assert v.pose_excluded == 1
+    diag = summarize([v], split="eval", render_source="rig")["diagnostics"]["nonstandard"]["pose_dangerous"]
+    assert diag["excluded_candidates"] == 1
+
+
+def test_summary_reports_pose_danger_as_a_diagnostic():
+    truth = _truth([_inst(0, 0.0)])
+    v = judge_scene(META, truth, NONE_IN, [_cand("a", 0.0, dy=0.035, yaw=math.radians(3.9), pickable=None)],
+                    TargetDecision("selected", "a", ()))
+    diag = summarize([v], split="eval", render_source="rig")["diagnostics"]["known:epal6"]
+    assert diag["pose_dangerous"] == {"n": 1, "failures": 1, "checked_candidates": 1, "unmatched_candidates": 0,
+                                      "excluded_candidates": 0}

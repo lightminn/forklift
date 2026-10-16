@@ -82,14 +82,29 @@ def _nearest(cands):
     return min(cands, key=lambda c: (round(c.range_m, 3), c.pallet_centre_m[1]))
 
 
+def _segment_distance(p, a, b) -> float:
+    """Horizontal distance from p to the segment a-b."""
+    a, b = np.asarray(a[:2], float), np.asarray(b[:2], float)
+    d = b - a
+    t = 0.0 if not d.any() else float(np.clip((p - a) @ d / (d @ d), 0.0, 1.0))
+    return float(np.linalg.norm(p - (a + t * d)))
+
+
 def _could_be_inside(c, target, radius) -> bool:
     """A fitted, confirmed candidate is where its fit says. Any other candidate is uncertain: it is
     in the radius if its centre, a competing reading or -- conservatively, like an unfitted object --
     its visible points within the largest half-diagonal could be (Codex review A round 4)."""
+    # A counted candidate is judged on its own reading: its centre and, when the depth is unseen,
+    # the depth segment. Competing readings (a rejected known shape among them) only make an
+    # uncertain candidate possibly inside (Codex review 2026-10-16).
     centres = [c.pallet_centre_m] + ([] if c.counted else list(c.alternative_centres_m))
     if any(np.linalg.norm(np.asarray(p[:2]) - target) <= radius for p in centres):
         return True
+    if c.centre_segment_m and _segment_distance(target, *c.centre_segment_m) <= radius:
+        return True
     if c.counted:
+        # A fit -- known or non-standard -- is where its centres say; the visible-points fallback
+        # below is for uncertain candidates only (independent review 2026-10-16).
         return False
     if c.observed_centre_xy is None:
         return True
