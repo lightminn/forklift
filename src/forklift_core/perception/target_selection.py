@@ -94,9 +94,10 @@ def _could_be_inside(c, target, radius) -> bool:
     """A fitted, confirmed candidate is where its fit says. Any other candidate is uncertain: it is
     in the radius if its centre, a competing reading or -- conservatively, like an unfitted object --
     its visible points within the largest half-diagonal could be (Codex review A round 4)."""
-    # A non-standard fit has no known depth: its centre may lie anywhere along the depth range.
-    exact = c.counted and c.shape.spec is not None
-    centres = [c.pallet_centre_m] + ([] if exact else list(c.alternative_centres_m))
+    # A counted candidate is judged on its own reading: its centre and, when the depth is unseen,
+    # the depth segment. Competing readings (a rejected known shape among them) only make an
+    # uncertain candidate possibly inside (Codex review 2026-10-16).
+    centres = [c.pallet_centre_m] + ([] if c.counted else list(c.alternative_centres_m))
     if any(np.linalg.norm(np.asarray(p[:2]) - target) <= radius for p in centres):
         return True
     if c.centre_segment_m and _segment_distance(target, *c.centre_segment_m) <= radius:

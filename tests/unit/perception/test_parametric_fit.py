@@ -226,3 +226,46 @@ def test_the_evaluator_gives_a_non_standard_reading_no_site_default():
     assert E._load_for({"present": False}, site)(None) is None
     given = {"pallet_mass_kg": 2.0, "load_mass_kg": 1.0, "com_x_max_m": 0.2, "com_y_max_m": 0.0, "source": "instruction"}
     assert E._load_for({"present": True, "load": given}, site)(None) == LoadDeclaration(**given)
+
+
+def test_a_mask_cut_through_two_touching_pallets_has_no_physical_ends():
+    """Codex review 2026-10-16: two EPAL 6 touching at y = 0, proposed as |y| < 0.4525 m (the inner
+    halves). Beyond each cut the members go on in the face plane, so a cut is not a physical end and
+    the reading must not be confirmed (it was fitted at 0.947 and selected)."""
+    boxes = [rt.placed_boxes(rt.instance_boxes(EPAL, ()), rt.Placement(3.0, y, 0.0, 0.0)) for y in (0.4, -0.4)]
+    out = instance_rig.render_instances(boxes)
+    rays = F.pixel_rays(out.scene)
+    with np.errstate(invalid="ignore"):
+        y = (F.camera_xyz(out.scene) + out.scene.depth_m[..., None] * rays)[..., 1]
+    mask = (out.instance_ids >= 0) & (np.abs(y) < 0.4525)
+    cand = F.fit_instance(out.scene, InstanceProposal("p0", mask, 1.0, "oracle"), specs=SPECS, setup=ForkSetup(0.3725),
+                          load_for=_load)
+    assert cand is None or not cand.counted, (cand.hypothesis, cand.geometry, cand.reasons)
+
+
+def test_a_fitted_non_standard_pallet_is_not_selected_through_a_rejected_reading():
+    """Codex review 2026-10-16: the centre of the known reading that was rejected stays among the
+    alternatives for uncertain candidates, but a counted non-standard candidate is where its own
+    depth segment says -- an instruction at the rejected centre, off the segment, is not it."""
+    recipe = _recipe("s7_nonstandard_1000738")
+    spec = recipe.instances[0].spec
+    instructed = LoadDeclaration(2.0, 1.0, 0.2, 0.0)
+    cand, _ = _fit_spec(spec, rt.Placement(3.0, 0.0, 0.0, 0.0), recipe.fork_spacing_m, load=lambda s: instructed)
+    assert cand.counted and cand.hypothesis == "parametric:x"
+    rejected = (cand.face_centre_m[0] + 0.4, cand.face_centre_m[1] + 0.3, 0.0)
+    cand = replace(cand, alternative_centres_m=(rejected,))
+    at_rejected = {"present": True, "x_m": rejected[0], "y_m": rejected[1], "radius_m": 0.05, "layer": None, "load": None}
+    assert select_target([cand], at_rejected).status == "none"
+
+
+def test_a_side_face_read_when_the_front_face_does_not_read_is_not_confirmed():
+    """Codex review 2026-10-16: s7_nonstandard_1000873 is cut by the image edge; its front (entry)
+    face has the most points but does not read, and the side face does -- it was fitted at -67.5 deg
+    against the entry yaw 22.5 deg. Nothing on the side face says it is an entry face, so a reading
+    off any face but the best-evidence one stays ambiguous (Isaac dev: every correct match was on
+    that face; 1000873, 1000802 and 1000828 were not)."""
+    recipe = _recipe("s7_nonstandard_1000873")
+    out = instance_rig.render_instances([rs.recipe_boxes(recipe, k) for k in range(len(recipe.instances))])
+    cand = F.fit_instance(out.scene, InstanceProposal("p0", out.instance_ids == 0, 1.0, "oracle"), specs=SPECS,
+                          setup=ForkSetup(recipe.fork_spacing_m), load_for=lambda s: LoadDeclaration(2.0, 1.0, 0.2, 0.0))
+    assert not cand.counted and cand.reasons[0] == "entry_face_unresolved"

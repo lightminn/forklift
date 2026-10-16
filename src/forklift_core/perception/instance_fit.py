@@ -648,8 +648,12 @@ def read_parametric_face(face: FacePlane, pts_u, pts_h, rays, support_z: float, 
     for edge, side in ((umin, -1.0), (umax, 1.0)):
         off = side * (ru - edge)
         beyond = band & (off > params.end_window_m[0]) & (off < params.end_window_m[1])
+        # Physical: rays pass behind just beyond the end, nothing occludes it, and the face plane
+        # does not go on there under another owner -- a mask cut through touching pallets has
+        # members continuing in the plane beyond the cut (Codex review 2026-10-16).
         ends.append(bool(((beyond & (rc == BEHIND)).sum() >= params.edge_min_hits)
-                         and ((beyond & (rc == FRONT)).sum() < params.edge_min_hits)))
+                         and ((beyond & (rc == FRONT)).sum() < params.edge_min_hits)
+                         and ((beyond & (rc == FACE) & ~owned).sum() < params.edge_min_hits)))
     layout = FaceLayout("x", umax - umin, math.nan,
                         tuple((lo * b + umin - c, hi * b + umin - c) for lo, hi in members),
                         tuple((lo * b + umin - c, hi * b + umin - c) for lo, hi in openings),
@@ -706,7 +710,7 @@ def _parametric_fit(layout: FaceLayout, setup, load, depth_max_m: float,
 
 
 def _parametric_candidate(scene, proposal, cam, face, fi, pts_u, pts_h, rays_f, reading, setup, load_for, params,
-                          candidate_id, identity_threshold, competing, state, seen, extent):
+                          candidate_id, identity_threshold, competing, state, seen, extent, best_face=True):
     layout = reading.layout
     occ = _layout_raster(layout, reading.top_m - reading.support_z, params.bin_m)
     # The top band was read as one block, but boards leave gaps the rays pass through: like the
@@ -728,6 +732,10 @@ def _parametric_candidate(scene, proposal, cam, face, fi, pts_u, pts_h, rays_f, 
         # A non-standard reading must see both physical ends: the inner part of two touching
         # pallets looks like one wide non-standard pallet (§7.4-5c).
         geometry, reasons = "ambiguous", ["end_unobserved"]
+    elif not best_face:
+        # The face with the most evidence did not read; a reading off another face (a side face)
+        # does not show which face is the entry face (Codex review 2026-10-16, s7 1000873).
+        geometry, reasons = "ambiguous", ["entry_face_unresolved"]
     pair, pickable, fit_reasons = _parametric_fit(layout, setup, load_for(None), params.nonstandard_depth_m[1],
                                                   params.parametric_spacing_slack_m)
     centre = face.centre_xy + face.left_xy * placement.u_centre
@@ -897,7 +905,8 @@ def fit_instance(scene: SceneInput, proposal: InstanceProposal, *, specs: dict, 
         # non-standard ones (dev 2026-10-16). The known reading's centre stays among the competing ones.
         competing_all = tuple(competing) + ((float(pallet_centre[0]), float(pallet_centre[1]), float(zs)),)
         raw, _ = proposal_points(scene, rays, proposal.mask, 0)
-        for fi in sorted(range(len(faces)), key=lambda k: -len(faces[k].index)):
+        order = sorted(range(len(faces)), key=lambda k: -len(faces[k].index))
+        for fi in order:
             f = faces[fi]
             u_f, rays_f = evidence[fi]
             h_f = pts[f.index, 2]
@@ -908,7 +917,8 @@ def fit_instance(scene: SceneInput, proposal: InstanceProposal, *, specs: dict, 
             reading, _ = read_parametric_face(f, u_f, h_f, rays_f, measured if measured is not None else low, params, rows)
             if reading is not None:
                 return _parametric_candidate(scene, proposal, cam, f, fi, u_f, h_f, rays_f, reading, setup, load_for,
-                                             params, candidate_id, identity_threshold, competing_all, st, seen, extent)
+                                             params, candidate_id, identity_threshold, competing_all, st, seen, extent,
+                                             fi == order[0])
     return PocketCandidate(
         candidate_id, proposal.proposal_id, proposal.source, scene.stamp_ns, hyp.label, hyp.axis,
         tuple((s[0].label, round(s[0].placement.score, 4)) for s in rivals[:3]), yaw,
