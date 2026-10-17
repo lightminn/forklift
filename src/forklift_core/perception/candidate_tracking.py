@@ -80,8 +80,8 @@ class TrackBounds:
             raise ValueError(f"rows must cover {FAMILIES}")
         for family, rows in self.rows.items():
             rows = tuple(rows)
-            if not rows or any(b.lo_m < a.hi_m for a, b in itertools.pairwise(rows)):
-                raise ValueError(f"{family} rows must be non-empty, sorted and non-overlapping")
+            if any(b.lo_m < a.hi_m for a, b in itertools.pairwise(rows)):  # empty: that family goes untracked
+                raise ValueError(f"{family} rows must be sorted and non-overlapping")
             self.rows[family] = rows
         ages = tuple(float(a) for a in self.ages_s)
         scalars = (*ages, *self.e_m, *self.psi_rad, *self.rear_axle_xy_m, self.window_s, self.expiry_s)

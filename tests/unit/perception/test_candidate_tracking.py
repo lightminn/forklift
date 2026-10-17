@@ -413,3 +413,11 @@ def test_a_tilted_odometry_pose_is_refused():
     tr = CandidateTracker(_bounds())
     with pytest.raises(ValueError, match="planar"):
         tr.update(_frame(0.0, [_candidate()], odom=pitched))
+
+
+def test_a_family_without_calibrated_rows_goes_untracked():
+    rows = {"known": (_row(1.0, 4.0),), "parametric": ()}
+    tr = CandidateTracker(TrackBounds(rows=rows, ages_s=(0.1, 10.0), e_m=(0.0, 0.0), psi_rad=(0.0, 0.0),
+                                      rear_axle_xy_m=(0.0, 0.0), window_s=1.2))
+    report = tr.update(_frame(0.0, [_candidate(hypothesis="parametric:x"), _candidate((3.0, 0.8, 0.06), cid="k")]))
+    assert report.untracked == 1 and report.new == 1
