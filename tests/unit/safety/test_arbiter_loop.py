@@ -164,3 +164,14 @@ def test_a_loaded_state_names_the_pallet_on_the_forks():
     assert st["load"] == {"state": "loaded", "basis": "phase", "pallet_id": "P-1"}
     empty = state_message(loop.a, out, dict(safety, load={"loaded": False, "basis": "phase"}), now_mono=loop.t)
     assert empty["load"]["pallet_id"] is None
+
+
+def test_measured_steering_and_lift_height_are_sent_when_given_and_null_otherwise():
+    # contract 6: steering_rad and lift_m are what the vehicle measured; the live runner reads its joints (C3 b)
+    loop = Loop()
+    out = loop.a.step(loop.t, SAFE, (0.0, 0.0), {"measured_mps": 0.0, "measured_kappa": 0.0,
+                                                 "steering_error_rad": 0.0, "permit": loop.permit})
+    st = state_message(loop.a, out, SAFE, now_mono=loop.t)
+    assert st["steering_rad"] is None and st["lift_m"] is None
+    st = state_message(loop.a, out, SAFE, now_mono=loop.t, steering_rad=[0.1, 0.08], lift_m=0.05)
+    assert st["steering_rad"] == [0.1, 0.08] and st["lift_m"] == 0.05

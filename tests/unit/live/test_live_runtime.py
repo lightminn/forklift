@@ -164,3 +164,39 @@ def test_the_welcome_carries_the_chassis_outline_the_console_draws(tmp_path):
         assert ch["half_width_m"] == pytest.approx(0.315)
     finally:
         rt.close()
+
+
+def test_the_camera_model_is_the_isaac_mount_in_the_pages_frame():
+    # The page draws the teleop sweep over the picture from camera_model: camera_link (x forward, z up) placed from
+    # the rear axle on the floor, intrinsics of the picture as sent (C3 b). The carriage_low_measured mount:
+    # base_link (0.619, 0, 0.27), tilted 0.10 rad down, rear axle 0.34 m behind base_link.
+    import math
+
+    from sim.isaac.live_runtime import live_camera_model
+    from tools.scene_rig import Camera as RigCamera
+
+    mount = RigCamera((0.619, 0.0, 0.27), 0.10).base_from_optical()
+    k = SimpleNamespace(width=1280, height=720, fx=640.0, fy=640.0, cx=641.0, cy=361.0)
+    m = live_camera_model(k, mount, rear_axle_offset_m=-0.34, sent_width=640)
+    assert m["width"] == 640 and m["height"] == 360
+    assert m["fx"] == pytest.approx(320.0) and m["cy"] == pytest.approx(180.5)
+    cam = m["base_from_camera"]
+    assert cam["xyz_m"] == pytest.approx([0.959, 0.0, 0.27])
+    qx, qy, qz, qw = cam["quaternion_xyzw"]
+    assert qx == pytest.approx(0.0, abs=1e-9) and qz == pytest.approx(0.0, abs=1e-9)
+    assert 2 * math.atan2(qy, qw) == pytest.approx(0.10)  # positive = looking down, as the page reads it
+    assert "lift 0" in cam["frame"]
+
+
+def test_the_welcome_carries_a_camera_model_when_the_runner_gives_one(tmp_path):
+    model = {"width": 640, "height": 360, "fx": 320.0}
+    rt, *_ = runtime(tmp_path, camera_model=model)
+    try:
+        assert rt.welcome["capabilities"]["camera_model"] == model
+    finally:
+        rt.close()
+    rt, *_ = runtime(tmp_path)
+    try:
+        assert "camera_model" not in rt.welcome["capabilities"]  # no perception camera: none, not a guess
+    finally:
+        rt.close()
