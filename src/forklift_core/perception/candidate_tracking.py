@@ -572,8 +572,9 @@ class CandidateTracker:
         shadows = [tr for tr in self._tracks if tr.shadow]
         chosen_fits = set() if chosen is None else {j for j, o in enumerate(obs) if _gate(chosen, o, self.bounds)}
         # exempt only a single reading the owner fits: with several, its shadows keep the alternatives (Codex)
+        # and only while the owner is active, i.e. in the same matching stage as its shadows (Codex)
         skip = ({(sh.id, j) for sh in shadows if sh.duplicate_of == self.selected for j in chosen_fits}
-                if len(chosen_fits) == 1 else set())
+                if len(chosen_fits) == 1 and chosen_active else set())
         shadow_fits = {j for j, o in enumerate(obs) if any(_gate(sh, o, self.bounds) for sh in shadows)}
         live = [tr for tr in self._live(frame.stamp_ns) if not tr.shadow]
         if priority is None:  # the selected track (if any) takes its natural stage under the 2B-3b rules
@@ -584,7 +585,10 @@ class CandidateTracker:
             stages = [("selected", [chosen])]
         stale = [tr for tr in self._tracks if tr not in active and not tr.shadow
                  and not (priority is not None and tr is chosen)]
-        stages += [("active", active + shadows), ("stale", stale)]
+        # a shadow competes in the stage its own age puts it in, as the duplicate itself would have (2B-3d)
+        fresh_shadows = [sh for sh in shadows if self._age(sh, frame.stamp_ns) <= self.bounds.expiry_s]
+        stale_shadows = [sh for sh in shadows if sh not in fresh_shadows]
+        stages += [("active", active + fresh_shadows), ("stale", stale + stale_shadows)]
         for stage, tracks in stages:
             # the selected stage sees only its one observation; the others see what is still free
             pairs, h, gated = self._match(tracks, obs, {priority} if stage == "selected" else free, skip=skip)

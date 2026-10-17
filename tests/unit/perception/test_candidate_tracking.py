@@ -1017,3 +1017,20 @@ def test_the_owner_exemption_needs_a_single_reading(monkeypatch):
     monkeypatch.setattr(CT, "_gate", lambda track, o, bounds: (track.id, o.candidate.candidate_id) in edges)
     report = tr.update(_frame(0.2, [_candidate((3.0, y, 0.06), cid=c) for y, c in ((0.0, "o1"), (0.6, "o2"), (1.2, "o3"))]))
     assert report.accepted == {} and report.new == 0
+
+
+def test_a_stale_owner_gives_its_shadow_no_exemption(monkeypatch):
+    # Codex graph: stale S -> O1, active neighbour E -> {O1, O2}, S's shadow D -> {O1, O2}. Exempting D-O1
+    # settles E<-O1, D<-O2 in the active stage; without the exemption both readings stay ambiguous
+    from forklift_core.perception import candidate_tracking as CT
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="s"), _candidate((3.0, 0.6, 0.06), cid="e"),
+                           _candidate((3.0, 1.2, 0.06), cid="d")]))
+    tr.select(0)
+    for t in (0.2, 0.4, 0.6):
+        tr.update(_frame(t, [_candidate((3.0, 0.6, 0.06), cid="e"), _candidate((3.0, 1.2, 0.06), cid="d")]))
+    tr._tracks[2].shadow, tr._tracks[2].duplicate_of = True, 0
+    edges = {(0, "o1"), (1, "o1"), (1, "o2"), (2, "o1"), (2, "o2")}
+    monkeypatch.setattr(CT, "_gate", lambda track, o, bounds: (track.id, o.candidate.candidate_id) in edges)
+    report = tr.update(_frame(0.8, [_candidate((3.0, y, 0.06), cid=c) for y, c in ((0.0, "o1"), (0.6, "o2"))]))
+    assert "o1" not in report.accepted and report.new == 0
