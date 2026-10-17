@@ -775,4 +775,5 @@ def test_a_near_miss_needs_the_pockets_within_the_position_cap():
 
 def test_the_position_cap_includes_exactly_0_2_m():
     rows = (_row(1.0, 4.0, lat=0.5, yaw=0.05, z_s=0.005),)
-    assert _born(rows=rows, mid=(3.0, 0.2, 0.06), yaw=0.12)._tracks[1].duplicate_of == 0
+    # a support near miss so the pockets move exactly 0.2 m (a yaw miss would also rotate them)
+    assert _born(rows=rows, mid=(3.0, 0.2, 0.06), support_z=0.015)._tracks[1].duplicate_of == 0
