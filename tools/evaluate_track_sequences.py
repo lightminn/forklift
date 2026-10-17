@@ -309,14 +309,22 @@ def verdict(s: dict) -> dict:
     return {"pass": not fails, "failures": fails}
 
 
-def band_problem(records, band: str | None, expect: int | None) -> str | None:
-    """Why these records must not be judged: another band among them, or not the expected count."""
-    if band is not None:
-        other = sorted({r.get("band") for r in records} - {band}, key=str)
-        if other:
-            return f"records of band(s) {other} among {band}"
-    if expect is not None and len(records) != expect:
-        return f"{len(records)} records, expected {expect}"
+def population_problem(records, band: str, per_cell: int, kinds=("straight", "curve", "pitch")) -> str | None:
+    """Why these records are not exactly the planned population: another band, a duplicate, or a
+    missing or extra (case, shape, seed, kind) against CELLS x per_cell x kinds of `band`."""
+    from tools.recognition_sequences import CELL_STRIDE, CELLS, SEQUENCE_BANDS  # noqa: PLC0415
+
+    other = sorted({r.get("band") for r in records} - {band}, key=str)
+    if other:
+        return f"records of band(s) {other} among {band}"
+    got = [(r["case"], r["shape_key"], r["seed"], r["kind"]) for r in records]
+    if len(set(got)) != len(got):
+        return "duplicate records"
+    want = {(case, shape, SEQUENCE_BANDS[band] + c * CELL_STRIDE + i, kind)
+            for c, (case, shape) in enumerate(CELLS) for i in range(per_cell) for kind in kinds}
+    missing, extra = want - set(got), set(got) - want
+    if missing or extra:
+        return f"{len(missing)} planned records missing, {len(extra)} unplanned"
     return None
 
 
@@ -351,14 +359,14 @@ def main(argv=None) -> int:
     ap.add_argument("--bounds", type=Path, default=ROOT / "config/recognition_track_bounds.yaml")
     ap.add_argument("--odometry", type=Path, default=ROOT / "config/obstacle_odometry_age.json")
     ap.add_argument("--variants", default=",".join(VARIANTS))
-    ap.add_argument("--band", help="refuse records of any other band")
-    ap.add_argument("--expect", type=int, help="refuse unless exactly this many records")
+    ap.add_argument("--band", required=True, help="the planned band; anything else is refused")
+    ap.add_argument("--per-cell", type=int, required=True, help="planned sequences per cell")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args(argv)
     bounds = TrackBounds.load(args.bounds)
     table = json.loads(args.odometry.read_text())
     records = load_records(args.records)
-    problem = band_problem(records, args.band, args.expect)
+    problem = population_problem(records, args.band, args.per_cell)
     if problem:
         raise SystemExit(f"refused: {problem}")
     report = evaluate(records, bounds, table, tuple(args.variants.split(",")))

@@ -202,8 +202,26 @@ def test_the_truth_pockets_are_two_of_the_recorded_openings(short_sequence):
     assert labels and all(len(lab) == 3 and lab[2] == pair for lab in labels)
 
 
-def test_the_evaluation_refuses_other_bands_and_wrong_counts():
-    recs = [{"band": "evaluation_b"}, {"band": "calibration"}]
-    assert "calibration" in E.band_problem(recs, "evaluation_b", None)
-    assert "expected 3" in E.band_problem(recs[:1], "evaluation_b", 3)
-    assert E.band_problem(recs[:1], "evaluation_b", 1) is None
+def test_the_evaluation_refuses_anything_but_the_planned_population():
+    def rec(c, i, kind, band="evaluation_b"):
+        case, shape = R.CELLS[c]
+        return {"band": band, "case": case, "shape_key": shape, "seed": R.SEQUENCE_BANDS[band] + c * R.CELL_STRIDE + i,
+                "kind": kind}
+    full = [rec(c, i, k) for c in range(len(R.CELLS)) for i in range(2) for k in ("straight", "curve", "pitch")]
+    assert E.population_problem(full, "evaluation_b", 2) is None
+    assert "calibration" in E.population_problem(full[:-1] + [rec(0, 0, "straight", "calibration")], "evaluation_b", 2)
+    assert "duplicate" in E.population_problem(full[:-1] + [full[0]], "evaluation_b", 2)
+    assert "1 planned records missing" in E.population_problem(full[:-1], "evaluation_b", 2)
+    straight_only = [r for r in full if r["kind"] == "straight"] * 3  # Codex: one kind copied to the full count
+    assert E.population_problem(straight_only, "evaluation_b", 2) is not None
+
+
+def test_calibration_measures_a_candidate_against_the_pocket_pair_it_took(short_sequence):
+    _, first, _ = short_sequence
+    k, i, pair = first["target"]
+    f = first["frames"][0]
+    openings = f["openings"][k][i]
+    other = (len(openings) - 1, 0) if pair != (len(openings) - 1, 0) else (1, 0)
+    face = C.pair_face(f, k, i, other)
+    assert np.allclose(face["left_m"], openings[other[0]]) and np.allclose(face["right_m"], openings[other[1]])
+    assert face["insertion_yaw_rad"] == f["faces"][k][i]["insertion_yaw_rad"]
