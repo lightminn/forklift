@@ -829,3 +829,14 @@ def test_a_duplicate_that_took_another_reading_this_frame_is_not_absorbed():
     report = tr.update(_frame(0.4, [_candidate((3.0, 0.06, 0.06), hypothesis="parametric:x", cid="o1"),
                                     _candidate((3.0, 0.14, 0.06), hypothesis="parametric:x", cid="o2")]))
     assert report.accepted == {"o1": 0, "o2": 1} and report.absorbed == 0
+
+
+def test_a_stale_real_neighbour_that_fits_the_taken_reading_is_not_absorbed():
+    # S (selected) and A born together at t 0 (A is not a duplicate); A goes stale; S takes a reading A fits too
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="s"), _candidate((3.0, 0.15, 0.06), cid="a")]))
+    tr.select(0)
+    for t in (0.2, 0.4, 0.6):
+        tr.update(_frame(t, [_candidate((3.0, 0.0, 0.06), cid="s")]))
+    report = tr.update(_frame(0.8, [_candidate((3.0, 0.07, 0.06), cid="o")]))
+    assert report.accepted == {"o": 0} and report.absorbed == 0 and [t.id for t in tr._tracks] == [0, 1]
