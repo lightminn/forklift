@@ -2,6 +2,7 @@
 """Far-range candidate tracking and fusion (stage 2B-3 plan sections 1-5)."""
 import math
 import random
+from pathlib import Path
 from dataclasses import replace
 
 import numpy as np
@@ -743,3 +744,30 @@ def test_a_neighbour_born_while_the_selected_track_is_stale_is_not_a_duplicate()
     assert tr._tracks[1].duplicate_of is None
     report = tr.update(_frame(0.8, [_candidate((3.0, 0.05, 0.06), support_z=0.008, cid="c")]))
     assert report.accepted == {"c": 1}
+
+
+def test_a_front_back_neighbour_born_while_the_selected_track_is_active_is_not_a_duplicate():
+    # Codex, with the calibrated table: A at x 4.24 (range 3.49), B first seen 0.4 s later at x 4.71 with
+    # support 20 mm (1.34 x) -- inside the odometry-widened along gate (501 mm) but 470 mm away
+    bounds = TrackBounds.load(Path(__file__).resolve().parents[3] / "config/recognition_track_bounds.yaml")
+    tr = CandidateTracker(bounds)
+    tr.update(_frame(0.0, [_candidate((4.24, 0.0, 0.06), range_m=3.49, cid="a")]))
+    tr.select(0)
+    tr.update(_frame(0.4, [_candidate((4.71, 0.0, 0.06), range_m=3.96, support_z=0.020, cid="b")]))
+    assert [t.duplicate_of for t in tr._tracks] == [None, None]
+    report = tr.update(_frame(0.6, [_candidate((4.71, 0.0, 0.06), range_m=3.96, support_z=0.010, cid="c")]))
+    assert report.accepted == {"c": 1} and report.revived == 0
+
+
+def test_the_absolute_caps_are_exact_at_30_degrees_and_45_mm():
+    tr = _born(rows=(_row(1.0, 4.0, yaw=0.2, along=0.06, z_s=0.005),), yaw=math.radians(30))
+    assert tr._tracks[1].duplicate_of == 0
+    tr = _born(rows=(_row(1.0, 4.0, yaw=0.05, z_s=0.012),), support_z=0.045)
+    assert tr._tracks[1].duplicate_of is None
+
+
+def test_a_near_miss_needs_the_pockets_within_the_position_cap():
+    # wide position gate (lat 0.5): a 0.25 m lateral step with a yaw near miss is a neighbour, 0.15 m is not
+    rows = (_row(1.0, 4.0, lat=0.5, yaw=0.05, z_s=0.005),)
+    assert _born(rows=rows, mid=(3.0, 0.25, 0.06), yaw=0.12)._tracks[1].duplicate_of is None
+    assert _born(rows=rows, mid=(3.0, 0.15, 0.06), yaw=0.12)._tracks[1].duplicate_of == 0

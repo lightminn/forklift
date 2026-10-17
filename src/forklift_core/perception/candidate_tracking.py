@@ -88,6 +88,10 @@ class TrackBounds:
     near_miss_yaw_cap_rad: float = math.radians(30.0)
     near_miss_support_ratio: float = 2.5
     near_miss_support_cap_m: float = 0.045
+    # each pocket within 0.2 m of the selected track's last reading on both axes: the odometry-widened
+    # gate reaches 0.5 m at far range, while a real neighbour (0.65 m true spacing, minus two far p95
+    # errors) still reads >= 0.41 m away; the six active-track misses moved <= 54 mm (Codex)
+    near_miss_position_cap_m: float = 0.2
     # Fusion weights only: the assumed odometry noise as random walks (position_m_per_sqrt_s,
     # yaw_rad_per_sqrt_s). None weighs with the worst-case bound, which leaves older observations
     # almost no weight (stage 2B-3 calibration). The budget always uses the bound.
@@ -104,7 +108,7 @@ class TrackBounds:
         ages = tuple(float(a) for a in self.ages_s)
         scalars = (*ages, *self.e_m, *self.psi_rad, *self.rear_axle_xy_m, self.window_s, self.expiry_s, self.keep_s,
                    self.near_miss_yaw_ratio, self.near_miss_yaw_cap_rad, self.near_miss_support_ratio,
-                   self.near_miss_support_cap_m)
+                   self.near_miss_support_cap_m, self.near_miss_position_cap_m)
         if not all(math.isfinite(float(v)) for v in scalars) or len(self.rear_axle_xy_m) != 2:
             raise ValueError("odometry bounds, the rear axle, window_s and expiry_s must be finite")
         if not ages or ages[0] <= 0 or any(b <= a for a, b in itertools.pairwise(ages)):
@@ -122,7 +126,8 @@ class TrackBounds:
             object.__setattr__(self, "weight_model", wm)
         if not (self.window_s >= 0 and self.keep_s >= self.expiry_s > 0 and self.max_observations >= 1
                 and self.near_miss_yaw_ratio >= 1 and self.near_miss_support_ratio >= 1
-                and self.near_miss_yaw_cap_rad >= 0 and self.near_miss_support_cap_m >= 0):
+                and self.near_miss_yaw_cap_rad >= 0 and self.near_miss_support_cap_m >= 0
+                and self.near_miss_position_cap_m >= 0):
             raise ValueError("window_s >= 0, expiry_s > 0 and max_observations >= 1 are required")
 
     @classmethod
@@ -136,7 +141,8 @@ class TrackBounds:
                    near_miss_yaw_ratio=float(data.get("near_miss_yaw_ratio", 1.5)),
                    near_miss_yaw_cap_rad=float(data.get("near_miss_yaw_cap_rad", math.radians(30.0))),
                    near_miss_support_ratio=float(data.get("near_miss_support_ratio", 2.5)),
-                   near_miss_support_cap_m=float(data.get("near_miss_support_cap_m", 0.045)))
+                   near_miss_support_cap_m=float(data.get("near_miss_support_cap_m", 0.045)),
+                   near_miss_position_cap_m=float(data.get("near_miss_position_cap_m", 0.2)))
 
     @classmethod
     def load(cls, path) -> TrackBounds:
@@ -299,8 +305,8 @@ def _reading_fits(track: _Track, new: _Observation) -> bool:
 
 
 def _pose_terms(track: _Track, new: _Observation, bounds: TrackBounds):
-    """(position fits, yaw difference, yaw gate, support difference, support gate) against the track's
-    last accepted observation, or None past the odometry table."""
+    """(position fits, yaw difference, yaw gate, support difference, support gate, largest pocket step
+    along either axis) against the track's last accepted observation, or None past the odometry table."""
     ref = track.last
     odometry = bounds.odometry((new.stamp_ns - ref.stamp_ns) / 1e9)
     if odometry is None:
@@ -309,7 +315,7 @@ def _pose_terms(track: _Track, new: _Observation, bounds: TrackBounds):
     a = np.array([math.cos(ref.yaw), math.sin(ref.yaw)])
     n = np.array([-a[1], a[0]])
     mixing = ref.row.yaw_rad + psi
-    position = True
+    position, step = True, 0.0
     for side in ("left", "right"):
         d = getattr(new, side)[:2] - getattr(ref, side)[:2]
         lever = bounds.lever_m(getattr(new.candidate, side).centre_m)
@@ -317,8 +323,9 @@ def _pose_terms(track: _Track, new: _Observation, bounds: TrackBounds):
         t_along = ref.row.along_m + new.row.along_m + e + lever * psi
         if abs(float(d @ n)) > t_lat + t_along * mixing or abs(float(d @ a)) > t_along + t_lat * mixing:
             position = False
+        step = max(step, abs(float(d @ n)), abs(float(d @ a)))
     return (position, abs(_wrap(new.yaw - ref.yaw)), ref.row.yaw_rad + new.row.yaw_rad + psi,
-            abs(new.support_z - ref.support_z), ref.row.support_m + new.row.support_m)
+            abs(new.support_z - ref.support_z), ref.row.support_m + new.row.support_m, step)
 
 
 def _pose_fits(track: _Track, new: _Observation, bounds: TrackBounds) -> bool:
@@ -328,7 +335,7 @@ def _pose_fits(track: _Track, new: _Observation, bounds: TrackBounds) -> bool:
     terms = _pose_terms(track, new, bounds)
     if terms is None:
         return False
-    position, dyaw, gyaw, dsup, gsup = terms
+    position, dyaw, gyaw, dsup, gsup, _ = terms
     return position and dyaw <= gyaw and dsup <= gsup
 
 
@@ -339,9 +346,9 @@ def _near_miss(track: _Track, new: _Observation, bounds: TrackBounds) -> bool:
     terms = _pose_terms(track, new, bounds)
     if terms is None or not _reading_fits(track, new):
         return False
-    position, dyaw, gyaw, dsup, gsup = terms
+    position, dyaw, gyaw, dsup, gsup, step = terms
     eps = 1e-12
-    return (position and (dyaw > gyaw or dsup > gsup)
+    return (position and step <= bounds.near_miss_position_cap_m and (dyaw > gyaw or dsup > gsup)
             and dyaw <= min(bounds.near_miss_yaw_ratio * gyaw, bounds.near_miss_yaw_cap_rad) + eps
             and dsup <= bounds.near_miss_support_ratio * gsup + eps and dsup < bounds.near_miss_support_cap_m)
 
