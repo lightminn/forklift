@@ -46,7 +46,9 @@ NOISE_CONFIG = ROOT / "config/depth_noise_d435i_team.yaml"
 # Seeds for sequence recipes: inside the eval_pool band, far from the catalogue (1,000,000-1,001,019).
 SEQUENCE_BANDS = {"calibration": 1_500_000, "evaluation": 1_600_000,
                   "evaluation_b": 1_700_000, "evaluation_c": 1_800_000,
-                  "evaluation_d": 1_900_000}  # 2B-3b re-judgement: the 2B-3 evaluation set was used for diagnosis
+                  "evaluation_d": 1_900_000,
+                  "evaluation_e": 1_950_000,
+                  "evaluation_f": 1_970_000}  # the eval_pool band ends at 2,000,000  # 2B-3b re-judgement: the 2B-3 evaluation set was used for diagnosis
 CELLS = tuple((c, s) for c in ("S1", "S2", "S3", "S4", "S5", "S6") for s in ("epal6", "t11_06")) + (("S7", "nonstandard"),)
 CELL_STRIDE = 1_000  # x 13 cells stays inside the 100,000 gap between the two bands
 START_M, END_M, STEP_M, PERIOD_S = 3.5, 1.3, 0.12, 0.2

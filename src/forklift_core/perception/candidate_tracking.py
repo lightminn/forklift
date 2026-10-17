@@ -191,6 +191,7 @@ class FrameReport:
     ignored: str | None = None
     cleared: bool = False
     revived: int = 0  # stale tracks that took an observation and became active again
+    absorbed: int = 0  # suspected duplicates removed when the selected track took their observation (2B-3e)
 
 
 @dataclass(frozen=True)
@@ -271,6 +272,14 @@ class _Track:
         # the selected track this one may duplicate: born where the selected track's pose gate holds
         # but split off by a reading test (2B-3c)
         self.duplicate_of: int | None = None
+        # why: "reading" (split off by family / layout -- carries a reading the selected track refuses) or
+        # "near_miss" (yaw / support near miss -- the same reading); only near misses are absorbed (2B-3e)
+        self.duplicate_kind: str | None = None
+        # 2B-3e: an absorbed duplicate becomes a shadow -- a hidden duplicate: it keeps tracking (taking the
+        # readings a unique matching gives it, ageing and expiring like any track) so every ambiguity it would
+        # have held in 2B-3d stays held, but it never reaches the output or the selection (deleting it handed
+        # readings to neighbours -- Codex)
+        self.shadow = False
 
     def accept(self, obs: _Observation) -> None:
         self.history.append(obs)
@@ -384,7 +393,7 @@ class CandidateTracker:
     def select(self, track_id: int | None) -> None:
         """Name the track target selection follows; it is matched before every other track, stale or
         not. None clears it. A deleted selected track clears the selection (no automatic replacement)."""
-        if track_id is not None and all(t.id != track_id for t in self._tracks):
+        if track_id is not None and all(t.id != track_id or t.shadow for t in self._tracks):
             raise ValueError(f"no live or stale track {track_id}")
         self.selected = track_id
 
@@ -392,6 +401,12 @@ class CandidateTracker:
         self._tracks = self._kept(now_ns)
         if self.selected is not None and all(t.id != self.selected for t in self._tracks):
             self.selected = None
+        # a shadow whose owner is gone is an ordinary track again: visible and selectable, never chosen
+        # automatically (otherwise a target read only by it would stay hidden for good -- Codex)
+        ids = {t.id for t in self._tracks}
+        for t in self._tracks:
+            if t.shadow and t.duplicate_of not in ids:
+                t.shadow, t.duplicate_of, t.duplicate_kind = False, None, None
 
     # Fusion ------------------------------------------------------------------------------------
     def _window(self, track: _Track) -> list[_Observation]:
@@ -468,7 +483,7 @@ class CandidateTracker:
 
     def _match(self, tracks, obs, free):
         """Unique maximum matching per gate component over the observations in `free`.
-        Returns (matched (track, obs index) pairs, held track count, gated observation indices)."""
+        Returns (matched (track, obs index) pairs, held tracks, gated observation indices)."""
         edges = {(i, j) for i, t in enumerate(tracks) for j in free if _gate(t, obs[j], self.bounds)}
         parent = {("t", i): ("t", i) for i in range(len(tracks))} | {("o", j): ("o", j) for j in free}
 
@@ -483,7 +498,7 @@ class CandidateTracker:
         components: dict = {}
         for node in parent:
             components.setdefault(find(node), []).append(node)
-        pairs, held, gated = [], 0, set()
+        pairs, held, gated = [], [], set()
         for nodes in components.values():
             ts = sorted(i for k, i in nodes if k == "t")
             os_ = sorted(j for k, j in nodes if k == "o")
@@ -497,7 +512,7 @@ class CandidateTracker:
                 best = top[0] if len(top) == 1 else None
             gated.update(os_)  # gated observations never start a track
             if best is None:
-                held += len(ts)
+                held += [tracks[i] for i in ts]
                 for i in ts:
                     tracks[i].holds += 1
                 continue
@@ -533,9 +548,19 @@ class CandidateTracker:
         # judged against the selected track as it was before this frame's matching moves it: inside its
         # pose gate but refused by a reading test (Codex: judging after the update marks real neighbours)
         chosen_active = chosen is not None and self._age(chosen, frame.stamp_ns) <= self.bounds.expiry_s
-        split_off = {j for j, o in enumerate(obs) if chosen is not None
-                     and ((_pose_fits(chosen, o, self.bounds) and not _reading_fits(chosen, o))
-                          or (chosen_active and _near_miss(chosen, o, self.bounds)))}  # 2B-3d
+        split_off = {}
+        for j, o in enumerate(obs):
+            if chosen is None:
+                break
+            if _pose_fits(chosen, o, self.bounds) and not _reading_fits(chosen, o):
+                split_off[j] = "reading"
+            elif chosen_active and _near_miss(chosen, o, self.bounds):  # 2B-3d
+                split_off[j] = "near_miss"
+        # 2B-3e: before matching, which of the selected track's suspected duplicates each reading fits
+        duplicates = [] if chosen is None else [tr for tr in self._tracks
+                                                if tr.duplicate_of == chosen.id and not tr.shadow]
+        dup_fits = {j: [tr for tr in duplicates if _gate(tr, o, self.bounds)] for j, o in enumerate(obs)}
+        taken_by_chosen, held_now = [], set()
         free = set(range(len(obs)))
         accepted, held, revived, blocked = {}, 0, 0, set()
         priority = None
@@ -545,19 +570,31 @@ class CandidateTracker:
                 rivals = [tr for tr in self._tracks if tr is not chosen and _gate(tr, obs[fits[0]], self.bounds)]
                 if all(tr.duplicate_of == chosen.id for tr in rivals):
                     priority = fits[0]  # the selected track wins only against its own suspected duplicates
-        live = self._live(frame.stamp_ns)
+        # 2B-3e shadows are hidden duplicates: they keep matching and taking readings exactly as the
+        # duplicate would have in 2B-3d (so every ambiguity it held stays held), but never reach the output
+        # or the selection. The selected track wins over its own shadows only through the priority stage
+        # (when its single reading has no rival but its duplicates); any edge cut beyond that dropped
+        # ambiguity elsewhere (Codex, four counterexamples)
+        shadows = [tr for tr in self._tracks if tr.shadow]
+        shadow_fits = {j for j, o in enumerate(obs) if any(_gate(sh, o, self.bounds) for sh in shadows)}
+        live = [tr for tr in self._live(frame.stamp_ns) if not tr.shadow]
         if priority is None:  # the selected track (if any) takes its natural stage under the 2B-3b rules
             active = live
             stages = []
         else:
             active = [tr for tr in live if tr is not chosen]
             stages = [("selected", [chosen])]
-        stale = [tr for tr in self._tracks if tr not in active and not (priority is not None and tr is chosen)]
-        stages += [("active", active), ("stale", stale)]
+        stale = [tr for tr in self._tracks if tr not in active and not tr.shadow
+                 and not (priority is not None and tr is chosen)]
+        # a shadow competes in the stage its own age puts it in, as the duplicate itself would have (2B-3d)
+        fresh_shadows = [sh for sh in shadows if self._age(sh, frame.stamp_ns) <= self.bounds.expiry_s]
+        stale_shadows = [sh for sh in shadows if sh not in fresh_shadows]
+        stages += [("active", active + fresh_shadows), ("stale", stale + stale_shadows)]
         for stage, tracks in stages:
             # the selected stage sees only its one observation; the others see what is still free
             pairs, h, gated = self._match(tracks, obs, {priority} if stage == "selected" else free)
-            held += h
+            held += len(h)
+            held_now.update(tr.id for tr in h)
             blocked |= gated
             free -= gated
             for track, j in pairs:
@@ -569,29 +606,40 @@ class CandidateTracker:
                 track.accept(o)
                 track.history = self._window(track)  # the stored history never outgrows W and the count
                 accepted[o.candidate.candidate_id] = track.id
+                if track is chosen:
+                    taken_by_chosen.append(j)
                 if was_stale:
                     track.revivals += 1
                     revived += 1
 
+        took_other = set(accepted.values())  # a duplicate that took another reading this frame tracks something
+        absorbed = {tr.id for j in taken_by_chosen for tr in dup_fits[j]
+                    if tr is not chosen and tr.duplicate_kind == "near_miss"
+                    and tr.id not in took_other and tr.id not in held_now}
+        for tr in self._tracks:
+            if tr.id in absorbed:
+                tr.shadow = True
+
         new = 0
-        fresh = sorted((j for j in range(len(obs)) if j not in blocked),
+        fresh = sorted((j for j in range(len(obs)) if j not in blocked and j not in shadow_fits),
                        key=lambda j: (round(float(obs[j].mid[0]), 9), round(float(obs[j].mid[1]), 9), obs[j].key))
         for j in fresh:
             o = obs[j]
             track = _Track(self._next_id, o)
             if j in split_off:
                 track.duplicate_of = chosen.id  # where the selected track was, split off by a reading test
+                track.duplicate_kind = split_off[j]
             self._tracks.append(track)
             accepted[o.candidate.candidate_id] = self._next_id
             self._next_id += 1
             new += 1
         return FrameReport(accepted=accepted, new=new, held=held, untracked=untracked, cleared=cleared,
-                           revived=revived)
+                           revived=revived, absorbed=len(absorbed))
 
     # Output ------------------------------------------------------------------------------------
     def stale_ids(self, now_ns: int) -> tuple:
         """Tracks hidden from selection but still revivable at now_ns (for diagnostics)."""
-        return tuple(t.id for t in self._kept(now_ns) if self._age(t, now_ns) > self.bounds.expiry_s)
+        return tuple(t.id for t in self._kept(now_ns) if self._age(t, now_ns) > self.bounds.expiry_s and not t.shadow)
 
     def tracks(self, now_ns: int, odom_from_base_now: RigidTransform) -> tuple:
         if self._last_stamp is not None and now_ns < self._last_stamp:
@@ -599,7 +647,7 @@ class CandidateTracker:
         robot_yaw = _planar_yaw(odom_from_base_now)
         self._prune(now_ns)  # a query deletes only past keep_s; stale tracks stay revivable
         out = []
-        for track in sorted(self._live(now_ns), key=lambda t: t.id):
+        for track in sorted((t for t in self._live(now_ns) if not t.shadow), key=lambda t: t.id):
             fused = self._fuse(track, now_ns, odom_from_base_now)
             if fused is None:  # every observation is older than the odometry table
                 continue

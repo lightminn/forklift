@@ -568,9 +568,10 @@ def _with_duplicate():
 def test_the_selected_track_takes_an_observation_that_also_fits_its_duplicate():
     tr = _with_duplicate()
     report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", cid="c")]))
-    assert report.accepted == {"c": 0} and report.held == 0
+    assert report.accepted == {"c": 0} and report.held == 0  # (2B-3e: the duplicate is then absorbed)
+    tr = _with_duplicate()
     tr.select(None)
-    report = tr.update(_frame(0.6, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", cid="d")]))
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", cid="d")]))
     assert report.accepted == {} and report.held == 2  # without a selection: the 2B-3b hold
 
 
@@ -777,3 +778,306 @@ def test_the_position_cap_includes_exactly_0_2_m():
     rows = (_row(1.0, 4.0, lat=0.5, yaw=0.05, z_s=0.005),)
     # a support near miss so the pockets move exactly 0.2 m (a yaw miss would also rotate them)
     assert _born(rows=rows, mid=(3.0, 0.2, 0.06), support_z=0.015)._tracks[1].duplicate_of == 0
+
+
+# 2B-3e: the selected track absorbs its suspected duplicates ---------------------------------------------
+
+def test_the_selected_track_absorbs_a_near_miss_duplicate_that_fits_the_observation_it_takes():
+    tr = _born(support_z=0.015)  # duplicate 1 born on a support near miss (same reading as the selected track)
+    assert tr._tracks[1].duplicate_kind == "near_miss"
+    history, layout = list(tr._tracks[0].history), list(tr._tracks[0].layout)
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", support_z=0.008, cid="c")]))
+    assert report.accepted == {"c": 0} and report.absorbed == 1
+    assert [(t.id, t.shadow) for t in tr._tracks] == [(0, False), (1, True)]  # kept as a shadow
+    assert [t.track_id for t in tr.tracks(int(0.4 * S), _odom())] == [0]   # hidden from the output
+    assert tr._tracks[0].history == history + [tr._tracks[0].last]  # its own readings only, nothing merged
+    assert tr._tracks[0].layout == [(max(lo, x - b), min(hi, x + b)) for (lo, hi), x, b in
+                                    zip(layout, tr._tracks[0].last.offsets, [tr._tracks[0].last.row.layout_m] * 2)]
+    with pytest.raises(ValueError):
+        tr.select(1)
+
+
+def test_a_duplicate_that_does_not_fit_the_taken_observation_stays():
+    tr = _with_duplicate()  # duplicate 1 reads t11_06:x; an epal6:x reading fits only the selected track
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="c")]))
+    assert report.accepted == {"c": 0} and report.absorbed == 0 and [t.id for t in tr._tracks] == [0, 1]
+
+
+def test_a_real_neighbour_is_never_absorbed():
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="s"), _candidate((3.0, 0.12, 0.06), cid="a")]))
+    tr.select(0)
+    report = tr.update(_frame(0.2, [_candidate((3.0, 0.06, 0.06), cid="o1"), _candidate((3.0, 0.18, 0.06), cid="o2")]))
+    assert report.accepted == {"o1": 0, "o2": 1} and report.absorbed == 0 and len(tr._tracks) == 2
+
+
+def test_nothing_is_absorbed_without_a_selection_or_when_the_selected_track_takes_nothing():
+    tr = _with_duplicate()
+    tr.select(None)
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", cid="c")]))
+    assert report.absorbed == 0 and len(tr._tracks) == 2
+    tr = _with_duplicate()
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="t11_06:x", cid="c")]))  # only 1 fits
+    assert report.accepted == {"c": 1} and report.absorbed == 0 and len(tr._tracks) == 2
+
+
+def test_a_duplicate_that_took_another_reading_this_frame_is_not_absorbed():
+    # S-O1, D-O1, D-O2: the duplicate D took O2, so it tracks something and stays
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="s")]))
+    tr.select(0)
+    tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="s"),
+                           _candidate((3.0, 0.05, 0.06), hypothesis="t11_06:x", cid="d")]))
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.06, 0.06), hypothesis="parametric:x", cid="o1"),
+                                    _candidate((3.0, 0.14, 0.06), hypothesis="parametric:x", cid="o2")]))
+    assert report.accepted == {"o1": 0, "o2": 1} and report.absorbed == 0
+
+
+def test_a_stale_real_neighbour_that_fits_the_taken_reading_is_not_absorbed():
+    # S (selected) and A born together at t 0 (A is not a duplicate); A goes stale; S takes a reading A fits too
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="s"), _candidate((3.0, 0.15, 0.06), cid="a")]))
+    tr.select(0)
+    for t in (0.2, 0.4, 0.6):
+        tr.update(_frame(t, [_candidate((3.0, 0.0, 0.06), cid="s")]))
+    report = tr.update(_frame(0.8, [_candidate((3.0, 0.07, 0.06), cid="o")]))
+    assert report.accepted == {"o": 0} and report.absorbed == 0 and [t.id for t in tr._tracks] == [0, 1]
+
+
+def test_a_reading_split_duplicate_is_kept_so_a_later_reading_of_that_kind_stays_ambiguous():
+    # Codex: S (EPAL 6) selected, neighbour E (T11) ahead; S read once as T11 starts duplicate D; a parametric
+    # reading fits S and D; later S is read as T11 again -- with D gone, E would take it (identity error)
+    tr = CandidateTracker(_bounds(rows=(_row(1.0, 4.0, along=0.3),)))
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="s"),
+                           _candidate((3.65, 0.0, 0.06), hypothesis="t11_06:x", cid="e")]))
+    tr.select(0)
+    tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), hypothesis="t11_06:x", cid="d")]))
+    assert tr._tracks[2].duplicate_of == 0
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", cid="o")]))
+    assert report.accepted == {"o": 0} and report.absorbed == 0  # a reading split: kept
+    report = tr.update(_frame(0.6, [_candidate((3.1, 0.0, 0.06), hypothesis="t11_06:x", cid="t")]))
+    assert report.accepted.get("t") != 1  # never handed to the neighbour E
+
+
+def test_a_held_near_miss_duplicate_is_not_absorbed():
+    # S-O, D-O/P, E-P: S takes O by priority (its only rival is D); D and E are held over P -- D stays
+    rows = (_row(1.0, 4.0, yaw=0.05, z_s=0.005),)
+    tr = CandidateTracker(_bounds(rows=rows))
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="s"), _candidate((3.0, 0.18, 0.06), support_z=0.015, cid="e")]))
+    tr.select(0)
+    tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), cid="s"), _candidate((3.0, 0.18, 0.06), support_z=0.015, cid="e"),
+                           _candidate((3.0, 0.06, 0.06), support_z=0.015, cid="d")]))
+    assert [t.duplicate_of for t in tr._tracks] == [None, None, 0]
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.03, 0.06), support_z=0.008, cid="o"),
+                                    _candidate((3.0, 0.12, 0.06), support_z=0.015, cid="p")]))
+    assert report.accepted == {"o": 0} and report.held == 2 and report.absorbed == 0 and len(tr._tracks) == 3
+
+
+def test_a_near_miss_duplicate_that_later_learned_another_reading_becomes_a_shadow():
+    # Codex: D is born on a support near miss (parametric), then takes a T11 reading -- its reading now
+    # differs from the selected EPAL 6 track, so absorbing it would lose that reading
+    rows = (_row(1.0, 4.0, yaw=0.05, z_s=0.005),)
+    tr = CandidateTracker(_bounds(rows=rows))
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="s")]))
+    tr.select(0)
+    tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", support_z=0.015, cid="d")]))
+    assert tr._tracks[1].duplicate_kind == "near_miss"
+    tr.update(_frame(0.3, [_candidate((3.0, 0.0, 0.06), hypothesis="t11_06:x", support_z=0.015, cid="d2")]))
+    assert tr._tracks[1].known == "t11_06:x"
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", support_z=0.008, cid="c")]))
+    assert report.accepted == {"c": 0} and report.absorbed == 1 and tr._tracks[1].shadow
+    # the shadow keeps its T11 hypothesis: it takes the T11 reading S refuses, hidden, with no new track
+    report = tr.update(_frame(0.5, [_candidate((3.0, 0.0, 0.06), hypothesis="t11_06:x", support_z=0.015, cid="t")]))
+    assert report.accepted == {"t": 1} and report.new == 0
+    assert [x.track_id for x in tr.tracks(int(0.5 * S), _odom())] == [0]
+
+
+
+
+def test_a_shadow_keeps_the_pose_hypothesis_of_an_absorbed_duplicate():
+    # Codex (accepted residual, plan 2B-3e): S, D, E share one reading; D (support 15 mm) is absorbed;
+    # a later target reading misses S on support but would have fitted D -- E (support 15 mm) now takes it
+    # where 2B-3d gave it to D (still active at 0.6 s here; held between D and E once D was stale)
+    rows = (_row(1.0, 4.0, yaw=0.05, z_s=0.005, along=0.15),)  # along gate 0.3 m
+    tr = CandidateTracker(_bounds(rows=rows))
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="s"), _candidate((3.4, 0.0, 0.06), support_z=0.015, cid="e")]))
+    tr.select(0)
+    tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), support_z=0.015, cid="d")]))
+    assert tr._tracks[2].duplicate_kind == "near_miss"
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), support_z=0.008, cid="c")]))
+    assert report.accepted == {"c": 0} and report.absorbed == 1
+    report = tr.update(_frame(0.6, [_candidate((3.15, 0.0, 0.06), support_z=0.024, cid="t")]))
+    assert report.accepted.get("t") != 1 and report.new == 0  # the shadow keeps it from E (was E before shadows)
+
+
+
+
+def test_a_shadow_keeps_the_ambiguity_after_the_selected_track_decides_a_hypothesis():
+    # Codex frames: S undecided (parametric) and T11 neighbour E; D born undecided on a support near miss;
+    # D must survive the shared reading, so after S learns EPAL 6 a T11 target reading is held between D and E
+    rows = (_row(1.0, 4.0, yaw=0.05, z_s=0.005, along=0.15),)
+    tr = CandidateTracker(_bounds(rows=rows))
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", cid="s"),
+                           _candidate((3.4, 0.0, 0.06), hypothesis="t11_06:x", support_z=0.012, cid="e")]))
+    tr.select(0)
+    tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", support_z=0.012, cid="d")]))
+    assert tr._tracks[2].duplicate_kind == "near_miss"
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", support_z=0.006, cid="c")]))
+    assert report.accepted == {"c": 0} and report.absorbed == 1
+    tr.update(_frame(0.5, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", support_z=0.006, cid="c2")]))
+    assert tr._tracks[0].known == "epal6:x"
+    report = tr.update(_frame(0.6, [_candidate((3.15, 0.0, 0.06), hypothesis="t11_06:x", support_z=0.012, cid="t")]))
+    assert report.accepted.get("t") != 1 and report.new == 0  # the shadow keeps it from E
+
+
+def test_a_shadow_cannot_be_selected_and_expires_with_keep_s():
+    tr = _born(support_z=0.015)
+    tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", support_z=0.008, cid="c")]))
+    assert tr._tracks[1].shadow
+    with pytest.raises(ValueError):
+        tr.select(1)
+    assert 1 not in tr.stale_ids(int(1.0 * S))  # a shadow is never listed as revivable
+    tr.update(_frame(1.3, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="c2")]))  # 1.1 s after D's reading
+    assert [t.id for t in tr._tracks] == [0]
+
+
+def test_the_shadow_veto_applies_before_the_matching_decides_uniqueness():
+    # Codex: shadow D-O1, A-O1/O2, B-O2. Vetoing A-O1 after matching left B with O2; without A-O1 the
+    # reading O2 is ambiguous between A and B and must be held
+    rows = (_row(1.0, 4.0, yaw=0.05, z_s=0.005),)
+    tr = CandidateTracker(_bounds(rows=rows))
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="s"), _candidate((3.0, 0.12, 0.06), support_z=0.02, cid="a"),
+                           _candidate((3.0, 0.24, 0.06), support_z=0.02, cid="b")]))
+    tr.select(0)
+    tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), cid="s"), _candidate((3.0, 0.12, 0.06), support_z=0.02, cid="a"),
+                           _candidate((3.0, 0.24, 0.06), support_z=0.02, cid="b"),
+                           _candidate((3.0, 0.0, 0.06), support_z=0.015, cid="d")]))
+    assert tr._tracks[3].duplicate_kind == "near_miss"
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), support_z=0.008, cid="s"),
+                                    _candidate((3.0, 0.12, 0.06), support_z=0.02, cid="a"),
+                                    _candidate((3.0, 0.24, 0.06), support_z=0.02, cid="b")]))
+    assert report.absorbed == 1 and tr._tracks[3].shadow
+    report = tr.update(_frame(0.6, [_candidate((3.0, 0.06, 0.06), support_z=0.02, cid="o1"),
+                                    _candidate((3.0, 0.18, 0.06), support_z=0.02, cid="o2")]))
+    assert "o2" not in report.accepted and report.new == 0
+
+
+def _shadowed():
+    """Selected S (y 0), real neighbour E (y 0.18, born with S, so not a duplicate), and S's shadow D
+    (a support near miss absorbed at 0.4 s)."""
+    rows = (_row(1.0, 4.0, yaw=0.05, z_s=0.005),)
+    tr = CandidateTracker(_bounds(rows=rows))
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="s"), _candidate((3.0, 0.18, 0.06), cid="e")]))
+    tr.select(0)
+    tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), support_z=0.015, cid="d")]))
+    tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), support_z=0.008, cid="s")]))
+    assert tr._tracks[2].shadow and tr._tracks[1].duplicate_of is None
+    return tr
+
+
+def test_a_shadow_never_hands_a_real_neighbours_reading_to_a_stale_selected_track():
+    # Codex: E active, S stale, the shadow fits too -- E keeps its reading (2B-3b active-first)
+    tr = _shadowed()
+    for t in (0.6, 0.8):
+        tr.update(_frame(t, [_candidate((3.0, 0.12, 0.06), cid="e")]))
+    report = tr.update(_frame(1.0, [_candidate((3.0, 0.06, 0.06), support_z=0.008, cid="o")]))  # fits E, stale S, shadow
+    assert report.accepted == {"o": 1} and report.revived == 0
+
+
+def test_a_shadow_keeps_the_hold_between_an_active_selected_track_and_a_real_neighbour():
+    tr = _shadowed()
+    tr.update(_frame(0.5, [_candidate((3.0, 0.12, 0.06), cid="e")]))
+    report = tr.update(_frame(0.6, [_candidate((3.0, 0.05, 0.06), support_z=0.008, cid="o")]))
+    assert report.accepted == {} and report.held >= 2  # S and E both fit: the 2B-3b hold stays
+
+
+def test_switching_the_selection_keeps_the_old_targets_shadow_in_the_competition():
+    # Codex: after absorbing D into S, selecting the neighbour E must not exempt E from S's shadow
+    rows = (_row(1.0, 4.0, yaw=0.05, z_s=0.005, along=0.15),)
+    tr = CandidateTracker(_bounds(rows=rows))
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="s"), _candidate((3.4, 0.0, 0.06), support_z=0.015, cid="e")]))
+    tr.select(0)
+    tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), support_z=0.015, cid="d")]))
+    tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), support_z=0.008, cid="c")]))
+    assert tr._tracks[2].shadow
+    tr.select(1)
+    report = tr.update(_frame(0.6, [_candidate((3.15, 0.0, 0.06), support_z=0.024, cid="t")]))
+    assert report.accepted.get("t") != 1  # the target's reading that fits S's shadow is not handed to E
+
+
+def test_the_owner_exemption_needs_a_single_reading(monkeypatch):
+    # Codex graph: S -> {O1, O2}, neighbour E -> {O2, O3}, S's shadow D -> {O1, O2, O3}. Exempting D from
+    # every reading S fits settles S<-O1, E<-O2; with D kept the readings stay ambiguous and are held
+    from forklift_core.perception import candidate_tracking as CT
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="s"), _candidate((3.0, 0.6, 0.06), cid="e"),
+                           _candidate((3.0, 1.2, 0.06), cid="d")]))
+    tr.select(0)
+    tr._tracks[2].shadow, tr._tracks[2].duplicate_of = True, 0
+    edges = {(0, "o1"), (0, "o2"), (1, "o2"), (1, "o3"), (2, "o1"), (2, "o2"), (2, "o3")}
+    monkeypatch.setattr(CT, "_gate", lambda track, o, bounds: (track.id, o.candidate.candidate_id) in edges)
+    report = tr.update(_frame(0.2, [_candidate((3.0, y, 0.06), cid=c) for y, c in ((0.0, "o1"), (0.6, "o2"), (1.2, "o3"))]))
+    assert report.accepted == {} and report.new == 0
+
+
+def test_a_stale_owner_gives_its_shadow_no_exemption(monkeypatch):
+    # Codex graph: stale S -> O1, active neighbour E -> {O1, O2}, S's shadow D -> {O1, O2}. Exempting D-O1
+    # settles E<-O1, D<-O2 in the active stage; without the exemption both readings stay ambiguous
+    from forklift_core.perception import candidate_tracking as CT
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="s"), _candidate((3.0, 0.6, 0.06), cid="e"),
+                           _candidate((3.0, 1.2, 0.06), cid="d")]))
+    tr.select(0)
+    for t in (0.2, 0.4, 0.6):
+        tr.update(_frame(t, [_candidate((3.0, 0.6, 0.06), cid="e"), _candidate((3.0, 1.2, 0.06), cid="d")]))
+    tr._tracks[2].shadow, tr._tracks[2].duplicate_of = True, 0
+    edges = {(0, "o1"), (1, "o1"), (1, "o2"), (2, "o1"), (2, "o2")}
+    monkeypatch.setattr(CT, "_gate", lambda track, o, bounds: (track.id, o.candidate.candidate_id) in edges)
+    report = tr.update(_frame(0.8, [_candidate((3.0, y, 0.06), cid=c) for y, c in ((0.0, "o1"), (0.6, "o2"))]))
+    assert "o1" not in report.accepted and report.new == 0
+
+
+def test_a_shadow_keeps_tracking_its_readings_so_it_stays_in_the_active_competition():
+    # Codex: a reading only the shadow fits refreshes it (as the duplicate would have in 2B-3d); the next
+    # reading that fits it and the neighbour E is then held instead of going to E
+    rows = (_row(1.0, 4.0, yaw=0.05, z_s=0.005, along=0.15),)
+    tr = CandidateTracker(_bounds(rows=rows))
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="s"), _candidate((3.4, 0.0, 0.06), support_z=0.015, cid="e")]))
+    tr.select(0)
+    tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), support_z=0.015, cid="d")]))
+    tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), support_z=0.008, cid="c")]))
+    assert tr._tracks[2].shadow
+    tr.update(_frame(0.5, [_candidate((3.4, 0.0, 0.06), support_z=0.015, cid="e")]))
+    report = tr.update(_frame(0.6, [_candidate((3.0, 0.0, 0.06), support_z=0.024, cid="t1")]))
+    assert report.accepted == {"t1": 2}  # the shadow takes it -- hidden, but its age is refreshed
+    report = tr.update(_frame(0.8, [_candidate((3.15, 0.0, 0.06), support_z=0.024, cid="t2")]))
+    assert report.accepted.get("t2") != 1  # never handed to the neighbour E
+    assert [t.track_id for t in tr.tracks(int(0.8 * S), _odom())] != [] and 2 not in [t.track_id for t in tr.tracks(int(0.8 * S), _odom())]
+
+
+def test_a_shadow_keeps_its_edges_when_a_real_neighbour_also_competes(monkeypatch):
+    # Codex graph: active S -> O1, real A -> O1, S's shadow D -> {O1, O2}, real B -> {O2, O3}: with A competing
+    # there is no priority, and cutting D-O1 settled D<-O2, B<-O3; with D's edges kept everything is held
+    from forklift_core.perception import candidate_tracking as CT
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate((3.0, y, 0.06), cid=c) for y, c in ((0.0, "s"), (0.6, "a"), (1.2, "d"), (1.8, "b"))]))
+    tr.select(0)
+    tr._tracks[2].shadow, tr._tracks[2].duplicate_of = True, 0
+    edges = {(0, "o1"), (1, "o1"), (2, "o1"), (2, "o2"), (3, "o2"), (3, "o3")}
+    monkeypatch.setattr(CT, "_gate", lambda track, o, bounds: (track.id, o.candidate.candidate_id) in edges)
+    report = tr.update(_frame(0.2, [_candidate((3.0, y, 0.06), cid=c) for y, c in ((0.0, "o1"), (0.6, "o2"), (1.2, "o3"))]))
+    assert report.accepted == {} and report.new == 0
+
+
+def test_a_shadow_reappears_as_an_ordinary_track_once_its_owner_is_deleted():
+    # Codex: the target keeps being read only by the shadow; when the owner S is deleted the shadow must be
+    # visible and selectable again (not chosen automatically)
+    tr = _born(support_z=0.015)
+    tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", support_z=0.008, cid="c")]))
+    assert tr._tracks[1].shadow
+    for k in range(3, 12):  # readings only the shadow fits, every 0.2 s
+        tr.update(_frame(0.2 * k, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", support_z=0.024, cid=f"t{k}")]))
+    now = int(2.2 * S)
+    assert all(t.id != 0 for t in tr._tracks) and tr.selected is None
+    assert [t.track_id for t in tr.tracks(now, _odom())] == [1]
+    tr.select(1)
