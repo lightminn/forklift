@@ -53,10 +53,39 @@ def run(d, teleop, permit, *, last=0.0, measured=0.0, kappa=0.0, armed=True, all
                   measured_mps=measured, measured_kappa=kappa, steering_error_rad=err, permit=permit)
 
 
-def test_the_bundle_covers_measured_to_output_curvature_at_most_a_step_apart():
-    ks = bundle(-0.1, 0.12)
-    assert ks[0] == -0.1 and ks[-1] == pytest.approx(0.12) and max(np.diff(ks)) <= 0.05 + 1e-12
-    assert bundle(0.2, 0.2) == [0.2]  # one arc, not the same arc twice
+def test_the_bundle_is_the_grid_covering_both_curvatures_and_the_margin():
+    """Teleop bundle margin plan D1: the 0.05 grid, outer points rounded outward, the margin on both sides."""
+    assert bundle(-0.1, 0.12) == pytest.approx([-0.1, -0.05, 0.0, 0.05, 0.1, 0.15])
+    assert bundle(0.12, -0.1) == bundle(-0.1, 0.12)  # either order
+    assert bundle(0.2, 0.2) == [0.2]  # a grid point alone: one arc, not the same arc twice
+    assert bundle(0.21, 0.21) == pytest.approx([0.2, 0.25])  # off the grid: bracketed
+    assert bundle(0.0, 0.0, 0.04) == pytest.approx([-0.05, 0.0, 0.05])
+    assert bundle(-0.092, -0.108, 0.04) == pytest.approx([-0.15, -0.1, -0.05])
+    for low, high, margin in ((-0.37, 0.02, 0.04), (0.149999, 0.15, 0.0), (-0.0001, 0.0001, 0.03)):
+        ks = bundle(low, high, margin)
+        assert ks[0] <= low - margin + 1e-12 and ks[-1] >= high + margin - 1e-12
+        assert max(np.diff(ks), default=0.0) <= 0.05 + 1e-12
+        assert all(abs(k / 0.05 - round(k / 0.05)) < 1e-9 for k in ks)  # exactly on the grid
+
+
+def test_the_limits_refuse_a_negative_margin():
+    with pytest.raises(ValueError):
+        TeleopLimits(curvature_margin_inv_m=-0.01)
+
+
+def test_the_drive_asks_the_margined_bundle():
+    """Plan D1: the chain asks the grid bundle of measured to output curvature grown by the limits' margin."""
+    asked = []
+
+    def permit(curvatures, direction, check):
+        asked.append(list(curvatures))
+        return 1.0, "ok"
+
+    d = drive()
+    d.kappa = -0.1
+    run(d, cmd(curvature=-0.1 / 0.36), permit, kappa=-0.092)
+    assert asked[-1] == pytest.approx([-0.15, -0.1, -0.05])
+    assert asked[-1] == pytest.approx(bundle(-0.092, -0.1, 0.04))
 
 
 def test_a_free_corridor_lets_the_slew_pull_away_and_the_arc_never_reaches_its_end():
@@ -231,3 +260,74 @@ def test_steering_away_from_a_single_arc_installs_the_output_curvature():
     assert [k for k, _ in bp._cache[1]["perms"]] == pytest.approx(bundle(0.0, -0.024))
     direct = arc_permit(DrivePermission(CONFIG), snap, 0.1, {"low": 0.1}, curvatures=bundle(0.0, -0.024), **kw)
     assert cached == pytest.approx(direct)
+
+
+def test_an_end_drifting_inside_its_grid_cell_keeps_the_arcs_a_full_check_would_install():
+    """Plan D1 (M-c evidence 1.5: the cache once allowed 0.361 m/s where the full check gave 0.341): the old ends
+    rounded to one key while the installed arcs were the old exact curvatures; on the grid both are the same set."""
+    from forklift_core.safety.teleop_drive import BundlePermit
+
+    snap = snapshot()
+    occupy(snap, 1.6, -0.25)
+    bp = BundlePermit(CONFIG)
+    kw = dict(pose=(0.0, 0.0, 0.0), direction=1, check_speed_mps=0.4, footprint=FOOT, own_footprint=BODY)
+    first = bundle(-0.092, -0.108, 0.04)
+    bp.limit(snap, 1, 0.1, {"low": 0.1}, curvatures=first, **kw)
+    installed = [id(p) for _, p in bp._cache[1]["perms"]]
+    later = bundle(-0.097, -0.104, 0.04)  # drifted, same grid cells
+    assert later == first
+    cached = bp.limit(snap, 1, 0.1, {"low": 0.1}, curvatures=later, **kw)
+    assert [id(p) for _, p in bp._cache[1]["perms"]] == installed  # no reinstall
+    direct = arc_permit(DrivePermission(CONFIG), snap, 0.1, {"low": 0.1}, curvatures=later, **kw)
+    assert cached == pytest.approx(direct)
+
+
+def test_the_short_walk_gives_the_limit_the_full_lookahead_gives_up_to_the_teleop_caps():
+    """Plan D6: an arc walks the refresh distance and the stop from 1 m/s; beyond that speed_for() is above every
+    teleop cap, so the limit an occupied cell gives the chain is the 3 m lookahead's (the evidence age differs:
+    test_only_the_walked_evidence_must_be_fresh)."""
+    from forklift_core.safety.teleop_drive import WALK_SPEED_MPS, walk_m
+
+    assert walk_m(CONFIG, 0.5) == pytest.approx(0.25 + STOP.distance_m(WALK_SPEED_MPS) + CONFIG.step_m)
+    assert STOP.speed_for(walk_m(CONFIG, 0.5) - 0.25) > max(TeleopLimits().video_forward_mps, 0.6)
+    for x_obstacle in (1.7, 1.9, 2.5, 4.0):  # the front face at 1.29 m: 0.41, 0.61, 1.21 and 2.71 m of travel
+        snap = snapshot()
+        occupy(snap, x_obstacle, 0.0)
+        kw = dict(pose=(0.0, 0.0, 0.0), curvatures=bundle(0.0, 0.0, 0.04), direction=1, check_speed_mps=0.5,
+                  footprint=FOOT, own_footprint=BODY)
+        short = arc_permit(DrivePermission(CONFIG), snap, 0.1, {"low": 0.1}, **kw)
+        full = DrivePermission(CONFIG)
+        best = math.inf
+        for k in kw["curvatures"]:
+            from forklift_core.control.drive_permission import arc_poses
+
+            path, _ = arc_poses((0.0, 0.0, 0.0), k, 1, 3.6, 0.02)
+            full.update(snap, path, FOOT, BODY, current_pose=(0.0, 0.0, 0.0), direction=1)
+            best = min(best, full.allowed_speed(0.1, {"low": 0.1}, current_pose=(0.0, 0.0, 0.0), curvature_inv_m=k,
+                                                direction=1, footprint=FOOT, own_footprint=BODY,
+                                                speed_cap_mps=0.5)[0])
+        assert min(short[0], 0.6) == pytest.approx(min(best, 0.6))
+
+
+def test_only_the_walked_evidence_must_be_fresh():
+    """Plan D6 (Codex review r2 P2): the short walk asks fresh evidence only where a stop can reach -- an old FREE
+    cell 2.8 m out no longer zeroes teleop (the 3 m lookahead's did), one inside the walk still does."""
+    kw = dict(pose=(0.0, 0.0, 0.0), curvatures=bundle(0.0, 0.0, 0.04), direction=1, check_speed_mps=0.5,
+              footprint=FOOT, own_footprint=BODY)
+    for x, expected in ((2.8 + 1.29, "ok"), (0.5 + 1.29, "evidence_stale")):
+        snap = snapshot()
+        i, j = int(math.floor((x + 1.0) / 0.05)), int(math.floor((0.0 + 3.0) / 0.05))
+        snap.free_stamp[i, j] = -10.0  # seen free long ago
+        assert arc_permit(DrivePermission(CONFIG), snap, 0.1, {"low": 0.1}, **kw)[1] == expected
+
+
+def test_a_forbidden_drive_does_not_ask_the_arcs():
+    """The cap is 0 anyway; the arcs are the costly part of a cycle (console session profile, 2026-10-17)."""
+    asked = []
+
+    def permit(curvatures, direction, check):
+        asked.append(curvatures)
+        return 1.0, "ok"
+
+    speed, _, (limit, why) = run(drive(), cmd(speed=1.0), permit, last=0.2, measured=0.2, allowed=False)
+    assert asked == [] and (limit, why) == (0.0, "drive_forbidden") and speed < 0.2

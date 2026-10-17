@@ -5247,6 +5247,10 @@ def drive(S, isaac) -> None:
                                          frame_window_s=max(5.0, 2 * 0.50 / args.live_factor),
                                          lease_timeout_s=max(args.live_lease_timeout_s, 0.30 / args.live_factor,
                                                              0.50 / args.live_factor),
+                                         # The truck stops in sim time: the 10 s stop deadline is 10/f wall s here
+                                         # (at f 0.08 the unscaled one took the settling start for a failed stop and
+                                         # latched STOPPED before TELEOP could be entered, 2026-10-17 job 3886).
+                                         not_stopped_s=LiveArbiterConfig.not_stopped_s / args.live_factor,
                                          # The pixels trail the render metadata in sim steps, so the wall bound
                                          # goes as 1/f (M-c evidence); the per-frame pixel age is checked as well.
                                          camera_latency_bound_s=(args.live_camera_latency_bound_s
@@ -6103,6 +6107,12 @@ def drive(S, isaac) -> None:
                      "steering_error_rad": float(np.max(np.abs(target_steer_ - actual_steering))),
                      "permit": live_permit})
                 if out_.source == "teleop":
+                    if args.live_test_permit_compare:
+                        # The bundle's inputs each teleop cycle, for the offline coverage check (teleop bundle margin
+                        # plan V3): the grid bundle's last curvature is its margined edge, not the output.
+                        live.log({"teleop_k": float(t), "measured_kappa": float(kappa),
+                                  "output_kappa": float(live.arbiter.drive.kappa), "speed_mps": float(out_.speed_mps),
+                                  "permit_asked": bool(out_.policy.drive_allowed)})  # forbidden: no arcs asked
                     drive = live_ackermann(out_.speed_mps, out_.curvature_inv_m, args.drive_geometry)
                     rate_ = settings["steering_command_rate_rad_s"] * dt
                     steering_command[:] = steer_before_ + np.clip(np.asarray(drive.steering_rad) - steer_before_,
