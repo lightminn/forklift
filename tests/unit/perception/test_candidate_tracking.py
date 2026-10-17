@@ -906,7 +906,7 @@ def test_a_shadow_keeps_the_pose_hypothesis_of_an_absorbed_duplicate():
     report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), support_z=0.008, cid="c")]))
     assert report.accepted == {"c": 0} and report.absorbed == 1
     report = tr.update(_frame(0.6, [_candidate((3.15, 0.0, 0.06), support_z=0.024, cid="t")]))
-    assert report.accepted == {} and report.held >= 1  # held between the shadow and E (was E before shadows)
+    assert report.accepted == {} and report.new == 0  # vetoed by the shadow: not given to E (was E before shadows)
 
 
 
@@ -926,7 +926,7 @@ def test_a_shadow_keeps_the_ambiguity_after_the_selected_track_decides_a_hypothe
     tr.update(_frame(0.5, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", support_z=0.006, cid="c2")]))
     assert tr._tracks[0].known == "epal6:x"
     report = tr.update(_frame(0.6, [_candidate((3.15, 0.0, 0.06), hypothesis="t11_06:x", support_z=0.012, cid="t")]))
-    assert "t" not in report.accepted and report.held >= 1  # held between the shadow and E, not given to E
+    assert "t" not in report.accepted and report.new == 0  # vetoed by the shadow: not given to E, no new track
 
 
 def test_a_shadow_cannot_be_selected_and_expires_with_keep_s():
@@ -938,3 +938,24 @@ def test_a_shadow_cannot_be_selected_and_expires_with_keep_s():
     assert 1 not in tr.stale_ids(int(1.0 * S))  # a shadow is never listed as revivable
     tr.update(_frame(1.3, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="c2")]))  # 1.1 s after D's reading
     assert [t.id for t in tr._tracks] == [0]
+
+
+def test_the_shadow_veto_applies_before_the_matching_decides_uniqueness():
+    # Codex: shadow D-O1, A-O1/O2, B-O2. Vetoing A-O1 after matching left B with O2; without A-O1 the
+    # reading O2 is ambiguous between A and B and must be held
+    rows = (_row(1.0, 4.0, yaw=0.05, z_s=0.005),)
+    tr = CandidateTracker(_bounds(rows=rows))
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="s"), _candidate((3.0, 0.12, 0.06), support_z=0.02, cid="a"),
+                           _candidate((3.0, 0.24, 0.06), support_z=0.02, cid="b")]))
+    tr.select(0)
+    tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), cid="s"), _candidate((3.0, 0.12, 0.06), support_z=0.02, cid="a"),
+                           _candidate((3.0, 0.24, 0.06), support_z=0.02, cid="b"),
+                           _candidate((3.0, 0.0, 0.06), support_z=0.015, cid="d")]))
+    assert tr._tracks[3].duplicate_kind == "near_miss"
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), support_z=0.008, cid="s"),
+                                    _candidate((3.0, 0.12, 0.06), support_z=0.02, cid="a"),
+                                    _candidate((3.0, 0.24, 0.06), support_z=0.02, cid="b")]))
+    assert report.absorbed == 1 and tr._tracks[3].shadow
+    report = tr.update(_frame(0.6, [_candidate((3.0, 0.06, 0.06), support_z=0.02, cid="o1"),
+                                    _candidate((3.0, 0.18, 0.06), support_z=0.02, cid="o2")]))
+    assert "o2" not in report.accepted and report.new == 0

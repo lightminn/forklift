@@ -474,10 +474,12 @@ class CandidateTracker:
         """Active and stale tracks; anything older is deleted for good."""
         return [t for t in self._tracks if self._age(t, now_ns) <= self.bounds.keep_s]
 
-    def _match(self, tracks, obs, free):
-        """Unique maximum matching per gate component over the observations in `free`.
+    def _match(self, tracks, obs, free, veto=frozenset(), keep=None):
+        """Unique maximum matching per gate component over the observations in `free`. Edges from any
+        track but `keep` to a reading in `veto` are left out before uniqueness is judged (2B-3e shadows).
         Returns (matched (track, obs index) pairs, held tracks, gated observation indices)."""
-        edges = {(i, j) for i, t in enumerate(tracks) for j in free if _gate(t, obs[j], self.bounds)}
+        edges = {(i, j) for i, t in enumerate(tracks) for j in free
+                 if (j not in veto or t is keep) and _gate(t, obs[j], self.bounds)}
         parent = {("t", i): ("t", i) for i in range(len(tracks))} | {("o", j): ("o", j) for j in free}
 
         def find(x):
@@ -578,17 +580,13 @@ class CandidateTracker:
         stages += [("active", active), ("stale", stale)]
         for stage, tracks in stages:
             # the selected stage sees only its one observation; the others see what is still free
-            pairs, h, gated = self._match(tracks, obs, {priority} if stage == "selected" else free)
+            pairs, h, gated = self._match(tracks, obs, {priority} if stage == "selected" else free,
+                                          veto=shadow_fits, keep=chosen)
             held += len(h)
             held_now.update(tr.id for tr in h)
             blocked |= gated
             free -= gated
             for track, j in pairs:
-                if track is not chosen and j in shadow_fits:
-                    # a reading an absorbed duplicate would have taken: held from any other track (2B-3e)
-                    held += 1
-                    held_now.add(track.id)
-                    continue
                 o = obs[j]
                 was_stale = self._age(track, frame.stamp_ns) > self.bounds.expiry_s
                 if self._conflicts(track, o):
