@@ -58,8 +58,9 @@ def test_sequence_seeds_stay_clear_of_the_catalogue_and_of_each_other():
     seeds = {R.SEQUENCE_BANDS[b] + c * R.CELL_STRIDE + i for b in R.SEQUENCE_BANDS for c in range(len(R.CELLS))
              for i in range(100)}
     assert not seeds & catalogue
-    assert len(seeds) == 2 * len(R.CELLS) * 100
-    assert len(R.CELLS) * R.CELL_STRIDE <= R.SEQUENCE_BANDS["evaluation"] - R.SEQUENCE_BANDS["calibration"]
+    assert len(seeds) == len(R.SEQUENCE_BANDS) * len(R.CELLS) * 100
+    starts = sorted(R.SEQUENCE_BANDS.values())
+    assert all(len(R.CELLS) * R.CELL_STRIDE <= b - a for a, b in zip(starts, starts[1:]))
 
 
 def test_noisy_odometry_starts_true_and_stays_within_a_few_millimetres_per_second():
