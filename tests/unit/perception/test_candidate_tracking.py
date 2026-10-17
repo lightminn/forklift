@@ -886,9 +886,10 @@ def test_a_near_miss_duplicate_that_later_learned_another_reading_becomes_a_shad
     assert tr._tracks[1].known == "t11_06:x"
     report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", support_z=0.008, cid="c")]))
     assert report.accepted == {"c": 0} and report.absorbed == 1 and tr._tracks[1].shadow
-    # the shadow keeps its T11 hypothesis: a T11 reading S refuses starts no new (duplicate) track
+    # the shadow keeps its T11 hypothesis: it takes the T11 reading S refuses, hidden, with no new track
     report = tr.update(_frame(0.5, [_candidate((3.0, 0.0, 0.06), hypothesis="t11_06:x", support_z=0.015, cid="t")]))
-    assert report.accepted == {} and report.new == 0
+    assert report.accepted == {"t": 1} and report.new == 0
+    assert [x.track_id for x in tr.tracks(int(0.5 * S), _odom())] == [0]
 
 
 
@@ -906,7 +907,7 @@ def test_a_shadow_keeps_the_pose_hypothesis_of_an_absorbed_duplicate():
     report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), support_z=0.008, cid="c")]))
     assert report.accepted == {"c": 0} and report.absorbed == 1
     report = tr.update(_frame(0.6, [_candidate((3.15, 0.0, 0.06), support_z=0.024, cid="t")]))
-    assert report.accepted == {} and report.new == 0  # vetoed by the shadow: not given to E (was E before shadows)
+    assert report.accepted.get("t") != 1 and report.new == 0  # the shadow keeps it from E (was E before shadows)
 
 
 
@@ -926,7 +927,7 @@ def test_a_shadow_keeps_the_ambiguity_after_the_selected_track_decides_a_hypothe
     tr.update(_frame(0.5, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", support_z=0.006, cid="c2")]))
     assert tr._tracks[0].known == "epal6:x"
     report = tr.update(_frame(0.6, [_candidate((3.15, 0.0, 0.06), hypothesis="t11_06:x", support_z=0.012, cid="t")]))
-    assert "t" not in report.accepted and report.new == 0  # vetoed by the shadow: not given to E, no new track
+    assert report.accepted.get("t") != 1 and report.new == 0  # the shadow keeps it from E
 
 
 def test_a_shadow_cannot_be_selected_and_expires_with_keep_s():
@@ -1001,7 +1002,7 @@ def test_switching_the_selection_keeps_the_old_targets_shadow_in_the_competition
     assert tr._tracks[2].shadow
     tr.select(1)
     report = tr.update(_frame(0.6, [_candidate((3.15, 0.0, 0.06), support_z=0.024, cid="t")]))
-    assert "t" not in report.accepted  # the target's reading that fits S's shadow is not handed to E
+    assert report.accepted.get("t") != 1  # the target's reading that fits S's shadow is not handed to E
 
 
 def test_the_owner_exemption_needs_a_single_reading(monkeypatch):
@@ -1034,3 +1035,21 @@ def test_a_stale_owner_gives_its_shadow_no_exemption(monkeypatch):
     monkeypatch.setattr(CT, "_gate", lambda track, o, bounds: (track.id, o.candidate.candidate_id) in edges)
     report = tr.update(_frame(0.8, [_candidate((3.0, y, 0.06), cid=c) for y, c in ((0.0, "o1"), (0.6, "o2"))]))
     assert "o1" not in report.accepted and report.new == 0
+
+
+def test_a_shadow_keeps_tracking_its_readings_so_it_stays_in_the_active_competition():
+    # Codex: a reading only the shadow fits refreshes it (as the duplicate would have in 2B-3d); the next
+    # reading that fits it and the neighbour E is then held instead of going to E
+    rows = (_row(1.0, 4.0, yaw=0.05, z_s=0.005, along=0.15),)
+    tr = CandidateTracker(_bounds(rows=rows))
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="s"), _candidate((3.4, 0.0, 0.06), support_z=0.015, cid="e")]))
+    tr.select(0)
+    tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), support_z=0.015, cid="d")]))
+    tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), support_z=0.008, cid="c")]))
+    assert tr._tracks[2].shadow
+    tr.update(_frame(0.5, [_candidate((3.4, 0.0, 0.06), support_z=0.015, cid="e")]))
+    report = tr.update(_frame(0.6, [_candidate((3.0, 0.0, 0.06), support_z=0.024, cid="t1")]))
+    assert report.accepted == {"t1": 2}  # the shadow takes it -- hidden, but its age is refreshed
+    report = tr.update(_frame(0.8, [_candidate((3.15, 0.0, 0.06), support_z=0.024, cid="t2")]))
+    assert report.accepted.get("t2") != 1  # never handed to the neighbour E
+    assert [t.track_id for t in tr.tracks(int(0.8 * S), _odom())] != [] and 2 not in [t.track_id for t in tr.tracks(int(0.8 * S), _odom())]

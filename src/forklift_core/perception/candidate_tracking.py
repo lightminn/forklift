@@ -275,9 +275,10 @@ class _Track:
         # why: "reading" (split off by family / layout -- carries a reading the selected track refuses) or
         # "near_miss" (yaw / support near miss -- the same reading); only near misses are absorbed (2B-3e)
         self.duplicate_kind: str | None = None
-        # 2B-3e: an absorbed duplicate becomes a shadow -- hidden from output and selection, never accepts,
-        # but until keep_s it still holds any reading another track would take from it (its reading and pose
-        # hypotheses are kept for ambiguity; deleting them handed readings to neighbours -- Codex)
+        # 2B-3e: an absorbed duplicate becomes a shadow -- a hidden duplicate: it keeps tracking (taking the
+        # readings a unique matching gives it, ageing and expiring like any track) so every ambiguity it would
+        # have held in 2B-3d stays held, but it never reaches the output or the selection (deleting it handed
+        # readings to neighbours -- Codex)
         self.shadow = False
 
     def accept(self, obs: _Observation) -> None:
@@ -565,8 +566,9 @@ class CandidateTracker:
                 rivals = [tr for tr in self._tracks if tr is not chosen and _gate(tr, obs[fits[0]], self.bounds)]
                 if all(tr.duplicate_of == chosen.id for tr in rivals):
                     priority = fits[0]  # the selected track wins only against its own suspected duplicates
-        # 2B-3e shadows compete in the active stage like tracks but never accept: a reading a unique
-        # matching gives to a shadow is held. A shadow never competes with the selected track it was
+        # 2B-3e shadows are hidden duplicates: they keep matching and taking readings exactly as the
+        # duplicate would have in 2B-3d (so every ambiguity it held stays held), but never reach the output
+        # or the selection. A shadow never competes with the selected track it was
         # absorbed into for a reading that track fits (only its owner is exempt -- switching the selection
         # keeps an old target's shadows competing); every other competition stays as in 2B-3b
         shadows = [tr for tr in self._tracks if tr.shadow]
@@ -597,10 +599,6 @@ class CandidateTracker:
             blocked |= gated
             free -= gated
             for track, j in pairs:
-                if track.shadow:  # a shadow never accepts: the reading is held
-                    held += 1
-                    held_now.add(track.id)
-                    continue
                 o = obs[j]
                 was_stale = self._age(track, frame.stamp_ns) > self.bounds.expiry_s
                 if self._conflicts(track, o):
