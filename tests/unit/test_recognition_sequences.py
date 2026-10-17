@@ -161,3 +161,15 @@ def test_a_track_that_accepts_another_instance_is_an_identity_error_even_without
     assert E.identity_errors({0: [(0, 0), (1, None)]}) == 1
     assert E.identity_errors({0: [(0, 0), (0, 1)]}) == 1          # another face of the same instance
     assert E.identity_errors({0: [(0, 0), (0, None), (0, 0)]}) == 0  # an unmatched reading of the same instance
+
+
+def test_the_front_back_and_side_floor_is_judged_per_case():
+    # S3 13/16 retained against 15/16 single misses the floor even though S2+S3+S6 pooled would pass
+    def cell(case, retained, single, n=16):
+        return [{"case": case, "rows": [{"distance_m": 2.75, "retained": k < retained, "reacquired": False,
+                                         "single": k < single, "duplicates": 0, "held": 0, "initialised": True}],
+                 "variant": "V2", "identity_errors": 0} for k in range(n)]
+    res = cell("S2", 16, 15) + cell("S3", 13, 15) + cell("S6", 14, 15)
+    s = E.summarise(res, 0)["V2"]
+    fails = " ".join(s["verdict"]["failures"])
+    assert "bin [2.5, 3.0]: S3 retained" in fails and "S2 retained" not in fails

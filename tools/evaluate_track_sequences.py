@@ -40,6 +40,7 @@ FAR_BINS = ((3.0, 3.5), (2.5, 3.0), (2.0, 2.5))
 VARIANTS = {"V0": ("straight", "perfect"), "V1": ("straight", "noise"), "V2": ("curve", "noise"),
             "V3": ("straight", "noise"), "V4": ("pitch", "late"), "V5": ("straight", "drift")}
 JUDGED = ("V0", "V1", "V2")
+FRONT_BACK_SIDE = ("S2", "S3", "S6")
 AXES = ("lateral_m", "along_m", "yaw_rad", "height_m")
 TOLERANCE = {"lateral_m": 0.002, "along_m": 0.002, "yaw_rad": math.radians(0.2), "height_m": 0.002}
 
@@ -243,11 +244,12 @@ def summarise(results: list, n_skipped: int) -> dict:
             for axis in AXES:
                 cell[f"output_{axis}"] = _p95([p["output"][axis] for p in both])
                 cell[f"latest_{axis}"] = _p95([p["latest"][axis] for p in both])
-            for group, cases in (("front_back_side", ("S2", "S3", "S6")),):
-                sub = [(p, r) for p, r in picked if r["case"] in cases]
-                cell[f"{group}_sequences"] = len(sub)
-                cell[f"{group}_retained"] = sum(1 for p, _ in sub if p and p["retained"])
-                cell[f"{group}_single_available"] = sum(1 for p, _ in sub if p and p["single"])
+            cell["cases"] = {}
+            for case in FRONT_BACK_SIDE:  # judged one case at a time (plan section 7)
+                sub = [(p, r) for p, r in picked if r["case"] == case]
+                cell["cases"][case] = {"sequences": len(sub),
+                                       "retained": sum(1 for p, _ in sub if p and p["retained"]),
+                                       "single_available": sum(1 for p, _ in sub if p and p["single"])}
             table.append(cell)
         after = [p for r in res for lo, hi in BINS for p in [_bin_row(r["rows"], lo, hi)] if p and p["initialised"]]
         coverage = {axis: None for axis in AXES}
@@ -280,9 +282,9 @@ def verdict(s: dict) -> dict:
         b = cell["bin"]
         if cell["retained"] < cell["single_available"] - 0.05 * cell["sequences"]:
             fails.append(f"bin {b}: retained {cell['retained']} < single {cell['single_available']} - 5 %p")
-        fbs = cell["front_back_side_sequences"]
-        if fbs and cell["front_back_side_retained"] < cell["front_back_side_single_available"] - 0.05 * fbs:
-            fails.append(f"bin {b}: S2/S3/S6 retained below single - 5 %p")
+        for case, c in cell["cases"].items():
+            if c["sequences"] and c["retained"] < c["single_available"] - 0.05 * c["sequences"]:
+                fails.append(f"bin {b}: {case} retained {c['retained']} < single {c['single_available']} - 5 %p")
         if cell["both"] < 10:
             fails.append(f"bin {b}: {cell['both']} sequences with both outputs (< 10)")
             continue
