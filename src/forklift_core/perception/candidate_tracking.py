@@ -7,12 +7,18 @@ of each live track, with the near-field tracker's gate (`near_field_tracking.py`
 both single-frame bounds, the odometry bound for the elapsed time, its lever and
 the axis-mixing term. A component of the gate graph is applied only when its
 maximum matching is unique; otherwise its tracks are held (not refreshed) and its
-observations start no track. A track expires 0.5 s after its last accepted
-observation and is never revived, so a lost target is not silently replaced.
+observations start no track. A track is active (output, selectable) up to 0.5 s
+after its last accepted observation, then stale up to keep_s (hidden, but a
+re-observation of the same pallet that passes the gate revives it with its id --
+design §8's re-observation, not a replacement), then deleted. Active tracks are
+matched first; observations tied to them never go to stale tracks. A parametric
+reading may join any track; a known reading must match the track's first known
+hypothesis; each pocket's face coordinate must overlap the interval every accepted
+observation allows (2B-3b plan).
 
 Fusion is over the rigid pocket-pair pose -- the pair midpoint and the insertion
-yaw -- in a window W, weighted by 1/(sigma^2 + o^2) with o the odometry bound at
-the observation's age. The latest reading's local layout (pocket spacing, face,
+yaw -- in a window W, weighted by 1/(sigma^2 + o^2) with o the assumed odometry
+noise at the observation's age (weight_model; the worst-case bound if absent). The latest reading's local layout (pocket spacing, face,
 centre) is kept and moved by one rigid transform, so every field still describes
 one reading. The budget is the weighted mean of each observation's bound plus its
 odometry terms: an empirical budget built from p95 rows, not a probability bound.
