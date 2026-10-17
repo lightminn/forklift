@@ -554,10 +554,14 @@ class CandidateTracker:
         # judged against the selected track as it was before this frame's matching moves it: inside its
         # pose gate but refused by a reading test (Codex: judging after the update marks real neighbours)
         chosen_active = chosen is not None and self._age(chosen, frame.stamp_ns) <= self.bounds.expiry_s
-        split_off = {}
+        split_off, hide = {}, set()
         for j, o in enumerate(obs):
             if chosen is None:
                 break
+            terms = _pose_terms(chosen, o, self.bounds)
+            if (self.bounds.suppress_duplicates and chosen_active and terms is not None
+                    and terms[5] <= self.bounds.near_miss_position_cap_m + 1e-12):
+                hide.add(j)  # 2B-3f: eligible for a hidden birth, judged before matching moves the selected track
             if _pose_fits(chosen, o, self.bounds) and not _reading_fits(chosen, o):
                 split_off[j] = "reading"
             elif chosen_active and _near_miss(chosen, o, self.bounds):  # 2B-3d
@@ -636,9 +640,7 @@ class CandidateTracker:
             if j in split_off:
                 track.duplicate_of = chosen.id  # where the selected track was, split off by a reading test
                 track.duplicate_kind = split_off[j]
-                terms = _pose_terms(chosen, o, self.bounds)
-                if (self.bounds.suppress_duplicates and chosen_active and terms is not None
-                        and terms[5] <= self.bounds.near_miss_position_cap_m + 1e-12):
+                if j in hide:
                     # 2B-3f: born hidden -- it keeps its reading for the ambiguity but never reaches the
                     # output (dropping it handed the target's next reading to a neighbour -- Codex)
                     track.shadow = True

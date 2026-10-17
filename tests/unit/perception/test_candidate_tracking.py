@@ -1137,18 +1137,50 @@ def test_a_persistent_neighbour_with_another_reading_stays_visible_and_selectabl
     tr.select(1)
 
 
-def test_with_hidden_births_the_target_reading_is_never_handed_to_the_neighbour():
-    # Codex's three cases with suppression on: reading split, support near miss, selection switched away
-    for d_kw, t_kw in ((dict(hypothesis="t11_06:x"), dict(hypothesis="t11_06:x")),
-                       (dict(support_z=0.015), dict(support_z=0.024))):
-        tr = CandidateTracker(_bounds(rows=(_row(1.0, 4.0, yaw=0.05, z_s=0.005, along=0.15),), suppress=True))
+def _hidden_case(kind):
+    """Codex's 2B-3e counterexamples with suppression on: S selected, neighbour E ahead, the target read once
+    as a suspected duplicate (born hidden), then read again in a way that fits E and the hidden track only."""
+    if kind == "reading":
+        tr = CandidateTracker(_bounds(rows=(_row(1.0, 4.0, along=0.3),), suppress=True))
         tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="s"),
-                               _candidate((3.4, 0.0, 0.06), hypothesis="t11_06:x", support_z=0.015, cid="e")]))
+                               _candidate((3.65, 0.0, 0.06), hypothesis="t11_06:x", cid="e")]))
         tr.select(0)
-        tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), **{"hypothesis": "epal6:x", **d_kw}, cid="d")]))
-        assert tr._tracks[2].shadow
-        report = tr.update(_frame(0.4, [_candidate((3.15, 0.0, 0.06), **{"hypothesis": "epal6:x", **t_kw}, cid="t")]))
-        assert report.accepted.get("t") != 1
+        tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), hypothesis="t11_06:x", cid="d")]))
+        tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", cid="p")]))
+        target = _candidate((3.1, 0.0, 0.06), hypothesis="t11_06:x", cid="t")
+    else:
+        tr = CandidateTracker(_bounds(rows=(_row(1.0, 4.0, yaw=0.05, z_s=0.005, along=0.15),), suppress=True))
+        tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="s"), _candidate((3.4, 0.0, 0.06), support_z=0.015, cid="e")]))
+        tr.select(0)
+        tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), support_z=0.015, cid="d")]))
+        tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), support_z=0.008, cid="p")]))
+        target = _candidate((3.15, 0.0, 0.06), support_z=0.024, cid="t")
+    assert tr._tracks[2].shadow
+    return tr, target
+
+
+@pytest.mark.parametrize("kind", ["reading", "near_miss"])
+@pytest.mark.parametrize("switch", [False, True])
+def test_with_hidden_births_the_target_reading_is_never_handed_to_the_neighbour(kind, switch):
+    from forklift_core.perception import candidate_tracking as CT
+    tr, target = _hidden_case(kind)
+    if switch:
         tr.select(1)  # switching to the neighbour keeps the target's shadow competing
-        report = tr.update(_frame(0.6, [_candidate((3.15, 0.0, 0.06), **{"hypothesis": "epal6:x", **t_kw}, cid="t2")]))
-        assert report.accepted.get("t2") != 1
+    o = CT._Observation.make(replace(target, stamp_ns=int(0.6 * S)), _frame(0.6, [target]), tr.bounds)
+    assert CT._gate(tr._tracks[1], o, tr.bounds) and CT._gate(tr._tracks[2], o, tr.bounds)  # fits E and the shadow
+    report = tr.update(_frame(0.6, [target]))
+    assert report.accepted.get("t") != 1
+
+
+@pytest.mark.parametrize("towards", [True, False])
+def test_the_hidden_birth_is_judged_against_the_selected_track_before_it_moves(towards):
+    # Codex: S at y 0 is read at y +/-0.15 in the same frame as another reading N; N's distance to S before
+    # matching decides (0.30 m -> visible, 0.15 m -> hidden), not after S moved
+    tr = CandidateTracker(_bounds(rows=(_row(1.0, 4.0, lat=0.15),), suppress=True))
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="s")]))
+    tr.select(0)
+    s_y, n_y = (0.15, 0.30) if towards else (-0.15, 0.15)
+    report = tr.update(_frame(0.2, [_candidate((3.0, s_y, 0.06), hypothesis="epal6:x", cid="s"),
+                                    _candidate((3.0, n_y, 0.06), hypothesis="t11_06:x", cid="n")]))
+    assert report.accepted["s"] == 0
+    assert tr._tracks[1].shadow is (not towards)
