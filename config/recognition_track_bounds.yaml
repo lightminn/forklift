@@ -1,0 +1,275 @@
+role: provisional
+window_s: 1.2
+expiry_s: 0.5
+max_observations: 10
+rear_axle_xy_m:
+- -0.34
+- 0.0
+weight_model:
+  position_m_per_sqrt_s: 0.0016137430609197568
+  yaw_rad_per_sqrt_s: 0.0002934078292581376
+odometry:
+  source: config/obstacle_odometry_age.json
+  ages_s:
+  - 0.1
+  - 0.2
+  - 0.3
+  - 0.5
+  - 1.0
+  - 2.0
+  - 3.0
+  - 5.0
+  - 10.0
+  e_m:
+  - 0.024127454946306245
+  - 0.03154050388981921
+  - 0.042073498037983145
+  - 0.05858382163605211
+  - 0.0915203383921065
+  - 0.11401136844608778
+  - 0.13977025375788116
+  - 0.16363399501687817
+  - 0.4483619613620488
+  psi_rad:
+  - 0.014372055832039932
+  - 0.021879345531134575
+  - 0.025960997689755683
+  - 0.03037066336547589
+  - 0.04000779180844738
+  - 0.055386581211799076
+  - 0.07654215848519998
+  - 0.09972746617085804
+  - 0.15543189475764893
+rows:
+  known:
+  - lo_m: 1.0
+    hi_m: 1.5
+    lateral_m: 0.004644493018467918
+    along_m: 0.01017099891341991
+    centre_lateral_m: 0.004615610065802124
+    centre_along_m: 0.007570962233143351
+    centre_height_m: 0.003081118272485227
+    yaw_rad: 0.029335769843157705
+    support_m: 0.0030811182724852257
+    layout_m: 0.001
+    sigma_m: 0.002638091260076945
+  - lo_m: 1.5
+    hi_m: 2.0
+    lateral_m: 0.012013809996589419
+    along_m: 0.02279336687256459
+    centre_lateral_m: 0.011974123918637544
+    centre_along_m: 0.0170681449721023
+    centre_height_m: 0.004224190548021917
+    yaw_rad: 0.06305666009290796
+    support_m: 0.004224190548021915
+    layout_m: 0.001
+    sigma_m: 0.003784962089793576
+  - lo_m: 2.0
+    hi_m: 2.5
+    lateral_m: 0.015019788582656624
+    along_m: 0.03852102273592761
+    centre_lateral_m: 0.014812187233198104
+    centre_along_m: 0.029338779502221968
+    centre_height_m: 0.005004914747109027
+    yaw_rad: 0.10131370417243923
+    support_m: 0.005004914747109027
+    layout_m: 0.001
+    sigma_m: 0.0044377835751145825
+  - lo_m: 2.5
+    hi_m: 3.0
+    lateral_m: 0.022171819281383263
+    along_m: 0.0643545140967949
+    centre_lateral_m: 0.022119559090378417
+    centre_along_m: 0.04958699509317209
+    centre_height_m: 0.0058041621878913595
+    yaw_rad: 0.18275104588298466
+    support_m: 0.0058041621878913595
+    layout_m: 0.0025800052938549523
+    sigma_m: 0.0073298361457702675
+  - lo_m: 3.0
+    hi_m: 3.5
+    lateral_m: 0.02561869398149133
+    along_m: 0.0926207281178461
+    centre_lateral_m: 0.023707588187180828
+    centre_along_m: 0.0766122704277094
+    centre_height_m: 0.006295821215765603
+    yaw_rad: 0.2403891212801768
+    support_m: 0.006295821215765604
+    layout_m: 0.004721494557726761
+    sigma_m: 0.008080057185791112
+  - lo_m: 3.5
+    hi_m: 4.0
+    lateral_m: 0.03739726117723063
+    along_m: 0.11819750961471787
+    centre_lateral_m: 0.03363541989647784
+    centre_along_m: 0.09988264113789408
+    centre_height_m: 0.007866870670111019
+    yaw_rad: 0.24473790297222076
+    support_m: 0.007866870670111019
+    layout_m: 0.005418778766648556
+    sigma_m: 0.012686861533045464
+  parametric:
+  - lo_m: 1.5
+    hi_m: 2.0
+    lateral_m: 0.01835257044869742
+    along_m: 0.021471686086722
+    centre_lateral_m: 0.008174387768948481
+    centre_along_m: 0.013877842452095022
+    centre_height_m: 0.013919826787487159
+    yaw_rad: 0.08101250802239027
+    support_m: 0.0026145163774188764
+    layout_m: 0.015323069795648903
+    sigma_m: 0.0037037770687726864
+  - lo_m: 2.0
+    hi_m: 2.5
+    lateral_m: 0.0554403234262325
+    along_m: 0.032744626789761956
+    centre_lateral_m: 0.025301552096881105
+    centre_along_m: 0.027652947479568566
+    centre_height_m: 0.013116700774254971
+    yaw_rad: 0.07632382393292246
+    support_m: 0.003294585570187412
+    layout_m: 0.032466963763717334
+    sigma_m: 0.00983358110206609
+provenance:
+  records: 78
+  records_sha256: 562ef3b02240a84e4a23de3500dec67cdd5d84f24760f9dd03c00786cb165918
+  commit: b7b85f6f868188e05de240f779f0b2da7d9ae359
+  seeds:
+  - 1500000
+  - 1500001
+  - 1500002
+  - 1500003
+  - 1500004
+  - 1500005
+  - 1501000
+  - 1501001
+  - 1501002
+  - 1501003
+  - 1501004
+  - 1501005
+  - 1502000
+  - 1502001
+  - 1502002
+  - 1502003
+  - 1502004
+  - 1502005
+  - 1503000
+  - 1503001
+  - 1503002
+  - 1503003
+  - 1503004
+  - 1503005
+  - 1504000
+  - 1504001
+  - 1504002
+  - 1504003
+  - 1504004
+  - 1504005
+  - 1505000
+  - 1505001
+  - 1505002
+  - 1505003
+  - 1505004
+  - 1505005
+  - 1506000
+  - 1506001
+  - 1506002
+  - 1506003
+  - 1506004
+  - 1506005
+  - 1507000
+  - 1507001
+  - 1507002
+  - 1507003
+  - 1507004
+  - 1507005
+  - 1508000
+  - 1508001
+  - 1508002
+  - 1508003
+  - 1508004
+  - 1508005
+  - 1509000
+  - 1509001
+  - 1509002
+  - 1509003
+  - 1509004
+  - 1509005
+  - 1510000
+  - 1510001
+  - 1510002
+  - 1510003
+  - 1510004
+  - 1510005
+  - 1511000
+  - 1511001
+  - 1511002
+  - 1511003
+  - 1511004
+  - 1511005
+  - 1512000
+  - 1512001
+  - 1512002
+  - 1512003
+  - 1512004
+  - 1512005
+  level:
+  - frame_848
+  bins:
+    known 1.0-1.5:
+      samples: 172
+      sigma_samples: 171
+      unmatched: 0
+    known 1.5-2.0:
+      samples: 394
+      sigma_samples: 394
+      unmatched: 0
+    known 2.0-2.5:
+      samples: 381
+      sigma_samples: 377
+      unmatched: 0
+    known 2.5-3.0:
+      samples: 404
+      sigma_samples: 399
+      unmatched: 3
+    known 3.0-3.5:
+      samples: 388
+      sigma_samples: 383
+      unmatched: 5
+    known 3.5-4.0:
+      samples: 65
+      sigma_samples: 65
+      unmatched: 1
+    parametric 1.0-1.5:
+      samples: 6
+      sigma_samples: 6
+      unmatched: 0
+    parametric 1.5-2.0:
+      samples: 24
+      sigma_samples: 20
+      unmatched: 0
+    parametric 2.0-2.5:
+      samples: 22
+      sigma_samples: 20
+      unmatched: 0
+    parametric 2.5-3.0:
+      samples: 7
+      sigma_samples: 7
+      unmatched: 0
+    parametric 3.0-3.5:
+      samples: 0
+      sigma_samples: 0
+      unmatched: 0
+    parametric 3.5-4.0:
+      samples: 0
+      sigma_samples: 0
+      unmatched: 0
+  window_p95_yaw_rad_beyond_2m:
+    '0.0': 0.21296046680211034
+    '0.6': 0.15612049942103456
+    '1.2': 0.15575633326037241
+    '2.0': 0.15575633326037241
+  note: single-frame p95 rows from the CPU rig with team noise; empirical budgets,
+    not probability bounds. The odometry table is the worst-case age table of reported
+    odometry
