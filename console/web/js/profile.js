@@ -136,3 +136,24 @@ export function forbidText(reason) {
   const fb = /^no_feedback:(.+)$/.exec(reason);
   return fb ? `차량 피드백(${fb[1]})이 끊겨 수동 조종을 받지 않습니다` : reason;
 }
+
+// The page's "video stalled" notice in wall seconds: a slowed simulation (pacing target f < 1)
+// sends its sim-rate camera 1/f times slower and the vehicle scales its own video limit by 1/f.
+export function videoStaleAfterS(st) {
+  const f = st?.pacing?.target_factor;
+  return Number.isFinite(f) && f > 0 && f < 1 ? 1.0 / f : 1.0;
+}
+
+// What changed for this page between two states of one session that the operator should
+// read in the log: the lease left this page, or the vehicle disarmed without being asked.
+export function sessionChanges(prev, cur, { clientId, askedDisarm = false } = {}) {
+  if (!prev || !cur || prev.session_epoch !== cur.session_epoch) return [];
+  const out = [];
+  if (prev.lease?.holder === clientId && cur.lease?.holder !== clientId) {
+    out.push({ text: "조종 권한이 이 기기에서 풀렸습니다 (만료·해제·다른 기기)", level: "warn" });
+  }
+  if (prev.armed && !cur.armed && !askedDisarm) {
+    out.push({ text: "차량이 조종 준비를 풀었습니다", level: "warn" });
+  }
+  return out;
+}

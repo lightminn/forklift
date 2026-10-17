@@ -1,7 +1,7 @@
 // Panel rendering from the latest vehicle state. Buttons are only enabled when the
 // request could be accepted; the vehicle still decides and may reject.
 
-import { controlProfile, forbidText, palletKindLabel, permitText, rearmState, resumeState, resumeSteps, standWhy, stopInstruction, stopKind } from "./profile.js";
+import { controlProfile, forbidText, videoStaleAfterS, palletKindLabel, permitText, rearmState, resumeState, resumeSteps, standWhy, stopInstruction, stopKind } from "./profile.js";
 import { blockReason, currentDestination, missionProgress, PHASES, subtaskOf } from "./wizard.js";
 
 const MODE_KO = { AUTO: "자동 주행", TELEOP: "수동 조종", PAUSED: "대기", STOPPED: "정지됨" };
@@ -336,7 +336,7 @@ export function render(m) {
   const age = m.camera.lastAt ? (performance.now() - m.camera.lastAt) / 1000 : null;
   $("cam-age").textContent = age === null ? "마지막 프레임 이후 —" : `마지막 프레임 ${age.toFixed(2)} s 전 (브라우저 기준)`;
   const banner = $("cam-banner");
-  banner.hidden = !(age !== null && age > 1.0);
+  banner.hidden = !(age !== null && age > videoStaleAfterS(st));
   banner.textContent = "영상이 멈췄습니다 · 영상 조종은 차량이 거부합니다";
   $("cam-meta").textContent = m.camera.frameId ? `frame ${m.camera.frameId}` : "영상 대기 중";
   $("map-meta").textContent = m.grid ? `${Number(m.grid.head.resolution_m.toPrecision(4))} m 격자 · 스캔 ${m.scan ? m.scan.points.length / 2 : 0}점` : "격자 대기 중";

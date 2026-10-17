@@ -163,3 +163,19 @@ test("only controls that were on screen and left it release; a page opening else
   assert.equal(hiddenEdge(false, false), false);
   assert.equal(hiddenEdge(true, true), false);
 });
+
+test("a release latches only what is held: the next press after letting everything go counts", () => {
+  // tab switches released the inputs while no key was down, and the keyboard then
+  // ignored its whole first press (C3 live run, 2026-10-17)
+  const i = createInputs({ onRelease: () => {} });
+  i.controlsHidden();
+  i.setKeys({ deadman: true, w: true });
+  assert.equal(i.read().deadman, true);
+  assert.equal(i.read().speedRatio, 1);
+  // still latched when it was held at the release (a blur can swallow the keyup)
+  i.focus(false);
+  assert.equal(i.read().deadman, false);
+  i.setKeys({ deadman: false, w: false });
+  i.setKeys({ deadman: true });
+  assert.equal(i.read().deadman, true);
+});
