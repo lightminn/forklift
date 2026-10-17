@@ -906,7 +906,7 @@ def test_absorption_needs_the_duplicate_layout_inside_the_selected_layout():
 def test_known_residual_absorbing_a_duplicate_also_removes_its_pose_hypothesis():
     # Codex (accepted residual, plan 2B-3e): S, D, E share one reading; D (support 15 mm) is absorbed;
     # a later target reading misses S on support but would have fitted D -- E (support 15 mm) now takes it
-    # where 2B-3d held it between D and E
+    # where 2B-3d gave it to D (still active at 0.6 s here; held between D and E once D was stale)
     rows = (_row(1.0, 4.0, yaw=0.05, z_s=0.005, along=0.15),)  # along gate 0.3 m
     tr = CandidateTracker(_bounds(rows=rows))
     tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="s"), _candidate((3.4, 0.0, 0.06), support_z=0.015, cid="e")]))
