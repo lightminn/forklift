@@ -81,6 +81,10 @@ class TrackBounds:
     max_observations: int = 10
     expiry_s: float = 0.5
     keep_s: float = 1.0  # 2B-3b: a track is stale (hidden, revivable) up to keep_s, then deleted
+    # 2B-3d: a new track born on a yaw / support near miss of the selected track is a suspected duplicate;
+    # 2.5 x is a development value (largest calibration miss 2.01 x), 45 mm half the lowest layer height
+    near_miss_ratio: float = 2.5
+    near_miss_support_cap_m: float = 0.045
     # Fusion weights only: the assumed odometry noise as random walks (position_m_per_sqrt_s,
     # yaw_rad_per_sqrt_s). None weighs with the worst-case bound, which leaves older observations
     # almost no weight (stage 2B-3 calibration). The budget always uses the bound.
@@ -95,7 +99,8 @@ class TrackBounds:
                 raise ValueError(f"{family} rows must be sorted and non-overlapping")
             self.rows[family] = rows
         ages = tuple(float(a) for a in self.ages_s)
-        scalars = (*ages, *self.e_m, *self.psi_rad, *self.rear_axle_xy_m, self.window_s, self.expiry_s, self.keep_s)
+        scalars = (*ages, *self.e_m, *self.psi_rad, *self.rear_axle_xy_m, self.window_s, self.expiry_s, self.keep_s,
+                   self.near_miss_ratio, self.near_miss_support_cap_m)
         if not all(math.isfinite(float(v)) for v in scalars) or len(self.rear_axle_xy_m) != 2:
             raise ValueError("odometry bounds, the rear axle, window_s and expiry_s must be finite")
         if not ages or ages[0] <= 0 or any(b <= a for a, b in itertools.pairwise(ages)):
@@ -111,7 +116,8 @@ class TrackBounds:
             if not all(math.isfinite(v) and v >= 0 for v in wm.values()):
                 raise ValueError("weight_model values must be finite and non-negative")
             object.__setattr__(self, "weight_model", wm)
-        if not (self.window_s >= 0 and self.keep_s >= self.expiry_s > 0 and self.max_observations >= 1):
+        if not (self.window_s >= 0 and self.keep_s >= self.expiry_s > 0 and self.max_observations >= 1
+                and self.near_miss_ratio >= 1 and self.near_miss_support_cap_m >= 0):
             raise ValueError("window_s >= 0, expiry_s > 0 and max_observations >= 1 are required")
 
     @classmethod
@@ -121,7 +127,9 @@ class TrackBounds:
         return cls(rows=rows, ages_s=tuple(odo["ages_s"]), e_m=tuple(odo["e_m"]), psi_rad=tuple(odo["psi_rad"]),
                    rear_axle_xy_m=tuple(data["rear_axle_xy_m"]), window_s=float(data["window_s"]),
                    max_observations=int(data["max_observations"]), expiry_s=float(data["expiry_s"]),
-                   weight_model=data.get("weight_model"), keep_s=float(data.get("keep_s", 1.0)))
+                   weight_model=data.get("weight_model"), keep_s=float(data.get("keep_s", 1.0)),
+                   near_miss_ratio=float(data.get("near_miss_ratio", 2.5)),
+                   near_miss_support_cap_m=float(data.get("near_miss_support_cap_m", 0.045)))
 
     @classmethod
     def load(cls, path) -> TrackBounds:
@@ -283,28 +291,50 @@ def _reading_fits(track: _Track, new: _Observation) -> bool:
     return _layout_fits(track.last, new) and track.layout_overlaps(new)
 
 
-def _pose_fits(track: _Track, new: _Observation, bounds: TrackBounds) -> bool:
-    """The near-field comparison (near_field_tracking.py `_compare`) against the track's last accepted
-    observation: both bounds, the odometry bound for the elapsed time, its lever, the axis mixing,
-    yaw and support."""
+def _pose_terms(track: _Track, new: _Observation, bounds: TrackBounds):
+    """(position fits, yaw difference, yaw gate, support difference, support gate) against the track's
+    last accepted observation, or None past the odometry table."""
     ref = track.last
     odometry = bounds.odometry((new.stamp_ns - ref.stamp_ns) / 1e9)
     if odometry is None:
-        return False
+        return None
     e, psi = odometry
     a = np.array([math.cos(ref.yaw), math.sin(ref.yaw)])
     n = np.array([-a[1], a[0]])
     mixing = ref.row.yaw_rad + psi
+    position = True
     for side in ("left", "right"):
         d = getattr(new, side)[:2] - getattr(ref, side)[:2]
         lever = bounds.lever_m(getattr(new.candidate, side).centre_m)
         t_lat = ref.row.lateral_m + new.row.lateral_m + e + lever * psi
         t_along = ref.row.along_m + new.row.along_m + e + lever * psi
         if abs(float(d @ n)) > t_lat + t_along * mixing or abs(float(d @ a)) > t_along + t_lat * mixing:
-            return False
-    if abs(_wrap(new.yaw - ref.yaw)) > ref.row.yaw_rad + new.row.yaw_rad + psi:
+            position = False
+    return (position, abs(_wrap(new.yaw - ref.yaw)), ref.row.yaw_rad + new.row.yaw_rad + psi,
+            abs(new.support_z - ref.support_z), ref.row.support_m + new.row.support_m)
+
+
+def _pose_fits(track: _Track, new: _Observation, bounds: TrackBounds) -> bool:
+    """The near-field comparison (near_field_tracking.py `_compare`) against the track's last accepted
+    observation: both bounds, the odometry bound for the elapsed time, its lever, the axis mixing,
+    yaw and support."""
+    terms = _pose_terms(track, new, bounds)
+    if terms is None:
         return False
-    return abs(new.support_z - ref.support_z) <= ref.row.support_m + new.row.support_m
+    position, dyaw, gyaw, dsup, gsup = terms
+    return position and dyaw <= gyaw and dsup <= gsup
+
+
+def _near_miss(track: _Track, new: _Observation, bounds: TrackBounds) -> bool:
+    """Position fits, and yaw and support miss by at most near_miss_ratio x their gates with the support
+    difference under near_miss_support_cap_m (below a stacked layer), at least one of them missing (2B-3d)."""
+    terms = _pose_terms(track, new, bounds)
+    if terms is None:
+        return False
+    position, dyaw, gyaw, dsup, gsup = terms
+    ratio = bounds.near_miss_ratio
+    return (position and (dyaw > gyaw or dsup > gsup) and dyaw <= ratio * gyaw and dsup <= ratio * gsup
+            and dsup < bounds.near_miss_support_cap_m)
 
 
 def _matchings(tracks, obs, edges):
@@ -486,7 +516,8 @@ class CandidateTracker:
         # judged against the selected track as it was before this frame's matching moves it: inside its
         # pose gate but refused by a reading test (Codex: judging after the update marks real neighbours)
         split_off = {j for j, o in enumerate(obs) if chosen is not None
-                     and _pose_fits(chosen, o, self.bounds) and not _reading_fits(chosen, o)}
+                     and ((_pose_fits(chosen, o, self.bounds) and not _reading_fits(chosen, o))
+                          or _near_miss(chosen, o, self.bounds))}  # 2B-3d: or a yaw / support near miss
         free = set(range(len(obs)))
         accepted, held, revived, blocked = {}, 0, 0, set()
         priority = None

@@ -682,3 +682,36 @@ def test_a_track_born_outside_the_selected_pose_gate_is_not_a_duplicate():
     tr.select(0)
     tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), cid="a"), _candidate((3.0, 0.15, 0.06), cid="b")]))
     assert [t.duplicate_of for t in tr._tracks] == [None, None]
+
+
+# 2B-3d: near misses on yaw or support are suspected duplicates too -----------------------------------
+
+def _born(**kw):
+    """Selected track 0 at y 0 / yaw 0 / support 0, then one reading that starts track 1; returns the tracker."""
+    rows = (_row(1.0, 4.0, yaw=0.05, z_s=kw.pop("z_s", 0.005)),)  # yaw gate 0.1 rad, support gate 2 z_s
+    tr = CandidateTracker(_bounds(rows=rows))
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="s")]))
+    tr.select(0)
+    report = tr.update(_frame(0.2, [_candidate(**kw, cid="b")]))
+    assert report.new == 1
+    return tr
+
+
+@pytest.mark.parametrize("kw, duplicate", [
+    (dict(mid=(3.0, 0.0, 0.06), yaw=0.12), True),                       # yaw 1.2 x
+    (dict(mid=(3.0, 0.0, 0.06), support_z=0.015), True),                # support 1.5 x, 15 mm
+    (dict(mid=(3.0, 0.0, 0.06), yaw=0.30), False),                      # yaw 3 x
+    (dict(mid=(3.0, 0.0, 0.06), support_z=0.026), False),               # support 2.6 x
+    (dict(mid=(3.0, 0.0, 0.06), support_z=0.050, z_s=0.012), False),    # 50 mm: within 2.5 x but a layer
+    (dict(mid=(3.0, 0.15, 0.06), yaw=0.12), False),                     # misses on position: a neighbour
+    (dict(mid=(3.0, 0.0, 0.06), yaw=0.12, hypothesis="t11_06:x"), True),  # reading split and yaw near miss
+])
+def test_a_near_miss_on_yaw_or_support_marks_a_suspected_duplicate(kw, duplicate):
+    tr = _born(**kw)
+    assert tr._tracks[1].duplicate_of == (0 if duplicate else None)
+
+
+def test_the_selected_track_wins_over_a_yaw_near_miss_duplicate():
+    tr = _born(mid=(3.0, 0.0, 0.06), yaw=0.12)
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), 0.06, hypothesis="parametric:x", cid="c")]))
+    assert report.accepted == {"c": 0}
