@@ -44,97 +44,119 @@ rows:
   known:
   - lo_m: 1.0
     hi_m: 1.5
-    lateral_m: 0.004644493018467918
-    along_m: 0.01017099891341991
-    centre_lateral_m: 0.004615610065802124
-    centre_along_m: 0.007570962233143351
-    centre_height_m: 0.003081118272485227
-    yaw_rad: 0.029335769843157705
-    support_m: 0.0030811182724852257
+    lateral_m: 0.00463206224653777
+    along_m: 0.010024258137570729
+    centre_lateral_m: 0.004612652456278596
+    centre_along_m: 0.007326762753496337
+    centre_height_m: 0.003374077080703625
+    yaw_rad: 0.029257295951045707
+    support_m: 0.0033740770807036214
     layout_m: 0.001
-    sigma_m: 0.002638091260076945
+    sigma_m: 0.002577955538981343
   - lo_m: 1.5
     hi_m: 2.0
-    lateral_m: 0.012013809996589419
-    along_m: 0.02279336687256459
-    centre_lateral_m: 0.011974123918637544
-    centre_along_m: 0.0170681449721023
-    centre_height_m: 0.004224190548021917
-    yaw_rad: 0.06305666009290796
-    support_m: 0.004224190548021915
+    lateral_m: 0.012507577295955257
+    along_m: 0.022848852189118623
+    centre_lateral_m: 0.012502119444229472
+    centre_along_m: 0.016235142860266394
+    centre_height_m: 0.004548942429300766
+    yaw_rad: 0.06299100635575011
+    support_m: 0.004548942429300766
     layout_m: 0.001
-    sigma_m: 0.003784962089793576
+    sigma_m: 0.003983945976702357
   - lo_m: 2.0
     hi_m: 2.5
-    lateral_m: 0.015019788582656624
-    along_m: 0.03852102273592761
-    centre_lateral_m: 0.014812187233198104
-    centre_along_m: 0.029338779502221968
-    centre_height_m: 0.005004914747109027
-    yaw_rad: 0.10131370417243923
-    support_m: 0.005004914747109027
+    lateral_m: 0.017072850527329694
+    along_m: 0.03854074866182245
+    centre_lateral_m: 0.016919799004873504
+    centre_along_m: 0.029576048724732792
+    centre_height_m: 0.006162912478363833
+    yaw_rad: 0.10017256142546827
+    support_m: 0.005858856888309884
     layout_m: 0.001
-    sigma_m: 0.0044377835751145825
+    sigma_m: 0.005180541333224911
   - lo_m: 2.5
     hi_m: 3.0
-    lateral_m: 0.022171819281383263
-    along_m: 0.0643545140967949
-    centre_lateral_m: 0.022119559090378417
-    centre_along_m: 0.04958699509317209
-    centre_height_m: 0.0058041621878913595
-    yaw_rad: 0.18275104588298466
-    support_m: 0.0058041621878913595
-    layout_m: 0.0025800052938549523
-    sigma_m: 0.0073298361457702675
+    lateral_m: 0.024139742157274123
+    along_m: 0.06271592530070169
+    centre_lateral_m: 0.023161137498161975
+    centre_along_m: 0.05071146001216194
+    centre_height_m: 0.0068265649342786686
+    yaw_rad: 0.17532826505263022
+    support_m: 0.006549246100982309
+    layout_m: 0.0025321751953236438
+    sigma_m: 0.0072977812683893035
   - lo_m: 3.0
     hi_m: 3.5
-    lateral_m: 0.02561869398149133
-    along_m: 0.0926207281178461
-    centre_lateral_m: 0.023707588187180828
-    centre_along_m: 0.0766122704277094
-    centre_height_m: 0.006295821215765603
-    yaw_rad: 0.2403891212801768
-    support_m: 0.006295821215765604
-    layout_m: 0.004721494557726761
-    sigma_m: 0.008080057185791112
+    lateral_m: 0.028216918538816915
+    along_m: 0.09275641041951457
+    centre_lateral_m: 0.027213118905080946
+    centre_along_m: 0.07520121220770801
+    centre_height_m: 0.00786880462760728
+    yaw_rad: 0.2447387006575433
+    support_m: 0.007358507232717043
+    layout_m: 0.004923014453884203
+    sigma_m: 0.009206894585030465
   - lo_m: 3.5
     hi_m: 4.0
-    lateral_m: 0.03739726117723063
-    along_m: 0.11819750961471787
-    centre_lateral_m: 0.03363541989647784
-    centre_along_m: 0.09988264113789408
-    centre_height_m: 0.007866870670111019
-    yaw_rad: 0.24473790297222076
-    support_m: 0.007866870670111019
-    layout_m: 0.005418778766648556
-    sigma_m: 0.012686861533045464
+    lateral_m: 0.043989855916863045
+    along_m: 0.11826719815920139
+    centre_lateral_m: 0.04322817421207789
+    centre_along_m: 0.09195961327965067
+    centre_height_m: 0.007917035873892149
+    yaw_rad: 0.28440171255429697
+    support_m: 0.007575145826279535
+    layout_m: 0.00583214009368814
+    sigma_m: 0.016258524032337462
   parametric:
+  - lo_m: 1.0
+    hi_m: 1.5
+    lateral_m: 0.013215566516549149
+    along_m: 0.009110465639448062
+    centre_lateral_m: 0.006616990699058203
+    centre_along_m: 0.007316212323528859
+    centre_height_m: 0.013192293467269786
+    yaw_rad: 0.02095817287738244
+    support_m: 0.001696461886224243
+    layout_m: 0.007566860587889246
+    sigma_m: 0.0025000993296411967
   - lo_m: 1.5
     hi_m: 2.0
-    lateral_m: 0.01835257044869742
-    along_m: 0.021471686086722
-    centre_lateral_m: 0.008174387768948481
-    centre_along_m: 0.013877842452095022
-    centre_height_m: 0.013919826787487159
-    yaw_rad: 0.08101250802239027
-    support_m: 0.0026145163774188764
-    layout_m: 0.015323069795648903
-    sigma_m: 0.0037037770687726864
+    lateral_m: 0.018652548450294255
+    along_m: 0.018501176011701665
+    centre_lateral_m: 0.007897034622089677
+    centre_along_m: 0.014959847991961695
+    centre_height_m: 0.013483359962558818
+    yaw_rad: 0.05177440246637265
+    support_m: 0.002915208824706048
+    layout_m: 0.01500705936224645
+    sigma_m: 0.004066387870145043
   - lo_m: 2.0
     hi_m: 2.5
-    lateral_m: 0.0554403234262325
-    along_m: 0.032744626789761956
-    centre_lateral_m: 0.025301552096881105
-    centre_along_m: 0.027652947479568566
-    centre_height_m: 0.013116700774254971
-    yaw_rad: 0.07632382393292246
-    support_m: 0.003294585570187412
-    layout_m: 0.032466963763717334
-    sigma_m: 0.00983358110206609
+    lateral_m: 0.06729126841623795
+    along_m: 0.033060762118678436
+    centre_lateral_m: 0.03241716891405884
+    centre_along_m: 0.02938411489609081
+    centre_height_m: 0.013235377594531963
+    yaw_rad: 0.07963102695124641
+    support_m: 0.004140738036902198
+    layout_m: 0.049862731016056795
+    sigma_m: 0.013729163514155726
+  - lo_m: 2.5
+    hi_m: 3.0
+    lateral_m: 0.053183957764094535
+    along_m: 0.06422033702000764
+    centre_lateral_m: 0.023192817317608243
+    centre_along_m: 0.042971560285855574
+    centre_height_m: 0.010816164725046764
+    yaw_rad: 0.1294072392458666
+    support_m: 0.004690775319843124
+    layout_m: 0.030383947356160082
+    sigma_m: 0.020793575526488636
 provenance:
-  records: 78
-  records_sha256: 562ef3b02240a84e4a23de3500dec67cdd5d84f24760f9dd03c00786cb165918
-  commit: b7b85f6f868188e05de240f779f0b2da7d9ae359
+  records: 102
+  records_sha256: 48af746ffb6ead8bb2b376c29f39ac6371d34ef43fe49a07275bbd1e7174bdf4
+  commit: c2012cfbcbca78eb52691580f918a7d1886b20b3
   seeds:
   - 1500000
   - 1500001
@@ -214,48 +236,72 @@ provenance:
   - 1512003
   - 1512004
   - 1512005
+  - 1512006
+  - 1512007
+  - 1512008
+  - 1512009
+  - 1512010
+  - 1512011
+  - 1512012
+  - 1512013
+  - 1512014
+  - 1512015
+  - 1512016
+  - 1512017
+  - 1512018
+  - 1512019
+  - 1512020
+  - 1512021
+  - 1512022
+  - 1512023
+  - 1512024
+  - 1512025
+  - 1512026
+  - 1512027
+  - 1512028
+  - 1512029
   level:
   - frame_848
   bins:
     known 1.0-1.5:
-      samples: 172
-      sigma_samples: 171
+      samples: 175
+      sigma_samples: 174
       unmatched: 0
     known 1.5-2.0:
-      samples: 394
-      sigma_samples: 394
+      samples: 415
+      sigma_samples: 410
       unmatched: 0
     known 2.0-2.5:
-      samples: 381
-      sigma_samples: 377
+      samples: 419
+      sigma_samples: 415
       unmatched: 0
     known 2.5-3.0:
-      samples: 404
-      sigma_samples: 399
-      unmatched: 3
-    known 3.0-3.5:
-      samples: 388
-      sigma_samples: 383
-      unmatched: 5
-    known 3.5-4.0:
-      samples: 65
-      sigma_samples: 65
+      samples: 431
+      sigma_samples: 427
       unmatched: 1
+    known 3.0-3.5:
+      samples: 422
+      sigma_samples: 416
+      unmatched: 4
+    known 3.5-4.0:
+      samples: 82
+      sigma_samples: 81
+      unmatched: 3
     parametric 1.0-1.5:
-      samples: 6
-      sigma_samples: 6
+      samples: 41
+      sigma_samples: 37
       unmatched: 0
     parametric 1.5-2.0:
-      samples: 24
-      sigma_samples: 20
+      samples: 97
+      sigma_samples: 80
       unmatched: 0
     parametric 2.0-2.5:
-      samples: 22
-      sigma_samples: 20
+      samples: 77
+      sigma_samples: 66
       unmatched: 0
     parametric 2.5-3.0:
-      samples: 7
-      sigma_samples: 7
+      samples: 30
+      sigma_samples: 24
       unmatched: 0
     parametric 3.0-3.5:
       samples: 0
@@ -266,10 +312,10 @@ provenance:
       sigma_samples: 0
       unmatched: 0
   window_p95_yaw_rad_beyond_2m:
-    '0.0': 0.21296046680211034
-    '0.6': 0.15612049942103456
-    '1.2': 0.15575633326037241
-    '2.0': 0.15575633326037241
+    '0.0': 0.20125329328060265
+    '0.6': 0.15356215819255595
+    '1.2': 0.14970322534664532
+    '2.0': 0.14970322534664532
   note: single-frame p95 rows from the CPU rig with team noise; empirical budgets,
     not probability bounds. The odometry table is the worst-case age table of reported
     odometry

@@ -58,8 +58,9 @@ def test_sequence_seeds_stay_clear_of_the_catalogue_and_of_each_other():
     seeds = {R.SEQUENCE_BANDS[b] + c * R.CELL_STRIDE + i for b in R.SEQUENCE_BANDS for c in range(len(R.CELLS))
              for i in range(100)}
     assert not seeds & catalogue
-    assert len(seeds) == 2 * len(R.CELLS) * 100
-    assert len(R.CELLS) * R.CELL_STRIDE <= R.SEQUENCE_BANDS["evaluation"] - R.SEQUENCE_BANDS["calibration"]
+    assert len(seeds) == len(R.SEQUENCE_BANDS) * len(R.CELLS) * 100
+    starts = sorted(R.SEQUENCE_BANDS.values())
+    assert all(len(R.CELLS) * R.CELL_STRIDE <= b - a for a, b in zip(starts, starts[1:]))
 
 
 def test_noisy_odometry_starts_true_and_stays_within_a_few_millimetres_per_second():
@@ -116,7 +117,7 @@ def test_a_sequence_is_deterministic(short_sequence):
 
 def test_each_frames_truth_is_the_world_face_seen_from_that_pose(short_sequence):
     recipe, first, _ = short_sequence
-    k, i = first["target"]
+    k, i, _ = first["target"]
     world = R.choose_target(recipe, R.load_site())
     face = next(f for kk, ii, f in world if (kk, ii) == (k, i))
     for f in first["frames"]:
@@ -158,9 +159,10 @@ def test_the_evaluation_and_calibration_run_on_a_recorded_sequence(short_sequenc
 
 
 def test_a_track_that_accepts_another_instance_is_an_identity_error_even_without_a_face_match():
-    assert E.identity_errors({0: [(0, 0), (1, None)]}) == 1
-    assert E.identity_errors({0: [(0, 0), (0, 1)]}) == 1          # another face of the same instance
-    assert E.identity_errors({0: [(0, 0), (0, None), (0, 0)]}) == 0  # an unmatched reading of the same instance
+    assert E.identity_errors({0: [(0, 0, (0, 1)), (1, None, None)]}) == 1
+    assert E.identity_errors({0: [(0, 0, (0, 1)), (0, 1, (0, 1))]}) == 1          # another face
+    assert E.identity_errors({0: [(0, 0, (0, 1)), (0, 0, (1, 2))]}) == 1          # another pocket pair
+    assert E.identity_errors({0: [(0, 0, (0, 1)), (0, None, None), (0, 0, (0, 1))]}) == 0
 
 
 def test_the_front_back_and_side_floor_is_judged_per_case():
@@ -173,3 +175,53 @@ def test_the_front_back_and_side_floor_is_judged_per_case():
     s = E.summarise(res, 0)["V2"]
     fails = " ".join(s["verdict"]["failures"])
     assert "bin [2.5, 3.0]: S3 retained" in fails and "S2 retained" not in fails
+
+
+def test_sequence_recipes_take_their_rank_from_the_index():
+    s2 = [R.recipe_for(R.CELLS[2], "calibration", i) for i in range(4)]   # S2 EPAL 6: rank % 4 == 0 touches
+    assert [r.rank for r in s2] == [0, 1, 2, 3] and [r.touching for r in s2] == [True, False, False, False]
+    from forklift_core.perception.pallet_model import face_layout
+    s7 = [R.recipe_for(R.CELLS[12], "calibration", i) for i in range(8)]
+    openings = {len(face_layout(r.instances[0].spec, "x").opening_intervals_m) for r in s7}
+    assert openings == {2, 3}  # rank 0 is always a four-block layout; other ranks draw three blocks too
+
+
+def test_one_recipe_matches_the_catalogue_generator():
+    batch = rs.generate("S5", "epal6", 5, band="eval_pool", first_seed=1_000_000 + 7 * 61)
+    for r in batch:
+        assert rs.recipe(r.case, r.shape_key, r.seed, r.rank, r.split) == r
+
+
+def test_the_truth_pockets_are_two_of_the_recorded_openings(short_sequence):
+    _, first, _ = short_sequence
+    k, i, pair = first["target"]
+    for f in first["frames"]:
+        face, openings = f["faces"][k][i], f["openings"][k][i]
+        assert np.allclose(face["left_m"], openings[pair[0]]) and np.allclose(face["right_m"], openings[pair[1]])
+    labels = [lab for f in first["frames"] for lab in f["labels"].values() if lab[0] == k and lab[1] == i]
+    assert labels and all(len(lab) == 3 and lab[2] == pair for lab in labels)
+
+
+def test_the_evaluation_refuses_anything_but_the_planned_population():
+    def rec(c, i, kind, band="evaluation_b"):
+        case, shape = R.CELLS[c]
+        return {"band": band, "case": case, "shape_key": shape, "seed": R.SEQUENCE_BANDS[band] + c * R.CELL_STRIDE + i,
+                "kind": kind}
+    full = [rec(c, i, k) for c in range(len(R.CELLS)) for i in range(2) for k in ("straight", "curve", "pitch")]
+    assert E.population_problem(full, "evaluation_b", 2) is None
+    assert "calibration" in E.population_problem(full[:-1] + [rec(0, 0, "straight", "calibration")], "evaluation_b", 2)
+    assert "duplicate" in E.population_problem(full[:-1] + [full[0]], "evaluation_b", 2)
+    assert "1 planned records missing" in E.population_problem(full[:-1], "evaluation_b", 2)
+    straight_only = [r for r in full if r["kind"] == "straight"] * 3  # Codex: one kind copied to the full count
+    assert E.population_problem(straight_only, "evaluation_b", 2) is not None
+
+
+def test_calibration_measures_a_candidate_against_the_pocket_pair_it_took(short_sequence):
+    _, first, _ = short_sequence
+    k, i, pair = first["target"]
+    f = first["frames"][0]
+    openings = f["openings"][k][i]
+    other = (len(openings) - 1, 0) if pair != (len(openings) - 1, 0) else (1, 0)
+    face = C.pair_face(f, k, i, other)
+    assert np.allclose(face["left_m"], openings[other[0]]) and np.allclose(face["right_m"], openings[other[1]])
+    assert face["insertion_yaw_rad"] == f["faces"][k][i]["insertion_yaw_rad"]

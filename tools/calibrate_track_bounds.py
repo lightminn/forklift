@@ -61,6 +61,14 @@ def _family(c) -> str:
     return "parametric" if c.hypothesis.startswith("parametric") else "known"
 
 
+def pair_face(frame, k, i, pair) -> dict:
+    """Truth face i of instance k with its pockets at the openings `pair` (labels carry the pair)."""
+    face = dict(frame["faces"][k][i])
+    openings = frame["openings"][k][i]
+    face["left_m"], face["right_m"] = tuple(openings[pair[0]]), tuple(openings[pair[1]])
+    return face
+
+
 def sample_errors(cand, face, support_z) -> dict:
     yaw = face["insertion_yaw_rad"]
     a = np.array([math.cos(yaw), math.sin(yaw)])
@@ -106,18 +114,19 @@ def collect(records):
                 if b is None:
                     continue
                 key = (_family(c), b)
-                k, i = f["labels"][c.candidate_id]
+                label = tuple(f["labels"][c.candidate_id])
+                k, i, pair = label
                 if i is None:
                     unmatched[key] += 1
                     continue
-                face = f["faces"][k][i]
+                face = pair_face(f, k, i, pair)  # the truth pockets of the pair the candidate took
                 e = sample_errors(c, face, f["support_z_m"][k])
                 samples[key].append(e)
-                per_face[(k, i, key)].append(e["offsets"])
-                ref = clean_by_label.get((k, i))
+                per_face[(label, key)].append(e["offsets"])
+                ref = clean_by_label.get(label)  # the clean reading of the same instance, face and pair
                 if ref is not None:
                     sigma[key].append(e["mid_lateral_signed"] - sample_errors(ref, face, f["support_z_m"][k])["mid_lateral_signed"])
-        for (k, i, key), offs in per_face.items():
+        for (_, key), offs in per_face.items():
             arr = np.asarray(offs)
             offsets[key] += list(np.abs(arr - np.median(arr, axis=0)).max(axis=1))
     return samples, sigma, offsets, unmatched

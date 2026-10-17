@@ -7,12 +7,18 @@ of each live track, with the near-field tracker's gate (`near_field_tracking.py`
 both single-frame bounds, the odometry bound for the elapsed time, its lever and
 the axis-mixing term. A component of the gate graph is applied only when its
 maximum matching is unique; otherwise its tracks are held (not refreshed) and its
-observations start no track. A track expires 0.5 s after its last accepted
-observation and is never revived, so a lost target is not silently replaced.
+observations start no track. A track is active (output, selectable) up to 0.5 s
+after its last accepted observation, then stale up to keep_s (hidden, but a
+re-observation of the same pallet that passes the gate revives it with its id --
+design §8's re-observation, not a replacement), then deleted. Active tracks are
+matched first; observations tied to them never go to stale tracks. A parametric
+reading may join any track; a known reading must match the track's first known
+hypothesis; each pocket's face coordinate must overlap the interval every accepted
+observation allows (2B-3b plan).
 
 Fusion is over the rigid pocket-pair pose -- the pair midpoint and the insertion
-yaw -- in a window W, weighted by 1/(sigma^2 + o^2) with o the odometry bound at
-the observation's age. The latest reading's local layout (pocket spacing, face,
+yaw -- in a window W, weighted by 1/(sigma^2 + o^2) with o the assumed odometry
+noise at the observation's age (weight_model; the worst-case bound if absent). The latest reading's local layout (pocket spacing, face,
 centre) is kept and moved by one rigid transform, so every field still describes
 one reading. The budget is the weighted mean of each observation's bound plus its
 odometry terms: an empirical budget built from p95 rows, not a probability bound.
@@ -74,6 +80,7 @@ class TrackBounds:
     window_s: float
     max_observations: int = 10
     expiry_s: float = 0.5
+    keep_s: float = 1.0  # 2B-3b: a track is stale (hidden, revivable) up to keep_s, then deleted
     # Fusion weights only: the assumed odometry noise as random walks (position_m_per_sqrt_s,
     # yaw_rad_per_sqrt_s). None weighs with the worst-case bound, which leaves older observations
     # almost no weight (stage 2B-3 calibration). The budget always uses the bound.
@@ -88,7 +95,7 @@ class TrackBounds:
                 raise ValueError(f"{family} rows must be sorted and non-overlapping")
             self.rows[family] = rows
         ages = tuple(float(a) for a in self.ages_s)
-        scalars = (*ages, *self.e_m, *self.psi_rad, *self.rear_axle_xy_m, self.window_s, self.expiry_s)
+        scalars = (*ages, *self.e_m, *self.psi_rad, *self.rear_axle_xy_m, self.window_s, self.expiry_s, self.keep_s)
         if not all(math.isfinite(float(v)) for v in scalars) or len(self.rear_axle_xy_m) != 2:
             raise ValueError("odometry bounds, the rear axle, window_s and expiry_s must be finite")
         if not ages or ages[0] <= 0 or any(b <= a for a, b in itertools.pairwise(ages)):
@@ -104,7 +111,7 @@ class TrackBounds:
             if not all(math.isfinite(v) and v >= 0 for v in wm.values()):
                 raise ValueError("weight_model values must be finite and non-negative")
             object.__setattr__(self, "weight_model", wm)
-        if not (self.window_s >= 0 and self.expiry_s > 0 and self.max_observations >= 1):
+        if not (self.window_s >= 0 and self.keep_s >= self.expiry_s > 0 and self.max_observations >= 1):
             raise ValueError("window_s >= 0, expiry_s > 0 and max_observations >= 1 are required")
 
     @classmethod
@@ -114,7 +121,7 @@ class TrackBounds:
         return cls(rows=rows, ages_s=tuple(odo["ages_s"]), e_m=tuple(odo["e_m"]), psi_rad=tuple(odo["psi_rad"]),
                    rear_axle_xy_m=tuple(data["rear_axle_xy_m"]), window_s=float(data["window_s"]),
                    max_observations=int(data["max_observations"]), expiry_s=float(data["expiry_s"]),
-                   weight_model=data.get("weight_model"))
+                   weight_model=data.get("weight_model"), keep_s=float(data.get("keep_s", 1.0)))
 
     @classmethod
     def load(cls, path) -> TrackBounds:
@@ -161,6 +168,7 @@ class FrameReport:
     untracked: int = 0  # uncounted candidates and distances outside the bound table
     ignored: str | None = None
     cleared: bool = False
+    revived: int = 0  # stale tracks that took an observation and became active again
 
 
 @dataclass(frozen=True)
@@ -172,6 +180,7 @@ class TrackedCandidate:
     age_s: float  # query time minus the last accepted observation's acquisition time
     resets: int
     holds: int
+    revivals: int = 0
 
 
 def _planar_yaw(t: RigidTransform) -> float:
@@ -229,15 +238,44 @@ class _Track:
         self.history = [obs]
         self.resets = 0
         self.holds = 0
+        self.revivals = 0
+        # the first known-shape hypothesis this track accepted: a known reading must match it, a
+        # parametric reading of the same pocket pair may join any track (2B-3b)
+        self.known = obs.key if obs.family == "known" else None
+        # each pocket's face coordinate interval every accepted observation allows: a new observation
+        # must overlap all of them, so a pocket cannot creep to another opening through small steps
+        # (2B-3b; kept across history resets)
+        self.layout = [(x - obs.row.layout_m, x + obs.row.layout_m) for x in obs.offsets]
+
+    def accept(self, obs: _Observation) -> None:
+        self.history.append(obs)
+        if self.known is None and obs.family == "known":
+            self.known = obs.key
+        b = obs.row.layout_m
+        self.layout = [(max(lo, x - b), min(hi, x + b)) for (lo, hi), x in zip(self.layout, obs.offsets)]
+
+    def layout_overlaps(self, obs: _Observation) -> bool:
+        b = obs.row.layout_m
+        return all(max(lo, x - b) <= min(hi, x + b) for (lo, hi), x in zip(self.layout, obs.offsets))
 
     @property
     def last(self) -> _Observation:
         return self.history[-1]
 
 
-def _gate(ref: _Observation, new: _Observation, bounds: TrackBounds) -> bool:
-    """The near-field comparison (near_field_tracking.py `_compare`) plus family, layout and support."""
-    if ref.key != new.key:
+def _layout_fits(a: _Observation, b: _Observation) -> bool:
+    layout = a.row.layout_m + b.row.layout_m
+    return all(abs(x - y) <= layout for x, y in zip(a.offsets, b.offsets))
+
+
+def _gate(track: _Track, new: _Observation, bounds: TrackBounds) -> bool:
+    """The near-field comparison (near_field_tracking.py `_compare`) against the track's last accepted
+    observation, plus family compatibility, support and each pocket's face coordinate against the last
+    observation and the interval every accepted observation allows."""
+    ref = track.last
+    if new.family == "known" and track.known is not None and new.key != track.known:
+        return False
+    if not (_layout_fits(ref, new) and track.layout_overlaps(new)):
         return False
     odometry = bounds.odometry((new.stamp_ns - ref.stamp_ns) / 1e9)
     if odometry is None:
@@ -255,10 +293,7 @@ def _gate(ref: _Observation, new: _Observation, bounds: TrackBounds) -> bool:
             return False
     if abs(_wrap(new.yaw - ref.yaw)) > ref.row.yaw_rad + new.row.yaw_rad + psi:
         return False
-    if abs(new.support_z - ref.support_z) > ref.row.support_m + new.row.support_m:
-        return False
-    layout = ref.row.layout_m + new.row.layout_m
-    return all(abs(a - b) <= layout for a, b in zip(new.offsets, ref.offsets))
+    return abs(new.support_z - ref.support_z) <= ref.row.support_m + new.row.support_m
 
 
 def _matchings(tracks, obs, edges):
@@ -349,8 +384,54 @@ class CandidateTracker:
                 or abs(float(d[2])) > new.row.centre_height_m + b["height_m"])
 
     # Frames ------------------------------------------------------------------------------------
+    def _age(self, track: _Track, now_ns: int) -> float:
+        return (now_ns - track.last.stamp_ns) / 1e9
+
     def _live(self, now_ns: int) -> list[_Track]:
-        return [t for t in self._tracks if (now_ns - t.last.stamp_ns) / 1e9 <= self.bounds.expiry_s]
+        """Active tracks: the ones selection may read (design §6)."""
+        return [t for t in self._tracks if self._age(t, now_ns) <= self.bounds.expiry_s]
+
+    def _kept(self, now_ns: int) -> list[_Track]:
+        """Active and stale tracks; anything older is deleted for good."""
+        return [t for t in self._tracks if self._age(t, now_ns) <= self.bounds.keep_s]
+
+    def _match(self, tracks, obs, free):
+        """Unique maximum matching per gate component over the observations in `free`.
+        Returns (matched (track, obs index) pairs, held track count, gated observation indices)."""
+        edges = {(i, j) for i, t in enumerate(tracks) for j in free if _gate(t, obs[j], self.bounds)}
+        parent = {("t", i): ("t", i) for i in range(len(tracks))} | {("o", j): ("o", j) for j in free}
+
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        for i, j in edges:
+            parent[find(("t", i))] = find(("o", j))
+        components: dict = {}
+        for node in parent:
+            components.setdefault(find(node), []).append(node)
+        pairs, held, gated = [], 0, set()
+        for nodes in components.values():
+            ts = sorted(i for k, i in nodes if k == "t")
+            os_ = sorted(j for k, j in nodes if k == "o")
+            if not ts or not os_:
+                continue
+            best = None
+            if len(ts) <= MAX_COMPONENT and len(os_) <= MAX_COMPONENT:
+                ms = _matchings(ts, os_, edges)
+                size = max(len(m) for m in ms)
+                top = [m for m in ms if len(m) == size]
+                best = top[0] if len(top) == 1 else None
+            gated.update(os_)  # gated observations never start a track
+            if best is None:
+                held += len(ts)
+                for i in ts:
+                    tracks[i].holds += 1
+                continue
+            pairs += [(tracks[i], j) for i, j in sorted(best)]
+        return pairs, held, gated
 
     def update(self, frame: Frame) -> FrameReport:
         ids = [c.candidate_id for c in frame.candidates]
@@ -365,7 +446,7 @@ class CandidateTracker:
         if self._last_stamp is not None and frame.stamp_ns <= self._last_stamp:
             return FrameReport(ignored="not_newer")
         self._last_stamp, self._clock, self._epoch = frame.stamp_ns, frame.clock_domain, frame.odom_epoch
-        self._tracks = self._live(frame.stamp_ns)  # expired tracks are never revived
+        self._tracks = self._kept(frame.stamp_ns)  # older than keep_s: deleted for good
 
         obs, untracked = [], 0
         for c in frame.candidates:
@@ -374,50 +455,28 @@ class CandidateTracker:
                 untracked += 1
             else:
                 obs.append(o)
-        tracks = self._tracks
-        edges = {(i, j) for i, t in enumerate(tracks) for j, o in enumerate(obs) if _gate(t.last, o, self.bounds)}
-
-        # gate components
-        parent = {("t", i): ("t", i) for i in range(len(tracks))} | {("o", j): ("o", j) for j in range(len(obs))}
-
-        def find(x):
-            while parent[x] != x:
-                parent[x] = parent[parent[x]]
-                x = parent[x]
-            return x
-
-        for i, j in edges:
-            parent[find(("t", i))] = find(("o", j))
-        components: dict = {}
-        for node in parent:
-            components.setdefault(find(node), []).append(node)
-
-        accepted, held, blocked = {}, 0, set()
-        for nodes in components.values():
-            ts = sorted(i for k, i in nodes if k == "t")
-            os_ = sorted(j for k, j in nodes if k == "o")
-            if not ts or not os_:
-                continue
-            best = None
-            if len(ts) <= MAX_COMPONENT and len(os_) <= MAX_COMPONENT:
-                ms = _matchings(ts, os_, edges)
-                size = max(len(m) for m in ms)
-                top = [m for m in ms if len(m) == size]
-                best = top[0] if len(top) == 1 else None
-            blocked.update(os_)  # gated observations never start a track
-            if best is None:
-                held += len(ts)
-                for i in ts:
-                    tracks[i].holds += 1
-                continue
-            for i, j in sorted(best):
-                track, o = tracks[i], obs[j]
+        # two stages: active tracks first, then the remaining observations against stale tracks, so a
+        # stale track's wide gate never holds an active track's observation (2B-3b, agy review)
+        active = self._live(frame.stamp_ns)
+        stale = [tr for tr in self._tracks if tr not in active]
+        free = set(range(len(obs)))
+        accepted, held, revived, blocked = {}, 0, 0, set()
+        for stage, tracks in (("active", active), ("stale", stale)):
+            pairs, h, gated = self._match(tracks, obs, free)
+            held += h
+            blocked |= gated
+            free -= gated
+            for track, j in pairs:
+                o = obs[j]
                 if self._conflicts(track, o):
                     track.history = []
                     track.resets += 1
-                track.history.append(o)
+                track.accept(o)
                 track.history = self._window(track)  # the stored history never outgrows W and the count
                 accepted[o.candidate.candidate_id] = track.id
+                if stage == "stale":
+                    track.revivals += 1
+                    revived += 1
 
         new = 0
         fresh = sorted((o for j, o in enumerate(obs) if j not in blocked),
@@ -427,16 +486,21 @@ class CandidateTracker:
             accepted[o.candidate.candidate_id] = self._next_id
             self._next_id += 1
             new += 1
-        return FrameReport(accepted=accepted, new=new, held=held, untracked=untracked, cleared=cleared)
+        return FrameReport(accepted=accepted, new=new, held=held, untracked=untracked, cleared=cleared,
+                           revived=revived)
 
     # Output ------------------------------------------------------------------------------------
+    def stale_ids(self, now_ns: int) -> tuple:
+        """Tracks hidden from selection but still revivable at now_ns (for diagnostics)."""
+        return tuple(t.id for t in self._kept(now_ns) if self._age(t, now_ns) > self.bounds.expiry_s)
+
     def tracks(self, now_ns: int, odom_from_base_now: RigidTransform) -> tuple:
         if self._last_stamp is not None and now_ns < self._last_stamp:
             raise ValueError("the query time is before the last processed frame")
         robot_yaw = _planar_yaw(odom_from_base_now)
-        self._tracks = self._live(now_ns)  # an expiry seen by a query is permanent: a late frame cannot revive it
+        self._tracks = self._kept(now_ns)  # a query deletes only past keep_s; stale tracks stay revivable
         out = []
-        for track in sorted(self._tracks, key=lambda t: t.id):
+        for track in sorted(self._live(now_ns), key=lambda t: t.id):
             fused = self._fuse(track, now_ns, odom_from_base_now)
             if fused is None:  # every observation is older than the odometry table
                 continue
@@ -466,7 +530,7 @@ class CandidateTracker:
                 support_z_m=float(_inverse(odom_from_base_now, (0.0, 0.0, latest.support_z + dz))[2]),
             )
             out.append(TrackedCandidate(track.id, moved, used, budget, (now_ns - latest.stamp_ns) / 1e9,
-                                        track.resets, track.holds))
+                                        track.resets, track.holds, track.revivals))
         return tuple(out)
 
 

@@ -38,12 +38,14 @@ from tools import instance_rig, scene_rig
 from tools import recognition_scenes as rs
 from tools.evaluate_recognition import _known, _load_for
 from tools.generate_recognition_scenes import load_site
+from forklift_core.perception.pallet_model import face_layout
 from tools.recognition_truth import Placement, scene_truths
 
 ROOT = Path(__file__).resolve().parents[1]
 NOISE_CONFIG = ROOT / "config/depth_noise_d435i_team.yaml"
 # Seeds for sequence recipes: inside the eval_pool band, far from the catalogue (1,000,000-1,001,019).
-SEQUENCE_BANDS = {"calibration": 1_500_000, "evaluation": 1_600_000}
+SEQUENCE_BANDS = {"calibration": 1_500_000, "evaluation": 1_600_000,
+                  "evaluation_b": 1_700_000}  # 2B-3b re-judgement: the 2B-3 evaluation set was used for diagnosis
 CELLS = tuple((c, s) for c in ("S1", "S2", "S3", "S4", "S5", "S6") for s in ("epal6", "t11_06")) + (("S7", "nonstandard"),)
 CELL_STRIDE = 1_000  # x 13 cells stays inside the 100,000 gap between the two bands
 START_M, END_M, STEP_M, PERIOD_S = 3.5, 1.3, 0.12, 0.2
@@ -75,7 +77,7 @@ def _wrap(a: float) -> float:
 def recipe_for(cell: tuple, band: str, index: int):
     case, shape = cell
     seed = SEQUENCE_BANDS[band] + CELLS.index(cell) * CELL_STRIDE + index
-    return rs.generate(case, shape, 1, band="eval_pool", first_seed=seed)[0]
+    return rs.recipe(case, shape, seed, index, "sequence")  # rank = index: every scene type appears (2B-3b)
 
 
 def _loads(recipe, site):
@@ -148,19 +150,55 @@ def choose_target(recipe, site):
     return [(k, i, truths[k].faces[i]) for *_, k, i in ranked]
 
 
-def _label(cand, proposal_instance: dict, truths) -> tuple:
-    """(instance, face index or None): the face whose two pockets lie within 0.2 m and 0.35 rad
-    (the evaluator's matching rule) -- None when the candidate matches no face of its instance."""
+def face_openings(recipe, pose: Pose) -> list:
+    """Every opening centre of every face, per instance, in the base frame of `pose` -- the same face
+    order and geometry as recognition_truth._faces (truth pockets are two of these)."""
+    out = []
+    for inst in recipe.instances:
+        spec, pl = inst.spec, inst.placement
+        faces = []
+        for axis in spec.entry_axes:
+            layout = face_layout(spec, axis)
+            z0, z1 = layout.pocket_band_m
+            z = pl.support_z_m + (z0 + z1) / 2
+            base = pl.yaw_rad + (0.0 if axis == "x" else math.pi / 2)
+            for sign in (1, -1):
+                yaw = base + (0.0 if sign == 1 else math.pi)
+                a = np.array([math.cos(yaw), math.sin(yaw)])
+                n = np.array([-a[1], a[0]])
+                centre = np.array([pl.x_m, pl.y_m]) - a * layout.depth_m / 2
+                lats = sorted(sign * (lo + hi) / 2 for lo, hi in layout.opening_intervals_m)
+                faces.append([(*pose.to_base(centre + n * lat), z) for lat in lats])
+        out.append(faces)
+    return out
+
+
+def _label(cand, proposal_instance: dict, truths, openings) -> tuple:
+    """(instance, face index, pocket pair) -- the face within 0.35 rad whose openings take both pockets
+    within 0.2 m (the evaluator's matching distance), the pair being the two openings' indices. Face and
+    pair are None when no face of the candidate's instance takes it."""
     k = proposal_instance[cand.proposal_id]
     best = None
     for i, f in enumerate(truths[k].faces):
         if abs(_wrap(cand.insertion_yaw_rad - f.insertion_yaw_rad)) > 0.35:
             continue
-        dl = np.linalg.norm(np.subtract(cand.left.centre_m, f.left_m))
-        dr = np.linalg.norm(np.subtract(cand.right.centre_m, f.right_m))
-        if dl <= 0.2 and dr <= 0.2 and (best is None or dl + dr < best[0]):
-            best = (dl + dr, i)
-    return k, None if best is None else best[1]
+        pair, total = [], 0.0
+        for pocket in (cand.left.centre_m, cand.right.centre_m):
+            d = [float(np.linalg.norm(np.subtract(pocket, o))) for o in openings[k][i]]
+            j = int(np.argmin(d))
+            pair.append(j)
+            total += d[j]
+            if d[j] > 0.2:
+                break
+        else:
+            if best is None or total < best[0]:
+                best = (total, i, tuple(pair))
+    return (k, None, None) if best is None else (k, best[1], best[2])
+
+
+def target_pair(face, openings) -> tuple:
+    """The truth face's own pocket pair as opening indices."""
+    return tuple(int(np.argmin([np.linalg.norm(np.subtract(p, o)) for o in openings])) for p in (face.left_m, face.right_m))
 
 
 def fit_frame(recipe, rendered, noise_seed: int | None, level: str, rng):
@@ -199,24 +237,29 @@ def sequence(recipe, kind: str, *, level: str, clean: bool, site=None):
         frames = []
         for j, pose in enumerate(poses):
             truths, rendered = render(recipe, site, pose, tilt_rad=tilt[j])
+            openings = face_openings(recipe, pose)
             noise_seed = int(rng.integers(2**63))
             cands, labels = fit_frame(recipe, rendered, noise_seed, level, id_rng)
             frame = {
                 "index": j, "t_s": j * PERIOD_S, "pose": (pose.x, pose.y, pose.yaw), "tilt_rad": tilt[j],
                 "candidates": cands,
-                "labels": {c.candidate_id: _label(c, labels, truths) for c in cands},
+                "labels": {c.candidate_id: _label(c, labels, truths, openings) for c in cands},
+                "openings": openings,
                 "faces": [[{"left_m": f.left_m, "right_m": f.right_m, "insertion_yaw_rad": f.insertion_yaw_rad,
                             "exposure": f.exposure} for f in t.faces] for t in truths],
                 "support_z_m": [t.support_z_m for t in truths],
                 "noise_seed": noise_seed,
+                "truth_face": truths[k].faces[i],
             }
             if clean:
                 clean_cands, clean_labels = fit_frame(recipe, rendered, None, level, clean_rng)
                 frame["clean"] = clean_cands
-                frame["clean_labels"] = {c.candidate_id: _label(c, clean_labels, truths) for c in clean_cands}
+                frame["clean_labels"] = {c.candidate_id: _label(c, clean_labels, truths, openings)
+                                         for c in clean_cands}
             frames.append(frame)
         return {"scene_id": recipe.scene_id, "case": recipe.case, "shape_key": recipe.shape_key, "seed": recipe.seed,
-                "kind": kind, "level": level, "target": (k, i), "frames": frames, "skipped": None}
+                "kind": kind, "level": level, "frames": frames, "skipped": None,
+                "target": (k, i, target_pair(frames[0]["truth_face"], frames[0]["openings"][k][i]))}
     return {"scene_id": recipe.scene_id, "case": recipe.case, "shape_key": recipe.shape_key, "seed": recipe.seed,
             "kind": kind, "level": level, "target": None, "frames": [], "skipped": "no_clear_visible_face"}
 
