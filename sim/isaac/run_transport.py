@@ -682,8 +682,8 @@ def arguments() -> argparse.Namespace:
                         "physics step -- for a run without a mission")
     parser.add_argument("--live-test-permit-compare", action="store_true",
                         help="M-c tests only (completion 5): every 12th teleoperation permission is also asked of a "
-                        "fresh full check on the same grid, pose and arcs, and both are logged with the measured path "
-                        "curvature; the truth check's hall bounds (0.76 m inside the wall) are widened so the approach "
+                        "fresh full check on the same grid, pose and arcs, and both are logged with the true rear-axle "
+                        "pose; the truth check's hall bounds (0.76 m inside the wall) are widened so the approach "
                         "can reach the wall")
     parser.add_argument("--live-test-scan-silence", default=None,
                         help="M-c tests only (completion 5): FROM:TO sim seconds in which the obstacle layer gets no "
@@ -5317,16 +5317,16 @@ def drive(S, isaac) -> None:
                                                 now_, layer_.last_scan_s, pose=pose_, curvatures=list(curvatures),
                                                 direction=direction, check_speed_mps=check, footprint=fp_,
                                                 own_footprint=own_)
-                        # The measured path curvature (odometry yaw rate over speed): the bundle assumes it stays
-                        # between its end arcs while the steering turns.
-                        v_ = (slam or {}).get("odom_speed")
-                        w_ = (slam or {}).get("odom_yaw_rate")
-                        k_ = (float(w_) / float(v_) if v_ is not None and w_ is not None and abs(float(v_)) > 0.05
-                              else None)
+                        # The true rear-axle pose, for the test's own reading of the path the truck drove against
+                        # the bundle's arcs (offline, between comparisons); nothing decides on it (Codex M-c round
+                        # 24: the odometry's yaw is integrated from the steering model and cannot check it).
+                        tb_, tq_ = robot.get_world_pose()
+                        tyaw_, _ = yaw_and_tilt(tq_)
+                        truth_ = (float(tb_[0]) - abs(args.rear_axle_offset_m) * math.cos(tyaw_),
+                                  float(tb_[1]) - abs(args.rear_axle_offset_m) * math.sin(tyaw_), float(tyaw_))
                         live.log({"permit_cmp": now_, "pose": pose_, "curvatures": list(curvatures),
                                   "direction": direction, "check_mps": check, "bundle": list(result_),
-                                  "full": list(full_), "measured_kappa": k_,
-                                  "silenced": scan_silenced(now_)})
+                                  "full": list(full_), "truth_rear": truth_, "silenced": scan_silenced(now_)})
                 return result_
 
         stepper["fn"] = step_world if live is None else live_step_world
