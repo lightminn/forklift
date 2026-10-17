@@ -38,8 +38,10 @@ from math import cos, hypot, sin
 
 import numpy as np
 
+from forklift_core import kernels
 from forklift_core.control.drive_permission import RETAINED, footprint_cells
 from forklift_core.perception.obstacle_grid import FREE, OCCUPIED, UNKNOWN, AgeErrorTable, GridSnapshot
+from forklift_core.perf import changed, dual, dumped, shape_kind
 from forklift_core.planning.geometry import Footprint
 
 
@@ -105,6 +107,11 @@ class ShadowMemory:
         self.memory = moved
         self.stats["moves"] += 1
 
+    @dumped("shadow_apply", strata=lambda self_, a, k, r: (
+        shape_kind(a[2]), bool(k.get("extra_support") or (a[3] if len(a) > 3 else None)),
+        changed("shadow_apply.correction", tuple(float(v) for v in a[0].correction)),
+        bool((r.state == RETAINED).any())))
+    @dual("shadow_apply", carried=True)
     def apply(self, snapshot: GridSnapshot, own_pose, own_footprint: Footprint,
               extra_support: dict | None = None) -> GridSnapshot:
         """The snapshot with the band's supported remembered cells set to RETAINED.
@@ -186,7 +193,12 @@ class ShadowMemory:
                     fresh[a, b] = True
                     if not np.isfinite(stamps_fresh[a, b]) or t_cert < stamps_fresh[a, b]:
                         stamps_fresh[a, b] = t_cert
-        stamp = self._retained_stamps(cand, res, fresh, stamps_fresh, whole, nx, ny)
+        # A zero or NaN among the stamps the minima may pick: the reference, whose reduction order decides which
+        # zero (+0.0 or -0.0) is kept (Codex real-time round 3 P1); a nonzero finite minimum has one bit pattern.
+        zero_or_nan = bool(np.any(fresh & ((stamps_fresh == 0.0) | np.isnan(stamps_fresh))))
+        retained_stamps = self._retained_stamps if kernels.mode() == "reference" or zero_or_nan else \
+            _retained_stamps_batched
+        stamp = retained_stamps(cand, res, fresh, stamps_fresh, whole, nx, ny)
         if not stamp:
             return snapshot
         out = state.copy()
@@ -313,6 +325,8 @@ def band_cells(snapshot: GridSnapshot, pose, footprint: Footprint, band_m: float
 def whole_cells(snapshot: GridSnapshot, pose, footprint: Footprint) -> set:
     """Cells of the outline whose four corners all lie inside it."""
     cells, _ = footprint_cells(snapshot, pose, footprint, 0.0)
+    if kernels.mode() != "reference":
+        return _whole_cells_batched(snapshot, pose, footprint, cells)
     x, y, yaw = pose
     c, s = cos(yaw), sin(yaw)
     res = snapshot.resolution_m
@@ -329,6 +343,73 @@ def whole_cells(snapshot: GridSnapshot, pose, footprint: Footprint) -> set:
         else:
             out.add((int(a), int(b)))
     return out
+
+
+def _whole_cells_batched(snapshot: GridSnapshot, pose, footprint: Footprint, cells) -> set:
+    """whole_cells with every corner judged in one pass by the same expressions (real-time plan S1); the set is
+    filled in the reference's order, so it iterates alike."""
+    x, y, yaw = pose
+    c, s = cos(yaw), sin(yaw)
+    res = snapshot.resolution_m
+    x0 = snapshot.origin_x_m + cells[:, 0] * res
+    y0 = snapshot.origin_y_m + cells[:, 1] * res
+    inside = np.ones(len(cells), dtype=bool)
+    for dx, dy in ((0, 0), (res, 0), (0, res), (res, res)):
+        px, py = x0 + dx - x, y0 + dy - y
+        u = px * c + py * s
+        w = -px * s + py * c
+        inside &= (-footprint.rear_m <= u) & (u <= footprint.front_m) & (np.abs(w) <= footprint.half_width_m)
+    return set(map(tuple, cells[inside].tolist()))
+
+
+def _retained_stamps_batched(cand, res, fresh, stamps_fresh, whole, nx, ny) -> dict:
+    """ShadowMemory._retained_stamps on arrays (real-time plan S1): the same support test per candidate, then
+    the removal and the stamps as fixpoints -- removal is the greatest set closed under losing a non-whole
+    support, a stamp the least over the alive support chain, so the order of the updates does not change them."""
+    if not cand:
+        return {}
+    keys = list(cand)
+    a = np.array([k[0] for k in keys], dtype=np.int64)
+    b = np.array([k[1] for k in keys], dtype=np.int64)
+    r = np.array([cand[k] for k in keys], dtype=float)
+    cand_id = np.full((nx, ny), -1, dtype=np.int64)
+    cand_id[a, b] = np.arange(len(keys))
+    whole_mask = np.zeros((nx, ny), dtype=bool)
+    if whole:
+        w = np.array([c for c in whole if 0 <= c[0] < nx and 0 <= c[1] < ny], dtype=np.int64).reshape(-1, 2)
+        whole_mask[w[:, 0], w[:, 1]] = True
+    k = int(np.ceil(max(cand.values()) / res)) + 1
+    offsets = [(i, j) for i in range(-k, k + 1) for j in range(-k, k + 1) if (i, j) != (0, 0)]
+    di = np.array([o[0] for o in offsets])
+    dj = np.array([o[1] for o in offsets])
+    gap = np.array([res * hypot(max(abs(i) - 1, 0), max(abs(j) - 1, 0)) for i, j in offsets])
+    reach = gap[None, :] <= r[:, None]
+    p, q = a[:, None] + di[None, :], b[:, None] + dj[None, :]
+    off_grid = reach & ((p < 0) | (p >= nx) | (q < 0) | (q >= ny))
+    pc, qc = np.clip(p, 0, nx - 1), np.clip(q, 0, ny - 1)
+    fr = reach & fresh[pc, qc]
+    cid = cand_id[pc, qc]
+    ret = reach & ~fresh[pc, qc] & (cid >= 0)
+    wm = whole_mask[pc, qc]
+    unsupported = reach & ~fresh[pc, qc] & ~ret & ~wm
+    alive = ~(off_grid.any(axis=1) | unsupported.any(axis=1))
+    first = np.where(alive, np.min(np.where(fr, stamps_fresh[pc, qc], np.inf), axis=1), np.inf)
+    ret &= alive[:, None]
+    withdraw = ret & ~wm  # a dropped candidate wholly inside the outline still supports
+    dep = np.where(ret, cid, 0)
+    while True:
+        lost = (withdraw & ~alive[dep]).any(axis=1)
+        if not (alive & lost).any():
+            break
+        alive &= ~lost
+    stamp = first.copy()
+    while True:
+        low = np.min(np.where(ret & alive[dep], stamp[dep], np.inf), axis=1)
+        update = alive & (low < stamp)
+        if not update.any():
+            break
+        stamp[update] = low[update]
+    return {keys[n]: float(stamp[n]) for n in range(len(keys)) if alive[n]}
 
 
 __all__ = ["RETAINED", "ShadowMemory", "band_cells", "whole_cells"]

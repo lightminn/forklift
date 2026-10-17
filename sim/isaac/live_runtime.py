@@ -26,6 +26,7 @@ from console.vehicle_outline import DLS08_MEASURED_CHASSIS
 from forklift_core.live.link import Channels, Link
 from forklift_core.live.pacing import Pacer
 from forklift_core.mission.commands import Context
+from forklift_core.perf import TIMERS
 from forklift_core.safety.arbiter import Arbiter, ArbiterConfig, Feedback
 from forklift_core.safety.state import state_message
 
@@ -49,7 +50,7 @@ class LiveRuntime:
                  sleep: Callable[[float], None] = time.sleep, session_epoch: int | None = None,
                  test_step_delay_s: float = 0.0, camera_freeze: tuple | None = None,
                  test_stop_in_capture: bool = False, camera_pixel_lag_s: float = 0.0,
-                 camera_model: dict | None = None):
+                 camera_model: dict | None = None, catchup_steps: int = 0):
         self.core, self.hooks, self.clock, self.sleep = core, hooks, clock, sleep
         self.dt = dt
         self.session_epoch = session_epoch if session_epoch is not None else secrets.randbits(48)  # a job, an epoch
@@ -58,7 +59,7 @@ class LiveRuntime:
         self.channels = Channels()
         self.link = Link(self.arbiter, self.channels)
         self.store = MediaStore()
-        self.pacer = Pacer(factor, dt)
+        self.pacer = Pacer(factor, dt, catchup_steps=catchup_steps)  # real-time plan D7
         # Frames by sim time (plan C4a): the video limit is scaled by the declared factor like the command age, so
         # a sim-rate camera keeps the same freshness in sim terms; frames by wall time made a slower run render more
         # often and run slower still (2026-10-17).
@@ -156,7 +157,9 @@ class LiveRuntime:
                       "feedback": None if fb is None else [fb.stamp_mono, fb.rear_axle_speed_mps, fb.yaw_rate_radps],
                       "lease": None if self.arbiter.lease is None else
                       [self.arbiter.lease.client_id, self.arbiter.lease.renewed_mono],
-                      "pacing": self.pacer.report()})
+                      "pacing": self.pacer.report(),
+                      # Real-time plan S0: the regions' wall time since the last status (empty unless enabled).
+                      "timers": TIMERS.take() if TIMERS.enabled else None})
 
     def tick_end(self, t: float, records: list, safety: dict, candidate: tuple, drive: dict | None):
         """The output for this tick (the runner applies it, then calls ``publish`` with what it applied)."""
