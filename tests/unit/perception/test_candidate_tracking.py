@@ -1002,3 +1002,18 @@ def test_switching_the_selection_keeps_the_old_targets_shadow_in_the_competition
     tr.select(1)
     report = tr.update(_frame(0.6, [_candidate((3.15, 0.0, 0.06), support_z=0.024, cid="t")]))
     assert "t" not in report.accepted  # the target's reading that fits S's shadow is not handed to E
+
+
+def test_the_owner_exemption_needs_a_single_reading(monkeypatch):
+    # Codex graph: S -> {O1, O2}, neighbour E -> {O2, O3}, S's shadow D -> {O1, O2, O3}. Exempting D from
+    # every reading S fits settles S<-O1, E<-O2; with D kept the readings stay ambiguous and are held
+    from forklift_core.perception import candidate_tracking as CT
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="s"), _candidate((3.0, 0.6, 0.06), cid="e"),
+                           _candidate((3.0, 1.2, 0.06), cid="d")]))
+    tr.select(0)
+    tr._tracks[2].shadow, tr._tracks[2].duplicate_of = True, 0
+    edges = {(0, "o1"), (0, "o2"), (1, "o2"), (1, "o3"), (2, "o1"), (2, "o2"), (2, "o3")}
+    monkeypatch.setattr(CT, "_gate", lambda track, o, bounds: (track.id, o.candidate.candidate_id) in edges)
+    report = tr.update(_frame(0.2, [_candidate((3.0, y, 0.06), cid=c) for y, c in ((0.0, "o1"), (0.6, "o2"), (1.2, "o3"))]))
+    assert report.accepted == {} and report.new == 0

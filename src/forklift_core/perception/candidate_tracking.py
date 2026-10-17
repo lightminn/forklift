@@ -571,7 +571,9 @@ class CandidateTracker:
         # keeps an old target's shadows competing); every other competition stays as in 2B-3b
         shadows = [tr for tr in self._tracks if tr.shadow]
         chosen_fits = set() if chosen is None else {j for j, o in enumerate(obs) if _gate(chosen, o, self.bounds)}
-        skip = {(sh.id, j) for sh in shadows if sh.duplicate_of == self.selected for j in chosen_fits}
+        # exempt only a single reading the owner fits: with several, its shadows keep the alternatives (Codex)
+        skip = ({(sh.id, j) for sh in shadows if sh.duplicate_of == self.selected for j in chosen_fits}
+                if len(chosen_fits) == 1 else set())
         shadow_fits = {j for j, o in enumerate(obs) if any(_gate(sh, o, self.bounds) for sh in shadows)}
         live = [tr for tr in self._live(frame.stamp_ns) if not tr.shadow]
         if priority is None:  # the selected track (if any) takes its natural stage under the 2B-3b rules
