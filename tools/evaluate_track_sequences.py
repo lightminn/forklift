@@ -26,6 +26,7 @@ import numpy as np
 
 from forklift_core.geometry import RigidTransform
 from forklift_core.perception.candidate_tracking import CandidateTracker, Frame, TrackBounds
+from forklift_core.perception.candidate_tracking import _Observation, _pose_fits  # diagnostics only
 
 ROOT = Path(__file__).resolve().parents[1]
 SUBSTEPS = 24  # 120 Hz odometry samples per 0.2 s frame
@@ -186,12 +187,24 @@ def run(seq, bounds: TrackBounds, variant: str, table: dict, seed: int) -> dict:
         cands = [replace(c, stamp_ns=stamp) for c in f["candidates"]
                  if not (j in drops and tuple(f["labels"][c.candidate_id]) == target)]
         odom = _transform(*reported[j])
-        report = tr.update(Frame(stamp, "sim", 0, odom, tuple(cands)))
+        frame = Frame(stamp, "sim", 0, odom, tuple(cands))
+        # the plan's stated residual: target readings that fit the selected track's pose but not the
+        # layout interval its accepted readings allow (counted before the update changes the track)
+        sel_track = next((t for t in tr._tracks if t.id == selected), None)
+        refused = 0
+        if sel_track is not None and (stamp - sel_track.last.stamp_ns) / 1e9 <= bounds.keep_s:  # not deleted now
+            for c in cands:
+                o = _Observation.make(c, frame, bounds) if tuple(f["labels"][c.candidate_id]) == target else None
+                if o is not None and _pose_fits(sel_track, o, bounds) and not sel_track.layout_overlaps(o):
+                    refused += 1
+        report = tr.update(frame)
         for cid, tid in report.accepted.items():
             labels_of[tid].append(tuple(f["labels"][cid]))
         if selected is None:
             selected = next((tid for cid, tid in sorted(report.accepted.items())
                              if tuple(f["labels"][cid]) == target), None)
+            if selected is not None:
+                tr.select(selected)  # the selection proxy tells the tracker which track it follows (2B-3c)
         live = {t.track_id: t for t in tr.tracks(stamp, odom)}
         stale = set(tr.stale_ids(stamp))
         face = f["faces"][target[0]][target[1]]
@@ -201,7 +214,7 @@ def run(seq, bounds: TrackBounds, variant: str, table: dict, seed: int) -> dict:
         row = {"frame": j, "distance_m": _distance(face), "retained": retained,
                "reacquired": (not retained) and bool(on_target), "single": single is not None,
                "duplicates": max(0, len(on_target) - 1), "held": report.held, "initialised": selected is not None,
-               "selected_stale": selected in stale, "revived": report.revived}
+               "selected_stale": selected in stale, "revived": report.revived, "interval_refused": refused}
         if retained:
             out = live[selected]
             row["output"] = errors(out.candidate, face)
@@ -268,6 +281,7 @@ def summarise(results: list, n_skipped: int) -> dict:
             "held_frames": sum(row["held"] > 0 for r in res for row in r["rows"]),
             "selected_stale_frames": sum(row.get("selected_stale", False) for r in res for row in r["rows"]),
             "revivals": sum(row.get("revived", 0) for r in res for row in r["rows"]),
+            "interval_refusals": sum(row.get("interval_refused", 0) for r in res for row in r["rows"]),
             "retention_after_init": (sum(p["retained"] for p in after) / len(after)) if after else None,
             "coverage": coverage,
             "initialised_m": [next((row["distance_m"] for row in r["rows"] if row["initialised"]), None) for r in res],

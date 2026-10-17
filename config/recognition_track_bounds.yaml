@@ -44,9 +44,9 @@ rows:
   known:
   - lo_m: 1.0
     hi_m: 1.5
-    lateral_m: 0.00463206224653777
-    along_m: 0.010024258137570729
-    centre_lateral_m: 0.004612652456278596
+    lateral_m: 0.004632062246537817
+    along_m: 0.01002425813757104
+    centre_lateral_m: 0.004612652456278635
     centre_along_m: 0.007326762753496337
     centre_height_m: 0.003374077080703625
     yaw_rad: 0.029257295951045707
@@ -55,10 +55,10 @@ rows:
     sigma_m: 0.002577955538981343
   - lo_m: 1.5
     hi_m: 2.0
-    lateral_m: 0.012507577295955257
-    along_m: 0.022848852189118623
-    centre_lateral_m: 0.012502119444229472
-    centre_along_m: 0.016235142860266394
+    lateral_m: 0.012507577295955186
+    along_m: 0.0228488521891192
+    centre_lateral_m: 0.012502119444229394
+    centre_along_m: 0.016235142860266703
     centre_height_m: 0.004548942429300766
     yaw_rad: 0.06299100635575011
     support_m: 0.004548942429300766
@@ -66,10 +66,10 @@ rows:
     sigma_m: 0.003983945976702357
   - lo_m: 2.0
     hi_m: 2.5
-    lateral_m: 0.017072850527329694
-    along_m: 0.03854074866182245
-    centre_lateral_m: 0.016919799004873504
-    centre_along_m: 0.029576048724732792
+    lateral_m: 0.01707285052733013
+    along_m: 0.038540748661822055
+    centre_lateral_m: 0.0169197990048738
+    centre_along_m: 0.02957604872473319
     centre_height_m: 0.006162912478363833
     yaw_rad: 0.10017256142546827
     support_m: 0.005858856888309884
@@ -77,86 +77,86 @@ rows:
     sigma_m: 0.005180541333224911
   - lo_m: 2.5
     hi_m: 3.0
-    lateral_m: 0.024139742157274123
-    along_m: 0.06271592530070169
+    lateral_m: 0.024139742157274068
+    along_m: 0.06271592530070125
     centre_lateral_m: 0.023161137498161975
-    centre_along_m: 0.05071146001216194
+    centre_along_m: 0.05071146001216216
     centre_height_m: 0.0068265649342786686
     yaw_rad: 0.17532826505263022
     support_m: 0.006549246100982309
-    layout_m: 0.0025321751953236438
+    layout_m: 0.001
     sigma_m: 0.0072977812683893035
   - lo_m: 3.0
     hi_m: 3.5
-    lateral_m: 0.028216918538816915
+    lateral_m: 0.028216918538816783
     along_m: 0.09275641041951457
-    centre_lateral_m: 0.027213118905080946
-    centre_along_m: 0.07520121220770801
+    centre_lateral_m: 0.02721311890508073
+    centre_along_m: 0.07520121220770716
     centre_height_m: 0.00786880462760728
     yaw_rad: 0.2447387006575433
     support_m: 0.007358507232717043
-    layout_m: 0.004923014453884203
+    layout_m: 0.001
     sigma_m: 0.009206894585030465
   - lo_m: 3.5
     hi_m: 4.0
-    lateral_m: 0.043989855916863045
-    along_m: 0.11826719815920139
-    centre_lateral_m: 0.04322817421207789
-    centre_along_m: 0.09195961327965067
+    lateral_m: 0.04398985591686326
+    along_m: 0.11826719815920055
+    centre_lateral_m: 0.04322817421207811
+    centre_along_m: 0.09195961327964981
     centre_height_m: 0.007917035873892149
     yaw_rad: 0.28440171255429697
     support_m: 0.007575145826279535
-    layout_m: 0.00583214009368814
+    layout_m: 0.001
     sigma_m: 0.016258524032337462
   parametric:
   - lo_m: 1.0
     hi_m: 1.5
-    lateral_m: 0.013215566516549149
-    along_m: 0.009110465639448062
-    centre_lateral_m: 0.006616990699058203
+    lateral_m: 0.013215566516548954
+    along_m: 0.009110465639447174
+    centre_lateral_m: 0.006616990699058314
     centre_along_m: 0.007316212323528859
     centre_height_m: 0.013192293467269786
     yaw_rad: 0.02095817287738244
     support_m: 0.001696461886224243
-    layout_m: 0.007566860587889246
+    layout_m: 0.011456041047188788
     sigma_m: 0.0025000993296411967
   - lo_m: 1.5
     hi_m: 2.0
-    lateral_m: 0.018652548450294255
-    along_m: 0.018501176011701665
-    centre_lateral_m: 0.007897034622089677
+    lateral_m: 0.018652548450294217
+    along_m: 0.018501176011701485
+    centre_lateral_m: 0.0078970346220896
     centre_along_m: 0.014959847991961695
     centre_height_m: 0.013483359962558818
     yaw_rad: 0.05177440246637265
     support_m: 0.002915208824706048
-    layout_m: 0.01500705936224645
+    layout_m: 0.032037106423515004
     sigma_m: 0.004066387870145043
   - lo_m: 2.0
     hi_m: 2.5
-    lateral_m: 0.06729126841623795
+    lateral_m: 0.06729126841623775
     along_m: 0.033060762118678436
-    centre_lateral_m: 0.03241716891405884
-    centre_along_m: 0.02938411489609081
+    centre_lateral_m: 0.032417168914058825
+    centre_along_m: 0.02938411489609072
     centre_height_m: 0.013235377594531963
     yaw_rad: 0.07963102695124641
     support_m: 0.004140738036902198
-    layout_m: 0.049862731016056795
+    layout_m: 0.07726641128337573
     sigma_m: 0.013729163514155726
   - lo_m: 2.5
     hi_m: 3.0
-    lateral_m: 0.053183957764094535
-    along_m: 0.06422033702000764
-    centre_lateral_m: 0.023192817317608243
-    centre_along_m: 0.042971560285855574
+    lateral_m: 0.05318395776409442
+    along_m: 0.0642203370200076
+    centre_lateral_m: 0.023192817317608208
+    centre_along_m: 0.04297156028585553
     centre_height_m: 0.010816164725046764
     yaw_rad: 0.1294072392458666
     support_m: 0.004690775319843124
-    layout_m: 0.030383947356160082
+    layout_m: 0.14832135966375523
     sigma_m: 0.020793575526488636
 provenance:
   records: 102
-  records_sha256: 48af746ffb6ead8bb2b376c29f39ac6371d34ef43fe49a07275bbd1e7174bdf4
-  commit: c2012cfbcbca78eb52691580f918a7d1886b20b3
+  records_sha256: 40382a24e5ba07971726020f215f1d69cc971c7218e28cdb29834c2c846a7127
+  commit: d49165a117021a9694e5c8e7689656f64babd053
   seeds:
   - 1500000
   - 1500001
@@ -312,10 +312,10 @@ provenance:
       sigma_samples: 0
       unmatched: 0
   window_p95_yaw_rad_beyond_2m:
-    '0.0': 0.20125329328060265
-    '0.6': 0.15356215819255595
-    '1.2': 0.14970322534664532
-    '2.0': 0.14970322534664532
+    '0.0': 0.20085290618250573
+    '0.6': 0.1533506140806571
+    '1.2': 0.14906291091853419
+    '2.0': 0.14906291091853419
   note: single-frame p95 rows from the CPU rig with team noise; empirical budgets,
     not probability bounds. The odometry table is the worst-case age table of reported
     odometry

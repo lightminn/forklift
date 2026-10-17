@@ -548,3 +548,137 @@ def test_an_observation_held_by_active_tracks_is_not_given_to_a_stale_track():
     assert report.new == 2  # S is stale and out of reach
     report = tr.update(_frame(0.8, [_candidate((3.0, 0.0, 0.06), cid="o")]))
     assert report.accepted == {} and report.revived == 0 and report.new == 0 and report.held == 2
+
+
+# 2B-3c: the selected track first against its suspected duplicates (user decision B) -------------------
+
+def _with_duplicate():
+    """Selected track 0 (EPAL 6 reading) and track 1, born at the same place from a T11 reading that the
+    selected track's family test refused -- a suspected duplicate of 0."""
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="a")]))
+    tr.select(0)
+    report = tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), hypothesis="t11_06:x", cid="b")]))
+    assert report.new == 1
+    assert tr._tracks[1].duplicate_of == 0
+    return tr
+
+
+def test_the_selected_track_takes_an_observation_that_also_fits_its_duplicate():
+    tr = _with_duplicate()
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", cid="c")]))
+    assert report.accepted == {"c": 0} and report.held == 0
+    tr.select(None)
+    report = tr.update(_frame(0.6, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", cid="d")]))
+    assert report.accepted == {} and report.held == 2  # without a selection: the 2B-3b hold
+
+
+def test_a_stale_selected_track_is_revived_before_its_active_duplicate():
+    tr = _with_duplicate()
+    for t in (0.4, 0.6):
+        tr.update(_frame(t, [_candidate((3.0, 0.0, 0.06), hypothesis="t11_06:x", cid="b")]))  # only 1 fits
+    report = tr.update(_frame(0.8, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", cid="c")]))
+    assert report.accepted == {"c": 0} and report.revived == 1
+
+
+def test_a_real_neighbour_keeps_its_observation_from_a_stale_selected_track():
+    # Codex: a neighbour tracked from the start is not a duplicate -- the 2B-3b active-first rule holds
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="a"), _candidate((3.0, 0.15, 0.06), cid="b")]))
+    tr.select(0)
+    assert tr._tracks[1].duplicate_of is None
+    for t in (0.2, 0.4):
+        tr.update(_frame(t, [_candidate((3.0, 0.15, 0.06), cid="b")]))
+    report = tr.update(_frame(0.6, [_candidate((3.0, 0.07, 0.06), cid="c")]))  # fits stale 0 and active 1
+    assert report.accepted == {"c": 1} and report.revived == 0
+
+
+def test_two_observations_in_the_selected_gate_turn_the_priority_off_without_blocking_them():
+    # agy: no black hole -- the 2B-3b rules apply; tracks 0 (y 0) and 1 (y 0.12), observations at 0.04 and -0.04
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="a"), _candidate((3.0, 0.12, 0.06), cid="b")]))
+    tr.select(0)
+    report = tr.update(_frame(0.2, [_candidate((3.0, 0.04, 0.06), cid="c"), _candidate((3.0, -0.04, 0.06), cid="d")]))
+    assert report.accepted == {"d": 0, "c": 1} and report.held == 0
+
+
+@pytest.mark.parametrize("duplicate", [True, False])
+def test_s_o1_a_o1_a_o2_gives_o1_to_the_selected_and_o2_to_the_other(duplicate):
+    # Codex graph S-O1, A-O1, A-O2 (gate 0.1 m). Duplicate: A born at 0.05 from a T11 reading (inside S's
+    # pose gate, refused by its family test). Not: A born at 0.12 (outside S's pose gate).
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="s")]))
+    tr.select(0)
+    a_y, a_hyp = (0.05, "t11_06:x") if duplicate else (0.12, "epal6:x")
+    tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="s"),
+                           _candidate((3.0, a_y, 0.06), hypothesis=a_hyp, cid="a")]))
+    assert [x.duplicate_of for x in tr._tracks] == [None, 0 if duplicate else None]
+    o2 = a_y + 0.09
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.06, 0.06), hypothesis="parametric:x", cid="o1"),
+                                    _candidate((3.0, o2, 0.06), hypothesis="parametric:x", cid="o2")]))
+    assert report.accepted == {"o1": 0, "o2": 1}
+
+
+def test_a_neighbour_is_judged_against_the_selected_track_before_it_moves():
+    # Codex: S moves to 0.09 in the same frame A (0.18) is born; A was outside S's pose gate before the update
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="s")]))
+    tr.select(0)
+    tr.update(_frame(0.2, [_candidate((3.0, 0.09, 0.06), cid="s"), _candidate((3.0, 0.18, 0.06), cid="a")]))
+    assert [x.duplicate_of for x in tr._tracks] == [None, None]
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.135, 0.06), cid="c")]))
+    assert report.accepted == {} and report.held == 2  # the 2B-3b hold, not a priority grab
+
+
+def test_s_o1_o2_a_o1_o3_holds_without_a_unique_matching():
+    # S at 0 fits O1 (0.07) and O2 (-0.07); A at 0.14 fits O1 and O3 (0.21): three maximum matchings
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="s"), _candidate((3.0, 0.14, 0.06), cid="a")]))
+    tr.select(0)
+    report = tr.update(_frame(0.2, [_candidate((3.0, 0.07, 0.06), cid="o1"), _candidate((3.0, -0.07, 0.06), cid="o2"),
+                                    _candidate((3.0, 0.21, 0.06), cid="o3")]))
+    assert report.accepted == {} and report.held == 2 and report.new == 0
+
+
+def test_the_selection_ends_with_the_track_and_never_comes_back_by_itself():
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate()]))
+    tr.select(0)
+    tr.tracks(int(1.1 * S), _odom())  # deleted by a query
+    assert tr.selected is None
+    tr.update(_frame(1.2, [_candidate()]))
+    assert tr.selected is None
+    tr.select(1)
+    tr.update(_frame(1.4, [], epoch=1))  # a new odometry epoch clears every track and the selection
+    assert tr.selected is None and tr.tracks(int(1.4 * S), _odom()) == ()
+    with pytest.raises(ValueError):
+        tr.select(5)
+    tr.select(None)
+
+
+def test_the_priority_does_not_depend_on_candidate_order():
+    def run(order):
+        tr = _with_duplicate()
+        cands = [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", cid="c"),
+                 _candidate((3.0, 0.6, 0.06), hypothesis="parametric:x", cid="e")]
+        return tr.update(_frame(0.4, [cands[i] for i in order])).accepted
+    assert run((0, 1)) == run((1, 0))
+
+
+def test_known_residual_a_wild_first_reading_then_accurate_ones_are_refused_by_the_intersection():
+    # the plan's stated residual: a 183 mm-like first layout error excludes the truth from the intersection
+    rows = (_row(1.0, 2.0, lat=0.5, s=0.02), _row(2.0, 4.0, lat=0.5, s=0.06))
+    tr = CandidateTracker(_bounds(rows=rows))
+    wild = _candidate((3.0, 0.15, 0.06), hypothesis="parametric:x", face_offset=0.15)   # offsets +0.35 / -0.05
+    tr.update(_frame(0.0, [wild], odom=_odom(0.5)))
+    tr.select(0)
+    good = _candidate((1.5, 0.0, 0.06), hypothesis="parametric:x", face_offset=0.0)      # offsets +0.2 / -0.2
+    assert tr.update(_frame(0.2, [good], odom=_odom(2.0))).new == 1
+
+
+def test_a_track_born_outside_the_selected_pose_gate_is_not_a_duplicate():
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="a")]))
+    tr.select(0)
+    tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), cid="a"), _candidate((3.0, 0.15, 0.06), cid="b")]))
+    assert [t.duplicate_of for t in tr._tracks] == [None, None]

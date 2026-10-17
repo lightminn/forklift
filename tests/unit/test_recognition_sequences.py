@@ -225,3 +225,73 @@ def test_calibration_measures_a_candidate_against_the_pocket_pair_it_took(short_
     face = C.pair_face(f, k, i, other)
     assert np.allclose(face["left_m"], openings[other[0]]) and np.allclose(face["right_m"], openings[other[1]])
     assert face["insertion_yaw_rad"] == f["faces"][k][i]["insertion_yaw_rad"]
+
+
+def test_the_face_centre_and_openings_share_one_geometry(short_sequence):
+    _, first, _ = short_sequence
+    k, i, pair = first["target"]
+    for f in first["frames"]:
+        centre, openings = np.asarray(f["face_centres"][k][i]), np.asarray(f["openings"][k][i])
+        yaw = f["faces"][k][i]["insertion_yaw_rad"]
+        n = np.array([-math.sin(yaw), math.cos(yaw)])
+        lats = (openings[:, :2] - centre[:2]) @ n
+        assert np.allclose((openings[:, :2] - centre[:2]) - np.outer(lats, n), 0, atol=1e-9)  # on the face line
+        assert lats[0] < lats[-1]  # sorted along the left axis, like recognition_truth._faces
+
+
+def test_the_layout_error_is_zero_for_a_candidate_on_the_truth(short_sequence):
+    _, first, _ = short_sequence
+    f = first["frames"][0]
+    k, i, pair = first["target"]
+    cand = next(c for c in f["candidates"] if tuple(f["labels"][c.candidate_id]) == (k, i, pair))
+    centre, openings = f["face_centres"][k][i], f["openings"][k][i]
+    yaw = f["faces"][k][i]["insertion_yaw_rad"]
+    from dataclasses import replace as _r
+    exact = _r(cand, insertion_yaw_rad=yaw, face_centre_m=tuple(centre),
+               left=_r(cand.left, centre_m=tuple(openings[pair[0]])), right=_r(cand.right, centre_m=tuple(openings[pair[1]])))
+    assert C.face_offset_error(exact, f, (k, i, pair)) == pytest.approx(0.0, abs=1e-9)
+    shifted = _r(exact, face_centre_m=(centre[0] - 0.03 * math.sin(yaw), centre[1] + 0.03 * math.cos(yaw), centre[2]))
+    assert C.face_offset_error(shifted, f, (k, i, pair)) == pytest.approx(0.03, abs=1e-9)
+
+
+def test_calibration_refuses_records_of_another_band(tmp_path):
+    import pickle
+    with open(tmp_path / "x.pkl", "wb") as fh:
+        pickle.dump({"band": "evaluation_c", "skipped": None, "kind": "straight", "frames": []}, fh)
+    with pytest.raises(SystemExit, match="calibration band only"):
+        C.main([str(tmp_path), "--out", str(tmp_path / "b.yaml")])
+
+
+def test_the_evaluation_follows_the_first_selection_and_never_reselects(short_sequence, monkeypatch):
+    _, first, _ = short_sequence
+    calls = []
+    orig = E.CandidateTracker.select
+    monkeypatch.setattr(E.CandidateTracker, "select", lambda self, tid: (calls.append(tid), orig(self, tid))[1])
+    monkeypatch.setattr(C, "MIN_SAMPLES", 1)
+    rows, _ = C.table([first])
+    res = E.run(first, E.TrackBounds.from_dict(C.config(rows, TABLE, 1.2)), "V1", TABLE, seed=1)
+    assert calls == [0] and "interval_refused" in res["rows"][0]
+
+
+def test_face_centres_sit_at_half_the_depth_or_width_from_the_pallet_centre_on_every_face():
+    # independent of face_layout: opposite faces mirror through the pallet centre, x faces sit at half the
+    # depth and y faces at half the width; openings lie on their face line on both sides of the centre
+    for cell, index in ((R.CELLS[12], 1), (R.CELLS[12], 2), (R.CELLS[1], 0)):
+        recipe = R.recipe_for(cell, "calibration", index)
+        pose = R.Pose(-0.4, 0.3, 0.2)
+        openings, centres = R.face_geometry(recipe, pose)
+        for k, inst in enumerate(recipe.instances):
+            spec, pl = inst.spec, inst.placement
+            p = np.array(pose.to_base((pl.x_m, pl.y_m)))
+            axes = [ax for ax in spec.entry_axes for _ in (1, -1)]
+            for f in range(0, len(axes), 2):
+                c1, c2 = np.array(centres[k][f][:2]), np.array(centres[k][f + 1][:2])
+                assert np.allclose((c1 + c2) / 2, p, atol=1e-9)
+                half = (spec.overall_depth_m if axes[f] == "x" else spec.overall_width_m) / 2
+                assert np.linalg.norm(c1 - p) == pytest.approx(half, abs=1e-9)
+                for face in (f, f + 1):
+                    c = np.array(centres[k][face][:2])
+                    u = c - p
+                    side = [float(u[0] * (o[1] - c[1]) - u[1] * (o[0] - c[0])) for o in openings[k][face]]
+                    assert np.allclose([abs(np.dot(c - p, np.array(o[:2]) - c)) for o in openings[k][face]], 0, atol=1e-9)
+                    assert min(side) < 0 < max(side)

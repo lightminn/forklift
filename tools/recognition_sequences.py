@@ -45,7 +45,7 @@ ROOT = Path(__file__).resolve().parents[1]
 NOISE_CONFIG = ROOT / "config/depth_noise_d435i_team.yaml"
 # Seeds for sequence recipes: inside the eval_pool band, far from the catalogue (1,000,000-1,001,019).
 SEQUENCE_BANDS = {"calibration": 1_500_000, "evaluation": 1_600_000,
-                  "evaluation_b": 1_700_000}  # 2B-3b re-judgement: the 2B-3 evaluation set was used for diagnosis
+                  "evaluation_b": 1_700_000, "evaluation_c": 1_800_000}  # 2B-3b re-judgement: the 2B-3 evaluation set was used for diagnosis
 CELLS = tuple((c, s) for c in ("S1", "S2", "S3", "S4", "S5", "S6") for s in ("epal6", "t11_06")) + (("S7", "nonstandard"),)
 CELL_STRIDE = 1_000  # x 13 cells stays inside the 100,000 gap between the two bands
 START_M, END_M, STEP_M, PERIOD_S = 3.5, 1.3, 0.12, 0.2
@@ -153,10 +153,16 @@ def choose_target(recipe, site):
 def face_openings(recipe, pose: Pose) -> list:
     """Every opening centre of every face, per instance, in the base frame of `pose` -- the same face
     order and geometry as recognition_truth._faces (truth pockets are two of these)."""
-    out = []
+    return face_geometry(recipe, pose)[0]
+
+
+def face_geometry(recipe, pose: Pose) -> tuple:
+    """(openings, centres): every face's opening centres and its face centre (z = the pocket band's
+    middle), per instance, in the base frame of `pose`."""
+    out, centres = [], []
     for inst in recipe.instances:
         spec, pl = inst.spec, inst.placement
-        faces = []
+        faces, mids = [], []
         for axis in spec.entry_axes:
             layout = face_layout(spec, axis)
             z0, z1 = layout.pocket_band_m
@@ -169,8 +175,10 @@ def face_openings(recipe, pose: Pose) -> list:
                 centre = np.array([pl.x_m, pl.y_m]) - a * layout.depth_m / 2
                 lats = sorted(sign * (lo + hi) / 2 for lo, hi in layout.opening_intervals_m)
                 faces.append([(*pose.to_base(centre + n * lat), z) for lat in lats])
+                mids.append((*pose.to_base(centre), z))
         out.append(faces)
-    return out
+        centres.append(mids)
+    return out, centres
 
 
 def _label(cand, proposal_instance: dict, truths, openings) -> tuple:
@@ -237,7 +245,7 @@ def sequence(recipe, kind: str, *, level: str, clean: bool, site=None):
         frames = []
         for j, pose in enumerate(poses):
             truths, rendered = render(recipe, site, pose, tilt_rad=tilt[j])
-            openings = face_openings(recipe, pose)
+            openings, centres = face_geometry(recipe, pose)
             noise_seed = int(rng.integers(2**63))
             cands, labels = fit_frame(recipe, rendered, noise_seed, level, id_rng)
             frame = {
@@ -245,6 +253,7 @@ def sequence(recipe, kind: str, *, level: str, clean: bool, site=None):
                 "candidates": cands,
                 "labels": {c.candidate_id: _label(c, labels, truths, openings) for c in cands},
                 "openings": openings,
+                "face_centres": centres,
                 "faces": [[{"left_m": f.left_m, "right_m": f.right_m, "insertion_yaw_rad": f.insertion_yaw_rad,
                             "exposure": f.exposure} for f in t.faces] for t in truths],
                 "support_z_m": [t.support_z_m for t in truths],

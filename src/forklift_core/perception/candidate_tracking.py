@@ -246,6 +246,9 @@ class _Track:
         # must overlap all of them, so a pocket cannot creep to another opening through small steps
         # (2B-3b; kept across history resets)
         self.layout = [(x - obs.row.layout_m, x + obs.row.layout_m) for x in obs.offsets]
+        # the selected track this one may duplicate: born where the selected track's pose gate holds
+        # but split off by a reading test (2B-3c)
+        self.duplicate_of: int | None = None
 
     def accept(self, obs: _Observation) -> None:
         self.history.append(obs)
@@ -269,14 +272,22 @@ def _layout_fits(a: _Observation, b: _Observation) -> bool:
 
 
 def _gate(track: _Track, new: _Observation, bounds: TrackBounds) -> bool:
-    """The near-field comparison (near_field_tracking.py `_compare`) against the track's last accepted
-    observation, plus family compatibility, support and each pocket's face coordinate against the last
-    observation and the interval every accepted observation allows."""
-    ref = track.last
+    """The reading tests (family compatibility, each pocket's face coordinate against the last
+    observation and the interval every accepted observation allows) and the pose tests."""
+    return _reading_fits(track, new) and _pose_fits(track, new, bounds)
+
+
+def _reading_fits(track: _Track, new: _Observation) -> bool:
     if new.family == "known" and track.known is not None and new.key != track.known:
         return False
-    if not (_layout_fits(ref, new) and track.layout_overlaps(new)):
-        return False
+    return _layout_fits(track.last, new) and track.layout_overlaps(new)
+
+
+def _pose_fits(track: _Track, new: _Observation, bounds: TrackBounds) -> bool:
+    """The near-field comparison (near_field_tracking.py `_compare`) against the track's last accepted
+    observation: both bounds, the odometry bound for the elapsed time, its lever, the axis mixing,
+    yaw and support."""
+    ref = track.last
     odometry = bounds.odometry((new.stamp_ns - ref.stamp_ns) / 1e9)
     if odometry is None:
         return False
@@ -321,6 +332,19 @@ class CandidateTracker:
         self._last_stamp: int | None = None
         self._clock: str | None = None
         self._epoch: int | None = None
+        self.selected: int | None = None  # the track target selection follows (2B-3c, user decision B)
+
+    def select(self, track_id: int | None) -> None:
+        """Name the track target selection follows; it is matched before every other track, stale or
+        not. None clears it. A deleted selected track clears the selection (no automatic replacement)."""
+        if track_id is not None and all(t.id != track_id for t in self._tracks):
+            raise ValueError(f"no live or stale track {track_id}")
+        self.selected = track_id
+
+    def _prune(self, now_ns: int) -> None:
+        self._tracks = self._kept(now_ns)
+        if self.selected is not None and all(t.id != self.selected for t in self._tracks):
+            self.selected = None
 
     # Fusion ------------------------------------------------------------------------------------
     def _window(self, track: _Track) -> list[_Observation]:
@@ -446,7 +470,7 @@ class CandidateTracker:
         if self._last_stamp is not None and frame.stamp_ns <= self._last_stamp:
             return FrameReport(ignored="not_newer")
         self._last_stamp, self._clock, self._epoch = frame.stamp_ns, frame.clock_domain, frame.odom_epoch
-        self._tracks = self._kept(frame.stamp_ns)  # older than keep_s: deleted for good
+        self._prune(frame.stamp_ns)  # older than keep_s: deleted for good
 
         obs, untracked = [], 0
         for c in frame.candidates:
@@ -455,34 +479,60 @@ class CandidateTracker:
                 untracked += 1
             else:
                 obs.append(o)
-        # two stages: active tracks first, then the remaining observations against stale tracks, so a
-        # stale track's wide gate never holds an active track's observation (2B-3b, agy review)
-        active = self._live(frame.stamp_ns)
-        stale = [tr for tr in self._tracks if tr not in active]
+        # stages: the selected track first (2B-3c), then the other active tracks, then the remaining
+        # observations against the other stale tracks, so a stale track's wide gate never holds an
+        # active track's observation (2B-3b, agy review)
+        chosen = next((tr for tr in self._tracks if tr.id == self.selected), None)
+        # judged against the selected track as it was before this frame's matching moves it: inside its
+        # pose gate but refused by a reading test (Codex: judging after the update marks real neighbours)
+        split_off = {j for j, o in enumerate(obs) if chosen is not None
+                     and _pose_fits(chosen, o, self.bounds) and not _reading_fits(chosen, o)}
         free = set(range(len(obs)))
         accepted, held, revived, blocked = {}, 0, 0, set()
-        for stage, tracks in (("active", active), ("stale", stale)):
-            pairs, h, gated = self._match(tracks, obs, free)
+        priority = None
+        if chosen is not None:
+            fits = sorted(j for j in free if _gate(chosen, obs[j], self.bounds))
+            if len(fits) == 1:
+                rivals = [tr for tr in self._tracks if tr is not chosen and _gate(tr, obs[fits[0]], self.bounds)]
+                if all(tr.duplicate_of == chosen.id for tr in rivals):
+                    priority = fits[0]  # the selected track wins only against its own suspected duplicates
+        live = self._live(frame.stamp_ns)
+        if priority is None:  # the selected track (if any) takes its natural stage under the 2B-3b rules
+            active = live
+            stages = []
+        else:
+            active = [tr for tr in live if tr is not chosen]
+            stages = [("selected", [chosen])]
+        stale = [tr for tr in self._tracks if tr not in active and not (priority is not None and tr is chosen)]
+        stages += [("active", active), ("stale", stale)]
+        for stage, tracks in stages:
+            # the selected stage sees only its one observation; the others see what is still free
+            pairs, h, gated = self._match(tracks, obs, {priority} if stage == "selected" else free)
             held += h
             blocked |= gated
             free -= gated
             for track, j in pairs:
                 o = obs[j]
+                was_stale = self._age(track, frame.stamp_ns) > self.bounds.expiry_s
                 if self._conflicts(track, o):
                     track.history = []
                     track.resets += 1
                 track.accept(o)
                 track.history = self._window(track)  # the stored history never outgrows W and the count
                 accepted[o.candidate.candidate_id] = track.id
-                if stage == "stale":
+                if was_stale:
                     track.revivals += 1
                     revived += 1
 
         new = 0
-        fresh = sorted((o for j, o in enumerate(obs) if j not in blocked),
-                       key=lambda o: (round(float(o.mid[0]), 9), round(float(o.mid[1]), 9), o.key))
-        for o in fresh:
-            self._tracks.append(_Track(self._next_id, o))
+        fresh = sorted((j for j in range(len(obs)) if j not in blocked),
+                       key=lambda j: (round(float(obs[j].mid[0]), 9), round(float(obs[j].mid[1]), 9), obs[j].key))
+        for j in fresh:
+            o = obs[j]
+            track = _Track(self._next_id, o)
+            if j in split_off:
+                track.duplicate_of = chosen.id  # where the selected track was, split off by a reading test
+            self._tracks.append(track)
             accepted[o.candidate.candidate_id] = self._next_id
             self._next_id += 1
             new += 1
@@ -498,7 +548,7 @@ class CandidateTracker:
         if self._last_stamp is not None and now_ns < self._last_stamp:
             raise ValueError("the query time is before the last processed frame")
         robot_yaw = _planar_yaw(odom_from_base_now)
-        self._tracks = self._kept(now_ns)  # a query deletes only past keep_s; stale tracks stay revivable
+        self._prune(now_ns)  # a query deletes only past keep_s; stale tracks stay revivable
         out = []
         for track in sorted(self._live(now_ns), key=lambda t: t.id):
             fused = self._fuse(track, now_ns, odom_from_base_now)
