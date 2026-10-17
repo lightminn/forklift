@@ -899,8 +899,8 @@ def test_absorption_needs_the_duplicate_layout_inside_the_selected_layout():
     assert not _reading_contains(s, d)
     d.known = None  # Codex: no hypothesis accepts any known reading -- wider than an EPAL 6 track
     assert s.known == "epal6:x" and not _reading_contains(s, d)
-    d.known, s.known = "epal6:x", None  # a track without a hypothesis accepts whatever the duplicate accepts
-    assert _reading_contains(s, d)
+    d.known, s.known = "epal6:x", None  # an undecided selected track may adopt another hypothesis later
+    assert not _reading_contains(s, d)
 
 
 def test_known_residual_absorbing_a_duplicate_also_removes_its_pose_hypothesis():
@@ -917,3 +917,15 @@ def test_known_residual_absorbing_a_duplicate_also_removes_its_pose_hypothesis()
     assert report.accepted == {"c": 0} and report.absorbed == 1
     report = tr.update(_frame(0.6, [_candidate((3.15, 0.0, 0.06), support_z=0.024, cid="t")]))
     assert report.accepted == {"t": 1}  # the neighbour E -- an identity error the evaluation counts
+
+
+def test_an_undecided_selected_track_does_not_absorb_a_duplicate_with_a_known_reading():
+    # Codex: S parametric (no hypothesis); D born as T11 on a support near miss; absorbing D and later
+    # learning EPAL 6 would leave the target's next T11 reading to the T11 neighbour E
+    from forklift_core.perception.candidate_tracking import _reading_contains
+    tr = _born(hypothesis="t11_06:x", support_z=0.015)
+    s, d = tr._tracks
+    s.known = None
+    assert not _reading_contains(s, d)
+    d.known = None
+    assert _reading_contains(s, d)
