@@ -84,6 +84,9 @@ class TrackBounds:
                 raise ValueError(f"{family} rows must be non-empty, sorted and non-overlapping")
             self.rows[family] = rows
         ages = tuple(float(a) for a in self.ages_s)
+        scalars = (*ages, *self.e_m, *self.psi_rad, *self.rear_axle_xy_m, self.window_s, self.expiry_s)
+        if not all(math.isfinite(float(v)) for v in scalars) or len(self.rear_axle_xy_m) != 2:
+            raise ValueError("odometry bounds, the rear axle, window_s and expiry_s must be finite")
         if not ages or ages[0] <= 0 or any(b <= a for a, b in itertools.pairwise(ages)):
             raise ValueError("odometry ages must be positive and increase")
         for name in ("e_m", "psi_rad"):
@@ -94,6 +97,21 @@ class TrackBounds:
         object.__setattr__(self, "ages_s", ages)
         if not (self.window_s >= 0 and self.expiry_s > 0 and self.max_observations >= 1):
             raise ValueError("window_s >= 0, expiry_s > 0 and max_observations >= 1 are required")
+
+    @classmethod
+    def from_dict(cls, data: dict) -> TrackBounds:
+        odo = data["odometry"]
+        rows = {family: tuple(BoundRow(**r) for r in data["rows"][family]) for family in FAMILIES}
+        return cls(rows=rows, ages_s=tuple(odo["ages_s"]), e_m=tuple(odo["e_m"]), psi_rad=tuple(odo["psi_rad"]),
+                   rear_axle_xy_m=tuple(data["rear_axle_xy_m"]), window_s=float(data["window_s"]),
+                   max_observations=int(data["max_observations"]), expiry_s=float(data["expiry_s"]))
+
+    @classmethod
+    def load(cls, path) -> TrackBounds:
+        import yaml  # noqa: PLC0415 -- only the config loader needs it
+
+        with open(path, encoding="utf-8") as fh:
+            return cls.from_dict(yaml.safe_load(fh))
 
     def row(self, family: str, distance_m: float) -> BoundRow | None:
         for r in self.rows[family]:
@@ -148,7 +166,7 @@ class TrackedCandidate:
 
 def _planar_yaw(t: RigidTransform) -> float:
     r = np.asarray(t.rotation)
-    if abs(r[2, 2] - 1) > 1e-6:
+    if abs(r[2, 2] - 1) > 1e-9 or np.abs(r[2, :2]).max() > 1e-9 or np.abs(r[:2, 2]).max() > 1e-9:
         raise ValueError("odom_from_base must be planar (a rotation about z)")
     return math.atan2(r[1, 0], r[0, 0])
 
@@ -175,7 +193,7 @@ class _Observation:
     yaw: float
     support_z: float
     spacing: float
-    face_offset: float
+    offsets: tuple  # each pocket's signed coordinate along the face from the face centre (left, right)
 
     @classmethod
     def make(cls, c: PocketCandidate, frame: Frame, bounds: TrackBounds):
@@ -186,13 +204,13 @@ class _Observation:
         t = frame.odom_from_base
         left, right = _apply(t, c.left.centre_m), _apply(t, c.right.centre_m)
         lb, rb = np.asarray(c.left.centre_m), np.asarray(c.right.centre_m)
-        mid_b = (lb + rb) / 2
         n = np.array([-math.sin(c.insertion_yaw_rad), math.cos(c.insertion_yaw_rad)])
+        face = np.asarray(c.face_centre_m[:2])
         return cls(frame.stamp_ns, c, t, family, "parametric" if family == "parametric" else c.hypothesis, row,
                    left, right, (left + right) / 2, _wrap(c.insertion_yaw_rad + _planar_yaw(t)),
                    float(_apply(t, (*c.face_centre_m[:2], c.support_z_m))[2]),
                    float(np.linalg.norm(lb[:2] - rb[:2])),
-                   float((mid_b[:2] - np.asarray(c.face_centre_m[:2])) @ n))
+                   (float((lb[:2] - face) @ n), float((rb[:2] - face) @ n)))
 
 
 class _Track:
@@ -230,7 +248,7 @@ def _gate(ref: _Observation, new: _Observation, bounds: TrackBounds) -> bool:
     if abs(new.support_z - ref.support_z) > ref.row.support_m + new.row.support_m:
         return False
     layout = ref.row.layout_m + new.row.layout_m
-    return abs(new.spacing - ref.spacing) <= layout and abs(new.face_offset - ref.face_offset) <= layout
+    return all(abs(a - b) <= layout for a, b in zip(new.offsets, ref.offsets))
 
 
 def _matchings(tracks, obs, edges):
@@ -306,8 +324,11 @@ class CandidateTracker:
         a = np.array([math.cos(new.yaw), math.sin(new.yaw)])
         n = np.array([-a[1], a[0]])
         d = new.mid - mid
-        return (abs(float(d[:2] @ n)) > new.row.centre_lateral_m + b["centre_lateral_m"]
-                or abs(float(d[:2] @ a)) > new.row.centre_along_m + b["centre_along_m"]
+        t_lat = new.row.centre_lateral_m + b["centre_lateral_m"]
+        t_along = new.row.centre_along_m + b["centre_along_m"]
+        mixing = new.row.yaw_rad + b["yaw_rad"]  # the comparison axis against each estimate's own axis (as the gate)
+        return (abs(float(d[:2] @ n)) > t_lat + t_along * mixing
+                or abs(float(d[:2] @ a)) > t_along + t_lat * mixing
                 or abs(_wrap(new.yaw - yaw)) > new.row.yaw_rad + b["yaw_rad"]
                 or abs(float(d[2])) > new.row.centre_height_m + b["height_m"])
 
@@ -379,6 +400,7 @@ class CandidateTracker:
                     track.history = []
                     track.resets += 1
                 track.history.append(o)
+                track.history = self._window(track)  # the stored history never outgrows W and the count
                 accepted[o.candidate.candidate_id] = track.id
 
         new = 0
@@ -396,8 +418,9 @@ class CandidateTracker:
         if self._last_stamp is not None and now_ns < self._last_stamp:
             raise ValueError("the query time is before the last processed frame")
         robot_yaw = _planar_yaw(odom_from_base_now)
+        self._tracks = self._live(now_ns)  # an expiry seen by a query is permanent: a late frame cannot revive it
         out = []
-        for track in sorted(self._live(now_ns), key=lambda t: t.id):
+        for track in sorted(self._tracks, key=lambda t: t.id):
             fused = self._fuse(track, now_ns, odom_from_base_now)
             if fused is None:  # every observation is older than the odometry table
                 continue

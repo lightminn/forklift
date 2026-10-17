@@ -348,3 +348,68 @@ def test_the_tracker_never_reads_proposal_ids():
         cid = f"p{rng.randrange(10**6)}"
         tr.update(_frame(0.2 * k, [_candidate(cid=cid, proposal_id=cid)]))
     assert [t.observations for t in tr.tracks(int(0.6 * S), _odom())] == [4]
+
+
+# Task 1 review (Codex) ---------------------------------------------------------------------------
+
+def test_a_track_expired_at_a_query_is_not_revived_by_a_late_frame():
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate()]))
+    assert tr.tracks(int(0.6 * S), _odom()) == ()
+    report = tr.update(_frame(0.4, [_candidate()]))  # acquired before the query, delivered after it
+    assert report.new == 1
+    (out,) = tr.tracks(int(0.6 * S), _odom())
+    assert out.track_id != 0
+
+
+def test_the_layout_gate_compares_each_pockets_face_coordinate():
+    rows = (_row(1.0, 4.0, lat=0.5, s=0.02),)
+    # spacing 400 -> 438 mm with the pair moved 35 mm along the face: the left pocket moves 54 mm (> 40)
+    tr = CandidateTracker(_bounds(rows=rows))
+    tr.update(_frame(0.0, [_candidate(hypothesis="parametric:x", spacing=0.400, face_offset=0.0)]))
+    moved = _candidate((3.0, 0.035, 0.06), hypothesis="parametric:x", spacing=0.438, face_offset=0.035)
+    assert tr.update(_frame(0.2, [moved])).new == 1
+    # spacing 400 -> 460 mm about the same midpoint: each pocket moves 30 mm (< 40), same pair
+    tr = CandidateTracker(_bounds(rows=rows))
+    tr.update(_frame(0.0, [_candidate(hypothesis="parametric:x", spacing=0.400)]))
+    assert tr.update(_frame(0.2, [_candidate(hypothesis="parametric:x", spacing=0.460)])).new == 0
+
+
+def test_the_conflict_check_mixes_the_axes_like_the_gate():
+    # midpoint bounds 32 / 54 mm, pocket bounds 35 / 90 mm, yaw 0.1: every observation is inside its budget
+    row = BoundRow(lo_m=1.0, hi_m=4.0, lateral_m=0.035, along_m=0.09, centre_lateral_m=0.032, centre_along_m=0.054,
+                   centre_height_m=0.02, yaw_rad=0.1, support_m=0.02, layout_m=0.02, sigma_m=0.01)
+    tr = CandidateTracker(_bounds(rows=(row,)))
+    tr.update(_frame(0.0, [_candidate((2.95, 0.03, 0.06), 0.0)]))
+    report = tr.update(_frame(0.2, [_candidate((3.05, -0.03, 0.06), 0.16)]))
+    assert report.new == 0
+    (out,) = tr.tracks(int(0.2 * S), _odom())
+    assert out.resets == 0 and out.observations == 2
+
+
+@pytest.mark.parametrize("field, value", [("e_m", (math.nan,) * 4), ("psi_rad", (0, 0, math.inf, math.inf)),
+                                          ("rear_axle_xy_m", (math.nan, 0.0)), ("window_s", math.nan),
+                                          ("expiry_s", math.inf)])
+def test_non_finite_bounds_are_refused(field, value):
+    kw = dict(rows={"known": (_row(1.0, 4.0),), "parametric": (_row(1.0, 4.0),)}, ages_s=(0.1, 0.5, 1.0, 10.0),
+              e_m=(0.0,) * 4, psi_rad=(0.0,) * 4, rear_axle_xy_m=(0.0, 0.0), window_s=1.2, max_observations=10,
+              expiry_s=0.5)
+    kw[field] = value
+    with pytest.raises(ValueError):
+        TrackBounds(**kw)
+
+
+def test_the_stored_history_is_bounded_by_the_window_and_count():
+    tr = CandidateTracker(_bounds(window_s=0.6))
+    for k in range(200):
+        tr.update(_frame(0.2 * k, [_candidate()]))
+    (track,) = tr._tracks
+    assert len(track.history) <= 4
+
+
+def test_a_tilted_odometry_pose_is_refused():
+    c, s = math.cos(0.001), math.sin(0.001)
+    pitched = RigidTransform("base_link", "odom", ((c, 0, s), (0, 1, 0), (-s, 0, c)), (0.0, 0.0, 0.0))
+    tr = CandidateTracker(_bounds())
+    with pytest.raises(ValueError, match="planar"):
+        tr.update(_frame(0.0, [_candidate()], odom=pitched))
