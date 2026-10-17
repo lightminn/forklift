@@ -988,3 +988,17 @@ def test_a_shadow_keeps_the_hold_between_an_active_selected_track_and_a_real_nei
     tr.update(_frame(0.5, [_candidate((3.0, 0.12, 0.06), cid="e")]))
     report = tr.update(_frame(0.6, [_candidate((3.0, 0.05, 0.06), support_z=0.008, cid="o")]))
     assert report.accepted == {} and report.held >= 2  # S and E both fit: the 2B-3b hold stays
+
+
+def test_switching_the_selection_keeps_the_old_targets_shadow_in_the_competition():
+    # Codex: after absorbing D into S, selecting the neighbour E must not exempt E from S's shadow
+    rows = (_row(1.0, 4.0, yaw=0.05, z_s=0.005, along=0.15),)
+    tr = CandidateTracker(_bounds(rows=rows))
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="s"), _candidate((3.4, 0.0, 0.06), support_z=0.015, cid="e")]))
+    tr.select(0)
+    tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), support_z=0.015, cid="d")]))
+    tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), support_z=0.008, cid="c")]))
+    assert tr._tracks[2].shadow
+    tr.select(1)
+    report = tr.update(_frame(0.6, [_candidate((3.15, 0.0, 0.06), support_z=0.024, cid="t")]))
+    assert "t" not in report.accepted  # the target's reading that fits S's shadow is not handed to E

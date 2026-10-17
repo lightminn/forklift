@@ -566,11 +566,12 @@ class CandidateTracker:
                 if all(tr.duplicate_of == chosen.id for tr in rivals):
                     priority = fits[0]  # the selected track wins only against its own suspected duplicates
         # 2B-3e shadows compete in the active stage like tracks but never accept: a reading a unique
-        # matching gives to a shadow is held. They never compete with the selected track for a reading
-        # it fits (it wins over its own absorbed duplicates); every other competition stays as in 2B-3b
+        # matching gives to a shadow is held. A shadow never competes with the selected track it was
+        # absorbed into for a reading that track fits (only its owner is exempt -- switching the selection
+        # keeps an old target's shadows competing); every other competition stays as in 2B-3b
         shadows = [tr for tr in self._tracks if tr.shadow]
         chosen_fits = set() if chosen is None else {j for j, o in enumerate(obs) if _gate(chosen, o, self.bounds)}
-        skip = {(sh.id, j) for sh in shadows for j in chosen_fits}
+        skip = {(sh.id, j) for sh in shadows if sh.duplicate_of == self.selected for j in chosen_fits}
         shadow_fits = {j for j, o in enumerate(obs) if any(_gate(sh, o, self.bounds) for sh in shadows)}
         live = [tr for tr in self._live(frame.stamp_ns) if not tr.shadow]
         if priority is None:  # the selected track (if any) takes its natural stage under the 2B-3b rules
