@@ -959,3 +959,32 @@ def test_the_shadow_veto_applies_before_the_matching_decides_uniqueness():
     report = tr.update(_frame(0.6, [_candidate((3.0, 0.06, 0.06), support_z=0.02, cid="o1"),
                                     _candidate((3.0, 0.18, 0.06), support_z=0.02, cid="o2")]))
     assert "o2" not in report.accepted and report.new == 0
+
+
+def _shadowed():
+    """Selected S (y 0), real neighbour E (y 0.18, born with S, so not a duplicate), and S's shadow D
+    (a support near miss absorbed at 0.4 s)."""
+    rows = (_row(1.0, 4.0, yaw=0.05, z_s=0.005),)
+    tr = CandidateTracker(_bounds(rows=rows))
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="s"), _candidate((3.0, 0.18, 0.06), cid="e")]))
+    tr.select(0)
+    tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), support_z=0.015, cid="d")]))
+    tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), support_z=0.008, cid="s")]))
+    assert tr._tracks[2].shadow and tr._tracks[1].duplicate_of is None
+    return tr
+
+
+def test_a_shadow_never_hands_a_real_neighbours_reading_to_a_stale_selected_track():
+    # Codex: E active, S stale, the shadow fits too -- E keeps its reading (2B-3b active-first)
+    tr = _shadowed()
+    for t in (0.6, 0.8):
+        tr.update(_frame(t, [_candidate((3.0, 0.12, 0.06), cid="e")]))
+    report = tr.update(_frame(1.0, [_candidate((3.0, 0.06, 0.06), support_z=0.008, cid="o")]))  # fits E, stale S, shadow
+    assert report.accepted == {"o": 1} and report.revived == 0
+
+
+def test_a_shadow_keeps_the_hold_between_an_active_selected_track_and_a_real_neighbour():
+    tr = _shadowed()
+    tr.update(_frame(0.5, [_candidate((3.0, 0.12, 0.06), cid="e")]))
+    report = tr.update(_frame(0.6, [_candidate((3.0, 0.05, 0.06), support_z=0.008, cid="o")]))
+    assert report.accepted == {} and report.held >= 2  # S and E both fit: the 2B-3b hold stays
