@@ -6,6 +6,7 @@ load handling. The simulation adapter supplies real asset bounds and executes
 the distinct insertion, loading, transport, unloading, and withdrawal stages.
 """
 
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from math import ceil, cos, pi, sin
@@ -27,7 +28,8 @@ from .geometry import (
     collision_free_path,
     collision_free_pose,
 )
-from .hybrid_astar import PlannerConfig, PlanResult, plan_hybrid_astar
+from .grid_collision import make_checker
+from .hybrid_astar import PlannerConfig, PlanResult, _sample_arc, _wrap, obstacle_heuristic_field, plan_hybrid_astar
 
 DEFAULT_TRANSPORT_CLEARANCE_M = 0.10
 # Denser analytic-connection intervals tried, in order, when a mission search
@@ -66,6 +68,19 @@ _RETRIED_STATUSES = ("expansion_limit", "no_path")
 DEFAULT_TRANSPORT_PRIMITIVE_LENGTH_M = 0.25
 
 
+@dataclass
+class SearchBudget:
+    """A wall-clock budget for every search ladder on its own (priority-5 plan D7 CPU
+    baseline: "재계획 시간 상한 20 s 는 사다리 전체에 적용한다"). Passed where a deadline
+    goes, each _search turns it into a deadline from its own start, so one slow leg does
+    not eat the next leg's time, and a ladder that ends after it -- even with a goal
+    connection found past the last 256-expansion check -- fails as "timeout" (Codex D7
+    3rd P2). ``spent_s`` collects every ladder's own wall time, in call order."""
+
+    seconds: float
+    spent_s: list = field(default_factory=list)
+
+
 def _retries(config, extended=True):
     """The configs _search tries, in order, after config itself runs out."""
     fine = None
@@ -98,11 +113,15 @@ def _retries(config, extended=True):
 
 
 def _search(
-    start, goal, obstacles, footprint, bounds, config, extended=True
+    start, goal, obstacles, footprint, bounds, config, extended=True, occupancy=None, deadline=None
 ) -> PlanResult:
     """plan_hybrid_astar, retried on a finer lattice, then at denser analytic
     intervals, then (``extended``) on the fine lattice with more budget and a
     shorter primitive, if it runs out."""
+    budget = deadline if isinstance(deadline, SearchBudget) else None
+    if budget is not None:
+        started = time.monotonic()
+        deadline = started + float(budget.seconds)
     attempts = []
     closed = []  # configs whose queue closed (no_path), budget aside
 
@@ -110,8 +129,12 @@ def _search(
 
     def attempt(attempt_config):
         attempts_config.append(attempt_config)
+        # Without a grid the call is exactly the pre-grid one.
+        extra = {} if occupancy is None else {"occupancy": occupancy}
+        if deadline is not None:
+            extra["deadline"] = deadline
         result = plan_hybrid_astar(
-            start, goal, obstacles, footprint, bounds, attempt_config
+            start, goal, obstacles, footprint, bounds, attempt_config, **extra
         )
         attempts.append(
             (
@@ -123,6 +146,8 @@ def _search(
                 attempt_config.collision_step_m,
                 attempt_config.primitive_length_m,
                 attempt_config.max_expansions,
+                int(getattr(result, "pruned_children", 0)),
+                int(getattr(result, "superseded_pops", 0)),
             )
         )
         return result
@@ -138,6 +163,8 @@ def _search(
         config = replace(config, collision_step_m=FALLBACK_BOXED_COLLISION_STEP_M)
         result = attempt(config)
     for retry in _retries(config, extended):
+        if result.status == "timeout":
+            break
         if result.status == "no_path":
             closed.append(replace(attempts_config[-1], max_expansions=1))
         if result.success or result.status not in _RETRIED_STATUSES:
@@ -147,9 +174,29 @@ def _search(
             continue
         result = attempt(retry)
         interval = retry.analytic_expansion_interval
+    if budget is not None:
+        ended = time.monotonic()
+        budget.spent_s.append(ended - started)
+        if ended > deadline and result.status != "timeout":
+            result = _timed_out(result)
     return replace(
         result, analytic_expansion_interval=interval, search_attempts=tuple(attempts)
     )
+
+
+def _timed_out(result: PlanResult) -> PlanResult:
+    """A result that came back after its budget: a timeout, its path dropped."""
+    return replace(
+        result, success=False, status="timeout", poses=np.empty((0, 3)),
+        directions=np.empty(0, dtype=np.int8), curvatures_inv_m=np.empty(0), length_m=0.0,
+    )
+
+
+# Plan D7 CPU judgement (2026-10-08, judge_rerun.json, combination 3): the goal connection
+# tries Reeds-Shepp words as well as Dubins, and a connection longer than the straight-line
+# distance + 4 m waits for the search instead of being taken at once. Penalties and D7b
+# stay at their defaults. Applied by the runner's --d7-planner (Isaac D7 off/on).
+D7_PLANNER_OPTIONS = {"goal_connection": "reeds_shepp", "shot_cap_m": 4.0}
 
 
 def make_transport_planner_config(**overrides: float | int) -> PlannerConfig:
@@ -483,7 +530,7 @@ def make_scenario(
     )
 
 
-def _straight_plan(start, goal, direction, obstacles, footprint, bounds, clearance_m):
+def _straight_plan(start, goal, direction, obstacles, footprint, bounds, clearance_m, occupancy=None):
     distance = float(np.hypot(goal.x_m - start.x_m, goal.y_m - start.y_m))
     count = max(1, ceil(distance / 0.04))
     fractions = np.linspace(0, 1, count + 1)
@@ -495,7 +542,8 @@ def _straight_plan(start, goal, direction, obstacles, footprint, bounds, clearan
         )
     )
     if not collision_free_path(
-        poses, obstacles, footprint, bounds, margin_m=clearance_m, max_step_m=0.04
+        poses, obstacles, footprint, bounds, margin_m=clearance_m, max_step_m=0.04,
+        occupancy=occupancy,
     ):
         return PlanResult(
             False,
@@ -533,6 +581,14 @@ def _append_straight(first, second):
         first.expanded_nodes + second.expanded_nodes,
         analytic_expansion_interval=first.analytic_expansion_interval,
         search_attempts=first.search_attempts,
+        pruned_children=first.pruned_children + second.pruned_children,
+        superseded_pops=first.superseded_pops + second.superseded_pops,
+        cycles_queued=first.cycles_queued + second.cycles_queued,
+        cycles_in_path=first.cycles_in_path + second.cycles_in_path,
+        shots_capped=first.shots_capped + second.shots_capped,
+        shot_fallback=first.shot_fallback or second.shot_fallback,
+        root_shot=first.root_shot,
+        cycles_generated=first.cycles_generated + second.cycles_generated,
     )
 
 
@@ -545,8 +601,15 @@ def plan_observation_leg(
     start_rear: Pose2D | None = None,
     pickup_bounds: Bounds | None = None,
     extended: bool = True,
+    occupancy=None,
+    pickup_obstacle: Rectangle | None = None,
+    deadline=None,
 ) -> PlanResult:
     """Plan a separate leg to the observation waypoint at full clearance.
+
+    occupancy / pickup_obstacle (priority-5 plan): a LiDAR occupancy grid and
+    the rectangle that stands for the unrecognised pallet (the pickup zone
+    prior) instead of scenario.pickup; pass a scenario without props then.
 
     Like plan_transport's target/obstacle split, scenario.pickup is an obstacle,
     not the goal of this leg.
@@ -558,22 +621,19 @@ def plan_observation_leg(
     """
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
     config = config if config is not None else make_transport_planner_config()
-    props = [prop.rectangle for prop in scenario.props]
-    pallet = Rectangle(
-        scenario.pickup.x_m,
-        scenario.pickup.y_m,
-        geometry.pallet_depth_m,
-        geometry.pallet_width_m,
-        scenario.pickup.yaw_rad,
+    obstacles, footprint, bounds = leg_obstacles(
+        "observe", scenario, geometry, pickup_obstacle=pickup_obstacle, pickup_bounds=pickup_bounds
     )
     return _search(
         start_rear if start_rear is not None else scenario.start_rear,
         waypoint,
-        props + [pallet],
-        geometry.unloaded_footprint,
-        pickup_bounds if pickup_bounds is not None else scenario.bounds,
+        obstacles,
+        footprint,
+        bounds,
         config,
         extended,
+        occupancy,
+        deadline,
     )
 
 
@@ -643,11 +703,14 @@ def straight_from_pose(
     lateral = float(offset @ normal)
     yaw = float(np.arctan2(np.sin(current.yaw_rad - line_start.yaw_rad), np.cos(current.yaw_rad - line_start.yaw_rad)))
     total = float(np.hypot(line_end.x_m - line_start.x_m, line_end.y_m - line_start.y_m))
-    left = total - max(along, 0.0)
+    # Behind the line start the straight begins at the truck's own projection,
+    # not at the start: cutting a negative along to 0 began the path ahead of
+    # the truck (plan v10 D7c, Codex v10 2nd P1-4).
+    left = total - along
     record = {"along_m": along, "lateral_m": lateral, "yaw_rad": yaw, "length_left_m": left}
     if abs(lateral) > max_lateral_m or abs(yaw) > max_yaw_rad or left < min_length_m:
         return None, record
-    begin = np.array([line_start.x_m, line_start.y_m]) + max(along, 0.0) * heading
+    begin = np.array([line_start.x_m, line_start.y_m]) + along * heading
     count = max(1, ceil(left / step_m))
     fractions = np.linspace(0.0, 1.0, count + 1)
     xy = begin + fractions[:, None] * (np.array([line_end.x_m, line_end.y_m]) - begin)
@@ -666,6 +729,90 @@ def straight_from_pose(
     )
 
 
+def correction_point_offsets(
+    trajectory,
+    line_start: Pose2D,
+    *,
+    face_distance,
+    points_m: Sequence[float],
+) -> list[dict]:
+    """Where a rolled-out approach crosses the near-field correction points (plan D8 S4c-3).
+
+    face_distance(pose) is the estimated fork tip to pallet face at a trajectory pose (rear
+    axle x, y, yaw) as the runner's correction trigger measures it. For each point d, the
+    first pose whose distance is within d, the pose before it (None when the first pose
+    already is) and the offsets of the crossing pose to the line from line_start (along,
+    lateral, heading -- as straight_from_pose records them); pose and offsets are None when
+    the trajectory never comes that close.
+    """
+    heading = np.array([cos(line_start.yaw_rad), sin(line_start.yaw_rad)])
+    normal = np.array([-heading[1], heading[0]])
+    origin = np.array([line_start.x_m, line_start.y_m])
+    poses = np.asarray(trajectory, dtype=float).reshape(-1, 3)
+    distances = [float(face_distance(pose)) for pose in poses]
+    out = []
+    for point in points_m:
+        entry = {"point_m": float(point), "pose": None, "offsets": None}
+        for i, (pose, distance) in enumerate(zip(poses, distances, strict=True)):
+            if distance <= point + 1e-12:
+                offset = pose[:2] - origin
+                entry.update(
+                    pose=[float(v) for v in pose],
+                    face_distance_m=distance,
+                    previous_pose=[float(v) for v in poses[i - 1]] if i else None,
+                    previous_face_distance_m=distances[i - 1] if i else None,
+                    offsets={
+                        "along_m": float(offset @ heading),
+                        "lateral_m": float(offset @ normal),
+                        "yaw_rad": float(np.arctan2(np.sin(pose[2] - line_start.yaw_rad), np.cos(pose[2] - line_start.yaw_rad))),
+                    },
+                )
+                break
+        out.append(entry)
+    return out
+
+
+def leg_obstacles(
+    kind: str,
+    scenario: TransportScenario,
+    geometry: SyntheticMissionGeometry | None = None,
+    *,
+    pickup_obstacle: Rectangle | None = None,
+    pickup_bounds: Bounds | None = None,
+) -> tuple[list[Rectangle], Footprint, Bounds]:
+    """(rectangles, footprint, bounds) the transport, return or observation leg's search checks
+    besides its grid: the props, plus the delivered pallet on the return and the pallet (or the
+    rectangle standing for it) on the observation leg; the loaded outline in transport. One source
+    for plan_transport_leg, plan_return_leg, plan_observation_leg and the recoveries that check a
+    sweep against them (plan 2026-10-04-lidar-obstacle-map, obstacle recovery v4 E2 ①, cusp
+    position stall v7)."""
+    geometry = geometry if geometry is not None else SyntheticMissionGeometry()
+    props = [prop.rectangle for prop in scenario.props]
+    if kind == "observe":
+        pallet = pickup_obstacle if pickup_obstacle is not None else Rectangle(
+            scenario.pickup.x_m,
+            scenario.pickup.y_m,
+            geometry.pallet_depth_m,
+            geometry.pallet_width_m,
+            scenario.pickup.yaw_rad,
+        )
+        return props + [pallet], geometry.unloaded_footprint, (
+            pickup_bounds if pickup_bounds is not None else scenario.bounds
+        )
+    if kind == "transport":
+        return props, geometry.loaded_footprint, scenario.bounds
+    if kind == "return":
+        delivered = Rectangle(
+            scenario.destination.x_m,
+            scenario.destination.y_m,
+            geometry.pallet_depth_m,
+            geometry.pallet_width_m,
+            scenario.destination.yaw_rad,
+        )
+        return props + [delivered], geometry.unloaded_footprint, scenario.bounds
+    raise ValueError(f"unknown leg {kind!r}")
+
+
 def plan_transport_leg(
     scenario: TransportScenario,
     start_rear: Pose2D,
@@ -673,6 +820,8 @@ def plan_transport_leg(
     *,
     geometry: SyntheticMissionGeometry | None = None,
     travel_config: PlannerConfig | None = None,
+    occupancy=None,
+    deadline=None,
 ) -> PlanResult:
     """The loaded transport leg alone, from ``start_rear`` to the delivery pose.
 
@@ -684,15 +833,17 @@ def plan_transport_leg(
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
     config = config if config is not None else make_transport_planner_config()
     travel_config = travel_config if travel_config is not None else config
-    props = [prop.rectangle for prop in scenario.props]
+    props, footprint, bounds = leg_obstacles("transport", scenario, geometry)
     destination = site_poses(scenario.destination, geometry)
     search = _search(
         start_rear,
         destination["predelivery"],
         props,
-        geometry.loaded_footprint,
-        scenario.bounds,
+        footprint,
+        bounds,
         travel_config,
+        occupancy=occupancy,
+        deadline=deadline,
     )
     if not search.success:
         return search
@@ -704,10 +855,217 @@ def plan_transport_leg(
         geometry.loaded_footprint,
         scenario.bounds,
         config.clearance_m,
+        occupancy,
     )
     if not tail.success:
         return tail
     return _append_straight(search, tail)
+
+
+def plan_docking_reapproach(
+    scenario: TransportScenario,
+    start_rear: Pose2D,
+    line_start: Pose2D,
+    config: PlannerConfig | None = None,
+    *,
+    geometry: SyntheticMissionGeometry | None = None,
+    keep_m: float,
+    occupancy=None,
+    deadline=None,
+    behind_m: float = 4.0,
+    lateral_m: float = 1.5,
+    ahead_margin_m: float = 0.2,
+    max_length_m: float = 6.0,
+) -> tuple[PlanResult | None, dict]:
+    """Back to the docking line's start from where the truck stands (plan D7c ③).
+
+    A loaded search to ``line_start``, accepted only when every rear-axle pose
+    stays in the line-start frame box -- along [-behind_m, keep_m + ahead_margin_m]
+    (the docking goal is keep_m ahead; the margin is for a start at the goal),
+    lateral within +-lateral_m -- and the path is at most max_length_m. None with
+    the reason in the record ("no_path", "leaves_box", "too_long") otherwise.
+    """
+    geometry = geometry if geometry is not None else SyntheticMissionGeometry()
+    config = config if config is not None else make_transport_planner_config()
+    props = [prop.rectangle for prop in scenario.props]
+    result = _search(
+        start_rear,
+        line_start,
+        props,
+        geometry.loaded_footprint,
+        scenario.bounds,
+        config,
+        occupancy=occupancy,
+        deadline=deadline,
+    )
+    directions = np.asarray(result.directions)
+    record = {"status": result.status, "refused": None, "length_m": None, "along_min_m": None,
+              "along_max_m": None, "lateral_max_m": None, "expansions": int(result.expanded_nodes),
+              "search_attempts": [list(a) for a in (result.search_attempts or ())],
+              "gear_changes": int((directions[1:] != directions[:-1]).sum()) if len(directions) > 1 else 0}
+    if not result.success:
+        record["refused"] = "no_path"
+        return None, record
+    heading = np.array([cos(line_start.yaw_rad), sin(line_start.yaw_rad)])
+    offsets = np.asarray(result.poses, dtype=float)[:, :2] - np.array([line_start.x_m, line_start.y_m])
+    along = offsets @ heading
+    lateral = offsets @ np.array([-heading[1], heading[0]])
+    record.update(length_m=float(result.length_m), along_min_m=float(along.min()), along_max_m=float(along.max()),
+                  lateral_max_m=float(np.abs(lateral).max()))
+    if along.min() < -behind_m or along.max() > keep_m + ahead_margin_m or np.abs(lateral).max() > lateral_m:
+        record["refused"] = "leaves_box"
+    elif result.length_m > max_length_m:
+        record["refused"] = "too_long"
+    return (None if record["refused"] else result), record
+
+
+def redraw_docking(
+    scenario: TransportScenario,
+    current_rear: Pose2D,
+    target_pickup: PalletSite,
+    config: PlannerConfig | None = None,
+    *,
+    geometry: SyntheticMissionGeometry | None = None,
+    pickup_bounds: Bounds | None = None,
+    occupancy=None,
+    pickup_obstacle: Rectangle | None = None,
+    docking_occupancy=None,
+    dry_runs: Sequence = (),
+    max_lateral_m: float = 0.05,
+    max_yaw_rad: float = 0.05,
+    min_length_m: float = 0.3,
+    dry_ahead_m: float = 0.006,
+    dry_lateral_m: float = 0.006,
+    dry_yaw_rad: float = 0.015,
+) -> tuple[dict | None, dict]:
+    """The docking straights re-drawn for a new pallet estimate from where the truck
+    stands (plan D8 S4b, a correction point).
+
+    The approach is the rest of the new prealign-approach line (straight_from_pose,
+    the near capture's box); the insertion and the extraction are plan_transport's,
+    with its checks: the approach straight against the props and the perceived pallet
+    at the approach clearance, the insertion and extraction straights against the props
+    -- on docking_occupancy when given, else occupancy. Each of dry_runs (callables
+    taking the approach straight and returning a RolloutResult) must arrive with its
+    last pose within dry_ahead_m past the goal, dry_lateral_m across the new line and
+    dry_yaw_rad of its heading (the tracker's own stop leaves it up to its position
+    tolerance short, which "arrived" bounds), and its trajectory must pass the
+    approach straight's check. Returns ({"approach", "insert", "extract"}, record) or
+    (None, record) with the first refusal in record["refused"].
+    """
+    geometry = geometry if geometry is not None else SyntheticMissionGeometry()
+    config = config if config is not None else make_transport_planner_config()
+    props = [prop.rectangle for prop in scenario.props]
+    pickup = site_poses(target_pickup, geometry)
+    pallet = (
+        pickup_obstacle
+        if pickup_obstacle is not None
+        else Rectangle(
+            target_pickup.x_m,
+            target_pickup.y_m,
+            geometry.pallet_depth_m,
+            geometry.pallet_width_m,
+            target_pickup.yaw_rad,
+        )
+    )
+    near_bounds = pickup_bounds if pickup_bounds is not None else scenario.bounds
+    approach_clearance = min(config.clearance_m, geometry.approach_gap_m / 2)
+    docking_clearance = (
+        approach_clearance if occupancy is not None else config.clearance_m
+    )
+    grid = docking_occupancy if docking_occupancy is not None else occupancy
+    straight, offsets = straight_from_pose(
+        current_rear,
+        pickup["prealign"],
+        pickup["approach"],
+        max_lateral_m=max_lateral_m,
+        max_yaw_rad=max_yaw_rad,
+        min_length_m=min_length_m,
+    )
+    record = {
+        "offsets": offsets,
+        "refused": None,
+        "dry_runs": [],
+        "target": [target_pickup.x_m, target_pickup.y_m, target_pickup.yaw_rad],
+    }
+
+    def approach_clear(poses) -> bool:
+        return collision_free_path(
+            poses,
+            props + [pallet],
+            geometry.unloaded_footprint,
+            near_bounds,
+            margin_m=approach_clearance,
+            max_step_m=0.04,
+            occupancy=grid,
+        )
+
+    if straight is None:
+        record["refused"] = "box"
+        return None, record
+    if not approach_clear(straight.poses):
+        record["refused"] = "approach_collision"
+        return None, record
+    end = pickup["approach"]
+    heading = np.array([cos(end.yaw_rad), sin(end.yaw_rad)])
+    for dry_run in dry_runs:
+        dry = dry_run(straight)
+        last = np.asarray(
+            dry.trajectory[-1] if dry.trajectory else (np.nan,) * 3, dtype=float
+        )
+        offset = last[:2] - np.array([end.x_m, end.y_m])
+        entry = {
+            "status": dry.status,
+            "position_error_m": float(dry.position_error_m),
+            "yaw_error_rad": float(dry.yaw_error_rad),
+            "time_s": float(dry.time_s),
+            "end_ahead_m": float(offset @ heading),
+            "end_lateral_m": float(offset @ np.array([-heading[1], heading[0]])),
+            "end_yaw_rad": float(
+                np.arctan2(np.sin(last[2] - end.yaw_rad), np.cos(last[2] - end.yaw_rad))
+            ),
+            "trajectory_samples": len(dry.trajectory),
+        }
+        record["dry_runs"].append(entry)
+        if not (
+            dry.status == "arrived"
+            and entry["end_ahead_m"] <= dry_ahead_m
+            and abs(entry["end_lateral_m"]) <= dry_lateral_m
+            and abs(entry["end_yaw_rad"]) <= dry_yaw_rad
+        ):
+            record["refused"] = "dry_run"
+            return None, record
+        entry["swept_clear"] = approach_clear(np.asarray(dry.trajectory, dtype=float))
+        if not entry["swept_clear"]:
+            record["refused"] = "dry_run_collision"
+            return None, record
+    insert = _straight_plan(
+        pickup["approach"],
+        pickup["inserted"],
+        1,
+        props,
+        geometry.unloaded_footprint,
+        near_bounds,
+        docking_clearance,
+        grid,
+    )
+    if not insert.success:
+        record["refused"] = f"insert:{insert.status}"
+        return None, record
+    extract = _straight_plan(
+        pickup["inserted"],
+        pickup["extracted"],
+        -1,
+        props,
+        geometry.loaded_footprint,
+        near_bounds,
+        0.0 if occupancy is not None else config.clearance_m,
+        grid,
+    )
+    if not extract.success:
+        record["refused"] = f"extract:{extract.status}"
+        return None, record
+    return {"approach": straight, "insert": insert, "extract": extract}, record
 
 
 def plan_return_leg(
@@ -718,32 +1076,256 @@ def plan_return_leg(
     *,
     geometry: SyntheticMissionGeometry | None = None,
     travel_config: PlannerConfig | None = None,
+    occupancy=None,
+    deadline=None,
+    forward_turnaround: bool = False,
+    turnaround_check=None,
 ) -> PlanResult:
     """The unloaded return leg alone, as plan_transport's return_home stage.
 
     For replanning from the measured pose after a SLAM correction is applied
     at the destination (docs/plans/2026-10-04-online-slam-closed-loop.md); the
     delivered pallet is an obstacle, as in plan_transport.
+
+    forward_turnaround (docs/plans/2026-10-12-return-forward-turnaround.md): the plan
+    the truck sets off home with, from the withdrawal end, also weighs turning round
+    first -- see _return_turnaround. turnaround_check, given poses (N, 3) of a
+    turnaround arc from start_rear, returns None when the arc may be driven now or the
+    reason it may not (the runner: the drive permission's snapshot). Off, the result is
+    the direct plan exactly as before.
     """
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
     config = config if config is not None else make_transport_planner_config()
     travel_config = travel_config if travel_config is not None else config
-    props = [prop.rectangle for prop in scenario.props]
-    delivered = Rectangle(
-        scenario.destination.x_m,
-        scenario.destination.y_m,
-        geometry.pallet_depth_m,
-        geometry.pallet_width_m,
-        scenario.destination.yaw_rad,
-    )
-    return _search(
+    obstacles, footprint, bounds = leg_obstacles("return", scenario, geometry)
+    started = time.monotonic()
+    direct = _search(
         start_rear,
         return_to,
-        props + [delivered],
-        geometry.unloaded_footprint,
-        scenario.bounds,
+        obstacles,
+        footprint,
+        bounds,
         travel_config,
+        occupancy=occupancy,
+        deadline=deadline,
     )
+    if not forward_turnaround:
+        return direct
+    return _return_turnaround(
+        start_rear, return_to, obstacles, footprint, bounds, travel_config, direct,
+        occupancy=occupancy, deadline=deadline, check=turnaround_check, started=started,
+    )
+
+
+# Return-leg forward preference (2026-10-12, user: prefer driving forward; plan
+# docs/plans/2026-10-12-return-forward-turnaround.md). The unloaded return starts at the
+# withdrawal end facing the delivered pallet, home usually behind the truck, and the search's
+# root goal shot is taken whenever it is collision-free and within the length cap: seed 5 of
+# the recorded mission reversed all 22.8 m home. Raising reverse_penalty does not reach it (the
+# root shot is taken before any comparison) and a capped root shot leaves the search to turn
+# round on a heuristic that ignores heading -- 41,536 expansions and 28 s at reverse weight 2.0,
+# a timeout within the runner's 20 s. Instead the plan the truck sets off with compares the
+# direct plan with full-lock reverse arcs to either side, each followed by one search home.
+RETURN_TURNAROUND_TRIGGER_M = 3.0  # direct plans reversing at most this are kept as they are
+# Policy value, not a measurement: reverse length counts this many times forward length when
+# whole return paths are compared (the search itself keeps the travel config's own weights). With 2.0
+# the live-grid run of the recorded seed 5 (Isaac v6) kept the direct, all-reverse return (best
+# turnaround 47.9 against 47.3); after seeing that, 3.0 was adopted provisionally to weigh the user's
+# preference for driving forward more strongly. It was tuned on that seed's result and does not
+# guarantee a forward return; whether it generalises is checked on independent runs.
+RETURN_TURNAROUND_REVERSE_WEIGHT = 3.0
+# Each side: 5 arcs, 10 candidates. 15-degree steps from 45 (20 candidates) chose 60-150 degrees on the
+# 45 recorded and planned starts of tools/return_turnaround_check.py, neighbours within about one cost
+# unit, and needed up to 14 s on ws1 (2026-10-12, artifacts/20261012_return_forward/check.json).
+RETURN_TURNAROUND_ANGLES_DEG = (60, 90, 120, 150, 180)
+# Provisional tuning value, not a measurement or a stability guarantee: the turnaround's own moves (the
+# reverse arc and the search home after it) plan at this curvature, below the travel config's 0.29 1/m, to
+# ease the tracker's load (its 0.36 1/m limit minus the plan's curvature: 0.07 -> 0.11 1/m, a difference of
+# limits, not a measured error budget). Tried after Isaac v4 of the recorded seed 5 (ws1
+# artifacts/20261012_return_forward/seed_5_fwd4): it chose the turnaround, but on the 92-degree full-lock turn
+# into the parking cusp near home the command sat at the tracker's 0.36 limit for about 6 s and the truck
+# stopped 0.115 m off the cusp (cusp_position_stall), while the ideal bicycle rollout of the same path
+# arrived within 2.5 mm. Whether the steering response or SLAM pose changes made that demand is not
+# separated (45a0259 found the 0.29 / 0.36 margin not short by itself), and the lower curvature also changes
+# the chosen path's shape. The direct plan is unchanged; min() keeps a gentler caller curvature.
+RETURN_TURNAROUND_CURVATURE_INV_M = 0.25
+RETURN_TURNAROUND_EXPANSIONS = 8000  # one candidate's search (a single attempt, no ladder)
+RETURN_TURNAROUND_TOTAL_EXPANSIONS = 60000  # every candidate's search together
+# Time safety only: the candidates stop at the first of the caller's deadline (an absolute time,
+# or a SearchBudget counted from the call's start, so the direct plan and the candidates share
+# it) and this many seconds after the direct plan; a candidate finished after that is dropped.
+# The record says so. Results are deterministic as long as it does not fire.
+# 18 s: the runner gives the live return plan 20 s; the simulator waits for it (Isaac v5 ran out of 10 s).
+RETURN_TURNAROUND_MAX_S = 18.0
+
+
+def path_terms(path: PlanResult, config: PlannerConfig, reverse_weight: float) -> dict:
+    """A whole path's forward and reverse length, gear changes and cost for comparing whole
+    return paths -- its own objective, built from the planner's terms: length, reverse length
+    weighted reverse_weight, gear changes, steering and steering change (from straight at the
+    start) at config's penalties. The search itself does not charge steering on its analytic
+    shots, so this is not the search's cost. Lengths are summed over the path samples."""
+    poses = np.asarray(path.poses, dtype=float)
+    if len(poses) < 2:
+        return {"forward_m": 0.0, "reverse_m": 0.0, "gear_changes": 0, "cost": 0.0}
+    seg = np.hypot(np.diff(poses[:, 0]), np.diff(poses[:, 1]))
+    gear = np.asarray(path.directions, dtype=int)[1:]
+    steer = np.asarray(path.curvatures_inv_m, dtype=float)[1:] / config.curvature_limit_inv_m
+    forward = float(seg[gear > 0].sum())
+    reverse = float(seg[gear < 0].sum())
+    changes = int(np.count_nonzero(np.diff(gear)))
+    cost = (
+        forward
+        + reverse_weight * reverse
+        + config.gear_change_penalty_m * changes
+        + config.steering_penalty * float((seg * np.abs(steer)).sum())
+        + config.steering_change_penalty_m * (abs(float(steer[0])) + float(np.abs(np.diff(steer)).sum()))
+    )
+    return {"forward_m": forward, "reverse_m": reverse, "gear_changes": changes, "cost": float(cost)}
+
+
+def _join_turnaround(start_pose, arc, curvature, arc_m: float, sub: PlanResult, sub_config: PlannerConfig,
+                     direct: PlanResult) -> PlanResult:
+    """The reverse arc (start_pose + its samples) followed by the search from its end, one
+    PlanResult in the array contract: sample zero and the arc samples carry the arc's
+    controls, the search's first pose (the arc end) is not repeated."""
+    arc_poses = np.asarray([start_pose, *arc], dtype=float)
+    attempt = (
+        sub_config.analytic_expansion_interval, sub.status, int(sub.expanded_nodes),
+        sub_config.xy_resolution_m, sub_config.yaw_resolution_rad, sub_config.collision_step_m,
+        sub_config.primitive_length_m, sub_config.max_expansions,
+        int(sub.pruned_children), int(sub.superseded_pops),
+    )
+    return replace(
+        sub,
+        poses=np.vstack([arc_poses, sub.poses[1:]]),
+        directions=np.concatenate([np.full(len(arc_poses), -1, dtype=np.int8), sub.directions[1:]]),
+        curvatures_inv_m=np.concatenate([np.full(len(arc_poses), float(curvature)), sub.curvatures_inv_m[1:]]),
+        length_m=float(arc_m) + float(sub.length_m),  # both continuous lengths
+        analytic_expansion_interval=sub_config.analytic_expansion_interval,
+        search_attempts=tuple(direct.search_attempts) + (attempt,),
+    )
+
+
+def _return_turnaround(start_rear, return_to, obstacles, footprint, bounds, config, direct, *,
+                       occupancy=None, deadline=None, check=None, started=None) -> PlanResult:
+    """The direct return plan, or a turnaround home when that is cheaper.
+
+    When the direct plan reverses more than RETURN_TURNAROUND_TRIGGER_M, each candidate is a
+    full-lock reverse arc from the start (left and right, RETURN_TURNAROUND_ANGLES_DEG, at
+    RETURN_TURNAROUND_CURVATURE_INV_M), swept against the same rectangles and grid at the search's
+    clearance and passed by ``check`` when given, followed by one Hybrid A* search (no retry
+    ladder) from the arc end home; the searches run cheapest lower bound first and are skipped
+    when the bound cannot beat the best so far. Every successful candidate and the direct plan are compared on path_terms at
+    RETURN_TURNAROUND_REVERSE_WEIGHT; the cheapest is kept, the direct plan on a tie. This is
+    the cheapest of what was evaluated, not an optimum of the weighted cost. The result's
+    ``turnaround`` records the comparison."""
+    weight = RETURN_TURNAROUND_REVERSE_WEIGHT
+    record = {
+        "trigger_m": RETURN_TURNAROUND_TRIGGER_M,
+        "reverse_weight": weight,
+        # The candidates' arc and search curvature, and the one path_terms normalises steering by.
+        "candidate_curvature_inv_m": min(config.curvature_limit_inv_m, RETURN_TURNAROUND_CURVATURE_INV_M),
+        "cost_curvature_inv_m": config.curvature_limit_inv_m,
+        "direct": {"status": direct.status},
+        "chosen": "direct",
+        "evaluated": False,
+        "candidates": [],
+        "expansions": 0,
+        "timed_out": False,
+    }
+    if not direct.success:
+        return replace(direct, turnaround=record)
+    record["direct"].update(path_terms(direct, config, weight))
+    if record["direct"]["reverse_m"] <= RETURN_TURNAROUND_TRIGGER_M:
+        return replace(direct, turnaround=record)
+    record["evaluated"] = True
+    limit = time.monotonic() + RETURN_TURNAROUND_MAX_S
+    if isinstance(deadline, SearchBudget):
+        limit = min(limit, (started if started is not None else time.monotonic()) + float(deadline.seconds))
+    elif deadline is not None:
+        limit = min(limit, float(deadline))
+    checker = make_checker(obstacles, footprint, bounds, occupancy)
+    field = None  # the candidates' searches share one obstacle heuristic (same goal and grid)
+    move_config = replace(
+        config, curvature_limit_inv_m=min(config.curvature_limit_inv_m, RETURN_TURNAROUND_CURVATURE_INV_M)
+    )
+    k = move_config.curvature_limit_inv_m
+    start_pose = (start_rear.x_m, start_rear.y_m, _wrap(start_rear.yaw_rad))
+    best_cost, best, best_name = record["direct"]["cost"], direct, "direct"
+    spent = 0
+    # 1. Every arc, in the fixed order: swept against the rectangles and grid, then the check.
+    ready = []
+    for side in (1, -1):
+        for degrees in RETURN_TURNAROUND_ANGLES_DEG:
+            entry = {"name": f"reverse_arc:{side:+d}:{degrees}"}
+            record["candidates"].append(entry)
+            if time.monotonic() > limit:  # the arcs' own checks share the limit too
+                entry["status"] = "skipped_time"
+                record["timed_out"] = True
+                continue
+            curvature = side * k
+            arc_m = degrees * pi / 180 / k
+            arc = _sample_arc(start_pose, arc_m, -1, curvature, checker, move_config)
+            if arc is None:
+                entry["status"] = "arc_blocked"
+                continue
+            if check is not None:
+                why = check(np.asarray([start_pose, *arc], dtype=float))
+                if why is not None:
+                    entry["status"] = f"arc_not_permitted:{why}"
+                    continue
+            # A lower bound on the candidate's whole path_terms cost: the arc's own terms over its samples
+            # (path_terms sums chords, not the analytic length -- Codex 2026-10-12 6th P2) plus the
+            # straight-line distance from its end home (the search home costs at least its length;
+            # the cusp's gear change and any further steering change cost at least 0).
+            arc_xy = np.asarray([start_pose, *arc], dtype=float)[:, :2]
+            chord_m = float(np.hypot(*np.diff(arc_xy, axis=0).T).sum())
+            steer = abs(curvature) / config.curvature_limit_inv_m
+            bound = (weight + config.steering_penalty * steer) * chord_m + config.steering_change_penalty_m * steer
+            bound += float(np.hypot(arc[-1][0] - return_to.x_m, arc[-1][1] - return_to.y_m))
+            entry["lower_bound"] = bound
+            ready.append((bound, len(ready), entry, curvature, arc_m, arc))
+    # 2. Searches cheapest bound first (Isaac v5: under the simulator's load the fixed order spent the
+    # time safety on the far side's arcs before reaching the near side's), none whose bound cannot
+    # beat the best so far.
+    for bound, _, entry, curvature, arc_m, arc in sorted(ready, key=lambda item: item[:2]):
+        if time.monotonic() > limit:
+            entry["status"] = "skipped_time"
+            record["timed_out"] = True
+            continue
+        if bound >= best_cost - 1e-9:
+            entry["status"] = "pruned"
+            continue
+        if spent >= RETURN_TURNAROUND_TOTAL_EXPANSIONS:
+            entry["status"] = "skipped_budget"
+            continue
+        sub_config = replace(
+            move_config,
+            max_expansions=min(RETURN_TURNAROUND_EXPANSIONS, RETURN_TURNAROUND_TOTAL_EXPANSIONS - spent),
+        )
+        if field is None:
+            field = obstacle_heuristic_field(return_to, obstacles, footprint, bounds, config, occupancy)
+        sub = plan_hybrid_astar(
+            Pose2D(*arc[-1]), return_to, obstacles, footprint, bounds, sub_config,
+            occupancy=occupancy, deadline=limit, obstacle_field=field,
+        )
+        spent += int(sub.expanded_nodes)
+        entry.update(status=sub.status, expansions=int(sub.expanded_nodes))
+        if sub.status == "timeout" or time.monotonic() > limit:
+            record["timed_out"] = True
+            if sub.success:
+                entry["status"] = "late"  # finished after the limit: not compared
+            continue
+        if not sub.success:
+            continue
+        joined = _join_turnaround(start_pose, arc, curvature, arc_m, sub, sub_config, direct)
+        terms = path_terms(joined, config, weight)
+        entry.update(terms)
+        if terms["cost"] < best_cost - 1e-9:
+            best_cost, best, best_name = terms["cost"], joined, entry["name"]
+    record.update(chosen=best_name, expansions=spent)
+    return replace(best, turnaround=record)
 
 
 def plan_transport(
@@ -757,6 +1339,10 @@ def plan_transport(
     pickup_bounds: Bounds | None = None,
     travel_config: PlannerConfig | None = None,
     trace: list | None = None,
+    occupancy=None,
+    pickup_obstacle: Rectangle | None = None,
+    docking_occupancy=None,
+    deadline=None,
 ) -> MissionPlan:
     """Plan all stages with exact final straight approaches and loaded geometry.
 
@@ -782,6 +1368,14 @@ def plan_transport(
     the step that failed -- search and appended straight parts separately --
     because a failed MissionPlan keeps no paths. Anything with ``append``
     works; the plan returned is the same with or without it.
+    occupancy / pickup_obstacle (priority-5 plan): a LiDAR occupancy grid
+    checked with every stage, and the perceived pallet rectangle in place of
+    scenario.pickup as the approach obstacle. docking_occupancy, when given,
+    replaces occupancy from the approach straight on -- typically a
+    grid_collision.SplitOccupancy: the body on the full grid, the forks (or
+    the carried pallet) on the grid with the perceived pallet's band cleared,
+    since the forks must enter what the LiDAR sees as the pallet (plan D5).
+    The runner replans the travel legs on the live grid when they start.
     """
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
     config = config if config is not None else make_transport_planner_config()
@@ -813,7 +1407,7 @@ def plan_transport(
         target_pickup if target_pickup is not None else scenario.pickup, geometry
     )
     destination = site_poses(scenario.destination, geometry)
-    pallet = Rectangle(
+    pallet = pickup_obstacle if pickup_obstacle is not None else Rectangle(
         scenario.pickup.x_m,
         scenario.pickup.y_m,
         geometry.pallet_depth_m,
@@ -833,6 +1427,8 @@ def plan_transport(
             geometry.unloaded_footprint,
             near_bounds,
             approach_config,
+            occupancy=occupancy,
+            deadline=deadline,
         ),
     )
     if not approach.success:
@@ -847,11 +1443,17 @@ def plan_transport(
             geometry.unloaded_footprint,
             near_bounds,
             approach_config.clearance_m,
+            docking_occupancy if docking_occupancy is not None else occupancy,
         ),
     )
     if not approach_tail.success:
         return MissionPlan(False, f"approach:{approach_tail.status}")
     approach = _append_straight(approach, approach_tail)
+    # On a grid (priority-5 D3) the marks are already swollen by the placement
+    # error, so the docking straights keep the approach's clearance instead of
+    # adding the full one on top (L3c seed 4: a prop 0.5 m beside the insert
+    # line failed only at 0.10 m). Without a grid, as before.
+    docking_clearance = approach_config.clearance_m if occupancy is not None else config.clearance_m
     insert = note(
         "insert",
         _straight_plan(
@@ -861,7 +1463,8 @@ def plan_transport(
             props,
             geometry.unloaded_footprint,
             near_bounds,
-            config.clearance_m,
+            docking_clearance,
+            docking_occupancy if docking_occupancy is not None else occupancy,
         ),
     )
     if not insert.success:
@@ -875,7 +1478,11 @@ def plan_transport(
             props,
             geometry.loaded_footprint,
             near_bounds,
-            config.clearance_m,
+            # The lifted pallet backs out along the footprint it stood on, so its
+            # gap to a neighbour exists by construction; on a grid no clearance
+            # is added to the swelling (L3c seed 4: a prop beside the pallet).
+            0.0 if occupancy is not None else config.clearance_m,
+            docking_occupancy if docking_occupancy is not None else occupancy,
         ),
     )
     if not extract.success:
@@ -889,8 +1496,28 @@ def plan_transport(
             geometry.loaded_footprint,
             scenario.bounds,
             travel_config,
+            occupancy=docking_occupancy if docking_occupancy is not None else occupancy,
+            deadline=deadline,
         ),
     )
+    if transport.status == "invalid_start" and occupancy is not None:
+        # The extracted pose sits where the pallet was: within the travel
+        # clearance of a grid mark beside it (L3c seed 4). As the runner's
+        # replans do, once more with no clearance -- the swelling holds the
+        # placement error and the permission guards every tick.
+        transport = note(
+            "transport_search_tight",
+            _search(
+                pickup["extracted"],
+                destination["predelivery"],
+                props,
+                geometry.loaded_footprint,
+                scenario.bounds,
+                replace(travel_config, clearance_m=0.0),
+                occupancy=docking_occupancy if docking_occupancy is not None else occupancy,
+                deadline=deadline,
+            ),
+        )
     if not transport.success:
         return MissionPlan(False, f"transport:{transport.status}")
     transport_tail = note(
@@ -903,6 +1530,7 @@ def plan_transport(
             geometry.loaded_footprint,
             scenario.bounds,
             config.clearance_m,
+            docking_occupancy if docking_occupancy is not None else occupancy,
         ),
     )
     if not transport_tail.success:
@@ -918,6 +1546,7 @@ def plan_transport(
             geometry.unloaded_footprint,
             scenario.bounds,
             config.clearance_m,
+            docking_occupancy if docking_occupancy is not None else occupancy,
         ),
     )
     if not withdraw.success:
@@ -942,6 +1571,8 @@ def plan_transport(
             geometry.unloaded_footprint,
             scenario.bounds,
             travel_config,
+            occupancy=docking_occupancy if docking_occupancy is not None else occupancy,
+            deadline=deadline,
         ),
     )
     if not return_home.success:

@@ -105,6 +105,18 @@ def association_gate(observation, association):
     )
 
 
+def with_frame_target(tracking_settings: dict, frame, blades=None) -> dict:
+    """The controller settings with the target front x of the chassis model's tracking
+    frame (plan D8a) and, given the model's blades (base-frame (x0, x1, y0, y1) each), their
+    centre |y| and width -- the fork spacing is a test setting of the model, not the
+    controller's default (EPAL 6 fork spacing plan, S0.2); the YAML left as it is."""
+    controller = {**tracking_settings["controller"], "target_front_x_m": frame.target_front_x_m}
+    if blades is not None:
+        controller["fork_center_y_m"] = sum(abs(b[2] + b[3]) / 2 for b in blades) / len(blades)
+        controller["fork_width_m"] = max(b[3] - b[2] for b in blades)
+    return {**tracking_settings, "controller": controller}
+
+
 def run(app, args, state):
     import yaml
     from perception_camera import (
@@ -133,6 +145,13 @@ def run(app, args, state):
     state["tracking_settings_synthetic"] = tracking_settings
     pallet_geometry_path = root / "config/pallet_geometry_epal6.yaml"
     pallet_geometry = load_pallet_geometry(pallet_geometry_path)
+    # Plan D8a: the drive geometry, fork tip and target front x come from the chassis
+    # model and the insertion rule, not constants (same values on the provisional model).
+    from insertion_geometry import read_fork_blades_m, tracking_frame
+
+    frame = tracking_frame(args.forklift_urdf, pallet_geometry)
+    state["tracking_frame"] = asdict(frame)
+    tracking_settings = with_frame_target(tracking_settings, frame, read_fork_blades_m(args.forklift_urdf))
     files = [
         *Path(__file__).parent.glob("*.py"),
         *Path(forklift_core.__file__).parent.rglob("*.py"),
@@ -264,6 +283,7 @@ def run(app, args, state):
             args,
             reference_target=target,
             pallet_geometry=pallet_geometry,
+            frame=frame,
         )
     )
 
@@ -283,13 +303,14 @@ def follow_pockets(
     *,
     reference_target,
     pallet_geometry=None,
+    frame,
 ):
     from insertion_geometry import InsertionGeometry
     from isaacsim.core.utils.types import ArticulationAction
     from perception_camera import acquire_frozen_snapshot, save_snapshot
     from PIL import Image, ImageDraw
 
-    from forklift_core.control import AckermannGeometry, ackermann_command
+    from forklift_core.control import ackermann_command
     from forklift_core.control.pocket_insertion import (
         PocketInsertionConfig,
         PocketInsertionController,
@@ -310,7 +331,7 @@ def follow_pockets(
 
         require(pallet_geometry is not None, "Roof tracking requires known geometry")
         handoff = RoofHandoff(**roof_settings)
-    geometry = AckermannGeometry(0.64, 0.51, 0.135, 0.45, 8.0)
+    geometry = frame.drive
     guard = InsertionGeometry.from_urdfs(args.forklift_urdf, args.pallet_urdf)
     names = list(robot.dof_names)
     wheels = np.array(
@@ -667,7 +688,7 @@ def follow_pockets(
         if loss_pose is None
         else float(np.linalg.norm(final_base[:2] - loss_pose[:2])),
         "evaluation_actual_front_x_m": front_gap,
-        "evaluation_fork_tip_to_front_m": front_gap - 0.95,
+        "evaluation_fork_tip_to_front_m": front_gap - frame.fork_tip_x_m,
         "evaluation_lateral_error_m": lateral_error,
         "evaluation_yaw_error_rad": yaw_error,
         "evaluation_final_forbidden_contacts": final_contacts,

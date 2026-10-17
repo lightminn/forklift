@@ -7,6 +7,7 @@ continuous swept clearance between updates.
 """
 
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -14,7 +15,12 @@ from numpy.typing import ArrayLike
 
 from forklift_core.control.path_tracking import AckermannGeometry
 from forklift_core.geometry import rotation_matrix_from_quaternion_xyzw
-from forklift_core.perception.pallet_geometry import PalletGeometry, pallet_boxes
+from forklift_core.perception.pallet_geometry import (
+    INSERTION_RESERVE_M,
+    PalletGeometry,
+    pallet_boxes,
+    target_insertion_depth_m,
+)
 
 
 def _vector(value: ArrayLike) -> np.ndarray:
@@ -138,6 +144,88 @@ def read_carriage_limit_m(forklift_urdf: Path) -> float:
     if not fronts:
         raise ValueError("Missing carriage_cross collision boxes")
     return tip - max(fronts)
+
+
+def read_carriage_front_corners_m(forklift_urdf: Path) -> tuple:
+    """Plan D8 S4a-2: the base-frame front corners ((x, +y), (x, -y)) of the carriage
+    without its blades -- the frontmost x and the widest y of every non-blade carriage box
+    (cross members, sides, heels, grille), so the two corners cover its whole outline."""
+    truck = ET.parse(forklift_urdf).getroot()
+    carriage = _base_position_m(truck, "fork_lift")
+    link = truck.find("link[@name='fork_carriage']")
+    if link is None:
+        raise ValueError("Missing fork_carriage link")
+    boxes = [
+        (carriage[0] + center[0] + half[0], carriage[1] + center[1] - half[1], carriage[1] + center[1] + half[1])
+        for name, center, half in _boxes(link)
+        if not name.endswith("_fork_collision")
+    ]
+    if not boxes:
+        raise ValueError("Missing carriage collision boxes")
+    front = float(max(b[0] for b in boxes))
+    return ((front, float(max(b[2] for b in boxes))), (front, float(min(b[1] for b in boxes))))
+
+
+@dataclass(frozen=True)
+class TrackingFrame:
+    """Base-frame x of the fork tip and carriage front, the insertion target and the
+    pallet front-face x at that target, and the drive geometry -- one chassis model,
+    one insertion rule (plan D8a: the near-field tracking reads these, not constants)."""
+
+    fork_tip_x_m: float
+    carriage_front_x_m: float
+    carriage_limit_m: float
+    reserve_m: float
+    insertion_target_m: float
+    target_front_x_m: float
+    drive: AckermannGeometry
+
+
+def tracking_frame(
+    forklift_urdf: Path,
+    pallet_geometry: PalletGeometry,
+    reserve_m: float = INSERTION_RESERVE_M,
+    max_wheel_rate_rad_s: float = 8.0,
+) -> TrackingFrame:
+    """Plan D8a: the near-field tracking frame of a chassis model under the insertion
+    rule min(depth x 0.6, carriage limit - reserve) (ADR 0004 D3)."""
+    axle_to_tip, rear = read_chassis_reference_m(forklift_urdf)
+    tip = axle_to_tip + rear
+    limit = read_carriage_limit_m(forklift_urdf)
+    target = target_insertion_depth_m(pallet_geometry.overall_depth_m, limit, reserve_m)
+    return TrackingFrame(
+        fork_tip_x_m=tip,
+        carriage_front_x_m=tip - limit,
+        carriage_limit_m=limit,
+        reserve_m=float(reserve_m),
+        insertion_target_m=target,
+        target_front_x_m=tip - target,
+        drive=read_drive_geometry_m(forklift_urdf, max_wheel_rate_rad_s),
+    )
+
+
+def read_fork_blades_m(forklift_urdf: Path) -> tuple:
+    """Base-frame (x0, x1, y0, y1) of each fork blade collision box, lowered.
+
+    The drive permission checks the body and these blades, not their hull: the
+    gap between the blades is not the truck (plan D4).
+    """
+    truck = ET.parse(forklift_urdf).getroot()
+    carriage = _base_position_m(truck, "fork_lift")
+    link = truck.find("link[@name='fork_carriage']")
+    if link is None:
+        raise ValueError("Missing fork_carriage link")
+    blades = tuple(
+        (
+            float(carriage[0] + center[0] - half[0]), float(carriage[0] + center[0] + half[0]),
+            float(carriage[1] + center[1] - half[1]), float(carriage[1] + center[1] + half[1]),
+        )
+        for name, center, half in _boxes(link)
+        if name.endswith("_fork_collision")
+    )
+    if len(blades) != 2:
+        raise ValueError("Expected two *_fork_collision boxes")
+    return blades
 
 
 def _cylinder_radius_m(truck: ET.Element, link_name: str) -> float:

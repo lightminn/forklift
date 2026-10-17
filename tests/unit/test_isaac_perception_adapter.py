@@ -916,7 +916,14 @@ def test_the_carriage_mount_is_lower_further_back_and_tilted_down():
     assert optical_z_in_base[0] == pytest.approx(np.cos(0.10), abs=1e-12)
 
 
-@pytest.mark.parametrize("name", ["legacy", "carriage_low"])
+def test_the_measured_carriage_mount_is_the_same_mount_0_06_m_forward():
+    low = MODULE.mount_base_from_optical("carriage_low")
+    measured = MODULE.mount_base_from_optical("carriage_low_measured")
+    np.testing.assert_allclose(measured.translation_m, [0.619, 0.0, 0.27])
+    np.testing.assert_allclose(np.asarray(measured.rotation), np.asarray(low.rotation), atol=1e-12)
+
+
+@pytest.mark.parametrize("name", ["legacy", "carriage_low", "carriage_low_measured"])
 def test_the_mount_quaternion_round_trips(name):
     rotation = np.asarray(MODULE.mount_base_from_optical(name).rotation)
     q = MODULE.quaternion_xyzw(rotation)

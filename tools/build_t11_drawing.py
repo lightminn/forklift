@@ -373,9 +373,10 @@ def verification(g: PalletGeometry) -> dict:
             "reserve_m": INSERTION_RESERVE_M,
             "target_m": target,
             "remaining_to_carriage_m": CARRIAGE_INSERTION_LIMIT_M - target,
-            "source": "사용자 지정 min(D×0.6, 406−46) mm; "
+            "source": f"사용자 지정 min(D×0.6, 406−{INSERTION_RESERVE_M * 1000:.0f}) mm "
+            "(여유 46 → 16 mm, 2026-10-08 사용자 결정, ADR 0004 D3 개정); "
             + line_ref(ADR3, "최대 삽입 406 mm, 목표 깊이 360 mm")
-            + "; 406 = 950−544; 46 = 406−360",
+            + "; 406 = 950−544",
         },
     }
 

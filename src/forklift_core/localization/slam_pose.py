@@ -20,6 +20,7 @@ from forklift_core._validation import _finite_scalar
 from forklift_core.localization.wheel_odometry import (
     AckermannOdometryGeometry,
     _curvature_inv_m,
+    advance_arc,
 )
 
 
@@ -56,8 +57,42 @@ class IncrementalWheelOdometry:
         self.geometry = geometry
         self.pose = [_finite_scalar(v, "initial pose") for v in initial_pose]
         self._last = None  # (stamp, speed, curvature)
+        self._path = None  # "rates" or "increments": one object integrates one kind of input
+
+    def _use(self, path: str) -> None:
+        if self._path not in (None, path):
+            raise ValueError(f"this odometry integrates {self._path}, not {path}")
+        self._path = path
+
+    def update_increments(self, stamp_s, rear_wheel_increments_rad, steering_rad) -> tuple[float, float, float]:
+        """integrate_wheel_odometry_increments one sample at a time, bit for bit: the increments are
+        the rear wheels' rotation over the interval ending at this stamp (ignored on the first)."""
+        self._use("increments")
+        stamp = _finite_scalar(stamp_s, "stamp_s")
+        increments = np.asarray(rear_wheel_increments_rad, dtype=float)
+        steering = np.asarray(steering_rad, dtype=float)
+        if increments.shape != (2,) or steering.shape != (2,):
+            raise ValueError("wheel increments and steering must each hold two values")
+        if not (np.isfinite(increments).all() and np.isfinite(steering).all()):
+            raise ValueError("wheel increments and steering must be finite")
+        if np.any(np.abs(steering) >= np.pi / 2):
+            raise ValueError("steering angles must be below pi/2")
+        curvature = float(_curvature_inv_m(steering[None, :], self.geometry)[0])
+        distance = 0.0
+        if self._last is not None:
+            last_stamp, _, last_curvature = self._last
+            if stamp - last_stamp <= 0:
+                raise ValueError("stamps must be strictly increasing")
+            distance = increments.mean() * self.geometry.wheel_radius_m
+            self.pose = list(advance_arc(*self.pose, distance, (last_curvature + curvature) / 2))
+            self.interval_speed = distance / (stamp - last_stamp)
+        else:
+            self.interval_speed = 0.0
+        self._last = (stamp, None, curvature)
+        return tuple(self.pose)
 
     def update(self, stamp_s, rear_wheel_rates_rad_s, steering_rad) -> tuple[float, float, float]:
+        self._use("rates")
         stamp = _finite_scalar(stamp_s, "stamp_s")
         rates = np.asarray(rear_wheel_rates_rad_s, dtype=float)
         steering = np.asarray(steering_rad, dtype=float)
@@ -307,11 +342,24 @@ class OdometryNoise:
         wheel_rate_std_rad_s: float = 0.2,
         steering_std_rad: float = 0.005,
         range_std_m: float = 0.02,
+        range_model: str = "constant",
+        range_spec_scale: float = 1.0,
     ):
         self.enabled = bool(enabled)
         self.wheel_rate_std_rad_s = wheel_rate_std_rad_s
         self.steering_std_rad = steering_std_rad
         self.range_std_m = range_std_m
+        # "constant": range_std_m on every beam. "a2m12": the RPLIDAR A2M12
+        # datasheet maximum error as sigma -- 1 % of range up to 3 m, 2 % to
+        # 5 m, 2.5 % beyond (week-6 spec-noise runs).
+        if range_model not in ("constant", "a2m12"):
+            raise ValueError("range_model must be 'constant' or 'a2m12'")
+        self.range_model = range_model
+        # sigma = scale x the datasheet row: 1.0 reads the maximum error as one
+        # sigma, 1/3 reads it as three sigma.
+        if not (math.isfinite(range_spec_scale) and range_spec_scale > 0):
+            raise ValueError("range_spec_scale must be positive")
+        self.range_spec_scale = float(range_spec_scale)
         self._ranges = np.random.default_rng([seed, 0])
         self._wheels = np.random.default_rng([seed, 1])
         self._steering = np.random.default_rng([seed, 2])
@@ -333,7 +381,12 @@ class OdometryNoise:
         if not self.enabled:
             return out
         measured = np.isfinite(out)
-        out[measured] += self._ranges.normal(0, self.range_std_m, int(measured.sum()))
+        if self.range_model == "a2m12":
+            r = out[measured]
+            sigma = np.where(r <= 3.0, 0.01, np.where(r <= 5.0, 0.02, 0.025)) * r * self.range_spec_scale
+            out[measured] += self._ranges.normal(0, 1.0, int(measured.sum())) * sigma
+        else:
+            out[measured] += self._ranges.normal(0, self.range_std_m, int(measured.sum()))
         out[measured] = np.clip(out[measured], range_min_m, range_max_m)
         return out
 

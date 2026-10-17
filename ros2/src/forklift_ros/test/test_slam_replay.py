@@ -106,6 +106,22 @@ def test_noise_is_seeded_and_never_turns_a_miss_into_a_distance(tmp_path):
     assert first[:, 3].max() <= 12.0  # clipped to the configured maximum
 
 
+def test_a2m12_noise_grows_with_range_like_the_accuracy_row(tmp_path):
+    np.testing.assert_allclose(replay.a2m12_range_std_m(np.array([2.0, 4.0, 8.0])), [0.02, 0.08, 0.2])
+    write_record(tmp_path)
+    log, meta = replay.load_slam_log(tmp_path)
+    noise = replay.ReplayNoise(seed=7, range_model="a2m12")
+    out = replay.noisy_ranges(log["scan_ranges_m"], meta, noise)
+    assert np.isposinf(out[:, 1]).all() and np.isneginf(out[:, 2]).all()
+    assert not np.array_equal(out[:, 0], log["scan_ranges_m"][:, 0])
+    # The constant model with the same seed draws the same standard normals.
+    const = replay.noisy_ranges(log["scan_ranges_m"], meta, replay.ReplayNoise(range_std_m=0.05, seed=7))
+    finite = np.isfinite(log["scan_ranges_m"]) & (const > 0.2) & (const < 12.0) & (out > 0.2) & (out < 12.0)
+    z_const = (const - log["scan_ranges_m"])[finite] / 0.05
+    z_spec = (out - log["scan_ranges_m"])[finite] / replay.a2m12_range_std_m(log["scan_ranges_m"][finite])
+    np.testing.assert_allclose(z_const, z_spec, atol=1e-3)
+
+
 def test_zero_noise_leaves_the_record_untouched(tmp_path):
     write_record(tmp_path)
     log, meta = replay.load_slam_log(tmp_path)
@@ -164,3 +180,36 @@ def test_map_history_packs_each_update_with_its_origin():
     np.testing.assert_allclose(packed["origins"], [[-1, -2, 0], [-1.5, -2, 0]])
     assert packed["map_0000"].shape == (2, 3)
     assert packed["map_0001"].tolist() == [[0, 0, 100, -1]]
+
+
+def test_a_team_spec_record_replays_its_encoder_counts(tmp_path):
+    """2026-10-15 encoder model: the reported rates are zeroed here; the replay must follow the
+    recorded encoder counts (checked against the record) and add no Gaussian to them."""
+    from forklift_core.localization.encoders import TeamEncoderModel, encoder_model_spec, sensor_phases
+
+    t, base_xy = write_record(tmp_path)
+    with np.load(tmp_path / "slam_log.npz") as data:
+        arrays = {k: np.asarray(data[k]) for k in data.files}
+    steps = len(t)
+    theta = 0.5 * t / RADIUS
+    angles = np.column_stack((theta, theta, theta, theta))
+    model = TeamEncoderModel(encoder_model_spec("team_spec_quantized"), sensor_phases(None))
+    rows = [model.read(angles[k, 2:4], (0.0, 0.0)) for k in range(steps)]
+    arrays.update(wheel_rates_rad_s=np.zeros((steps, 4)), wheel_angles_rad=angles,
+                  wheel_counts=np.array([r[2] for r in rows], dtype=np.int64),
+                  wheel_increments_rad=np.array([r[0] for r in rows]),
+                  steering_measured_rad=np.array([r[1] for r in rows]))
+    np.savez_compressed(tmp_path / "slam_log.npz", **arrays)
+    meta = json.loads((tmp_path / "meta.json").read_text())
+    meta["encoder_model"] = model.record()
+    (tmp_path / "meta.json").write_text(json.dumps(meta))
+    log, meta = replay.load_slam_log(tmp_path)
+    poses = replay.odometry_base_poses(log, meta)
+    travelled = np.hypot(*(poses[-1, :2] - poses[0, :2]))
+    assert travelled == pytest.approx(0.5 * t[-1], abs=2 * 2 * math.pi / 4096 * RADIUS)
+    # A damaged count is refused, not replayed as rates.
+    arrays["wheel_counts"] = arrays["wheel_counts"] + 1
+    np.savez_compressed(tmp_path / "slam_log.npz", **arrays)
+    log, meta = replay.load_slam_log(tmp_path)
+    with pytest.raises(ValueError, match="wheel_counts"):
+        replay.odometry_base_poses(log, meta)

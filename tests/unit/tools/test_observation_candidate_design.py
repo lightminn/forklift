@@ -111,7 +111,12 @@ def test_the_runner_configuration_and_scenarios_are_rebuilt_exactly():
     evaluator = design.Evaluator(config)
     for seed in range(9):
         record = json.loads((RECORDS / f"seed_{seed}/result.json").read_text())
-        assert dataclasses.asdict(config.planner) == record["planner_config"]
+        planner = dataclasses.asdict(config.planner)
+        assert {k: planner[k] for k in record["planner_config"]} == record["planner_config"]
+        # Fields added after these records (plan D7 options) stay at their defaults.
+        added = set(planner) - set(record["planner_config"])
+        defaults = dataclasses.asdict(type(config.planner)())
+        assert {k: planner[k] for k in added} == {k: defaults[k] for k in added}
         assert dataclasses.asdict(config.geometry) == record["geometry"]
         scenario = evaluator.scenario(seed)
         assert json.dumps(dataclasses.asdict(scenario), sort_keys=True) == json.dumps(
@@ -123,16 +128,18 @@ def test_the_runner_appends_the_chosen_candidates_after_the_original_five():
     """Appending keeps every seed served by the first five on its old path."""
     import ast
 
+    from forklift_core.planning.observation_viewpoints import DEFAULT_OBSERVATION_WAYPOINTS
+
+    # The runner reads the shared list (plan D7: the CPU sweep plans the same candidates).
     source = (design.ROOT / "sim/isaac/run_transport.py").read_text()
-    lists = [
-        node.value
+    assigns = [
+        ast.unparse(node.value)
         for node in ast.walk(ast.parse(source))
         if isinstance(node, ast.Assign)
         and any(ast.unparse(t) == "args.observation_waypoints" for t in node.targets)
-        and isinstance(node.value, ast.List)
     ]
-    assert len(lists) == 1
-    waypoints = [tuple(ast.literal_eval(e)) for e in lists[0].elts]
+    assert "[list(w) for w in DEFAULT_OBSERVATION_WAYPOINTS]" in assigns
+    waypoints = [tuple(w) for w in DEFAULT_OBSERVATION_WAYPOINTS]
     assert tuple(waypoints[:5]) == design.DEFAULT_CANDIDATES
     # docs/validation/2026-10-02-g4-observation-candidates.md, design seeds 200-399.
     assert waypoints[5:] == [(0.0, 2.1, -0.25), (0.4, 1.2, 0.0), (-0.6, 1.8, -0.25)]

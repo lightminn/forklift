@@ -1,0 +1,4 @@
+# N1 (plan D6): a box on the transport path, farther than the stopping distance.
+# Expected: stop, replan, finish. Fixed before any run.
+events:
+  - {id: n1, action: spawn, phase: transport, after_m: 3.0, ahead_m: 2.5, lateral_m: 0.0, size_m: [0.4, 0.4, 0.5]}

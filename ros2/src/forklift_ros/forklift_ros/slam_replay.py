@@ -29,9 +29,11 @@ from pathlib import Path
 
 import numpy as np
 
+from forklift_core.localization.encoders import encoder_odometry_inputs
 from forklift_core.localization.wheel_odometry import (
     AckermannOdometryGeometry,
     integrate_wheel_odometry,
+    integrate_wheel_odometry_increments,
 )
 
 LOG_FORMAT = "forklift_slam_log_v1"
@@ -46,6 +48,7 @@ _ARRAYS = (
     "scan_ranges_m",
     "laser_pose_world",
 )
+_ENCODER_ARRAYS = ("wheel_angles_rad", "wheel_counts", "wheel_increments_rad", "steering_measured_rad")
 
 
 @dataclass(frozen=True)
@@ -56,12 +59,18 @@ class ReplayNoise:
     wheel_rate_std_rad_s: float = 0.0
     steering_std_rad: float = 0.0
     seed: int = 0
+    # "constant": range_std_m everywhere. "a2m12": sigma = the RPLIDAR A2M12
+    # accuracy row (1 % of range up to 3 m, 2 % to 5 m, 2.5 % beyond), and
+    # range_std_m is ignored.
+    range_model: str = "constant"
 
     def __post_init__(self) -> None:
         for name in ("range_std_m", "wheel_rate_std_rad_s", "steering_std_rad"):
             value = getattr(self, name)
             if not math.isfinite(value) or value < 0:
                 raise ValueError(f"{name} must be finite and nonnegative")
+        if self.range_model not in ("constant", "a2m12"):
+            raise ValueError("range_model must be 'constant' or 'a2m12'")
         if isinstance(self.seed, bool) or not isinstance(self.seed, int):
             raise ValueError("seed must be an integer")
         if self.seed < 0:
@@ -76,6 +85,8 @@ def load_slam_log(directory: Path) -> tuple[dict[str, np.ndarray], dict]:
         raise ValueError(f"unsupported record format: {meta.get('format')!r}")
     with np.load(directory / "slam_log.npz") as data:
         log = {name: np.asarray(data[name]) for name in _ARRAYS}
+        # A team-spec encoder record (2026-10-15) also carries the encoder arrays.
+        log.update({name: np.asarray(data[name]) for name in _ENCODER_ARRAYS if name in data.files})
     joints = len(log["joint_stamps_s"])
     scans = len(log["scan_stamps_s"])
     expected = {
@@ -109,6 +120,18 @@ def odometry_base_poses(
         geometry_record["wheel_radius_m"],
     )
     rear_x = geometry_record["rear_axle_x_in_base_m"]
+    encoders = encoder_odometry_inputs(log, meta)
+    if encoders["kind"] == "increments":
+        # The run's own team-spec encoder readings (checked against the record); the Gaussian wheel
+        # and steering noise does not apply to them.
+        rear = integrate_wheel_odometry_increments(
+            log["joint_stamps_s"], encoders["increments"], encoders["steering"], geometry,
+            initial_pose=(rear_x, 0, 0),
+        )
+        base = rear.copy()
+        base[:, 0] -= rear_x * np.cos(rear[:, 2])
+        base[:, 1] -= rear_x * np.sin(rear[:, 2])
+        return base
     rates = log["wheel_rates_rad_s"][:, 2:4].astype(float)
     steering = log["steering_rad"].astype(float)
     if noise.wheel_rate_std_rad_s:
@@ -136,13 +159,21 @@ def ground_truth_base_poses(log: dict[str, np.ndarray]) -> np.ndarray:
     return np.column_stack((pose[:, 0], pose[:, 1], yaw))
 
 
+def a2m12_range_std_m(ranges_m: np.ndarray) -> np.ndarray:
+    """The A2M12 accuracy row as a standard deviation: 1 % / 2 % / 2.5 % of range."""
+    r = np.asarray(ranges_m, dtype=float)
+    return np.where(r <= 3.0, 0.01, np.where(r <= 5.0, 0.02, 0.025)) * r
+
+
 def noisy_ranges(ranges: np.ndarray, meta: dict, noise: ReplayNoise) -> np.ndarray:
     """Add range noise to measured beams only, kept inside [min, max]."""
-    if not noise.range_std_m:
+    if noise.range_model == "constant" and not noise.range_std_m:
         return ranges
     out = ranges.astype(float).copy()
     measured = np.isfinite(out)
-    out[measured] += _rng(noise, 0).normal(0, noise.range_std_m, measured.sum())
+    sigma = (a2m12_range_std_m(out[measured]) if noise.range_model == "a2m12"
+             else noise.range_std_m)
+    out[measured] += _rng(noise, 0).normal(0, 1.0, measured.sum()) * sigma
     laser = meta["laser"]
     out[measured] = np.clip(out[measured], laser["range_min_m"], laser["range_max_m"])
     return out.astype(ranges.dtype)
@@ -305,6 +336,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--wheel-rate-noise-std-rad-s", type=float, default=0.0)
     parser.add_argument("--steering-noise-std-rad", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--range-noise-model", choices=("constant", "a2m12"), default="constant")
     args = parser.parse_args(argv)
     args.output.mkdir(parents=True, exist_ok=False)
     noise = ReplayNoise(
@@ -312,6 +344,7 @@ def main(argv: list[str] | None = None) -> int:
         args.wheel_rate_noise_std_rad_s,
         args.steering_noise_std_rad,
         args.seed,
+        args.range_noise_model,
     )
     manifest = write_bag(args.record, args.output / "bag", noise, args.storage)
     (args.output / "replay_manifest.json").write_text(

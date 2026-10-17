@@ -1,0 +1,8 @@
+# N9 (plan D6), all sensors: every obstacle sensor goes silent on the transport
+# leg. Expected: stop command 0.25 s after the last scan (deadline 1), then the
+# stop completes within the measured braking distance and time (deadline 2).
+# Fixed before any run (2026-10-06).
+events:
+  - {id: n9b_high, action: silence, phase: transport, after_m: 3.0, target: high}
+  - {id: n9b_fl, action: silence, phase: transport, after_m: 3.0, target: low_fl}
+  - {id: n9b_rr, action: silence, phase: transport, after_m: 3.0, target: low_rr}

@@ -13,8 +13,9 @@ instantaneously; an adapter must account for steering rate and stop at cusps.
 """
 
 import heapq
+import time
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import count
 from math import acos, atan2, ceil, cos, hypot, isfinite, pi, sin, sqrt
 
@@ -24,6 +25,8 @@ from numpy.typing import NDArray
 from forklift_core._validation import _finite_scalar
 
 from .geometry import Bounds, Footprint, FootprintCollisionChecker, Pose2D, Rectangle
+from .grid_collision import make_checker
+from .reeds_shepp import reeds_shepp_words
 
 
 @dataclass(frozen=True)
@@ -50,6 +53,28 @@ class PlannerConfig:
     # None keeps the distance/heading heuristic alone. A positive cell size adds
     # the paper's holonomic-with-obstacles term: a goal-rooted grid distance.
     obstacle_heuristic_resolution_m: float | None = None
+    # Goal connection (priority-5 plan D7a): "dubins" -- forward-only or reverse-only
+    # Dubins words, the original; "reeds_shepp" -- every Reeds-Shepp word (gear
+    # changes inside the shot) together with the Dubins ones, tried in cost order.
+    # A Reeds-Shepp word with a segment shorter than rs_min_segment_m is not tried:
+    # the tracker cannot drive a cusp every few centimetres (its cusp tolerance is 0.03 m).
+    goal_connection: str = "dubins"
+    rs_min_segment_m: float = 0.10
+    # Shot cap (priority-5 plan D7a, D7d): an analytic connection longer than the
+    # straight-line distance to the goal plus shot_cap_m is not taken at once -- the
+    # search keeps expanding (a short reverse then a forward shot replaces the 21.7 m
+    # forward loop a 0.02 rad heading fix at the goal gave). The shortest one passed
+    # over is kept and returned if the search ends without a path, so no plan the
+    # uncapped search finds is lost. None keeps the original behaviour.
+    shot_cap_m: float | None = None
+    # Expansions the search may spend after its first capped-out shot before it
+    # returns the cheapest one (bounds the extra time; a deadline also returns it).
+    shot_cap_patience: int = 2000
+    # D7b (priority-5 plan): besides the arcs, expand a turn cycle -- full steering one
+    # way for turn_cycle_m, then the other gear at full opposite steering for
+    # turn_cycle_m (four variants). Its first half is never a search state.
+    turn_cycles: bool = False
+    turn_cycle_m: float = 0.5
 
     def __post_init__(self) -> None:
         positive = (
@@ -82,6 +107,17 @@ class PlannerConfig:
             and _finite_scalar(resolution, "obstacle heuristic resolution") <= 0
         ):
             raise ValueError("obstacle heuristic resolution must be positive")
+        if self.goal_connection not in ("dubins", "reeds_shepp"):
+            raise ValueError("goal_connection must be dubins or reeds_shepp")
+        if _finite_scalar(self.rs_min_segment_m, "rs_min_segment_m") < 0:
+            raise ValueError("rs_min_segment_m must be nonnegative")
+        if self.shot_cap_m is not None and _finite_scalar(self.shot_cap_m, "shot_cap_m") < 0:
+            raise ValueError("shot_cap_m must be nonnegative")
+        if _finite_scalar(self.turn_cycle_m, "turn_cycle_m") <= 0:
+            raise ValueError("turn_cycle_m must be positive")
+        if isinstance(self.shot_cap_patience, bool) or not isinstance(self.shot_cap_patience, int) \
+                or self.shot_cap_patience <= 0:
+            raise ValueError("shot_cap_patience must be a positive integer")
 
 
 @dataclass(frozen=True)
@@ -104,10 +140,31 @@ class PlanResult:
     # Set by pallet_mission._search, which may retry on a finer lattice and at
     # denser analytic intervals: the interval of the search that produced this
     # result, and one (interval, status, expanded_nodes, xy_resolution_m,
-    # yaw_resolution_rad, collision_step_m) entry per search it ran, kept free of timing so equal
-    # inputs give equal results. None and () for a direct plan_hybrid_astar call.
+    # yaw_resolution_rad, collision_step_m, primitive_length_m, max_expansions,
+    # pruned_children, superseded_pops) entry per search it ran, kept free of timing so
+    # equal inputs give equal results. None and () for a direct plan_hybrid_astar call.
     analytic_expansion_interval: int | None = None
     search_attempts: tuple = ()
+    # Search diagnostics (priority-5 plan D7d): children dropped because their
+    # state key already had a cheaper or equal cost, and queue entries skipped
+    # because a cheaper node replaced them. They never change the result.
+    pruned_children: int = 0
+    superseded_pops: int = 0
+    # D7b: turn cycles queued during the search, and cycles on the returned path.
+    cycles_queued: int = 0
+    cycles_in_path: int = 0
+    # Shot cap: connections passed over for their length, and whether the result is
+    # the shortest of them, returned because the search found nothing else.
+    shots_capped: int = 0
+    shot_fallback: bool = False
+    # The root's goal shot: "taken", "capped" (passed over for its length) or "none";
+    # D7b cycles generated (both halves free) before the key check.
+    root_shot: str = "none"
+    cycles_generated: int = 0
+    # Return-leg turnaround (pallet_mission.plan_return_leg, forward_turnaround): what was
+    # compared and chosen -- the direct plan and each reverse-arc candidate's status and cost
+    # terms. None for every other plan.
+    turnaround: dict | None = None
 
 
 def _wrap(angle):
@@ -137,6 +194,7 @@ class _ObstacleDistance:
         *,
         resolution_m: float,
         clearance_m: float,
+        occupancy=None,
     ) -> None:
         self.bounds, self.resolution_m = bounds, resolution_m
         self.shape = (
@@ -165,6 +223,38 @@ class _ObstacleDistance:
             along = np.maximum(np.abs(dx * c + dy * s) - o.length_m / 2, 0)
             across = np.maximum(np.abs(dy * c - dx * s) - o.width_m / 2, 0)
             blocked |= np.hypot(along, across) < reach
+        if occupancy is not None and hasattr(occupancy, "body"):
+            # A split grid (docking, plan D5): the heuristic takes the part
+            # with fewer occupied cells (the band-cleared one) -- blocking less
+            # can only underestimate, never seal a passage the checker allows.
+            occupancy = occupancy.forks
+        if occupancy is not None and occupancy.occupied.any():
+            # Occupied grid cells (plan D3): mark the heuristic cells holding
+            # an occupied centre, then block only where the nearest such
+            # centre is certainly within reach -- a cell centre is at most a
+            # half diagonal from its occupied centre, so a gap is never sealed.
+            ii, jj = np.nonzero(occupancy.occupied)
+            ox = occupancy.origin_x_m + (ii + 0.5) * occupancy.resolution_m
+            oy = occupancy.origin_y_m + (jj + 0.5) * occupancy.resolution_m
+            hi = np.floor((ox - bounds.x_min_m) / resolution_m).astype(int)
+            hj = np.floor((oy - bounds.y_min_m) / resolution_m).astype(int)
+            inside = (hi >= 0) & (hi < self.shape[0]) & (hj >= 0) & (hj < self.shape[1])
+            seeds = np.zeros(self.shape, dtype=bool)
+            seeds[hi[inside], hj[inside]] = True
+            # Heuristic cells whose centre is within reach - half diagonal of
+            # a seed cell's centre (the occupied centre lies inside that cell).
+            span = int(ceil(reach / resolution_m))
+            offsets = [
+                (di, dj)
+                for di in range(-span, span + 1)
+                for dj in range(-span, span + 1)
+                if hypot(di, dj) * resolution_m + resolution_m * sqrt(2) / 2 < reach
+            ]
+            si, sj = np.nonzero(seeds)
+            for di, dj in offsets:
+                ti, tj = si + di, sj + dj
+                ok = (ti >= 0) & (ti < self.shape[0]) & (tj >= 0) & (tj < self.shape[1])
+                blocked[ti[ok], tj[ok]] = True
         self.distance_m = np.full(self.shape, np.inf)
         goal = self._cell(*goal_xy)
         self.distance_m[goal] = 0.0
@@ -201,6 +291,22 @@ class _ObstacleDistance:
     def distance(self, x_m: float, y_m: float) -> float:
         value = self.distance_m[self._cell(x_m, y_m)]
         return max(0.0, value - self._slack_m) if isfinite(value) else 0.0
+
+
+def obstacle_heuristic_field(goal, obstacles, footprint, bounds, config, occupancy=None):
+    """The holonomic-with-obstacles heuristic plan_hybrid_astar builds for this goal (None when
+    config has no obstacle_heuristic_resolution_m)."""
+    if config.obstacle_heuristic_resolution_m is None:
+        return None
+    return _ObstacleDistance(
+        obstacles,
+        footprint,
+        bounds,
+        (goal.x_m, goal.y_m),
+        resolution_m=config.obstacle_heuristic_resolution_m,
+        clearance_m=config.clearance_m,
+        occupancy=occupancy,
+    )
 
 
 def _advance(pose, distance_m, curvature):
@@ -278,12 +384,16 @@ def _dubins_words(start, goal, curvature):
     return candidates
 
 
-def _connection(pose, goal, previous_direction, checker, config):
+def _connection(pose, goal, previous_direction, checker, config, cap_length=None):
+    """(connector, its cost) for the cheapest collision-free goal shot no longer than
+    cap_length (None: any length), and (over, its cost) for the cheapest collision-free
+    one longer than the cap -- None where there is none. Cost is the candidates' own:
+    length x reverse ratio + gear-change penalties (incl. one against the node's gear)."""
     if (
         hypot(pose[0] - goal[0], pose[1] - goal[1]) < 1e-12
         and abs(_wrap(pose[2] - goal[2])) < 1e-12
     ):
-        return [], [], [], 0.0
+        return ([], [], [], 0.0), 0.0, None, None
     k = config.curvature_limit_inv_m
     candidates = []
     for direction in (1, -1):
@@ -298,15 +408,32 @@ def _connection(pose, goal, previous_direction, checker, config):
             cost = sum(lengths) * (config.reverse_penalty if direction < 0 else 1)
             if previous_direction and direction != previous_direction:
                 cost += config.gear_change_penalty_m
-            candidates.append((cost, direction, word, lengths))
+            # One segment list for both kinds: (gear, curvature, length).
+            segments = tuple((direction, turn * direction * k, length) for turn, length in zip(word, lengths, strict=True))
+            candidates.append((cost, segments))
+    if config.goal_connection == "reeds_shepp":
+        for word in reeds_shepp_words(pose, goal, k):
+            used = [seg for seg in word if seg[2] >= 1e-10]
+            if not used or any(seg[2] < config.rs_min_segment_m for seg in used):
+                continue
+            cost = sum(length * (config.reverse_penalty if gear < 0 else 1) for _, gear, length in used)
+            gears = [gear for _, gear, _ in used]
+            cost += config.gear_change_penalty_m * sum(a != b for a, b in zip(gears, gears[1:]))
+            if previous_direction and gears[0] != previous_direction:
+                cost += config.gear_change_penalty_m
+            candidates.append((cost, tuple((gear, turn * k, length) for turn, gear, length in used)))
     candidates.sort(key=lambda candidate: candidate[0])
-    for _, direction, word, lengths in candidates:
+    over = over_cost = None
+    for cost, segments in candidates:
+        length_total = sum(seg[2] for seg in segments)
+        capped = cap_length is not None and length_total > cap_length
+        if capped and over is not None:
+            continue  # only the cheapest over-cap shot is ever needed
         current = pose
         samples, directions, curvatures = [], [], []
-        for turn, length in zip(word, lengths, strict=True):
+        for direction, curvature, length in segments:
             if length < 1e-10:
                 continue
-            curvature = turn * direction * k
             arc = _sample_arc(current, length, direction, curvature, checker, config)
             if arc is None:
                 break
@@ -321,8 +448,12 @@ def _connection(pose, goal, previous_direction, checker, config):
                 continue
             if abs(_wrap(current[2] - goal[2])) > 1e-7:
                 continue
-            return samples, directions, curvatures, sum(lengths)
-    return None
+            connector = (samples, directions, curvatures, length_total)
+            if capped:
+                over, over_cost = connector, cost
+                continue
+            return connector, cost, over, over_cost
+    return None, None, over, over_cost
 
 
 @dataclass
@@ -333,14 +464,17 @@ class _Node:
     steering: int
     parent: object
     samples: list
+    cycle_half: bool = False  # the first half of a D7b turn cycle (never a search state)
+    length_m: float = 0.0  # path length this node adds (its primitive or cycle half)
 
 
-def _result(node, connector, expanded, config):
+def _result(node, connector, expanded, config, counts=(0, 0, 0)):
     chain = []
     current = node
     while current.parent is not None:
         chain.append(current)
         current = current.parent
+    cycles_in_path = sum(1 for item in chain if item.cycle_half)
     poses, directions, curvatures = [current.pose], [1], [0.0]
     for item in reversed(chain):
         poses.extend(item.samples)
@@ -360,12 +494,18 @@ def _result(node, connector, expanded, config):
         np.asarray(poses, dtype=float),
         np.asarray(directions, dtype=np.int8),
         np.asarray(curvatures),
-        len(chain) * config.primitive_length_m + length,
+        sum(item.length_m for item in chain) + length,
         expanded,
+        pruned_children=counts[0],
+        superseded_pops=counts[1],
+        cycles_queued=counts[2] if len(counts) > 2 else 0,
+        cycles_in_path=cycles_in_path,
+        shots_capped=counts[3] if len(counts) > 3 else 0,
+        cycles_generated=counts[4] if len(counts) > 4 else 0,
     )
 
 
-def _failure(status, expanded=0):
+def _failure(status, expanded=0, counts=(0, 0, 0)):
     return PlanResult(
         False,
         status,
@@ -374,6 +514,11 @@ def _failure(status, expanded=0):
         np.empty(0),
         0.0,
         expanded,
+        pruned_children=counts[0],
+        superseded_pops=counts[1],
+        cycles_queued=counts[2] if len(counts) > 2 else 0,
+        shots_capped=counts[3] if len(counts) > 3 else 0,
+        cycles_generated=counts[4] if len(counts) > 4 else 0,
     )
 
 
@@ -384,8 +529,21 @@ def plan_hybrid_astar(
     footprint: Footprint,
     bounds: Bounds,
     config: PlannerConfig | None = None,
+    *,
+    occupancy=None,
+    deadline=None,
+    obstacle_field=None,
 ) -> PlanResult:
     """Plan bounded, collision-checked forward/reverse motion in a static map.
+
+    occupancy optionally adds an OccupancyGrid (forklift_core.planning.
+    grid_collision) checked cell by cell alongside the rectangles; unknown
+    cells are free to the planner (priority-5 plan D3). deadline optionally
+    stops the search at that time.monotonic() value with status "timeout".
+    obstacle_field optionally supplies the holonomic-with-obstacles term already
+    built for this goal, obstacles, footprint, bounds, occupancy and the config's
+    resolution and clearance (obstacle_heuristic_field) -- several searches to one
+    goal share it (pallet_mission's return turnaround); the result is the same.
 
     Invalid colliding endpoints return invalid_start/invalid_goal. Exhaustion
     returns no_path or expansion_limit; neither proves physical infeasibility.
@@ -394,7 +552,7 @@ def plan_hybrid_astar(
     config = config if config is not None else PlannerConfig()
     start_pose = (start.x_m, start.y_m, _wrap(start.yaw_rad))
     goal_pose = (goal.x_m, goal.y_m, _wrap(goal.yaw_rad))
-    checker = FootprintCollisionChecker(obstacles, footprint, bounds)
+    checker = make_checker(obstacles, footprint, bounds, occupancy)
     if not checker.free(start_pose, config.clearance_m):
         return _failure("invalid_start")
     if not checker.free(goal_pose, config.clearance_m):
@@ -413,14 +571,9 @@ def plan_hybrid_astar(
     field = (
         None
         if config.obstacle_heuristic_resolution_m is None
-        else _ObstacleDistance(
-            obstacles,
-            footprint,
-            bounds,
-            (goal.x_m, goal.y_m),
-            resolution_m=config.obstacle_heuristic_resolution_m,
-            clearance_m=config.clearance_m,
-        )
+        else obstacle_field
+        if obstacle_field is not None
+        else obstacle_heuristic_field(goal, obstacles, footprint, bounds, config, occupancy)
     )
 
     def heuristic(pose):
@@ -435,21 +588,50 @@ def plan_hybrid_astar(
     queue = [(heuristic(start_pose), next(serial), root)]
     best = {key(start_pose, 0, 0): 0.0}
     expanded = 0
+    # pruned children, superseded pops, cycles queued, shots capped, cycles generated
+    counts = [0, 0, 0, 0, 0]
+    passed_over = None  # (search cost + shot cost, node, connector, expansion): the cheapest capped-out shot
+    root_shot = "none"
+
+    def fallback(status):
+        if passed_over is not None:
+            result = _result(passed_over[1], passed_over[2], expanded, config, tuple(counts))
+            return replace(result, shot_fallback=True, root_shot=root_shot)
+        return replace(_failure(status, expanded, tuple(counts)), root_shot=root_shot)
+
     while queue and expanded < config.max_expansions:
+        if deadline is not None and expanded % 256 == 0 and time.monotonic() > deadline:
+            return fallback("timeout")
+        if passed_over is not None and expanded - passed_over[3] >= config.shot_cap_patience:
+            return fallback("expansion_limit")
         _, _, node = heapq.heappop(queue)
         if (
             node.cost
             > best.get(key(node.pose, node.direction, node.steering), float("inf"))
             + 1e-10
         ):
+            counts[1] += 1
             continue
         expanded += 1
         if expanded == 1 or expanded % config.analytic_expansion_interval == 0:
-            connector = _connection(
-                node.pose, goal_pose, node.direction, checker, config
+            cap_length = (
+                None if config.shot_cap_m is None
+                else hypot(node.pose[0] - goal_pose[0], node.pose[1] - goal_pose[1]) + config.shot_cap_m
+            )
+            connector, _, over, over_cost = _connection(
+                node.pose, goal_pose, node.direction, checker, config, cap_length
             )
             if connector is not None:
-                return _result(node, connector, expanded, config)
+                if expanded == 1:
+                    root_shot = "taken"
+                return replace(_result(node, connector, expanded, config, tuple(counts)), root_shot=root_shot)
+            if over is not None:
+                counts[3] += 1
+                if expanded == 1:
+                    root_shot = "capped"
+                total = node.cost + over_cost
+                if passed_over is None or total < passed_over[0]:
+                    passed_over = (total, node, over, expanded if passed_over is None else passed_over[3])
         for direction in (1, -1):
             for steering in (0, -1, 1):
                 curvature = steering * config.curvature_limit_inv_m
@@ -472,9 +654,11 @@ def plan_hybrid_astar(
                     cost += config.gear_change_penalty_m
                 state_key = key(samples[-1], direction, steering)
                 if cost >= best.get(state_key, float("inf")) - 1e-10:
+                    counts[0] += 1
                     continue
                 best[state_key] = cost
                 child = _Node(samples[-1], cost, direction, steering, node, samples)
+                child.length_m = config.primitive_length_m
                 heapq.heappush(
                     queue,
                     (
@@ -483,4 +667,42 @@ def plan_hybrid_astar(
                         child,
                     ),
                 )
-    return _failure("expansion_limit" if queue else "no_path", expanded)
+        if config.turn_cycles:
+            # D7b: (gear, steering) of the two halves; the second half reverses both.
+            length = config.turn_cycle_m
+            k = config.curvature_limit_inv_m
+            for first_dir, first_steer in ((1, 1), (1, -1), (-1, 1), (-1, -1)):
+                second_dir, second_steer = -first_dir, -first_steer
+                first = _sample_arc(node.pose, length, first_dir, first_steer * k, checker, config)
+                if first is None:
+                    continue
+                cost1 = node.cost + length * (
+                    (config.reverse_penalty if first_dir < 0 else 1) + config.steering_penalty
+                )
+                cost1 += config.steering_change_penalty_m * abs(first_steer - node.steering)
+                if node.direction and node.direction != first_dir:
+                    cost1 += config.gear_change_penalty_m
+                second = _sample_arc(first[-1], length, second_dir, second_steer * k, checker, config)
+                if second is None:
+                    continue
+                counts[4] += 1
+                cost2 = cost1 + length * (
+                    (config.reverse_penalty if second_dir < 0 else 1) + config.steering_penalty
+                )
+                cost2 += config.steering_change_penalty_m * abs(second_steer - first_steer)
+                cost2 += config.gear_change_penalty_m
+                state_key = key(second[-1], second_dir, second_steer)
+                if cost2 >= best.get(state_key, float("inf")) - 1e-10:
+                    counts[0] += 1
+                    continue
+                best[state_key] = cost2
+                half = _Node(first[-1], cost1, first_dir, first_steer, node, first, cycle_half=True)
+                half.length_m = length
+                child = _Node(second[-1], cost2, second_dir, second_steer, half, second)
+                child.length_m = length
+                counts[2] += 1
+                heapq.heappush(
+                    queue,
+                    (cost2 + config.heuristic_weight * heuristic(child.pose), next(serial), child),
+                )
+    return fallback("expansion_limit" if queue else "no_path")

@@ -1,0 +1,3 @@
+# N5 (limit experiment, not a pass condition): a box below h_det (0.08 m tall). Record what happens.
+events:
+  - {id: n5, action: spawn, phase: transport, after_m: 3.0, ahead_m: 2.5, lateral_m: 0.0, size_m: [0.4, 0.4, 0.08]}

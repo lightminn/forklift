@@ -72,8 +72,12 @@ def expand_instances(prim: Usd.Prim) -> None:
     raise RuntimeError("Unexpected nested instance depth")
 
 
-def add_props(stage: Usd.Stage, app, props, offsets: dict) -> list[dict]:
-    """Place actual factory assets as static collision objects, without rescaling."""
+def add_props(stage: Usd.Stage, app, props, offsets: dict, *, mesh_collision: bool = True) -> list[dict]:
+    """Place actual factory assets as static collision objects, without rescaling.
+
+    mesh_collision False (plan v10 prism colliders): the meshes stay visible
+    but do not collide; add_prism_colliders gives each prop its column.
+    """
     records = []
     for index, placed in enumerate(props):
         rect = placed.rectangle
@@ -103,9 +107,12 @@ def add_props(stage: Usd.Stage, app, props, offsets: dict) -> list[dict]:
             if child.HasAPI(UsdPhysics.ArticulationRootAPI):
                 child.RemoveAPI(UsdPhysics.ArticulationRootAPI)
             if child.IsA(UsdGeom.Mesh):
-                UsdPhysics.CollisionAPI.Apply(child).CreateCollisionEnabledAttr(True)
-                UsdPhysics.MeshCollisionAPI.Apply(child).CreateApproximationAttr("none")
+                UsdPhysics.CollisionAPI.Apply(child).CreateCollisionEnabledAttr(mesh_collision)
+                if mesh_collision:
+                    UsdPhysics.MeshCollisionAPI.Apply(child).CreateApproximationAttr("none")
                 count += 1
+            elif not mesh_collision and child.HasAPI(UsdPhysics.CollisionAPI):
+                UsdPhysics.CollisionAPI(child).CreateCollisionEnabledAttr(False)
         if not count:
             raise RuntimeError(
                 f"Factory prop has no collision mesh: {placed.asset.uri}"
@@ -123,7 +130,8 @@ def add_props(stage: Usd.Stage, app, props, offsets: dict) -> list[dict]:
     return records
 
 
-def add_factory_items(stage: Usd.Stage, app, work_items, loads, offsets: dict) -> dict:
+def add_factory_items(stage: Usd.Stage, app, work_items, loads, offsets: dict, *,
+                      mesh_collision: bool = True) -> dict:
     """Place factory work items and their stacked loads as static colliders.
 
     The same per-prop handling as add_props -- measured origin offsets, no
@@ -166,9 +174,12 @@ def add_factory_items(stage: Usd.Stage, app, work_items, loads, offsets: dict) -
             if child.HasAPI(UsdPhysics.ArticulationRootAPI):
                 child.RemoveAPI(UsdPhysics.ArticulationRootAPI)
             if child.IsA(UsdGeom.Mesh):
-                UsdPhysics.CollisionAPI.Apply(child).CreateCollisionEnabledAttr(True)
-                UsdPhysics.MeshCollisionAPI.Apply(child).CreateApproximationAttr("none")
+                UsdPhysics.CollisionAPI.Apply(child).CreateCollisionEnabledAttr(mesh_collision)
+                if mesh_collision:
+                    UsdPhysics.MeshCollisionAPI.Apply(child).CreateApproximationAttr("none")
                 count += 1
+            elif not mesh_collision and child.HasAPI(UsdPhysics.CollisionAPI):
+                UsdPhysics.CollisionAPI(child).CreateCollisionEnabledAttr(False)
         if not count:
             raise RuntimeError(
                 f"Factory item has no collision mesh: {placed.asset.uri}"
@@ -180,6 +191,29 @@ def add_factory_items(stage: Usd.Stage, app, work_items, loads, offsets: dict) -
         "loads": len(loads),
         "collision_meshes": meshes,
     }
+
+
+def add_prism_colliders(stage: Usd.Stage, columns, root: str = "/World/PrismColliders") -> dict:
+    """One invisible box collider per kept prop: its floor rectangle up to its top.
+
+    Plan v10 D0 (Codex v10 3rd P1-1): with the meshes' collision off, the
+    LiDAR raycast, the SLAM scans, the docking reference scan and PhysX
+    contact all meet the column, so the operating assumption (no part of an
+    obstacle below the 1.05 m plane reaches past its section there) holds by
+    construction. The evaluator already judges the same floor rectangles.
+    """
+    count = 0
+    for index, (rect, top_m) in enumerate(columns):
+        cube = UsdGeom.Cube.Define(stage, f"{root}/Column_{index}")
+        cube.CreateSizeAttr(1.0)
+        xf = UsdGeom.XformCommonAPI(cube)
+        xf.SetTranslate(Gf.Vec3d(float(rect.x_m), float(rect.y_m), float(top_m) / 2))
+        xf.SetRotate(Gf.Vec3f(0.0, 0.0, float(math.degrees(rect.yaw_rad))))
+        xf.SetScale(Gf.Vec3f(float(rect.length_m), float(rect.width_m), float(top_m)))
+        UsdPhysics.CollisionAPI.Apply(cube.GetPrim()).CreateCollisionEnabledAttr(True)
+        UsdGeom.Imageable(cube.GetPrim()).MakeInvisible()
+        count += 1
+    return {"root": root, "columns": count}
 
 
 def hide_overhead(stage: Usd.Stage, root: str = "/World/Environment") -> list[str]:
@@ -350,6 +384,78 @@ def create_pallet(
     return pallet
 
 
+def plant_readback(stage: Usd.Stage) -> dict:
+    """The run's plant as the stage holds it after configure_drives (new plant candidate V0): every
+    collider's bound physics material counted by (root, material, compliant stiffness, damping,
+    acceleration-spring flag), the colliders with a compliant contact by path, the rigid bodies with
+    neither an authored mass nor a collider (PhysX gives those a default mass), and the articulation's
+    solver iterations."""
+    counts, compliant, massless, solver = {}, [], [], {}
+    for prim in Usd.PrimRange(stage.GetPseudoRoot(), Usd.TraverseInstanceProxies()):
+        path = str(prim.GetPath())
+        if prim.HasAPI(UsdPhysics.CollisionAPI):
+            material, _ = UsdShade.MaterialBindingAPI(prim).ComputeBoundMaterial("physics")
+            mprim = material.GetPrim() if material else None
+
+            def value(name):
+                attr = mprim.GetAttribute(name) if mprim else None
+                return attr.Get() if attr and attr.IsValid() and attr.HasAuthoredValue() else None
+
+            key = (path.split("/")[2] if path.count("/") >= 2 else path, str(mprim.GetPath()) if mprim else None,
+                   value("physxMaterial:compliantContactStiffness"), value("physxMaterial:compliantContactDamping"),
+                   value("physxMaterial:compliantContactAccelerationSpring"),
+                   value("physics:staticFriction"), value("physics:dynamicFriction"))
+            counts[key] = counts.get(key, 0) + 1
+            if key[2]:
+                compliant.append(path)
+        if prim.HasAPI(UsdPhysics.RigidBodyAPI):
+            mass = UsdPhysics.MassAPI(prim).GetMassAttr().Get() if prim.HasAPI(UsdPhysics.MassAPI) else None
+            has_collider = any(p.HasAPI(UsdPhysics.CollisionAPI) for p in Usd.PrimRange(prim, Usd.TraverseInstanceProxies()))
+            if not mass and not has_collider:
+                massless.append(path)
+        if prim.HasAPI(UsdPhysics.ArticulationRootAPI):
+            physx = PhysxSchema.PhysxArticulationAPI(prim)
+            solver[path] = [physx.GetSolverPositionIterationCountAttr().Get(), physx.GetSolverVelocityIterationCountAttr().Get()]
+    return {
+        "materials": [{"root": k[0], "material": k[1], "compliant_stiffness": k[2], "compliant_damping": k[3],
+                       "acceleration_spring": k[4], "static_friction": k[5], "dynamic_friction": k[6],
+                       "colliders": n} for k, n in sorted(counts.items(), key=str)],
+        "compliant_colliders": compliant,
+        "massless_bodies": massless,
+        "articulation_solver_iterations": solver,
+    }
+
+
+def tyre_contact_readback(stage: Usd.Stage) -> list[dict]:
+    """Every robot collider's bound physics material and its friction / compliant-contact values, read
+    back from the stage after configure_drives (the plant record: the same base USD hash is not the
+    same plant once a run-time material changes)."""
+    out = []
+    for prim in Usd.PrimRange(stage.GetPrimAtPath("/World/Forklift")):
+        if not prim.HasAPI(UsdPhysics.CollisionAPI) or "_tire_collision" not in str(prim.GetPath()):
+            continue
+        material, _ = UsdShade.MaterialBindingAPI(prim).ComputeBoundMaterial("physics")
+        mprim = material.GetPrim() if material else None
+
+        def value(name):
+            attr = mprim.GetAttribute(name) if mprim else None
+            return attr.Get() if attr and attr.IsValid() and attr.HasAuthoredValue() else None
+
+        out.append({
+            "collider": str(prim.GetPath()),
+            "material": str(mprim.GetPath()) if mprim else None,
+            "static_friction": value("physics:staticFriction"),
+            "dynamic_friction": value("physics:dynamicFriction"),
+            "compliant_stiffness": value("physxMaterial:compliantContactStiffness"),
+            "compliant_damping": value("physxMaterial:compliantContactDamping"),
+            # The combine modes apply only when both materials are compliant (Omni Physics 107.3); against the
+            # rigid floor material the tyre's own stiffness and damping are used as authored.
+            "damping_combine_mode": value("physxMaterial:dampingCombineMode"),
+            "friction_combine_mode": value("physxMaterial:frictionCombineMode"),
+        })
+    return out
+
+
 def configure_drives(
     stage: Usd.Stage,
     settings: dict,
@@ -365,6 +471,13 @@ def configure_drives(
     material_api.CreateStaticFrictionAttr(settings["static_friction"])
     material_api.CreateDynamicFrictionAttr(settings["dynamic_friction"])
     material_api.CreateRestitutionAttr(0.0)
+    if settings.get("contact_stiffness_n_per_m") is not None:
+        # Diagnostic (EPAL 6 fork spacing plan, cause survey after the S4 rerun): a compliant contact
+        # spreads the weight over all four wheels instead of the rigid solver's diagonal pair. Off
+        # (rigid contact) unless a settings file sets it.
+        physx_material = PhysxSchema.PhysxMaterialAPI.Apply(physics_material.GetPrim())
+        physx_material.CreateCompliantContactStiffnessAttr(float(settings["contact_stiffness_n_per_m"]))
+        physx_material.CreateCompliantContactDampingAttr(float(settings.get("contact_damping_n_s_per_m", 0.0)))
     roots = ["/World/Forklift"]
     if expected_pallet_box_count is not None:
         roots.append("/World/Pallet")
@@ -378,6 +491,25 @@ def configure_drives(
         for prim in instances:
             prim.SetInstanceable(False)
         print("COLLISION_INSTANCES_EXPANDED", root_path, len(instances), flush=True)
+    # EPAL 6 fork spacing plan, new plant candidate: the four tyre colliders alone get a compliant
+    # contact (a rigid four-wheel stance settled onto a diagonal pair); every other robot, pallet and
+    # floor contact keeps the rigid material. Off unless a settings file sets the stiffness.
+    if settings.get("tyre_contact_stiffness_n_per_m") is not None and settings.get("contact_stiffness_n_per_m") is not None:
+        raise ValueError("the diagnostic common compliant contact and the tyre-only one exclude each other")
+    tyre_material = None
+    if settings.get("tyre_contact_stiffness_n_per_m") is not None:
+        tyre_material = UsdShade.Material.Define(stage, "/World/TyreContactMaterial")
+        tyre_api = UsdPhysics.MaterialAPI.Apply(tyre_material.GetPrim())
+        tyre_api.CreateStaticFrictionAttr(settings["static_friction"])
+        tyre_api.CreateDynamicFrictionAttr(settings["dynamic_friction"])
+        tyre_api.CreateRestitutionAttr(0.0)
+        tyre_physx = PhysxSchema.PhysxMaterialAPI.Apply(tyre_material.GetPrim())
+        tyre_physx.CreateCompliantContactStiffnessAttr(float(settings["tyre_contact_stiffness_n_per_m"]))
+        tyre_physx.CreateCompliantContactDampingAttr(float(settings["tyre_contact_damping_n_s_per_m"]))
+        if settings.get("tyre_damping_combine_max"):
+            # Cause separation E (diagnostic, --steering-probe only): a null control -- the combine mode
+            # applies only between two compliant materials, so against the rigid floor nothing changes.
+            tyre_physx.CreateDampingCombineModeAttr("max")
     collision_counts = {}
     for root_path in roots:
         collision_counts[root_path] = 0
@@ -387,13 +519,15 @@ def configure_drives(
                 contact = PhysxSchema.PhysxCollisionAPI.Apply(prim)
                 contact.CreateContactOffsetAttr(0.002)
                 contact.CreateRestOffsetAttr(0.0)
+                tyre = tyre_material is not None and root_path == "/World/Forklift" and "_tire_collision" in str(prim.GetPath())
                 UsdShade.MaterialBindingAPI.Apply(prim).Bind(
-                    physics_material, UsdShade.Tokens.strongerThanDescendants, "physics"
+                    tyre_material if tyre else physics_material, UsdShade.Tokens.strongerThanDescendants, "physics"
                 )
             if prim.HasAPI(UsdPhysics.ArticulationRootAPI):
                 physics = PhysxSchema.PhysxArticulationAPI.Apply(prim)
-                physics.CreateSolverPositionIterationCountAttr(32)
-                physics.CreateSolverVelocityIterationCountAttr(8)
+                # 32/8 unless a convergence check sets them (new plant candidate V4).
+                physics.CreateSolverPositionIterationCountAttr(int(settings.get("solver_position_iterations", 32)))
+                physics.CreateSolverVelocityIterationCountAttr(int(settings.get("solver_velocity_iterations", 8)))
             if prim.IsA(UsdPhysics.RevoluteJoint) or prim.IsA(
                 UsdPhysics.PrismaticJoint
             ):
@@ -411,7 +545,7 @@ def configure_drives(
                 drive.CreateDampingAttr(
                     400.0
                     if is_lift
-                    else (20.0 if wheel else settings["steering_damping"])
+                    else (float(settings.get("wheel_drive_damping", 20.0)) if wheel else settings["steering_damping"])
                 )
                 drive.CreateMaxForceAttr(
                     settings["lift_force_n"]

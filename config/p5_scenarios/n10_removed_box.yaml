@@ -1,0 +1,4 @@
+# N10a: a box appears, the truck stops, the box is removed in view. Expected: re-observe and resume.
+events:
+  - {id: n10, action: spawn, phase: return_home, after_m: 3.0, ahead_m: 3.0, lateral_m: 0.0, size_m: [0.4, 0.4, 0.5]}
+  - {id: n10_gone, action: remove, phase: return_home, after_m: 0.0, target: n10, after_event: n10, delay_s: 8.0}

@@ -1,5 +1,8 @@
 # 근접 포켓 추적과 삽입 — 정지 관측 반복 (4순위, 계획 — **보류: 카메라 장착 결정 필요**)
 
+> **2026-10-07:** 캐리지 하단 장착(실측 차체 `carriage_low_measured`)으로 보류 원인이 풀려, 근접 추적은 [LiDAR 장애물 지도 계획 D8](2026-10-04-lidar-obstacle-map.md)(주행 중
+> 10 Hz 프레임 + 지연 교정, 실측 차체)로 다시 설계했다. 이 문서는 기록으로 남긴다.
+
 작성일: 2026-10-03 · 상위: [현황과 다음 단계](2026-09-17-project-status-and-next-steps.md) 4순위, [로드맵](2026-09-11-development-roadmap.md) M3·M5,
 [다섯 번째 동결 평가](../validation/2026-10-03-fifth-frozen-evaluation.md)(3순위 완료)
 

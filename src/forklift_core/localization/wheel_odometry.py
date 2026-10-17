@@ -87,4 +87,58 @@ def integrate_wheel_odometry(
     return poses
 
 
-__all__ = ["AckermannOdometryGeometry", "integrate_wheel_odometry"]
+def advance_arc(x: float, y: float, yaw: float, distance: float, kappa: float) -> tuple[float, float, float]:
+    """One interval: advance `distance` along the arc of curvature `kappa` (the same step as
+    integrate_wheel_odometry)."""
+    turn = distance * kappa
+    if abs(turn) < 1e-12:
+        x += distance * cos(yaw + turn / 2)
+        y += distance * sin(yaw + turn / 2)
+    else:
+        x += (sin(yaw + turn) - sin(yaw)) / kappa
+        y += (cos(yaw) - cos(yaw + turn)) / kappa
+    return x, y, yaw + turn
+
+
+def integrate_wheel_odometry_increments(
+    stamps_s: ArrayLike,
+    rear_wheel_increments_rad: ArrayLike,
+    steering_rad: ArrayLike,
+    geometry: AckermannOdometryGeometry,
+    *,
+    initial_pose: tuple[float, float, float] = (0.0, 0.0, 0.0),
+) -> NDArray[np.float64]:
+    """Like integrate_wheel_odometry, from encoder increments instead of rates.
+
+    rear_wheel_increments_rad: (N, 2) rear left, rear right rotation measured over the interval
+    ending at each stamp (row 0 is ignored -- it has no interval). Each interval advances the
+    mean increment x wheel radius along the arc of its two end samples' mean curvature: an
+    increment is already the interval's rotation, so it is not averaged with the previous one
+    (a rate path fed with increment / dt would lag half a tick).
+    """
+    stamps = _real_array(stamps_s, "stamps_s")
+    increments = _real_array(rear_wheel_increments_rad, "rear_wheel_increments_rad")
+    steering = _real_array(steering_rad, "steering_rad")
+    if stamps.ndim != 1 or len(stamps) < 2:
+        raise ValueError("stamps_s must hold at least two samples")
+    if increments.shape != (len(stamps), 2) or steering.shape != (len(stamps), 2):
+        raise ValueError("wheel increments and steering must be (N, 2) like the stamps")
+    if not (np.isfinite(stamps).all() and np.isfinite(increments).all()):
+        raise ValueError("stamps and wheel increments must be finite")
+    if not np.isfinite(steering).all() or np.any(np.abs(steering) >= np.pi / 2):
+        raise ValueError("steering angles must be finite and below pi/2")
+    if np.any(np.diff(stamps) <= 0):
+        raise ValueError("stamps_s must be strictly increasing")
+    x, y, yaw = (_finite_scalar(v, "initial pose") for v in initial_pose)
+    distance = increments.mean(axis=1) * geometry.wheel_radius_m
+    curvature = _curvature_inv_m(steering, geometry)
+    poses = np.empty((len(stamps), 3))
+    poses[0] = x, y, yaw
+    for k in range(len(stamps) - 1):
+        x, y, yaw = advance_arc(x, y, yaw, distance[k + 1], (curvature[k] + curvature[k + 1]) / 2)
+        poses[k + 1] = x, y, yaw
+    return poses
+
+
+__all__ = ["AckermannOdometryGeometry", "advance_arc", "integrate_wheel_odometry",
+           "integrate_wheel_odometry_increments"]

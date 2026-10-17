@@ -59,6 +59,11 @@ class TrackerConfig:
     # not carry into a turn the steering cannot follow.
     max_lateral_acceleration_mps2: float | None = None
     max_reverse_speed_mps: float | None = None
+    # A cusp reached inside its window whose heading misses cusp_yaw_tolerance_rad but stays within
+    # this holds (zero command, ``cusp_pending``) instead of failing, for the caller to judge the
+    # next leg from the stopped pose and release_cusp() or fail_pending() (EPAL 6 fork spacing plan,
+    # fix A). None fails at once as before. Rollouts ignore it (rollout.py).
+    cusp_heading_pending_rad: float | None = None
 
     def __post_init__(self) -> None:
         for name in self.__dataclass_fields__:
@@ -102,6 +107,9 @@ class TrackingCommand:
     # Whether this pose is beyond max_cross_track_error_m right now. failure
     # keeps the first cause; this says whether the vehicle has since left the path.
     off_path: bool = False
+    # Holding at a cusp whose heading miss is within cusp_heading_pending_rad: status "braking",
+    # speed 0, until the caller releases the cusp or fails the hold.
+    cusp_pending: bool = False
 
 
 class RearAxlePathTracker:
@@ -169,6 +177,13 @@ class RearAxlePathTracker:
         self._failure = None
         self._arrived = False
         self._command_speed: float | None = None
+        # A cusp held for the caller's judgement (cusp_heading_pending_rad): latched until
+        # release_cusp() or fail_pending(), whatever the pose does meanwhile.
+        self._pending = False
+        # Every leg switch with the pose and errors of the update that led to it (fork spacing plan,
+        # V5 cusp arrivals): the caller stamps and keeps them; control does not read them.
+        self.leg_switches: list[dict] = []
+        self._last_eval = None
 
     def _speed_profile(self) -> np.ndarray:
         """Largest speed on the segment arriving at each sample, braked ahead."""
@@ -208,6 +223,119 @@ class RearAxlePathTracker:
         """Path length still to drive to the final pose, from current progress."""
         return max(0.0, float(self._distance[-1] - self._progress))
 
+    # Cusp position stall (docs/plans/2026-10-04-lidar-obstacle-map.md, "cusp 위치 정체 복구
+    # 설계 7판"): read-only views of the leg being driven, and a release of its cusp from the
+    # measured pose. None of them changes how update() tracks or accepts.
+    @property
+    def leg_index(self) -> int:
+        """The leg being driven (0 first; it advances at each accepted cusp)."""
+        return self._leg
+
+    @property
+    def leg_end_index(self) -> int:
+        """The path sample the current leg ends at (a cusp, or the goal)."""
+        return int(self._leg_ends[self._leg])
+
+    def leg_remaining_m(self) -> float:
+        """Path length still to drive to the end of the current leg, from current progress."""
+        return max(0.0, float(self._distance[self._leg_ends[self._leg]] - self._progress))
+
+    def leg_end_window_m(self) -> float:
+        """The brake window update() applies at the current leg's end."""
+        cfg = self.config
+        if self._leg_ends[self._leg] == len(self._poses) - 1:
+            return cfg.position_tolerance_m
+        tolerance = cfg.position_tolerance_m if cfg.cusp_position_tolerance_m is None else cfg.cusp_position_tolerance_m
+        if cfg.cusp_brake_window_m is None:
+            return tolerance
+        return min(cfg.cusp_brake_window_m, tolerance)
+
+    def release_cusp(self, stopped: bool) -> bool:
+        """Start the next leg from the measured pose at a cusp the tracker would not accept.
+
+        Only when the current leg ends at a cusp, its remaining length is within the leg end's
+        brake window, the tracker has neither failed nor arrived, and ``stopped`` (the caller's
+        stop decision with a zero command applied). The leg switch is update()'s own; the
+        requested-speed slew restarts from zero. Returns whether it released.
+        """
+        if (
+            not stopped
+            or self._failed
+            or self._arrived
+            or self._leg_ends[self._leg] == len(self._poses) - 1
+            or self.leg_remaining_m() > self.leg_end_window_m()
+        ):
+            return False
+        self._advance_leg("release")
+        self._command_speed = 0.0
+        return True
+
+    def fail_pending(self) -> None:
+        """Latch the endpoint_heading failure of a cusp held for judgement (cusp_pending): the
+        caller judged it not releasable (EPAL 6 fork spacing plan, fix A)."""
+        if not self._failed:
+            self._failure = "endpoint_heading"
+        self._failed = True
+        self._pending = False
+
+    def skip_legs(self, count: int) -> None:
+        """Start ``count`` legs later, as if their cusps had been accepted (for dry runs)."""
+        for _ in range(int(count)):
+            if self._leg_ends[self._leg] == len(self._poses) - 1:
+                raise ValueError("no further leg to start")
+            self._advance_leg("skip")
+        self._command_speed = 0.0
+
+    def _advance_leg(self, via: str = "arrival") -> None:
+        """The one leg switch: the next leg, from the end of this one."""
+        self._pending = False
+        endpoint = self._leg_ends[self._leg]
+        pose, position_error, yaw_error = self._last_eval or (None, None, None)
+        self.leg_switches.append({
+            "via": via, "leg": self._leg, "endpoint_index": int(endpoint),
+            "endpoint_pose": [float(v) for v in self._poses[endpoint]],
+            "pose": pose, "position_error_m": position_error, "yaw_error_rad": yaw_error,
+        })
+        self._leg += 1
+        self._segment = endpoint
+        self._progress = float(self._distance[endpoint])
+
+    def restart_speed_slew(self, speed_mps: float = 0.0) -> None:
+        """Restart the requested-speed slew from ``speed_mps``.
+
+        For a stop imposed outside the tracker (plan D8b calibration dwells): the
+        slew kept its own command meanwhile, so without this the first command
+        after the stop would jump back to it instead of accelerating.
+        """
+        if not np.isfinite(speed_mps):
+            raise ValueError("speed_mps must be finite")
+        self._command_speed = float(speed_mps)
+
+    def path_arrays(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Copies of the path this tracker follows (poses, directions, curvatures).
+
+        The tracker copied them when it was built; a runner that replaces a path
+        records these to show which path was actually followed (plan D8 S4b).
+        """
+        return self._poses.copy(), self._directions.copy(), self._curvatures.copy()
+
+    def leg_ahead(self) -> tuple[np.ndarray, int]:
+        """Rear-axle poses from the current progress to the end of the current
+        leg (the next cusp or the goal), and that leg's direction (+1 / -1).
+
+        For the obstacle layer's drive permission (priority-5 plan D4): a cusp
+        is a stop, so the look-ahead ends there.
+        """
+        end = self._leg_ends[self._leg]
+        k = int(np.clip(np.searchsorted(self._distance, self._progress, side="right") - 1, 0, end - 1))
+        along = float(np.clip((self._progress - self._distance[k]) / self._lengths[k], 0.0, 1.0))
+        start = self._poses[k] + along * (self._poses[k + 1] - self._poses[k])
+        start[2] = self._poses[k, 2] + along * float(
+            np.arctan2(np.sin(self._poses[k + 1, 2] - self._poses[k, 2]), np.cos(self._poses[k + 1, 2] - self._poses[k, 2]))
+        )
+        poses = np.vstack((start, self._poses[k + 1 : end + 1]))
+        return poses, int(self._directions[min(k + 1, end)])
+
     def _overshoot_accepted(
         self, pose: np.ndarray, goal: np.ndarray, endpoint: int, tolerance: float
     ) -> bool:
@@ -241,6 +369,7 @@ class RearAxlePathTracker:
         goal = self._poses[endpoint]
         position_error = float(np.linalg.norm(goal[:2] - pose[:2]))
         yaw_error = _angle(float(goal[2] - pose[2]))
+        self._last_eval = ([float(v) for v in pose], position_error, float(yaw_error))
 
         # Only walk adjacent segments; repeated spatial locations cannot select
         # a later leg. Bound projection advance to a local motion-sized window.
@@ -289,14 +418,25 @@ class RearAxlePathTracker:
             position_error <= position_tolerance
             or self._overshoot_accepted(pose, goal, endpoint, position_tolerance)
         )
-        if at_endpoint and abs(yaw_error) > yaw_tolerance:
-            if not self._failed:
-                self._failure = "endpoint_heading"
-            self._failed = True
+        if self._pending:
+            pass  # held: only release_cusp(), fail_pending() or a cross-track failure end it
+        elif at_endpoint and abs(yaw_error) > yaw_tolerance:
+            if (
+                not self._failed
+                and endpoint != len(self._poses) - 1
+                and cfg.cusp_heading_pending_rad is not None
+                and abs(yaw_error) <= cfg.cusp_heading_pending_rad
+            ):
+                self._pending = True  # held for the caller's judgement, not failed
+            else:
+                if not self._failed:
+                    self._failure = "endpoint_heading"
+                self._failed = True
+        pending = self._pending and not self._failed
         direction = self._directions[self._segment + 1]
         curvature = 0.0
         status = "tracking"
-        if self._failed or self._arrived or at_endpoint:
+        if self._failed or self._arrived or at_endpoint or pending:
             target_speed = 0.0
             status = "failed" if self._failed else "braking"
         else:
@@ -365,10 +505,15 @@ class RearAxlePathTracker:
                 self._command_speed + delta_speed,
             )
         )
+        if pending:
+            # A zero command at once, as the caller's stop for a failed observe leg is
+            # (Codex fix A implementation review 1 P2); release_cusp() restarts the slew from 0.
+            speed = 0.0
         self._command_speed = speed
         if (
             at_endpoint
             and not self._failed
+            and not pending
             and abs(signed_speed_mps) <= cfg.stop_speed_mps
             and abs(speed) < 1e-12
         ):
@@ -376,9 +521,7 @@ class RearAxlePathTracker:
                 self._arrived = True
                 status = "arrived"
             else:
-                self._leg += 1
-                self._segment = endpoint
-                self._progress = float(self._distance[endpoint])
+                self._advance_leg()
         if self._arrived:
             status = "arrived"
         return TrackingCommand(
@@ -392,6 +535,7 @@ class RearAxlePathTracker:
             self._failure if self._failed else None,
             endpoint != len(self._poses) - 1,
             off_path,
+            pending,
         )
 
 

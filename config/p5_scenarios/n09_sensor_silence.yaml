@@ -1,0 +1,3 @@
+# N9: one obstacle sensor goes silent on the transport leg. Expected: stop command 0.25 s after its last scan.
+events:
+  - {id: n9, action: silence, phase: transport, after_m: 3.0, target: low_fl}

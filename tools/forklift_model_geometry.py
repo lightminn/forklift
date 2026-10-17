@@ -73,13 +73,16 @@ def load_parameters(path: Path) -> dict:
         ),
         "evidence": "identity catalogue dimensions dynamics",
     }
+    # Keys a model may add; absent ones keep the earlier output byte for byte (the provisional model).
+    optional = {"assumptions": "site_link_mass_kg site_link_inertia_kgm2"}
     if not isinstance(value, dict) or set(value) != {*keys, "model_name"}:
         raise ValueError("parameters: unexpected or missing top-level fields")
     if value["model_name"] not in MODEL_NAMES:
         raise ValueError(f"parameters: model_name must be one of {sorted(MODEL_NAMES)}")
     for group, names in keys.items():
-        if not isinstance(value[group], dict) or set(value[group]) != set(
-            names.split()
+        required, allowed = set(names.split()), set(optional.get(group, "").split())
+        if not isinstance(value[group], dict) or not (
+            required <= set(value[group]) <= required | allowed
         ):
             raise ValueError(f"parameters: unexpected or missing {group} fields")
         for name, number in value[group].items():

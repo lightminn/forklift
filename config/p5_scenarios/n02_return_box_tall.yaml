@@ -1,0 +1,5 @@
+# Single-LiDAR variant (2026-10-07): the same box 1.3 m tall, above the 1.05 m plane
+# (assumption: no floor obstacle lower than the LiDAR).
+# N2: a box on the return path at 0.6 m/s. Expected: stop, replan, finish.
+events:
+  - {id: n2, action: spawn, phase: return_home, after_m: 3.0, ahead_m: 3.0, lateral_m: 0.0, size_m: [0.4, 0.4, 1.3]}

@@ -1,0 +1,83 @@
+source: team RealSense D435i capture 2026-10-16 (tools/capture_d435i_noise.py)
+license: internal
+revision: '2026-10-16'
+files_sha256: 1731d444b4b122190488c7716cb86c3a397a14e9b597659db390e8e66627d2b9
+role: provisional
+method: 'Each capture is a folder of 30 raw Z16 frames with capture.json (tools/capture_d435i_noise.py).
+  Every frame is dithered by +-0.5 mm (a seeded stream per frame) and turned to inverse
+  depth, then fitted two ways with depth_noise_fit.fit_noise_components on the robust
+  variance of inverse-depth second differences at steps 1-32:'
+source_fx: 388.81207275390625
+dropout_fraction: 0.05028932548774274
+provenance:
+  components: measured (wall captures at 2 and 3 m)
+  dropout_fraction: provisional table (MR6D), kept so only the components change
+  registration_shift_px, flying_fraction, quantize_step_m: model defaults, not measured
+levels:
+  temporal_640:
+    k_iid: 0.0
+    components:
+    - k: 0.0006577897193552831
+      correlation_px_source:
+      - 0.47848072953171344
+      - 0.0
+    - k: 0.005515020604485356
+      correlation_px_source:
+      - 5.929616986142978
+      - 4.046350917833278
+  frame_640:
+    k_iid: 0.0
+    components:
+    - k: 0.000799713364016107
+      correlation_px_source:
+      - 0.175
+      - 0.0
+    - k: 0.005847145494648723
+      correlation_px_source:
+      - 6.265553063111793
+      - 4.275592579909036
+  temporal_848:
+    k_iid: 0.0
+    components:
+    - k: 0.0005980186546341547
+      correlation_px_source:
+      - 0.31698111423725484
+      - 0.0
+    - k: 0.005921409587674054
+      correlation_px_source:
+      - 5.128697755279729
+      - 3.4998062974155832
+  frame_848:
+    k_iid: 0.0
+    components:
+    - k: 0.0007231214431018256
+      correlation_px_source:
+      - 0.15849055711862742
+      - 0.0
+    - k: 0.006460343384626491
+      correlation_px_source:
+      - 5.737185709508684
+      - 4.0994037061455915
+levels_from:
+  temporal_640:
+  - wall_2p00m_640
+  - wall_3p00m_640
+  frame_640:
+  - wall_2p00m_640
+  - wall_3p00m_640
+  temporal_848:
+  - wall_2p00m_848
+  - wall_3p00m_848
+  frame_848:
+  - wall_2p00m_848
+  - wall_3p00m_848
+limitations:
+- 'no reference flat: fixed spatial error and absolute bias are not separated; the
+  frame levels are a scenario of one observed wall frame, not an upper bound'
+- 'a plane in inverse depth cancels in second differences and slow warps are attenuated:
+  whole-frame tilt or shift and lens warps are not guaranteed to be represented'
+- 'one k for 2-3 m: the measured sigma grows slightly faster than z^2'
+- 'Gaussian components: the measured heavy tails are not reproduced (see the reproduction
+  report)'
+- 'random dropout at the provisional rate: persistent invalid pixels are not reproduced'
+- static tripod, indoor fluorescent light, one team D435i

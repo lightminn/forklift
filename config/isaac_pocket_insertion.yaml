@@ -5,7 +5,7 @@ detector_range_min_m: 0.05
 acceleration_mps2: 0.6
 max_angular_speed_rad_s: 0.3
 controller:
-  target_front_x_m: 0.59
+  # target_front_x_m comes from tracking_frame (chassis model + insertion rule, plan D8a).
   max_start_front_x_m: 1.76
   max_observation_age_ns: 150000000
   max_frame_interval_ns: 110000000

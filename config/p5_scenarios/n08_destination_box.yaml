@@ -1,0 +1,4 @@
+# N8: a box on the drop site, placed past the transport path end by the inserted offset.
+# Expected: stop before the delivery straight is entered (no drop on it).
+events:
+  - {id: n8, action: spawn, phase: transport, after_m: 2.0, beyond_end_m: 1.23, lateral_m: 0.0, size_m: [0.5, 0.5, 0.5]}
