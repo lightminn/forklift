@@ -870,3 +870,30 @@ def test_a_held_near_miss_duplicate_is_not_absorbed():
     report = tr.update(_frame(0.4, [_candidate((3.0, 0.03, 0.06), support_z=0.008, cid="o"),
                                     _candidate((3.0, 0.12, 0.06), support_z=0.015, cid="p")]))
     assert report.accepted == {"o": 0} and report.held == 2 and report.absorbed == 0 and len(tr._tracks) == 3
+
+
+def test_a_near_miss_duplicate_that_later_learned_another_reading_is_kept():
+    # Codex: D is born on a support near miss (parametric), then takes a T11 reading -- its reading now
+    # differs from the selected EPAL 6 track, so absorbing it would lose that reading
+    rows = (_row(1.0, 4.0, yaw=0.05, z_s=0.005),)
+    tr = CandidateTracker(_bounds(rows=rows))
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="s")]))
+    tr.select(0)
+    tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", support_z=0.015, cid="d")]))
+    assert tr._tracks[1].duplicate_kind == "near_miss"
+    tr.update(_frame(0.3, [_candidate((3.0, 0.0, 0.06), hypothesis="t11_06:x", support_z=0.015, cid="d2")]))
+    assert tr._tracks[1].known == "t11_06:x"
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", support_z=0.008, cid="c")]))
+    assert report.accepted == {"c": 0} and report.absorbed == 0 and len(tr._tracks) == 2
+
+
+def test_absorption_needs_the_duplicate_layout_inside_the_selected_layout():
+    from forklift_core.perception.candidate_tracking import _reading_contains
+    tr = _born(support_z=0.015)
+    s, d = tr._tracks
+    s.layout, d.layout = [(0.18, 0.22), (-0.22, -0.18)], [(0.23, 0.25), (-0.21, -0.19)]
+    assert not _reading_contains(s, d)  # Codex: [0.23, 0.25] is not inside [0.18, 0.22]
+    d.layout = [(0.19, 0.21), (-0.21, -0.19)]
+    assert _reading_contains(s, d)
+    d.known = "t11_06:x"
+    assert not _reading_contains(s, d)

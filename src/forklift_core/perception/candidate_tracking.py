@@ -309,6 +309,16 @@ def _reading_fits(track: _Track, new: _Observation) -> bool:
     return _layout_fits(track.last, new) and track.layout_overlaps(new)
 
 
+def _reading_contains(chosen: _Track, other: _Track) -> bool:
+    """Whether every reading `other` would accept, `chosen` would accept too: its known-shape hypothesis
+    is absent or chosen's (or chosen has none), and each pocket's layout interval lies inside chosen's
+    (2B-3e: absorbing `other` then loses no reading -- Codex)."""
+    if other.known is not None and chosen.known is not None and other.known != chosen.known:
+        return False
+    return all(clo - 1e-12 <= olo and ohi <= chi + 1e-12
+               for (olo, ohi), (clo, chi) in zip(other.layout, chosen.layout))
+
+
 def _pose_terms(track: _Track, new: _Observation, bounds: TrackBounds):
     """(position fits, yaw difference, yaw gate, support difference, support gate, largest pocket step
     along either axis) against the track's last accepted observation, or None past the odometry table."""
@@ -591,7 +601,7 @@ class CandidateTracker:
 
         took_other = set(accepted.values())  # a duplicate that took another reading this frame tracks something
         absorbed = {tr.id for j in taken_by_chosen for tr in dup_fits[j]
-                    if tr is not chosen and tr.duplicate_kind == "near_miss"
+                    if tr is not chosen and tr.duplicate_kind == "near_miss" and _reading_contains(chosen, tr)
                     and tr.id not in took_other and tr.id not in held_now}
         self._tracks = [tr for tr in self._tracks if tr.id not in absorbed]
         accepted = {cid: tid for cid, tid in accepted.items() if tid not in absorbed}
