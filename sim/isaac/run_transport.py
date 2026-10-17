@@ -6738,6 +6738,12 @@ def main() -> None:
     try:
         from isaacsim import SimulationApp
 
+        # Nothing here plays sound. With the default backend, a job whose user has no PulseAudio server keeps an
+        # Omniverse audio thread busy retrying (seen on ws1 by another job); the null backend never connects.
+        # FORKLIFT_ISAAC_AUDIO=on keeps Kit's default.
+        audio_args = [] if os.environ.get("FORKLIFT_ISAAC_AUDIO") == "on" else [
+            "--/audio/deviceBackend=null", "--/app/audio/enabled=false"]
+        state["isaac_audio_args"] = audio_args
         app = SimulationApp(
             {
                 "headless": True,
@@ -6745,6 +6751,7 @@ def main() -> None:
                 "height": 720,
                 "renderer": "RaytracedLighting",
                 "multi_gpu": False,
+                "extra_args": audio_args,
             }
         )
         run(app, args, settings, state)
