@@ -90,7 +90,8 @@ class TrackBounds:
     near_miss_support_cap_m: float = 0.045
     # each pocket within 0.2 m of the selected track's last reading on both axes: the odometry-widened
     # gate reaches 0.5 m at far range, while a real neighbour (0.65 m true spacing, minus two far p95
-    # errors) still reads >= 0.41 m away; the six active-track misses moved <= 54 mm (Codex)
+    # errors) reads >= 0.41 m away when both errors are within p95; the six active-track misses moved
+    # about 54 mm at most (Codex)
     near_miss_position_cap_m: float = 0.2
     # Fusion weights only: the assumed odometry noise as random walks (position_m_per_sqrt_s,
     # yaw_rad_per_sqrt_s). None weighs with the worst-case bound, which leaves older observations
@@ -348,7 +349,7 @@ def _near_miss(track: _Track, new: _Observation, bounds: TrackBounds) -> bool:
         return False
     position, dyaw, gyaw, dsup, gsup, step = terms
     eps = 1e-12
-    return (position and step <= bounds.near_miss_position_cap_m and (dyaw > gyaw or dsup > gsup)
+    return (position and step <= bounds.near_miss_position_cap_m + eps and (dyaw > gyaw or dsup > gsup)
             and dyaw <= min(bounds.near_miss_yaw_ratio * gyaw, bounds.near_miss_yaw_cap_rad) + eps
             and dsup <= bounds.near_miss_support_ratio * gsup + eps and dsup < bounds.near_miss_support_cap_m)
 
