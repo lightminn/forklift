@@ -1086,41 +1086,69 @@ def test_a_shadow_reappears_as_an_ordinary_track_once_its_owner_is_deleted():
 
 
 
-# 2B-3f: suspected-duplicate readings start no track -----------------------------------------------------
+# 2B-3f: suspected-duplicate readings near an active selected track are born as shadows -------------------
 
-def _suppressing(rows=None):
-    tr = CandidateTracker(_bounds(rows=rows or (_row(1.0, 4.0, yaw=0.05, z_s=0.005),), suppress=True))
+def _suppressing(rows=None, **kw):
+    tr = CandidateTracker(_bounds(rows=rows or (_row(1.0, 4.0, yaw=0.05, z_s=0.005),), suppress=True, **kw))
     tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="s")]))
     tr.select(0)
     return tr
 
 
-@pytest.mark.parametrize("kw", [dict(hypothesis="t11_06:x"),            # reading split
-                                dict(hypothesis="epal6:x", support_z=0.015)])  # support near miss
-def test_a_suspected_duplicate_reading_starts_no_track(kw):
+@pytest.mark.parametrize("kw", [dict(hypothesis="t11_06:x"),                     # reading split
+                                dict(hypothesis="epal6:x", support_z=0.015)])    # support near miss
+def test_a_suspected_duplicate_reading_is_born_as_a_hidden_shadow(kw):
     tr = _suppressing()
     report = tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), cid="d", **kw)]))
-    assert report.new == 0 and report.suppressed == 1 and [t.id for t in tr._tracks] == [0]
+    assert report.new == 1 and report.suppressed == 1 and report.accepted == {"d": 1}
+    assert tr._tracks[1].shadow and [t.track_id for t in tr.tracks(int(0.2 * S), _odom())] == [0]
 
 
-def test_without_a_selection_the_same_reading_starts_a_track():
+def test_without_a_selection_the_same_reading_is_an_ordinary_track():
     tr = _suppressing()
     tr.select(None)
     report = tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), hypothesis="t11_06:x", cid="d")]))
-    assert report.new == 1 and report.suppressed == 0
+    assert report.suppressed == 0 and not tr._tracks[1].shadow
 
 
-def test_a_real_neighbour_still_starts_a_track():
+def test_a_real_neighbour_is_an_ordinary_track():
     tr = _suppressing()
     report = tr.update(_frame(0.2, [_candidate((3.0, 0.3, 0.06), hypothesis="t11_06:x", cid="n")]))
-    assert report.new == 1 and report.suppressed == 0
+    assert report.suppressed == 0 and not tr._tracks[1].shadow
 
 
-def test_known_limit_a_different_reading_inside_a_stale_selected_gate_is_suppressed():
-    # the reading split only checks the pose gate, which widens while the selected track is stale: a real
-    # neighbour first seen there with another reading gets no track (plan 2B-3f risk, pinned)
+def test_a_different_reading_near_a_stale_selected_track_is_an_ordinary_track():
+    # the hidden birth needs an active selected track and pockets within 0.2 m (Codex: no such limit let a
+    # real neighbour stay hidden for as long as the selected track lived)
     tr = CandidateTracker(_bounds(rows=(_row(1.0, 4.0),), e=0.08, suppress=True))
     tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="s")]))
     tr.select(0)
     report = tr.update(_frame(0.8, [_candidate((3.0, 0.15, 0.06), hypothesis="t11_06:x", cid="n")]))
-    assert report.new == 0 and report.suppressed == 1
+    assert report.suppressed == 0 and not tr._tracks[1].shadow
+
+
+def test_a_persistent_neighbour_with_another_reading_stays_visible_and_selectable():
+    # Codex: a T11 neighbour read every frame 0.42 m from an active EPAL 6 selected track
+    tr = _suppressing(rows=(_row(1.0, 4.0, lat=0.15, along=0.3),))
+    for k in range(1, 6):
+        tr.update(_frame(0.2 * k, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="s"),
+                                   _candidate((3.42, 0.0, 0.06), hypothesis="t11_06:x", cid="n")]))
+    assert [t.track_id for t in tr.tracks(int(1.0 * S), _odom())] == [0, 1]
+    tr.select(1)
+
+
+def test_with_hidden_births_the_target_reading_is_never_handed_to_the_neighbour():
+    # Codex's three cases with suppression on: reading split, support near miss, selection switched away
+    for d_kw, t_kw in ((dict(hypothesis="t11_06:x"), dict(hypothesis="t11_06:x")),
+                       (dict(support_z=0.015), dict(support_z=0.024))):
+        tr = CandidateTracker(_bounds(rows=(_row(1.0, 4.0, yaw=0.05, z_s=0.005, along=0.15),), suppress=True))
+        tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="s"),
+                               _candidate((3.4, 0.0, 0.06), hypothesis="t11_06:x", support_z=0.015, cid="e")]))
+        tr.select(0)
+        tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), **{"hypothesis": "epal6:x", **d_kw}, cid="d")]))
+        assert tr._tracks[2].shadow
+        report = tr.update(_frame(0.4, [_candidate((3.15, 0.0, 0.06), **{"hypothesis": "epal6:x", **t_kw}, cid="t")]))
+        assert report.accepted.get("t") != 1
+        tr.select(1)  # switching to the neighbour keeps the target's shadow competing
+        report = tr.update(_frame(0.6, [_candidate((3.15, 0.0, 0.06), **{"hypothesis": "epal6:x", **t_kw}, cid="t2")]))
+        assert report.accepted.get("t2") != 1

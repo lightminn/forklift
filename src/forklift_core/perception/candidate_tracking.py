@@ -93,8 +93,9 @@ class TrackBounds:
     # errors) reads >= 0.41 m away when both errors are within p95; the six active-track misses moved
     # about 54 mm at most (Codex)
     near_miss_position_cap_m: float = 0.2
-    # 2B-3f: a reading that would start a track but is a suspected duplicate of the selected track (a
-    # reading split or a near miss) is dropped instead; False keeps the 2B-3c..3e duplicate tracks
+    # 2B-3f: a reading that would start a track but is a suspected duplicate of the active selected track
+    # (a reading split or a near miss, pockets within near_miss_position_cap_m) starts a shadow -- a hidden
+    # duplicate -- instead of a visible track; False keeps the 2B-3c..3e duplicate tracks
     suppress_duplicates: bool = True
     # Fusion weights only: the assumed odometry noise as random walks (position_m_per_sqrt_s,
     # yaw_rad_per_sqrt_s). None weighs with the worst-case bound, which leaves older observations
@@ -196,7 +197,7 @@ class FrameReport:
     cleared: bool = False
     revived: int = 0  # stale tracks that took an observation and became active again
     absorbed: int = 0  # suspected duplicates removed when the selected track took their observation (2B-3e)
-    suppressed: int = 0  # suspected-duplicate readings that started no track (2B-3f)
+    suppressed: int = 0  # suspected-duplicate readings that started a hidden shadow instead of a track (2B-3f)
 
 
 @dataclass(frozen=True)
@@ -630,14 +631,18 @@ class CandidateTracker:
         fresh = sorted((j for j in range(len(obs)) if j not in blocked and j not in shadow_fits),
                        key=lambda j: (round(float(obs[j].mid[0]), 9), round(float(obs[j].mid[1]), 9), obs[j].key))
         for j in fresh:
-            if self.bounds.suppress_duplicates and j in split_off:
-                suppressed += 1  # 2B-3f: a suspected duplicate of the selected track starts no track
-                continue
             o = obs[j]
             track = _Track(self._next_id, o)
             if j in split_off:
                 track.duplicate_of = chosen.id  # where the selected track was, split off by a reading test
                 track.duplicate_kind = split_off[j]
+                terms = _pose_terms(chosen, o, self.bounds)
+                if (self.bounds.suppress_duplicates and chosen_active and terms is not None
+                        and terms[5] <= self.bounds.near_miss_position_cap_m + 1e-12):
+                    # 2B-3f: born hidden -- it keeps its reading for the ambiguity but never reaches the
+                    # output (dropping it handed the target's next reading to a neighbour -- Codex)
+                    track.shadow = True
+                    suppressed += 1
             self._tracks.append(track)
             accepted[o.candidate.candidate_id] = self._next_id
             self._next_id += 1
