@@ -5259,7 +5259,8 @@ def drive(S, isaac) -> None:
                 # The page's teleop overlay (display only, contract 3); none without the perception camera.
                 camera_model=None if live_cam_ is None else live_camera_model(
                     _bound["perception_calibration"], _bound["perception_mount"],
-                    rear_axle_offset_m=args.rear_axle_offset_m, sent_width=640))
+                    rear_axle_offset_m=args.rear_axle_offset_m, sent_width=640,
+                    rides_lift=args.perception_mount != "legacy"))  # legacy hangs off base_link
             live.start()
             core.hooks.live_abort = lambda: live.stopped_in_tick  # the core stops right after a raw capture
 

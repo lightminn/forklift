@@ -157,3 +157,18 @@ export function sessionChanges(prev, cur, { clientId, askedDisarm = false } = {}
   }
   return out;
 }
+
+// The camera's height for the display overlay: a carriage camera (rides_lift) moves with the
+// lift, so its lift-0 placement plus the measured lift; null (draw nothing) while that is unknown.
+export function cameraHeightM(model, st) {
+  const z = model?.base_from_camera?.xyz_m?.[2];
+  if (!Number.isFinite(z)) return null;
+  if (!model.rides_lift) return z;
+  return Number.isFinite(st?.lift_m) ? Math.round((z + st.lift_m) * 1e9) / 1e9 : null;
+}
+
+// A disarm this page asked for is excused only in the arm period it was asked in, and
+// only for a few seconds; a later vehicle disarm after a re-arm is logged.
+export function disarmAsked(asked, prev, nowMs) {
+  return Boolean(asked) && prev?.arm_gen === asked.armGen && nowMs - asked.at < 3000;
+}

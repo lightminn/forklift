@@ -177,7 +177,7 @@ def test_the_camera_model_is_the_isaac_mount_in_the_pages_frame():
 
     mount = RigCamera((0.619, 0.0, 0.27), 0.10).base_from_optical()
     k = SimpleNamespace(width=1280, height=720, fx=640.0, fy=640.0, cx=641.0, cy=361.0)
-    m = live_camera_model(k, mount, rear_axle_offset_m=-0.34, sent_width=640)
+    m = live_camera_model(k, mount, rear_axle_offset_m=-0.34, sent_width=640, rides_lift=True)
     assert m["width"] == 640 and m["height"] == 360
     assert m["fx"] == pytest.approx(320.0) and m["cy"] == pytest.approx(180.5)
     cam = m["base_from_camera"]
@@ -200,3 +200,14 @@ def test_the_welcome_carries_a_camera_model_when_the_runner_gives_one(tmp_path):
         assert "camera_model" not in rt.welcome["capabilities"]  # no perception camera: none, not a guess
     finally:
         rt.close()
+
+
+def test_a_carriage_camera_says_it_rides_the_lift():
+    # the page adds the lift height to a carriage camera's placement (Codex C3 b review P2)
+    from sim.isaac.live_runtime import live_camera_model
+    from tools.scene_rig import Camera as RigCamera
+
+    k = SimpleNamespace(width=640, height=480, fx=465.7, fy=465.7, cx=320.0, cy=240.0)
+    mount = RigCamera((0.619, 0.0, 0.27), 0.10).base_from_optical()
+    assert live_camera_model(k, mount, rear_axle_offset_m=-0.34, sent_width=640, rides_lift=True)["rides_lift"]
+    assert not live_camera_model(k, mount, rear_axle_offset_m=-0.34, sent_width=640, rides_lift=False)["rides_lift"]

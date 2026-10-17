@@ -283,10 +283,12 @@ def sent_scale(width: int, max_width: int = 640) -> int:
 _OPTICAL_FROM_LINK = np.array([[0.0, -1.0, 0.0], [0.0, 0.0, -1.0], [1.0, 0.0, 0.0]])
 
 
-def live_camera_model(calibration, mount, *, rear_axle_offset_m: float, sent_width: int) -> dict:
+def live_camera_model(calibration, mount, *, rear_axle_offset_m: float, sent_width: int,
+                      rides_lift: bool) -> dict:
     """The perception camera as the page's camera_model (contract 3, display only): intrinsics of the picture as
     sent, and the mount as camera_link placed from the rear axle on the floor -- the state's pose is the rear axle.
-    ``mount`` is base_link <- optical; the camera rides the carriage, so the placement holds at lift 0 only."""
+    ``mount`` is base_link <- optical at lift 0; ``rides_lift``: the camera is on the carriage, so the page adds the
+    state's lift_m to its height (and draws no overlay while the lift height is unknown)."""
     n = sent_scale(int(calibration.width), sent_width)
     rotation = np.asarray(mount.rotation, dtype=float) @ _OPTICAL_FROM_LINK
     w = math.sqrt(max(0.0, 1.0 + np.trace(rotation))) / 2.0
@@ -301,7 +303,8 @@ def live_camera_model(calibration, mount, *, rear_axle_offset_m: float, sent_wid
             "base_from_camera": {
                 "frame": "camera_link (x forward, y left, z up) from the rear axle on the floor, lift 0",
                 "xyz_m": [float(t[0]) + abs(float(rear_axle_offset_m)), float(t[1]), float(t[2])],
-                "quaternion_xyzw": [float(v) for v in q]}}
+                "quaternion_xyzw": [float(v) for v in q]},
+            "rides_lift": bool(rides_lift)}
 
 
 def _quantiles(values: list) -> dict | None:

@@ -10,7 +10,7 @@ import { createMapView, panBy, zoomAt, zoomPercent } from "./mapview.js";
 import { decodeScan, parseFrame } from "./media.js";
 import { API, createSession } from "./protocol.js";
 import { log, render, renderPallets, renderTemplates, renderWizard } from "./ui.js";
-import { controlProfile, frameAgreement, scanDrawable, sessionChanges, staleness, stopIsRefused } from "./profile.js";
+import { controlProfile, disarmAsked, frameAgreement, scanDrawable, sessionChanges, staleness, stopIsRefused } from "./profile.js";
 import { blockReason, nextAllowed, templatesFor } from "./wizard.js";
 
 const TELEOP_MIN_INTERVAL_MS = 33; // ~30 Hz cap: a fast display must not flood ticks
@@ -167,8 +167,9 @@ m.session.subscribe((msg) => {
     }
   } else if (msg.t === "state") {
     m.stateAt = performance.now();
-    const asked = m.askedDisarmAt !== undefined && performance.now() - m.askedDisarmAt < 3000;
+    const asked = disarmAsked(m.askedDisarm, m.prevState, performance.now());
     for (const c of sessionChanges(m.prevState, msg, { clientId, askedDisarm: asked })) log(c.text, c.level);
+    if (m.prevState?.armed && !msg.armed) m.askedDisarm = null; // the excuse is used up by that disarm
     m.prevState = msg;
     if (msg.mode === "TELEOP" && m.lastMode !== "TELEOP") showTab("tele"); // controls on screen when teleop starts
     m.lastMode = msg.mode;
@@ -258,13 +259,16 @@ function connectMedia() {
 // stop the truck. Say so loudly instead of sending a request that does nothing. Until a
 // welcome says so, STOP is sent as before (it is kept and resent until answered).
 // A disarm this page asked for (or caused: STOP, leaving TELEOP) is not logged as the vehicle's.
+function noteDisarmAsked() {
+  m.askedDisarm = { at: performance.now(), armGen: m.session.state?.arm_gen };
+}
 function askDisarm() {
-  m.askedDisarmAt = performance.now();
+  noteDisarmAsked();
   return m.session.request("disarm").then(report);
 }
 
 function pressStop(source) {
-  m.askedDisarmAt = performance.now();
+  noteDisarmAsked();
   if (stopIsRefused(m.linkWelcome)) {
     $("nostop").hidden = false;
     log(`정지 불가 · 관찰 전용 연결 (${source})`, "crit");
@@ -397,7 +401,7 @@ $("m-cancel").onclick = () => req("mission_cancel", { mission_id: missionId() })
 $("recover").onclick = () => req("recovery", { action: "withdraw_straight" });
 $("t-enter").onclick = () => req("mode_request", { to: "TELEOP" });
 $("t-exit").onclick = () => {
-  m.askedDisarmAt = performance.now();
+  noteDisarmAsked();
   req("mode_request", { to: "PAUSED" });
 };
 $("t-arm").onclick = () => (m.session.armed ? askDisarm() : req("arm"));

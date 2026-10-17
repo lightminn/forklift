@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { controlProfile, forbidText, sessionChanges, videoStaleAfterS, frameAgreement, palletKindLabel, permitText, rearmState, resumeState, resumeSteps, scanDrawable, staleness, standWhy, stopInstruction, stopIsRefused, stopKind } from "../js/profile.js";
+import { cameraHeightM, controlProfile, disarmAsked, forbidText, sessionChanges, videoStaleAfterS, frameAgreement, palletKindLabel, permitText, rearmState, resumeState, resumeSteps, scanDrawable, staleness, standWhy, stopInstruction, stopIsRefused, stopKind } from "../js/profile.js";
 
 test("a vehicle without the control field is a full console (console/1 as before)", () => {
   const p = controlProfile({ mission: true, teleop_direct: true, teleop_video: true, lift: true });
@@ -168,4 +168,23 @@ test("losing the lease and a disarm the page did not ask for are logged", () => 
   assert.deepEqual(sessionChanges(null, held, { clientId: me }), []);
   // a new session is announced by the reconnect itself
   assert.deepEqual(sessionChanges(held, { session_epoch: 6, lease: { holder: null }, armed: false }, { clientId: me }), []);
+});
+
+test("a camera on the carriage is drawn from the lift height; unknown lift, no overlay", () => {
+  // Codex C3 b review P2: lifted 0.20 m, the floor overlay was ~97 px off
+  const model = { base_from_camera: { xyz_m: [0.959, 0, 0.27] }, rides_lift: true };
+  assert.equal(cameraHeightM(model, { lift_m: 0.2 }), 0.47);
+  assert.equal(cameraHeightM(model, { lift_m: null }), null);
+  assert.equal(cameraHeightM(model, {}), null);
+  const fixed = { base_from_camera: { xyz_m: [0.7, 0, 1.05] } };
+  assert.equal(cameraHeightM(fixed, { lift_m: 0.2 }), 1.05); // a mast camera does not move with the lift
+});
+
+test("a disarm the page asked for is excused once, and only in the arm period it was asked in", () => {
+  // Codex C3 b review P3: ask, see it disarmed, re-arm, then a vehicle disarm within 3 s was hidden
+  const asked = { at: 1000, armGen: 4 };
+  assert.equal(disarmAsked(asked, { arm_gen: 4 }, 2000), true);
+  assert.equal(disarmAsked(asked, { arm_gen: 5 }, 2000), false); // re-armed since
+  assert.equal(disarmAsked(asked, { arm_gen: 4 }, 4500), false); // too long ago
+  assert.equal(disarmAsked(null, { arm_gen: 4 }, 2000), false);
 });

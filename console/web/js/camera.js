@@ -2,10 +2,11 @@
 // vehicle's camera_model (contract 3). Overlays never feed a safety decision.
 
 import { fitCanvas, predictSweep } from "./map.js";
+import { cameraHeightM } from "./profile.js";
 
-function projector(model, pose, w, h) {
+function projector(model, pose, height, w, h) {
   const cam = model.base_from_camera;
-  const [fwd, , height] = cam.xyz_m;
+  const [fwd] = cam.xyz_m;
   const [, qy, , qw] = cam.quaternion_xyzw;
   const pitch = 2 * Math.atan2(qy, qw);
   const c = Math.cos(pose.yaw_rad);
@@ -38,11 +39,12 @@ export function drawCamera(cv, view, tok) {
   if (view.bitmap) c.drawImage(view.bitmap, 0, 0, w, h);
   const st = view.state;
   const model = view.cameraModel;
-  if (st?.pose && model && st.mode === "TELEOP" && view.chassis) {
+  const height = model ? cameraHeightM(model, st) : null; // a carriage camera rides the lift
+  if (st?.pose && model && height !== null && st.mode === "TELEOP" && view.chassis) {
     const cmd = st.command || { speed_mps: 0, curvature_inv_m: 0 };
     const dir = cmd.speed_mps < 0 ? -1 : 1;
     if (dir > 0) {
-      const project = projector(model, st.pose, w, h);
+      const project = projector(model, st.pose, height, w, h);
       const sweep = predictSweep(st.pose, cmd.curvature_inv_m, 1, view.chassis, 34, 0.08);
       c.strokeStyle = "#b79cff";
       c.lineWidth = 3 * dpr;
