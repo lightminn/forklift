@@ -1,0 +1,302 @@
+"""Mission commands and the mission lifecycle (M-a3, docs/plans/2026-10-16-m-a3-mission-commands.md E1, E2, E4).
+
+Pure: no Isaac, no numpy. The core owns one :class:`MissionCommands`; the runner queues commands (from a schedule
+file in a batch run, from the arbiter later) and the core applies the queue at the start of a control tick.
+
+Lifecycle: ``idle -> accepted -> running <-> paused -> resuming -> running``; ``cancel`` goes through
+``cancelling`` (standing still is confirmed first) to ``cancelled``; the mission's own end is ``done`` or
+``failed``. A finished mission leaves the lifecycle ``idle`` for the next ``submit``.
+
+Work time (E4): a pause stops the work clocks. The start-type comparisons ask :meth:`work_elapsed`, which is
+``now - since`` minus the pauses inside that interval -- and exactly ``now - since`` when there has been no pause,
+so a run without commands decides bit for bit as before. The pause record lives here, outside every dictionary
+the replay compares.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+ACTIVE = ("accepted", "running", "paused", "resuming", "held", "cancelling")
+FINAL = ("done", "failed", "cancelled")
+STOP_KINDS = ("none", "controlled", "preempt")
+PRIORITY = {"hold_off": -1, "cancel": 0, "hold_on": 1, "pause": 1, "resume": 2, "submit": 2}
+
+
+@dataclass(frozen=True)
+class Submit:
+    pallet_id: str
+    destination_id: str
+    targets_revision: int = 0
+    request_id: str | None = None  # the arbiter's reliable request this came from (M-b B3), kept in the record
+    kind: str = field(default="submit", init=False)
+
+
+@dataclass(frozen=True)
+class Pause:
+    request_id: str | None = None
+    kind: str = field(default="pause", init=False)
+
+
+@dataclass(frozen=True)
+class Resume:
+    request_id: str | None = None
+    kind: str = field(default="resume", init=False)
+
+
+@dataclass(frozen=True)
+class Cancel:
+    mission_id: str | None = None  # None: the active mission
+    request_id: str | None = None
+    kind: str = field(default="cancel", init=False)
+
+
+@dataclass(frozen=True)
+class HoldOn:
+    """The arbiter's TELEOP entry (M-b B6), applied at the tick's start in the core's own time."""
+
+    request_id: str | None = None
+    kind: str = field(default="hold_on", init=False)
+
+
+@dataclass(frozen=True)
+class HoldOff:
+    """The arbiter leaves TELEOP: held -> paused, before a resume queued in the same tick."""
+
+    request_id: str | None = None
+    kind: str = field(default="hold_off", init=False)
+
+
+@dataclass(frozen=True)
+class Context:
+    """What a command's acceptance depends on, read by the core at the tick's start."""
+
+    stop_kind: str = "none"
+    near_tracker: bool = False  # a near-field tracker exists (pause is refused, E3)
+    clear_for_submit: bool = True  # empty forks and outside the near section (else recovery_required)
+
+
+class MissionCommands:
+    def __init__(self, targets=None) -> None:
+        self.targets = targets  # M-a4: a submit must name the current targets list (TargetsBook.check_submit)
+        self.status = "idle"
+        self.mission_id: str | None = None
+        self.mission: Submit | None = None
+        self.mission_gen = 0
+        self._issued = 0
+        self._queue: list = []
+        self.log: list[dict] = []  # every command with its tick, outcome and reason
+        self.pauses: list[list] = []  # [start, end-or-None] of every pause (the work clock's stops)
+        self.paused_since: float | None = None
+        self.stop_seen_s: float | None = None  # the first standing tick of the current stop
+        self.not_stopped = False  # the stop not seen standing within its limit (E3), for the safety state
+        self.resume_check: dict | None = None  # the resume's last check (E5), for the safety state
+        self.resume_retry_s = -1e9  # a resume's replan without a path tries again from here
+        self.stop_pose: tuple | None = None  # the control pose where the stop was first seen standing (M-a3c R11)
+        self.pause_hold_count: int | None = None  # the SLAM hold episode at the stop's first paused tick
+        self.pause_holding = False  # SLAM was holding then
+        self.pause_release_pending = False  # a SLAM release was due then (R9, R14: it may happen while paused)
+
+    # --- the queue ---------------------------------------------------------------------------------------------
+    def queue(self, command) -> None:
+        self._queue.append(command)
+
+    def apply(self, t: float, context: Context = Context()) -> list[dict]:
+        """Apply this tick's queue by priority (cancel > pause > resume, submit), each once; returns its records."""
+        if context.stop_kind not in STOP_KINDS:
+            raise ValueError(f"unknown stop kind {context.stop_kind!r}")
+        if self.status in FINAL:
+            self.status, self.mission_id, self.mission = "idle", None, None  # a finished mission frees the slot
+        commands = sorted(self._queue, key=lambda c: PRIORITY[c.kind])  # sorted() is stable: same rank keeps order
+        self._queue = []
+        records = []
+        if context.stop_kind != "none" and self.status in ("running", "resuming"):
+            # E7: the arbiter's stop is a pause of the mission (resumed only by a resume once it is lifted).
+            if self.paused_since is None:
+                self._stop_boundary(t)
+            else:
+                self.mission_gen += 1
+            self.status = "paused"
+            record = {"t": t, "command": f"stop_kind:{context.stop_kind}", "accepted": True, "reason": None,
+                      "mission_id": self.mission_id, "status": self.status}
+            records.append(record)
+            self.log.append(record)
+        for command in commands:
+            reason = getattr(self, f"_{command.kind}")(t, command, context)
+            record = {"t": t, "command": command.kind, "accepted": reason is None, "reason": reason,
+                      "mission_id": self.mission_id, "status": self.status}
+            if command.request_id is not None:
+                record["request_id"] = command.request_id
+            records.append(record)
+            self.log.append(record)
+        return records
+
+    def _submit(self, t, command: Submit, context: Context):
+        if self.status in ACTIVE:
+            return "mission_active"
+        if context.stop_kind != "none":
+            return "stopping"
+        if not context.clear_for_submit:
+            return "recovery_required"
+        if self.targets is not None:
+            refused = self.targets.check_submit(command.pallet_id, command.destination_id, command.targets_revision)
+            if refused is not None:
+                return refused
+        self._issued += 1
+        self.mission_id, self.mission, self.status = f"m{self._issued}", command, "accepted"
+        self.resume_check = None  # the last mission's resume is not this one's (Codex M-b review round 5 P1)
+        return None
+
+    def _pause(self, t, command: Pause, context: Context):
+        if self.status == "held":
+            return "held"
+        if self.status not in ("running", "resuming"):
+            return "not_running"
+        if context.near_tracker:
+            return "near_tracking_active"
+        if self.paused_since is None:
+            self._stop_boundary(t)
+        else:  # paused again while resuming: the same stop goes on (one open interval), a new boundary
+            self.mission_gen += 1
+        self.status = "paused"
+        return None
+
+    def _resume(self, t, command: Resume, context: Context):
+        if self.status == "held":
+            return "held"
+        if self.status != "paused":
+            return "not_paused"
+        if context.stop_kind != "none":
+            return "stopping"
+        self.status = "resuming"
+        return None
+
+    def _cancel(self, t, command: Cancel, context: Context):
+        if self.status not in ACTIVE or self.status == "cancelling":
+            return "not_running"
+        if command.mission_id is not None and command.mission_id != self.mission_id:
+            return "unknown_mission"
+        if self.status == "accepted":  # nothing has moved yet
+            self.status = "cancelled"
+            self.mission_gen += 1
+            return None
+        if self.paused_since is None:
+            self._stop_boundary(t)
+        else:  # cancelled while paused or resuming: the open stop goes on, the cancel is a boundary of its own
+            self.mission_gen += 1
+        self.status = "cancelling"
+        return None
+
+    def _stop_boundary(self, t: float) -> None:
+        self.paused_since = t
+        self.stop_seen_s = None
+        self.not_stopped = False
+        self.stop_pose = None
+        self.pause_hold_count = None
+        self.pause_holding = self.pause_release_pending = False
+        self.pauses.append([t, None])
+        self.mission_gen += 1
+
+    def _hold_on(self, t, command: HoldOn, context: Context):
+        return None if self.hold_on(t, record=False) else "not_running"
+
+    def _hold_off(self, t, command: HoldOff, context: Context):
+        return None if self.hold_off(t, record=False) else "not_held"
+
+    # --- the arbiter's hold (M-b B6) ------------------------------------------------------------------------------
+    def hold_on(self, t: float, *, record: bool = True) -> bool:
+        """The operator takes over (TELEOP): an active mission is held -- its work clock stops (one open stop), a
+        new generation, a resume's checks dropped. Held is left only by ``hold_off`` (to paused) or a cancel."""
+        if self.status not in ("accepted", "running", "paused", "resuming"):
+            return False
+        if self.paused_since is None:
+            self._stop_boundary(t)
+        else:
+            self.mission_gen += 1
+        self.status = "held"
+        self.resume_check = None
+        if record:
+            self._record(t, "hold_on")
+        return True
+
+    def hold_off(self, t: float, *, record: bool = True) -> bool:
+        """The operator hands back: held becomes paused, the stop stays open and a resume is needed (its checks see
+        that the truck was moved)."""
+        if self.status != "held":
+            return False
+        self.status = "paused"
+        self.mission_gen += 1
+        if record:
+            self._record(t, "hold_off")
+        return True
+
+    def _record(self, t: float, command: str) -> None:
+        self.log.append({"t": t, "command": command, "accepted": True, "reason": None, "mission_id": self.mission_id,
+                         "status": self.status})
+
+    # --- transitions the core makes ------------------------------------------------------------------------------
+    def start(self) -> None:
+        """The mission's first tick runs."""
+        if self.status == "accepted":
+            self.status = "running"
+
+    def resumed(self, t: float) -> float:
+        """The resume steps passed: running again. Returns the pause's length (deadline-type anchors move by it)."""
+        if self.status != "resuming":
+            raise RuntimeError(f"resumed from {self.status}")
+        length = self._close_pause(t)
+        self.status = "running"
+        self.mission_gen += 1
+        return length
+
+    def refuse_resume(self, t: float, reason: str) -> None:
+        """The resume cannot finish (E5 ``no_resume``): back to paused, the stop still open; a new resume is
+        needed (or a cancel)."""
+        if self.status != "resuming":
+            raise RuntimeError(f"refuse_resume from {self.status}")
+        self.status = "paused"
+        self.log.append({"t": t, "command": "resume", "accepted": False, "reason": reason,
+                         "mission_id": self.mission_id, "status": self.status})
+
+    def cancelled(self, t: float) -> None:
+        """Standing still confirmed after a cancel."""
+        if self.status != "cancelling":
+            raise RuntimeError(f"cancelled from {self.status}")
+        self._close_pause(t)
+        self.status = "cancelled"
+
+    def finish(self, outcome: str, t: float | None) -> None:
+        """The mission's own end (``done`` or ``failed``) at loop time ``t``: an open pause closes there, so the
+        next mission's work clock does not stay stopped (``t`` None: before any tick -- the pause closes at its own
+        start)."""
+        if outcome not in ("done", "failed"):
+            raise ValueError(outcome)
+        if self.status in ACTIVE:
+            self._close_pause(self.paused_since if t is None and self.paused_since is not None else t)
+            self.status = outcome
+
+    def _close_pause(self, t: float) -> float:
+        if self.paused_since is None:
+            return 0.0
+        self.pauses[-1][1] = t
+        length = t - self.paused_since
+        self.paused_since = None
+        return length
+
+    # --- the work clock ------------------------------------------------------------------------------------------
+    @property
+    def stopped(self) -> bool:
+        """Paused, resuming, held or cancelling: the mission's work does not run this tick."""
+        return self.status in ("paused", "resuming", "held", "cancelling")
+
+    def work_elapsed(self, since: float, now: float) -> float:
+        """``now - since`` without the pauses inside that interval; exactly ``now - since`` before any pause."""
+        if not self.pauses:
+            return now - since
+        paused = 0.0
+        for start, end in self.pauses:
+            end_ = now if end is None else end
+            lo, hi = max(start, since), min(end_, now)
+            if hi > lo:
+                paused += hi - lo
+        return (now - since) - paused

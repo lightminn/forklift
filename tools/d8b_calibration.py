@@ -423,9 +423,21 @@ def check_hashes(run: Run) -> None:
             raise ValueError(f"{run.key}: {key} missing or malformed in result.json")
 
 
+def check_not_recorded(run) -> None:
+    """A boundary-recorded run (--record-boundary, M-a0) applies the near bounds but is never a bounds
+    measurement run: the recorder can shift wall-clock timing (docs/plans/2026-10-15-m-a05-boundary.md
+    section 5). A record without the argument predates it and was not recorded."""
+    from forklift_core.mission.boundary_record import measurement_refusal
+
+    reason = measurement_refusal(run.result)
+    if reason is not None:
+        raise ValueError(f"{run.key}: {reason} (never a bounds measurement run)")
+
+
 def check_contract(runs: list[Run]) -> dict:
     for run in runs:
         check_hashes(run)
+        check_not_recorded(run)
     shared = {key: runs[0].meta.get(key) for key in CONTRACT_KEYS}
     shared.update({key: runs[0].result.get(key) for key in HASH_KEYS})
     for run in runs[1:]:

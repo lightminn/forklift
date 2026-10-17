@@ -610,6 +610,7 @@ def check_calibration(run: CAL.Run, key: str, calibration: dict) -> None:
     """The run is the one the calibration measured, under its contract and hashes, so its
     L applies here (re-review P2)."""
     contract = calibration["contract"]
+    CAL.check_not_recorded(run)  # a boundary-recorded run is never measurement evidence (M-a0)
     for k in CAL.CONTRACT_KEYS:
         if run.meta.get(k) != contract.get(k):
             raise ValueError(f"{key}: meta {k} differs from the calibration's contract")

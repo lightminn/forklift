@@ -1,0 +1,699 @@
+{
+ "jobs": [
+  3150,
+  3166
+ ],
+ "rule": "A swap of two neighbouring statements is judged observable when (1) a hook or port call reads state the other statement writes, (2) a refusal (require, or a method that calls it) can end the call between them and the state left differs, (3) a callback run inside a call reads a name the other statement binds, or (4) a value is read before or after a state change it depends on. Exceptions the mission does not model (constructors and queries on well-formed planner output) and dict key order alone are not counted. The 12 swaps judged observable (one more after Codex round 5: a refused realignment install leaves the new follower unrun) got behaviour tests (batch 11 and B8); these are the rest.",
+ "swaps": [
+  {
+   "line": 176,
+   "swap": "depth_ = geometry.axle_to_fork_tip_m + geometry.pallet_depth <-> half_ = sum(((y1 - y0) / 2 for _, _, y0, y1 in bla",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 316,
+   "swap": "transition('near_tracking_stopped', t) <-> state['near_tracking']['arrival'] = {'time_s': t, ",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 458,
+   "swap": "start = PlanningPose(float(rear[0]), float(rear[1]), float(r <-> obstacle['deadline'] = hooks.wall() + 20.0",
+   "category": "a wall-clock reading, a display or a log line moved past a pure computation: the order among port calls is unchanged"
+  },
+  {
+   "line": 491,
+   "swap": "obstacle['live_retry_after_s'] = t + 1.0 <-> obstacle['live_replanned'][ms.phase] = False",
+   "category": "different keys of one container: the same state, at most a different dict key order (the A/B compare ignores key order)"
+  },
+  {
+   "line": 496,
+   "swap": "trackers[ms.phase] = RearAxlePathTracker(live.poses, live.di <-> hooks.write_paths()",
+   "category": "a follower built from a planned path: the constructor raises only on malformed planner output, not a modelled path; the other statement does not read the follower"
+  },
+  {
+   "line": 612,
+   "swap": "acting = (ms.phase in ('observe', 'approach', 'transport', ' <-> pocket_phase = options.pocket_check and (ms.phase ",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 687,
+   "swap": "trace.setdefault('first_zero_s', t) <-> trace.setdefault('reason', why)",
+   "category": "different keys of one container: the same state, at most a different dict key order (the A/B compare ignores key order)"
+  },
+  {
+   "line": 714,
+   "swap": "stopped_now = slam['stop_now'] if slam is not None else floa <-> cusp_prefix_blocked_ = cusp_handed_ is not None an",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 764,
+   "swap": "require(not (ms.phase == 'observe' and realign_active() and  <-> apply_tracker_profile, arm_docking = (self.apply_t",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 769,
+   "swap": "pre_ = obstacle['backoff'].pop('stop_cause', None) if obstac <-> perm_ = obstacle['layer'].permission",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 790,
+   "swap": "start = PlanningPose(float(rear[0]), float(rear[1]), float(r <-> replan_start = wall()",
+   "category": "a wall-clock reading, a display or a log line moved past a pure computation: the order among port calls is unchanged"
+  },
+  {
+   "line": 792,
+   "swap": "tight = replace(planner_config, clearance_m=0.0) <-> replan_start = wall()",
+   "category": "a wall-clock reading, a display or a log line moved past a pure computation: the order among port calls is unchanged"
+  },
+  {
+   "line": 792,
+   "swap": "tight = replace(planner_config, clearance_m=0.0) <-> tight_travel = replace(travel_config, clearance_m=",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 829,
+   "swap": "escape_, escape_cands_ = find_escape(t, rear, leg_dir_e, kap <-> old_d_ = -1 if leg_dir_e >= 0 else 1",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 910,
+   "swap": "clearance_used_ = 0.0 <-> state['observation_waypoint_selected'] = list(coor",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 929,
+   "swap": "mission_again = plan_transport(grid_world(scenario), planner <-> mission_clearance_ = float(planner_config.clearanc",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 942,
+   "swap": "mission_again = plan_transport(grid_world(scenario), tight,  <-> mission_clearance_ = 0.0",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 962,
+   "swap": "clearance_used_ = mission_clearance_ <-> state['near_capture']['waypoint'] = near_again.pos",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 975,
+   "swap": "obstacle['replans'].append({'phase': ms.phase, 'time_s': t,  <-> obstacle['deadline'] = None",
+   "category": "a wall-clock reading, a display or a log line moved past a pure computation: the order among port calls is unchanged"
+  },
+  {
+   "line": 986,
+   "swap": "obstacle['replans'][-1].update(backoff=True, failed=False, e <-> obstacle['escapes'][ms.phase] = obstacle['escapes'",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 986,
+   "swap": "obstacle['replans'][-1].update(backoff=True, failed=False, e <-> config0 = obstacle.get('backoff', {}).get('config'",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 988,
+   "swap": "config0 = obstacle.get('backoff', {}).get('config', trackers <-> obstacle['replans'][-1].update(backoff=True, faile",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 989,
+   "swap": "obstacle['backoff'] = {'phase': ms.phase, 'config': config0, <-> obstacle.setdefault('replan_wait', {}).pop(ms.phas",
+   "category": "different keys of one container: the same state, at most a different dict key order (the A/B compare ignores key order)"
+  },
+  {
+   "line": 995,
+   "swap": "trackers[ms.phase] = RearAxlePathTracker(replanned.poses, re <-> paths[ms.phase] = replanned",
+   "category": "a follower built from a planned path: the constructor raises only on malformed planner output, not a modelled path; the other statement does not read the follower"
+  },
+  {
+   "line": 995,
+   "swap": "trackers[ms.phase] = RearAxlePathTracker(replanned.poses, re <-> ms.phase_started = t",
+   "category": "a follower built from a planned path: the constructor raises only on malformed planner output, not a modelled path; the other statement does not read the follower"
+  },
+  {
+   "line": 1013,
+   "swap": "obstacle.setdefault('replan_wait', {})[ms.phase] = True <-> requested_speed = 0.0",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 1016,
+   "swap": "back_ok_ = not escape_skips_back_ <-> backs = obstacle.setdefault('backoffs', {})",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 1040,
+   "swap": "leg_dir = obstacle.get('backoff', {}).get('leg_dir') <-> backs[ms.phase] = backs.get(ms.phase, 0) + 1",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 1043,
+   "swap": "d = -1 if leg_dir >= 0 else 1 <-> n_ = max(1, int(math.ceil(BACKOFF_M / 0.04)))",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 1055,
+   "swap": "config0 = obstacle.get('backoff', {}).get('config', trackers <-> back = PlanResult(True, 'backoff', np.column_stack",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 1062,
+   "swap": "trackers[ms.phase] = RearAxlePathTracker(back.poses, back.di <-> paths[ms.phase] = back",
+   "category": "a follower built from a planned path: the constructor raises only on malformed planner output, not a modelled path; the other statement does not read the follower"
+  },
+  {
+   "line": 1062,
+   "swap": "trackers[ms.phase] = RearAxlePathTracker(back.poses, back.di <-> ms.phase_started = t",
+   "category": "a follower built from a planned path: the constructor raises only on malformed planner output, not a modelled path; the other statement does not read the follower"
+  },
+  {
+   "line": 1084,
+   "swap": "require(len(recent) <= 3, f'obstacle_blocked in {ms.phase}:  <-> leg_replans = sum((1 for r in obstacle['replans'] ",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 1085,
+   "swap": "leg_replans = sum((1 for r in obstacle['replans'] if r['phas <-> require(len(recent) <= 3, f'obstacle_blocked in {m",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 1088,
+   "swap": "obstacle.setdefault('progress', {}).clear() <-> obstacle.setdefault('replan_wait', {}).pop(ms.phas",
+   "category": "different keys of one container: the same state, at most a different dict key order (the A/B compare ignores key order)"
+  },
+  {
+   "line": 1093,
+   "swap": "config_ = trackers[ms.phase].config <-> hooks.write_paths()",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 1124,
+   "swap": "raw_tracking_ = tracking <-> cusp_holds.sync(t, ms.phase, id(trackers[ms.phase]",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 1132,
+   "swap": "cusp_holds.sync(t, ms.phase, id(trackers[ms.phase]), tracker <-> raw_tracking_ = tracking",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 1211,
+   "swap": "d7_owned = ms.phase == 'transport' and bool(d7_docking_.get( <-> dock_stop = ms.phase == 'transport' and d7_docking",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 1214,
+   "swap": "dock_stop = ms.phase == 'transport' and d7_docking_.get('sta <-> d7_owned = ms.phase == 'transport' and bool(d7_doc",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 1229,
+   "swap": "tracking = replace(tracking, status='braking', speed_mps=0.0 <-> ms.dock_stop_ticks = ms.dock_stop_ticks + 1 if sla",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 1301,
+   "swap": "start = PlanningPose(float(rear[0]), float(rear[1]), float(r <-> ms.slam_stall_ticks = 0",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 1330,
+   "swap": "obstacle['layer'].refresh(t, obstacle['applied'], obstacle[' <-> obstacle['reprojections'] = obstacle.get('reprojec",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 1372,
+   "swap": "stall_config = trackers[ms.phase].config <-> hooks.show_path(replanned, 'Transport' if ms.phase",
+   "category": "a wall-clock reading, a display or a log line moved past a pure computation: the order among port calls is unchanged"
+  },
+  {
+   "line": 1375,
+   "swap": "stall_config = obstacle.pop('backoff')['config'] <-> obstacle.setdefault('replan_wait', {}).pop(ms.phas",
+   "category": "different keys of one container: the same state, at most a different dict key order (the A/B compare ignores key order)"
+  },
+  {
+   "line": 1464,
+   "swap": "replanned = plan_transport_leg(grid_world(slam.get('transpor <-> replan_start = wall()",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 1464,
+   "swap": "replanned = plan_transport_leg(grid_world(slam.get('transpor <-> replan_wall_s = wall() - replan_start",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 1487,
+   "swap": "state['cusp_replans'].append({'time_s': t, 'loop_step': step <-> state['planning_wall_s'] = (state.get('planning_wa",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 1506,
+   "swap": "trackers[ms.phase] = RearAxlePathTracker(replanned.poses, re <-> hooks.show_path(replanned, 'Transport', (1.0, 0.65",
+   "category": "a follower built from a planned path: the constructor raises only on malformed planner output, not a modelled path; the other statement does not read the follower"
+  },
+  {
+   "line": 1616,
+   "swap": "tracking = replace(tracking, status='braking', speed_mps=0.0 <-> ms.observe_stall_ticks = 0",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 1644,
+   "swap": "paths['observe'] = replanned <-> state.setdefault('paths', {})['observe'] = path_re",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 1645,
+   "swap": "state.setdefault('paths', {})['observe'] = path_record(repla <-> paths['observe'] = replanned",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 1710,
+   "swap": "trackers['approach'].restart_speed_slew(0.0) <-> requested_speed = 0.0",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 1745,
+   "swap": "safety_hold = True <-> tracking = replace(tracking, status='arrived', spe",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 1746,
+   "swap": "tracking = replace(tracking, status='arrived', speed_mps=0.0 <-> safety_hold = True",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 1754,
+   "swap": "trackers[ms.phase].restart_speed_slew(0.0) <-> requested_speed = 0.0",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 1811,
+   "swap": "tracking = replace(tracking, status='tracking', speed_mps=0. <-> requested_speed = 0.0",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 1900,
+   "swap": "reasons = ';'.join((candidate['status'] for candidate in sta <-> state['planning_status'] = 'all_candidates_exhaust",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 1912,
+   "swap": "trackers['observe'] = RearAxlePathTracker(observe_plan.poses <-> paths['observe'] = observe_plan",
+   "category": "a follower built from a planned path: the constructor raises only on malformed planner output, not a modelled path; the other statement does not read the follower"
+  },
+  {
+   "line": 1912,
+   "swap": "trackers['observe'] = RearAxlePathTracker(observe_plan.poses <-> ms.phase_started = t",
+   "category": "a follower built from a planned path: the constructor raises only on malformed planner output, not a modelled path; the other statement does not read the follower"
+  },
+  {
+   "line": 1992,
+   "swap": "inject_ = near is not None and options.near_inject is not No <-> state['perception'] = attempt.copy()",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 1992,
+   "swap": "inject_ = near is not None and options.near_inject is not No <-> raw_observation = observation",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 2072,
+   "swap": "planning_trace = [] <-> planning_start = wall()",
+   "category": "a wall-clock reading, a display or a log line moved past a pure computation: the order among port calls is unchanged"
+  },
+  {
+   "line": 2081,
+   "swap": "plans = plan_transport(grid_world(scenario), planner_config, <-> state.setdefault('planning_traces', []).append(pla",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 2085,
+   "swap": "state.setdefault('planning_traces', []).append(planning_trac <-> plans = plan_transport(grid_world(scenario), plann",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 2085,
+   "swap": "state.setdefault('planning_traces', []).append(planning_trac <-> state['planning_wall_s'] += wall() - planning_star",
+   "category": "a wall-clock reading, a display or a log line moved past a pure computation: the order among port calls is unchanged"
+  },
+  {
+   "line": 2161,
+   "swap": "state['paths'] = {name: path_record(path) for name, path in  <-> record_tracker_configs()",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 2173,
+   "swap": "hooks.echo('PLANNED ' + record_json({k: {'length_m': v.lengt <-> near_leg = None",
+   "category": "a wall-clock reading, a display or a log line moved past a pure computation: the order among port calls is unchanged"
+  },
+  {
+   "line": 2214,
+   "swap": "state['observe_replan_leg'] = {'serial': state['observe_repl <-> paths['observe'] = near_leg",
+   "category": "different keys of one container: the same state, at most a different dict key order (the A/B compare ignores key order)"
+  },
+  {
+   "line": 2218,
+   "swap": "paths['observe'] = near_leg <-> state['observe_replan_leg'] = {'serial': state['ob",
+   "category": "different keys of one container: the same state, at most a different dict key order (the A/B compare ignores key order)"
+  },
+  {
+   "line": 2218,
+   "swap": "paths['observe'] = near_leg <-> trackers['observe'] = RearAxlePathTracker(near_leg",
+   "category": "a follower built from a planned path: the constructor raises only on malformed planner output, not a modelled path; the other statement does not read the follower"
+  },
+  {
+   "line": 2222,
+   "swap": "trackers['observe'] = RearAxlePathTracker(near_leg.poses, ne <-> paths['observe'] = near_leg",
+   "category": "a follower built from a planned path: the constructor raises only on malformed planner output, not a modelled path; the other statement does not read the follower"
+  },
+  {
+   "line": 2222,
+   "swap": "trackers['observe'] = RearAxlePathTracker(near_leg.poses, ne <-> state['observation_waypoint_selected'] = near_leg.",
+   "category": "a follower built from a planned path: the constructor raises only on malformed planner output, not a modelled path; the other statement does not read the follower"
+  },
+  {
+   "line": 2288,
+   "swap": "refusal = f'near_capture_misaligned:dry_run:{asdict(dry)}' <-> straight = None",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 2307,
+   "swap": "trackers[name_] = RearAxlePathTracker(redraw_plans[name_].po <-> state['paths'][name_] = path_record(redraw_plans[n",
+   "category": "a follower built from a planned path: the constructor raises only on malformed planner output, not a modelled path; the other statement does not read the follower"
+  },
+  {
+   "line": 2320,
+   "swap": "start_near_realign(t, attempt_number) <-> near_realign_ = True",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 2323,
+   "swap": "require(straight is not None, refusal) <-> approach_config = acceptance_config",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 2341,
+   "swap": "trackers['approach'] = RearAxlePathTracker(straight.poses, s <-> hooks.show_path(straight, 'Approach', (0.05, 0.45,",
+   "category": "a follower built from a planned path: the constructor raises only on malformed planner output, not a modelled path; the other statement does not read the follower"
+  },
+  {
+   "line": 2476,
+   "swap": "rear = slam_rear(now_s) <-> rear_stamp = now_s",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 2488,
+   "swap": "attempt['slam_error'] = slam_error() <-> attempt['control_pose_source'] = 'slam_estimate'",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 2488,
+   "swap": "attempt['slam_error'] = slam_error() <-> attempt['capture_control'] = {'time_s': now_s, 'co",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 2494,
+   "swap": "attempt['capture_control'] = {'time_s': now_s, 'control_rear <-> attempt['slam_error'] = slam_error()",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 2502,
+   "swap": "prior = options.pallet_prior_loaded <-> attempt.update({'frame_diagnostics': asdict(frame_",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 2507,
+   "swap": "detector_input = adapter.detector_input(scene_input, options <-> state['detector_params'] = asdict(params)",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 2507,
+   "swap": "detector_input = adapter.detector_input(scene_input, options <-> attempt['base_from_optical'] = {'translation_m': n",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 2510,
+   "swap": "attempt['base_from_optical'] = {'translation_m': np.asarray( <-> detector_input = adapter.detector_input(scene_inpu",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 2510,
+   "swap": "attempt['base_from_optical'] = {'translation_m': np.asarray( <-> attempt['depth_quantize_mm'] = options.depth_quant",
+   "category": "different keys of one container: the same state, at most a different dict key order (the A/B compare ignores key order)"
+  },
+  {
+   "line": 2518,
+   "swap": "attempt['depth_quantize_mm'] = options.depth_quantize_mm <-> attempt['base_from_optical'] = {'translation_m': n",
+   "category": "different keys of one container: the same state, at most a different dict key order (the A/B compare ignores key order)"
+  },
+  {
+   "line": 2518,
+   "swap": "attempt['depth_quantize_mm'] = options.depth_quantize_mm <-> detection = detect_pockets(detector_input, prior, ",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 2519,
+   "swap": "detection = detect_pockets(detector_input, prior, params) <-> attempt['depth_quantize_mm'] = options.depth_quant",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 2553,
+   "swap": "releasing = slam is not None and slam.get('pending_release') <-> require, slam_release, slam_rear = (hooks.require,",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 2560,
+   "swap": "rear = slam_rear(t) <-> releasing = False",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 2587,
+   "swap": "target_steering = steering_command.copy() if estop_holding o <-> actual_steering = hooks.steering_position()",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 2611,
+   "swap": "wheel_speed = previous + float(np.clip(target_speed - previo <-> cap = obstacle.get('permission_cap')",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 2612,
+   "swap": "cap = obstacle.get('permission_cap') <-> wheel_speed = previous + float(np.clip(target_spee",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 2618,
+   "swap": "drive = ackermann_command(wheel_speed, wheel_curvature, driv <-> rate = settings['steering_command_rate_rad_s'] * d",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 2619,
+   "swap": "rate = settings['steering_command_rate_rad_s'] * dt <-> drive = ackermann_command(wheel_speed, wheel_curva",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 2704,
+   "swap": "path_ = layer_.check_candidate(leg_, current_pose=pose_, dir <-> kappa_ = held_kappa()",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 2705,
+   "swap": "arc_ = layer_.check_arc_candidate(current_pose=pose_, curvat <-> timeout_ = layer_.permission.config.sensor_timeout",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 2709,
+   "swap": "timeout_ = layer_.permission.config.sensor_timeout_s <-> arc_ = layer_.check_arc_candidate(current_pose=pos",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 2759,
+   "swap": "passes_ = layer_.check_candidate(trajectory, current_pose=po <-> plain_ = layer_.check_candidate(trajectory, curren",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 2759,
+   "swap": "passes_ = layer_.check_candidate(trajectory, current_pose=po <-> stop_need_ = pconf_.stopping.distance_m(trackers[m",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 2760,
+   "swap": "stop_need_ = pconf_.stopping.distance_m(trackers[ms.phase].c <-> passes_ = layer_.check_candidate(trajectory, curre",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 2761,
+   "swap": "unknown_near_ = plain_.blocked in ('unknown', 'edge') and pl <-> age_ = now_s - min(plain_.oldest_free_s, passes_.o",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 2763,
+   "swap": "age_ = now_s - min(plain_.oldest_free_s, passes_.oldest_free <-> unknown_near_ = plain_.blocked in ('unknown', 'edg",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 2763,
+   "swap": "age_ = now_s - min(plain_.oldest_free_s, passes_.oldest_free <-> silent_ = sorted((n_ for n_, last_ in layer_.last_",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 2764,
+   "swap": "silent_ = sorted((n_ for n_, last_ in layer_.last_scan_s.ite <-> age_ = now_s - min(plain_.oldest_free_s, passes_.o",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 2764,
+   "swap": "silent_ = sorted((n_ for n_, last_ in layer_.last_scan_s.ite <-> occupied_ = passes_.blocked == 'occupied'",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 2989,
+   "swap": "obstacle.setdefault('progress', {}).clear() <-> obstacle.setdefault('replan_wait', {}).pop('transp",
+   "category": "different keys of one container: the same state, at most a different dict key order (the A/B compare ignores key order)"
+  },
+  {
+   "line": 3175,
+   "swap": "result = dock(slam['reference_points'], live, rear_from_lase <-> match_start = time.monotonic()",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 3175,
+   "swap": "result = dock(slam['reference_points'], live, rear_from_lase <-> expected = compose(estimate, compose(invert(tuple(",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 3225,
+   "swap": "docking.setdefault('rounds', []).append({'round': round_numb <-> step_shift = compose(goal, invert(previous_goal))",
+   "category": "pure computations or locals only"
+  },
+  {
+   "line": 3265,
+   "swap": "move_withdraw(step_shift) <-> docking['to_world'] = list(compose(compose(referen",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 3265,
+   "swap": "move_withdraw(step_shift) <-> docking['previous_goal'] = list(goal)",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 3421,
+   "swap": "applied_before_ = [float(v) for v in slam['tracker'].applied <-> before_ = slam_rear(now_s)",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 3434,
+   "swap": "obstacle['layer'].refresh(now_s, obstacle['applied'], obstac <-> obstacle['reprojections'] = obstacle.get('reprojec",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 3434,
+   "swap": "obstacle['layer'].refresh(now_s, obstacle['applied'], obstac <-> reprojected_ = {'version': obstacle['version'], 'a",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 3437,
+   "swap": "reprojected_ = {'version': obstacle['version'], 'applied': l <-> obstacle['layer'].refresh(now_s, obstacle['applied",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 3775,
+   "swap": "tip_x, rear_x = (near['fork_tip_x_m'], -abs(options.rear_axl <-> face = near_tracking.carried_face(latest_.held, wi",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 3812,
+   "swap": "gaps_ = near_tracking.blade_gaps(face, near['blades'], (0.0, <-> lat_sweep = near_tracking.lateral_sweep_m(kappa_b,",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 3897,
+   "swap": "corr_record['revision'] = near_install(now_s, plans_, target <-> corr = near_tracking.correction_installed(corr, no",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 3995,
+   "swap": "target_, _ = G2.planning_target(options.planning_target, sit <-> driven_ = trackers['approach'].config",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 4009,
+   "swap": "plans_, record_ = redraw_docking(grid_world(scenario), Plann <-> previous_ = pocket['planning_pickup']",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 4052,
+   "swap": "plans_, record_, trajectories_ = redraw_docking_traced(grid_ <-> raw_ = adapter.estimate_world_pallet_site(base_xy_",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 4052,
+   "swap": "plans_, record_, trajectories_ = redraw_docking_traced(grid_ <-> sites_ = site_poses(target_, geometry)",
+   "category": "the other statement writes only a local name or a value the call does not read; the call's refusal (if any) leaves the same state"
+  },
+  {
+   "line": 4063,
+   "swap": "held_ = held_pockets(observation_, tuple((float(v) for v in  <-> sites_ = site_poses(target_, geometry)",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 4063,
+   "swap": "held_ = held_pockets(observation_, tuple((float(v) for v in  <-> widths_ = (observation_.left.width_m, observation_",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 4066,
+   "swap": "face_distance_ = near_tracking.rollout_face_distance(held_,  <-> points_ = []",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 4105,
+   "swap": "pred_ = near_tracking.protection_prediction(arrays_, config_ <-> retry_ = near_tracking.retry_allowed('replan_rejec",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 4109,
+   "swap": "retry_ = near_tracking.retry_allowed('replan_rejected', near <-> pred_ = near_tracking.protection_prediction(arrays",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 4109,
+   "swap": "retry_ = near_tracking.retry_allowed('replan_rejected', near <-> lost_ = options.near_drop_frames_from_m is not Non",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 4111,
+   "swap": "lost_ = options.near_drop_frames_from_m is not None <-> retry_ = near_tracking.retry_allowed('replan_rejec",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 4160,
+   "swap": "trackers[name_] = RearAxlePathTracker(path_.poses, path_.dir <-> paths[name_] = path_",
+   "category": "a follower built from a planned path: the constructor raises only on malformed planner output, not a modelled path; the other statement does not read the follower"
+  },
+  {
+   "line": 4160,
+   "swap": "trackers[name_] = RearAxlePathTracker(path_.poses, path_.dir <-> state['paths'][name_] = path_record(path_)",
+   "category": "a follower built from a planned path: the constructor raises only on malformed planner output, not a modelled path; the other statement does not read the follower"
+  },
+  {
+   "line": 4168,
+   "swap": "entry_['trackers'][name_] = near_tracking.path_digest(*track <-> entry_['paths'][name_] = {'sha256': near_tracking.",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 4177,
+   "swap": "obstacle.setdefault('progress', {}).clear() <-> leg_, dir_ = trackers['approach'].leg_ahead()",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 4394,
+   "swap": "near.update(episode=episode, fork_tip_x_m=frame_geo.fork_tip <-> near.setdefault('stop_events', [])",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  },
+  {
+   "line": 4406,
+   "swap": "state['near_tracking']['start'] = {'built_s': now_s, 'attemp <-> near['history'].clear()",
+   "category": "side-effect-free queries or records read before or after a write they do not read"
+  }
+ ]
+}

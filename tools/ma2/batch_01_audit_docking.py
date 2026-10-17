@@ -1,0 +1,63 @@
+"""M-a2 batch 1: the truth audit (static bans kept as S, runner checks R), the D7c round-two stop and the delivery
+docking's grid sweep (core behaviour, D/N with mutations), and the runner's traced redraw (R)."""
+
+T = "tests/unit/"
+D7C = T + "tools/test_d7c_round2_prefix.py::test_the_runner_refuses_on_it_only_with_the_flag::"
+AUDIT = T + "test_isaac_truth_audit.py::"
+DOCK = T + "mission/test_core_docking_helpers.py::"
+CORE = "src/forklift_core/mission/core.py"
+
+PROPERTIES = [
+    {"id": "B1:no-props-in-plans", "class": "S", "checks": [AUDIT + "test_every_plan_sees_the_grid_world_without_props::*"],
+     "statement": "every planning call in the runner and the core plans on grid_world(...) (props removed under grid planning)",
+     "tests": [AUDIT + "test_every_plan_sees_the_grid_world_without_props"],
+     "reason": "a static ban over every planning call site (runner and core); a behaviour test cannot enumerate call sites"},
+    {"id": "B1:no-truth-args", "class": "S", "checks": [AUDIT + "test_no_plan_takes_a_ground_truth_argument::*"],
+     "statement": "no planning call takes a ground-truth argument",
+     "tests": [AUDIT + "test_no_plan_takes_a_ground_truth_argument"],
+     "reason": "a static ban over every planning call site's arguments"},
+    {"id": "B1:pickup-obstacle", "class": "R", "checks": [AUDIT + "test_the_planner_pickup_obstacle_is_the_zone_prior_or_the_estimate::*"],
+     "statement": "the planner's pickup obstacle is the zone prior or the estimate, never the true pickup",
+     "tests": [AUDIT + "test_the_planner_pickup_obstacle_is_the_zone_prior_or_the_estimate"],
+     "reason": "grid_kwargs (the planning-grid preparation) stays in the runner's drive()"},
+    {"id": "B1:arg-runtime-viewpoints", "class": "R", "checks": [AUDIT + "test_runtime_viewpoints_cannot_join_grid_planning::*"],
+     "statement": "--runtime-viewpoints is refused with --grid-planning",
+     "tests": [AUDIT + "test_runtime_viewpoints_cannot_join_grid_planning"], "reason": "a runner argument check"},
+    {"id": "B1:arg-grid-perception", "class": "R", "checks": [AUDIT + "test_grid_planning_plans_on_perception_only::*"],
+     "statement": "--grid-planning needs perception with a perception planning target",
+     "tests": [AUDIT + "test_grid_planning_plans_on_perception_only"], "reason": "a runner argument check"},
+    {"id": "B1:traced-redraw", "class": "R",
+     "checks": [T + "mission/test_core_near_field.py::test_the_runners_traced_redraw_returns_its_dry_runs_trajectories_in_call_order_and_is_one_planner_call::*"],
+     "statement": "the runner's redraw_docking_traced rolls its dry runs in order, returns their trajectories and is one recorded Planner call",
+     "tests": [T + "mission/test_core_near_field.py::test_the_runners_traced_redraw_returns_its_dry_runs_trajectories_in_call_order_and_is_one_planner_call"],
+     "reason": "redraw_docking_traced is a runner function (the Planner port's traced form); already a behaviour test, with one wiring check"},
+    {"id": "B1:sweep-every-pose", "class": "D", "checks": [D7C + "2"],
+     "statement": "the delivery straight is accepted only if every pose of its dry run passes the pose check",
+     "tests": [DOCK + "test_an_unaligned_straight_retries_from_the_committed_goal_with_its_partial_record[swept]"],
+     "mutation": {"file": CORE, "find": "swept_clear = all(pose_clear(pose) for pose in dry.trajectory)",
+                  "replace": "swept_clear = True"}},
+    {"id": "B1:stop-check-same-pose-check", "class": "N", "checks": [D7C + "1"],
+     "statement": "the round-two stop is judged with the same pose check as the straight's sweep",
+     "tests": [DOCK + "test_the_round_two_stop_is_judged_with_the_same_pose_check_as_the_straights_sweep"],
+     "mutation": {"file": CORE, "find": "ROUND2_KEEP_M, clear=pose_clear", "replace": "ROUND2_KEEP_M, clear=lambda pose: True"}},
+    {"id": "B1:stop-check-refusal-drops-path", "class": "D", "checks": [D7C + "1"],
+     "statement": "a failed round-two stop check drops the straight (the docking retries instead)",
+     "tests": [DOCK + "test_an_unaligned_straight_retries_from_the_committed_goal_with_its_partial_record[round_two_stop]"],
+     "mutation": {"file": CORE, "find": "if not stop_ok:\n                        path = None",
+                  "replace": "if False:\n                        path = None"}},
+    {"id": "B1:stop-check-only-d7-round1", "class": "N", "checks": [D7C + "4"],
+     "statement": "the round-two stop check runs only with --d7-docking, after an accepted first-round match",
+     "tests": [DOCK + "test_the_round_two_stop_check_runs_only_with_d7_docking_after_an_accepted_first_match"],
+     "mutation": {"file": CORE, "find": "if options.d7_docking and round_number == 1 and result.accepted:",
+                  "replace": "if round_number == 1 and result.accepted:"}},
+    {"id": "B1:round2-keep", "class": "D", "checks": [D7C + "3"],
+     "statement": "round two keeps ROUND2_KEEP_M of the straight",
+     "tests": [DOCK + "test_an_accepted_first_match_moves_the_goal_and_withdraw_installs_the_straight_and_arms_round_two"],
+     "mutation": {"file": CORE, "find": "final_keep = ROUND2_KEEP_M", "replace": "final_keep = 0.9"}},
+    {"id": "B1:delivery-grid-sweep", "class": "N",
+     "checks": [AUDIT + "test_the_delivery_docking_sweep_uses_the_grid_when_grid_planning::*"],
+     "statement": "with grid planning the delivery sweep is checked on the docking grid, never on the ground truth",
+     "tests": [DOCK + "test_with_grid_planning_the_delivery_sweep_is_checked_on_the_docking_grid"],
+     "mutation": {"file": CORE, "find": 'grid_kwargs("docking")["occupancy"], geometry.loaded_footprint',
+                  "replace": 'grid_kwargs("mission")["occupancy"], geometry.loaded_footprint'}},
+]

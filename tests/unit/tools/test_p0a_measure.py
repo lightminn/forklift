@@ -139,6 +139,7 @@ def _team_spec_run(directory, *, garbage_rates=True, steps=1200, speed=0.4):
         wheel_increments_rad=np.array([r[0] for r in rows]), steering_measured_rad=np.array([r[1] for r in rows]),
         scan_stamps_s=t[::12])
     (directory / "meta.json").write_text(json.dumps({
+        "record_boundary": False,
         "encoder_model": model.record(),
         "odometry_geometry": {"wheelbase_m": 0.66, "track_m": 0.53, "wheel_radius_m": radius,
                               "rear_axle_x_in_base_m": rear_x}}))
@@ -195,3 +196,41 @@ def test_runs_with_different_odometry_wheel_radii_are_not_mixed(tmp_path):
         MODULE.odometry_command(SimpleNamespace(run=[a, b], draws=1, start_every=120, max_age_s=None))
     with pytest.raises(SystemExit, match="different odometry wheel radii"):
         MODULE.age_command(SimpleNamespace(run=[a, b], draws=1))
+
+
+def test_a_boundary_recorded_run_is_refused_by_its_meta_even_without_result_json(tmp_path):
+    """M-a0 (Codex round 6, P2): the tables read meta.json and slam_log.npz, so a copied pair from a
+    recorded run is refused by the runner's record_boundary flag in meta.json."""
+    import json
+    from types import SimpleNamespace
+
+    import pytest
+
+    _team_spec_run(tmp_path)
+    meta = json.loads((tmp_path / "meta.json").read_text())
+    meta["record_boundary"] = True
+    (tmp_path / "meta.json").write_text(json.dumps(meta))
+    assert not (tmp_path / "result.json").exists()
+    with pytest.raises(SystemExit, match="never measurement evidence"):
+        MODULE.odometry_command(SimpleNamespace(run=[tmp_path], draws=1, start_every=120, max_age_s=None))
+
+
+def test_a_run_whose_recording_cannot_be_verified_is_refused(tmp_path):
+    """M-a0 (Codex round 7, P2): a meta.json written before the flag (possibly by a recording runner) needs
+    result.json to decide; with neither, the input is refused; result.json decides when it is there."""
+    import json
+    from types import SimpleNamespace
+
+    import pytest
+
+    _team_spec_run(tmp_path)
+    meta = json.loads((tmp_path / "meta.json").read_text())
+    meta.pop("record_boundary")
+    (tmp_path / "meta.json").write_text(json.dumps(meta))
+    with pytest.raises(SystemExit, match="cannot verify"):
+        MODULE.odometry_command(SimpleNamespace(run=[tmp_path], draws=1, start_every=120, max_age_s=None))
+    (tmp_path / "result.json").write_text(json.dumps({"arguments": {"record_boundary": True}}))
+    with pytest.raises(SystemExit, match="never measurement evidence"):
+        MODULE.odometry_command(SimpleNamespace(run=[tmp_path], draws=1, start_every=120, max_age_s=None))
+    (tmp_path / "result.json").write_text(json.dumps({"arguments": {}}))
+    MODULE.odometry_command(SimpleNamespace(run=[tmp_path], draws=1, start_every=120, max_age_s=None))

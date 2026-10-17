@@ -1,6 +1,6 @@
 # 콘솔 인터페이스 계약 초안 (`console/1`)
 
-작성: 2026-10-13 · 상태: **초안, 9절 항목은 메인 개발과 합의함(2026-10-13), 10절 관찰 전용 프로파일도 합의함(2026-10-15). 재개 절차 이름·사유는 잠정이며 M-a 설계 때 확정** · 설계: [개별 지게차 운용 콘솔 설계](../design/2026-10-13-operator-console.md)
+작성: 2026-10-13 · 상태: **초안, 9절 항목은 메인 개발과 합의함(2026-10-13), 10절 관찰 전용 프로파일도 합의함(2026-10-15). 재개 절차 이름·사유는 M-a 설계에서 확정(2026-10-15, 6절)** · 설계: [개별 지게차 운용 콘솔 설계](../design/2026-10-13-operator-console.md)
 
 이 문서는 웹 앱과 차량 쪽 게이트웨이 사이의 메시지(`console/1`)와, 그 뒤에서 차량 스택이 지켜야 할 의미를 적는다. ROS 2 msg/action 정의로 옮길 항목은 8절에 표시한다. 차량 쪽(중재기 M-b, 미션 실행부 M-a)이 생기기 전에는 웹 앱의 가짜 차량 백엔드와, 10절의 관찰 전용 게이트웨이(C2a)가 이 형식을 쓴다.
 
@@ -140,6 +140,7 @@ lease 보유자는 `tick`을 받을 때마다 `{"t": "echo", "session_epoch", "l
 - `camera_latency_bound_s`는 촬영부터 드라이버 수신까지 걸리는 지연의 보수적 상한이다. 측정해서 정하며, 그 전에는 잠정값이다. sensor·sim 시각을 차량 단조 시계로 바꾸지 않고 이 상한으로 덮는다.
 - 같은 촬영을 다시 보내도 `frame_id`와 `acquired_mono`가 바뀌지 않는다. 그래서 오래된 JPEG를 새 번호로 재전송해 나이를 초기화할 수 없다.
 - 카메라나 렌더가 멈추면 새 `frame_id`가 생기지 않는다. 그러면 나이가 계속 커져 영상 조종이 멈춘다. sim 시각이 멈춘 Isaac도 마찬가지다.
+- **Isaac 실행기의 추가 검사(M-c, 2026-10-17).** 실행기는 물리 스텝마다 시작 단조 시각을 알고 있어, 프레임의 픽셀이 보여 주는 스텝(렌더 메타데이터 시각 − 가정한 픽셀 지연)의 시작 시각 `pixel_mono` 도 중재기에 넘긴다. 중재기는 위 식과 함께 `now_mono − pixel_mono ≤ video_max_age_s` 를 보고, 만료 시각도 `pixel_mono + video_max_age_s` 와의 이른 쪽으로 둔다. 그 스텝을 찾지 못하면 그 프레임으로는 영상 조종을 하지 않는다. 위 식보다 엄격한 쪽으로만 더하는 검사이고, `acquired_mono` 는 그대로 실제 수신 시각이다. 근거와 측정은 [M-c 증거](../validation/2026-10-17-m-c-evidence.md) 1.4절.
 - `frame_echo`를 갱신하는 시점은 프레임을 그린 다음 표시 콜백이 실제로 호출됐을 때다(설계 5.3). 탭이 가려지면 콜백이 멈추므로 echo도 멈춘다. 그래도 이 판정은 지원 클라이언트의 표시 진행 보고를 **신뢰한다는 전제** 위에 있다. 브라우저 합성 이후 실제 화면 출력까지는 증명하지 못한다.
 
 ### 4.3 입력 상태
@@ -171,6 +172,8 @@ lease 보유자는 `tick`을 받을 때마다 `{"t": "echo", "session_epoch", "l
 - 보정 버전이 바뀌면 자세를 다시 표현하고 revision을 올린다.
 - 포크에 실린 팔레트(`state: carried`)는 `pose`를 `null`로 싣는다. 차체를 따라 매 주기 움직이는 자세를 대상 목록에 실으면 revision이 쉼 없이 오르기 때문이다. 내려놓으면 그 자리의 자세와 함께 revision을 올린다.
 
+**구현 상태(M-a4, 2026-10-16).** `forklift_core/mission/targets.py` 의 `TargetsBook` 이 위 규칙을 구현한다: 등록·자세·상태·보정 버전이 바뀌면 revision 이 오르고(같은 값이면 오르지 않음), `carried` 는 자세를 싣지 않으며 그동안의 자세 갱신은 무시하고, 내려놓으면 같은 ID 로 그 자리에 `delivered` 로 다시 싣는다. 보정 버전이 바뀌면 자세를 다시 표현하는 함수를 받아 모두 옮기고 revision 을 올린다(배치 실행기에서는 보정 버전이 SLAM release 횟수다 — 추적 중에는 보정이 스캔마다 바뀌어도 지도 자세가 뛰지 않고, release 때 코어가 추정치를 새 프레임으로 옮긴다. 목적지와 내려놓은 팔레트는 코어가 지금 쓰는 목적지 추정(도킹 보정, release 재표현)을 매 틱 따른다). `mission_submit` 은 revision 이 다르면 `reject(stale_targets)`, 없는 ID 나 이미 실린 팔레트는 `reject(invalid)`. 배치 실행기는 시나리오의 팔레트·목적지를 `P-1`·`D-1` 로 등록해 스스로 제출한다.
+
 **거부 사유 코드(초안).** `no_lease`, `lease_reserved`, `stale_epoch`, `stale_lease`, `stale_control`, `stale_arm`, `stale_seq`, `bad_echo`, `expired`, `stale_video`, `not_armed`, `stopped_locked`, `state_forbids_teleop`, `stale_targets`, `permission_denied:<허가 reason>`, `no_feedback:<항목>`, `unsupported`, `busy`, `invalid`.
 
 ## 6. 상태 메시지
@@ -198,8 +201,10 @@ lease 보유자는 `tick`을 받을 때마다 `{"t": "echo", "session_epoch", "l
 
 - 표시용 계획 경로는 `plan: {"revision": n, "poses": [[x_m, y_m, direction], …]}`로, 바뀔 때만 싣는다. 안전 판단에 쓰지 않는다.
 - `mission.status`: `accepted`, `running`, `paused`, `held`(수동 조종 등으로 보류), `resuming`, `done`, `failed`, `cancelled`. 실패·보류에는 `reason`을 붙인다.
-- `mission.resume_steps`: 재개 절차 진행 중일 때 단계별 `pending / ok / failed(reason)`. 단계 이름과 사유(잠정, M-a 설계 때 확정): `stop_confirmed`(`no_speed_feedback`, `not_stopped_timeout`) → `state_verified`(`pose_unbounded`, `load_unknown`, `load_changed`, `insertion_state_unknown`, `fork_in_pocket`, `lift_mismatch`) → `frame_reexpressed`(`reprojection_failed`) → `path_rechecked`(필요하면 재계획 포함; `path_blocked:<허가 reason>`, `replan_failed:<계획기 status>`, `reobserve_required`).
+- `mission.resume_steps`: 재개 절차 진행 중일 때 단계별 `pending / ok / failed(reason)`. 단계 이름과 사유(확정, 2026-10-15 — [M-a 경계 설계 2부](../plans/2026-10-15-m-a05-boundary.md) 8–9절): `stop_confirmed`(`no_speed_feedback`, `not_stopped_timeout`) → `state_verified`(`pose_unbounded`, `load_unknown`, `load_changed`, `insertion_state_unknown`, `fork_in_pocket`, `lift_mismatch`, `hold_episode_changed`, `hold_state_mismatch`, `near_stopped:<근접 정지 사유>`) → `frame_reexpressed`(`reprojection_failed`) → `path_rechecked`(필요하면 재계획 포함; `path_blocked:<허가 reason>`, `replan_failed:<계획기 status>`, `reobserve_required`, `rejoin_failed`). 근접 관측이 소실됐지만 실패로 고정되기 전이면 `state_verified` 는 `pending` 으로 재획득을 기다린다.
+- `mission.resume_result`: 재개 절차를 마치지 않고 다른 동작으로 넘어갈 때의 최종 결과 — `pickup_retry`(근접 불일치·재계획 거절이 기존 집기 재시도로 감), `recovery_only`(축을 따라 빼기만 허용), `no_resume`(재개 정책 표에 없는 조합, hold 중 재정렬, 재결합·재시도 불가). 어느 상태에서 어떤 결과가 나는지는 경계 설계 2부 8절의 표(R1–R15)가 정본이다.
 - `phase_elapsed_s`는 일시정지 동안 멈추는 작업 시간이다. `freshness`의 값들은 멈추지 않는다.
+- **구현 상태(M-a3, 2026-10-16).** 코어의 `safety_state()`(배치 실행기에서는 명령 일정이 있을 때 `mission_safety.jsonl` 로 매 제어 틱)가 이 절의 미션 쪽 값을 낸다: `mission`(`id`·`status`·`generation`·`phase`·작업 시간 `phase_elapsed_s`·재개의 마지막 검사 `resume`·`stop_seen_s`·`not_stopped`), `load`·`fork_in_pocket`(근거 `phase`), 승강 목표, 근접 정지, 보정 버전·hold, 적용 명령, 허가 상한과 사유. 재개 절차의 거절은 `reason` 에 `no_resume:<사유>`·`state_verified:<사유>` 로 싣고 미션은 `paused` 로 돌아간다(새 `mission_resume` 이 필요). 중재기의 정지 종류(`controlled`·`preempt`)는 미션을 일시정지로 넘기고, 해제 뒤에도 `mission_resume` 으로만 재개한다.
 - `command`는 텔레옵 비율에 현재 상한을 곱한 물리 명령이다. `applied`는 slew, 허가 상한, 안전 선점, Ackermann 바퀴 속도 한계, 조향 속도 한계까지 거친 값이다(배치 runner의 `applied_command` 지점과 같은 위치). 화면은 둘을 나란히 보여 준다.
 - `drive_allowed`·`lift_allowed`는 중재기가 **제어 주기마다** 현재 상태로 따로 판정한 결과다(설계 4.5). TELEOP 진입 때 한 번만 보는 것이 아니다.
 - `pacing`은 Isaac에서만 의미가 있다. 실시간 배속을 유지하지 못하면(`ok: false`) 수동 조종을 막는다. 기준은 M-c가 정한다.
@@ -248,7 +253,7 @@ lease 보유자는 `tick`을 받을 때마다 `{"t": "echo", "session_epoch", "l
    - 적재 footprint를 쓰고, `applied`를 정의한다.
 3. **관찰 기기의 STOP — 동의.** 반복 STOP으로 작업을 멈출 수 있는 점은 안전한 쪽의 고장으로 적는다(5절).
 4. **명령 형식 — 동의(비율).** 상태에 물리 명령(`command`)과 적용값(`applied`)을 함께 싣는다(6절).
-5. **재개 절차 단계·사유 — 잠정 동의.** 6절에 적은 이름과 사유이며, M-a 설계 때 실제 분기와 맞춰 확정한다.
+5. **재개 절차 단계·사유 — 확정(2026-10-15).** 6절에 적은 이름과 사유이며, M-a 경계 설계 2부(재개 정책 표 R1–R15)에서 실제 분기와 맞춰 확정했다. 잠정안의 이름은 바꾸지 않고 사유와 `resume_result` 만 더했다.
 6. **수치 예산 — 방법 동의, 측정 근거 수정.** 설계 5.4에 반영했다.
 7. **바퀴 속도 피드백이 없는 차량 — 재무장·재개 금지에 동의, 대안은 보류.** 지금 구현을 실차에 쓰려면 검증된 바퀴·조향 피드백이 필요하다. 수단은 H1/H3에서 확인한다. 스캔 정합이나 영상 정지 감지 같은 다른 정지 확인 수단은 그 결과를 보고 검증 대상으로만 둔다.
 

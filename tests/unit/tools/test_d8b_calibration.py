@@ -504,3 +504,19 @@ def test_the_outer_dwells_cover_their_stand_and_the_margin_beyond():
     dwells = [(2.49968, 0.01e-3, 2.49968, 2.49968), (2.25, 0.02e-3, 2.25, 2.25)]
     assert CAL.bias_bound(2.3, 2.49998, dwells) == pytest.approx(0.02e-3 + CAL.M_U_M)
     assert CAL.bias_bound(2.3, 2.49968 + CAL.OUTER_MARGIN_M + 0.001, dwells) is None
+
+
+def test_a_boundary_recorded_run_is_refused_as_measurement_evidence():
+    """M-a0 (Codex round 4, P2): --record-boundary runs apply the near bounds but never measure them; a
+    record without the argument predates it."""
+    from types import SimpleNamespace
+
+    import pytest
+
+    check = CAL.check_not_recorded
+    check(SimpleNamespace(key="a", result={"arguments": {}}))
+    check(SimpleNamespace(key="b", result={"arguments": {"record_boundary": False}}))
+    with pytest.raises(ValueError, match="never a bounds measurement run"):
+        check(SimpleNamespace(key="c", result={"arguments": {"record_boundary": True}}))
+    source = (ROOT / "tools/d8b_observations.py").read_text()
+    assert "CAL.check_not_recorded(run)" in source

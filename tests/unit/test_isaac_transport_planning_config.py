@@ -21,6 +21,32 @@ from forklift_core.planning.pallet_mission import (
 )
 
 SCRIPT = Path(__file__).resolve().parents[2] / "sim/isaac/run_transport.py"
+CORE = Path(__file__).resolve().parents[2] / "src/forklift_core/mission/core.py"  # moved mission logic (M-a1)
+
+
+
+def runner_run(tree):
+    """run() as one function again: its setup and then drive()'s statements (the M-a1 replay plan R2 split
+    them at the initial plans; drive's prologue that binds the setup's names is left out)."""
+    import copy
+
+    run = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "run")
+    drive = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "drive")
+    body = list(drive.body)
+    while body and (
+        (isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant))
+        or ast.unparse(body[0]).startswith("_bound = ")
+        or (isinstance(body[0], ast.If) and ast.unparse(body[0].test).endswith("in _bound"))
+    ):
+        body.pop(0)
+    merged = copy.copy(run)
+    merged.body = run.body[:-2] + body  # without the hand-over (import, return drive(...))
+    return merged
+
+def _pass_through(call) -> bool:
+    """``f(*a, **k)``: the runner's hook for the core, every argument passed straight on."""
+    return (bool(call.args) and all(isinstance(a, ast.Starred) and isinstance(a.value, ast.Name) for a in call.args)
+            and all(k.arg is None and isinstance(k.value, ast.Name) for k in call.keywords))
 
 
 @pytest.mark.parametrize("d7", [False, True])
@@ -32,11 +58,7 @@ def test_all_runner_planning_calls_use_the_recorded_config(
     monkeypatch, gap, clearance, approach_clearance, d7
 ):
     tree = ast.parse(SCRIPT.read_text())
-    run = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name == "run"
-    )
+    run = runner_run(tree)
     assignments = []
     for node in run.body:
         if not isinstance(node, ast.Assign) or len(node.targets) != 1:
@@ -140,12 +162,14 @@ def test_all_runner_planning_calls_use_the_recorded_config(
         # The priority-5 mission replan after recognition plans to the same pickup.
         pocket={"planning_pickup": scenario.pickup},
     )
+    # The obstacle replan's calls moved to the mission core (M-a1 slice 3c), its names bound to the same ports.
     calls = [
         node
-        for node in ast.walk(run)
+        for node in [*ast.walk(run), *ast.walk(ast.parse(CORE.read_text()))]
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
         and node.func.id in ("plan_observation_leg", "plan_transport")
+        and not _pass_through(node)  # the runner's hook for the core passes straight through
     ]
     # Third observation leg call: the SLAM observe replan (online SLAM plan
     # v3.8, same recorded planner_config, earlier ladder); fourth and fifth:
@@ -166,8 +190,7 @@ def test_all_runner_planning_calls_use_the_recorded_config(
         "plan_transport",
         "plan_transport",
     ]
-    source = SCRIPT.read_text()
-    assert "tight = replace(planner_config, clearance_m=0.0)" in source
+    assert "tight = replace(planner_config, clearance_m=0.0)" in CORE.read_text()
     for call in calls:
         if any(ast.unparse(a) == "tight" for a in call.args[1:3]):
             continue  # the documented zero-clearance retry, built from planner_config
@@ -223,9 +246,8 @@ def test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules():
     # repositioning goal cannot correct sideways, so the tighter tolerance only
     # deadlocks it (docs/validation/2026-09-23-return-to-start-runs.md,
     # 2026-09-26-factory-hall-and-isaac-slam.md).
-    tree = ast.parse(SCRIPT.read_text())
-    rules = []
-    for node in ast.walk(tree):
+    rules = []  # (the mission plan after a detection moved to the mission core, M-a1 slice 4b-iv)
+    for node in [*ast.walk(ast.parse(SCRIPT.read_text())), *ast.walk(ast.parse(CORE.read_text()))]:
         if not isinstance(node, ast.DictComp):
             continue
         source = ast.unparse(node.generators[0].iter)
@@ -258,10 +280,10 @@ def test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules():
 
 
 def test_the_re_observation_tracker_uses_the_repositioning_tolerances():
-    tree = ast.parse(SCRIPT.read_text())
+    # (the re-observation's candidate tracker moved to the mission core, M-a1 slice 4b-iii)
     literal = [
         {k.arg: k.value for k in call.keywords}
-        for call in ast.walk(tree)
+        for call in [*ast.walk(ast.parse(SCRIPT.read_text())), *ast.walk(ast.parse(CORE.read_text()))]
         if isinstance(call, ast.Call)
         and getattr(call.func, "id", "") == "TrackerConfig"
         and isinstance(
@@ -276,10 +298,10 @@ def test_the_re_observation_tracker_uses_the_repositioning_tolerances():
 
 
 def test_every_runner_tracker_releases_gear_change_cusps_the_same_way():
-    tree = ast.parse(SCRIPT.read_text())
+    # (the re-observation's candidate tracker moved to the mission core, M-a1 slice 4b-iii)
     configs = [
         {k.arg: k.value for k in call.keywords}
-        for call in ast.walk(tree)
+        for call in [*ast.walk(ast.parse(SCRIPT.read_text())), *ast.walk(ast.parse(CORE.read_text()))]
         if isinstance(call, ast.Call)
         and getattr(call.func, "id", "") == "TrackerConfig"
     ]
@@ -360,9 +382,8 @@ def test_path_record_keeps_the_interval_through_the_straight_tail():
 
 def test_every_observation_candidate_record_keeps_its_search_attempts():
     """Both branches record every search behind a candidate, with its start."""
-    tree = ast.parse(SCRIPT.read_text())
-    records = []
-    for call in ast.walk(tree):
+    records = []  # the runner's branches and the obstacle replan's fallback, now in the mission core (M-a1 slice 3c)
+    for call in [*ast.walk(ast.parse(SCRIPT.read_text())), *ast.walk(ast.parse(CORE.read_text()))]:
         if (
             isinstance(call, ast.Call)
             and isinstance(call.func, ast.Attribute)
@@ -383,12 +404,11 @@ def test_the_20260921_profile_restores_the_old_observation_heading():
 
     from forklift_core.control.path_tracking import TrackerConfig
 
-    tree = ast.parse(SCRIPT.read_text())
-    function = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "apply_tracker_profile"
-    )
+    from forklift_core.mission.core import apply_tracker_profile_to  # a core function (M-a1 slice 6e)
+
+    source = SCRIPT.read_text()
+    first = source.index("apply_tracker_profile_to(trackers, args.tracker_profile)")
+    assert first < source.index("record_tracker_configs_in(state, trackers)") < source.index("    core = MissionCore(")
 
     def build(profile):
         trackers = {
@@ -399,16 +419,7 @@ def test_the_20260921_profile_restores_the_old_observation_heading():
                 config=TrackerConfig(position_tolerance_m=0.008, yaw_tolerance_rad=0.02)
             ),
         }
-        namespace = {
-            "args": SimpleNamespace(tracker_profile=profile),
-            "trackers": trackers,
-            "replace": replace,
-        }
-        exec(
-            compile(ast.Module(body=[function], type_ignores=[]), str(SCRIPT), "exec"),
-            namespace,
-        )
-        namespace["apply_tracker_profile"]()
+        apply_tracker_profile_to(trackers, profile)
         return trackers
 
     old = build("20260921")
@@ -428,11 +439,15 @@ def test_runtime_viewpoints_extend_the_default_list_before_any_candidate_is_plan
     source = SCRIPT.read_text()
     extend = source.index("args.observation_waypoints = list(args.observation_waypoints) + [")
     first_loop = source.index("for candidate_index, coordinates, extended in initial_candidates:")
-    reobserve = source.index("while next_candidate_index < len(")
+    # The re-observation moved to the mission core (M-a1 slice 4b-iii); it reads the same list, which the
+    # runner hands it after the extension (the core is built later in run()).
+    core = CORE.read_text()
+    reobserve = core.index("while ms.next_candidate_index < len(")
     assert source.count("args.observation_waypoints = list(args.observation_waypoints) + [") == 1
-    assert extend < first_loop < reobserve
+    assert extend < first_loop < source.index("    core = MissionCore(")
+    assert "observation_waypoints=args.observation_waypoints" in source
     assert "if args.runtime_viewpoints:" in source[source.rindex("if args.use_perception:", 0, extend) : extend]
-    assert "args.observation_waypoints" in source[reobserve : reobserve + 120]
+    assert "options.observation_waypoints" in core[reobserve : reobserve + 120]
 
 
 def test_runtime_viewpoints_only_follow_the_default_bay_list():
@@ -478,7 +493,7 @@ def test_runtime_viewpoints_need_both_the_default_list_and_the_bay():
 
 
 def _cusp_replan_branch():
-    tree = ast.parse(SCRIPT.read_text())
+    tree = ast.parse(CORE.read_text())  # the cusp recoveries moved to the mission core (M-a1 slice 4a-iii)
     for node in ast.walk(tree):
         if isinstance(node, ast.If) and "max_cusp_replans" in ast.unparse(node.test):
             return node
@@ -492,7 +507,7 @@ def test_only_a_transport_heading_failure_at_a_cusp_is_replanned():
     parts = {ast.unparse(v) for v in test.values}
     assert parts == {
         "tracking.status == 'failed'",
-        "phase == 'transport'",
+        "ms.phase == 'transport'",
         "tracking.failure == 'endpoint_heading'",
         "tracking.at_cusp",
         "not tracking.off_path",
@@ -507,13 +522,13 @@ def test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules():
     # Moving: keep braking, no plan yet. Stopped means zero command, planar
     # speed and yaw rate, held for 0.1 s -- not the forward speed alone.
     assert "tracking.speed_mps == 0.0" in branch
-    assert "np.linalg.norm(velocity[:2])" in branch
-    assert "robot.get_angular_velocity()[2]" in branch
+    assert "np.linalg.norm(hooks.truth_velocity()[:2])" in branch  # the runner's velocity, as a truth hook
+    assert "hooks.truth_yaw_rate()" in branch  # robot.get_angular_velocity()[2]
     assert "cusp_stop_ticks < cusp_stop_needed" in branch
     assert "replace(tracking, status='braking')" in branch
     # The replan is the active plan everywhere afterwards.
-    assert "state.setdefault('paths', {})[phase] = path_record(replanned)" in branch
-    assert "add_path_display(stage, replanned, 'Transport'" in branch
+    assert "state.setdefault('paths', {})[ms.phase] = path_record(replanned)" in branch
+    assert "hooks.show_path(replanned, 'Transport'" in branch
     assert "state['planning_wall_s'] = " in branch
     # Stopped: the transport leg alone, same planner config, from the measured rear pose.
     # Under SLAM after docking the corrected drop (online SLAM plan v3.8).
@@ -523,13 +538,15 @@ def test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules():
     )
     assert "planner_config" in branch and "travel_config=travel_config" in branch
     # Same tracker configuration as the leg it replaces.
-    assert "trackers[phase].config" in branch.split("RearAxlePathTracker(")[1]
+    assert "trackers[ms.phase].config" in branch.split("RearAxlePathTracker(")[1]
     source = SCRIPT.read_text()
     assert "max_cusp_replans = 2" in source
     assert "cusp_stop_ticks, cusp_stop_needed = 0, 12" in source
     # A failure the branch does not clear still aborts as before.
-    after = source.index("< max_cusp_replans")
-    assert source.index('if tracking.status == "failed":\n                    dump_tracking("failed", tracking)', after) > after
+    after = source.index("recover_ = core.cusp_and_observe_recovery(")
+    assert source.index("command_ = core.command(", after) > after  # whose first rule is the failure dump (4a-iv)
+    command = CORE.read_text()[CORE.read_text().index("    def command("):]
+    assert 'if tracking.status == "failed":\n            dump_tracking("failed", tracking)' in command
 
 
 def test_the_extended_ladder_is_a_second_pass_for_the_first_observation_only():
@@ -537,11 +554,11 @@ def test_the_extended_ladder_is_a_second_pass_for_the_first_observation_only():
     re-observation stays on the earlier ladder (transport-stage plan, T2)."""
     source = SCRIPT.read_text()
     assert "for extended in (False, True)\n            for index, coordinates in enumerate(args.observation_waypoints)" in source
-    tree = ast.parse(source)
-    calls = [
+    calls = [  # the obstacle replan's calls moved to the mission core (M-a1 slice 3c)
         node
-        for node in ast.walk(tree)
+        for node in [*ast.walk(ast.parse(source)), *ast.walk(ast.parse(CORE.read_text()))]
         if isinstance(node, ast.Call) and ast.unparse(node.func) == "plan_observation_leg"
+        and not _pass_through(node)  # the runner's hook for the core passes straight through
     ]
     extended = {
         next(ast.unparse(k.value) for k in c.keywords if k.arg == "extended") for c in calls
@@ -587,7 +604,7 @@ def test_the_carriage_mount_is_guarded_and_checked():
     source = SCRIPT.read_text()
     assert "guard_fn=lift_guard," in source
     assert 'raise adapter.CaptureFailure("lift_not_zero")' in source
-    assert "abs(float(robot.get_joint_positions()[lift_joint])) > 0.001" in source
+    assert "abs(float(cells.robot.get_joint_positions()[lift_joint])) > 0.001" in source
     assert '"Perception camera local pose differs from the planned mount"' in source
     for rule in (
         '"--perception-mount carriage_low needs --use-perception"',
@@ -599,13 +616,15 @@ def test_the_carriage_mount_is_guarded_and_checked():
 
 def test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the_mount():
     source = SCRIPT.read_text()
-    # Both detection paths go through the tested helper with the run's setting.
-    assert source.count("adapter.detector_input(") == 2
-    assert "adapter.detector_input(\n                            scene_input, args.depth_quantize_mm\n" in source
+    # Both detection paths go through the tested helper with the run's setting; the observe arrival's
+    # moved to the mission core (M-a1 slice 4b-i), the repeat-capture diagnostic stays in the runner.
+    core = CORE.read_text()
+    assert source.count("adapter.detector_input(") + core.count("adapter.detector_input(") == 2
+    assert "adapter.detector_input(\n            scene_input, options.depth_quantize_mm\n" in core
     assert "repeat_input, args.depth_quantize_mm" in source
-    assert "detection = detect_pockets(detector_input, prior, params)" in source
-    assert 'attempt["base_from_optical"] = {' in source
-    assert 'attempt["depth_quantize_mm"] = args.depth_quantize_mm' in source
+    assert "detection = detect_pockets(detector_input, prior, params)" in core
+    assert 'attempt["base_from_optical"] = {' in core
+    assert 'attempt["depth_quantize_mm"] = options.depth_quantize_mm' in core
     tree = ast.parse(source)
     defaults = {
         ast.unparse(call.args[0]): next(
@@ -656,102 +675,77 @@ def test_same_path_is_the_remaining_part_again():
     assert same_path(shifted, coarse, remaining_m=2.475)
 
 
-def test_same_path_waits_do_not_count_as_retries():
-    source = SCRIPT.read_text()
-    assert 'and not r.get("same_path") and not r.get("failed") and not r.get("escape")]' in source
-    assert (
-        'if r["phase"] == phase and not r.get("same_path")\n'
-        '                                          and not r.get("failed") and not r.get("escape"))'
-    ) in source
-    i = source.index("if same_path(replanned, paths[phase]")
-    wait = source[i : source.index("else:", i)]
-    assert "RearAxlePathTracker" not in wait and '"progress"' not in wait
-
-
 def test_wheel_target_brakes_at_the_stopping_model_deceleration():
-    source = SCRIPT.read_text()
-    # The flag is args.obstacle_act: the obstacle dict has no "act" key (L3c v37 never slewed).
-    i = source.index("if obstacle is not None and args.obstacle_act:\n                # A step wheel target")
+    runner = SCRIPT.read_text()
+    source = CORE.read_text()  # the command assembly moved to the mission core (M-a1 slice 5)
+    # The flag is args.obstacle_act (options.obstacle_act in the core): the obstacle dict has no "act" key
+    # (L3c v37 never slewed).
+    assert "obstacle_act=args.obstacle_act" in runner
+    i = source.index("if obstacle is not None and options.obstacle_act:\n            # A step wheel target")
     block = source[i : source.index("drive = ackermann_command(wheel_speed", i)]
     assert "permission.config.stopping.decel_mps2" in block
     assert "COMMAND_ACCEL_MPS2" in block
     # The slew acts on the final wheel speed (creep included), the permission's
     # own limit and the e-stop probe cut it as a step afterwards (Codex checkpoint 6 P1).
     pre = source[source.rindex("steering_error = ", 0, i) : i]
-    assert "wheel_speed = requested_speed * 0.25 if creeping" in pre
+    assert "wheel_speed = creep(requested_speed, steering_error)" in pre  # control/speed_chain.py (M-b4)
     assert "if creeping and" not in block  # the creep is slewed (L3c v43 seed 1)
-    assert block.index("np.clip(target_speed - previous") < block.index('obstacle.get("permission_cap")')
+    assert block.index("slew_cap_stop(") < block.index('obstacle.get("permission_cap")')  # its arithmetic: speed_chain
     # The e-stop and the plan D8 S4 safety stop (scheduled or near-field) cut it last.
     assert block.index('obstacle.get("permission_cap")') < block.index("if estop_holding or safety_hold:")
-    j = source.index('obstacle["permission_cap"] = ')
+    j = source.index('obstacle["permission_cap"] = ')  # the permission tick (M-a1 slice 3b)
     assert j < source.index('if obstacle["path_blocked_ticks"] >= 36 and allowed > 0.0:')
-    assert 'obstacle.get("act")' not in source and 'obstacle["act"]' not in source
-
-
-def test_the_retry_limit_is_checked_after_the_same_path_test():
-    source = SCRIPT.read_text()
-    same = source.index("if same_path(replanned, paths[phase]")
-    assert source.index('f"obstacle_blocked in {phase}') > same
-
-
-def test_loose_arrival_only_at_observation_waypoints():
-    source = SCRIPT.read_text()
-    i = source.index("# The tracker stops at a path end it missed sideways")
-    head = source[source.rindex("if (", 0, i) : i]
-    assert 'phase == "observe"' in head and "OBSERVE_ARRIVAL_M" in head
-    assert 'slam["stop_now"]' in head  # standing, not just a zero command (Codex checkpoint 6 P2)
-
-
-def test_a_failed_live_plan_stands_and_retries():
-    source = SCRIPT.read_text()
-    i = source.index("# Standing, the grid keeps updating")
-    block = source[i : source.index("waiting to retry the live plan: stand", i)]
-    assert "tries < 5" in block and 'obstacle["live_retry_after_s"] = t + 1.0' in block
-    assert 'and t >= obstacle.get("live_retry_after_s", 0.0)' in source
+    for text in (runner, source):
+        assert 'obstacle.get("act")' not in text and 'obstacle["act"]' not in text
 
 
 def test_a_failed_blocked_replan_stands_and_retries():
     source = SCRIPT.read_text()
-    i = source.index("# Standing, the grid keeps updating: a failed replan is")
-    block = source[i : source.index("elif same_path(replanned", i)]
-    assert "failures < 5" in block and 'obstacle.setdefault("replan_wait", {})[phase] = True' in block
+    core = CORE.read_text()  # the obstacle replan moved to the mission core (M-a1 slice 3c)
+    i = core.index("# Standing, the grid keeps updating: a failed replan is")
+    block = core[i : core.index("elif same_path(replanned", i)]
+    assert "failures < 5" in block and 'obstacle.setdefault("replan_wait", {})[ms.phase] = True' in block
     # Held on later ticks too, until a replan succeeds or the path clears (Codex checkpoint 7 P2).
-    j = source.index('if obstacle is not None and obstacle.get("replan_wait", {}).get(phase):')
-    assert j < source.index("drive = ackermann_command(requested_speed")
-    assert "check_.blocked is None" in source[j : j + 600]  # a verified path, not a zero count
-    assert 'if replanned.status in ("invalid_start", "no_path"):' in source
+    # The wait moved to the mission core with the live leg (M-a1 slice 3a); the runner stands on its answer.
+    assert source.index("if core.live_leg(t, rear, loaded):") < source.index("command_ = core.assemble_command(")
+    j = core.index('if obstacle is not None and obstacle.get("replan_wait", {}).get(ms.phase):')
+    assert "check_.blocked is None" in core[j : j + 600]  # a verified path, not a zero count
+    assert 'if replanned.status in ("invalid_start", "no_path"):' in core
 
 
 def test_a_failed_replan_backs_off_a_bounded_distance_then_replans():
     source = SCRIPT.read_text()
     assert "BACKOFF_M = 0.30" in source and "BACKOFF_SPEED_MPS = 0.15" in source and "BACKOFF_PER_LEG = 2" in source
-    i = source.index("# D4 delta: stood with the outline already on the")
-    block = source[source.rindex("if phase in", 0, i) : i + 2500]
-    assert 'phase in ("transport", "return_home")' in block and "backs.get(phase, 0) < BACKOFF_PER_LEG" in block
+    replan = CORE.read_text()  # the obstacle replan moved to the mission core (M-a1 slice 3c)
+    i = replan.index("# D4 delta: stood with the outline already on the")
+    block = replan[replan.rindex("if ms.phase in", 0, i) : i + 2500]
+    assert 'phase in ("transport", "return_home")' in block and "backs.get(ms.phase, 0) < BACKOFF_PER_LEG" in block
     assert "d = -1 if leg_dir >= 0 else 1" in block  # against the leg's direction
     # The end of a backoff is never the leg's arrival; it forces a replan.
-    j = source.index("# The end of a backoff is not the leg's arrival")
-    assert j < source.index('if tracking.status == "arrived":\n                    if args.use_perception and phase == "observe":')
-    assert 'obstacle["force_replan"] = phase' in source[j : j + 2500]
-    assert 'obstacle.pop("force_replan", None) == phase' in source
+    moved = CORE.read_text()  # the backoff end moved to the mission core (M-a1 slice 4a-iv)
+    j = moved.index("# The end of a backoff is not the leg's arrival")
+    assert source.index("command_ = core.command(") < source.index(
+        'if tracking.status == "arrived":\n                    if args.use_perception and ms.phase == "observe":')
+    assert 'obstacle["force_replan"] = ms.phase' in moved[j : j + 2500]
+    assert 'obstacle.pop("force_replan", None) == ms.phase' in source
     # Codex checkpoint 8: a backoff always acts under the permission, a forced
     # replan opens the obstacle block while standing, the leg direction is kept,
     # and the stall replan ends a backoff too.
-    k = source.index('acting = (\n                    phase in ("observe", "approach", "transport", "return_home")')
+    core = CORE.read_text()  # the permission tick moved to the mission core (M-a1 slice 3b)
+    k = core.index('acting = (\n            ms.phase in ("observe", "approach", "transport", "return_home")')
     # Plan v10 D5: the withdrawal acts under the permission too when known pallets are on.
-    assert '(phase == "withdraw" and obstacle["layer"].known_enabled' in source[k : k + 400]
-    assert 'known_config.get("withdraw_mode", "certified") == "certified"' in source[k : k + 400]
-    assert ') and not docking_straight' in source[k : k + 500]
-    # (the plan v10 withdraw tracking check now sits between them, hence the wider window)
-    assert 'obstacle.get("backoff", {}).get("phase") == phase' in source[k - 2000 : k]
-    assert 'or obstacle.get("force_replan") == phase' in source
-    assert 'leg_dir = obstacle.get("backoff", {}).get("leg_dir")' in source
-    assert 'stall_config = obstacle.pop("backoff")["config"]' in source
+    assert '(ms.phase == "withdraw" and obstacle["layer"].known_enabled' in core[k : k + 400]
+    assert 'known_config.get("withdraw_mode", "certified") == "certified"' in core[k : k + 400]
+    assert ') and not docking_straight' in core[k : k + 500]
+    assert 'obstacle.get("backoff", {}).get("phase") == ms.phase' in core[k - 2000 : k]
+    assert 'or obstacle.get("force_replan") == ms.phase' in source
+    assert 'leg_dir = obstacle.get("backoff", {}).get("leg_dir")' in core
+    assert 'stall_config = obstacle.pop("backoff")["config"]' in core  # the stall replan too (M-a1 slice 4a-ii)
 
 
 def test_new_obstacle_rules_get_the_leg_direction_the_pallet_face_and_can_silence_the_depth_camera():
     source = SCRIPT.read_text()
-    i = source.index('for action in new_obstacles["schedule"].update(')
+    i = source.index('due_ = new_obstacles["schedule"].update(')  # the call, assigned before its trace (M-a1 R3)
     call = source[i : i + 200]
     assert "leg_direction=int(leg_direction)" in call and "pallet_face=pallet_face" in call
     head = source[source.rindex("pallet_face = None", 0, i) : i]
@@ -764,21 +758,22 @@ def test_pocket_bars_are_judged_against_the_block_columns_not_the_outline():
     # Codex checkpoint 9 P1: the 0.6 x 0.8 m outline holds the pockets.
     source = SCRIPT.read_text()
     assert 'new_obstacles.setdefault("pallet_frame", []).append(rect)' in source
-    i = source.index('f"Measured pallet footprint overlap in {phase}"')
+    i = source.index('f"Measured pallet footprint overlap in {ms.phase}"')
     head = source[source.rindex("in_outline = []", 0, i) : i]
     assert "if not any(o is r_ for r_ in in_outline)" in head
-    assert 'f"Measured pallet solid overlap in {phase}: {box_.name}"' in source[i : i + 3500]
+    assert 'f"Measured pallet solid overlap in {ms.phase}: {box_.name}"' in source[i : i + 3500]
     assert "centre_p = (centre_w - np.asarray(ppos, dtype=float)) @ rot_" in source  # full pose, exact SAT
     assert "PALLET_BOXES = PALLET_BOXES_OF(args.pallet_geometry_loaded)" in source  # the canonical solids
 
 
 def test_a_backoff_offers_no_leg_to_the_rules_and_silence_is_traced():
     source = SCRIPT.read_text()
-    i = source.index('for action in new_obstacles["schedule"].update(')
+    i = source.index('due_ = new_obstacles["schedule"].update(')  # the call, assigned before its trace (M-a1 R3)
     assert "leg_direction = 0  # a backoff is not a leg of the phase" in source[i - 2500 : i]
-    assert 'trace.setdefault("first_zero_s", t)' in source and '"silence_trace": obstacle.get("silence_trace")' in source
-    j = source.index('obstacle["permission_cap"] = (t, float(allowed))')
-    assert 'trace.setdefault("first_zero_s", t)' in source[j : j + 900]  # at the cap the wheels take (Codex checkpoint 11)
+    core = CORE.read_text()  # the permission tick moved to the mission core (M-a1 slice 3b)
+    assert 'trace.setdefault("first_zero_s", t)' in core and '"silence_trace": obstacle.get("silence_trace")' in source
+    j = core.index('obstacle["permission_cap"] = (t, float(allowed))')
+    assert 'trace.setdefault("first_zero_s", t)' in core[j : j + 900]  # at the cap the wheels take (Codex checkpoint 11)
 
 
 def _bar_meets_pallet(pallet_xyz, roll, bar_xy, size):
@@ -837,7 +832,7 @@ def test_slam_ref_lives_only_inside_grid_kwargs():
     inside = {id(n) for n in ast.walk(fn)}
     stray = [n.lineno for n in ast.walk(tree) if isinstance(n, ast.Name) and n.id == "slam_ref" and id(n) not in inside]
     assert stray == []
-    run = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "run")
+    run = runner_run(tree)
     bound = [
         t.id
         for n in ast.walk(run)
@@ -846,16 +841,6 @@ def test_slam_ref_lives_only_inside_grid_kwargs():
         if isinstance(t, ast.Name)
     ]
     assert bound.count("slam") >= 2  # slam = None, then the link
-
-
-def test_the_pickup_retraction_covers_the_estimate_and_the_range_noise():
-    # Codex re-review 4 P2: a pallet endpoint at -0.059 m noise outlived a
-    # 0.05 m retraction and blocked the loaded start.
-    source = SCRIPT.read_text()
-    i = source.index("retract_endpoints(est_.x_m")
-    block = source[i - 900 : i + 200]
-    assert 'grow_ = 0.05 + obstacle["layer"].noise_cut_m' in block
-    assert "est_.yaw_rad, grow_)" in block
 
 
 def test_plans_project_with_the_grids_correction_and_a_release_passes_its_own():
@@ -868,19 +853,11 @@ def test_plans_project_with_the_grids_correction_and_a_release_passes_its_own():
     body = ast.get_source_segment(source, fn)
     assert '["tracker"].applied' not in body
     assert 'obstacle["applied"]' in body
-    rel = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "slam_release")
-    rel_src = ast.get_source_segment(source, rel)
+    core = CORE.read_text()  # the SLAM release moved to the mission core (M-a1 slice 6c)
+    rel = next(n for n in ast.walk(ast.parse(core)) if isinstance(n, ast.FunctionDef) and n.name == "slam_release")
+    rel_src = ast.get_source_segment(core, rel)
     assert rel_src.count("grid_kwargs(None, own=after, applied=released_)") == 4
     assert "grid_kwargs(None)" not in rel_src
-
-
-def test_replans_record_their_path_before_the_mission_plan_exists():
-    # l6_spec_mission seed 1: an observe replan under SLAM ran before the
-    # perception branch created state["paths"] -> KeyError.
-    source = SCRIPT.read_text()
-    assert 'state["paths"]["observe"] = path_record(replanned)' not in source
-    assert 'state["paths"][phase] = path_record(replanned)' not in source
-    assert 'state.setdefault("paths", {})["observe"] = path_record(replanned)' in source
 
 
 def test_every_path_replacement_restarts_the_no_progress_baseline():
@@ -888,44 +865,41 @@ def test_every_path_replacement_restarts_the_no_progress_baseline():
     # old path's near-zero remainder. Obstacle, stall and cusp replans that replace the phase
     # path all clear the watch after arm_docking, so it restarts on the path being driven.
     source = SCRIPT.read_text()
-    stall = source.index('require(replanned.success, f"stall_replan_failed:{replanned.status}")')
-    window = source[stall : stall + 2500]
+    moved = CORE.read_text()  # the stall replan moved to the mission core (M-a1 slice 4a-ii)
+    stall = moved.index('require(replanned.success, f"stall_replan_failed:{replanned.status}")')
+    window = moved[stall : stall + 2500]
     assert window.index("arm_docking()") < window.index('obstacle.setdefault("progress", {}).clear()')
-    cusp = source.index('"replaced_path": path_record(paths[phase]),')
-    window = source[cusp : cusp + 1500]
+    cusp = moved.index('"replaced_path": path_record(paths[ms.phase]),')  # the cusp replan (slice 4a-iii)
+    window = moved[cusp : cusp + 1500]
     assert window.index("arm_docking()") < window.index('obstacle.setdefault("progress", {}).clear()')
     # ... and a D7c re-approach installed in place of the transport path (plan D7c ④).
-    install = source.index("    def install_reapproach(")
-    assert 'obstacle.setdefault("progress", {}).clear()' in source[install : install + 1500]
+    install = moved.index("    def install_reapproach(self, ")  # a MissionCore method since M-a1 slice 6b
+    assert 'obstacle.setdefault("progress", {}).clear()' in moved[install : moved.index("\n    def ", install + 10)]
     # ... and a plan D8 S4b correction point's re-drawn docking straights.
-    near_install = source.index("    def near_install(")
-    assert 'obstacle.setdefault("progress", {}).clear()' in source[near_install : near_install + 3000]
+    near_install = moved.index("    def near_install(self, ")  # a MissionCore method since M-a1 slice 6d
+    assert 'obstacle.setdefault("progress", {}).clear()' in moved[near_install : near_install + 3500]
     # ... and every observe path a plan D8 S4c-3 realignment installs.
-    realign = source.index("    def realign_install(")
-    assert 'obstacle.setdefault("progress", {}).clear()' in source[realign : realign + 2000]
-    assert source.count('obstacle.setdefault("progress", {}).clear()') == 6
-
-
-def test_d7c_docking_branches_are_inert_without_the_flag():
-    # Plan D7c: flag-off runs drive and record as before.
-    source = SCRIPT.read_text()
-    assert 'd7_docking_ = slam["docking"] if (args.d7_docking and slam is not None) else {}' in source
-    assert "        if args.d7_docking and result.accepted:\n" in source  # the early goal commit
-    assert "        if path is None and args.d7_docking:\n" in source  # (b) instead of docking_unaligned
-    # Without the flag the stall and cusp branches are the old ones (d7_owned is False).
-    assert "d7_owned = phase == \"transport\" and bool(" in source
+    realign = moved.index("    def realign_install(self")  # a MissionCore method since M-a1 slice 6e
+    assert 'obstacle.setdefault("progress", {}).clear()' in moved[realign : realign + 2000]
+    # the obstacle replan's one moved to the mission core (M-a1 slice 3c)
+    replan = CORE.read_text()
+    assert 'obstacle.setdefault("progress", {}).clear()' in replan[replan.index("    def blocked_replan("):]
+    assert source.count('obstacle.setdefault("progress", {}).clear()') + replan.count(
+        'obstacle.setdefault("progress", {}).clear()') == 6
 
 
 def test_d7c_reapproach_is_under_the_permission_and_kept_by_obstacle_replans():
     source = SCRIPT.read_text()
-    straight = source.index("docking_straight = (phase == \"approach\"")
-    window = source[straight : straight + 1500]
+    core = CORE.read_text()  # the permission tick moved to the mission core (M-a1 slice 3b)
+    straight = core.index("docking_straight = (ms.phase == \"approach\"")
+    window = core[straight : straight + 1500]
     assert 'if slam is not None and slam["docking"].get("reapproach"):\n' in window
     assert window.index("reapproach") < window.index("acting = (")
     # Both obstacle replans of the transport go through the dispatch, and a
     # re-approach is never re-armed into a docking straight.
-    assert source.count("replanned = transport_replan(") == 2
-    assert 'and not slam["docking"].get("reapproach"):\n                            arm_docking()' in source
+    # (the obstacle replan moved to the mission core, M-a1 slice 3c)
+    assert source.count("replanned = transport_replan(") + core.count("replanned = transport_replan(") == 2
+    assert 'and not slam["docking"].get("reapproach"):\n                arm_docking()' in core
 
 
 def test_a_destination_prior_error_moves_planning_only():
@@ -947,19 +921,19 @@ def test_d7c_docking_needs_slam():
 
 def test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan():
     # Plan docs/plans/2026-10-04-lidar-obstacle-map.md, "장애물 복구–허가 정합 설계 4판" (smoke 2382).
-    source = SCRIPT.read_text()
-    assert "ESCAPE_PER_LEG = 2" in source
+    assert "ESCAPE_PER_LEG = 2" in SCRIPT.read_text()
+    source = CORE.read_text()  # the obstacle replan moved to the mission core (M-a1 slice 3c)
     block = source[source.index("escape_, escape_cands_, escape_skips_back_ = None, None, False"):]
     e1 = block[: block.index('if replanned.status in ("invalid_start", "no_path"):')]
     # E1: only an invalid start in transport/return_home, with budget, and not while docking owns the transport.
-    assert 'replanned.status == "invalid_start" and phase in ("transport", "return_home")' in e1
-    assert 'obstacle.setdefault("escapes", {}).get(phase, 0) < ESCAPE_PER_LEG' in e1
+    assert 'replanned.status == "invalid_start" and ms.phase in ("transport", "return_home")' in e1
+    assert 'obstacle.setdefault("escapes", {}).get(ms.phase, 0) < ESCAPE_PER_LEG' in e1
     assert 'slam["docking"].get("reapproach") or slam["docking"].get("accepted_any")' in e1
     assert "escape_, escape_cands_ = find_escape(t, rear, leg_dir_e, kappa)" in e1
     # A chosen escape replaces the plan before the clearance-0 retry, whose statuses it does not match.
     assert 'True, "escape", poses_e' in e1
     # Installed on the backoff machinery: not a failure, its own budget, the end tolerance of E2's region.
-    inst = block[block.index("if escape_ is not None:\n                        # Plan v4 E2"):]
+    inst = block[block.index("if escape_ is not None:\n            # Plan v4 E2"):]
     inst = inst[: inst.index("elif not replanned.success:")]
     assert "backoff=True, failed=False, escape=escape_.record()" in inst
     assert '"leg_dir": leg_dir_e' in inst and '"escape": True' in inst
@@ -971,22 +945,24 @@ def test_obstacle_recovery_v4_escapes_before_the_clearance_zero_replan():
     # The old backoff: skipped where E2 refused its straight by the checker; on the return only past
     # the rectangles (the delivered pallet the single LiDAR cannot see).
     assert "back_ok_ = not escape_skips_back_" in block
-    assert "escape_leg(phase)[2], esc_.straight(rear, d_b, BACKOFF_M)" in block
+    assert "escape_leg(ms.phase)[2], esc_.straight(rear, d_b, BACKOFF_M)" in block
     assert "and back_ok_):" in block
 
 
 def test_obstacle_recovery_v4_an_escape_end_bypasses_docking_stall_and_failure():
     source = SCRIPT.read_text()
-    e3 = source.index("escape_now_ = (")
+    core = CORE.read_text()  # the follower's tick moved to the mission core (M-a1 slice 4a-i)
+    e3 = core.index("escape_now_ = (")
     # Before each of the three ways an end could otherwise go: the docking stop, the heading miss and
-    # stall replan, and the tracking-failure require.
-    assert e3 < source.index("                dock_stop = (")
-    assert e3 < source.index("                goal_heading_miss = (")
-    assert e3 < source.index('                require(\n                    tracking.status != "failed",')
-    window = source[e3 : e3 + 2000]
+    # stall replan, and the tracking-failure require -- the runner calls the follower first.
+    follow = source.index("follow_ = core.follow(t, rear, signed_speed, dt)")
+    docking = source.index("stall_ = core.docking_and_stall(")  # the docking stop and heading miss (slice 4a-ii)
+    assert follow < docking and core.index("        dock_stop = (") < core.index("        goal_heading_miss = (")
+    assert follow < source.index("command_ = core.command(")  # the tracking-failure require (slice 4a-iv)
+    window = core[e3 : e3 + 2000]
     assert '"end_s" in back_e or tracking.status == "arrived"' in window
     # An endpoint failure is the end only standing; rolling, it brakes (Codex implementation review P2-1).
-    assert '(standing_e and (tracking.status == "failed" or trackers[phase].remaining_to_goal_m() <= 1e-6))' in window
+    assert '(standing_e and (tracking.status == "failed" or trackers[ms.phase].remaining_to_goal_m() <= 1e-6))' in window
     assert 'elif tracking.status == "failed":' in window and 'status="braking", speed_mps=0.0' in window
     assert 'back_e["stand_ticks"] >= 120' in window
     assert 'tracking = replace(tracking, status="arrived", speed_mps=0.0)' in window
@@ -994,35 +970,40 @@ def test_obstacle_recovery_v4_an_escape_end_bypasses_docking_stall_and_failure()
 
 def test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recovery():
     source = SCRIPT.read_text()
-    fn = source[source.index("    def release_after_backoff(") :]
+    moved_fn = CORE.read_text()  # release_after_backoff moved to the mission core (M-a1 slice 6c)
+    fn = moved_fn[moved_fn.index("    def release_after_backoff(") :]
     fn = fn[:2500]
-    assert 'slam["tracker"].mode != "holding"' in fn and 'slam["tracker"].release(' in fn
+    assert 'slam["tracker"].mode != "holding"' in fn and "self.release_slam(" in fn  # M-a4: every release goes through the counting method
     assert 'slam["docking"].get("accepted_any") or slam["docking"].get("reapproach")' in fn
     assert 'obstacle["layer"].refresh(' in fn  # the grid re-projected before any plan reads it
-    end = source.index("# The end of a backoff is not the leg's arrival")
-    end_block = source[end : end + 2500]
+    moved = CORE.read_text()  # the backoff end moved to the mission core (M-a1 slice 4a-iv)
+    end = moved.index("# The end of a backoff is not the leg's arrival")
+    end_block = moved[end : end + 2500]
     assert 'release_after_backoff(t, "release_after_backoff")' in end_block
     # Standing first, then the release and the forced replan (Codex implementation review P2-1).
     assert "if standing_b and not back_.get(\"released\"):" in end_block
-    assert 'if standing_b and t - back_.get("forced_s", -1e9) >= 1.0:' in end_block
-    rec = source.index('release_after_backoff(t, "release_in_backoff_recovery")')
-    assert rec < source.index("start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))", rec)
+    # (M-a3: the second is work time -- a pause does not count, plan E4)
+    assert 'if standing_b and self.commands.work_elapsed(back_.get("forced_s", -1e9), t) >= 1.0:' in end_block
+    core = CORE.read_text()  # the obstacle replan moved to the mission core (M-a1 slice 3c)
+    rec = core.index('release_after_backoff(t, "release_in_backoff_recovery")')
+    assert rec < core.index("start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))", rec)
     # D4: what the installed plan's clearance was and what stopped the truck -- read before a release
     # refreshes the permission (Codex implementation review P2-3), the clearance of whichever plan
     # was adopted (P2-4: the tight observe candidates and the tight mission replan too).
-    assert '"clearance_m": clearance_used_' in source and '"stop": stop_cause_' in source
-    cause = source.index("stop_cause_ = {")
-    assert cause < source.index("released_ = release_and_carry(t)", cause)
-    assert cause < source.index('release_after_backoff(t, "release_in_backoff_recovery")')
+    assert '"clearance_m": clearance_used_' in core and '"stop": stop_cause_' in core
+    cause = core.index("stop_cause_ = {")
+    assert cause < core.index("released_ = release_and_carry(t)", cause)
+    assert cause < core.index('release_after_backoff(t, "release_in_backoff_recovery")')
     # ... and at a backoff's end, which releases before the forced replan reads it (review 2 P2).
-    keep = source.index('back_["stop_cause"] = {')
-    assert keep < source.index('released_b = release_after_backoff(t, "release_after_backoff")')
-    assert 'obstacle["backoff"].pop("stop_cause", None)' in source
-    assert "clearance_used_ = 0.0  # the candidates are planned tight" in source
-    assert "clearance_used_ = mission_clearance_" in source
-    assert 'args.output / f"obstacle_recovery_{dumps_ + 1}.npz"' in source
+    keep = moved.index('back_["stop_cause"] = {')
+    assert keep < moved.index('released_b = release_after_backoff(t, "release_after_backoff")')
+    assert 'obstacle["backoff"].pop("stop_cause", None)' in core
+    assert "clearance_used_ = 0.0  # the candidates are planned tight" in core
+    assert "clearance_used_ = mission_clearance_" in core
+    # find_escape moved to the mission core (M-a1 slice 6c); its dump goes through the runner's Sink.
+    assert 'save_npz(\n                f"obstacle_recovery_{dumps_ + 1}.npz"' in moved_fn
     assert "band_pose=None, label=None" in source and "band_poses_ = rear if band_pose is None else band_pose" in source
-    assert 'own=list(region), band_pose=list(region), label="escape_end"' in source
+    assert 'own=list(region), band_pose=list(region), label="escape_end"' in moved_fn
 
 
 def test_cusp_position_stall_v7_is_wired_into_the_runner():
@@ -1031,70 +1012,75 @@ def test_cusp_position_stall_v7_is_wired_into_the_runner():
     assert 'cusp_monitor = CUSP_STALL.CuspStallMonitor(state["cusp_stalls"])' in source
     assert 'state["cusp_stalls"] = []' in source
     # The tracker's own result goes in, after the escape override and before every later recovery rule.
-    call = source.index("tracking, cusp_hold = cusp_tick(t, rear, raw_tracking_, tracking, retry_stand_)")
-    assert source.index("raw_tracking_ = tracking  # the tracker's own result") < call
-    assert source.index("escape_now_ = (") < call
-    for later in ("                dock_stop = (", "                goal_heading_miss = (", "                observe_stalled = ("):
-        assert call < source.index(later)
+    core = CORE.read_text()  # the follower's tick moved to the mission core (M-a1 slice 4a-i)
+    call = core.index("tracking, cusp_hold = cusp_tick(t, rear, raw_tracking_, tracking, retry_stand_)")
+    assert core.index("raw_tracking_ = tracking  # the tracker's own result") < call
+    assert core.index("escape_now_ = (") < call
+    follow = source.index("follow_ = core.follow(t, rear, signed_speed, dt)")
+    for later in ("stall_ = core.docking_and_stall(", "recover_ = core.cusp_and_observe_recovery("):
+        assert follow < source.index(later)
     # Exclusions: D7 transport whatever --d7-docking says, a held realignment, the legacy profile.
-    fn = source[source.index("    def cusp_excluded(phase_)") :]
-    fn = fn[: fn.index("    def cusp_standing")]
-    assert 'args.tracker_profile == "20260921"' in fn
+    # The cusp rules are MissionCore methods since M-a1 slice 6a (same indentation as the closures were).
+    moved = CORE.read_text()
+
+    def method(name):
+        text = moved[moved.index(f"    def {name}(") :]
+        return text[: text.index("\n    def ", 10)] if "\n    def " in text[10:] else text
+
+    fn = method("cusp_excluded")
+    assert 'options.tracker_profile == "20260921"' in fn
     assert 'slam["docking"].get("accepted_any") or slam["docking"].get("reapproach")' in fn
     assert 'slam["tracker"].mode == "holding" and realign_active()' in fn
     assert "args.d7_docking" not in fn
     # Ownership on the latest snapshot: the leg-ahead path, the e-stop arc at the permission's own cap
     # in the leg's direction, every sensor alive.
-    own = source[source.index("    def cusp_ownership(") :]
-    own = own[: own.index("    def cusp_leg_checker")]
+    own = method("cusp_ownership")
     assert "layer_.check_candidate(leg_, current_pose=pose_, direction=dir_, loaded=loaded)" in own
     assert "layer_.check_arc_candidate(" in own and "curvature_inv_m=kappa_, direction=dir_" in own
     assert "cap_mps=max(abs(float(command_mps)), abs(float(signed_speed)))" in own
     assert "sensor_timeout_s" in own
     # The prefix's planner obstacles: the leg's rectangles (observe as plan_observation_leg has them).
-    leg = source[source.index("    def cusp_leg_checker(") :]
-    leg = leg[: leg.index("    def cusp_sensors(")]
-    assert "escape_leg(phase)[2]" in leg and 'leg_obstacles(\n            "observe"' in leg
+    leg = method("cusp_leg_checker")
+    assert "escape_leg(ms.phase)[2]" in leg and 'leg_obstacles(\n            "observe"' in leg
     assert "pickup_bounds=pickup_bounds" in leg
     # The prefix's sensor checks: the plain walk within the stopping distance, the walk past unknown
     # for occupied, the evidence age, sensors alive.
-    sens = source[source.index("    def cusp_sensors(") :]
-    sens = sens[: sens.index("    def cusp_end_recovered(")]
+    sens = method("cusp_sensors")
     assert "unknown_passes=True" in sens and 'plain_.blocked in ("unknown", "edge")' in sens
     assert "age_ <= pconf_.evidence_max_age_s" in sens and "sensor_timeout_s" in sens
     # Every FREE cell either walk relied on (Codex implementation review P1).
     assert "age_ = now_s - min(plain_.oldest_free_s, passes_.oldest_free_s)" in sens
     # A short next leg's heading miss only within the existing rules' budgets.
-    rec = source[source.index("    def cusp_end_recovered(") :]
-    rec = rec[: rec.index("    def cusp_tick(")]
+    rec = method("cusp_end_recovered")
     assert 'len(state["cusp_replans"]) < max_cusp_replans' in rec
     assert 'goal and slam is not None' in rec and 'len(state["stall_replans"]) < 2' in rec
     # Stopped = standing with a zero applied at the wheels.
-    assert 'state.get("applied_command", (None, None))[0] == 0.0' in source
+    assert 'state.get("applied_command", (None, None))[0] == 0.0' in method("cusp_stopped")
     # The hand-off: one forced replan per key, the block entered while handed, its direction, an occupied
     # prefix counted as a blocked path; ownership back once no replan is pending.
-    tick = source[source.index("    def cusp_tick(") :]
-    tick = tick[: tick.index("    try:\n")]
+    tick = method("cusp_tick")
     # Forced only where the obstacle replan exists: with grid planning (Codex implementation review P1).
-    assert 'if result_.force_replan and obstacle is not None:\n            if grid_planning:\n                obstacle["force_replan"] = phase' in tick
+    assert 'if result_.force_replan and obstacle is not None:\n            if grid_planning:\n                obstacle["force_replan"] = ms.phase' in tick
     # A silent sensor sends no scan: liveness is passed in for every tick.
     assert "alive=lambda: cusp_alive(now_s)," in tick
-    alive = source[source.index("    def cusp_alive(") :]
+    alive = method("cusp_alive")
     assert "now_s - last_ <= timeout_ for last_ in layer_.last_scan_s.values()" in alive[:600]
-    assert 'obstacle.get("force_replan") == phase or bool(obstacle.get("replan_wait", {}).get(phase))' in tick
+    assert 'obstacle.get("force_replan") == ms.phase or bool(obstacle.get("replan_wait", {}).get(ms.phase))' in tick
     assert "or cusp_handed_ is not None" in source
-    assert "direction = cusp_handed_.hand_direction" in source
-    assert '((allowed == 0.0 and why == "occupied") or cusp_prefix_blocked_)' in source
+    core = CORE.read_text()  # the permission tick moved to the mission core (M-a1 slice 3b)
+    assert "direction = cusp_handed_.hand_direction" in core
+    assert '((allowed == 0.0 and why == "occupied") or cusp_prefix_blocked_)' in core
     # An end is dumped first, then the run ends.
     assert "dump_tracking(result_.end, result_.tracking)\n            require(False, result_.end)" in tick
     assert "release_update=lambda: tracker_.update(rear_now, signed_speed, dt)" in tick
     # The observe stop rule waits while the stall handling holds an observe stall.
-    assert "and not cusp_monitor.holds_observe()" in source
+    assert "and not cusp_monitor.holds_observe()" in core  # the observe stall rule (M-a1 slice 4a-iii)
     # Zero command with the steering held.
     assert "cusp_hold = False  # plan cusp position stall v7 K3" in source
-    assert "if estop_holding or obstacle_hold or dwell_hold or cusp_hold:" in source
-    assert "wheel_curvature = kappa if (dwell_hold or cusp_hold) else curvature" in source
-    assert "steering_command.copy() if (estop_holding or obstacle_hold or dwell_hold or cusp_hold)" in source
+    assembly = CORE.read_text()  # the command assembly moved to the mission core (M-a1 slice 5)
+    assert "if estop_holding or obstacle_hold or dwell_hold or cusp_hold:" in assembly
+    assert "wheel_curvature = kappa if (dwell_hold or cusp_hold) else curvature" in assembly
+    assert "steering_command.copy() if (estop_holding or obstacle_hold or dwell_hold or cusp_hold)" in assembly
 
 
 def test_near_protection_prediction_screens_only_the_last_correction():
@@ -1102,7 +1088,8 @@ def test_near_protection_prediction_screens_only_the_last_correction():
     source = SCRIPT.read_text()
     # The rule marker, always recorded with near tracking: the judgement (xii) applies by it.
     assert '"protection_prediction_rules": near_tracking.PREDICT_RULES,' in source
-    decide = source[source.index('        elif corr_act["decide"] and terminal is None:'):]
+    core = CORE.read_text()  # near_tick and the prediction moved to the mission core (M-a1 slice 6d)
+    decide = core[core.index('        elif corr_act["decide"] and terminal is None:'):]
     decide = decide[: decide.index("        if corr_act[\"event\"] == \"closed\"")]
     # After redraw_docking accepted, at the 0.6 m point only; a refusal turns into replan_rejected.
     assert decide.index("plans_, record_, target_ = near_redraw(latest_, rear_now)") < decide.index(
@@ -1111,12 +1098,12 @@ def test_near_protection_prediction_screens_only_the_last_correction():
     assert 'if pred_["disposition"] == "refused":' in decide
     assert 'record_["refused"] = "protection_predicted"' in decide and "plans_ = None" in decide
     assert decide.index('record_["refused"] = "protection_predicted"') < decide.index('terminal = "replan_rejected"')
-    fn = source[source.index("    def near_protection_prediction("):]
+    fn = core[core.index("    def near_protection_prediction("):]
     fn = fn[: fn.index("    def near_install(")]
     # The retry permission is the terminal stop's own predicate; the lost injection the argument.
     assert ('near_tracking.retry_allowed("replan_rejected", near.get("retries", 0), near["protect"] is not None,'
             in fn)
-    assert "lost_ = args.near_drop_frames_from_m is not None" in fn
+    assert "lost_ = options.near_drop_frames_from_m is not None" in fn
     assert "near_tracking.prediction_disposition(" in fn
     for key in ('"rear"', '"approach"', '"tracker_config"', '"held"', '"widths_m"', '"bounds_sha256"',
                 '"drive_terms_sha256"', '"constants"', '"camera_xy_m"', '"carriage_limit_m"', '"fork_tip_x_m"'):
@@ -1128,14 +1115,16 @@ def test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the
     pending SLAM release, re-projects the grid before it weighs the turnaround (a standing truck can
     skip the obstacle block's re-projection), and the release replans carry no turnaround."""
     src = SCRIPT.read_text()
-    start = src.index('and not obstacle.setdefault("live_replanned", {}).get(phase)')
-    block = src[start:src.index('obstacle["deadline"] = None', start)]
+    core = CORE.read_text()  # the live leg moved to the mission core (M-a1 slice 3a)
+    start = core.index('and not obstacle.setdefault("live_replanned", {}).get(ms.phase)')
+    block = core[start:core.index('obstacle["deadline"] = None', start)]
     assert 'slam.get("pending_release") is not None' in block.split("):", 1)[0]
     assert block.index('obstacle["layer"].refresh(') < block.index("**return_turnaround_kwargs()")
-    release = src[src.index("    def slam_release("):]
+    release = core[core.index("    def slam_release("):]  # moved to the mission core (M-a1 slice 6c)
     release = release[: release.index("\n    def ", 10)]
     assert "return_turnaround_kwargs" not in release and "plan_return_leg(" in release
-    assert src.count("**return_turnaround_kwargs()") == 2  # the live return plan and its tight retry
+    assert core.count("**return_turnaround_kwargs()") == 2  # the live return plan and its tight retry
+    assert src.count("**return_turnaround_kwargs()") == 0
 
 
 def test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judgement():
@@ -1145,7 +1134,8 @@ def test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judge
     assert "CUSP_HEADING_HOLD_RAD = 0.08\n" in source and "CUSP_HEADING_HOLD_POSITION_M = 0.03\n" in source
     assert 'CUSP_HEADING_HOLD_PHASES = ("observe", "return_home")\n' in source
     assert "cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD if name in CUSP_HEADING_HOLD_PHASES else None," in source
-    block = source[source.index("if phase in CUSP_HEADING_HOLD_PHASES and tracking.cusp_pending:"):]
+    moved = CORE.read_text()  # the cusp heading hold moved to the mission core (M-a1 slice 4a-iii)
+    block = moved[moved.index("if ms.phase in CUSP_HEADING_HOLD_PHASES and tracking.cusp_pending:"):]
     block = block[: block.index("# Under SLAM, an observe leg judged out of heading")]
     assert "bounds=(CUSP_HEADING_HOLD_POSITION_M, CUSP_HEADING_HOLD_RAD)" in block
     assert "hold_tracker.release_cusp(True)" in block and "hold_tracker.fail_pending()" in block
@@ -1153,25 +1143,29 @@ def test_only_the_observe_and_return_trackers_hold_a_cusp_heading_miss_for_judge
     # sync() and the watch on every tracker tick's own result, before any rule rewrites it or
     # replaces the tracker, then the hold; the watch once more on the release tick's own update
     # (Codex fix A implementation review 2 P3, 3 P2; A' design review 1 P2, 2 P2).
-    raw = source.index("raw_tracking_ = tracking  # the tracker's own result")
-    whole = source[raw:]
+    core = CORE.read_text()  # the follower's tick moved to the mission core (M-a1 slice 4a-i)
+    raw = core.index("raw_tracking_ = tracking  # the tracker's own result")
+    whole = core[raw:]
     first_rule = whole.index("retry_stand_ = near is not None")
     assert whole.index("cusp_holds.sync(") < whole.index("cusp_holds.tick(") < first_rule
-    assert first_rule < whole.index("if phase in CUSP_HEADING_HOLD_PHASES and tracking.cusp_pending:")
+    assert source.index("follow_ = core.follow(t, rear, signed_speed, dt)") < source.index(
+        "recover_ = core.cusp_and_observe_recovery(")
     after_update = block[block.index("tracking = hold_tracker.update(rear, signed_speed, dt)") :]
     assert 'if decision == "released":' in after_update and "cusp_holds.tick(" in after_update
     # Every observe and return tracker holds: the first ones, the candidate re-route's, the ones built
     # after the far observation (Codex fix A implementation review 1 P2); the near leg and the
     # replans reuse a tracker's config.
-    assert source.count("cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD") == 3
-    candidate = source[
-        source.index('trackers["observe"] = RearAxlePathTracker(\n                                observe_plan.poses') :
+    moved = CORE.read_text()  # the candidate re-route's tracker moved to the mission core (M-a1 slice 4b-iii)
+    assert source.count("cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD") + moved.count(
+        "cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD") == 3
+    candidate = moved[
+        moved.index('trackers["observe"] = RearAxlePathTracker(\n            observe_plan.poses') :
     ]
     assert "cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD," in candidate[: candidate.index("phase_started = t")]
-    assert 'near_leg.curvatures_inv_m,\n                                    trackers["observe"].config,' in source
+    assert 'near_leg.curvatures_inv_m,\n                trackers["observe"].config,' in moved  # (M-a1 slice 4b-v)
     # The 2026-09-21 profile had neither cusp tolerances nor the hold.
-    profile = source[source.index("    def apply_tracker_profile() -> None:") :]
-    assert "cusp_heading_pending_rad=None," in profile[: profile.index("    def record_tracker_configs()")]
+    profile = moved[moved.index("def apply_tracker_profile_to(") :]  # a core function (M-a1 slice 6e)
+    assert "cusp_heading_pending_rad=None," in profile[: profile.index("def record_tracker_configs_in(")]
 
 
 def test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own():
@@ -1183,23 +1177,25 @@ def test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own():
     assert 'state["observe_replan_leg"] = {"serial": 0, "start": 0}' in source
     # No run-wide count of observe replans is left.
     assert 'len(state["observe_replans"]) < 2' not in source
-    miss = source.index("observe_miss = (")
-    assert source.index(
+    moved = CORE.read_text()  # the observe-miss replan moved to the mission core (M-a1 slice 4a-iii)
+    assert 'len(state["observe_replans"]) < 2' not in moved
+    miss = moved.index("observe_miss = (")
+    assert moved.index(
         'len(state["observe_replans"]) - state["observe_replan_leg"]["start"]', miss
-    ) < source.index("if observe_miss:", miss)
+    ) < moved.index("if observe_miss:", miss)
     # The held-realignment refusal is checked before the replan rule.
-    assert source.index('require(False, "near_capture_realign_held_recovery")') < miss
-    record = source.index('state["observe_replans"].append(', miss)
-    assert source.index('"leg_serial": leg_["serial"]', record) < source.index(
+    assert moved.index('require(False, "near_capture_realign_held_recovery")') < miss
+    record = moved.index('state["observe_replans"].append(', miss)
+    assert moved.index('"leg_serial": leg_["serial"]', record) < moved.index(
         "paths[\"observe\"] = replanned", record
     )
-    assert '"budget_left": OBSERVE_REPLANS_PER_LEG' in source[record:]
+    assert '"budget_left": OBSERVE_REPLANS_PER_LEG' in moved[record:]
     # The near leg resets the budget where it is installed, not inside realign_install (which
     # returns at once outside a realignment), and only there.
-    near = source.index("if near_leg is not None:")
-    reset = source.index('state["observe_replan_leg"] = {\n', near)
-    assert reset < source.index("paths[\"observe\"] = near_leg", near)
-    assert source.count('state["observe_replan_leg"] = {') == 2
+    near = moved.index("if near_leg is not None:")  # the near leg install moved to the core (M-a1 slice 4b-v)
+    reset = moved.index('state["observe_replan_leg"] = {\n', near)
+    assert reset < moved.index("paths[\"observe\"] = near_leg", near)
+    assert source.count('state["observe_replan_leg"] = {') + moved.count('state["observe_replan_leg"] = {') == 2
 
 
 def test_the_steering_probe_runs_after_the_spawn_checks_and_ends_the_run():
@@ -1374,7 +1370,7 @@ def test_the_pocket_check_is_refused_with_a_team_spec_encoder_model():
 
 def _tracker_book_class():
     source = SCRIPT.read_text()
-    namespace = {}
+    namespace = {"Path": Path}  # the replay helpers in the slice annotate with Path (M-a1 R3)
     exec(source[source.index("class TrackerBook(dict):"): source.index("def run(app, args")], namespace)  # noqa: S102
     return namespace["TrackerBook"]
 
@@ -1489,3 +1485,28 @@ def test_the_obstacle_layers_age_table_must_match_the_runs_odometry():
     assert problem(dict(team, odometry_wheel_radius_m=0.1245), run("team_spec_typical_inl", 0.1245)) is None
     source = SCRIPT.read_text()
     assert "table_problem_ = age_table_problem(age_table, args)" in source
+
+
+def test_the_boundary_record_closes_an_exit_tick_with_its_branches_and_the_propagating_failure(tmp_path):
+    """M-a0 (Codex round 3, P2): the run's finally closes the record before main() sets failure_reason, so
+    the closer takes the reason from the exception propagating through that finally."""
+    import json
+
+    from forklift_core.mission.boundary_record import BoundaryRecorder, RecordingGate, read_record
+
+    source = SCRIPT.read_text()
+    block = source[source.index("_BOUNDARY_RECORD: dict = "): source.index("def run(app, args")]
+    namespace: dict = {"time": object(), "Path": Path}  # the replay helpers in the slice annotate with Path
+    exec(block, namespace)  # noqa: S102
+    gate = RecordingGate(BoundaryRecorder(tmp_path))
+    namespace["_BOUNDARY_RECORD"].update(gate=gate, probe=lambda: ["state.transitions+1"])
+    gate.recorder.tick_begin(7, tick_t=0.1, work_t=0.1, commands=[], stop_kind="none")
+    state = {"phase": "insert"}
+    namespace["close_boundary_record"](state, RuntimeError("near_field_unbounded"))
+    (tick,) = list(read_record(tmp_path))
+    assert tick["outputs"] == {"exit": "insert", "failure_reason": "near_field_unbounded"}
+    assert tick["branches"] == ["state.transitions+1"]
+    assert namespace["_BOUNDARY_RECORD"]["gate"] is None
+    assert json.loads((tmp_path / "boundary_meta.json").read_text())["ticks"] == 1
+    namespace["close_boundary_record"](state)  # a second close (main's finally) is a no-op
+    assert "close_boundary_record(state, sys.exc_info()[1])" in source

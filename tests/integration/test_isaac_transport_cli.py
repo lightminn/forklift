@@ -1,12 +1,46 @@
 """The optional simulator launcher must expose usage without starting Isaac Sim."""
 
+import ast
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "sim/isaac/run_transport.py"
+CORE = ROOT / "src/forklift_core/mission/core.py"  # the mission logic moved out of the runner (M-a1)
 PROVISIONAL_URDF = ROOT / "sim/models/dls08_provisional/forklift.urdf"
+
+
+
+def runner_run(tree):
+    """run() as one function again: its setup and then drive()'s statements (the M-a1 replay plan R2 split
+    them at the initial plans; drive's prologue that binds the setup's names is left out)."""
+    import copy
+
+    run = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "run")
+    drive = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "drive")
+    body = list(drive.body)
+    while body and (
+        (isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant))
+        or ast.unparse(body[0]).startswith("_bound = ")
+        or (isinstance(body[0], ast.If) and ast.unparse(body[0].test).endswith("in _bound"))
+    ):
+        body.pop(0)
+    merged = copy.copy(run)
+    merged.body = run.body[:-2] + body  # without the hand-over (import, return drive(...))
+    return merged
+
+def runner_and_core_functions(tree) -> dict:
+    """The runner's functions by name (unparsed), with the mission core's methods that moved out of
+    run() (M-a1 slices 6c, 6d) in their place."""
+    import ast
+
+    functions = {n.name: ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    core = ast.parse(CORE.read_text())
+    cls = next(n for n in core.body if isinstance(n, ast.ClassDef) and n.name == "MissionCore")
+    functions.update({n.name: ast.unparse(n) for n in cls.body if isinstance(n, ast.FunctionDef)
+                      and n.name not in functions})
+    return functions
 
 
 def test_isaac_transport_help_does_not_require_simulator_sdk() -> None:
@@ -397,9 +431,7 @@ def test_every_physics_step_after_start_goes_through_step_world() -> None:
     for needle in ("world.step(", "slam['odometry'].update(", "slam['link'].exchange(",
                    "slam['tracker'].receive(", "slam['stop'].update(", "tick % scan_every"):
         assert needle in body, needle
-    run = next(
-        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "run"
-    )
+    run = runner_run(tree)
     loop = next(
         node
         for node in ast.walk(run)
@@ -414,7 +446,7 @@ def test_every_physics_step_after_start_goes_through_step_world() -> None:
 def test_slam_release_replans_both_travel_legs_and_gates_on_a_stop() -> None:
     import ast
 
-    tree = ast.parse(SCRIPT.read_text())
+    tree = ast.parse(CORE.read_text())  # the SLAM release moved to the mission core (M-a1 slice 6c)
     release = next(
         node
         for node in ast.walk(tree)
@@ -424,25 +456,28 @@ def test_slam_release_replans_both_travel_legs_and_gates_on_a_stop() -> None:
     assert "jump_m <= 0.02 and abs(jump_rad) <= 0.02" in body
     assert "plan_transport_leg(" in body and "plan_return_leg(" in body
     source = SCRIPT.read_text()
-    assert "if slam[\"stop_now\"]:\n                    slam_release(t)" in source
-    assert "rear = slam_rear(t)  # the released estimate" in source
-    assert "if phase in trackers and not releasing and not warming:" in source
+    gate = CORE.read_text()  # the release gate moved to the mission core (M-a1 slice 5)
+    assert "if slam[\"stop_now\"]:\n                slam_release(t)" in gate
+    assert "rear = slam_rear(t)  # the released estimate" in gate
+    # (M-a3: nor while paused, resuming or cancelling, plan E3)
+    assert "if ms.phase in trackers and not releasing and not warming and not paused_:" in source
 
 
 def test_slam_runs_see_the_pallet_again_before_the_final_straight() -> None:
     """Plan v3.6: near capture from final_straight_prefix, no silent fallback."""
-    source = SCRIPT.read_text()
-    assert "final_straight_prefix(\n                                    paths[\"approach\"], geometry.alignment_straight_m" in source
-    assert 'f"near_capture_failed:{attempt[\'retry_reason\']}"' in source
-    assert 'if slam is not None and "near_capture" not in state:' in source
+    core = CORE.read_text()  # the observation's handling moved to the mission core (M-a1 slices 4b-iii/iv)
+    assert "final_straight_prefix(\n                paths[\"approach\"], geometry.alignment_straight_m" in core
+    assert 'f"near_capture_failed:{attempt[\'retry_reason\']}"' in core
+    assert 'if slam is not None and "near_capture" not in state:' in core
 
 
 def test_the_delivery_match_inputs_are_recorded_without_stopping_the_match() -> None:
     """2026-10-13: every delivery match round's inputs go to delivery_match_N.npz for
     offline replay; a failed write is noted and the round is still recorded (Codex P2)."""
-    source = SCRIPT.read_text()
-    start = source.index("    def dock_at_delivery_straight(t: float) -> None:")
-    body = source[start : source.index("\n    def ", start + 10)]
+    source = CORE.read_text()  # the delivery docking is a MissionCore method since M-a1 slice 6b
+    start = source.index("    def dock_at_delivery_straight(self, t: float) -> None:")
+    end = source.find("\n    def ", start + 10)
+    body = source[start : end if end >= 0 else len(source)]
     save = body.index("f\"delivery_match_{len(docking.get('rounds', [])) + 1}.npz\"")
     guard = body.rindex("try:", 0, save)
     handler = body.index("except OSError as exc:", save)
@@ -459,11 +494,13 @@ def test_the_delivery_match_inputs_are_recorded_without_stopping_the_match() -> 
 def test_slam_runs_dock_on_a_scan_before_the_delivery_straight() -> None:
     """Plan v3.8: stop at the straight start, match, move the whole drop."""
     source = SCRIPT.read_text()
-    assert 'dock_at_delivery_straight(t)' in source
-    assert 'ignore_self=True' in source
+    # The transport arrival (M-a1 slice 2) and the delivery docking (slice 6b) are the mission core's.
+    core = CORE.read_text()
+    assert 'self.dock_at_delivery_straight(t)' in core
+    assert 'ignore_self=True' in source  # the runner's scan for the match (a port)
     # The withdraw follows every goal change (plan D7c factored it into move_withdraw).
-    assert "set_withdraw(np.array([compose(tuple(frame_change), tuple(pose)) for pose in paths[\"withdraw\"].poses]))" in source
-    assert source.count("move_withdraw(step_shift)") == 2
+    assert "set_withdraw(np.array([compose(tuple(frame_change), tuple(pose)) for pose in paths[\"withdraw\"].poses]))" in core
+    assert core.count("move_withdraw(step_shift)") == 2
     # Three SLAM recoveries, plus the priority-5 obstacle replan of the
     # transport leg and the return leg's fallback to it.
     # (and the zero-clearance retry of that obstacle replan), plus the live
@@ -471,7 +508,9 @@ def test_slam_runs_dock_on_a_scan_before_the_delivery_straight() -> None:
     # Plan D7c: the two obstacle replans of the transport now share transport_replan
     # (one lookup), and the docking retry's release and re-approach plan add three.
     # Obstacle recovery v4: the escape's leg (transport and return) looks them up as the replans do.
-    assert source.count('slam.get("transport_scenario", scenario)') == 12
+    # (the obstacle replan and the live leg moved to the mission core, M-a1 slices 3a/3c)
+    assert source.count('slam.get("transport_scenario", scenario)') + CORE.read_text().count(
+        'slam.get("transport_scenario", scenario)') == 12
 
 
 def test_d8b_recording_options_validate_before_startup(tmp_path) -> None:
@@ -502,7 +541,7 @@ def test_d8b_every_read_is_recorded_before_the_d5_check_can_drop_it() -> None:
     import ast
 
     tree = ast.parse(SCRIPT.read_text())
-    functions = {node.name: ast.unparse(node) for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    functions = runner_and_core_functions(tree)
     read = functions["read_pocket_frame"]
     assert read.index("record_pocket_read(raw)") < read.index("if raw is None:") < read.index("frames_without_time")
     assert "if check is None:" in read
@@ -517,45 +556,50 @@ def test_d8b_every_read_is_recorded_before_the_d5_check_can_drop_it() -> None:
     assert "recorder.tick_error = " in functions["record_truth_tick"]
     source = SCRIPT.read_text()
     # The dwells restart the tracker's slew and hold the switch to the insertion.
-    assert "trackers[\"approach\"].restart_speed_slew(0.0)" in source
-    assert "tracking = replace(tracking, status=\"tracking\", speed_mps=0.0)" in source
+    command = CORE.read_text()  # the dwells moved to the mission core (M-a1 slice 4a-iv)
+    assert "trackers[\"approach\"].restart_speed_slew(0.0)" in command
+    assert "tracking = replace(tracking, status=\"tracking\", speed_mps=0.0)" in command
     # The recorder is written first in the finally block, guarded.
-    finally_at = source.index("    finally:\n        if recorder is not None:")
+    # (M-a1 replay R3: the finally's body sits in a try whose own finally closes a format-2 record.)
+    finally_at = source.index("    finally:\n        try:\n            if recorder is not None:")
     assert finally_at < source.index("state[\"pocket_recording\"] = recorder.close(") < source.index(
         "state[\"pocket_recording_close_error\"] = repr(exc)") < source.index("write_slam_record(args, state, replace(scenario")
     # A failed close fails the run without replacing an earlier failure reason.
     assert "state.setdefault(\"failure_reason\", f\"pocket_recording_close_failed: {exc!r}\")" in source
     # The control pose read with a frame carries the time it was taken at (a capture in the
     # same loop iteration moves it past the loop's t).
-    assert "rear = slam_rear(now_s)\n                            rear_stamp = now_s" in source
+    assert "rear = slam_rear(now_s)\n            rear_stamp = now_s" in CORE.read_text()  # (M-a1 slice 4b-i)
+    assert "    rear_stamp = captured_.rear_stamp" in source  # handed back to the runner's control stamp
     assert "pocket[\"control_stamped\"] = (rear_stamp," in source
 
 
 def test_d8b_custom_cruise_drives_the_straight_but_not_the_acceptance_dry_run() -> None:
     """The near capture's go/no-go stays the baseline's (smoke run: a 0.30 m/s dry run
     arrives 7.76 mm short, past the 6 mm acceptance); the custom-cruise one is recorded."""
-    source = SCRIPT.read_text()
+    source = CORE.read_text()  # the near capture's straight moved to the mission core (M-a1 slice 4b-v)
     acceptance = source.index("acceptance_config = replace(acceptance_config,\n")
     assert "cruise_speed_mps=speeds[\"approach\"])" in source[acceptance:acceptance + 200]
-    dry = source.index("acceptance_config,\n                                            rear,\n")
+    dry = source.index("acceptance_config,\n                        rear,\n")
     driven = source.index("state[\"near_capture\"][\"dry_run_driven\"] = asdict(bicycle_rollout(")
-    tracker = source.index("approach_config,\n                                        )\n")
+    tracker = source.index("approach_config,\n                    )\n")
     assert acceptance < dry < driven < tracker
 
 
 def test_d8b_dwells_hold_the_steering_as_well_as_the_wheels() -> None:
     """Matrix 1883: steering turned 0.18-0.25 rad in every start dwell and the body crept."""
     source = SCRIPT.read_text()
-    block = source[source.index("hold_, released_ = dwells.update("):source.index("elif released_:")]
+    command = CORE.read_text()  # the dwells moved to the mission core (M-a1 slice 4a-iv)
+    block = command[command.index("hold_, released_ = dwells.update("):command.index("elif released_:")]
     assert "dwell_hold = True" in block
     # (A cusp position stall's hold, plan cusp stall v7, joins the same path.)
-    assert "if estop_holding or obstacle_hold or dwell_hold or cusp_hold:" in source
-    assert "steering_command.copy() if (estop_holding or obstacle_hold or dwell_hold or cusp_hold)" in source
+    # (the command assembly moved to the mission core, M-a1 slice 5)
+    assert "if estop_holding or obstacle_hold or dwell_hold or cusp_hold:" in command
+    assert "steering_command.copy() if (estop_holding or obstacle_hold or dwell_hold or cusp_hold)" in command
     # The wheels brake on the held steering's curvature, in the command actually applied.
-    assert "wheel_curvature = kappa if (dwell_hold or cusp_hold) else curvature" in source
-    assert "drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)" in source
-    assert "ackermann_command(wheel_speed, curvature," not in source
-    assert source.index("dwell_hold = dwell_standing = False") < source.index("hold_, released_ = dwells.update(")
+    assert "wheel_curvature = kappa if (dwell_hold or cusp_hold) else curvature" in command
+    assert "drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)" in command
+    assert "ackermann_command(wheel_speed, curvature," not in command and "ackermann_command(" not in source
+    assert source.index("dwell_hold = dwell_standing = False") < source.index("command_ = core.command(")
 
 
 def test_d8b_dwells_lock_the_wheels_and_give_their_gains_back() -> None:
@@ -565,7 +609,7 @@ def test_d8b_dwells_lock_the_wheels_and_give_their_gains_back() -> None:
     assert "locked_kps[wheels] = DWELL_WHEEL_KP" in lock and "controller_.set_gains(kps=locked_kps, kds=kds_)" in lock
     assert 'elif not dwell_standing and wheel_lock["q"] is not None:' in lock
     # Locked once standing, never while braking (diagnostic 1984).
-    assert 'dwell_standing = dwells.active is not None and dwells.active["still_since_s"] is not None' in source
+    assert 'dwell_standing = dwells.active is not None and dwells.active["still_since_s"] is not None' in CORE.read_text()
     assert 'set_gains(kps=wheel_lock["gains"][0], kds=wheel_lock["gains"][1])' in lock
     assert 'joint_positions=wheel_lock["q"],' in lock
 
@@ -579,23 +623,27 @@ def test_s4_safety_stops_take_the_dwell_path_without_the_wheel_lock_and_record_t
     import ast
 
     source = SCRIPT.read_text()
-    block = source[source.index("safety_stops.update("):source.index("phase == \"observe\" and tracking.status")]
+    command = CORE.read_text()  # the safety stops moved to the mission core (M-a1 slice 4a-iv)
+    block = command[command.index("safety_stops.update("):command.index("phase == \"observe\" and tracking.status")]
     assert "dwell_hold = True" in block and "dwell_standing" not in block
     assert "safety_hold = True" in block
     assert "restart_speed_slew(0.0)" in block
     # Reset every loop tick, before the stop block can set it.
-    assert source.index("safety_hold = False") < source.index("safety_stops.update(")
+    assert source.index("safety_hold = False") < source.index("command_ = core.command(")
     # The zero comes after the slew and the permission cap, last before the drive command.
-    slew = source.index("wheel_speed = previous + float(np.clip(target_speed - previous, -rate, rate))")
-    zero = source.index("if estop_holding or safety_hold:\n                    wheel_speed = 0.0")
-    assert slew < source.index("cap = obstacle.get(\"permission_cap\")") < zero
-    assert zero < source.index("drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)")
+    assembly = CORE.read_text()  # the command assembly moved to the mission core (M-a1 slice 5)
+    slew = assembly.index("wheel_speed = slew_cap_stop(")  # its arithmetic: control/speed_chain.py (M-b4)
+    zero = assembly.index("if estop_holding or safety_hold:\n                wheel_speed = 0.0")
+    assert slew < assembly.index("cap = obstacle.get(\"permission_cap\")") < zero
+    assert zero < assembly.index("drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)")
     tree = ast.parse(source)
-    functions = {node.name: ast.unparse(node) for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    functions = runner_and_core_functions(tree)
     assert "applied_speed_mps=state.get('applied_command'" in functions["record_truth_tick"]
-    recorded = source.index("state[\"applied_command\"] = (float(drive.speed_mps)")
-    assert source.index("drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)") < recorded
-    assert recorded < source.index("joint_velocities=np.asarray(drive.wheel_rates_rad_s)")
+    recorded = assembly.index("state[\"applied_command\"] = (float(drive.speed_mps)")
+    assert assembly.index("drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)") < recorded
+    # The runner applies the assembled command afterwards (M-a1 slice 5).
+    assert source.index("command_ = core.assemble_command(") < source.index(
+        "joint_velocities=np.asarray(drive.wheel_rates_rad_s)")
 
 
 def test_s4_near_tracking_options_validate_before_startup() -> None:
@@ -620,6 +668,18 @@ def test_s4_near_tracking_options_validate_before_startup() -> None:
         assert expected in result.stderr, (flags, result.stderr)
 
 
+def _core_hook(call, parents) -> bool:
+    """The runner's ``near_tick=lambda *a: near_tick(*a)`` handed to MissionCore -- the only call of a guarded
+    function allowed outside a ``near is not None`` test, since the core guards it (Codex 4a-iii/iv P3)."""
+    import ast
+
+    lam = parents.get(call)
+    kw = parents.get(lam)
+    owner = parents.get(parents.get(parents.get(kw)))  # keyword -> SimpleNamespace(...) -> hooks= -> MissionCore(...)
+    return (isinstance(lam, ast.Lambda) and lam.body is call and isinstance(kw, ast.keyword)
+            and kw.arg == call.func.id and isinstance(owner, ast.Call) and ast.unparse(owner.func) == "MissionCore")
+
+
 def test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival() -> None:
     """Plan D8 S4a: with --near-tracking off the run is unchanged -- every call into the
     near-field path sits under a `near is not None` test -- and the stop is decided before
@@ -630,7 +690,11 @@ def test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival() -> 
     tree = ast.parse(source)
     parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
     guarded_calls = ("build_near_tracker", "feed_near_frame", "near_tick")
-    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and getattr(n.func, "id", None) in guarded_calls]
+    core_tree = ast.parse(CORE.read_text())  # the near tick moved to the mission core (M-a1 slice 4a-iv)
+    parents.update({child: node for node in ast.walk(core_tree) for child in ast.iter_child_nodes(node)})
+    calls = [n for t_ in (tree, core_tree) for n in ast.walk(t_) if isinstance(n, ast.Call)
+             and getattr(n.func, "id", None) in guarded_calls
+             and not _core_hook(n, parents)]
     assert {c.func.id for c in calls} == set(guarded_calls)
     for call in calls:
         node, guarded = call, False
@@ -642,31 +706,40 @@ def test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival() -> 
         assert guarded, ast.unparse(call)
     assert source.count("near = None\n") == 1
     # The contract is checked before the first tick; S4a-2 opens the insertion.
-    assert source.index("            check_near_contract()\n        for step in range(") > 0
+    check_ = source.index("            check_near_contract()\n")
+    loop_ = source.index("        for step in range(int(120 * args.max_sim_seconds)):")
+    assert check_ < loop_
+    # Only the M-a0 boundary-record wrapping (recording only) sits between the check and the loop.
+    between_ = source[check_ + len("            check_near_contract()\n"): loop_]
+    assert between_.startswith("        if boundary is not None:\n") and "require(" not in between_
     assert "until S4a-2" not in source
     # Decided after the scheduled safety stops and before the arrival transitions.
-    tick = source.index("hold_, released_, arrive_ = near_tick(t, rear_stamp, rear, requested_speed, phase, curvature,")
-    assert source.index("safety_stops.update(") < tick < source.index("elif phase == \"approach\":\n")
-    block = source[tick:source.index("phase == \"observe\" and tracking.status", tick)]
+    moved = CORE.read_text()
+    tick = moved.index("hold_, released_, arrive_ = near_tick(t, rear_stamp, rear, requested_speed, ms.phase, curvature,")
+    assert moved.index("safety_stops.update(") < tick
+    assert source.index("command_ = core.command(") < source.index("arrival_ = core.arrive(t, tracking)")
+    block = moved[tick:moved.index("phase == \"observe\" and tracking.status", tick)]
     for line in ("requested_speed = 0.0", "dwell_hold = True", "safety_hold = True",
                  "tracking = replace(tracking, status=\"tracking\", speed_mps=0.0)",
-                 "trackers[phase].restart_speed_slew(0.0)"):
+                 "trackers[ms.phase].restart_speed_slew(0.0)"):
         assert line in block, line
     # S4a-2: the carriage-corner insertion end becomes the insertion's arrival, standing.
     arrive = block.index("if arrive_:")
     assert arrive < block.index("tracking = replace(tracking, status=\"arrived\", speed_mps=0.0)") < block.index("elif hold_:")
-    assert "state[\"near_tracking\"][\"insert_arrival\"]" in source
+    core = CORE.read_text()  # the arrival transitions moved to the mission core (M-a1 slice 2)
+    assert "state[\"near_tracking\"][\"insert_arrival\"]" in core
     # Built in the hold the approach transition begins; fed the raw frame before D5 reads it.
-    build = source.index("build_near_tracker(t)  # in the hold the transition began")
-    assert source.rindex("transition(\"approach\", t)", 0, build) > build - 300
+    build = moved.index("build_near_tracker(t)  # in the hold the transition began")  # (M-a1 slice 4b-v)
+    assert moved.rindex("transition(\"approach\", t)", 0, build) > build - 300
     feed = source.index("if feed_near_frame(raw) == \"bad_depth\":\n                return")
     assert source.index("record_pocket_read(raw)\n        if raw is None:") < feed < source.index(
         "        if check is None:\n            pocket[\"frames_read\"] += 1")
     # S4a-1 ends at the approach's arrival, and the loop end lets that phase return.
-    assert "transition(\"near_tracking_stopped\", t)\n                            break" in source
+    assert "transition(\"near_tracking_stopped\", t)\n                return SimpleNamespace(stop=True, rear=rear)" in core
+    assert "if arrival_.stop:\n                            break" in source
     assert "\"repeat_target_not_reached\", \"near_tracking_stopped\"):\n            return" in source
     # Terminal stops end the run only once the stop detector sees the truck stand.
-    functions = {n.name: ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    functions = runner_and_core_functions(tree)
     feed_fn = functions["feed_near_frame"]
     assert feed_fn.index("skipped='bad_depth'") < feed_fn.index("get_current_frame()") < feed_fn.index(
         "row['skipped'] = 'uncovered'")
@@ -680,7 +753,8 @@ def test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival() -> 
     latched = tick_fn.index("if near['stop_state'].terminal:")
     assert latched < tick_fn.index("near_tracking.correction_update(") < tick_fn.index("near_redraw(latest_, rear_now)")
     # A gap shortfall ends the run only on a fresh observation; otherwise it waits.
-    tick_src = source[source.index("    def near_tick("):source.index("    def read_pocket_frame(")]
+    core_src = CORE.read_text()  # near_tick moved to the mission core (M-a1 slice 6d)
+    tick_src = core_src[core_src.index("    def near_tick("):core_src.index("\n    def ", core_src.index("    def near_tick(") + 10)]
     fresh_branch = tick_src[tick_src.index("if margins_[worst_] < 0:"):tick_src.index("ghat = ")]
     assert fresh_branch.index("if fresh:") < fresh_branch.index('terminal = terminal or "stuck"') < fresh_branch.index(
         'stale_now.add("gap_wait")')
@@ -704,10 +778,11 @@ def test_s4c1_injections_bias_only_the_captures_before_the_tracker_and_drop_befo
 
     source = SCRIPT.read_text()
     tree = ast.parse(source)
-    functions = {n.name: ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    functions = runner_and_core_functions(tree)
     assert "near['injection_closed'] = True" in functions["build_near_tracker"]
-    inject = source.index("inject_ = (near is not None and args.near_inject is not None")
-    window = source[inject : inject + 4000]
+    core = CORE.read_text()  # the injection moved to the mission core with the observation (M-a1 slice 4b-iv)
+    inject = core.index("inject_ = (near is not None and options.near_inject is not None")
+    window = core[inject : inject + 4000]
     assert 'not near.get("injection_closed"))' in window
     assert window.index("near_tracking.biased_observation(") < window.index("base_xy = adapter.estimate_pallet_center_m(")
     assert window.index("target_pickup = adapter.estimate_world_pallet_site(") < window.index("near_tracking.biased_site(")
@@ -715,7 +790,7 @@ def test_s4c1_injections_bias_only_the_captures_before_the_tracker_and_drop_befo
     assert feed_fn.index("row.update(skipped='dropped'") < feed_fn.index("adapter.normalize_depth(")
     assert feed_fn.index("return 'dropped'") < feed_fn.index("near['last_stamp'] = stamp")
     tick_fn = functions["near_tick"]
-    assert "face_distance <= args.near_drop_frames_from_m" in tick_fn and "'face_distance_m': face_distance" in tick_fn
+    assert "face_distance <= options.near_drop_frames_from_m" in tick_fn and "'face_distance_m': face_distance" in tick_fn
     assert "known pallet would carry the injected bias" in functions["check_near_contract"]
     near_tracking = (ROOT / "sim/isaac/near_tracking.py").read_text()
     for name in ("near_inject", "near_inject_lateral_m", "near_inject_yaw_rad", "near_drop_frames_from_m"):
@@ -732,7 +807,7 @@ def test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_captu
 
     source = SCRIPT.read_text()
     tree = ast.parse(source)
-    functions = {n.name: ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    functions = runner_and_core_functions(tree)
     tick_fn = functions["near_tick"]
     retry = tick_fn.index("near_tracking.retry_allowed(")
     assert tick_fn.index("near.setdefault('terminal_standing_since', now_s)") < retry
@@ -746,7 +821,7 @@ def test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_captu
     assert positions == sorted(positions), order
     # The release and the stand, shared with the S4c-3 realignment.
     shared = functions["release_and_stand"]
-    order = ["slam['tracker'].release(", "obstacle['layer'].refresh(", "carried(obstacle['pickup_estimate'])",
+    order = ["self.release_slam(", "obstacle['layer'].refresh(", "carried(obstacle['pickup_estimate'])",
              "near['retry_stand'] = True"]
     positions = [shared.index(o) for o in order]
     assert positions == sorted(positions), order
@@ -754,23 +829,26 @@ def test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_captu
     build_fn = functions["build_near_tracker"]
     assert "mismatch=False, unbounded=False, path_revision=0" in build_fn
     assert "near.setdefault('stop_events', [])" in build_fn and "stop_events=[]" not in build_fn
-    stand = source.index("retry_stand_ = near is not None and near.get('retry_stand') and phase == 'observe'".replace("'", '"'))
-    window = source[stand : stand + 2700]  # obstacle recovery v4's escape end and the cusp stall sit between
+    core = CORE.read_text()  # the follower's tick moved to the mission core (M-a1 slice 4a-i)
+    stand = core.index("retry_stand_ = near is not None and near.get('retry_stand') and ms.phase == 'observe'".replace("'", '"'))
+    window = core[stand : stand + 2700]  # obstacle recovery v4's escape end and the cusp stall sit between
     assert 'tracking = replace(tracking, status="arrived", speed_mps=0.0)' in window
     assert "and not retry_stand_" in window
-    seen = source.index("Plan D8 S4c-2 / S4c-3: the re-observation must see the pallet")
-    assert '"near_field_retry_no_detection" if stand_key_ == "retry"' in source[seen : seen + 900]
-    assert "require(False, reason_)" in source[seen : seen + 900]
-    assert source.index("detection = detect_pockets(detector_input, prior, params)") < seen
+    moved = CORE.read_text()  # the capture and detection moved to the mission core (M-a1 slice 4b-i)
+    seen = moved.index("Plan D8 S4c-2 / S4c-3: the re-observation must see the pallet")
+    assert '"near_field_retry_no_detection" if stand_key_ == "retry"' in moved[seen : seen + 900]
+    assert "require(False, reason_)" in moved[seen : seen + 900]
+    assert moved.index("detection = detect_pockets(detector_input, prior, params)") < seen
     # What (x) judges by: each frame's hold, the re-projection, and the re-observation as
     # placed with the target the planner used.
     assert "'episode': near['episode']" in functions["feed_near_frame"]
     assert "'reprojected': reprojected_" in shared and "reprojected_ = {" in shared
-    assert shared.index("applied_before_ = [") < shared.index("slam['tracker'].release(")
-    placed = source.index("Plan D8 S4c-2 / S4c-3: the re-observation as placed and its target.")
-    assert "capture_base=" in source[placed : placed + 500] and "target=[target_pickup.x_m" in source[placed : placed + 500]
-    assert source.index('state["near_tracking"][stand_key_]["planned_target"] = [') > source.index(
-        "planning_pickup, state[\"planning_target_source\"] = ("
+    assert shared.index("applied_before_ = [") < shared.index("self.release_slam(")
+    moved = CORE.read_text()  # the observation's handling moved to the mission core (M-a1 slice 4b-iv)
+    placed = moved.index("Plan D8 S4c-2 / S4c-3: the re-observation as placed and its target.")
+    assert "capture_base=" in moved[placed : placed + 500] and "target=[target_pickup.x_m" in moved[placed : placed + 500]
+    assert moved.index('state["near_tracking"][stand_key_]["planned_target"] = [') > moved.index(
+        "planning_pickup, state[\"planning_target_source\"] = hooks.planning_target(target_pickup)"
     )
 
 
@@ -783,20 +861,21 @@ def test_s4b_correction_points_are_decided_before_the_stop_and_install_at_once()
 
     source = SCRIPT.read_text()
     tree = ast.parse(source)
-    functions = {n.name: ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    functions = runner_and_core_functions(tree)
     tick_fn = functions["near_tick"]
     assert tick_fn.index("near_tracking.correction_update(") < tick_fn.index("near_tracking.decide_stop(")
     assert tick_fn.index("near_redraw(latest_, rear_now)") < tick_fn.index("near_install(")
     assert "terminal = terminal or 'correction_missed'" in tick_fn and "terminal = 'replan_rejected'" in tick_fn
     assert "revision_used = near['path_revision']" in tick_fn and "'path_revision': revision_used" in tick_fn
-    assert 'tracking.status == "arrived")' in source[source.index("arrive_ = near_tick("):][:200]
+    moved = CORE.read_text()  # the near tick moved to the mission core (M-a1 slice 4a-iv)
+    assert 'tracking.status == "arrived")' in moved[moved.index("arrive_ = near_tick("):][:200]
     grid_fn = functions["correction_grid"]
     assert "docking_band(occupancy_, first_target) & docking_band(occupancy_, target)" in grid_fn
     redraw_fn = functions["near_redraw"]
     assert "near['first_target']" in redraw_fn and "dry(acceptance_), dry(driven_)" in redraw_fn
     assert "max_yaw_rad=near_tracking.CORRECTION_MAX_YAW_RAD" in redraw_fn  # S4b revision: 0.12 rad
     install_fn = functions["near_install"]
-    for line in ("nonlocal phase_started", "phase_started = now_s", "pocket['planning_pickup'] = target_",
+    for line in ("ms.phase_started = now_s",  # M-a1 step 0: the phase clock lives on the MissionState "pocket['planning_pickup'] = target_",
                  "obstacle['pickup_estimate'] = target_", "obstacle['layer'].refresh(", "trackers[name_] = RearAxlePathTracker(",
                  "trackers[name_].path_arrays()", "near['path_revision'] = revision_"):
         assert line in install_fn, line
@@ -817,41 +896,42 @@ def test_s4c3_stage_one_redraws_a_refused_near_capture_before_ending() -> None:
 
     source = SCRIPT.read_text()
     tree = ast.parse(source)
-    functions = {
-        n.name: ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
-    }
+    functions = runner_and_core_functions(tree)
     redraw_fn = functions["near_capture_redraw"]
     for needed in (
-        "redraw_docking(",
+        "redraw_docking_traced(",  # the dry runs' trajectories come back in the Planner response (M-a1 6d)
+        "dry_configs=(acceptance_, driven_)",
         "max_yaw_rad=near_tracking.CORRECTION_MAX_YAW_RAD",
         "correction_grid(target_, target_, rear_now)",
         "record_['refused'] = 'correction_point'",
         "'raw_target':",
         "'line':",
         "held_pockets(observation_,",
-        "near_tracking.rollout_face_distance(held_, widths_, tip_x_, args.rear_axle_offset_m)",
-        "near_tracking.correction_points_check(",
+        "near_tracking.rollout_face_distance(held_, widths_, tip_x_, options.rear_axle_offset_m)",
+        "near_tracking.correction_points_check(list(trajectories_),",
         "'fork_tip_x_m': tip_x_",
     ):
         assert needed in redraw_fn, needed
     # (x) v3: the capture's own control sample, taken with its SLAM error at the same instant.
-    sample = source.index('attempt["capture_control"] = {')
-    assert source.index('attempt["slam_error"] = slam_error()') < sample
-    assert source.index("truth_rear_capture = [float(v) for v in rear]") < source.index(
-        "rear = slam_rear(now_s)", source.index("truth_rear_capture")
+    moved = CORE.read_text()  # the capture moved to the mission core (M-a1 slice 4b-i)
+    sample = moved.index('attempt["capture_control"] = {')
+    assert moved.index('attempt["slam_error"] = slam_error()') < sample
+    assert moved.index("truth_rear_capture = [float(v) for v in rear]") < moved.index(
+        "rear = slam_rear(now_s)", moved.index("truth_rear_capture")
     )
     # The correction trigger and the check measure the same distance.
     assert (
         "face_distance = near_tracking.face_distance_m(face, tip_x)"
         in functions["near_tick"]
     )
-    branch = source.index(
+    moved = CORE.read_text()  # the near capture's straight moved to the mission core (M-a1 slice 4b-v)
+    branch = moved.index(
         "Plan D8 S4c-3 stage 1: the S4b re-draw acceptance at the near"
     )
-    window = source[branch - 2500 : branch + 3500]
+    window = moved[branch - 2500 : branch + 3500]
     assert window.index(
         'refusal = f"near_capture_misaligned:{offsets}"'
-    ) < window.index('if straight is None and near is not None and args.near_capture_redraw == "on":')
+    ) < window.index('if straight is None and near is not None and options.near_capture_redraw == "on":')
     assert 'refusal = f"near_capture_misaligned:dry_run:{asdict(dry)}"' in window
     assert window.index("near_capture_redraw(") < window.index(
         "require(straight is not None, refusal)"
@@ -860,13 +940,13 @@ def test_s4c3_stage_one_redraws_a_refused_near_capture_before_ending() -> None:
         'state["near_capture"].setdefault("recoveries", []).append(redraw_entry)'
         in window
     )
-    installed = source.index('redraw_entry["installed"] = {')
+    installed = moved.index('redraw_entry["installed"] = {')
     assert (
-        source.index('trackers["approach"] = RearAxlePathTracker(', branch) < installed
+        moved.index('trackers["approach"] = RearAxlePathTracker(', branch) < installed
     )
-    assert (
+    assert (  # the tracker's build moved to the mission core (M-a1 slice 6e)
         '"paths0": {name_: near_tracking.path_digest(*trackers[name_].path_arrays())'
-        in source
+        in CORE.read_text()
     )
 
 
@@ -879,9 +959,9 @@ def test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_in
 
     source = SCRIPT.read_text()
     tree = ast.parse(source)
-    functions = {n.name: ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    functions = runner_and_core_functions(tree)
     shared = functions["release_and_stand"]
-    for needed in ("slam['tracker'].release(", "obstacle['layer'].refresh(", "carried(pocket['planning_pickup'])",
+    for needed in ("self.release_slam(", "obstacle['layer'].refresh(", "carried(pocket['planning_pickup'])",
                    "near['retry_stand'] = True", "'applied_before': applied_before_"):
         assert needed in shared, needed
     assert "release_and_stand(now_s, 'release_pickup_retry')" in functions["start_pickup_retry"]
@@ -894,12 +974,44 @@ def test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_in
     assert "realign_install('stand')" in realign
     install = functions["realign_install"]
     assert "near_tracking.REALIGN_MAX_LENGTH_M" in install and "'slam_mode': slam['tracker'].mode" in install
-    for site in ("near_leg", "observe_replan", "observe_candidate", "backoff", "obstacle_replan"):
-        assert f'realign_install("{site}")' in source, site
-    assert source.count('"near_capture_realign_held_recovery"') == 2
-    branch = source.index("Plan D8 S4c-3 stage 2: once per pickup, instead of ending.")
-    window = source[branch - 1500 : branch + 600]
+    core = CORE.read_text()  # the obstacle replan's installs moved to the mission core (M-a1 slice 3c)
+    for site in ("backoff", "obstacle_replan", "observe_replan", "observe_candidate", "near_leg"):
+        assert f'realign_install("{site}")' in core, site
+    assert source.count('"near_capture_realign_held_recovery"') + core.count('"near_capture_realign_held_recovery"') == 2
+    branch = core.index("Plan D8 S4c-3 stage 2: once per pickup, instead of ending.")  # (M-a1 slice 4b-v)
+    window = core[branch - 1500 : branch + 600]
     assert 'state["near_tracking"].get("realigns", 0) == 0' in window
     assert window.index("near_tracking.REALIGN_MIN_LEFT_M") < window.index("start_near_realign(t, attempt_number)")
     assert window.index("start_near_realign(t, attempt_number)") < window.index("require(straight is not None, refusal)")
-    assert 'if straight is None and near is not None and args.near_capture_redraw == "on":' in source
+    assert 'if straight is None and near is not None and options.near_capture_redraw == "on":' in core
+
+
+def test_mission_commands_options_validate_before_startup(tmp_path) -> None:
+    """M-a3 (docs/plans/2026-10-16-m-a3-mission-commands.md E7, E9): a schedule needs the obstacle layer acting,
+    excludes the near tracker, the measurement runs' stops and a boundary record, and must be well formed."""
+    good = tmp_path / "commands.json"
+    good.write_text('{"commands": [{"t": 30.0, "command": "pause"}, {"t": 40.0, "command": "resume"}]}')
+    bad = tmp_path / "bad.json"
+    bad.write_text('{"commands": [{"t": 30.0, "command": "halt"}]}')
+    kinds = tmp_path / "kinds.json"
+    kinds.write_text('{"commands": [], "stop_kinds": [{"from": 10.0, "to": 12.0, "kind": "halt"}]}')
+    overlap = tmp_path / "overlap.json"
+    overlap.write_text('{"stop_kinds": [{"from": 0.0, "to": 3.0, "kind": "controlled"}, '
+                       '{"from": 1.0, "to": 2.0, "kind": "preempt"}]}')
+    layer = ["--record-slam", "--obstacle-layer", "config/obstacle_layer_single.yaml", "--obstacle-act"]
+    for flags, expected in (
+        (["--mission-commands", str(good)], "--mission-commands needs --obstacle-act"),
+        (["--mission-commands", str(good), *layer, "--record-boundary"], "--mission-commands excludes"),
+        (["--mission-commands", str(bad), *layer], "command must be pause, resume or cancel"),
+        (["--mission-commands", str(kinds), *layer], "stop kind must be controlled or preempt"),
+        (["--mission-commands", str(overlap), *layer], "stop kind intervals must not overlap"),
+        (["--mission-commands", str(tmp_path / "missing.json"), *layer], "--mission-commands:"),
+    ):
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--base-scene", "unused.usda", "--pallet-urdf", "unused.urdf",
+             "--forklift-urdf", str(PROVISIONAL_URDF), "--pallet-geometry", "unused.yaml", "--settings",
+             "unused.yaml", "--output", "unused", "--seed", "2", *flags],
+            capture_output=True, text=True, check=False, cwd=ROOT,
+        )
+        assert result.returncode == 2, (flags, result.stderr[-400:])
+        assert expected in result.stderr, (flags, result.stderr[-400:])

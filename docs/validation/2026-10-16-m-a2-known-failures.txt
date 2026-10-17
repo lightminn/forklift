@@ -1,0 +1,15 @@
+# M-a2 known ws1 failures (docs/plans/2026-10-16-m-a2-source-tests-to-behaviour.md, section 3)
+# Measured on ws1 (~/bin/forklift-ws1-pytest -rfE tests) at 5faf5e9: 14 failed, 3479 passed, 19 skipped.
+# Four of the 14 were source tests broken by the M-a1 replay instrumentation (the schedule call assigned to due_,
+# the replay helpers' Path annotations in exec'd module slices) and are fixed by the commit that adds this file;
+# the ten below are the ws1 environment's own (not M-a2's): the acceptance is "this set exactly, nothing new".
+tests/integration/test_evaluate_cli.py::test_run_metadata_records_effective_params_and_detector_inputs_have_no_labels | TypeError: object of type 'NoneType' has no len()
+tests/integration/test_remote_model_jobs.py::test_prepare_core_environment_installs_snapshot_wheel_into_run_venv | RuntimeError: core import is outside the run venv
+tests/unit/test_preview_docking.py::test_every_frame_keeps_the_whole_truck_clear_of_the_pallet | ModuleNotFoundError: No module named 'mujoco'
+tests/unit/test_preview_docking.py::test_the_insertion_stops_short_of_the_carriage_touching_the_pallet | ModuleNotFoundError: No module named 'mujoco'
+tests/unit/test_preview_docking.py::test_the_lift_stops_below_the_top_deck_without_moving_the_pallet | ModuleNotFoundError: No module named 'mujoco'
+tests/unit/test_preview_docking.py::test_asking_for_a_deeper_insertion_than_the_truck_allows_is_refused | ModuleNotFoundError: No module named 'mujoco'
+tests/unit/test_preview_docking.py::test_the_phases_run_in_order_and_each_one_is_used | ModuleNotFoundError: No module named 'mujoco'
+tests/unit/test_preview_docking.py::test_the_forks_only_rise_after_they_are_inside | ModuleNotFoundError: No module named 'mujoco'
+tests/unit/tools/test_diagnose_detection.py::test_a_run_record_passes_its_gates | AssertionError: gates dict (a ws1 data/path difference)
+tests/unit/tools/test_diagnose_detection.py::test_an_unverified_truth_chain_makes_the_configuration_undecidable | KeyError: 'visibility'

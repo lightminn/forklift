@@ -112,6 +112,27 @@ def binned_max(d, value, bins=DISTANCE_BINS_M):
     return upper, maxima
 
 
+def refuse_recorded(runs) -> None:
+    """The error tables are measurement: no boundary-recorded run among their inputs (M-a0)."""
+    from forklift_core.mission.boundary_record import measurement_refusal
+
+    for run in runs:
+        # The tables read meta.json and slam_log.npz, so the flag the runner writes into meta.json is checked;
+        # a meta without it was written before the flag (possibly by a recording runner), so result.json's
+        # arguments decide, and with neither the input cannot be verified and is refused.
+        meta = json.loads((run / "meta.json").read_text())
+        path = run / "result.json"
+        result = json.loads(path.read_text()) if path.exists() else None
+        if "record_boundary" not in meta and result is None:
+            raise SystemExit(f"{run}: no record_boundary in meta.json and no result.json -- cannot verify the run "
+                             "was not boundary-recorded")
+        reason = measurement_refusal({"arguments": {"record_boundary": meta.get("record_boundary", False)}})
+        if reason is None and result is not None:
+            reason = measurement_refusal(result)
+        if reason is not None:
+            raise SystemExit(f"{run}: {reason}")
+
+
 def encoder_model_of(runs) -> str:
     """The one encoder model every run was recorded with (meta.json; none recorded = reported): a
     table mixes no two models (2026-10-15)."""
@@ -140,6 +161,7 @@ def odometry_noise_record(model: str) -> dict:
 
 
 def odometry_command(args) -> dict:
+    refuse_recorded(args.run)
     model = encoder_model_of(args.run)
     radius = odometry_radius_of(args.run)
     per_run = []
@@ -239,6 +261,7 @@ def cumulative_table(maxima):
 
 def age_command(args) -> dict:
     """Odometry error by observation age, from every recorded scan stamp (Codex P0a)."""
+    refuse_recorded(args.run)
     model = encoder_model_of(args.run)
     radius = odometry_radius_of(args.run)
     maxima = np.zeros((len(AGES_S), 2))

@@ -1061,7 +1061,24 @@ POST_MEASUREMENT_ARGUMENTS = {"return_turnaround": False, "repeat_at_near_captur
                               "encoder_model": "reported",
                               # 2026-10-15: the odometry's own wheel radius; unset = the geometric one
                               # every earlier record integrated with.
-                              "odometry_wheel_radius_m": None}
+                              "odometry_wheel_radius_m": None,
+                              # 2026-10-15: M-a0 boundary record (recording only).
+                              "record_boundary": False,
+                              # 2026-10-16: M-a3 mission commands; a run with a schedule is refused below.
+                              "mission_commands": None,
+                              # 2026-10-17: M-c live runs -- off unless given; a live run is not a measurement run.
+                              "live": False, "live_port_file": None, "live_host": "127.0.0.1", "live_factor": 1.0,
+                              "live_lease_timeout_s": 5.0, "live_web_root": None, "live_test_step_delay_ms": 0.0,
+                              "live_test_stop_in_capture": False, "live_test_camera_freeze": None,
+                              "live_test_marker": False, "live_camera_latency_bound_s": None,
+                              "live_camera_pixel_lag_s": 0.2, "live_test_permit_compare": False,
+                              "live_test_scan_silence": None}
+# Arguments that only add records to a run (M-a0 boundary record, docs/plans/2026-10-15-m-a05-boundary.md
+# section 5): any value matches the measurement condition. The recorder only reads (values are copied before
+# a call runs), so what it can change is wall-clock timing, to which runs are already sensitive (render
+# readiness, map callbacks, planning deadlines); a run with it on applies the bounds but is never a bounds
+# measurement run.
+RECORDING_ONLY_ARGUMENTS = frozenset({"record_boundary", "record_boundary_format"})
 CONDITION_FIELDS = (
     "settings_synthetic",
     "detector_params",
@@ -1174,6 +1191,8 @@ def condition_problems(expected: dict, observed: dict, skip=()) -> list[str]:
                     and key in POST_MEASUREMENT_ARGUMENTS
                     and have.get(key) == POST_MEASUREMENT_ARGUMENTS[key]
                 ):
+                    continue
+                if name == "arguments" and key in RECORDING_ONLY_ARGUMENTS:
                     continue
                 if want.get(key) != have.get(key) or (
                     name == "input_files" and have.get(key) is None

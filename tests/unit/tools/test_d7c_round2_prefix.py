@@ -69,17 +69,6 @@ def test_a_straight_without_a_round_two_stop_is_not_judged():
     assert RETRY.round_two_stop_check(straight, start, STOP, 0.6) == (True, None)
 
 
-def test_the_runner_refuses_on_it_only_with_the_flag():
-    source = (ROOT / "sim/isaac/run_transport.py").read_text()
-    call = source.index("DOCKING_RETRY.round_two_stop_check(")
-    guard = source.rindex("if args.d7_docking and round_number == 1 and result.accepted:", 0, call)
-    window = source[guard : call + 400]
-    assert "clear=pose_clear" in window and "if not stop_ok:\n                        path = None" in window
-    # The whole straight's sweep and the stop path's use one pose check.
-    assert "swept_clear = all(pose_clear(pose) for pose in dry.trajectory)" in source
-    assert "final_keep = ROUND2_KEEP_M" in source
-
-
 def pytest_approx(value, tol):
     import pytest
 

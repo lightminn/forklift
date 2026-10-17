@@ -229,10 +229,20 @@ def _estimate(result):
     return (float(e["x_m"]), float(e["y_m"]), float(e["yaw_rad"]))
 
 
+def _refuse_recorded(run, result) -> None:
+    """r_fix and the withdrawal bounds are adopted as gate bounds: no boundary-recorded run (M-a0)."""
+    from forklift_core.mission.boundary_record import measurement_refusal
+
+    reason = measurement_refusal(result)
+    if reason is not None:
+        raise SystemExit(f"{run}: {reason}")
+
+
 def capture_command(args) -> dict:
     rows = []
     for run in args.run:
         result = json.loads((run / "result.json").read_text())
+        _refuse_recorded(run, result)
         depth, width = _pallet_dims(result)
         truth, est = _truth_pallet(result), _estimate(result)
         # Truth-controlled: the estimate is in the world frame; the corner error is frame-free.
@@ -261,6 +271,7 @@ def withdraw_command(args) -> dict:
     rows = []
     for run in args.run:
         result = json.loads((run / "result.json").read_text())
+        _refuse_recorded(run, result)
         depth, width = _pallet_dims(result)
         t_lift, t_release = _transition(result, "lift"), _transition(result, "withdraw")
         t_end = next(float(t["time_s"]) for t in result["transitions"] if t["from"] == "withdraw")

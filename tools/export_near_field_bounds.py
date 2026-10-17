@@ -389,6 +389,7 @@ def check_supplement_run(run, contract: dict) -> tuple[int, str, float]:
     assets and code by content (the closed loop still uses S2's L); near tracking with a
     correction injection, D5 off, 0.055 m/s."""
     CAL.check_hashes(run)
+    CAL.check_not_recorded(run)  # a boundary-recorded run never adds to the bounds (M-a0)
     for k in CAL.CONTRACT_KEYS:
         if run.meta.get(k) != contract.get(k):
             raise ValueError(f"{run.key}: meta {k} differs from the S2 contract")
