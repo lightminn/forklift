@@ -782,10 +782,11 @@ def test_the_position_cap_includes_exactly_0_2_m():
 
 # 2B-3e: the selected track absorbs its suspected duplicates ---------------------------------------------
 
-def test_the_selected_track_absorbs_a_duplicate_that_fits_the_observation_it_takes():
-    tr = _with_duplicate()
+def test_the_selected_track_absorbs_a_near_miss_duplicate_that_fits_the_observation_it_takes():
+    tr = _born(support_z=0.015)  # duplicate 1 born on a support near miss (same reading as the selected track)
+    assert tr._tracks[1].duplicate_kind == "near_miss"
     history, layout = list(tr._tracks[0].history), list(tr._tracks[0].layout)
-    report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", cid="c")]))
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", support_z=0.008, cid="c")]))
     assert report.accepted == {"c": 0} and report.absorbed == 1
     assert [t.id for t in tr._tracks] == [0]
     assert tr._tracks[0].history == history + [tr._tracks[0].last]  # its own readings only, nothing merged
@@ -840,3 +841,32 @@ def test_a_stale_real_neighbour_that_fits_the_taken_reading_is_not_absorbed():
         tr.update(_frame(t, [_candidate((3.0, 0.0, 0.06), cid="s")]))
     report = tr.update(_frame(0.8, [_candidate((3.0, 0.07, 0.06), cid="o")]))
     assert report.accepted == {"o": 0} and report.absorbed == 0 and [t.id for t in tr._tracks] == [0, 1]
+
+
+def test_a_reading_split_duplicate_is_kept_so_a_later_reading_of_that_kind_stays_ambiguous():
+    # Codex: S (EPAL 6) selected, neighbour E (T11) ahead; S read once as T11 starts duplicate D; a parametric
+    # reading fits S and D; later S is read as T11 again -- with D gone, E would take it (identity error)
+    tr = CandidateTracker(_bounds(rows=(_row(1.0, 4.0, along=0.3),)))
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="s"),
+                           _candidate((3.65, 0.0, 0.06), hypothesis="t11_06:x", cid="e")]))
+    tr.select(0)
+    tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), hypothesis="t11_06:x", cid="d")]))
+    assert tr._tracks[2].duplicate_of == 0
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", cid="o")]))
+    assert report.accepted == {"o": 0} and report.absorbed == 0  # a reading split: kept
+    report = tr.update(_frame(0.6, [_candidate((3.1, 0.0, 0.06), hypothesis="t11_06:x", cid="t")]))
+    assert report.accepted.get("t") != 1  # never handed to the neighbour E
+
+
+def test_a_held_near_miss_duplicate_is_not_absorbed():
+    # S-O, D-O/P, E-P: S takes O by priority (its only rival is D); D and E are held over P -- D stays
+    rows = (_row(1.0, 4.0, yaw=0.05, z_s=0.005),)
+    tr = CandidateTracker(_bounds(rows=rows))
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="s"), _candidate((3.0, 0.18, 0.06), support_z=0.015, cid="e")]))
+    tr.select(0)
+    tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), cid="s"), _candidate((3.0, 0.18, 0.06), support_z=0.015, cid="e"),
+                           _candidate((3.0, 0.06, 0.06), support_z=0.015, cid="d")]))
+    assert [t.duplicate_of for t in tr._tracks] == [None, None, 0]
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.03, 0.06), support_z=0.008, cid="o"),
+                                    _candidate((3.0, 0.12, 0.06), support_z=0.015, cid="p")]))
+    assert report.accepted == {"o": 0} and report.held == 2 and report.absorbed == 0 and len(tr._tracks) == 3

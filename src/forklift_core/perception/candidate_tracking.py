@@ -272,6 +272,9 @@ class _Track:
         # the selected track this one may duplicate: born where the selected track's pose gate holds
         # but split off by a reading test (2B-3c)
         self.duplicate_of: int | None = None
+        # why: "reading" (split off by family / layout -- carries a reading the selected track refuses) or
+        # "near_miss" (yaw / support near miss -- the same reading); only near misses are absorbed (2B-3e)
+        self.duplicate_kind: str | None = None
 
     def accept(self, obs: _Observation) -> None:
         self.history.append(obs)
@@ -469,7 +472,7 @@ class CandidateTracker:
 
     def _match(self, tracks, obs, free):
         """Unique maximum matching per gate component over the observations in `free`.
-        Returns (matched (track, obs index) pairs, held track count, gated observation indices)."""
+        Returns (matched (track, obs index) pairs, held tracks, gated observation indices)."""
         edges = {(i, j) for i, t in enumerate(tracks) for j in free if _gate(t, obs[j], self.bounds)}
         parent = {("t", i): ("t", i) for i in range(len(tracks))} | {("o", j): ("o", j) for j in free}
 
@@ -484,7 +487,7 @@ class CandidateTracker:
         components: dict = {}
         for node in parent:
             components.setdefault(find(node), []).append(node)
-        pairs, held, gated = [], 0, set()
+        pairs, held, gated = [], [], set()
         for nodes in components.values():
             ts = sorted(i for k, i in nodes if k == "t")
             os_ = sorted(j for k, j in nodes if k == "o")
@@ -498,7 +501,7 @@ class CandidateTracker:
                 best = top[0] if len(top) == 1 else None
             gated.update(os_)  # gated observations never start a track
             if best is None:
-                held += len(ts)
+                held += [tracks[i] for i in ts]
                 for i in ts:
                     tracks[i].holds += 1
                 continue
@@ -534,13 +537,18 @@ class CandidateTracker:
         # judged against the selected track as it was before this frame's matching moves it: inside its
         # pose gate but refused by a reading test (Codex: judging after the update marks real neighbours)
         chosen_active = chosen is not None and self._age(chosen, frame.stamp_ns) <= self.bounds.expiry_s
-        split_off = {j for j, o in enumerate(obs) if chosen is not None
-                     and ((_pose_fits(chosen, o, self.bounds) and not _reading_fits(chosen, o))
-                          or (chosen_active and _near_miss(chosen, o, self.bounds)))}  # 2B-3d
+        split_off = {}
+        for j, o in enumerate(obs):
+            if chosen is None:
+                break
+            if _pose_fits(chosen, o, self.bounds) and not _reading_fits(chosen, o):
+                split_off[j] = "reading"
+            elif chosen_active and _near_miss(chosen, o, self.bounds):  # 2B-3d
+                split_off[j] = "near_miss"
         # 2B-3e: before matching, which of the selected track's suspected duplicates each reading fits
         duplicates = [] if chosen is None else [tr for tr in self._tracks if tr.duplicate_of == chosen.id]
         dup_fits = {j: [tr for tr in duplicates if _gate(tr, o, self.bounds)] for j, o in enumerate(obs)}
-        taken_by_chosen = []
+        taken_by_chosen, held_now = [], set()
         free = set(range(len(obs)))
         accepted, held, revived, blocked = {}, 0, 0, set()
         priority = None
@@ -562,7 +570,8 @@ class CandidateTracker:
         for stage, tracks in stages:
             # the selected stage sees only its one observation; the others see what is still free
             pairs, h, gated = self._match(tracks, obs, {priority} if stage == "selected" else free)
-            held += h
+            held += len(h)
+            held_now.update(tr.id for tr in h)
             blocked |= gated
             free -= gated
             for track, j in pairs:
@@ -582,7 +591,8 @@ class CandidateTracker:
 
         took_other = set(accepted.values())  # a duplicate that took another reading this frame tracks something
         absorbed = {tr.id for j in taken_by_chosen for tr in dup_fits[j]
-                    if tr is not chosen and tr.id not in took_other}
+                    if tr is not chosen and tr.duplicate_kind == "near_miss"
+                    and tr.id not in took_other and tr.id not in held_now}
         self._tracks = [tr for tr in self._tracks if tr.id not in absorbed]
         accepted = {cid: tid for cid, tid in accepted.items() if tid not in absorbed}
 
@@ -594,6 +604,7 @@ class CandidateTracker:
             track = _Track(self._next_id, o)
             if j in split_off:
                 track.duplicate_of = chosen.id  # where the selected track was, split off by a reading test
+                track.duplicate_kind = split_off[j]
             self._tracks.append(track)
             accepted[o.candidate.candidate_id] = self._next_id
             self._next_id += 1
