@@ -4,9 +4,10 @@
 Reads calibration-band straight sequences recorded with --clean
 (tools/recognition_sequences.py). Every counted candidate matched to a truth face
 contributes its errors to its range bin and family: the per-pocket and pair-midpoint
-lateral / along p95, the pair-midpoint height, yaw and support p95, the layout p95
-(each pocket's coordinate along the face against the truth, and its spread inside
-one sequence) and sigma, the spread of (noisy - clean) midpoint lateral offsets of
+lateral / along p95, the pair-midpoint height, yaw and support p95, the layout bound
+(p99 of the error of what the layout gate compares -- each pocket's coordinate along
+the face from the face centre -- against the truth; 2B-3c) and sigma, the spread of
+(noisy - clean) midpoint lateral offsets of
 the same instance in the same frame. Candidates matched to no face (beyond the
 evaluator's 0.2 m / 0.35 rad) are counted, not used. A bin with fewer than
 MIN_SAMPLES samples is left out, so its observations go untracked. The window W is
@@ -46,6 +47,7 @@ RANGE_BINS = ((1.0, 1.5), (1.5, 2.0), (2.0, 2.5), (2.5, 3.0), (3.0, 3.5), (3.5, 
 MIN_SAMPLES = 20
 WINDOWS = (0.0, 0.6, 1.2, 2.0)
 LAYOUT_FLOOR_M = 0.001
+LAYOUT_QUANTILE = 99  # the layout bound is a gate: p99 of the truth error (2B-3c), not p95
 # The fusion weights' odometry spread: the OdometryNoise assumption on a straight 0.6 m/s approach as
 # random walks (tools/evaluate_track_sequences.py V1). Assumed, not measured; the budget keeps the bound.
 WEIGHT_MODEL = {"position_m_per_sqrt_s": SPEED_SIGMA_MPS * math.sqrt(0.2 / SUBSTEPS),
@@ -67,6 +69,20 @@ def pair_face(frame, k, i, pair) -> dict:
     openings = frame["openings"][k][i]
     face["left_m"], face["right_m"] = tuple(openings[pair[0]]), tuple(openings[pair[1]])
     return face
+
+
+def face_offset_error(cand, frame, label) -> float:
+    """The larger pocket error of the coordinate the layout gate compares -- each pocket along the face
+    from the face centre -- against the truth (the labelled pair's openings from the true face centre)."""
+    k, i, pair = label
+    truth = frame["faces"][k][i]
+    tn = np.array([-math.sin(truth["insertion_yaw_rad"]), math.cos(truth["insertion_yaw_rad"])])
+    centre = np.asarray(frame["face_centres"][k][i][:2])
+    true = [float((np.asarray(frame["openings"][k][i][j][:2]) - centre) @ tn) for j in pair]
+    n = np.array([-math.sin(cand.insertion_yaw_rad), math.cos(cand.insertion_yaw_rad)])
+    face = np.asarray(cand.face_centre_m[:2])
+    est = [float((np.asarray(p[:2]) - face) @ n) for p in (cand.left.centre_m, cand.right.centre_m)]
+    return max(abs(e - t) for e, t in zip(est, true))
 
 
 def sample_errors(cand, face, support_z) -> dict:
@@ -95,12 +111,11 @@ def sample_errors(cand, face, support_z) -> dict:
 
 
 def collect(records):
-    """Per (family, bin): error samples, sigma samples and face-offset spreads."""
-    samples, sigma, offsets, unmatched = defaultdict(list), defaultdict(list), defaultdict(list), defaultdict(int)
+    """Per (family, bin): error samples and sigma samples, and unmatched counts."""
+    samples, sigma, unmatched = defaultdict(list), defaultdict(list), defaultdict(int)
     for rec in records:
         if rec["skipped"] or rec["kind"] != "straight":
             continue
-        per_face = defaultdict(list)
         for f in rec["frames"]:
             clean_by_label = {}
             for c in f.get("clean", ()):
@@ -121,19 +136,16 @@ def collect(records):
                     continue
                 face = pair_face(f, k, i, pair)  # the truth pockets of the pair the candidate took
                 e = sample_errors(c, face, f["support_z_m"][k])
+                e["face_offset_m"] = face_offset_error(c, f, label)
                 samples[key].append(e)
-                per_face[(label, key)].append(e["offsets"])
                 ref = clean_by_label.get(label)  # the clean reading of the same instance, face and pair
                 if ref is not None:
                     sigma[key].append(e["mid_lateral_signed"] - sample_errors(ref, face, f["support_z_m"][k])["mid_lateral_signed"])
-        for (_, key), offs in per_face.items():
-            arr = np.asarray(offs)
-            offsets[key] += list(np.abs(arr - np.median(arr, axis=0)).max(axis=1))
-    return samples, sigma, offsets, unmatched
+    return samples, sigma, unmatched
 
 
 def table(records) -> tuple[dict, dict]:
-    samples, sigma, offsets, unmatched = collect(records)
+    samples, sigma, unmatched = collect(records)
     rows = {"known": [], "parametric": []}
     report = {}
     for family in rows:
@@ -149,7 +161,7 @@ def table(records) -> tuple[dict, dict]:
                 return float(np.percentile([e[name] for e in s], 95))
             # LAYOUT_FLOOR_M is a development allowance so a constant known-shape layout cannot fail
             # the gate on rounding; larger empirical values are kept
-            layout = max(p95("layout_m"), float(np.percentile(offsets.get(key, [0.0]), 95)), LAYOUT_FLOOR_M)
+            layout = max(float(np.percentile([e["face_offset_m"] for e in s], LAYOUT_QUANTILE)), LAYOUT_FLOOR_M)
             rows[family].append({
                 "lo_m": b[0], "hi_m": b[1], "lateral_m": p95("lateral_m"), "along_m": p95("along_m"),
                 "centre_lateral_m": p95("centre_lateral_m"), "centre_along_m": p95("centre_along_m"),
@@ -196,6 +208,9 @@ def main(argv=None) -> int:
     ap.add_argument("--out", type=Path, default=ROOT / "config/recognition_track_bounds.yaml")
     args = ap.parse_args(argv)
     records = load_records(args.records)
+    other = sorted({r.get("band") for r in records} - {"calibration"}, key=str)
+    if other:
+        raise SystemExit(f"refused: records of band(s) {other} -- calibration reads the calibration band only")
     odometry = json.loads(args.odometry.read_text())
     rows, report = table(records)
     window, scores = choose_window(records, rows, odometry)
