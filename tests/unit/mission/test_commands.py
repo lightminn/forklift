@@ -232,3 +232,20 @@ def test_a_new_mission_does_not_carry_the_last_ones_resume_check():
     m.finish("failed", 5.0)
     m.queue(Submit("P2", "D2"))
     assert m.apply(6.0)[0]["accepted"] and m.resume_check is None
+
+
+def test_waits_stop_the_work_clock_once_even_inside_a_pause():
+    """Real-time plan D8c: a wait for a plan is taken out of the work time while it is open and after it closes;
+    overlapping a pause it counts once."""
+    c = MissionCommands()
+    assert c.work_elapsed(0.0, 10.0) == 10.0
+    c.begin_wait(2.0)
+    assert c.work_elapsed(0.0, 4.0) == pytest.approx(2.0)  # open: stopped since 2.0
+    with pytest.raises(ValueError):
+        c.begin_wait(3.0)
+    c.end_wait(5.0)
+    c.end_wait(6.0)  # none open: nothing
+    assert c.work_elapsed(0.0, 10.0) == pytest.approx(7.0)
+    assert c.work_elapsed(3.0, 10.0) == pytest.approx(5.0)  # the wait counted from where the interval starts
+    c.pauses.append([4.0, 6.0])  # overlaps the wait 4..5
+    assert c.work_elapsed(0.0, 10.0) == pytest.approx(6.0)  # stopped 2..6 once

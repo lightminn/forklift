@@ -10,7 +10,8 @@ Lifecycle: ``idle -> accepted -> running <-> paused -> resuming -> running``; ``
 Work time (E4): a pause stops the work clocks. The start-type comparisons ask :meth:`work_elapsed`, which is
 ``now - since`` minus the pauses inside that interval -- and exactly ``now - since`` when there has been no pause,
 so a run without commands decides bit for bit as before. The pause record lives here, outside every dictionary
-the replay compares.
+the replay compares. A real-time run also stops the work clocks while the core waits for a plan (real-time plan
+D8c, docs/plans/2026-10-17-realtime-sim.md): :meth:`begin_wait` / :meth:`end_wait`; a batch run never waits.
 """
 
 from __future__ import annotations
@@ -87,6 +88,7 @@ class MissionCommands:
         self._queue: list = []
         self.log: list[dict] = []  # every command with its tick, outcome and reason
         self.pauses: list[list] = []  # [start, end-or-None] of every pause (the work clock's stops)
+        self.waits: list[list] = []  # [start, end-or-None] of every wait for a plan in a real-time run (plan D8c)
         self.paused_since: float | None = None
         self.stop_seen_s: float | None = None  # the first standing tick of the current stop
         self.not_stopped = False  # the stop not seen standing within its limit (E3), for the safety state
@@ -289,8 +291,29 @@ class MissionCommands:
         """Paused, resuming, held or cancelling: the mission's work does not run this tick."""
         return self.status in ("paused", "resuming", "held", "cancelling")
 
+    def begin_wait(self, t: float) -> None:
+        """A real-time run starts waiting for a plan at ``t`` (sim s): the work clocks stand still from now."""
+        if self.waits and self.waits[-1][1] is None:
+            raise ValueError("a wait is already open")
+        self.waits.append([float(t), None])
+
+    def end_wait(self, t: float) -> None:
+        """The wait ends at ``t``; nothing happens when none is open."""
+        if self.waits and self.waits[-1][1] is None:
+            self.waits[-1][1] = float(t)
+
     def work_elapsed(self, since: float, now: float) -> float:
-        """``now - since`` without the pauses inside that interval; exactly ``now - since`` before any pause."""
+        """``now - since`` without the pauses (and waits) inside that interval; exactly ``now - since`` before any."""
+        if self.waits:
+            # The union of pauses and waits (a wait may fall inside a pause), clipped to [since, now].
+            spans = sorted([(start, now if end is None else end) for start, end in self.pauses + self.waits])
+            stopped, reach = 0.0, since
+            for start, end in spans:
+                lo, hi = max(start, reach), min(end, now)
+                if hi > lo:
+                    stopped += hi - lo
+                    reach = hi
+            return (now - since) - stopped
         if not self.pauses:
             return now - since
         paused = 0.0

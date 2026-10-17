@@ -3190,9 +3190,11 @@ def drive(S, isaac) -> None:
             overlay["grids"].append((float(t_now), float(snap_.origin_x_m), float(snap_.origin_y_m),
                                      float(snap_.resolution_m), cells_))
 
-    def build_pocket_check(axis_yaw: float, rear_now, base_now) -> None:
+    def build_pocket_check(axis_yaw: float, rear_now, base_now, stamp_s=None, rear_at_stamp=None) -> None:
         """The D5 pocket check, at the near (stand-off) capture: the final estimate,
-        the approach straight's heading, and that capture as its first frame."""
+        the approach straight's heading, and that capture as its first frame -- at this
+        tick's time and pose, or (real-time plan D8b: the check built after the plan was
+        waited for) at the capture's own time and pose."""
         import pocket_check as pocket_module
         from forklift_core.perception.pocket_clearance import DepthCamera
 
@@ -3222,7 +3224,8 @@ def drive(S, isaac) -> None:
             noise_seed=args.seed,
         )
         now_s = world.current_time - initial_time
-        first = check.add_frame(now_s, scene.depth_m, tuple(float(v) for v in rear_now))
+        first = check.add_frame(now_s if stamp_s is None else float(stamp_s), scene.depth_m,
+                                tuple(float(v) for v in (rear_now if rear_at_stamp is None else rear_at_stamp)))
         # M-a0.5 PocketCheck service: depth frames recorded by hash only.
         pocket["check"] = check if boundary is None else RecordingProxy(
             check, "PocketCheck", boundary, hash_only_requests={"add_frame"})
@@ -5292,6 +5295,12 @@ def drive(S, isaac) -> None:
             # compiled (or loaded) before the first step, not in it.
             live_kernels.prefer_fast()
             state["kernels"] = {"mode": live_kernels.mode(), "warm_up_s": live_kernels.warm_up()}
+            if os.environ.get("FORKLIFT_LIVE_ASYNC_PLAN", "1") != "0":
+                # Real-time plan D8: the long plans go to a worker process; the control loop stands and goes on.
+                from forklift_core.planning.plan_worker import PlanWorker
+
+                core.jobs = PlanWorker()
+                state["async_plan_worker"] = {"pid": core.jobs.proc.pid}
             live.start()
             core.hooks.live_abort = lambda: live.stopped_in_tick  # the core stops right after a raw capture
 
@@ -5799,7 +5808,11 @@ def drive(S, isaac) -> None:
             if live is not None and core.commands.status in ("idle", "accepted", "done", "failed", "cancelled"):
                 paused_ = True  # M-c: no mission yet (or over): its work does not run
             cancel_stop_ = False
-            if ms.phase in trackers and not releasing and not warming and not paused_:
+            # Real-time plan D8b: a tick waiting for a plan (asked, still computing, or just taken) stands: none of the
+            # mission's own work below runs, the permission watches, the links, commands and sensors go on.
+            plan_wait_ = core.jobs is not None and core.job_hold(
+                t, rear, float(np.dot(velocity[:2], forward)), paused_).hold
+            if ms.phase in trackers and not releasing and not warming and not paused_ and not plan_wait_:
                 # Three times the path time at the tracker's own speed caps
                 # (length / cruise when there are none), plus 10 s.
                 # M-a1 slice 4a-i: the follower's tick and the rules that rewrite its result are the core's.
@@ -5971,8 +5984,11 @@ def drive(S, isaac) -> None:
                             if succeeded_.stop:
                                 break
                             observation, near_leg = succeeded_.observation, succeeded_.near_leg
-                            # M-a1 slice 4b-v: the near leg, or the near capture's re-drawn straight, is the core's.
-                            core.near_leg_or_recapture(t, rear, base, yaw, observation, attempt_number, near_leg)
+                            if getattr(succeeded_, "pending", False):
+                                plan_wait_ = True  # real-time plan D8b: the mission plan is asked; this tick stands
+                            else:
+                                # M-a1 slice 4b-v: the near leg, or the near capture's re-drawn straight, is the core's.
+                                core.near_leg_or_recapture(t, rear, base, yaw, observation, attempt_number, near_leg)
                     else:
                         # M-a1 slice 2: every other arrival is the core's.
                         arrival_ = core.arrive(t, tracking)
@@ -5982,7 +5998,7 @@ def drive(S, isaac) -> None:
                             break
             if live_abort_:
                 requested_speed, curvature = 0.0, 0.0
-            if not paused_ and not live_abort_ and core.lift_and_timers(t, dt):  # M-a1 slice 2: the lift ramp, timers
+            if not paused_ and not live_abort_ and not plan_wait_ and core.lift_and_timers(t, dt):  # M-a1 slice 2: the lift ramp, timers
                 break
             # The curvature the wheels actually hold: an emergency stop keeps it, so
             # the permission, the stop itself and the probe all use this one.
@@ -5993,19 +6009,28 @@ def drive(S, isaac) -> None:
             # Plan cusp position stall v7: a stall handed to the obstacle side keeps this block running
             # while it stands on a zero command.
             cusp_handed_ = cusp_monitor.handed(ms.phase) if obstacle is not None else None
-            if not paused_ and not live_abort_ and obstacle is not None and ms.phase in trackers and (
+            permission_tick_ = not paused_ and not live_abort_ and obstacle is not None and ms.phase in trackers and (
                 requested_speed != 0.0 or abs(truth_speed) > 0.05 or obstacle.get("force_replan") == ms.phase
                 or cusp_handed_ is not None
-            ):
-                # M-a1 slice 3b: the permission tick (re-projection, limit, pocket check, path-blocked and
-                # silence stops, speed cap, stall watch) is the core's; the replan below reads its answer.
-                perm_tick_ = core.permission(t, rear, kappa, requested_speed, loaded, cusp_handed_)
-                allowed, why, acting, pocket_phase = perm_tick_.allowed, perm_tick_.why, perm_tick_.acting, perm_tick_.pocket_phase
-                requested_speed, obstacle_hold = perm_tick_.requested_speed, perm_tick_.obstacle_hold
-                # M-a1 slice 3c: stop, replan, resume (plan D4) is the core's.
-                if obstacle["blocked_ticks"] >= 120 or obstacle.pop("force_replan", None) == ms.phase:
-                    replan_tick_ = core.blocked_replan(t, rear, kappa, requested_speed)
-                    rear, requested_speed = replan_tick_.rear, replan_tick_.requested_speed
+            ) and not plan_wait_
+            # Real-time plan D8b: a tick standing for a plan has the paused tick's watch instead (no work counters,
+            # no replan), and the truth evaluation below with what it allows.
+            plan_watch_ = plan_wait_ and not paused_ and obstacle is not None
+            if permission_tick_ or plan_watch_:
+                if plan_watch_:
+                    watch_ = core.permission_watch(t, rear, kappa, loaded)
+                    allowed, why, acting, pocket_phase = watch_.allowed, watch_.why, watch_.acting, False
+                    obstacle_hold = watch_.obstacle_hold
+                else:
+                    # M-a1 slice 3b: the permission tick (re-projection, limit, pocket check, path-blocked and
+                    # silence stops, speed cap, stall watch) is the core's; the replan below reads its answer.
+                    perm_tick_ = core.permission(t, rear, kappa, requested_speed, loaded, cusp_handed_)
+                    allowed, why, acting, pocket_phase = perm_tick_.allowed, perm_tick_.why, perm_tick_.acting, perm_tick_.pocket_phase
+                    requested_speed, obstacle_hold = perm_tick_.requested_speed, perm_tick_.obstacle_hold
+                    # M-a1 slice 3c: stop, replan, resume (plan D4) is the core's.
+                    if obstacle["blocked_ticks"] >= 120 or obstacle.pop("force_replan", None) == ms.phase:
+                        replan_tick_ = core.blocked_replan(t, rear, kappa, requested_speed)
+                        rear, requested_speed = replan_tick_.rear, replan_tick_.requested_speed
                 # Evaluation only (truth): every moving tick, each ground-truth
                 # obstacle in the steering-held stopping volume (with the envelope)
                 # while the permission allowed this speed (Codex L0b P2).
@@ -6052,8 +6077,15 @@ def drive(S, isaac) -> None:
                 requested_speed, curvature = 0.0, 0.0
                 dwell_hold = True  # the steering held where it is; the wheels brake on its curvature
                 cancel_stop_ = paused_tick_.stop  # the loop ends after this tick's stop output is applied
+            elif plan_wait_:  # real-time plan D8b: standing for a plan, the steering held
+                requested_speed, curvature = 0.0, 0.0
+                dwell_hold = True
             elif core.live_leg(t, rear, loaded):  # M-a1 slice 3a: the live travel leg and the replan wait
                 requested_speed = 0.0
+                if core.jobs is not None and core.job_pending():
+                    plan_wait_ = True  # real-time plan D8b: the leg's plan was just asked
+                    curvature = 0.0
+                    dwell_hold = True
             if new_obstacles is not None and ms.phase in trackers:
                 leg, leg_direction = trackers[ms.phase].leg_ahead()
                 driven = float(trackers[ms.phase]._distance[-1]) - trackers[ms.phase].remaining_to_goal_m()
@@ -6571,6 +6603,12 @@ def drive(S, isaac) -> None:
                     require(exit_code == 0, f"{name} video encoding failed")
         finally:
             live = locals().get("live")  # unbound when the setup failed before the live runtime was made
+            if locals().get("core") is not None and core.jobs is not None:
+                try:
+                    core.jobs.close()  # real-time plan D8: the planning worker ends with the run
+                    state["async_plan_worker"]["restarts"] = core.jobs.restarts
+                except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own end
+                    state["async_plan_worker_close_error"] = repr(exc_)
             if live is not None:
                 try:
                     live.close()  # M-c: close frames to every client, the port file says ended (or stop_failed)
