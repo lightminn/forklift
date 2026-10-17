@@ -31,7 +31,8 @@ def resume_steps(check: dict | None) -> dict | None:
 
 def state_message(arbiter, out, safety: dict | None, *, now_mono: float, rear_axle_speed_mps: float | None = None,
                   applied: dict | None = None, pose: dict | None = None, freshness: dict | None = None,
-                  pacing: dict | None = None) -> dict:
+                  pacing: dict | None = None, steering_rad: list | None = None,
+                  lift_m: float | None = None) -> dict:
     """``applied`` is what the back end actually ran (after the Ackermann wheel-rate and steering-rate limits:
     ``speed_mps``, ``curvature_inv_m``, ``steering_rad``); without it the field is null -- the arbiter's own output is
     not the applied command (contract 6)."""
@@ -60,6 +61,7 @@ def state_message(arbiter, out, safety: dict | None, *, now_mono: float, rear_ax
                   "reserved_until_s": reserved},
         "pose": pose,
         "rear_axle_speed_mps": rear_axle_speed_mps,
+        "steering_rad": steering_rad, "lift_m": lift_m,  # measured by the back end, null when it cannot (C3 b)
         "load": {"state": None if loaded is None else ("loaded" if loaded else "empty"), "basis": load.get("basis"),
                  # loaded is judged by the mission's phase, so the pallet on the forks is the mission's (C3)
                  "pallet_id": mission.get("pallet_id") if loaded else None},

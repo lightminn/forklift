@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { controlProfile, forbidText, frameAgreement, palletKindLabel, permitText, rearmState, resumeState, resumeSteps, scanDrawable, staleness, standWhy, stopInstruction, stopIsRefused, stopKind } from "../js/profile.js";
+import { cameraHeightM, controlProfile, disarmAsked, forbidText, sessionChanges, videoStaleAfterS, frameAgreement, palletKindLabel, permitText, rearmState, resumeState, resumeSteps, scanDrawable, staleness, standWhy, stopInstruction, stopIsRefused, stopKind } from "../js/profile.js";
 
 test("a vehicle without the control field is a full console (console/1 as before)", () => {
   const p = controlProfile({ mission: true, teleop_direct: true, teleop_video: true, lift: true });
@@ -143,4 +143,48 @@ test("every reason the live arbiter gives for refusing manual driving reads in K
   assert.match(forbidText("no_feedback:rear_axle_speed"), /rear_axle_speed/); // the missing feedback is named
   assert.equal(forbidText("brand_new"), "brand_new");
   assert.equal(forbidText(null), "");
+});
+
+test("the video-stalled notice waits as long as the vehicle's own limit scale: 1/f in a slowed simulation", () => {
+  assert.equal(videoStaleAfterS({ pacing: { target_factor: 0.08 } }), 12.5);
+  assert.equal(videoStaleAfterS({ pacing: { target_factor: 1 } }), 1);
+  assert.equal(videoStaleAfterS({}), 1); // a real truck: wall time
+  assert.equal(videoStaleAfterS({ pacing: { target_factor: 0 } }), 1);
+  assert.equal(videoStaleAfterS(null), 1);
+});
+
+test("losing the lease and a disarm the page did not ask for are logged", () => {
+  const me = "c1";
+  const held = { session_epoch: 5, lease: { holder: me }, armed: true };
+  const lost = sessionChanges(held, { ...held, lease: { holder: null }, armed: false }, { clientId: me, askedDisarm: false });
+  assert.equal(lost.length, 2);
+  assert.match(lost[0].text, /조종 권한/);
+  assert.match(lost[1].text, /조종 준비/);
+  // a disarm this page asked for is not news
+  const asked = sessionChanges(held, { ...held, armed: false }, { clientId: me, askedDisarm: true });
+  assert.deepEqual(asked, []);
+  // nothing changed, or no previous state
+  assert.deepEqual(sessionChanges(held, held, { clientId: me }), []);
+  assert.deepEqual(sessionChanges(null, held, { clientId: me }), []);
+  // a new session is announced by the reconnect itself
+  assert.deepEqual(sessionChanges(held, { session_epoch: 6, lease: { holder: null }, armed: false }, { clientId: me }), []);
+});
+
+test("a camera on the carriage is drawn from the lift height; unknown lift, no overlay", () => {
+  // Codex C3 b review P2: lifted 0.20 m, the floor overlay was ~97 px off
+  const model = { base_from_camera: { xyz_m: [0.959, 0, 0.27] }, rides_lift: true };
+  assert.equal(cameraHeightM(model, { lift_m: 0.2 }), 0.47);
+  assert.equal(cameraHeightM(model, { lift_m: null }), null);
+  assert.equal(cameraHeightM(model, {}), null);
+  const fixed = { base_from_camera: { xyz_m: [0.7, 0, 1.05] } };
+  assert.equal(cameraHeightM(fixed, { lift_m: 0.2 }), 1.05); // a mast camera does not move with the lift
+});
+
+test("a disarm the page asked for is excused once, and only in the arm period it was asked in", () => {
+  // Codex C3 b review P3: ask, see it disarmed, re-arm, then a vehicle disarm within 3 s was hidden
+  const asked = { at: 1000, armGen: 4 };
+  assert.equal(disarmAsked(asked, { arm_gen: 4 }, 2000), true);
+  assert.equal(disarmAsked(asked, { arm_gen: 5 }, 2000), false); // re-armed since
+  assert.equal(disarmAsked(asked, { arm_gen: 4 }, 4500), false); // too long ago
+  assert.equal(disarmAsked(null, { arm_gen: 4 }, 2000), false);
 });

@@ -10,7 +10,7 @@ import { createMapView, panBy, zoomAt, zoomPercent } from "./mapview.js";
 import { decodeScan, parseFrame } from "./media.js";
 import { API, createSession } from "./protocol.js";
 import { log, render, renderPallets, renderTemplates, renderWizard } from "./ui.js";
-import { controlProfile, frameAgreement, scanDrawable, staleness, stopIsRefused } from "./profile.js";
+import { controlProfile, disarmAsked, frameAgreement, scanDrawable, sessionChanges, staleness, stopIsRefused } from "./profile.js";
 import { blockReason, nextAllowed, templatesFor } from "./wizard.js";
 
 const TELEOP_MIN_INTERVAL_MS = 33; // ~30 Hz cap: a fast display must not flood ticks
@@ -113,7 +113,7 @@ const cameraVisible = () => camOnScreen && !document.hidden;
 // (the displayed frame also stops advancing, so the vehicle would expire it anyway)
 function cameraLeftScreen() {
   if (m.teleop.gate.mode === "video" && m.session.armed) {
-    m.session.request("disarm").then(report);
+    askDisarm();
     log("조종 준비 해제 요청 · 카메라가 화면에서 사라짐", "warn");
   }
 }
@@ -167,6 +167,10 @@ m.session.subscribe((msg) => {
     }
   } else if (msg.t === "state") {
     m.stateAt = performance.now();
+    const asked = disarmAsked(m.askedDisarm, m.prevState, performance.now());
+    for (const c of sessionChanges(m.prevState, msg, { clientId, askedDisarm: asked })) log(c.text, c.level);
+    if (m.prevState?.armed && !msg.armed) m.askedDisarm = null; // the excuse is used up by that disarm
+    m.prevState = msg;
     if (msg.mode === "TELEOP" && m.lastMode !== "TELEOP") showTab("tele"); // controls on screen when teleop starts
     m.lastMode = msg.mode;
     m.teleop.gate.onArmed(Boolean(msg.armed) && m.session.hasLease);
@@ -254,7 +258,17 @@ function connectMedia() {
 // Monitor-only connection (capabilities.control === false, gateway C2a): this page cannot
 // stop the truck. Say so loudly instead of sending a request that does nothing. Until a
 // welcome says so, STOP is sent as before (it is kept and resent until answered).
+// A disarm this page asked for (or caused: STOP, leaving TELEOP) is not logged as the vehicle's.
+function noteDisarmAsked() {
+  m.askedDisarm = { at: performance.now(), armGen: m.session.state?.arm_gen };
+}
+function askDisarm() {
+  noteDisarmAsked();
+  return m.session.request("disarm").then(report);
+}
+
 function pressStop(source) {
+  noteDisarmAsked();
   if (stopIsRefused(m.linkWelcome)) {
     $("nostop").hidden = false;
     log(`정지 불가 · 관찰 전용 연결 (${source})`, "crit");
@@ -270,8 +284,10 @@ $("nostop").onclick = () => {
 const inputs = createInputs({
   onRelease(reason) {
     send({ t: "input_state", visible: reason !== "hidden", focused: reason !== "blur", gamepad_lost: reason === "gamepad_lost" });
-    if (m.session.armed) m.session.request("disarm").then(report);
-    log(`조종 준비 해제 요청 · ${reason}`, "warn");
+    if (m.session.armed) {
+      askDisarm();
+      log(`조종 준비 해제 요청 · ${reason}`, "warn");
+    }
   },
 });
 
@@ -384,8 +400,11 @@ $("m-resume").onclick = () => req("mission_resume", { mission_id: missionId() })
 $("m-cancel").onclick = () => req("mission_cancel", { mission_id: missionId() });
 $("recover").onclick = () => req("recovery", { action: "withdraw_straight" });
 $("t-enter").onclick = () => req("mode_request", { to: "TELEOP" });
-$("t-exit").onclick = () => req("mode_request", { to: "PAUSED" });
-$("t-arm").onclick = () => req(m.session.armed ? "disarm" : "arm");
+$("t-exit").onclick = () => {
+  noteDisarmAsked();
+  req("mode_request", { to: "PAUSED" });
+};
+$("t-arm").onclick = () => (m.session.armed ? askDisarm() : req("arm"));
 $("m-direct").onclick = () => m.teleop.gate.setMode("direct");
 $("m-video").onclick = () => {
   m.teleop.gate.setMode("video");
@@ -637,7 +656,7 @@ function checkTeleVisible() {
   // an arm answered after the controls were hidden (a late ack) is asked back at once
   if (!shown && m.session.armed && !hiddenDisarmSent) {
     hiddenDisarmSent = true;
-    m.session.request("disarm").then(report);
+    askDisarm();
     log("조종 준비 해제 요청 · 조종판이 화면에 없음", "warn");
   }
   if (!m.session.armed) hiddenDisarmSent = false;

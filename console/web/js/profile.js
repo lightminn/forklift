@@ -136,3 +136,39 @@ export function forbidText(reason) {
   const fb = /^no_feedback:(.+)$/.exec(reason);
   return fb ? `차량 피드백(${fb[1]})이 끊겨 수동 조종을 받지 않습니다` : reason;
 }
+
+// The page's "video stalled" notice in wall seconds: a slowed simulation (pacing target f < 1)
+// sends its sim-rate camera 1/f times slower and the vehicle scales its own video limit by 1/f.
+export function videoStaleAfterS(st) {
+  const f = st?.pacing?.target_factor;
+  return Number.isFinite(f) && f > 0 && f < 1 ? 1.0 / f : 1.0;
+}
+
+// What changed for this page between two states of one session that the operator should
+// read in the log: the lease left this page, or the vehicle disarmed without being asked.
+export function sessionChanges(prev, cur, { clientId, askedDisarm = false } = {}) {
+  if (!prev || !cur || prev.session_epoch !== cur.session_epoch) return [];
+  const out = [];
+  if (prev.lease?.holder === clientId && cur.lease?.holder !== clientId) {
+    out.push({ text: "조종 권한이 이 기기에서 풀렸습니다 (만료·해제·다른 기기)", level: "warn" });
+  }
+  if (prev.armed && !cur.armed && !askedDisarm) {
+    out.push({ text: "차량이 조종 준비를 풀었습니다", level: "warn" });
+  }
+  return out;
+}
+
+// The camera's height for the display overlay: a carriage camera (rides_lift) moves with the
+// lift, so its lift-0 placement plus the measured lift; null (draw nothing) while that is unknown.
+export function cameraHeightM(model, st) {
+  const z = model?.base_from_camera?.xyz_m?.[2];
+  if (!Number.isFinite(z)) return null;
+  if (!model.rides_lift) return z;
+  return Number.isFinite(st?.lift_m) ? Math.round((z + st.lift_m) * 1e9) / 1e9 : null;
+}
+
+// A disarm this page asked for is excused only in the arm period it was asked in, and
+// only for a few seconds; a later vehicle disarm after a re-arm is logged.
+export function disarmAsked(asked, prev, nowMs) {
+  return Boolean(asked) && prev?.arm_gen === asked.armGen && nowMs - asked.at < 3000;
+}

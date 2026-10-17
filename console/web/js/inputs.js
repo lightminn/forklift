@@ -29,11 +29,16 @@ export function createInputs({ onRelease }) {
   let touch = { deadman: false, x: 0, y: 0, lift: 0 };
   let keys = {};
   let pad = null;
-  // After a release every source must report "not pressed" once before it counts again.
+  // After a release a source that was held must report "not pressed" once before it
+  // counts again; one that was not held counts at its next press (a keyboard reports only
+  // on key events, so latching it while idle swallowed its whole first press).
   const latched = { touch: false, keyboard: false, gamepad: false };
 
   function release(reason) {
-    latched.touch = latched.keyboard = latched.gamepad = true;
+    latched.touch = latched.touch || Boolean(touch.deadman);
+    latched.keyboard = latched.keyboard || Boolean(keys.deadman);
+    // a lost or replaced pad's buttons are unknown: it must show "not pressed" again
+    latched.gamepad = latched.gamepad || reason === "gamepad_lost" || Boolean(pad?.buttons.deadman);
     onRelease(reason);
   }
 

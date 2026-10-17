@@ -48,7 +48,8 @@ class LiveRuntime:
                  config: ArbiterConfig | None = None, clock: Callable[[], float] = time.monotonic,
                  sleep: Callable[[float], None] = time.sleep, session_epoch: int | None = None,
                  test_step_delay_s: float = 0.0, camera_freeze: tuple | None = None,
-                 test_stop_in_capture: bool = False, camera_pixel_lag_s: float = 0.0):
+                 test_stop_in_capture: bool = False, camera_pixel_lag_s: float = 0.0,
+                 camera_model: dict | None = None):
         self.core, self.hooks, self.clock, self.sleep = core, hooks, clock, sleep
         self.dt = dt
         self.session_epoch = session_epoch if session_epoch is not None else secrets.randbits(48)  # a job, an epoch
@@ -72,6 +73,8 @@ class LiveRuntime:
                                       "grid": {"max_hz": 1}},
                             "chassis": dict(DLS08_MEASURED_CHASSIS),  # display only (C3)
                             "provisional_limits": True}}
+        if camera_model is not None:
+            self.welcome["capabilities"]["camera_model"] = camera_model  # display only (contract 3)
         self.server = LiveServer(self.channels, self.store, self.welcome, host=host, web_root=web_root)
         self.output, self.port_file = Path(output), port_file
         self._log = open(self.output / "live_log.jsonl", "w")  # noqa: SIM115 -- closed in close()
@@ -160,12 +163,14 @@ class LiveRuntime:
         return self.link.end(self.clock(), records, safety, candidate, drive)
 
     def publish(self, t: float, out, safety: dict, *, pose: dict | None, freshness: dict | None,
-                applied: dict | None, speed_mps: float | None) -> None:
+                applied: dict | None, speed_mps: float | None, steering_rad: list | None = None,
+                lift_m: float | None = None) -> None:
         """The state (with the command as finally applied), the targets and the log entry due this tick."""
         now = self.clock()
         if self.link.state_due(now):
             msg = state_message(self.arbiter, out, safety, now_mono=now, rear_axle_speed_mps=speed_mps,
-                                applied=applied, pose=pose, freshness=freshness, pacing=self.pacer.report())
+                                applied=applied, pose=pose, freshness=freshness, pacing=self.pacer.report(),
+                                steering_rad=steering_rad, lift_m=lift_m)
             self.channels.put(None, msg)
         targets = self.core.targets
         if targets.revision != self._targets_revision:
@@ -264,6 +269,42 @@ class LiveRuntime:
         self.log({"camera": self.frame_id, "render_time": render_time, "sim_t": sim_t,
                   "latency_s": None if start is None else acquired - start,
                   "pixel_latency_s": None if pixel is None else acquired - pixel})
+
+
+def sent_scale(width: int, max_width: int = 640) -> int:
+    """The runner halves the picture until it is at most ``max_width`` wide (live_camera in run_transport)."""
+    n = 1
+    while width // n > max_width:
+        n *= 2
+    return n
+
+
+# camera_link (x forward, y left, z up) axes as columns, in optical (x right, y down, z forward) coordinates
+_OPTICAL_FROM_LINK = np.array([[0.0, -1.0, 0.0], [0.0, 0.0, -1.0], [1.0, 0.0, 0.0]])
+
+
+def live_camera_model(calibration, mount, *, rear_axle_offset_m: float, sent_width: int,
+                      rides_lift: bool) -> dict:
+    """The perception camera as the page's camera_model (contract 3, display only): intrinsics of the picture as
+    sent, and the mount as camera_link placed from the rear axle on the floor -- the state's pose is the rear axle.
+    ``mount`` is base_link <- optical at lift 0; ``rides_lift``: the camera is on the carriage, so the page adds the
+    state's lift_m to its height (and draws no overlay while the lift height is unknown)."""
+    n = sent_scale(int(calibration.width), sent_width)
+    rotation = np.asarray(mount.rotation, dtype=float) @ _OPTICAL_FROM_LINK
+    w = math.sqrt(max(0.0, 1.0 + np.trace(rotation))) / 2.0
+    if w < 1e-6:
+        raise ValueError("camera mount turned half a turn: not a forward camera")
+    q = [(rotation[2, 1] - rotation[1, 2]) / (4 * w), (rotation[0, 2] - rotation[2, 0]) / (4 * w),
+         (rotation[1, 0] - rotation[0, 1]) / (4 * w), w]
+    t = np.asarray(mount.translation_m, dtype=float)
+    return {"calibration_version": 0, "width": int(calibration.width) // n, "height": int(calibration.height) // n,
+            "fx": float(calibration.fx) / n, "fy": float(calibration.fy) / n,
+            "cx": float(calibration.cx) / n, "cy": float(calibration.cy) / n,
+            "base_from_camera": {
+                "frame": "camera_link (x forward, y left, z up) from the rear axle on the floor, lift 0",
+                "xyz_m": [float(t[0]) + abs(float(rear_axle_offset_m)), float(t[1]), float(t[2])],
+                "quaternion_xyzw": [float(v) for v in q]},
+            "rides_lift": bool(rides_lift)}
 
 
 def _quantiles(values: list) -> dict | None:

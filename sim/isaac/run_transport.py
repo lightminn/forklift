@@ -5173,7 +5173,7 @@ def drive(S, isaac) -> None:
             repo_root_ = str(Path(__file__).resolve().parents[2])  # console/ lives at the repository's root
             if repo_root_ not in sys.path:
                 sys.path.insert(0, repo_root_)
-            from live_runtime import Hooks as LiveHooks, LiveRuntime  # a sibling, as the runner's other modules
+            from live_runtime import Hooks as LiveHooks, LiveRuntime, live_camera_model  # siblings, as the rest
 
             def live_zero_wheels() -> None:
                 # As a scheduled preempt (M-a3 E7): the wheels stop at this step, the steering stays; the applied
@@ -5255,7 +5255,12 @@ def drive(S, isaac) -> None:
                 camera_pixel_lag_s=args.live_camera_pixel_lag_s,
                 host=args.live_host, web_root=args.live_web_root,
                 test_step_delay_s=args.live_test_step_delay_ms / 1000.0, camera_freeze=freeze_,
-                test_stop_in_capture=args.live_test_stop_in_capture)
+                test_stop_in_capture=args.live_test_stop_in_capture,
+                # The page's teleop overlay (display only, contract 3); none without the perception camera.
+                camera_model=None if live_cam_ is None else live_camera_model(
+                    _bound["perception_calibration"], _bound["perception_mount"],
+                    rear_axle_offset_m=args.rear_axle_offset_m, sent_width=640,
+                    rides_lift=args.perception_mount != "legacy"))  # legacy hangs off base_link
             live.start()
             core.hooks.live_abort = lambda: live.stopped_in_tick  # the core stops right after a raw capture
 
@@ -6120,7 +6125,10 @@ def drive(S, isaac) -> None:
                     freshness=None,
                     applied={"speed_mps": float(drive.speed_mps), "curvature_inv_m": float(drive.curvature_inv_m),
                              "steering_rad": [float(v) for v in steering_command]},
-                    speed_mps=float(speed_now_))
+                    speed_mps=float(speed_now_),
+                    # measured, not commanded: the joints as they stand (contract 6)
+                    steering_rad=[float(v) for v in robot.get_joint_positions()[steers]],
+                    lift_m=float(robot.get_joint_positions()[lift_index[0]]))
             if dwell_standing and wheel_lock["q"] is None:
                 # Plan D8b: hold the wheels where they stand for the dwell (DWELL_WHEEL_KP).
                 controller_ = robot.get_articulation_controller()
