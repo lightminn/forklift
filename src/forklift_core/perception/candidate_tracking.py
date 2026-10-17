@@ -74,6 +74,10 @@ class TrackBounds:
     window_s: float
     max_observations: int = 10
     expiry_s: float = 0.5
+    # Fusion weights only: the assumed odometry noise as random walks (position_m_per_sqrt_s,
+    # yaw_rad_per_sqrt_s). None weighs with the worst-case bound, which leaves older observations
+    # almost no weight (stage 2B-3 calibration). The budget always uses the bound.
+    weight_model: dict | None = None
 
     def __post_init__(self) -> None:
         if set(self.rows) != set(FAMILIES):
@@ -95,6 +99,11 @@ class TrackBounds:
                 raise ValueError(f"odometry {name} must be a non-negative running maximum over the ages")
             object.__setattr__(self, name, values)
         object.__setattr__(self, "ages_s", ages)
+        if self.weight_model is not None:
+            wm = {k: float(self.weight_model[k]) for k in ("position_m_per_sqrt_s", "yaw_rad_per_sqrt_s")}
+            if not all(math.isfinite(v) and v >= 0 for v in wm.values()):
+                raise ValueError("weight_model values must be finite and non-negative")
+            object.__setattr__(self, "weight_model", wm)
         if not (self.window_s >= 0 and self.expiry_s > 0 and self.max_observations >= 1):
             raise ValueError("window_s >= 0, expiry_s > 0 and max_observations >= 1 are required")
 
@@ -104,7 +113,8 @@ class TrackBounds:
         rows = {family: tuple(BoundRow(**r) for r in data["rows"][family]) for family in FAMILIES}
         return cls(rows=rows, ages_s=tuple(odo["ages_s"]), e_m=tuple(odo["e_m"]), psi_rad=tuple(odo["psi_rad"]),
                    rear_axle_xy_m=tuple(data["rear_axle_xy_m"]), window_s=float(data["window_s"]),
-                   max_observations=int(data["max_observations"]), expiry_s=float(data["expiry_s"]))
+                   max_observations=int(data["max_observations"]), expiry_s=float(data["expiry_s"]),
+                   weight_model=data.get("weight_model"))
 
     @classmethod
     def load(cls, path) -> TrackBounds:
@@ -293,7 +303,13 @@ class CandidateTracker:
             e, psi = odometry
             lever = self.bounds.lever_m(_inverse(base_now, o.mid))
             reach = e + lever * psi
-            w = 1.0 / (o.row.sigma_m ** 2 + reach ** 2)
+            wm = self.bounds.weight_model
+            if wm is None:
+                spread = reach
+            else:
+                root = math.sqrt((now_ns - o.stamp_ns) / 1e9)
+                spread = (wm["position_m_per_sqrt_s"] + lever * wm["yaw_rad_per_sqrt_s"]) * root
+            w = 1.0 / (o.row.sigma_m ** 2 + spread ** 2)
             rows.append((o, w, reach, psi))
         if not rows:
             return None

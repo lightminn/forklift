@@ -30,12 +30,26 @@ import numpy as np
 import yaml
 
 from forklift_core.perception.candidate_tracking import TrackBounds
-from tools.evaluate_track_sequences import FAR_BINS, _bin_row, load_records, run
+from tools.evaluate_track_sequences import (
+    FAR_BINS,
+    SPEED_SIGMA_MPS,
+    STEER_SIGMA_RAD,
+    SUBSTEPS,
+    WHEELBASE_M,
+    _bin_row,
+    load_records,
+    run,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 RANGE_BINS = ((1.0, 1.5), (1.5, 2.0), (2.0, 2.5), (2.5, 3.0), (3.0, 3.5), (3.5, 4.0))
 MIN_SAMPLES = 20
 WINDOWS = (0.0, 0.6, 1.2, 2.0)
+LAYOUT_FLOOR_M = 0.001
+# The fusion weights' odometry spread: the OdometryNoise assumption on a straight 0.6 m/s approach as
+# random walks (tools/evaluate_track_sequences.py V1). Assumed, not measured; the budget keeps the bound.
+WEIGHT_MODEL = {"position_m_per_sqrt_s": SPEED_SIGMA_MPS * math.sqrt(0.2 / SUBSTEPS),
+                "yaw_rad_per_sqrt_s": 0.6 * STEER_SIGMA_RAD / WHEELBASE_M * math.sqrt(0.2 / SUBSTEPS)}
 REAR_AXLE_XY_M = (-0.34, 0.0)  # sim/models/dls08_measured/parameters.yaml rear_axle_x_m
 
 
@@ -124,7 +138,9 @@ def table(records) -> tuple[dict, dict]:
 
             def p95(name):
                 return float(np.percentile([e[name] for e in s], 95))
-            layout = max(p95("layout_m"), float(np.percentile(offsets.get(key, [0.0]), 95)))
+            # LAYOUT_FLOOR_M is a development allowance so a constant known-shape layout cannot fail
+            # the gate on rounding; larger empirical values are kept
+            layout = max(p95("layout_m"), float(np.percentile(offsets.get(key, [0.0]), 95)), LAYOUT_FLOOR_M)
             rows[family].append({
                 "lo_m": b[0], "hi_m": b[1], "lateral_m": p95("lateral_m"), "along_m": p95("along_m"),
                 "centre_lateral_m": p95("centre_lateral_m"), "centre_along_m": p95("centre_along_m"),
@@ -139,6 +155,7 @@ def config(rows, odometry: dict, window_s: float) -> dict:
         "role": "provisional",
         "window_s": window_s, "expiry_s": 0.5, "max_observations": 10,
         "rear_axle_xy_m": list(REAR_AXLE_XY_M),
+        "weight_model": dict(WEIGHT_MODEL),
         "odometry": {"source": "config/obstacle_odometry_age.json", "ages_s": odometry["ages_s"],
                      "e_m": odometry["cumulative_position_m"], "psi_rad": odometry["cumulative_yaw_rad"]},
         "rows": rows,

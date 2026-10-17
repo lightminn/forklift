@@ -151,6 +151,13 @@ def errors(cand, face) -> dict:
     return out
 
 
+def identity_errors(labels_of: dict) -> int:
+    """Tracks that accepted another instance (any accepted reading) or another face of one instance
+    (readings matched to a face); an unmatched reading of the same instance is not a switch."""
+    return sum(1 for labels in labels_of.values()
+               if len({lab[0] for lab in labels}) > 1 or len({lab for lab in labels if lab[1] is not None}) > 1)
+
+
 def _drop_frames(seq) -> set:
     k, i = seq["target"]
     dist = [_distance(f["faces"][k][i]) for f in seq["frames"]]
@@ -198,8 +205,7 @@ def run(seq, bounds: TrackBounds, variant: str, table: dict, seed: int) -> dict:
         if single is not None:
             row["latest"] = errors(single, face)
         rows.append(row)
-    identity = sum(1 for labels in labels_of.values()
-                   if len({lab for lab in labels if lab[1] is not None}) > 1)
+    identity = identity_errors(labels_of)
     unmatched = sum(1 for labels in labels_of.values() for lab in labels if lab[1] is None)
     resets = sum(t.resets for t in tr.tracks(int(round(seq["frames"][-1]["t_s"] * 1e9)),
                                              _transform(*reported[-1])))

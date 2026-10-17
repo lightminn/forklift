@@ -155,3 +155,9 @@ def test_the_evaluation_and_calibration_run_on_a_recorded_sequence(short_sequenc
     assert res["rows"][0]["initialised"] and res["rows"][-1]["retained"]
     s = E.summarise([res], 0)["V1"]
     assert s["sequences"] == 1 and s["verdict"]["pass"] is False  # one sequence cannot fill a bin
+
+
+def test_a_track_that_accepts_another_instance_is_an_identity_error_even_without_a_face_match():
+    assert E.identity_errors({0: [(0, 0), (1, None)]}) == 1
+    assert E.identity_errors({0: [(0, 0), (0, 1)]}) == 1          # another face of the same instance
+    assert E.identity_errors({0: [(0, 0), (0, None), (0, 0)]}) == 0  # an unmatched reading of the same instance

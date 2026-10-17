@@ -421,3 +421,21 @@ def test_a_family_without_calibrated_rows_goes_untracked():
                                       rear_axle_xy_m=(0.0, 0.0), window_s=1.2))
     report = tr.update(_frame(0.0, [_candidate(hypothesis="parametric:x"), _candidate((3.0, 0.8, 0.06), cid="k")]))
     assert report.untracked == 1 and report.new == 1
+
+
+def test_a_weight_model_sets_the_weights_of_both_the_pose_and_the_budget():
+    # weights from the assumed odometry noise (random walk), the budget's odometry terms stay the worst-case bound
+    rows = (_row(1.0, 4.0, lat=0.024, along=0.024, yaw=0.3, sigma=0.008),)
+    bounds = TrackBounds(rows={"known": rows, "parametric": rows}, ages_s=(0.1, 0.3, 10.0), e_m=(0.0, 0.0315, 0.0315),
+                         psi_rad=(0.0, 0.0219, 0.0219), rear_axle_xy_m=(-1.0, 0.0), window_s=1.2,
+                         weight_model={"position_m_per_sqrt_s": 0.0016, "yaw_rad_per_sqrt_s": 0.0003})
+    tr = CandidateTracker(bounds)
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), 0.1)]))
+    tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), 0.0)]))
+    out = tr.tracks(int(0.2 * S), _odom())[0]
+    lever = 4.0
+    o_w = 0.0016 * math.sqrt(0.2) + lever * 0.0003 * math.sqrt(0.2)
+    w_old, w_new = 1 / (0.008**2 + o_w**2), 1 / 0.008**2
+    assert out.candidate.insertion_yaw_rad == pytest.approx(0.1 * w_old / (w_old + w_new))
+    o_b = 0.0315 + lever * 0.0219
+    assert out.budget["centre_lateral_m"] == pytest.approx((w_old * (0.024 + o_b) + w_new * 0.024) / (w_old + w_new))
