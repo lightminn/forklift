@@ -897,3 +897,7 @@ def test_absorption_needs_the_duplicate_layout_inside_the_selected_layout():
     assert _reading_contains(s, d)
     d.known = "t11_06:x"
     assert not _reading_contains(s, d)
+    d.known = None  # Codex: no hypothesis accepts any known reading -- wider than an EPAL 6 track
+    assert s.known == "epal6:x" and not _reading_contains(s, d)
+    d.known, s.known = "epal6:x", None  # a track without a hypothesis accepts whatever the duplicate accepts
+    assert _reading_contains(s, d)
