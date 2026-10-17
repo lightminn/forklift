@@ -178,8 +178,9 @@ export function drawMap(cv, model, tok, view, layers) {
       if (p.state === "carried" || !p.pose) continue;
       const sel = mission && mission.pallet_id === p.pallet_id && ["running", "paused", "held", "resuming"].includes(mission.status);
       const [x, y] = P(p.pose.x_m, p.pose.y_m);
-      const dw = p.depth_m * sc;
-      const ws = p.width_m * sc;
+      const sized = Number.isFinite(p.depth_m) && Number.isFinite(p.width_m);
+      const dw = (sized ? p.depth_m : 0.6) * sc; // unknown size: a nominal box drawn dashed
+      const ws = (sized ? p.width_m : 0.6) * sc;
       c.save();
       c.translate(x, y);
       c.rotate(-p.pose.yaw_rad);
@@ -202,7 +203,9 @@ export function drawMap(cv, model, tok, view, layers) {
       }
       c.fillRect(-dw / 2, -ws / 2, dw, ws);
       c.shadowBlur = 0;
+      if (!sized) c.setLineDash([4, 3]);
       c.strokeRect(-dw / 2, -ws / 2, dw, ws);
+      c.setLineDash([]);
       c.strokeStyle = tok.muted;
       c.globalAlpha = 0.5;
       c.lineWidth = 1;
@@ -303,7 +306,7 @@ export function drawMap(cv, model, tok, view, layers) {
     for (const fy of [-0.17, 0.17]) c.fillRect(bodyFront * sc, (fy - 0.0275) * sc, 0.36 * sc, Math.max(2, 0.055 * sc));
     if (st.load?.state === "loaded" && targets) {
       const lp = targets.pallets.find((q) => q.pallet_id === st.load.pallet_id);
-      if (lp) {
+      if (lp && Number.isFinite(lp.depth_m) && Number.isFinite(lp.width_m)) {
         const off = ch.nose_from_rear_m - 0.33; // back face of the load: fork tip minus insertion depth
         c.fillStyle = "rgba(245,165,36,0.18)";
         c.strokeStyle = tok.dest;
@@ -363,7 +366,9 @@ export function palletAt(view, w, h, targets, px, py) {
     // screen y is flipped: rotate into the pallet frame
     const lx = (dx * c - dy * s) / view.scale;
     const ly = (-dx * s - dy * c) / view.scale;
-    if (Math.abs(lx) <= p.depth_m / 2 + 0.1 && Math.abs(ly) <= p.width_m / 2 + 0.1) return p;
+    const d = Number.isFinite(p.depth_m) ? p.depth_m : 0.6;
+    const wd = Number.isFinite(p.width_m) ? p.width_m : 0.6;
+    if (Math.abs(lx) <= d / 2 + 0.1 && Math.abs(ly) <= wd / 2 + 0.1) return p;
   }
   return null;
 }

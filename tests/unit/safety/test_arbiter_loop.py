@@ -136,3 +136,17 @@ def test_stop_then_rearm_then_teleop_again():
         loop.cycle()
     loop.to_teleop_armed()
     assert loop.a.mode == "TELEOP" and loop.a.armed
+
+
+def test_the_state_says_whether_the_stop_is_confirmed_and_names_the_mission_targets():
+    # the console enables rearm on stopped_confirmed and shows pallet -> destination (C3)
+    loop = Loop()
+    for _ in range(40):
+        loop.cycle()
+    assert loop.state["stopped_confirmed"] is True  # standing still, fresh feedback
+    safety = dict(SAFE, mission={"id": "m1", "status": "running", "phase": "approach",
+                                 "pallet_id": "P-1", "destination_id": "D-1"})
+    out = loop.a.step(loop.t, safety, (0.0, 0.0), {"measured_mps": 0.0, "measured_kappa": 0.0,
+                                                   "steering_error_rad": 0.0, "permit": loop.permit})
+    st = state_message(loop.a, out, safety, now_mono=loop.t)
+    assert st["mission"]["pallet_id"] == "P-1" and st["mission"]["destination_id"] == "D-1"

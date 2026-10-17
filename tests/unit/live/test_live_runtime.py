@@ -153,3 +153,11 @@ def test_feedback_keeps_the_time_its_sample_was_made(tmp_path):
         assert rt.feedback.stamp_mono == made
     finally:
         rt.close()
+
+
+def test_the_welcome_carries_the_chassis_outline_the_console_draws(tmp_path):
+    # without it the page cannot draw the truck or its teleop sweep (C3)
+    rt, *_ = runtime(tmp_path)
+    ch = rt.welcome["capabilities"]["chassis"]
+    assert ch["nose_from_rear_m"] == pytest.approx(1.29) and ch["rear_overhang_m"] == pytest.approx(0.17)
+    assert ch["half_width_m"] == pytest.approx(0.315)

@@ -1,7 +1,7 @@
 // Panel rendering from the latest vehicle state. Buttons are only enabled when the
 // request could be accepted; the vehicle still decides and may reject.
 
-import { controlProfile, stopInstruction } from "./profile.js";
+import { controlProfile, rearmState, resumeSteps, stopInstruction } from "./profile.js";
 import { blockReason, currentDestination, missionProgress, PHASES, subtaskOf } from "./wizard.js";
 
 const MODE_KO = { AUTO: "자동 주행", TELEOP: "수동 조종", PAUSED: "대기", STOPPED: "정지됨" };
@@ -46,6 +46,9 @@ function badge(el, cls, text) {
   el.textContent = text;
 }
 
+// "P-1 → D-1 · " when the vehicle names the mission's targets, else nothing
+const route = (mi) => (mi.pallet_id ? `${mi.pallet_id} → ${mi.destination_id ?? "?"} · ` : "");
+
 export function renderPallets(targets, onPick) {
   const box = $("pallet-list");
   const checked = document.querySelector('input[name="pal"]:checked')?.value;
@@ -55,7 +58,7 @@ export function renderPallets(targets, onPick) {
     const lab = document.createElement("label");
     lab.className = "pal";
     const avail = p.state === "available";
-    lab.innerHTML = `<input type="radio" name="pal" value="${esc(p.pallet_id)}"><span><b>${esc(p.pallet_id)} · ${esc(p.kind)}</b><small>${Math.round(p.depth_m * 1000)} × ${Math.round(p.width_m * 1000)} mm · ${p.pose ? `(${p.pose.x_m.toFixed(1)}, ${p.pose.y_m.toFixed(1)}) m` : "포크 위"}</small></span><span class="chip ${avail ? "" : "ok"}">${esc(PALLET_STATE[p.state] ?? p.state)}</span>`;
+    lab.innerHTML = `<input type="radio" name="pal" value="${esc(p.pallet_id)}"><span><b>${esc(p.pallet_id)} · ${esc(p.kind)}</b><small>${Number.isFinite(p.depth_m) && Number.isFinite(p.width_m) ? `${Math.round(p.depth_m * 1000)} × ${Math.round(p.width_m * 1000)} mm` : "크기 모름"} · ${p.pose ? `(${p.pose.x_m.toFixed(1)}, ${p.pose.y_m.toFixed(1)}) m` : "포크 위"}</small></span><span class="chip ${avail ? "" : "ok"}">${esc(PALLET_STATE[p.state] ?? p.state)}</span>`;
     const input = lab.querySelector("input");
     input.disabled = !avail;
     input.checked = avail && p.pallet_id === checked;
@@ -188,8 +191,11 @@ export function render(m) {
   $("mode-code").textContent = mode ?? "—";
   $("mode-ko").textContent = mode ? MODE_KO[mode] ?? mode : "판정 없음";
   chip($("stop-kind"), st.stop_kind === "safety_preempt" ? "crit" : st.stop_kind === "controlled_decel" ? "warn" : "", st.stop_kind ? STOP_KO[st.stop_kind] ?? st.stop_kind : "정지 종류 —");
-  $("rearm").hidden = mode !== "STOPPED";
-  $("rearm").disabled = !lease || !st.stopped_confirmed;
+  const rearm = rearmState(st, lease);
+  $("rearm").hidden = !rearm.shown;
+  $("rearm").disabled = !rearm.enabled;
+  $("rearm").title = rearm.why;
+  $("rearm").textContent = rearm.why && lease ? `재무장 · ${rearm.why}` : "재무장";
   $("l-peers").textContent = monitor
     ? "알 수 없음 · 이 연결은 조종 권한을 다루지 않습니다"
     : `${st.lease?.holder ? (lease ? "이 기기(조종)" : "다른 기기(조종)") : "조종 기기 없음"} · 관찰 ${st.lease?.observers ?? 0}대${st.lease?.reserved_until_s ? ` · 재연결 대기 ${st.lease.reserved_until_s.toFixed(1)} s` : ""}`;
@@ -212,7 +218,7 @@ export function render(m) {
     prog.dataset.tone = mcls;
     const pct = missionProgress(mi);
     $("d-prog-fill").style.width = `${(pct * 100).toFixed(1)}%`;
-    $("d-prog-pct").textContent = `${mi.pallet_id} → ${mi.destination_id} · ${Math.round(pct * 100)}%`;
+    $("d-prog-pct").textContent = `${route(mi)}${Math.round(pct * 100)}%`;
   } else {
     $("req-status-line").textContent = monitor ? "작업 정보 없음 · 관찰 전용 연결" : "진행 중인 작업 없음";
     prog.dataset.tone = "";
@@ -232,7 +238,7 @@ export function render(m) {
   $("m-resume").disabled = !lease || !mi || !["paused", "held"].includes(mi.status) || mode === "STOPPED" || mode === "TELEOP";
   $("m-cancel").disabled = !lease || !active;
   if (mi) {
-    $("req-id").textContent = `${mi.mission_id} · ${mi.pallet_id} → ${mi.destination_id}`;
+    $("req-id").textContent = `${mi.mission_id}${mi.pallet_id ? ` · ${mi.pallet_id} → ${mi.destination_id ?? "?"}` : ""}`;
     chip($("req-status"), mcls, mi.reason ? `${mko} · ${mi.reason}` : mko);
     const sub = subtaskOf(mi.phase);
     const ph = PHASES.find(([en]) => en === mi.phase);
@@ -253,7 +259,7 @@ export function render(m) {
       return `<li class="${cls}" title="${en}"><i class="tick"></i><span>${ko}</span></li>`;
     }).join("");
   }
-  const steps = mi?.resume_steps;
+  const steps = resumeSteps(mi?.resume_steps);
   $("resume-steps").hidden = !steps;
   if (steps) {
     $("resume-steps").innerHTML = steps

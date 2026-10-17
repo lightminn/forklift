@@ -162,3 +162,15 @@ def test_every_slam_release_goes_through_the_one_counting_method():
     source = (root / "mission" / "core.py").read_text()
     body = source[source.index("    def release_slam("):source.index("    def refresh_targets(")]
     assert '.release(odom_from_base=odom_from_base)' in body and "self.slam_releases += 1" in body
+
+
+def test_a_pallet_registered_with_its_size_carries_it_in_the_message():
+    # the console draws the pallet from these (C3); a pallet registered without them has none
+    b = TargetsBook()
+    b.add_pallet("P-1", "epal6", Pose(5.0, 0.0, 0.0), depth_m=0.8, width_m=0.6)
+    b.add_pallet("P-2", "t11", Pose(6.0, 0.0, 0.0))
+    p1, p2 = b.message()["pallets"]
+    assert (p1["depth_m"], p1["width_m"]) == (0.8, 0.6)
+    assert "depth_m" not in p2 and "width_m" not in p2
+    b.carried("P-1")
+    assert b.message()["pallets"][0]["depth_m"] == 0.8  # still known while carried

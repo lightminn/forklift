@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { controlProfile, frameAgreement, scanDrawable, staleness, stopInstruction, stopIsRefused } from "../js/profile.js";
+import { controlProfile, frameAgreement, rearmState, resumeSteps, scanDrawable, staleness, stopInstruction, stopIsRefused } from "../js/profile.js";
 
 test("a vehicle without the control field is a full console (console/1 as before)", () => {
   const p = controlProfile({ mission: true, teleop_direct: true, teleop_video: true, lift: true });
@@ -65,4 +65,27 @@ test("the 'cannot stop' notice tells the method the vehicle named, never an assu
   // a link that names nothing gets a neutral line, not a device that may not exist
   assert.equal(stopInstruction({ capabilities: {} }), "차량에서 직접 멈추는 수단을 쓰세요");
   assert.equal(stopInstruction(null), "차량에서 직접 멈추는 수단을 쓰세요");
+});
+
+test("resume steps read the same from a list (fake vehicle) or a map (live runner)", () => {
+  const list = [{ name: "stop_confirmed", result: "ok" }, { name: "state_verified", result: "failed", reason: "load_changed" }];
+  assert.deepEqual(resumeSteps(list), list);
+  assert.deepEqual(
+    resumeSteps({ stop_confirmed: "ok", state_verified: "failed(load_changed)", frame_reexpressed: "pending" }),
+    [
+      { name: "stop_confirmed", result: "ok", reason: null },
+      { name: "state_verified", result: "failed", reason: "load_changed" },
+      { name: "frame_reexpressed", result: "pending", reason: null },
+    ],
+  );
+  assert.equal(resumeSteps(null), null);
+});
+
+test("rearm is offered once stopped with the lease; an unconfirmed stop says so instead", () => {
+  assert.equal(rearmState({ mode: "STOPPED", stopped_confirmed: true }, true).enabled, true);
+  assert.equal(rearmState({ mode: "STOPPED", stopped_confirmed: false }, true).enabled, false);
+  assert.match(rearmState({ mode: "STOPPED", stopped_confirmed: false }, true).why, /정지 확인/);
+  assert.equal(rearmState({ mode: "STOPPED" }, true).enabled, true); // a vehicle that does not say: let it judge
+  assert.equal(rearmState({ mode: "STOPPED", stopped_confirmed: true }, false).enabled, false);
+  assert.equal(rearmState({ mode: "PAUSED", stopped_confirmed: true }, true).shown, false);
 });

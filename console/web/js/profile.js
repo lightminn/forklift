@@ -54,3 +54,24 @@ export function stopInstruction(linkWelcome) {
   const text = linkWelcome?.capabilities?.stop_instruction;
   return typeof text === "string" && text.trim() ? text.trim() : "차량에서 직접 멈추는 수단을 쓰세요";
 }
+
+// Resume steps as [{name, result, reason}]: the fake vehicle sends that list, the live
+// runner a map {name: "ok" | "pending" | "failed(reason)"} (both read contract 6).
+export function resumeSteps(steps) {
+  if (!steps) return null;
+  if (Array.isArray(steps)) return steps;
+  return Object.entries(steps).map(([name, value]) => {
+    const m = /^failed\((.*)\)$/.exec(String(value));
+    return { name, result: m ? "failed" : String(value), reason: m ? m[1] : null };
+  });
+}
+
+// The rearm button: shown while STOPPED, usable with the lease once the vehicle says the
+// truck stands (stopped_confirmed); a vehicle that does not report it judges the request.
+export function rearmState(st, hasLease) {
+  const shown = st?.mode === "STOPPED";
+  if (!shown) return { shown, enabled: false, why: "" };
+  if (!hasLease) return { shown, enabled: false, why: "조종 권한이 필요합니다" };
+  if (st.stopped_confirmed === false) return { shown, enabled: false, why: "정지 확인을 기다리는 중" };
+  return { shown, enabled: true, why: "" };
+}

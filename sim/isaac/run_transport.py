@@ -4581,7 +4581,9 @@ def drive(S, isaac) -> None:
 
     # M-a4 (plan D7): the scenario's pallet and destination are the targets list; the submit names them.
     core.targets.add_pallet("P-1", Path(args.pallet_geometry).stem, MissionTargetPose(
-        float(scenario.pickup.x_m), float(scenario.pickup.y_m), float(scenario.pickup.yaw_rad)))
+        float(scenario.pickup.x_m), float(scenario.pickup.y_m), float(scenario.pickup.yaw_rad)),
+        depth_m=float(args.pallet_geometry_loaded.overall_depth_m),  # the console draws it (C3)
+        width_m=float(args.pallet_geometry_loaded.overall_width_m))
     core.targets.add_destination("D-1", MissionTargetPose(
         float(scenario.destination.x_m), float(scenario.destination.y_m), float(scenario.destination.yaw_rad)))
     if not getattr(args, "live", False):  # M-c: live, the operator submits (a record from before M-c has no flag)

@@ -28,6 +28,8 @@ class Pallet:
     kind: str
     pose: Pose | None
     state: str = "available"
+    depth_m: float | None = None  # overall size for the console's drawing (C3); None when not known
+    width_m: float | None = None
 
 
 @dataclass
@@ -39,11 +41,12 @@ class TargetsBook:
     _issued: set = field(default_factory=set)
 
     # --- registration ---------------------------------------------------------------------------------------
-    def add_pallet(self, pallet_id: str, kind: str, pose: Pose) -> None:
+    def add_pallet(self, pallet_id: str, kind: str, pose: Pose, *, depth_m: float | None = None,
+                   width_m: float | None = None) -> None:
         if pallet_id in self._issued:
             raise ValueError(f"pallet id {pallet_id!r} was already used in this session")
         self._issued.add(pallet_id)
-        self.pallets[pallet_id] = Pallet(pallet_id, kind, pose)
+        self.pallets[pallet_id] = Pallet(pallet_id, kind, pose, depth_m=depth_m, width_m=width_m)
         self.revision += 1
 
     def add_destination(self, destination_id: str, pose: Pose) -> None:
@@ -116,8 +119,13 @@ class TargetsBook:
         def pose_(p):
             return None if p is None else {"x_m": p.x_m, "y_m": p.y_m, "yaw_rad": p.yaw_rad}
 
+        def pallet_(p):
+            item = {"pallet_id": p.pallet_id, "kind": p.kind, "pose": pose_(p.pose), "state": p.state}
+            if p.depth_m is not None and p.width_m is not None:  # the size, when registered with one
+                item.update(depth_m=p.depth_m, width_m=p.width_m)
+            return item
+
         return {"t": "targets", "targets_revision": self.revision, "map_frame": map_frame,
                 "correction_version": self.correction_version,
-                "pallets": [{"pallet_id": p.pallet_id, "kind": p.kind, "pose": pose_(p.pose), "state": p.state}
-                            for p in self.pallets.values()],
+                "pallets": [pallet_(p) for p in self.pallets.values()],
                 "destinations": [{"destination_id": d, "pose": pose_(p)} for d, p in self.destinations.items()]}
