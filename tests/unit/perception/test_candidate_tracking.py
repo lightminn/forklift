@@ -2,6 +2,7 @@
 """Far-range candidate tracking and fusion (stage 2B-3 plan sections 1-5)."""
 import math
 import random
+from pathlib import Path
 from dataclasses import replace
 
 import numpy as np
@@ -682,3 +683,97 @@ def test_a_track_born_outside_the_selected_pose_gate_is_not_a_duplicate():
     tr.select(0)
     tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), cid="a"), _candidate((3.0, 0.15, 0.06), cid="b")]))
     assert [t.duplicate_of for t in tr._tracks] == [None, None]
+
+
+# 2B-3d: near misses on yaw or support (active selected track) are suspected duplicates too -----------
+
+def _born(t_born=0.2, rows=None, **kw):
+    """Selected track 0 at y 0 / yaw 0 / support 0 (t 0), then one reading at t_born that starts track 1."""
+    rows = rows or (_row(1.0, 4.0, yaw=0.05, z_s=0.005),)  # yaw gate 0.1 rad, support gate 0.01 m
+    tr = CandidateTracker(_bounds(rows=rows))
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="s")]))
+    tr.select(0)
+    report = tr.update(_frame(t_born, [_candidate(**{"mid": (3.0, 0.0, 0.06), **kw}, cid="b")]))
+    assert report.new == 1
+    return tr
+
+
+@pytest.mark.parametrize("kw, duplicate", [
+    (dict(yaw=0.12), True),                                   # yaw 1.2 x
+    (dict(support_z=0.015), True),                            # support 1.5 x, 15 mm
+    (dict(yaw=0.12, support_z=0.015), True),                  # both near
+    (dict(yaw=0.15), True),                                   # yaw exactly 1.5 x
+    (dict(support_z=0.025), True),                            # support exactly 2.5 x
+    (dict(yaw=0.16), False),                                  # yaw 1.6 x
+    (dict(support_z=0.026), False),                           # support 2.6 x
+    (dict(mid=(3.0, 0.15, 0.06), yaw=0.12), False),           # lateral miss: a neighbour
+    (dict(mid=(3.15, 0.0, 0.06), yaw=0.12), False),           # along miss: a neighbour
+    (dict(yaw=0.12, hypothesis="t11_06:x"), False),           # the reading splits too: not a near miss
+])
+def test_a_near_miss_on_yaw_or_support_marks_a_suspected_duplicate(kw, duplicate):
+    tr = _born(**kw)
+    assert tr._tracks[1].duplicate_of == (0 if duplicate else None)
+
+
+def test_the_absolute_caps_bound_a_near_miss():
+    # yaw gate 0.6 rad (34 deg): 36 deg is within 1.5 x but above the 30 deg cap
+    tr = _born(rows=(_row(1.0, 4.0, yaw=0.3, along=0.06, z_s=0.005),), yaw=math.radians(36))
+    assert tr._tracks[1].duplicate_of is None
+    # support gate 24 mm: 50 mm is within 2.5 x but not under 45 mm
+    tr = _born(rows=(_row(1.0, 4.0, yaw=0.05, z_s=0.012),), support_z=0.050)
+    assert tr._tracks[1].duplicate_of is None
+
+
+def test_the_selected_track_wins_over_a_yaw_near_miss_duplicate():
+    tr = _born(yaw=0.12)
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), 0.06, hypothesis="parametric:x", cid="c")]))
+    assert report.accepted == {"c": 0}
+
+
+def test_a_stale_selected_track_wins_over_its_support_near_miss_duplicate():
+    tr = _born(support_z=0.015)
+    for t in (0.4, 0.6):
+        tr.update(_frame(t, [_candidate((3.0, 0.0, 0.06), support_z=0.015, cid="b")]))  # only 1 fits
+    report = tr.update(_frame(0.8, [_candidate((3.0, 0.0, 0.06), support_z=0.008, cid="c")]))
+    assert report.accepted == {"c": 0} and report.revived == 1
+
+
+def test_a_neighbour_born_while_the_selected_track_is_stale_is_not_a_duplicate():
+    # Codex: born at 0.6 s (selected stale, its gate widened) on a support near miss -- a real neighbour
+    tr = _born(t_born=0.6, mid=(3.0, 0.05, 0.06), support_z=0.015)
+    assert tr._tracks[1].duplicate_of is None
+    report = tr.update(_frame(0.8, [_candidate((3.0, 0.05, 0.06), support_z=0.008, cid="c")]))
+    assert report.accepted == {"c": 1}
+
+
+def test_a_front_back_neighbour_born_while_the_selected_track_is_active_is_not_a_duplicate():
+    # Codex, with the calibrated table: A at x 4.24 (range 3.49), B first seen 0.4 s later at x 4.71 with
+    # support 20 mm (1.34 x) -- inside the odometry-widened along gate (501 mm) but 470 mm away
+    bounds = TrackBounds.load(Path(__file__).resolve().parents[3] / "config/recognition_track_bounds.yaml")
+    tr = CandidateTracker(bounds)
+    tr.update(_frame(0.0, [_candidate((4.24, 0.0, 0.06), range_m=3.49, cid="a")]))
+    tr.select(0)
+    tr.update(_frame(0.4, [_candidate((4.71, 0.0, 0.06), range_m=3.96, support_z=0.020, cid="b")]))
+    assert [t.duplicate_of for t in tr._tracks] == [None, None]
+    report = tr.update(_frame(0.6, [_candidate((4.71, 0.0, 0.06), range_m=3.96, support_z=0.010, cid="c")]))
+    assert report.accepted == {"c": 1} and report.revived == 0
+
+
+def test_the_absolute_caps_are_exact_at_30_degrees_and_45_mm():
+    tr = _born(rows=(_row(1.0, 4.0, yaw=0.2, along=0.06, z_s=0.005),), yaw=math.radians(30))
+    assert tr._tracks[1].duplicate_of == 0
+    tr = _born(rows=(_row(1.0, 4.0, yaw=0.05, z_s=0.012),), support_z=0.045)
+    assert tr._tracks[1].duplicate_of is None
+
+
+def test_a_near_miss_needs_the_pockets_within_the_position_cap():
+    # wide position gate (lat 0.5): a 0.25 m lateral step with a yaw near miss is a neighbour, 0.15 m is not
+    rows = (_row(1.0, 4.0, lat=0.5, yaw=0.05, z_s=0.005),)
+    assert _born(rows=rows, mid=(3.0, 0.25, 0.06), yaw=0.12)._tracks[1].duplicate_of is None
+    assert _born(rows=rows, mid=(3.0, 0.15, 0.06), yaw=0.12)._tracks[1].duplicate_of == 0
+
+
+def test_the_position_cap_includes_exactly_0_2_m():
+    rows = (_row(1.0, 4.0, lat=0.5, yaw=0.05, z_s=0.005),)
+    # a support near miss so the pockets move exactly 0.2 m (a yaw miss would also rotate them)
+    assert _born(rows=rows, mid=(3.0, 0.2, 0.06), support_z=0.015)._tracks[1].duplicate_of == 0
