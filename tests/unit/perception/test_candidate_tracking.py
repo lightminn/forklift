@@ -568,9 +568,10 @@ def _with_duplicate():
 def test_the_selected_track_takes_an_observation_that_also_fits_its_duplicate():
     tr = _with_duplicate()
     report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", cid="c")]))
-    assert report.accepted == {"c": 0} and report.held == 0
+    assert report.accepted == {"c": 0} and report.held == 0  # (2B-3e: the duplicate is then absorbed)
+    tr = _with_duplicate()
     tr.select(None)
-    report = tr.update(_frame(0.6, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", cid="d")]))
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", cid="d")]))
     assert report.accepted == {} and report.held == 2  # without a selection: the 2B-3b hold
 
 
@@ -777,3 +778,54 @@ def test_the_position_cap_includes_exactly_0_2_m():
     rows = (_row(1.0, 4.0, lat=0.5, yaw=0.05, z_s=0.005),)
     # a support near miss so the pockets move exactly 0.2 m (a yaw miss would also rotate them)
     assert _born(rows=rows, mid=(3.0, 0.2, 0.06), support_z=0.015)._tracks[1].duplicate_of == 0
+
+
+# 2B-3e: the selected track absorbs its suspected duplicates ---------------------------------------------
+
+def test_the_selected_track_absorbs_a_duplicate_that_fits_the_observation_it_takes():
+    tr = _with_duplicate()
+    history, layout = list(tr._tracks[0].history), list(tr._tracks[0].layout)
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", cid="c")]))
+    assert report.accepted == {"c": 0} and report.absorbed == 1
+    assert [t.id for t in tr._tracks] == [0]
+    assert tr._tracks[0].history == history + [tr._tracks[0].last]  # its own readings only, nothing merged
+    assert tr._tracks[0].layout == [(max(lo, x - b), min(hi, x + b)) for (lo, hi), x, b in
+                                    zip(layout, tr._tracks[0].last.offsets, [tr._tracks[0].last.row.layout_m] * 2)]
+    with pytest.raises(ValueError):
+        tr.select(1)
+
+
+def test_a_duplicate_that_does_not_fit_the_taken_observation_stays():
+    tr = _with_duplicate()  # duplicate 1 reads t11_06:x; an epal6:x reading fits only the selected track
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="c")]))
+    assert report.accepted == {"c": 0} and report.absorbed == 0 and [t.id for t in tr._tracks] == [0, 1]
+
+
+def test_a_real_neighbour_is_never_absorbed():
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="s"), _candidate((3.0, 0.12, 0.06), cid="a")]))
+    tr.select(0)
+    report = tr.update(_frame(0.2, [_candidate((3.0, 0.06, 0.06), cid="o1"), _candidate((3.0, 0.18, 0.06), cid="o2")]))
+    assert report.accepted == {"o1": 0, "o2": 1} and report.absorbed == 0 and len(tr._tracks) == 2
+
+
+def test_nothing_is_absorbed_without_a_selection_or_when_the_selected_track_takes_nothing():
+    tr = _with_duplicate()
+    tr.select(None)
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", cid="c")]))
+    assert report.absorbed == 0 and len(tr._tracks) == 2
+    tr = _with_duplicate()
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="t11_06:x", cid="c")]))  # only 1 fits
+    assert report.accepted == {"c": 1} and report.absorbed == 0 and len(tr._tracks) == 2
+
+
+def test_a_duplicate_that_took_another_reading_this_frame_is_not_absorbed():
+    # S-O1, D-O1, D-O2: the duplicate D took O2, so it tracks something and stays
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="s")]))
+    tr.select(0)
+    tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="s"),
+                           _candidate((3.0, 0.05, 0.06), hypothesis="t11_06:x", cid="d")]))
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.06, 0.06), hypothesis="parametric:x", cid="o1"),
+                                    _candidate((3.0, 0.14, 0.06), hypothesis="parametric:x", cid="o2")]))
+    assert report.accepted == {"o1": 0, "o2": 1} and report.absorbed == 0

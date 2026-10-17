@@ -191,6 +191,7 @@ class FrameReport:
     ignored: str | None = None
     cleared: bool = False
     revived: int = 0  # stale tracks that took an observation and became active again
+    absorbed: int = 0  # suspected duplicates removed when the selected track took their observation (2B-3e)
 
 
 @dataclass(frozen=True)
@@ -536,6 +537,10 @@ class CandidateTracker:
         split_off = {j for j, o in enumerate(obs) if chosen is not None
                      and ((_pose_fits(chosen, o, self.bounds) and not _reading_fits(chosen, o))
                           or (chosen_active and _near_miss(chosen, o, self.bounds)))}  # 2B-3d
+        # 2B-3e: before matching, which of the selected track's suspected duplicates each reading fits
+        duplicates = [] if chosen is None else [tr for tr in self._tracks if tr.duplicate_of == chosen.id]
+        dup_fits = {j: [tr for tr in duplicates if _gate(tr, o, self.bounds)] for j, o in enumerate(obs)}
+        taken_by_chosen = []
         free = set(range(len(obs)))
         accepted, held, revived, blocked = {}, 0, 0, set()
         priority = None
@@ -569,9 +574,17 @@ class CandidateTracker:
                 track.accept(o)
                 track.history = self._window(track)  # the stored history never outgrows W and the count
                 accepted[o.candidate.candidate_id] = track.id
+                if track is chosen:
+                    taken_by_chosen.append(j)
                 if was_stale:
                     track.revivals += 1
                     revived += 1
+
+        took_other = set(accepted.values())  # a duplicate that took another reading this frame tracks something
+        absorbed = {tr.id for j in taken_by_chosen for tr in dup_fits[j]
+                    if tr is not chosen and tr.id not in took_other}
+        self._tracks = [tr for tr in self._tracks if tr.id not in absorbed]
+        accepted = {cid: tid for cid, tid in accepted.items() if tid not in absorbed}
 
         new = 0
         fresh = sorted((j for j in range(len(obs)) if j not in blocked),
@@ -586,7 +599,7 @@ class CandidateTracker:
             self._next_id += 1
             new += 1
         return FrameReport(accepted=accepted, new=new, held=held, untracked=untracked, cleared=cleared,
-                           revived=revived)
+                           revived=revived, absorbed=len(absorbed))
 
     # Output ------------------------------------------------------------------------------------
     def stale_ids(self, now_ns: int) -> tuple:
