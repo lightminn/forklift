@@ -475,12 +475,10 @@ class CandidateTracker:
         """Active and stale tracks; anything older is deleted for good."""
         return [t for t in self._tracks if self._age(t, now_ns) <= self.bounds.keep_s]
 
-    def _match(self, tracks, obs, free, skip=frozenset()):
-        """Unique maximum matching per gate component over the observations in `free`; (track id, obs
-        index) pairs in `skip` get no edge. Returns (matched (track, obs index) pairs, held tracks, gated
-        observation indices)."""
-        edges = {(i, j) for i, t in enumerate(tracks) for j in free
-                 if (t.id, j) not in skip and _gate(t, obs[j], self.bounds)}
+    def _match(self, tracks, obs, free):
+        """Unique maximum matching per gate component over the observations in `free`.
+        Returns (matched (track, obs index) pairs, held tracks, gated observation indices)."""
+        edges = {(i, j) for i, t in enumerate(tracks) for j in free if _gate(t, obs[j], self.bounds)}
         parent = {("t", i): ("t", i) for i in range(len(tracks))} | {("o", j): ("o", j) for j in free}
 
         def find(x):
@@ -568,15 +566,10 @@ class CandidateTracker:
                     priority = fits[0]  # the selected track wins only against its own suspected duplicates
         # 2B-3e shadows are hidden duplicates: they keep matching and taking readings exactly as the
         # duplicate would have in 2B-3d (so every ambiguity it held stays held), but never reach the output
-        # or the selection. A shadow never competes with the selected track it was
-        # absorbed into for a reading that track fits (only its owner is exempt -- switching the selection
-        # keeps an old target's shadows competing); every other competition stays as in 2B-3b
+        # or the selection. The selected track wins over its own shadows only through the priority stage
+        # (when its single reading has no rival but its duplicates); any edge cut beyond that dropped
+        # ambiguity elsewhere (Codex, four counterexamples)
         shadows = [tr for tr in self._tracks if tr.shadow]
-        chosen_fits = set() if chosen is None else {j for j, o in enumerate(obs) if _gate(chosen, o, self.bounds)}
-        # exempt only a single reading the owner fits: with several, its shadows keep the alternatives (Codex)
-        # and only while the owner is active, i.e. in the same matching stage as its shadows (Codex)
-        skip = ({(sh.id, j) for sh in shadows if sh.duplicate_of == self.selected for j in chosen_fits}
-                if len(chosen_fits) == 1 and chosen_active else set())
         shadow_fits = {j for j, o in enumerate(obs) if any(_gate(sh, o, self.bounds) for sh in shadows)}
         live = [tr for tr in self._live(frame.stamp_ns) if not tr.shadow]
         if priority is None:  # the selected track (if any) takes its natural stage under the 2B-3b rules
@@ -593,7 +586,7 @@ class CandidateTracker:
         stages += [("active", active + fresh_shadows), ("stale", stale + stale_shadows)]
         for stage, tracks in stages:
             # the selected stage sees only its one observation; the others see what is still free
-            pairs, h, gated = self._match(tracks, obs, {priority} if stage == "selected" else free, skip=skip)
+            pairs, h, gated = self._match(tracks, obs, {priority} if stage == "selected" else free)
             held += len(h)
             held_now.update(tr.id for tr in h)
             blocked |= gated

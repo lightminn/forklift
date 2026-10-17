@@ -1053,3 +1053,17 @@ def test_a_shadow_keeps_tracking_its_readings_so_it_stays_in_the_active_competit
     report = tr.update(_frame(0.8, [_candidate((3.15, 0.0, 0.06), support_z=0.024, cid="t2")]))
     assert report.accepted.get("t2") != 1  # never handed to the neighbour E
     assert [t.track_id for t in tr.tracks(int(0.8 * S), _odom())] != [] and 2 not in [t.track_id for t in tr.tracks(int(0.8 * S), _odom())]
+
+
+def test_a_shadow_keeps_its_edges_when_a_real_neighbour_also_competes(monkeypatch):
+    # Codex graph: active S -> O1, real A -> O1, S's shadow D -> {O1, O2}, real B -> {O2, O3}: with A competing
+    # there is no priority, and cutting D-O1 settled D<-O2, B<-O3; with D's edges kept everything is held
+    from forklift_core.perception import candidate_tracking as CT
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate((3.0, y, 0.06), cid=c) for y, c in ((0.0, "s"), (0.6, "a"), (1.2, "d"), (1.8, "b"))]))
+    tr.select(0)
+    tr._tracks[2].shadow, tr._tracks[2].duplicate_of = True, 0
+    edges = {(0, "o1"), (1, "o1"), (2, "o1"), (2, "o2"), (3, "o2"), (3, "o3")}
+    monkeypatch.setattr(CT, "_gate", lambda track, o, bounds: (track.id, o.candidate.candidate_id) in edges)
+    report = tr.update(_frame(0.2, [_candidate((3.0, y, 0.06), cid=c) for y, c in ((0.0, "o1"), (0.6, "o2"), (1.2, "o3"))]))
+    assert report.accepted == {} and report.new == 0
