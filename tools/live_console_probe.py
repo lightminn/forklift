@@ -396,14 +396,21 @@ async def approach_scenario(p: Probe, args):
     p.arm_gen = (arm or {}).get("arm_gen", 0)
     legs = (("forward_to_wall", 0.6, args.approach_curvature, args.approach_s),
             ("reverse_swing", -0.6, 0.4, args.approach_s / 4), ("forward_again", 0.6, 0.0, args.approach_s))
+    if args.approach_weave_s > 0:
+        # Teleop bundle margin plan V3: steering swung back and forth before the approach, so the bundle's arcs
+        # change while the truck drives (the curvature ratio flips every weave period, wall seconds).
+        legs = (("weave", 0.6, "weave", args.approach_weave_s * args.approach_weave_n),) + legs
     p.report["approach"] = []
     for name, speed, curv, limit_s in legs:
         start = time.monotonic()
         still_since = None
         moved = False
         while time.monotonic() - start < limit_s and p.closed_code is None:
+            now_curv = curv
+            if curv == "weave":
+                now_curv = 0.8 if int((time.monotonic() - start) / args.approach_weave_s) % 2 == 0 else -0.8
             try:
-                await p.teleop(speed, curv, True)
+                await p.teleop(speed, now_curv, True)
             except websockets.ConnectionClosed:
                 break  # the runner ended (its own checks stop a run): recorded below
             st = p.state or {}
@@ -412,7 +419,7 @@ async def approach_scenario(p: Probe, args):
             applied_ = abs((st.get("applied") or {}).get("speed_mps") or 0.0)
             if moved and applied_ == 0.0 and v < 0.03:  # the vehicle holds it (the measured speed jitters ~0.02)
                 still_since = still_since or time.monotonic()
-                if time.monotonic() - still_since > args.held_s and name != "reverse_swing":
+                if time.monotonic() - still_since > args.held_s and name not in ("reverse_swing", "weave"):
                     break  # held short of the obstacle with the command still asking to go
             else:
                 still_since = None
@@ -453,6 +460,9 @@ def main():
     ap.add_argument("--scenario", choices=("main", "slow", "marker", "approach"), default="main")
     ap.add_argument("--approach-s", type=float, default=600.0, help="approach scenario: wall seconds per leg at most")
     ap.add_argument("--held-s", type=float, default=15.0, help="approach scenario: standing this long ends a leg")
+    ap.add_argument("--approach-weave-s", type=float, default=0.0,
+                    help="approach scenario: weave first, flipping the curvature ratio +-0.8 every this many wall s")
+    ap.add_argument("--approach-weave-n", type=int, default=6, help="approach scenario: weave periods")
     ap.add_argument("--approach-curvature", type=float, default=-0.3,
                     help="approach scenario: the first leg's curvature ratio (-0.15 passed too close to the pallet the "
                     "scan plane does not see, 2026-10-17)")

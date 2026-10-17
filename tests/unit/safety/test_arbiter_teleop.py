@@ -5,6 +5,7 @@ import itertools
 import pytest
 
 from forklift_core.safety.arbiter import Arbiter, ArbiterConfig, Feedback
+from forklift_core.safety.teleop_drive import TeleopLimits, bundle
 
 EPOCH = 3
 SAFE = {"load": {"loaded": False}, "fork_in_pocket": {"value": False}, "near": None,
@@ -136,7 +137,8 @@ def test_the_arbiter_drives_teleop_through_the_chain_from_the_measured_steering(
     a.observe(t + 0.01, Feedback(t + 0.01, 0.0))
     out = a.step(t + 0.01, SAFE, (0.0, 0.0), drive)
     assert out.source == "teleop" and out.speed_mps == pytest.approx(0.8 / 120)
-    assert out.curvature_inv_m == pytest.approx(0.2 + 0.5 / 120) and asked[0][0] == 0.2
+    assert out.curvature_inv_m == pytest.approx(0.2 + 0.5 / 120)
+    assert asked[0] == pytest.approx(bundle(0.2, 0.2 + 0.5 / 120, TeleopLimits().curvature_margin_inv_m))  # grid
     assert out.permit == (1.0, "ok")
 
 

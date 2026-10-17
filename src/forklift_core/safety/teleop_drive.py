@@ -1,11 +1,16 @@
 """The teleoperated drive command (M-b plan B8; design 4.4): ratio to physical, the curvature rate limit, the dead-man
 switch, the shared speed chain (creep, slew, final permission cap, preempt) and the arc-bundle permission.
 
-The permission is asked on the arbiter's own ``DrivePermission`` (the mission's installed path is left alone): for
-every curvature from the measured steering to the output curvature, at most ``KAPPA_STEP`` apart, the arc is
-installed with ``update()`` and ``allowed_speed`` read at that curvature; the smallest limit counts. While the
-steering moves monotonically between the two, the swept path is taken to lie in that bundle -- an approximation
-whose gaps the permission's envelope offset is assumed to cover (plan section 6: to be verified).
+The permission is asked on the arbiter's own ``DrivePermission`` (the mission's installed path is left alone): the
+curvatures span the measured steering curvature and the output curvature, grown by ``curvature_margin_inv_m`` on
+each side and rounded outward to the ``KAPPA_STEP`` grid; for each, the arc is installed with ``update()`` and
+``allowed_speed`` read at that curvature; the smallest limit counts. The margin is there because the truck's path
+does not curve as its steering joints say (Isaac, 2026-10-17: up to about 0.037 1/m off while the steering holds,
+more while it moves -- docs/plans/2026-10-17-teleop-bundle-margin.md); the gaps between grid arcs are left to the
+permission's envelope offset, which that plan checks over the distance a check is relied on. What that plan shows
+(recorded Isaac runs, at the points and poses measured -- not a continuous guarantee): a stop begun at any checked
+cycle kept the true body inside the checked region while the output curvature stayed inside the bundle; a new
+input's path is the next check's (design 4.4).
 """
 
 from __future__ import annotations
@@ -19,6 +24,18 @@ from forklift_core.control.drive_permission import DrivePermission, arc_poses
 from forklift_core.control.speed_chain import creep, slew_cap_stop
 
 KAPPA_STEP = 0.05  # 1/m between the arcs of the bundle
+REFRESH_M = 0.25  # BundlePermit installs again after this much driving
+# An arc's walk needs reach only what its speed limit can use: the refresh distance and the stop from this speed,
+# above every teleop limit, after which speed_for() returns more than any cap (teleop bundle margin plan D6). The
+# 3 m lookahead walked four times as far for nothing and, with the margin's extra arcs, cost the live runner its
+# pacing at f 0.08 (job 3889).
+WALK_SPEED_MPS = 1.0
+
+
+def walk_m(config, check_speed_mps: float) -> float:
+    """The verified distance a teleop arc walks: the refresh distance and the stop from the larger of the check
+    speed and WALK_SPEED_MPS, plus a sample."""
+    return REFRESH_M + config.stopping.distance_m(max(WALK_SPEED_MPS, abs(check_speed_mps))) + config.step_m
 
 
 @dataclass(frozen=True)
@@ -34,18 +51,25 @@ class TeleopLimits:
     curvature_rate_inv_m_s: float = 0.5
     accel_mps2: float = 0.8
     stop_speed_mps: float = 0.012  # below this the measured direction is not trusted (the stop detector's gate)
+    # The bundle's allowance for the path curving otherwise than the steering joints say. Measured on the Isaac
+    # baseline plant only (docs/plans/2026-10-17-teleop-bundle-margin.md: 0.02 still let the body out of the
+    # checked region in 5 of about 177,000 checks, 0.04 in none); the real truck's comes from H3.
+    curvature_margin_inv_m: float = 0.04
 
     def __post_init__(self):
         if self.direct_forward_mps > self.video_forward_mps or self.direct_reverse_mps > self.video_reverse_mps:
             raise ValueError("direct limits must not exceed video limits (design 5.3)")
+        if not self.curvature_margin_inv_m >= 0:
+            raise ValueError("the bundle's curvature margin must be non-negative")
 
 
-def bundle(kappa_from: float, kappa_to: float) -> list[float]:
-    """Curvatures from one to the other, both ends included, at most KAPPA_STEP apart (one arc when they agree)."""
-    if kappa_from == kappa_to:
-        return [float(kappa_from)]
-    n = max(1, math.ceil(abs(kappa_to - kappa_from) / KAPPA_STEP))
-    return [float(k) for k in np.linspace(kappa_from, kappa_to, n + 1)]
+def bundle(kappa_from: float, kappa_to: float, margin_inv_m: float = 0.0) -> list[float]:
+    """The arcs' curvatures: the KAPPA_STEP grid points covering [low - margin, high + margin] of the two, the
+    outer ones rounded outward (one arc only when that span is a single grid point). On the grid, the cached and
+    the full checks install the same arcs, and an end that drifts inside its grid cell keeps them."""
+    low, high = min(kappa_from, kappa_to) - margin_inv_m, max(kappa_from, kappa_to) + margin_inv_m
+    first, last = math.floor(low / KAPPA_STEP + 1e-9), math.ceil(high / KAPPA_STEP - 1e-9)
+    return [round(i * KAPPA_STEP, 12) for i in range(first, max(first, last) + 1)]
 
 
 def arc_permit(permission: DrivePermission, snapshot, now_s: float, sensors_last_s: dict, *, pose, curvatures,
@@ -53,11 +77,13 @@ def arc_permit(permission: DrivePermission, snapshot, now_s: float, sensors_last
     """The smallest (limit, reason) over the bundle. Each arc is longer than the permission's walk so its end is
     never reached -- a teleoperated drive has no goal to slow down for."""
     cfg = permission.config
-    length = cfg.lookahead_m + cfg.stopping.distance_m(check_speed_mps) + cfg.step_m
+    walk = walk_m(cfg, check_speed_mps)
+    length = walk + cfg.stopping.distance_m(check_speed_mps) + cfg.step_m  # past the walk: no end to stop at
     best = (math.inf, "ok")
     for kappa in curvatures:
         path, _ = arc_poses(tuple(pose), kappa, direction, length, cfg.step_m)
-        permission.update(snapshot, path, footprint, own_footprint, current_pose=pose, direction=direction)
+        permission.update(snapshot, path, footprint, own_footprint, current_pose=pose, direction=direction,
+                          lookahead_m=walk)
         limit, why = permission.allowed_speed(now_s, sensors_last_s, current_pose=pose, curvature_inv_m=kappa,
                                               direction=direction, footprint=footprint, own_footprint=own_footprint,
                                               speed_cap_mps=check_speed_mps)
@@ -102,10 +128,13 @@ class TeleopDrive:
         directions = {1 if v > 0 else -1 for v in (measured_mps if abs(measured_mps) > lim.stop_speed_mps else 0.0,
                                                     last_applied_mps, speed_target) if v != 0.0} or {1}
         check = max(abs(measured_mps), abs(last_applied_mps), abs(speed_target))
-        limit, why = min((permit(bundle(measured_kappa, self.kappa), d, check) for d in sorted(directions)),
-                         key=lambda r: r[0])
         if not drive_allowed:
+            # The cap is 0 whatever the arcs say: they are not asked (the live runner spent about 1.7 wall s per sim
+            # s on them while pacing forbade every drive, console session profile 2026-10-17).
             limit, why = 0.0, "drive_forbidden"
+        else:
+            arcs = bundle(measured_kappa, self.kappa, lim.curvature_margin_inv_m)
+            limit, why = min((permit(arcs, d, check) for d in sorted(directions)), key=lambda r: r[0])
         speed = slew_cap_stop(last_applied_mps, creep(speed_target, steering_error_rad), decel_mps2=self.decel_mps2,
                               accel_mps2=lim.accel_mps2, dt=self.dt, cap_mps=max(0.0, limit), stop=preempt)
         return speed, self.kappa, (limit, why)
@@ -115,12 +144,13 @@ class BundlePermit:
     """The arc bundle's permission at the batch runner's cost (M-c live runs, plan C4a): per direction, the arcs'
     path checks are installed again only when the grid changed, the bundle's ends moved by a step or the truck has
     driven ``refresh_m`` since; between, each installed check is advanced by the distance driven, as the batch's
-    obstacle layer does between scans. Every cycle: the two ends are asked in full at the **current** curvatures
-    (their emergency-stop arcs, the sensor silence, the evidence age), and every arc between by its advanced path
-    distance and its FREE evidence's age (Codex M-c round 10 P1 x2). Asking every arc in full every cycle cost 32 ms
-    for two arcs and 150 ms for eight (2026-10-17), more than a live physics step."""
+    obstacle layer does between scans. Every cycle: the two ends are asked in full (their emergency-stop arcs, the
+    sensor silence, the evidence age), and every arc between by its advanced path distance and its FREE evidence's
+    age (Codex M-c round 10 P1 x2). Asking every arc in full every cycle cost 32 ms for two arcs and 150 ms for eight
+    (2026-10-17), more than a live physics step. The curvatures are on the ``bundle`` grid, so an installed set is
+    exactly the set a full check would install, and the ends asked are its own outer arcs."""
 
-    def __init__(self, config, refresh_m: float = 0.25):
+    def __init__(self, config, refresh_m: float = REFRESH_M):
         self.config, self.refresh_m = config, refresh_m
         self._cache: dict = {}  # direction -> {"key", "perms": [(kappa, DrivePermission)], "since_m"}
 
@@ -134,16 +164,18 @@ class BundlePermit:
     def limit(self, snapshot, snapshot_key, now_s: float, sensors_last_s: dict, *, pose, curvatures, direction: int,
               check_speed_mps: float, footprint, own_footprint) -> tuple[float, str]:
         cfg = self.config
-        ends = (round(curvatures[0] / KAPPA_STEP), round(curvatures[-1] / KAPPA_STEP))
-        key = (snapshot_key, ends, len(curvatures))  # one arc -> two (steering starts) installs again (Codex r14)
+        ends = (round(curvatures[0] / KAPPA_STEP), round(curvatures[-1] / KAPPA_STEP))  # grid indices (bundle)
+        key = (snapshot_key, ends, len(curvatures))
         entry = self._cache.get(direction)
         if entry is None or entry["key"] != key or entry["since_m"] > self.refresh_m:
-            length = cfg.lookahead_m + cfg.stopping.distance_m(check_speed_mps) + cfg.step_m
+            walk = walk_m(cfg, check_speed_mps) + max(0.0, self.refresh_m - REFRESH_M)
+            length = walk + cfg.stopping.distance_m(check_speed_mps) + cfg.step_m
             perms = []
             for kappa in curvatures:
                 perm = DrivePermission(cfg)
                 path, _ = arc_poses(tuple(pose), kappa, direction, length, cfg.step_m)
-                perm.update(snapshot, path, footprint, own_footprint, current_pose=pose, direction=direction)
+                perm.update(snapshot, path, footprint, own_footprint, current_pose=pose, direction=direction,
+                            lookahead_m=walk)
                 perms.append((kappa, perm))
             entry = self._cache[direction] = {"key": key, "perms": perms, "since_m": 0.0}
         best = (math.inf, "ok")

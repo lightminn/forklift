@@ -1021,8 +1021,10 @@ def test_format_1_records_no_callback_descriptor(tmp_path):
     recorded_function(lambda *, check: 1, "Planner", "plan", gate)(check=lambda p: None)
     rec.tick_end(outputs={}, branches=[])
     rec.close()
-    lines = [json.loads(line) for f in sorted(tmp_path.glob("boundary_*.jsonl*"))
-             for line in (gzip.open(f, "rt") if f.suffix == ".gz" else open(f))]
+    lines = []
+    for f in sorted(tmp_path.glob("boundary_*.jsonl*")):
+        with gzip.open(f, "rt") if f.suffix == ".gz" else open(f) as stream:  # closed: the suite runs -W error
+            lines += [json.loads(line) for line in stream]
     assert [c["method"] for t in lines for c in t["calls"]] == ["plan"]
 
 

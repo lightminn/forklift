@@ -448,10 +448,11 @@ class DrivePermission:
                           own_pose=current_pose, own_footprint=own_footprint)
 
     def update(self, snapshot: GridSnapshot, path_ahead, footprint: Footprint, own_footprint: Footprint, *,
-               current_pose, direction: int = 0) -> Check:
-        """New snapshot: the verified distance along path_ahead (rear-axle poses from the truck on)."""
+               current_pose, direction: int = 0, lookahead_m: float | None = None) -> Check:
+        """New snapshot: the verified distance along path_ahead (rear-axle poses from the truck on). lookahead_m
+        shortens the walk as in check_path (the teleoperated arcs walk only what their speed limit can use)."""
         check = self.check_path(snapshot, path_ahead, footprint, own_footprint, current_pose=current_pose,
-                                direction=direction)
+                                direction=direction, lookahead_m=lookahead_m)
         self.snapshot = snapshot
         self.path_check = check
         self._driven_since_m = 0.0
