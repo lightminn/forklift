@@ -150,3 +150,17 @@ def test_the_state_says_whether_the_stop_is_confirmed_and_names_the_mission_targ
                                                    "steering_error_rad": 0.0, "permit": loop.permit})
     st = state_message(loop.a, out, safety, now_mono=loop.t)
     assert st["mission"]["pallet_id"] == "P-1" and st["mission"]["destination_id"] == "D-1"
+
+
+def test_a_loaded_state_names_the_pallet_on_the_forks():
+    # the console draws the carried pallet from load.pallet_id (Codex C3 review P3)
+    loop = Loop()
+    safety = dict(SAFE, load={"loaded": True, "basis": "phase"},
+                  mission={"id": "m1", "status": "running", "phase": "transport",
+                           "pallet_id": "P-1", "destination_id": "D-1"})
+    out = loop.a.step(loop.t, safety, (0.0, 0.0), {"measured_mps": 0.0, "measured_kappa": 0.0,
+                                                   "steering_error_rad": 0.0, "permit": loop.permit})
+    st = state_message(loop.a, out, safety, now_mono=loop.t)
+    assert st["load"] == {"state": "loaded", "basis": "phase", "pallet_id": "P-1"}
+    empty = state_message(loop.a, out, dict(safety, load={"loaded": False, "basis": "phase"}), now_mono=loop.t)
+    assert empty["load"]["pallet_id"] is None

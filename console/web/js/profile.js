@@ -66,12 +66,73 @@ export function resumeSteps(steps) {
   });
 }
 
-// The rearm button: shown while STOPPED, usable with the lease once the vehicle says the
-// truck stands (stopped_confirmed); a vehicle that does not report it judges the request.
+// Rearm, entering TELEOP, a mission submit and a resume are refused (not_stopped) until the
+// vehicle says the truck stands; a vehicle that does not report it judges the request.
+export function standWhy(st) {
+  return st?.stopped_confirmed === false ? "정지 확인을 기다리는 중" : null;
+}
+
+// The rearm button: shown while STOPPED, usable with the lease once the truck stands.
 export function rearmState(st, hasLease) {
   const shown = st?.mode === "STOPPED";
   if (!shown) return { shown, enabled: false, why: "" };
   if (!hasLease) return { shown, enabled: false, why: "조종 권한이 필요합니다" };
-  if (st.stopped_confirmed === false) return { shown, enabled: false, why: "정지 확인을 기다리는 중" };
+  const stand = standWhy(st);
+  if (stand) return { shown, enabled: false, why: stand };
   return { shown, enabled: true, why: "" };
+}
+
+// Resume: a paused or held mission, outside STOPPED and TELEOP, once the truck stands.
+export function resumeState({ state, mission, hasLease }) {
+  const mode = state?.mode;
+  if (!hasLease || !mission || !["paused", "held"].includes(mission.status) || mode === "STOPPED" || mode === "TELEOP") {
+    return { enabled: false, why: "" };
+  }
+  const stand = standWhy(state);
+  return stand ? { enabled: false, why: stand } : { enabled: true, why: "" };
+}
+
+// The fake vehicle names stops controlled_decel / safety_preempt, the live arbiter controlled / preempt.
+const STOP_KINDS = {
+  none: { label: "정지 종류 없음", level: "" },
+  controlled: { label: "제어 감속", level: "warn" },
+  controlled_decel: { label: "제어 감속", level: "warn" },
+  preempt: { label: "안전 선점", level: "crit" },
+  safety_preempt: { label: "안전 선점", level: "crit" },
+};
+export function stopKind(kind) {
+  if (kind === null || kind === undefined) return { label: "정지 종류 —", level: "" };
+  return STOP_KINDS[kind] ?? { label: String(kind), level: "" };
+}
+
+// The live runner names a pallet kind after its geometry file (pallet_geometry_epal6).
+const PALLET_KINDS = { epal6: "EPAL 6", t11_06: "T11 ×0.6" };
+export function palletKindLabel(kind) {
+  if (!kind) return "종류 모름";
+  const k = String(kind).replace(/^pallet_geometry_/, "");
+  return PALLET_KINDS[k] ?? k;
+}
+
+// The drive permit: its limit may be unknown (null) while the reason is known.
+export function permitText(permit) {
+  if (!permit) return "판정 없음";
+  const lim = Number.isFinite(permit.limit_mps) ? `${permit.limit_mps.toFixed(2)} m/s` : "모름";
+  return `${permit.reason} · 상한 ${lim}`;
+}
+
+// Why manual driving is refused: the fake vehicle's reasons and the live arbiter's policy (teleop_policy.py).
+const FORBID = {
+  state_forbids_teleop: "근접·삽입·승강 중이거나 포크가 포켓 안에 있어 수동 조종을 받지 않습니다",
+  stopped_locked: "정지 상태입니다. 재무장해야 합니다",
+  fork_in_pocket: "포크가 포켓 안에 있어 수동 조종을 받지 않습니다",
+  near_section: "팔레트 근접 구간이라 수동 조종을 받지 않습니다",
+  near_section_unknown: "근접 구간인지 판단할 수 없어 수동 조종을 받지 않습니다",
+  state_unknown: "적재·포크 상태를 알 수 없어 수동 조종을 받지 않습니다",
+  pacing: "시뮬레이션이 실시간을 따라가지 못해 수동 조종을 받지 않습니다",
+};
+export function forbidText(reason) {
+  if (!reason) return "";
+  if (FORBID[reason]) return FORBID[reason];
+  const fb = /^no_feedback:(.+)$/.exec(reason);
+  return fb ? `차량 피드백(${fb[1]})이 끊겨 수동 조종을 받지 않습니다` : reason;
 }

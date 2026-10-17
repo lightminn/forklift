@@ -1,12 +1,11 @@
 // Panel rendering from the latest vehicle state. Buttons are only enabled when the
 // request could be accepted; the vehicle still decides and may reject.
 
-import { controlProfile, rearmState, resumeSteps, stopInstruction } from "./profile.js";
+import { controlProfile, forbidText, palletKindLabel, permitText, rearmState, resumeState, resumeSteps, standWhy, stopInstruction, stopKind } from "./profile.js";
 import { blockReason, currentDestination, missionProgress, PHASES, subtaskOf } from "./wizard.js";
 
 const MODE_KO = { AUTO: "자동 주행", TELEOP: "수동 조종", PAUSED: "대기", STOPPED: "정지됨" };
 const MODE_CLS = { AUTO: "acc", TELEOP: "tel", PAUSED: "ok", STOPPED: "crit" };
-const STOP_KO = { none: "정지 종류 없음", controlled_decel: "제어 감속", safety_preempt: "안전 선점" };
 const STATUS = {
   accepted: ["acc", "수락"],
   running: ["acc", "실행 중"],
@@ -22,10 +21,6 @@ const STEP_KO = {
   state_verified: "실제 상태 확인",
   frame_reexpressed: "보정 반영",
   path_rechecked: "경로 재검사",
-};
-const FORBID_KO = {
-  state_forbids_teleop: "근접·삽입·승강 중이거나 포크가 포켓 안에 있어 수동 조종을 받지 않습니다",
-  stopped_locked: "정지 상태입니다. 재무장해야 합니다",
 };
 const PALLET_STATE = { available: "대기", carried: "적재 중", delivered: "하역 완료" };
 
@@ -58,7 +53,7 @@ export function renderPallets(targets, onPick) {
     const lab = document.createElement("label");
     lab.className = "pal";
     const avail = p.state === "available";
-    lab.innerHTML = `<input type="radio" name="pal" value="${esc(p.pallet_id)}"><span><b>${esc(p.pallet_id)} · ${esc(p.kind)}</b><small>${Number.isFinite(p.depth_m) && Number.isFinite(p.width_m) ? `${Math.round(p.depth_m * 1000)} × ${Math.round(p.width_m * 1000)} mm` : "크기 모름"} · ${p.pose ? `(${p.pose.x_m.toFixed(1)}, ${p.pose.y_m.toFixed(1)}) m` : "포크 위"}</small></span><span class="chip ${avail ? "" : "ok"}">${esc(PALLET_STATE[p.state] ?? p.state)}</span>`;
+    lab.innerHTML = `<input type="radio" name="pal" value="${esc(p.pallet_id)}"><span><b>${esc(p.pallet_id)} · ${esc(palletKindLabel(p.kind))}</b><small>${Number.isFinite(p.depth_m) && Number.isFinite(p.width_m) ? `${Math.round(p.depth_m * 1000)} × ${Math.round(p.width_m * 1000)} mm` : "크기 모름"} · ${p.pose ? `(${p.pose.x_m.toFixed(1)}, ${p.pose.y_m.toFixed(1)}) m` : "포크 위"}</small></span><span class="chip ${avail ? "" : "ok"}">${esc(PALLET_STATE[p.state] ?? p.state)}</span>`;
     const input = lab.querySelector("input");
     input.disabled = !avail;
     input.checked = avail && p.pallet_id === checked;
@@ -190,7 +185,8 @@ export function render(m) {
   $("mode").dataset.m = mode ?? "NONE";
   $("mode-code").textContent = mode ?? "—";
   $("mode-ko").textContent = mode ? MODE_KO[mode] ?? mode : "판정 없음";
-  chip($("stop-kind"), st.stop_kind === "safety_preempt" ? "crit" : st.stop_kind === "controlled_decel" ? "warn" : "", st.stop_kind ? STOP_KO[st.stop_kind] ?? st.stop_kind : "정지 종류 —");
+  const sk = stopKind(st.stop_kind);
+  chip($("stop-kind"), sk.level, sk.label);
   const rearm = rearmState(st, lease);
   $("rearm").hidden = !rearm.shown;
   $("rearm").disabled = !rearm.enabled;
@@ -235,7 +231,9 @@ export function render(m) {
   ready.querySelector("span").textContent = why ?? "작업을 받을 수 있습니다";
   $("m-open").disabled = Boolean(why);
   $("m-pause").disabled = !lease || !mi || mi.status !== "running";
-  $("m-resume").disabled = !lease || !mi || !["paused", "held"].includes(mi.status) || mode === "STOPPED" || mode === "TELEOP";
+  const resume = resumeState({ state: st, mission: mi, hasLease: lease });
+  $("m-resume").disabled = !resume.enabled;
+  $("m-resume").title = resume.why;
   $("m-cancel").disabled = !lease || !active;
   if (mi) {
     $("req-id").textContent = `${mi.mission_id}${mi.pallet_id ? ` · ${mi.pallet_id} → ${mi.destination_id ?? "?"}` : ""}`;
@@ -268,7 +266,7 @@ export function render(m) {
   }
   const forbidden = st.teleop_forbidden_reason;
   $("forbid").hidden = !forbidden || forbidden === "stopped_locked";
-  $("forbid-reason").textContent = FORBID_KO[forbidden] ?? forbidden ?? "";
+  $("forbid-reason").textContent = forbidText(forbidden);
   $("recover").disabled = !lease || mode === "STOPPED";
 
   // position and readouts
@@ -280,8 +278,8 @@ export function render(m) {
   $("r-v").textContent = Number.isFinite(st.rear_axle_speed_mps) ? st.rear_axle_speed_mps.toFixed(2) : "—";
   $("r-st").textContent = st.steering_rad ? deg(st.steering_rad[0]) : "—";
   $("r-lift").textContent = Number.isFinite(st.lift_m) ? Math.round(st.lift_m * 1000) : "—";
-  $("r-load").textContent = st.load?.state === "loaded" ? `적재 · ${st.load.pallet_id}` : st.load?.state === "empty" ? "없음" : "측정 안 됨";
-  $("r-permit").textContent = st.permit ? `${st.permit.reason} · 상한 ${st.permit.limit_mps.toFixed(2)} m/s` : "판정 없음";
+  $("r-load").textContent = st.load?.state === "loaded" ? `적재 · ${st.load.pallet_id ?? "팔레트 모름"}` : st.load?.state === "empty" ? "없음" : "측정 안 됨";
+  $("r-permit").textContent = permitText(st.permit);
   $("r-cmd").textContent = st.command && st.applied ? `${st.command.speed_mps.toFixed(2)} → ${st.applied.speed_mps.toFixed(2)} m/s` : "—";
   if (m.chassis) $("r-radius").textContent = m.chassis.model_turning_radius_m.toFixed(2);
   $("r-phase-t").textContent = mi && Number.isFinite(mi.phase_elapsed_s) ? `${mi.phase_elapsed_s.toFixed(1)} s (일시정지 동안 멈춤)` : "—";
@@ -294,7 +292,9 @@ export function render(m) {
 
   // teleop
   const inTele = mode === "TELEOP";
-  $("t-enter").disabled = !prof.teleop || !lease || inTele || mode === "STOPPED" || Boolean(forbidden);
+  const enterStand = inTele ? null : standWhy(st); // entering TELEOP is refused until the truck stands
+  $("t-enter").disabled = !prof.teleop || !lease || inTele || mode === "STOPPED" || Boolean(forbidden) || Boolean(enterStand);
+  $("t-enter").title = enterStand ?? "";
   $("t-exit").disabled = !lease || !inTele;
   const gate = m.teleop.gate;
   $("t-arm").disabled = !lease || !inTele || !gate.canSend();

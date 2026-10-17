@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createInputs } from "../js/inputs.js";
+import { hiddenEdge, createInputs } from "../js/inputs.js";
 import { createFrameTracker } from "../js/frames.js";
 import { padSnapshot } from "../js/inputs.js";
 
@@ -152,4 +152,14 @@ test("hiding the controls releases every source until each is let go", () => {
   i.read();
   i.setKeys({ deadman: true });
   assert.equal(i.read().deadman, true);
+});
+
+test("only controls that were on screen and left it release; a page opening elsewhere does not", () => {
+  // the first frame of a page opened on another tab used to count as 'hidden', which
+  // latched the keyboard until its first press was let go (C3 live run)
+  assert.equal(hiddenEdge(null, false), false);
+  assert.equal(hiddenEdge(null, true), false);
+  assert.equal(hiddenEdge(true, false), true);
+  assert.equal(hiddenEdge(false, false), false);
+  assert.equal(hiddenEdge(true, true), false);
 });

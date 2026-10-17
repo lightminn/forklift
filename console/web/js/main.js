@@ -4,7 +4,7 @@
 import { drawCamera } from "./camera.js";
 import { createFrameTracker } from "./frames.js";
 import { chooseClientId, createTeleopGate, shouldReclaim } from "./gate.js";
-import { createInputs, padSnapshot } from "./inputs.js";
+import { createInputs, hiddenEdge, padSnapshot } from "./inputs.js";
 import { drawMap, palletAt } from "./map.js";
 import { createMapView, panBy, zoomAt, zoomPercent } from "./mapview.js";
 import { decodeScan, parseFrame } from "./media.js";
@@ -628,11 +628,11 @@ $("dest").addEventListener("change", () => {
 // ------------------------------------------------------------------ loops
 // The teleop controls and their feedback must be on screen to drive: a tab switch, a view
 // or a width change that hides them releases every input (C1 rule), whatever caused it.
-let teleShown = true;
+let teleShown = null; // unknown until the first frame: opening on another tab hides nothing
 let hiddenDisarmSent = false;
 function checkTeleVisible() {
   const shown = $("pane-tele").getClientRects().length > 0;
-  if (teleShown && !shown) inputs.controlsHidden();
+  if (hiddenEdge(teleShown, shown)) inputs.controlsHidden();
   teleShown = shown;
   // an arm answered after the controls were hidden (a late ack) is asked back at once
   if (!shown && m.session.armed && !hiddenDisarmSent) {

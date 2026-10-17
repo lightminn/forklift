@@ -3,6 +3,7 @@
 // predicted sweep. Display only; nothing here decides motion.
 
 import { fitView, worldToScreen } from "./mapview.js";
+import { palletKindLabel } from "./profile.js";
 
 export function fitCanvas(cv) {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -217,7 +218,7 @@ export function drawMap(cv, model, tok, view, layers) {
       c.stroke();
       c.globalAlpha = 1;
       c.restore();
-      label(`${p.pallet_id} · ${p.kind}`, x, y + Math.max(dw, ws) / 2 + 15, sel ? tok.accent : tok.station);
+      label(`${p.pallet_id} · ${palletKindLabel(p.kind)}`, x, y + Math.max(dw, ws) / 2 + 15, sel ? tok.accent : tok.station);
     }
   }
 
