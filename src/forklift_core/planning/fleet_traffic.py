@@ -64,6 +64,12 @@ mixed-integer solve of all open orders (fleet_queue_opt), and ``pace`` a
 speed cap in each permit so a truck reaches where it will be held just as it
 may go on.
 
+``mode`` ``"adg"``, ``"sections"``, ``"mapf"`` and ``"tiles"`` (plan
+2026-10-17) are literature baselines for comparison on the same claims:
+fixed plan orders, closest-first critical sections and prioritized
+space-time reservation (fleet_baselines), and tile reservation with
+deadlock avoidance (fleet_tiles).
+
 Poses are what each truck believes (SLAM estimates). Rear-axle x, y, yaw in
 metres and radians; arc lengths along the truck's route.
 """
@@ -75,8 +81,10 @@ from math import cos, hypot, sin
 
 import numpy as np
 
+from .fleet_baselines import FixedOrders, Reservations, Sections
 from .fleet_physics import gears, speed_profile
 from .fleet_queues import Queues
+from .fleet_tiles import Tiles
 from .fleet_windows import Windows, time_profile, touch_groups
 from .geometry import Bounds, Footprint, FootprintCollisionChecker, Pose2D, Rectangle
 
@@ -276,6 +284,9 @@ class _Truck:
         return (self.rank, self.name)
 
 
+MODES = ("rank", "windows", "queues", "adg", "sections", "mapf", "tiles")
+
+
 class TrafficManager:
     """Claims along planned routes under fixed ranks; see the module docstring."""
 
@@ -306,9 +317,13 @@ class TrafficManager:
         queue_opt: str = "local",
         opt_period_s: float = 5.0,
         node_limit: int = 2000,
+        mapf_window_s: float = 30.0,
+        mapf_replan_s: float = 5.0,
+        tile_m: float = 0.25,
+        tile_horizon_m: float | None = None,
     ) -> None:
-        if mode not in ("rank", "windows", "queues"):
-            raise ValueError("mode is rank, windows or queues")
+        if mode not in MODES:
+            raise ValueError(f"mode is one of {', '.join(MODES)}")
         if pace and mode != "queues":
             raise ValueError("pace needs mode queues")
         if min(lookahead_m, sample_m, moving_m, scan_m) <= 0 or margin_m < 0:
@@ -347,6 +362,14 @@ class TrafficManager:
             self.windows = Queues(
                 pace_min_mps=pace_min_mps, optimiser=queue_opt, opt_period_s=opt_period_s, node_limit=node_limit, **timing
             )
+        elif mode == "adg":
+            self.windows = FixedOrders(**timing)
+        elif mode == "sections":
+            self.windows = Sections(**timing)
+        elif mode == "mapf":
+            self.windows = Reservations(window_s=mapf_window_s, replan_s=mapf_replan_s, **timing)
+        elif mode == "tiles":
+            self.windows = Tiles(tile_m=tile_m, horizon_m=tile_horizon_m, **timing)
         else:
             self.windows = None
         self.ra_against: dict[str, str] = {}  # truck in RA -> the truck it cleared
@@ -401,7 +424,8 @@ class TrafficManager:
         if self.windows is None:
             self._refresh_cover(name)
         else:
-            ok = self.windows.replace(name, self._groups(truck, self.trucks), self.trucks, self.now)
+            groups = {} if self.mode == "tiles" else self._groups(truck, self.trucks)
+            ok = self.windows.replace(name, groups, self.trucks, self.now)
             if not ok:
                 self.windows.counts["route_lock"] += 1
                 self.windows.events.append({"t_s": round(self.now, 1), "kind": "order_lock", "truck": name})
@@ -492,7 +516,8 @@ class TrafficManager:
         trial = _Truck(name, truck.rank, truck.footprint, route[0], route[1], route[2], span=route[3], eta=route[4],
                        restart=route[5], stopcost=route[6], pose=truck.pose)
         trucks = {**self.trucks, name: trial}
-        return self.windows.replace(name, self._groups(trial, trucks), trucks, self.now, dry=True)
+        groups = {} if self.mode == "tiles" else self._groups(trial, trucks)
+        return self.windows.replace(name, groups, trucks, self.now, dry=True)
 
     def set_footprint(self, name: str, footprint: Footprint) -> None:
         """The body the truck has now (loaded or not)."""

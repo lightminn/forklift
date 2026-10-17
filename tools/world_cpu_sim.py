@@ -49,6 +49,7 @@ import yaml
 
 from forklift_core.planning.fleet_physics import Chassis, Load, limits, speed_caps
 from forklift_core.planning.fleet_traffic import (
+    MODES,
     TrafficManager,
     arc_lengths,
     oriented_rects,
@@ -435,6 +436,10 @@ def run(structure, seed, trucks_n, condition, args, settings, geometry, configs,
         queue_opt=args.queue_opt,
         opt_period_s=args.opt_period_s,
         node_limit=args.node_limit,
+        mapf_window_s=args.mapf_window_s,
+        mapf_replan_s=args.mapf_replan_s,
+        tile_m=args.tile_m,
+        tile_horizon_m=args.tile_horizon_m,
     )
     trucks = [Truck(k, p, world, geometry, settings) for k, p in enumerate(places)]
     for t in trucks:
@@ -961,7 +966,7 @@ def main(argv=None) -> int:
     parser.add_argument("--yield-s", type=float, default=20.0)
     parser.add_argument("--yield-back-m", type=float, default=2.5)
     # Time-window tokens (plan 2026-10-11).
-    parser.add_argument("--traffic", default="rank", choices=("rank", "windows", "queues"))
+    parser.add_argument("--traffic", default="rank", choices=MODES)
     parser.add_argument("--issue-s", type=float, default=30.0)
     parser.add_argument("--slack-s", type=float, default=10.0)
     parser.add_argument("--window-period-s", type=float, default=1.0)
@@ -974,6 +979,11 @@ def main(argv=None) -> int:
     parser.add_argument("--queue-opt", default="local", choices=("local", "global"))
     parser.add_argument("--opt-period-s", type=float, default=5.0)
     parser.add_argument("--node-limit", type=int, default=2000)
+    # Literature baselines (plan 2026-10-17): --traffic adg | sections | mapf | tiles.
+    parser.add_argument("--mapf-window-s", type=float, default=30.0)
+    parser.add_argument("--mapf-replan-s", type=float, default=5.0)
+    parser.add_argument("--tile-m", type=float, default=0.25)
+    parser.add_argument("--tile-horizon-m", type=float, default=0.0, help="0: the whole route")
     # Physical model (plan 2026-10-12).
     parser.add_argument("--vehicle", default="kinematic", choices=("kinematic", "physics"))
     parser.add_argument("--eta", default="simple", choices=("simple", "physics"))

@@ -101,7 +101,9 @@ def arguments() -> argparse.Namespace:
     # Making room for a person (plan 2026-10-11 (h)); a non-positive time turns it off.
     parser.add_argument("--yield-s", type=float, default=20.0)
     parser.add_argument("--yield-back-m", type=float, default=2.5)
-    parser.add_argument("--traffic", default="rank", choices=("rank", "windows", "queues"))
+    parser.add_argument(
+        "--traffic", default="rank", choices=("rank", "windows", "queues", "adg", "sections", "mapf", "tiles")
+    )
     parser.add_argument("--issue-s", type=float, default=30.0)
     parser.add_argument("--slack-s", type=float, default=10.0)
     parser.add_argument("--window-period-s", type=float, default=1.0)
@@ -115,6 +117,11 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--queue-opt", default="local", choices=("local", "global"))
     parser.add_argument("--opt-period-s", type=float, default=5.0)
     parser.add_argument("--node-limit", type=int, default=2000)
+    # Literature baselines (plan 2026-10-17): --traffic adg | sections | mapf | tiles.
+    parser.add_argument("--mapf-window-s", type=float, default=30.0)
+    parser.add_argument("--mapf-replan-s", type=float, default=5.0)
+    parser.add_argument("--tile-m", type=float, default=0.25)
+    parser.add_argument("--tile-horizon-m", type=float, default=0.0, help="0: the whole route")
     # Physical timing for the windows (plan 2026-10-12); the tracker is unchanged.
     parser.add_argument("--eta", default="simple", choices=("simple", "physics"))
     parser.add_argument("--tip-share", type=float, default=0.5)
@@ -617,6 +624,10 @@ def run(app, args, settings, state) -> None:
         queue_opt=args.queue_opt,
         opt_period_s=args.opt_period_s,
         node_limit=args.node_limit,
+        mapf_window_s=args.mapf_window_s,
+        mapf_replan_s=args.mapf_replan_s,
+        tile_m=args.tile_m,
+        tile_horizon_m=args.tile_horizon_m,
     )
     log_stages = ("idle", *STAGES, "lift", "lower", "broken")
     ctx = {
