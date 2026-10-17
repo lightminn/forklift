@@ -93,6 +93,9 @@ class TrackBounds:
     # errors) reads >= 0.41 m away when both errors are within p95; the six active-track misses moved
     # about 54 mm at most (Codex)
     near_miss_position_cap_m: float = 0.2
+    # 2B-3f: a reading that would start a track but is a suspected duplicate of the selected track (a
+    # reading split or a near miss) is dropped instead; False keeps the 2B-3c..3e duplicate tracks
+    suppress_duplicates: bool = True
     # Fusion weights only: the assumed odometry noise as random walks (position_m_per_sqrt_s,
     # yaw_rad_per_sqrt_s). None weighs with the worst-case bound, which leaves older observations
     # almost no weight (stage 2B-3 calibration). The budget always uses the bound.
@@ -143,7 +146,8 @@ class TrackBounds:
                    near_miss_yaw_cap_rad=float(data.get("near_miss_yaw_cap_rad", math.radians(30.0))),
                    near_miss_support_ratio=float(data.get("near_miss_support_ratio", 2.5)),
                    near_miss_support_cap_m=float(data.get("near_miss_support_cap_m", 0.045)),
-                   near_miss_position_cap_m=float(data.get("near_miss_position_cap_m", 0.2)))
+                   near_miss_position_cap_m=float(data.get("near_miss_position_cap_m", 0.2)),
+                   suppress_duplicates=bool(data.get("suppress_duplicates", True)))
 
     @classmethod
     def load(cls, path) -> TrackBounds:
@@ -192,6 +196,7 @@ class FrameReport:
     cleared: bool = False
     revived: int = 0  # stale tracks that took an observation and became active again
     absorbed: int = 0  # suspected duplicates removed when the selected track took their observation (2B-3e)
+    suppressed: int = 0  # suspected-duplicate readings that started no track (2B-3f)
 
 
 @dataclass(frozen=True)
@@ -621,9 +626,13 @@ class CandidateTracker:
                 tr.shadow = True
 
         new = 0
+        suppressed = 0
         fresh = sorted((j for j in range(len(obs)) if j not in blocked and j not in shadow_fits),
                        key=lambda j: (round(float(obs[j].mid[0]), 9), round(float(obs[j].mid[1]), 9), obs[j].key))
         for j in fresh:
+            if self.bounds.suppress_duplicates and j in split_off:
+                suppressed += 1  # 2B-3f: a suspected duplicate of the selected track starts no track
+                continue
             o = obs[j]
             track = _Track(self._next_id, o)
             if j in split_off:
@@ -634,7 +643,7 @@ class CandidateTracker:
             self._next_id += 1
             new += 1
         return FrameReport(accepted=accepted, new=new, held=held, untracked=untracked, cleared=cleared,
-                           revived=revived, absorbed=len(absorbed))
+                           revived=revived, absorbed=len(absorbed), suppressed=suppressed)
 
     # Output ------------------------------------------------------------------------------------
     def stale_ids(self, now_ns: int) -> tuple:
