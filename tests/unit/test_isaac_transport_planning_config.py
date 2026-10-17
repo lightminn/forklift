@@ -1119,11 +1119,14 @@ def test_the_return_turnaround_runs_on_the_first_live_return_plan_only_after_the
     start = core.index('and not obstacle.setdefault("live_replanned", {}).get(ms.phase)')
     block = core[start:core.index('obstacle["deadline"] = None', start)]
     assert 'slam.get("pending_release") is not None' in block.split("):", 1)[0]
-    assert block.index('obstacle["layer"].refresh(') < block.index("**return_turnaround_kwargs()")
+    # The re-projection comes before every plan of the leg: the worker's request (real-time plan D8) and the
+    # synchronous plan.
+    assert block.index('obstacle["layer"].refresh(') < len(block) <= core.index("**return_turnaround_kwargs()", start) - start
     release = core[core.index("    def slam_release("):]  # moved to the mission core (M-a1 slice 6c)
     release = release[: release.index("\n    def ", 10)]
     assert "return_turnaround_kwargs" not in release and "plan_return_leg(" in release
-    assert core.count("**return_turnaround_kwargs()") == 2  # the live return plan and its tight retry
+    # the live return plan and its tight retry, and the worker's request of it (real-time plan D8)
+    assert core.count("**return_turnaround_kwargs()") == 3
     assert src.count("**return_turnaround_kwargs()") == 0
 
 
