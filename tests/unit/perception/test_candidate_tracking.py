@@ -927,5 +927,19 @@ def test_an_undecided_selected_track_does_not_absorb_a_duplicate_with_a_known_re
     s, d = tr._tracks
     s.known = None
     assert not _reading_contains(s, d)
-    d.known = None
-    assert _reading_contains(s, d)
+    d.known = None  # Codex: both undecided -- the selected track may still adopt a hypothesis later
+    assert not _reading_contains(s, d)
+
+
+def test_an_undecided_selected_track_absorbs_nothing_so_a_later_hypothesis_keeps_the_ambiguity():
+    # Codex frames: S undecided (parametric) and T11 neighbour E; D born undecided on a support near miss;
+    # D must survive the shared reading, so after S learns EPAL 6 a T11 target reading is held between D and E
+    rows = (_row(1.0, 4.0, yaw=0.05, z_s=0.005, along=0.15),)
+    tr = CandidateTracker(_bounds(rows=rows))
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", cid="s"),
+                           _candidate((3.4, 0.0, 0.06), hypothesis="t11_06:x", support_z=0.012, cid="e")]))
+    tr.select(0)
+    tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", support_z=0.012, cid="d")]))
+    assert tr._tracks[2].duplicate_kind == "near_miss"
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", support_z=0.006, cid="c")]))
+    assert report.accepted == {"c": 0} and report.absorbed == 0

@@ -310,12 +310,12 @@ def _reading_fits(track: _Track, new: _Observation) -> bool:
 
 
 def _reading_contains(chosen: _Track, other: _Track) -> bool:
-    """Whether every reading `other` would accept, `chosen` would accept too: both hold the same known-shape
-    hypothesis (or neither does), and each pocket's layout interval lies inside chosen's
+    """Whether every reading `other` would accept, `chosen` would accept too: chosen holds a known-shape
+    hypothesis and other the same one, and each pocket's layout interval lies inside chosen's
     (2B-3e: absorbing `other` then loses no reading -- Codex)."""
-    # the same hypothesis or neither: no hypothesis accepts any known reading (wider), and an undecided
-    # selected track may later adopt a different one and refuse the duplicate's readings (Codex)
-    if other.known != chosen.known:
+    # a decided selected track and the same hypothesis: no hypothesis accepts any known reading (wider),
+    # and an undecided selected track may later adopt one and refuse the duplicate's readings (Codex)
+    if chosen.known is None or other.known != chosen.known:
         return False
     return all(clo - 1e-12 <= olo and ohi <= chi + 1e-12
                for (olo, ohi), (clo, chi) in zip(other.layout, chosen.layout))
