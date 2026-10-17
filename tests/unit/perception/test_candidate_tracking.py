@@ -1067,3 +1067,17 @@ def test_a_shadow_keeps_its_edges_when_a_real_neighbour_also_competes(monkeypatc
     monkeypatch.setattr(CT, "_gate", lambda track, o, bounds: (track.id, o.candidate.candidate_id) in edges)
     report = tr.update(_frame(0.2, [_candidate((3.0, y, 0.06), cid=c) for y, c in ((0.0, "o1"), (0.6, "o2"), (1.2, "o3"))]))
     assert report.accepted == {} and report.new == 0
+
+
+def test_a_shadow_reappears_as_an_ordinary_track_once_its_owner_is_deleted():
+    # Codex: the target keeps being read only by the shadow; when the owner S is deleted the shadow must be
+    # visible and selectable again (not chosen automatically)
+    tr = _born(support_z=0.015)
+    tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", support_z=0.008, cid="c")]))
+    assert tr._tracks[1].shadow
+    for k in range(3, 12):  # readings only the shadow fits, every 0.2 s
+        tr.update(_frame(0.2 * k, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", support_z=0.024, cid=f"t{k}")]))
+    now = int(2.2 * S)
+    assert all(t.id != 0 for t in tr._tracks) and tr.selected is None
+    assert [t.track_id for t in tr.tracks(now, _odom())] == [1]
+    tr.select(1)

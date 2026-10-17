@@ -401,6 +401,12 @@ class CandidateTracker:
         self._tracks = self._kept(now_ns)
         if self.selected is not None and all(t.id != self.selected for t in self._tracks):
             self.selected = None
+        # a shadow whose owner is gone is an ordinary track again: visible and selectable, never chosen
+        # automatically (otherwise a target read only by it would stay hidden for good -- Codex)
+        ids = {t.id for t in self._tracks}
+        for t in self._tracks:
+            if t.shadow and t.duplicate_of not in ids:
+                t.shadow, t.duplicate_of, t.duplicate_kind = False, None, None
 
     # Fusion ------------------------------------------------------------------------------------
     def _window(self, track: _Track) -> list[_Observation]:
