@@ -27,11 +27,13 @@ def _row(lo, hi, *, lat=0.05, along=0.05, yaw=0.0, z_s=0.02, h=0.02, s=0.02, sig
                     centre_height_m=h, yaw_rad=yaw, support_m=z_s, layout_m=s, sigma_m=sigma)
 
 
-def _bounds(*, rows=None, window_s=1.2, e=0.0, psi=0.0, rear_axle=(0.0, 0.0)):
+def _bounds(*, rows=None, window_s=1.2, e=0.0, psi=0.0, rear_axle=(0.0, 0.0), suppress=False):
+    # suppress=False keeps the 2B-3c..3e tests on the duplicate-track machinery; the default in
+    # TrackBounds (2B-3f) suppresses new tracks from suspected-duplicate readings
     rows = rows or (_row(1.0, 2.5), _row(2.5, 4.0))
     return TrackBounds(rows={"known": rows, "parametric": rows}, ages_s=(0.1, 0.5, 1.0, 10.0),
                        e_m=(e, e, e, e), psi_rad=(psi, psi, psi, psi), rear_axle_xy_m=rear_axle,
-                       window_s=window_s, max_observations=10, expiry_s=0.5)
+                       window_s=window_s, max_observations=10, expiry_s=0.5, suppress_duplicates=suppress)
 
 
 def _odom(x=0.0, y=0.0, yaw=0.0):
@@ -1081,3 +1083,104 @@ def test_a_shadow_reappears_as_an_ordinary_track_once_its_owner_is_deleted():
     assert all(t.id != 0 for t in tr._tracks) and tr.selected is None
     assert [t.track_id for t in tr.tracks(now, _odom())] == [1]
     tr.select(1)
+
+
+
+# 2B-3f: suspected-duplicate readings near an active selected track are born as shadows -------------------
+
+def _suppressing(rows=None, **kw):
+    tr = CandidateTracker(_bounds(rows=rows or (_row(1.0, 4.0, yaw=0.05, z_s=0.005),), suppress=True, **kw))
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="s")]))
+    tr.select(0)
+    return tr
+
+
+@pytest.mark.parametrize("kw", [dict(hypothesis="t11_06:x"),                     # reading split
+                                dict(hypothesis="epal6:x", support_z=0.015)])    # support near miss
+def test_a_suspected_duplicate_reading_is_born_as_a_hidden_shadow(kw):
+    tr = _suppressing()
+    report = tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), cid="d", **kw)]))
+    assert report.new == 1 and report.suppressed == 1 and report.accepted == {"d": 1}
+    assert tr._tracks[1].shadow and [t.track_id for t in tr.tracks(int(0.2 * S), _odom())] == [0]
+
+
+def test_without_a_selection_the_same_reading_is_an_ordinary_track():
+    tr = _suppressing()
+    tr.select(None)
+    report = tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), hypothesis="t11_06:x", cid="d")]))
+    assert report.suppressed == 0 and not tr._tracks[1].shadow
+
+
+def test_a_real_neighbour_is_an_ordinary_track():
+    tr = _suppressing()
+    report = tr.update(_frame(0.2, [_candidate((3.0, 0.3, 0.06), hypothesis="t11_06:x", cid="n")]))
+    assert report.suppressed == 0 and not tr._tracks[1].shadow
+
+
+def test_a_different_reading_near_a_stale_selected_track_is_an_ordinary_track():
+    # the hidden birth needs an active selected track and pockets within 0.2 m (Codex: no such limit let a
+    # real neighbour stay hidden for as long as the selected track lived)
+    tr = CandidateTracker(_bounds(rows=(_row(1.0, 4.0),), e=0.08, suppress=True))
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="s")]))
+    tr.select(0)
+    report = tr.update(_frame(0.8, [_candidate((3.0, 0.15, 0.06), hypothesis="t11_06:x", cid="n")]))
+    assert report.suppressed == 0 and not tr._tracks[1].shadow
+
+
+def test_a_persistent_neighbour_with_another_reading_stays_visible_and_selectable():
+    # Codex: a T11 neighbour read every frame 0.42 m from an active EPAL 6 selected track
+    tr = _suppressing(rows=(_row(1.0, 4.0, lat=0.15, along=0.3),))
+    for k in range(1, 6):
+        tr.update(_frame(0.2 * k, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="s"),
+                                   _candidate((3.42, 0.0, 0.06), hypothesis="t11_06:x", cid="n")]))
+    assert [t.track_id for t in tr.tracks(int(1.0 * S), _odom())] == [0, 1]
+    tr.select(1)
+
+
+def _hidden_case(kind):
+    """Codex's 2B-3e counterexamples with suppression on: S selected, neighbour E ahead, the target read once
+    as a suspected duplicate (born hidden), then read again in a way that fits E and the hidden track only."""
+    if kind == "reading":
+        tr = CandidateTracker(_bounds(rows=(_row(1.0, 4.0, along=0.3),), suppress=True))
+        tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="s"),
+                               _candidate((3.65, 0.0, 0.06), hypothesis="t11_06:x", cid="e")]))
+        tr.select(0)
+        tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), hypothesis="t11_06:x", cid="d")]))
+        tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", cid="p")]))
+        target = _candidate((3.1, 0.0, 0.06), hypothesis="t11_06:x", cid="t")
+    else:
+        tr = CandidateTracker(_bounds(rows=(_row(1.0, 4.0, yaw=0.05, z_s=0.005, along=0.15),), suppress=True))
+        tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="s"), _candidate((3.4, 0.0, 0.06), support_z=0.015, cid="e")]))
+        tr.select(0)
+        tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), support_z=0.015, cid="d")]))
+        tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), support_z=0.008, cid="p")]))
+        target = _candidate((3.15, 0.0, 0.06), support_z=0.024, cid="t")
+    assert tr._tracks[2].shadow
+    return tr, target
+
+
+@pytest.mark.parametrize("kind", ["reading", "near_miss"])
+@pytest.mark.parametrize("switch", [False, True])
+def test_with_hidden_births_the_target_reading_is_never_handed_to_the_neighbour(kind, switch):
+    from forklift_core.perception import candidate_tracking as CT
+    tr, target = _hidden_case(kind)
+    if switch:
+        tr.select(1)  # switching to the neighbour keeps the target's shadow competing
+    o = CT._Observation.make(replace(target, stamp_ns=int(0.6 * S)), _frame(0.6, [target]), tr.bounds)
+    assert CT._gate(tr._tracks[1], o, tr.bounds) and CT._gate(tr._tracks[2], o, tr.bounds)  # fits E and the shadow
+    report = tr.update(_frame(0.6, [target]))
+    assert report.accepted.get("t") != 1
+
+
+@pytest.mark.parametrize("towards", [True, False])
+def test_the_hidden_birth_is_judged_against_the_selected_track_before_it_moves(towards):
+    # Codex: S at y 0 is read at y +/-0.15 in the same frame as another reading N; N's distance to S before
+    # matching decides (0.30 m -> visible, 0.15 m -> hidden), not after S moved
+    tr = CandidateTracker(_bounds(rows=(_row(1.0, 4.0, lat=0.15),), suppress=True))
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="s")]))
+    tr.select(0)
+    s_y, n_y = (0.15, 0.30) if towards else (-0.15, 0.15)
+    report = tr.update(_frame(0.2, [_candidate((3.0, s_y, 0.06), hypothesis="epal6:x", cid="s"),
+                                    _candidate((3.0, n_y, 0.06), hypothesis="t11_06:x", cid="n")]))
+    assert report.accepted["s"] == 0
+    assert tr._tracks[1].shadow is (not towards)
