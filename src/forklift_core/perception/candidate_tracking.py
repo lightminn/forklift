@@ -275,6 +275,10 @@ class _Track:
         # why: "reading" (split off by family / layout -- carries a reading the selected track refuses) or
         # "near_miss" (yaw / support near miss -- the same reading); only near misses are absorbed (2B-3e)
         self.duplicate_kind: str | None = None
+        # 2B-3e: an absorbed duplicate becomes a shadow -- hidden from output and selection, never accepts,
+        # but until keep_s it still holds any reading another track would take from it (its reading and pose
+        # hypotheses are kept for ambiguity; deleting them handed readings to neighbours -- Codex)
+        self.shadow = False
 
     def accept(self, obs: _Observation) -> None:
         self.history.append(obs)
@@ -307,18 +311,6 @@ def _reading_fits(track: _Track, new: _Observation) -> bool:
     if new.family == "known" and track.known is not None and new.key != track.known:
         return False
     return _layout_fits(track.last, new) and track.layout_overlaps(new)
-
-
-def _reading_contains(chosen: _Track, other: _Track) -> bool:
-    """Whether every reading `other` would accept, `chosen` would accept too: chosen holds a known-shape
-    hypothesis and other the same one, and each pocket's layout interval lies inside chosen's
-    (2B-3e: absorbing `other` then loses no reading -- Codex)."""
-    # a decided selected track and the same hypothesis: no hypothesis accepts any known reading (wider),
-    # and an undecided selected track may later adopt one and refuse the duplicate's readings (Codex)
-    if chosen.known is None or other.known != chosen.known:
-        return False
-    return all(clo - 1e-12 <= olo and ohi <= chi + 1e-12
-               for (olo, ohi), (clo, chi) in zip(other.layout, chosen.layout))
 
 
 def _pose_terms(track: _Track, new: _Observation, bounds: TrackBounds):
@@ -400,7 +392,7 @@ class CandidateTracker:
     def select(self, track_id: int | None) -> None:
         """Name the track target selection follows; it is matched before every other track, stale or
         not. None clears it. A deleted selected track clears the selection (no automatic replacement)."""
-        if track_id is not None and all(t.id != track_id for t in self._tracks):
+        if track_id is not None and all(t.id != track_id or t.shadow for t in self._tracks):
             raise ValueError(f"no live or stale track {track_id}")
         self.selected = track_id
 
@@ -558,7 +550,8 @@ class CandidateTracker:
             elif chosen_active and _near_miss(chosen, o, self.bounds):  # 2B-3d
                 split_off[j] = "near_miss"
         # 2B-3e: before matching, which of the selected track's suspected duplicates each reading fits
-        duplicates = [] if chosen is None else [tr for tr in self._tracks if tr.duplicate_of == chosen.id]
+        duplicates = [] if chosen is None else [tr for tr in self._tracks
+                                                if tr.duplicate_of == chosen.id and not tr.shadow]
         dup_fits = {j: [tr for tr in duplicates if _gate(tr, o, self.bounds)] for j, o in enumerate(obs)}
         taken_by_chosen, held_now = [], set()
         free = set(range(len(obs)))
@@ -587,6 +580,10 @@ class CandidateTracker:
             blocked |= gated
             free -= gated
             for track, j in pairs:
+                if track.shadow:  # a shadow never accepts: the reading it would have taken is held
+                    held += 1
+                    held_now.add(track.id)
+                    continue
                 o = obs[j]
                 was_stale = self._age(track, frame.stamp_ns) > self.bounds.expiry_s
                 if self._conflicts(track, o):
@@ -603,10 +600,11 @@ class CandidateTracker:
 
         took_other = set(accepted.values())  # a duplicate that took another reading this frame tracks something
         absorbed = {tr.id for j in taken_by_chosen for tr in dup_fits[j]
-                    if tr is not chosen and tr.duplicate_kind == "near_miss" and _reading_contains(chosen, tr)
+                    if tr is not chosen and tr.duplicate_kind == "near_miss"
                     and tr.id not in took_other and tr.id not in held_now}
-        self._tracks = [tr for tr in self._tracks if tr.id not in absorbed]
-        accepted = {cid: tid for cid, tid in accepted.items() if tid not in absorbed}
+        for tr in self._tracks:
+            if tr.id in absorbed:
+                tr.shadow = True
 
         new = 0
         fresh = sorted((j for j in range(len(obs)) if j not in blocked),
@@ -627,7 +625,7 @@ class CandidateTracker:
     # Output ------------------------------------------------------------------------------------
     def stale_ids(self, now_ns: int) -> tuple:
         """Tracks hidden from selection but still revivable at now_ns (for diagnostics)."""
-        return tuple(t.id for t in self._kept(now_ns) if self._age(t, now_ns) > self.bounds.expiry_s)
+        return tuple(t.id for t in self._kept(now_ns) if self._age(t, now_ns) > self.bounds.expiry_s and not t.shadow)
 
     def tracks(self, now_ns: int, odom_from_base_now: RigidTransform) -> tuple:
         if self._last_stamp is not None and now_ns < self._last_stamp:
@@ -635,7 +633,7 @@ class CandidateTracker:
         robot_yaw = _planar_yaw(odom_from_base_now)
         self._prune(now_ns)  # a query deletes only past keep_s; stale tracks stay revivable
         out = []
-        for track in sorted(self._live(now_ns), key=lambda t: t.id):
+        for track in sorted((t for t in self._live(now_ns) if not t.shadow), key=lambda t: t.id):
             fused = self._fuse(track, now_ns, odom_from_base_now)
             if fused is None:  # every observation is older than the odometry table
                 continue

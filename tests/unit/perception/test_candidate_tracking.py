@@ -788,7 +788,8 @@ def test_the_selected_track_absorbs_a_near_miss_duplicate_that_fits_the_observat
     history, layout = list(tr._tracks[0].history), list(tr._tracks[0].layout)
     report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", support_z=0.008, cid="c")]))
     assert report.accepted == {"c": 0} and report.absorbed == 1
-    assert [t.id for t in tr._tracks] == [0]
+    assert [(t.id, t.shadow) for t in tr._tracks] == [(0, False), (1, True)]  # kept as a shadow
+    assert [t.track_id for t in tr.tracks(int(0.4 * S), _odom())] == [0]   # hidden from the output
     assert tr._tracks[0].history == history + [tr._tracks[0].last]  # its own readings only, nothing merged
     assert tr._tracks[0].layout == [(max(lo, x - b), min(hi, x + b)) for (lo, hi), x, b in
                                     zip(layout, tr._tracks[0].last.offsets, [tr._tracks[0].last.row.layout_m] * 2)]
@@ -872,7 +873,7 @@ def test_a_held_near_miss_duplicate_is_not_absorbed():
     assert report.accepted == {"o": 0} and report.held == 2 and report.absorbed == 0 and len(tr._tracks) == 3
 
 
-def test_a_near_miss_duplicate_that_later_learned_another_reading_is_kept():
+def test_a_near_miss_duplicate_that_later_learned_another_reading_becomes_a_shadow():
     # Codex: D is born on a support near miss (parametric), then takes a T11 reading -- its reading now
     # differs from the selected EPAL 6 track, so absorbing it would lose that reading
     rows = (_row(1.0, 4.0, yaw=0.05, z_s=0.005),)
@@ -884,26 +885,15 @@ def test_a_near_miss_duplicate_that_later_learned_another_reading_is_kept():
     tr.update(_frame(0.3, [_candidate((3.0, 0.0, 0.06), hypothesis="t11_06:x", support_z=0.015, cid="d2")]))
     assert tr._tracks[1].known == "t11_06:x"
     report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", support_z=0.008, cid="c")]))
-    assert report.accepted == {"c": 0} and report.absorbed == 0 and len(tr._tracks) == 2
+    assert report.accepted == {"c": 0} and report.absorbed == 1 and tr._tracks[1].shadow
+    # the shadow keeps its T11 hypothesis: a T11 reading S refuses is held, not lost to a new track
+    report = tr.update(_frame(0.5, [_candidate((3.0, 0.0, 0.06), hypothesis="t11_06:x", support_z=0.015, cid="t")]))
+    assert report.accepted == {} and report.held == 1 and report.new == 0
 
 
-def test_absorption_needs_the_duplicate_layout_inside_the_selected_layout():
-    from forklift_core.perception.candidate_tracking import _reading_contains
-    tr = _born(support_z=0.015)
-    s, d = tr._tracks
-    s.layout, d.layout = [(0.18, 0.22), (-0.22, -0.18)], [(0.23, 0.25), (-0.21, -0.19)]
-    assert not _reading_contains(s, d)  # Codex: [0.23, 0.25] is not inside [0.18, 0.22]
-    d.layout = [(0.19, 0.21), (-0.21, -0.19)]
-    assert _reading_contains(s, d)
-    d.known = "t11_06:x"
-    assert not _reading_contains(s, d)
-    d.known = None  # Codex: no hypothesis accepts any known reading -- wider than an EPAL 6 track
-    assert s.known == "epal6:x" and not _reading_contains(s, d)
-    d.known, s.known = "epal6:x", None  # an undecided selected track may adopt another hypothesis later
-    assert not _reading_contains(s, d)
 
 
-def test_known_residual_absorbing_a_duplicate_also_removes_its_pose_hypothesis():
+def test_a_shadow_keeps_the_pose_hypothesis_of_an_absorbed_duplicate():
     # Codex (accepted residual, plan 2B-3e): S, D, E share one reading; D (support 15 mm) is absorbed;
     # a later target reading misses S on support but would have fitted D -- E (support 15 mm) now takes it
     # where 2B-3d gave it to D (still active at 0.6 s here; held between D and E once D was stale)
@@ -916,22 +906,12 @@ def test_known_residual_absorbing_a_duplicate_also_removes_its_pose_hypothesis()
     report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), support_z=0.008, cid="c")]))
     assert report.accepted == {"c": 0} and report.absorbed == 1
     report = tr.update(_frame(0.6, [_candidate((3.15, 0.0, 0.06), support_z=0.024, cid="t")]))
-    assert report.accepted == {"t": 1}  # the neighbour E -- an identity error the evaluation counts
+    assert report.accepted == {} and report.held >= 1  # held between the shadow and E (was E before shadows)
 
 
-def test_an_undecided_selected_track_does_not_absorb_a_duplicate_with_a_known_reading():
-    # Codex: S parametric (no hypothesis); D born as T11 on a support near miss; absorbing D and later
-    # learning EPAL 6 would leave the target's next T11 reading to the T11 neighbour E
-    from forklift_core.perception.candidate_tracking import _reading_contains
-    tr = _born(hypothesis="t11_06:x", support_z=0.015)
-    s, d = tr._tracks
-    s.known = None
-    assert not _reading_contains(s, d)
-    d.known = None  # Codex: both undecided -- the selected track may still adopt a hypothesis later
-    assert not _reading_contains(s, d)
 
 
-def test_an_undecided_selected_track_absorbs_nothing_so_a_later_hypothesis_keeps_the_ambiguity():
+def test_a_shadow_keeps_the_ambiguity_after_the_selected_track_decides_a_hypothesis():
     # Codex frames: S undecided (parametric) and T11 neighbour E; D born undecided on a support near miss;
     # D must survive the shared reading, so after S learns EPAL 6 a T11 target reading is held between D and E
     rows = (_row(1.0, 4.0, yaw=0.05, z_s=0.005, along=0.15),)
@@ -942,4 +922,19 @@ def test_an_undecided_selected_track_absorbs_nothing_so_a_later_hypothesis_keeps
     tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", support_z=0.012, cid="d")]))
     assert tr._tracks[2].duplicate_kind == "near_miss"
     report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", support_z=0.006, cid="c")]))
-    assert report.accepted == {"c": 0} and report.absorbed == 0
+    assert report.accepted == {"c": 0} and report.absorbed == 1
+    tr.update(_frame(0.5, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", support_z=0.006, cid="c2")]))
+    assert tr._tracks[0].known == "epal6:x"
+    report = tr.update(_frame(0.6, [_candidate((3.15, 0.0, 0.06), hypothesis="t11_06:x", support_z=0.012, cid="t")]))
+    assert "t" not in report.accepted and report.held >= 1  # held between the shadow and E, not given to E
+
+
+def test_a_shadow_cannot_be_selected_and_expires_with_keep_s():
+    tr = _born(support_z=0.015)
+    tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", support_z=0.008, cid="c")]))
+    assert tr._tracks[1].shadow
+    with pytest.raises(ValueError):
+        tr.select(1)
+    assert 1 not in tr.stale_ids(int(1.0 * S))  # a shadow is never listed as revivable
+    tr.update(_frame(1.3, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="c2")]))  # 1.1 s after D's reading
+    assert [t.id for t in tr._tracks] == [0]
