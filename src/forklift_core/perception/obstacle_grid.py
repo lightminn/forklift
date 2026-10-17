@@ -41,6 +41,9 @@ from math import ceil, cos, sin, sqrt
 
 import numpy as np
 
+from forklift_core import kernels
+from forklift_core.perf import changed, dual, dumped
+
 UNKNOWN, FREE, OCCUPIED = 0, 1, 2
 
 
@@ -197,6 +200,11 @@ def _line_close(occupied: np.ndarray, max_gap: int) -> np.ndarray:
     out = occupied.copy()
     if not occupied.any() or max_gap <= 0:
         return out
+    if kernels.mode() == "numba":
+        from forklift_core.perception import grid_numba
+
+        return grid_numba.line_close(np.ascontiguousarray(occupied), int(max_gap),
+                                     int(np.floor(max_gap / np.sqrt(2))))
     out |= _fill_rows(occupied, max_gap)
     out |= _fill_rows(occupied.T, max_gap).T
     # Along a diagonal a cell step is sqrt(2) cells long: the same physical gap
@@ -286,9 +294,16 @@ def _hull_fill(occupied: np.ndarray, link_cells: float) -> np.ndarray:
 
 def _dilate(mask: np.ndarray, radius_cells: float) -> np.ndarray:
     """Cells whose centre is within radius_cells of a mask cell's centre."""
+    offsets = _disk_offsets(radius_cells)
+    if kernels.mode() == "numba":
+        from forklift_core.perception import grid_numba
+
+        rows = grid_numba.row_intervals(offsets)
+        if rows is not None:
+            return grid_numba.dilate_rows(np.ascontiguousarray(mask), rows)
+        return grid_numba.dilate(np.ascontiguousarray(mask), np.ascontiguousarray(offsets, dtype=np.int64))
     out = mask.copy()
     nx, ny = mask.shape
-    offsets = _disk_offsets(radius_cells)
     span = int(np.abs(offsets).max()) if len(offsets) else 0
     big = np.zeros((nx + 2 * span, ny + 2 * span), dtype=bool)
     big[span : span + nx, span : span + ny] = mask
@@ -300,10 +315,17 @@ def _dilate(mask: np.ndarray, radius_cells: float) -> np.ndarray:
 def _erode(mask: np.ndarray, radius_cells: float, *, offsets=None) -> np.ndarray:
     """Cells of mask such that every point within radius_cells of any point of
     the cell lies in a mask cell (or, with offsets, every listed neighbour is in mask)."""
-    out = mask.copy()
-    nx, ny = mask.shape
     if offsets is None:
         offsets = _reach_offsets(max(radius_cells, 0.0))
+    if kernels.mode() == "numba":
+        from forklift_core.perception import grid_numba
+
+        rows = grid_numba.row_intervals(offsets)
+        if rows is not None:
+            return grid_numba.erode_rows(np.ascontiguousarray(mask), rows)
+        return grid_numba.erode(np.ascontiguousarray(mask), np.ascontiguousarray(offsets, dtype=np.int64))
+    out = mask.copy()
+    nx, ny = mask.shape
     span = int(np.abs(offsets).max())
     big = np.zeros((nx + 2 * span, ny + 2 * span), dtype=bool)
     big[span : span + nx, span : span + ny] = mask
@@ -340,6 +362,10 @@ class ObstacleGrid:
         e, psi = bound
         return e + 2 * rho_m * sin(psi / 2) + (self.config.sensor_bound_m if sensor else 0.0)
 
+    @dumped("grid_snapshot", strata=lambda self_, a, k, r: (
+        changed("grid_snapshot.correction", tuple(float(v) for v in a[1])), min(r.scans_used, 4),
+        bool((r.state == FREE).any())))
+    @dual("grid_snapshot")
     def snapshot(self, now_s: float, map_from_odom, correction_version: int = 0) -> GridSnapshot:
         cfg = self.config
         self.prune(now_s)
@@ -542,6 +568,13 @@ class ObstacleGrid:
         if longest <= 0:
             return mask
         s = np.arange(0.0, longest + 1e-9, step)
+        if kernels.mode() == "numba":
+            from forklift_core.perception import grid_numba
+
+            return grid_numba.ray_mask(nx, ny, float(cfg.x_min_m), float(cfg.y_min_m), float(cfg.resolution_m),
+                                       float(laser[0]), float(laser[1]), np.ascontiguousarray(cos_a, dtype=float),
+                                       np.ascontiguousarray(sin_a, dtype=float),
+                                       np.ascontiguousarray(lengths, dtype=float), s)
         keep = s[None, :] <= lengths[:, None]
         x = laser[0] + cos_a[:, None] * s[None, :]
         y = laser[1] + sin_a[:, None] * s[None, :]

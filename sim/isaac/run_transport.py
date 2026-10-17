@@ -2509,6 +2509,19 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
 
     state["velocities_after_reset"] = body_velocities()
     camera.initialize()
+    if getattr(args, "live", False) and not args.video:
+        # Real-time plan S4 (a): the overview camera (1280x720) feeds only the video, its inset and the robot-camera
+        # composite, all of which need --video; without it a live run neither renders it nor evaluates its frame
+        # pipeline at every render step. FORKLIFT_LIVE_OVERVIEW=on keeps it (an A/B of the render cost).
+        if os.environ.get("FORKLIFT_LIVE_OVERVIEW", "off") == "on":
+            state["overview_render"] = "on (FORKLIFT_LIVE_OVERVIEW)"
+        else:
+            try:
+                camera.pause()
+                camera._render_product.hydra_texture.set_updates_enabled(False)
+                state["overview_render"] = "off"
+            except Exception as exc:  # noqa: BLE001 -- an SDK without the switch keeps rendering it
+                state["overview_render"] = f"on ({type(exc).__name__}: {exc})"
     import carb
 
     # Every run records the render mode it used (G2 rerun plan, 2026-10-01).
@@ -5233,6 +5246,10 @@ def drive(S, isaac) -> None:
                 a_, b_ = (float(v) for v in args.live_test_camera_freeze.split(":"))
                 freeze_ = (a_, b_)
             live_state = {"rear": None, "snapshot": None, "snapshot_key": None}
+            # Real-time plan D7: at most this many steps in a row made up after a late one (0: never, the M-c rule).
+            live_catchup_ = int(os.environ.get("FORKLIFT_LIVE_CATCHUP_STEPS", "0"))
+            if not 0 <= live_catchup_ <= 12:
+                raise ValueError("FORKLIFT_LIVE_CATCHUP_STEPS must be 0..12")
             live_perm = LiveBundlePermit(obstacle["layer"].permission.config) if obstacle is not None else None
             live = LiveRuntime(
                 core, LiveHooks(zero_wheels=live_zero_wheels, hold_lift=live_hold_lift,
@@ -5242,8 +5259,11 @@ def drive(S, isaac) -> None:
                 # The human and network time limits scaled by the declared factor f (plan C4a): the truck in the sim
                 # moves f metres of sim for a wall metre's worth, so a wall limit of L/f bounds the same sim
                 # distance as L does on a real truck. The lease is administrative and only kept above the command age.
-                config=LiveArbiterConfig(tick_s=1 / 120, command_max_age_s=0.30 / args.live_factor,
-                                         video_max_age_s=0.50 / args.live_factor,
+                # Real-time plan D7: a catch-up burst runs at most catchup_steps / 120 sim s ahead of f x wall, so
+                # the wall limits give that much up to bound the same sim distance as before.
+                config=LiveArbiterConfig(tick_s=1 / 120,
+                                         command_max_age_s=(0.30 - live_catchup_ / 120) / args.live_factor,
+                                         video_max_age_s=(0.50 - live_catchup_ / 120) / args.live_factor,
                                          frame_window_s=max(5.0, 2 * 0.50 / args.live_factor),
                                          lease_timeout_s=max(args.live_lease_timeout_s, 0.30 / args.live_factor,
                                                              0.50 / args.live_factor),
@@ -5260,11 +5280,18 @@ def drive(S, isaac) -> None:
                 host=args.live_host, web_root=args.live_web_root,
                 test_step_delay_s=args.live_test_step_delay_ms / 1000.0, camera_freeze=freeze_,
                 test_stop_in_capture=args.live_test_stop_in_capture,
+                catchup_steps=live_catchup_,
                 # The page's teleop overlay (display only, contract 3); none without the perception camera.
                 camera_model=None if live_cam_ is None else live_camera_model(
                     _bound["perception_calibration"], _bound["perception_mount"],
                     rear_axle_offset_m=args.rear_axle_offset_m, sent_width=640,
                     rides_lift=args.perception_mount != "legacy"))  # legacy hangs off base_link
+            from forklift_core import kernels as live_kernels
+
+            # Real-time plan D3: a live run takes the fastest kernels (a batch run stays on the reference unless told),
+            # compiled (or loaded) before the first step, not in it.
+            live_kernels.prefer_fast()
+            state["kernels"] = {"mode": live_kernels.mode(), "warm_up_s": live_kernels.warm_up()}
             live.start()
             core.hooks.live_abort = lambda: live.stopped_in_tick  # the core stops right after a raw capture
 
@@ -5286,7 +5313,14 @@ def drive(S, isaac) -> None:
                 if live_marker_ is not None:
                     live_marker_(sim_ + 1 / 120)  # after the gate: the wave also runs past a stopped step's lift latch
                 camera_ = live.camera_due() and live_cam_ is not None
+                # Real-time plan S0: the step's own wall time by kind (render, scan, plain), the pacing sleep apart.
+                # (step_world renders a video frame on its own when one is due: that step is a render step too.)
+                scan_ = args.record_slam and stepper["tick"] % scan_every == 0
+                frame_ = args.video and stepper["tick"] % fps_divisor == 0
+                kind_ = "render" if (render or camera_ or frame_) else ("scan" if scan_ else "plain")
+                started_, cpu_ = time.perf_counter(), time.thread_time()
                 step_world(render or camera_)
+                live_timers.add(f"step.{kind_}", time.perf_counter() - started_, time.thread_time() - cpu_)
                 if slam is not None:
                     speed_, yaw_rate_ = slam.get("odom_speed"), float(slam.get("odom_yaw_rate", 0.0))
                     made_ = slam.get("odom_mono")
@@ -5339,6 +5373,43 @@ def drive(S, isaac) -> None:
                                   "direction": direction, "check_mps": check, "bundle": list(result_),
                                   "full": list(full_), "truth_rear": truth_, "silenced": scan_silenced(now_)})
                 return result_
+
+            # Real-time plan S0 (docs/plans/2026-10-17-realtime-sim.md): each region's wall and CPU time, in the
+            # status log once a wall second (forklift_core.perf); live only, so a batch run's calls are untouched.
+            # The permission, grid, shadow and layer classes are timed (every instance -- the bundle's own
+            # permissions too -- and nothing put on an instance, so a dump still pickles it), by caller where one
+            # method serves several.
+            import forklift_core.control.drive_permission as timed_permission
+            from forklift_core.control.shadow_memory import ShadowMemory as TimedShadow
+            from forklift_core.perception.obstacle_grid import ObstacleGrid as TimedGrid
+            from forklift_core.perf import TIMERS as live_timers
+
+            live_timers.enabled = True
+            live_timers.wrap(world, "step", "isaac.step")
+            if args.record_slam:  # the module and the scan cadence exist only with the recorded scans
+                live_timers.wrap(planar_lidar, "cast_scan_flags", "lidar.cast")
+            if slam is not None:
+                live_timers.wrap(slam["link"], "exchange", "slam.exchange")
+            if obstacle is not None:
+                layer_class_ = type(obstacle["layer"])
+                for name_ in ("add_scans", "refresh", "limit", "check_candidate", "planner_grid"):
+                    live_timers.wrap(layer_class_, name_, f"layer.{name_}", by_caller=True)
+                live_timers.wrap(TimedGrid, "snapshot", "grid.snapshot", by_caller=True)
+                live_timers.wrap(TimedShadow, "apply", "shadow.apply")
+                for name_ in ("update", "allowed_speed", "check_path", "check_arc"):
+                    live_timers.wrap(timed_permission.DrivePermission, name_, f"permission.{name_}", by_caller=True)
+            for name_, value_ in list(vars(type(core)).items()):  # every public step of the mission core
+                if callable(value_) and not name_.startswith("_"):
+                    live_timers.wrap(type(core), name_, f"core.{name_}")
+            for name_ in ("plan_transport", "plan_transport_leg", "plan_return_leg", "plan_observation_leg",
+                          "grid_world", "grid_kwargs", "final_straight_prefix"):  # the planner ports
+                if callable(getattr(core.hooks, name_, None)):
+                    live_timers.wrap(core.hooks, name_, f"plan.{name_}", by_caller=True)
+            live_permit_untimed_ = live_permit
+
+            def live_permit(curvatures, direction, check):
+                with live_timers.region("teleop.permit"):
+                    return live_permit_untimed_(curvatures, direction, check)
 
         stepper["fn"] = step_world if live is None else live_step_world
         if slam is not None:
@@ -5470,6 +5541,8 @@ def drive(S, isaac) -> None:
                 globals()["time"] = RecordingProxy(time, "Clock", boundary)
         if early_ports:
             boundary.recorder.tick_end(outputs={"bootstrap": True}, branches=[])
+        from forklift_core.perf import CONTEXT as perf_context
+
         for step in range(int(120 * args.max_sim_seconds)):
             if early_ports:
                 # Format 2: the tick opens first, the clock is read inside it (recorded), then the head's times
@@ -5482,6 +5555,7 @@ def drive(S, isaac) -> None:
                 if boundary is not None:
                     boundary.recorder.tick_begin(step, tick_t=t, work_t=t, commands=[], stop_kind="none")
             book_clock["t"] = t
+            perf_context["phase"] = ms.phase  # real-time plan S0: the dumps' strata (read only by the dumps)
             applied_commands_, stop_kind_ = [], "none"
             live_abort_ = False  # M-c: the stop gate stopped the wheels inside this tick (plan C2)
             if live is not None:
@@ -6658,6 +6732,9 @@ def main() -> None:
                 "/rtx/rendermode"
             )
         (args.output / "result.json").write_text(record_json(state, indent=2) + "\n")
+        from forklift_core import perf as perf_
+
+        perf_._dual_report()  # real-time plan V2: the dual run's final counts (a no-op otherwise)
         print(
             "MISSION_RESULT",
             record_json(

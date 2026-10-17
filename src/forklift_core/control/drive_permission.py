@@ -23,12 +23,15 @@ obstacle sensor silent for sensor_timeout_s gives 0.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from math import ceil, cos, floor, sin, sqrt
 
 import numpy as np
 
+from forklift_core import kernels
 from forklift_core.perception.obstacle_grid import FREE, OCCUPIED, GridSnapshot
+from forklift_core.perf import bucket, dual, dumped, shape_kind
 
 RETAINED = 3  # shadow-band memory (control/shadow_memory.py)
 from forklift_core.planning.geometry import Bounds, Footprint, FootprintCollisionChecker
@@ -211,6 +214,122 @@ def arc_poses(pose, curvature_inv_m: float, direction: int, length_m: float, ste
     return np.column_stack((xs, ys, yaws)), s
 
 
+def _shape_cells_batch(snapshot: GridSnapshot, poses, parts, margins, direction: int):
+    """shape_cells for several poses at once (real-time plan S1): the cells of each pose in shape_cells' order
+    (one part: footprint_cells' order; several: the sorted union), each pose's own margin, all found in one
+    vectorised pass by footprint_cells' own expressions. Returns (cells (n, 2), owner pose index (n,),
+    outside per pose) with the rows grouped by pose, or (None, None, None) when a cell leaves the union's key
+    range (shape_cells then sorts row-wise)."""
+    res = snapshot.resolution_m
+    ox, oy = snapshot.origin_x_m, snapshot.origin_y_m
+    half = res / 2
+    rows = []  # per (pose, part): pose index, i0, ni, j0, nj, c, s, cx, cy, ex + half, ey + half, hl + p, hw + p
+    for k, (pose, margin) in enumerate(zip(poses, margins, strict=True)):
+        x, y, yaw = pose
+        c, s = cos(yaw), sin(yaw)
+        for fp, lateral_m, longitudinal_m in parts:
+            front = fp.front_m + (margin if direction >= 0 else 0.0)
+            rear = fp.rear_m + (margin if direction <= 0 else 0.0)
+            offset = (front - rear) / 2 + longitudinal_m
+            cx, cy = x + offset * c - lateral_m * s, y + offset * s + lateral_m * c
+            hl = (front + rear) / 2
+            hw = fp.half_width_m + margin
+            ex = abs(c) * hl + abs(s) * hw
+            ey = abs(s) * hl + abs(c) * hw
+            i0 = int(floor((cx - ex - ox) / res)) - 1
+            i1 = int(ceil((cx + ex - ox) / res)) + 1
+            j0 = int(floor((cy - ey - oy) / res)) - 1
+            j1 = int(ceil((cy + ey - oy) / res)) + 1
+            proj = half * (abs(c) + abs(s))
+            rows.append((k, i0, i1 - i0, j0, j1 - j0, c, s, cx, cy, ex + half, ey + half, hl + proj, hw + proj))
+    k_, i0_, ni_, j0_, nj_ = (np.array([r[n] for r in rows], dtype=np.int64) for n in range(5))
+    c_, s_, cx_, cy_, exh_, eyh_, hlp_, hwp_ = (np.array([r[n] for r in rows], dtype=float) for n in range(5, 13))
+    size = ni_ * nj_
+    entry = np.repeat(np.arange(len(rows)), size)
+    local = np.arange(int(size.sum())) - np.repeat(np.cumsum(size) - size, size)
+    nj_e = nj_[entry]
+    ii = i0_[entry] + local // nj_e
+    jj = j0_[entry] + local % nj_e
+    sx = ox + (ii + 0.5) * res
+    sy = oy + (jj + 0.5) * res
+    dx, dy = sx - cx_[entry], sy - cy_[entry]
+    c_e, s_e = c_[entry], s_[entry]
+    hit = (
+        (np.abs(dx) <= exh_[entry])
+        & (np.abs(dy) <= eyh_[entry])
+        & (np.abs(dx * c_e + dy * s_e) <= hlp_[entry])
+        & (np.abs(-dx * s_e + dy * c_e) <= hwp_[entry])
+    )
+    ii, jj, owner = ii[hit], jj[hit], k_[entry[hit]]
+    nx, ny = snapshot.state.shape
+    out = (ii < 0) | (ii >= nx) | (jj < 0) | (jj >= ny)
+    outside = np.bincount(owner[out], minlength=len(poses)) > 0
+    if len(parts) > 1 and len(ii):
+        off, span = 1 << 20, 1 << 21
+        if max(int(np.abs(ii).max()), int(np.abs(jj).max())) >= off:
+            return None, None, None
+        keys = np.unique(owner * (span * span) + (ii + off) * span + (jj + off))
+        owner = keys // (span * span)
+        rest = keys % (span * span)
+        ii, jj = rest // span - off, rest % span - off
+    return np.column_stack((ii, jj)), owner, outside
+
+
+def _own_lookup_flat(snapshot, own_cells, own_pose, own_footprint):
+    """DrivePermission._own_lookup with the partial cells' outside sub-samples in one flat array: (whole mask,
+    partial index grid, (points (m, 2), start per partial cell, count per partial cell)), the same points in the
+    same order."""
+    whole, partial = own_cells
+    shape = snapshot.state.shape
+    whole_mask = np.zeros(shape, dtype=bool)
+    if whole:
+        w = np.array(list(whole), dtype=np.int64)
+        w = w[(w[:, 0] >= 0) & (w[:, 0] < shape[0]) & (w[:, 1] >= 0) & (w[:, 1] < shape[1])]
+        whole_mask[w[:, 0], w[:, 1]] = True
+    partial_id = np.full(shape, -1, dtype=np.int64)
+    points, start, count = np.zeros((0, 2)), np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64)
+    if partial and own_pose is not None:
+        pa = np.array(list(partial), dtype=np.int64)
+        pa = pa[(pa[:, 0] >= 0) & (pa[:, 0] < shape[0]) & (pa[:, 1] >= 0) & (pa[:, 1] < shape[1])]
+        partial_id[pa[:, 0], pa[:, 1]] = np.arange(len(pa))
+        res = snapshot.resolution_m
+        g = np.arange(11) / 10 * res
+        gx, gy = np.meshgrid(g, g, indexing="ij")
+        px = snapshot.origin_x_m + pa[:, 0, None] * res + gx.ravel()[None, :]
+        py = snapshot.origin_y_m + pa[:, 1, None] * res + gy.ravel()[None, :]
+        out = ~in_shape(px, py, own_pose, own_footprint)
+        points = np.column_stack((px[out], py[out]))
+        count = out.sum(axis=1).astype(np.int64)
+        start = np.cumsum(count) - count
+    return whole_mask, partial_id, (points, start, count)
+
+
+def _parts_reach_batch(flat, ids, owner, poses, parts, margins, direction) -> np.ndarray:
+    """_parts_reach for cells of several poses (each cell its own pose and margin), by the same expressions."""
+    points, start, count = flat
+    sizes = count[ids]
+    if not sizes.sum():
+        return np.zeros(len(ids), dtype=bool)
+    cell = np.repeat(np.arange(len(ids)), sizes)
+    allp = points[np.repeat(start[ids], sizes) + (np.arange(int(sizes.sum())) - np.repeat(np.cumsum(sizes) - sizes,
+                                                                                            sizes))]
+    pose_of = owner[cell]
+    xs = np.array([float(p[0]) for p in poses])[pose_of]
+    ys = np.array([float(p[1]) for p in poses])[pose_of]
+    cs = np.array([cos(p[2]) for p in poses])[pose_of]
+    ss = np.array([sin(p[2]) for p in poses])[pose_of]
+    u = (allp[:, 0] - xs) * cs + (allp[:, 1] - ys) * ss
+    v = -(allp[:, 0] - xs) * ss + (allp[:, 1] - ys) * cs
+    hit = np.zeros(len(allp), dtype=bool)
+    for fp, lat, lon in parts:
+        front = np.array([fp.front_m + (m if direction >= 0 else 0.0) for m in margins])[pose_of]
+        rear = np.array([fp.rear_m + (m if direction <= 0 else 0.0) for m in margins])[pose_of]
+        width = np.array([fp.half_width_m + m for m in margins])[pose_of]
+        w = u - lon
+        hit |= (w >= -rear) & (w <= front) & (np.abs(v - lat) <= width)
+    return np.bincount(cell[hit], minlength=len(ids)) > 0
+
+
 class DrivePermission:
     def __init__(self, config: PermissionConfig):
         self.config = config
@@ -255,14 +374,19 @@ class DrivePermission:
         first was, so that only an occupied cell blocks -- the part of a sample inside the grid is
         still checked, every FREE cell met counts in the evidence age, and verified_m stops at the
         first unknown or edge."""
-        cfg = self.config
-        verified, blocked, oldest = 0.0, None, np.inf
-        blocked_cells = ()
-        first_unknown = None
+        checks = self._checks(samples, arc, footprint)
+        mode = kernels.mode()
+        walk = self._walk_reference if mode == "reference" else self._walk_numba if mode == "numba" else \
+            self._walk_batched
+        return walk(snapshot, checks, arc, footprint, own_cells, full_path_m=full_path_m, direction=direction,
+                    own_pose=own_pose, own_footprint=own_footprint, extra_margin_m=extra_margin_m,
+                    extra_ramp_m=extra_ramp_m, unknown_passes=unknown_passes)
+
+    @staticmethod
+    def _checks(samples, arc, footprint) -> list:
+        """(pose, arc length, pad) of every check: the first sample, then each interval's midpoint."""
         radius = max(float(np.hypot(abs(lon) + max(fp.front_m, fp.rear_m), abs(lat) + fp.half_width_m))
                      for fp, lat, lon in parts_of(footprint))
-        band = None  # cells near the present outline where RETAINED may pass, built on demand
-        own_lookup = None  # (whole mask, partial index grid, outside sub-samples), built on demand
         checks = [(samples[0], float(arc[0]), 0.0)]
         for i in range(1, len(samples)):
             a, b = samples[i - 1], samples[i]
@@ -270,11 +394,28 @@ class DrivePermission:
             motion = float(np.hypot(b[0] - a[0], b[1] - a[1])) + radius * abs(dyaw)
             mid = np.array([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, a[2] + dyaw / 2])
             checks.append((mid, float(arc[i]), motion / 2))
+        return checks
+
+    def _margin(self, s: float, pad: float, extra_margin_m: float, extra_ramp_m) -> float:
+        cfg = self.config
+        ramp = min(1.0, s / cfg.envelope_ramp_m) if cfg.envelope_ramp_m > 0 else 1.0
+        margin = cfg.envelope_offset_m * ramp + pad
+        if extra_margin_m:
+            margin += extra_margin_m * (min(1.0, s / extra_ramp_m) if extra_ramp_m else 1.0)
+        return margin
+
+    def _walk_reference(self, snapshot, checks, arc, footprint, own_cells, *, full_path_m=None, direction=0,
+                        own_pose=None, own_footprint=None, extra_margin_m=0.0, extra_ramp_m=None,
+                        unknown_passes=False) -> Check:
+        """The original walk, one check at a time (the oracle of real-time plan D2)."""
+        cfg = self.config
+        verified, blocked, oldest = 0.0, None, np.inf
+        blocked_cells = ()
+        first_unknown = None
+        band = None  # cells near the present outline where RETAINED may pass, built on demand
+        own_lookup = None  # (whole mask, partial index grid, outside sub-samples), built on demand
         for pose, s, pad in checks:
-            ramp = min(1.0, s / cfg.envelope_ramp_m) if cfg.envelope_ramp_m > 0 else 1.0
-            margin = cfg.envelope_offset_m * ramp + pad
-            if extra_margin_m:
-                margin += extra_margin_m * (min(1.0, s / extra_ramp_m) if extra_ramp_m else 1.0)
+            margin = self._margin(s, pad, extra_margin_m, extra_ramp_m)
             cells, outside = shape_cells(snapshot, pose, footprint, margin, direction=direction)
             if outside:
                 if not unknown_passes:
@@ -338,6 +479,160 @@ class DrivePermission:
                 oldest = min(oldest, float(np.min(snapshot.free_stamp[cells[seen, 0], cells[seen, 1]])))
             if first_unknown is None:
                 verified = float(s)
+        reached_end = blocked is None and full_path_m is not None and arc[-1] >= full_path_m - 1e-9
+        return Check(verified, blocked, oldest, reached_end, blocked_cells, first_unknown)
+
+    def _walk_numba(self, snapshot, checks, arc, footprint, own_cells, *, full_path_m=None, direction=0,
+                    own_pose=None, own_footprint=None, extra_margin_m=0.0, extra_ramp_m=None,
+                    unknown_passes=False) -> Check:
+        """The reference walk compiled (real-time plan S3, ``permission_numba.walk``), bit for bit its result."""
+        from forklift_core.control import permission_numba as nb
+
+        cfg = self.config
+        parts = parts_of(footprint)
+        p_front, p_rear, p_hw, p_lat, p_lon = (np.array([v[n] for v in [(fp.front_m, fp.rear_m, fp.half_width_m,
+                                                                           lat, lon) for fp, lat, lon in parts]],
+                                                        dtype=float) for n in range(5))
+        xs = np.array([float(pose[0]) for pose, _, _ in checks])
+        ys = np.array([float(pose[1]) for pose, _, _ in checks])
+        cs = np.array([cos(pose[2]) for pose, _, _ in checks])
+        ss = np.array([sin(pose[2]) for pose, _, _ in checks])
+        svals = np.array([s for _, s, _ in checks], dtype=float)
+        margins = np.array([self._margin(s, pad, extra_margin_m, extra_ramp_m) for _, s, pad in checks])
+        nx, ny = snapshot.state.shape
+        if own_cells is None:  # the own outline found here (check_arc and check_path leave it to the kernel)
+            o_parts = parts_of(own_footprint)
+            o = [np.array([v[n] for v in [(fp.front_m, fp.rear_m, fp.half_width_m, lat, lon)
+                                         for fp, lat, lon in o_parts]], dtype=float) for n in range(5)]
+            oi0, oj0, whole_box, pid_box, pts, pstart, pcount, has_own = nb.own_lookup(
+                float(snapshot.origin_x_m), float(snapshot.origin_y_m), float(snapshot.resolution_m), nx, ny,
+                float(own_pose[0]), float(own_pose[1]), cos(own_pose[2]), sin(own_pose[2]), *o)
+        else:
+            whole, partial = own_cells
+            has_own = bool(whole or partial)
+            oi0 = oj0 = 0
+            if has_own:
+                whole_box, pid_box, (pts, pstart, pcount) = _own_lookup_flat(snapshot, own_cells, own_pose,
+                                                                            own_footprint)
+            else:
+                whole_box = np.zeros((1, 1), dtype=bool)
+                pid_box = np.full((1, 1), -1, dtype=np.int64)
+                pts, pstart, pcount = np.zeros((0, 2)), np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64)
+        band = np.zeros(snapshot.state.shape, dtype=bool)
+        if (own_pose is not None and own_footprint is not None and cfg.shadow_band_m > 0
+                and (snapshot.state == RETAINED).any()):
+            near, _ = shape_cells(snapshot, own_pose, own_footprint, cfg.shadow_band_m)
+            near = near[(near[:, 0] >= 0) & (near[:, 0] < nx) & (near[:, 1] >= 0) & (near[:, 1] < ny)]
+            band[near[:, 0], near[:, 1]] = True
+        verified, code, oldest, first_unknown, cells = nb.walk(
+            snapshot.state, snapshot.free_stamp, float(snapshot.origin_x_m), float(snapshot.origin_y_m),
+            float(snapshot.resolution_m), xs, ys, cs, ss, svals, margins, int(direction), bool(unknown_passes),
+            p_front, p_rear, p_hw, p_lat, p_lon, has_own, oi0, oj0, whole_box, pid_box, pts, pstart, pcount,
+            own_pose is not None, band)
+        if code == nb.NEEDS_REFERENCE:
+            if own_cells is None:
+                own_cells = self._own_cells(snapshot, own_pose, own_footprint)
+            return self._walk_reference(snapshot, checks, arc, footprint, own_cells, full_path_m=full_path_m,
+                                        direction=direction, own_pose=own_pose, own_footprint=own_footprint,
+                                        extra_margin_m=extra_margin_m, extra_ramp_m=extra_ramp_m,
+                                        unknown_passes=unknown_passes)
+        blocked = {0: None, nb.EDGE: "edge", nb.BLOCK_OCCUPIED: "occupied", nb.BLOCK_UNKNOWN: "unknown"}[int(code)]
+        blocked_cells = tuple(map(tuple, cells.tolist())) if blocked in ("occupied", "unknown") else ()
+        reached_end = blocked is None and full_path_m is not None and arc[-1] >= full_path_m - 1e-9
+        return Check(float(verified), blocked, float(oldest), reached_end, blocked_cells,
+                     None if math.isnan(first_unknown) else float(first_unknown))
+
+    def _walk_batched(self, snapshot, checks, arc, footprint, own_cells, *, full_path_m=None, direction=0,
+                      own_pose=None, own_footprint=None, extra_margin_m=0.0, extra_ramp_m=None,
+                      unknown_passes=False, first_chunk: int = 2, chunk: int = 16) -> Check:
+        """The walk with each chunk of checks' cells found in one pass (real-time plan S1), then judged in the
+        reference's order: the same cells in the same order, the same samples counted, bit for bit."""
+        cfg = self.config
+        verified, blocked, oldest = 0.0, None, np.inf
+        blocked_cells = ()
+        first_unknown = None
+        parts = parts_of(footprint)
+        nx, ny = snapshot.state.shape
+        whole, partial = own_cells
+        own_lookup = _own_lookup_flat(snapshot, own_cells, own_pose, own_footprint) if (whole or partial) else None
+        band = None
+        start, size = 0, first_chunk
+        while start < len(checks):
+            # Growing chunks: a walk blocked at its first checks (most stop arcs that block) pays for few.
+            part_checks = checks[start:start + size]
+            start, size = start + size, min(chunk, 2 * size)
+            margins = [self._margin(s, pad, extra_margin_m, extra_ramp_m) for _, s, pad in part_checks]
+            cells, owner, outside = _shape_cells_batch(snapshot, [c[0] for c in part_checks], parts, margins,
+                                                       direction)
+            if cells is None:  # outside the key range: the reference walk decides (never on a real grid)
+                return self._walk_reference(snapshot, checks, arc, footprint, own_cells, full_path_m=full_path_m,
+                                            direction=direction, own_pose=own_pose, own_footprint=own_footprint,
+                                            extra_margin_m=extra_margin_m, extra_ramp_m=extra_ramp_m,
+                                            unknown_passes=unknown_passes)
+            inside = (cells[:, 0] >= 0) & (cells[:, 0] < nx) & (cells[:, 1] >= 0) & (cells[:, 1] < ny)
+            cells, owner = cells[inside], owner[inside]
+            if own_lookup is not None:
+                whole_mask, partial_id, flat = own_lookup
+                keep = ~whole_mask[cells[:, 0], cells[:, 1]]
+                ids = partial_id[cells[:, 0], cells[:, 1]]
+                touched = keep & (ids >= 0)
+                if touched.any() and own_pose is not None:
+                    keep[touched] = _parts_reach_batch(flat, ids[touched], owner[touched],
+                                                       [c[0] for c in part_checks], parts, margins, direction)
+                cells, owner = cells[keep], owner[keep]
+            states = snapshot.state[cells[:, 0], cells[:, 1]]
+            retained = states == RETAINED
+            if retained.any():
+                if band is None:
+                    band = np.zeros(snapshot.state.shape, dtype=bool)
+                    if own_pose is not None and own_footprint is not None and cfg.shadow_band_m > 0:
+                        near, _ = shape_cells(snapshot, own_pose, own_footprint, cfg.shadow_band_m)
+                        near = near[(near[:, 0] >= 0) & (near[:, 0] < nx) & (near[:, 1] >= 0) & (near[:, 1] < ny)]
+                        band[near[:, 0], near[:, 1]] = True
+                judged = states.copy()
+                judged[retained & ~band[cells[:, 0], cells[:, 1]]] = 0
+            else:
+                judged = states
+            n = len(part_checks)
+            occupied = states == OCCUPIED
+            bad = (judged != FREE) & (judged != RETAINED)
+            seen = (judged == FREE) | (judged == RETAINED)
+            any_occupied = np.bincount(owner[occupied], minlength=n) > 0
+            any_bad = np.bincount(owner[bad], minlength=n) > 0
+            # The oldest FREE stamp per check: a minimum of nonzero finite times, the same whatever the order.
+            seen_owner = owner[seen]
+            seen_stamp = snapshot.free_stamp[cells[seen, 0], cells[seen, 1]]
+            if np.any((seen_stamp == 0.0) | np.isnan(seen_stamp)):
+                # Which zero, or NaN, np.min keeps depends on its reduction order: the reference decides.
+                return self._walk_reference(snapshot, checks, arc, footprint, own_cells, full_path_m=full_path_m,
+                                            direction=direction, own_pose=own_pose, own_footprint=own_footprint,
+                                            extra_margin_m=extra_margin_m, extra_ramp_m=extra_ramp_m,
+                                            unknown_passes=unknown_passes)
+            present, first = np.unique(seen_owner, return_index=True)
+            lowest = dict(zip(present.tolist(), np.minimum.reduceat(seen_stamp, first).tolist(), strict=True)) \
+                if len(seen_owner) else {}
+            for k, (_, s, _) in enumerate(part_checks):
+                if outside[k]:
+                    if not unknown_passes:
+                        blocked = "edge"
+                        break
+                    first_unknown = float(s) if first_unknown is None else first_unknown
+                if any_occupied[k]:
+                    blocked = "occupied"
+                    blocked_cells = tuple(map(tuple, cells[(owner == k) & occupied][:20].tolist()))
+                    break
+                if any_bad[k]:
+                    if not unknown_passes:
+                        blocked = "unknown"
+                        blocked_cells = tuple(map(tuple, cells[(owner == k) & bad][:20].tolist()))
+                        break
+                    first_unknown = float(s) if first_unknown is None else first_unknown
+                if k in lowest:
+                    oldest = min(oldest, float(lowest[k]))
+                if first_unknown is None:
+                    verified = float(s)
+            if blocked is not None:
+                break
         reached_end = blocked is None and full_path_m is not None and arc[-1] >= full_path_m - 1e-9
         return Check(verified, blocked, oldest, reached_end, blocked_cells, first_unknown)
 
@@ -419,6 +714,11 @@ class DrivePermission:
         partial = {(int(a), int(b)) for a, b in cells[~inside]}
         return out, partial
 
+    @dumped("check_path", pure=True, strata=lambda self_, a, k, r: (
+        k.get("direction", 0), bool(k.get("unknown_passes")), bool(k.get("extra_margin_m")),
+        k.get("extra_ramp_m") is not None, k.get("lookahead_m") is not None, shape_kind(a[2]),
+        self_.config.step_m, r.blocked, r.reached_end))
+    @dual("check_path")
     def check_path(self, snapshot: GridSnapshot, path_ahead, footprint: Footprint, own_footprint: Footprint, *,
                    current_pose, direction: int = 0, extra_margin_m: float = 0.0,
                    extra_ramp_m: float | None = None, unknown_passes: bool = False,
@@ -432,18 +732,21 @@ class DrivePermission:
             raise ValueError("path_ahead must be a non-empty (N, 3) array")
         limit = self.config.lookahead_m if lookahead_m is None else float(lookahead_m)
         samples, arc, total = resample_path(poses, self.config.step_m, limit)
-        own = self._own_cells(snapshot, current_pose, own_footprint)
+        own = None if kernels.mode() == "numba" else self._own_cells(snapshot, current_pose, own_footprint)
         return self._walk(snapshot, samples, arc, footprint, own, full_path_m=total, direction=direction,
                           own_pose=current_pose, own_footprint=own_footprint, extra_margin_m=extra_margin_m,
                           extra_ramp_m=extra_ramp_m, unknown_passes=unknown_passes)
 
+    @dumped("check_arc", pure=True, strata=lambda self_, a, k, r: (
+        a[3] >= 0, bucket(a[2]), shape_kind(a[4]), self_.config.step_m, r.blocked, r.verified_m > 0))
+    @dual("check_arc")
     def check_arc(self, snapshot: GridSnapshot, current_pose, curvature_inv_m: float, direction: int,
                   footprint: Footprint, own_footprint: Footprint, speed_cap_mps: float) -> Check:
         """The emergency-stop arc allowed_speed walks, on snapshot, leaving this permission as it is."""
         cfg = self.config
         length = cfg.stopping.distance_m(speed_cap_mps) + cfg.step_m
         samples, arc = arc_poses(current_pose, curvature_inv_m, 1 if direction >= 0 else -1, length, cfg.step_m)
-        own = self._own_cells(snapshot, current_pose, own_footprint)
+        own = None if kernels.mode() == "numba" else self._own_cells(snapshot, current_pose, own_footprint)
         return self._walk(snapshot, samples, arc, footprint, own, direction=1 if direction >= 0 else -1,
                           own_pose=current_pose, own_footprint=own_footprint)
 
