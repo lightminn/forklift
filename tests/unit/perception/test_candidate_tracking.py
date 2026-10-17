@@ -604,23 +604,30 @@ def test_two_observations_in_the_selected_gate_turn_the_priority_off_without_blo
 
 @pytest.mark.parametrize("duplicate", [True, False])
 def test_s_o1_a_o1_a_o2_gives_o1_to_the_selected_and_o2_to_the_other(duplicate):
-    # Codex graph: S-O1, A-O1, A-O2 (gate 0.1 m: S at 0, A at 0.12, O1 at 0.06, O2 at 0.18)
+    # Codex graph S-O1, A-O1, A-O2 (gate 0.1 m). Duplicate: A born at 0.05 from a T11 reading (inside S's
+    # pose gate, refused by its family test). Not: A born at 0.12 (outside S's pose gate).
     tr = CandidateTracker(_bounds())
-    if duplicate:
-        tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="s")]))
-        tr.select(0)
-        tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="s"),
-                               _candidate((3.0, 0.12, 0.06), hypothesis="t11_06:x", cid="a")]))
-        a_id = 1
-    else:
-        tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="s"), _candidate((3.0, 0.12, 0.06), cid="a")]))
-        tr.select(0)
-        tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), cid="s"), _candidate((3.0, 0.12, 0.06), cid="a")]))
-        a_id = 1
-    hyp = "parametric:x"
-    report = tr.update(_frame(0.4, [_candidate((3.0, 0.06, 0.06), hypothesis=hyp, cid="o1"),
-                                    _candidate((3.0, 0.18, 0.06), hypothesis=hyp, cid="o2")]))
-    assert report.accepted == {"o1": 0, "o2": a_id}
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="s")]))
+    tr.select(0)
+    a_y, a_hyp = (0.05, "t11_06:x") if duplicate else (0.12, "epal6:x")
+    tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", cid="s"),
+                           _candidate((3.0, a_y, 0.06), hypothesis=a_hyp, cid="a")]))
+    assert [x.duplicate_of for x in tr._tracks] == [None, 0 if duplicate else None]
+    o2 = a_y + 0.09
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.06, 0.06), hypothesis="parametric:x", cid="o1"),
+                                    _candidate((3.0, o2, 0.06), hypothesis="parametric:x", cid="o2")]))
+    assert report.accepted == {"o1": 0, "o2": 1}
+
+
+def test_a_neighbour_is_judged_against_the_selected_track_before_it_moves():
+    # Codex: S moves to 0.09 in the same frame A (0.18) is born; A was outside S's pose gate before the update
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="s")]))
+    tr.select(0)
+    tr.update(_frame(0.2, [_candidate((3.0, 0.09, 0.06), cid="s"), _candidate((3.0, 0.18, 0.06), cid="a")]))
+    assert [x.duplicate_of for x in tr._tracks] == [None, None]
+    report = tr.update(_frame(0.4, [_candidate((3.0, 0.135, 0.06), cid="c")]))
+    assert report.accepted == {} and report.held == 2  # the 2B-3b hold, not a priority grab
 
 
 def test_s_o1_o2_a_o1_o3_holds_without_a_unique_matching():

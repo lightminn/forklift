@@ -192,7 +192,7 @@ def run(seq, bounds: TrackBounds, variant: str, table: dict, seed: int) -> dict:
         # layout interval its accepted readings allow (counted before the update changes the track)
         sel_track = next((t for t in tr._tracks if t.id == selected), None)
         refused = 0
-        if sel_track is not None:
+        if sel_track is not None and (stamp - sel_track.last.stamp_ns) / 1e9 <= bounds.keep_s:  # not deleted now
             for c in cands:
                 o = _Observation.make(c, frame, bounds) if tuple(f["labels"][c.candidate_id]) == target else None
                 if o is not None and _pose_fits(sel_track, o, bounds) and not sel_track.layout_overlaps(o):

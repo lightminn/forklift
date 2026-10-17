@@ -271,3 +271,27 @@ def test_the_evaluation_follows_the_first_selection_and_never_reselects(short_se
     rows, _ = C.table([first])
     res = E.run(first, E.TrackBounds.from_dict(C.config(rows, TABLE, 1.2)), "V1", TABLE, seed=1)
     assert calls == [0] and "interval_refused" in res["rows"][0]
+
+
+def test_face_centres_sit_at_half_the_depth_or_width_from_the_pallet_centre_on_every_face():
+    # independent of face_layout: opposite faces mirror through the pallet centre, x faces sit at half the
+    # depth and y faces at half the width; openings lie on their face line on both sides of the centre
+    for cell, index in ((R.CELLS[12], 1), (R.CELLS[12], 2), (R.CELLS[1], 0)):
+        recipe = R.recipe_for(cell, "calibration", index)
+        pose = R.Pose(-0.4, 0.3, 0.2)
+        openings, centres = R.face_geometry(recipe, pose)
+        for k, inst in enumerate(recipe.instances):
+            spec, pl = inst.spec, inst.placement
+            p = np.array(pose.to_base((pl.x_m, pl.y_m)))
+            axes = [ax for ax in spec.entry_axes for _ in (1, -1)]
+            for f in range(0, len(axes), 2):
+                c1, c2 = np.array(centres[k][f][:2]), np.array(centres[k][f + 1][:2])
+                assert np.allclose((c1 + c2) / 2, p, atol=1e-9)
+                half = (spec.overall_depth_m if axes[f] == "x" else spec.overall_width_m) / 2
+                assert np.linalg.norm(c1 - p) == pytest.approx(half, abs=1e-9)
+                for face in (f, f + 1):
+                    c = np.array(centres[k][face][:2])
+                    u = c - p
+                    side = [float(u[0] * (o[1] - c[1]) - u[1] * (o[0] - c[0])) for o in openings[k][face]]
+                    assert np.allclose([abs(np.dot(c - p, np.array(o[:2]) - c)) for o in openings[k][face]], 0, atol=1e-9)
+                    assert min(side) < 0 < max(side)

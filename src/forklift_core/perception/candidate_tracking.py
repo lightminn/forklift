@@ -483,6 +483,10 @@ class CandidateTracker:
         # observations against the other stale tracks, so a stale track's wide gate never holds an
         # active track's observation (2B-3b, agy review)
         chosen = next((tr for tr in self._tracks if tr.id == self.selected), None)
+        # judged against the selected track as it was before this frame's matching moves it: inside its
+        # pose gate but refused by a reading test (Codex: judging after the update marks real neighbours)
+        split_off = {j for j, o in enumerate(obs) if chosen is not None
+                     and _pose_fits(chosen, o, self.bounds) and not _reading_fits(chosen, o)}
         free = set(range(len(obs)))
         accepted, held, revived, blocked = {}, 0, 0, set()
         priority = None
@@ -521,13 +525,13 @@ class CandidateTracker:
                     revived += 1
 
         new = 0
-        fresh = sorted((o for j, o in enumerate(obs) if j not in blocked),
-                       key=lambda o: (round(float(o.mid[0]), 9), round(float(o.mid[1]), 9), o.key))
-        chosen = next((tr for tr in self._tracks if tr.id == self.selected), None)
-        for o in fresh:
+        fresh = sorted((j for j in range(len(obs)) if j not in blocked),
+                       key=lambda j: (round(float(obs[j].mid[0]), 9), round(float(obs[j].mid[1]), 9), obs[j].key))
+        for j in fresh:
+            o = obs[j]
             track = _Track(self._next_id, o)
-            if chosen is not None and _pose_fits(chosen, o, self.bounds):
-                track.duplicate_of = chosen.id  # where the selected track is, split off by a reading test
+            if j in split_off:
+                track.duplicate_of = chosen.id  # where the selected track was, split off by a reading test
             self._tracks.append(track)
             accepted[o.candidate.candidate_id] = self._next_id
             self._next_id += 1
