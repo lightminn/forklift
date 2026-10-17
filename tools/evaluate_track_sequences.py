@@ -11,6 +11,7 @@ Scoring uses the records' oracle labels, which the tracker never sees.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import pickle
@@ -153,14 +154,15 @@ def errors(cand, face) -> dict:
 
 
 def identity_errors(labels_of: dict) -> int:
-    """Tracks that accepted another instance (any accepted reading) or another face of one instance
-    (readings matched to a face); an unmatched reading of the same instance is not a switch."""
+    """Tracks that accepted another instance (any accepted reading), or another face or pocket pair of
+    one instance (readings matched to a face); an unmatched reading of the same instance is not a switch.
+    Labels are (instance, face, pocket pair)."""
     return sum(1 for labels in labels_of.values()
-               if len({lab[0] for lab in labels}) > 1 or len({lab for lab in labels if lab[1] is not None}) > 1)
+               if len({lab[0] for lab in labels}) > 1 or len({lab[1:] for lab in labels if lab[1] is not None}) > 1)
 
 
 def _drop_frames(seq) -> set:
-    k, i = seq["target"]
+    k, i, _ = seq["target"]
     dist = [_distance(f["faces"][k][i]) for f in seq["frames"]]
     out = set()
     for d0, n in DROP_GAPS:
@@ -191,13 +193,15 @@ def run(seq, bounds: TrackBounds, variant: str, table: dict, seed: int) -> dict:
             selected = next((tid for cid, tid in sorted(report.accepted.items())
                              if tuple(f["labels"][cid]) == target), None)
         live = {t.track_id: t for t in tr.tracks(stamp, odom)}
+        stale = set(tr.stale_ids(stamp))
         face = f["faces"][target[0]][target[1]]
         on_target = [tid for tid in live if labels_of[tid] and labels_of[tid][-1] == target]
         retained = selected in live and labels_of[selected][-1] == target
         single = next((c for c in cands if c.counted and tuple(f["labels"][c.candidate_id]) == target), None)
         row = {"frame": j, "distance_m": _distance(face), "retained": retained,
                "reacquired": (not retained) and bool(on_target), "single": single is not None,
-               "duplicates": max(0, len(on_target) - 1), "held": report.held, "initialised": selected is not None}
+               "duplicates": max(0, len(on_target) - 1), "held": report.held, "initialised": selected is not None,
+               "selected_stale": selected in stale, "revived": report.revived}
         if retained:
             out = live[selected]
             row["output"] = errors(out.candidate, face)
@@ -262,6 +266,8 @@ def summarise(results: list, n_skipped: int) -> dict:
             "identity_errors": sum(r["identity_errors"] for r in res),
             "duplicate_frames": sum(row["duplicates"] > 0 for r in res for row in r["rows"]),
             "held_frames": sum(row["held"] > 0 for r in res for row in r["rows"]),
+            "selected_stale_frames": sum(row.get("selected_stale", False) for r in res for row in r["rows"]),
+            "revivals": sum(row.get("revived", 0) for r in res for row in r["rows"]),
             "retention_after_init": (sum(p["retained"] for p in after) / len(after)) if after else None,
             "coverage": coverage,
             "initialised_m": [next((row["distance_m"] for row in r["rows"] if row["initialised"]), None) for r in res],
@@ -303,6 +309,17 @@ def verdict(s: dict) -> dict:
     return {"pass": not fails, "failures": fails}
 
 
+def band_problem(records, band: str | None, expect: int | None) -> str | None:
+    """Why these records must not be judged: another band among them, or not the expected count."""
+    if band is not None:
+        other = sorted({r.get("band") for r in records} - {band}, key=str)
+        if other:
+            return f"records of band(s) {other} among {band}"
+    if expect is not None and len(records) != expect:
+        return f"{len(records)} records, expected {expect}"
+    return None
+
+
 def load_records(directory: Path, kinds=None):
     recs = []
     for p in sorted(directory.glob("*.pkl")):
@@ -334,14 +351,26 @@ def main(argv=None) -> int:
     ap.add_argument("--bounds", type=Path, default=ROOT / "config/recognition_track_bounds.yaml")
     ap.add_argument("--odometry", type=Path, default=ROOT / "config/obstacle_odometry_age.json")
     ap.add_argument("--variants", default=",".join(VARIANTS))
+    ap.add_argument("--band", help="refuse records of any other band")
+    ap.add_argument("--expect", type=int, help="refuse unless exactly this many records")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args(argv)
     bounds = TrackBounds.load(args.bounds)
     table = json.loads(args.odometry.read_text())
-    report = evaluate(load_records(args.records), bounds, table, tuple(args.variants.split(",")))
+    records = load_records(args.records)
+    problem = band_problem(records, args.band, args.expect)
+    if problem:
+        raise SystemExit(f"refused: {problem}")
+    report = evaluate(records, bounds, table, tuple(args.variants.split(",")))
     for variant, s in report["summary"].items():
         s["skipped"] = report["skipped"].get(variant, 0)
-    args.out.write_text(json.dumps({"summary": report["summary"], "results": report["results"]}, indent=1))
+    digest = hashlib.sha256()
+    for p in sorted(args.records.glob("*.pkl")):
+        digest.update(p.name.encode())
+        digest.update(p.read_bytes())
+    args.out.write_text(json.dumps({"summary": report["summary"], "results": report["results"],
+                                    "records": len(records), "records_sha256": digest.hexdigest(),
+                                    "bounds": str(args.bounds)}, indent=1))
     for variant, s in report["summary"].items():
         print(variant, json.dumps(s.get("verdict")), flush=True)
     return 0

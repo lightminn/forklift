@@ -110,11 +110,12 @@ def test_the_other_face_of_a_square_pallet_starts_a_new_track():
     assert len(tr.tracks(int(0.2 * S), _odom())) == 2
 
 
-def test_a_switch_between_known_shape_and_parametric_reading_starts_a_new_track():
+def test_a_switch_between_known_shape_and_parametric_reading_keeps_the_track():
+    # 2B-3b user decision 2: the same pocket pair read as a known shape or as parametric is one track
     tr = CandidateTracker(_bounds())
     tr.update(_frame(0.0, [_candidate()]))
     report = tr.update(_frame(0.2, [_candidate(hypothesis="parametric:x")]))
-    assert report.new == 1
+    assert report.new == 0 and report.accepted == {"c0": 0}
 
 
 def test_another_pocket_pair_on_the_same_face_starts_a_new_track():
@@ -159,11 +160,14 @@ def test_assignment_does_not_depend_on_candidate_order_or_ids():
     assert len(results) == 1
 
 
-def test_an_expired_track_takes_no_observation_and_the_pallet_gets_a_new_track():
+def test_a_track_kept_past_one_second_is_deleted_and_the_pallet_gets_a_new_track():
+    # 2B-3b: a track is stale (not output, still revivable) up to keep_s = 1.0 s, then deleted for good
     tr = CandidateTracker(_bounds())
     tr.update(_frame(0.0, [_candidate()]))
-    report = tr.update(_frame(0.6, [_candidate()]))
-    assert report.new == 1 and len(tr.tracks(int(0.6 * S), _odom())) == 1
+    report = tr.update(_frame(1.1, [_candidate()]))
+    assert report.new == 1 and report.revived == 0
+    (out,) = tr.tracks(int(1.1 * S), _odom())
+    assert out.track_id == 1
 
 
 def test_uncounted_candidates_and_distances_outside_the_table_are_not_tracked():
@@ -352,14 +356,17 @@ def test_the_tracker_never_reads_proposal_ids():
 
 # Task 1 review (Codex) ---------------------------------------------------------------------------
 
-def test_a_track_expired_at_a_query_is_not_revived_by_a_late_frame():
+def test_a_query_makes_a_track_stale_not_deleted_and_a_newer_frame_revives_it():
+    # 2B-3b replaces "an expiry seen by a query is permanent": only keep_s deletes
     tr = CandidateTracker(_bounds())
     tr.update(_frame(0.0, [_candidate()]))
     assert tr.tracks(int(0.6 * S), _odom()) == ()
-    report = tr.update(_frame(0.4, [_candidate()]))  # acquired before the query, delivered after it
-    assert report.new == 1
+    report = tr.update(_frame(0.4, [_candidate()]))  # newer than the last processed frame, delivered after the query
+    assert report.new == 0 and report.accepted == {"c0": 0}  # active by its own acquisition time
     (out,) = tr.tracks(int(0.6 * S), _odom())
-    assert out.track_id != 0
+    assert out.track_id == 0
+    assert tr.tracks(int(1.5 * S), _odom()) == ()
+    assert tr.update(_frame(1.45, [_candidate()])).new == 1  # deleted at the 1.5 s query: never revived
 
 
 def test_the_layout_gate_compares_each_pockets_face_coordinate():
@@ -439,3 +446,105 @@ def test_a_weight_model_sets_the_weights_of_both_the_pose_and_the_budget():
     assert out.candidate.insertion_yaw_rad == pytest.approx(0.1 * w_old / (w_old + w_new))
     o_b = 0.0315 + lever * 0.0219
     assert out.budget["centre_lateral_m"] == pytest.approx((w_old * (0.024 + o_b) + w_new * 0.024) / (w_old + w_new))
+
+
+# 2B-3b: stale tracks, revival, family compatibility, the layout anchor ----------------------------
+
+def test_a_track_revives_with_its_id_after_a_gap_and_is_hidden_while_stale():
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate()]))
+    tr.update(_frame(0.2, [_candidate()]))
+    assert tr.tracks(int(0.8 * S), _odom()) == ()
+    report = tr.update(_frame(0.8, [_candidate()]))
+    assert report.revived == 1 and report.new == 0
+    (out,) = tr.tracks(int(0.8 * S), _odom())
+    assert out.track_id == 0 and out.revivals == 1
+
+
+@pytest.mark.parametrize("gap_ns, active, revivable", [(0, True, True), (1, False, True),
+                                                       (int(0.5 * S), False, True), (int(0.5 * S) + 1, False, False)])
+def test_the_active_and_keep_boundaries_are_inclusive(gap_ns, active, revivable):
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate()]))
+    now = int(0.5 * S) + gap_ns
+    assert bool(tr.tracks(now, _odom())) is active
+    stamp = now / S
+    report = tr.update(_frame(stamp, [_candidate()]))
+    assert (report.revived == 1) is (revivable and not active) and (report.new == 1) is (not revivable)
+
+
+def test_an_active_track_is_matched_before_a_stale_one():
+    tr = CandidateTracker(_bounds())  # gate 0.1 m
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), cid="a"), _candidate((3.0, 0.12, 0.06), cid="b")]))
+    for t in (0.2, 0.4):
+        tr.update(_frame(t, [_candidate((3.0, 0.0, 0.06), cid="a")]))
+    report = tr.update(_frame(0.6, [_candidate((3.0, 0.05, 0.06), cid="c")]))  # inside both gates
+    assert report.held == 0 and report.accepted == {"c": 0} and report.revived == 0
+
+
+def test_a_track_started_by_a_parametric_reading_remembers_its_first_known_shape_even_after_a_reset():
+    tr = CandidateTracker(_bounds())
+    for k, (y, hyp) in enumerate(((0.0, "parametric:x"), (0.0, "epal6:x"), (0.09, "parametric:x"),
+                                  (0.18, "parametric:x"))):  # the last one resets the history (conflict)
+        report = tr.update(_frame(0.2 * k, [_candidate((3.0, y, 0.06), hypothesis=hyp)]))
+        assert report.new == (1 if k == 0 else 0)
+    (out,) = tr.tracks(int(0.6 * S), _odom())
+    assert out.resets == 1
+    assert tr.update(_frame(0.8, [_candidate((3.0, 0.18, 0.06), hypothesis="epal6:x")])).new == 0
+    assert tr.update(_frame(1.0, [_candidate((3.0, 0.18, 0.06), hypothesis="t11_06:x")])).new == 1
+
+
+def test_a_known_parametric_known_chain_across_shapes_starts_a_new_track():
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate(hypothesis="epal6:x")]))
+    assert tr.update(_frame(0.2, [_candidate(hypothesis="parametric:x")])).new == 0
+    assert tr.update(_frame(0.4, [_candidate(hypothesis="t11_06:x")])).new == 1
+
+
+def _pair(left_y, right_y=-0.18, **kw):
+    mid = (left_y + right_y) / 2
+    return _candidate((3.0, mid, 0.06), hypothesis="parametric:x", spacing=left_y - right_y, face_offset=mid, **kw)
+
+
+def test_the_layout_anchor_stops_a_pocket_creeping_to_another_opening():
+    # each 45 mm step passes against the last observation (0.03 + 0.03) but not against the anchor
+    tr = CandidateTracker(_bounds(rows=(_row(1.0, 4.0, lat=0.5, s=0.03),)))
+    assert tr.update(_frame(0.0, [_pair(0.180)])).new == 1
+    assert tr.update(_frame(0.2, [_pair(0.135)])).new == 0
+    assert tr.update(_frame(0.4, [_pair(0.090)])).new == 1
+
+
+def test_known_limits_a_neighbour_or_another_object_inside_the_gate_joins_the_track():
+    # the tracker cannot tell an object that sits inside the gate from the target; the evaluation counts it
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06))]))
+    assert tr.update(_frame(0.8, [_candidate((3.7, 0.0, 0.06))])).new == 1      # outside: a new track
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06))]))
+    assert tr.update(_frame(0.8, [_candidate((3.08, 0.0, 0.06))])).revived == 1  # inside: joins (limit)
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x")]))
+    other = _candidate((3.0, 0.0, 0.06), hypothesis="parametric:x")             # same layout and support
+    assert tr.update(_frame(0.2, [other])).new == 0                             # joins (limit)
+
+
+def test_the_layout_intersection_stops_a_creep_through_shrinking_bounds():
+    # Codex: 0 (b_s 32.5 mm) -> 44 (15.3) -> 60 (1.0): each step fits its predecessor, the last misses the first
+    rows = (_row(1.0, 2.0, lat=0.5, s=0.001), _row(2.0, 3.0, lat=0.5, s=0.0153), _row(3.0, 4.0, lat=0.5, s=0.0325))
+    tr = CandidateTracker(_bounds(rows=rows))
+    for k, (rng, left) in enumerate(((3.5, 0.180), (2.5, 0.224), (1.5, 0.240))):
+        odom = _odom(3.5 - rng)
+        mid = (left - 0.18) / 2
+        c = _candidate((rng, mid, 0.06), hypothesis="parametric:x", spacing=left + 0.18, face_offset=mid)
+        report = tr.update(_frame(0.2 * k, [c], odom=odom))
+        assert report.new == (1 if k in (0, 2) else 0), k
+
+
+def test_an_observation_held_by_active_tracks_is_not_given_to_a_stale_track():
+    # box gates of 0.2 m: S, A1, A2 are pairwise more than 0.2 m apart, all within 0.19 m of O
+    tr = CandidateTracker(_bounds(rows=(_row(1.0, 4.0, lat=0.1, along=0.1),)))
+    tr.update(_frame(0.0, [_candidate((3.19, 0.0, 0.06), cid="s")]))
+    report = tr.update(_frame(0.6, [_candidate((2.81, 0.19, 0.06), cid="a1"), _candidate((2.81, -0.19, 0.06), cid="a2")]))
+    assert report.new == 2  # S is stale and out of reach
+    report = tr.update(_frame(0.8, [_candidate((3.0, 0.0, 0.06), cid="o")]))
+    assert report.accepted == {} and report.revived == 0 and report.new == 0 and report.held == 2

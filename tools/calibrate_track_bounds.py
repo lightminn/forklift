@@ -96,7 +96,7 @@ def collect(records):
         for f in rec["frames"]:
             clean_by_label = {}
             for c in f.get("clean", ()):
-                lab = tuple(f["clean_labels"][c.candidate_id])
+                lab = tuple(f["clean_labels"][c.candidate_id])[:2]
                 if c.counted and lab[1] is not None:
                     clean_by_label[lab] = c
             for c in f["candidates"]:
@@ -106,7 +106,7 @@ def collect(records):
                 if b is None:
                     continue
                 key = (_family(c), b)
-                k, i = f["labels"][c.candidate_id]
+                k, i = tuple(f["labels"][c.candidate_id])[:2]
                 if i is None:
                     unmatched[key] += 1
                     continue

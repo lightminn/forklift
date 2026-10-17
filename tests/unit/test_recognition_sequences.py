@@ -117,7 +117,7 @@ def test_a_sequence_is_deterministic(short_sequence):
 
 def test_each_frames_truth_is_the_world_face_seen_from_that_pose(short_sequence):
     recipe, first, _ = short_sequence
-    k, i = first["target"]
+    k, i, _ = first["target"]
     world = R.choose_target(recipe, R.load_site())
     face = next(f for kk, ii, f in world if (kk, ii) == (k, i))
     for f in first["frames"]:
@@ -159,9 +159,10 @@ def test_the_evaluation_and_calibration_run_on_a_recorded_sequence(short_sequenc
 
 
 def test_a_track_that_accepts_another_instance_is_an_identity_error_even_without_a_face_match():
-    assert E.identity_errors({0: [(0, 0), (1, None)]}) == 1
-    assert E.identity_errors({0: [(0, 0), (0, 1)]}) == 1          # another face of the same instance
-    assert E.identity_errors({0: [(0, 0), (0, None), (0, 0)]}) == 0  # an unmatched reading of the same instance
+    assert E.identity_errors({0: [(0, 0, (0, 1)), (1, None, None)]}) == 1
+    assert E.identity_errors({0: [(0, 0, (0, 1)), (0, 1, (0, 1))]}) == 1          # another face
+    assert E.identity_errors({0: [(0, 0, (0, 1)), (0, 0, (1, 2))]}) == 1          # another pocket pair
+    assert E.identity_errors({0: [(0, 0, (0, 1)), (0, None, None), (0, 0, (0, 1))]}) == 0
 
 
 def test_the_front_back_and_side_floor_is_judged_per_case():
@@ -174,3 +175,35 @@ def test_the_front_back_and_side_floor_is_judged_per_case():
     s = E.summarise(res, 0)["V2"]
     fails = " ".join(s["verdict"]["failures"])
     assert "bin [2.5, 3.0]: S3 retained" in fails and "S2 retained" not in fails
+
+
+def test_sequence_recipes_take_their_rank_from_the_index():
+    s2 = [R.recipe_for(R.CELLS[2], "calibration", i) for i in range(4)]   # S2 EPAL 6: rank % 4 == 0 touches
+    assert [r.rank for r in s2] == [0, 1, 2, 3] and [r.touching for r in s2] == [True, False, False, False]
+    from forklift_core.perception.pallet_model import face_layout
+    s7 = [R.recipe_for(R.CELLS[12], "calibration", i) for i in range(8)]
+    openings = {len(face_layout(r.instances[0].spec, "x").opening_intervals_m) for r in s7}
+    assert openings == {2, 3}  # rank 0 is always a four-block layout; other ranks draw three blocks too
+
+
+def test_one_recipe_matches_the_catalogue_generator():
+    batch = rs.generate("S5", "epal6", 5, band="eval_pool", first_seed=1_000_000 + 7 * 61)
+    for r in batch:
+        assert rs.recipe(r.case, r.shape_key, r.seed, r.rank, r.split) == r
+
+
+def test_the_truth_pockets_are_two_of_the_recorded_openings(short_sequence):
+    _, first, _ = short_sequence
+    k, i, pair = first["target"]
+    for f in first["frames"]:
+        face, openings = f["faces"][k][i], f["openings"][k][i]
+        assert np.allclose(face["left_m"], openings[pair[0]]) and np.allclose(face["right_m"], openings[pair[1]])
+    labels = [lab for f in first["frames"] for lab in f["labels"].values() if lab[0] == k and lab[1] == i]
+    assert labels and all(len(lab) == 3 and lab[2] == pair for lab in labels)
+
+
+def test_the_evaluation_refuses_other_bands_and_wrong_counts():
+    recs = [{"band": "evaluation_b"}, {"band": "calibration"}]
+    assert "calibration" in E.band_problem(recs, "evaluation_b", None)
+    assert "expected 3" in E.band_problem(recs[:1], "evaluation_b", 3)
+    assert E.band_problem(recs[:1], "evaluation_b", 1) is None
