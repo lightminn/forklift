@@ -2847,6 +2847,8 @@ class MissionCore:
         return {
             "t": t,
             "mission": {"id": cmds.mission_id, "status": cmds.status, "generation": cmds.mission_gen,
+                        "pallet_id": None if cmds.mission is None else cmds.mission.pallet_id,
+                        "destination_id": None if cmds.mission is None else cmds.mission.destination_id,
                         "phase": phase_,
                         "phase_elapsed_s": (cmds.work_elapsed(ms.phase_started, t)
                                             if phase_ is not None and t is not None else None),

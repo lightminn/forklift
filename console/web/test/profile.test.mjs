@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { controlProfile, frameAgreement, scanDrawable, staleness, stopInstruction, stopIsRefused } from "../js/profile.js";
+import { controlProfile, forbidText, frameAgreement, palletKindLabel, permitText, rearmState, resumeState, resumeSteps, scanDrawable, staleness, standWhy, stopInstruction, stopIsRefused, stopKind } from "../js/profile.js";
 
 test("a vehicle without the control field is a full console (console/1 as before)", () => {
   const p = controlProfile({ mission: true, teleop_direct: true, teleop_video: true, lift: true });
@@ -65,4 +65,82 @@ test("the 'cannot stop' notice tells the method the vehicle named, never an assu
   // a link that names nothing gets a neutral line, not a device that may not exist
   assert.equal(stopInstruction({ capabilities: {} }), "차량에서 직접 멈추는 수단을 쓰세요");
   assert.equal(stopInstruction(null), "차량에서 직접 멈추는 수단을 쓰세요");
+});
+
+test("resume steps read the same from a list (fake vehicle) or a map (live runner)", () => {
+  const list = [{ name: "stop_confirmed", result: "ok" }, { name: "state_verified", result: "failed", reason: "load_changed" }];
+  assert.deepEqual(resumeSteps(list), list);
+  assert.deepEqual(
+    resumeSteps({ stop_confirmed: "ok", state_verified: "failed(load_changed)", frame_reexpressed: "pending" }),
+    [
+      { name: "stop_confirmed", result: "ok", reason: null },
+      { name: "state_verified", result: "failed", reason: "load_changed" },
+      { name: "frame_reexpressed", result: "pending", reason: null },
+    ],
+  );
+  assert.equal(resumeSteps(null), null);
+});
+
+test("rearm is offered once stopped with the lease; an unconfirmed stop says so instead", () => {
+  assert.equal(rearmState({ mode: "STOPPED", stopped_confirmed: true }, true).enabled, true);
+  assert.equal(rearmState({ mode: "STOPPED", stopped_confirmed: false }, true).enabled, false);
+  assert.match(rearmState({ mode: "STOPPED", stopped_confirmed: false }, true).why, /정지 확인/);
+  assert.equal(rearmState({ mode: "STOPPED" }, true).enabled, true); // a vehicle that does not say: let it judge
+  assert.equal(rearmState({ mode: "STOPPED", stopped_confirmed: true }, false).enabled, false);
+  assert.equal(rearmState({ mode: "PAUSED", stopped_confirmed: true }, true).shown, false);
+});
+
+test("stop kinds read the same from the fake vehicle's names and the live arbiter's", () => {
+  assert.deepEqual(stopKind("controlled"), stopKind("controlled_decel"));
+  assert.deepEqual(stopKind("preempt"), stopKind("safety_preempt"));
+  assert.equal(stopKind("preempt").level, "crit");
+  assert.equal(stopKind("controlled").level, "warn");
+  assert.equal(stopKind("none").level, "");
+  assert.match(stopKind(null).label, /—/); // unknown, not "none"
+  assert.equal(stopKind("brand_new").label, "brand_new"); // an unknown name is shown as sent
+});
+
+test("a pallet kind named after its geometry file reads as the pallet's name", () => {
+  assert.equal(palletKindLabel("pallet_geometry_epal6"), "EPAL 6");
+  assert.equal(palletKindLabel("pallet_geometry_t11_06"), "T11 ×0.6");
+  assert.equal(palletKindLabel("pallet_geometry_other"), "other");
+  assert.equal(palletKindLabel("EUR"), "EUR");
+  assert.equal(palletKindLabel(undefined), "종류 모름");
+});
+
+test("requests that need the truck standing wait for stopped_confirmed", () => {
+  assert.match(standWhy({ stopped_confirmed: false }), /정지 확인/);
+  assert.equal(standWhy({ stopped_confirmed: true }), null);
+  assert.equal(standWhy({}), null); // a vehicle that does not say judges the request itself
+});
+
+test("resume is offered for a paused or held mission once the truck stands", () => {
+  const st = { mode: "PAUSED", stopped_confirmed: true };
+  const mi = { status: "paused" };
+  assert.equal(resumeState({ state: st, mission: mi, hasLease: true }).enabled, true);
+  const moving = resumeState({ state: { ...st, stopped_confirmed: false }, mission: mi, hasLease: true });
+  assert.equal(moving.enabled, false);
+  assert.match(moving.why, /정지 확인/);
+  assert.equal(resumeState({ state: st, mission: mi, hasLease: false }).enabled, false);
+  assert.equal(resumeState({ state: { ...st, mode: "STOPPED" }, mission: mi, hasLease: true }).enabled, false);
+  assert.equal(resumeState({ state: { ...st, mode: "TELEOP" }, mission: { status: "held" }, hasLease: true }).enabled, false);
+  assert.equal(resumeState({ state: st, mission: { status: "running" }, hasLease: true }).enabled, false);
+  assert.equal(resumeState({ state: st, mission: null, hasLease: true }).enabled, false);
+});
+
+test("a permit whose limit is unknown is shown, not dropped", () => {
+  assert.equal(permitText(null), "판정 없음");
+  assert.equal(permitText({ reason: "clear", limit_mps: 0.3 }), "clear · 상한 0.30 m/s");
+  assert.equal(permitText({ reason: "lift", limit_mps: null }), "lift · 상한 모름");
+});
+
+test("every reason the live arbiter gives for refusing manual driving reads in Korean", () => {
+  for (const r of ["fork_in_pocket", "near_section", "near_section_unknown", "state_unknown", "pacing",
+    "no_feedback:rear_axle_speed", "state_forbids_teleop", "stopped_locked"]) {
+    assert.doesNotMatch(forbidText(r), /^[a-z_:]+$/, r);
+  }
+  assert.match(forbidText("fork_in_pocket"), /포켓/);
+  assert.match(forbidText("no_feedback:rear_axle_speed"), /rear_axle_speed/); // the missing feedback is named
+  assert.equal(forbidText("brand_new"), "brand_new");
+  assert.equal(forbidText(null), "");
 });

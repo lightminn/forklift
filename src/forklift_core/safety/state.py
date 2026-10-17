@@ -54,12 +54,15 @@ def state_message(arbiter, out, safety: dict | None, *, now_mono: float, rear_ax
         "t": "state", "state_seq": a.ticks.next_seq(), "session_epoch": a.session_epoch,
         "mode": out.mode, "stop_kind": out.stop_kind, "control_gen": out.control_gen, "armed": out.armed,
         "arm_gen": a.arm_gen,
+        "stopped_confirmed": bool(a.stop_confirmed),  # what rearm and mode changes wait for (contract 5)
         "lease": {"holder": None if lease is None else lease.client_id,
                   "observers": sum(1 for c in a.clients if lease is None or c != lease.client_id),
                   "reserved_until_s": reserved},
         "pose": pose,
         "rear_axle_speed_mps": rear_axle_speed_mps,
-        "load": {"state": None if loaded is None else ("loaded" if loaded else "empty"), "basis": load.get("basis")},
+        "load": {"state": None if loaded is None else ("loaded" if loaded else "empty"), "basis": load.get("basis"),
+                 # loaded is judged by the mission's phase, so the pallet on the forks is the mission's (C3)
+                 "pallet_id": mission.get("pallet_id") if loaded else None},
         "command": command,
         "applied": None if applied is None else dict(applied, stop_kind=out.stop_kind),
         "permit": permit,
@@ -70,6 +73,7 @@ def state_message(arbiter, out, safety: dict | None, *, now_mono: float, rear_ax
         "teleop_allowed": out.policy.teleop_allowed, "teleop_forbidden_reason": out.policy.reason,
         "mission": None if not mission.get("id") else {
             "mission_id": mission.get("id"), "status": mission.get("status"), "phase": mission.get("phase"),
+            "pallet_id": mission.get("pallet_id"), "destination_id": mission.get("destination_id"),
             "reason": ("teleop" if mission.get("status") == "held"
                        else (mission.get("resume") or {}).get("reason") if (mission.get("resume") or {}).get("refused")
                        else last.get("reason")),

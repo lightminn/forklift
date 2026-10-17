@@ -56,6 +56,7 @@ export function blockReason(ctx) {
   if (ctx.mode === "STOPPED") return "정지 상태입니다 · 재무장 뒤 지시할 수 있습니다";
   if (ctx.mode === "TELEOP") return "수동 조종 중에는 지시할 수 없습니다";
   if (ctx.mission && ACTIVE.includes(ctx.mission.status)) return "작업이 진행 중입니다";
+  if (ctx.state?.stopped_confirmed === false) return "정지 확인을 기다리는 중입니다"; // else not_stopped
   return null;
 }
 

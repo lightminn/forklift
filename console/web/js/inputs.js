@@ -19,6 +19,12 @@ export function padSnapshot(gamepad) {
   };
 }
 
+// Controls that were on screen and left it (tab switch, width change). The page's first
+// frame has no "before": a page opened on another tab has not hidden anything.
+export function hiddenEdge(wasShown, shown) {
+  return wasShown === true && !shown;
+}
+
 export function createInputs({ onRelease }) {
   let touch = { deadman: false, x: 0, y: 0, lift: 0 };
   let keys = {};

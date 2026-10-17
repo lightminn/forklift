@@ -36,6 +36,9 @@ test("the start is blocked with a reason the operator can act on", () => {
   assert.match(blockReason({ ...base, mission: { status: "held" } }), /진행 중/);
   assert.equal(blockReason({ ...base, mission: { status: "done" } }), null);
   assert.match(blockReason({ ...base, state: null }), /연결/);
+  // the vehicle refuses a submit until the truck stands (not_stopped): say so first
+  assert.match(blockReason({ ...base, state: { stopped_confirmed: false } }), /정지 확인/);
+  assert.equal(blockReason({ ...base, state: { stopped_confirmed: true } }), null);
 });
 
 test("phases map onto the four subtasks", () => {

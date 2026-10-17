@@ -22,6 +22,7 @@ from typing import Callable
 import numpy as np
 
 from console.live.server import LiveServer, MediaStore, camera_item, grid_item, scan_item, write_port_file
+from console.vehicle_outline import DLS08_MEASURED_CHASSIS
 from forklift_core.live.link import Channels, Link
 from forklift_core.live.pacing import Pacer
 from forklift_core.mission.commands import Context
@@ -69,6 +70,7 @@ class LiveRuntime:
                                          "load_state": False},
                             "media": {"camera_rgb": {"max_hz": camera_hz}, "scan": {"max_hz": 10},
                                       "grid": {"max_hz": 1}},
+                            "chassis": dict(DLS08_MEASURED_CHASSIS),  # display only (C3)
                             "provisional_limits": True}}
         self.server = LiveServer(self.channels, self.store, self.welcome, host=host, web_root=web_root)
         self.output, self.port_file = Path(output), port_file
