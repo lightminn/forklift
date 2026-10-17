@@ -563,14 +563,18 @@ class CandidateTracker:
                 rivals = [tr for tr in self._tracks if tr is not chosen and _gate(tr, obs[fits[0]], self.bounds)]
                 if all(tr.duplicate_of == chosen.id for tr in rivals):
                     priority = fits[0]  # the selected track wins only against its own suspected duplicates
-        live = self._live(frame.stamp_ns)
+        # shadows stay out of the matching; afterwards they veto readings that fit them (below)
+        shadows = [tr for tr in self._tracks if tr.shadow]
+        shadow_fits = {j for j, o in enumerate(obs) if any(_gate(sh, o, self.bounds) for sh in shadows)}
+        live = [tr for tr in self._live(frame.stamp_ns) if not tr.shadow]
         if priority is None:  # the selected track (if any) takes its natural stage under the 2B-3b rules
             active = live
             stages = []
         else:
             active = [tr for tr in live if tr is not chosen]
             stages = [("selected", [chosen])]
-        stale = [tr for tr in self._tracks if tr not in active and not (priority is not None and tr is chosen)]
+        stale = [tr for tr in self._tracks if tr not in active and not tr.shadow
+                 and not (priority is not None and tr is chosen)]
         stages += [("active", active), ("stale", stale)]
         for stage, tracks in stages:
             # the selected stage sees only its one observation; the others see what is still free
@@ -580,7 +584,8 @@ class CandidateTracker:
             blocked |= gated
             free -= gated
             for track, j in pairs:
-                if track.shadow:  # a shadow never accepts: the reading it would have taken is held
+                if track is not chosen and j in shadow_fits:
+                    # a reading an absorbed duplicate would have taken: held from any other track (2B-3e)
                     held += 1
                     held_now.add(track.id)
                     continue
@@ -607,7 +612,7 @@ class CandidateTracker:
                 tr.shadow = True
 
         new = 0
-        fresh = sorted((j for j in range(len(obs)) if j not in blocked),
+        fresh = sorted((j for j in range(len(obs)) if j not in blocked and j not in shadow_fits),
                        key=lambda j: (round(float(obs[j].mid[0]), 9), round(float(obs[j].mid[1]), 9), obs[j].key))
         for j in fresh:
             o = obs[j]

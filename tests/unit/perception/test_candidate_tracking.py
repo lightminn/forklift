@@ -886,9 +886,9 @@ def test_a_near_miss_duplicate_that_later_learned_another_reading_becomes_a_shad
     assert tr._tracks[1].known == "t11_06:x"
     report = tr.update(_frame(0.4, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", support_z=0.008, cid="c")]))
     assert report.accepted == {"c": 0} and report.absorbed == 1 and tr._tracks[1].shadow
-    # the shadow keeps its T11 hypothesis: a T11 reading S refuses is held, not lost to a new track
+    # the shadow keeps its T11 hypothesis: a T11 reading S refuses starts no new (duplicate) track
     report = tr.update(_frame(0.5, [_candidate((3.0, 0.0, 0.06), hypothesis="t11_06:x", support_z=0.015, cid="t")]))
-    assert report.accepted == {} and report.held == 1 and report.new == 0
+    assert report.accepted == {} and report.new == 0
 
 
 
