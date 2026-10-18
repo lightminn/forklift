@@ -145,7 +145,11 @@ def main(argv: list[str] | None = None) -> int:
     meta = json.loads((args.run / "meta.json").read_text())
     video = json.loads((args.run / "video_frames.json").read_text())
     result = json.loads((args.run / "result.json").read_text())
-    scans = scan_estimates(json.loads((args.run / "slam_records.json").read_text()))
+    records = json.loads((args.run / "slam_records.json").read_text())
+    if any(r.get("link") == "async" for r in records):
+        # Real-time plan D9a: an asynchronous link's records do not pair each scan with its applied correction.
+        raise SystemExit(f"{args.run}: asynchronous SLAM link records (a real-time run) are not supported")
+    scans = scan_estimates(records)
     with np.load(args.run / "slam_log.npz") as data:
         joint_t = data["joint_stamps_s"]
         base_pose = data["base_pose_world"].astype(float)

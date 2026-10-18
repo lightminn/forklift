@@ -1418,7 +1418,8 @@ def test_the_runner_stamps_every_leg_switch_and_the_plant_record_carries_frictio
     collider census records the friction coefficients of every bound material."""
     source = SCRIPT.read_text()
     loop = source[source.index("for step in range(int(120 * args.max_sim_seconds)):"):]
-    harvest = loop[: loop.index('stepper["fn"](pocket_frames and step % 12 == 0)')]
+    # (real-time plan D9c: the step also renders while a capture runs over the ticks)
+    harvest = loop[: loop.index('stepper["fn"]((pocket_frames and step % 12 == 0) or capturing_)')]
     assert "trackers.collect()" in harvest and 'book_clock["t"] = t' in harvest
     assert 'trackers = TrackerBook(state.setdefault("leg_switches", []), state.setdefault("tracker_versions", [])' in source
     # Drained in the finally block after the D8b recorder (which stays first) and before the records are written.

@@ -276,3 +276,23 @@ def test_a_stall_replan_keeps_another_legs_backoff():
     assert "plan_transport_leg" in w.names()
     assert w.obstacle["backoff"]["phase"] == "return_home"  # not this leg's: neither popped nor used
     assert w.core.trackers["transport"].config.cruise_speed_mps == 0.5
+
+
+def test_a_real_time_docking_stop_that_asks_its_match_stands_braking_without_the_old_follower():
+    """Codex D9 impl P2: the match asked from the docking stop -- that tick brakes, the old follower is not run
+    again (it would fail the endpoint heading the stop is there for)."""
+    w = World(docking={"status": "armed", "round": 2})
+    w.core.jobs = SimpleNamespace()
+    w.core.pending = None
+    asked = []
+
+    def ask(t):
+        asked.append(t)
+        w.core.pending = SimpleNamespace(site="dock")
+
+    w.core.dock_at_delivery_straight = ask
+    for _ in range(119):
+        w.tick(MISS)
+    out = w.tick(MISS)
+    assert asked == [50.0] and "update" not in w.names() and "slam_rear" not in w.names()
+    assert out.tracking.status == "braking" and out.tracking.speed_mps == 0.0

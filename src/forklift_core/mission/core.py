@@ -156,6 +156,9 @@ class MissionCore:
         self.jobs = None
         self.pending: SimpleNamespace | None = None  # the plan being waited for
         self.release_replan_needed: dict | None = None  # a discarded release replan to ask again when running
+        self.capture_live = None  # D9c: the capture running over control ticks
+        self.observation_live = None  # D9c: a finished capture's observation, handled on the next tick
+        self.capture_acquired_s: float | None = None  # D9c: its acquisition time, for the plan it asks
         self.fresh_depth_wait: tuple | None = None  # (since, acquisition stamp): an async near build's first frame
 
     def known_transition(self, from_phase: str, next_phase: str, t: float) -> None:
@@ -617,14 +620,7 @@ class MissionCore:
             # A correction change since the snapshot (a SLAM release): the
             # grid is re-projected now, never mixed with the new pose
             # (Codex L0b P1).
-            obstacle["version"] += 1
-            obstacle["applied"] = applied_now
-            obstacle["reprojections"] = obstacle.get("reprojections", 0) + 1
-            leg_now, leg_dir_now = trackers[ms.phase].leg_ahead()
-            obstacle["layer"].refresh(
-                t, applied_now, obstacle["version"], current_pose=tuple(float(v) for v in rear),
-                path_ahead=leg_now, loaded=loaded, direction=leg_dir_now,
-            )
+            self._reproject(t, applied_now, rear, loaded)
         if requested_speed != 0.0:
             direction = 1 if requested_speed > 0 else -1
         elif cusp_handed_ is not None:
@@ -1301,11 +1297,12 @@ class MissionCore:
                      "position_error_m": tracking.position_error_m, "yaw_error_rad": tracking.yaw_error_rad}
                 )
                 dock_at_delivery_straight(t)
-                rear = slam_rear(t)  # a retry may have released the correction
-                hooks.set_rear(rear)  # the runner's closures (grid_kwargs, ...) read its rear (Codex slice-3 P2)
-                slam["control"][-1][1:4] = rear.tolist()
-                tracking = trackers[ms.phase].update(rear, signed_speed, dt)
-                ms.last_tracking = tracking
+                if not (self.jobs is not None and self.job_pending()):  # D9b: else the match is asked; it stands
+                    rear = slam_rear(t)  # a retry may have released the correction
+                    hooks.set_rear(rear)  # the runner's closures (grid_kwargs, ...) read its rear (Codex slice-3 P2)
+                    slam["control"][-1][1:4] = rear.tolist()
+                    tracking = trackers[ms.phase].update(rear, signed_speed, dt)
+                    ms.last_tracking = tracking
         else:
             ms.dock_stop_ticks = 0
         goal_heading_miss = (
@@ -2144,7 +2141,9 @@ class MissionCore:
                           ctx={"base": tuple(float(v) for v in base), "yaw": float(yaw), "observation": observation,
                                "attempt_number": attempt_number, "planning_start": planning_start,
                                # the world time after the capture: what the tick would have stamped its depth with
-                               "acquired_s": float(hooks.now_s())})
+                               "acquired_s": float(hooks.now_s()) if self.capture_acquired_s is None
+                               else self.capture_acquired_s})
+            self.capture_acquired_s = None
             return SimpleNamespace(stop=False, observation=observation, near_leg=None, pending=True)
         plans = plan_transport(
             grid_world(scenario),
@@ -2493,20 +2492,46 @@ class MissionCore:
                 if near is not None and state.get("near_capture", {}).get("status") == "done":
                     build_near_tracker(t)  # in the hold the transition began
 
-    def capture_and_detect(self, t: float, rear, step: int) -> SimpleNamespace:
-        """The observe leg's arrival with perception: the attempt record, the capture (a port that steps the
-        physics until the truck stands, refused on a capture failure), its diagnostic dumps (the runner's), the
-        accepted pose as the capture base -- under SLAM the hold let go (except before the near capture) and
-        the control pose taken from the estimate at this instant, kept as the runner's mixed sample (q the
-        accepted truth, base/yaw/forward/rear the estimate's) -- the detector input and the detection, and the
-        re-observation stand's check. Returns everything the runner reads after it."""
-        ms, state, slam, pocket, hooks, options, near = (self.ms, self.state, self.slam, self.pocket, self.hooks,
-                                                         self.options, self.near)
-        adapter, G2, yaw_and_tilt = options.adapter, options.G2, options.yaw_and_tilt
-        perception_capture = hooks.perception_capture()
-        require, slam_odom_base, slam_rear, slam_error, detect_pockets = (
-            hooks.require, hooks.slam_odom_base, hooks.slam_rear, hooks.slam_error, hooks.detect_pockets)
-        rear_stamp = None  # set only under SLAM, as the runner's was
+    def _reproject(self, t: float, applied_now, rear, loaded) -> None:
+        """The grid re-projected with a new correction (the permission tick's statements)."""
+        ms, obstacle, trackers = self.ms, self.obstacle, self.trackers
+        obstacle["version"] += 1
+        obstacle["applied"] = applied_now
+        obstacle["reprojections"] = obstacle.get("reprojections", 0) + 1
+        if ms.phase in trackers:
+            leg_now, leg_dir_now = trackers[ms.phase].leg_ahead()
+        else:  # a phase without a follower (lift, lower, settle): the truck's own place
+            leg_now, leg_dir_now = np.array([tuple(float(v) for v in rear)]), 0
+        obstacle["layer"].refresh(
+            t, applied_now, obstacle["version"], current_pose=tuple(float(v) for v in rear),
+            path_ahead=leg_now, loaded=loaded, direction=leg_dir_now,
+        )
+
+    def slam_replies(self, t: float, replies, loaded) -> None:
+        """Real-time plan D9a: the SLAM replies in since the last tick, applied at this tick's start -- before any
+        mission work, plan or permission reads the pose -- in order, each recorded with its scan's own record and
+        what it changed; a changed applied correction re-projects the grid here, so this tick's pose and grid
+        share it (Codex D9 1st P2-4)."""
+        slam, obstacle, hooks = self.slam, self.obstacle, self.hooks
+        tracker = slam["tracker"]
+        before = tracker.applied
+        for reply, meta, sent_mono, received_mono in replies:
+            tracker.receive(reply.scan_id, reply.stamp_s, reply.status, reply.map_from_odom)
+            slam["records"].append({
+                **meta, "link": "async", "status": reply.status, "map_from_odom": list(reply.map_from_odom),
+                "received_after": list(tracker.received[0]) if tracker.received is not None else None,
+                "applied_after": list(tracker.applied[0]) if tracker.applied is not None else None,
+                "mode": tracker.mode, "hold": self.hold_count(), "sent_mono": sent_mono,
+                "received_mono": received_mono, "applied_tick_s": float(t), "slam_wall_s": reply.slam_wall_s})
+        if obstacle is None or tracker.applied is None or tracker.applied is before:
+            return
+        applied_now = tuple(float(v) for v in tracker.applied[0])
+        if applied_now != obstacle["applied"]:
+            self._reproject(t, applied_now, hooks.slam_rear(t), loaded)
+
+    def _new_attempt(self, t: float, rear, step: int):
+        """The observation attempt's record, appended (capture_and_detect's first statements)."""
+        ms, state = self.ms, self.state
         attempt_number = len(state["observation_attempts"]) + 1
         attempt = {
             "candidate_index": ms.next_candidate_index - 1,
@@ -2522,22 +2547,108 @@ class MissionCore:
             "t_before_capture_s": t,
         }
         state["observation_attempts"].append(attempt)
+        return attempt, attempt_number
+
+    def _capture_failed(self, attempt: dict, exc) -> SimpleNamespace:
+        """A capture failure: a STOP inside it pauses (``aborted``), anything else ends the run."""
+        hooks = self.hooks
+        attempt["capture_failure"] = exc.reason
+        attempt["capture_diagnostics"] = asdict(exc.diagnostics)
+        attempt["capture_attempts"] = exc.diagnostics.attempts
+        live_abort = getattr(hooks, "live_abort", None)
+        if live_abort is not None and live_abort():
+            # A STOP inside a failing capture (the truck stopped mid-capture) pauses, it does not end the run.
+            attempt["aborted"] = "live_stop"
+            return SimpleNamespace(aborted=True)
+        hooks.require(False, f"perception_capture_failed:{exc.reason}")
+
+    # --- real-time plan D9c: the capture over control ticks (live runs with the planning worker only) ----------------
+    def capture_begin(self, t: float, rear, step: int):
+        """Open the capture at the observe arrival and run it to its first render step (the guard, the start pose
+        and time taken now). None: it waits for the render steps; else the failure's result (``aborted``)."""
+        attempt, attempt_number = self._new_attempt(t, rear, step)
+        session = self.hooks.perception_capture().session(max_attempts=self.options.perception_max_attempts)
+        self.capture_live = SimpleNamespace(session=session, attempt=attempt, attempt_number=attempt_number, raw=None)
         try:
-            scene_input, frame_diagnostics, capture_attempts = (
-                perception_capture.capture(
-                    max_attempts=options.perception_max_attempts,
+            session.start()
+        except self.options.adapter.CaptureFailure as exc:
+            self.capture_live = None
+            return self._capture_failed(attempt, exc)
+        return None
+
+    def capture_stepped(self, stopped: bool):
+        """Right after a render step, before the next tick's start (the step's own STOP is still known): a STOP
+        or an expiry at the step ends the capture as the blocking one did (``aborted``); else the capture reads
+        on, and once it accepted a frame ``capture_live.raw`` holds it for the next tick (``capture_and_detect``
+        with ``raw``)."""
+        c = self.capture_live
+        if stopped:
+            c.session.close()
+            c.attempt["aborted"] = "live_stop"
+            self.capture_live = None
+            return SimpleNamespace(aborted=True)
+        try:
+            if c.session.stepped():
+                c.raw = c.session.result
+        except self.options.adapter.CaptureFailure as exc:
+            self.capture_live = None
+            return self._capture_failed(c.attempt, exc)
+        return None
+
+    def capture_abandon(self) -> None:
+        """A pause or a cancel while the capture runs: it is dropped; the arrival opens a new one when running."""
+        if self.capture_live is not None:
+            self.capture_live.session.close()
+            self.capture_live.attempt["aborted"] = "paused"
+            self.capture_live = None
+
+    def observation_freeze(self, t: float, captured) -> None:
+        """D9c: the observation is handled on the next tick; what it rests on is fixed now (Codex D9 1st P1)."""
+        self.observation_live = SimpleNamespace(captured=captured, applied=self._applied_now(),
+                                                gen=self.commands.mission_gen, phase=self.ms.phase,
+                                                acquired_s=float(self.hooks.now_s()), t=float(t))
+
+    def observation_take(self, t: float):
+        """The fixed observation if nothing it rests on changed (the correction, the run, the phase); else it is
+        dropped (counted, 3 at most per run) and None -- the arrival captures again."""
+        o, self.observation_live = self.observation_live, None
+        why = ("mission" if self.commands.status != "running" or self.commands.mission_gen != o.gen
+               else "phase" if self.ms.phase != o.phase
+               else "correction" if self._applied_now() != o.applied else None)
+        if why is None:
+            self.capture_acquired_s = o.acquired_s
+            return o.captured
+        drops = self.state.setdefault("observation_drops", [])
+        drops.append({"time_s": float(t), "captured_s": o.t, "why": why})
+        self.hooks.require(len(drops) <= self.ASYNC_MAX_DISCARDS, f"observation_discarded:{why}")
+        return None
+
+    def capture_and_detect(self, t: float, rear, step: int, raw=None) -> SimpleNamespace:
+        """The observe leg's arrival with perception: the attempt record, the capture (a port that steps the
+        physics until the truck stands, refused on a capture failure), its diagnostic dumps (the runner's), the
+        accepted pose as the capture base -- under SLAM the hold let go (except before the near capture) and
+        the control pose taken from the estimate at this instant, kept as the runner's mixed sample (q the
+        accepted truth, base/yaw/forward/rear the estimate's) -- the detector input and the detection, and the
+        re-observation stand's check. Returns everything the runner reads after it."""
+        ms, state, slam, pocket, hooks, options, near = (self.ms, self.state, self.slam, self.pocket, self.hooks,
+                                                         self.options, self.near)
+        adapter, G2, yaw_and_tilt = options.adapter, options.G2, options.yaw_and_tilt
+        perception_capture = hooks.perception_capture()
+        require, slam_odom_base, slam_rear, slam_error, detect_pockets = (
+            hooks.require, hooks.slam_odom_base, hooks.slam_rear, hooks.slam_error, hooks.detect_pockets)
+        rear_stamp = None  # set only under SLAM, as the runner's was
+        if raw is None:
+            attempt, attempt_number = self._new_attempt(t, rear, step)
+            try:
+                scene_input, frame_diagnostics, capture_attempts = (
+                    perception_capture.capture(
+                        max_attempts=options.perception_max_attempts,
+                    )
                 )
-            )
-        except adapter.CaptureFailure as exc:
-            attempt["capture_failure"] = exc.reason
-            attempt["capture_diagnostics"] = asdict(exc.diagnostics)
-            attempt["capture_attempts"] = exc.diagnostics.attempts
-            live_abort = getattr(hooks, "live_abort", None)
-            if live_abort is not None and live_abort():
-                # A STOP inside a failing capture (the truck stopped mid-capture) pauses, it does not end the run.
-                attempt["aborted"] = "live_stop"
-                return SimpleNamespace(aborted=True)
-            require(False, f"perception_capture_failed:{exc.reason}")
+            except adapter.CaptureFailure as exc:
+                return self._capture_failed(attempt, exc)
+        else:  # D9c: the capture ran over the ticks before this one (capture_begin, capture_stepped)
+            attempt, attempt_number, (scene_input, frame_diagnostics, capture_attempts) = raw
         live_abort = getattr(hooks, "live_abort", None)  # M-c: set only by the live runner
         if live_abort is not None and live_abort():
             # A STOP or an expiry at a physics step inside the capture (M-c plan C2): nothing after the raw capture
@@ -3511,8 +3622,14 @@ class MissionCore:
             start, config, geometry=geometry, travel_config=travel, **grid_kwargs(None),
         )
 
-    def dock_at_delivery_straight(self, t: float) -> None:
+    def dock_at_delivery_straight(self, t: float, answer=None) -> None:
         """Match the live scan to the delivery reference and re-place the goal.
+
+        Real-time plan D9b: in a real-time run (``self.jobs``) the first call stops at the match and asks the
+        worker for it; the truck stands; once the answer passes the D8 checks this is called again with
+        ``answer`` = (the asking call's inputs, the match result, its wall time) and goes on from the match with
+        those inputs -- the estimate, the scan and the truth it was matched on -- and the pose, grid and obstacles
+        of now. Nothing of the docking's state changes before the answer, so a dropped match leaves it armed.
 
         Codex v3.8: goal_est = A o R^-1 with R = X o Q o X^-1; the whole rest
         of the drop (delivery straight, withdraw, any transport replan) is
@@ -3576,18 +3693,30 @@ class MissionCore:
         reference = tuple(docking.get("delivery_rear_reference", delivery))
         seeded = docking.get("retry_seed_goal") is not None
         seed = tuple(docking["retry_seed_goal"]) if seeded else delivery
-        match_start = time.monotonic()
-        result = dock(
-            slam["reference_points"],
-            live,
-            rear_from_laser=rear_from_laser,
-            estimate_rear=estimate,
-            delivery_rear=seed,
-        )
+        if answer is None and self.jobs is not None:
+            self._request("dock", "dock", {"args": (slam["reference_points"], live), "kwargs": dict(
+                rear_from_laser=rear_from_laser, estimate_rear=estimate, delivery_rear=seed)},
+                t, rear, self._applied_now(), ctx={"estimate": estimate, "live": live, "rear_from_laser": rear_from_laser,
+                                                   "reference": reference, "seed": seed, "seeded": seeded,
+                                                   "truth_rear": tuple(float(v) for v in truth_rear)})
+            return
+        if answer is not None:
+            asked, result, answer_wall_s = answer
+            estimate, live, rear_from_laser = asked["estimate"], asked["live"], asked["rear_from_laser"]
+            reference, seed, seeded, truth_rear = asked["reference"], asked["seed"], asked["seeded"], asked["truth_rear"]
+        else:
+            match_start = time.monotonic()
+            result = dock(
+                slam["reference_points"],
+                live,
+                rear_from_laser=rear_from_laser,
+                estimate_rear=estimate,
+                delivery_rear=seed,
+            )
         # Evaluation only: where the delivery pose really is in the estimate frame.
         expected = compose(estimate, compose(invert(tuple(truth_rear)), reference))
         docking.update(
-            match_wall_s=time.monotonic() - match_start,
+            match_wall_s=time.monotonic() - match_start if answer is None else answer_wall_s,
             live_beams=int(len(live)),
             accepted=result.accepted,
             reason=result.reason,
@@ -3675,8 +3804,10 @@ class MissionCore:
         # Delivery corrections of ~10 cm are the point of docking (seed 0: 92 mm),
         # so the box is wider than the insertion one; what makes it safe is the
         # dry run arriving AND its swept loaded footprint staying clear.
+        # D9b: an asynchronous match is placed with the estimate it was matched on, but the straight starts where
+        # the truck stands when it is taken (Codex D9 impl P2).
         straight, offsets = straight_from_pose(
-            PlanningPose(*estimate),
+            PlanningPose(*(estimate if answer is None else tuple(float(v) for v in rear))),
             PlanningPose(*line_start),
             PlanningPose(*goal),
             max_lateral_m=0.12,
@@ -4227,6 +4358,16 @@ class MissionCore:
         ms.phase_started = p.t  # with the wait out of the work clock, as the tick that asked would have set it
         self._refresh_for_new_leg(t, rear)
 
+    def _dock_finish(self, p, value, t: float, rear) -> None:
+        """D9b: the match taken -- the rest of the docking from it, then this tick's pose as the asking call sites
+        read it after the docking (a retry may have released the correction)."""
+        hooks, slam = self.hooks, self.slam
+        self.state["async_plans"][-1]["dock_reason"] = getattr(value["result"], "reason", None)
+        self.dock_at_delivery_straight(t, answer=(p.ctx, value["result"], value.get("wall_s", 0.0)))
+        rear_ = hooks.slam_rear(t)
+        hooks.set_rear(rear_)
+        slam["control"][-1][1:4] = rear_.tolist()
+
     def job_pending(self) -> bool:
         return self.pending is not None
 
@@ -4334,7 +4475,7 @@ class MissionCore:
             return SimpleNamespace(hold=True)
         hooks.require(ok, f"async_plan_failed:{str(value).splitlines()[0] if value else ''}")
         {"observe": self._observe_finish, "release": self._release_finish,
-         "live_leg": self._live_leg_finish}[p.site](p, value, t, rear)
+         "live_leg": self._live_leg_finish, "dock": self._dock_finish}[p.site](p, value, t, rear)
         return SimpleNamespace(hold=True)
 
     def _drop(self, p, t: float, why: str, *, count: bool) -> None:

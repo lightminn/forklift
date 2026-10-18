@@ -1310,6 +1310,10 @@ def single_command(args) -> dict:
         feedback = result.get("feedback")
         if feedback == "slam_estimate":
             recs = json.loads((snap / "slam_records.json").read_bytes())
+            if any(x.get("link") == "async" for x in recs):
+                # Real-time plan D9a: an asynchronous link's record is not "the reply and the applied correction
+                # at the scan's stamp", which this study reads it as.
+                raise SystemExit(f"{snap}: asynchronous SLAM link records (a real-time run) are not supported")
             rec_by_stamp = {round(float(x["stamp_s"]), 6): x for x in recs}
             control = np.load(snap / "slam_control.npy")  # t, control rear (x, y, yaw), truth rear
             releases = sorted(float(e["time_s"]) for e in (result.get("slam_summary") or {}).get("holds", ())

@@ -426,3 +426,91 @@ def test_a_release_carries_from_the_pose_before_it_to_the_pose_after_it(tmp_path
     (_, (before, after), _), = [c for c in w.calls if c[0] == "carry"]
     np.testing.assert_allclose(before, [1.0, 2.0, 0.0])
     np.testing.assert_allclose(after, [1.1, 2.0, 0.01])
+
+
+class FakeDockJobs:
+    """The planning worker as the core sees it (real-time plan D9b)."""
+
+    def __init__(self):
+        self.submitted, self.answers, self.discarded = [], {}, []
+
+    def submit(self, name, payload):
+        self.submitted.append((name, payload))
+        return len(self.submitted)
+
+    def poll(self, job):
+        return self.answers.pop(job, None)
+
+    def discard(self, job):
+        self.discarded.append(job)
+
+
+def async_docking_world(tmp_path, monkeypatch, **kw):
+    w = docking_world(tmp_path, monkeypatch, **kw)
+    w.core.jobs = FakeDockJobs()
+    w.core.commands.status = "running"
+    w.slam.update(stop_now=True, holds=w.slam.get("holds", []))
+    w.slam["tracker"].mode = "holding"
+    w.hooks.slam_rear = lambda t: np.array([8.0, 0.0, 0.0])
+    w.hooks.set_rear = lambda r: w.log("set_rear")
+    w.slam["control"] = [[0.0, 0.0, 0.0, 0.0]]
+    w.hooks.wall = lambda: 100.0
+    return w
+
+
+def test_a_real_time_match_is_asked_from_the_worker_and_nothing_of_the_docking_changes_until_it_is_taken(
+        tmp_path, monkeypatch):
+    w = async_docking_world(tmp_path, monkeypatch)
+    (tmp_path / "sync").mkdir()
+    sync = docking_world(tmp_path / "sync", monkeypatch)  # the same docking, synchronous
+    sync.core.dock_at_delivery_straight(12.0)
+    withdraw_before = w.core.paths["withdraw"].poses.copy()
+    w.core.dock_at_delivery_straight(12.0)
+    assert "dock" not in w.names() and w.core.job_pending()
+    ((name, payload),) = w.core.jobs.submitted
+    assert name == "dock" and payload["kwargs"]["delivery_rear"] == (9.0, 0.0, 0.0) and len(payload["args"][1]) == 2
+    d = w.slam["docking"]
+    assert "rounds" not in d and "accepted_any" not in d and "previous_goal" not in d
+    np.testing.assert_array_equal(w.core.paths["withdraw"].poses, withdraw_before)
+    assert w.core.job_hold(12.5, np.array([8.0, 0.0, 0.0]), 0.0, False).hold  # waiting
+    match = SimpleNamespace(accepted=True, reason="ok", correction=[0.0], starts=[(True, "ok", (0.0, 0.0, 0.0))],
+                            start_details=[{"iterations": 3}], goal_estimate=(9.05, 0.02, 0.01),
+                            relative_rear=(-1.0, 0.0, 0.0))
+    w.core.jobs.answers[1] = (True, {"result": match, "wall_s": 1.1})
+    assert w.core.job_hold(13.3, np.array([8.0, 0.0, 0.0]), 0.0, False).hold and not w.core.job_pending()
+    # the synchronous docking's steps, without the match itself, and the same outcome
+    assert [n for n in w.names() if n != "set_rear"] == [n for n in sync.names() if n != "dock"]
+    s = sync.slam["docking"]
+    assert (d["status"], d["round"], d["keep_m"], d["previous_goal"]) == (s["status"], s["round"], s["keep_m"],
+                                                                        s["previous_goal"])
+    assert d["match_wall_s"] == 1.1 and w.state["async_plans"][-1]["dock_reason"] == "ok"
+    assert w.core.paths["transport"].length_m == pytest.approx(sync.core.paths["transport"].length_m)
+
+
+def test_a_dropped_real_time_match_leaves_the_docking_armed_to_be_asked_again(tmp_path, monkeypatch):
+    w = async_docking_world(tmp_path, monkeypatch)
+    w.core.dock_at_delivery_straight(12.0)
+    w.slam["tracker"].applied = ((0.05, 0.0, 0.0),)  # a new correction while it waited
+    w.core.jobs.answers[1] = (True, {"result": SimpleNamespace(accepted=True), "wall_s": 1.0})
+    assert w.core.job_hold(13.0, np.array([8.0, 0.0, 0.0]), 0.0, False).hold
+    assert w.state["async_plans"][-1]["dropped"] == "correction" and not w.core.job_pending()
+    assert "rounds" not in w.slam["docking"] and w.state["async_plan_drops"] == {"dock": 1}
+    w.core.dock_at_delivery_straight(13.1)  # the next arrival asks again
+    assert [n for n, _ in w.core.jobs.submitted] == ["dock", "dock"]
+
+
+def test_a_real_time_match_redraws_the_straight_from_where_the_truck_stands_when_it_is_taken(tmp_path, monkeypatch):
+    """Codex D9 impl P2: placed with the estimate it was matched on, started from the pose it is taken at."""
+    w = async_docking_world(tmp_path, monkeypatch)
+    starts = []
+    inner = w.hooks.straight_from_pose
+    w.hooks.straight_from_pose = lambda start, line_start, goal_, **k: starts.append(
+        (start.x_m, start.y_m, start.yaw_rad)) or inner(start, line_start, goal_, **k)
+    w.core.dock_at_delivery_straight(12.0)
+    w.hooks.rear = lambda: np.array([8.015, 0.005, 0.0])  # it stood 16 mm on while the match ran
+    match = SimpleNamespace(accepted=True, reason="ok", correction=[0.0], starts=[(True, "ok", (0.0, 0.0, 0.0))],
+                            start_details=[{"iterations": 3}], goal_estimate=(9.05, 0.02, 0.01),
+                            relative_rear=(-1.0, 0.0, 0.0))
+    w.core.jobs.answers[1] = (True, {"result": match, "wall_s": 1.1})
+    w.core.job_hold(13.3, np.array([8.015, 0.005, 0.0]), 0.0, False)
+    assert starts == [pytest.approx((8.015, 0.005, 0.0))]

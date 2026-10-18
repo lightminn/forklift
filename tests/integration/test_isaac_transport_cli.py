@@ -476,7 +476,8 @@ def test_the_delivery_match_inputs_are_recorded_without_stopping_the_match() -> 
     """2026-10-13: every delivery match round's inputs go to delivery_match_N.npz for
     offline replay; a failed write is noted and the round is still recorded (Codex P2)."""
     source = CORE.read_text()  # the delivery docking is a MissionCore method since M-a1 slice 6b
-    start = source.index("    def dock_at_delivery_straight(self, t: float) -> None:")
+    # (real-time plan D9b: ``answer`` carries an asynchronous match back in)
+    start = source.index("    def dock_at_delivery_straight(self, t: float, answer=None) -> None:")
     end = source.find("\n    def ", start + 10)
     body = source[start : end if end >= 0 else len(source)]
     save = body.index("f\"delivery_match_{len(docking.get('rounds', [])) + 1}.npz\"")
@@ -1018,3 +1019,13 @@ def test_mission_commands_options_validate_before_startup(tmp_path) -> None:
         )
         assert result.returncode == 2, (flags, result.stderr[-400:])
         assert expected in result.stderr, (flags, result.stderr[-400:])
+
+
+def test_a_live_slam_link_failure_ends_the_session_not_only_the_mission() -> None:
+    """Real-time plan D9a: the asynchronous link's failures and its warm-up raise SessionFailure (a RuntimeError, so
+    a run ends as before; a console that outlives missions tells it apart); the batch lockstep keeps require."""
+    source = SCRIPT.read_text()
+    assert "class SessionFailure(RuntimeError):" in source
+    assert source.count('raise SessionFailure(f"slam_link_failed: {exc}") from exc') == 3
+    assert 'raise SessionFailure("slam_prewarm_timeout")' in source
+    assert source.count('require(False, f"slam_link_failed: {exc}")') == 1  # the batch lockstep exchange
