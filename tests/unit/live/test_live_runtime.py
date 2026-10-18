@@ -310,3 +310,27 @@ def test_a_cancelled_mission_ends_the_mission_but_not_a_live_run():
     source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
     block = source[source.index("            if cancel_stop_"):][:300]
     assert block.startswith("            if cancel_stop_ and live is None:")
+
+
+def test_the_withdraw_tracking_certificate_is_checked_under_the_obstacle_layer_every_tick():
+    # 7610ed5 put the live first-leg replan between `if obstacle is not None:` and the withdraw tracking check, which
+    # then ran only inside the replan's branch (found by the persistent-console survey, 2026-10-18).
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse((Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text())
+    parents = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+    (call,) = [n for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)
+               and n.value.startswith("withdraw_tracking_exceeded")] or [
+        n for n in ast.walk(tree) if isinstance(n, ast.JoinedStr)
+        and any(isinstance(v, ast.Constant) and "withdraw_tracking_exceeded" in str(v.value) for v in n.values)]
+    ifs = []
+    node = call
+    while node in parents:
+        node = parents[node]
+        if isinstance(node, ast.If):
+            ifs.append(ast.unparse(node.test))
+    assert ifs[1] == "obstacle is not None", ifs[:3]

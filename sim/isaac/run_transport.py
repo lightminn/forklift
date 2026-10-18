@@ -5767,6 +5767,19 @@ def drive(S, isaac) -> None:
                 slam["control"].append([t, *rear.tolist(), *truth_rear.tolist()])
             if obstacle is not None:
                 obstacle["control_rear"] = tuple(float(v) for v in rear)  # known pallets fix against it
+                if ms.phase == "withdraw" and obstacle["layer"].corridor is not None and obstacle.get("withdraw_line"):
+                    # Plan v10 D5 (4) (Codex stage-1 P1-2, 2nd P2-3): every tick, standing or
+                    # arriving included, the certificate holds only while the truck stays on its
+                    # straight -- lateral offset plus the yaw swing at the fork tips within the
+                    # tracking bound; past it the truck stops.
+                    (wx_, wy_, wyaw_), _ = obstacle["withdraw_line"]
+                    lat_ = -(rear[0] - wx_) * math.sin(wyaw_) + (rear[1] - wy_) * math.cos(wyaw_)
+                    dyaw_ = math.atan2(math.sin(rear[2] - wyaw_), math.cos(rear[2] - wyaw_))
+                    dev_ = abs(lat_) + geometry.axle_to_fork_tip_m * abs(math.sin(dyaw_))
+                    wt_ = state.setdefault("withdraw_tracking", {"max_deviation_m": 0.0})
+                    wt_["max_deviation_m"] = max(wt_["max_deviation_m"], float(dev_))
+                    require(dev_ <= float(obstacle["layer"].known_config.get("tracking_m", 0.006)),
+                            f"withdraw_tracking_exceeded:{dev_:.4f}")
             if live_first_replan_["due"] and core.commands.status == "running":
                 # The operator's submit found the truck off the first leg (driven by hand): that leg is replanned
                 # from here before the follower's first tick, with the obstacle recovery's own replan (the leg's
@@ -5781,19 +5794,6 @@ def drive(S, isaac) -> None:
                     {"time_s": t, "phase": ms.phase, "rear": [float(v) for v in rear], "installed": bool(from_truck_)})
                 if not from_truck_:
                     core.commands.finish("failed", t)
-                if ms.phase == "withdraw" and obstacle["layer"].corridor is not None and obstacle.get("withdraw_line"):
-                    # Plan v10 D5 (4) (Codex stage-1 P1-2, 2nd P2-3): every tick, standing or
-                    # arriving included, the certificate holds only while the truck stays on its
-                    # straight -- lateral offset plus the yaw swing at the fork tips within the
-                    # tracking bound; past it the truck stops.
-                    (wx_, wy_, wyaw_), _ = obstacle["withdraw_line"]
-                    lat_ = -(rear[0] - wx_) * math.sin(wyaw_) + (rear[1] - wy_) * math.cos(wyaw_)
-                    dyaw_ = math.atan2(math.sin(rear[2] - wyaw_), math.cos(rear[2] - wyaw_))
-                    dev_ = abs(lat_) + geometry.axle_to_fork_tip_m * abs(math.sin(dyaw_))
-                    wt_ = state.setdefault("withdraw_tracking", {"max_deviation_m": 0.0})
-                    wt_["max_deviation_m"] = max(wt_["max_deviation_m"], float(dev_))
-                    require(dev_ <= float(obstacle["layer"].known_config.get("tracking_m", 0.006)),
-                            f"withdraw_tracking_exceeded:{dev_:.4f}")
             require(np.isfinite([base, ppos]).all(), "Nonfinite body state")
             if ms.phase == "lift":
                 # Every physics step, so the peak and the aborting state are
