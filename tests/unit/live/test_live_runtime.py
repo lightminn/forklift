@@ -26,6 +26,14 @@ class Clock:
         self.t += max(0.0, s)
 
 
+def _squash(text: str) -> str:
+    """Runs of whitespace as one space: a source test that does not hang on the runner's indentation (the tick body
+    moved one level in for the persistent console plan D6's catch)."""
+    import re
+
+    return re.sub(r"\s+", " ", text)
+
+
 _MADE: list = []  # every runtime a test made, closed after it (its live_log file; -W error, ws1 full suite)
 
 
@@ -280,7 +288,7 @@ def test_the_runner_hands_the_followed_path_to_the_live_state():
     from pathlib import Path
 
     source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
-    call = source[source.index("live.publish("):][:1600]
+    call = source[source.index("live.publish(\n"):][:1600]  # the tick's own call (live_failed's is on one line)
     assert "plan_key=" in call and "plan_poses=" in call
 
 
@@ -290,10 +298,10 @@ def test_a_cancelled_mission_ends_the_mission_but_not_a_live_run():
     from pathlib import Path
 
     source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
-    block = source[source.index("\n            if cancel_stop_") + 1:][:300]
-    assert block.startswith("            if cancel_stop_ and live is None:")
+    flat = _squash(source)
+    assert "if cancel_stop_ and live is None: break" in flat
     # persistent console plan D1: live, the confirmed cancel goes through the mission end (recorded)
-    assert 'if cancel_stop_ and live is not None:\n                    live.end_mission(t, "cancelled", "operator")' in source
+    assert 'if cancel_stop_ and live is not None: live.end_mission(t, "cancelled", "operator")' in flat
 
 
 def test_the_withdraw_tracking_certificate_is_checked_under_the_obstacle_layer_every_tick():
@@ -432,8 +440,8 @@ def test_a_completed_mission_ends_the_mission_but_not_a_live_run():
     from pathlib import Path
 
     source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
-    block = source[source.index("core.lift_and_timers(t, dt):"):][:500]
-    assert "if live is None:\n                    break" in block
+    block = _squash(source[source.index("core.lift_and_timers(t, dt):"):][:500])
+    assert "if live is None: break" in block
     assert 'live.end_mission(t, "complete", None)' in block and "paused_, requested_speed, curvature = True" in block
     assert "end=LiveEndHooks(stop=live_zero_wheels, unlock_wheels=live_unlock_wheels," in source
 
@@ -508,15 +516,15 @@ def test_the_runner_prepares_each_live_mission_from_where_the_truck_stands():
 
     source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
     # no setup ladder live (a live session starts without a mission), and the worker is required
-    assert 'if getattr(args, "live", False):\n' in source and "            initial_candidates = []\n" in source
+    assert 'if getattr(args, "live", False):\n' in source and "initial_candidates = []" in source
     assert 'raise ValueError("a live session needs the planning worker' in source
     # each submit is prepared once the control pose is this tick's, and stands while it is
-    assert ('if live is not None and core.commands.status in ("accepted", "preparing") and not core.job_pending():\n'
-            '                live_prepare(t, rear)') in source
+    flat = _squash(source)
+    assert ('if live is not None and core.commands.status in ("accepted", "preparing") and not core.job_pending(): '
+            'live_prepare(t, rear)') in flat
     assert source.index("live_prepare(t, rear)  #") < source.index("plan_wait_ = core.jobs is not None and core.job_hold(")
     assert 'core.commands.status in ("idle", "done", "failed", "cancelled"):' in source  # accepted is not paused
-    assert ('if live is not None and core.commands.status in ("accepted", "preparing"):\n'
-            '                plan_wait_ = True') in source
+    assert 'if live is not None and core.commands.status in ("accepted", "preparing"): plan_wait_ = True' in flat
     assert "clear_for_submit=ms.phase not in LIVE_POCKET_PHASES" in source
     # the adoption's runner part and the session's baseline, before the console starts
     assert "nonlocal scenario, truth_destination, initial_pallet, pickup_obstacle, pickup_zone, pickup_bounds" in source
@@ -567,3 +575,30 @@ def test_the_state_carries_the_scene_and_a_damaged_scene_refuses_submits(tmp_pat
     from sim.isaac import live_runtime
 
     assert 'msg["scene"] = self.scene' in inspect.getsource(live_runtime.LiveRuntime.publish)
+
+
+def test_a_live_missions_failure_in_its_tick_ends_the_mission_and_the_tick_finishes_once():
+    """Persistent console plan D6 (stage 3 design): one catch around the tick body; only live mission and scene
+    reasons are handled, the output and the physics step run once."""
+    import ast
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
+    tree = ast.parse(source)
+    (loop,) = [n for n in ast.walk(tree) if isinstance(n, ast.For)
+               and ast.unparse(n.iter) == "range(int(120 * args.max_sim_seconds))"]
+    assert ast.unparse(loop.body[0]) == "live_tick_out_ = live_stepped_ = False"
+    (body,) = [n for n in loop.body if isinstance(n, ast.Try)]
+    (handler,) = body.handlers
+    assert ast.unparse(handler.type) == "RuntimeError"
+    text = ast.unparse(handler)
+    assert ("if live is None or isinstance(exc_, SessionFailure) or classify_failure(str(exc_)) == 'session':\n"
+            "        raise") in text
+    assert "live_failed(t, str(exc_), live_tick_out_, live_stepped_" in text
+    # the flags follow the output and the physics step, and the step's flag comes before capture_stepped
+    inside = source[source.index("            try:\n                if early_ports:"):]
+    assert inside.index("live_tick_out_ = True") > inside.index("out_ = live.tick_end(")
+    step_at = inside.index('stepper["fn"]((pocket_frames and step % 12 == 0) or capturing_)')
+    assert step_at < inside.index("live_stepped_ = True") < inside.index("core.capture_stepped(")
+    failed = source[source.index("        def live_failed("):source.index("        for step in range(")]
+    assert failed.index("live.end_mission(t_") < failed.index("if not ticked_:") < failed.index("if not stepped__:")
