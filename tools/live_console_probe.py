@@ -39,6 +39,7 @@ class Probe:
         self.tick = None
         self.state = None
         self.targets = None
+        self.missions = None  # the session's results book (persistent console plan D1)
         self.replies: dict = {}
         self.seq = 0
         self.n = 0
@@ -98,9 +99,11 @@ class Probe:
                                         "mission": msg.get("mission"), "pacing": msg.get("pacing"),
                                         "latch": msg.get("stop_latch"), "reject": msg.get("last_teleop_reject"),
                                         "teleop_forbidden": msg.get("teleop_forbidden_reason"),
-                                        "permit": msg.get("permit")})
+                                        "permit": msg.get("permit"), "last_result": msg.get("last_result")})
                 elif t == "targets":
                     self.targets = msg
+                elif t == "missions":
+                    self.missions = msg
                 elif t in ("ack", "reject"):
                     self.replies[msg.get("request_id")] = (time.monotonic(), msg)
         except asyncio.CancelledError:
@@ -535,11 +538,90 @@ async def slow_scenario(p: Probe, args):
     await p.keep_alive(args.auto_s)
 
 
+async def teleop_drive(p: Probe, seconds: float, speed: float, curvature: float) -> dict | None:
+    """Pause, take the truck by hand, drive for ``seconds`` wall s, stop and hand back (PAUSED)."""
+    await p.request("mode_request", to="PAUSED")
+    await p.until(p.standing, 20, label="standing_before_teleop")
+    teleop = None
+    for _ in range(40):
+        teleop = await p.request("mode_request", to="TELEOP")
+        if teleop is None or (teleop.get("reason") not in ("not_stopped", "no_feedback:rear_axle_speed")
+                              and teleop.get("detail") != "pacing"):
+            break
+        await asyncio.sleep(0.5)
+    if not teleop or teleop["t"] != "ack":
+        return teleop
+    arm = await p.request("arm")
+    p.arm_gen = (arm or {}).get("arm_gen", 0)
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        await p.teleop(speed, curvature, True)
+        await asyncio.sleep(0.05)
+    stop_by = time.monotonic() + 15.0
+    while time.monotonic() < stop_by and not (p.state and p.standing(p.state)):
+        await p.teleop(0.0, 0.0, True)
+        await asyncio.sleep(0.05)
+    await p.request("mode_request", to="PAUSED")
+    return teleop
+
+
+async def cycle_scenario(p: Probe, args):
+    """Persistent console plan U2-U5: missions one after another in one session, each judged at its end (the
+    results book); optionally driven by hand first, so the first mission is prepared from elsewhere."""
+    await p.open()
+    await p.open_media()
+    await p.until(lambda s: True, 10, label="first_state")
+    lease = await p.request("lease_request")
+    p.lease_id = lease.get("lease_id") if lease else None
+    p.report["session"] = {"session_epoch": p.epoch, "lease_id": p.lease_id}
+    await p.until(lambda s: p.targets is not None, 10, label="targets")
+    await p.until(p.standing, 20, label="standing_at_start")
+    if args.pre_teleop_s > 0:
+        p.report["pre_teleop"] = await teleop_drive(p, args.pre_teleop_s, args.pre_teleop_speed,
+                                                    args.pre_teleop_curvature)
+    p.report["missions_run"] = []
+    for leg in args.cycle.split(","):
+        pallet_id, destination_id = leg.split(":")
+        await p.until(p.standing, 30, label="standing_before_submit")
+        await asyncio.sleep(1.0)
+        seen = ((p.state or {}).get("last_result") or {}).get("seq", 0)
+        submit = None
+        for _ in range(40):  # standing on the vehicle's own detector, and the list's revision as it is now
+            submit = await p.request("mission_submit", pallet_id=pallet_id, destination_id=destination_id,
+                                     targets_revision=p.targets["targets_revision"])
+            if submit is None or submit.get("reason") not in ("not_stopped", "no_feedback:rear_axle_speed",
+                                                              "stale_targets"):
+                break
+            await asyncio.sleep(0.5)
+        entry = {"pallet_id": pallet_id, "destination_id": destination_id, "submit": submit,
+                 "submitted_mono": time.monotonic()}
+        p.report["missions_run"].append(entry)
+        if not submit or submit.get("t") != "ack":
+            continue
+        end_by = time.monotonic() + args.mission_timeout_s
+        while time.monotonic() < end_by and p.closed_code is None:
+            await p.until(lambda s: ((s.get("last_result") or {}).get("seq", 0) > seen) or s.get("mode") == "STOPPED",
+                          end_by - time.monotonic(), label=f"end:{leg}")
+            if p.state is None or p.state.get("mode") != "STOPPED" or p.closed_code is not None:
+                break
+            await p.until(p.standing, 20, label="standing_again")
+            await p.request_until_standing("rearm")
+            await p.request_until_standing("mission_resume", mission_id=submit.get("mission_id"))
+        entry["result"] = (p.state or {}).get("last_result")
+        entry["ended_mono"] = time.monotonic()
+    p.report["missions_message"] = p.missions
+    p.report["close_code"] = p.closed_code
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port-file", type=Path, required=True)
     ap.add_argument("--report", type=Path, required=True)
-    ap.add_argument("--scenario", choices=("main", "slow", "marker", "approach", "planwait"), default="main")
+    ap.add_argument("--scenario", choices=("main", "slow", "marker", "approach", "planwait", "cycle"), default="main")
+    ap.add_argument("--cycle", default="P-1:D-1,P-1:D-0,P-1:D-1", help="cycle scenario: pallet:destination,...")
+    ap.add_argument("--pre-teleop-s", type=float, default=0.0, help="cycle scenario: drive by hand first (wall s)")
+    ap.add_argument("--pre-teleop-speed", type=float, default=0.5)
+    ap.add_argument("--pre-teleop-curvature", type=float, default=0.3)
     ap.add_argument("--wait-offset-s", type=float, default=4.0,
                     help="planwait scenario: standing this long in AUTO observe is taken as the plan wait")
     ap.add_argument("--hold-s", type=float, default=5.0, help="planwait scenario: standing watched after pause/STOP")
@@ -579,7 +661,7 @@ def main():
     p = Probe(info["port"], report)
     try:
         scenario = {"main": main_scenario, "slow": slow_scenario, "marker": marker_scenario,
-                    "approach": approach_scenario, "planwait": planwait_scenario}[args.scenario]
+                    "approach": approach_scenario, "planwait": planwait_scenario, "cycle": cycle_scenario}[args.scenario]
         asyncio.run(scenario(p, args))
     finally:
         report["frames"] = p.frames
