@@ -525,7 +525,7 @@ D2 의 `mission_start` 는 작업자 작업 `observe_ladder` 로 한다. 이름 
 - 소스 시험: 실시간 시작이 셋업 사다리를 건너뜀, 지운 임시 처리가 남지 않음.
 - Isaac: U2·U3·U4·U5.
 
-### D6 구현 설계 (3단계, 2026-10-18, 2단계 9803b9c 수렴 뒤; 2판 — Codex 설계 검토 1회차 반영)
+### D6 구현 설계 (3단계, 2026-10-18, 2단계 9803b9c 수렴 뒤; 3판 — Codex 설계 검토 1·2회차 반영)
 
 **분류표.** `forklift_core/mission/failures.py` 의 `classify(reason) -> "mission" | "scene" | "session"`. 사유 접두로 고르고(가장 긴 접두), 표에 없으면 `session` 이다.
 - **scene**(참값 검사): `Excessive body tilt`, `Actual truck/load footprint overlap`, `Measured pallet footprint overlap`, `Measured pallet solid overlap`, `Pallet dropped during transport`, `Pallet slipped off forks`, `Pallet displaced before pickup`, `Forbidden fork/pallet contact`.
@@ -553,7 +553,12 @@ D2 의 `mission_start` 는 작업자 작업 `observe_ladder` 로 한다. 이름 
 - `end_reset` 이 미션의 release 예약(`pending_release`, `release_wait_from`)을 지운다. 남기면 다음 틱 `release_gate` 의 10 s 시한이 매 틱 같은 실패를 낸다.
 - tracker 가 holding 이고 포크가 비어 있으면(아래 단계 기준) 종료용 해제를 한다. 비어 있다는 것은 종료 단계가 포켓·적재 단계가 아니라는 뜻이다.
 - 서 있으면 그 틱에 하고, 아니면 설 때까지 미룬다(`release_gate` 가 미션 없이도 처리한다).
-- 해제는 `release_slam` → 재투영(`_reproject`) → 회계(`slam["holds"]` 에 `reason: "mission_end"`)만 한다. 계획·경로·재관찰 예약은 없다(U28 사후조건, CPU 시험).
+- 해제는 다음만 한다:
+  1. `release_slam`
+  2. 대상 목록의 재표현: 좌표계 변화 `after ∘ before⁻¹` 로 팔레트(실린 것 제외)와 목적지 자세를 옮기고, 보정 버전·revision 을 올린다(`set_correction_version(…, reexpress)`). 종료 뒤에는 `refresh_targets` 가 돌지 않으므로 여기서 한다(Codex 2회차 P2).
+  3. 재투영(`_reproject`)
+  4. 회계(`slam["holds"]` 에 `reason: "mission_end"`)
+- 계획·경로·재관찰 예약은 없다(U28 사후조건). 즉시 해제와 지연 해제 모두 CPU 시험으로 확인한다.
 - 포크가 포켓·적재 단계면 hold 를 유지하고 제출은 `recovery_required` 다(6단계 D4).
 
 **종료 뒤 수동 조종(Codex P1-1, D5 전까지의 임시 조건).**
@@ -564,7 +569,7 @@ D2 의 `mission_start` 는 작업자 작업 `observe_ladder` 로 한다. 이름 
 
 **미션 없는 동안의 2D 겹침(Codex P2-7).** 실시간에서 진행 중 미션이 없으면 팔레트 사각형을 2D 겹침 검사(`checked_obstacles`)에서 뺀다.
 - 수동으로 포크를 포켓에 넣으면 2D 사각형은 겹쳐도 실제로는 닿지 않는다.
-- 실제 접촉은 3D 검사(`Forbidden fork/pallet contact`, `Measured pallet solid overlap`)가 본다.
+- 실제 접촉은 포크·팔레트 3D 접촉 검사(`Forbidden fork/pallet contact`)가 본다. 이 검사는 지금 insert·withdraw 에서만 도는데, 실시간에서 미션이 없는 동안에는 **모든 단계에서** 돌린다(Codex 2회차 P2). 수동 조종으로 포크가 블록에 닿으면 장면 손상으로 래치된다.
 - 소품과의 2D 겹침은 그대로 장면 손상이다.
 
 **장면 손상 래치.**
