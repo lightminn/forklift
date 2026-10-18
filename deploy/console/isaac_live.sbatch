@@ -63,7 +63,7 @@ echo "host=$(hostname) job=$JOB out=$OUT port=$PORT factor=$FACTOR"
 "$VENV_PY" "$ROOT/tools/live_supervisor.py" --out "$OUT" --port-file "$OUT/live_port.json" \
   --bridge "[\"bash\", \"$OUT/bridge.sh\", \"{epoch}\", \"{epoch_dir}\"]" \
   --bridge-stop "[\"bash\", \"$OUT/stop.sh\", \"{epoch}\"]" \
-  --bridge-ready "{epoch_dir}/bridge/bridge_ready" \
+  --bridge-ready "{epoch_dir}/bridge/bridge_ready" --exit-file "{epoch_dir}/run/exit_code" \
   --runner "[\"bash\", \"$OUT/runner.sh\", \"{epoch}\", \"{epoch_dir}\", \"{port_file}\"]" &
 SUP=$!
 wait $SUP

@@ -68,3 +68,17 @@ def test_no_runner_starts_without_its_bridge_ready(tmp_path):
                            bridge=[PY, "-c", "pass"], bridge_ready="{epoch_dir}/bridge/bridge_ready",
                            ready_timeout_s=0.2)
     assert result["end"] == "failing" and result["codes"] == [1, 1, 1] and not ran.exists()
+
+
+def test_the_runners_own_exit_file_wins_over_the_process_code(tmp_path):
+    """Isaac's app.close() ended the process with 0 before the runner's SystemExit (ws1 2026-10-18: a SLAM link
+    failure and an obstacle failure both exited 0); the runner writes its code first and that is what counts."""
+    runner = [PY, "-c", "import sys,pathlib; e=int(sys.argv[1]); d=pathlib.Path(sys.argv[2]) / 'run'; d.mkdir();"
+              "(d / 'exit_code').write_text(str([3, 1, 0][e - 1])); sys.exit(0)", "{epoch}", "{epoch_dir}"]
+    result = run(tmp_path, runner, exit_file="{epoch_dir}/run/exit_code")
+    assert result["codes"] == [3, 1, 0] and result["end"] == "ended"
+
+
+def test_a_process_that_ends_without_its_exit_file_is_a_crash(tmp_path):
+    result = run(tmp_path, [PY, "-c", "pass"], exit_file="{epoch_dir}/run/exit_code", max_epochs=1)
+    assert result["codes"] == [1]

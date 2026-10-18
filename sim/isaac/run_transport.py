@@ -7223,6 +7223,9 @@ def main() -> None:
             ),
             flush=True,
         )
+        # The exit code as a file too, before app.close(): Isaac ends the process with 0 there whatever the run did
+        # (ws1 2026-10-18), so a supervisor reads this (persistent console plan D9).
+        (args.output / "exit_code").write_text(str(state.get("live_exit_code", 0) if state["success"] else 1))
         if app is not None:
             app.close()
     # A live session's own end code (0 ended, 3 a new scene) only when the run ended cleanly: a failure in its closing

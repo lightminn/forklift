@@ -10,6 +10,9 @@ one connection, so a new one each epoch) and the runner. The runner's exit decid
 
 - 0, the session ended: stop.
 - 3, the operator asked for a new scene: the next epoch at once.
+With ``--exit-file`` the runner's own code file counts, not the process's: Isaac's ``app.close()`` ends the process with
+0 whatever happened; a runner that wrote no file crashed.
+
 - anything else (a session failure, a crash): the port file says ``crashed`` (the runner may have left it
   ``running``), then the next epoch after a backoff; three such ends in a row stop the supervisor.
 
@@ -59,7 +62,7 @@ def _mark_crashed(port_file: Path, epoch: int, code: int) -> None:
 
 def supervise(*, out: Path, runner: list[str], port_file: Path, backoff_s: float = 10.0, max_failures: int = 3,
               max_epochs: int | None = None, bridge: list[str] | None = None, bridge_stop: list[str] | None = None,
-              bridge_ready: str | None = None, ready_timeout_s: float = 120.0) -> dict:
+              bridge_ready: str | None = None, ready_timeout_s: float = 120.0, exit_file: str | None = None) -> dict:
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     codes, failures, epoch = [], 0, 0
@@ -80,6 +83,15 @@ def supervise(*, out: Path, runner: list[str], port_file: Path, backoff_s: float
             if ready:
                 _log(out, {"event": "start", "epoch": epoch})
                 code = subprocess.run(_fill(runner, **values)).returncode
+                if exit_file is not None:
+                    # The runner's own code, written before Isaac's app.close() -- which ends the process with 0
+                    # whatever the run did (ws1 2026-10-18). No file: it did not get that far, a crash.
+                    path = Path(_fill([exit_file], **values)[0])
+                    try:
+                        code = int(path.read_text().strip())
+                    except (OSError, ValueError):
+                        _log(out, {"event": "no_exit_file", "epoch": epoch, "process_code": code})
+                        code = code if code not in (ENDED, NEW_SCENE) else 1
             else:  # no bridge: no runner (it would fail its SLAM warm-up); counted as a failed epoch
                 _log(out, {"event": "bridge_not_ready", "epoch": epoch})
                 code = 1
@@ -109,6 +121,7 @@ def main(argv=None) -> int:
     ap.add_argument("--bridge", default=None, help="starts the epoch's SLAM bridge (JSON list), before the runner")
     ap.add_argument("--bridge-stop", default=None, help="removes it after the runner (JSON list)")
     ap.add_argument("--bridge-ready", default=None, help="a file the bridge writes when it accepts")
+    ap.add_argument("--exit-file", default=None, help="the runner's own exit code file (its process code otherwise)")
     ap.add_argument("--backoff-s", type=float, default=10.0)
     ap.add_argument("--max-failures", type=int, default=3)
     ap.add_argument("--max-epochs", type=int, default=None)
@@ -116,7 +129,7 @@ def main(argv=None) -> int:
     load = (lambda text: None if text is None else json.loads(text))
     result = supervise(out=args.out, runner=load(args.runner), port_file=args.port_file, backoff_s=args.backoff_s,
                        max_failures=args.max_failures, max_epochs=args.max_epochs, bridge=load(args.bridge),
-                       bridge_stop=load(args.bridge_stop), bridge_ready=args.bridge_ready)
+                       bridge_stop=load(args.bridge_stop), bridge_ready=args.bridge_ready, exit_file=args.exit_file)
     print(json.dumps(result), flush=True)
     return 0 if result["end"] == "ended" else 1
 
