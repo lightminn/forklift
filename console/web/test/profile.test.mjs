@@ -198,3 +198,23 @@ test("a forbidden drive names the policy's reason, not the permit's code (2026-1
 test("a reject without a Korean text shows its code", () => {
   assert.equal(rejectText("mission_active"), "mission_active");
 });
+
+test("plan D14: each lift button follows the allowed directions, and the travel is the state's", async () => {
+  const { liftControls } = await import("../js/profile.js");
+  assert.deepEqual(liftControls({ lift_dirs: [-1, 1], lift_limit_m: 0.28 }), { up: true, down: true, limitMm: 280 });
+  assert.deepEqual(liftControls({ lift_dirs: [-1], lift_limit_m: 0.28 }), { up: false, down: true, limitMm: 280 });
+  assert.deepEqual(liftControls({ lift_dirs: [], lift_limit_m: 0.2 }), { up: false, down: false, limitMm: 200 });
+  // an older back end without lift_dirs: lift_allowed for both, the old 280 mm
+  assert.deepEqual(liftControls({ lift_allowed: true }), { up: true, down: true, limitMm: 280 });
+});
+
+test("plan D14: the recovery reasons and the straight reverse are said in Korean", async () => {
+  const { recoveryNote } = await import("../js/profile.js");
+  for (const r of ["recovery:lower_first", "recovery:ground_wait", "recovery:evidence", "recovery:misaligned",
+    "recovery:unknown", "recovery:no_lift_measure", "recovery:no_steering", "recovery:steering"]) {
+    assert.notEqual(forbidText(r), r, r);
+  }
+  assert.match(recoveryNote({ drive_mode: "reverse_straight", recovery: { stage: "in_pocket" } }), /곧게.*인증 없음/);
+  assert.match(recoveryNote({ drive_mode: "reverse_straight", recovery: { stage: "manual_clear" } }), /구역/);
+  assert.equal(recoveryNote({ drive_mode: "normal", recovery: null }), "");
+});

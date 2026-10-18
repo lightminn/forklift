@@ -1,6 +1,8 @@
 """The live session's spooled records (persistent console plan D8): which lists go to the spool, and the end-of-run
 summaries a live run makes from the chunks one at a time -- the same numbers a batch run makes from the whole list."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -160,7 +162,7 @@ def test_the_live_teleop_permit_takes_the_pallet_zones_and_advances_them():
     """Plan D10: the target pallets on the same arcs and outline as the grid permit; the slower wins; the installed
     distances are advanced by the same driving; the U11 control flag turns it off (live only)."""
     src = _runner()
-    assert "live_zones_from(core.targets, pickup_zone), core.targets.revision, pose_, curvatures, direction," in src
+    assert "zones_ = live_zones_from(core.targets, pickup_zone)" in src and "live_pallet_perm.limit(zones_, core.targets.revision" in src
     assert "if pallet_[0] < result_[0]:" in src
     assert src.index("live_perm.advance(driven_)") < src.index("live_pallet_perm.advance(driven_)")
     assert "if obstacle is not None and not args.live_test_no_pallet_permit else None" in src
@@ -207,10 +209,10 @@ def test_the_runner_feeds_the_recovery_its_evidence_checks_and_outcome():
     assert src.index("core.cargo.observe(ms.phase, rear)") < src.index("live_safety_ = core.safety_state(t)")
     assert "core.cargo.trace_valid = False" in src and "trace_evidence = live_records.TraceEvidence()" in src
     # plan D4b: the back-out too, with the whole truck's contacts as when free
-    assert 'if ms.phase in ["insert", "withdraw", "recover_withdraw"] or live_free_ or clear_out_:' in src
-    assert "if live_free_ or clear_out_:" in src and 'clear_out_ = ms.phase == "clear_out"' in src
+    assert 'if checks_phase_ in ["insert", "withdraw", "recover_withdraw"] or live_free_ or clear_out_ or withdraw_watch_:' in src
+    assert "if live_free_ or clear_out_ or withdraw_watch_:" in src and 'clear_out_ = ms.phase == "clear_out"' in src
     assert 'core.observe_motion(slam["odom_rear"] if slam is not None else rear)' in src
-    assert 'if ms.phase in ["insert", "extract", "withdraw", "recover_withdraw"]:' in src
+    assert 'if checks_phase_ in ["insert", "extract", "withdraw", "recover_withdraw"]:' in src
     assert '"recovery_required" if core.commands.recovery else "failed"' in src
 
 
@@ -230,3 +232,47 @@ def test_the_runner_publishes_the_retrace_and_keeps_a_recovery_refusals_reason()
     assert 'live.end_mission(t, "recovery_required", core.commands.end_reason)' in src
     end_ = src.index("core.cargo.observe(ms.phase, rear)")
     assert src.index("trace_evidence.update(ms.phase", end_) < src.index("live_safety_ = core.safety_state(t)")
+
+
+def test_the_manual_ground_verdict_moves_the_evidence_to_the_floor_and_idle_keeps_it():
+    """Plan D14: lowered by hand, the pallet's floor pose is the reference; idle ticks (an ended mission's phase is
+    not the truck's) keep the reference they have -- backing out with the pallet still is valid, dragging it is not."""
+    ev = live_records.TraceEvidence()
+    ev.update("insert", (3.6, 0.0, 0.0), (5.0, 0.0, 0.0))
+    ev.update("lift", (3.9, 0.0, 0.0), (5.0, 0.0, 0.0))
+    assert ev.update("idle", (3.9, 0.0, 0.0), (5.0, 0.0, 0.0))  # riding, ended: still the riding reference
+    ev.ground((5.0, 0.0, 0.0))
+    assert ev.update("idle", (3.5, 0.0, 0.0), (5.0, 0.0, 0.0))  # backed out 0.4 m, the pallet on the floor
+    assert not ev.update("idle", (3.3, 0.0, 0.0), (4.8, 0.0, 0.0))  # dragged with the forks: lost
+    ev.ground((4.8, 0.0, 0.0))
+    assert not ev.update("idle", (3.3, 0.0, 0.0), (4.8, 0.0, 0.0))  # a lost evidence is not revived
+
+
+def test_the_runner_wires_the_manual_recovery():
+    src = _runner()
+    assert "core.manual_recovery_tick(t, rear, standing=bool(live.arbiter.stop_confirmed))" in src
+    assert src.index("core.manual_recovery_tick(") < src.index("live_safety_ = core.safety_state(t)")
+    assert '"lift_command_m": float(ms.lift_command)' in src and "ms.lift_command = float(out_.lift_target_m)" in src
+    assert "ms.lift_command = float(live._lift_latch)" in src
+    assert "core.hooks.trace_ground = lambda: trace_evidence.ground(" in src
+    assert 'trace_evidence.update(ms.phase if core.commands.adopted_id is not None else "idle"' in src
+    assert "core.manual_clear_done(now_)" in src and 'z.zone_id != ctx_["pallet_id"]' in src
+    assert 'state.setdefault("uncertified_teleop_withdraw", [])' in src
+    assert 'core.cargo.invalidate("teleop_withdraw_contact")' in src
+    near = (Path(__file__).resolve().parents[3] / "sim" / "isaac" / "near_tracking.py").read_text()
+    assert '"live_test_recovery_blocked": False' in near
+
+
+def test_the_urdf_lift_limit_is_the_models_or_the_documented_default(tmp_path):
+    import ast
+    import math as _math
+
+    src = _runner()
+    fn = next(n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.FunctionDef) and n.name == "urdf_lift_limit")
+    scope = {"math": _math}
+    exec(compile(ast.Module([fn], []), "run_transport.py", "exec"), scope)
+    root = Path(__file__).resolve().parents[3]
+    assert scope["urdf_lift_limit"](root / "sim/models/dls08_measured/forklift.urdf") == (0.28, "urdf")
+    (tmp_path / "x.urdf").write_text("<robot name='x'/>")
+    assert scope["urdf_lift_limit"](tmp_path / "x.urdf") == (0.20, "default")
+    assert scope["urdf_lift_limit"](tmp_path / "missing.urdf") == (0.20, "default")

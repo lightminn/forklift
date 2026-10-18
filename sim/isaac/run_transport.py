@@ -685,6 +685,9 @@ def arguments() -> argparse.Namespace:
                         help="M-c tests only (plan C5): the lift follows a non-periodic wave so the carriage camera's "
                         "horizon tells the sim time a frame's pixels were drawn at; the lift height is logged every "
                         "physics step -- for a run without a mission")
+    parser.add_argument("--live-test-recovery-blocked", action="store_true",
+                        help="Persistent console plan D14 tests only (U20 c): the automatic recovery's retrace is "
+                        "refused with its evidence valid, so the mission ends recovery_required for a manual recovery")
     parser.add_argument("--live-test-no-pallet-permit", action="store_true",
                         help="Persistent console plan D10 tests only (U11's control): the teleop permit does not see "
                         "the target pallets, as before D10")
@@ -901,7 +904,8 @@ def arguments() -> argparse.Namespace:
         parser.error("--live does not take --repeat-captures (its captures bypass the stop boundary, plan C2)")
     if args.live and args.record_boundary:
         parser.error("--live is not replayed: not with --record-boundary (plan C4)")
-    if not args.live and (args.live_test_permit_compare or args.live_test_scan_silence or args.live_test_no_pallet_permit):
+    if not args.live and (args.live_test_permit_compare or args.live_test_scan_silence or args.live_test_no_pallet_permit
+                          or args.live_test_recovery_blocked):
         parser.error("--live-test-permit-compare and --live-test-scan-silence are for --live runs only")
     if args.live and not 0 < args.live_factor <= 1:
         # The limits are divided by it (plan C4a); above 1 the 0.05 s tick would exceed a quarter of the command age.
@@ -1631,6 +1635,22 @@ def path_stats(path) -> dict:
         "gear_changes": int(np.count_nonzero(np.diff(directions))) if len(directions) > 1 else 0,
         "search_attempts": [list(entry) for entry in getattr(path, "search_attempts", ())],
     }
+
+
+def urdf_lift_limit(urdf_path) -> tuple[float, str]:
+    """Persistent console plan D14 (main condition 2): the manual lift's travel, the model's fork_lift joint upper
+    limit; without one, the autonomous lift target 0.20 m (and that it was the default)."""
+    import xml.etree.ElementTree as ET
+
+    try:
+        for joint in ET.parse(str(urdf_path)).getroot().iter("joint"):
+            if joint.get("name") == "fork_lift" and joint.find("limit") is not None:
+                upper = float(joint.find("limit").get("upper"))
+                if math.isfinite(upper) and upper > 0:
+                    return upper, "urdf"
+    except (OSError, ET.ParseError, TypeError, ValueError):
+        pass
+    return 0.20, "default"
 
 
 class TrackerBook(dict):
@@ -5316,6 +5336,7 @@ def drive(S, isaac) -> None:
             # M-c (docs/plans/2026-10-17-m-c-isaac-live-runner.md): the arbiter, its console server and the pacing.
             from forklift_core.control.path_tracking import ackermann_command as live_ackermann
             from forklift_core.safety.arbiter import ArbiterConfig as LiveArbiterConfig
+            from forklift_core.safety.teleop_drive import TeleopLimits as LiveTeleopLimits
             from forklift_core.safety.teleop_drive import BundlePermit as LiveBundlePermit
             from forklift_core.safety.teleop_drive import arc_permit as live_arc_permit
             from forklift_core.control.drive_permission import DrivePermission as LiveDrivePermission
@@ -5392,9 +5413,56 @@ def drive(S, isaac) -> None:
             # Persistent console plan D10: the pallets the LiDAR plane does not see are keep-out zones for teleop.
             from forklift_core.safety.pallet_permit import PalletPermit as LivePalletPermit, zones_from as live_zones_from
 
+            # Plan D14: the manual lift's travel and rate (within the autonomous ramp's, main condition 2).
+            live_lift_limit_, live_lift_source_ = urdf_lift_limit(args.forklift_urdf)
+            state["teleop_lift"] = {"limit_m": live_lift_limit_, "limit_source": live_lift_source_,
+                                    "rate_mps": LiveTeleopLimits().lift_rate_mps}
+            require(LiveTeleopLimits().lift_rate_mps <= float(settings["lift_rate_mps"]) + 1e-12,
+                    "teleop lift rate above the autonomous lift_rate_mps")
             live_pallet_perm = (LivePalletPermit(obstacle["layer"].permission.config.stopping,
                                                  step_m=obstacle["layer"].permission.config.step_m)
                                 if obstacle is not None and not args.live_test_no_pallet_permit else None)
+            # Plan D14: the same permit without the recovered pallet's exemption, asked in the manual clear only --
+            # the clear ends when it allows the drive's own reverse bundle (Codex D14 design rounds 2-3 P2-1).
+            live_pallet_full = (LivePalletPermit(obstacle["layer"].permission.config.stopping,
+                                                 step_m=obstacle["layer"].permission.config.step_m)
+                                if live_pallet_perm is not None else None)
+            core.hooks.test_recovery_blocked = bool(args.live_test_recovery_blocked)
+
+            live_withdraw = {"open": None, "watch": False}  # plan D14: the uncertified teleop withdraw's episode
+
+            def live_teleop_withdraw(t_, out_, rear_):
+                """Plan D14 (main condition 4): every stretch the recovery's straight reverse moves is recorded as an
+                uncertified teleop withdraw; the contact watch runs through it and until the truck stands."""
+                moving_ = (out_.source == "teleop" and out_.policy.drive_mode == "reverse_straight"
+                           and abs(float(out_.speed_mps)) > 1e-9)
+                depth_ = core.cargo.depth(rear_) if core.cargo.anchor is not None else None
+                ep_ = live_withdraw["open"]
+                if moving_:
+                    if ep_ is None:
+                        ep_ = live_withdraw["open"] = {"start_s": float(t_), "start_depth_m": depth_,
+                                                       "start_rear": [float(v) for v in rear_],
+                                                       "pallet_id": (core.cargo.recovery_context or {}).get("pallet_id")}
+                    ep_.update(end_s=float(t_), end_depth_m=depth_, end_rear=[float(v) for v in rear_])
+                elif ep_ is not None:
+                    why_ = ("stop" if out_.mode == "STOPPED" or out_.stop_kind == "preempt"
+                            else "mode_change" if out_.mode != "TELEOP"
+                            else "misaligned" if out_.policy.reason == "recovery:misaligned"
+                            else "evidence" if out_.policy.reason == "recovery:evidence"
+                            else "stopped")
+                    live_teleop_withdraw_close(t_, why_)
+                live_withdraw["watch"] = moving_ or (live_withdraw["watch"] and not live.arbiter.stop_confirmed)
+
+            def live_teleop_withdraw_close(t_, why_):
+                ep_ = live_withdraw["open"]
+                if ep_ is None:
+                    return
+                ep_.update(end_s=float(t_), end_reason=why_)
+                if ep_.get("end_rear") is not None:
+                    ep_["distance_m"] = float(math.hypot(ep_["end_rear"][0] - ep_["start_rear"][0],
+                                                         ep_["end_rear"][1] - ep_["start_rear"][1]))
+                state.setdefault("uncertified_teleop_withdraw", []).append(ep_)
+                live_withdraw["open"] = None
 
             def live_unlock_wheels():  # persistent console plan D1 step 5: the dwell's lock, released as the loop does
                 if wheel_lock["q"] is not None:
@@ -5420,7 +5488,7 @@ def drive(S, isaac) -> None:
                 # distance as L does on a real truck. The lease is administrative and only kept above the command age.
                 # Real-time plan D7: a catch-up burst runs at most catchup_steps / 120 sim s ahead of f x wall, so
                 # the wall limits give that much up to bound the same sim distance as before.
-                config=LiveArbiterConfig(tick_s=1 / 120,
+                config=LiveArbiterConfig(tick_s=1 / 120, lift_limit_m=live_lift_limit_,
                                          command_max_age_s=(0.30 - live_catchup_ / 120) / args.live_factor,
                                          video_max_age_s=(0.50 - live_catchup_ / 120) / args.live_factor,
                                          frame_window_s=max(5.0, 2 * 0.50 / args.live_factor),
@@ -5497,8 +5565,11 @@ def drive(S, isaac) -> None:
                     made_ = live.clock()
                     rates_ = robot.get_joint_velocities()[wheels]
                     speed_, yaw_rate_ = float(np.mean(rates_[2:4])) * args.drive_geometry.wheel_radius_m, 0.0
+                joints_ = robot.get_joint_positions()
                 live.after_step(float(world.current_time - initial_time), odom_speed=speed_, yaw_rate=yaw_rate_,
-                                odom_mono=made_, rendered=camera_, render_sim_time_of=lambda rt: rt - initial_time)
+                                odom_mono=made_, rendered=camera_, render_sim_time_of=lambda rt: rt - initial_time,
+                                lift_m=float(joints_[lift_index[0]]),  # plan D14: measured, for the manual lift
+                                steering_rad=float(np.max(np.abs(joints_[steers]))))
                 if live_marker_ is not None:
                     live.log({"lift_sim_t": float(world.current_time - initial_time),
                               "lift_m": float(robot.get_joint_positions()[lift_index[0]]),
@@ -5546,9 +5617,23 @@ def drive(S, isaac) -> None:
                     # Plan D10: the target pallets (grown by their margins) on the same arcs and outline; installed
                     # again on a new grid snapshot, a targets change or a correction (the pose moves without driving).
                     applied_ = obstacle.get("applied")
-                    pallet_ = live_pallet_perm.limit(
-                        live_zones_from(core.targets, pickup_zone), core.targets.revision, pose_, curvatures, direction,
-                        check, fp_, key=(key_, None if applied_ is None else tuple(float(v) for v in applied_)))
+                    zones_ = live_zones_from(core.targets, pickup_zone)
+                    ctx_ = core.cargo.recovery_context
+                    pkey_ = (key_, None if applied_ is None else tuple(float(v) for v in applied_))
+                    if ctx_ is not None:
+                        # Plan D14: the recovered pallet's own zone is exempted (inside it every arc is 0); the
+                        # others stay, and so does the LiDAR permission above.
+                        kept_ = [z for z in zones_ if z.zone_id != ctx_["pallet_id"]]
+                        pallet_ = live_pallet_perm.limit(kept_, (core.targets.revision, "exempt", ctx_["pallet_id"]),
+                                                         pose_, curvatures, direction, check, fp_, key=pkey_)
+                        if ctx_["stage"] == "manual_clear" and direction < 0 and live_pallet_full is not None:
+                            full_ = live_pallet_full.limit(zones_, core.targets.revision, pose_, curvatures,
+                                                           direction, check, fp_, key=pkey_)
+                            if min(full_[0], result_[0]) > 0.0:
+                                core.manual_clear_done(now_)  # the drive's own reverse bundle is allowed without it
+                    else:
+                        pallet_ = live_pallet_perm.limit(zones_, core.targets.revision, pose_, curvatures, direction,
+                                                         check, fp_, key=pkey_)
                     if pallet_[0] < result_[0]:
                         result_ = pallet_
                 return result_
@@ -5950,6 +6035,8 @@ def drive(S, isaac) -> None:
                 state.setdefault("tyre_contact_rows", [])
             live_spool = RecordSpool(args.output / "spool", interval_s=10.0)
             trace_evidence = live_records.TraceEvidence()
+            # plan D14: the manual ground verdict moves the evidence's reference to the floor pose the tick read
+            core.hooks.trace_ground = lambda: trace_evidence.ground(live_state["pallet_now"])
             state["spool_registered"] = live_records.register(
                 live_spool, slam_log=slam_log, slam=slam, obstacle=obstacle, state=state,
                 video={"frame_audit": frame_audit, "video_frames": video_frames if args.robot_camera else None,
@@ -6265,9 +6352,14 @@ def drive(S, isaac) -> None:
                 # Live and free (no mission, ended outside the pocket phases): the forks' contact is checked wherever the
                 # truck is driven; ended inside them it is not -- supporting a pallet touches it, and teleop is refused
                 # there (Codex D6 design round 2-3 P2).
-                # plan D4: the retrace too; D4b: the back-out, with the whole truck as when free
+                # plan D4: the retrace too; D4b: the back-out, with the whole truck as when free; D14: the uncertified
+                # teleop withdraw, through it and until standing (counted apart, main condition 4)
                 clear_out_ = ms.phase == "clear_out"
-                if ms.phase in ["insert", "withdraw", "recover_withdraw"] or live_free_ or clear_out_:
+                withdraw_watch_ = live is not None and live_withdraw["watch"]
+                # Live with no mission adopted, the phase is the ended mission's, not the truck's (plan D14): the
+                # phase-named checks are a running mission's; idle, the free and withdraw watches decide.
+                checks_phase_ = ms.phase if live is None or core.commands.adopted_id is not None else None
+                if checks_phase_ in ["insert", "withdraw", "recover_withdraw"] or live_free_ or clear_out_ or withdraw_watch_:
                     contacts = insertion_geometry.forbidden_contacts(
                         base,
                         q,
@@ -6276,7 +6368,7 @@ def drive(S, isaac) -> None:
                         pq,
                         clearance_m=state["pocket_clearance_margin_m"],
                     )
-                    if live_free_ or clear_out_:
+                    if live_free_ or clear_out_ or withdraw_watch_:
                         # The rest of the truck too -- body and carriage -- since the outline left the 2D check
                         # (Codex D6 review P2: driven onto the pallet, the underbody met its top boards).
                         joints_ = robot.get_joint_positions()
@@ -6286,14 +6378,23 @@ def drive(S, isaac) -> None:
                             steering={"left_steer": float(joints_[steers[0]]), "right_steer": float(joints_[steers[1]])},
                             clearance_m=state["pocket_clearance_margin_m"])
                     state["pocket_geometry_checks"] += 1
-                    if contacts:
-                        state["forbidden_pocket_contacts"] = contacts
-                    scene_require(
-                        t, not contacts,
-                        f"Forbidden fork/pallet contact in {ms.phase}: {contacts}",
-                        cargo=True,
-                    )
-                if ms.phase in ["insert", "extract", "withdraw", "recover_withdraw"]:
+                    if withdraw_watch_ and not (checks_phase_ in ["insert", "withdraw", "recover_withdraw"] or live_free_
+                                                or clear_out_):
+                        # Plan D14 (main condition 4): counted apart; the forks' relation is no longer known (lower
+                        # only from here) -- a manual withdraw's contact is the operator's, not a scene failure.
+                        if contacts:
+                            state.setdefault("teleop_withdraw_contacts", []).append(
+                                {"time_s": float(t), "contacts": contacts})
+                            core.cargo.invalidate("teleop_withdraw_contact")
+                    else:
+                        if contacts:
+                            state["forbidden_pocket_contacts"] = contacts
+                        scene_require(
+                            t, not contacts,
+                            f"Forbidden fork/pallet contact in {ms.phase}: {contacts}",
+                            cargo=True,
+                        )
+                if checks_phase_ in ["insert", "extract", "withdraw", "recover_withdraw"]:
                     # Smallest sideways gap per blade over every check (SLAM plan
                     # S2 insertion criterion), kept per phase.
                     lateral = insertion_geometry.lateral_clearances(
@@ -6309,6 +6410,13 @@ def drive(S, isaac) -> None:
                     for side, gap in lateral.items():
                         if gap is not None and (minima[side] is None or gap < minima[side]):
                             minima[side] = gap
+                if live is not None and live_withdraw["watch"] and live_withdraw["open"] is not None:
+                    # Plan D14: the uncertified teleop withdraw's smallest sideways gap (the forks still in the pocket)
+                    gaps_ = [g for g in insertion_geometry.lateral_clearances(
+                        base, q, float(robot.get_joint_positions()[lift_index[0]]), ppos, pq).values() if g is not None]
+                    if gaps_:
+                        ep_ = live_withdraw["open"]
+                        ep_["min_lateral_m"] = min(min(gaps_), ep_.get("min_lateral_m", math.inf))
                 requested_speed, curvature = 0.0, 0.0
                 tracking = None
                 # M-a1 slice 5: the release gate at the tick's start is the core's.
@@ -6794,14 +6902,26 @@ def drive(S, isaac) -> None:
                     if trace_evidence is not None:
                         # The truth read this tick, again with the phase this tick ended in: a reference is taken at
                         # its transition's instant, not a physics step later (Codex 6b impl round 1 P2-5).
-                        trace_evidence.update(ms.phase, (float(base[0]), float(base[1]), float(yaw)),
+                        trace_evidence.update(ms.phase if core.commands.adopted_id is not None else "idle",
+                                              (float(base[0]), float(base[1]), float(yaw)),
                                               (float(ppos[0]), float(ppos[1]), float(pallet_yaw)))
+                    if core.commands.adopted_id is None:
+                        # Plan D14: the manual recovery's verdicts (ground, free) with no mission adopted.
+                        live_state["pallet_now"] = (float(ppos[0]), float(ppos[1]), float(pallet_yaw))
+                        core.manual_recovery_tick(t, rear, standing=bool(live.arbiter.stop_confirmed))
                     live_safety_ = core.safety_state(t)
                     out_ = live.tick_end(
                         t, applied_commands_, live_safety_, (float(drive.speed_mps), float(drive.curvature_inv_m)),
                         {"measured_mps": float(speed_now_), "measured_kappa": float(kappa),
                          "steering_error_rad": float(np.max(np.abs(target_steer_ - actual_steering))),
-                         "permit": live_permit})
+                         "permit": live_permit, "lift_command_m": float(ms.lift_command)})
+                    if out_.lift_target_m is not None:
+                        ms.lift_command = float(out_.lift_target_m)  # plan D14: the manual lift owns the target
+                    if live._lift_latch is not None:
+                        # The gate latched the lift where it stood: the target agrees with it once the gate lifts
+                        # (Codex D14 design round 1 P2-4).
+                        ms.lift_command = float(live._lift_latch)
+                    live_teleop_withdraw(t, out_, rear)
                     live_tick_out_ = True  # persistent console plan D6: this tick's output is given
                     if out_.source == "teleop":
                         if args.live_test_permit_compare:
@@ -6966,6 +7086,7 @@ def drive(S, isaac) -> None:
             # The session's end decides the exit (plan D9): 0 ended, 3 a new scene; the supervisor reads it.
             state["live_exit_code"] = {"end": 0, "reset": 3}.get(state.get("live_session_request"), 0)
             live.end_mission(book_clock["t"] if book_clock["t"] is not None else 0.0, "failed", "session_end")
+            live_teleop_withdraw_close(book_clock["t"] or 0.0, "session_end")  # plan D14: an open episode closes
             state.update({"success": True, "mission_results": live.results.message()["results"],
                           "simulated_time_s": world.current_time - initial_time,
                           "simulation_wall_s": time.monotonic() - simulation_started_wall})

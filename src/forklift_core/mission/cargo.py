@@ -63,6 +63,9 @@ class CargoState:
         self.placed: list | None = None  # the trace placed at the destination (once, at -> lower)
         self.trace_valid = True  # the simulation's truth check on the trace's premise (plan D4)
         self.last_rear = None  # the control pose at the last tick's end
+        # Plan D14: what a manual recovery needs once the mission that left the forks in a pocket is gone (the
+        # pallet's ID and estimate, the SLAM hold's basis, the stage); None when there is none.
+        self.recovery_context: dict | None = None
         self._last_phase = None
 
     def on_transition(self, from_phase: str | None, to_phase: str, pallet_id: str | None) -> None:
@@ -159,6 +162,27 @@ class CargoState:
             depths.append(end)  # the end itself, never a repeat of the last sample (the tracker refuses repeats)
         poses = [self._pose_at(trace, d) for d in depths]
         return poses if len(poses) >= 2 else []
+
+    def alignment(self, rear) -> tuple[float, float] | None:
+        """(lateral, heading) offset of ``rear`` from the pocket axis -- the pose the trace (the destination's
+        placement once made) puts at the depth now, which a retrace follows (plan D14). None without a trace."""
+        trace = self.placed if self.placed is not None else self.trace
+        if not trace or self.anchor is None:
+            return None
+        rear = tuple(float(v) for v in rear)
+        ex, ey, et = self._pose_at(trace, self.depth(rear))
+        lateral = -(rear[0] - ex) * math.sin(et) + (rear[1] - ey) * math.cos(et)
+        return lateral, math.atan2(math.sin(rear[2] - et), math.cos(rear[2] - et))
+
+    def reexpress(self, change) -> None:
+        """Every map pose the cargo keeps, carried by a change of the applied correction (plan D14: the truck's
+        relative geometry to the pocket is kept; its own motion comes in through the odometry)."""
+        change = tuple(float(v) for v in change)
+        move = lambda pose: None if pose is None else _compose(change, tuple(pose))  # noqa: E731
+        self.anchor, self.insert_end, self.last_rear = move(self.anchor), move(self.insert_end), move(self.last_rear)
+        self.trace = [(move(pose), depth) for pose, depth in self.trace]
+        if self.placed is not None:
+            self.placed = [(move(pose), depth) for pose, depth in self.placed]
 
     def cancel_decision(self, rear, *, in_withdraw: bool) -> str:
         """What a live cancel confirmed standing leads to: ``cancelled``, ``recover`` or ``recovery_required``."""

@@ -119,7 +119,7 @@
 | `mode` | `direct`(육안) 또는 `video`(영상). 모드별 속도 상한이 다르다 |
 | `deadman` | 누르고 있기가 눌린 상태. `false`면 0 명령 |
 | `speed_ratio`, `curvature_ratio` | −1…1 비율(합의). 차량이 현재 상한(모드·잠정값·적재·허가)을 곱해 물리량으로 바꾼다. 곡률 비율에 곱하는 상한은 차량 설정의 수동 조종 곡률 상한이다(실측 모델 추종기 0.36 m⁻¹ 이하). 클라이언트는 물리 상한을 계산하지 않는다 |
-| `lift_dir` | −1, 0, 1. 승강 속도는 차량 설정 |
+| `lift_dir` | −1, 0, 1. 승강 속도는 차량 설정. 2026-10-19(상시 운용 콘솔 계획 D14): 실제로 구동한다 — 중재기가 자율과 같은 꼴(목표 위치 + 속도 상한 램프 + [0, 차체 모형의 승강 한계] 클립)의 목표를 낸다. 텔레옵 속도 0.02 m/s(자율 `lift_rate_mps` 이하). 허용된 명령이 이어지는 동안만 움직이고, 그 구간이 끝나는 첫 주기(데드맨·`lift_dir` 0·명령 기한·lease·STOP·preempt·PAUSED·정책 차단·TELEOP 이탈)에 목표를 측정 승강으로 한 번 고정한다. 속도형 변환은 실차 어댑터가 맡는다 |
 
 lease 보유자는 `tick`을 받을 때마다 `{"t": "echo", "session_epoch", "lease_id", "echo": {"state_seq", "token"}}`를 보낸다(최신값만). 텔레옵 명령의 `echo`도 같은 역할을 한다.
 
@@ -223,6 +223,7 @@ lease 보유자는 `tick`을 받을 때마다 `{"t": "echo", "session_epoch", "l
 - **구현 상태(M-a3, 2026-10-16).** 코어의 `safety_state()`(배치 실행기에서는 명령 일정이 있을 때 `mission_safety.jsonl` 로 매 제어 틱)가 이 절의 미션 쪽 값을 낸다: `mission`(`id`·`status`·`generation`·`phase`·작업 시간 `phase_elapsed_s`·재개의 마지막 검사 `resume`·`stop_seen_s`·`not_stopped`), `load`·`fork_in_pocket`(근거 `phase`), 승강 목표, 근접 정지, 보정 버전·hold, 적용 명령, 허가 상한과 사유. 재개 절차의 거절은 `reason` 에 `no_resume:<사유>`·`state_verified:<사유>` 로 싣고 미션은 `paused` 로 돌아간다(새 `mission_resume` 이 필요). 중재기의 정지 종류(`controlled`·`preempt`)는 미션을 일시정지로 넘기고, 해제 뒤에도 `mission_resume` 으로만 재개한다.
 - `command`는 텔레옵 비율에 현재 상한을 곱한 물리 명령이다. `applied`는 slew, 허가 상한, 안전 선점, Ackermann 바퀴 속도 한계, 조향 속도 한계까지 거친 값이다(배치 runner의 `applied_command` 지점과 같은 위치). 화면은 둘을 나란히 보여 준다.
 - `drive_allowed`·`lift_allowed`는 중재기가 **제어 주기마다** 현재 상태로 따로 판정한 결과다(설계 4.5). TELEOP 진입 때 한 번만 보는 것이 아니다.
+- 2026-10-19(상시 운용 콘솔 계획 D14) 추가: `lift_dirs`(허용된 승강 방향 배열, `lift_allowed` 는 그 배열이 비어 있지 않은지), `drive_mode`(`normal` / `reverse_straight` — 수동 복구의 곧은 후진: 곡률 0, 후진만, 0.10 m/s 이하, 측정 조향 ≈ 0 일 때만 속도), `lift_limit_m`(승강 한계), `recovery`(포크가 포켓에 남은 채 끝난 미션의 수동 복구 단계: `stage` `in_pocket`/`manual_clear`, `grounded`, `evidence`, `aligned`, `pallet_id`; 없으면 `null`). `teleop_allowed` 는 주행 또는 승강 중 하나라도 허용이면 참이다(내리기만 되는 상태에도 TELEOP 에 들어갈 수 있다). 수동 복구는 시뮬레이션에서만 열린다(빠져나옴 판정이 참값을 쓴다).
 - `pacing`은 Isaac에서만 의미가 있다. 실시간 배속을 유지하지 못하면(`ok: false`) 수동 조종을 막는다. 기준은 M-c가 정한다.
 - 잴 수 없는 값은 `null`로 둔다. 0이나 추정값으로 채우지 않는다.
 

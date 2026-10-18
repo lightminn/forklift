@@ -131,7 +131,32 @@ const FORBID = {
   near_section_unknown: "근접 구간인지 판단할 수 없어 수동 조종을 받지 않습니다",
   state_unknown: "적재·포크 상태를 알 수 없어 수동 조종을 받지 않습니다",
   pacing: "시뮬레이션이 실시간을 따라가지 못해 수동 조종을 받지 않습니다",
+  // persistent console plan D14: the recovery rows
+  "recovery:lower_first": "포크가 들려 있습니다. 먼저 내려 주세요(내리기만 됩니다)",
+  "recovery:ground_wait": "팔레트가 바닥에 놓였는지 확인하는 중입니다",
+  "recovery:evidence": "삽입 기록을 믿을 수 없어 손으로 빼기를 열지 않습니다",
+  "recovery:misaligned": "포켓 축에서 벗어났습니다. 이대로 빼면 팔레트가 끌립니다",
+  "recovery:unknown": "팔레트 상태를 알 수 없어 내리기만 됩니다",
+  "recovery:no_lift_measure": "승강 높이를 잴 수 없어 손 복구를 열지 않습니다",
+  "recovery:no_steering": "조향각을 잴 수 없어 손으로 빼기를 열지 않습니다",
+  "recovery:steering": "조향이 아직 0 으로 돌아오지 않아 멈춰 있습니다",
+  "recovery:stage_unknown": "복구 단계를 알 수 없어 수동 조종을 받지 않습니다",
 };
+
+// Plan D14: which lift buttons work (the policy's directions) and the travel shown beside the height.
+export function liftControls(st) {
+  const dirs = Array.isArray(st?.lift_dirs) ? st.lift_dirs : st?.lift_allowed ? [-1, 1] : [];
+  const limit = Number.isFinite(st?.lift_limit_m) ? st.lift_limit_m : 0.28;
+  return { up: dirs.includes(1), down: dirs.includes(-1), limitMm: Math.round(limit * 1000) };
+}
+
+// Plan D14: the straight reverse of a manual recovery is said wherever the drive is shown.
+export function recoveryNote(st) {
+  if (st?.drive_mode !== "reverse_straight") return "";
+  return st.recovery?.stage === "manual_clear"
+    ? "복구 후진(곧게) · 팔레트 구역을 벗어날 때까지"
+    : "복구 후진(곧게, 인증 없음) · 전진·조향 없음";
+}
 export function forbidText(reason) {
   if (!reason) return "";
   if (FORBID[reason]) return FORBID[reason];

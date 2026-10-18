@@ -116,8 +116,29 @@ class TraceEvidence:
         self.riding = False
         self.phase = None
 
+    def ground(self, pallet) -> None:
+        """Persistent console plan D14: the manual ground verdict -- the pallet is on the floor now, so the evidence's
+        reference becomes this floor pose (as the automatic recovery's recover_withdraw entry does). Evidence already
+        lost stays lost (until the next insert)."""
+        if self.valid:
+            self.floor_ref, self.riding = tuple(float(v) for v in pallet), False
+            self.phase = "manual_ground"
+
     def update(self, phase, base, pallet) -> bool:
         base, pallet = tuple(float(v) for v in base), tuple(float(v) for v in pallet)
+        if phase == "idle":
+            # Plan D14: no mission adopted -- the ended mission's phase is not the truck's; the reference it has
+            # holds (riding: relative to the forks; on the floor: the floor pose).
+            if not self.valid:
+                return False
+            if self.riding and self.rel_ref is not None:
+                now = _relative(base, pallet)
+                d = (now[0] - self.rel_ref[0], now[1] - self.rel_ref[1],
+                     math.atan2(math.sin(now[2] - self.rel_ref[2]), math.cos(now[2] - self.rel_ref[2])))
+                self.valid = all(abs(v) <= b for v, b in zip(d, TRACE_BOUNDS))
+            elif not self.riding and self.floor_ref is not None:
+                self.valid = all(abs(v) <= b for v, b in zip(_relative(self.floor_ref, pallet), TRACE_BOUNDS))
+            return self.valid
         if phase != self.phase:
             if phase == "insert":
                 self.valid, self.floor_ref, self.rel_ref, self.riding = True, pallet, None, False

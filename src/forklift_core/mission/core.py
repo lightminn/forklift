@@ -63,7 +63,7 @@ import numpy as np
 
 from forklift_core.control import RearAxlePathTracker, TrackerConfig, ackermann_command
 from forklift_core.control import cusp_stall as CUSP_STALL
-from forklift_core.mission.cargo import CargoState
+from forklift_core.mission.cargo import APPROACH_GAP_M, CargoState
 from forklift_core.safety.pallet_permit import RECOGNISED_MARGIN_M
 from forklift_core.mission.commands import MissionCommands
 from forklift_core.control.speed_chain import creep, slew_cap_stop
@@ -90,7 +90,9 @@ def rollout_callback_spec(config, start) -> dict:
 CLEAR_OUT_BUDGET_M = 1.0  # plan D4b: the most a cancelled truck backs out to where the next preparation can start
 CLEAR_OUT_MARGIN_M = 0.08  # its end: clear with the arrival and tracking tolerances (0.03 + 0.008 + 0.02 rad x 1.66 m)
 CLEAR_OUT_STEP_M = 0.05  # a final check that fails at the end backs out this much more (within the budget)
-RECOVERY_PHASE_LIMIT_S = 20.0  # plan D4: each recovery phase's work-clock limit
+RECOVERY_PHASE_LIMIT_S = 20.0
+MANUAL_GROUND_HOLD_S = 1.0  # plan D14: the manual ground verdict holds this long before the reverse opens
+ALIGN_HEADING_RAD = 0.02  # plan D14: the straight reverse's heading tolerance to the pocket axis  # plan D4: each recovery phase's work-clock limit
 RECOVERY_LOWER_MIN_S = 1.0  # the lowered verdict is read after this much of recover_lower (the lift ramps down first)
 
 
@@ -450,13 +452,16 @@ class MissionCore:
             if ms.phase in ["lift", "extract", "transport"]
             else 0.0
         )
-        ms.lift_command += float(
-            np.clip(
-                desired_lift - ms.lift_command,
-                -settings["lift_rate_mps"] * dt,
-                settings["lift_rate_mps"] * dt,
+        if self.baseline is None or self.commands.adopted_id is not None:
+            # Plan D14: live, with no mission adopted, the core does not own the lift -- the ended mission's phase
+            # ramped a lift lowered by hand back up (the manual lift and the hold own it then).
+            ms.lift_command += float(
+                np.clip(
+                    desired_lift - ms.lift_command,
+                    -settings["lift_rate_mps"] * dt,
+                    settings["lift_rate_mps"] * dt,
+                )
             )
-        )
         if ms.phase == "lift" and self.commands.work_elapsed(ms.phase_started, t) > 4.5:
             hooks.require(hooks.pallet_z() > 0.06, "Pallet was not lifted")
             transition("extract", t)
@@ -773,6 +778,14 @@ class MissionCore:
         or the destination's once placed there) -- at the ground verdict, so the end's start check sees it."""
         mission = self.commands.mission
         tb = self.targets
+        ctx = self.cargo.recovery_context
+        if ctx is not None and ctx.get("pose") is not None:
+            # Plan D14 (Codex design round 1 P2-7): the mission is gone; the context kept where the pallet is.
+            pid = ctx["pallet_id"]
+            if pid in tb.pallets and tb.pallets[pid].state == "carried":
+                tb.put_down(pid, TargetPose(*(float(v) for v in ctx["pose"])),
+                            **({} if ctx["placed"] else {"state": "available"}), uncertainty_m=RECOGNISED_MARGIN_M)
+            return
         if mission is None or mission.pallet_id not in tb.pallets or tb.pallets[mission.pallet_id].state != "carried":
             return
         if self.cargo.placed is not None:
@@ -787,6 +800,85 @@ class MissionCore:
             if est_ is not None:
                 tb.put_down(mission.pallet_id, TargetPose(float(est_.x_m), float(est_.y_m), float(est_.yaw_rad)),
                             state="available", uncertainty_m=RECOGNISED_MARGIN_M)
+
+    # --- plan D14: the manual recovery after a live mission ended with the forks in a pocket --------------------
+    def capture_recovery_context(self) -> None:
+        """Before the mission and its state go (end_reset): what a manual recovery needs -- the pallet's ID and
+        estimate, where the destination's pallet stands, the SLAM hold's basis, and whether it is on the floor."""
+        cargo, mission = self.cargo, self.commands.mission
+        if self.baseline is None or cargo.relation not in ("constrained", "unknown") or mission is None:
+            return
+        slam = self.slam
+        holding = slam is not None and slam["tracker"].mode == "holding"
+        pallet_held, destination_held = self._held_estimates() if holding else (False, False)
+        if cargo.placed is not None:
+            site_ = self._destination_estimate()
+        else:
+            site_ = (self.obstacle or {}).get("pickup_estimate") or (self.pocket or {}).get("planning_pickup")
+        pose = None if site_ is None else (float(site_.x_m), float(site_.y_m), float(site_.yaw_rad))
+        cargo.recovery_context = {
+            "pallet_id": mission.pallet_id, "destination_id": mission.destination_id, "pose": pose,
+            "placed": cargo.placed is not None, "pallet_held": bool(pallet_held),
+            "destination_held": bool(destination_held), "stage": "in_pocket",
+            "grounded": cargo.load == "none", "ground_since": None}
+
+    def recovery_report(self) -> dict | None:
+        """The stage the teleop policy reads (plan D14 table): grounded, the evidence, aligned to the pocket axis."""
+        cargo, ctx = self.cargo, self.cargo.recovery_context
+        if ctx is None:
+            return None
+        aligned = False
+        if cargo.last_rear is not None:
+            offset = cargo.alignment(cargo.last_rear)
+            aligned = offset is not None and abs(offset[0]) <= cargo.band(cargo.last_rear) + 1e-9 \
+                and abs(offset[1]) <= ALIGN_HEADING_RAD + 1e-12
+        return {"stage": ctx["stage"], "grounded": bool(ctx["grounded"]), "evidence": bool(cargo.trace_valid),
+                "aligned": bool(aligned), "pallet_id": ctx["pallet_id"]}
+
+    def manual_recovery_tick(self, t: float, rear, *, standing: bool) -> None:
+        """Each live tick with no mission adopted: the manual ground verdict (the pallet off the forks onto the
+        floor, held 1 s: the evidence moves to the floor and the pallet back into the targets), then the free
+        verdict by the automatic recovery's criteria (the release deferred since the end, the cargo carried with
+        it), then the manual clear (ended by the runner's permit check)."""
+        cargo, ctx, hooks = self.cargo, self.cargo.recovery_context, self.hooks
+        if ctx is None or ctx["stage"] != "in_pocket" or cargo.relation != "constrained":
+            return
+        rear = tuple(float(v) for v in rear)
+        lowered = standing and hooks.lift_position() < 0.012 and abs(hooks.pallet_z()) < 0.008
+        log = self.state.setdefault("manual_recovery", [])
+        if not ctx["grounded"]:
+            if not lowered:
+                ctx["ground_since"] = None
+                return
+            ctx["ground_since"] = t if ctx["ground_since"] is None else ctx["ground_since"]
+            if t - ctx["ground_since"] < MANUAL_GROUND_HOLD_S:
+                return
+            ctx["grounded"] = True
+            getattr(hooks, "trace_ground", lambda: None)()  # the evidence's reference moves to the floor
+            self.restore_pallet_target()
+            log.append({"time_s": t, "event": "grounded", "depth_m": cargo.depth(rear)})
+            return
+        out = cargo.depth(rear) < -(APPROACH_GAP_M + cargo.band(rear))
+        if not (lowered and out and cargo.trace_valid):
+            return
+        cargo.recovered()
+        ctx["stage"] = "manual_clear"
+        self.restore_pallet_target()
+        log.append({"time_s": t, "event": "free", "depth_m": cargo.depth(rear)})
+        slam = self.slam
+        if slam is not None and slam["tracker"].mode == "holding":
+            # The end release deferred since the mission ended constrained (D1 step 4), with the basis kept then.
+            self.end_release_due = {"pallet_id": ctx["pallet_id"], "destination_id": ctx["destination_id"],
+                                    "pallet_held": ctx["pallet_held"], "destination_held": ctx["destination_held"]}
+            self.end_release(t, deferred=True)
+
+    def manual_clear_done(self, t: float) -> None:
+        """The runner's permit allows the reverse without the recovered pallet's exemption: an ordinary teleop."""
+        ctx = self.cargo.recovery_context
+        if ctx is None or ctx["stage"] != "manual_clear":
+            return
+        self.state.setdefault("manual_recovery", []).append({"time_s": t, "event": "clear"})
+        self.cargo.recovery_context = None
 
     def recovery_done(self, t: float) -> None:
         """Backed out: the mission ends cancelled; the pallet is back on the floor in the targets list (Codex 6b impl
@@ -853,6 +945,10 @@ class MissionCore:
             curvatures[0] = curvatures[1]
         path = RecoveryPath(poses, np.full(count, -1, dtype=np.int8), curvatures, float(np.sum(steps)))
         obstacle = self.obstacle
+        if getattr(self.hooks, "test_recovery_blocked", False) and phase == "recover_withdraw":
+            # Plan D14 tests only (U20 c): the retrace refused with its evidence valid -- the manual recovery's case.
+            self.recovery_failed(t, "blocked:test")
+            return False
         if obstacle is not None:
             check = obstacle["layer"].check_candidate(path.poses, current_pose=tuple(float(v) for v in rear),
                                                       direction=-1, loaded=False, lookahead_m=path.length_m)
@@ -2790,6 +2886,10 @@ class MissionCore:
     def _reproject(self, t: float, applied_now, rear, loaded) -> None:
         """The grid re-projected with a new correction (the permission tick's statements)."""
         ms, obstacle, trackers = self.ms, self.obstacle, self.trackers
+        old = tuple(float(v) for v in (obstacle.get("applied") or (0.0, 0.0, 0.0)))
+        if self.cargo.recovery_context is not None and tuple(float(v) for v in applied_now) != old:
+            # Plan D14 (Codex design round 4 P2): every applied correction change carries the cargo's map poses.
+            self.cargo.reexpress(compose(tuple(float(v) for v in applied_now), invert(old)))
         obstacle["version"] += 1
         obstacle["applied"] = applied_now
         obstacle["reprojections"] = obstacle.get("reprojections", 0) + 1
@@ -3442,6 +3542,9 @@ class MissionCore:
             refusal_ = self.cargo.submit_refusal()
             if refusal_ is not None:
                 out[refusal_] = True
+            report_ = self.recovery_report()
+            if report_ is not None:
+                out["recovery"] = report_  # plan D14: the recovery stage the teleop policy reads
         return out
 
     def release_gate(self, t: float, rear) -> SimpleNamespace:
@@ -4941,6 +5044,7 @@ class MissionCore:
         """A live mission's end (D1 steps 3 and 8): the pocket check closed as the insertion's end closes it, then
         the mission-owned state back to the baseline. Returns the mission's records (for its own record)."""
         pocket, obstacle, state, slam = self.pocket, self.obstacle, self.state, self.slam
+        self.capture_recovery_context()  # plan D14: before the mission-owned state goes
         if slam is not None:
             # The mission's release reservation goes with it (Codex D6 P2-3: its 10 s limit failed every tick after);
             # a hold left with the forks free is released for the end (D1 step 4), now or once standing.

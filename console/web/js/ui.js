@@ -1,7 +1,7 @@
 // Panel rendering from the latest vehicle state. Buttons are only enabled when the
 // request could be accepted; the vehicle still decides and may reject.
 
-import { controlProfile, forbidText, videoStaleAfterS, palletKindLabel, permitText, rearmState, resumeState, resumeSteps, standWhy, stopInstruction, stopKind } from "./profile.js";
+import { controlProfile, forbidText, liftControls, recoveryNote, videoStaleAfterS, palletKindLabel, permitText, rearmState, resumeState, resumeSteps, standWhy, stopInstruction, stopKind } from "./profile.js";
 import { blockReason, currentDestination, missionProgress, PHASES, selectable, subtaskOf } from "./wizard.js";
 
 const MODE_KO = { AUTO: "자동 주행", TELEOP: "수동 조종", PAUSED: "대기", STOPPED: "정지됨" };
@@ -301,7 +301,9 @@ export function render(m) {
   // teleop
   const inTele = mode === "TELEOP";
   const enterStand = inTele ? null : standWhy(st); // entering TELEOP is refused until the truck stands
-  $("t-enter").disabled = !prof.teleop || !lease || inTele || mode === "STOPPED" || Boolean(forbidden) || Boolean(enterStand);
+  // plan D14: a state that only lowers may be entered (teleop_allowed), though driving is forbidden there
+  const teleopOk = st.teleop_allowed === undefined ? !forbidden : st.teleop_allowed !== false;
+  $("t-enter").disabled = !prof.teleop || !lease || inTele || mode === "STOPPED" || !teleopOk || Boolean(enterStand);
   $("t-enter").title = enterStand ?? "";
   $("t-exit").disabled = !lease || !inTele;
   const gate = m.teleop.gate;
@@ -316,8 +318,10 @@ export function render(m) {
   $("deadman").disabled = !live;
   $("deadman").dataset.on = String(Boolean(live && m.teleop.lastRead?.deadman));
   $("joy").setAttribute("aria-disabled", String(!live));
-  $("lift-up").disabled = $("lift-dn").disabled = !live || !prof.lift || st.lift_allowed === false;
-  $("lift-val").textContent = `${Number.isFinite(st.lift_m) ? Math.round(st.lift_m * 1000) : "—"} / 280 mm`;
+  const lc = liftControls(st); // plan D14: each direction on its own
+  $("lift-up").disabled = !live || !prof.lift || !lc.up;
+  $("lift-dn").disabled = !live || !prof.lift || !lc.down;
+  $("lift-val").textContent = `${Number.isFinite(st.lift_m) ? Math.round(st.lift_m * 1000) : "—"} / ${lc.limitMm} mm`;
   $("m-direct").setAttribute("aria-pressed", String(gate.mode === "direct"));
   $("m-video").setAttribute("aria-pressed", String(gate.mode === "video"));
   $("direct-confirm").hidden = gate.canSend();
@@ -334,7 +338,8 @@ export function render(m) {
   bar($("b-s"), -sn);
   $("b-v-t").textContent = `${cmd.speed_mps.toFixed(2)} m/s`;
   $("b-s-t").textContent = `${cmd.curvature_inv_m.toFixed(2)} 1/m`;
-  $("limits").textContent = st.limits ? `상한 전진 ${lim.forward_mps.toFixed(2)} · 후진 ${lim.reverse_mps.toFixed(2)} m/s${lim.provisional ? " (잠정)" : ""}${st.drive_allowed === false ? " · 주행 금지" : ""}` : "상한 —";
+  const note = recoveryNote(st);
+  $("limits").textContent = st.limits ? `상한 전진 ${lim.forward_mps.toFixed(2)} · 후진 ${lim.reverse_mps.toFixed(2)} m/s${lim.provisional ? " (잠정)" : ""}${st.drive_allowed === false ? " · 주행 금지" : ""}${note ? ` · ${note}` : ""}` : "상한 —";
   const pr = st.permit?.reason;
   if (!pr) chip($("permit-chip"), "", "허가 판정 없음");
   else chip($("permit-chip"), pr === "ok" ? "ok" : pr.startsWith("occupied") ? "crit" : "warn", pr === "ok" ? "주행 허가 ok" : pr);

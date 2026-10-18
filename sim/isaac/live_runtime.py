@@ -359,7 +359,8 @@ class LiveRuntime:
         return zero
 
     def after_step(self, sim_t: float, *, odom_speed: float | None, yaw_rate: float, rendered: bool,
-                   odom_mono: float | None = None, render_sim_time_of=None) -> None:
+                   odom_mono: float | None = None, render_sim_time_of=None, lift_m: float | None = None,
+                   steering_rad: float | None = None) -> None:
         """The step ended: its clock, the feedback it made, and the media."""
         if self.test_step_delay_s:
             self.sleep(self.test_step_delay_s)  # the slow-pacing test only
@@ -371,7 +372,8 @@ class LiveRuntime:
             # Stamped when the sample was made (the runner passes it; a SLAM exchange may have waited since --
             # Codex M-c round 5 P1), else at this step's end.
             made = now if odom_mono is None else float(odom_mono)
-            self.feedback = Feedback(made, float(odom_speed), float(yaw_rate))
+            # plan D14: the measured lift and the larger measured steering angle go with it
+            self.feedback = Feedback(made, float(odom_speed), float(yaw_rate), lift_m=lift_m, steering_rad=steering_rad)
         if rendered:
             self._camera(sim_t, render_sim_time_of)
         if self.step % 12 == 0:
