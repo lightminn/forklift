@@ -60,7 +60,7 @@ def make(phase="transport", *, applied=(0.1, 0.0, 0.0)):
         grid_world=lambda sc: ("world", sc),
         grid_kwargs=lambda *a, **k: calls.append(("grid_kwargs", a, k)) or {"grid": a},
         path_record=lambda path: {"status": path.status}, write_paths=lambda: calls.append(("write_paths",)),
-        slam_rear=lambda t: np.array([1.0, 2.0, 0.5]), stage=lambda: "STAGE",
+        slam_rear=lambda t: np.array([1.0, 2.0, 0.5]), stage=lambda: "STAGE", truth_rear=lambda: (1.0, 2.0, 0.5),
         add_path_display=lambda *a: calls.append(("display", a[2])),
     )
     refreshes = []
@@ -107,13 +107,29 @@ def test_the_first_live_leg_plan_is_asked_stands_and_is_taken_on_the_current_sta
     assert np.array_equal(refreshes[-1][1]["path_ahead"][:, :2], Plan("success").poses[:, :2])
     assert refreshes[-1][1]["current_pose"] == (1.005, 2.0, 0.5)
     assert obstacle["live_plans"][-1]["async"] and obstacle["live_plans"][-1]["time_s"] == 20.0
+    record = state["async_plans"][-1]  # what it was asked on and taken on
+    assert record["asked"]["rear"] == [1.0, 2.0, 0.5] and record["taken"]["rear"] == [1.005, 2.0, 0.5]
+    assert record["asked"]["truth_rear"] == [1.0, 2.0, 0.5] and record["asked"]["mode"] == "tracking"
     assert not core.job_hold(38.0, REAR, 0.0, False).hold
+
+
+def test_a_leg_is_asked_only_once_the_truck_stands():
+    """Isaac V8-4 d8c_6: asked while still rolling out of the last phase, the plan came back dropped as moving."""
+    core, ms, state, obstacle, slam, calls, _ = make("transport")
+    slam["stop_now"] = False
+    for t in (20.0, 20.1):
+        assert core.live_leg(t, REAR, True) is True  # stands, asks nothing, counts nothing
+        assert not core.jobs.submitted and not core.job_pending()
+        assert obstacle["live_replanned"]["transport"] is False and obstacle["deadline"] is None
+    assert "async_plan_drops" not in state
+    slam["stop_now"] = True
+    assert core.live_leg(20.2, REAR, True) is True and core.job_pending()
+    assert len(core.jobs.submitted) == 1
 
 
 @pytest.mark.parametrize("change,why", [
     (lambda core, slam: slam["tracker"].__setattr__("applied", ((0.2, 0.0, 0.0), 0)), "correction"),
     (lambda core, slam: slam["tracker"].__setattr__("mode", "holding"), "slam_mode"),
-    (lambda core, slam: slam.__setitem__("stop_now", False), "moving"),
     (lambda core, slam: core.ms.__setattr__("phase", "return_home"), "phase"),
 ])
 def test_a_plan_is_dropped_when_the_state_it_was_made_for_changed(change, why):
@@ -125,6 +141,28 @@ def test_a_plan_is_dropped_when_the_state_it_was_made_for_changed(change, why):
     assert state["async_plans"][-1]["dropped"] == why and "transport" not in core.paths
     assert obstacle["live_replanned"]["transport"] is False  # live_leg asks again on its next call
     assert core.commands.waits[-1] == [20.0, 25.0]
+
+
+def test_a_plan_waits_for_the_stop_detector_and_is_dropped_only_if_it_never_confirms():
+    """Isaac d8e_p: the answer came 0.18 s after the ask, 0.3 s before the detector confirmed the stand."""
+    core, ms, state, obstacle, slam, calls, _ = make("transport")
+    core.live_leg(20.0, REAR, True)
+    core.jobs.answers[1] = (True, {"result": Plan("success"), "tight": False})
+    slam["stop_now"] = False
+    for t in (20.2, 20.5, 22.0):  # kept, judged again each tick, the wait still open
+        assert core.job_hold(t, REAR, 0.0, False).hold and core.job_pending()
+    assert "async_plan_drops" not in state and core.commands.waits[-1][1] is None
+    slam["stop_now"] = True
+    assert core.job_hold(22.1, REAR, 0.0, False).hold and not core.job_pending()
+    assert core.paths["transport"].status == "success" and state["async_plans"][-1]["dropped"] is None
+    # never confirmed: dropped (and counted) once ASYNC_STAND_CONFIRM_S has passed since the answer
+    core, ms, state, obstacle, slam, calls, _ = make("transport")
+    core.live_leg(20.0, REAR, True)
+    core.jobs.answers[1] = (True, {"result": Plan("success"), "tight": False})
+    slam["stop_now"] = False
+    assert core.job_hold(20.2, REAR, 0.0, False).hold and core.job_pending()
+    assert core.job_hold(22.21, REAR, 0.0, False).hold and not core.job_pending()
+    assert state["async_plans"][-1]["dropped"] == "moving" and state["async_plan_drops"] == {"live_leg": 1}
 
 
 def test_drift_drops_the_plan_and_the_fourth_drop_ends_the_run():

@@ -491,6 +491,14 @@ class MissionCore:
                 obstacle["live_replanned"][ms.phase] = False
                 obstacle["deadline"] = None
                 return True
+            if (self.jobs is not None and not (options.return_turnaround and ms.phase == "return_home")
+                    and slam is not None and not slam["stop_now"]):
+                # Real-time plan D8b: a leg asked while the truck still rolls out of the last phase is dropped as
+                # moving when it comes back, and each drop counts (Isaac V8-4 d8c_6: two drops in 0.25 s at the
+                # transport's start). It stands until the stop detector holds, then asks.
+                obstacle["live_replanned"][ms.phase] = False
+                obstacle["deadline"] = None
+                return True
             if self.jobs is not None and not (options.return_turnaround and ms.phase == "return_home"):
                 # Real-time plan D8b: the worker plans (the tight retry with it, under the same deadline); the leg
                 # stands until the plan is taken. A return turnaround's closure arguments keep it here.
@@ -4129,6 +4137,7 @@ class MissionCore:
     ASYNC_DRIFT_RAD = math.radians(1.0)
     ASYNC_MAX_DISCARDS = 3
     ASYNC_FRESH_DEPTH_S = 2.0
+    ASYNC_STAND_CONFIRM_S = 2.0  # how long a finished plan waits for the stop detector before it is dropped
 
     def _leg_payload(self, kind: str, scenario_, start, grid_kw: dict, *, retry_on) -> dict:
         """A ``leg`` job: the leg planner's call and its tight retry, as the tick would make them."""
@@ -4237,9 +4246,20 @@ class MissionCore:
         self.pending = SimpleNamespace(
             site=site, job=job, t=float(t), rear=tuple(float(v) for v in rear), applied=applied,
             mode=slam["tracker"].mode if slam is not None else None, hold=self.hold_count(),
-            gen=self.commands.mission_gen, phase=self.ms.phase, ctx=ctx, wall=self.hooks.wall(), moving_since=None)
+            gen=self.commands.mission_gen, phase=self.ms.phase, ctx=ctx, wall=self.hooks.wall(), moving_since=None,
+            answer=None, answered_s=None)
         self.state.setdefault("async_plans", []).append(
-            {"site": site, "job": job, "requested_s": float(t), "phase": self.ms.phase})
+            {"site": site, "job": job, "requested_s": float(t), "phase": self.ms.phase,
+             "asked": self._plan_context(rear, applied)})
+
+    def _plan_context(self, rear, applied) -> dict:
+        """What a plan was asked on and taken on, for the run's record (Codex real-time D8 round 10: the async
+        runs could not be told apart from the synchronous ones without it): the control and true rear poses, the
+        applied correction, the SLAM mode and hold count."""
+        slam = self.slam
+        return {"rear": [float(v) for v in rear], "truth_rear": [float(v) for v in self.hooks.truth_rear()],
+                "applied": None if applied is None else [float(v) for v in applied],
+                "mode": slam["tracker"].mode if slam is not None else None, "hold": self.hold_count()}
 
     def _job_invalid(self, p, t: float, rear) -> str | None:
         """Why the plan p may not be taken now (None: it may), judged on the current state (D8b)."""
@@ -4291,15 +4311,24 @@ class MissionCore:
             hooks.require(t - p.moving_since <= 1.0, "planning_wait_moving")
         else:
             p.moving_since = None
-        out = self.jobs.poll(p.job)
+        out = p.answer if p.answer is not None else self.jobs.poll(p.job)
         if out is None:
+            return SimpleNamespace(hold=True)
+        why = self._job_invalid(p, t, rear)
+        if why == "moving" and (p.answered_s is None or t - p.answered_s <= self.ASYNC_STAND_CONFIRM_S):
+            # The stop detector confirms a stand some ticks after the wheels stop (Isaac d8e_p: a plan asked as the
+            # truck came to rest came back 0.18 s later, 0.3 s before the confirmation, and was dropped). The
+            # answer is kept and judged again each tick; a real motion still ends the run (planning_wait_moving),
+            # and a stand never confirmed drops it after ASYNC_STAND_CONFIRM_S.
+            if p.answer is None:
+                p.answer, p.answered_s = out, float(t)
             return SimpleNamespace(hold=True)
         ok, value = out
         self.pending = None
         self.commands.end_wait(t)
-        why = self._job_invalid(p, t, rear)
         record = state["async_plans"][-1]
-        record.update(finished_s=float(t), wall_s=hooks.wall() - p.wall, ok=bool(ok), dropped=why)
+        record.update(finished_s=float(t), wall_s=hooks.wall() - p.wall, ok=bool(ok), dropped=why,
+                      taken=self._plan_context(rear, self._applied_now()))
         if why is not None:
             self._drop(p, t, why, count=True)
             return SimpleNamespace(hold=True)
