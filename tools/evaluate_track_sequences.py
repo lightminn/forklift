@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import numpy as np
 
 from forklift_core.geometry import RigidTransform
+from forklift_core.perception.recognition_bridge import face_distance, pocket_errors
 from forklift_core.perception.candidate_tracking import CandidateTracker, Frame, TrackBounds
 from forklift_core.perception.candidate_tracking import _Observation, _pose_fits  # diagnostics only
 
@@ -134,24 +135,14 @@ def drift_problem(poses, table) -> str | None:
 
 
 def _distance(face, camera_x=0.75) -> float:
-    yaw = face["insertion_yaw_rad"]
-    mid = (np.asarray(face["left_m"][:2]) + np.asarray(face["right_m"][:2])) / 2
-    return float((mid - np.array([camera_x, 0.0])) @ np.array([math.cos(yaw), math.sin(yaw)]))
+    """The rig camera sits 0.75 m ahead of base_link; the Isaac mission passes its own (recognition_bridge)."""
+    return face_distance(face, camera_x)
 
 
 def errors(cand, face) -> dict:
-    """Worst-pocket lateral / along, yaw and height of a candidate against a truth face."""
-    yaw = face["insertion_yaw_rad"]
-    a = np.array([math.cos(yaw), math.sin(yaw)])
-    n = np.array([-a[1], a[0]])
-    out = {"lateral_m": 0.0, "along_m": 0.0, "height_m": 0.0}
-    for side, key in (("left", "left_m"), ("right", "right_m")):
-        d = np.subtract(getattr(cand, side).centre_m, face[key])
-        out["lateral_m"] = max(out["lateral_m"], abs(float(d[:2] @ n)))
-        out["along_m"] = max(out["along_m"], abs(float(d[:2] @ a)))
-        out["height_m"] = max(out["height_m"], abs(float(d[2])))
-    out["yaw_rad"] = abs(_wrap(cand.insertion_yaw_rad - yaw))
-    return out
+    """Worst-pocket lateral / along, yaw and height of a candidate against a truth face (one function with the
+    Isaac mission's far error, recognition_bridge.pocket_errors)."""
+    return pocket_errors(cand, face)
 
 
 def identity_errors(labels_of: dict) -> int:
