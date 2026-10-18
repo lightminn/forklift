@@ -12,7 +12,9 @@ M-c 미션 구성을 배치로 돌렸다(`--live` 제외).
 - 장면: 공장 배치, EPAL 6.
 - 미션 인자: SLAM 되먹임, d7 계획기·도킹, 장애물 층·격자 계획, 복귀 포함, `--use-perception --planning-target perception`.
 - 인식 인자: `--recognition far --recognition-pixel-lag-steps 24`.
-- 실행: ws1 Slurm, snapshot `6b9cbcb`, seed 0·1·2. 대조는 같은 snapshot·seed 의 `--recognition off`(기존 검출기).
+- 실행: ws1 Slurm, seed 0·1·2. 판정 실행(far)은 snapshot `12c10db`, 대조 `--recognition off`(기존 검출기)는 `6b9cbcb` 다.
+  - 두 snapshot 사이 변경은 far 경로(지연 일치 판정·재계산 도구·기록)뿐이라 off 실행은 같다.
+  - far 는 `6b9cbcb` 에서도 같은 결과(사이클·관측·오차)를 냈다.
 
 원거리 관측의 흐름:
 1. Isaac 의미 분할에서 팔레트 인스턴스 마스크를 만든다(제안). 정답 분할이고 실제 검출기가 아니다. 공장의 적재 팔레트들도 인스턴스로 넣는다.
@@ -27,7 +29,7 @@ M-c 미션 구성을 배치로 돌렸다(`--live` 제외).
 |---|---|---|---|---|---|---|---|---|
 | 0 | **완료** — 배달 30 mm, 207 s | fused | 2.01 m | 0.2 mm / 0.8 mm / 0.006° | 5.9 / 29.5 mm / 3.75° | 57 | 2 | τ 24 = 사용값 |
 | 1 | **완료** — 32 mm, 271 s | fused | 1.83 m | 4.8 / 1.1 mm / 0.002° | 7.7 / 15.6 mm / 2.17° | 50 | 3 | τ 24 = 사용값 |
-| 2 | **완료** — 40 mm, 217 s | fused | 1.68 m | 5.5 / 0.3 mm / 0.011° | 7.7 / 15.6 mm / 2.17° | 5 | 3 | 식별 안 됨(판단 없음) |
+| 2 | **완료** — 40 mm, 217 s | fused | 1.68 m | 5.5 / 0.3 mm / 0.011° | 7.7 / 15.6 mm / 2.17° | 5 | 3 | 마지막 다리 식별 안 됨, 분실로 끝난 다리 0 은 τ 24 = 사용값 |
 
 **대조(`off`)는 모두 완료했다.**
 
@@ -42,8 +44,10 @@ M-c 미션 구성을 배치로 돌렸다(`--live` 제외).
   - 지연: 연기 시험에서 채택한 지연 24 스텝을 썼고, 다리마다의 자체 추정이 식별되면 그 값과 1 스텝 안에서 맞았다.
   - 판독: 선택 트랙이 서로 다른 주행 프레임 판독을 2 개 이상 받았다.
   - 관측: 계획에 넘어간 관측이 `fused` 이고, 융합 관측 수가 2 개 이상이다.
-- seed 2 의 재관측 다리는 counted 판독이 6 개 미만이라 지연을 식별하지 못했다. 그래서 그 다리는 지연 조건에서 "판단 없음"이다.
-- **재계산:** 세 실행 모두 저장 프레임만으로 `tools/recompute_far_recognition.py` 가 판정·출처·선택 트랙·사용 후보를 같게 다시 만든다.
+- 지연 조건은 다리마다 τ 를 식별한 구간(전체·두 반쪽 각각)이 모두 24 와 1 스텝 안이어야 한다.
+  - seed 0·1 은 세 구간 모두 24 로 식별됐다.
+  - seed 2 의 재관측 다리는 counted 판독이 6 개 미만이라 식별 구간이 없다(판단 없음). 분실로 끝난 다리 0 은 세 구간 모두 24 다.
+- **재계산:** 세 실행 모두 저장 프레임만으로 `tools/recompute_far_recognition.py` 가 판정·출처·선택 트랙·사용 후보를 같게 다시 만든다. 저장 프레임 수와 정지 판정 수도 기록과 맞고, 종료 코드는 0 이다.
 - **근거리 보정량**(지도 좌표의 원거리 팔레트 추정 → 근거리 추정, xy 거리 `|far_estimate_m − near_estimate_m|`): 22 / 33 / 25 mm.
 - 같은 원거리 추정의 참값 대비 위치 오차(`near_capture.far_error`, SLAM 자세 오차 포함): 17 / 28 / 8 mm. 위 표의 원거리 오차는 이와 다르게 카메라 기준(base) 포켓 오차다.
 
@@ -73,7 +77,7 @@ M-c 미션 구성을 배치로 돌렸다(`--live` 제외).
 
 ## 재현
 
-- 브랜치 `feat/isaac-recognition`. 판정 snapshot 은 `6b9cbcb`.
+- 브랜치 `feat/isaac-recognition`. 판정 snapshot 은 `12c10db`(far)·`6b9cbcb`(off).
 - 실행 스크립트: ws1 `/home/projects/forklift/test_runs/recog/recog.sbatch`. 인자는 위와 같고, 메모리 7 G(실측 최대 5.6 G), 시간 30 분(실측 3–8 분)이다.
-- 실행 결과: ws1 `/home/projects/forklift/test_runs/recog/k_{far,off}_s{0,1,2}/run/`(result.json, recognition/frame_*.npz).
+- 실행 결과: ws1 `/home/projects/forklift/test_runs/recog/m_far_s{0,1,2}/run/`·`k_off_s{0,1,2}/run/`(result.json, recognition/frame_*.npz).
 - 재계산 명령: `tools/recompute_far_recognition.py <run>`.
