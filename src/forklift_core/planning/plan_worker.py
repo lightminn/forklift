@@ -12,6 +12,11 @@ Jobs (each a module-level planner and a copy of its arguments):
 - ``leg``: ``plan_transport_leg`` or ``plan_return_leg``, then once more with the tight arguments when the first
   status is one of ``retry_on`` -- the caller's own fallback, run here so both share one deadline.
 - ``dock``: ``scan_docking.dock(*args, **kwargs)`` and its wall time (real-time plan D9b).
+- ``observe_ladder``: a live mission's first leg (persistent console plan D2, agreed with the main session
+  2026-10-18): the setup's candidate ladder -- every waypoint with ``extended=False``, then, only if none plans,
+  every one with ``extended=True`` -- stopping at the first success or, between candidates, at the payload's
+  absolute ``deadline`` (this host's monotonic clock), which every call also gets. The batch setup keeps its own
+  loop: the replay gate records each ``plan_observation_leg`` call, so this is an intended duplicate.
 
 ``PlanWorker`` is the runner's side. The control thread never waits on the worker (Codex real-time D8 round 4
 P1): ``submit`` pickles the request at once (its inputs are fixed from that moment) and queues the bytes;
@@ -59,6 +64,8 @@ def _run(name: str, payload: dict):
         started = time.monotonic()
         result = dock(*payload["args"], **payload["kwargs"])
         return {"result": result, "wall_s": time.monotonic() - started}
+    if name == "observe_ladder":
+        return _observe_ladder(pm, payload)
     if name == "echo":  # the tests' job
         if payload.get("sleep_s"):
             time.sleep(payload["sleep_s"])
@@ -66,6 +73,38 @@ def _run(name: str, payload: dict):
             raise ValueError(payload["raise"])
         return {"result": payload.get("value")}
     raise ValueError(f"unknown job {name!r}")
+
+
+def _observe_ladder(pm, payload: dict) -> dict:
+    """The setup's ladder (run_transport, ``initial_candidates``), each candidate recorded with the keys of
+    ``state["observation_candidates"]``; every candidate tried comes back, failed or not."""
+    from forklift_core.planning.geometry import Pose2D
+
+    started = time.monotonic()
+    world, deadline = payload["world"], payload.get("deadline")
+    start = world.start_rear
+    candidates, result, selected, timed_out = [], None, None, False
+    for extended in (False, True):
+        for index, coordinates in enumerate(payload["waypoints"]):
+            if deadline is not None and time.monotonic() >= deadline:
+                timed_out = True
+                break
+            waypoint = Pose2D(*coordinates)
+            plan = pm.plan_observation_leg(world, waypoint, payload["config"], geometry=payload["geometry"],
+                                           pickup_bounds=payload["pickup_bounds"], extended=extended,
+                                           deadline=deadline, **payload["grid_kwargs"])
+            candidates.append({"candidate_index": index, "pose": [waypoint.x_m, waypoint.y_m, waypoint.yaw_rad],
+                               "success": plan.success, "status": plan.status,
+                               "analytic_expansion_interval": plan.analytic_expansion_interval,
+                               "search_attempts": [list(entry) for entry in plan.search_attempts],
+                               "start_rear": [start.x_m, start.y_m, start.yaw_rad], "extended_ladder": extended})
+            if plan.success:
+                result, selected = plan, index
+                break
+        if result is not None or timed_out:
+            break
+    return {"result": result, "selected": selected, "candidates": candidates, "timed_out": timed_out,
+            "wall_s": time.monotonic() - started}
 
 
 def main(argv: list[str]) -> int:

@@ -419,6 +419,19 @@
   - 회계는 `slam["holds"]` 와 `obstacle["reprojections"]` 다.
   - D9a 비동기에서는 해제 직후에도 대기열에 남은 답이 다음 틱 시작에 들어와 보정이 한 번 더 바뀔 수 있다. 미션 준비의 채택 검사(보정 버전)가 이것을 잡는다.
 
+### 합의 — 준비 작업 `observe_ladder` (메인 세션, 2026-10-18, D9 머지 9f0d215 뒤)
+
+D2 의 `mission_start` 는 작업자 작업 `observe_ladder` 로 한다. 이름 그대로, 콘솔 브랜치에서 `plan_worker.py` 에 더한다. 조건:
+1. payload 는 `waypoints=[(x, y, yaw)…]` 만 받는다. 두 바퀴(모두 `extended=False` → 하나도 안 되면 모두 `extended=True`, T2·seed 4020)는 작업자가 만든다. 셋업과 같은 순서인지 단위 시험으로 확인한다.
+2. 배치 셋업 경로는 이 작업으로 바꾸지 않는다. 재생 게이트가 `plan_observation_leg` 를 호출 단위로 기록하기 때문이다. 작업자 루프는 의도된 중복이다.
+3. 후보 요약은 `state["observation_candidates"]` 와 같은 키다(`candidate_index`, `pose`, `success`, `status`, `analytic_expansion_interval`, `search_attempts`, `start_rear`, `extended_ladder`). 실패해도 전부 돌려준다(`all_candidates_failed` 사유는 이 status 들의 `;` 연결이다). 출력에 `wall_s` 를 넣는다.
+4. 채택 때 코어에 둘 것: `ms.next_candidate_index = selected + 1`(extended 바퀴에서도 waypoint 인덱스 + 1), `state["observation_waypoint_selected"]`, `observation_candidates`, `planning_status`. core 953·1905 의 재관측 폴백이 이 커서를 읽는다. 전부 실패면 `planning_status="all_candidates_failed"`.
+5. 시간: payload 에 같은 호스트 monotonic 의 전체 deadline 을 넣는다. 작업자는 후보 사이에서 멈추고, 각 호출에도 그 deadline 을 넘긴다.
+6. `grid_kwargs("observe")` 는 요청 틱에 평가한다(D9 의 마지막 응답 스캔 id 를 읽고, submit 때 피클로 고정된다). 세션 중간이면 own 이 지금 rear 라 트럭 밑 칸이 빠지는데, 그게 맞다.
+7. 시험: `plan_observation_leg` 를 monkeypatch 하고 `_run` 을 직접 부른다(순서, 첫 성공에서 멈춤, 전부 실패 요약, deadline 멈춤).
+
+§5-2 의 나머지 계약 추가는 메인이 PR 때 본다.
+
 ## 4. 유즈케이스와 시험
 
 시험은 세 층이다:
