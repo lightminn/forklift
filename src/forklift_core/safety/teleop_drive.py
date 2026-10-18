@@ -55,8 +55,18 @@ class TeleopLimits:
     # baseline plant only (docs/plans/2026-10-17-teleop-bundle-margin.md: 0.02 still let the body out of the
     # checked region in 5 of about 177,000 checks, 0.04 in none); the real truck's comes from H3.
     curvature_margin_inv_m: float = 0.04
+    # Persistent console plan D14 (main session conditions 2, 4, 5): the manual lift's rate (within the autonomous
+    # ramp's lift_rate_mps -- the runner checks), the recovery's straight reverse cap (below the autonomous withdraw's
+    # 0.12 m/s) and the measured steering it moves within.
+    lift_rate_mps: float = 0.02
+    recovery_reverse_mps: float = 0.10
+    recovery_steer_tol_rad: float = 0.01
 
     def __post_init__(self):
+        for name in ("lift_rate_mps", "recovery_reverse_mps", "recovery_steer_tol_rad"):
+            value = getattr(self, name)
+            if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be a positive finite number")
         if self.direct_forward_mps > self.video_forward_mps or self.direct_reverse_mps > self.video_reverse_mps:
             raise ValueError("direct limits must not exceed video limits (design 5.3)")
         if not self.curvature_margin_inv_m >= 0:
@@ -92,6 +102,46 @@ def arc_permit(permission: DrivePermission, snapshot, now_s: float, sensors_last
     return best
 
 
+class TeleopLift:
+    """Plan D14 (5th ed.): the manual lift's target, in the autonomous ramp's form (a position moved at a capped
+    rate, clipped to [0, the model's travel]). It starts from the target it takes over (never the measurement: a
+    loaded lift sags) and moves while a permitted command's active stretch lasts -- TELEOP, armed, the dead-man
+    held, a lift direction the policy allows, a measurement in hand. When the stretch ends, for any reason, the
+    target is set to the measured lift once and held (a sagging lift is not followed: the core's stop latch rule,
+    core 3118). A lift never moved by hand keeps its target. ``step`` returns the target to apply, or None when the
+    arbiter does not own the lift (the tick after TELEOP was left, which hands the last target over)."""
+
+    def __init__(self, limits: TeleopLimits, *, limit_m: float, dt: float) -> None:
+        if not (math.isfinite(limit_m) and limit_m > 0):
+            raise ValueError("limit_m must be a positive finite number")
+        self.limits, self.limit_m, self.dt = limits, float(limit_m), float(dt)
+        self.target: float | None = None
+        self.active = False
+
+    def step(self, teleop_mode: bool, teleop: dict | None, *, armed: bool, dirs, measured: float | None,
+             start_from: float | None) -> float | None:
+        measured = None if measured is None or not math.isfinite(measured) else float(measured)
+        if not teleop_mode:
+            if self.target is None:
+                return None
+            out = measured if self.active and measured is not None else self.target  # handed over once
+            self.target, self.active = None, False
+            return out
+        if self.target is None:
+            self.target = float(start_from) if start_from is not None else (measured or 0.0)
+        direction = int((teleop or {}).get("lift_dir") or 0)
+        if (armed and teleop is not None and teleop.get("deadman") and direction != 0 and direction in dirs
+                and measured is not None):
+            step = direction * self.limits.lift_rate_mps * self.dt
+            self.target = float(min(self.limit_m, max(0.0, self.target + step)))
+            self.active = True
+        elif self.active:
+            if measured is not None:
+                self.target = measured
+            self.active = False
+        return self.target
+
+
 class TeleopDrive:
     def __init__(self, limits: TeleopLimits, decel_mps2: float, dt: float) -> None:
         self.limits, self.decel_mps2, self.dt = limits, float(decel_mps2), float(dt)
@@ -113,11 +163,16 @@ class TeleopDrive:
 
     def step(self, teleop: dict | None, *, armed: bool, drive_allowed: bool, loaded: bool, preempt: bool,
              last_applied_mps: float, measured_mps: float, measured_kappa: float, steering_error_rad: float,
-             permit) -> tuple[float, float, tuple[float, str]]:
+             permit, mode: str = "normal", steering_rad: float | None = 0.0) -> tuple[float, float, tuple[float, str]]:
         """(speed, curvature, (limit, reason)) for this cycle. ``permit(curvatures, direction, check_speed)`` asks
-        the arc bundle; ``steering_error_rad`` is how far the measured steering is from this cycle's target."""
+        the arc bundle; ``steering_error_rad`` is how far the measured steering is from this cycle's target.
+        ``mode`` "reverse_straight" (plan D14): curvature 0, backward only, at most recovery_reverse_mps, and no
+        speed at all this cycle while the measured steering (``steering_rad``) is off zero."""
         lim = self.limits
         speed_target, kappa_target = self.target(teleop, loaded=loaded)
+        straight = mode == "reverse_straight"
+        if straight:
+            speed_target, kappa_target = max(-lim.recovery_reverse_mps, min(0.0, speed_target)), 0.0
         step_k = lim.curvature_rate_inv_m_s * self.dt
         self.kappa += float(np.clip(kappa_target - self.kappa, -step_k, step_k))
         if teleop is None or not armed or not teleop["deadman"]:
@@ -132,6 +187,10 @@ class TeleopDrive:
             # The cap is 0 whatever the arcs say: they are not asked (the live runner spent about 1.7 wall s per sim
             # s on them while pacing forbade every drive, console session profile 2026-10-17).
             limit, why = 0.0, "drive_forbidden"
+        elif straight and (steering_rad is None or abs(float(steering_rad)) > lim.recovery_steer_tol_rad):
+            # Main condition 5: a straight command while the wheels still turn draws an arc -- no speed this cycle
+            # (the cap is a step after the slew: the output is 0 now, Codex D14 design round 1 P1-2).
+            limit, why = 0.0, "recovery:steering"
         else:
             arcs = bundle(measured_kappa, self.kappa, lim.curvature_margin_inv_m)
             limit, why = min((permit(arcs, d, check) for d in sorted(directions)), key=lambda r: r[0])

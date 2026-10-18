@@ -20,7 +20,7 @@ from forklift_core.mission.commands import ACTIVE, FINAL, Cancel, HoldOff, HoldO
 
 from .generations import PENDING, RequestBook, RequestLedger
 from .ledger import FrameLedger, TickLedger
-from .teleop_drive import TeleopDrive, TeleopLimits
+from .teleop_drive import TeleopDrive, TeleopLift, TeleopLimits
 from .teleop_policy import Policy, teleop_policy
 from .validate import problem
 
@@ -50,11 +50,14 @@ class ArbiterConfig:
     not_stopped_s: float = 10.0  # the mission's E3 limit: not standing by then is a fault (B5)
     tick_s: float = 1 / 120  # the control cycle the stop detector counts in
     teleop_limits: TeleopLimits = field(default_factory=TeleopLimits)
+    # Persistent console plan D14 (main condition 2): the lift's travel the manual target is clipped to -- the
+    # runner reads the model's (dls08_measured fork_lift: 0.28 m); without one, the autonomous lift target 0.20 m.
+    lift_limit_m: float = 0.20
     decel_mps2: float = 1.5  # the stopping model's (config/obstacle_layer.yaml), the slew's braking
 
     def __post_init__(self):
         for name in ("command_max_age_s", "lease_timeout_s", "grace_s", "video_max_age_s", "camera_latency_bound_s",
-                     "feedback_max_age_s", "not_stopped_s", "tick_s", "decel_mps2", "frame_window_s"):
+                     "feedback_max_age_s", "not_stopped_s", "tick_s", "decel_mps2", "frame_window_s", "lift_limit_m"):
             value = getattr(self, name)
             if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be a positive finite number (a NaN or inf would disable its expiry)")
@@ -69,6 +72,8 @@ class Feedback:
     stamp_mono: float
     rear_axle_speed_mps: float | None
     yaw_rate_radps: float = 0.0
+    lift_m: float | None = None  # plan D14: the measured lift
+    steering_rad: float | None = None  # plan D14: the larger measured steering angle (absolute)
 
 
 @dataclass
@@ -83,6 +88,7 @@ class Output:
     armed: bool
     reason: str | None = None
     permit: tuple | None = None  # (limit, reason) of the teleoperated drive's arc bundle
+    lift_target_m: float | None = None  # plan D14: the lift target the arbiter sets (None: not the arbiter's)
 
 
 @dataclass
@@ -133,6 +139,9 @@ class Arbiter:
         self.teleop_seq = -1  # the last accepted seq within this arm generation
         self.last_teleop_reject: str | None = None
         self.drive = TeleopDrive(config.teleop_limits, config.decel_mps2, config.tick_s)
+        self.lift = TeleopLift(config.teleop_limits, limit_m=config.lift_limit_m, dt=config.tick_s)  # plan D14
+        self.lift_m: float | None = None  # this cycle's measured lift and steering (None: not measured)
+        self.steering_rad: float | None = None
         self._drive_fresh = False  # TELEOP just entered: the output curvature starts from the measured one
 
     # --- connections and the lease ------------------------------------------------------------------------------
@@ -509,6 +518,8 @@ class Arbiter:
         self._check_deadline(now_mono)
         fresh = _valid_feedback(feedback, now_mono, self.config.feedback_max_age_s)
         self.feedback_ok = fresh
+        self.lift_m = _finite(getattr(feedback, "lift_m", None)) if fresh else None
+        self.steering_rad = _finite(getattr(feedback, "steering_rad", None)) if fresh else None
         if fresh:
             self.stop_confirmed = self.detector.update(commanded_speed=self.last_applied,
                                                        speed=float(feedback.rear_axle_speed_mps),
@@ -649,15 +660,22 @@ class Arbiter:
                     self.teleop, armed=self.armed, drive_allowed=policy.drive_allowed, loaded=policy.loaded,
                     preempt=False, last_applied_mps=self.last_applied, measured_mps=drive["measured_mps"],
                     measured_kappa=drive["measured_kappa"], steering_error_rad=drive["steering_error_rad"],
-                    permit=drive["permit"])
+                    permit=drive["permit"], mode=policy.drive_mode, steering_rad=self.steering_rad)
+        # Plan D14: the manual lift -- TELEOP owns the target; leaving it hands the last one over once.
+        lift_target = self.lift.step(
+            self.mode == "TELEOP" and self.preempt_latch is None, self.teleop, armed=self.armed,
+            dirs=policy.lift_dirs, measured=self.lift_m,
+            start_from=None if drive is None else drive.get("lift_command_m"))
         self.last_applied = speed
         return Output(self.mode, stop_kind, source, speed, curvature, policy, self.control_gen, self.armed,
-                      self.preempt_latch, permit)
+                      self.preempt_latch, permit, lift_target)
 
     def _policy(self, safety) -> Policy:
-        policy = teleop_policy(safety, feedback_ok=self.feedback_ok, standing=self.stop_confirmed)
-        if policy.drive_allowed and not self.pacing_ok:
-            return Policy(False, False, "pacing", loaded=policy.loaded)  # M-c: no real time, no hands on
+        policy = teleop_policy(safety, feedback_ok=self.feedback_ok, standing=self.stop_confirmed,
+                               lift_m=self.lift_m, steering_rad=self.steering_rad)
+        if policy.teleop_allowed and not self.pacing_ok:
+            # M-c: no real time, no hands on -- the lift too (plan D14).
+            return Policy(False, False, "pacing", loaded=policy.loaded)
         return policy
 
     # --- mode and mission requests (B5) --------------------------------------------------------------------------
@@ -755,6 +773,11 @@ def _ratio(value) -> float:
     except (TypeError, ValueError):
         return 0.0
     return max(-1.0, min(1.0, v)) if v == v else 0.0
+
+
+def _finite(value) -> float | None:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) \
+        else None
 
 
 def _valid_feedback(feedback, now_mono: float, max_age_s: float) -> bool:

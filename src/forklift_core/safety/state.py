@@ -77,6 +77,10 @@ def state_message(arbiter, out, safety: dict | None, *, now_mono: float, rear_ax
                    "loaded_mps": lim.loaded_mps, "curvature_inv_m": lim.curvature_inv_m, "provisional": True},
         "drive_allowed": out.policy.drive_allowed, "lift_allowed": out.policy.lift_allowed,
         "teleop_allowed": out.policy.teleop_allowed, "teleop_forbidden_reason": out.policy.reason,
+        # persistent console plan D14: which lift directions, the drive mode, the lift travel and the
+        # recovery stage the core reports
+        "lift_dirs": sorted(out.policy.lift_dirs), "drive_mode": out.policy.drive_mode,
+        "lift_limit_m": a.config.lift_limit_m, "recovery": safety.get("recovery") if safety else None,
         "mission": None if not mission.get("id") else {
             "mission_id": mission.get("id"), "status": mission.get("status"), "phase": mission.get("phase"),
             "pallet_id": mission.get("pallet_id"), "destination_id": mission.get("destination_id"),
