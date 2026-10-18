@@ -453,6 +453,23 @@ class InsertionGeometry:
         result.carriage_boxes = tuple(
             b for b in _boxes(carriage) if "fork_collision" not in b[0]
         )
+        # The truck's own body (base_link's boxes, not lifted): with no live mission the 2D outline check leaves the
+        # pallet out (hands may put the forks in its pockets), so its solids meet these in 3D (console plan D6).
+        # Only its unrotated boxes: the rotated ones are the cab's posts and braces, above any pallet (named in
+        # body_boxes_skipped, so a model whose low parts turn shows here).
+        base_link = truck.find("link[@name='base_link']")
+        result.body_boxes, result.body_boxes_skipped = (), ()
+        if base_link is not None:
+            aligned, skipped = [], []
+            for collision in base_link.findall("collision"):
+                origin = collision.find("origin")
+                rpy = np.fromstring(origin.get("rpy", "0 0 0"), sep=" ") if origin is not None else np.zeros(3)
+                (skipped if np.any(rpy != 0) or collision.find("geometry/box") is None else aligned).append(collision)
+            if aligned:
+                holder = ET.Element("link")
+                holder.extend(aligned)
+                result.body_boxes = _boxes(holder)
+            result.body_boxes_skipped = tuple(c.get("name", "unnamed") for c in skipped)
         if len(result.fork_boxes) != 4:
             raise ValueError("Expected two fork blades and two heels")
         result.pallet_boxes = _boxes(links[0])
@@ -570,6 +587,16 @@ class InsertionGeometry:
             side = "left" if "left" in name else "right"
             out[side] = float(gaps.min()) if gaps.size else None
         return out
+
+    def body_contacts(self, base_position_m: ArrayLike, base_quaternion_wxyz: ArrayLike, lift_m: float,
+                      pallet_position_m: ArrayLike, pallet_quaternion_wxyz: ArrayLike, *,
+                      clearance_m: float = 0.002) -> tuple[tuple[str, str], ...]:
+        """(truck box, pallet box) pairs that may touch for the base link's boxes (lift 0) and the carriage's
+        non-blade boxes (lifted) -- the parts forbidden_contacts leaves out. Same conventions as it."""
+        return (self.forbidden_contacts(base_position_m, base_quaternion_wxyz, 0.0, pallet_position_m,
+                                        pallet_quaternion_wxyz, clearance_m=clearance_m, boxes=self.body_boxes)
+                + self.forbidden_contacts(base_position_m, base_quaternion_wxyz, lift_m, pallet_position_m,
+                                          pallet_quaternion_wxyz, clearance_m=clearance_m, boxes=self.carriage_boxes))
 
     def forbidden_contacts(
         self,

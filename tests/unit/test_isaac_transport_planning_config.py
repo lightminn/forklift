@@ -729,7 +729,7 @@ def test_a_failed_replan_backs_off_a_bounded_distance_then_replans():
     moved = CORE.read_text()  # the backoff end moved to the mission core (M-a1 slice 4a-iv)
     j = moved.index("# The end of a backoff is not the leg's arrival")
     assert source.index("command_ = core.command(") < source.index(
-        'if tracking.status == "arrived":\n                    if args.use_perception and ms.phase == "observe":')
+        'if tracking.status == "arrived":\n                        if args.use_perception and ms.phase == "observe":')  # the tick body sits one level in (D6)
     assert 'obstacle["force_replan"] = ms.phase' in moved[j : j + 2500]
     assert 'obstacle.pop("force_replan", None) == ms.phase' in source
     # Codex checkpoint 8: a backoff always acts under the permission, a forced

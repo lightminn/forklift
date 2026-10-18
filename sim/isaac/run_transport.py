@@ -5902,6 +5902,10 @@ def drive(S, isaac) -> None:
                 safety_hold = False  # plan D8 S4: a safety stop -- the final wheel command steps to zero
                 base, q = robot.get_world_pose()
                 ppos, pq = pallet.get_world_pose()
+                # Before anything reads them (Codex D6 review P2: a NaN reached the withdraw check first, a mission
+                # failure; and a NaN quaternion read as tilt, scene damage): the session's own failure.
+                require(np.isfinite([base, ppos]).all() and np.isfinite(q).all() and np.isfinite(pq).all(),
+                        "Nonfinite body state")
                 yaw, tilt = yaw_and_tilt(q)
                 pallet_yaw, pallet_tilt = yaw_and_tilt(pq)
                 forward = np.array([math.cos(yaw), math.sin(yaw)])
@@ -5948,10 +5952,6 @@ def drive(S, isaac) -> None:
                                 f"withdraw_tracking_exceeded:{dev_:.4f}")
                 if live is not None and core.commands.status in ("accepted", "preparing") and not core.job_pending():
                     live_prepare(t, rear)  # persistent console plan D2: the submitted mission's first leg, from here
-                # The quaternions too, before any check reads a tilt from them (Codex D6 design P1-2: a NaN quaternion
-                # read as excessive tilt, scene damage).
-                require(np.isfinite([base, ppos]).all() and np.isfinite(q).all() and np.isfinite(pq).all(),
-                        "Nonfinite body state")
                 # Persistent console plan D6: no live mission running (none yet, or it ended); a free one ended outside
                 # the pocket and loaded phases, so the truck may be driven by hand.
                 live_idle_ = live is not None and core.commands.adopted_id is None
@@ -5994,7 +5994,7 @@ def drive(S, isaac) -> None:
                     # there; the fork/pallet contact check below judges it (Codex D6 design P2-7).
                     [pickup_obstacle] if ms.phase in ("approach", "observe") and not live_idle_ else []
                 )
-                if ms.phase in ("return_home", "home_settle"):
+                if ms.phase in ("return_home", "home_settle") and not live_idle_:  # (D6: as above, Codex P2)
                     # The pallet is on the floor behind the forks now, so drive
                     # around its measured pose rather than its planned one.
                     checked_obstacles = checked_obstacles + [
@@ -6111,6 +6111,12 @@ def drive(S, isaac) -> None:
                         pq,
                         clearance_m=state["pocket_clearance_margin_m"],
                     )
+                    if live_free_:
+                        # The rest of the truck too -- body and carriage -- since the outline left the 2D check
+                        # (Codex D6 review P2: driven onto the pallet, the underbody met its top boards).
+                        contacts = contacts + insertion_geometry.body_contacts(
+                            base, q, float(robot.get_joint_positions()[lift_index[0]]), ppos, pq,
+                            clearance_m=state["pocket_clearance_margin_m"])
                     state["pocket_geometry_checks"] += 1
                     if contacts:
                         state["forbidden_pocket_contacts"] = contacts

@@ -466,3 +466,16 @@ def test_the_carriage_front_corners_cover_every_non_blade_carriage_box():
             assert carriage[1] + center[1] + half[1] <= y_plus + 1e-12
     corners = MODULE.read_carriage_front_corners_m(ROOT / "sim/models/dls08_measured/forklift.urdf")
     assert [v for c in corners for v in c] == pytest.approx([0.604, 0.235, 0.604, -0.235])
+
+
+def test_the_body_and_the_carriage_are_checked_against_the_pallet_too(geometry):
+    """Persistent console plan D6 (Codex stage 3 review P2): with no live mission the pallet's outline leaves the 2D
+    check; the truck's own boxes -- the base link's and the carriage's -- meet its solids in 3D instead."""
+    assert geometry.body_boxes and geometry.carriage_boxes
+    names = {b[0] for b in geometry.body_boxes}
+    assert {"underbody_collision", "footwell_collision", "left_sill_collision", "mast_rail_1_collision"} <= names
+    assert all("post" in n or "door" in n or "brace" in n for n in geometry.body_boxes_skipped)  # the cab, up high
+    assert not geometry.body_contacts((-3.0, 0, 0), (1, 0, 0, 0), 0.0, (0, 0, 0), (1, 0, 0, 0))
+    assert not geometry.body_contacts((-1.35, 0, 0), (1, 0, 0, 0), 0.0, (0, 0, 0), (1, 0, 0, 0))  # forks only in
+    over = geometry.body_contacts((0.80, 0, 0), (1, 0, 0, 0), 0.0, (0, 0, 0), (1, 0, 0, 0))  # driven onto it
+    assert {name for name, _ in over} & {b[0] for b in geometry.body_boxes}
