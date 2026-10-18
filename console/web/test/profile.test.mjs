@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cameraHeightM, controlProfile, disarmAsked, forbidText, sessionChanges, videoStaleAfterS, frameAgreement, palletKindLabel, permitText, rearmState, resumeState, resumeSteps, scanDrawable, staleness, standWhy, stopInstruction, stopIsRefused, stopKind } from "../js/profile.js";
+import { cameraHeightM, controlProfile, rejectText, disarmAsked, forbidText, sessionChanges, videoStaleAfterS, frameAgreement, palletKindLabel, permitText, rearmState, resumeState, resumeSteps, scanDrawable, staleness, standWhy, stopInstruction, stopIsRefused, stopKind } from "../js/profile.js";
 
 test("a vehicle without the control field is a full console (console/1 as before)", () => {
   const p = controlProfile({ mission: true, teleop_direct: true, teleop_video: true, lift: true });
@@ -193,4 +193,9 @@ test("a forbidden drive names the policy's reason, not the permit's code (2026-1
   assert.equal(permitText({ reason: "drive_forbidden", limit_mps: 0 }, "pacing"), "시뮬레이션이 실시간을 따라가지 못해 수동 조종을 받지 않습니다 · 상한 0.00 m/s");
   assert.equal(permitText({ reason: "drive_forbidden", limit_mps: 0 }, null), "수동 주행 금지 · 상한 0.00 m/s");
   assert.equal(permitText({ reason: "clear", limit_mps: 0.3 }, "pacing"), "clear · 상한 0.30 m/s");
+});
+
+test("a refused submit away from the start says so in Korean", () => {
+  assert.match(rejectText("not_at_start"), /출발 위치/);
+  assert.equal(rejectText("mission_active"), "mission_active");
 });

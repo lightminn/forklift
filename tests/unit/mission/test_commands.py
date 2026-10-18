@@ -29,7 +29,9 @@ def test_submit_issues_a_mission_id_and_one_mission_at_a_time():
 
 @pytest.mark.parametrize("context, reason", [(Context(stop_kind="preempt"), "stopping"),
                                              (Context(stop_kind="controlled"), "stopping"),
-                                             (Context(clear_for_submit=False), "recovery_required")])
+                                             (Context(clear_for_submit=False), "recovery_required"),
+                                             # live: driven by hand off the first leg's start (2026-10-18 demo)
+                                             (Context(at_start=False), "not_at_start")])
 def test_submit_is_refused_while_stopping_or_when_a_recovery_is_needed(context, reason):
     m = MissionCommands()
     m.queue(Submit("P1", "D1"))

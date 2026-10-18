@@ -598,6 +598,6 @@ def test_the_live_runner_starts_a_submitted_mission_through_the_core():
     from pathlib import Path
 
     source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
-    live_block = source[source.index("live.tick_start(t, core.near_active())"):][:400]
+    live_block = source[source.index("live.tick_start(t, core.near_active()"):][:400]
     assert "core.start_submitted(t)" in live_block
     assert "core.commands.start()" not in live_block

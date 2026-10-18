@@ -130,13 +130,15 @@ class LiveRuntime:
         self._log.write(json.dumps(entry, default=_jsonable) + "\n")
 
     # --- per control tick ------------------------------------------------------------------------------------------
-    def tick_start(self, t: float, near_active: bool) -> tuple[str, list]:
-        """The arbiter's cycle start, then the mission's commands with the stop kind it gives (M-b B3)."""
+    def tick_start(self, t: float, near_active: bool, at_start: bool = True) -> tuple[str, list]:
+        """The arbiter's cycle start, then the mission's commands with the stop kind it gives (M-b B3). ``at_start``:
+        the truck stands where the mission's first leg (planned before any submit) starts."""
         now = self.clock()
         self.stopped_in_tick = False
         self.arbiter.pacing_ok = self.pacer.ok
         stop_kind = self.link.begin(now, self.feedback)
-        records = self.core.commands.apply(t, Context(stop_kind=stop_kind, near_tracker=near_active))
+        records = self.core.commands.apply(t, Context(stop_kind=stop_kind, near_tracker=near_active,
+                                                      at_start=at_start))
         self._flush(t)
         return stop_kind, records
 

@@ -269,3 +269,34 @@ def test_the_runner_hands_the_followed_path_to_the_live_state():
     source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
     call = source[source.index("live.publish("):][:1600]
     assert "plan_key=" in call and "plan_poses=" in call
+
+
+def test_the_tick_hands_the_start_check_to_the_mission_commands(tmp_path):
+    # 2026-10-18 demo: driven 7 m by hand, a submit ran the observe leg planned from the start and ended the run with
+    # "Tracking failed in observe". Without grid planning (nothing to replan with) the runner says the truck is off
+    # the start and the submit is refused (commands: not_at_start).
+    rt, core, did, clock = runtime(tmp_path)
+    seen = []
+    apply_ = core.commands.apply
+    core.commands.apply = lambda t, context: seen.append(context) or apply_(t, context)
+    rt.start()
+    try:
+        rt.tick_start(0.0, False, at_start=False)
+        rt.tick_start(0.1, False)
+        assert [c.at_start for c in seen] == [False, True]
+    finally:
+        rt.close()
+
+
+def test_the_runner_replans_the_first_leg_from_where_a_submit_finds_the_truck():
+    # With grid planning a submit off the start is accepted and the first leg replanned from the truck (the
+    # obstacle recovery's own replan); a replan that installs no path from the truck fails the mission, not the run.
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
+    head = source[:source.index("live.tick_start(t, core.near_active()")][-1800:]
+    assert "_poses[0]" in head and "live_last_rear_" in head
+    assert "at_start=live_at_start_" in source[source.index("live.tick_start(t, core.near_active()"):][:120]
+    replan = source[source.index('live_first_replan_["due"] and'):][:1600]
+    assert "core.blocked_replan(t, rear, 0.0, 0.0)" in replan
+    assert 'core.commands.finish("failed", t)' in replan

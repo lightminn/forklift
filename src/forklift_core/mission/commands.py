@@ -75,6 +75,7 @@ class Context:
     stop_kind: str = "none"
     near_tracker: bool = False  # a near-field tracker exists (pause is refused, E3)
     clear_for_submit: bool = True  # empty forks and outside the near section (else recovery_required)
+    at_start: bool = True  # live: the truck stands at its first leg's start, planned before the submit (else not_at_start)
 
 
 class MissionCommands:
@@ -140,6 +141,8 @@ class MissionCommands:
             return "stopping"
         if not context.clear_for_submit:
             return "recovery_required"
+        if not context.at_start:
+            return "not_at_start"
         if self.targets is not None:
             refused = self.targets.check_submit(command.pallet_id, command.destination_id, command.targets_revision)
             if refused is not None:

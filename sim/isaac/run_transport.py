@@ -5260,6 +5260,8 @@ def drive(S, isaac) -> None:
 
         gc_seen_: list = []  # real-time plan D9d: garbage collections timed in a live run, folded in at a tick's start
         live = None
+        live_last_rear_ = {"pose": None}  # the last live tick's control pose (the submit's start check)
+        live_first_replan_ = {"due": False}  # a submit off the first leg's start: replan it from the truck this tick
         if getattr(args, "live", False):
             # M-c (docs/plans/2026-10-17-m-c-isaac-live-runner.md): the arbiter, its console server and the pacing.
             from forklift_core.control.path_tracking import ackermann_command as live_ackermann
@@ -5698,8 +5700,22 @@ def drive(S, isaac) -> None:
             while gc_seen_:  # D9d: the collections timed since the last tick, folded in outside any walk
                 live_timers.add(*gc_seen_.pop())
             if live is not None:
-                stop_kind_, applied_commands_ = live.tick_start(t, core.near_active())
+                # The first leg was planned from the start pose before any submit: a truck driven elsewhere by hand
+                # would follow it from metres away (2026-10-18 demo: "Tracking failed in observe"). Off its first
+                # pose a submit replans that leg from the truck (below, with the obstacle recovery's replan); with
+                # nothing to replan with (no obstacle layer) it is refused (not_at_start).
+                live_idle_ = core.commands.status in ("idle", "done", "failed", "cancelled")
+                live_first_ = trackers.get(ms.phase) if live_idle_ else None
+                live_off_start_ = False
+                if live_first_ is not None and live_last_rear_["pose"] is not None:
+                    p0_, r_ = live_first_._poses[0], live_last_rear_["pose"]
+                    live_off_start_ = not (math.hypot(r_[0] - p0_[0], r_[1] - p0_[1]) <= 0.3 and abs(
+                        math.remainder(r_[2] - p0_[2], math.tau)) <= math.radians(15))
+                live_at_start_ = not (live_off_start_ and obstacle is None)
+                stop_kind_, applied_commands_ = live.tick_start(t, core.near_active(), at_start=live_at_start_)
                 core.start_submitted(t)  # the operator's submit: the mission and its phase clock run from this tick
+                if live_off_start_ and live_idle_ and core.commands.status == "running":
+                    live_first_replan_["due"] = True
             elif mission_schedule is not None:
                 # M-a3 (plan E2, E7): the schedule's due commands and the stop kind in force, applied at this
                 # control tick's start.
@@ -5751,6 +5767,20 @@ def drive(S, isaac) -> None:
                 slam["control"].append([t, *rear.tolist(), *truth_rear.tolist()])
             if obstacle is not None:
                 obstacle["control_rear"] = tuple(float(v) for v in rear)  # known pallets fix against it
+            if live_first_replan_["due"] and core.commands.status == "running":
+                # The operator's submit found the truck off the first leg (driven by hand): that leg is replanned
+                # from here before the follower's first tick, with the obstacle recovery's own replan (the leg's
+                # goal kept). A replan that installs no path from the truck fails the mission, not the run; the
+                # operator may submit again.
+                live_first_replan_["due"] = False
+                first_replan_ = core.blocked_replan(t, rear, 0.0, 0.0)
+                rear = first_replan_.rear
+                p0_ = trackers[ms.phase]._poses[0] if ms.phase in trackers else None
+                from_truck_ = p0_ is not None and math.hypot(rear[0] - p0_[0], rear[1] - p0_[1]) <= 0.3
+                state.setdefault("live_first_replans", []).append(
+                    {"time_s": t, "phase": ms.phase, "rear": [float(v) for v in rear], "installed": bool(from_truck_)})
+                if not from_truck_:
+                    core.commands.finish("failed", t)
                 if ms.phase == "withdraw" and obstacle["layer"].corridor is not None and obstacle.get("withdraw_line"):
                     # Plan v10 D5 (4) (Codex stage-1 P1-2, 2nd P2-3): every tick, standing or
                     # arriving included, the certificate holds only while the truck stays on its
@@ -6428,6 +6458,7 @@ def drive(S, isaac) -> None:
                     state["command_speed"] = 0.0
                     state["applied_command"] = (0.0, [float(v) for v in steering_command])
                 # The state carries what is applied after the choice above (contract 6, Codex M-c round 5 P1).
+                live_last_rear_["pose"] = (float(rear[0]), float(rear[1]), float(rear[2]))
                 live_tracker_ = trackers.get(ms.phase) if core.commands.status in (
                     "running", "paused", "held", "resuming") else None
                 live_plan_key_ = None if live_tracker_ is None else (

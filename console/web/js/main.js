@@ -10,7 +10,7 @@ import { createMapView, panBy, zoomAt, zoomPercent } from "./mapview.js";
 import { decodeScan, parseFrame } from "./media.js";
 import { API, createSession } from "./protocol.js";
 import { log, render, renderPallets, renderTemplates, renderWizard } from "./ui.js";
-import { controlProfile, disarmAsked, frameAgreement, scanDrawable, sessionChanges, staleness, stopIsRefused } from "./profile.js";
+import { controlProfile, disarmAsked, frameAgreement, rejectText, scanDrawable, sessionChanges, staleness, stopIsRefused } from "./profile.js";
 import { blockReason, nextAllowed, templatesFor } from "./wizard.js";
 
 const TELEOP_MIN_INTERVAL_MS = 33; // ~30 Hz cap: a fast display must not flood ticks
@@ -389,7 +389,7 @@ $("m-start").onclick = () => {
   req("mission_submit", { pallet_id: pallet, destination_id: $("dest").value, targets_revision: targets.targets_revision }).then((r) => {
     if (r && r.t === "reject") {
       m.wz.note = r.reason === "stale_targets" ? "대상 목록이 바뀌었습니다 · 다시 고르세요" : `거부 · ${r.reason}`;
-      log(`작업 지시 거부 · ${r.reason}`, "warn");
+      log(`작업 지시 거부 · ${rejectText(r.reason)}`, "warn");
       if (r.reason === "stale_targets") wizardGo(2); // the list changed: pick again
       else refreshWizard();
     } else if (r) closeWizard();
