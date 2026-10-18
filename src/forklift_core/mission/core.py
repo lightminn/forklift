@@ -151,6 +151,12 @@ class MissionCore:
         self.slam_releases = 0  # every SLAM release the core made (the targets list's correction version)
         self.commands = MissionCommands(self.targets)
         self.last_permission: tuple | None = None  # (allowed, why) of the latest permission or watch (E8)
+        # Real-time plan D8 (docs/plans/2026-10-17-realtime-sim.md): a real-time run hands the long plans to a
+        # worker (the runner sets ``jobs``); a batch run leaves it None and plans in the tick, as before.
+        self.jobs = None
+        self.pending: SimpleNamespace | None = None  # the plan being waited for
+        self.release_replan_needed: dict | None = None  # a discarded release replan to ask again when running
+        self.fresh_depth_wait: tuple | None = None  # (since, acquisition stamp): an async near build's first frame
 
     def known_transition(self, from_phase: str, next_phase: str, t: float) -> None:
         """Known pallets across the mission (plan v10 D5)."""
@@ -478,6 +484,36 @@ class MissionCore:
                     )
             start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))
             obstacle["deadline"] = hooks.wall() + 20.0
+            if self.jobs is not None and (self.pending is not None or (slam is not None
+                                                                       and slam.get("pending_release") is not None)):
+                # Real-time plan D8b: one plan waited for at a time; a pending SLAM release goes first (its own
+                # replan follows), and the leg is planned after it, on the released pose.
+                obstacle["live_replanned"][ms.phase] = False
+                obstacle["deadline"] = None
+                return True
+            if (self.jobs is not None and not (options.return_turnaround and ms.phase == "return_home")
+                    and slam is not None and not slam["stop_now"]):
+                # Real-time plan D8b: a leg asked while the truck still rolls out of the last phase is dropped as
+                # moving when it comes back, and each drop counts (Isaac V8-4 d8c_6: two drops in 0.25 s at the
+                # transport's start). It stands until the stop detector holds, then asks.
+                obstacle["live_replanned"][ms.phase] = False
+                obstacle["deadline"] = None
+                return True
+            if self.jobs is not None and not (options.return_turnaround and ms.phase == "return_home"):
+                # Real-time plan D8b: the worker plans (the tight retry with it, under the same deadline); the leg
+                # stands until the plan is taken. A return turnaround's closure arguments keep it here.
+                if ms.phase == "transport":
+                    sc_ = slam.get("transport_scenario", scenario) if slam is not None else scenario
+                    payload = self._leg_payload("transport", grid_world(sc_), start, grid_kwargs(None),
+                                                retry_on=("invalid_start", "no_path"))
+                else:
+                    sc_ = scenario if slam is None else slam.get("return_scenario", slam.get("transport_scenario", scenario))
+                    payload = self._leg_payload("return", grid_world(sc_), start,
+                                                {**grid_kwargs("return", sc_.destination), **return_turnaround_kwargs()},
+                                                retry_on=("invalid_start", "no_path"))
+                obstacle["deadline"] = None
+                self._request("live_leg", "leg", payload, t, rear, self._applied_now(), ctx={})
+                return True
             if ms.phase == "transport":
                 sc_ = slam.get("transport_scenario", scenario) if slam is not None else scenario
                 live = hooks.plan_transport_leg(grid_world(sc_), start, planner_config, geometry=geometry,
@@ -1986,19 +2022,15 @@ class MissionCore:
         planning target, the known pallet, the mission plan and its followers, and the pending near capture
         of the first far observation under SLAM. Returns ``stop`` (the repeat diagnostic ends the loop),
         ``observation`` (biased under a mismatch injection) and ``near_leg``."""
-        ms, state, obstacle, slam, pocket, hooks, options, near = (self.ms, self.state, self.obstacle, self.slam,
-                                                                   self.pocket, self.hooks, self.options, self.near)
-        paths, trackers, geometry, settings, transition = self.paths, self.trackers, self.geometry, self.settings, self.transition
+        state, obstacle, pocket, hooks, options, near = (self.state, self.obstacle, self.pocket, self.hooks,
+                                                         self.options, self.near)
+        geometry, transition = self.geometry, self.transition
         planner_config, travel_config, scenario, pickup_bounds = (options.planner_config, options.travel_config,
                                                                   options.scenario, options.pickup_bounds)
-        return_to_pose, mission_stages, speeds = options.return_to_pose, options.mission_stages, options.speeds
-        CUSP_HEADING_HOLD_RAD, CUSP_HEADING_HOLD_PHASES = options.cusp_heading_hold_rad, options.cusp_heading_hold_phases
+        return_to_pose = options.return_to_pose
         adapter, near_tracking, Pose2D = options.adapter, options.near_tracking, PlanningPose
-        require, wall, path_record, record_json, known_pallet = (hooks.require, hooks.wall, hooks.path_record,
-                                                                 hooks.record_json, self.known_pallet)
-        grid_world, grid_kwargs, plan_transport, final_straight_prefix = (
-            hooks.grid_world, hooks.grid_kwargs, hooks.plan_transport, hooks.final_straight_prefix)
-        apply_tracker_profile, record_tracker_configs = self.apply_tracker_profile, self.record_tracker_configs
+        wall, known_pallet = hooks.wall, self.known_pallet
+        grid_world, grid_kwargs, plan_transport = hooks.grid_world, hooks.grid_kwargs, hooks.plan_transport
         if options.repeat_captures and options.repeat_at_attempt is not None:
             # G2r took another path to a valid detection
             # before the requested attempt: no batch, no plan.
@@ -2099,6 +2131,21 @@ class MissionCore:
                          f"recognised:attempt{len(state.get('observation_attempts', []))}")
         planning_start = wall()
         planning_trace = []
+        if self.jobs is not None:
+            # Real-time plan D8b: the mission plan is the worker's; the truck stands at the observation pose until
+            # it is taken, and the rest of this observation (its followers, the near leg or the near capture's
+            # straight) is finished then, with this capture's acquisition kept apart (_observe_finish).
+            kwargs_ = dict(geometry=geometry, target_pickup=planning_pickup, start_rear=start_rear_pose,
+                           return_to=return_to_pose, pickup_bounds=pickup_bounds, travel_config=travel_config,
+                           trace=planning_trace, **grid_kwargs("mission", planning_pickup))
+            self._request("observe", "plan_transport", {"args": (grid_world(scenario), planner_config),
+                                                        "kwargs": kwargs_},
+                          t, rear, self._applied_now(),
+                          ctx={"base": tuple(float(v) for v in base), "yaw": float(yaw), "observation": observation,
+                               "attempt_number": attempt_number, "planning_start": planning_start,
+                               # the world time after the capture: what the tick would have stamped its depth with
+                               "acquired_s": float(hooks.now_s())})
+            return SimpleNamespace(stop=False, observation=observation, near_leg=None, pending=True)
         plans = plan_transport(
             grid_world(scenario),
             planner_config,
@@ -2111,6 +2158,19 @@ class MissionCore:
             trace=planning_trace,
             **grid_kwargs("mission", planning_pickup),
         )
+        near_leg = self._observe_install(plans, planning_trace, planning_start, attempt_number)
+        return SimpleNamespace(stop=False, observation=observation, near_leg=near_leg)
+
+    def _observe_install(self, plans, planning_trace: list, planning_start: float, attempt_number: int):
+        """After the mission plan of a valid observation: its records, the followers, the paths shown and saved,
+        and (the first far observation under SLAM) the near leg to the near capture point."""
+        state, slam, hooks, options = self.state, self.slam, self.hooks, self.options
+        paths, trackers, geometry, settings = self.paths, self.trackers, self.geometry, self.settings
+        mission_stages, speeds = options.mission_stages, options.speeds
+        CUSP_HEADING_HOLD_RAD, CUSP_HEADING_HOLD_PHASES = options.cusp_heading_hold_rad, options.cusp_heading_hold_phases
+        require, wall, path_record, record_json = hooks.require, hooks.wall, hooks.path_record, hooks.record_json
+        final_straight_prefix = hooks.final_straight_prefix
+        apply_tracker_profile, record_tracker_configs = self.apply_tracker_profile, self.record_tracker_configs
         state.setdefault("planning_traces", []).append(
             planning_trace
         )
@@ -2222,9 +2282,24 @@ class MissionCore:
                 ],
                 "far_error": state["perception"]["perception_error"],
             }
-        return SimpleNamespace(stop=False, observation=observation, near_leg=near_leg)
+        return near_leg
 
-    def near_leg_or_recapture(self, t: float, rear, base, yaw: float, observation, attempt_number: int, near_leg) -> None:
+    def _observe_finish(self, p, value, t: float, rear) -> None:
+        """The mission plan taken: install it, then the near leg or the near capture's straight -- the
+        observation placed by its capture (base, yaw, the acquisition time and pose for the first depth frame),
+        the straight drawn and judged from where the truck stands now (Codex real-time D8 round 3 P1)."""
+        ctx = p.ctx
+        near_leg = self._observe_install(value["result"], value["trace"], ctx["planning_start"], ctx["attempt_number"])
+        built_before = (self.state.get("pocket_check") or {}).get("built_s")
+        self.near_leg_or_recapture(t, rear, np.asarray(ctx["base"], dtype=float), ctx["yaw"], ctx["observation"],
+                                   ctx["attempt_number"], near_leg, acquired=(ctx["acquired_s"], p.rear))
+        built_now = (self.state.get("pocket_check") or {}).get("built_s")
+        if built_now is not None and built_now != built_before:
+            self.fresh_depth_wait = (float(t), float(ctx["acquired_s"]))  # a fresh pocket frame must follow (D8b)
+        self._refresh_for_new_leg(t, rear)  # the new leg's path check before the first move
+
+    def near_leg_or_recapture(self, t: float, rear, base, yaw: float, observation, attempt_number: int, near_leg,
+                              acquired=None) -> None:
         """After the mission plan: the first far observation under SLAM drives the near leg to the near capture
         point; the near capture itself re-draws the approach straight from where the truck stands (box,
         dry run, the S4c-3 re-draw acceptance, the once-per-pickup realignment), installs it with the pocket
@@ -2392,7 +2467,10 @@ class MissionCore:
                             for name_ in ("approach", "insert", "extract")
                         }
                     if options.pocket_check:
-                        build_pocket_check(float(straight.poses[-1][2]), rear, base)
+                        if acquired is None:
+                            build_pocket_check(float(straight.poses[-1][2]), rear, base)
+                        else:  # real-time plan D8b: the capture's depth at its own time and pose
+                            build_pocket_check(float(straight.poses[-1][2]), rear, base, acquired[0], acquired[1])
                     state["near_capture"].update(
                         status="done",
                         near_attempt=attempt_number,
@@ -3870,6 +3948,25 @@ class MissionCore:
         released_ = (tuple(float(v) for v in slam["tracker"].applied[0])
                      if slam["tracker"].applied is not None else None)
         replan_start = time.monotonic()
+        if self.jobs is not None:
+            # Real-time plan D8b: the release itself is this tick's; the leg's replan is the worker's, and the leg
+            # stands until it is taken (its delivered pallet carried into the released frame here, as below).
+            return_scenario = None
+            if leg != "transport":
+                return_scenario = slam.get("transport_scenario", scenario)
+                if slam["docking"].get("accepted_any"):
+                    frame_change = compose(tuple(after), invert(tuple(before)))
+                    site = return_scenario.destination
+                    moved_site = compose(frame_change, (site.x_m, site.y_m, site.yaw_rad))
+                    return_scenario = replace(
+                        return_scenario,
+                        destination=replace(site, x_m=moved_site[0], y_m=moved_site[1], yaw_rad=moved_site[2]),
+                    )
+                    event["pallet_frame_change"] = list(frame_change)
+                    slam["return_scenario"] = return_scenario
+            self._release_request(t, {"leg": leg, "event": event, "after": tuple(float(v) for v in after),
+                                      "return_scenario": return_scenario, "redo": False})
+            return
         if leg == "transport":
             replanned = plan_transport_leg(
                 grid_world(scenario), start, planner_config, geometry=geometry, travel_config=travel_config,
@@ -4035,6 +4132,227 @@ class MissionCore:
         return choice_, candidates_
 
     # --- M-a1 slice 6d: closures moved from run(), statement for statement ---
+    # --- real-time plan D8: waiting for a plan without stopping the control loop -----------------------------------
+    ASYNC_DRIFT_M = 0.02
+    ASYNC_DRIFT_RAD = math.radians(1.0)
+    ASYNC_MAX_DISCARDS = 3
+    ASYNC_FRESH_DEPTH_S = 2.0
+    ASYNC_STAND_CONFIRM_S = 2.0  # how long a finished plan waits for the stop detector before it is dropped
+
+    def _leg_payload(self, kind: str, scenario_, start, grid_kw: dict, *, retry_on) -> dict:
+        """A ``leg`` job: the leg planner's call and its tight retry, as the tick would make them."""
+        options = self.options
+        cfg, travel = options.planner_config, options.travel_config
+        tight_cfg = replace(cfg, clearance_m=0.0)
+        tight_travel = replace(travel, clearance_m=0.0) if travel is not None else None
+        if kind == "transport":
+            args, tight_args = (scenario_, start, cfg), (scenario_, start, tight_cfg)
+        else:
+            args = (scenario_, start, options.return_to_pose, cfg)
+            tight_args = (scenario_, start, options.return_to_pose, tight_cfg)
+        return {"kind": kind, "args": args, "kwargs": dict(geometry=self.geometry, travel_config=travel, **grid_kw),
+                "retry_on": tuple(retry_on), "tight_args": tight_args,
+                "tight_kwargs": dict(geometry=self.geometry, travel_config=tight_travel, **grid_kw)}
+
+    def _refresh_for_new_leg(self, t: float, rear) -> None:
+        """Right after a plan is taken: the permission's path check on the new leg before the first move (D8b)."""
+        obstacle, ms, trackers = self.obstacle, self.ms, self.trackers
+        if obstacle is None or ms.phase not in trackers:
+            return
+        leg_now, leg_dir_now = trackers[ms.phase].leg_ahead()
+        obstacle["layer"].refresh(
+            t, obstacle["applied"], obstacle["version"], current_pose=tuple(float(v) for v in rear),
+            path_ahead=leg_now, loaded=ms.phase in ("lift", "extract", "transport", "lower"), direction=leg_dir_now)
+
+    def _release_request(self, t: float, need: dict) -> None:
+        """The release replan of ``need["leg"]``: from the released pose the first time, from where the truck
+        stands now when asked again after a drop; its grid and the start share the correction applied now."""
+        hooks, options = self.hooks, self.options
+        leg = need["leg"]
+        after = tuple(float(v) for v in (hooks.slam_rear(t) if need["redo"] else need["after"]))
+        start = PlanningPose(*after)
+        released_ = self._applied_now()
+        grid_kw = hooks.grid_kwargs(None, own=after, applied=released_)
+        if leg == "transport":
+            payload = self._leg_payload("transport", hooks.grid_world(options.scenario), start, grid_kw,
+                                        retry_on=("invalid_start",) if options.grid_planning else ())
+        else:
+            payload = self._leg_payload("return", hooks.grid_world(need["return_scenario"]), start, grid_kw,
+                                        retry_on=("invalid_start",) if options.grid_planning else ())
+        self._request("release", "leg", payload, t, after, released_, ctx={"need": dict(need, redo=True)})
+
+    def _release_finish(self, p, value, t: float, rear) -> None:
+        ms, state, paths, trackers, hooks = self.ms, self.state, self.paths, self.trackers, self.hooks
+        need = p.ctx["need"]
+        leg, event = need["leg"], need["event"]
+        replanned = value["result"]
+        if value.get("tight"):
+            event["tight_retry"] = True
+        event.update(replaced_path=hooks.path_record(paths[leg]), replanned=True, replan_status=replanned.status,
+                     planning_wall_s=hooks.wall() - p.wall, async_taken_s=float(t))
+        hooks.require(replanned.success, f"slam_release_replan_failed: {replanned.status}")
+        paths[leg] = replanned
+        state.setdefault("paths", {})[leg] = hooks.path_record(replanned)
+        hooks.write_paths()
+        trackers[leg] = RearAxlePathTracker(replanned.poses, replanned.directions, replanned.curvatures_inv_m,
+                                            trackers[leg].config)
+        hooks.add_path_display(hooks.stage(), replanned, "Transport" if leg == "transport" else "Return",
+                               (1.0, 0.65, 0.04) if leg == "transport" else (0.55, 0.2, 0.85))
+        if leg == ms.phase:
+            ms.phase_started = p.t
+        if leg == "transport":
+            self.arm_docking()
+        self._refresh_for_new_leg(t, rear)
+
+    def _live_leg_finish(self, p, value, t: float, rear) -> None:
+        ms, obstacle, state, paths, trackers, hooks, slam = (self.ms, self.obstacle, self.state, self.paths,
+                                                             self.trackers, self.hooks, self.slam)
+        live = value["result"]
+        obstacle.setdefault("live_plans", []).append(
+            {"phase": ms.phase, "time_s": p.t, "status": live.status, "turnaround": getattr(live, "turnaround", None),
+             "async": True, "taken_s": float(t)})
+        if not live.success:
+            tries = sum(1 for lp in obstacle["live_plans"] if lp["phase"] == ms.phase)
+            hooks.require(tries < 5, f"obstacle_live_plan_failed in {ms.phase}: {live.status}")
+            obstacle["live_replanned"][ms.phase] = False
+            obstacle["live_retry_after_s"] = t + 1.0  # from now: the wait is not a retry interval (Codex D8 P2-6)
+            return
+        paths[ms.phase] = live
+        state["paths"][ms.phase] = hooks.path_record(live)
+        hooks.write_paths()
+        trackers[ms.phase] = RearAxlePathTracker(live.poses, live.directions, live.curvatures_inv_m,
+                                                 trackers[ms.phase].config)
+        if ms.phase == "transport" and slam is not None:
+            self.arm_docking()
+        ms.phase_started = p.t  # with the wait out of the work clock, as the tick that asked would have set it
+        self._refresh_for_new_leg(t, rear)
+
+    def job_pending(self) -> bool:
+        return self.pending is not None
+
+    def _applied_now(self):
+        slam = self.slam
+        if slam is None or slam["tracker"].applied is None:
+            return None
+        return tuple(float(v) for v in slam["tracker"].applied[0])
+
+    def _request(self, site: str, name: str, payload: dict, t: float, rear, applied, ctx: dict) -> None:
+        """Ask the worker for a plan; the work clocks stand still until it is taken or dropped (D8c)."""
+        slam = self.slam
+        if self.pending is not None:  # one plan waited for at a time (Codex D8 implementation P1)
+            self._drop(self.pending, t, "superseded", count=False)
+        job = self.jobs.submit(name, payload)
+        self.commands.begin_wait(t)
+        self.pending = SimpleNamespace(
+            site=site, job=job, t=float(t), rear=tuple(float(v) for v in rear), applied=applied,
+            mode=slam["tracker"].mode if slam is not None else None, hold=self.hold_count(),
+            gen=self.commands.mission_gen, phase=self.ms.phase, ctx=ctx, wall=self.hooks.wall(), moving_since=None,
+            answer=None, answered_s=None)
+        self.state.setdefault("async_plans", []).append(
+            {"site": site, "job": job, "requested_s": float(t), "phase": self.ms.phase,
+             "asked": self._plan_context(rear, applied)})
+
+    def _plan_context(self, rear, applied) -> dict:
+        """What a plan was asked on and taken on, for the run's record (Codex real-time D8 round 10: the async
+        runs could not be told apart from the synchronous ones without it): the control and true rear poses, the
+        applied correction, the SLAM mode and hold count."""
+        slam = self.slam
+        return {"rear": [float(v) for v in rear], "truth_rear": [float(v) for v in self.hooks.truth_rear()],
+                "applied": None if applied is None else [float(v) for v in applied],
+                "mode": slam["tracker"].mode if slam is not None else None, "hold": self.hold_count()}
+
+    def _job_invalid(self, p, t: float, rear) -> str | None:
+        """Why the plan p may not be taken now (None: it may), judged on the current state (D8b)."""
+        cmds, slam = self.commands, self.slam
+        if cmds.status != "running" or cmds.mission_gen != p.gen:
+            return "mission"
+        if self.ms.phase != p.phase:
+            return "phase"
+        if self._applied_now() != p.applied:
+            return "correction"
+        if slam is not None and (slam["tracker"].mode != p.mode or self.hold_count() != p.hold):
+            return "slam_mode"
+        if slam is not None and not slam["stop_now"]:
+            return "moving"
+        dx, dy = float(rear[0]) - p.rear[0], float(rear[1]) - p.rear[1]
+        dyaw = math.atan2(math.sin(float(rear[2]) - p.rear[2]), math.cos(float(rear[2]) - p.rear[2]))
+        if math.hypot(dx, dy) > self.ASYNC_DRIFT_M or abs(dyaw) > self.ASYNC_DRIFT_RAD:
+            return "drift"
+        return None
+
+    def job_hold(self, t: float, rear, truth_speed: float, paused: bool) -> SimpleNamespace:
+        """At each control tick's start in a real-time run (D8b): whether this tick stands for a plan. A finished
+        plan is checked and taken (or dropped) here, once; a dropped release replan is asked again when the
+        mission runs; the first fresh depth frame after an asynchronous near build is watched."""
+        hooks, state = self.hooks, self.state
+        p = self.pending
+        if p is not None and paused:
+            # A pause or a cancel: the plan belongs to the mission as it was; drop it, ask again when running.
+            self._drop(p, t, "paused", count=False)
+            return SimpleNamespace(hold=False)
+        if p is None:
+            if self.fresh_depth_wait is not None:
+                since, stamp = self.fresh_depth_wait
+                check = self.pocket.get("check")
+                last_new = getattr(check, "last_new_s", None) if check is not None else None
+                cfg = getattr(check, "config", None)
+                lag, max_age = getattr(cfg, "frame_lag_s", 0.0), getattr(cfg, "frame_max_age_s", 0.2)
+                if last_new is not None and last_new > stamp and t - (last_new - lag) <= max_age:
+                    self.fresh_depth_wait = None  # a new pocket frame the check itself takes as fresh
+                else:
+                    hooks.require(t - since <= self.ASYNC_FRESH_DEPTH_S, "async_near_no_fresh_depth")
+            if self.release_replan_needed is not None and not paused and self.commands.status == "running":
+                need, self.release_replan_needed = self.release_replan_needed, None
+                self._release_request(t, need)
+                return SimpleNamespace(hold=True)
+            return SimpleNamespace(hold=False)
+        if abs(float(truth_speed)) > 0.05:
+            p.moving_since = t if p.moving_since is None else p.moving_since
+            hooks.require(t - p.moving_since <= 1.0, "planning_wait_moving")
+        else:
+            p.moving_since = None
+        out = p.answer if p.answer is not None else self.jobs.poll(p.job)
+        if out is None:
+            return SimpleNamespace(hold=True)
+        why = self._job_invalid(p, t, rear)
+        if why == "moving" and (p.answered_s is None or t - p.answered_s <= self.ASYNC_STAND_CONFIRM_S):
+            # The stop detector confirms a stand some ticks after the wheels stop (Isaac d8e_p: a plan asked as the
+            # truck came to rest came back 0.18 s later, 0.3 s before the confirmation, and was dropped). The
+            # answer is kept and judged again each tick; a real motion still ends the run (planning_wait_moving),
+            # and a stand never confirmed drops it after ASYNC_STAND_CONFIRM_S.
+            if p.answer is None:
+                p.answer, p.answered_s = out, float(t)
+            return SimpleNamespace(hold=True)
+        ok, value = out
+        self.pending = None
+        self.commands.end_wait(t)
+        record = state["async_plans"][-1]
+        record.update(finished_s=float(t), wall_s=hooks.wall() - p.wall, ok=bool(ok), dropped=why,
+                      taken=self._plan_context(rear, self._applied_now()))
+        if why is not None:
+            self._drop(p, t, why, count=True)
+            return SimpleNamespace(hold=True)
+        hooks.require(ok, f"async_plan_failed:{str(value).splitlines()[0] if value else ''}")
+        {"observe": self._observe_finish, "release": self._release_finish,
+         "live_leg": self._live_leg_finish}[p.site](p, value, t, rear)
+        return SimpleNamespace(hold=True)
+
+    def _drop(self, p, t: float, why: str, *, count: bool) -> None:
+        if self.pending is p:
+            self.pending = None
+            self.commands.end_wait(t)
+            self.jobs.discard(p.job)
+            self.state["async_plans"][-1].update(finished_s=float(t), dropped=why)
+        if count:
+            drops = self.state.setdefault("async_plan_drops", {})
+            drops[p.site] = drops.get(p.site, 0) + 1
+            self.hooks.require(drops[p.site] <= self.ASYNC_MAX_DISCARDS, f"async_plan_discarded:{p.site}:{why}")
+        if p.site == "release":
+            self.release_replan_needed = p.ctx["need"]
+        elif p.site == "live_leg":
+            self.obstacle.setdefault("live_replanned", {})[p.phase] = False
+        # observe: nothing to undo -- the truck stands at the observation pose and captures again
+
     def hold_count(self) -> int:
         """SLAM hold episodes so far: the near-field tracker's frame_version."""
         slam = self.slam

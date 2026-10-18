@@ -14,7 +14,9 @@ import argparse
 import asyncio
 import json
 import math
+import signal
 import struct
+import sys
 import time
 from pathlib import Path
 
@@ -435,6 +437,86 @@ async def approach_scenario(p: Probe, args):
     await p.request("mode_request", to="PAUSED")
 
 
+async def planwait_scenario(p: Probe, args):
+    """Real-time plan V8-5: a pause, a STOP and a cancel each sent while the mission stands for its plan.
+
+    The state does not say a plan is being waited for, so the requests are timed: the observation's mission plan
+    takes ~12-16 wall s after the truck stands for the far capture (and again after each resume, which captures
+    again), longer than any other stand in AUTO observe (a gear change stands well under a second); each request
+    goes once the truck has stood ``--wait-offset-s`` there. The run's ``async_plans`` says afterwards whether it
+    landed in a wait (tools/check_planwait_probe.py)."""
+    await p.open()
+    await p.open_media()
+    await p.until(lambda s: True, 10, label="first_state")
+    lease = await p.request("lease_request")
+    p.lease_id = (lease or {}).get("lease_id")
+    await p.until(lambda s: p.targets is not None, 10, label="targets")
+    await p.until(p.standing, 20, label="standing_at_start")
+    submit = None
+    for _ in range(20):
+        submit = await p.request("mission_submit", pallet_id="P-1", destination_id="D-1",
+                                 targets_revision=p.targets["targets_revision"])
+        if submit is None or submit.get("reason") not in ("not_stopped", "no_feedback:rear_axle_speed"):
+            break
+        await asyncio.sleep(0.5)
+    mission_id = (submit or {}).get("mission_id")
+    await p.until(lambda s: s.get("mode") == "AUTO", 5, label="auto")
+    await p.until(lambda s: abs(s.get("rear_axle_speed_mps") or 0.0) > 0.05, 60, label="moving")
+
+    async def in_plan_wait(label):
+        """AUTO, observe, standing without a break for --wait-offset-s."""
+        since, end = None, time.monotonic() + args.observe_timeout_s
+        while time.monotonic() < end:
+            s = p.state or {}
+            # the vehicle's own stand confirmation: the measured speed of a standing truck wanders past 0.01 m/s
+            if (s.get("mode") == "AUTO" and (s.get("mission") or {}).get("phase") == "observe"
+                    and s.get("stopped_confirmed")):
+                since = since or time.monotonic()
+                if time.monotonic() - since >= args.wait_offset_s:
+                    p.event("reached", label=label)
+                    return True
+            else:
+                since = None
+            await asyncio.sleep(0.05)
+        p.event("timeout", label=label)
+        return False
+
+    async def watch_standing(seconds, key):
+        """The truck must not move while paused, stopped or cancelled: the largest speed in the states received
+        meanwhile, and how many (the judge, tools/check_planwait_probe.py, reads the vehicle's own record)."""
+        start = time.monotonic()
+        await asyncio.sleep(seconds)
+        speeds = [s["speed"] for s in p.states if s["mono"] >= start]
+        p.report[key] = {"max": max((abs(v) for v in speeds if v is not None), default=None),
+                         "samples": len(speeds), "missing": sum(v is None for v in speeds)}
+
+    # 1. pause inside the wait, stand, resume
+    await in_plan_wait("plan_wait_1")
+    p.report["pause_sent_mono"] = time.monotonic()
+    p.report["pause_reply"] = await p.request("mission_pause", mission_id=mission_id)
+    await p.until(lambda s: s.get("mode") == "PAUSED", 5, label="paused_in_wait")
+    await watch_standing(args.hold_s, "paused_max_speed_mps")
+    p.report["resume_after_pause"] = await p.request_until_standing("mission_resume", mission_id=mission_id)
+    await p.until(lambda s: s.get("mode") == "AUTO", 5, label="auto_after_pause")
+    # 2. STOP inside the plan asked again after the resume, rearm, resume
+    await in_plan_wait("plan_wait_2")
+    p.report["stop_sent_mono"] = time.monotonic()
+    p.report["stop_reply"] = await p.request("stop", source="key")
+    await p.until(lambda s: s.get("mode") == "STOPPED", 3, label="stopped_in_wait")
+    await watch_standing(args.hold_s, "stopped_max_speed_mps")
+    await p.request_until_standing("rearm")
+    await p.until(p.standing, 5, label="standing_before_resume")
+    p.report["resume_after_stop"] = await p.request_until_standing("mission_resume", mission_id=mission_id)
+    await p.until(lambda s: s.get("mode") == "AUTO", 5, label="auto_after_stop")
+    # 3. cancel inside the next wait: no plan may be taken afterwards
+    await in_plan_wait("plan_wait_3")
+    p.report["cancel_sent_mono"] = time.monotonic()
+    p.report["cancel_reply"] = await p.request("mission_cancel", mission_id=mission_id)
+    await p.until(lambda s: (s.get("mission") or {}).get("status") == "cancelled", 10, label="cancelled_in_wait")
+    await watch_standing(args.after_cancel_s, "cancelled_max_speed_mps")
+    p.report["final_state"] = {k: (p.state or {}).get(k) for k in ("mode", "mission", "rear_axle_speed_mps")}
+
+
 async def slow_scenario(p: Probe, args):
     await p.open()
     await p.open_media()
@@ -457,7 +539,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port-file", type=Path, required=True)
     ap.add_argument("--report", type=Path, required=True)
-    ap.add_argument("--scenario", choices=("main", "slow", "marker", "approach"), default="main")
+    ap.add_argument("--scenario", choices=("main", "slow", "marker", "approach", "planwait"), default="main")
+    ap.add_argument("--wait-offset-s", type=float, default=4.0,
+                    help="planwait scenario: standing this long in AUTO observe is taken as the plan wait")
+    ap.add_argument("--hold-s", type=float, default=5.0, help="planwait scenario: standing watched after pause/STOP")
+    ap.add_argument("--after-cancel-s", type=float, default=20.0,
+                    help="planwait scenario: standing watched after the cancel (the dropped plan would have landed)")
     ap.add_argument("--approach-s", type=float, default=600.0, help="approach scenario: wall seconds per leg at most")
     ap.add_argument("--held-s", type=float, default=15.0, help="approach scenario: standing this long ends a leg")
     ap.add_argument("--approach-weave-s", type=float, default=0.0,
@@ -478,6 +565,8 @@ def main():
     ap.add_argument("--mission-timeout-s", type=float, default=900.0)
     ap.add_argument("--wait-port-s", type=float, default=900.0)
     args = ap.parse_args()
+    # The job's timeout ends a stuck probe with SIGTERM: leave through the finally below, so the report is written.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(124))
     end = time.monotonic() + args.wait_port_s
     info = None
     while time.monotonic() < end:
@@ -490,7 +579,7 @@ def main():
     p = Probe(info["port"], report)
     try:
         scenario = {"main": main_scenario, "slow": slow_scenario, "marker": marker_scenario,
-                    "approach": approach_scenario}[args.scenario]
+                    "approach": approach_scenario, "planwait": planwait_scenario}[args.scenario]
         asyncio.run(scenario(p, args))
     finally:
         report["frames"] = p.frames

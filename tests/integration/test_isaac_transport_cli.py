@@ -459,8 +459,9 @@ def test_slam_release_replans_both_travel_legs_and_gates_on_a_stop() -> None:
     gate = CORE.read_text()  # the release gate moved to the mission core (M-a1 slice 5)
     assert "if slam[\"stop_now\"]:\n                slam_release(t)" in gate
     assert "rear = slam_rear(t)  # the released estimate" in gate
-    # (M-a3: nor while paused, resuming or cancelling, plan E3)
-    assert "if ms.phase in trackers and not releasing and not warming and not paused_:" in source
+    # (M-a3: nor while paused, resuming or cancelling, plan E3; real-time plan D8: nor while a plan is waited for)
+    assert ("if ms.phase in trackers and not releasing and not warming and not paused_ and not plan_wait_:"
+            in source)
 
 
 def test_slam_runs_see_the_pallet_again_before_the_final_straight() -> None:
@@ -509,8 +510,10 @@ def test_slam_runs_dock_on_a_scan_before_the_delivery_straight() -> None:
     # (one lookup), and the docking retry's release and re-approach plan add three.
     # Obstacle recovery v4: the escape's leg (transport and return) looks them up as the replans do.
     # (the obstacle replan and the live leg moved to the mission core, M-a1 slices 3a/3c)
+    # Real-time plan D8: the worker's requests look them up as their synchronous paths do -- the live
+    # transport and return legs and the release's return scenario add three.
     assert source.count('slam.get("transport_scenario", scenario)') + CORE.read_text().count(
-        'slam.get("transport_scenario", scenario)') == 12
+        'slam.get("transport_scenario", scenario)') == 15
 
 
 def test_d8b_recording_options_validate_before_startup(tmp_path) -> None:
