@@ -608,11 +608,25 @@ async def manual_recovery(p: Probe, args) -> dict:
             break
         if dirs == [-1]:
             await p.teleop(0.0, 0.0, True, lift_dir=-1)
+            await asyncio.sleep(0.05)
         elif mode == "reverse_straight":
-            await p.teleop(-1.0, 0.0, True)
+            # In short strokes: the free verdict needs the truck standing (Codex D14 impl round 2 P2) -- back off,
+            # stand, give the verdict a moment, again.
+            stroke_end = time.monotonic() + args.manual_stroke_s
+            while time.monotonic() < stroke_end and (p.state or {}).get("drive_mode") == "reverse_straight":
+                await p.teleop(-1.0, 0.0, True)
+                await asyncio.sleep(0.05)
+            stand_by = time.monotonic() + 15.0
+            while time.monotonic() < stand_by and not (p.state and p.standing(p.state)):
+                await p.teleop(0.0, 0.0, True)
+                await asyncio.sleep(0.05)
+            settle_end = time.monotonic() + 1.5
+            while time.monotonic() < settle_end:
+                await p.teleop(0.0, 0.0, True)
+                await asyncio.sleep(0.05)
         else:
             await p.teleop(0.0, 0.0, True)
-        await asyncio.sleep(0.05)
+            await asyncio.sleep(0.05)
     out["done"] = (p.state or {}).get("recovery") is None
     # a little further back by hand, normally, so the next preparation has room (plan D4b checks it at the submit)
     stop_by = time.monotonic() + args.manual_extra_s
@@ -717,6 +731,9 @@ async def cycle_scenario(p: Probe, args):
         if args.manual_recovery and p.report["missions_run"] and \
                 (p.report["missions_run"][-1].get("result") or {}).get("outcome") == "recovery_required":
             p.report["manual_recovery"] = await manual_recovery(p, args)  # plan D14 U20 c, before the next submit
+            if not p.report["manual_recovery"]["done"]:
+                p.event("manual_recovery_not_done")
+                break  # the next mission is not asked of a truck still recovering
             await p.until(p.standing, 30, label="standing_after_manual_recovery")
             await asyncio.sleep(1.0)
             seen = ((p.state or {}).get("last_result") or {}).get("seq", 0)
@@ -798,6 +815,8 @@ def main():
                     help="cycle scenario (plan D14 U20 c): a mission ending recovery_required is recovered by hand "
                     "before the next submit")
     ap.add_argument("--manual-extra-s", type=float, default=2.0, help="manual recovery: reverse this long after it")
+    ap.add_argument("--manual-stroke-s", type=float, default=1.5,
+                    help="manual recovery: each straight reverse stroke before standing for the verdict (wall s)")
     ap.add_argument("--lift-up-s", type=float, default=6.0, help="lift scenario: hold the lift up this long (wall s)")
     ap.add_argument("--quiet-s", type=float, default=8.0, help="lift scenario: the client quiet / runner stopped (s)")
     ap.add_argument("--cycle", default="P-1:D-1,P-1:D-0,P-1:D-1", help="cycle scenario: pallet:destination,...")

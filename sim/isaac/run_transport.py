@@ -5437,16 +5437,17 @@ def drive(S, isaac) -> None:
                 moving_ = (out_.source == "teleop" and out_.policy.drive_mode == "reverse_straight"
                            and abs(float(out_.speed_mps)) > 1e-9)
                 depth_ = core.cargo.depth(rear_) if core.cargo.anchor is not None else None
+                odom_ = [float(v) for v in (slam["odom_rear"] if slam is not None else rear_)][:3]
                 ep_ = live_withdraw["open"]
                 if moving_ and ep_ is not None and ep_.get("stop_reason") is not None:
                     ep_.pop("stop_reason")  # moving again before it stood: the same stretch
                 if moving_ and ep_ is None:
                     ep_ = live_withdraw["open"] = {"start_s": float(t_), "start_depth_m": depth_,
-                                                   "start_rear": [float(v) for v in rear_],
+                                                   "start_rear": [float(v) for v in rear_], "start_odom": odom_,
                                                    "pallet_id": (core.cargo.recovery_context or {}).get("pallet_id")}
                 if ep_ is not None:
                     # Kept up to date until the truck stands, the braking included (Codex D14 impl round 1 P3).
-                    ep_.update(end_s=float(t_), end_depth_m=depth_, end_rear=[float(v) for v in rear_])
+                    ep_.update(end_s=float(t_), end_depth_m=depth_, end_rear=[float(v) for v in rear_], end_odom=odom_)
                     if not moving_ and ep_.get("stop_reason") is None:
                         ep_["stop_reason"] = ("stop" if out_.mode == "STOPPED" or out_.stop_kind == "preempt"
                                               else "mode_change" if out_.mode != "TELEOP"
@@ -5463,9 +5464,11 @@ def drive(S, isaac) -> None:
                 if ep_ is None:
                     return
                 ep_.update(end_s=float(t_), end_reason=why_)
-                if ep_.get("end_rear") is not None:
-                    ep_["distance_m"] = float(math.hypot(ep_["end_rear"][0] - ep_["start_rear"][0],
-                                                         ep_["end_rear"][1] - ep_["start_rear"][1]))
+                if ep_.get("end_odom") is not None:
+                    # In odometry: a SLAM release inside the stretch (the free verdict's) moves the map poses
+                    # without the truck moving (Codex D14 impl round 2 P3).
+                    ep_["distance_m"] = float(math.hypot(ep_["end_odom"][0] - ep_["start_odom"][0],
+                                                         ep_["end_odom"][1] - ep_["start_odom"][1]))
                 state.setdefault("uncertified_teleop_withdraw", []).append(ep_)
                 live_withdraw["open"] = None
 
