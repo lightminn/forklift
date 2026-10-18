@@ -429,3 +429,28 @@ def test_replies_are_applied_in_order_and_a_new_correction_re_projects_the_grid_
     core.slam_replies(5.2, [(Reply(8, 0.8, "processed", (0.05, 0.0, 0.0), 3, 0.2), meta(8), 1.2, 1.4)], True)
     assert len(refreshes) == 1 and slam["records"][-1]["received_after"] == [0.05, 0.0, 0.0]
     assert slam["records"][-1]["applied_after"] == [0.03, 0.0, 0.0]
+
+
+# --- the persistent console's mission end (docs/plans/2026-10-18-persistent-live-console.md D1 step 2) -------------
+@pytest.mark.parametrize("phase", ["transport", "lower"])
+def test_abandon_jobs_drops_the_waited_plan_without_the_drops_side_effects(phase):
+    core, ms, state, obstacle, slam, calls, _ = make(phase)
+    if phase == "transport":
+        assert core.live_leg(20.0, REAR, True) is True  # a live leg plan is waited for
+    else:
+        core._request("release", "leg", {}, 20.0, REAR, None, {"need": {"leg": "x"}})
+    job = core.pending.job
+    closed = []
+    core.capture_live = SimpleNamespace(session=SimpleNamespace(close=lambda: closed.append(True)), attempt={})
+    core.observation_live, core.capture_acquired_s, core.fresh_depth_wait = "OBS", 19.0, (18.0, 17.5)
+    core.release_replan_needed = {"leg": "older"}
+    core.abandon_jobs(22.0)
+    assert core.pending is None and core.jobs.discarded == [job]
+    assert core.commands.waits[-1] == [20.0, 22.0]
+    assert state["async_plans"][-1]["finished_s"] == 22.0 and state["async_plans"][-1]["dropped"] == "abandoned"
+    assert core.release_replan_needed is None and "async_plan_drops" not in state
+    assert obstacle.get("live_replanned", {}).get(phase) is not False  # _drop's live-leg undo is not made
+    assert closed == [True] and core.capture_live is None
+    assert core.observation_live is None and core.capture_acquired_s is None and core.fresh_depth_wait is None
+    core.abandon_jobs(23.0)  # nothing left: nothing happens
+    assert core.jobs.discarded == [job] and len(state["async_plans"]) == 1

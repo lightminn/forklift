@@ -26,6 +26,7 @@ from console.vehicle_outline import DLS08_MEASURED_CHASSIS
 from forklift_core.live.link import Channels, Link
 from forklift_core.live.pacing import Pacer
 from forklift_core.mission.commands import Context
+from forklift_core.mission.results import ResultsBook
 from forklift_core.perf import TIMERS
 from forklift_core.safety.arbiter import Arbiter, ArbiterConfig, Feedback
 from forklift_core.safety.state import state_message
@@ -43,6 +44,18 @@ class Hooks:
     scan: Callable[[], dict | None]  # -> scan_item kwargs or None
 
 
+@dataclass
+class EndHooks:
+    """What the runner does at a mission's end (docs/plans/2026-10-18-persistent-live-console.md D1), in this order:
+    stop (step 1), release the wheel lock (step 5), drain the trackers' leg switches into the record (step 5a) and,
+    for a completed mission, judge the delivery on the truth (step 6: ``delivery_verdict``)."""
+
+    stop: Callable[[], None] = lambda: None
+    unlock_wheels: Callable[[], None] = lambda: None
+    drain_trackers: Callable[[], None] = lambda: None
+    judge_delivery: Callable[[], object] | None = None
+
+
 class LiveRuntime:
     def __init__(self, core, hooks: Hooks, *, output: Path, port_file: Path | None, dt: float, factor: float = 1.0,
                  camera_hz: float = 10.0, host: str = "127.0.0.1", web_root: Path | None = None,
@@ -50,8 +63,11 @@ class LiveRuntime:
                  sleep: Callable[[float], None] = time.sleep, session_epoch: int | None = None,
                  test_step_delay_s: float = 0.0, camera_freeze: tuple | None = None,
                  test_stop_in_capture: bool = False, camera_pixel_lag_s: float = 0.0,
-                 camera_model: dict | None = None, catchup_steps: int = 0):
+                 camera_model: dict | None = None, catchup_steps: int = 0, end: EndHooks | None = None):
         self.core, self.hooks, self.clock, self.sleep = core, hooks, clock, sleep
+        self.end = end or EndHooks()
+        self.results = ResultsBook()  # the session's mission outcomes (persistent console plan D1 step 9)
+        self._ended_id: str | None = None  # the mission end_mission last ended (each ends once)
         self.dt = dt
         self.session_epoch = session_epoch if session_epoch is not None else secrets.randbits(48)  # a job, an epoch
         self.arbiter = Arbiter(self.session_epoch, config or ArbiterConfig(tick_s=dt),
@@ -139,8 +155,53 @@ class LiveRuntime:
         stop_kind = self.link.begin(now, self.feedback)
         records = self.core.commands.apply(t, Context(stop_kind=stop_kind, near_tracker=near_active,
                                                       at_start=at_start))
+        if self.core.commands.status == "cancelled":
+            self.end_mission(t, "cancelled", "operator")  # cancelled before it ran: nothing moved, nothing to stop
         self._flush(t)
         return stop_kind, records
+
+    # --- a mission's end (docs/plans/2026-10-18-persistent-live-console.md D1) -------------------------------------
+    def end_mission(self, t: float, outcome: str, reason: str | None) -> dict | None:
+        """End the session's current mission at sim ``t``: ``outcome`` is ``complete`` (judged on the truth: done or
+        failed), ``failed`` or ``cancelled``. The session goes on; the slot is free at the next tick. Returns the
+        result (None: no mission, or this one already ended)."""
+        cmds = self.core.commands
+        mission_id, mission = cmds.mission_id, cmds.mission
+        if mission_id is None or mission_id == self._ended_id:
+            return None
+        self._ended_id = mission_id
+        self.end.stop()
+        self.core.abandon_jobs(t)  # step 2: the plan, the capture and the observation of this mission
+        self.capturing = False
+        self.end.unlock_wheels()  # step 5
+        cmds.close_open(t)  # step 5a
+        self.end.drain_trackers()
+        extra = {}
+        final = outcome
+        if outcome == "complete":  # step 6
+            verdict = self.end.judge_delivery()
+            final, reason = ("done", None) if verdict.ok else ("failed", verdict.reason)
+            extra["delivery_error_m"] = verdict.delivery_error_m
+        if not cmds.terminate(final, t, reason):  # step 9: a cancel confirmed standing is already cancelled
+            cmds.end_reason = reason
+        started = next((r["t"] for r in reversed(cmds.log) if r["command"] == "submit" and r["accepted"]
+                        and r["mission_id"] == mission_id), None)
+        entry = self.results.add(mission_id=mission_id, outcome=cmds.status, reason=reason, started_s=started,
+                                 ended_s=float(t), pallet_id=mission.pallet_id if mission else None,
+                                 destination_id=mission.destination_id if mission else None)
+        clock = cmds.take_clock()  # step 8: the next mission's work clock starts clean
+        try:  # step 7: bounded (the result, its clock); the mission's paths and logs go by chunks (plan D8)
+            folder = self.output / "missions" / mission_id
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "result.json").write_text(json.dumps({"result": entry, "clock": clock, **extra},
+                                                           default=_jsonable))
+        except OSError as exc:
+            entry = self.results.note(entry["seq"], record_error=f"{type(exc).__name__}: {exc}")
+        message = self.results.message()
+        self.store.put("missions", self.results.seq, message)  # a client connecting later gets it after the targets
+        self.channels.put(None, message)
+        self.log({"mission_end": entry, "tick_t": t, **extra})
+        return entry
 
     def _flush(self, t: float) -> None:
         """The link's message log and the arbiter's boundary events (mode, lease, disarm, generation reasons), and
@@ -181,6 +242,7 @@ class LiveRuntime:
             plan = self.plan_feed.update(plan_key, plan_poses, now)
             if plan is not OMIT:
                 msg["plan"] = plan
+            msg["last_result"] = self.results.last  # the session's last mission outcome, after its slot is free
             self.channels.put(None, msg)
         targets = self.core.targets
         if targets.revision != self._targets_revision:

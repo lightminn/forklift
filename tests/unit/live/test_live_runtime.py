@@ -308,8 +308,10 @@ def test_a_cancelled_mission_ends_the_mission_but_not_a_live_run():
     from pathlib import Path
 
     source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
-    block = source[source.index("            if cancel_stop_"):][:300]
+    block = source[source.index("\n            if cancel_stop_") + 1:][:300]
     assert block.startswith("            if cancel_stop_ and live is None:")
+    # persistent console plan D1: live, the confirmed cancel goes through the mission end (recorded)
+    assert 'if cancel_stop_ and live is not None:\n                    live.end_mission(t, "cancelled", "operator")' in source
 
 
 def test_the_withdraw_tracking_certificate_is_checked_under_the_obstacle_layer_every_tick():
@@ -334,3 +336,120 @@ def test_the_withdraw_tracking_certificate_is_checked_under_the_obstacle_layer_e
         if isinstance(node, ast.If):
             ifs.append(ast.unparse(node.test))
     assert ifs[1] == "obstacle is not None", ifs[:3]
+
+
+# --- the persistent console's mission end (docs/plans/2026-10-18-persistent-live-console.md D1) ---------------------
+def ending(tmp_path, verdict=None):
+    """A runtime whose mission runs, with the end's hooks recorded in order."""
+    order = []
+    from types import SimpleNamespace as NS
+
+    from sim.isaac.live_runtime import EndHooks
+
+    end = EndHooks(stop=lambda: order.append("stop"), unlock_wheels=lambda: order.append("unlock"),
+                   drain_trackers=lambda: order.append("drain"),
+                   judge_delivery=lambda: order.append("judge") or (verdict or NS(ok=True, reason=None,
+                                                                                   delivery_error_m=0.02)))
+    rt, core, did, clock = runtime(tmp_path, end=end)
+    core.abandon_jobs = lambda t: order.append(("abandon", t))
+    from forklift_core.mission.commands import Submit
+
+    core.commands.queue(Submit("P-1", "D-1", core.targets.revision))
+    core.commands.apply(10.0)  # the fixture's arbiter has no feedback (stopping): the submit goes in directly
+    core.commands.start()
+    return rt, core, order
+
+
+def test_a_completed_mission_is_judged_on_the_truth_recorded_and_published(tmp_path):
+    rt, core, order = ending(tmp_path)
+    core.commands.begin_wait(11.0)
+    entry = rt.end_mission(20.0, "complete", None)
+    assert order == ["stop", ("abandon", 20.0), "unlock", "drain", "judge"]
+    assert entry == {"seq": 1, "mission_id": "m1", "outcome": "done", "reason": None, "started_s": 10.0,
+                     "ended_s": 20.0, "pallet_id": "P-1", "destination_id": "D-1"}
+    assert core.commands.status == "done" and core.commands.waits == [] and rt.results.last == entry
+    seq, message = rt.store.get("missions")
+    assert seq == 1 and message == {"t": "missions", "missions_seq": 1, "results": [entry]}
+    record = json.loads((tmp_path / "missions" / "m1" / "result.json").read_text())
+    assert record["result"] == entry and record["delivery_error_m"] == 0.02
+    assert record["clock"] == {"pauses": [], "waits": [[11.0, 20.0]]}
+    assert rt.end_mission(21.0, "failed", "late") is None  # ended once
+    rt.tick_start(21.0, False)
+    assert core.commands.status == "idle" and rt.results.last == entry
+
+
+def test_a_completed_mission_that_misses_the_destination_fails_with_the_checks_message(tmp_path):
+    from types import SimpleNamespace as NS
+
+    rt, core, _ = ending(tmp_path, NS(ok=False, reason="Pallet missed the green destination center",
+                                      delivery_error_m=0.11))
+    entry = rt.end_mission(20.0, "complete", None)
+    assert entry["outcome"] == "failed" and entry["reason"] == "Pallet missed the green destination center"
+    assert core.commands.status == "failed" and core.commands.end_reason == entry["reason"]
+
+
+def test_a_failed_mission_is_not_judged_and_keeps_its_reason(tmp_path):
+    rt, core, order = ending(tmp_path)
+    entry = rt.end_mission(15.0, "failed", "Pallet was not lifted")
+    assert "judge" not in order and entry["outcome"] == "failed" and entry["reason"] == "Pallet was not lifted"
+
+
+def test_a_cancel_confirmed_standing_is_recorded_as_cancelled(tmp_path):
+    from forklift_core.mission.commands import Cancel
+
+    rt, core, order = ending(tmp_path)
+    core.commands.queue(Cancel())
+    rt.tick_start(12.0, False)
+    assert core.commands.status == "cancelling" and rt.results.last is None
+    core.commands.cancelled(13.0)  # the core's paused tick: standing confirmed
+    entry = rt.end_mission(13.0, "cancelled", "operator")
+    assert entry["outcome"] == "cancelled" and entry["reason"] == "operator" and "judge" not in order
+    assert core.commands.pauses == []  # handed to the record
+
+
+def test_a_mission_cancelled_before_it_ran_is_recorded_at_the_tick_start(tmp_path):
+    from forklift_core.mission.commands import Cancel, Submit
+
+    rt, core, order = ending(tmp_path)
+    rt.end_mission(11.0, "failed", "x")
+    rt.tick_start(12.0, False)
+    core.commands.queue(Submit("P-1", "D-1", core.targets.revision))
+    core.commands.apply(13.0)
+    core.commands.queue(Cancel())
+    rt.tick_start(14.0, False)  # accepted, nothing moved: cancelled at once
+    assert rt.results.last["mission_id"] == "m2" and rt.results.last["outcome"] == "cancelled"
+    assert rt.results.last["started_s"] == 13.0 and rt.results.last["ended_s"] == 14.0
+
+
+def test_no_mission_no_result(tmp_path):
+    rt, core, _, _ = runtime(tmp_path)
+    assert rt.end_mission(1.0, "failed", "x") is None and rt.results.last is None
+
+
+def test_the_state_carries_the_last_result_from_the_runtime():
+    import inspect
+
+    from sim.isaac import live_runtime
+
+    source = inspect.getsource(live_runtime.LiveRuntime.publish)
+    assert 'msg["last_result"] = self.results.last' in source
+
+
+def test_a_record_that_cannot_be_written_is_marked_in_the_result(tmp_path):
+    rt, core, _ = ending(tmp_path)
+    (tmp_path / "missions").write_text("not a folder")
+    entry = rt.end_mission(20.0, "failed", "x")
+    assert entry["record_error"].startswith(("FileExistsError", "NotADirectoryError"))
+    assert rt.results.last["record_error"] == entry["record_error"]
+    assert rt.store.get("missions")[1]["results"][0]["record_error"] == entry["record_error"]
+
+
+def test_a_completed_mission_ends_the_mission_but_not_a_live_run():
+    """2026-10-18 demo: "한 운반 사이클 끝나니까 잡이 걍 죽는데" -- live, the end of the timers goes through end_mission."""
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
+    block = source[source.index("core.lift_and_timers(t, dt):"):][:500]
+    assert "if live is None:\n                    break" in block
+    assert 'live.end_mission(t, "complete", None)' in block and "paused_, requested_speed, curvature = True" in block
+    assert "end=LiveEndHooks(stop=live_zero_wheels, unlock_wheels=live_unlock_wheels," in source

@@ -99,6 +99,7 @@ class MissionCommands:
         self.pause_hold_count: int | None = None  # the SLAM hold episode at the stop's first paused tick
         self.pause_holding = False  # SLAM was holding then
         self.pause_release_pending = False  # a SLAM release was due then (R9, R14: it may happen while paused)
+        self.end_reason: str | None = None  # why the last mission ended (live: terminate), for its result
 
     # --- the queue ---------------------------------------------------------------------------------------------
     def queue(self, command) -> None:
@@ -279,6 +280,35 @@ class MissionCommands:
         if self.status in ACTIVE:
             self._close_pause(self.paused_since if t is None and self.paused_since is not None else t)
             self.status = outcome
+
+    # --- a live run's mission end (docs/plans/2026-10-18-persistent-live-console.md D1) --------------------------
+    def close_open(self, t: float) -> None:
+        """Close the open pause and the open wait at ``t`` (D1 step 5a); the status does not change."""
+        self._close_pause(t)
+        self.end_wait(t)
+
+    def terminate(self, outcome: str, t: float, reason: str | None) -> bool:
+        """End the active mission at ``t`` with ``outcome`` and ``reason`` (D1 step 9): the open stops close, a new
+        generation (a plan asked before cannot be taken), one log entry. False, nothing changed: no active mission."""
+        if outcome not in FINAL:
+            raise ValueError(outcome)
+        if self.status not in ACTIVE:
+            return False
+        self.close_open(t)
+        self.status, self.end_reason = outcome, reason
+        self.mission_gen += 1
+        self._record(t, "end")
+        self.log[-1]["reason"] = reason
+        return True
+
+    def take_clock(self) -> dict:
+        """The finished mission's pauses and waits, handed to its record; the next mission's work clock starts
+        clean (D1 step 8)."""
+        if self.status in ACTIVE:
+            raise RuntimeError(f"take_clock while {self.status}")
+        clock = {"pauses": self.pauses, "waits": self.waits}
+        self.pauses, self.waits = [], []
+        return clock
 
     def _close_pause(self, t: float) -> float:
         if self.paused_since is None:

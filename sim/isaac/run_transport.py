@@ -4382,6 +4382,11 @@ def drive(S, isaac) -> None:
     from types import SimpleNamespace
 
     from forklift_core.mission.commands import Cancel as MissionCancel
+    from forklift_core.mission.delivery import delivery_verdict
+
+    def base_pose():  # base_link (x, y) and yaw, read by the delivery check after its first two checks pass
+        final_base_, final_q_ = robot.get_world_pose()
+        return final_base_, yaw_and_tilt(final_q_)[0]
     from forklift_core.mission.commands import Context as MissionContext
     from forklift_core.mission.commands import Pause as MissionPause
     from forklift_core.mission.commands import Resume as MissionResume
@@ -5272,7 +5277,7 @@ def drive(S, isaac) -> None:
             repo_root_ = str(Path(__file__).resolve().parents[2])  # console/ lives at the repository's root
             if repo_root_ not in sys.path:
                 sys.path.insert(0, repo_root_)
-            from live_runtime import Hooks as LiveHooks, LiveRuntime, live_camera_model  # siblings, as the rest
+            from live_runtime import EndHooks as LiveEndHooks, Hooks as LiveHooks, LiveRuntime, live_camera_model  # siblings, as the rest
 
             def live_zero_wheels() -> None:
                 # As a scheduled preempt (M-a3 E7): the wheels stop at this step, the steering stays; the applied
@@ -5339,6 +5344,21 @@ def drive(S, isaac) -> None:
             if not 0 <= live_catchup_ <= 12:
                 raise ValueError("FORKLIFT_LIVE_CATCHUP_STEPS must be 0..12")
             live_perm = LiveBundlePermit(obstacle["layer"].permission.config) if obstacle is not None else None
+
+            def live_unlock_wheels():  # persistent console plan D1 step 5: the dwell's lock, released as the loop does
+                if wheel_lock["q"] is not None:
+                    robot.get_articulation_controller().set_gains(kps=wheel_lock["gains"][0], kds=wheel_lock["gains"][1])
+                    wheel_lock["events"][-1]["release_s"] = float(book_clock["t"])
+                    wheel_lock["q"] = None
+
+            def live_judge_delivery():  # D1 step 6: the batch run's delivery check, on this mission's truth
+                final_pallet_, _ = pallet.get_world_pose()
+                return delivery_verdict(final_pallet_, base_pose,
+                                        (truth_destination.x_m, truth_destination.y_m, truth_destination.yaw_rad),
+                                        pallet_depth_m=geometry.pallet_depth_m,
+                                        axle_to_fork_tip_m=args.axle_to_fork_tip_m,
+                                        rear_axle_offset_m=args.rear_axle_offset_m, exit_clearance_m=EXIT_CLEARANCE_M)
+
             live = LiveRuntime(
                 core, LiveHooks(zero_wheels=live_zero_wheels, hold_lift=live_hold_lift,
                                 lift_position=lambda: float(robot.get_joint_positions()[lift_index[0]]),
@@ -5369,6 +5389,8 @@ def drive(S, isaac) -> None:
                 test_step_delay_s=args.live_test_step_delay_ms / 1000.0, camera_freeze=freeze_,
                 test_stop_in_capture=args.live_test_stop_in_capture,
                 catchup_steps=live_catchup_,
+                end=LiveEndHooks(stop=live_zero_wheels, unlock_wheels=live_unlock_wheels,
+                                 drain_trackers=trackers.close, judge_delivery=live_judge_delivery),
                 # The page's teleop overlay (display only, contract 3); none without the perception camera.
                 camera_model=None if live_cam_ is None else live_camera_model(
                     _bound["perception_calibration"], _bound["perception_mount"],
@@ -5711,7 +5733,9 @@ def drive(S, isaac) -> None:
                     p0_, r_ = live_first_._poses[0], live_last_rear_["pose"]
                     live_off_start_ = not (math.hypot(r_[0] - p0_[0], r_[1] - p0_[1]) <= 0.3 and abs(
                         math.remainder(r_[2] - p0_[2], math.tau)) <= math.radians(15))
-                live_at_start_ = not (live_off_start_ and obstacle is None)
+                # A completed mission leaves no leg to start from: refused (not_at_start) until the persistent
+                # console plan's D2 prepares each mission from where the truck stands.
+                live_at_start_ = not (live_off_start_ and obstacle is None) and ms.phase != "complete"
                 stop_kind_, applied_commands_ = live.tick_start(t, core.near_active(), at_start=live_at_start_)
                 core.start_submitted(t)  # the operator's submit: the mission and its phase clock run from this tick
                 if live_off_start_ and live_idle_ and core.commands.status == "running":
@@ -6224,7 +6248,11 @@ def drive(S, isaac) -> None:
             if live_abort_:
                 requested_speed, curvature = 0.0, 0.0
             if not paused_ and not live_abort_ and not plan_wait_ and core.lift_and_timers(t, dt):  # M-a1 slice 2: the lift ramp, timers
-                break
+                if live is None:
+                    break
+                # Persistent console plan D1: the mission ends, judged on the truth; the session goes on standing.
+                live.end_mission(t, "complete", None)
+                paused_, requested_speed, curvature = True, 0.0, 0.0
             # The curvature the wheels actually hold: an emergency stop keeps it, so
             # the permission, the stop itself and the probe all use this one.
             kappa = held_kappa()
@@ -6302,6 +6330,8 @@ def drive(S, isaac) -> None:
                 requested_speed, curvature = 0.0, 0.0
                 dwell_hold = True  # the steering held where it is; the wheels brake on its curvature
                 cancel_stop_ = paused_tick_.stop  # the loop ends after this tick's stop output is applied
+                if cancel_stop_ and live is not None:
+                    live.end_mission(t, "cancelled", "operator")  # persistent console plan D1: recorded, run goes on
             elif plan_wait_:  # real-time plan D8b: standing for a plan, the steering held
                 requested_speed, curvature = 0.0, 0.0
                 dwell_hold = True
@@ -6593,29 +6623,14 @@ def drive(S, isaac) -> None:
             state["mission_result"] = "cancelled"  # M-a3 (plan E6): an outcome of its own, not a time-out
             require(False, "mission_cancelled")
         require(ms.phase == "complete", "Mission exceeded simulation time budget")
+        # Persistent console plan D1 step 6: the delivery check is a function a live run calls at each mission's end.
         final_pallet, _ = pallet.get_world_pose()
-        destination = np.array([truth_destination.x_m, truth_destination.y_m])
-        delivery_error = float(np.linalg.norm(final_pallet[:2] - destination))
-        require(delivery_error < 0.08, "Pallet missed the green destination center")
-        require(abs(final_pallet[2]) < 0.008, "Delivered pallet is not grounded")
-        final_base, final_q = robot.get_world_pose()
-        final_yaw = yaw_and_tilt(final_q)[0]
-        # final_base is base_link, not the rear axle -- axle_to_fork_tip_m is
-        # measured from the axle, so subtract the axle-to-base_link offset first.
-        tip = final_base[:2] + (
-            args.axle_to_fork_tip_m - abs(args.rear_axle_offset_m)
-        ) * np.array([math.cos(final_yaw), math.sin(final_yaw)])
-        destination_axis = np.array(
-            [
-                math.cos(truth_destination.yaw_rad),
-                math.sin(truth_destination.yaw_rad),
-            ]
-        )
-        require(
-            float(np.dot(final_pallet[:2] - tip, destination_axis))
-            > geometry.pallet_depth_m / 2 + EXIT_CLEARANCE_M,
-            "Fork still inside delivered pallet",
-        )
+        verdict_ = delivery_verdict(final_pallet, base_pose,
+                                    (truth_destination.x_m, truth_destination.y_m, truth_destination.yaw_rad),
+                                    pallet_depth_m=geometry.pallet_depth_m, axle_to_fork_tip_m=args.axle_to_fork_tip_m,
+                                    rear_axle_offset_m=args.rear_axle_offset_m, exit_clearance_m=EXIT_CLEARANCE_M)
+        require(verdict_.ok, verdict_.reason or "")
+        delivery_error = verdict_.delivery_error_m
         snapshot("delivered")
         state.update(
             {

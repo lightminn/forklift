@@ -155,3 +155,16 @@ def test_a_client_connecting_later_gets_the_targets_after_the_welcome():
     with StandIn() as s:
         s.store.put("targets", 3, {"t": "targets", "targets_revision": 3, "pallets": [], "destinations": []})
         assert asyncio.run(client(s.port))["targets_revision"] == 3
+
+
+def test_a_client_connecting_later_gets_the_mission_results_after_the_targets():
+    """Persistent console plan D1 step 9: a page connecting later still sees how the missions ended."""
+    async def client(port):
+        async with connect(f"ws://127.0.0.1:{port}/api/v1/control") as ws:
+            await ws.send(json.dumps({"t": "hello", "api": "console/1", "client_id": "late"}))
+            return [json.loads(await ws.recv())["t"] for _ in range(3)]
+
+    with StandIn() as s:
+        s.store.put("targets", 3, {"t": "targets", "targets_revision": 3, "pallets": [], "destinations": []})
+        s.store.put("missions", 1, {"t": "missions", "missions_seq": 1, "results": []})
+        assert asyncio.run(client(s.port)) == ["welcome", "targets", "missions"]

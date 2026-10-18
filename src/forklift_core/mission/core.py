@@ -4506,6 +4506,22 @@ class MissionCore:
             self.obstacle.setdefault("live_replanned", {})[p.phase] = False
         # observe: nothing to undo -- the truck stands at the observation pose and captures again
 
+    def abandon_jobs(self, t: float) -> None:
+        """A live mission's end (docs/plans/2026-10-18-persistent-live-console.md D1 step 2): the plan waited for,
+        the capture and the observation belong to the mission that ended. Each is dropped without ``_drop``'s
+        undo for a resume (a release replan asked again, a live leg planned again) and without counting it."""
+        p = self.pending
+        if p is not None:
+            self.jobs.discard(p.job)
+            self.commands.end_wait(t)
+            self.state["async_plans"][-1].update(finished_s=float(t), dropped="abandoned")
+            self.pending = None
+        self.release_replan_needed = None
+        self.fresh_depth_wait = None
+        self.capture_abandon()
+        self.observation_live = None
+        self.capture_acquired_s = None
+
     def hold_count(self) -> int:
         """SLAM hold episodes so far: the near-field tracker's frame_version."""
         slam = self.slam

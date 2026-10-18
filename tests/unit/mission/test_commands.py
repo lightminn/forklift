@@ -251,3 +251,58 @@ def test_waits_stop_the_work_clock_once_even_inside_a_pause():
     assert c.work_elapsed(3.0, 10.0) == pytest.approx(5.0)  # the wait counted from where the interval starts
     c.pauses.append([4.0, 6.0])  # overlaps the wait 4..5
     assert c.work_elapsed(0.0, 10.0) == pytest.approx(6.0)  # stopped 2..6 once
+
+
+# --- the persistent console's mission end (docs/plans/2026-10-18-persistent-live-console.md D1) ---------------------
+def test_close_open_closes_the_open_pause_and_wait_without_changing_the_status():
+    m = running()
+    m.queue(Pause())
+    m.apply(2.0)
+    m.begin_wait(3.0)
+    gen = m.mission_gen
+    m.close_open(5.0)
+    assert m.status == "paused" and m.mission_gen == gen
+    assert m.pauses == [[2.0, 5.0]] and m.waits == [[3.0, 5.0]] and m.paused_since is None
+    m.close_open(6.0)  # nothing open: nothing changes
+    assert m.pauses == [[2.0, 5.0]] and m.waits == [[3.0, 5.0]]
+
+
+@pytest.mark.parametrize("outcome", ["done", "failed", "cancelled"])
+def test_terminate_ends_an_active_mission_with_its_reason_once(outcome):
+    m = running()
+    m.queue(Pause())
+    m.apply(2.0)
+    gen = m.mission_gen
+    assert m.terminate(outcome, 4.0, "why") is True
+    assert m.status == outcome and m.end_reason == "why" and m.mission_gen == gen + 1
+    assert m.pauses == [[2.0, 4.0]] and m.paused_since is None
+    assert m.log[-1] == {"t": 4.0, "command": "end", "accepted": True, "reason": "why", "mission_id": "m1",
+                         "status": outcome}
+    assert m.terminate("failed", 5.0, "again") is False  # already over: nothing changes
+    assert m.status == outcome and m.end_reason == "why" and len(m.log) == 3
+    m.apply(6.0)
+    assert m.status == "idle" and m.mission_id is None
+
+
+def test_terminate_refuses_an_unknown_outcome_and_an_idle_slot():
+    m = MissionCommands()
+    with pytest.raises(ValueError):
+        m.terminate("finished", 1.0, None)
+    assert m.terminate("failed", 1.0, "x") is False and m.status == "idle"
+
+
+def test_take_clock_hands_over_the_finished_missions_stops_and_empties_them():
+    m = running()
+    m.queue(Pause())
+    m.apply(2.0)
+    m.begin_wait(2.5)
+    m.terminate("failed", 4.0, "why")
+    assert m.take_clock() == {"pauses": [[2.0, 4.0]], "waits": [[2.5, 4.0]]}
+    assert m.pauses == [] and m.waits == []
+    assert m.work_elapsed(0.0, 10.0) == 10.0  # the next mission's work clock starts clean
+
+
+def test_take_clock_refuses_while_a_mission_is_active():
+    m = running()
+    with pytest.raises(RuntimeError):
+        m.take_clock()
