@@ -1030,3 +1030,66 @@ def _scene_with_depth(depth):
         depth_m: object
 
     return Scene(depth_m=depth)
+
+
+# --- real-time plan D9c: the capture one render step at a time ------------------------------------------------------
+def run_session(sensor, step, max_attempts=20):
+    """Drive a session as a live run would: the caller runs each render step, then hands it back."""
+    session = sensor.session(max_attempts=max_attempts)
+    done = session.start()
+    while not done:
+        try:
+            step()
+        except Exception as exc:  # noqa: BLE001
+            done = session.stepped(exc)
+        else:
+            done = session.stepped()
+    return session.result
+
+
+@pytest.mark.parametrize("delay", [2, 4, 7])
+def test_a_session_gives_the_blocking_capture_s_result_and_diagnostics(delay):
+    blocking, stepped = DelayedSensorCamera(delay), DelayedSensorCamera(delay)
+    a, b = blocking.sensor(), stepped.sensor()
+    for _ in range(2):  # twice: the second capture compares against the first's frame
+        ra = a.capture(max_attempts=20)
+        rb = run_session(b, stepped.step)
+        assert ra[1:] == rb[1:] and ra[0].stamp_ns == rb[0].stamp_ns
+        np.testing.assert_array_equal(ra[0].depth_m, rb[0].depth_m)
+        assert asdict(a.state.diagnostics) == asdict(b.state.diagnostics)
+        blocking.now += 10
+        stepped.now += 10
+
+
+def test_a_session_takes_the_start_pose_before_its_first_render_step():
+    """Codex D9 1st P2-6: a move in the first render step is outside the bracket only if the start comes after it."""
+    camera = DelayedSensorCamera(2)
+    poses = iter([([0, 0, 0], [1, 0, 0, 0]), ([0.002, 0, 0], [1, 0, 0, 0])])
+    sensor = camera.sensor(pose=lambda: next(poses))
+    session = sensor.session(max_attempts=20)
+    assert session.start() is False  # stopped at its first render step, the start pose taken
+    camera.step()
+    with pytest.raises(MODULE.CaptureFailure) as error:
+        session.stepped()
+    assert error.value.reason == "pose_changed"
+
+
+def test_a_render_step_error_is_handled_inside_the_capture_as_before():
+    blocking, stepped = DelayedSensorCamera(2), DelayedSensorCamera(2)
+
+    def failing(camera):
+        def step():
+            raise MODULE.CaptureFailure("sensor_frame_not_ready")  # a transient reason: retried in the loop
+        return step
+
+    with pytest.raises(MODULE.CaptureFailure) as a:
+        MODULE.SensorCapture(blocking, MODULE.default_base_from_optical(), step_fn=failing(blocking),
+                             physics_time_fn=lambda: blocking.now,
+                             pose_fn=lambda: ([0, 0, 0], [1, 0, 0, 0]), render_latency_s=0).capture(max_attempts=3)
+    sensor = MODULE.SensorCapture(stepped, MODULE.default_base_from_optical(), step_fn=None,
+                                  physics_time_fn=lambda: stepped.now,
+                                  pose_fn=lambda: ([0, 0, 0], [1, 0, 0, 0]), render_latency_s=0)
+    with pytest.raises(MODULE.CaptureFailure) as b:
+        run_session(sensor, failing(stepped), max_attempts=3)
+    assert a.value.reason == b.value.reason
+    assert a.value.diagnostics.rejection_counts == b.value.diagnostics.rejection_counts == {"sensor_frame_not_ready": 3}

@@ -398,6 +398,16 @@ class SensorCapture:
         return tuple(map(float, position)), tuple(map(float, quaternion))
 
     def capture(self, *, max_attempts=200):
+        """Step and read until a frame is accepted: ``capture_steps`` driven with this capture's ``step_fn``."""
+        return drive_capture(self.capture_steps(max_attempts=max_attempts), self.step_fn)
+
+    def session(self, *, max_attempts=200) -> "CaptureSession":
+        """The same capture, one render step at a time (real-time plan D9c): the caller runs the step."""
+        return CaptureSession(self.capture_steps(max_attempts=max_attempts))
+
+    def capture_steps(self, *, max_attempts=200):
+        """The capture as a generator: it yields where a render step must run and returns the result
+        (``capture`` runs ``step_fn`` at each yield; a live run steps its world there instead)."""
         metadata = None
 
         def step():
@@ -409,7 +419,7 @@ class SensorCapture:
                 diag.pose_before = self._pose()
                 diag.capture_start_time_s = float(self.physics_time_fn())
             diag.physics_time_before_s = float(self.physics_time_fn())
-            self.step_fn()
+            yield "render_step"
             diag.render_steps += 1
             if self.guard_fn is not None:
                 self.guard_fn()
@@ -455,12 +465,12 @@ class SensorCapture:
             return after[0]
 
         try:
-            result = capture_scene_input(
+            result = yield from capture_scene_steps(
                 self.camera,
                 self.mount,
                 max_attempts=max_attempts,
                 state=self.state,
-                step_fn=step,
+                step_steps=step,
                 frame_id_fn=frame_id,
                 stamp_ns_fn=lambda: int(metadata[1] * 1e9),
             )
@@ -476,6 +486,52 @@ class SensorCapture:
             raise
 
 
+def drive_capture(steps, step_fn):
+    """Run a capture generator to its result, calling ``step_fn`` at each yield. An exception from ``step_fn`` is
+    raised inside the generator at that yield, where the step used to be called, so its handling is unchanged."""
+    try:
+        next(steps)
+        while True:
+            try:
+                step_fn()
+            except Exception as exc:  # noqa: BLE001 -- handed to the capture, which decides
+                steps.throw(exc)
+                continue
+            steps.send(None)
+    except StopIteration as stop:
+        return stop.value
+
+
+class CaptureSession:
+    """A capture run one render step at a time (real-time plan D9c). ``start`` runs it to its first render step
+    (the guard, the start pose and time are taken there); after each render step the caller runs, ``stepped`` goes
+    on to the next one. Both return True once the capture ended: ``result`` holds it; a failure raises."""
+
+    def __init__(self, steps):
+        self._steps = steps
+        self.done = False
+        self.result = None
+
+    def _go(self, advance) -> bool:
+        try:
+            advance()
+        except StopIteration as stop:
+            self.done, self.result = True, stop.value
+        return self.done
+
+    def start(self) -> bool:
+        return self._go(lambda: next(self._steps))
+
+    def stepped(self, error: Exception | None = None) -> bool:
+        """The render step ran (or raised ``error``, handed to the capture as the blocking call would)."""
+        if error is not None:
+            return self._go(lambda: self._steps.throw(error))
+        return self._go(lambda: self._steps.send(None))
+
+    def close(self) -> None:
+        self._steps.close()
+
+
 def capture_scene_input(
     camera,
     base_from_optical: RigidTransform,
@@ -488,7 +544,33 @@ def capture_scene_input(
     stamp_ns_fn: Callable[[], int] | None = None,
     state: CaptureState | None = None,
 ) -> tuple[SceneInput, FrameDiagnostics, int]:
-    """Read a ready synthetic frame, calling step_fn before every attempt.
+    """Read a ready synthetic frame, calling step_fn before every attempt (``capture_scene_steps`` driven)."""
+
+    def plain_step():
+        yield "render_step"
+
+    return drive_capture(
+        capture_scene_steps(camera, base_from_optical, stamp_ns, max_attempts=max_attempts,
+                            std_threshold=std_threshold, step_steps=plain_step if step_fn is not None else None,
+                            frame_id_fn=frame_id_fn, stamp_ns_fn=stamp_ns_fn, state=state),
+        step_fn if step_fn is not None else (lambda: None),
+    )
+
+
+def capture_scene_steps(
+    camera,
+    base_from_optical: RigidTransform,
+    stamp_ns: int | None = None,
+    *,
+    max_attempts: int = 200,
+    std_threshold: float = 2.0,
+    step_steps=None,
+    frame_id_fn: Callable[[], object] | None = None,
+    stamp_ns_fn: Callable[[], int] | None = None,
+    state: CaptureState | None = None,
+):
+    """Read a ready synthetic frame, running ``step_steps()`` (a generator that yields where the render step
+    goes) before every attempt; a generator returning the result.
 
     Retain state across calls to compare the first attempt against the last
     accepted frame. Without state this is a one-shot conversion only. The first
@@ -535,8 +617,8 @@ def capture_scene_input(
     for attempt in range(max_attempts):
         state.diagnostics.attempts = attempt + 1
         try:
-            if step_fn is not None:
-                step_fn()
+            if step_steps is not None:
+                yield from step_steps()
             # Own both buffers: Isaac/fakes may mutate the same arrays on the next step.
             rgba = np.array(camera.get_rgba(), copy=True)
             raw_depth = np.array(camera.get_depth(), copy=True)
