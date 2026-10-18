@@ -432,6 +432,68 @@ D2 의 `mission_start` 는 작업자 작업 `observe_ladder` 로 한다. 이름 
 
 §5-2 의 나머지 계약 추가는 메인이 PR 때 본다.
 
+### D2 구현 설계 (2단계, 2026-10-18, 1단계 cc90aca·0c4a08d 수렴 뒤)
+
+**명령 상태.**
+- `preparing` 을 `ACTIVE` 에 더한다. 흐름은 `accepted → preparing → running` 이다.
+- `preparing` 에서는 미션 일을 하지 않는다. 그 틱은 계획 대기와 같이 선다.
+- 취소는 `accepted` 와 같이 곧바로 `cancelled` 다. 아무것도 움직이지 않았기 때문이다.
+- 중재기 STOP 은 `failed: prepare:stopped` 다(D2 "STOP 이면").
+- `hold_on`(TELEOP 진입)은 `failed: prepare:teleop` 다. 수동으로 움직인 뒤 다시 제출하면 된다. held 에서 재개하는 경로를 준비 중에 만들지 않는다.
+
+**요청.**
+- 자리: 지금의 첫 구간 재계획 자리(장애물 `control_rear` 와 철수 감시 뒤)다. 이 틱의 SLAM 응답 적용·재투영 뒤의 `rear` 다.
+- 호출: `core.prepare_request(t, rear, inputs)` → `_request("prepare", "observe_ladder", payload, …)`.
+- payload:
+  - `world = grid_world(미션 시나리오)`
+  - `waypoints` = 관찰 후보를 대상 팔레트로 옮긴 것(아래)
+  - `pickup_bounds=None`(홀 경계)
+  - 요청 틱의 `grid_kwargs("observe")`
+  - `deadline` = 요청 시각 + 2N × 20 s(N 후보 수, 이 호스트 monotonic)
+- 미션 시나리오: 세션 시나리오의 소품·경계에 `start_rear`=지금 `rear`, `pickup`=대상 목록의 팔레트 사전 자세, `destination`=대상 목록의 목적지 자세.
+
+**관찰 후보 옮기기.** 새 순수 함수 `relocate_waypoints(waypoints, reference, target)`:
+- 기준 = 세션 시작의 `scenario.pickup`(첫 팔레트 사전 자세).
+- 각 후보에 강체 변환 `target ∘ reference⁻¹` 를 적용한다(자세와 방향 모두).
+- 첫 자리(target = reference)에서는 항등이라 지금 후보와 같다. CPU 시험으로 확인한다.
+- 배치는 쓰지 않는다.
+
+**채택 검사(`_job_invalid` 의 prepare 갈래).**
+- 미션 세대, 상태 `preparing`, 보정(`applied`), SLAM 모드·hold 수, 정지, 자세(2 cm, 1°), 대상 revision 이 요청 때와 같아야 한다.
+- 다르면 한 번 다시 요청한다. 두 번째도 다르면 `failed: prepare:<사유>` 다.
+- 결과가 `None` 이면 다음 중 하나다:
+  - `timed_out`: `failed: prepare:timeout`
+  - 그 밖: `failed: prepare:all_candidates_failed:<status;…>`
+- 실패해도 세션 상태는 바꾸지 않는다(P4). 미션 시작 처리는 채택 때만 한다.
+
+**채택 = 미션 시작 처리.** 두 부분으로 나눈다.
+- 코어 쪽 `core.start_mission(t, plan, inputs, ladder)`: D0 1–6절의 M0·N 항목이다(`ms`, 코어 속성, `obstacle` 미션 키, `slam` 도킹·시나리오 키, `near`·`pocket` 실행 키, `state` 미션 키, `options` 필드). 메인 합의 4: `next_candidate_index = selected + 1`, `observation_waypoint_selected`, `observation_candidates`, `planning_status`.
+- 실행기 쪽 훅 `hooks.live_mission_start(inputs)`:
+  - `drive()` 지역을 `nonlocal` 로 다시 묶는다: `scenario`, `truth_destination`, `initial_pallet`(지금 팔레트 참값), `pickup_obstacle`, `pickup_zone`(새 팔레트 자리 중심), `pickup_bounds`(원래 자리면 세션 값, 아니면 `None`), `return_to_pose`.
+  - `paths`·`trackers` 를 비우고(drain 뒤) 관찰 추적기를 셋업과 같은 설정으로 설치한다.
+  - 장애물 층 `known` 을 새 사전 영역으로 둔다.
+  - 도킹 참조 스캔을 새 목적지에서 다시 뜬다(R5545–5585 를 함수로 뽑아 셋업과 같이 쓴다).
+  - 허가 캐시를 무효화한다.
+- 목적지의 참값:
+  - `D-1` 은 세션 시나리오의 참 목적지다.
+  - `D-0` 은 세션 시작 때 팔레트의 참 자리(자세·방향)다. 세션 시작 때 대상 목록에 `D-0` 을 등록한다(사전 자세 = `scenario.pickup`).
+- 대기 자리: `return_to_pose`=`home_rear`=세션 시작의 `scenario.start_rear`(또는 `--live-wait-pose`). 복귀 목표 방향은 완화하지 않는다(사용자 결정 1·2).
+
+**지우는 것.**
+- `live_first_replan_`, `live_last_rear_`, `Context.at_start`·`not_at_start`
+- `blocked_replan(hall=…)`
+- 1단계의 '완료 뒤 제출 거절'
+- 그 소스 시험들
+
+**시험.**
+- CPU:
+  - 명령 상태 전이(준비 중 취소·STOP·TELEOP·채택·재요청·실패)
+  - `relocate_waypoints` 의 항등·회전
+  - `start_mission` 뒤 미션 소유 상태가 첫 미션 시작 직후와 같음(U21 의 CPU 판, 가짜 코어로 D0 키 목록을 비교)
+  - prepare 갈래 `_job_invalid`
+- 소스 시험: 실행기가 지운 임시 처리를 다시 쓰지 않음.
+- Isaac: U2·U3·U4·U5 는 4절의 시나리오로 돌린다.
+
 ## 4. 유즈케이스와 시험
 
 시험은 세 층이다:
