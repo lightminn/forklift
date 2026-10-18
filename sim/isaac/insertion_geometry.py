@@ -6,6 +6,7 @@ guard. This geometric check does not measure PhysX contact forces or prove
 continuous swept clearance between updates.
 """
 
+import math
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,6 +56,33 @@ def _boxes(link: ET.Element) -> tuple:
         boxes.append((collision.get("name", "unnamed"), center, half))
     if not boxes:
         raise ValueError("Collision boxes are required")
+    return tuple(boxes)
+
+
+def _wheel_boxes(truck: ET.Element) -> tuple:
+    """Each tyre (a cylinder on its own link, axis along the link's y) as a base-frame box at the neutral pose: its
+    width as it is when the wheel cannot steer, and wide enough for every steering angle when it hangs from a
+    steering joint (persistent console plan D6: the truck's own parts against a pallet with no mission)."""
+    parents = {j.find("child").get("link"): j for j in truck.findall("joint") if j.find("child") is not None}
+    boxes = []
+    for link in truck.findall("link"):
+        for collision in link.findall("collision"):
+            cylinder = collision.find("geometry/cylinder")
+            joint = parents.get(link.get("name"))
+            if cylinder is None or joint is None:
+                continue
+            origin = collision.find("origin")
+            rpy = np.fromstring(origin.get("rpy", "0 0 0"), sep=" ") if origin is not None else np.zeros(3)
+            if not np.allclose(rpy, (math.pi / 2, 0, 0), atol=1e-6):
+                raise ValueError(f"Unsupported tyre orientation: {collision.get('name')}")
+            radius, half_width = float(cylinder.get("radius")), float(cylinder.get("length")) / 2
+            steered, chain = False, joint
+            while chain is not None:
+                steered |= "steer" in chain.get("name", "")
+                chain = parents.get(chain.find("parent").get("link"))
+            reach = math.hypot(radius, half_width) if steered else None
+            half = np.array([reach, reach, radius]) if steered else np.array([radius, half_width, radius])
+            boxes.append((collision.get("name", "unnamed"), _base_position_m(truck, joint.get("name")), half))
     return tuple(boxes)
 
 
@@ -470,6 +498,7 @@ class InsertionGeometry:
                 holder.extend(aligned)
                 result.body_boxes = _boxes(holder)
             result.body_boxes_skipped = tuple(c.get("name", "unnamed") for c in skipped)
+        result.wheel_boxes = _wheel_boxes(truck)
         if len(result.fork_boxes) != 4:
             raise ValueError("Expected two fork blades and two heels")
         result.pallet_boxes = _boxes(links[0])
@@ -595,6 +624,8 @@ class InsertionGeometry:
         non-blade boxes (lifted) -- the parts forbidden_contacts leaves out. Same conventions as it."""
         return (self.forbidden_contacts(base_position_m, base_quaternion_wxyz, 0.0, pallet_position_m,
                                         pallet_quaternion_wxyz, clearance_m=clearance_m, boxes=self.body_boxes)
+                + self.forbidden_contacts(base_position_m, base_quaternion_wxyz, 0.0, pallet_position_m,
+                                          pallet_quaternion_wxyz, clearance_m=clearance_m, boxes=self.wheel_boxes)
                 + self.forbidden_contacts(base_position_m, base_quaternion_wxyz, lift_m, pallet_position_m,
                                           pallet_quaternion_wxyz, clearance_m=clearance_m, boxes=self.carriage_boxes))
 

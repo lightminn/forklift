@@ -479,3 +479,20 @@ def test_the_body_and_the_carriage_are_checked_against_the_pallet_too(geometry):
     assert not geometry.body_contacts((-1.35, 0, 0), (1, 0, 0, 0), 0.0, (0, 0, 0), (1, 0, 0, 0))  # forks only in
     over = geometry.body_contacts((0.80, 0, 0), (1, 0, 0, 0), 0.0, (0, 0, 0), (1, 0, 0, 0))  # driven onto it
     assert {name for name, _ in over} & {b[0] for b in geometry.body_boxes}
+
+
+def test_the_wheels_are_part_of_the_truck_body_check():
+    """Codex stage 3 review round 2 P2: driven alongside, the measured truck's rear tyre met the pallet's side 15 mm
+    deep and neither check saw it (the tyres are links of their own)."""
+    measured = MODULE.InsertionGeometry.from_urdfs(
+        ROOT / "sim/models/dls08_measured/forklift.urdf", ROOT / "sim/models/epal6_pallet/pallet.urdf")
+    wheels = {b[0]: b for b in measured.wheel_boxes}
+    assert set(wheels) == {"front_left_tire_collision", "front_right_tire_collision", "rear_left_tire_collision",
+                           "rear_right_tire_collision"}
+    _, centre, half = wheels["rear_right_tire_collision"]
+    assert np.allclose(centre, (-0.34, -0.265, 0.125)) and np.allclose(half, (0.125, 0.04, 0.125))
+    _, centre, half = wheels["front_left_tire_collision"]  # steered: a box around every steering angle
+    assert np.allclose(centre, (0.32, 0.265, 0.125)) and np.allclose(half[:2], math.hypot(0.125, 0.04))
+    touching = measured.body_contacts((0.34, 0.69, 0.0), (1, 0, 0, 0), 0.0, (0, 0, 0), (1, 0, 0, 0))
+    assert any(name == "rear_right_tire_collision" for name, _ in touching)
+    assert not measured.body_contacts((0.34, 1.20, 0.0), (1, 0, 0, 0), 0.0, (0, 0, 0), (1, 0, 0, 0))
