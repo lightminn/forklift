@@ -43,6 +43,9 @@ MISSION_KEYS = {
         "tracker", "start", "stop_state", "correction", "path_revision", "first_target", "retries", "retry_stand",
         "mismatch", "unbounded", "protect", "arrival", "drop_latch", "stale_waits", "last_stamp", "last_fed_stamp",
         "injection_closed", "stand_record", "terminal_standing_since",
+        # Plan D8 (Codex D8 design review P2-3): the near-field record is the mission's -- a tick per control tick
+        # while tracking (~6 MB a minute) -- handed to its record at the end, so a long session does not keep them.
+        "frames", "ticks", "events", "corrections", "path_revisions", "stop_events", "frames_overflow",
     ),
     "pocket": (
         "capture", "history", "planning_pickup", "await_still_frame", "mid_still_done", "zero_since",
@@ -56,7 +59,7 @@ NESTED_KEYS = {
                                  "insert_arrival", ("injection", "captures")),
 }
 # What a mission's record keeps (the records the table hands to the mission's record, D1 step 7).
-RECORD_OWNERS = ("state", "obstacle", "pocket")
+RECORD_OWNERS = ("state", "obstacle", "pocket", "near")
 # The table's session rows that share an owner with mission rows (checked by the tests: never in MISSION_KEYS).
 SESSION_KEYS = {
     "state": ("samples", "tyre_contact_rows", "leg_switches", "tracker_versions", "transitions", "applied_command",
@@ -65,8 +68,7 @@ SESSION_KEYS = {
                  "slowed", "reasons", "unpermitted", "events", "event_objects", "run_wall_start", "scans", "plans",
                  "reprojections", "silence_trace", "plan_cache", "memory_events"),
     "slam": ("link", "async_link", "tracker", "holds", "records", "control", "scan_id", "stop", "stop_now"),
-    "near": ("bounds", "episode", "history", "commands", "events", "frames", "ticks", "path_revisions",
-             "corrections", "stop_events"),
+    "near": ("bounds", "episode", "history", "commands"),
     "pocket": ("check",),
 }
 MS_FIELDS = ("observe_stall_ticks", "slam_stall_ticks", "dock_stop_ticks", "cusp_stop_ticks", "next_candidate_index",
@@ -144,7 +146,7 @@ class MissionBaseline:
 
     def restore(self, core) -> dict:
         """Put the mission's keys back; returns the last mission's record keys (moved out, not copied)."""
-        records: dict = {owner: {} for owner in RECORD_OWNERS}
+        records: dict = {owner: {} for owner in RECORD_OWNERS if getattr(core, owner) is not None}
         for slot, value in self._values.items():
             owner = slot[0]
             if owner == "ms":

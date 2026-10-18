@@ -65,7 +65,7 @@ class LiveRuntime:
                  test_step_delay_s: float = 0.0, camera_freeze: tuple | None = None,
                  test_stop_in_capture: bool = False, camera_pixel_lag_s: float = 0.0,
                  camera_model: dict | None = None, catchup_steps: int = 0, end: EndHooks | None = None,
-                 port: int = 0, supervised: bool = False):
+                 port: int = 0, supervised: bool = False, log_rotate_bytes: int = 200_000_000, log_keep: int = 3):
         self.core, self.hooks, self.clock, self.sleep = core, hooks, clock, sleep
         self.end = end or EndHooks()
         self.results = ResultsBook()  # the session's mission outcomes (persistent console plan D1 step 9)
@@ -104,6 +104,11 @@ class LiveRuntime:
         self.server = LiveServer(self.channels, self.store, self.welcome, host=host, port=port, web_root=web_root)
         self.output, self.port_file = Path(output), port_file
         self._log = open(self.output / "live_log.jsonl", "w")  # noqa: SIM115 -- closed in close()
+        # Persistent console plan D8: the log rolls over at log_rotate_bytes into live_log.jsonl.1 (the newest) ...
+        # live_log.jsonl.<log_keep>; older ones go.
+        self._log_rotate_bytes, self._log_keep, self._log_bytes = int(log_rotate_bytes), int(log_keep), 0
+        self._log_lock = threading.Lock()  # the control thread and the records' writer threads both log
+        self._log_rotations = 0
         self.feedback: Feedback | None = None
         self.step = 0
         self.step_start: deque = deque(maxlen=600)  # (sim time at the step's end, mono at its start)
@@ -117,11 +122,10 @@ class LiveRuntime:
         self.camera_freeze = camera_freeze  # (from, to) sim seconds: no new frames (the video-stall test)
         self.capturing = False  # the runner marks a capture in progress
         self._test_stop_in_capture = test_stop_in_capture  # tests only: one STOP at the first capture's steps
-        self.camera_latency: list[float] = []
+        self.camera_latency = LatencyWindow(maxlen=LATENCY_WINDOW)
         self.camera_pixel_lag_s = camera_pixel_lag_s  # sim s the pixels trail the render metadata (plan C5)
-        self.camera_pixel_latency: list[float] = []
+        self.camera_pixel_latency = LatencyWindow(maxlen=LATENCY_WINDOW)
         self.camera_pixel_unknown = 0
-        self._events_logged = 0
         self._next_status = 0.0
 
     # --- lifecycle -------------------------------------------------------------------------------------------------
@@ -159,17 +163,43 @@ class LiveRuntime:
                                              "session_epoch": self.session_epoch, "pid": os.getpid(),
                                              "state": "ended" if ended else "stop_failed"})
         for entry in self.link.log:
-            self._log.write(json.dumps(entry) + "\n")
+            self._write_log(json.dumps(entry) + "\n")
         self.link.log.clear()
         self.log({"event": "end", "server_ended": ended, "pacing": self.pacer.report(),
-                  "camera_latency_s": _quantiles(self.camera_latency),
-                  "camera_pixel_latency_s": _quantiles(self.camera_pixel_latency),
+                  "camera_latency_s": self.camera_latency.report(),
+                  "camera_pixel_latency_s": self.camera_pixel_latency.report(),
                   "camera_pixel_unknown": self.camera_pixel_unknown})
-        self._log.close()
+        with self._log_lock:
+            self._log.close()
 
     def log(self, entry: dict) -> None:
         entry.setdefault("mono", self.clock())
-        self._log.write(json.dumps(entry, default=_jsonable) + "\n")
+        self._write_log(json.dumps(entry, default=_jsonable) + "\n")
+
+    def _write_log(self, line: str) -> None:
+        with self._log_lock:
+            self._write_log_locked(line)
+
+    def _write_log_locked(self, line: str) -> None:
+        self._log.write(line)
+        self._log_bytes += len(line)
+        if self._log_bytes < self._log_rotate_bytes:
+            return
+        self._log.close()
+        base = self.output / "live_log.jsonl"
+        for n in range(self._log_keep, 0, -1):
+            older = base.with_name(f"{base.name}.{n}")
+            if n == self._log_keep:
+                older.unlink(missing_ok=True)
+            elif older.exists():
+                older.rename(base.with_name(f"{base.name}.{n + 1}"))
+        base.rename(base.with_name(f"{base.name}.1"))
+        self._log = open(base, "w")  # noqa: SIM115 -- closed in close()
+        self._log_bytes = 0
+        self._log_rotations += 1
+        # How often it rolled and how many it keeps: a reader knows when the oldest part is gone (read_live_log).
+        (self.output / "live_log.index.json").write_text(
+            json.dumps({"rotations": self._log_rotations, "keep": self._log_keep}))
 
     # --- per control tick ------------------------------------------------------------------------------------------
     def tick_start(self, t: float, near_active: bool, clear_for_submit: bool = True) -> tuple[str, list]:
@@ -251,11 +281,11 @@ class LiveRuntime:
         """The link's message log and the arbiter's boundary events (mode, lease, disarm, generation reasons), and
         once a second the stop detector and the feedback it judged."""
         for entry in self.link.log:
-            self._log.write(json.dumps(entry) + "\n")
+            self._write_log(json.dumps(entry) + "\n")
         self.link.log.clear()
-        for event in self.arbiter.events[self._events_logged:]:
+        for event in self.arbiter.events:
             self.log(dict(event, arbiter=True, tick_t=t))
-        self._events_logged = len(self.arbiter.events)
+        self.arbiter.events.clear()  # plan D8: logged, then let go (nothing else reads them)
         now = self.clock()
         if now >= self._next_status:
             self._next_status = now + 1.0
@@ -464,6 +494,30 @@ def live_camera_model(calibration, mount, *, rear_axle_offset_m: float, sent_wid
                 "xyz_m": [float(t[0]) + abs(float(rear_axle_offset_m)), float(t[1]), float(t[2])],
                 "quaternion_xyzw": [float(v) for v in q]},
             "rides_lift": bool(rides_lift)}
+
+
+LATENCY_WINDOW = 36_000  # the camera latencies kept (plan D8): measured frames, an hour at 10 Hz and factor 1
+
+
+class LatencyWindow(deque):
+    """The last ``maxlen`` latencies, with the whole session's count and maximum (plan D8: a session left up for
+    hours keeps a window, not every frame's)."""
+
+    def __init__(self, maxlen: int) -> None:
+        super().__init__(maxlen=maxlen)
+        self.n, self.max = 0, None
+
+    def append(self, value: float) -> None:
+        super().append(value)
+        self.n += 1
+        self.max = value if self.max is None else max(self.max, value)
+
+    def report(self) -> dict | None:
+        window = _quantiles(list(self))
+        if window is None:
+            return None
+        return {"n": self.n, "max": self.max, "window_n": window["n"], "window_median": window["median"],
+                "window_p99": window["p99"], "window": f"the last {self.maxlen} measured frames (a count, not a wall time)"}
 
 
 def _quantiles(values: list) -> dict | None:

@@ -629,6 +629,85 @@ D2 의 `mission_start` 는 작업자 작업 `observe_ladder` 로 한다. 이름 
 
 **구현에서 남긴 것(2026-10-18).** 가짜 차량(`console/mock_vehicle`)은 아직 자기 요청 저장소를 쓰고 토큰을 주지 않는다. 클라이언트는 그때 토큰 없이 보내므로 예전 규칙대로 동작한다(Codex 4c 구현 검토 P3: 실시간 수정의 선행 조건은 아니지만, 가짜 차량 기반 시험을 원장 검증으로 세지 않는다). 공유 `RequestLedger` 로 옮기는 일은 화면 단계(D13) 전에 한다.
 
+### D8 구현 설계 (5단계, 2026-10-19, 4단계 80fc9ff 뒤; 3판 — Codex 설계 검토 1·2회차 반영)
+
+**측정(U1, c795917, ws1 GPU 0).** 영상을 구독한 채 30분 대기한 뒤 미션 하나를 수행했다. 실행기 RSS 는 5분 6,455 MB → 30분 6,585 MB → 미션 뒤 40분 6,699 MB 였다. 대기 중 증가는 분당 약 5 MB(시간당 약 300 MB)로, 상한 초안 200 MB/시간을 넘는다. VRAM 은 3,280–3,344 MiB 로 평평했다. 종료 때 쓴 기록(시뮬 914 s)은 다음과 같다.
+
+| 기록 | 항목 수 | 디스크 | 증가 단위 |
+|---|---|---|---|
+| `slam_log` 관절 5목록(팀 엔코더면 8) | 109,655 | npz 35 MB 의 일부 | 물리 스텝(120 Hz) |
+| `slam_log` 스캔 3목록(거리 1,600개) | 9,138 | 같은 npz 의 대부분 | 스캔(10 Hz) |
+| `slam["control"]` 7열 | 109,606 | 6.1 MB | 스텝 |
+| `slam["records"]` | 9,138 | 7.6 MB | 스캔 |
+| `obstacle["scans"]` | 9,138 | 1.9 MB | 스캔 |
+| `state["samples"]` | 9,134 | result.json 의 6.8 MB | 0.1 s |
+| `live_log.jsonl` | — | 41 MB(파일) | 메시지·사건 |
+
+메모리 위 객체 크기로 셈한 합(관절 약 1.5 MB/분 + 스캔 약 1.5 MB/분 + 제어 약 0.8 MB/분 + 나머지 약 0.6 MB/분)이 측정한 5 MB/분과 맞는다. 그 밖에 커지는 것: 근접 추적의 `near["ticks"]` 는 추적 중 제어 틱마다 하나씩 붙어 분당 약 6 MB 다(Codex P2-3). `--live --video` 에서는 `frame_audit`·`video_frames`(로봇 카메라)·겹침 격자 `overlay["grids"]`(0.5 s 마다)가 유휴 중에도 쌓인다(Codex P2-4). `transitions`·`obstacle["plans"]`·`commands.log` 는 미션마다 수 KB 로, U16 에서 잰다.
+
+**읽는 쪽 조사.** 실행 중에 위 목록을 읽는 곳은 모두 마지막 항목뿐이다.
+- `slam_log["scan_ranges_m"][-1]`·`["scan_stamps_s"][-1]`: 도킹 스캔 포트(R5338–5351)
+- `slam["control"][-1][1:4]`: 코어가 보정 자세로 고쳐 쓴다(core.py 9곳, R6195). 틱 시작의 `collect_end → end_mission → end_reset → end_release` 는 그 틱의 행이 붙기 전에 **직전 틱의 행**을 고칠 수 있다(Codex 확인). `keep=1` 이 그 행을 남기므로 안전하다. 더 오래된 행을 고치는 경로는 없다.
+- `obstacle["plans"][-1]`: 덧붙인 직후 같은 호출 안에서 고친다(R3790·3826)
+- 전체 목록은 실행이 끝날 때만 읽는다(R6915–7021: 파일 쓰기·요약).
+- 경계 기록(`DictWatch` 의 append_only)은 라이브에서 금지라(R902) 스풀과 겹치지 않는다.
+- 이 목록들은 모두 D0 의 세션 키다. 미션 종료의 기준값 복원·미션 기록(RECORD_OWNERS) 과 겹치지 않는다(`test_baseline` 이 MISSION_KEYS 와 SESSION_KEYS 의 분리를 확인한다).
+
+**설계.**
+1. **스풀 등록(라이브만).** 루프 직전, 목록이 다 만들어진 뒤 `RecordSpool(args.output / "spool", interval_s=10)` 에 등록한다. 모두 `keep=1` 이다.
+   - 묶음 `slam_log.joint`: 관절 목록(팀 엔코더 목록 포함). 같은 스텝에 하나씩 붙으므로 한 길이로 자른다.
+   - 묶음 `slam_log.scan`: `scan_stamps_s`·`scan_ranges_m`·`laser_pose_world`.
+   - 목록: `slam_log.silenced`, `slam.control`, `slam.records`, `obstacle.scans`, `state.samples`, `state.tyre_contact_rows`(켜져 있을 때).
+   - 영상 기록(`--video`)이 켜져 있으면 `frame_audit`, `overlay.grids`, `overlay.plan_history` 도 등록한다. `video_frames`(`[-1]` 을 R4918 에서 고친다)는 `--robot-camera` 일 때만 등록한다. 그 기록과 메타는 로봇 카메라가 있을 때만 생기기 때문이다(Codex 2회차 P2-4: 없이 등록하면 종료가 `perception_calibration` 을 읽다 예외를 낸다).
+   - `spool.tick(time.monotonic())` 는 틱 시작(어떤 append 보다 먼저)에 부른다. 자르는 비용은 10초분의 슬라이스와 `del` 이다. 스풀은 자르기마다 걸린 벽시계의 최댓값을 manifest 에 적는다.
+   - 배치(비라이브)는 등록하지 않는다. 동작·출력이 지금과 같다(재생 게이트 29/29 로 확인).
+2. **스풀이 지키는 것**(Codex P2-1·P2-2·P3).
+   - `close()` 는 꼬리까지 모두 잘라 마지막 조각으로 쓴다. 그래서 디스크만으로 전체가 되살아난다. 닫을 때 묶음의 목록 길이가 다르면 manifest 에 `misaligned` 로 적는다.
+   - 쓰기 스레드가 꺼낸 조각은 다 쓸 때까지 큐 상한에 계속 센다(메모리에 남아 있으므로). 닫기 제한 시간이 지나도 큐에 남았거나 쓰는 중인 항목은 `unsettled_items` 로 센다. 그 뒤에 쓰기가 끝나도 manifest 는 바꾸지 않는다.
+   - manifest 의 `complete` 는 누락·미확정·길이 어긋남이 모두 없을 때만 참이다.
+   - 조각은 `<n>.<kind>.tmp` 에 쓰고 이름을 바꾼다. 읽는 쪽은 `.tmp` 를 읽지 않는다.
+   - 큐 상한은 **아직 쓰지 못한 자르기 회차 수**(기본 6회 = 기록 60초분)다. 넘으면 그 회차 전체를 버리고 센다. 닫기의 마지막 회차는 언제나 받는다. 바이트 추정은 쓰지 않는다. 마지막 항목 × 개수는 크기가 들쭉날쭉한 격자 기록을 과소 계산하고(Codex 2회차 P2-2), 항목마다 재면 10초분에 약 4 ms 가 든다(실측). 회차 상한은 메모리에 남는 밀린 기록을 시간으로 묶는다. 한 회차 분량은 생산 속도로 정해진다(U1 실측 분당 약 5 MB → 60초분 약 5 MB). 쓰기 오류는 총수와 마지막 10개만 둔다.
+   - `close()` 는 한 번만 일한다. 다시 부르면 첫 manifest 를 돌려준다(Codex 2회차 P3-1).
+3. **종료 때.** `finally` 의 기록 쓰기 앞에서 `spool.close()` 한다. 라이브에서는 스풀에 넣은 목록의 종료 파일(`slam_records.json`·`slam_control.npy`·`obstacle_scans.json`·`slam_log.npz`·`video_frames.json` 의 프레임·`obstacle_grid_frames.npz`)을 메모리에서 쓰지 않는다. 내용은 `spool/` 에 있고, `result.json` 의 `"spool"` 에 manifest(조각·항목·누락·미확정·`complete`)를 싣는다.
+   - 요약(`slam_summary` 의 수·RMSE, `obstacle_layer` 의 스캔당 벽시계)은 라이브에서 스풀 조각을 하나씩 읽어 누적해 셈한다(`iter_chunks`, 한 번에 한 조각). `complete` 가 거짓이면 요약에 `incomplete: true` 를 단다.
+   - `meta.json`(재생 형식)은 그대로 쓰고 `"spool": {"joint": "slam_log.joint", "scan": "slam_log.scan", "silenced": "slam_log.silenced", "root": "spool"}` 를 적는다. `tyre_contacts.npy` 도 라이브에서는 쓰지 않는다(빈 배열이 되므로, Codex 2회차 P3-2).
+   - **읽는 쪽**(Codex 2회차 P2-3). `forklift_core.live.spool` 에 실행 뒤 읽기 함수를 둔다.
+     - `load_slam_log(run)`: `slam_log.npz` 가 있으면 그것, 없으면 `meta.json` 이 가리키는 조각을 잇는다. manifest 가 `complete` 가 아니면 거부한다(`allow_incomplete` 로만 읽음).
+     - `load_list(root, name)`: 스풀에 넣은 목록 전체. 같은 완전성 검사를 한다.
+     - `read_live_log(run)`: 넘긴 로그를 오래된 것부터 이어 읽는다. LiveRuntime 이 넘길 때마다 `live_log.index.json`(넘긴 횟수·보존 개수)을 쓴다. 횟수가 보존 개수를 넘으면(가장 오래된 부분이 지워짐) 거부한다.
+     - 복사본에서 조각이나 로그 파일이 빠졌으면 거부한다. 읽은 항목 수를 manifest 의 항목 수와, 있어야 할 로그 파일을 index 와 대조한다(Codex 3회차 P3-1).
+     - 라이브 실행을 읽는 `tools/bundle_coverage.py` 는 세 함수를 쓴다(SLAM 기록, `state.samples` 의 명령 곡률, TELEOP 구간). 같은 자료를 배치 형식과 스풀 형식으로 준 두 실행의 결과가 같음을 시험으로 확인한다.
+     - 나머지 `slam_log.npz` 를 읽는 도구(`compose_slam_video`·`p0a_measure`·`gate_measure`·`plant_gates`·`curvature_residual` 등)는 배치 실행용이다. 라이브 실행을 주면 파일이 없다는 오류로 멈춘다. 조용히 다른 입력을 쓰지는 않는다.
+4. **근접 기록은 미션 소유**(Codex 1회차 P2-3). `near` 의 `frames`·`ticks`·`events`·`corrections`·`path_revisions`·`stop_events` 를 D0 의 M0(기록은 M기록)으로 옮긴다. 미션 종료의 복원이 미션 기록(`missions/<id>/records.json`)으로 넘기고 비운다. 재시도 판정이 지금 일화의 `ticks` 를 모두 읽으므로(C5229–5231) 스풀에는 넣지 않는다. 한 미션의 근접 기록은 그 미션의 추적 시간에 묶인다(60 s 에 약 6 MB). 라이브 종료의 `near_tracking` 기록은 마지막 미션 이후 것만 담는다.
+   - **미션 안에서도 묶는다**(Codex 2회차 P2-1). 근접 추적 중 STOP 은 미션을 끝내지 않고 `paused` 로 둔다. 그동안에도 프레임은 10 Hz 로 읽혀 `near["frames"]` 에 쌓인다. 라이브에서는 미션당 12,000개(10 Hz 로 20분)까지 두고 넘친 수를 `frames_overflow`(미션 키)로 센다. `ticks` 는 일시정지 중 붙지 않는다(`paused_tick` 은 근접 틱을 돌지 않음). 배치는 지금처럼 모두 둔다.
+5. **LiveRuntime.**
+   - 카메라 지연 두 목록은 측정된 프레임 36,000개 창(`LatencyWindow`)이다. 벽시계 1시간이 아니라 측정 개수다(Codex P3). 종료 요약에는 전체 수·전체 최댓값과 창 안의 중앙값·p99 를 싣고, 창이 개수임을 적는다.
+   - `arbiter.events` 는 LiveRuntime 이 `live_log` 에 쓴 뒤 비운다. 중재기를 직접 시험하는 시험은 이 비우기를 거치지 않는다.
+   - `live_log.jsonl` 은 200 MB 마다 `live_log.jsonl.1`(가장 새것) … `.3` 으로 넘기고 더 오래된 것은 지운다. 제어 스레드와 미션 기록 쓰기 스레드가 함께 쓰므로 쓰기·넘기기·닫기를 잠금 하나로 묶는다(Codex P3). 넘기기는 200 MB 넘는 실행에서만 일어나므로, 짧은 시험 실행을 읽는 도구(`live_console_probe` 등)는 그대로다.
+6. **GC 재동결.** live 타이머의 `gc.gen2` 를 U1 재측정에서 보고 정한다. 2세대 수집이 평균 0.8 ms(틱 예산 8.3 ms 의 10 %)·최대 20 ms 안이면 하지 않는다.
+7. **SLAM 브리지.** 컨테이너 안 별도 프로세스라 실행기 RSS 에 들지 않는다. U1 재측정에서 브리지 RSS 도 잰다. 늘면 ROS 패키지 변경으로 따로 다룬다(이 단계 밖).
+
+**합격 기준(Codex 1회차 P2-5·2회차 P3-3 반영).** 틱 p99 비교는 10초마다 한 번인 자르기를 가리지 못하므로 쓰지 않는다. 자르기 비용은 직접 재고, 쓰기 스레드의 GIL 경쟁과 로그 넘기기는 틱 간격 전체로 본다. 틱 간격은 `live_log` 의 틱마다 기록(`mono`)에서 구한다.
+- U1 재측정(영상 구독, 30분 대기 뒤 미션):
+  - 실행기 RSS 의 5분 뒤 → 30분 증가 < 100 MB, 5–30분 선형 기울기 < 200 MB/시간
+  - manifest `complete: true`, 오류 0
+  - 자르기 최대 벽시계(`cut_wall_max_s`) < 5 ms(로컬 실측 0.2–0.4 ms)
+  - 틱 간격: 스풀 없는 U1(c795917)과 비교해, 간격 p99.9 증가 < 2 ms, 최대 간격 증가 < 10 ms. 페이싱 보고의 실시간 비율 차이 < 2 %, `stalls` 가 늘지 않음
+  - 미션 `done`, 배달 참값 판정 통과
+- U16 짧은 판(미션 3회 반복, 영상 기록 켬): 위 기준에 더해 첫 미션 뒤와 셋째 미션 뒤의 RSS 차이 < 100 MB(미션당 남는 것이 50 MB 아래). 미션마다 남는 것과 영상 경로를 본다.
+- U30(새, STOP 뒤 오래 대기): 근접 추적 중 STOP → **시뮬 시간 25분** 대기(상한 12,000개는 시뮬 10 Hz 로 20분이다. 배속 0.4 에서 벽시계 약 63분) → 취소 → 새 미션. 대기 동안 RSS 증가 < 100 MB, 그 미션 기록의 `frames_overflow` > 0(상한이 동작, Codex 3회차 P3-2), 새 미션 `done`.
+- 디스크: 세션 디스크 < 5 GB/8시간(U1 의 시간당 증가로 외삽해 확인).
+
+**시험(먼저 쓴다).**
+- 스풀 단위: 잘라 쓰기, 묶음 한 길이, 밀린 회차 상한(크기가 들쭉날쭉해도 회차 전체가 함께 감), 쓰기 실패 계수와 오류 상한, 닫기 때 꼬리까지 기록, 닫기 재호출, 쓰는 중 제한 시간 초과의 `unsettled_items`·`complete: false`, `.tmp` 무시, 길이 어긋남, 자르기 비용 기록, `iter_chunks`·`load_group`·`load_list`·`load_slam_log`(불완전 거부)·`read_live_log`(지워진 부분 거부).
+- 근접 프레임 상한: 상한까지 두고 넘친 수를 셈, 배치는 모두 둠, 러너의 다섯 곳이 모두 상한 함수를 거침.
+- 기준값: 근접 기록이 미션 기록으로 넘어가고 비워짐, 근접 추적이 없는 실행에서는 `near` 기록 없음.
+- 러너 원천 시험: 라이브만 등록, 틱 시작 호출, 종료 순서(close 가 기록 쓰기 앞), 라이브 종료 파일 생략, 배치 경로 불변.
+- 요약 누적: 조각으로 셈한 `slam_summary` 가 같은 자료를 한 번에 셈한 값과 같음(CPU, 합성 자료).
+- LiveRuntime: 지연 창, `arbiter.events` 를 한 번만 기록하고 비움, 로그 넘기기와 `live_log.index.json`, 다른 스레드가 쓰는 중의 넘기기.
+- `bundle_coverage`: 배치 형식과 스풀 형식으로 같은 자료를 준 두 실행의 결과가 같음(예전 읽기 코드로 되돌리면 실패함을 확인).
+- Isaac: U1 재측정, 이어 U16 의 짧은 판(미션 3회 반복, 영상 기록 켬), U30.
+
 ## 4. 유즈케이스와 시험
 
 시험은 세 층이다:
@@ -669,6 +748,7 @@ D2 의 `mission_start` 는 작업자 작업 `observe_ladder` 로 한다. 이름 
 | U27 | 철수 초반·후반 취소 | 포켓 점유로 분기(초반 복구, 후반 `cancelled`) | Isaac `cancel_each` |
 | U28 | 종료용 SLAM 해제 | 해제 뒤 대기 작업·경로 설치·재관찰 예약 0건 | CPU |
 | U29 | 기록 소유권과 비용 | 두 미션 연속 뒤 각 미션 기록이 자기 자료만 담음. 큐 가득 참·쓰기 실패가 결과 기록부에 표시. 최대 조각·가득 찬 큐에서 종료 틱의 기록 비용 ≤ 20 ms, 틱 간격·STOP 응답이 평소 분포 안 | CPU + Isaac |
+| U30 | 근접 추적 중 STOP 뒤 시뮬 25분 대기 → 취소 → 새 미션 | 대기 중 RSS 증가 < 100 MB, 미션 기록의 `frames_overflow` > 0, 새 미션 `done`(D8) | Isaac `stop_wait` |
 
 배치 회귀: 재생 게이트 29/29, ws1 전체 pytest(알려진 실패 목록 외 0).
 
@@ -801,6 +881,7 @@ D2 의 `mission_start` 는 작업자 작업 `observe_ladder` 로 한다. 이름 
 | 4b 감독 루프 | 4c04a52·a5fe1d9 → 364fd66 | 3 | 1회차 P2 5(TERM 전달, 실제 충돌이 종료 파일에 가려짐, 시작 실패, 같은 원인 규칙, sbatch 종료 상태)·P3(경로 이스케이프), 2회차 P2(대기 중 TERM)·P3(정리 실패 기록). 3회차 새 P1/P2 없음. Isaac U15(kill -9 → crashed → epoch 2)·U14(session_end → ended) 통과 |
 | 4c 설계 | 09a83d1 → 2판 | 2 | P2 5(토큰 소유, 전체 상한, 옛 토큰 stale 의 재접속 연쇄, 연결별 welcome, PENDING 키)·P3 2. 2회차 새 P1/P2 없음 |
 | 4c 구현 | 823c98c → f8a4416 | 2 | P2 2(닫힌 연결 토큰 회수, 재기동 뒤 토큰 재사용)·P3 2(등록 거절의 연결 거절, 가짜 차량 — 후속). 2회차 새 P1/P2 없음 |
+| 5 설계·구현(D8) | 80fc9ff → 3판 | 3 | 1회차 P2 5(종료 꼬리 유실, 쓰는 중 시간 초과의 계수, 근접 기록 미회수, 영상 기록 경로, 합격 기준)·P3 3. 2회차 P2 4(STOP 중 근접 프레임, 바이트 추정 과소, 읽는 쪽 전환 일부, 로봇 카메라 없는 영상 종료 예외)·P3 3. 3회차 새 P1/P2 없음, P3 2(복사본 누락 감지, U30 대기 시간) 반영 |
 
 ## 7. 사용자 결정 (2026-10-18)
 

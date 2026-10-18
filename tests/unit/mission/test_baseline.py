@@ -101,3 +101,27 @@ def test_a_restore_keeps_the_lists_and_dicts_other_objects_hold():
     assert core.state["cusp_stalls"] is held and held == [] and core.obstacle["replans"] is replans and replans == {}
     assert records["state"]["cusp_stalls"] == [{"stall": 1}] and records["obstacle"]["replans"] == {"x": 1}
     assert records["state"]["cusp_stalls"] is not held
+
+
+def test_the_near_fields_record_goes_with_its_mission_and_the_next_starts_empty():
+    """Plan D8 (Codex D8 design review P2-3): the near-field ticks (one per control tick while tracking, ~6 MB a
+    minute) and its frames, events, corrections and revisions are the mission's; a session left up does not keep
+    every mission's."""
+    core = fake_core()
+    core.near.update(ticks=[], frames=[], events=[], corrections=[], path_revisions=[])
+    ticks = core.near["ticks"]
+    base = MissionBaseline.capture(core)
+    core.near["ticks"].extend({"face_distance_m": d, "episode": 1} for d in (0.5, 0.4))
+    core.near["events"].append({"event": "armed"})
+    core.near["episode"] = 1
+    records = base.restore(core)
+    assert records["near"]["ticks"] == [{"face_distance_m": 0.5, "episode": 1}, {"face_distance_m": 0.4, "episode": 1}]
+    assert records["near"]["events"] == [{"event": "armed"}]
+    assert core.near["ticks"] == [] and core.near["ticks"] is ticks and core.near["episode"] == 1
+
+
+def test_a_run_without_near_tracking_hands_over_no_near_record():
+    core = fake_core()
+    core.near = None
+    records = MissionBaseline.capture(core).restore(core)
+    assert "near" not in records  # start_mission puts each owner's records back: there is no near to put them in

@@ -1,0 +1,156 @@
+"""The live session's spooled records (persistent console plan D8): which lists go to the spool, and the end-of-run
+summaries a live run makes from the chunks one at a time -- the same numbers a batch run makes from the whole list."""
+
+import numpy as np
+import pytest
+
+from forklift_core.live.spool import RecordSpool, iter_chunks
+from sim.isaac import live_records
+
+
+def rows(n, seed=0):
+    rng = np.random.default_rng(seed)
+    out = []
+    for i in range(n):
+        est = rng.normal(size=3)
+        truth = est + rng.normal(scale=0.05, size=3)
+        out.append([i / 120, *est.tolist(), *truth.tolist()])
+    return out
+
+
+def batch_summary(control_rows, statuses):
+    control = np.asarray(control_rows, dtype=float).reshape(-1, 7)
+    error = np.hypot(control[:, 1] - control[:, 4], control[:, 2] - control[:, 5])
+    yaw_error = np.abs(np.angle(np.exp(1j * (control[:, 3] - control[:, 6]))))
+    return {"control_samples": len(control), "raw_position_rmse_m": float(np.sqrt(np.mean(error**2))),
+            "raw_position_max_m": float(error.max()), "raw_yaw_rmse_rad": float(np.sqrt(np.mean(yaw_error**2))),
+            "raw_yaw_max_rad": float(yaw_error.max()), "scans": len(statuses),
+            "processed": statuses.count("processed"), "skipped": statuses.count("skipped"),
+            "link_failures": statuses.count("link_failure")}
+
+
+def test_the_streamed_slam_summary_is_the_whole_lists_summary(tmp_path):
+    control, records = rows(1000), [{"status": s} for s in ["processed"] * 70 + ["skipped"] * 25 + ["link_failure"] * 5]
+    spool = RecordSpool(tmp_path, interval_s=0.0, queue_cuts=100)  # cut back to back: no backlog drop
+    live_control, live_records_ = [], []
+    spool.register("slam.control", live_control, keep=1)
+    spool.register("slam.records", live_records_, keep=1)
+    for i, row in enumerate(control):
+        live_control.append(list(row))
+        if i % 10 == 0 and i // 10 < len(records):
+            live_records_.append(records[i // 10])
+        if i % 137 == 0:
+            spool.tick(float(i))
+    spool.close()
+    streamed = live_records.slam_summary(iter_chunks(tmp_path, "slam.control"), iter_chunks(tmp_path, "slam.records"))
+    expected = batch_summary(control, [r["status"] for r in records])
+    assert streamed.keys() == expected.keys()
+    for key, value in expected.items():
+        assert streamed[key] == pytest.approx(value, rel=1e-12), key
+
+
+def test_an_empty_slam_record_summarises_as_nothing(tmp_path):
+    s = live_records.slam_summary(iter([]), iter([]))
+    assert s["control_samples"] == 0 and s["raw_position_rmse_m"] is None and s["scans"] == 0
+
+
+def test_the_streamed_scan_wall_is_the_whole_lists(tmp_path):
+    walls = [{"total_wall_s": w} for w in np.linspace(0.001, 0.02, 57)]
+    stats = live_records.scan_wall_stats([walls[:20], walls[20:]])
+    assert stats["scans"] == 57
+    assert stats["wall_s_per_scan"]["mean"] == pytest.approx(float(np.mean([w["total_wall_s"] for w in walls])))
+    assert stats["wall_s_per_scan"]["max"] == pytest.approx(0.02)
+    assert live_records.scan_wall_stats([])["wall_s_per_scan"] == {"mean": 0.0, "max": 0.0}
+
+
+def test_registration_takes_the_growing_session_lists_with_their_last_item(tmp_path):
+    slam_log = {k: [] for k in ("silenced_scan_stamps_s", "joint_stamps_s", "wheel_rates_rad_s", "steering_rad",
+                                "base_pose_world", "scan_stamps_s", "scan_ranges_m", "laser_pose_world",
+                                "wheel_angles_rad", "wheel_counts", "wheel_increments_rad", "steering_measured_rad")}
+    slam = {"control": [], "records": []}
+    obstacle = {"scans": [], "plans": []}
+    state = {"samples": [], "tyre_contact_rows": []}
+    video = {"frame_audit": [], "video_frames": [], "overlay": {"grids": [], "plan_history": []}}
+    spool = RecordSpool(tmp_path, interval_s=0.0)
+    names = live_records.register(spool, slam_log=slam_log, slam=slam, obstacle=obstacle, state=state, video=video)
+    assert names == ["slam_log.joint", "slam_log.scan", "slam_log.silenced", "slam.control", "slam.records",
+                     "obstacle.scans", "state.samples", "state.tyre_contact_rows", "video.frame_audit",
+                     "video.frames", "video.grids", "video.plan_history"]
+    joint = spool._groups["slam_log.joint"][0]
+    assert set(joint) == {"joint_stamps_s", "wheel_rates_rad_s", "steering_rad", "base_pose_world", "wheel_angles_rad",
+                          "wheel_counts", "wheel_increments_rad", "steering_measured_rad"}
+    assert set(spool._groups["slam_log.scan"][0]) == {"scan_stamps_s", "scan_ranges_m", "laser_pose_world"}
+    assert all(keep == 1 for _, keep in [*spool._lists.values(), *spool._groups.values()])
+    assert "obstacle.plans" not in names  # its last entry is written right after it is added, in the same call
+    spool.close()
+
+
+def test_registration_skips_what_the_run_does_not_have(tmp_path):
+    spool = RecordSpool(tmp_path, interval_s=0.0)
+    names = live_records.register(spool, slam_log=None, slam=None, obstacle=None, state={"samples": []}, video=None)
+    assert names == ["state.samples"]
+    spool.close()
+
+
+def _runner() -> str:
+    from pathlib import Path
+
+    return (Path(__file__).resolve().parents[3] / "sim" / "isaac" / "run_transport.py").read_text()
+
+
+def test_the_runner_spools_only_a_live_run_and_cuts_at_the_tick_start():
+    src = _runner()
+    made = src.index('live_spool = RecordSpool(args.output / "spool", interval_s=10.0)')
+    assert src.index("core.baseline = MissionBaseline.capture(core)") < made < src.index("            live.start()")
+    assert src.count("live_spool = RecordSpool(") == 1 and "    live_spool = None" in src
+    cut = src.index("live_spool.tick(time.monotonic())")
+    start = src.index("stop_kind_, applied_commands_ = live.tick_start(")
+    assert cut < start and src.rfind("if live is not None:", 0, cut) > src.rfind("try:", 0, cut)
+
+
+def test_the_runner_closes_the_spool_before_the_records_and_takes_them_from_it():
+    src = _runner()
+    closed = src.index('state["spool"] = {"root": "spool", **live_spool.close()}')
+    for later in ('if state.get("obstacle_layer") is not None and obstacle is not None:',
+                  'if slam is not None and "slam.control" in spooled_:', 'if "video.frame_audit" not in spooled_:',
+                  'if slam_log is not None and "slam_log.joint" in spooled_:'):
+        assert closed < src.index(later), later
+    assert 'if "obstacle.scans" not in spooled_:' in src  # a batch run (nothing spooled) writes as before
+    assert "elif slam_log is not None and slam_log[\"scan_stamps_s\"]:" in src
+
+
+def test_a_near_frame_record_stops_at_its_bound_and_counts_the_rest():
+    """Codex D8 design round 2 P2-1: a STOP while tracking pauses the mission without ending it, and frames are
+    still read (10 Hz): a mission's frame record is bounded on its own, the overflow counted."""
+    near = {"frames": []}
+    for i in range(7):
+        live_records.keep_near_frame(near, {"i": i}, kept=5)
+    assert [f["i"] for f in near["frames"]] == [0, 1, 2, 3, 4] and near["frames_overflow"] == 2
+    batch = {"frames": []}
+    for i in range(7):
+        live_records.keep_near_frame(batch, {"i": i}, kept=None)  # a batch run keeps every frame, as before
+    assert len(batch["frames"]) == 7 and "frames_overflow" not in batch
+
+
+def test_the_runner_keeps_near_frames_through_the_bound():
+    src = _runner()
+    assert 'near["frames"].append(' not in src
+    assert src.count('keep_near_frame(near, row, NEAR_FRAMES_KEPT if getattr(args, "live", False) else None)') == 5
+
+
+def test_video_recording_without_the_robot_camera_spools_no_frame_records(tmp_path):
+    """Codex D8 design round 2 P2-4: the robot camera's frame records exist only with --robot-camera; registering
+    them otherwise sent the end into the robot camera's metadata (perception_calibration unset)."""
+    spool = RecordSpool(tmp_path, interval_s=0.0)
+    names = live_records.register(spool, slam_log=None, slam=None, obstacle=None, state={"samples": []},
+                                  video={"frame_audit": [], "video_frames": None,
+                                         "overlay": {"grids": [], "plan_history": []}})
+    assert "video.frames" not in names and "video.frame_audit" in names
+    spool.close()
+    assert '"video_frames": video_frames if args.robot_camera else None' in _runner()
+
+
+def test_a_live_runs_tyre_contacts_stay_in_the_spool():
+    src = _runner()
+    assert 'if "state.tyre_contact_rows" in (state.get("spool_registered") or ()):' in src
+    assert src.index('if "state.tyre_contact_rows" in') < src.index('np.save(args.output / "tyre_contacts.npy"')

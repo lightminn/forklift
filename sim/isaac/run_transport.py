@@ -1404,8 +1404,9 @@ def record_robot_camera_frame(
     frames.append({"time_s": stamp, "phase": phase, "camera_ready": bool(ready)})
 
 
-def write_slam_record(args, state, scenario, factory, log, lidar_config) -> None:
-    """slam_log.npz + meta.json in the run_slam_drive.py format, plus the mission."""
+def write_slam_record(args, state, scenario, factory, log, lidar_config, spool: dict | None = None) -> None:
+    """slam_log.npz + meta.json in the run_slam_drive.py format, plus the mission. A live run's log is in its record
+    spool (persistent console plan D8): ``spool`` names the groups and meta.json points at them, no npz."""
     from forklift_core.sensors.lidar import PlanarScanPattern
 
     pattern = PlanarScanPattern(
@@ -1413,9 +1414,10 @@ def write_slam_record(args, state, scenario, factory, log, lidar_config) -> None
         float(lidar_config["range_min_m"]),
         float(lidar_config["range_max_m"]),
     )
-    np.savez_compressed(
-        args.output / "slam_log.npz", **{k: np.asarray(v) for k, v in log.items()}
-    )
+    if spool is None:
+        np.savez_compressed(
+            args.output / "slam_log.npz", **{k: np.asarray(v) for k, v in log.items()}
+        )
     obstacles = [
         {**asdict(prop.rectangle), "height_m": prop.asset.height_m, "base_m": 0.0}
         for prop in scenario.props
@@ -1476,6 +1478,7 @@ def write_slam_record(args, state, scenario, factory, log, lidar_config) -> None
                 "perception_pickup_estimate_m"
             ),
         },
+        **({"spool": spool} if spool is not None else {}),
     }
     (args.output / "meta.json").write_text(record_json(meta, indent=2) + "\n")
 
@@ -3450,6 +3453,7 @@ def drive(S, isaac) -> None:
         D5), without a time, from the future, not newer than the last one, or not
         covered by the history is recorded and left out."""
         from forklift_core.perception.scene_dataset import SceneInput
+        from live_records import NEAR_FRAMES_KEPT, keep_near_frame  # a sibling; plan D8: a live mission's bound
 
         tracker_ = near["tracker"]
         now_s = world.current_time - initial_time
@@ -3458,7 +3462,7 @@ def drive(S, isaac) -> None:
             # Plan D8 S4c-1: an injected loss -- the frame is recorded (the recorder kept the raw
             # read) but never reaches the tracker, and tau's reference stays the last received.
             row.update(skipped="dropped", latch_s=near["drop_latch"]["time_s"])
-            near["frames"].append(row)
+            keep_near_frame(near, row, NEAR_FRAMES_KEPT if getattr(args, "live", False) else None)
             return "dropped"
         k_ = pocket["capture"].intrinsics
         try:
@@ -3468,7 +3472,7 @@ def drive(S, isaac) -> None:
             # loss stops the truck; checked first, whatever its time, so the caller
             # never hands it to D5 (Codex S4a-1 reviews P2).
             row.update(skipped="bad_depth", error=repr(exc))
-            near["frames"].append(row)
+            keep_near_frame(near, row, NEAR_FRAMES_KEPT if getattr(args, "live", False) else None)
             return "bad_depth"
         frame = pocket_camera.get_current_frame()
         rendered = frame.get("rendering_time") if isinstance(frame, dict) else None
@@ -3483,14 +3487,14 @@ def drive(S, isaac) -> None:
         elif near["last_fed_stamp"] is not None and stamp <= near["last_fed_stamp"]:
             row["skipped"] = "not_new"
         if "skipped" in row:
-            near["frames"].append(row)
+            keep_near_frame(near, row, NEAR_FRAMES_KEPT if getattr(args, "live", False) else None)
             return
         aligned = stamp - near["bounds"].align_latency_s
         pose = near["history"].base_at(aligned, near["episode"])
         row.update(stamp_s=stamp, aligned_s=aligned)
         if pose is None:
             row["skipped"] = "uncovered"
-            near["frames"].append(row)
+            keep_near_frame(near, row, NEAR_FRAMES_KEPT if getattr(args, "live", False) else None)
             return None
         lift_ = float(robot.get_joint_positions()[lift_index[0]])
         scene_ = SceneInput(
@@ -3516,7 +3520,7 @@ def drive(S, isaac) -> None:
             latest_widths_m=[latest_.observation.left.width_m, latest_.observation.right.width_m],
             latest_bound=dict(latest_.bound), latest_frame_version=latest_.frame_version,
         )
-        near["frames"].append(row)
+        keep_near_frame(near, row, NEAR_FRAMES_KEPT if getattr(args, "live", False) else None)
         if result_.mismatch and not near.get("mismatch"):
             near["mismatch"] = True  # terminal in S4a (no retry before S4c)
             near["events"].append({"time_s": now_s, "event": "mismatch", "stamp_s": stamp})
@@ -4061,6 +4065,7 @@ def drive(S, isaac) -> None:
     fps_divisor = 120 // args.fps
     dt = 1 / 120
     encoder = None
+    live_spool = None  # persistent console plan D8: a live run's record spool (made before the first control tick)
     extra_encoders = {}
     frame_log = None
     chase_yaw = None
@@ -5824,6 +5829,19 @@ def drive(S, isaac) -> None:
             core.options.observe_bounds = None  # the whole observation travel in the hall (D2, Codex P2-6)
             core.hooks.live_mission_ready, core.hooks.live_mission_start = live_mission_ready, live_mission_start
             core.baseline = MissionBaseline.capture(core)
+            # Persistent console plan D8: what grows every step or scan goes to disk in chunks, the last item kept
+            # (the only one the running code reads); cut at each tick's start, before anything is appended.
+            from forklift_core.live.spool import RecordSpool
+            import live_records  # a sibling, as live_runtime
+
+            if args.tyre_contact_log:
+                state.setdefault("tyre_contact_rows", [])
+            live_spool = RecordSpool(args.output / "spool", interval_s=10.0)
+            state["spool_registered"] = live_records.register(
+                live_spool, slam_log=slam_log, slam=slam, obstacle=obstacle, state=state,
+                video={"frame_audit": frame_audit, "video_frames": video_frames if args.robot_camera else None,
+                       "overlay": overlay}
+                if encoder is not None else None)
             live.start()  # after the SLAM warm-up: the console sees the first control tick next (Codex D9 impl P3)
 
         def scene_require(t_, ok_, reason_):
@@ -5887,6 +5905,7 @@ def drive(S, isaac) -> None:
                 while gc_seen_:  # D9d: the collections timed since the last tick, folded in outside any walk
                     live_timers.add(*gc_seen_.pop())
                 if live is not None:
+                    live_spool.tick(time.monotonic())  # plan D8: before any of this tick's appends
                     # Persistent console plan D2: a submit is prepared from where the truck stands (below, once the
                     # control pose is this tick's). Until D4/D5 a mission that ended with the forks possibly in a pocket
                     # refuses the next submit (recovery_required).
@@ -6911,13 +6930,32 @@ def drive(S, isaac) -> None:
                     # a failure already raised (Codex S4a-1 review P2).
                     state["success"] = False
                     state.setdefault("failure_reason", f"near_tracking_record_failed: {exc!r}")
+            spooled_ = ()
+            if live_spool is not None:
+                # Persistent console plan D8: the tails cut too, so the spool holds the whole session; the spooled
+                # lists are empty from here, and their end files and summaries come from the spool.
+                from forklift_core.live.spool import iter_chunks as spool_chunks
+                import live_records  # a sibling, as live_runtime
+
+                spool_root_ = args.output / "spool"
+                spooled_ = tuple(state.get("spool_registered") or ())
+                try:
+                    state["spool"] = {"root": "spool", **live_spool.close()}
+                except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own failure
+                    state.setdefault("record_errors", []).append(f"spool: {exc_!r}")
+                    state["spool"] = {"root": "spool", "complete": False, "close_error": repr(exc_)}
             if state.get("obstacle_layer") is not None and obstacle is not None:
                 scans_rec = obstacle["scans"]
-                walls = [x["total_wall_s"] for x in scans_rec] or [0.0]
+                if "obstacle.scans" in spooled_:
+                    scan_stats_ = live_records.scan_wall_stats(spool_chunks(spool_root_, "obstacle.scans"))
+                else:
+                    walls = [x["total_wall_s"] for x in scans_rec] or [0.0]
+                    scan_stats_ = {"scans": len(scans_rec),
+                                   "wall_s_per_scan": {"mean": float(np.mean(walls)), "max": float(np.max(walls))}}
                 state["obstacle_layer"].update(
                     {
-                        "scans": len(scans_rec),
-                        "wall_s_per_scan": {"mean": float(np.mean(walls)), "max": float(np.max(walls))},
+                        **scan_stats_,
+                        **({"incomplete": True} if spooled_ and not state["spool"].get("complete") else {}),
                         "control_ticks": obstacle["ticks"],
                         "slowed_ticks": obstacle["slowed"],
                         "slowed_reasons": obstacle["reasons"],
@@ -6941,7 +6979,8 @@ def drive(S, isaac) -> None:
                         },
                     }
                 )
-                (args.output / "obstacle_scans.json").write_text(record_json(scans_rec) + "\n")
+                if "obstacle.scans" not in spooled_:
+                    (args.output / "obstacle_scans.json").write_text(record_json(scans_rec) + "\n")
                 if overlay["plan_history"] or overlay["grids"]:
                     (args.output / "plan_history.json").write_text(
                         record_json({"plans": overlay["plan_history"], "replans": obstacle.get("replans", []),
@@ -6959,6 +6998,17 @@ def drive(S, isaac) -> None:
             if slam is not None:
                 # First, so a video shutdown failure cannot lose the SLAM record.
                 slam["link"].close()
+            if slam is not None and "slam.control" in spooled_:
+                # Plan D8: the live run's SLAM summary from its spooled chunks, one at a time.
+                state["slam_summary"] = {
+                    **live_records.slam_summary(spool_chunks(spool_root_, "slam.control"),
+                                                spool_chunks(spool_root_, "slam.records")),
+                    "holds": slam["holds"],
+                    "pending_release_at_end": slam["pending_release"],
+                    "final_mode": slam["tracker"].mode,
+                    **({"incomplete": True} if not state["spool"].get("complete") else {}),
+                }
+            elif slam is not None:
                 (args.output / "slam_records.json").write_text(
                     record_json(slam["records"]) + "\n"
                 )
@@ -6987,10 +7037,11 @@ def drive(S, isaac) -> None:
                 }
             if frame_log is not None:
                 frame_log.close()
-            (args.output / "frame_audit.json").write_text(
-                record_json(frame_audit, indent=2) + "\n"
-            )
-            if video_frames:
+            if "video.frame_audit" not in spooled_:
+                (args.output / "frame_audit.json").write_text(
+                    record_json(frame_audit, indent=2) + "\n"
+                )
+            if video_frames or "video.frames" in spooled_:
                 (args.output / "video_frames.json").write_text(
                     record_json(
                         {
@@ -7011,13 +7062,17 @@ def drive(S, isaac) -> None:
                                 "depth_video_range_m": list(DEPTH_VIDEO_RANGE_M),
                                 "timing": "video only, not a freshness-checked capture",
                             },
-                            "frames": video_frames,
+                            "frames": {"spool": "video.frames"} if "video.frames" in spooled_ else video_frames,
                         },
                         indent=1,
                     )
                     + "\n"
                 )
-            if slam_log is not None and slam_log["scan_stamps_s"]:
+            if slam_log is not None and "slam_log.joint" in spooled_:
+                write_slam_record(args, state, replace(scenario, destination=truth_destination), factory, slam_log,
+                                  lidar_config, spool={"joint": "slam_log.joint", "scan": "slam_log.scan",
+                                                       "silenced": "slam_log.silenced", "root": "spool"})
+            elif slam_log is not None and slam_log["scan_stamps_s"]:
                 write_slam_record(args, state, replace(scenario, destination=truth_destination), factory, slam_log, lidar_config)
             # Records first, encoders last: a slow ffmpeg shutdown must neither
             # lose the records above nor replace the run's own failure reason.
@@ -7203,7 +7258,9 @@ def main() -> None:
         # is that exception (Codex R3/R4 review P2).
         close_boundary_record(state, failure_exc)
         state["wall_time_s"] = time.monotonic() - started
-        if state.get("tyre_contact_rows") is not None:
+        if "state.tyre_contact_rows" in (state.get("spool_registered") or ()):
+            state.pop("tyre_contact_rows", None)  # plan D8: a live run's rows are in spool/state.tyre_contact_rows
+        elif state.get("tyre_contact_rows") is not None:
             # (t, then per tyre FL FR RL RR: impulse x y z, contact count, mean contact x y)
             np.save(args.output / "tyre_contacts.npy", np.asarray(state.pop("tyre_contact_rows"), dtype=float))
         if app is not None and "render_mode" in state:

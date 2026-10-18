@@ -89,8 +89,8 @@
 | `episode` | S | 일화 번호. 단조 증가로 둔다. 프레임 기록이 이 번호로 나뉜다(R3405·3438). |
 | `tracker`, `start`, `stop_state`, `correction`, `path_revision`, `first_target`, `retries`, `retry_stand`, `mismatch`, `unbounded`, `protect`, `arrival`, `drop_latch`, `stale_waits`, `last_stamp`, `last_fed_stamp`, `injection_closed`, `stand_record`, `terminal_standing_since` | M0 | 남은 `tracker` 는 다음 접근에서 `near_active()` 를 참으로 만든다(C2883). |
 | `history`, `commands` | S(짧은 이력) | 명령 창·이력. 링 버퍼로 묶는다(계획 D8). |
-| `events`, `frames`, `ticks`, `path_revisions` | S/조각 | 기록. |
-| `corrections`, `stop_events` | S/조각, **열린 항목 보유** | 마지막 항목을 뒤에서 계속 고친다(C4657 보정의 standing·판정·설치, C4706 정지 시각). 닫힌 항목만 조각으로 넘긴다. |
+| `events`, `frames`, `ticks`, `path_revisions` | M0 (기록은 M기록) | 기록. 추적 중에는 제어 틱마다 `ticks` 가 하나씩 붙어 분당 약 6 MB 가 된다. 재시도 판정이 지금 일화의 `ticks` 를 모두 읽으므로(C5229–5231) 마지막 항목만 남기는 스풀에는 넣지 않는다. 미션 종료 때 미션 기록으로 넘기고 비운다(계획 D8 구현 설계, Codex D8 설계 검토 P2-3, 2026-10-19). |
+| `corrections`, `stop_events` | M0 (기록은 M기록), **열린 항목 보유** | 마지막 항목을 뒤에서 계속 고친다(C4657 보정의 standing·판정·설치, C4706 정지 시각). 그 항목을 쥐는 `correction`·`stop_state` 도 M0 이라 같은 복원에서 놓으므로, 넘긴 뒤에는 아무도 고치지 않는다. |
 
 ## 6. `pocket`
 

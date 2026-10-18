@@ -529,7 +529,7 @@ def test_the_runner_prepares_each_live_mission_from_where_the_truck_stands():
     # the adoption's runner part and the session's baseline, before the console starts
     assert "nonlocal scenario, truth_destination, initial_pallet, pickup_obstacle, pickup_zone, pickup_bounds" in source
     start = source.index("            live.start()  # after the SLAM warm-up")
-    before = source[start - 600:start]
+    before = source[start - 1600:start]  # (the D8 record spool is made between them)
     assert "core.options.observe_bounds = None" in before and "core.baseline = MissionBaseline.capture(core)" in before
     # D-0 live only; the session's end ends a mission still on and skips the batch judgement
     assert source.index('core.targets.add_destination("D-0"') > source.index('    if getattr(args, "live", False):\n        # Persistent console plan D2/D3')
@@ -633,3 +633,91 @@ def test_the_runner_leaves_its_loop_on_a_session_request_with_its_exit_code():
 def test_a_live_runtime_judges_requests_by_the_ledger(tmp_path):
     rt, core, did, clock = runtime(tmp_path)
     assert rt.arbiter.config.request_tokens is True
+
+
+def test_the_camera_latency_keeps_a_window_and_counts_every_frame(tmp_path):
+    """Persistent console plan D8: a session left up for hours keeps the last hour of latencies, not every one."""
+    from sim.isaac.live_runtime import LatencyWindow
+
+    window = LatencyWindow(maxlen=3)
+    for v in (0.05, 0.40, 0.01, 0.02, 0.03):
+        window.append(v)
+    assert list(window) == [0.01, 0.02, 0.03]
+    report = window.report()
+    assert report["n"] == 5 and report["max"] == 0.40  # the whole session
+    assert report["window_n"] == 3 and report["window_median"] == 0.02
+    rt, *_ = runtime(tmp_path)
+    assert isinstance(rt.camera_latency, LatencyWindow) and isinstance(rt.camera_pixel_latency, LatencyWindow)
+    assert rt.camera_latency.maxlen == 36_000
+
+
+def test_the_arbiters_events_are_logged_once_and_then_let_go(tmp_path):
+    rt, core, did, clock = runtime(tmp_path)
+    rt.start()
+    try:
+        rt.arbiter.stop(clock(), "stop:test")
+        step(rt, clock, 0.0)
+        rt.tick_start(0.0, near_active=False)
+        assert rt.arbiter.events == []
+        step(rt, clock, DT)
+        rt.tick_start(DT, near_active=False)
+    finally:
+        rt.close()
+    logged = [json.loads(line) for line in (tmp_path / "live_log.jsonl").read_text().splitlines()]
+    stops = [(e["t"], e["event"]) for e in logged if e.get("arbiter") and e.get("reason") == "stop:test"]
+    assert stops and len(stops) == len(set(stops))  # each boundary event logged, and only once
+
+
+def test_the_live_log_rolls_over_and_keeps_the_newest_files(tmp_path):
+    rt, *_ = runtime(tmp_path, log_rotate_bytes=200, log_keep=2)
+    for i in range(40):
+        rt.log({"event": "x", "i": i})
+    rt.close()
+    names = sorted(p.name for p in tmp_path.glob("live_log.jsonl*"))
+    assert names == ["live_log.jsonl", "live_log.jsonl.1", "live_log.jsonl.2"]
+    kept = [json.loads(line) for name in names[::-1][:-1] + ["live_log.jsonl"]  # oldest first
+            for line in (tmp_path / name).read_text().splitlines()]
+    xs = [e["i"] for e in kept if e.get("event") == "x"]
+    assert xs == list(range(xs[0], 40)) and xs[0] > 0  # the newest entries, in order, the oldest gone
+    assert all(p.stat().st_size < 200 + 200 for p in tmp_path.glob("live_log.jsonl.*"))
+
+
+def test_the_log_rolls_over_safely_while_a_record_writer_also_logs(tmp_path):
+    """The mission records' writer thread logs its errors (plan D2): the rollover is one owner's, so no line is lost
+    or cut while another thread writes."""
+    import threading
+
+    rt, *_ = runtime(tmp_path, log_rotate_bytes=500, log_keep=1000)
+
+    def writer(tag):
+        for i in range(300):
+            rt.log({"event": "w", "tag": tag, "i": i})
+
+    threads = [threading.Thread(target=writer, args=(k,)) for k in range(3)]
+    for th in threads:
+        th.start()
+    writer(9)
+    for th in threads:
+        th.join()
+    rt.close()
+    lines = [json.loads(line) for p in tmp_path.glob("live_log.jsonl*") for line in p.read_text().splitlines()]
+    seen = {(e["tag"], e["i"]) for e in lines if e.get("event") == "w"}
+    assert len(seen) == 4 * 300
+
+
+def test_the_rolled_log_says_how_often_it_rolled_so_a_reader_knows_what_is_gone(tmp_path):
+    from forklift_core.live.spool import read_live_log
+
+    rt, *_ = runtime(tmp_path, log_rotate_bytes=200, log_keep=50)
+    for i in range(10):
+        rt.log({"event": "x", "i": i})
+    rt.close()
+    index = json.loads((tmp_path / "live_log.index.json").read_text())
+    assert index["keep"] == 50 and index["rotations"] >= 1
+    assert [e["i"] for e in read_live_log(tmp_path) if e.get("event") == "x"] == list(range(10))
+    rt2, *_ = runtime(tmp_path / "x" if (tmp_path / "x").mkdir() is None else None, log_rotate_bytes=200, log_keep=1)
+    for i in range(20):
+        rt2.log({"event": "x", "i": i})
+    rt2.close()
+    with pytest.raises(ValueError, match="rolled"):
+        read_live_log(tmp_path / "x")

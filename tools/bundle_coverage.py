@@ -54,6 +54,7 @@ sys.path.insert(0, str(ROOT))
 from tools.curvature_residual import joint_curvature, loaded_at, plant_key, yaw_of  # noqa: E402
 
 from forklift_core.control.drive_permission import StoppingModel, arc_poses  # noqa: E402
+from forklift_core.live.spool import load_list, load_slam_log, read_live_log  # noqa: E402
 from forklift_core.safety.teleop_drive import KAPPA_STEP, bundle  # noqa: E402
 
 Part = tuple  # (front_m, rear_m, half_width_m, lateral_m, longitudinal_m) in the rear-axle frame
@@ -139,7 +140,7 @@ def shapes_of(result: dict, offset: float, urdf_root: Path | None = None) -> dic
 
 def run_coverage(run: Path, args) -> dict:
     result = json.loads((run / "result.json").read_text())
-    log = np.load(run / "slam_log.npz")
+    log = load_slam_log(run)  # a live run's log is in its record spool (persistent console plan D8)
     a = result.get("arguments", {})
     geom = a.get("drive_geometry") or {}
     wheelbase, track = float(geom.get("wheelbase_m", 0.66)), float(geom.get("track_m", 0.53))
@@ -161,8 +162,8 @@ def run_coverage(run: Path, args) -> dict:
     speed = np.abs(vlon)
     direction = np.where(speed >= args.min_speed_mps, np.sign(vlon), 0).astype(int)
     # A new grid snapshot per scan the obstacle layer took in; a silenced scan is recorded but never reaches it.
-    scans = np.asarray(log["scan_stamps_s"], float) if "scan_stamps_s" in log.files else np.zeros(0)
-    if "silenced_scan_stamps_s" in log.files and len(log["silenced_scan_stamps_s"]):
+    scans = np.asarray(log["scan_stamps_s"], float) if "scan_stamps_s" in log else np.zeros(0)
+    if "silenced_scan_stamps_s" in log and len(log["silenced_scan_stamps_s"]):
         scans = scans[~np.isin(scans, np.asarray(log["silenced_scan_stamps_s"], float))]
     silence = a.get("live_test_scan_silence")  # "a:b" sim s: recorded raw, kept from the layer (not in the list)
     if silence:
@@ -171,17 +172,18 @@ def run_coverage(run: Path, args) -> dict:
     scan_index = np.searchsorted(scans, stamps, side="right")
 
     # The output curvature at every joint sample, and whether that sample was teleoperated.
-    samples = result.get("samples") or []
+    # A live run's samples are in its record spool (plan D8); an empty list here would fall back to the joints.
+    spooled = (result.get("spool") or {}).get("root") is not None and "state.samples" in result.get("spool_registered", ())
+    samples = load_list(run / result["spool"]["root"], "state.samples") if spooled else (result.get("samples") or [])
     ts = np.array([s["time_s"] for s in samples], float)
     kc = np.array([s.get("curvature_inv_m", 0.0) for s in samples], float)
     k_out = kc[np.clip(np.searchsorted(ts, stamps, side="right") - 1, 0, len(ts) - 1)] if len(ts) else kj.copy()
     mode = np.zeros(n, dtype="<U9")
     mode[:] = "auto"
-    live = run / "live_log.jsonl"
-    if live.exists():
-        text = live.read_text()
-        tele = [json.loads(line) for line in text.splitlines() if '"teleop_k"' in line]
-        cmp_ = [json.loads(line) for line in text.splitlines() if '"permit_cmp"' in line]
+    if (run / "live_log.jsonl").exists():
+        entries = read_live_log(run)  # every rolled part, oldest first; refused if one rolled off (plan D8)
+        tele = [e for e in entries if "teleop_k" in e]
+        cmp_ = [e for e in entries if "permit_cmp" in e]
         if tele:
             tt = np.array([r["teleop_k"] for r in tele], float)
             ko = np.array([r["output_kappa"] for r in tele], float)
