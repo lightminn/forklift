@@ -21,6 +21,7 @@ MISSION_KEYS = {
         "paths", "paths_replaced", "planning_status", "planning_target_source", "planning_traces", "planning_wall_s",
         "observation_attempts", "observation_candidates", "observation_waypoint_selected", "observation_drops",
         "observe_replans", "observe_replan_leg", "observe_loose_arrival", "observe_loose_arrivals",
+        "cusp_heading_holds",
         "perception", "near_capture", "near_capture_history", "near_capture_refused",
         "cusp_replans", "stall_replans", "docking_retries", "cusp_heading_watch", "cusp_stalls", "cusp_heading_hold",
         "async_plans", "async_plan_drops",
@@ -94,6 +95,8 @@ def _get(d: dict, path):
 
 
 def _put(d: dict, path, value) -> None:
+    """Put ``value`` (a baseline copy) at ``path``. A list or dict already there is refilled in place: another object
+    may hold it (CuspStallMonitor holds state["cusp_stalls"], Codex stage 2 impl P2-4)."""
     path = path if isinstance(path, tuple) else (path,)
     for key in path[:-1]:
         if value is _ABSENT and not isinstance(d.get(key), dict):
@@ -101,8 +104,15 @@ def _put(d: dict, path, value) -> None:
         d = d.setdefault(key, {})
     if value is _ABSENT:
         d.pop(path[-1], None)
+        return
+    old, new = d.get(path[-1], _ABSENT), copy.deepcopy(value)
+    if isinstance(old, list) and isinstance(new, list):
+        old[:] = new
+    elif isinstance(old, dict) and isinstance(new, dict):
+        old.clear()
+        old.update(new)
     else:
-        d[path[-1]] = copy.deepcopy(value)
+        d[path[-1]] = new
 
 
 class MissionBaseline:
@@ -145,7 +155,8 @@ class MissionBaseline:
                 d = getattr(core, owner)
                 old = d.get(slot[1], _ABSENT)
                 if owner in RECORD_OWNERS and old is not _ABSENT:
-                    records[owner][slot[1]] = old
+                    # handed over as it is now; a list or dict is refilled in place below, so a copy of its top level
+                    records[owner][slot[1]] = copy.copy(old) if isinstance(old, (list, dict)) else old
                 _put(d, slot[1], value)
             else:
                 inner = getattr(core, owner).get(slot[1])

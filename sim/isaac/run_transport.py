@@ -5556,8 +5556,9 @@ def drive(S, isaac) -> None:
                     return live_permit_untimed_(curvatures, direction, check)
 
         stepper["fn"] = step_world if live is None else live_step_world
-        def teach_docking_reference(prior_site, taught_site, *, base_z=None, always_reference=False):
-            """The docking reference scan at a destination (setup; each live mission at its own, plan D2)."""
+        def teach_docking_reference(prior_site, taught_site, *, base_z=None, always_reference=False, install=True):
+            """The docking reference scan at a destination (setup; each live mission at its own, plan D2). Returns
+            what it would install; ``install=False`` (a live preparation) casts without changing the state."""
             # The taught station, fixed before the mission moves (Codex v3.8
             # impl P2): the planned delivery rear pose, the start's base height,
             # one ray cast with the truck left out. Truth enters here only.
@@ -5588,17 +5589,23 @@ def drive(S, isaac) -> None:
                 ray_origin, ray_directions, scan_pattern.range_max_m, ignore_self=True
             )
             reference_ranges = scan_pattern.ranges_from_hits(ray_distances, ray_hits)
-            slam["reference_points"] = laser_points(reference_ranges, beam_angles)
-            if args.d7_docking or args.destination_prior_error_m or always_reference:
-                # Live (persistent console plan D2, Codex P2-8): the cast pose always goes with its scan -- a later
-                # mission's prior drifts from the truth the scan was cast at.
-                slam["docking"]["delivery_rear_reference"] = list(delivery_d)
-            slam["docking"].update(
-                delivery_rear_prior=list(prior_d),
-                reference_beams=int(np.isfinite(reference_ranges).sum()),
-                reference_self_hits_dropped=int(ray_own),
-                reference_base_z_m=base_z,
-            )
+            taught_ = {"reference_points": laser_points(reference_ranges, beam_angles),
+                       # Live (persistent console plan D2, Codex P2-8): the cast pose always goes with its scan -- a
+                       # later mission's prior drifts from the truth the scan was cast at.
+                       "reference": list(delivery_d) if (args.d7_docking or args.destination_prior_error_m
+                                                         or always_reference) else None,
+                       "fields": dict(delivery_rear_prior=list(prior_d),
+                                      reference_beams=int(np.isfinite(reference_ranges).sum()),
+                                      reference_self_hits_dropped=int(ray_own), reference_base_z_m=base_z)}
+            if install:
+                install_docking_reference(taught_)
+            return taught_
+
+        def install_docking_reference(taught_):
+            slam["reference_points"] = taught_["reference_points"]
+            if taught_["reference"] is not None:
+                slam["docking"]["delivery_rear_reference"] = taught_["reference"]
+            slam["docking"].update(taught_["fields"])
 
         if slam is not None:
             teach_docking_reference(scenario.destination, truth_destination)
@@ -5767,14 +5774,22 @@ def drive(S, isaac) -> None:
                            "pallet_id": mission_.pallet_id, "destination_id": mission_.destination_id}
                 core.prepare_request(t_, rear_, inputs_, payload_)
 
-            def live_mission_start(t_, inputs_, plan_, records_):
-                """The runner's part of the adoption (D2): its locals, the prior zone, the permission's path caches,
-                the docking reference at the new destination, the last mission's records."""
+            def live_mission_ready(t_, inputs_):
+                """What can fail in the adoption, made before anything changes (Codex stage 2 impl P2-6): the
+                docking reference scan cast at the new destination's truth."""
+                if slam is None:
+                    return None
+                return teach_docking_reference(inputs_["scenario"].destination, inputs_["truth_destination"],
+                                               base_z=live_session_["base_z"], always_reference=True, install=False)
+
+            def live_mission_start(t_, inputs_, plan_, ready_):
+                """The runner's part of the adoption (D2): its locals, the cusp watches, the prior zone, the
+                permission's path caches, the docking reference made by live_mission_ready."""
                 nonlocal scenario, truth_destination, initial_pallet, pickup_obstacle, pickup_zone, pickup_bounds
-                nonlocal return_to_pose
-                last_ = live.results.last
-                if last_ is not None and any(records_.values()):
-                    live.archive(last_["mission_id"], records_)
+                nonlocal return_to_pose, cusp_monitor, cusp_holds
+                # Fresh watches on the mission's own records (the baseline refilled those lists in place).
+                cusp_monitor = CUSP_STALL.CuspStallMonitor(state["cusp_stalls"])
+                cusp_holds = CUSP_HOLD.CuspHeadingHolds(state)
                 scenario, truth_destination = inputs_["scenario"], inputs_["truth_destination"]
                 pickup_zone, pickup_bounds, return_to_pose = (inputs_["pickup_zone"], inputs_["pickup_bounds"],
                                                               inputs_["wait_pose"])
@@ -5785,20 +5800,23 @@ def drive(S, isaac) -> None:
                     if obstacle["layer"].known_enabled:
                         from forklift_core.perception.known_obstacles import KnownRect
 
+                        # The zone is in map coordinates now: the correction it is expressed under goes with it
+                        # (Codex stage 2 impl P2-3: (0, 0, 0) applied the current correction once more).
+                        applied_ = (slam["tracker"].applied[0] if slam is not None
+                                    and slam["tracker"].applied is not None else (0.0, 0.0, 0.0))
                         obstacle["layer"].known = [KnownRect(
                             (pickup_zone.x_m, pickup_zone.y_m, pickup_zone.length_m, pickup_zone.width_m,
                              pickup_zone.yaw_rad), fix_stamp_s=float(t_), r_fix_m=0.0, rho_m=0.0,
-                            frame_correction=(0.0, 0.0, 0.0), kind="zone")]
+                            frame_correction=tuple(float(v) for v in applied_), kind="zone")]
                     permission_ = obstacle["layer"].permission
                     permission_.path_check, permission_._driven_since_m = None, 0.0
                 if live_perm is not None:
                     live_perm._cache.clear()
-                if slam is not None:
-                    teach_docking_reference(scenario.destination, truth_destination, base_z=live_session_["base_z"],
-                                            always_reference=True)
+                if ready_ is not None:
+                    install_docking_reference(ready_)
 
             core.options.observe_bounds = None  # the whole observation travel in the hall (D2, Codex P2-6)
-            core.hooks.live_mission_start = live_mission_start
+            core.hooks.live_mission_ready, core.hooks.live_mission_start = live_mission_ready, live_mission_start
             core.baseline = MissionBaseline.capture(core)
             live.start()  # after the SLAM warm-up: the console sees the first control tick next (Codex D9 impl P3)
 
@@ -5824,7 +5842,8 @@ def drive(S, isaac) -> None:
                 # control pose is this tick's). Until D4/D5 a mission that ended with the forks possibly in a pocket
                 # refuses the next submit (recovery_required).
                 stop_kind_, applied_commands_ = live.tick_start(
-                    t, core.near_active(), clear_for_submit=ms.phase not in LIVE_POCKET_PHASES)
+                    t, core.near_active(), clear_for_submit=ms.phase not in LIVE_POCKET_PHASES and (
+                        slam is None or slam["tracker"].mode != "holding"))
             elif mission_schedule is not None:
                 # M-a3 (plan E2, E7): the schedule's due commands and the stop kind in force, applied at this
                 # control tick's start.
@@ -6696,6 +6715,7 @@ def drive(S, isaac) -> None:
         if live is not None:
             # Persistent console plan D1: each mission was judged at its own end (the results book); the session
             # ends here (at the loop's limit until D7), a mission still on as session_end.
+            live.collect_end(book_clock["t"] if book_clock["t"] is not None else 0.0)  # its own reason (Codex P3)
             live.end_mission(book_clock["t"] if book_clock["t"] is not None else 0.0, "failed", "session_end")
             state.update({"success": True, "mission_results": live.results.message()["results"],
                           "simulated_time_s": world.current_time - initial_time,

@@ -4545,14 +4545,34 @@ class MissionCore:
             cmds.terminate("failed", t, "prepare:timeout" if value["timed_out"] else
                            "prepare:all_candidates_failed:" + ";".join(c["status"] for c in value["candidates"]))
         else:
-            self.start_mission(t, value["result"], p.ctx["inputs"], value)
+            try:  # what can fail is made before anything changes (Codex stage 2 impl P2-6): the docking reference
+                ready = self.hooks.live_mission_ready(t, p.ctx["inputs"])
+            except Exception as exc:  # noqa: BLE001 -- the preparation fails, the session goes on (P4)
+                cmds.terminate("failed", t, f"prepare:reference:{exc}")
+                return
+            self.start_mission(t, value["result"], p.ctx["inputs"], value, ready)
 
-    def start_mission(self, t: float, plan, inputs: dict, ladder: dict) -> None:
+    def end_reset(self, t: float) -> dict:
+        """A live mission's end (D1 steps 3 and 8): the pocket check closed as the insertion's end closes it, then
+        the mission-owned state back to the baseline. Returns the mission's records (for its own record)."""
+        pocket, obstacle, state = self.pocket, self.obstacle, self.state
+        if pocket.get("check") is not None:
+            if obstacle is not None:
+                obstacle["layer"].exempt = None
+                obstacle["layer"].depth_support = None
+            state.setdefault("pocket_check", {}).update(pocket["check"].summary(), frames_read=pocket["frames_read"])
+            pocket["check"] = None
+        return self.baseline.restore(self) if self.baseline is not None else {}
+
+    def start_mission(self, t: float, plan, inputs: dict, ladder: dict, ready=None) -> None:
         """The adoption (D2 start processing): the mission-owned state back to the session's baseline (D0), the
         mission's inputs into the options, the observation leg and its records, the runner's own start
         (``hooks.live_mission_start``: its locals, trackers, prior zone, docking reference), then running."""
         ms, state, options = self.ms, self.state, self.options
-        records = self.baseline.restore(self)
+        # The last mission's end restored the baseline (end_reset); what came since -- this mission's preparation --
+        # stays with this mission; the rest (the follower's counters, the near and SLAM run keys) starts clean.
+        for owner, kept in self.baseline.restore(self).items():
+            getattr(self, owner).update(kept)
         options.scenario = inputs["scenario"]
         options.return_to_pose = options.home_rear = inputs["wait_pose"]
         options.observation_waypoints[:] = inputs["waypoints"]
@@ -4570,7 +4590,7 @@ class MissionCore:
         self.trackers["observe"] = self.observe_tracker(plan)
         self.apply_tracker_profile()
         self.record_tracker_configs()
-        self.hooks.live_mission_start(t, inputs, plan, records)
+        self.hooks.live_mission_start(t, inputs, plan, ready)
         state["transitions"].append({"from": ms.phase, "to": "observe", "time_s": t,
                                      "mission_id": self.commands.mission_id})
         ms.phase, ms.phase_started = "observe", t

@@ -197,3 +197,15 @@ def test_a_pallet_registered_with_its_size_carries_it_in_the_message():
     assert "depth_m" not in p2 and "width_m" not in p2
     b.carried("P-1")
     assert b.message()["pallets"][0]["depth_m"] == 0.8  # still known while carried
+
+
+def test_a_delivered_pallet_can_be_submitted_again():
+    """Codex stage 2 impl P1-2 (plan D3): a pallet put down is available again where it lies; delivered is shown."""
+    book = TargetsBook()
+    book.add_pallet("P-1", "epal6", Pose(1.0, 0.0, 0.0))
+    book.add_destination("D-1", Pose(9.0, 0.0, 0.0))
+    book.add_destination("D-0", Pose(1.0, 0.0, 0.0))
+    book.carried("P-1")
+    assert book.check_submit("P-1", "D-0", book.revision) == "invalid"
+    book.put_down("P-1", Pose(9.0, 0.0, 0.0))
+    assert book.pallets["P-1"].state == "delivered" and book.check_submit("P-1", "D-0", book.revision) is None

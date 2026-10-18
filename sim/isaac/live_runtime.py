@@ -173,15 +173,15 @@ class LiveRuntime:
         self.stopped_in_tick = False
         self.arbiter.pacing_ok = self.pacer.ok
         stop_kind = self.link.begin(now, self.feedback)
-        self._collect_end(t)  # ended after the last apply (a preparation's job_hold failure): before this one frees it
+        self.collect_end(t)  # ended after the last apply (a preparation's job_hold failure): before this one frees it
         records = self.core.commands.apply(t, Context(stop_kind=stop_kind, near_tracker=near_active,
                                                       clear_for_submit=clear_for_submit))
-        self._collect_end(t)  # ended in this apply (a cancel before it ran, a stopped preparation)
+        self.collect_end(t)  # ended in this apply (a cancel before it ran, a stopped preparation)
         self._flush(t)
         return stop_kind, records
 
     # --- a mission's end (docs/plans/2026-10-18-persistent-live-console.md D1) -------------------------------------
-    def _collect_end(self, t: float) -> None:
+    def collect_end(self, t: float) -> None:
         """A mission the commands ended by themselves (FINAL, not yet through end_mission), at its end's time."""
         cmds = self.core.commands
         if cmds.status in FINAL and cmds.mission_id is not None and cmds.mission_id != self._ended_id:
@@ -219,6 +219,9 @@ class LiveRuntime:
                                  ended_s=float(t), pallet_id=mission.pallet_id if mission else None,
                                  destination_id=mission.destination_id if mission else None)
         clock = cmds.take_clock()  # step 8: the next mission's work clock starts clean
+        records = self.core.end_reset(t)  # steps 3 and 8: the pocket check closed, the mission's state back to the start
+        if any(records.values()):
+            self.archive(mission_id, records)  # under this mission's own id (Codex stage 2 impl P2-5)
         try:  # step 7: bounded (the result, its clock); the mission's paths and logs go by chunks (plan D8)
             folder = self.output / "missions" / mission_id
             folder.mkdir(parents=True, exist_ok=True)

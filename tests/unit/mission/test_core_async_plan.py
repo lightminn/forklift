@@ -473,6 +473,7 @@ def preparing_core():
     core.hooks.lift_position = lambda: 0.004
     started = []
     core.hooks.live_mission_start = lambda t, inputs, plan, records: started.append((t, inputs, plan, records))
+    core.hooks.live_mission_ready = lambda t, inputs: None
     state["observation_attempts"] = []
     core.baseline = MissionBaseline.capture(core)
     core.commands.queue(Submit("P-1", "D-1", core.targets.revision))
@@ -545,3 +546,53 @@ def test_a_preparation_whose_inputs_changed_is_asked_again_once_then_fails(chang
         assert core.pending is None and "async_plan_drops" not in state
         assert core.commands.status == ("preparing" if attempt == 1 else "failed")
     assert core.commands.end_reason == f"prepare:{why}" and not started
+
+
+def test_the_destinations_reference_is_made_before_anything_changes_and_its_failure_fails_only_the_preparation():
+    """Codex stage 2 impl P2-6: the cast ran after the start processing had changed the options, paths and trackers."""
+    core, ms, state, started, inputs = preparing_core()
+    order = []
+    core.hooks.live_mission_ready = lambda t, inputs: order.append(("ready", core.options.scenario)) or "REF"
+    core.hooks.live_mission_start = lambda t, inputs, plan, ready: order.append(("start", ready))
+    core.prepare_request(11.0, REAR, inputs, {})
+    core.jobs.answers[core.pending.job] = (True, ladder(Plan("success"), 0, statuses=("success",)))
+    core.job_hold(12.0, REAR, 0.0, False)
+    assert order[0][0] == "ready" and order[0][1].destination == "DEST"  # before the options changed
+    assert order[1] == ("start", "REF") and core.commands.status == "running"
+
+    core, ms, state, started, inputs = preparing_core()
+
+    def broken(t, inputs):
+        raise RuntimeError("cast failed")
+
+    core.hooks.live_mission_ready = broken
+    core.prepare_request(11.0, REAR, inputs, {})
+    core.jobs.answers[core.pending.job] = (True, ladder(Plan("success"), 0, statuses=("success",)))
+    core.job_hold(12.0, REAR, 0.0, False)
+    assert core.commands.status == "failed" and core.commands.end_reason == "prepare:reference:cast failed"
+    assert ms.phase == "complete" and core.options.scenario.destination == "DEST" and not started
+
+
+def test_the_adoption_keeps_this_missions_own_preparation_records():
+    """Codex stage 2 impl P2-5: the baseline is restored at the mission's end (D1 step 8); at the adoption what was
+    recorded since -- this mission's preparation -- stays with it."""
+    core, ms, state, started, inputs = preparing_core()
+    core.hooks.live_mission_ready = lambda t, inputs: None
+    core.prepare_request(11.0, REAR, inputs, {})
+    core.jobs.answers[core.pending.job] = (True, ladder(Plan("success"), 0, statuses=("success",)))
+    core.job_hold(12.0, REAR, 0.0, False)
+    assert [r["site"] for r in state["async_plans"]] == ["prepare"]
+
+
+def test_the_end_closes_the_pocket_check_and_hands_the_mission_records_back():
+    """Codex stage 2 impl P1-1: a cancel in the approach left the pocket check, its exemption and support."""
+    core, ms, state, started, inputs = preparing_core()
+    layer = core.obstacle["layer"]
+    layer.exempt, layer.depth_support = "EXEMPT", "SUPPORT"
+    core.pocket["check"] = SimpleNamespace(summary=lambda: {"frames": 3})
+    core.pocket["frames_read"] = 3
+    state["async_plans"] = [{"site": "leg"}]
+    records = core.end_reset(20.0)
+    assert core.pocket["check"] is None and layer.exempt is None and layer.depth_support is None
+    assert records["state"]["pocket_check"] == {"frames": 3, "frames_read": 3} and "pocket_check" not in state
+    assert records["state"]["async_plans"] == [{"site": "leg"}] and "async_plans" not in state

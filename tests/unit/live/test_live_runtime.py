@@ -321,6 +321,7 @@ def ending(tmp_path, verdict=None):
                                                                                    delivery_error_m=0.02)))
     rt, core, did, clock = runtime(tmp_path, end=end)
     core.abandon_jobs = lambda t: order.append(("abandon", t))
+    core.end_reset = lambda t: order.append(("reset", t)) or {"state": {"async_plans": [{"site": "leg"}]}}
     from forklift_core.mission.commands import Submit
 
     core.commands.queue(Submit("P-1", "D-1", core.targets.revision))
@@ -333,7 +334,7 @@ def test_a_completed_mission_is_judged_on_the_truth_recorded_and_published(tmp_p
     rt, core, order = ending(tmp_path)
     core.commands.begin_wait(11.0)
     entry = rt.end_mission(20.0, "complete", None)
-    assert order == ["stop", ("abandon", 20.0), "unlock", "drain", "judge"]
+    assert order == ["stop", ("abandon", 20.0), "unlock", "drain", "judge", ("reset", 20.0)]
     assert entry == {"seq": 1, "mission_id": "m1", "outcome": "done", "reason": None, "started_s": 10.0,
                      "ended_s": 20.0, "pallet_id": "P-1", "destination_id": "D-1"}
     assert core.commands.status == "done" and core.commands.waits == [] and rt.results.last == entry
@@ -515,3 +516,12 @@ def test_the_runner_prepares_each_live_mission_from_where_the_truck_stands():
     # the temporary handling D2 replaces is gone
     for gone in ("live_first_replan_", "live_last_rear_", "at_start", "start_submitted", "hall=True"):
         assert gone not in source, gone
+
+
+def test_the_end_archives_the_missions_records_under_its_own_id(tmp_path):
+    """Codex stage 2 impl P2-5: the records moved at the next adoption went under whatever result was last."""
+    rt, core, order = ending(tmp_path)
+    rt.end_mission(15.0, "failed", "x")
+    rt.close()
+    written = json.loads((tmp_path / "missions" / "m1" / "records.json").read_text())
+    assert written == {"state": {"async_plans": [{"site": "leg"}]}}

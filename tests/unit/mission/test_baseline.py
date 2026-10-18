@@ -86,3 +86,18 @@ def test_the_baseline_owns_no_key_the_ownership_table_calls_the_sessions():
 
     for owner, keys in baseline.MISSION_KEYS.items():
         assert not set(keys) & set(baseline.SESSION_KEYS.get(owner, ())), owner
+
+
+def test_a_restore_keeps_the_lists_and_dicts_other_objects_hold():
+    """Codex stage 2 impl P2-4: CuspStallMonitor holds state["cusp_stalls"]; a new list cut it off from the state."""
+    core = fake_core()
+    core.state["cusp_stalls"] = []
+    held = core.state["cusp_stalls"]
+    replans = core.obstacle["replans"]
+    base = MissionBaseline.capture(core)
+    held.append({"stall": 1})
+    replans["x"] = 1
+    records = base.restore(core)
+    assert core.state["cusp_stalls"] is held and held == [] and core.obstacle["replans"] is replans and replans == {}
+    assert records["state"]["cusp_stalls"] == [{"stall": 1}] and records["obstacle"]["replans"] == {"x": 1}
+    assert records["state"]["cusp_stalls"] is not held

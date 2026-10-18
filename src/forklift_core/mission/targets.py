@@ -111,7 +111,7 @@ class TargetsBook:
         pallet = self.pallets.get(pallet_id)
         if pallet is None or destination_id not in self.destinations:
             return "invalid"
-        if pallet.state != "available":
+        if pallet.state not in ("available", "delivered"):  # delivered: put down, available again where it lies
             return "invalid"
         return None
 
