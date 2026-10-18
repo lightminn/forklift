@@ -525,14 +525,14 @@ D2 의 `mission_start` 는 작업자 작업 `observe_ladder` 로 한다. 이름 
 - 소스 시험: 실시간 시작이 셋업 사다리를 건너뜀, 지운 임시 처리가 남지 않음.
 - Isaac: U2·U3·U4·U5.
 
-### D6 구현 설계 (3단계, 2026-10-18, 2단계 9803b9c 수렴 뒤)
+### D6 구현 설계 (3단계, 2026-10-18, 2단계 9803b9c 수렴 뒤; 2판 — Codex 설계 검토 1회차 반영)
 
 **분류표.** `forklift_core/mission/failures.py` 의 `classify(reason) -> "mission" | "scene" | "session"`. 사유 접두로 고르고(가장 긴 접두), 표에 없으면 `session` 이다.
 - **scene**(참값 검사): `Excessive body tilt`, `Actual truck/load footprint overlap`, `Measured pallet footprint overlap`, `Measured pallet solid overlap`, `Pallet dropped during transport`, `Pallet slipped off forks`, `Pallet displaced before pickup`, `Forbidden fork/pallet contact`.
-- **session**: 계약·설정 위반(`near_field_contract`, `near_field_without_capture`, `near_field_without_hold`, `near_field_frame_released`, `pocket_check_without_capture`, `pocket_check_refused`), 위치 추정·링크(`localization_stale`, `slam_link_failed`, `slam_prewarm_timeout`), 센서(`sensor_silence_stopped`, `Camera did not produce RGB`, `Perception camera did not produce depth`), `Nonfinite body state`, 셋업 사유 전부.
-- **mission**: 나머지 미션 일 사유. 추적(`Tracking timeout`, `Tracking failed`), 장애물(`obstacle_`), 인식·근접 캡처(`perception_capture_failed`, `observation_discarded`, `near_capture_`, `near_field_`(위 세 계약 사유 제외)), 관찰(`observe:`, `observe_replan_failed`), 도킹(`docking_`), SLAM 해제 재계획(`slam_release_`), 작업자(`async_plan_failed`, `async_plan_discarded`, `async_near_no_fresh_depth`, `planning_wait_moving`), 단계(`Pallet was not lifted`, `Pallet did not settle onto destination floor`, `Fork did not lower`, `withdraw_not_certified`, `withdraw_tracking_exceeded`, `pocket_stop`, `transport_recovery_after_docking`, `stall_replan_failed`), 계획(`Mission planning failed`, 미션 계획 상태 `approach:`·`insert:`·`extract:`·`transport:`·`withdraw:`·`return_home:`), 커스프(`cusp_position_stall`).
+- **session**: 계약·설정 위반(`near_field_contract`, `near_field_without_capture`, `near_field_without_hold`, `near_field_frame_released`, `pocket_check_without_capture`), 캡처 계약(`perception_capture_failed:invalid_capture_pose`, `perception_capture_failed:sensor_metadata_unavailable`; Codex P1-2), 작업자 고장(`plan_worker_dead`; Codex P2-4), 위치 추정·링크(`localization_stale`, `slam_link_failed`, `slam_prewarm_timeout`), 센서(`sensor_silence_stopped`, `Camera did not produce RGB`, `Perception camera did not produce depth`), `Nonfinite body state`, 셋업 사유 전부.
+- **mission**: 나머지 미션 일 사유. 추적(`Tracking timeout`, `Tracking failed`), 장애물(`obstacle_`), 인식·근접 캡처(`perception_capture_failed`, `observation_discarded`, `near_capture_`, `near_field_`(위 세 계약 사유 제외)), 관찰(`observe:`, `observe_replan_failed`), 도킹(`docking_`), 삽입 거절(`pocket_check_refused`; 관측 yaw 에 따라 정상적으로도 거절된다, Codex P2-5), SLAM 해제 재계획(`slam_release_`), 작업자(`async_plan_failed`, `async_plan_discarded`, `async_near_no_fresh_depth`, `planning_wait_moving`), 단계(`Pallet was not lifted`, `Pallet did not settle onto destination floor`, `Fork did not lower`, `withdraw_not_certified`, `withdraw_tracking_exceeded`, `pocket_stop`, `transport_recovery_after_docking`, `stall_replan_failed`), 계획(`Mission planning failed`, 미션 계획 상태 `approach:`·`insert:`·`extract:`·`transport:`·`withdraw:`·`return_home:`), 커스프(`cusp_position_stall`).
 - 미션 실패가 포켓 단계에서 나면 다음 제출은 2단계의 `recovery_required` 로 막힌다. 그래서 미션으로 분류해도 포크가 포켓 안인 채 새 미션이 시작되지 않는다.
-- AST 시험: `run_transport.py`·`core.py` 의 모든 `require` 사유(상수와 f-문자열 접두)가 표에서 기본값이 아닌 분류를 받는다. 동적 사유 호출 자리(`plans.status`, `failure`, `result_.end`, `reason_`, `refusal`, 판정 사유)는 시험 안의 목록에 자리와 분류를 적어 고정한다.
+- AST 시험: `run_transport.py`·`core.py` 의 모든 `require` 사유(상수와 f-문자열 접두)가 표에서 기본값이 아닌 분류를 받고, **시험 안의 알려진 사유 목록**과 같다. 새 사유는 넓은 접두(`near_field_` 등)에 걸려도 목록에 없으면 시험이 실패한다(Codex 1회차). 캡처 어댑터의 `CaptureFailure` 사유도 목록으로 고정한다. 동적 사유 호출 자리(`plans.status`, `failure`, `result_.end`, `reason_`, `refusal`, 판정 사유)는 시험 안의 목록에 자리와 분류를 적어 고정한다.
 
 **잡는 자리 — 계획 D6 의 '두 곳' 대신 틱 본문 한 곳.**
 - 미션 일은 틱 안에 흩어져 있다: `job_hold`, 준비 요청, 캡처, 추종·도착, `lift_and_timers`, `live_leg`, `paused_tick`·재개, 물리 스텝 뒤 `capture_stepped`. 그래서 `for step` 본문 전체를 `try` 로 감싼다(들여쓰기만 바뀌는 기계적 변경이다. `git diff -w` 로 확인하고 재생 게이트로 배치 불변을 본다).
@@ -542,6 +542,30 @@ D2 의 `mission_start` 는 작업자 작업 `observe_ladder` 로 한다. 이름 
   2. 틱 응답이 아직이면 `live.tick_end(t, applied_commands_, safety, (0, 0), None)` 를 하고, 바퀴 0·조향 유지·승강 유지를 적용하고, `live.publish` 를 한다.
   3. 물리 스텝이 아직이면 `stepper["fn"](False)` 를 한다.
 - 잡은 예외는 `state["live_failures"]` 에 `{t, phase, reason, class, traceback 마지막 줄}` 로 남긴다.
+
+**비유한 상태를 먼저.** `Nonfinite body state` 검사에 쿼터니언(차체·팔레트)을 넣고, 참값 검사보다 먼저 둔다(Codex P1-2: NaN 쿼터니언이 `Excessive body tilt` 장면 손상이 됐다).
+
+**작업자 고장.** 작업자가 다시 시작하지 못해 모든 작업이 즉시 실패하는 상태(`_dead`)면 `job_hold`·준비 응답이 `plan_worker_dead`(session)로 끝낸다. 경로 없음과 고장을 섞지 않는다(Codex P2-4).
+
+**종료 때의 정지·승강.** `end_mission` 의 정지 훅이 바퀴 0 과 함께 **승강을 지금 높이로 고정**한다(`ms.lift_command` 와 관절 목표). 틱 응답 여부와 무관하게 언제나 한다(Codex P2-6: 물리 스텝 뒤 `capture_stepped` 실패에서 승강이 빠졌다). 공통 꼬리의 안전 상태는 종료 뒤에 다시 계산한다. 물리 스텝 완료 표시는 `stepper` 가 정상 반환한 직후, `capture_stepped` 전에 둔다(기존 `stepped_` 변수와 이름을 나눈다).
+
+**종료용 SLAM 해제(D1 4단계, Codex P2-3).**
+- `end_reset` 이 미션의 release 예약(`pending_release`, `release_wait_from`)을 지운다. 남기면 다음 틱 `release_gate` 의 10 s 시한이 매 틱 같은 실패를 낸다.
+- tracker 가 holding 이고 포크가 비어 있으면(아래 단계 기준) 종료용 해제를 한다. 비어 있다는 것은 종료 단계가 포켓·적재 단계가 아니라는 뜻이다.
+- 서 있으면 그 틱에 하고, 아니면 설 때까지 미룬다(`release_gate` 가 미션 없이도 처리한다).
+- 해제는 `release_slam` → 재투영(`_reproject`) → 회계(`slam["holds"]` 에 `reason: "mission_end"`)만 한다. 계획·경로·재관찰 예약은 없다(U28 사후조건, CPU 시험).
+- 포크가 포켓·적재 단계면 hold 를 유지하고 제출은 `recovery_required` 다(6단계 D4).
+
+**종료 뒤 수동 조종(Codex P1-1, D5 전까지의 임시 조건).**
+- 안전 상태의 적재·포켓 판단은 아직 단계 기준이다. 그런데 종료는 `ms.phase` 를 그대로 둔다.
+- 운반 중 팔레트가 떨어져 끝나면 '적재'로 남아, 떨어진 팔레트가 차체의 자기 반사로 장애물에서 빠진다.
+- 그래서 **포켓·적재 단계에서 끝난 미션 뒤에는 수동 조종도 거절**한다. `safety_state` 의 `recovery_required` 를 중재기 허가가 읽고, 거절 사유는 `recovery_required` 다.
+- 사용자 결정 4('손상 뒤 수동 조종 허용')는 6단계(D5 포크 관계) 전까지 **포켓·적재 단계 밖에서 끝난 경우에만** 성립한다. 보고에 밝힌다.
+
+**미션 없는 동안의 2D 겹침(Codex P2-7).** 실시간에서 진행 중 미션이 없으면 팔레트 사각형을 2D 겹침 검사(`checked_obstacles`)에서 뺀다.
+- 수동으로 포크를 포켓에 넣으면 2D 사각형은 겹쳐도 실제로는 닿지 않는다.
+- 실제 접촉은 3D 검사(`Forbidden fork/pallet contact`, `Measured pallet solid overlap`)가 본다.
+- 소품과의 2D 겹침은 그대로 장면 손상이다.
 
 **장면 손상 래치.**
 - 참값 검사 자리(위 scene 사유 8개)를 `scene_require(cond, reason)` 로 바꾼다.
