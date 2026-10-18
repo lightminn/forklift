@@ -298,5 +298,5 @@ def test_the_runner_replans_the_first_leg_from_where_a_submit_finds_the_truck():
     assert "_poses[0]" in head and "live_last_rear_" in head
     assert "at_start=live_at_start_" in source[source.index("live.tick_start(t, core.near_active()"):][:120]
     replan = source[source.index('live_first_replan_["due"] and'):][:1600]
-    assert "core.blocked_replan(t, rear, 0.0, 0.0)" in replan
+    assert "core.blocked_replan(t, rear, 0.0, 0.0, hall=True)" in replan
     assert 'core.commands.finish("failed", t)' in replan

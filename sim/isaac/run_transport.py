@@ -5773,7 +5773,7 @@ def drive(S, isaac) -> None:
                 # goal kept). A replan that installs no path from the truck fails the mission, not the run; the
                 # operator may submit again.
                 live_first_replan_["due"] = False
-                first_replan_ = core.blocked_replan(t, rear, 0.0, 0.0)
+                first_replan_ = core.blocked_replan(t, rear, 0.0, 0.0, hall=True)  # maybe driven out of the bay
                 rear = first_replan_.rear
                 p0_ = trackers[ms.phase]._poses[0] if ms.phase in trackers else None
                 from_truck_ = p0_ is not None and math.hypot(rear[0] - p0_[0], rear[1] - p0_[1]) <= 0.3

@@ -804,17 +804,22 @@ class MissionCore:
         return SimpleNamespace(allowed=allowed, why=why, acting=acting, pocket_phase=pocket_phase,
                                obstacle_hold=obstacle_hold, requested_speed=requested_speed)
 
-    def blocked_replan(self, t: float, rear, kappa: float, requested_speed: float) -> SimpleNamespace:
+    def blocked_replan(self, t: float, rear, kappa: float, requested_speed: float, *,
+                       hall: bool = False) -> SimpleNamespace:
         """Stop, replan, resume (plan D4) once the truck has stood blocked for a second or a replan is forced:
         the release a backoff or a D7c re-approach needs, the replan of the leg (an escape straight first when
         the start is inside the clearance, then clearance 0, other observation candidates before recognition,
         the whole mission again after it), and what is installed -- an escape, a backoff, a wait, the same
-        path or the new path. Returns the control pose (moved by a release) and the requested speed."""
+        path or the new path. Returns the control pose (moved by a release) and the requested speed.
+        ``hall``: the observe leg is planned in the scenario's own bounds, not the pickup bay's (a live submit
+        found the truck where the operator drove it, possibly out of the bay)."""
         ms, state, obstacle, slam, pocket, hooks, options = (self.ms, self.state, self.obstacle, self.slam, self.pocket,
                                                             self.hooks, self.options)
         paths, trackers, geometry = self.paths, self.trackers, self.geometry
         planner_config, travel_config, scenario = options.planner_config, options.travel_config, options.scenario
         return_to_pose, pickup_bounds, mission_stages = options.return_to_pose, options.pickup_bounds, options.mission_stages
+        if hall:
+            pickup_bounds = None
         BACKOFF_M, BACKOFF_SPEED_MPS, BACKOFF_PER_LEG, ESCAPE_PER_LEG = (
             options.backoff_m, options.backoff_speed_mps, options.backoff_per_leg, options.escape_per_leg)
         require, wall, same_path, path_stats, path_record = (hooks.require, hooks.wall, hooks.same_path, hooks.path_stats,
