@@ -232,6 +232,8 @@ def test_the_runner_streams_the_live_video_camera_with_a_near_plane_for_the_fork
     from pathlib import Path
 
     source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
+    head = source[:source.index("from live_runtime import live_video_size")][-400:]
+    assert "sys.path.insert(0, repo_root_)" in head  # live_runtime imports console/: the root first (Isaac run 4115)
     setup = source[source.index("live_video_size(perception_calibration, 640)"):][:2500]
     assert '"/LiveVideoCamera"' in setup and "resolution=(video_w_, video_h_)" in setup
     assert "set_clipping_range(near_distance=0.05" in setup

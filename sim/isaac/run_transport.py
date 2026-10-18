@@ -2565,6 +2565,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             # field of view, rendered at the size the page is sent, with a 0.05 m near plane so the forks and the
             # floor before them show -- the perception camera's 1.0 m left the lower third of the picture black
             # (2026-10-18 demo). RGB only.
+            repo_root_ = str(Path(__file__).resolve().parents[2])  # live_runtime imports console/ (the repository's root)
+            if repo_root_ not in sys.path:
+                sys.path.insert(0, repo_root_)
             from live_runtime import live_video_size  # a sibling, as the live block's import
 
             video_w_, video_h_ = live_video_size(perception_calibration, 640)
