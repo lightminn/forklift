@@ -719,8 +719,8 @@ def test_a_near_miss_on_yaw_or_support_marks_a_suspected_duplicate(kw, duplicate
 
 
 def test_the_absolute_caps_bound_a_near_miss():
-    # yaw gate 0.6 rad (34 deg): 36 deg is within 1.5 x but above the 30 deg cap
-    tr = _born(rows=(_row(1.0, 4.0, yaw=0.3, along=0.06, z_s=0.005),), yaw=math.radians(36))
+    # yaw gate 0.6 rad (34 deg): 41 deg is within 1.5 x (52 deg) but above the 40 deg cap (2B-3g)
+    tr = _born(rows=(_row(1.0, 4.0, yaw=0.3, along=0.06, z_s=0.005),), yaw=math.radians(41))
     assert tr._tracks[1].duplicate_of is None
     # support gate 24 mm: 50 mm is within 2.5 x but not under 45 mm
     tr = _born(rows=(_row(1.0, 4.0, yaw=0.05, z_s=0.012),), support_z=0.050)
@@ -762,8 +762,8 @@ def test_a_front_back_neighbour_born_while_the_selected_track_is_active_is_not_a
     assert report.accepted == {"c": 1} and report.revived == 0
 
 
-def test_the_absolute_caps_are_exact_at_30_degrees_and_45_mm():
-    tr = _born(rows=(_row(1.0, 4.0, yaw=0.2, along=0.06, z_s=0.005),), yaw=math.radians(30))
+def test_the_absolute_caps_are_exact_at_40_degrees_and_45_mm():
+    tr = _born(rows=(_row(1.0, 4.0, yaw=0.3, along=0.06, z_s=0.005),), yaw=math.radians(40))
     assert tr._tracks[1].duplicate_of == 0
     tr = _born(rows=(_row(1.0, 4.0, yaw=0.05, z_s=0.012),), support_z=0.045)
     assert tr._tracks[1].duplicate_of is None
@@ -1184,3 +1184,121 @@ def test_the_hidden_birth_is_judged_against_the_selected_track_before_it_moves(t
                                     _candidate((3.0, n_y, 0.06), hypothesis="t11_06:x", cid="n")]))
     assert report.accepted["s"] == 0
     assert tr._tracks[1].shadow is (not towards)
+
+
+# 2B-3g: an axis reading switch in place, the wider yaw cap, family-crossing support ---------------------
+
+def test_a_t11_axis_switch_on_the_same_face_keeps_the_track():
+    # the same face read under the x and the y hypothesis (only the bottom-board evidence differs)
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate(hypothesis="t11_06:x")]))
+    report = tr.update(_frame(0.2, [_candidate(hypothesis="t11_06:y")]))
+    assert report.new == 0 and report.accepted == {"c0": 0}
+
+
+def test_a_stale_track_revives_on_an_axis_switch_in_place():
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate(hypothesis="t11_06:x")]))
+    report = tr.update(_frame(0.8, [_candidate(hypothesis="t11_06:y")]))
+    assert report.new == 0 and report.revived == 1
+
+
+@pytest.mark.parametrize("dx, joins", [(0.2, True), (0.21, False)])
+def test_an_axis_switch_joins_only_within_the_pocket_cap(dx, joins):
+    # wide position gate (0.5 m): the pose fits either way, the 0.2 m pocket cap decides
+    tr = CandidateTracker(_bounds(rows=(_row(1.0, 4.0, lat=0.5, along=0.5),)))
+    tr.update(_frame(0.0, [_candidate(hypothesis="t11_06:x")]))
+    report = tr.update(_frame(0.2, [_candidate((3.0 + dx, 0.0, 0.06), hypothesis="t11_06:y")]))
+    assert (report.new == 0) is joins
+
+
+def test_a_same_axis_reading_far_away_is_still_left_to_the_pose_gate():
+    tr = CandidateTracker(_bounds(rows=(_row(1.0, 4.0, lat=0.5, along=0.5),)))
+    tr.update(_frame(0.0, [_candidate(hypothesis="t11_06:x")]))
+    report = tr.update(_frame(0.2, [_candidate((3.3, 0.0, 0.06), hypothesis="t11_06:x")]))
+    assert report.new == 0
+
+
+def test_another_known_shape_still_starts_a_new_track():
+    tr = CandidateTracker(_bounds())
+    tr.update(_frame(0.0, [_candidate(hypothesis="epal6:x")]))
+    assert tr.update(_frame(0.2, [_candidate(hypothesis="t11_06:x")])).new == 1
+
+
+@pytest.mark.parametrize("hypothesis, revived", [("t11_06:y", 0), ("t11_06:x", 1)])
+def test_a_stale_selected_track_does_not_revive_on_another_pallets_other_axis_reading(hypothesis, revived):
+    # Codex, with the calibrated table: T11 A and B 710 mm apart front to back; A read as x at base 4.23 m
+    # and selected; 0.8 s later (robot 0.48 m on) only B is seen, at base 4.26 m (odom 4.74 m) -- 510 mm
+    # from A's last reading but inside the stale pose gate (586 mm). Read on another axis it is refused by
+    # the pocket cap; read on the same axis the pose gate alone decides (unchanged, its known limit)
+    bounds = TrackBounds.load(Path(__file__).resolve().parents[3] / "config/recognition_track_bounds.yaml")
+    tr = CandidateTracker(bounds)
+    tr.update(_frame(0.0, [_candidate((4.23, 0.0, 0.06), hypothesis="t11_06:x", range_m=3.48, cid="a")]))
+    tr.select(0)
+    report = tr.update(_frame(0.8, [_candidate((4.26, 0.0, 0.06), hypothesis=hypothesis, range_m=3.51, cid="b")],
+                              odom=_odom(0.48)))
+    assert report.revived == revived and report.new == 1 - revived
+
+
+@pytest.mark.parametrize("hypothesis, support, duplicate", [
+    ("parametric:x", 0.044, True),   # known -> parametric, 44 mm (6.3 x the 7 mm gate): only the 45 mm cap
+    ("parametric:x", 0.046, False),  # over the cap
+    ("epal6:x", 0.044, False),       # same family: the 2.5 x ratio still applies
+])
+def test_a_family_crossing_support_near_miss_uses_only_the_absolute_cap(hypothesis, support, duplicate):
+    tr = _born(rows=(_row(1.0, 4.0, yaw=0.05, z_s=0.0035),), hypothesis=hypothesis, support_z=support)
+    assert tr._tracks[1].duplicate_of == (0 if duplicate else None)
+
+
+def test_a_family_crossing_stacked_layer_misread_by_44_mm_is_hidden():
+    # Codex P3, a synthetic residual: a lower layer read as known with support 46 mm, an upper layer read
+    # parametric at 90 mm (44 mm apart, gate 7 mm) right above it is hidden. Pinned as the current behaviour
+    tr = CandidateTracker(_bounds(rows=(_row(1.0, 4.0, yaw=0.05, z_s=0.0035),), suppress=True))
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", support_z=0.046, cid="s")]))
+    tr.select(0)
+    report = tr.update(_frame(0.2, [_candidate((3.0, 0.0, 0.06), hypothesis="epal6:x", support_z=0.046, cid="s"),
+                                    _candidate((3.0, 0.0, 0.15), hypothesis="parametric:x", support_z=0.090,
+                                               cid="u")]))
+    assert report.suppressed == 1
+    assert len(tr.tracks(int(0.2 * S), _odom())) == 1
+
+
+@pytest.mark.parametrize("first, second", [("t11_06:x", "t11_06:y"), ("t11_06:y", "t11_06:x")])
+def test_a_switch_back_to_the_first_axis_is_still_an_axis_switch(first, second):
+    # Codex: A read first, then in place on the other axis, then B 510 mm away 0.8 s later on the first
+    # axis again -- comparing with the first hypothesis alone let B revive the selected track
+    bounds = TrackBounds.load(Path(__file__).resolve().parents[3] / "config/recognition_track_bounds.yaml")
+    tr = CandidateTracker(bounds)
+    tr.update(_frame(0.0, [_candidate((3.30, 0.0, 0.06), hypothesis=first, range_m=3.30, cid="a")]))
+    tr.select(0)
+    assert tr.update(_frame(0.4, [_candidate((3.30, 0.0, 0.06), hypothesis=second, range_m=3.30,
+                                             cid="a")])).accepted == {"a": 0}
+    report = tr.update(_frame(1.2, [_candidate((3.81, 0.0, 0.06), hypothesis=first, range_m=3.81, cid="b")]))
+    assert report.revived == 0 and report.new == 1
+
+
+def test_without_an_axis_switch_the_same_reading_far_away_revives_on_the_pose_gate():
+    # the control for the test above: the same 510 mm / 0.8 s step on one axis passes the stale pose gate
+    bounds = TrackBounds.load(Path(__file__).resolve().parents[3] / "config/recognition_track_bounds.yaml")
+    tr = CandidateTracker(bounds)
+    for t in (0.0, 0.4):
+        tr.update(_frame(t, [_candidate((3.30, 0.0, 0.06), hypothesis="t11_06:x", range_m=3.30, cid="a")]))
+        tr.select(0)
+    report = tr.update(_frame(1.2, [_candidate((3.81, 0.0, 0.06), hypothesis="t11_06:x", range_m=3.81, cid="b")]))
+    assert report.revived == 1
+
+
+def test_an_axis_switch_through_a_parametric_reading_keeps_the_pocket_cap():
+    tr = CandidateTracker(_bounds(rows=(_row(1.0, 4.0, lat=0.5, along=0.5),)))
+    tr.update(_frame(0.0, [_candidate(hypothesis="t11_06:x")]))
+    assert tr.update(_frame(0.2, [_candidate(hypothesis="parametric:x")])).new == 0
+    assert tr.update(_frame(0.4, [_candidate((3.3, 0.0, 0.06), hypothesis="t11_06:y")])).new == 1
+
+
+def test_the_axis_of_the_last_known_reading_outlives_the_fusion_window():
+    # W = 0 keeps only the latest reading in the history: the switch is still judged against y
+    tr = CandidateTracker(_bounds(rows=(_row(1.0, 4.0, lat=0.5, along=0.5),), window_s=0.0))
+    tr.update(_frame(0.0, [_candidate(hypothesis="t11_06:x")]))
+    tr.update(_frame(0.2, [_candidate(hypothesis="t11_06:y")]))
+    tr.update(_frame(0.4, [_candidate(hypothesis="parametric:x")]))
+    assert tr.update(_frame(0.6, [_candidate((3.3, 0.0, 0.06), hypothesis="t11_06:x")])).new == 1

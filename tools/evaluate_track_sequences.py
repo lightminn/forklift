@@ -328,6 +328,8 @@ def population_problem(records, band: str, per_cell: int, kinds=("straight", "cu
     missing or extra (case, shape, seed, kind) against CELLS x per_cell x kinds of `band`."""
     from tools.recognition_sequences import CELL_STRIDE, CELLS, SEQUENCE_BANDS  # noqa: PLC0415
 
+    if not 1 <= per_cell <= CELL_STRIDE:
+        return f"per_cell {per_cell} outside 1..{CELL_STRIDE}"
     other = sorted({r.get("band") for r in records} - {band}, key=str)
     if other:
         return f"records of band(s) {other} among {band}"

@@ -13,7 +13,8 @@ re-observation of the same pallet that passes the gate revives it with its id --
 design §8's re-observation, not a replacement), then deleted. Active tracks are
 matched first; observations tied to them never go to stale tracks. A parametric
 reading may join any track; a known reading must match the track's first known
-hypothesis; each pocket's face coordinate must overlap the interval every accepted
+hypothesis -- or its shape on another axis when both pockets stayed within 0.2 m
+(2B-3g: the same T11 face read as x and as y); each pocket's face coordinate must overlap the interval every accepted
 observation allows (2B-3b plan).
 
 Fusion is over the rigid pocket-pair pose -- the pair midpoint and the insertion
@@ -83,9 +84,11 @@ class TrackBounds:
     keep_s: float = 1.0  # 2B-3b: a track is stale (hidden, revivable) up to keep_s, then deleted
     # 2B-3d: a new track born on a yaw / support near miss of the active selected track is a suspected
     # duplicate. Development values from seven calibration misses (yaw <= 1.23 x, support <= 2.01 x);
-    # 30 deg because far-range yaw gates are already ~26 deg; 45 mm a safety cap, not a layer guarantee
+    # the yaw cap bounds the ratio because far-range yaw gates are already ~26 deg: 30 deg in 2B-3d, 40 deg
+    # since 2B-3g (same-target misses of 32-35 deg at <= 1.39 x on development data); 45 mm a safety cap,
+    # not a layer guarantee -- and the only support test when the reading families differ (2B-3g)
     near_miss_yaw_ratio: float = 1.5
-    near_miss_yaw_cap_rad: float = math.radians(30.0)
+    near_miss_yaw_cap_rad: float = math.radians(40.0)
     near_miss_support_ratio: float = 2.5
     near_miss_support_cap_m: float = 0.045
     # each pocket within 0.2 m of the selected track's last reading on both axes: the odometry-widened
@@ -144,7 +147,7 @@ class TrackBounds:
                    max_observations=int(data["max_observations"]), expiry_s=float(data["expiry_s"]),
                    weight_model=data.get("weight_model"), keep_s=float(data.get("keep_s", 1.0)),
                    near_miss_yaw_ratio=float(data.get("near_miss_yaw_ratio", 1.5)),
-                   near_miss_yaw_cap_rad=float(data.get("near_miss_yaw_cap_rad", math.radians(30.0))),
+                   near_miss_yaw_cap_rad=float(data.get("near_miss_yaw_cap_rad", math.radians(40.0))),
                    near_miss_support_ratio=float(data.get("near_miss_support_ratio", 2.5)),
                    near_miss_support_cap_m=float(data.get("near_miss_support_cap_m", 0.045)),
                    near_miss_position_cap_m=float(data.get("near_miss_position_cap_m", 0.2)),
@@ -271,6 +274,10 @@ class _Track:
         # the first known-shape hypothesis this track accepted: a known reading must match it, a
         # parametric reading of the same pocket pair may join any track (2B-3b)
         self.known = obs.key if obs.family == "known" else None
+        # 2B-3g: the most recent known reading's key -- an axis switch is judged against it, not against
+        # the first hypothesis (x -> y -> x would otherwise skip the in-place limit -- Codex); kept outside
+        # the history so the fusion window and conflict resets do not lose it
+        self.recent_known = self.known
         # each pocket's face coordinate interval every accepted observation allows: a new observation
         # must overlap all of them, so a pocket cannot creep to another opening through small steps
         # (2B-3b; kept across history resets)
@@ -291,6 +298,8 @@ class _Track:
         self.history.append(obs)
         if self.known is None and obs.family == "known":
             self.known = obs.key
+        if obs.family == "known":
+            self.recent_known = obs.key
         b = obs.row.layout_m
         self.layout = [(max(lo, x - b), min(hi, x + b)) for (lo, hi), x in zip(self.layout, obs.offsets)]
 
@@ -311,12 +320,27 @@ def _layout_fits(a: _Observation, b: _Observation) -> bool:
 def _gate(track: _Track, new: _Observation, bounds: TrackBounds) -> bool:
     """The reading tests (family compatibility, each pocket's face coordinate against the last
     observation and the interval every accepted observation allows) and the pose tests."""
-    return _reading_fits(track, new) and _pose_fits(track, new, bounds)
+    return _reading_fits(track, new, bounds) and _pose_fits(track, new, bounds)
 
 
-def _reading_fits(track: _Track, new: _Observation) -> bool:
-    if new.family == "known" and track.known is not None and new.key != track.known:
-        return False
+def _pocket_step(ref: _Observation, new: _Observation) -> float:
+    """The larger pocket displacement along either axis of the reference reading (odom)."""
+    a = np.array([math.cos(ref.yaw), math.sin(ref.yaw)])
+    n = np.array([-a[1], a[0]])
+    return max(abs(float((getattr(new, side)[:2] - getattr(ref, side)[:2]) @ v))
+               for side in ("left", "right") for v in (a, n))
+
+
+def _reading_fits(track: _Track, new: _Observation, bounds: TrackBounds) -> bool:
+    if new.family == "known" and track.known is not None:
+        # a known reading keeps the track's shape; another axis of that shape is the same face read under the
+        # other axis hypothesis (a square T11 face differs only in bottom-board evidence) -- but only in
+        # place: a stale track's wide pose gate would otherwise take another pallet's other-axis reading
+        # 0.5 m away (2B-3g, Codex)
+        if new.key.split(":")[0] != track.known.split(":")[0]:
+            return False
+        if new.key != track.recent_known and _pocket_step(track.last, new) > bounds.near_miss_position_cap_m + 1e-12:
+            return False
     return _layout_fits(track.last, new) and track.layout_overlaps(new)
 
 
@@ -360,13 +384,16 @@ def _near_miss(track: _Track, new: _Observation, bounds: TrackBounds) -> bool:
     min(ratio x gate, cap), support within ratio x gate and under its cap (2B-3d). The caller requires the
     track to be active -- a stale track's gate is widened by the odometry bound."""
     terms = _pose_terms(track, new, bounds)
-    if terms is None or not _reading_fits(track, new):
+    if terms is None or not _reading_fits(track, new, bounds):
         return False
     position, dyaw, gyaw, dsup, gsup, step = terms
     eps = 1e-12
+    # across families (a known reading carries its hypothesis's support, a parametric one the measured
+    # support) only the absolute cap compares the support (2B-3g)
+    support_ratio_ok = new.family != track.last.family or dsup <= bounds.near_miss_support_ratio * gsup + eps
     return (position and step <= bounds.near_miss_position_cap_m + eps and (dyaw > gyaw or dsup > gsup)
             and dyaw <= min(bounds.near_miss_yaw_ratio * gyaw, bounds.near_miss_yaw_cap_rad) + eps
-            and dsup <= bounds.near_miss_support_ratio * gsup + eps and dsup < bounds.near_miss_support_cap_m)
+            and support_ratio_ok and dsup < bounds.near_miss_support_cap_m)
 
 
 def _matchings(tracks, obs, edges):
@@ -562,7 +589,7 @@ class CandidateTracker:
             if (self.bounds.suppress_duplicates and chosen_active and terms is not None
                     and terms[5] <= self.bounds.near_miss_position_cap_m + 1e-12):
                 hide.add(j)  # 2B-3f: eligible for a hidden birth, judged before matching moves the selected track
-            if _pose_fits(chosen, o, self.bounds) and not _reading_fits(chosen, o):
+            if _pose_fits(chosen, o, self.bounds) and not _reading_fits(chosen, o, self.bounds):
                 split_off[j] = "reading"
             elif chosen_active and _near_miss(chosen, o, self.bounds):  # 2B-3d
                 split_off[j] = "near_miss"
