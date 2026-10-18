@@ -282,6 +282,13 @@ def sent_scale(width: int, max_width: int = 640) -> int:
     return n
 
 
+def live_video_size(calibration, max_width: int = 640) -> tuple[int, int]:
+    """The live video camera's resolution: the perception camera's, halved as ``sent_scale`` halves it, so the picture
+    is rendered at the size it is sent and ``live_camera_model`` describes it."""
+    n = sent_scale(int(calibration.width), max_width)
+    return int(calibration.width) // n, int(calibration.height) // n
+
+
 # camera_link (x forward, y left, z up) axes as columns, in optical (x right, y down, z forward) coordinates
 _OPTICAL_FROM_LINK = np.array([[0.0, -1.0, 0.0], [0.0, 0.0, -1.0], [1.0, 0.0, 0.0]])
 

@@ -2560,6 +2560,46 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 "clipping_range_m": list(map(float, pocket_camera.get_clipping_range())),
                 "intrinsics": asdict(k_pocket),
             }
+        if getattr(args, "live", False):
+            # The live video's own camera (console/1 video; display only, never a sensor): the perception mount and
+            # field of view, rendered at the size the page is sent, with a 0.05 m near plane so the forks and the
+            # floor before them show -- the perception camera's 1.0 m left the lower third of the picture black
+            # (2026-10-18 demo). RGB only.
+            from live_runtime import live_video_size  # a sibling, as the live block's import
+
+            video_w_, video_h_ = live_video_size(perception_calibration, 640)
+            live_video_camera = Camera(
+                prim_path=mount_parent + "/LiveVideoCamera",
+                frequency=-1,
+                resolution=(video_w_, video_h_),
+            )
+            live_video_camera.set_local_pose(
+                translation=np.asarray(perception_mount.translation_m),
+                orientation=np.asarray(adapter.xyzw_to_wxyz(mount_xyzw)),
+                camera_axes=args.perception_camera_axes,
+            )
+            live_video_camera.set_projection_mode("perspective")
+            live_video_camera.set_lens_distortion_model("pinhole")
+            live_video_camera.set_focal_length(1.0)
+            live_video_camera.set_horizontal_aperture(
+                perception_calibration.width / perception_calibration.fx,
+                maintain_square_pixels=True,
+            )
+            live_video_camera.initialize()
+            _, video_far_m = live_video_camera.get_clipping_range()
+            live_video_camera.set_clipping_range(near_distance=0.05, far_distance=video_far_m)
+            k_video = adapter.read_isaac_intrinsics(live_video_camera).raw_sdk
+            scale_ = perception_calibration.width / video_w_
+            require(
+                (k_video.width, k_video.height) == (video_w_, video_h_)
+                and all(abs(getattr(k_video, n) - getattr(perception_calibration, n) / scale_) <= 1e-3
+                        for n in ("fx", "fy", "cx", "cy")),
+                "live video camera intrinsics differ from the scaled perception camera's (the page's camera_model)",
+            )
+            state["live_video_camera"] = {
+                "clipping_range_m": list(map(float, live_video_camera.get_clipping_range())),
+                "intrinsics": asdict(k_video),
+            }
         perception_display = None
         if "perception" in args.extra_views or args.robot_camera:
             # The display camera: the same mount and intrinsics with a 0.05 m
@@ -5241,7 +5281,9 @@ def drive(S, isaac) -> None:
             def live_hold_lift(position: float) -> None:
                 robot.apply_action(isaac.action(joint_positions=np.array([position]), joint_indices=lift_index))
 
-            live_cam_ = _bound.get("perception_camera")  # unbound without --use-perception: no video
+            # The live video camera (unbound without --use-perception: no video); the perception camera only if a run
+            # bound none.
+            live_cam_ = _bound.get("live_video_camera") or _bound.get("perception_camera")
 
             def live_camera():
                 if live_cam_ is None:
@@ -5654,8 +5696,7 @@ def drive(S, isaac) -> None:
                 live_timers.add(*gc_seen_.pop())
             if live is not None:
                 stop_kind_, applied_commands_ = live.tick_start(t, core.near_active())
-                if core.commands.status == "accepted":
-                    core.commands.start()  # the operator's submit: the mission runs from this tick
+                core.start_submitted(t)  # the operator's submit: the mission and its phase clock run from this tick
             elif mission_schedule is not None:
                 # M-a3 (plan E2, E7): the schedule's due commands and the stop kind in force, applied at this
                 # control tick's start.

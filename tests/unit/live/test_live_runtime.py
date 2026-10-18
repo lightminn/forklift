@@ -211,3 +211,28 @@ def test_a_carriage_camera_says_it_rides_the_lift():
     mount = RigCamera((0.619, 0.0, 0.27), 0.10).base_from_optical()
     assert live_camera_model(k, mount, rear_axle_offset_m=-0.34, sent_width=640, rides_lift=True)["rides_lift"]
     assert not live_camera_model(k, mount, rear_axle_offset_m=-0.34, sent_width=640, rides_lift=False)["rides_lift"]
+
+
+def test_the_live_video_camera_renders_the_picture_as_sent():
+    # The video comes from its own camera (near plane 0.05 m; the perception camera's 1.0 m left the lower third of
+    # the picture black, 2026-10-18 demo) rendered at the sent size, so the page's camera_model is that camera's.
+    from sim.isaac.live_runtime import live_camera_model, live_video_size
+    from tools.scene_rig import Camera as RigCamera
+
+    mount = RigCamera((0.619, 0.0, 0.27), 0.10).base_from_optical()
+    for k in (SimpleNamespace(width=1280, height=720, fx=640.0, fy=640.0, cx=640.0, cy=360.0),
+              SimpleNamespace(width=640, height=480, fx=465.7, fy=465.7, cx=320.0, cy=240.0)):
+        w, h = live_video_size(k, 640)
+        m = live_camera_model(k, mount, rear_axle_offset_m=-0.34, sent_width=640, rides_lift=True)
+        assert (m["width"], m["height"]) == (w, h) and w <= 640
+        assert m["fx"] / m["width"] == pytest.approx(k.fx / k.width)  # the same field of view
+
+
+def test_the_runner_streams_the_live_video_camera_with_a_near_plane_for_the_forks():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
+    setup = source[source.index("live_video_size(perception_calibration, 640)"):][:2500]
+    assert '"/LiveVideoCamera"' in setup and "resolution=(video_w_, video_h_)" in setup
+    assert "set_clipping_range(near_distance=0.05" in setup
+    assert "live_video_camera" in source[source.index("live_cam_ = "):][:200]

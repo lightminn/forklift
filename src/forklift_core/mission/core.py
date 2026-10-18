@@ -316,6 +316,13 @@ class MissionCore:
             slam["pending_release"] = ms.phase
             slam["release_wait_from"] = t
 
+    def start_submitted(self, t: float) -> None:
+        """A live run's submit: the mission runs from this tick, and so does its first phase's clock -- the truck stood
+        from sim 0 until the operator submitted, which is no work of that phase. A batch run starts at 0."""
+        if self.commands.status == "accepted":
+            self.commands.start()
+            self.ms.phase_started = t
+
     def tracking_limit(self, t: float) -> float:
         """The follower's time limit in the current phase: three times the path time at the tracker's own speed
         caps (length / cruise when there are none), plus 10 s; standing by design is not slowness."""
