@@ -476,7 +476,8 @@ def test_the_delivery_match_inputs_are_recorded_without_stopping_the_match() -> 
     """2026-10-13: every delivery match round's inputs go to delivery_match_N.npz for
     offline replay; a failed write is noted and the round is still recorded (Codex P2)."""
     source = CORE.read_text()  # the delivery docking is a MissionCore method since M-a1 slice 6b
-    start = source.index("    def dock_at_delivery_straight(self, t: float) -> None:")
+    # (real-time plan D9b: ``answer`` carries an asynchronous match back in)
+    start = source.index("    def dock_at_delivery_straight(self, t: float, answer=None) -> None:")
     end = source.find("\n    def ", start + 10)
     body = source[start : end if end >= 0 else len(source)]
     save = body.index("f\"delivery_match_{len(docking.get('rounds', [])) + 1}.npz\"")

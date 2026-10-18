@@ -1955,16 +1955,6 @@ SLAM_LIVE_REPLY_DEADLINE_S = 1.0  # real-time plan D9a: wall seconds a sent scan
 SLAM_LIVE_QUEUE_MAX = 20  # and how many scans may wait behind it (2 s of 10 Hz scans)
 
 
-def last_replied_scan_id(slam_ref):
-    """The last scan the SLAM bridge answered: the one before the next to send in lockstep; the asynchronous
-    link's own count otherwise (real-time plan D9a -- scans may be queued or in flight)."""
-    if slam_ref is None:
-        return None
-    if slam_ref.get("async_link") is not None:
-        return slam_ref["async_link"].last_reply_id
-    return slam_ref["scan_id"] - 1
-
-
 def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     """Construct and execute one immutable seeded scenario; state keeps evidence."""
     from forklift_core.mission.state import MissionState
@@ -3617,7 +3607,9 @@ def drive(S, isaac) -> None:
                         index_ = int(m_["index"])
                         after_ = int(m_["after_scan_id"])
                         map_stamp_ = int(m_["stamp_ns"]) / 1e9
-                        replied_ = last_replied_scan_id(slam_ref)
+                        # the last scan the bridge answered (an asynchronous link counts its own, real-time plan D9a)
+                        replied_ = ((slam_ref["async_link"].last_reply_id if slam_ref.get("async_link") is not None
+                                     else slam_ref["scan_id"] - 1) if slam_ref is not None else None)
                         loaded_index_ = (layer_.memory.slam_info or {}).get("index", -1)
                         why_not_ = None
                         if os.fstat(fh_.fileno()).st_mtime < obstacle["run_wall_start"]:
@@ -3651,7 +3643,8 @@ def drive(S, isaac) -> None:
                 "slam_used": use_slam and layer_.memory is not None and layer_.memory.slam is not None,
                 "slam_map": (layer_.memory.slam_info if layer_.memory is not None else None),
                 "slam_map_note": map_note,
-                "last_replied_scan_id": last_replied_scan_id(slam_ref),
+                "last_replied_scan_id": ((slam_ref["async_link"].last_reply_id if slam_ref.get("async_link") is not None
+                                          else slam_ref["scan_id"] - 1) if slam_ref is not None else None),
                 "applied": list(applied_),
                 "mode": mode_,
             }
