@@ -1655,6 +1655,34 @@ def urdf_lift_limit(urdf_path) -> tuple[float, str]:
     return 0.20, "default"
 
 
+def model_lift_sag_m(urdf_path) -> float | None:
+    """Plan D14 (main 2026-10-19): the lift position drive's gravity sag the model implies -- its carriage weight over
+    the lift position gain (parameters.yaml beside the URDF) -- without the blades, so a lower bound. None unknown."""
+    import yaml
+
+    try:
+        params = yaml.safe_load((Path(urdf_path).parent / "parameters.yaml").read_text())
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+
+    def find(d, key):
+        if isinstance(d, dict):
+            if key in d:
+                return d[key]
+            for v in d.values():
+                got = find(v, key)
+                if got is not None:
+                    return got
+        return None
+
+    mass, gain = find(params, "carriage_mass_kg"), find(params, "lift_position_gain")
+    try:
+        mass, gain = float(mass), float(gain)
+    except (TypeError, ValueError):
+        return None
+    return mass * 9.81 / gain if math.isfinite(mass) and math.isfinite(gain) and gain > 0 else None
+
+
 class TrackerBook(dict):
     """The runner's path trackers by owner phase (fork spacing plan, V5 cusp arrivals; Codex leg-switch
     review). Installing a tracker stamps it with a serial (its path version), its owner phase, the time
@@ -5421,6 +5449,11 @@ def drive(S, isaac) -> None:
                                     "rate_mps": LiveTeleopLimits().lift_rate_mps}
             if LiveTeleopLimits().lift_rate_mps > float(settings["lift_rate_mps"]) + 1e-12:
                 raise ValueError("teleop lift rate above the autonomous lift_rate_mps (plan D14, main condition 2)")
+            live_sag_ = model_lift_sag_m(args.forklift_urdf)
+            state["teleop_lift"].update(hold_tolerance_m=LiveTeleopLimits().lift_hold_tolerance_m, model_sag_m=live_sag_)
+            if live_sag_ is not None and LiveTeleopLimits().lift_hold_tolerance_m < live_sag_:
+                # Main 2026-10-19: a tolerance below the sag lowers a standing lift's target at every event.
+                raise ValueError(f"lift_hold_tolerance_m below the model's lift sag {live_sag_:.4f} m (plan D14)")
             live_pallet_perm = (LivePalletPermit(obstacle["layer"].permission.config.stopping,
                                                  step_m=obstacle["layer"].permission.config.step_m)
                                 if obstacle is not None and not args.live_test_no_pallet_permit else None)

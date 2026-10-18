@@ -679,7 +679,7 @@ async def lift_scenario(p: Probe, args):
     rep_["reenter"] = await enter_teleop(p)
     rep_["before_stop"] = await hold_lift(1, 2.0)
     pid = (p.report.get("port_file") or {}).get("pid")
-    if pid:
+    if pid and not args.no_sigstop:
         os.kill(int(pid), signal.SIGSTOP)
         stopped_at = (p.state or {}).get("lift_m")
         await asyncio.sleep(args.quiet_s)
@@ -715,7 +715,10 @@ async def cycle_scenario(p: Probe, args):
         p.report["pre_teleop"] = await teleop_drive(p, args.pre_teleop_s, args.pre_teleop_speed,
                                                     args.pre_teleop_curvature)
     p.report["missions_run"] = []
-    for leg in [leg for leg in args.cycle.split(",") if leg]:  # empty: only the teleop (plan U11)
+    legs = [leg for leg in args.cycle.split(",") if leg]  # empty: only the teleop (plan U11)
+    leg_index, backoffs = 0, 0
+    while leg_index < len(legs):
+        leg = legs[leg_index]
         pallet_id, destination_id = leg.split(":")
         await p.until(p.standing, 30, label="standing_before_submit")
         await asyncio.sleep(1.0)
@@ -794,6 +797,25 @@ async def cycle_scenario(p: Probe, args):
             await p.request_until_standing("mission_resume", mission_id=submit.get("mission_id"))
         entry["result"] = (p.state or {}).get("last_result")
         entry["ended_mono"] = time.monotonic()
+        reason_ = (entry["result"] or {}).get("reason") or ""
+        if (args.manual_recovery and "manual_recovery" in p.report and reason_.startswith("prepare:")
+                and "invalid_start" in reason_ and backoffs < args.manual_backoffs):
+            # Plan D14 U20 c: as an operator would -- the preparation could not start from here (D4b's check at the
+            # submit); back off a little more by hand and ask the same mission again.
+            backoffs += 1
+            await enter_teleop(p)
+            stop_by = time.monotonic() + args.manual_extra_s
+            while time.monotonic() < stop_by:
+                await p.teleop(-0.5, 0.0, True)
+                await asyncio.sleep(0.05)
+            stand_by = time.monotonic() + 15.0
+            while time.monotonic() < stand_by and not (p.state and p.standing(p.state)):
+                await p.teleop(0.0, 0.0, True)
+                await asyncio.sleep(0.05)
+            await p.request("mode_request", to="PAUSED")
+            p.report.setdefault("manual_backoffs", []).append({"after": reason_[:80], "mono": time.monotonic()})
+            continue
+        leg_index += 1
     p.report["missions_message"] = p.missions
     if args.end_session and p.closed_code is None:
         # Persistent console plan D7: the session ends on request (the runner exits 0), not at a sim time limit.
@@ -815,10 +837,15 @@ def main():
                     help="cycle scenario (plan D14 U20 c): a mission ending recovery_required is recovered by hand "
                     "before the next submit")
     ap.add_argument("--manual-extra-s", type=float, default=2.0, help="manual recovery: reverse this long after it")
+    ap.add_argument("--manual-backoffs", type=int, default=3,
+                    help="manual recovery: how often to back off further and ask again when the preparation cannot "
+                    "start from where the recovery ended (invalid_start)")
     ap.add_argument("--manual-stroke-s", type=float, default=1.5,
                     help="manual recovery: each straight reverse stroke before standing for the verdict (wall s)")
     ap.add_argument("--lift-up-s", type=float, default=6.0, help="lift scenario: hold the lift up this long (wall s)")
     ap.add_argument("--quiet-s", type=float, default=8.0, help="lift scenario: the client quiet / runner stopped (s)")
+    ap.add_argument("--no-sigstop", action="store_true",
+                    help="lift scenario: skip the runner SIGSTOP part (until main's SLAM link stall fix)")
     ap.add_argument("--cycle", default="P-1:D-1,P-1:D-0,P-1:D-1", help="cycle scenario: pallet:destination,...")
     ap.add_argument("--pre-teleop-s", type=float, default=0.0, help="cycle scenario: drive by hand first (wall s)")
     ap.add_argument("--end-session", action="store_true", help="cycle scenario: end the session at the end")

@@ -240,8 +240,9 @@ class LiveRuntime:
             return None
         self._ended_id = mission_id
         self.end.stop()
-        # The lift held where it is, whatever stage of the tick the end came in (Codex D6 design P2-6).
-        lift = float(self.hooks.lift_position())
+        # The lift held where it is, whatever stage of the tick the end came in (Codex D6 design P2-6) -- within the
+        # hold tolerance of the measurement, so a standing lift's sag does not lower its target (main 2026-10-19).
+        lift = self._held_lift()
         self.hooks.hold_lift(lift)
         if getattr(self.core, "ms", None) is not None:
             self.core.ms.lift_command = lift
@@ -350,13 +351,24 @@ class LiveRuntime:
             self.stopped_in_tick = True
             self.hooks.zero_wheels()
             if self._lift_latch is None:
-                self._lift_latch = float(self.hooks.lift_position())
+                self._lift_latch = self._held_lift()  # the plan D14 rule (main 2026-10-19), once
             self.hooks.hold_lift(self._lift_latch)
         else:
             self._lift_latch = None
         if zero or self.link.log:
             self.log({"gate": zero, "step": self.step, "sim_t": sim_t})
         return zero
+
+    def _held_lift(self) -> float:
+        """Where an event stops the lift (plan D14, main 2026-10-19): the target as it is, within the hold tolerance
+        of the measured lift -- a target that ran ahead stops near the lift, a standing lift's gravity sag (target -
+        measured) leaves the target alone. Without a core target: the measurement."""
+        measured = float(self.hooks.lift_position())
+        ms = getattr(self.core, "ms", None)
+        if ms is None or getattr(ms, "lift_command", None) is None:
+            return measured
+        a = float(self.arbiter.config.teleop_limits.lift_hold_tolerance_m)
+        return float(min(measured + a, max(measured - a, float(ms.lift_command))))
 
     def after_step(self, sim_t: float, *, odom_speed: float | None, yaw_rate: float, rendered: bool,
                    odom_mono: float | None = None, render_sim_time_of=None, lift_m: float | None = None,

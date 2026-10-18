@@ -61,9 +61,14 @@ class TeleopLimits:
     lift_rate_mps: float = 0.02
     recovery_reverse_mps: float = 0.10
     recovery_steer_tol_rad: float = 0.01
+    # Main session 2026-10-19 (condition 3 amended): an event stops the lift where it is -- the target is held within
+    # this much of the measured lift, so a standing lift's gravity sag (target - measured, the sim's position drive:
+    # carriage 1.6 kg x 9.81 / 1800 N/m = 8.7 mm plus the blades; 8.5 and 12.6 mm observed) leaves the target alone.
+    # The sim's value; the real truck's waits for its actuator's measurement.
+    lift_hold_tolerance_m: float = 0.02
 
     def __post_init__(self):
-        for name in ("lift_rate_mps", "recovery_reverse_mps", "recovery_steer_tol_rad"):
+        for name in ("lift_rate_mps", "recovery_reverse_mps", "recovery_steer_tol_rad", "lift_hold_tolerance_m"):
             value = getattr(self, name)
             if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be a positive finite number")
@@ -107,9 +112,11 @@ class TeleopLift:
     rate, clipped to [0, the model's travel]). It starts from the target it takes over (never the measurement: a
     loaded lift sags) and moves while a permitted command's active stretch lasts -- TELEOP, armed, the dead-man
     held, a lift direction the policy allows, a measurement in hand. When the stretch ends, for any reason, the
-    target is set to the measured lift once and held (a sagging lift is not followed: the core's stop latch rule,
-    core 3118). A lift never moved by hand keeps its target. ``step`` returns the target to apply, or None when the
-    arbiter does not own the lift (the tick after TELEOP was left, which hands the last target over)."""
+    target is held within lift_hold_tolerance_m of the measured lift, once (main 2026-10-19: stop where it is -- a ramp
+    that ran ahead stops near the lift, a standing lift's sag does not lower the target; the core's stop latch,
+    core 3118, has the same concern). A lift never moved by hand keeps its target. ``step`` returns the target to
+    apply, or None when the arbiter does not own the lift (the tick after TELEOP was left, which hands the last target
+    over)."""
 
     def __init__(self, limits: TeleopLimits, *, limit_m: float, dt: float) -> None:
         if not (math.isfinite(limit_m) and limit_m > 0):
@@ -130,7 +137,7 @@ class TeleopLift:
         if not teleop_mode:
             if self.target is None:
                 return None
-            out = measured if self.active and measured is not None else self.target  # handed over once
+            out = self.hold(self.target, measured) if self.active and measured is not None else self.target  # once
             self.target, self.active = None, False
             return out
         if self.target is None:
@@ -143,9 +150,15 @@ class TeleopLift:
             self.active = True
         elif self.active:
             if measured is not None:
-                self.target = measured
+                self.target = self.hold(self.target, measured)
             self.active = False
         return self.target
+
+    def hold(self, target: float, measured: float) -> float:
+        """Where an event stops the lift (main 2026-10-19): the target as it was, within the hold tolerance of the
+        measurement -- a ramp that ran ahead stops near the lift; a standing lift's sag does not move the target."""
+        a = self.limits.lift_hold_tolerance_m
+        return float(min(measured + a, max(measured - a, target)))
 
 
 class TeleopDrive:

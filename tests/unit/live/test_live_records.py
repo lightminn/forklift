@@ -288,3 +288,20 @@ def test_the_runner_closes_the_review_gaps_of_d14():
     assert src.count('ms.phase if core.commands.adopted_id is not None else "idle"') >= 2
     rt = (Path(__file__).resolve().parents[3] / "sim" / "isaac" / "live_runtime.py").read_text()
     assert '"lift": True' in rt
+
+
+def test_the_models_lift_sag_bounds_the_hold_tolerance(tmp_path):
+    """Main 2026-10-19: a hold tolerance below the lift's gravity sag would ratchet a standing lift down at every
+    event -- the runner refuses it. The sag is the model's carriage weight over its lift position gain."""
+    import ast
+    import math as _math
+
+    src = _runner()
+    fn = next(n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.FunctionDef) and n.name == "model_lift_sag_m")
+    scope = {"math": _math, "Path": Path}
+    exec(compile(ast.Module([fn], []), "run_transport.py", "exec"), scope)
+    root = Path(__file__).resolve().parents[3]
+    sag = scope["model_lift_sag_m"](root / "sim/models/dls08_measured/forklift.urdf")
+    assert sag == pytest.approx(1.6 * 9.81 / 1800.0)
+    assert scope["model_lift_sag_m"](tmp_path / "none.urdf") is None
+    assert "if live_sag_ is not None and LiveTeleopLimits().lift_hold_tolerance_m < live_sag_:" in src

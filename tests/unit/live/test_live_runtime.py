@@ -558,7 +558,32 @@ def test_a_mission_end_holds_the_lift_where_it_is(tmp_path):
     held = []
     rt.hooks.hold_lift = held.append
     rt.end_mission(15.0, "failed", "x")
-    assert held == [0.031] and core.ms.lift_command == 0.031
+    # within the hold tolerance (0.02 m) of the measured lift: a target that ran ahead stops near it (main
+    # 2026-10-19, plan D14 condition 3 amended)
+    assert held == [pytest.approx(0.051)] and core.ms.lift_command == pytest.approx(0.051)
+
+
+def test_a_standing_lifts_sag_is_not_taken_for_a_new_target_at_a_gate_or_an_end(tmp_path):
+    """Main 2026-10-19: a loaded lift standing 9 mm below its target (the drive's gravity sag) keeps the target at
+    the gate's latch and at a mission's end -- the measured height would lower it by the sag at every event."""
+    rt, core, did, clock = runtime(tmp_path)
+    core.ms = SimpleNamespace(lift_command=0.20)
+    did["lift_pos"] = 0.191
+    rt.start()
+    try:
+        rt.arbiter.stop(clock(), "stop:test")
+        step(rt, clock, 0.0)
+        assert did["lift"][-1] == pytest.approx(0.20)
+    finally:
+        rt.close()
+    (tmp_path / "end").mkdir()
+    rt2, core2, order = ending(tmp_path / "end")
+    core2.ms = SimpleNamespace(lift_command=0.20)
+    rt2.hooks.lift_position = lambda: 0.191
+    held = []
+    rt2.hooks.hold_lift = held.append
+    rt2.end_mission(15.0, "failed", "x")
+    assert held == [pytest.approx(0.20)] and core2.ms.lift_command == pytest.approx(0.20)
 
 
 def test_the_state_carries_the_scene_and_a_damaged_scene_refuses_submits(tmp_path):

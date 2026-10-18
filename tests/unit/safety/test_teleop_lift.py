@@ -43,10 +43,11 @@ def test_an_ended_active_stretch_latches_the_measured_lift_once(why):
         out = tl.step(True, cmd(1), **{**kw, "armed": False})
     else:
         out = tl.step(False, None, **kw)  # TELEOP left: the latched value is handed over once
-    assert out == pytest.approx(0.08)
+    # the target ran ahead (0.10 + 10 ticks); it stops within a = 0.02 m of the measured lift (main, 2026-10-19)
+    assert out == pytest.approx(0.08 + 0.02)
     # held from then on: a sagging measurement is not followed (Codex D14 design round 1 P1-1)
     nxt = tl.step(why != "leave", cmd(0), armed=True, dirs={-1, 1}, measured=0.07, start_from=None)
-    assert nxt == (None if why == "leave" else pytest.approx(0.08))
+    assert nxt == (None if why == "leave" else pytest.approx(0.10))
 
 
 def test_a_clipped_stretch_still_latches_when_it_ends():
@@ -55,7 +56,7 @@ def test_a_clipped_stretch_still_latches_when_it_ends():
     for _ in range(int(20 / DT)):
         tl.step(True, cmd(1), armed=True, dirs={-1, 1}, measured=0.26, start_from=0.0)
     assert tl.step(True, cmd(1, deadman=False), armed=True, dirs={-1, 1}, measured=0.26, start_from=None) == \
-        pytest.approx(0.26)
+        pytest.approx(0.28)  # 0.02 m above the measurement: within a, the target is kept
 
 
 def test_a_lift_never_moved_by_hand_keeps_its_target():
@@ -141,7 +142,8 @@ def test_teleop_lifts_at_its_rate_and_hands_the_target_over_when_left():
         out, _ = loop.cycle(teleop={"deadman": True, "speed_ratio": 0.0, "curvature_ratio": 0.0, "lift_dir": 1})
     assert out.lift_target_m == pytest.approx(0.04, abs=0.002)  # 2 s at 0.02 m/s
     out, _ = loop.cycle(loop.msg("mode_request", to="PAUSED"))
-    assert out.mode == "PAUSED" and out.lift_target_m == pytest.approx(loop.lift, abs=0.002)  # latched measured
+    # held within the hold tolerance of the measured lift (main 2026-10-19: the ramp's target, clipped to it)
+    assert out.mode == "PAUSED" and abs(out.lift_target_m - loop.lift) <= 0.02 + 1e-9
     out, _ = loop.cycle()
     assert out.lift_target_m is None  # the arbiter no longer owns it; the handed-over target stays
 
@@ -181,3 +183,39 @@ def test_a_gate_latch_is_the_manual_lifts_target_from_then_on():
     idle = lift()
     idle.sync(0.17)  # not owned: nothing to sync
     assert idle.target is None
+
+
+@pytest.mark.parametrize("direction", [1, -1])
+def test_an_event_stops_the_target_within_the_hold_tolerance_of_the_measurement(direction):
+    """Main's condition 3 as amended (2026-10-19): held = clip(target, measured - a, measured + a)."""
+    tl = lift()
+    start = 0.10
+    for _ in range(int(3 / DT)):  # 3 s: the target runs 0.06 m away while the lift lags at the start
+        tl.step(True, cmd(direction), armed=True, dirs={-1, 1}, measured=start, start_from=start)
+    held = tl.step(True, cmd(0), armed=True, dirs={-1, 1}, measured=start, start_from=None)
+    assert held == pytest.approx(start + direction * 0.02)
+
+
+def test_repeated_events_do_not_ratchet_a_standing_lift_down():
+    """Main (2026-10-19): with the position drive's gravity sag s < a, three release events in a row leave the lift
+    no lower than one sag below where it was put (the old rule lowered the target by s each time)."""
+    sag = 0.0087 + 0.003  # carriage 1.6 kg x 9.81 / 1800 N/m, plus the blades
+    tl = lift()
+    measured = 0.0
+    for _ in range(int(6 / DT)):
+        target = tl.step(True, cmd(1), armed=True, dirs={-1, 1}, measured=measured, start_from=0.0)
+        measured = max(0.0, target - sag)
+    first = None
+    for _ in range(3):
+        target = tl.step(True, cmd(0), armed=True, dirs={-1, 1}, measured=measured, start_from=None)
+        measured = max(0.0, target - sag)  # the plant settles a sag below its target
+        first = measured if first is None else first
+        for _ in range(5):  # a short press that the policy refuses (moving: no lift) is another stretch's end
+            tl.step(True, cmd(1), armed=True, dirs=set(), measured=measured, start_from=None)
+    assert measured >= first - 1e-9
+
+
+@pytest.mark.parametrize("value", [0.0, -0.01, math.nan])
+def test_the_hold_tolerance_is_positive_and_finite(value):
+    with pytest.raises(ValueError):
+        TeleopLimits(lift_hold_tolerance_m=value)
