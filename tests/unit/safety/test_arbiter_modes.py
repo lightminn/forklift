@@ -296,3 +296,19 @@ def test_a_stop_inside_the_missions_tick_is_not_undone_by_the_submit_it_overtook
     submit = r.msg("mission_submit", pallet_id="P", destination_id="D", targets_revision=0)
     r.cycle(submit, after_tick=lambda: r.a.stop(r.t, "stop:gate"))
     assert r.a.mode == "STOPPED" and r.out.speed_mps == 0.0 and r.out.stop_kind == "preempt"
+
+
+def test_a_preparing_mission_keeps_auto_and_a_pause_request_ends_the_preparation():
+    """Persistent console plan D2 (Codex stage 2 design P2): AUTO_STATUSES is the arbiter's own list."""
+    r = Rig()
+    r.m.start = r.m.begin_prepare  # a live submit is prepared before it runs
+    r.stand()
+    msg = r.msg("mission_submit", pallet_id="P", destination_id="D", targets_revision=0)
+    r.cycle(msg)
+    assert r.reply(msg["request_id"])["t"] == "ack" and r.a.mode == "AUTO" and r.m.status == "preparing"
+    r.stand(3)
+    assert r.a.mode == "AUTO" and r.m.status == "preparing"
+    r.cycle(r.msg("mode_request", to="PAUSED"))
+    r.cycle()
+    assert r.m.status in ("failed", "idle") and r.a.mode == "PAUSED"
+    assert any(e["command"] == "end" and e["reason"] == "prepare:paused" for e in r.m.log)

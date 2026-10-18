@@ -476,3 +476,44 @@ def test_a_first_leg_replan_that_installs_no_path_from_the_truck_ends_through_en
     block = source[source.index('if live_first_replan_["due"] and core.commands.status == "running":'):][:1800]
     assert 'live.end_mission(t, "failed", "first_leg_replan_failed")' in block
     assert 'core.commands.finish("failed", t)' not in block
+
+
+def test_a_preparation_ended_by_a_stop_is_collected_at_the_tick_start_once(tmp_path):
+    """Persistent console plan D2: the fixture's arbiter has no feedback, so its stop kind is not none."""
+    rt, core, order = ending(tmp_path)
+    core.commands.status = "accepted"
+    core.commands.begin_prepare()
+    rt.tick_start(12.0, False)
+    last = rt.results.last
+    assert last["mission_id"] == "m1" and last["outcome"] == "failed" and last["reason"].startswith("prepare:")
+    assert [r["command"] for r in core.commands.log].count("end") == 1
+    assert ("abandon", 12.0) in order
+
+
+def test_a_submit_is_refused_while_the_forks_may_be_in_a_pocket(tmp_path):
+    """Codex stage 2 design P1: a cancel during the insertion, then the same pallet submitted again (until D4/D5)."""
+    from forklift_core.mission.commands import Submit
+
+    rt, core, did, clock = runtime(tmp_path)
+    captured = []
+    real_apply = core.commands.apply
+    core.commands.apply = lambda t, context: captured.append(context) or real_apply(t, context)
+    core.commands.queue(Submit("P-1", "D-1", core.targets.revision))
+    rt.tick_start(1.0, False, clear_for_submit=False)
+    assert captured[-1].clear_for_submit is False
+    rt.tick_start(2.0, False)
+    assert captured[-1].clear_for_submit is True
+
+
+def test_a_preparation_ended_after_the_apply_is_collected_before_the_next_one(tmp_path):
+    """Codex stage 2 design round 2 P2: a job_hold failure (timeout, no candidate) comes after the tick's apply; the
+    next apply frees the slot first, so it is collected before it -- exactly once, at the end log's time."""
+    rt, core, order = ending(tmp_path)
+    core.commands.status = "accepted"
+    core.commands.begin_prepare()
+    core.commands.terminate("failed", 11.5, "prepare:timeout")  # job_hold, late in tick 11.5
+    rt.tick_start(12.0, False)
+    last = rt.results.last
+    assert last["outcome"] == "failed" and last["reason"] == "prepare:timeout" and last["ended_s"] == 11.5
+    rt.tick_start(13.0, False)
+    assert rt.results.seq == 1 and core.commands.status == "idle"

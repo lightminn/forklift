@@ -28,7 +28,7 @@ MODES = ("PAUSED", "AUTO", "TELEOP", "STOPPED")
 LEASED = ("rearm", "mode_request", "arm", "disarm", "mission_submit", "mission_pause", "mission_resume",
           "mission_cancel", "recovery")
 RELIABLE = LEASED + ("stop", "lease_request", "lease_release", "targets_request")
-AUTO_STATUSES = ("accepted", "running", "resuming", "cancelling")  # the mission states AUTO stays in (B5)
+AUTO_STATUSES = ("accepted", "preparing", "running", "resuming", "cancelling")  # the mission states AUTO stays in (B5)
 
 
 @dataclass(frozen=True)
@@ -477,7 +477,7 @@ class Arbiter:
         if self.mission is not None:
             # The hold follows the cycle's final mode, once, in the mission's own time (Codex M-b review P2/P2:
             # queuing at each transition replayed TELEOP-then-STOP in the wrong order and the vehicle clock).
-            if self.mode == "TELEOP" and status in ("accepted", "running", "paused", "resuming"):
+            if self.mode == "TELEOP" and status in ("accepted", "preparing", "running", "paused", "resuming"):
                 self.mission.queue(HoldOn())
             elif self.mode != "TELEOP" and status == "held":
                 self.mission.queue(HoldOff())

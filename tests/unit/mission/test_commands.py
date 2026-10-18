@@ -332,3 +332,59 @@ def test_note_end_logs_an_end_already_reached():
                          "status": "cancelled"} and m.end_reason == "operator"
     with pytest.raises(RuntimeError):
         running().note_end(3.0, "x")
+
+
+# --- persistent console plan D2: preparing (a live mission's first leg planned before it runs) ----------------------
+def preparing(t=0.0):
+    m = MissionCommands()
+    m.queue(Submit("P1", "D1"))
+    m.apply(t)
+    m.begin_prepare()
+    return m
+
+
+def test_a_submit_is_prepared_then_adopted():
+    m = preparing()
+    assert m.status == "preparing" and not m.stopped
+    gen = m.mission_gen
+    m.adopt()
+    assert m.status == "running" and m.mission_gen == gen + 1
+    with pytest.raises(RuntimeError):
+        m.adopt()
+    with pytest.raises(RuntimeError):
+        running().begin_prepare()
+
+
+@pytest.mark.parametrize("kind, reason", [("preempt", "prepare:stopped"), ("controlled", "prepare:paused")])
+def test_a_stop_ends_the_preparation(kind, reason):
+    m = preparing()
+    (rec,) = m.apply(1.0, Context(stop_kind=kind))
+    assert m.status == "failed" and m.end_reason == reason and m.pauses == []
+    assert rec["command"] == "end" and rec["reason"] == reason
+
+
+def test_a_cancel_ends_the_preparation_at_once():
+    m = preparing()
+    m.queue(Cancel())
+    m.apply(1.0)
+    assert m.status == "cancelled" and m.pauses == []
+
+
+def test_teleop_ends_the_preparation():
+    m = preparing()
+    assert m.hold_on(1.0) is True
+    assert m.status == "failed" and m.end_reason == "prepare:teleop"
+
+
+def test_the_adopted_mission_is_named_by_start_and_adopt():
+    m = MissionCommands()
+    assert m.adopted_id is None
+    m.queue(Submit("P1", "D1"))
+    m.apply(0.0)
+    assert m.adopted_id is None
+    m.start()
+    assert m.adopted_id == "m1"
+    p = preparing(1.0)
+    assert p.adopted_id is None
+    p.adopt()
+    assert p.adopted_id == p.mission_id

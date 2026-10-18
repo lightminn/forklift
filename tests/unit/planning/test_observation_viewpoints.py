@@ -112,3 +112,28 @@ def test_the_pallet_heading_range_is_sampled():
     with_range = view_score(pose, [], BAY_PICKUP_ZONE, 0.6, 0.8, 1.09, HALF_FOV, ViewpointConfig())
     without = view_score(pose, [], flat, 0.6, 0.8, 1.09, HALF_FOV, ViewpointConfig())
     assert with_range != without
+
+
+# --- persistent console plan D2: the fixed candidates moved with the pallet ---------------------------------------
+def test_relocated_waypoints_are_the_same_at_the_reference_pallet():
+    from forklift_core.planning.observation_viewpoints import DEFAULT_OBSERVATION_WAYPOINTS, relocate_waypoints
+
+    ref = (3.1, 0.65, 0.0)
+    moved = relocate_waypoints(DEFAULT_OBSERVATION_WAYPOINTS, ref, ref)
+    assert [tuple(m) for m in moved] == [tuple(w) for w in DEFAULT_OBSERVATION_WAYPOINTS]
+
+
+def test_relocated_waypoints_keep_their_place_and_heading_relative_to_the_pallet():
+    import math
+
+    import pytest
+
+    from forklift_core.planning.observation_viewpoints import relocate_waypoints
+
+    ref, target = (3.0, 0.0, 0.0), (10.0, 5.0, math.pi / 2)
+    (moved,) = relocate_waypoints([(1.0, 0.5, 0.2)], ref, target)  # 2 m behind the pallet, 0.5 m to its left
+    # in the target pallet's frame: 2 m behind along its axis (now +y), 0.5 m to its left (now -x)
+    assert moved[0] == pytest.approx(10.0 - 0.5) and moved[1] == pytest.approx(5.0 - 2.0)
+    assert moved[2] == pytest.approx(0.2 + math.pi / 2)
+    (wrapped,) = relocate_waypoints([(0.0, 0.0, 3.0)], (0.0, 0.0, 0.0), (0.0, 0.0, 1.0))
+    assert -math.pi < wrapped[2] <= math.pi and wrapped[2] == pytest.approx(4.0 - 2 * math.pi)

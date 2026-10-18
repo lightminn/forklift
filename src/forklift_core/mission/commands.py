@@ -3,7 +3,7 @@
 Pure: no Isaac, no numpy. The core owns one :class:`MissionCommands`; the runner queues commands (from a schedule
 file in a batch run, from the arbiter later) and the core applies the queue at the start of a control tick.
 
-Lifecycle: ``idle -> accepted -> running <-> paused -> resuming -> running``; ``cancel`` goes through
+Lifecycle: ``idle -> accepted [-> preparing, live] -> running <-> paused -> resuming -> running``; ``cancel`` goes through
 ``cancelling`` (standing still is confirmed first) to ``cancelled``; the mission's own end is ``done`` or
 ``failed``. A finished mission leaves the lifecycle ``idle`` for the next ``submit``.
 
@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-ACTIVE = ("accepted", "running", "paused", "resuming", "held", "cancelling")
+ACTIVE = ("accepted", "preparing", "running", "paused", "resuming", "held", "cancelling")
 FINAL = ("done", "failed", "cancelled")
 STOP_KINDS = ("none", "controlled", "preempt")
 PRIORITY = {"hold_off": -1, "cancel": 0, "hold_on": 1, "pause": 1, "resume": 2, "submit": 2}
@@ -100,6 +100,8 @@ class MissionCommands:
         self.pause_holding = False  # SLAM was holding then
         self.pause_release_pending = False  # a SLAM release was due then (R9, R14: it may happen while paused)
         self.end_reason: str | None = None  # why the last mission ended (live: terminate), for its result
+        self.end_logged_for: str | None = None  # the mission whose end is in the log (terminate, note_end)
+        self.adopted_id: str | None = None  # the mission that ran (start, adopt): only it moves the targets list
 
     # --- the queue ---------------------------------------------------------------------------------------------
     def queue(self, command) -> None:
@@ -114,6 +116,10 @@ class MissionCommands:
         commands = sorted(self._queue, key=lambda c: PRIORITY[c.kind])  # sorted() is stable: same rank keeps order
         self._queue = []
         records = []
+        if context.stop_kind != "none" and self.status == "preparing":
+            # Persistent console plan D2: a stop ends a preparation (nothing has moved; the operator submits again).
+            self.terminate("failed", t, "prepare:stopped" if context.stop_kind == "preempt" else "prepare:paused")
+            records.append(self.log[-1])
         if context.stop_kind != "none" and self.status in ("running", "resuming"):
             # E7: the arbiter's stop is a pause of the mission (resumed only by a resume once it is lifted).
             if self.paused_since is None:
@@ -182,7 +188,7 @@ class MissionCommands:
             return "not_running"
         if command.mission_id is not None and command.mission_id != self.mission_id:
             return "unknown_mission"
-        if self.status == "accepted":  # nothing has moved yet
+        if self.status in ("accepted", "preparing"):  # nothing has moved yet
             self.status = "cancelled"
             self.mission_gen += 1
             return None
@@ -212,7 +218,11 @@ class MissionCommands:
     # --- the arbiter's hold (M-b B6) ------------------------------------------------------------------------------
     def hold_on(self, t: float, *, record: bool = True) -> bool:
         """The operator takes over (TELEOP): an active mission is held -- its work clock stops (one open stop), a
-        new generation, a resume's checks dropped. Held is left only by ``hold_off`` (to paused) or a cancel."""
+        new generation, a resume's checks dropped. Held is left only by ``hold_off`` (to paused) or a cancel. A
+        preparation it ends instead (persistent console plan D2): driven by hand, the mission is submitted again."""
+        if self.status == "preparing":
+            self.terminate("failed", t, "prepare:teleop")
+            return True
         if self.status not in ("accepted", "running", "paused", "resuming"):
             return False
         if self.paused_since is None:
@@ -245,6 +255,21 @@ class MissionCommands:
         """The mission's first tick runs."""
         if self.status == "accepted":
             self.status = "running"
+            self.adopted_id = self.mission_id
+
+    def begin_prepare(self) -> None:
+        """A live submit's first leg is being planned (persistent console plan D2)."""
+        if self.status != "accepted":
+            raise RuntimeError(f"begin_prepare from {self.status}")
+        self.status = "preparing"
+
+    def adopt(self) -> None:
+        """The prepared mission starts: running, a new generation (nothing asked while preparing is taken)."""
+        if self.status != "preparing":
+            raise RuntimeError(f"adopt from {self.status}")
+        self.status = "running"
+        self.adopted_id = self.mission_id
+        self.mission_gen += 1
 
     def resumed(self, t: float) -> float:
         """The resume steps passed: running again. Returns the pause's length (deadline-type anchors move by it)."""
@@ -295,7 +320,7 @@ class MissionCommands:
         if self.status not in ACTIVE:
             return False
         self.close_open(t)
-        self.status, self.end_reason = outcome, reason
+        self.status, self.end_reason, self.end_logged_for = outcome, reason, self.mission_id
         self.mission_gen += 1
         self._record(t, "end")
         self.log[-1]["reason"] = reason
@@ -305,7 +330,7 @@ class MissionCommands:
         """Log the end of a mission the core already ended (a cancel confirmed standing: ``cancelled``)."""
         if self.status not in FINAL:
             raise RuntimeError(f"note_end while {self.status}")
-        self.end_reason = reason
+        self.end_reason, self.end_logged_for = reason, self.mission_id
         self._record(t, "end")
         self.log[-1]["reason"] = reason
 

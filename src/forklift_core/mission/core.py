@@ -3016,6 +3016,10 @@ class MissionCore:
         mission = self.commands.mission
         if mission is None or mission.pallet_id not in tb.pallets or mission.destination_id not in tb.destinations:
             return
+        if self.commands.adopted_id != self.commands.mission_id:
+            # Not adopted (preparing, or a preparation that ended): what the core holds is the last mission's
+            # (persistent console plan D2; Codex stage 2 design P1 and round 2 P1).
+            return
         pid, did = mission.pallet_id, mission.destination_id
         tb.set_correction_version(self.slam_releases)
         scenario_ = self.options.scenario

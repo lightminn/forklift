@@ -25,7 +25,7 @@ from console.live.server import LiveServer, MediaStore, camera_item, grid_item, 
 from console.vehicle_outline import DLS08_MEASURED_CHASSIS
 from forklift_core.live.link import Channels, Link
 from forklift_core.live.pacing import Pacer
-from forklift_core.mission.commands import Context
+from forklift_core.mission.commands import FINAL, Context
 from forklift_core.mission.results import ResultsBook
 from forklift_core.perf import TIMERS
 from forklift_core.safety.arbiter import Arbiter, ArbiterConfig, Feedback
@@ -146,21 +146,32 @@ class LiveRuntime:
         self._log.write(json.dumps(entry, default=_jsonable) + "\n")
 
     # --- per control tick ------------------------------------------------------------------------------------------
-    def tick_start(self, t: float, near_active: bool, at_start: bool = True) -> tuple[str, list]:
+    def tick_start(self, t: float, near_active: bool, at_start: bool = True,
+                   clear_for_submit: bool = True) -> tuple[str, list]:
         """The arbiter's cycle start, then the mission's commands with the stop kind it gives (M-b B3). ``at_start``:
-        the truck stands where the mission's first leg (planned before any submit) starts."""
+        the truck stands where the mission's first leg (planned before any submit) starts. ``clear_for_submit``: the
+        forks are empty and out of every pocket (else a submit is refused recovery_required)."""
         now = self.clock()
         self.stopped_in_tick = False
         self.arbiter.pacing_ok = self.pacer.ok
         stop_kind = self.link.begin(now, self.feedback)
+        self._collect_end(t)  # ended after the last apply (a preparation's job_hold failure): before this one frees it
         records = self.core.commands.apply(t, Context(stop_kind=stop_kind, near_tracker=near_active,
-                                                      at_start=at_start))
-        if self.core.commands.status == "cancelled":
-            self.end_mission(t, "cancelled", "operator")  # cancelled before it ran: nothing moved, nothing to stop
+                                                      at_start=at_start, clear_for_submit=clear_for_submit))
+        self._collect_end(t)  # ended in this apply (a cancel before it ran, a stopped preparation)
         self._flush(t)
         return stop_kind, records
 
     # --- a mission's end (docs/plans/2026-10-18-persistent-live-console.md D1) -------------------------------------
+    def _collect_end(self, t: float) -> None:
+        """A mission the commands ended by themselves (FINAL, not yet through end_mission), at its end's time."""
+        cmds = self.core.commands
+        if cmds.status in FINAL and cmds.mission_id is not None and cmds.mission_id != self._ended_id:
+            logged = cmds.end_logged_for == cmds.mission_id
+            ended = next((r["t"] for r in reversed(cmds.log) if r["command"] == "end"
+                          and r["mission_id"] == cmds.mission_id), t) if logged else t
+            self.end_mission(ended, cmds.status, cmds.end_reason if logged else "operator")
+
     def end_mission(self, t: float, outcome: str, reason: str | None) -> dict | None:
         """End the session's current mission at sim ``t``: ``outcome`` is ``complete`` (judged on the truth: done or
         failed), ``failed`` or ``cancelled``. The session goes on; the slot is free at the next tick. Returns the
@@ -182,8 +193,8 @@ class LiveRuntime:
             verdict = self.end.judge_delivery()
             final, reason = ("done", None) if verdict.ok else ("failed", verdict.reason)
             extra["delivery_error_m"] = verdict.delivery_error_m
-        if not cmds.terminate(final, t, reason):  # step 9: a cancel confirmed standing is already cancelled
-            cmds.note_end(t, reason)
+        if not cmds.terminate(final, t, reason) and cmds.end_logged_for != mission_id:
+            cmds.note_end(t, reason)  # step 9: a cancel confirmed standing is already cancelled; logged once
         started = next((r["t"] for r in reversed(cmds.log) if r["command"] == "submit" and r["accepted"]
                         and r["mission_id"] == mission_id), None)
         entry = self.results.add(mission_id=mission_id, outcome=cmds.status, reason=reason, started_s=started,

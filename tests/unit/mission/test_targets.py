@@ -89,7 +89,30 @@ def core_with(slam=None):
     core.targets.add_destination("D-1", Pose(9.0, 0.5, 0.1))
     core.commands.queue(Submit("P-1", "D-1", 2))
     core.commands.apply(0.0)
+    core.commands.start()  # the batch run's mission runs at once; a live one only once adopted (plan D2)
     return core, pocket
+
+
+def test_the_list_is_not_refreshed_for_a_mission_not_yet_adopted():
+    """Persistent console stage 2 (Codex design P1): preparing P-1 -> D-0 wrote the last scenario's destination over
+    D-0 and raised the revision, so the adoption check saw its own change."""
+    from types import SimpleNamespace
+
+    from forklift_core.mission.commands import MissionCommands, Submit
+
+    core, pocket = core_with()
+    core.commands = MissionCommands(core.targets)
+    core.targets.add_destination("D-0", Pose(5.0, 0.0, 0.0))
+    revision = core.targets.revision
+    core.commands.queue(Submit("P-1", "D-0", revision))
+    core.commands.apply(1.0)
+    pocket["planning_pickup"] = SimpleNamespace(x_m=5.05, y_m=0.01, yaw_rad=0.0)
+    core.commands.begin_prepare()
+    core.refresh_targets()
+    assert core.targets.destinations["D-0"] == Pose(5.0, 0.0, 0.0) and core.targets.revision == revision
+    core.commands.terminate("failed", 2.0, "prepare:timeout")  # the ending tick: FINAL, never adopted
+    core.refresh_targets()
+    assert core.targets.destinations["D-0"] == Pose(5.0, 0.0, 0.0) and core.targets.revision == revision
 
 
 def test_the_core_carries_the_list_through_the_mission():
