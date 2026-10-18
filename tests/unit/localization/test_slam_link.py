@@ -138,3 +138,93 @@ def test_a_silent_bridge_times_out(tmp_path):
         client.exchange(_scan())
     client.close()
     server.close()
+
+
+# --- real-time plan D9a: the link without waiting ---------------------------------------------------------------
+import socket as _socket
+from types import SimpleNamespace
+
+from forklift_core.localization import slam_link as _sl
+
+
+_OPEN: list = []
+
+
+@pytest.fixture(autouse=True)
+def _close_pairs():
+    yield
+    while _OPEN:
+        _OPEN.pop().close()
+
+
+def async_pair(**kw):
+    a, b = _socket.socketpair(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    _OPEN.extend((a, b))
+    now = [0.0]
+    link = _sl.AsyncSlamLink(SimpleNamespace(sock=a), clock=lambda: now[0], **kw)
+    return link, b, now
+
+
+def scan_of(i):
+    return _sl.Scan(i, 0.1 * i, (0.0, 0.0, 0.0), np.ones(4, dtype=np.float32), -1.0, 0.5, 0.1, 10.0)
+
+
+def answer(bridge, status="skipped", pose=(0.0, 0.0, 0.0)):
+    scan = _sl.recv_scan(bridge)
+    bridge.sendall(_sl.encode_reply(_sl.Reply(scan.scan_id, scan.stamp_s, status, pose, 1, 0.01)))
+    return scan
+
+
+def test_scans_go_one_at_a_time_in_order_and_replies_come_back_with_their_records():
+    link, bridge, now = async_pair()
+    for i in range(3):
+        link.enqueue(scan_of(i), {"i": i})
+    assert link.depth() == 3 and link.max_depth == 3
+    bridge.settimeout(0.5)
+    assert answer(bridge).scan_id == 0
+    with pytest.raises(_socket.timeout):
+        _sl.recv_scan(bridge)  # the next one is not sent before the reply is read
+    now[0] = 0.2
+    (got,) = link.poll()
+    assert got[0].scan_id == 0 and got[1] == {"i": 0} and got[2:] == (0.0, 0.2) and link.last_reply_id == 0
+    assert answer(bridge).scan_id == 1  # sent on the poll that read the reply
+    (got,) = link.poll()
+    assert got[0].scan_id == 1  # and scan 2 sent now
+    assert answer(bridge, "processed", (1.0, 0.0, 0.0)).scan_id == 2
+    (got,) = link.poll()
+    assert got[0].scan_id == 2 and got[0].status == "processed" and got[0].map_from_odom == (1.0, 0.0, 0.0)
+    assert link.depth() == 0 and link.poll() == []
+
+
+def test_a_failed_reply_a_missed_deadline_a_full_queue_or_a_closed_bridge_fail_the_link():
+    link, bridge, now = async_pair()
+    link.enqueue(scan_of(0), {})
+    answer(bridge, "failed")
+    with pytest.raises(_sl.SlamLinkFailure, match="failure"):
+        link.poll()
+    link, bridge, now = async_pair(deadline_s=1.0)
+    link.enqueue(scan_of(0), {})
+    now[0] = 0.9
+    assert link.poll() == []
+    now[0] = 1.01
+    with pytest.raises(_sl.SlamLinkFailure, match="no reply within"):
+        link.poll()
+    link, bridge, now = async_pair(queue_max=2)
+    for i in range(3):
+        link.enqueue(scan_of(i), {})  # one in flight, two queued
+    with pytest.raises(_sl.SlamLinkFailure, match="queued"):
+        link.enqueue(scan_of(3), {})
+    link, bridge, now = async_pair()
+    link.enqueue(scan_of(0), {})
+    bridge.close()
+    with pytest.raises(_sl.SlamLinkFailure):
+        link.poll()
+
+
+def test_a_reply_to_another_scan_fails_the_link():
+    link, bridge, now = async_pair()
+    link.enqueue(scan_of(0), {})
+    _sl.recv_scan(bridge)
+    bridge.sendall(_sl.encode_reply(_sl.Reply(7, 0.7, "skipped", (0.0, 0.0, 0.0), 1, 0.0)))
+    with pytest.raises(_sl.SlamLinkFailure, match="reply for scan 7"):
+        link.poll()

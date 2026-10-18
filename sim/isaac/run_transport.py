@@ -1945,6 +1945,20 @@ def close_boundary_record(state: dict, exc: BaseException | None = None, final_s
             _BOUNDARY_RECORD["np"] = None
 
 
+SLAM_LIVE_REPLY_DEADLINE_S = 1.0  # real-time plan D9a: wall seconds a sent scan may wait for its reply
+SLAM_LIVE_QUEUE_MAX = 20  # and how many scans may wait behind it (2 s of 10 Hz scans)
+
+
+def last_replied_scan_id(slam_ref):
+    """The last scan the SLAM bridge answered: the one before the next to send in lockstep; the asynchronous
+    link's own count otherwise (real-time plan D9a -- scans may be queued or in flight)."""
+    if slam_ref is None:
+        return None
+    if slam_ref.get("async_link") is not None:
+        return slam_ref["async_link"].last_reply_id
+    return slam_ref["scan_id"] - 1
+
+
 def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     """Construct and execute one immutable seeded scenario; state keeps evidence."""
     from forklift_core.mission.state import MissionState
@@ -3597,7 +3611,7 @@ def drive(S, isaac) -> None:
                         index_ = int(m_["index"])
                         after_ = int(m_["after_scan_id"])
                         map_stamp_ = int(m_["stamp_ns"]) / 1e9
-                        replied_ = (slam_ref["scan_id"] - 1) if slam_ref is not None else None
+                        replied_ = last_replied_scan_id(slam_ref)
                         loaded_index_ = (layer_.memory.slam_info or {}).get("index", -1)
                         why_not_ = None
                         if os.fstat(fh_.fileno()).st_mtime < obstacle["run_wall_start"]:
@@ -3631,7 +3645,7 @@ def drive(S, isaac) -> None:
                 "slam_used": use_slam and layer_.memory is not None and layer_.memory.slam is not None,
                 "slam_map": (layer_.memory.slam_info if layer_.memory is not None else None),
                 "slam_map_note": map_note,
-                "last_replied_scan_id": (slam_ref["scan_id"] - 1) if slam_ref is not None else None,
+                "last_replied_scan_id": last_replied_scan_id(slam_ref),
                 "applied": list(applied_),
                 "mode": mode_,
             }
@@ -5128,6 +5142,28 @@ def drive(S, isaac) -> None:
                     bx - off * math.cos(byaw), by - off * math.sin(byaw), byaw
                 )
                 slam["last_scan_odom_base"] = tuple(slam_odom_base())
+            if slam.get("async_link") is not None:
+                # Real-time plan D9a: the scan and what it was taken with, queued; its reply is applied at a
+                # later tick's start (MissionCore.slam_replies). The obstacle scan runs now, on the correction
+                # applied now.
+                truth_yaw_, _ = yaw_and_tilt(now_q)
+                try:
+                    slam["async_link"].enqueue(
+                        link.Scan(slam["scan_id"], float(stamp_now), slam_odom_base(), sent.astype(np.float32),
+                                  scan_pattern.angle_min_rad, scan_pattern.angle_increment_rad,
+                                  scan_pattern.range_min_m, scan_pattern.range_max_m),
+                        {"scan_id": slam["scan_id"], "stamp_s": float(stamp_now), "phase": ms.phase,
+                         "odom_base": list(slam_odom_base()),
+                         "truth_base": [float(now_base[0]), float(now_base[1]), truth_yaw_],
+                         "scan_correction": list(slam["tracker"].applied[0])
+                         if slam["tracker"].applied is not None else None,
+                         "queued_mono": time.monotonic()})
+                except link.SlamLinkFailure as exc:
+                    require(False, f"slam_link_failed: {exc}")
+                slam["scan_id"] += 1
+                if obstacle is not None and not scan_silenced(stamp_now):
+                    obstacle_scan(stamp_now, now_base, now_q, shared_raw)
+                return
             try:
                 reply = slam["link"].exchange(
                     link.Scan(
@@ -5405,6 +5441,7 @@ def drive(S, isaac) -> None:
                     live_timers.wrap(layer_class_, name_, f"layer.{name_}", by_caller=True)
                 live_timers.wrap(TimedGrid, "snapshot", "grid.snapshot", by_caller=True)
                 live_timers.wrap(TimedShadow, "apply", "shadow.apply")
+                live_timers.wrap(TimedShadow, "_move", "shadow.move")  # real-time plan D9d: is the 0.27 s spike the move?
                 for name_ in ("update", "allowed_speed", "check_path", "check_arc"):
                     live_timers.wrap(timed_permission.DrivePermission, name_, f"permission.{name_}", by_caller=True)
             for name_, value_ in list(vars(type(core)).items()):  # every public step of the mission core
@@ -5551,6 +5588,25 @@ def drive(S, isaac) -> None:
         if early_ports:
             boundary.recorder.tick_end(outputs={"bootstrap": True}, branches=[])
         from forklift_core.perf import CONTEXT as perf_context
+
+        if live is not None and slam is not None and os.environ.get("FORKLIFT_LIVE_ASYNC_SLAM", "1") != "0":
+            # Real-time plan D9a: SLAM warms up before the first control tick, in lockstep (the bridge waits a second
+            # for each start-up scan slam_toolbox drops), the truck standing; then the link stops waiting and the
+            # tracker's age limit only backs up the reply deadline (Codex D9 1st P2-2, P2-3).
+            prewarm_wall_ = time.monotonic()
+            prewarm_steps_ = 0
+            while slam["tracker"].mode == "warming_up":
+                step_world(False)
+                prewarm_steps_ += 1
+                require(prewarm_steps_ <= 120 * 60, "slam_prewarm_timeout")
+            slam["async_link"] = slam["module"].AsyncSlamLink(
+                slam["link"], deadline_s=SLAM_LIVE_REPLY_DEADLINE_S, queue_max=SLAM_LIVE_QUEUE_MAX)
+            slam["tracker"].max_age_s = 0.25 + SLAM_LIVE_REPLY_DEADLINE_S * args.live_factor
+            state["slam_async"] = {"prewarm_steps": prewarm_steps_,
+                                   "prewarm_sim_s": float(world.current_time - initial_time),
+                                   "prewarm_wall_s": time.monotonic() - prewarm_wall_,
+                                   "reply_deadline_s": SLAM_LIVE_REPLY_DEADLINE_S, "queue_max": SLAM_LIVE_QUEUE_MAX,
+                                   "tracker_max_age_s": slam["tracker"].max_age_s}
 
         for step in range(int(120 * args.max_sim_seconds)):
             if early_ports:
@@ -5801,6 +5857,14 @@ def drive(S, isaac) -> None:
                         minima[side] = gap
             requested_speed, curvature = 0.0, 0.0
             tracking = None
+            if slam is not None and slam.get("async_link") is not None:
+                # Real-time plan D9a: the SLAM replies in since the last tick, applied before any mission work.
+                try:
+                    replies_ = slam["async_link"].poll()
+                except slam["module"].SlamLinkFailure as exc:
+                    require(False, f"slam_link_failed: {exc}")
+                if replies_:
+                    core.slam_replies(t, replies_, loaded)
             # M-a1 slice 5: the release gate at the tick's start is the core's.
             gate_ = core.release_gate(t, rear)
             releasing, warming, rear = gate_.releasing, gate_.warming, gate_.rear
@@ -5812,6 +5876,48 @@ def drive(S, isaac) -> None:
             # mission's own work below runs, the permission watches, the links, commands and sensors go on.
             plan_wait_ = core.jobs is not None and core.job_hold(
                 t, rear, float(np.dot(velocity[:2], forward)), paused_).hold
+            # Real-time plan D9c: the observe capture runs over control ticks (one render step each, at this tick's
+            # step) and its observation is handled on the tick after the one that detected it; those ticks stand
+            # as a plan wait does.
+            if live is not None and core.jobs is not None:
+                if paused_:
+                    if core.capture_live is not None:
+                        core.capture_abandon()
+                        live.capturing = False
+                    core.observation_live = None  # a pause or a cancel: the arrival captures again when running
+                elif core.capture_live is not None:
+                    plan_wait_ = True
+                    if core.capture_live.raw is not None:
+                        c_ = core.capture_live
+                        core.capture_live = None
+                        captured_ = core.capture_and_detect(t, rear, step, raw=(c_.attempt, c_.attempt_number, c_.raw))
+                        if getattr(captured_, "aborted", False):
+                            live_abort_ = True
+                        else:
+                            core.observation_freeze(t, captured_)
+                elif core.observation_live is not None and not plan_wait_:
+                    plan_wait_ = True
+                    captured_ = core.observation_take(t)
+                    if captured_ is not None:
+                        attempt, attempt_number, scene_input = captured_.attempt, captured_.attempt_number, captured_.scene_input
+                        frame_diagnostics, capture_attempts = captured_.frame_diagnostics, captured_.capture_attempts
+                        capture_diagnostics, base, q, yaw = captured_.capture_diagnostics, captured_.base, captured_.q, captured_.yaw
+                        forward, rear = captured_.forward, captured_.rear
+                        if captured_.rear_stamp is not None:
+                            rear_stamp = captured_.rear_stamp
+                        prior, params, detection, observation = captured_.prior, captured_.params, captured_.detection, captured_.observation
+                        if observation.status != "valid":
+                            if core.observe_failed(t, rear, attempt, attempt_number, observation):
+                                break
+                        else:
+                            succeeded_ = core.observe_succeeded(t, rear, base, yaw, attempt, attempt_number, observation,
+                                                                scene_input, capture_diagnostics, step)
+                            if succeeded_.stop:
+                                break
+                            observation, near_leg = succeeded_.observation, succeeded_.near_leg
+                            if not getattr(succeeded_, "pending", False):
+                                core.near_leg_or_recapture(t, rear, base, yaw, observation, attempt_number, near_leg)
+                        core.capture_acquired_s = None
             if ms.phase in trackers and not releasing and not warming and not paused_ and not plan_wait_:
                 # Three times the path time at the tracker's own speed caps
                 # (length / cruise when there are none), plus 10 s.
@@ -5832,163 +5938,170 @@ def drive(S, isaac) -> None:
                 dwell_hold, dwell_standing, safety_hold = command_.dwell_hold, command_.dwell_standing, command_.safety_hold
                 if tracking.status == "arrived":
                     if args.use_perception and ms.phase == "observe":
-                        # M-a1 slice 4b-i: the capture and the detection are the core's (the capture itself a port).
-                        if live is not None:
-                            live.capturing = True
-                        try:
-                            captured_ = core.capture_and_detect(t, rear, step)
-                        finally:
+                        if live is not None and core.jobs is not None:
+                            # Real-time plan D9c: the capture opens here and runs over the next ticks.
+                            begun_ = core.capture_begin(t, rear, step)
+                            live.capturing = core.capture_live is not None
+                            live_abort_ = bool(getattr(begun_, "aborted", False))
+                            plan_wait_ = True
+                        else:
+                            # M-a1 slice 4b-i: the capture and the detection are the core's (the capture itself a port).
                             if live is not None:
-                                live.capturing = False
-                        # M-c (plan C2): a STOP or an expiry at a physics step inside the capture ends this tick's
-                        # mission work right after the raw capture (the core returns ``aborted``) -- no SLAM release,
-                        # no observation handling, no transitions; the next tick pauses the mission.
-                        live_abort_ = bool(getattr(captured_, "aborted", False))
-                        if not live_abort_:
-                            attempt, attempt_number, scene_input = captured_.attempt, captured_.attempt_number, captured_.scene_input
-                            frame_diagnostics, capture_attempts = captured_.frame_diagnostics, captured_.capture_attempts
-                            capture_diagnostics, base, q, yaw = captured_.capture_diagnostics, captured_.base, captured_.q, captured_.yaw
-                            forward, rear = captured_.forward, captured_.rear
-                            if captured_.rear_stamp is not None:
-                                rear_stamp = captured_.rear_stamp
-                            prior, params, detection, observation = captured_.prior, captured_.params, captured_.detection, captured_.observation
-                        if live_abort_:
-                            pass
-                        elif (
-                            args.repeat_captures
-                            and (
-                                attempt_number == args.repeat_at_attempt
-                                if args.repeat_at_attempt is not None
-                                else state.get("near_capture", {}).get("status") == "pending"
-                            )
-                        ):
-                            # G2r: the original capture above is G2's; hold the
-                            # wheels, capture again, then stop whatever is seen.
-                            robot.apply_action(
-                                isaac.action(
-                                    joint_velocities=np.zeros(len(wheels)),
-                                    joint_indices=wheels,
+                                live.capturing = True
+                            try:
+                                captured_ = core.capture_and_detect(t, rear, step)
+                            finally:
+                                if live is not None:
+                                    live.capturing = False
+                            # M-c (plan C2): a STOP or an expiry at a physics step inside the capture ends this tick's
+                            # mission work right after the raw capture (the core returns ``aborted``) -- no SLAM release,
+                            # no observation handling, no transitions; the next tick pauses the mission.
+                            live_abort_ = bool(getattr(captured_, "aborted", False))
+                            if not live_abort_:
+                                attempt, attempt_number, scene_input = captured_.attempt, captured_.attempt_number, captured_.scene_input
+                                frame_diagnostics, capture_attempts = captured_.frame_diagnostics, captured_.capture_attempts
+                                capture_diagnostics, base, q, yaw = captured_.capture_diagnostics, captured_.base, captured_.q, captured_.yaw
+                                forward, rear = captured_.forward, captured_.rear
+                                if captured_.rear_stamp is not None:
+                                    rear_stamp = captured_.rear_stamp
+                                prior, params, detection, observation = captured_.prior, captured_.params, captured_.detection, captured_.observation
+                            if live_abort_:
+                                pass
+                            elif (
+                                args.repeat_captures
+                                and (
+                                    attempt_number == args.repeat_at_attempt
+                                    if args.repeat_at_attempt is not None
+                                    else state.get("near_capture", {}).get("status") == "pending"
                                 )
-                            )
-                            first_pose = [
-                                np.asarray(v, dtype=float).tolist()
-                                for v in capture_diagnostics.accepted_pose
-                            ]
-
-                            def observed(result) -> dict:
-                                obs, diag = result.observation, result.diagnostics
-                                valid = obs.status == "valid"
-                                return {
-                                    "status": obs.status,
-                                    "reason": obs.reason,
-                                    "left_center_m": list(obs.left.center_m)
-                                    if valid
-                                    else None,
-                                    "right_center_m": list(obs.right.center_m)
-                                    if valid
-                                    else None,
-                                    "insertion_yaw_rad": obs.insertion_yaw_rad,
-                                    # Fork spacing plan (B): the lower-deck evidence per
-                                    # capture, to see how much it moves in place.
-                                    "selected_lower": diag.selected_lower,
-                                    "rejected_lower": [
-                                        p.lower for p in diag.rejected_patterns
-                                    ],
-                                }
-
-                            def valid_fraction(depth) -> float:
-                                depth = np.asarray(depth, dtype=float)
-                                return float((np.isfinite(depth) & (depth > 0)).mean())
-
-                            captures = [
-                                {
-                                    "index": 0,
-                                    "accepted_pose": first_pose,
-                                    "drift": G2.drift(first_pose, first_pose),
-                                    "depth_sha256": attempt["depth_sha256"],
-                                    "valid_fraction": valid_fraction(
-                                        scene_input.depth_m
-                                    ),
-                                    **observed(detection),
-                                }
-                            ]
-                            for index in range(1, args.repeat_captures + 1):
-                                record = {"index": index}
-                                try:
-                                    repeat_input, _, repeat_attempts = (
-                                        perception_capture.capture(
-                                            max_attempts=args.perception_max_attempts,
-                                        )
+                            ):
+                                # G2r: the original capture above is G2's; hold the
+                                # wheels, capture again, then stop whatever is seen.
+                                robot.apply_action(
+                                    isaac.action(
+                                        joint_velocities=np.zeros(len(wheels)),
+                                        joint_indices=wheels,
                                     )
-                                except adapter.CaptureFailure as exc:
-                                    record["capture_failure"] = exc.reason
-                                    record["capture_diagnostics"] = asdict(
-                                        exc.diagnostics
+                                )
+                                first_pose = [
+                                    np.asarray(v, dtype=float).tolist()
+                                    for v in capture_diagnostics.accepted_pose
+                                ]
+
+                                def observed(result) -> dict:
+                                    obs, diag = result.observation, result.diagnostics
+                                    valid = obs.status == "valid"
+                                    return {
+                                        "status": obs.status,
+                                        "reason": obs.reason,
+                                        "left_center_m": list(obs.left.center_m)
+                                        if valid
+                                        else None,
+                                        "right_center_m": list(obs.right.center_m)
+                                        if valid
+                                        else None,
+                                        "insertion_yaw_rad": obs.insertion_yaw_rad,
+                                        # Fork spacing plan (B): the lower-deck evidence per
+                                        # capture, to see how much it moves in place.
+                                        "selected_lower": diag.selected_lower,
+                                        "rejected_lower": [
+                                            p.lower for p in diag.rejected_patterns
+                                        ],
+                                    }
+
+                                def valid_fraction(depth) -> float:
+                                    depth = np.asarray(depth, dtype=float)
+                                    return float((np.isfinite(depth) & (depth > 0)).mean())
+
+                                captures = [
+                                    {
+                                        "index": 0,
+                                        "accepted_pose": first_pose,
+                                        "drift": G2.drift(first_pose, first_pose),
+                                        "depth_sha256": attempt["depth_sha256"],
+                                        "valid_fraction": valid_fraction(
+                                            scene_input.depth_m
+                                        ),
+                                        **observed(detection),
+                                    }
+                                ]
+                                for index in range(1, args.repeat_captures + 1):
+                                    record = {"index": index}
+                                    try:
+                                        repeat_input, _, repeat_attempts = (
+                                            perception_capture.capture(
+                                                max_attempts=args.perception_max_attempts,
+                                            )
+                                        )
+                                    except adapter.CaptureFailure as exc:
+                                        record["capture_failure"] = exc.reason
+                                        record["capture_diagnostics"] = asdict(
+                                            exc.diagnostics
+                                        )
+                                        captures.append(record)
+                                        break
+                                    repeat_diagnostics = asdict(
+                                        perception_capture.state.diagnostics
+                                    )
+                                    pose = [
+                                        np.asarray(v, dtype=float).tolist()
+                                        for v in perception_capture.state.diagnostics.accepted_pose
+                                    ]
+                                    record.update(
+                                        {
+                                            "capture_diagnostics": repeat_diagnostics,
+                                            "capture_attempts": repeat_attempts,
+                                            "accepted_pose": pose,
+                                            "drift": G2.drift(first_pose, pose),
+                                            "depth_sha256": G2.depth_sha256(
+                                                repeat_input.depth_m
+                                            ),
+                                            "depth_change": G2.depth_change(
+                                                scene_input.depth_m, repeat_input.depth_m
+                                            ),
+                                            "valid_fraction": valid_fraction(
+                                                repeat_input.depth_m
+                                            ),
+                                            **observed(
+                                                detect_pockets(
+                                                    adapter.detector_input(
+                                                        repeat_input, args.depth_quantize_mm
+                                                    ),
+                                                    prior,
+                                                    params,
+                                                )
+                                            ),
+                                        }
                                     )
                                     captures.append(record)
+                                state["repeat_capture"] = {
+                                    "status": "repeat_capture_done",
+                                    "attempt_number": attempt_number,
+                                    "candidate_index": attempt["candidate_index"],
+                                    "wheels_held": True,
+                                    "captures": captures,
+                                    "summary": G2.repeat_summary(captures),
+                                }
+                                transition("repeat_capture_done", t)
+                                break
+                            if live_abort_:
+                                pass
+                            elif observation.status != "valid":
+                                # M-a1 slice 4b-iii: an observation without a detection goes to the next candidate (the core's).
+                                if core.observe_failed(t, rear, attempt, attempt_number, observation):
                                     break
-                                repeat_diagnostics = asdict(
-                                    perception_capture.state.diagnostics
-                                )
-                                pose = [
-                                    np.asarray(v, dtype=float).tolist()
-                                    for v in perception_capture.state.diagnostics.accepted_pose
-                                ]
-                                record.update(
-                                    {
-                                        "capture_diagnostics": repeat_diagnostics,
-                                        "capture_attempts": repeat_attempts,
-                                        "accepted_pose": pose,
-                                        "drift": G2.drift(first_pose, pose),
-                                        "depth_sha256": G2.depth_sha256(
-                                            repeat_input.depth_m
-                                        ),
-                                        "depth_change": G2.depth_change(
-                                            scene_input.depth_m, repeat_input.depth_m
-                                        ),
-                                        "valid_fraction": valid_fraction(
-                                            repeat_input.depth_m
-                                        ),
-                                        **observed(
-                                            detect_pockets(
-                                                adapter.detector_input(
-                                                    repeat_input, args.depth_quantize_mm
-                                                ),
-                                                prior,
-                                                params,
-                                            )
-                                        ),
-                                    }
-                                )
-                                captures.append(record)
-                            state["repeat_capture"] = {
-                                "status": "repeat_capture_done",
-                                "attempt_number": attempt_number,
-                                "candidate_index": attempt["candidate_index"],
-                                "wheels_held": True,
-                                "captures": captures,
-                                "summary": G2.repeat_summary(captures),
-                            }
-                            transition("repeat_capture_done", t)
-                            break
-                        if live_abort_:
-                            pass
-                        elif observation.status != "valid":
-                            # M-a1 slice 4b-iii: an observation without a detection goes to the next candidate (the core's).
-                            if core.observe_failed(t, rear, attempt, attempt_number, observation):
-                                break
-                        else:
-                            # M-a1 slice 4b-iv: a valid observation's estimate, records, plan and followers are the core's.
-                            succeeded_ = core.observe_succeeded(t, rear, base, yaw, attempt, attempt_number, observation, scene_input,
-                                                                capture_diagnostics, step)
-                            if succeeded_.stop:
-                                break
-                            observation, near_leg = succeeded_.observation, succeeded_.near_leg
-                            if getattr(succeeded_, "pending", False):
-                                plan_wait_ = True  # real-time plan D8b: the mission plan is asked; this tick stands
                             else:
-                                # M-a1 slice 4b-v: the near leg, or the near capture's re-drawn straight, is the core's.
-                                core.near_leg_or_recapture(t, rear, base, yaw, observation, attempt_number, near_leg)
+                                # M-a1 slice 4b-iv: a valid observation's estimate, records, plan and followers are the core's.
+                                succeeded_ = core.observe_succeeded(t, rear, base, yaw, attempt, attempt_number, observation, scene_input,
+                                                                    capture_diagnostics, step)
+                                if succeeded_.stop:
+                                    break
+                                observation, near_leg = succeeded_.observation, succeeded_.near_leg
+                                if getattr(succeeded_, "pending", False):
+                                    plan_wait_ = True  # real-time plan D8b: the mission plan is asked; this tick stands
+                                else:
+                                    # M-a1 slice 4b-v: the near leg, or the near capture's re-drawn straight, is the core's.
+                                    core.near_leg_or_recapture(t, rear, base, yaw, observation, attempt_number, near_leg)
                     else:
                         # M-a1 slice 2: every other arrival is the core's.
                         arrival_ = core.arrive(t, tracking)
@@ -5996,6 +6109,8 @@ def drive(S, isaac) -> None:
                             rear = arrival_.rear
                         if arrival_.stop:
                             break
+            if core.jobs is not None and not plan_wait_ and core.job_pending():
+                plan_wait_ = True  # real-time plan D9b: the delivery docking match was just asked; this tick stands
             if live_abort_:
                 requested_speed, curvature = 0.0, 0.0
             if not paused_ and not live_abort_ and not plan_wait_ and core.lift_and_timers(t, dt):  # M-a1 slice 2: the lift ramp, timers
@@ -6304,7 +6419,13 @@ def drive(S, isaac) -> None:
             # arrivals: the error at the switch); a replaced tracker is drained on replacement and the
             # rest at the end (TrackerBook).
             trackers.collect()
-            stepper["fn"](pocket_frames and step % 12 == 0)
+            capturing_ = core.capture_live is not None and core.capture_live.raw is None
+            stepper["fn"]((pocket_frames and step % 12 == 0) or capturing_)
+            if capturing_:
+                # Real-time plan D9c: right after its render step, before the next tick clears the step's STOP.
+                stepped_ = core.capture_stepped(bool(live.stopped_in_tick))
+                if getattr(stepped_, "aborted", False) or core.capture_live is None or core.capture_live.raw is not None:
+                    live.capturing = False
             if pocket_frames and step % 12 == 0:
                 read_pocket_frame()
             if step % 12 == 0:

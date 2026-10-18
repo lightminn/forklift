@@ -16,6 +16,8 @@ import json
 import math
 import socket
 import struct
+import time
+from collections import deque
 from dataclasses import dataclass
 
 import numpy as np
@@ -233,7 +235,92 @@ class SlamLinkClient:
         self.sock.close()
 
 
+class AsyncSlamLink:
+    """The same bridge, without waiting (real-time plan D9a): the simulator goes on while the bridge answers.
+
+    Scans are queued in order and sent one at a time -- the next only after the last one's reply -- so the
+    bridge sees exactly the lockstep stream (its keyframe gate, its /clock) and no scan is ever unanswered there.
+    ``poll`` collects the replies that have arrived (each with the scan's own record and the send/receive
+    clocks) and sends the next scan. A reply not in within ``deadline_s`` (wall), a queue over ``queue_max`` or a
+    ``failed`` reply raises ``SlamLinkFailure``, as a lockstep exchange would. A real-time run only; batch runs
+    keep ``SlamLinkClient.exchange``."""
+
+    def __init__(self, client: SlamLinkClient, *, deadline_s: float = 1.0, queue_max: int = 20, clock=time.monotonic):
+        self.client, self.deadline_s, self.queue_max, self.clock = client, float(deadline_s), int(queue_max), clock
+        self.queue: deque = deque()
+        self.in_flight = None  # (scan, meta, sent_mono)
+        self._buffer = b""
+        self.max_depth = 0
+        self.last_reply_id: int | None = None
+
+    def enqueue(self, scan: Scan, meta: dict) -> None:
+        if len(self.queue) >= self.queue_max:
+            raise SlamLinkFailure(f"scan {scan.scan_id}: {len(self.queue)} scans queued behind the bridge")
+        self.queue.append((scan, meta))
+        self.max_depth = max(self.max_depth, len(self.queue) + (self.in_flight is not None))
+        self._pump()
+
+    def depth(self) -> int:
+        return len(self.queue) + (self.in_flight is not None)
+
+    def _pump(self) -> None:
+        if self.in_flight is None and self.queue:
+            scan, meta = self.queue.popleft()
+            try:
+                self.client.sock.sendall(encode_scan(scan))
+            except OSError as exc:
+                raise SlamLinkFailure(f"scan {scan.scan_id}: {exc}") from exc
+            self.in_flight = (scan, meta, self.clock())
+
+    def _read(self) -> list[bytes]:
+        try:
+            while True:
+                chunk = self.client.sock.recv(65536, socket.MSG_DONTWAIT)
+                if not chunk:
+                    raise SlamLinkFailure("the bridge closed the connection")
+                self._buffer += chunk
+        except (BlockingIOError, InterruptedError):
+            pass
+        except OSError as exc:
+            raise SlamLinkFailure(f"reading replies: {exc}") from exc
+        bodies = []
+        while len(self._buffer) >= 4:
+            (length,) = struct.unpack(">I", self._buffer[:4])
+            if len(self._buffer) < 4 + length:
+                break
+            bodies.append(self._buffer[4:4 + length])
+            self._buffer = self._buffer[4 + length:]
+        return bodies
+
+    def poll(self) -> list:
+        """The replies in since the last call: (reply, meta, sent_mono, received_mono), in order."""
+        out = []
+        for body in self._read():
+            now = self.clock()
+            if self.in_flight is None:
+                raise SlamLinkFailure("a reply with no scan in flight")
+            scan, meta, sent = self.in_flight
+            try:
+                reply = decode_reply(body)
+            except (ValueError, KeyError) as exc:
+                raise SlamLinkFailure(f"scan {scan.scan_id}: {exc}") from exc
+            if reply.scan_id != scan.scan_id or reply.stamp_s != scan.stamp_s:
+                raise SlamLinkFailure(
+                    f"reply for scan {reply.scan_id} @{reply.stamp_s} to scan {scan.scan_id} @{scan.stamp_s}")
+            if reply.status == "failed":
+                raise SlamLinkFailure(f"bridge reported failure for scan {scan.scan_id}")
+            self.in_flight = None
+            self.last_reply_id = int(reply.scan_id)
+            out.append((reply, meta, sent, now))
+            self._pump()
+        if self.in_flight is not None and self.clock() - self.in_flight[2] > self.deadline_s:
+            raise SlamLinkFailure(
+                f"scan {self.in_flight[0].scan_id}: no reply within {self.deadline_s:.2f} s")
+        return out
+
+
 __all__ = [
+    "AsyncSlamLink",
     "Reply",
     "STATUSES",
     "Scan",

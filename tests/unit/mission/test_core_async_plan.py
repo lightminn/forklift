@@ -294,3 +294,138 @@ def test_a_batch_core_has_no_worker_and_plans_in_the_tick():
     core.hooks.arm_docking = lambda: None
     assert core.live_leg(20.0, REAR, True) is True
     assert not core.job_pending() and core.paths["transport"].status == "success" and ms.phase_started == 20.0
+
+
+# --- real-time plan D9c: the capture over control ticks and the observation's next-tick check ---------------------
+@dataclass
+class FakeCaptureDiagnostics:
+    attempts: int = 2
+
+
+class CaptureFailure(Exception):
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+        self.diagnostics = FakeCaptureDiagnostics()
+
+
+class FakeSession:
+    """Accepts a frame after ``steps`` render steps; ``fail_at`` raises at that step."""
+
+    def __init__(self, steps=3, fail_at=None):
+        self.steps, self.fail_at, self.n, self.closed, self.result = steps, fail_at, 0, False, None
+
+    def start(self):
+        return False
+
+    def stepped(self, error=None):
+        self.n += 1
+        if self.fail_at == self.n:
+            raise CaptureFailure("pose_changed")
+        if self.n >= self.steps:
+            self.result = ("SCENE", "FRAME_DIAG", self.n)
+            return True
+        return False
+
+    def close(self):
+        self.closed = True
+
+
+def capture_core(session):
+    core, ms, state, obstacle, slam, calls, _ = make("observe")
+    state.update(observation_attempts=[], observation_waypoint_selected=[1.0, 2.0, 0.0])
+    ms.next_candidate_index = 1
+    core.options.adapter = SimpleNamespace(CaptureFailure=CaptureFailure)
+    core.options.perception_max_attempts = 20
+    core.hooks.perception_capture = lambda: SimpleNamespace(session=lambda max_attempts: session)
+    core.hooks.live_abort = lambda: False
+    core.hooks.now_s = lambda: 50.25
+    return core, state, slam, calls
+
+
+def test_a_capture_runs_one_render_step_per_tick_and_holds_its_frame_for_the_next_tick():
+    session = FakeSession(steps=3)
+    core, state, slam, calls = capture_core(session)
+    assert core.capture_begin(50.0, REAR, 6000) is None and core.capture_live is not None
+    assert state["observation_attempts"][0]["t_before_capture_s"] == 50.0
+    for _ in range(2):
+        assert core.capture_stepped(False) is None and core.capture_live.raw is None
+    assert core.capture_stepped(False) is None and core.capture_live.raw == ("SCENE", "FRAME_DIAG", 3)
+
+
+def test_a_stop_at_a_render_step_or_a_pause_drops_the_capture_and_a_failure_is_the_capture_s_failure():
+    session = FakeSession(steps=5)
+    core, state, slam, calls = capture_core(session)
+    core.capture_begin(50.0, REAR, 6000)
+    core.capture_stepped(False)
+    assert core.capture_stepped(True).aborted and session.closed and core.capture_live is None
+    assert state["observation_attempts"][-1]["aborted"] == "live_stop"
+    session = FakeSession(steps=5)
+    core, state, slam, calls = capture_core(session)
+    core.capture_begin(50.0, REAR, 6000)
+    core.capture_abandon()
+    assert session.closed and core.capture_live is None and state["observation_attempts"][-1]["aborted"] == "paused"
+    core, state, slam, calls = capture_core(FakeSession(steps=5, fail_at=2))
+    core.capture_begin(50.0, REAR, 6000)
+    core.capture_stepped(False)
+    with pytest.raises(RuntimeError, match="perception_capture_failed:pose_changed"):
+        core.capture_stepped(False)
+
+
+@pytest.mark.parametrize("change,why", [
+    (None, None),
+    (lambda core, slam: slam["tracker"].__setattr__("applied", ((0.2, 0.0, 0.0), 0)), "correction"),
+    (lambda core, slam: setattr(core.commands, "mission_gen", core.commands.mission_gen + 1), "mission"),
+    (lambda core, slam: setattr(core.commands, "status", "cancelled"), "mission"),
+    (lambda core, slam: core.ms.__setattr__("phase", "approach"), "phase"),
+])
+def test_an_observation_is_taken_on_the_next_tick_only_on_what_it_was_detected_on(change, why):
+    core, state, slam, calls = capture_core(FakeSession())
+    core.observation_freeze(50.3, "CAPTURED")
+    if change is not None:
+        change(core, slam)
+    taken = core.observation_take(50.31)
+    if why is None:
+        assert taken == "CAPTURED" and core.capture_acquired_s == 50.25  # the time at detection, not now
+    else:
+        assert taken is None and state["observation_drops"][-1]["why"] == why
+
+
+def test_a_fourth_dropped_observation_ends_the_run():
+    core, state, slam, calls = capture_core(FakeSession())
+    for k in range(3):
+        core.observation_freeze(50.0 + k, "CAPTURED")
+        slam["tracker"].applied = ((0.2 + k, 0.0, 0.0), 0)
+        assert core.observation_take(50.5 + k) is None
+    core.observation_freeze(60.0, "CAPTURED")
+    slam["tracker"].applied = ((9.0, 0.0, 0.0), 0)
+    with pytest.raises(RuntimeError, match="observation_discarded:correction"):
+        core.observation_take(60.5)
+
+
+# --- real-time plan D9a: SLAM replies applied at a tick's start ----------------------------------------------------
+def test_replies_are_applied_in_order_and_a_new_correction_re_projects_the_grid_in_that_tick():
+    from forklift_core.localization.slam_link import Reply
+    from forklift_core.localization.slam_pose import SlamPoseTracker
+
+    core, ms, state, obstacle, slam, calls, refreshes = make("transport", applied=(0.0, 0.0, 0.0))
+    tracker = SlamPoseTracker(max_age_s=1.25, hold_limit_m=15.0)
+    tracker.receive(4, 0.4, "processed", (0.0, 0.0, 0.0))  # tracking, as after the warm-up
+    slam.update(tracker=tracker, records=[])
+    obstacle["applied"] = (0.0, 0.0, 0.0)
+    core.hooks.slam_rear = lambda t: np.array([1.0, 2.0, 0.5])
+    meta = lambda i: {"scan_id": i, "stamp_s": 0.1 * i, "phase": "transport", "scan_correction": [0.0, 0.0, 0.0]}
+    core.slam_replies(5.0, [(Reply(5, 0.5, "skipped", (0.0, 0.0, 0.0), 1, 0.0), meta(5), 1.0, 1.01)], True)
+    assert refreshes == [] and slam["records"][-1]["link"] == "async"  # a skipped reply changes nothing
+    core.slam_replies(5.1, [(Reply(6, 0.6, "skipped", (0.0, 0.0, 0.0), 1, 0.0), meta(6), 1.1, 1.11),
+                            (Reply(7, 0.7, "processed", (0.03, 0.0, 0.0), 2, 0.2), meta(7), 1.11, 1.35)], True)
+    rec = slam["records"][-1]
+    assert [r["scan_id"] for r in slam["records"]] == [5, 6, 7]
+    assert rec["applied_after"] == [0.03, 0.0, 0.0] and rec["scan_correction"] == [0.0, 0.0, 0.0]
+    assert (rec["sent_mono"], rec["received_mono"], rec["applied_tick_s"]) == (1.11, 1.35, 5.1)
+    assert obstacle["applied"] == (0.03, 0.0, 0.0) and obstacle["version"] == 4 and len(refreshes) == 1
+    assert refreshes[0][1]["current_pose"] == (1.0, 2.0, 0.5)  # the pose with the new correction
+    tracker.hold(odom_from_base=(0.0, 0.0, 0.0))  # held: a new correction is received, not applied
+    core.slam_replies(5.2, [(Reply(8, 0.8, "processed", (0.05, 0.0, 0.0), 3, 0.2), meta(8), 1.2, 1.4)], True)
+    assert len(refreshes) == 1 and slam["records"][-1]["received_after"] == [0.05, 0.0, 0.0]
+    assert slam["records"][-1]["applied_after"] == [0.03, 0.0, 0.0]

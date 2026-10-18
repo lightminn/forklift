@@ -11,6 +11,7 @@ Jobs (each a module-level planner and a copy of its arguments):
   arguments comes back filled.
 - ``leg``: ``plan_transport_leg`` or ``plan_return_leg``, then once more with the tight arguments when the first
   status is one of ``retry_on`` -- the caller's own fallback, run here so both share one deadline.
+- ``dock``: ``scan_docking.dock(*args, **kwargs)`` and its wall time (real-time plan D9b).
 
 ``PlanWorker`` is the runner's side. The control thread never waits on the worker (Codex real-time D8 round 4
 P1): ``submit`` pickles the request at once (its inputs are fixed from that moment) and queues the bytes;
@@ -52,6 +53,12 @@ def _run(name: str, payload: dict):
             result = fn(*payload["tight_args"], **payload["tight_kwargs"])
             tight = True
         return {"result": result, "tight": tight}
+    if name == "dock":  # real-time plan D9b: the delivery docking match
+        from forklift_core.localization.scan_docking import dock
+
+        started = time.monotonic()
+        result = dock(*payload["args"], **payload["kwargs"])
+        return {"result": result, "wall_s": time.monotonic() - started}
     if name == "echo":  # the tests' job
         if payload.get("sleep_s"):
             time.sleep(payload["sleep_s"])
