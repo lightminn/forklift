@@ -74,7 +74,9 @@ class Context:
 
     stop_kind: str = "none"
     near_tracker: bool = False  # a near-field tracker exists (pause is refused, E3)
-    clear_for_submit: bool = True  # empty forks and outside the near section (else recovery_required)
+    clear_for_submit: bool = True  # outside a SLAM hold and the near section (else recovery_required)
+    # live: what the forks are in refuses a submit (persistent console plan D5a: recovery_required, cargo_held)
+    submit_refusal: str | None = None
     scene_damaged: bool = False  # live: the scene's damage is latched (persistent console plan D6; else scene_damaged)
 
 
@@ -148,6 +150,8 @@ class MissionCommands:
             return "stopping"
         if context.scene_damaged:
             return "scene_damaged"
+        if context.submit_refusal is not None:
+            return context.submit_refusal
         if not context.clear_for_submit:
             return "recovery_required"
         if self.targets is not None:

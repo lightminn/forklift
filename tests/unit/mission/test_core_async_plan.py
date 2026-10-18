@@ -688,12 +688,29 @@ def test_an_end_while_moving_releases_once_standing_and_carries_the_pallet_targe
     assert slam["tracker"].released == 1  # once
 
 
-@pytest.mark.parametrize("phase", ["insert", "lift", "transport", "withdraw"])
-def test_an_end_in_a_pocket_or_loaded_phase_keeps_the_hold(phase):
+def cargo_to(core, phase):
+    """The session's fork relation as a mission that reached ``phase`` left it (plan D5a: driven by transitions)."""
+    order = ["observe", "approach", "insert", "lift", "extract", "transport", "lower", "withdraw", "settle"]
+    for a, b in zip(order, order[1:order.index(phase) + 1]):
+        core.cargo.on_transition(a, b, "P-1")
+
+
+@pytest.mark.parametrize("phase", ["insert", "lift", "lower", "withdraw"])
+def test_an_end_with_the_forks_in_a_pocket_keeps_the_hold(phase):
     core, slam, Pose = held_core(phase)
+    cargo_to(core, phase)
     core.end_reset(20.0)
     assert slam["tracker"].mode == "holding" and slam["tracker"].released == 0
     assert slam["pending_release"] is None  # the mission's own reservation is gone either way
+
+
+def test_an_end_while_carrying_releases_the_hold_for_the_teleop_with_the_load():
+    """Plan D5a (Codex round 1 P2-6): a hold left while carrying freezes the correction under the loaded teleop the
+    user allowed, until LocalizationStale at 15 m."""
+    core, slam, Pose = held_core("transport")
+    cargo_to(core, "transport")
+    core.end_reset(20.0)
+    assert slam["tracker"].released == 1
 
 
 @pytest.mark.parametrize("standing", [True, False])
@@ -723,16 +740,44 @@ def test_an_end_after_docking_carries_the_docked_destination_and_the_pallet_deli
     assert (pallet.x_m, pallet.y_m) == pytest.approx((5.2, 1.0)) and (dest.x_m, dest.y_m) == pytest.approx((5.2, 1.0))
 
 
-@pytest.mark.parametrize("phase, adopted, flagged", [
-    ("transport", False, True), ("withdraw", False, True), ("complete", False, False), ("observe", False, False),
-    ("transport", True, False),  # a mission running (a batch run's is always adopted)
+@pytest.mark.parametrize("phase, adopted, key", [
+    ("withdraw", False, "recovery_required"), ("insert", False, "recovery_required"),
+    ("transport", False, "cargo_held"), ("settle", False, None), ("observe", False, None),
+    ("transport", True, None),  # a mission running (a batch run's is always adopted)
 ])
-def test_the_safety_state_says_a_recovery_is_needed_after_an_end_in_a_pocket_phase(phase, adopted, flagged):
+def test_the_safety_state_says_what_an_ended_missions_forks_refuse(phase, adopted, key):
+    """Plan D5a: from the session's fork relation, not the phase name (which a batch run's state still uses)."""
     core, ms, state, obstacle, slam, calls, _ = make(phase)
+    cargo_to(core, phase)
     core.commands.adopted_id = "m1" if adopted else None
     core.commands.mission_id = "m1"
+    assert not {"recovery_required", "cargo_held"} & set(core.safety_state(10.0))  # not live: as before (P3)
+    core.baseline = object()  # a live session
     s = core.safety_state(10.0)
-    assert s.get("recovery_required", False) is flagged and (("recovery_required" in s) is flagged)
+    for k in ("recovery_required", "cargo_held"):
+        assert (k in s) is (k == key) and s.get(k, True) is True
+
+
+def test_a_live_safety_state_publishes_the_fork_relation_and_a_batch_one_the_phase():
+    core, ms, state, obstacle, slam, calls, _ = make("transport")
+    cargo_to(core, "transport")
+    batch = core.safety_state(10.0)
+    assert batch["load"] == {"loaded": True, "basis": "phase", "lift_target_m": 0.0}
+    assert batch["fork_in_pocket"] == {"value": False, "basis": "phase"}
+    core.baseline = object()  # a live session (the runner captures the baseline only there)
+    live = core.safety_state(10.0)
+    assert live["load"] == {"loaded": True, "basis": "phase+cargo", "pallet_id": "P-1", "state": "confirmed",
+                            "lift_target_m": 0.0}
+    assert live["fork_in_pocket"] == {"value": True, "basis": "phase+cargo", "relation": "carrying"}
+
+
+def test_the_cores_transitions_drive_the_session_cargo():
+    core, ms, state, obstacle, slam, calls, _ = make("lift")
+    core.commands.mission = SimpleNamespace(pallet_id="P-7", destination_id="D-1")
+    core.hooks.echo, core.hooks.snapshot = (lambda *a: None), (lambda *a: None)
+    obstacle["layer"].known_enabled, obstacle["layer"].memory = False, None
+    core.transition("extract", 5.0)
+    assert (core.cargo.relation, core.cargo.load, core.cargo.pallet_id) == ("carrying", "confirmed", "P-7")
 
 
 def test_an_arrival_hold_carries_only_what_it_found_itself():
@@ -777,3 +822,17 @@ def test_a_capture_made_under_the_held_correction_is_carried():
     slam["tracker"].mode = "holding"
     core.end_reset(12.0)
     assert core.targets.pallets["P-1"].pose.x_m == pytest.approx(3.2)
+
+
+def test_a_deferred_end_release_is_dropped_when_the_cargo_turns_unknown_before_standing():
+    """Codex D5a impl round 1 P2: the release was reserved while carrying; the pallet dropped before the truck stood
+    -- unknown keeps the hold."""
+    core, slam, Pose = held_core("transport")
+    cargo_to(core, "transport")
+    slam["stop_now"] = False
+    core.end_reset(20.0)
+    assert core.end_release_due is not None and slam["tracker"].released == 0
+    core.cargo.invalidate("Pallet dropped during transport")
+    slam["stop_now"] = True
+    core.release_gate(21.0, np.array([1.0, 2.0, 0.5]))
+    assert slam["tracker"].released == 0 and slam["tracker"].mode == "holding" and core.end_release_due is None

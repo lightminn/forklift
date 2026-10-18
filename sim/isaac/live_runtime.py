@@ -202,9 +202,11 @@ class LiveRuntime:
             json.dumps({"rotations": self._log_rotations, "keep": self._log_keep}))
 
     # --- per control tick ------------------------------------------------------------------------------------------
-    def tick_start(self, t: float, near_active: bool, clear_for_submit: bool = True) -> tuple[str, list]:
-        """The arbiter's cycle start, then the mission's commands with the stop kind it gives (M-b B3). ``clear_for_submit``: the
-        forks are empty and out of every pocket (else a submit is refused recovery_required)."""
+    def tick_start(self, t: float, near_active: bool, clear_for_submit: bool = True,
+                   submit_refusal: str | None = None) -> tuple[str, list]:
+        """The arbiter's cycle start, then the mission's commands with the stop kind it gives (M-b B3). ``clear_for_submit``:
+        outside a SLAM hold (else a submit is refused recovery_required); ``submit_refusal``: what the forks are in
+        refuses it (persistent console plan D5a: recovery_required, cargo_held)."""
         now = self.clock()
         self.stopped_in_tick = False
         self.arbiter.pacing_ok = self.pacer.ok
@@ -212,6 +214,7 @@ class LiveRuntime:
         self.collect_end(t)  # ended after the last apply (a preparation's job_hold failure): before this one frees it
         records = self.core.commands.apply(t, Context(stop_kind=stop_kind, near_tracker=near_active,
                                                       clear_for_submit=clear_for_submit,
+                                                      submit_refusal=submit_refusal,
                                                       scene_damaged=self.scene["damaged"] is not None))
         self.collect_end(t)  # ended in this apply (a cancel before it ran, a stopped preparation)
         self._flush(t)

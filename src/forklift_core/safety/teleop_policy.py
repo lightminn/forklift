@@ -34,7 +34,10 @@ def teleop_policy(safety: dict | None, *, feedback_ok: bool, standing: bool) -> 
         # A live mission ended where the forks may be in a pocket or the pallet on them: the phase is all the state
         # knows until D5 judges the pockets (persistent console plan D6), so no manual driving.
         return refuse("recovery_required")
-    if in_pocket:
+    relation = (safety.get("fork_in_pocket") or {}).get("relation")  # live only (persistent console plan D5a)
+    if in_pocket and relation != "carrying":
+        # Inside a pocket with the pallet supported elsewhere, or not known: no manual driving (recovery is D14).
+        # Carrying -- the lift verdict passed, the pallet off the floor -- drives with the load (user decision).
         return refuse("fork_in_pocket")
     near = safety.get("near") or {}
     frame = safety.get("frame") or {}

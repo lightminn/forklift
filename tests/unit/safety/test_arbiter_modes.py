@@ -385,3 +385,18 @@ def test_a_submit_queued_before_the_end_in_the_same_cycle_is_refused():
     submit = r.msg("mission_submit", pallet_id="P", destination_id="D", targets_revision=0)
     r.cycle(submit, r.msg("session_end"))
     assert r.m.status == "idle" and r.reply(submit["request_id"])["reason"] == "session_ending"
+
+
+@pytest.mark.parametrize("relation, allowed, reason, loaded", [
+    ("carrying", True, None, True),  # a mission cancelled while transporting: driven with the load (user decision)
+    ("constrained", False, "fork_in_pocket", False),
+    ("unknown", False, "fork_in_pocket", False),
+])
+def test_a_live_fork_relation_decides_teleop_in_a_pocket(relation, allowed, reason, loaded):
+    """Persistent console plan D5a: the live state says what the forks are in; only carrying may drive."""
+    from forklift_core.safety.teleop_policy import teleop_policy
+
+    safety = dict(SAFE, load={"loaded": relation != "free", "basis": "phase+cargo"},
+                  fork_in_pocket={"value": True, "basis": "phase+cargo", "relation": relation})
+    policy = teleop_policy(safety, feedback_ok=True, standing=True)
+    assert (policy.drive_allowed, policy.reason, policy.loaded) == (allowed, reason, loaded)

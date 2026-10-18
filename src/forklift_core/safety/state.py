@@ -65,8 +65,10 @@ def state_message(arbiter, out, safety: dict | None, *, now_mono: float, rear_ax
         "rear_axle_speed_mps": rear_axle_speed_mps,
         "steering_rad": steering_rad, "lift_m": lift_m,  # measured by the back end, null when it cannot (C3 b)
         "load": {"state": None if loaded is None else ("loaded" if loaded else "empty"), "basis": load.get("basis"),
-                 # loaded is judged by the mission's phase, so the pallet on the forks is the mission's (C3)
-                 "pallet_id": mission.get("pallet_id") if loaded else None},
+                 # a live state names the pallet on the forks itself, kept past the mission's end (plan D5a); a
+                 # batch one judges loaded by the phase, so the pallet is the mission's (C3)
+                 "pallet_id": (load["pallet_id"] if "pallet_id" in load else mission.get("pallet_id")) if loaded
+                 else None},
         "command": command,
         "applied": None if applied is None else dict(applied, stop_kind=out.stop_kind),
         "permit": permit,

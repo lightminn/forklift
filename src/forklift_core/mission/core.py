@@ -63,6 +63,7 @@ import numpy as np
 
 from forklift_core.control import RearAxlePathTracker, TrackerConfig, ackermann_command
 from forklift_core.control import cusp_stall as CUSP_STALL
+from forklift_core.mission.cargo import CargoState
 from forklift_core.mission.commands import MissionCommands
 from forklift_core.control.speed_chain import creep, slew_cap_stop
 from forklift_core.mission.targets import Pose as TargetPose
@@ -85,9 +86,6 @@ def rollout_callback_spec(config, start) -> dict:
     return {"kind": "bicycle_rollout", "config": asdict(config), "start": [float(v) for v in np.ravel(start)]}
 
 
-# A live mission that ended in one of these phases may have left the forks in a pocket or the pallet on them: no end
-# release of the SLAM hold, no submit and no teleop until the recovery (persistent console plan D4/D5).
-POCKET_PHASES = ("insert", "lift", "extract", "transport", "lower", "withdraw")
 _HELD = object()  # a hold basis entry that no estimate is: every estimate counts as found under the hold
 
 
@@ -170,6 +168,9 @@ class MissionCore:
         self.end_release_due: dict | None = None  # plan D1 step 4: an end release waiting for the truck to stand
         self.hold_basis: dict | None = None  # the estimates a SLAM hold began with (those stay map estimates)
         self.fresh_depth_wait: tuple | None = None  # (since, acquisition stamp): an async near build's first frame
+        # Persistent console plan D5a: the fork relation and the load, the session's (a batch run updates it too,
+        # but only a live run reads it -- core.baseline is set there alone).
+        self.cargo = CargoState()
 
     def known_transition(self, from_phase: str, next_phase: str, t: float) -> None:
         """Known pallets across the mission (plan v10 D5)."""
@@ -268,6 +269,8 @@ class MissionCore:
     def transition(self, next_phase: str, t: float) -> None:
         ms, state, obstacle, pocket, slam, hooks = self.ms, self.state, self.obstacle, self.pocket, self.slam, self.hooks
         state["transitions"].append({"from": ms.phase, "to": next_phase, "time_s": t})
+        mission_ = self.commands.mission
+        self.cargo.on_transition(ms.phase, next_phase, None if mission_ is None else mission_.pallet_id)
         if obstacle is not None and obstacle["layer"].known_enabled:
             self.known_transition(ms.phase, next_phase, t)
         hooks.echo("TRANSITION " + hooks.record_json(state["transitions"][-1]))
@@ -3083,11 +3086,19 @@ class MissionCore:
                         else float(obstacle["permission_cap"][1]),
                         "reason": None if self.last_permission is None else self.last_permission[1]},
         }
-        if cmds.adopted_id is None and ms.phase in POCKET_PHASES:
-            # A live mission ended in a pocket or loaded phase (the batch run's mission is always the adopted one):
-            # no submit and no teleop until the recovery (persistent console plan D6; the key only when it holds,
-            # so a batch run's safety record is as it was).
-            out["recovery_required"] = True
+        if self.baseline is not None:
+            # A live session (persistent console plan D5a): what the forks are in is the session's cargo state, kept
+            # across a mission's end; a batch run's record stays as it was (the replay compares it).
+            fields_ = self.cargo.safety_fields()
+            out["load"] = {**fields_["load"], "lift_target_m": float(ms.lift_command)}
+            out["fork_in_pocket"] = fields_["fork_in_pocket"]
+        if cmds.adopted_id is None and self.baseline is not None:
+            # A live mission ended (the batch run's mission is always the adopted one): the forks in a pocket refuse
+            # a submit and teleop until the recovery; the load held refuses a submit until the cargo submit (6c).
+            # The key only when it holds, so a batch run's safety record is as it was.
+            refusal_ = self.cargo.submit_refusal()
+            if refusal_ is not None:
+                out[refusal_] = True
         return out
 
     def release_gate(self, t: float, rear) -> SimpleNamespace:
@@ -3098,7 +3109,9 @@ class MissionCore:
         require, slam_release, slam_rear = hooks.require, self.slam_release, hooks.slam_rear
         if self.end_release_due is not None and slam is not None:
             # A live mission's end release, waiting for the truck to stand (plan D1 step 4).
-            if slam["tracker"].mode != "holding":
+            if slam["tracker"].mode != "holding" or not self.cargo.release_allowed():
+                # gone already, or the forks' state no longer allows it (a pallet check failed since the reservation:
+                # unknown keeps the hold, plan D5a, Codex impl round 1 P2)
                 self.end_release_due = None
             elif slam["stop_now"]:
                 self.end_release(t, deferred=True)
@@ -4584,7 +4597,7 @@ class MissionCore:
             # The mission's release reservation goes with it (Codex D6 P2-3: its 10 s limit failed every tick after);
             # a hold left with the forks free is released for the end (D1 step 4), now or once standing.
             slam["pending_release"] = slam["release_wait_from"] = None
-            if slam["tracker"].mode == "holding" and self.ms.phase not in POCKET_PHASES:
+            if slam["tracker"].mode == "holding" and self.cargo.release_allowed():  # free or carrying (plan D5a)
                 if slam["stop_now"]:
                     self.end_release(t, deferred=False)
                 else:

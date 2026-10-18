@@ -525,7 +525,7 @@ def test_the_runner_prepares_each_live_mission_from_where_the_truck_stands():
     assert source.index("live_prepare(t, rear)  #") < source.index("plan_wait_ = core.jobs is not None and core.job_hold(")
     assert 'core.commands.status in ("idle", "done", "failed", "cancelled"):' in source  # accepted is not paused
     assert 'if live is not None and core.commands.status in ("accepted", "preparing"): plan_wait_ = True' in flat
-    assert "clear_for_submit=ms.phase not in LIVE_POCKET_PHASES" in source
+    assert "submit_refusal=core.cargo.submit_refusal())" in source  # plan D5a: the forks, at the last tick's end
     # the adoption's runner part and the session's baseline, before the console starts
     assert "nonlocal scenario, truth_destination, initial_pallet, pickup_obstacle, pickup_zone, pickup_bounds" in source
     start = source.index("            live.start()  # after the SLAM warm-up")

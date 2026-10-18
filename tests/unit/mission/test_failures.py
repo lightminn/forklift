@@ -134,10 +134,10 @@ def test_the_scene_checks_are_scene_class_and_go_through_the_latch():
     assert all(classify(r) == "scene" for r in scene)
 
 
-def test_the_runner_and_the_core_name_the_same_pocket_phases():
-    from forklift_core.mission.core import POCKET_PHASES
+def test_no_live_decision_rests_on_pocket_phase_names_any_more():
+    """Plan D5a: what a live mission's end left the forks in is the session's cargo state (the runner and the core
+    named the pocket phases twice to decide it, plan D2/D6)."""
+    import forklift_core.mission.core as core_module
 
-    tree = ast.parse((ROOT / "sim/isaac/run_transport.py").read_text())
-    (value,) = [ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign)
-                and getattr(n.targets[0], "id", None) == "LIVE_POCKET_PHASES"]
-    assert value == POCKET_PHASES
+    assert not hasattr(core_module, "POCKET_PHASES")
+    assert "LIVE_POCKET_PHASES" not in (ROOT / "sim/isaac/run_transport.py").read_text()

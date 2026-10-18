@@ -189,3 +189,14 @@ def test_an_ended_mission_shows_its_end_reason_not_an_earlier_refused_resume():
     assert state_message(loop.a, out, safety, now_mono=loop.t)["mission"]["reason"] == "operator"
     running = dict(safety, mission=dict(safety["mission"], status="paused"))
     assert state_message(loop.a, out, running, now_mono=loop.t)["mission"]["reason"] == "path_blocked"
+
+
+def test_a_live_load_names_its_pallet_after_the_mission_ended():
+    """Plan D5a (Codex round 1 P3): the mission is cleared the tick after its end; the carried pallet stays drawn."""
+    loop = Loop()
+    safety = dict(SAFE, load={"loaded": True, "basis": "phase+cargo", "pallet_id": "P-2", "state": "confirmed"},
+                  mission={"id": None, "status": "idle", "phase": None, "pallet_id": None, "destination_id": None})
+    out = loop.a.step(loop.t, safety, (0.0, 0.0), {"measured_mps": 0.0, "measured_kappa": 0.0,
+                                                   "steering_error_rad": 0.0, "permit": loop.permit})
+    st = state_message(loop.a, out, safety, now_mono=loop.t)
+    assert st["load"] == {"state": "loaded", "basis": "phase+cargo", "pallet_id": "P-2"}
