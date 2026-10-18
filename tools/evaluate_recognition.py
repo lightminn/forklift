@@ -215,7 +215,8 @@ def _segmentation_summary(scenes) -> dict:
 def _truth_ids(truth_dir, scene_dir):
     """The depth-aligned truth ids of this scene; refused unless it is the same scene (same truth.json)."""
     other = truth_dir / scene_dir.name
-    if not (other / "truth.json").exists() or (other / "truth.json").read_bytes() != (scene_dir / "truth.json").read_bytes():
+    if not (other / "truth.json").exists() or (json.loads((other / "truth.json").read_text())
+                                               != json.loads((scene_dir / "truth.json").read_text())):
         raise SystemExit(f"segmentation truth {other} is not the same scene as {scene_dir}")
     return load_recognition_sample(other).instance_ids
 
