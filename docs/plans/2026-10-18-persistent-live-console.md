@@ -708,6 +708,34 @@ D2 의 `mission_start` 는 작업자 작업 `observe_ladder` 로 한다. 이름 
 - `bundle_coverage`: 배치 형식과 스풀 형식으로 같은 자료를 준 두 실행의 결과가 같음(예전 읽기 코드로 되돌리면 실패함을 확인).
 - Isaac: U1 재측정, 이어 U16 의 짧은 판(미션 3회 반복, 영상 기록 켬), U30.
 
+### D8b SLAM 브리지의 자원 (5단계 b, 2026-10-19, d57e0da 뒤; 4판 — Codex 1–3회차 반영)
+
+**측정(U1 재측정 초반, d57e0da 스냅숏).** 브리지 컨테이너 메모리가 대기 중 분당 약 10.6 MB 늘었다(시간당 약 640 MB). 컨테이너 한도가 4 GB 라 약 6시간이면 OOM 이다. 프로세스별로 재면 `isaac_slam_bridge` 만 30초마다 5.3 MB 늘고 slam_toolbox 는 그대로다. 원인은 브리지가 `/map` 을 받을 때마다 격자를 통째로 `map_arrays` 에 쌓는 것이다(`isaac_slam_bridge.py` 150). slam_toolbox 는 지도를 1초마다 발행하고(`map_update_interval: 1.0`), 이 장면의 격자는 약 176 KB 다. 176 KB × 60장/분 ≈ 10.6 MB/분으로 측정과 맞는다. 정지 중에도 같은 지도가 매번 다시 쌓인다. 응답 기록 `records` 도 스캔마다(10 Hz) 붙는다.
+
+**읽는 쪽.** 실행 중에 읽는 것은 `latest_map.npz`(계획기, 지도마다 원자적으로 다시 씀)뿐이다. `maps.json`·`maps.npz`·`bridge_records.json` 은 종료 때 쓴다. 배치 영상 도구(`compose_online_slam_video.py`)는 `maps.json`·`maps.npz` 와 실행기의 `slam_records.json` 을 읽는다(`bridge_records.json` 은 읽지 않는다). `bridge_status.json` 은 실행 판정이 읽는다.
+
+**설계.** 브리지에 ROS 인자 `persistent`(기본 거짓)를 둔다. 거짓이면 지금과 같다. 참이면 다음과 같다.
+1. 직전과 같은 지도(격자 바이트·크기·해상도·원점 위치와 방향·`frame_id` 가 같음)는 다시 쌓지 않는다. 반복 구간을 센다. 정지 중에는 늘지 않는다. `latest_map.npz` 는 지금처럼 지도마다 다시 쓴다.
+2. 바뀐 지도는 메모리에 두지 않는다. 받는 즉시 `maps/map_NNNNNN.npz`(압축, `.tmp` 에 쓰고 이름 바꿈)에 쓰고 메타는 `maps.jsonl` 에 한 줄 붙인다. 메모리에는 비교용 직전 격자 하나만 둔다.
+3. **번호·시각 계약**(Codex 1회차 P3). `index` 는 지금처럼 **수신 순번**이다. 반복도 순번을 하나 쓴다(`latest_map.npz` 의 `index` 가 달라야 실행기가 다시 설치한다, R3682). 저장된 지도의 줄은 그 지도의 **처음** `after_scan_id`·`stamp_ns`(메시지 시각)·`received_wall_s`(수신 시각)를 갖고, 반복이 덮어쓰지 않는다(영상 도구는 `after_scan_id < last_scan_id` 로 지도가 있었는지 판정한다). 반복 구간은 다음 바뀐 지도가 올 때와 종료 때 `{"repeat_of": i, "repeats": n, "last_index", "last_stamp_ns", "last_after_scan_id", "last_received_wall_s"}` 한 줄로 확정한다. 종료 전에 프로세스가 죽으면 열린 반복 구간 한 줄은 잃는다(지도 자체는 이미 디스크에 있음).
+4. 응답 기록은 `records.jsonl` 에 한 줄씩 붙인다. 메모리에는 판정에 필요한 실패 수와 "stray 가 기록된 응답이 있었는지"만 둔다. 마지막 응답 뒤의 stray 는 지금처럼 별도 줄을 남기고 실패로 센다.
+5. **응답 경로를 막지 않는다**(Codex 1회차 P2). 기본 콜백 그룹은 상호 배제라, 지도를 저장(압축)하는 동안 응답이 기다리는 `/pose` 콜백이 멈춘다. `/map` 구독을 자기 그룹(`map_group`)으로 뗀다. 응답 기록은 `sendall` 뒤에 넘긴다(`finally` 로, 보내기가 실패해도 기록은 남음). serve 스레드는 기록을 넘긴 직후 다음 스캔을 읽으므로, 파일 쓰기는 자기 쓰기 스레드가 한다(대기 줄 10,000개 상한. 큐 초과·쓰기 오류는 `records_dropped`, 종료 기한에 남았거나 쓰는 중이던 줄은 `records_unsettled` 로 `bridge_status.json` 에 셈, Codex 2·4회차). 판정용 실패 수·stray 여부는 넘길 때 바로 고친다. 실행기의 응답 제한은 1 s 다.
+6. 종료(`save`)는 먼저 `bridge_status.json` 을 `{"pending": true, "ok": false}` 로 쓰고, 기록을 다 쓰고(쓰기 스레드를 기한 30 s 까지 기다림) 열린 반복 구간을 확정한 뒤 최종 판정으로 바꾼다. 두 번 모두 `.tmp` 에 쓰고 이름을 바꾼다. 기한에 쓰는 중이던 줄과 남은 줄은 `records_unsettled` 로 세고, 그 뒤에 쓰기가 끝나도 바꾸지 않는다(Codex 3회차 P2 2건). 상시 모드의 상태에는 `records_dropped`·`records_unsettled` 가 붙는다.
+   - 라이브 작업의 정지 스크립트(`isaac_live.sbatch` 의 `stop.sh`)는 브리지 컨테이너가 스스로 끝나기를 최대 45 s 기다린 뒤 지운다. 실행기가 소켓을 닫으면 브리지는 저장하고 끝난다. 지금은 실행기가 끝나자마자 지워, 저장 중인 기록이 잘릴 수 있었다. `maps.json`·`maps.npz`·`bridge_records.json` 은 쓰지 않는다. 배치 도구에 상시 세션 출력을 주면 파일이 없다는 오류로 멈춘다.
+7. 켜는 곳: `tools/slam_bridge_container.sh` 의 넷째 인자 `persistent`. 라이브 실행을 띄우는 `deploy/console/isaac_live.sbatch` 와 ws1 시험용 `live.sbatch` 가 넘긴다.
+
+**디스크.** 지도 보관량은 정지 중 0, 주행 중 바뀐 지도당 수십 KB 다. 응답 기록은 정지 중에도 스캔마다 한 줄씩 는다(10 Hz × 약 300 B ≈ 시간당 11 MB). `latest_map.npz` 는 덮어쓰므로 늘지 않는다. U1 재측정에서 둘을 재서 세션 디스크 상한(8시간 5 GB)과 대조한다. `stray` 목록은 지우지 않지만, 쌓이면 다음 응답이 실패로 끝나므로 정상 대기 중에는 늘지 않는다.
+
+**slam_toolbox 자체.** 정지 중에는 늘지 않았다. 주행하면 자세 그래프가 거리만큼 커지는 것은 slam_toolbox 의 성질이다. U16 에서 미션당 증가를 재고, 상한을 넘으면 따로 다룬다.
+
+**시험.** ROS 를 가짜 모듈로 바꾼 지금의 규칙 시험 방식으로 한다.
+- persistent 끔: 지도 두 장이 `maps` 와 `map_arrays` 에 쌓이고 save 가 `maps.npz` 를 쓴다(지금과 같음).
+- persistent 켬: 같은 지도 100장은 메모리·파일이 늘지 않고 반복 구간만 센다. 바뀐 지도는 파일로 가고 메모리에 남지 않는다. 응답 기록은 `records.jsonl` 로 간다. save 는 상태 파일을 쓰고 열린 반복 구간을 `maps.jsonl` 에 확정할 뿐, `maps.json`·`maps.npz`·`bridge_records.json` 은 쓰지 않는다(Codex 2회차 P3).
+- 반복 구간이 처음 지도의 `after_scan_id`·`stamp_ns` 를 지키고, `frame_id` 가 다르면 새 지도다.
+- `/map` 구독이 자기 콜백 그룹을 쓰고, 응답 기록이 `sendall` 뒤에 있다. 쓰기가 멈춘 디스크에서도 기록 넘기기가 기다리지 않고, 상한을 넘은 줄은 버리고 센다.
+- 컨테이너 스크립트가 넷째 인자로 `-p persistent:=true` 를 넘기고, 두 sbatch 가 그것을 넘긴다.
+- Isaac: U1 재측정에서 브리지 메모리 증가 < 20 MB/시간(정지 중).
+
 ## 4. 유즈케이스와 시험
 
 시험은 세 층이다:
@@ -882,6 +910,7 @@ D2 의 `mission_start` 는 작업자 작업 `observe_ladder` 로 한다. 이름 
 | 4c 설계 | 09a83d1 → 2판 | 2 | P2 5(토큰 소유, 전체 상한, 옛 토큰 stale 의 재접속 연쇄, 연결별 welcome, PENDING 키)·P3 2. 2회차 새 P1/P2 없음 |
 | 4c 구현 | 823c98c → f8a4416 | 2 | P2 2(닫힌 연결 토큰 회수, 재기동 뒤 토큰 재사용)·P3 2(등록 거절의 연결 거절, 가짜 차량 — 후속). 2회차 새 P1/P2 없음 |
 | 5 설계·구현(D8) | 80fc9ff → 3판 | 3 | 1회차 P2 5(종료 꼬리 유실, 쓰는 중 시간 초과의 계수, 근접 기록 미회수, 영상 기록 경로, 합격 기준)·P3 3. 2회차 P2 4(STOP 중 근접 프레임, 바이트 추정 과소, 읽는 쪽 전환 일부, 로봇 카메라 없는 영상 종료 예외)·P3 3. 3회차 새 P1/P2 없음, P3 2(복사본 누락 감지, U30 대기 시간) 반영 |
+| 5b 브리지(D8b) | d57e0da → 4판 | 4 | 1회차 P2(지도 콜백이 /pose 를 막음, 기록이 sendall 앞)·P3 2(번호·시각 계약, 소비자·디스크 설명). 2회차 P2(같은 스레드의 동기 기록이 다음 응답을 막음)·P3. 3회차 P2 2(쓰는 중 줄 누락 집계, 기록 전 상태 공개·컨테이너 즉시 제거). 4회차 새 P1/P2 없음, P3(문구) 반영 |
 
 ## 7. 사용자 결정 (2026-10-18)
 

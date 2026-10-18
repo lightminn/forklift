@@ -39,13 +39,16 @@ cat > "$OUT/bridge.sh" <<'EOT'
 mkdir -p "$2/bridge" "$2/sock"
 docker run -d --name "slam_bridge_${JOB}_e$1" --network none --cpuset-cpus "$CPU0" --memory 4g --group-add 2000 \
   -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$ROOT:/workspace:ro" -v "$2/bridge:/out" -v "$2/sock:/run/slam" \
-  forklift/ros2-dev:jazzy bash /workspace/tools/slam_bridge_container.sh /run/slam/slam.sock /out "-0.12,0.0,1.05,0.0" >/dev/null
+  forklift/ros2-dev:jazzy bash /workspace/tools/slam_bridge_container.sh /run/slam/slam.sock /out "-0.12,0.0,1.05,0.0" persistent >/dev/null
 EOT
 cat > "$OUT/stop.sh" <<'EOT'
 #!/bin/bash
 . "$(dirname "$0")/env.sh"
 # a missing container is no failure; a removal that fails is (the supervisor logs it)
 if [ -n "$(docker ps -aq --filter "name=^slam_bridge_${JOB}_e$1\$")" ]; then
+  # the bridge ends by itself once the runner closed its socket, writing its records and final status first
+  # (persistent console plan D8b): give it that time, then remove the container either way
+  timeout 45 docker wait "slam_bridge_${JOB}_e$1" >/dev/null 2>&1
   docker rm -f "slam_bridge_${JOB}_e$1" >/dev/null
 fi
 EOT
