@@ -5215,6 +5215,7 @@ def drive(S, isaac) -> None:
                 # After this scan's reply: the correction control applies now.
                 obstacle_scan(stamp_now, now_base, now_q, shared_raw)
 
+        gc_seen_: list = []  # real-time plan D9d: garbage collections timed in a live run, folded in at a tick's start
         live = None
         if getattr(args, "live", False):
             # M-c (docs/plans/2026-10-17-m-c-isaac-live-runner.md): the arbiter, its console server and the pacing.
@@ -5443,6 +5444,9 @@ def drive(S, isaac) -> None:
                 live_timers.wrap(TimedShadow, "apply", "shadow.apply")
                 live_timers.wrap(TimedShadow, "_move", "shadow.move")  # real-time plan D9d: is the 0.27 s spike the move?
                 # D9d: the move was not it (d9a_1: 114 calls, at most 14 ms); time Python's garbage collections.
+                # A collection can start at any allocation -- inside the status line's walk over the timers too --
+                # so the callback only appends to its own list, folded into the timers at a tick's start (Codex D9
+                # impl round 2: a callback adding a timer mid-walk raised "dictionary changed size").
                 import gc as live_gc_
 
                 gc_started_ = {}
@@ -5451,7 +5455,7 @@ def drive(S, isaac) -> None:
                     if phase == "start":
                         gc_started_["t"] = time.perf_counter()
                     elif "t" in gc_started_:
-                        live_timers.add(f"gc.gen{info.get('generation')}", time.perf_counter() - gc_started_.pop("t"))
+                        gc_seen_.append((f"gc.gen{info.get('generation')}", time.perf_counter() - gc_started_.pop("t")))
 
                 live_gc_.callbacks.append(live_gc_timer)
                 for name_ in ("update", "allowed_speed", "check_path", "check_arc"):
@@ -5621,6 +5625,14 @@ def drive(S, isaac) -> None:
                                    "reply_deadline_s": SLAM_LIVE_REPLY_DEADLINE_S, "queue_max": SLAM_LIVE_QUEUE_MAX,
                                    "tracker_max_age_s": slam["tracker"].max_age_s, "max_depth": 0}
         if live is not None:
+            # Real-time plan D9d: what was built so far (the stage, the scene, the planners' tables) is frozen out of
+            # the garbage collector's walks; a full collection then walks only what the run makes (d9d_2/3/sc: a 0.30-
+            # 0.35 s generation-2 collection near sim 174 s was the remaining long tick).
+            import gc as live_gc_freeze_
+
+            live_gc_freeze_.collect()
+            live_gc_freeze_.freeze()
+            state["gc_frozen_objects"] = live_gc_freeze_.get_freeze_count()
             live.start()  # after the SLAM warm-up: the console sees the first control tick next (Codex D9 impl P3)
 
         for step in range(int(120 * args.max_sim_seconds)):
@@ -5638,6 +5650,8 @@ def drive(S, isaac) -> None:
             perf_context["phase"] = ms.phase  # real-time plan S0: the dumps' strata (read only by the dumps)
             applied_commands_, stop_kind_ = [], "none"
             live_abort_ = False  # M-c: the stop gate stopped the wheels inside this tick (plan C2)
+            while gc_seen_:  # D9d: the collections timed since the last tick, folded in outside any walk
+                live_timers.add(*gc_seen_.pop())
             if live is not None:
                 stop_kind_, applied_commands_ = live.tick_start(t, core.near_active())
                 if core.commands.status == "accepted":
