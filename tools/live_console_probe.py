@@ -74,7 +74,8 @@ class Probe:
         """As the web console: answer every tick while connected, whatever the scenario is waiting on."""
         while True:
             try:
-                await self.echo()
+                if not getattr(self, "silent", False):  # plan D14 U20 b: the client goes quiet
+                    await self.echo()
             except Exception:  # noqa: BLE001 -- a closed socket during a reconnect
                 pass
             await asyncio.sleep(0.05)
@@ -191,14 +192,14 @@ class Probe:
             await self.ws.send(json.dumps({"t": "echo", "session_epoch": self.epoch, "lease_id": self.lease_id,
                                            "echo": {"state_seq": self.tick["state_seq"], "token": self.tick["token"]}}))
 
-    async def teleop(self, speed, curvature, deadman=True, mode="direct"):
+    async def teleop(self, speed, curvature, deadman=True, mode="direct", lift_dir=0):
         if self.tick is None:
             return
         self.seq += 1
         msg = {"t": "teleop", "session_epoch": self.epoch, "lease_id": self.lease_id, "control_gen": self.control_gen,
                "arm_gen": self.arm_gen, "seq": self.seq,
                "echo": {"state_seq": self.tick["state_seq"], "token": self.tick["token"]}, "mode": mode,
-               "deadman": deadman, "speed_ratio": speed, "curvature_ratio": curvature, "lift_dir": 0}
+               "deadman": deadman, "speed_ratio": speed, "curvature_ratio": curvature, "lift_dir": int(lift_dir)}
         if mode == "video" and self.frames:
             msg["frame_echo"] = {"frame_id": self.frames[-1]["frame_id"]}
         await self.ws.send(json.dumps(msg))
@@ -570,6 +571,117 @@ async def teleop_drive(p: Probe, seconds: float, speed: float, curvature: float)
     return teleop
 
 
+async def enter_teleop(p: Probe) -> dict | None:
+    """PAUSED, standing, then TELEOP (retried while the vehicle has not confirmed standing) and armed."""
+    await p.request("mode_request", to="PAUSED")
+    await p.until(p.standing, 30, label="standing_before_teleop")
+    reply = None
+    for _ in range(60):
+        reply = await p.request("mode_request", to="TELEOP")
+        if reply is None or (reply.get("reason") not in ("not_stopped", "no_feedback:rear_axle_speed")
+                             and reply.get("detail") != "pacing"):
+            break
+        await asyncio.sleep(0.5)
+    if not reply or reply["t"] != "ack":
+        return reply
+    arm = await p.request("arm")
+    p.arm_gen = (arm or {}).get("arm_gen", 0)
+    return reply
+
+
+async def manual_recovery(p: Probe, args) -> dict:
+    """Plan D14 U20 c: an ended recovery_required mission recovered by hand -- lower while only lowering is
+    allowed, reverse straight while the drive mode says so, until the recovery stage is gone (normal teleop)."""
+    out = {"enter": await enter_teleop(p), "stages": [], "lift_m": []}
+    end = time.monotonic() + args.mission_timeout_s
+    last = None
+    while time.monotonic() < end and p.closed_code is None:
+        st = p.state or {}
+        rec, dirs, mode = st.get("recovery"), st.get("lift_dirs") or [], st.get("drive_mode")
+        key = (None if rec is None else (rec.get("stage"), rec.get("grounded"), rec.get("aligned"), rec.get("evidence")),
+               tuple(dirs), mode, st.get("teleop_forbidden_reason"))
+        if key != last:
+            out["stages"].append({"mono": time.monotonic(), "recovery": rec, "lift_dirs": dirs, "drive_mode": mode,
+                                  "forbidden": st.get("teleop_forbidden_reason"), "lift_m": st.get("lift_m")})
+            last = key
+        if rec is None and mode == "normal":
+            break
+        if dirs == [-1]:
+            await p.teleop(0.0, 0.0, True, lift_dir=-1)
+        elif mode == "reverse_straight":
+            await p.teleop(-1.0, 0.0, True)
+        else:
+            await p.teleop(0.0, 0.0, True)
+        await asyncio.sleep(0.05)
+    out["done"] = (p.state or {}).get("recovery") is None
+    # a little further back by hand, normally, so the next preparation has room (plan D4b checks it at the submit)
+    stop_by = time.monotonic() + args.manual_extra_s
+    while time.monotonic() < stop_by:
+        await p.teleop(-0.5, 0.0, True)
+        await asyncio.sleep(0.05)
+    stop_by = time.monotonic() + 15.0
+    while time.monotonic() < stop_by and not (p.state and p.standing(p.state)):
+        await p.teleop(0.0, 0.0, True)
+        await asyncio.sleep(0.05)
+    await p.request("mode_request", to="PAUSED")
+    return out
+
+
+async def lift_scenario(p: Probe, args):
+    """Plan D14 U20 a/b: the manual lift in an idle session -- up and down at its rate within the travel; the
+    client going quiet mid-lift; the runner stopped (SIGSTOP) while the lease runs out, then continued."""
+    import os
+
+    await p.open()
+    await p.until(lambda s: True, 10, label="first_state")
+    lease = await p.request("lease_request")
+    p.lease_id = lease.get("lease_id") if lease else None
+    await p.until(p.standing, 30, label="standing_at_start")
+    rep_ = p.report.setdefault("lift", {})
+    rep_["enter"] = await enter_teleop(p)
+
+    async def hold_lift(direction, seconds):
+        samples = []
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            await p.teleop(0.0, 0.0, True, lift_dir=direction)
+            samples.append(((p.state or {}).get("lift_m"), (p.state or {}).get("lift_dirs")))
+            await asyncio.sleep(0.05)
+        return samples
+
+    rep_["up"] = await hold_lift(1, args.lift_up_s)
+    rep_["after_up"] = await hold_lift(0, 3.0)
+    # the client goes quiet mid-lift (no echo, no commands) for longer than the lease, then takes it again
+    rep_["before_quiet"] = await hold_lift(1, 2.0)
+    p.silent = True
+    quiet_start = (p.state or {}).get("lift_m")
+    await asyncio.sleep(args.quiet_s)
+    rep_["quiet"] = {"start_lift_m": quiet_start, "end_lift_m": (p.state or {}).get("lift_m"), "mode": (p.state or {}).get("mode")}
+    p.silent = False
+    lease = await p.request("lease_request")
+    p.lease_id = lease.get("lease_id") if lease else p.lease_id
+    rep_["after_quiet"] = await hold_lift(0, 2.0)
+    # the runner stopped while the lease runs out (the 10-17 follow-up's path), then continued
+    rep_["reenter"] = await enter_teleop(p)
+    rep_["before_stop"] = await hold_lift(1, 2.0)
+    pid = (p.report.get("port_file") or {}).get("pid")
+    if pid:
+        os.kill(int(pid), signal.SIGSTOP)
+        stopped_at = (p.state or {}).get("lift_m")
+        await asyncio.sleep(args.quiet_s)
+        os.kill(int(pid), signal.SIGCONT)
+        rep_["sigstop"] = {"pid": pid, "lift_m_at_stop": stopped_at}
+        await asyncio.sleep(3.0)
+        rep_["after_sigcont"] = {"lift_m": (p.state or {}).get("lift_m"), "mode": (p.state or {}).get("mode")}
+    lease = await p.request("lease_request")
+    p.lease_id = lease.get("lease_id") if lease else p.lease_id
+    rep_["reenter2"] = await enter_teleop(p)
+    rep_["down"] = await hold_lift(-1, args.lift_up_s + 6.0)
+    await p.request("mode_request", to="PAUSED")
+    if args.end_session:
+        await p.request_until_standing("session_end")
+
+
 async def cycle_scenario(p: Probe, args):
     """Persistent console plan U2-U5: missions one after another in one session, each judged at its end (the
     results book); optionally driven by hand first, so the first mission is prepared from elsewhere."""
@@ -602,6 +714,19 @@ async def cycle_scenario(p: Probe, args):
                                                               "stale_targets"):
                 break
             await asyncio.sleep(0.5)
+        if args.manual_recovery and p.report["missions_run"] and \
+                (p.report["missions_run"][-1].get("result") or {}).get("outcome") == "recovery_required":
+            p.report["manual_recovery"] = await manual_recovery(p, args)  # plan D14 U20 c, before the next submit
+            await p.until(p.standing, 30, label="standing_after_manual_recovery")
+            await asyncio.sleep(1.0)
+            seen = ((p.state or {}).get("last_result") or {}).get("seq", 0)
+            for _ in range(40):
+                submit = await p.request("mission_submit", pallet_id=pallet_id, destination_id=destination_id,
+                                         targets_revision=p.targets["targets_revision"])
+                if submit is None or submit.get("reason") not in ("not_stopped", "no_feedback:rear_axle_speed",
+                                                                  "stale_targets"):
+                    break
+                await asyncio.sleep(0.5)
         entry = {"pallet_id": pallet_id, "destination_id": destination_id, "submit": submit,
                  "submitted_mono": time.monotonic()}
         p.report["missions_run"].append(entry)
@@ -667,7 +792,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port-file", type=Path, required=True)
     ap.add_argument("--report", type=Path, required=True)
-    ap.add_argument("--scenario", choices=("main", "slow", "marker", "approach", "planwait", "cycle"), default="main")
+    ap.add_argument("--scenario", choices=("main", "slow", "marker", "approach", "planwait", "cycle", "lift"),
+                    default="main")
+    ap.add_argument("--manual-recovery", action="store_true",
+                    help="cycle scenario (plan D14 U20 c): a mission ending recovery_required is recovered by hand "
+                    "before the next submit")
+    ap.add_argument("--manual-extra-s", type=float, default=2.0, help="manual recovery: reverse this long after it")
+    ap.add_argument("--lift-up-s", type=float, default=6.0, help="lift scenario: hold the lift up this long (wall s)")
+    ap.add_argument("--quiet-s", type=float, default=8.0, help="lift scenario: the client quiet / runner stopped (s)")
     ap.add_argument("--cycle", default="P-1:D-1,P-1:D-0,P-1:D-1", help="cycle scenario: pallet:destination,...")
     ap.add_argument("--pre-teleop-s", type=float, default=0.0, help="cycle scenario: drive by hand first (wall s)")
     ap.add_argument("--end-session", action="store_true", help="cycle scenario: end the session at the end")
@@ -716,7 +848,8 @@ def main():
     p = Probe(info["port"], report)
     try:
         scenario = {"main": main_scenario, "slow": slow_scenario, "marker": marker_scenario,
-                    "approach": approach_scenario, "planwait": planwait_scenario, "cycle": cycle_scenario}[args.scenario]
+                    "approach": approach_scenario, "planwait": planwait_scenario, "cycle": cycle_scenario,
+                    "lift": lift_scenario}[args.scenario]
         asyncio.run(scenario(p, args))
     finally:
         report["frames"] = p.frames

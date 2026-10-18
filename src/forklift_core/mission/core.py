@@ -835,32 +835,32 @@ class MissionCore:
         return {"stage": ctx["stage"], "grounded": bool(ctx["grounded"]), "evidence": bool(cargo.trace_valid),
                 "aligned": bool(aligned), "pallet_id": ctx["pallet_id"]}
 
-    def manual_recovery_tick(self, t: float, rear, *, standing: bool) -> None:
+    def manual_recovery_tick(self, t: float, rear, *, standing: bool) -> bool:
         """Each live tick with no mission adopted: the manual ground verdict (the pallet off the forks onto the
         floor, held 1 s: the evidence moves to the floor and the pallet back into the targets), then the free
         verdict by the automatic recovery's criteria (the release deferred since the end, the cargo carried with
-        it), then the manual clear (ended by the runner's permit check)."""
+        it), then the manual clear (ended by the runner's permit check). True: a release moved the control pose."""
         cargo, ctx, hooks = self.cargo, self.cargo.recovery_context, self.hooks
         if ctx is None or ctx["stage"] != "in_pocket" or cargo.relation != "constrained":
-            return
+            return False
         rear = tuple(float(v) for v in rear)
         lowered = standing and hooks.lift_position() < 0.012 and abs(hooks.pallet_z()) < 0.008
         log = self.state.setdefault("manual_recovery", [])
         if not ctx["grounded"]:
             if not lowered:
                 ctx["ground_since"] = None
-                return
+                return False
             ctx["ground_since"] = t if ctx["ground_since"] is None else ctx["ground_since"]
             if t - ctx["ground_since"] < MANUAL_GROUND_HOLD_S:
-                return
+                return False
             ctx["grounded"] = True
             getattr(hooks, "trace_ground", lambda: None)()  # the evidence's reference moves to the floor
             self.restore_pallet_target()
             log.append({"time_s": t, "event": "grounded", "depth_m": cargo.depth(rear)})
-            return
+            return False
         out = cargo.depth(rear) < -(APPROACH_GAP_M + cargo.band(rear))
         if not (lowered and out and cargo.trace_valid):
-            return
+            return False
         cargo.recovered()
         ctx["stage"] = "manual_clear"
         self.restore_pallet_target()
@@ -871,6 +871,8 @@ class MissionCore:
             self.end_release_due = {"pallet_id": ctx["pallet_id"], "destination_id": ctx["destination_id"],
                                     "pallet_held": ctx["pallet_held"], "destination_held": ctx["destination_held"]}
             self.end_release(t, deferred=True)
+            return True
+        return False
 
     def manual_clear_done(self, t: float) -> None:
         """The runner's permit allows the reverse without the recovered pallet's exemption: an ordinary teleop."""

@@ -89,3 +89,11 @@ def test_a_pocket_without_a_recovery_is_refused_as_before():
                                                                                          "status": "idle"}}
     p = policy(safety, lift_m=0.0)
     assert not p.teleop_allowed and p.reason == "fork_in_pocket"
+
+
+def test_a_manual_clear_whose_forks_turned_unknown_opens_nothing():
+    """Codex D14 impl round 1 P1-2: a contact in the manual clear makes the relation unknown; no reverse then."""
+    safety = {**FREE, "fork_in_pocket": {"value": True, "relation": "unknown"}, "load": {"loaded": True},
+              "recovery": {"stage": "manual_clear", "grounded": True, "evidence": True, "aligned": True}}
+    p = policy(safety, lift_m=0.0)
+    assert not p.drive_allowed and p.reason == "recovery:unknown"

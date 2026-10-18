@@ -170,3 +170,14 @@ def test_no_pacing_no_lift():
         out, _ = loop.cycle(teleop={"deadman": True, "speed_ratio": 0.0, "curvature_ratio": 0.0, "lift_dir": 1},
                             pacing=False)
     assert out.policy.lift_dirs == frozenset() and loop.cmd == pytest.approx(0.0)
+
+
+def test_a_gate_latch_is_the_manual_lifts_target_from_then_on():
+    """Codex D14 impl round 1 P1-1: the gate held the lift at 0.17 m; the old 0.20 m target must not come back."""
+    tl = lift()
+    tl.step(True, cmd(0), armed=True, dirs={-1, 1}, measured=0.17, start_from=0.20)
+    tl.sync(0.17)
+    assert tl.step(True, cmd(0), armed=True, dirs={-1, 1}, measured=0.17, start_from=None) == pytest.approx(0.17)
+    idle = lift()
+    idle.sync(0.17)  # not owned: nothing to sync
+    assert idle.target is None

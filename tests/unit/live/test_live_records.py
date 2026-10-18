@@ -276,3 +276,15 @@ def test_the_urdf_lift_limit_is_the_models_or_the_documented_default(tmp_path):
     (tmp_path / "x.urdf").write_text("<robot name='x'/>")
     assert scope["urdf_lift_limit"](tmp_path / "x.urdf") == (0.20, "default")
     assert scope["urdf_lift_limit"](tmp_path / "missing.urdf") == (0.20, "default")
+
+
+def test_the_runner_closes_the_review_gaps_of_d14():
+    """Codex D14 impl round 1: the gate's latch synced into the manual lift, the released pose to the permit, the
+    full permit advanced, the tick-start evidence idle too, the lift capability on, the episode kept to standing."""
+    src = _runner()
+    assert "live.arbiter.lift.sync(float(live._lift_latch))" in src
+    assert "if core.manual_recovery_tick(t, rear, standing=bool(live.arbiter.stop_confirmed)):" in src
+    assert "live_pallet_full.advance(driven_)" in src
+    assert src.count('ms.phase if core.commands.adopted_id is not None else "idle"') >= 2
+    rt = (Path(__file__).resolve().parents[3] / "sim" / "isaac" / "live_runtime.py").read_text()
+    assert '"lift": True' in rt

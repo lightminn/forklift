@@ -5417,8 +5417,8 @@ def drive(S, isaac) -> None:
             live_lift_limit_, live_lift_source_ = urdf_lift_limit(args.forklift_urdf)
             state["teleop_lift"] = {"limit_m": live_lift_limit_, "limit_source": live_lift_source_,
                                     "rate_mps": LiveTeleopLimits().lift_rate_mps}
-            require(LiveTeleopLimits().lift_rate_mps <= float(settings["lift_rate_mps"]) + 1e-12,
-                    "teleop lift rate above the autonomous lift_rate_mps")
+            if LiveTeleopLimits().lift_rate_mps > float(settings["lift_rate_mps"]) + 1e-12:
+                raise ValueError("teleop lift rate above the autonomous lift_rate_mps (plan D14, main condition 2)")
             live_pallet_perm = (LivePalletPermit(obstacle["layer"].permission.config.stopping,
                                                  step_m=obstacle["layer"].permission.config.step_m)
                                 if obstacle is not None and not args.live_test_no_pallet_permit else None)
@@ -5438,20 +5438,25 @@ def drive(S, isaac) -> None:
                            and abs(float(out_.speed_mps)) > 1e-9)
                 depth_ = core.cargo.depth(rear_) if core.cargo.anchor is not None else None
                 ep_ = live_withdraw["open"]
-                if moving_:
-                    if ep_ is None:
-                        ep_ = live_withdraw["open"] = {"start_s": float(t_), "start_depth_m": depth_,
-                                                       "start_rear": [float(v) for v in rear_],
-                                                       "pallet_id": (core.cargo.recovery_context or {}).get("pallet_id")}
+                if moving_ and ep_ is not None and ep_.get("stop_reason") is not None:
+                    ep_.pop("stop_reason")  # moving again before it stood: the same stretch
+                if moving_ and ep_ is None:
+                    ep_ = live_withdraw["open"] = {"start_s": float(t_), "start_depth_m": depth_,
+                                                   "start_rear": [float(v) for v in rear_],
+                                                   "pallet_id": (core.cargo.recovery_context or {}).get("pallet_id")}
+                if ep_ is not None:
+                    # Kept up to date until the truck stands, the braking included (Codex D14 impl round 1 P3).
                     ep_.update(end_s=float(t_), end_depth_m=depth_, end_rear=[float(v) for v in rear_])
-                elif ep_ is not None:
-                    why_ = ("stop" if out_.mode == "STOPPED" or out_.stop_kind == "preempt"
-                            else "mode_change" if out_.mode != "TELEOP"
-                            else "misaligned" if out_.policy.reason == "recovery:misaligned"
-                            else "evidence" if out_.policy.reason == "recovery:evidence"
-                            else "stopped")
-                    live_teleop_withdraw_close(t_, why_)
+                    if not moving_ and ep_.get("stop_reason") is None:
+                        ep_["stop_reason"] = ("stop" if out_.mode == "STOPPED" or out_.stop_kind == "preempt"
+                                              else "mode_change" if out_.mode != "TELEOP"
+                                              else "misaligned" if out_.policy.reason == "recovery:misaligned"
+                                              else "evidence" if out_.policy.reason == "recovery:evidence"
+                                              else "unknown" if out_.policy.reason == "recovery:unknown"
+                                              else "stopped")
                 live_withdraw["watch"] = moving_ or (live_withdraw["watch"] and not live.arbiter.stop_confirmed)
+                if ep_ is not None and not live_withdraw["watch"]:
+                    live_teleop_withdraw_close(t_, ep_.pop("stop_reason", None) or "stopped")
 
             def live_teleop_withdraw_close(t_, why_):
                 ep_ = live_withdraw["open"]
@@ -6144,7 +6149,8 @@ def drive(S, isaac) -> None:
                 yaw, tilt = yaw_and_tilt(q)
                 pallet_yaw, pallet_tilt = yaw_and_tilt(pq)
                 if trace_evidence is not None and not trace_evidence.update(
-                        ms.phase, (float(base[0]), float(base[1]), float(yaw)),
+                        ms.phase if core.commands.adopted_id is not None else "idle",  # plan D14 (Codex impl r1 P2-5)
+                        (float(base[0]), float(base[1]), float(yaw)),
                         (float(ppos[0]), float(ppos[1]), float(pallet_yaw))):
                     core.cargo.trace_valid = False  # plan D4: the retrace is no evidence (a recovery refuses)
                 forward = np.array([math.cos(yaw), math.sin(yaw)])
@@ -6894,6 +6900,7 @@ def drive(S, isaac) -> None:
                             live_perm.advance(driven_)
                             if live_pallet_perm is not None:
                                 live_pallet_perm.advance(driven_)
+                                live_pallet_full.advance(driven_)  # plan D14: the manual clear's end check too
                     live_state["odom_prev"] = odom_now_
                     target_steer_ = np.asarray(live_ackermann(1.0, live.arbiter.drive.kappa, args.drive_geometry).steering_rad)
                     core.cargo.observe(ms.phase, rear)  # plan D4: the insert's anchors and trace, at the tick's end
@@ -6908,7 +6915,11 @@ def drive(S, isaac) -> None:
                     if core.commands.adopted_id is None:
                         # Plan D14: the manual recovery's verdicts (ground, free) with no mission adopted.
                         live_state["pallet_now"] = (float(ppos[0]), float(ppos[1]), float(pallet_yaw))
-                        core.manual_recovery_tick(t, rear, standing=bool(live.arbiter.stop_confirmed))
+                        if core.manual_recovery_tick(t, rear, standing=bool(live.arbiter.stop_confirmed)):
+                            # The deferred release moved the control pose: the permit reads the released one (Codex
+                            # D14 impl round 1 P2-3).
+                            rear = np.asarray(slam_rear(t), dtype=float)
+                            live_state["rear"] = tuple(float(v) for v in rear)
                     live_safety_ = core.safety_state(t)
                     out_ = live.tick_end(
                         t, applied_commands_, live_safety_, (float(drive.speed_mps), float(drive.curvature_inv_m)),
@@ -6918,9 +6929,10 @@ def drive(S, isaac) -> None:
                     if out_.lift_target_m is not None:
                         ms.lift_command = float(out_.lift_target_m)  # plan D14: the manual lift owns the target
                     if live._lift_latch is not None:
-                        # The gate latched the lift where it stood: the target agrees with it once the gate lifts
-                        # (Codex D14 design round 1 P2-4).
+                        # The gate latched the lift where it stood: both targets agree with it once the gate lifts
+                        # (Codex D14 design round 1 P2-4, impl round 1 P1-1).
                         ms.lift_command = float(live._lift_latch)
+                        live.arbiter.lift.sync(float(live._lift_latch))
                     live_teleop_withdraw(t, out_, rear)
                     live_tick_out_ = True  # persistent console plan D6: this tick's output is given
                     if out_.source == "teleop":

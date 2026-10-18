@@ -89,7 +89,7 @@ class LiveRuntime:
         self.welcome = {"t": "welcome", "api": "console/1", "vehicle_id": "isaac-forklift",
                         "session_epoch": self.session_epoch, "backend": "isaac", "capabilities": {
                             "control": True, "mission": True, "teleop_direct": True, "teleop_video": True,
-                            "lift": False, "recovery_actions": [],
+                            "lift": True, "recovery_actions": [],  # plan D14: the manual lift is driven
                             # a supervisor restarts the runner on a new scene (persistent console plan D9)
                             "sim_reset": bool(supervised),
                             "feedback": {"rear_axle_speed": True, "steering": True, "lift_height": True,

@@ -118,6 +118,12 @@ class TeleopLift:
         self.target: float | None = None
         self.active = False
 
+    def sync(self, value: float) -> None:
+        """A target set from outside while owned -- the stop gate's latch (Codex D14 impl round 1 P1-1): the old
+        target must not come back when the gate lifts."""
+        if self.target is not None:
+            self.target, self.active = float(value), False
+
     def step(self, teleop_mode: bool, teleop: dict | None, *, armed: bool, dirs, measured: float | None,
              start_from: float | None) -> float | None:
         measured = None if measured is None or not math.isfinite(measured) else float(measured)

@@ -93,6 +93,8 @@ def _recovery(safety, recovery: dict, *, standing: bool, lift_m, steering_rad) -
             return refuse("recovery:ground_wait")
     elif stage != "manual_clear":
         return refuse("recovery:stage_unknown")
+    elif relation != "free":
+        return refuse("recovery:unknown")  # a contact in the manual clear (Codex D14 impl round 1 P1-2)
     if not recovery.get("evidence"):
         return refuse("recovery:evidence")
     if not recovery.get("aligned"):
