@@ -114,10 +114,12 @@ export function palletKindLabel(kind) {
 }
 
 // The drive permit: its limit may be unknown (null) while the reason is known.
-export function permitText(permit) {
+// forbidReason: the state's teleop_forbidden_reason, which says why the arbiter forbade driving
+export function permitText(permit, forbidReason = null) {
   if (!permit) return "판정 없음";
   const lim = Number.isFinite(permit.limit_mps) ? `${permit.limit_mps.toFixed(2)} m/s` : "모름";
-  return `${permit.reason} · 상한 ${lim}`;
+  const why = permit.reason === "drive_forbidden" ? forbidText(forbidReason) || "수동 주행 금지" : permit.reason;
+  return `${why} · 상한 ${lim}`;
 }
 
 // Why manual driving is refused: the fake vehicle's reasons and the live arbiter's policy (teleop_policy.py).

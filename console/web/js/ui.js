@@ -279,7 +279,7 @@ export function render(m) {
   $("r-st").textContent = st.steering_rad ? deg(st.steering_rad[0]) : "—";
   $("r-lift").textContent = Number.isFinite(st.lift_m) ? Math.round(st.lift_m * 1000) : "—";
   $("r-load").textContent = st.load?.state === "loaded" ? `적재 · ${st.load.pallet_id ?? "팔레트 모름"}` : st.load?.state === "empty" ? "없음" : "측정 안 됨";
-  $("r-permit").textContent = permitText(st.permit);
+  $("r-permit").textContent = permitText(st.permit, st.teleop_forbidden_reason);
   $("r-cmd").textContent = st.command && st.applied ? `${st.command.speed_mps.toFixed(2)} → ${st.applied.speed_mps.toFixed(2)} m/s` : "—";
   if (m.chassis) $("r-radius").textContent = m.chassis.model_turning_radius_m.toFixed(2);
   $("r-phase-t").textContent = mi && Number.isFinite(mi.phase_elapsed_s) ? `${mi.phase_elapsed_s.toFixed(1)} s (일시정지 동안 멈춤)` : "—";
