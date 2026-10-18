@@ -985,6 +985,12 @@ def require(condition: bool, reason: str) -> None:
         raise RuntimeError(reason)
 
 
+class SessionFailure(RuntimeError):
+    """A real-time run's failure that ends the session, not only its mission: the SLAM link (a missed reply, a
+    queue that does not drain, a failed or closed bridge) or its warm-up (real-time plan D9a). The reason reads as
+    a ``require`` failure would; a live console that keeps the runner up across missions tells it apart by type."""
+
+
 # EPAL 6 fork spacing plan, cause survey after the S4 rerun: the steering response probe. The recorded
 # runs show the front-left wheel short of its command while the body follows that wheel's curvature;
 # this drives scripted segments (standstill, forward, reverse at each curvature) through the runner's
@@ -5159,7 +5165,7 @@ def drive(S, isaac) -> None:
                          if slam["tracker"].applied is not None else None,
                          "queued_mono": time.monotonic()})
                 except link.SlamLinkFailure as exc:
-                    require(False, f"slam_link_failed: {exc}")
+                    raise SessionFailure(f"slam_link_failed: {exc}") from exc
                 slam["scan_id"] += 1
                 if obstacle is not None and not scan_silenced(stamp_now):
                     obstacle_scan(stamp_now, now_base, now_q, shared_raw)
@@ -5187,6 +5193,8 @@ def drive(S, isaac) -> None:
                         "error": str(exc),
                     }
                 )
+                if getattr(args, "live", False):
+                    raise SessionFailure(f"slam_link_failed: {exc}") from exc  # the live warm-up's lockstep exchange
                 require(False, f"slam_link_failed: {exc}")
             slam["tracker"].receive(
                 reply.scan_id, reply.stamp_s, reply.status, reply.map_from_odom
@@ -5609,7 +5617,8 @@ def drive(S, isaac) -> None:
             while slam["tracker"].mode == "warming_up":
                 step_world(False)
                 prewarm_steps_ += 1
-                require(prewarm_steps_ <= 120 * 60, "slam_prewarm_timeout")
+                if prewarm_steps_ > 120 * 60:
+                    raise SessionFailure("slam_prewarm_timeout")
             slam["async_link"] = slam["module"].AsyncSlamLink(
                 slam["link"], deadline_s=SLAM_LIVE_REPLY_DEADLINE_S, queue_max=SLAM_LIVE_QUEUE_MAX)
             slam["tracker"].max_age_s = 0.25 + SLAM_LIVE_REPLY_DEADLINE_S * args.live_factor
@@ -5681,7 +5690,7 @@ def drive(S, isaac) -> None:
                 try:
                     replies_ = slam["async_link"].poll()
                 except slam["module"].SlamLinkFailure as exc:
-                    require(False, f"slam_link_failed: {exc}")
+                    raise SessionFailure(f"slam_link_failed: {exc}") from exc
                 if replies_:
                     core.slam_replies(t, replies_, ms.phase in ["lift", "extract", "transport", "lower"])
                     state["slam_async"]["max_depth"] = slam["async_link"].max_depth

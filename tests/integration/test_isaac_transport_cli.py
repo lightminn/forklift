@@ -1018,3 +1018,13 @@ def test_mission_commands_options_validate_before_startup(tmp_path) -> None:
         )
         assert result.returncode == 2, (flags, result.stderr[-400:])
         assert expected in result.stderr, (flags, result.stderr[-400:])
+
+
+def test_a_live_slam_link_failure_ends_the_session_not_only_the_mission() -> None:
+    """Real-time plan D9a: the asynchronous link's failures and its warm-up raise SessionFailure (a RuntimeError, so
+    a run ends as before; a console that outlives missions tells it apart); the batch lockstep keeps require."""
+    source = SCRIPT.read_text()
+    assert "class SessionFailure(RuntimeError):" in source
+    assert source.count('raise SessionFailure(f"slam_link_failed: {exc}") from exc') == 3
+    assert 'raise SessionFailure("slam_prewarm_timeout")' in source
+    assert source.count('require(False, f"slam_link_failed: {exc}")') == 1  # the batch lockstep exchange
