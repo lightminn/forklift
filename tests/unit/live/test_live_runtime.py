@@ -627,4 +627,4 @@ def test_the_runner_leaves_its_loop_on_a_session_request_with_its_exit_code():
     assert "for step in (itertools.count() if live is not None else range(int(120 * args.max_sim_seconds))):" in flat
     head = flat[flat.index("if live is not None and live.arbiter.session_request is not None:"):][:400]
     assert 'state["live_session_request"] = live.arbiter.session_request break' in head
-    assert '{"end": 0, "reset": 3}' in flat and 'raise SystemExit(state.get("live_exit_code", 0 if state["success"] else 1))' in flat
+    assert '{"end": 0, "reset": 3}' in flat and 'raise SystemExit(state.get("live_exit_code", 0) if state["success"] else 1)' in flat

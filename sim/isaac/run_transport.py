@@ -7225,7 +7225,9 @@ def main() -> None:
         )
         if app is not None:
             app.close()
-    raise SystemExit(state.get("live_exit_code", 0 if state["success"] else 1))
+    # A live session's own end code (0 ended, 3 a new scene) only when the run ended cleanly: a failure in its closing
+    # is a failure for the supervisor too (Codex stage 4a P2).
+    raise SystemExit(state.get("live_exit_code", 0) if state["success"] else 1)
 
 
 if __name__ == "__main__":

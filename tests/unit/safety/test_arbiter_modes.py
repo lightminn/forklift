@@ -333,7 +333,7 @@ def test_the_lease_holder_ends_the_session_or_resets_the_scene_standing_with_no_
     r.stand()
     out = r.cycle(r.msg(kind))[0]
     assert out["t"] == "ack" and r.a.session_request == flag
-    assert r.a.events[-1]["event"] == "session_request" and r.a.events[-1]["request"] == flag
+    assert any(e["event"] == "session_request" and e["request"] == flag for e in r.a.events)
 
 
 def test_ending_the_session_is_refused_while_a_mission_is_on_while_moving_and_without_the_lease():
@@ -361,3 +361,27 @@ def test_a_scene_reset_is_refused_where_the_back_end_cannot_do_it():
     r.stand()
     out = r.cycle(r.msg("sim_reset"))[0]
     assert out["reason"] == "unsupported" and r.a.session_request is None
+
+
+def test_an_accepted_session_end_closes_the_controls_at_once():
+    """Codex stage 4a P2: after the ack the same batch still drove and submitted; the end is a boundary -- out of
+    TELEOP, disarmed, a new control generation -- and every later request is refused session_ending."""
+    r = Rig()
+    r.a.sim_reset_allowed = True
+    r.stand()
+    gen = r.a.control_gen
+    submit = r.msg("mission_submit", pallet_id="P", destination_id="D", targets_revision=0)
+    out = r.cycle(r.msg("session_end"), submit, r.msg("sim_reset"))
+    assert out[0]["t"] == "ack" and r.a.session_request == "end"
+    assert r.a.control_gen > gen and not r.a.armed and r.a.mode in ("PAUSED", "STOPPED")
+    later = [x for x in out[1:] if x is not None] + [x for x in r.replies if x.get("of") == "mission_submit"]
+    assert later and all(x["t"] == "reject" for x in later) and r.m.status == "idle"
+    assert r.a.session_request == "end"  # a later reset does not replace it
+
+
+def test_a_submit_queued_before_the_end_in_the_same_cycle_is_refused():
+    r = Rig()
+    r.stand()
+    submit = r.msg("mission_submit", pallet_id="P", destination_id="D", targets_revision=0)
+    r.cycle(submit, r.msg("session_end"))
+    assert r.m.status == "idle" and r.reply(submit["request_id"])["reason"] == "session_ending"

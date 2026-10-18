@@ -266,6 +266,8 @@ class Arbiter:
         problem = self._generation_problem(client_id, msg, lease=kind in LEASED)
         if problem is not None:
             return self._reply(kind, request_id, problem)
+        if kind in LEASED and self.session_request is not None:
+            return self._reply(kind, request_id, "session_ending")  # the session closes (console plan D7)
         handler = getattr(self, f"_on_{kind}")
         return handler(client_id, request_id, msg, now_mono)
 
@@ -309,7 +311,14 @@ class Arbiter:
             return self._reply(kind, request_id, "mission_active")
         self.session_request = "end" if kind == "session_end" else "reset"
         self.events.append({"t": now_mono, "event": "session_request", "request": self.session_request})
-        return self._reply(kind, request_id)
+        # The controls close now, not at the runner's next tick (Codex stage 4a P2): out of AUTO/TELEOP, disarmed,
+        # a new control generation (a command or request made before it is stale).
+        if self.mode in ("AUTO", "TELEOP"):
+            self._set_mode("PAUSED", now_mono, "session_request")
+        else:
+            self._disarm(now_mono, "session_request")
+            self._boundary(now_mono, "session_request")
+        return self._reply(kind, request_id, control_gen=self.control_gen)
 
     def _on_recovery(self, client_id, request_id, msg, now_mono):
         return self._reply("recovery", request_id, "unsupported")  # plan section 1: not this slice
@@ -506,6 +515,9 @@ class Arbiter:
                 status = "paused"  # what the lifecycle will be when the same tick's resume is judged (P2)
         for p in self.pending:
             if p["queued"]:
+                continue
+            if self.session_request is not None:  # the session closes: nothing more is started
+                self._settle(p, self._reply(p["kind"], p["request_id"], "session_ending"))
                 continue
             if p["control_gen"] != self.control_gen:
                 self._settle(p, self._reply(p["kind"], p["request_id"], "stale_control"))
