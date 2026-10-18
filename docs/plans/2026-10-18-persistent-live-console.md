@@ -525,6 +525,35 @@ D2 의 `mission_start` 는 작업자 작업 `observe_ladder` 로 한다. 이름 
 - 소스 시험: 실시간 시작이 셋업 사다리를 건너뜀, 지운 임시 처리가 남지 않음.
 - Isaac: U2·U3·U4·U5.
 
+### D6 구현 설계 (3단계, 2026-10-18, 2단계 9803b9c 수렴 뒤)
+
+**분류표.** `forklift_core/mission/failures.py` 의 `classify(reason) -> "mission" | "scene" | "session"`. 사유 접두로 고르고(가장 긴 접두), 표에 없으면 `session` 이다.
+- **scene**(참값 검사): `Excessive body tilt`, `Actual truck/load footprint overlap`, `Measured pallet footprint overlap`, `Measured pallet solid overlap`, `Pallet dropped during transport`, `Pallet slipped off forks`, `Pallet displaced before pickup`, `Forbidden fork/pallet contact`.
+- **session**: 계약·설정 위반(`near_field_contract`, `near_field_without_capture`, `near_field_without_hold`, `near_field_frame_released`, `pocket_check_without_capture`, `pocket_check_refused`), 위치 추정·링크(`localization_stale`, `slam_link_failed`, `slam_prewarm_timeout`), 센서(`sensor_silence_stopped`, `Camera did not produce RGB`, `Perception camera did not produce depth`), `Nonfinite body state`, 셋업 사유 전부.
+- **mission**: 나머지 미션 일 사유. 추적(`Tracking timeout`, `Tracking failed`), 장애물(`obstacle_`), 인식·근접 캡처(`perception_capture_failed`, `observation_discarded`, `near_capture_`, `near_field_`(위 세 계약 사유 제외)), 관찰(`observe:`, `observe_replan_failed`), 도킹(`docking_`), SLAM 해제 재계획(`slam_release_`), 작업자(`async_plan_failed`, `async_plan_discarded`, `async_near_no_fresh_depth`, `planning_wait_moving`), 단계(`Pallet was not lifted`, `Pallet did not settle onto destination floor`, `Fork did not lower`, `withdraw_not_certified`, `withdraw_tracking_exceeded`, `pocket_stop`, `transport_recovery_after_docking`, `stall_replan_failed`), 계획(`Mission planning failed`, 미션 계획 상태 `approach:`·`insert:`·`extract:`·`transport:`·`withdraw:`·`return_home:`), 커스프(`cusp_position_stall`).
+- 미션 실패가 포켓 단계에서 나면 다음 제출은 2단계의 `recovery_required` 로 막힌다. 그래서 미션으로 분류해도 포크가 포켓 안인 채 새 미션이 시작되지 않는다.
+- AST 시험: `run_transport.py`·`core.py` 의 모든 `require` 사유(상수와 f-문자열 접두)가 표에서 기본값이 아닌 분류를 받는다. 동적 사유 호출 자리(`plans.status`, `failure`, `result_.end`, `reason_`, `refusal`, 판정 사유)는 시험 안의 목록에 자리와 분류를 적어 고정한다.
+
+**잡는 자리 — 계획 D6 의 '두 곳' 대신 틱 본문 한 곳.**
+- 미션 일은 틱 안에 흩어져 있다: `job_hold`, 준비 요청, 캡처, 추종·도착, `lift_and_timers`, `live_leg`, `paused_tick`·재개, 물리 스텝 뒤 `capture_stepped`. 그래서 `for step` 본문 전체를 `try` 로 감싼다(들여쓰기만 바뀌는 기계적 변경이다. `git diff -w` 로 확인하고 재생 게이트로 배치 불변을 본다).
+- `except RuntimeError` 는 **실시간이고 `SessionFailure` 가 아니며 분류가 `mission` 또는 `scene` 일 때만** 처리한다. 그 밖은 다시 올린다(배치는 언제나 다시 올린다).
+- 공통 꼬리를 정확히 한 번 실행한다. 본문이 지나간 자리를 틱 플래그(`tick_out_`, `stepped_`)로 남긴다.
+  1. `live.end_mission(t, "failed", 사유)` 를 부른다. 정지 훅이 바퀴를 0 으로 둔다. 승강은 지금 높이로 유지한다.
+  2. 틱 응답이 아직이면 `live.tick_end(t, applied_commands_, safety, (0, 0), None)` 를 하고, 바퀴 0·조향 유지·승강 유지를 적용하고, `live.publish` 를 한다.
+  3. 물리 스텝이 아직이면 `stepper["fn"](False)` 를 한다.
+- 잡은 예외는 `state["live_failures"]` 에 `{t, phase, reason, class, traceback 마지막 줄}` 로 남긴다.
+
+**장면 손상 래치.**
+- 참값 검사 자리(위 scene 사유 8개)를 `scene_require(cond, reason)` 로 바꾼다.
+- 배치는 지금의 `require` 와 같다.
+- 실시간에서는 처음 거짓일 때 `scene = {"damaged": {reason, t}}` 를 래치하고 예외를 낸다. 그 예외는 위 처리로 진행 중 미션을 `failed` 로 끝낸다.
+- 래치 뒤에는 같은 검사가 기록만 하고 예외를 내지 않는다. 같은 조건이 틱마다 거짓이라 틱 본문이 매번 끊기기 때문이다.
+- 래치 뒤의 처리:
+  - 제출은 `scene_damaged` 로 거절한다(`Context.scene_damaged` 를 추가한다).
+  - 수동 조종은 허용한다(사용자 결정 4).
+  - 상태 메시지에 `scene` 을 싣는다(계약 추가).
+  - 장면 초기화는 4단계(D9)에서 한다.
+
 ## 4. 유즈케이스와 시험
 
 시험은 세 층이다:
