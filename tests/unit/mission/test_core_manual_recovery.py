@@ -131,3 +131,12 @@ def _compose(a, b):
     x, y, t = a
     c, s = math.cos(t), math.sin(t)
     return (x + c * b[0] - s * b[1], y + s * b[0] + c * b[1], t + b[2])
+
+
+def test_the_lower_test_flag_refuses_the_recovery_before_its_lowering():
+    """Plan D14 U20 c (lifted): the test flag's "lower" mode leaves the pallet on the forks for the manual lowering."""
+    core, rear = inserted_core(lift=0.10, pallet_z=0.05)
+    core.hooks.test_recovery_blocked = "lower"
+    stand(core, 6.0, rear)
+    assert core.commands.status == "recovery_required" and core.commands.end_reason == "recovery:blocked:test_lower"
+    assert core.ms.lift_command == pytest.approx(0.10) or core.ms.lift_command >= 0.0

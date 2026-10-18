@@ -260,7 +260,7 @@ def test_the_runner_wires_the_manual_recovery():
     assert 'state.setdefault("uncertified_teleop_withdraw", [])' in src
     assert 'core.cargo.invalidate("teleop_withdraw_contact")' in src
     near = (Path(__file__).resolve().parents[3] / "sim" / "isaac" / "near_tracking.py").read_text()
-    assert '"live_test_recovery_blocked": False' in near
+    assert '"live_test_recovery_blocked": None' in near
 
 
 def test_the_urdf_lift_limit_is_the_models_or_the_documented_default(tmp_path):

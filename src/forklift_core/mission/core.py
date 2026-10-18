@@ -947,7 +947,7 @@ class MissionCore:
             curvatures[0] = curvatures[1]
         path = RecoveryPath(poses, np.full(count, -1, dtype=np.int8), curvatures, float(np.sum(steps)))
         obstacle = self.obstacle
-        if getattr(self.hooks, "test_recovery_blocked", False) and phase == "recover_withdraw":
+        if getattr(self.hooks, "test_recovery_blocked", False) == "withdraw" and phase == "recover_withdraw":
             # Plan D14 tests only (U20 c): the retrace refused with its evidence valid -- the manual recovery's case.
             self.recovery_failed(t, "blocked:test")
             return False
@@ -3240,7 +3240,13 @@ class MissionCore:
             # still in a pocket back out first; without the evidence to, the mission needs a recovery by hand.
             decision = (self.cargo.cancel_decision(rear, in_withdraw=ms.phase == "withdraw")
                         if self.baseline is not None else "cancelled")
-            if decision == "recover":
+            if decision == "recover" and getattr(self.hooks, "test_recovery_blocked", False) == "lower":
+                # Plan D14 tests only (U20 c, lifted): the recovery refused before its lowering, the pallet left on
+                # the forks for the manual lowering and ground verdict.
+                cmds.begin_recovery(t)
+                self.recovery_failed(t, "blocked:test_lower")
+                stop = True
+            elif decision == "recover":
                 cmds.begin_recovery(t)
                 self.transition("recover_lower", t)
             elif decision == "recovery_required":

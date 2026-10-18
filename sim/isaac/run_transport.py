@@ -685,9 +685,11 @@ def arguments() -> argparse.Namespace:
                         help="M-c tests only (plan C5): the lift follows a non-periodic wave so the carriage camera's "
                         "horizon tells the sim time a frame's pixels were drawn at; the lift height is logged every "
                         "physics step -- for a run without a mission")
-    parser.add_argument("--live-test-recovery-blocked", action="store_true",
-                        help="Persistent console plan D14 tests only (U20 c): the automatic recovery's retrace is "
-                        "refused with its evidence valid, so the mission ends recovery_required for a manual recovery")
+    parser.add_argument("--live-test-recovery-blocked", nargs="?", const="withdraw", choices=("withdraw", "lower"),
+                        default=None,
+                        help="Persistent console plan D14 tests only (U20 c): the automatic recovery is refused with its "
+                        "evidence valid -- at its retrace (withdraw, the default) or before its lowering (lower, the "
+                        "pallet left on the forks) -- so the mission ends recovery_required for a manual recovery")
     parser.add_argument("--live-test-no-pallet-permit", action="store_true",
                         help="Persistent console plan D10 tests only (U11's control): the teleop permit does not see "
                         "the target pallets, as before D10")
@@ -5427,7 +5429,7 @@ def drive(S, isaac) -> None:
             live_pallet_full = (LivePalletPermit(obstacle["layer"].permission.config.stopping,
                                                  step_m=obstacle["layer"].permission.config.step_m)
                                 if live_pallet_perm is not None else None)
-            core.hooks.test_recovery_blocked = bool(args.live_test_recovery_blocked)
+            core.hooks.test_recovery_blocked = args.live_test_recovery_blocked or False
 
             live_withdraw = {"open": None, "watch": False}  # plan D14: the uncertified teleop withdraw's episode
 
