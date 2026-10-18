@@ -8,6 +8,7 @@ const MODE_KO = { AUTO: "자동 주행", TELEOP: "수동 조종", PAUSED: "대�
 const MODE_CLS = { AUTO: "acc", TELEOP: "tel", PAUSED: "ok", STOPPED: "crit" };
 const STATUS = {
   accepted: ["acc", "수락"],
+  preparing: ["acc", "준비 중"],
   running: ["acc", "실행 중"],
   paused: ["warn", "일시정지"],
   held: ["warn", "보류"],
@@ -207,7 +208,7 @@ export function render(m) {
 
   // progress strip and destination
   const prog = $("d-progress");
-  const active = mi && ["accepted", "running", "paused", "held", "resuming"].includes(mi.status);
+  const active = mi && ["accepted", "preparing", "running", "paused", "held", "resuming"].includes(mi.status);
   if (mi) {
     const ph = PHASES.find(([en]) => en === mi.phase);
     $("req-status-line").textContent = `${mko}${ph && mi.status !== "done" ? ` · ${ph[1]}` : ""}${mi.reason ? ` · ${mi.reason}` : ""}`;

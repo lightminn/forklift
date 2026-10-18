@@ -32,7 +32,7 @@ const TEMPLATES = [
   },
 ];
 
-const ACTIVE = ["accepted", "running", "paused", "held", "resuming"];
+const ACTIVE = ["accepted", "preparing", "running", "paused", "held", "resuming"];
 
 export function templatesFor(capabilities, query = "") {
   if (!capabilities) return [];

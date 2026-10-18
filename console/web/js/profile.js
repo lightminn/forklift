@@ -177,7 +177,6 @@ export function disarmAsked(asked, prev, nowMs) {
 
 // A refused request's reason as the operator reads it; an unknown code is shown as it is.
 const REJECT = {
-  not_at_start: "지게차가 출발 위치에 없고, 이 실행은 장애물 지도가 없어 지금 위치에서 경로를 다시 짤 수 없습니다",
 };
 export function rejectText(reason) {
   return REJECT[reason] ?? reason;

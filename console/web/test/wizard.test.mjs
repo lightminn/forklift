@@ -34,6 +34,8 @@ test("the start is blocked with a reason the operator can act on", () => {
   assert.match(blockReason({ ...base, mode: "STOPPED" }), /재무장/);
   assert.match(blockReason({ ...base, mode: "TELEOP" }), /수동 조종/);
   assert.match(blockReason({ ...base, mission: { status: "held" } }), /진행 중/);
+  // a live submit is prepared before it runs (persistent console plan D2)
+  assert.match(blockReason({ ...base, mission: { status: "preparing" } }), /진행 중/);
   assert.equal(blockReason({ ...base, mission: { status: "done" } }), null);
   assert.match(blockReason({ ...base, state: null }), /연결/);
   // the vehicle refuses a submit until the truck stands (not_stopped): say so first

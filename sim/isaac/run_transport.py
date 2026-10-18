@@ -23,6 +23,9 @@ from pathlib import Path
 import numpy as np
 
 EXIT_CLEARANCE_M = 0.08
+# Persistent console plan D2 (until D4/D5 judge the pockets themselves): a live mission that ended in one of these
+# phases may have left the forks in a pocket or the pallet on them, so the next submit is refused recovery_required.
+LIVE_POCKET_PHASES = ("insert", "lift", "extract", "transport", "lower", "withdraw")
 
 
 # Braking into the mid-approach standing frame (a planned stop).
@@ -3932,6 +3935,11 @@ def drive(S, isaac) -> None:
             for extended in (False, True)
             for index, coordinates in enumerate(args.observation_waypoints)
         ]
+        if getattr(args, "live", False):
+            # Persistent console plan D2 (Codex P2-7): a live session starts without a mission -- each submit
+            # prepares its own first leg from where the truck stands (and a ladder that failed here ended the
+            # session before the console was up).
+            initial_candidates = []
         for candidate_index, coordinates, extended in initial_candidates:
             ms.next_candidate_index = candidate_index + 1
             waypoint = Pose2D(*coordinates)
@@ -3985,14 +3993,14 @@ def drive(S, isaac) -> None:
             }
             state["phase"] = "repeat_target_not_reached"
             return
-        if observe_plan is None:
+        if observe_plan is None and not getattr(args, "live", False):
             state["planning_status"] = "all_candidates_failed"
             reasons = ";".join(
                 candidate["status"] for candidate in state["observation_candidates"]
             )
             require(False, f"observe:all_candidates_failed:{reasons}")
-        state["planning_status"] = observe_plan.status
-        paths = {"observe": observe_plan}
+        state["planning_status"] = "live_idle" if observe_plan is None else observe_plan.status
+        paths = {} if observe_plan is None else {"observe": observe_plan}
     else:
         planning_start = time.monotonic()
         # The per-stage trace survives a later stage's failure; the result does not.
@@ -4663,6 +4671,11 @@ def drive(S, isaac) -> None:
         width_m=float(args.pallet_geometry_loaded.overall_width_m))
     core.targets.add_destination("D-1", MissionTargetPose(
         float(scenario.destination.x_m), float(scenario.destination.y_m), float(scenario.destination.yaw_rad)))
+    if getattr(args, "live", False):
+        # Persistent console plan D2/D3: the first pallet's own place is a destination too (live only: a batch run's
+        # targets revision stays as it was).
+        core.targets.add_destination("D-0", MissionTargetPose(
+            float(scenario.pickup.x_m), float(scenario.pickup.y_m), float(scenario.pickup.yaw_rad)))
     if not getattr(args, "live", False):  # M-c: live, the operator submits (a record from before M-c has no flag)
         core.commands.queue(MissionSubmit("P-1", "D-1", core.targets.revision))
         core.commands.apply(0.0)
@@ -5265,8 +5278,6 @@ def drive(S, isaac) -> None:
 
         gc_seen_: list = []  # real-time plan D9d: garbage collections timed in a live run, folded in at a tick's start
         live = None
-        live_last_rear_ = {"pose": None}  # the last live tick's control pose (the submit's start check)
-        live_first_replan_ = {"due": False}  # a submit off the first leg's start: replan it from the truck this tick
         if getattr(args, "live", False):
             # M-c (docs/plans/2026-10-17-m-c-isaac-live-runner.md): the arbiter, its console server and the pacing.
             from forklift_core.control.path_tracking import ackermann_command as live_ackermann
@@ -5408,6 +5419,8 @@ def drive(S, isaac) -> None:
 
                 core.jobs = PlanWorker()
                 state["async_plan_worker"] = {"pid": core.jobs.proc.pid}
+            else:  # persistent console plan D2: each mission is prepared by the worker
+                raise ValueError("a live session needs the planning worker (FORKLIFT_LIVE_ASYNC_PLAN=0 is batch-only)")
             core.hooks.live_abort = lambda: live.stopped_in_tick  # the core stops right after a raw capture
 
             live_marker_ = None
@@ -5543,23 +5556,26 @@ def drive(S, isaac) -> None:
                     return live_permit_untimed_(curvatures, direction, check)
 
         stepper["fn"] = step_world if live is None else live_step_world
-        if slam is not None:
+        def teach_docking_reference(prior_site, taught_site, *, base_z=None, always_reference=False):
+            """The docking reference scan at a destination (setup; each live mission at its own, plan D2)."""
             # The taught station, fixed before the mission moves (Codex v3.8
             # impl P2): the planned delivery rear pose, the start's base height,
             # one ray cast with the truck left out. Truth enters here only.
-            prior = site_poses(scenario.destination, geometry)["delivery"]
+            prior = site_poses(prior_site, geometry)["delivery"]
             prior_d = (prior.x_m, prior.y_m, prior.yaw_rad)
             # The station is taught at the true destination; the prior differs only
             # with --destination-prior-error-m (plan D7c δ runs).
-            taught = site_poses(truth_destination, geometry)["delivery"]
+            taught = site_poses(taught_site, geometry)["delivery"]
             delivery_d = (taught.x_m, taught.y_m, taught.yaw_rad)
             offset_d = abs(args.rear_axle_offset_m)
-            start_base, _ = robot.get_world_pose()
+            if base_z is None:
+                start_base, _ = robot.get_world_pose()
+                base_z = float(start_base[2])
             base_d = np.array(
                 [
                     delivery_d[0] + offset_d * math.cos(delivery_d[2]),
                     delivery_d[1] + offset_d * math.sin(delivery_d[2]),
-                    float(start_base[2]),
+                    base_z,
                 ]
             )
             quat_d = np.array([math.cos(delivery_d[2] / 2), 0.0, 0.0, math.sin(delivery_d[2] / 2)])
@@ -5573,14 +5589,19 @@ def drive(S, isaac) -> None:
             )
             reference_ranges = scan_pattern.ranges_from_hits(ray_distances, ray_hits)
             slam["reference_points"] = laser_points(reference_ranges, beam_angles)
-            if args.d7_docking or args.destination_prior_error_m:
+            if args.d7_docking or args.destination_prior_error_m or always_reference:
+                # Live (persistent console plan D2, Codex P2-8): the cast pose always goes with its scan -- a later
+                # mission's prior drifts from the truth the scan was cast at.
                 slam["docking"]["delivery_rear_reference"] = list(delivery_d)
             slam["docking"].update(
                 delivery_rear_prior=list(prior_d),
                 reference_beams=int(np.isfinite(reference_ranges).sum()),
                 reference_self_hits_dropped=int(ray_own),
-                reference_base_z_m=float(start_base[2]),
+                reference_base_z_m=base_z,
             )
+
+        if slam is not None:
+            teach_docking_reference(scenario.destination, truth_destination)
         if near is not None:
             check_near_contract()
         if boundary is not None:
@@ -5702,6 +5723,83 @@ def drive(S, isaac) -> None:
             live_gc_freeze_.collect()
             live_gc_freeze_.freeze()
             state["gc_frozen_objects"] = live_gc_freeze_.get_freeze_count()
+            # Persistent console plan D2: what every mission of this session starts from. The candidates and the
+            # pickup's prior are copied now (options.observation_waypoints is changed in place at each adoption).
+            from forklift_core.mission.baseline import MissionBaseline
+            from forklift_core.planning import Pose2D as LivePose
+            from forklift_core.planning.observation_viewpoints import relocate_waypoints
+            from forklift_core.planning.pallet_mission import PalletSite as LiveSite
+
+            live_session_ = {
+                "scenario": scenario, "template": [tuple(float(v) for v in w) for w in args.observation_waypoints],
+                "reference": (float(scenario.pickup.x_m), float(scenario.pickup.y_m), float(scenario.pickup.yaw_rad)),
+                "zone": pickup_zone, "bounds": pickup_bounds, "wait": scenario.start_rear,
+                # the destinations' truth (simulation only): D-1 the scenario's, D-0 the first pallet's own place
+                "truth": {"D-1": truth_destination, "D-0": scenario.pickup},
+                "base_z": float(slam["docking"].get("reference_base_z_m")) if slam is not None
+                and slam["docking"].get("reference_base_z_m") is not None else None,
+            }
+
+            def live_prepare(t_, rear_):
+                """The submitted mission's inputs, fixed now, and its first leg asked of the worker (D2)."""
+                mission_ = core.commands.mission
+                pallet_ = core.targets.pallets[mission_.pallet_id].pose
+                dest_ = core.targets.destinations[mission_.destination_id]
+                target_ = (float(pallet_.x_m), float(pallet_.y_m), float(pallet_.yaw_rad))
+                at_first_ = target_ == live_session_["reference"]
+                waypoints_ = relocate_waypoints(live_session_["template"], live_session_["reference"], target_)
+                # A delivered pallet's prior: its place grown 0.3 m on every side; the first place keeps the bay's zone.
+                zone_ = live_session_["zone"] if at_first_ else Rectangle(
+                    target_[0], target_[1], geometry.pallet_depth_m + 0.6, geometry.pallet_width_m + 0.6, target_[2])
+                scenario_ = replace(live_session_["scenario"],
+                                    start_rear=LivePose(float(rear_[0]), float(rear_[1]), float(rear_[2])),
+                                    pickup=LiveSite(*target_),
+                                    destination=LiveSite(float(dest_.x_m), float(dest_.y_m), float(dest_.yaw_rad)))
+                grid_ = grid_kwargs("observe")  # this tick's grid (D9: its scan id), fixed by the submit's pickle
+                grid_["pickup_obstacle"] = zone_  # the new pallet's prior, not the last mission's (Codex P2-4)
+                grid_.pop("deadline", None)
+                payload_ = {"world": grid_world(scenario_), "waypoints": waypoints_, "config": planner_config,
+                            "geometry": geometry, "pickup_bounds": None, "grid_kwargs": grid_,
+                            "deadline": time.monotonic() + 2 * len(waypoints_) * 20.0}
+                inputs_ = {"scenario": scenario_, "wait_pose": live_session_["wait"], "waypoints": waypoints_,
+                           "pickup_bounds": live_session_["bounds"] if at_first_ else None, "pickup_zone": zone_,
+                           "truth_destination": live_session_["truth"].get(mission_.destination_id, dest_),
+                           "pallet_id": mission_.pallet_id, "destination_id": mission_.destination_id}
+                core.prepare_request(t_, rear_, inputs_, payload_)
+
+            def live_mission_start(t_, inputs_, plan_, records_):
+                """The runner's part of the adoption (D2): its locals, the prior zone, the permission's path caches,
+                the docking reference at the new destination, the last mission's records."""
+                nonlocal scenario, truth_destination, initial_pallet, pickup_obstacle, pickup_zone, pickup_bounds
+                nonlocal return_to_pose
+                last_ = live.results.last
+                if last_ is not None and any(records_.values()):
+                    live.archive(last_["mission_id"], records_)
+                scenario, truth_destination = inputs_["scenario"], inputs_["truth_destination"]
+                pickup_zone, pickup_bounds, return_to_pose = (inputs_["pickup_zone"], inputs_["pickup_bounds"],
+                                                              inputs_["wait_pose"])
+                initial_pallet, pallet_q_ = pallet.get_world_pose()  # the truth checks: displaced from here
+                pickup_obstacle = Rectangle(float(initial_pallet[0]), float(initial_pallet[1]), geometry.pallet_depth_m,
+                                            geometry.pallet_width_m, yaw_and_tilt(pallet_q_)[0])
+                if obstacle is not None:
+                    if obstacle["layer"].known_enabled:
+                        from forklift_core.perception.known_obstacles import KnownRect
+
+                        obstacle["layer"].known = [KnownRect(
+                            (pickup_zone.x_m, pickup_zone.y_m, pickup_zone.length_m, pickup_zone.width_m,
+                             pickup_zone.yaw_rad), fix_stamp_s=float(t_), r_fix_m=0.0, rho_m=0.0,
+                            frame_correction=(0.0, 0.0, 0.0), kind="zone")]
+                    permission_ = obstacle["layer"].permission
+                    permission_.path_check, permission_._driven_since_m = None, 0.0
+                if live_perm is not None:
+                    live_perm._cache.clear()
+                if slam is not None:
+                    teach_docking_reference(scenario.destination, truth_destination, base_z=live_session_["base_z"],
+                                            always_reference=True)
+
+            core.options.observe_bounds = None  # the whole observation travel in the hall (D2, Codex P2-6)
+            core.hooks.live_mission_start = live_mission_start
+            core.baseline = MissionBaseline.capture(core)
             live.start()  # after the SLAM warm-up: the console sees the first control tick next (Codex D9 impl P3)
 
         for step in range(int(120 * args.max_sim_seconds)):
@@ -5722,24 +5820,11 @@ def drive(S, isaac) -> None:
             while gc_seen_:  # D9d: the collections timed since the last tick, folded in outside any walk
                 live_timers.add(*gc_seen_.pop())
             if live is not None:
-                # The first leg was planned from the start pose before any submit: a truck driven elsewhere by hand
-                # would follow it from metres away (2026-10-18 demo: "Tracking failed in observe"). Off its first
-                # pose a submit replans that leg from the truck (below, with the obstacle recovery's replan); with
-                # nothing to replan with (no obstacle layer) it is refused (not_at_start).
-                live_idle_ = core.commands.status in ("idle", "done", "failed", "cancelled")
-                live_first_ = trackers.get(ms.phase) if live_idle_ else None
-                live_off_start_ = False
-                if live_first_ is not None and live_last_rear_["pose"] is not None:
-                    p0_, r_ = live_first_._poses[0], live_last_rear_["pose"]
-                    live_off_start_ = not (math.hypot(r_[0] - p0_[0], r_[1] - p0_[1]) <= 0.3 and abs(
-                        math.remainder(r_[2] - p0_[2], math.tau)) <= math.radians(15))
-                # A completed mission leaves no leg to start from: refused (not_at_start) until the persistent
-                # console plan's D2 prepares each mission from where the truck stands.
-                live_at_start_ = not (live_off_start_ and obstacle is None) and ms.phase != "complete"
-                stop_kind_, applied_commands_ = live.tick_start(t, core.near_active(), at_start=live_at_start_)
-                core.start_submitted(t)  # the operator's submit: the mission and its phase clock run from this tick
-                if live_off_start_ and live_idle_ and core.commands.status == "running":
-                    live_first_replan_["due"] = True
+                # Persistent console plan D2: a submit is prepared from where the truck stands (below, once the
+                # control pose is this tick's). Until D4/D5 a mission that ended with the forks possibly in a pocket
+                # refuses the next submit (recovery_required).
+                stop_kind_, applied_commands_ = live.tick_start(
+                    t, core.near_active(), clear_for_submit=ms.phase not in LIVE_POCKET_PHASES)
             elif mission_schedule is not None:
                 # M-a3 (plan E2, E7): the schedule's due commands and the stop kind in force, applied at this
                 # control tick's start.
@@ -5804,21 +5889,8 @@ def drive(S, isaac) -> None:
                     wt_["max_deviation_m"] = max(wt_["max_deviation_m"], float(dev_))
                     require(dev_ <= float(obstacle["layer"].known_config.get("tracking_m", 0.006)),
                             f"withdraw_tracking_exceeded:{dev_:.4f}")
-            if live_first_replan_["due"] and core.commands.status == "running":
-                # The operator's submit found the truck off the first leg (driven by hand): that leg is replanned
-                # from here before the follower's first tick, with the obstacle recovery's own replan (the leg's
-                # goal kept). A replan that installs no path from the truck fails the mission, not the run; the
-                # operator may submit again.
-                live_first_replan_["due"] = False
-                first_replan_ = core.blocked_replan(t, rear, 0.0, 0.0, hall=True)  # maybe driven out of the bay
-                rear = first_replan_.rear
-                p0_ = trackers[ms.phase]._poses[0] if ms.phase in trackers else None
-                from_truck_ = p0_ is not None and math.hypot(rear[0] - p0_[0], rear[1] - p0_[1]) <= 0.3
-                state.setdefault("live_first_replans", []).append(
-                    {"time_s": t, "phase": ms.phase, "rear": [float(v) for v in rear], "installed": bool(from_truck_)})
-                if not from_truck_:
-                    # Persistent console plan D1: recorded in the results book (Codex stage 1 P2: finish alone was not).
-                    live.end_mission(t, "failed", "first_leg_replan_failed")
+            if live is not None and core.commands.status in ("accepted", "preparing") and not core.job_pending():
+                live_prepare(t, rear)  # persistent console plan D2: the submitted mission's first leg, from here
             require(np.isfinite([base, ppos]).all(), "Nonfinite body state")
             if ms.phase == "lift":
                 # Every physics step, so the peak and the aborting state are
@@ -5999,13 +6071,15 @@ def drive(S, isaac) -> None:
             gate_ = core.release_gate(t, rear)
             releasing, warming, rear = gate_.releasing, gate_.warming, gate_.rear
             paused_ = core.commands.stopped  # M-a3 (plan E3): paused, resuming or cancelling -- no mission work
-            if live is not None and core.commands.status in ("idle", "accepted", "done", "failed", "cancelled"):
+            if live is not None and core.commands.status in ("idle", "done", "failed", "cancelled"):
                 paused_ = True  # M-c: no mission yet (or over): its work does not run
             cancel_stop_ = False
             # Real-time plan D8b: a tick waiting for a plan (asked, still computing, or just taken) stands: none of the
             # mission's own work below runs, the permission watches, the links, commands and sensors go on.
             plan_wait_ = core.jobs is not None and core.job_hold(
                 t, rear, float(np.dot(velocity[:2], forward)), paused_).hold
+            if live is not None and core.commands.status in ("accepted", "preparing"):
+                plan_wait_ = True  # persistent console plan D2: a mission being prepared stands, whatever is pending
             # Real-time plan D9c: the observe capture runs over control ticks (one render step each, at this tick's
             # step) and its observation is handled on the tick after the one that detected it; those ticks stand
             # as a plan wait does.
@@ -6489,7 +6563,6 @@ def drive(S, isaac) -> None:
                     state["command_speed"] = 0.0
                     state["applied_command"] = (0.0, [float(v) for v in steering_command])
                 # The state carries what is applied after the choice above (contract 6, Codex M-c round 5 P1).
-                live_last_rear_["pose"] = (float(rear[0]), float(rear[1]), float(rear[2]))
                 live_tracker_ = trackers.get(ms.phase) if core.commands.status in (
                     "running", "paused", "held", "resuming") else None
                 live_plan_key_ = None if live_tracker_ is None else (
@@ -6619,6 +6692,14 @@ def drive(S, isaac) -> None:
             # Format 2: the loop ran out of time between ticks -- the end's own reads go in a closing tick.
             boundary.recorder.tick_begin(-3, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
         if ms.phase in ("repeat_capture_done", "repeat_target_not_reached", "near_tracking_stopped"):
+            return
+        if live is not None:
+            # Persistent console plan D1: each mission was judged at its own end (the results book); the session
+            # ends here (at the loop's limit until D7), a mission still on as session_end.
+            live.end_mission(book_clock["t"] if book_clock["t"] is not None else 0.0, "failed", "session_end")
+            state.update({"success": True, "mission_results": live.results.message()["results"],
+                          "simulated_time_s": world.current_time - initial_time,
+                          "simulation_wall_s": time.monotonic() - simulation_started_wall})
             return
         if core.commands.status == "cancelled":
             state["mission_result"] = "cancelled"  # M-a3 (plan E6): an outcome of its own, not a time-out

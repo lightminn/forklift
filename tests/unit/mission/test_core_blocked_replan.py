@@ -517,14 +517,3 @@ def test_the_fifth_failed_replan_refuses_before_it_would_wait():
     assert w.obstacle.get("replan_wait", {}) == {}
 
 
-def test_a_replan_from_where_the_operator_left_the_truck_plans_in_the_whole_hall():
-    # 2026-10-18 demo: driven by hand out of the pickup bay, the submit's replan of the observe leg was confined to the
-    # bay and failed invalid_start twice (outside its bounds). hall=True plans the leg in the scenario's own bounds,
-    # the zero-clearance retry and the other observation candidates too.
-    w = World("observe", plans=[plan("invalid_start"), plan("invalid_start"), plan(x0=1.0)], waypoints=[(4.0, 2.0, 0.0)])
-    w.core.blocked_replan(50.0, REAR, 0.0, 0.0, hall=True)
-    leg_calls = [c for c in w.calls if c[0] == "plan_observation_leg"]
-    assert len(leg_calls) == 3 and all(c[2]["pickup_bounds"] is None for c in leg_calls)
-    w2 = World("observe", plans=[plan(x0=1.0)])
-    w2.replan()
-    assert [c for c in w2.calls if c[0] == "plan_observation_leg"][0][2]["pickup_bounds"] == "BOUNDS"  # default kept

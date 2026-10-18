@@ -468,6 +468,8 @@ def preparing_core():
     core.targets.add_destination("D-1", Pose(-5.0, -21.4, -1.57))
     core.options.observation_waypoints = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]
     core.options.pickup_bounds, core.options.home_rear = "BAY", "HOME"
+    core.options.speeds, core.options.cusp_heading_hold_rad, core.options.tracker_profile = {"observe": 0.3}, 0.05, None
+    core.settings.update(tracker_curvature_inv_m=0.4, drive_acceleration_mps2=0.3)
     core.hooks.lift_position = lambda: 0.004
     started = []
     core.hooks.live_mission_start = lambda t, inputs, plan, records: started.append((t, inputs, plan, records))
@@ -500,6 +502,7 @@ def test_a_prepared_mission_is_adopted_with_its_start_processing():
     assert ms.phase == "observe" and ms.phase_started == 12.0 and ms.next_candidate_index == 2
     assert ms.observe_stall_ticks == 0 and core.last_permission is None and ms.lift_command == 0.004
     assert core.paths == {"observe": plan} and state["planning_status"] == "success"
+    assert list(core.trackers) == ["observe"] and core.trackers["observe"].config.cruise_speed_mps == 0.3
     assert state["observation_waypoint_selected"] == [6.0, 5.0, 1.0]
     assert [c["status"] for c in state["observation_candidates"]] == ["no_path", "success"]
     o = core.options

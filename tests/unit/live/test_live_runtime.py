@@ -271,37 +271,6 @@ def test_the_runner_hands_the_followed_path_to_the_live_state():
     assert "plan_key=" in call and "plan_poses=" in call
 
 
-def test_the_tick_hands_the_start_check_to_the_mission_commands(tmp_path):
-    # 2026-10-18 demo: driven 7 m by hand, a submit ran the observe leg planned from the start and ended the run with
-    # "Tracking failed in observe". Without grid planning (nothing to replan with) the runner says the truck is off
-    # the start and the submit is refused (commands: not_at_start).
-    rt, core, did, clock = runtime(tmp_path)
-    seen = []
-    apply_ = core.commands.apply
-    core.commands.apply = lambda t, context: seen.append(context) or apply_(t, context)
-    rt.start()
-    try:
-        rt.tick_start(0.0, False, at_start=False)
-        rt.tick_start(0.1, False)
-        assert [c.at_start for c in seen] == [False, True]
-    finally:
-        rt.close()
-
-
-def test_the_runner_replans_the_first_leg_from_where_a_submit_finds_the_truck():
-    # With grid planning a submit off the start is accepted and the first leg replanned from the truck (the
-    # obstacle recovery's own replan); a replan that installs no path from the truck fails the mission, not the run.
-    from pathlib import Path
-
-    source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
-    head = source[:source.index("live.tick_start(t, core.near_active()")][-1800:]
-    assert "_poses[0]" in head and "live_last_rear_" in head
-    assert "at_start=live_at_start_" in source[source.index("live.tick_start(t, core.near_active()"):][:120]
-    replan = source[source.index('live_first_replan_["due"] and'):][:1600]
-    assert "core.blocked_replan(t, rear, 0.0, 0.0, hall=True)" in replan
-    assert 'live.end_mission(t, "failed", "first_leg_replan_failed")' in replan
-
-
 def test_a_cancelled_mission_ends_the_mission_but_not_a_live_run():
     # 2026-10-18 demo (ws1 run 4129): the operator cancelled 1.7 s after a submit and the run ended "mission_cancelled";
     # live, a cancel frees the slot (commands: cancelled -> idle at the next apply) and the session goes on.
@@ -468,16 +437,6 @@ def test_a_cancel_confirmed_standing_logs_its_end_once(tmp_path):
                      "status": "cancelled"}]
 
 
-def test_a_first_leg_replan_that_installs_no_path_from_the_truck_ends_through_end_mission():
-    """Codex stage 1 P2: it called commands.finish only, so the result never reached the results book."""
-    from pathlib import Path
-
-    source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
-    block = source[source.index('if live_first_replan_["due"] and core.commands.status == "running":'):][:1800]
-    assert 'live.end_mission(t, "failed", "first_leg_replan_failed")' in block
-    assert 'core.commands.finish("failed", t)' not in block
-
-
 def test_a_preparation_ended_by_a_stop_is_collected_at_the_tick_start_once(tmp_path):
     """Persistent console plan D2: the fixture's arbiter has no feedback, so its stop kind is not none."""
     rt, core, order = ending(tmp_path)
@@ -517,3 +476,42 @@ def test_a_preparation_ended_after_the_apply_is_collected_before_the_next_one(tm
     assert last["outcome"] == "failed" and last["reason"] == "prepare:timeout" and last["ended_s"] == 11.5
     rt.tick_start(13.0, False)
     assert rt.results.seq == 1 and core.commands.status == "idle"
+
+
+def test_the_last_missions_records_are_written_off_the_control_thread(tmp_path):
+    """Persistent console plan D2: the adoption hands the last mission's records over (MissionBaseline.restore)."""
+    rt, core, did, clock = runtime(tmp_path)
+    records = {"state": {"async_plans": [{"site": "leg", "wall_s": np.float64(0.25)}]}, "obstacle": {}, "pocket": {}}
+    rt.archive("m1", records)
+    rt.close()  # waits for the writes
+    written = json.loads((tmp_path / "missions" / "m1" / "records.json").read_text())
+    assert written["state"]["async_plans"] == [{"site": "leg", "wall_s": 0.25}]
+
+
+def test_the_runner_prepares_each_live_mission_from_where_the_truck_stands():
+    """Persistent console plan D2 (stage 2 design, 3rd edition): the runner's side of the preparation."""
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
+    # no setup ladder live (a live session starts without a mission), and the worker is required
+    assert 'if getattr(args, "live", False):\n' in source and "            initial_candidates = []\n" in source
+    assert 'raise ValueError("a live session needs the planning worker' in source
+    # each submit is prepared once the control pose is this tick's, and stands while it is
+    assert ('if live is not None and core.commands.status in ("accepted", "preparing") and not core.job_pending():\n'
+            '                live_prepare(t, rear)') in source
+    assert source.index("live_prepare(t, rear)  #") < source.index("plan_wait_ = core.jobs is not None and core.job_hold(")
+    assert 'core.commands.status in ("idle", "done", "failed", "cancelled"):' in source  # accepted is not paused
+    assert ('if live is not None and core.commands.status in ("accepted", "preparing"):\n'
+            '                plan_wait_ = True') in source
+    assert "clear_for_submit=ms.phase not in LIVE_POCKET_PHASES" in source
+    # the adoption's runner part and the session's baseline, before the console starts
+    assert "nonlocal scenario, truth_destination, initial_pallet, pickup_obstacle, pickup_zone, pickup_bounds" in source
+    start = source.index("            live.start()  # after the SLAM warm-up")
+    before = source[start - 600:start]
+    assert "core.options.observe_bounds = None" in before and "core.baseline = MissionBaseline.capture(core)" in before
+    # D-0 live only; the session's end ends a mission still on and skips the batch judgement
+    assert source.index('core.targets.add_destination("D-0"') > source.index('    if getattr(args, "live", False):\n        # Persistent console plan D2/D3')
+    assert 'live.end_mission(book_clock["t"] if book_clock["t"] is not None else 0.0, "failed", "session_end")' in source
+    # the temporary handling D2 replaces is gone
+    for gone in ("live_first_replan_", "live_last_rear_", "at_start", "start_submitted", "hall=True"):
+        assert gone not in source, gone

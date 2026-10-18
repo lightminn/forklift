@@ -318,13 +318,6 @@ class MissionCore:
             slam["pending_release"] = ms.phase
             slam["release_wait_from"] = t
 
-    def start_submitted(self, t: float) -> None:
-        """A live run's submit: the mission runs from this tick, and so does its first phase's clock -- the truck stood
-        from sim 0 until the operator submitted, which is no work of that phase. A batch run starts at 0."""
-        if self.commands.status == "accepted":
-            self.commands.start()
-            self.ms.phase_started = t
-
     def tracking_limit(self, t: float) -> float:
         """The follower's time limit in the current phase: three times the path time at the tracker's own speed
         caps (length / cruise when there are none), plus 10 s; standing by design is not slowness."""
@@ -806,23 +799,18 @@ class MissionCore:
         return SimpleNamespace(allowed=allowed, why=why, acting=acting, pocket_phase=pocket_phase,
                                obstacle_hold=obstacle_hold, requested_speed=requested_speed)
 
-    def blocked_replan(self, t: float, rear, kappa: float, requested_speed: float, *,
-                       hall: bool = False) -> SimpleNamespace:
+    def blocked_replan(self, t: float, rear, kappa: float, requested_speed: float) -> SimpleNamespace:
         """Stop, replan, resume (plan D4) once the truck has stood blocked for a second or a replan is forced:
         the release a backoff or a D7c re-approach needs, the replan of the leg (an escape straight first when
         the start is inside the clearance, then clearance 0, other observation candidates before recognition,
         the whole mission again after it), and what is installed -- an escape, a backoff, a wait, the same
-        path or the new path. Returns the control pose (moved by a release) and the requested speed.
-        ``hall``: the observe leg is planned in the scenario's own bounds, not the pickup bay's (a live submit
-        found the truck where the operator drove it, possibly out of the bay)."""
+        path or the new path. Returns the control pose (moved by a release) and the requested speed."""
         ms, state, obstacle, slam, pocket, hooks, options = (self.ms, self.state, self.obstacle, self.slam, self.pocket,
                                                             self.hooks, self.options)
         paths, trackers, geometry = self.paths, self.trackers, self.geometry
         planner_config, travel_config, scenario = options.planner_config, options.travel_config, options.scenario
         return_to_pose, pickup_bounds, mission_stages = options.return_to_pose, options.pickup_bounds, options.mission_stages
-        observe_bounds_ = None if hall else self.observe_bounds()
-        if hall:
-            pickup_bounds = None
+        observe_bounds_ = self.observe_bounds()
         BACKOFF_M, BACKOFF_SPEED_MPS, BACKOFF_PER_LEG, ESCAPE_PER_LEG = (
             options.backoff_m, options.backoff_speed_mps, options.backoff_per_leg, options.escape_per_leg)
         require, wall, same_path, path_stats, path_record = (hooks.require, hooks.wall, hooks.same_path, hooks.path_stats,
@@ -1982,10 +1970,21 @@ class MissionCore:
             )
         state["planning_status"] = observe_plan.status
         paths["observe"] = observe_plan
-        trackers["observe"] = RearAxlePathTracker(
-            observe_plan.poses,
-            observe_plan.directions,
-            observe_plan.curvatures_inv_m,
+        trackers["observe"] = self.observe_tracker(observe_plan)
+        ms.phase_started = t
+        apply_tracker_profile()
+        realign_install("observe_candidate")  # Plan D8 S4c-3 stage 2
+        record_tracker_configs()
+        return False
+
+    def observe_tracker(self, plan):
+        """The observation leg's follower, as the setup makes it (shared by the next candidate and a live
+        mission's adoption, persistent console plan D2)."""
+        speeds, settings, CUSP_HEADING_HOLD_RAD = self.options.speeds, self.settings, self.options.cusp_heading_hold_rad
+        return RearAxlePathTracker(
+            plan.poses,
+            plan.directions,
+            plan.curvatures_inv_m,
             TrackerConfig(
                 cruise_speed_mps=speeds["observe"],
                 max_curvature_inv_m=settings[
@@ -2020,11 +2019,6 @@ class MissionCore:
                 max_cross_track_error_m=0.35,
             ),
         )
-        ms.phase_started = t
-        apply_tracker_profile()
-        realign_install("observe_candidate")  # Plan D8 S4c-3 stage 2
-        record_tracker_configs()
-        return False
 
     def observe_succeeded(self, t: float, rear, base, yaw: float, attempt: dict, attempt_number: int, observation,
                           scene_input, capture_diagnostics, step: int) -> SimpleNamespace:
@@ -4571,6 +4565,11 @@ class MissionCore:
         state["planning_status"] = plan.status
         self.paths.clear()
         self.paths["observe"] = plan
+        getattr(self.trackers, "close", lambda: None)()  # the last mission's leg switches into the record first
+        self.trackers.clear()
+        self.trackers["observe"] = self.observe_tracker(plan)
+        self.apply_tracker_profile()
+        self.record_tracker_configs()
         self.hooks.live_mission_start(t, inputs, plan, records)
         state["transitions"].append({"from": ms.phase, "to": "observe", "time_s": t,
                                      "mission_id": self.commands.mission_id})

@@ -195,7 +195,6 @@ test("a forbidden drive names the policy's reason, not the permit's code (2026-1
   assert.equal(permitText({ reason: "clear", limit_mps: 0.3 }, "pacing"), "clear · 상한 0.30 m/s");
 });
 
-test("a refused submit away from the start says so in Korean", () => {
-  assert.match(rejectText("not_at_start"), /출발 위치/);
+test("a reject without a Korean text shows its code", () => {
   assert.equal(rejectText("mission_active"), "mission_active");
 });

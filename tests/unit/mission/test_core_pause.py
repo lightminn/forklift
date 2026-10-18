@@ -582,22 +582,3 @@ def test_unknown_far_ahead_resumes_like_a_running_leg_and_close_ahead_waits(veri
     assert core.commands.status == outcome
 
 
-def test_a_live_submit_starts_the_phase_clock_at_the_submit():
-    # Isaac live (2026-10-18 demo): the truck stood from sim 0 until the operator submitted at 33.8 s; the observe
-    # phase's clock had run from 0, so the first follower tick read a 30 s "Tracking timeout in observe".
-    core, _, _ = make("observe", start=False)
-    assert core.commands.status == "accepted"
-    core.start_submitted(33.8)
-    assert core.commands.status == "running" and core.ms.phase_started == 33.8
-    assert core.commands.work_elapsed(core.ms.phase_started, 34.0) == pytest.approx(0.2)
-    core.start_submitted(50.0)  # running already: a later tick does not restart the clock
-    assert core.ms.phase_started == 33.8
-
-
-def test_the_live_runner_starts_a_submitted_mission_through_the_core():
-    from pathlib import Path
-
-    source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
-    live_block = source[source.index("live.tick_start(t, core.near_active()"):][:400]
-    assert "core.start_submitted(t)" in live_block
-    assert "core.commands.start()" not in live_block

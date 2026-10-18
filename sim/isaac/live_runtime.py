@@ -13,6 +13,7 @@ import json
 import math
 import os
 import secrets
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -68,6 +69,7 @@ class LiveRuntime:
         self.end = end or EndHooks()
         self.results = ResultsBook()  # the session's mission outcomes (persistent console plan D1 step 9)
         self._ended_id: str | None = None  # the mission end_mission last ended (each ends once)
+        self._writers: list = []  # the threads writing the missions' records (plan D2), joined at close
         self.dt = dt
         self.session_epoch = session_epoch if session_epoch is not None else secrets.randbits(48)  # a job, an epoch
         self.arbiter = Arbiter(self.session_epoch, config or ArbiterConfig(tick_s=dt),
@@ -126,7 +128,25 @@ class LiveRuntime:
         self.log({"event": "start", "port": port, "session_epoch": self.session_epoch})
         return port
 
+    def archive(self, mission_id: str, records: dict) -> None:
+        """Write a mission's records (handed over at the next adoption) to missions/<id>/records.json off the
+        control thread; the dict is the mission's own (moved out of the core), so nothing changes it meanwhile."""
+        def write():
+            folder = self.output / "missions" / mission_id
+            try:
+                folder.mkdir(parents=True, exist_ok=True)
+                (folder / "records.json").write_text(json.dumps(records, default=_jsonable))
+            except (OSError, TypeError, ValueError) as exc:
+                self.log({"archive_error": f"{type(exc).__name__}: {exc}", "mission_id": mission_id})
+
+        self._writers = [w for w in self._writers if w.is_alive()]
+        writer = threading.Thread(target=write, name=f"archive-{mission_id}", daemon=True)
+        writer.start()
+        self._writers.append(writer)
+
     def close(self) -> None:
+        for writer in self._writers:
+            writer.join(timeout=30.0)
         ended = self.server.stop()
         if self.port_file is not None:
             write_port_file(self.port_file, {"host": self.server.host, "port": self.server.port,
@@ -146,10 +166,8 @@ class LiveRuntime:
         self._log.write(json.dumps(entry, default=_jsonable) + "\n")
 
     # --- per control tick ------------------------------------------------------------------------------------------
-    def tick_start(self, t: float, near_active: bool, at_start: bool = True,
-                   clear_for_submit: bool = True) -> tuple[str, list]:
-        """The arbiter's cycle start, then the mission's commands with the stop kind it gives (M-b B3). ``at_start``:
-        the truck stands where the mission's first leg (planned before any submit) starts. ``clear_for_submit``: the
+    def tick_start(self, t: float, near_active: bool, clear_for_submit: bool = True) -> tuple[str, list]:
+        """The arbiter's cycle start, then the mission's commands with the stop kind it gives (M-b B3). ``clear_for_submit``: the
         forks are empty and out of every pocket (else a submit is refused recovery_required)."""
         now = self.clock()
         self.stopped_in_tick = False
@@ -157,7 +175,7 @@ class LiveRuntime:
         stop_kind = self.link.begin(now, self.feedback)
         self._collect_end(t)  # ended after the last apply (a preparation's job_hold failure): before this one frees it
         records = self.core.commands.apply(t, Context(stop_kind=stop_kind, near_tracker=near_active,
-                                                      at_start=at_start, clear_for_submit=clear_for_submit))
+                                                      clear_for_submit=clear_for_submit))
         self._collect_end(t)  # ended in this apply (a cancel before it ran, a stopped preparation)
         self._flush(t)
         return stop_kind, records
