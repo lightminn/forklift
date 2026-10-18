@@ -159,6 +159,8 @@ class MissionCore:
         self.capture_live = None  # D9c: the capture running over control ticks
         self.observation_live = None  # D9c: a finished capture's observation, handled on the next tick
         self.capture_acquired_s: float | None = None  # D9c: its acquisition time, for the plan it asks
+        self.prepare_attempts = 0  # persistent console plan D2: the current submit's preparation requests
+        self.baseline = None  # persistent console plan D2: the mission-owned state before a live session's first mission
         self.fresh_depth_wait: tuple | None = None  # (since, acquisition stamp): an async near build's first frame
 
     def known_transition(self, from_phase: str, next_phase: str, t: float) -> None:
@@ -818,6 +820,7 @@ class MissionCore:
         paths, trackers, geometry = self.paths, self.trackers, self.geometry
         planner_config, travel_config, scenario = options.planner_config, options.travel_config, options.scenario
         return_to_pose, pickup_bounds, mission_stages = options.return_to_pose, options.pickup_bounds, options.mission_stages
+        observe_bounds_ = None if hall else self.observe_bounds()
         if hall:
             pickup_bounds = None
         BACKOFF_M, BACKOFF_SPEED_MPS, BACKOFF_PER_LEG, ESCAPE_PER_LEG = (
@@ -876,7 +879,7 @@ class MissionCore:
             target = PlanningPose(*(float(v) for v in paths["observe"].poses[-1]))
             replanned = plan_observation_leg(
                 grid_world(scenario), target, planner_config, geometry=geometry,
-                start_rear=start, pickup_bounds=pickup_bounds, extended=False,
+                start_rear=start, pickup_bounds=observe_bounds_, extended=False,
                 **grid_kwargs("observe"),
             )
         elif ms.phase == "transport":
@@ -926,7 +929,7 @@ class MissionCore:
             if ms.phase == "observe":
                 replanned = plan_observation_leg(
                     grid_world(scenario), target, tight, geometry=geometry,
-                    start_rear=start, pickup_bounds=pickup_bounds, extended=False,
+                    start_rear=start, pickup_bounds=observe_bounds_, extended=False,
                     **grid_kwargs("observe"),
                 )
             elif ms.phase == "transport":
@@ -969,7 +972,7 @@ class MissionCore:
                 candidate_plan = plan_observation_leg(
                     grid_world(scenario), PlanningPose(*(float(v) for v in coordinates)),
                     tight, geometry=geometry, start_rear=start,
-                    pickup_bounds=pickup_bounds, extended=False, **grid_kwargs("observe"),
+                    pickup_bounds=observe_bounds_, extended=False, **grid_kwargs("observe"),
                 )
                 state["observation_candidates"].append(
                     {"candidate_index": candidate_index, "pose": list(coordinates),
@@ -1697,7 +1700,7 @@ class MissionCore:
                     planner_config,
                     geometry=geometry,
                     start_rear=PlanningPose(float(rear[0]), float(rear[1]), float(rear[2])),
-                    pickup_bounds=pickup_bounds,
+                    pickup_bounds=self.observe_bounds(),
                     extended=False,
                     **grid_kwargs("observe"),
                 )
@@ -1929,7 +1932,7 @@ class MissionCore:
                 planner_config,
                 geometry=geometry,
                 start_rear=Pose2D(rear[0], rear[1], rear[2]),
-                pickup_bounds=pickup_bounds,
+                pickup_bounds=self.observe_bounds(),
                 # Re-observation keeps the earlier ladder.
                 extended=False,
                 **grid_kwargs("observe"),
@@ -3271,7 +3274,7 @@ class MissionCore:
                 known_.x_m, known_.y_m, geometry.pallet_depth_m, geometry.pallet_width_m, known_.yaw_rad
             )
         rects_, footprint_, bounds_ = leg_obstacles(
-            "observe", grid_world(scenario), geometry, pickup_obstacle=pickup_, pickup_bounds=pickup_bounds
+            "observe", grid_world(scenario), geometry, pickup_obstacle=pickup_, pickup_bounds=self.observe_bounds()
         )
         return GridChecker(rects_, footprint_, bounds_)
 
@@ -4419,11 +4422,17 @@ class MissionCore:
                 "mode": slam["tracker"].mode if slam is not None else None, "hold": self.hold_count()}
 
     def _job_invalid(self, p, t: float, rear) -> str | None:
-        """Why the plan p may not be taken now (None: it may), judged on the current state (D8b)."""
+        """Why the plan p may not be taken now (None: it may), judged on the current state (D8b). A preparation
+        (persistent console plan D2) is judged on its own status and on the targets list it was asked on."""
         cmds, slam = self.commands, self.slam
-        if cmds.status != "running" or cmds.mission_gen != p.gen:
+        if p.site == "prepare":
+            if cmds.status != "preparing" or cmds.mission_gen != p.gen:
+                return "mission"
+            if self.targets.revision != p.ctx["targets_revision"]:
+                return "targets"
+        elif cmds.status != "running" or cmds.mission_gen != p.gen:
             return "mission"
-        if self.ms.phase != p.phase:
+        elif self.ms.phase != p.phase:
             return "phase"
         if self._applied_now() != p.applied:
             return "correction"
@@ -4486,6 +4495,9 @@ class MissionCore:
         record = state["async_plans"][-1]
         record.update(finished_s=float(t), wall_s=hooks.wall() - p.wall, ok=bool(ok), dropped=why,
                       taken=self._plan_context(rear, self._applied_now()))
+        if p.site == "prepare":
+            self._prepare_answer(p, why, ok, value, t)
+            return SimpleNamespace(hold=True)
         if why is not None:
             self._drop(p, t, why, count=True)
             return SimpleNamespace(hold=True)
@@ -4509,6 +4521,69 @@ class MissionCore:
         elif p.site == "live_leg":
             self.obstacle.setdefault("live_replanned", {})[p.phase] = False
         # observe: nothing to undo -- the truck stands at the observation pose and captures again
+
+    # --- a live mission's preparation (docs/plans/2026-10-18-persistent-live-console.md D2) ------------------------
+    PREPARE_ATTEMPTS = 2  # a preparation whose inputs changed is asked again once
+
+    def prepare_request(self, t: float, rear, inputs: dict, payload: dict) -> None:
+        """Ask the worker for a submitted mission's first leg (``observe_ladder``) from where the truck stands.
+        ``inputs`` (the mission's scenario, waiting pose, candidates, bounds, prior zone) are fixed here and used as
+        they are at the adoption; nothing of the running state changes before it (plan principle P4)."""
+        cmds = self.commands
+        if cmds.status == "accepted":
+            cmds.begin_prepare()
+            self.prepare_attempts = 0
+        self.prepare_attempts += 1
+        self._request("prepare", "observe_ladder", payload, t, rear, self._applied_now(),
+                      {"inputs": inputs, "targets_revision": self.targets.revision})
+
+    def _prepare_answer(self, p, why: str | None, ok: bool, value, t: float) -> None:
+        """A preparation's answer: dropped and asked again once when what it rests on changed (not counted as a
+        plan drop), failed when it planned nothing, else adopted."""
+        cmds = self.commands
+        if why is not None:
+            if why != "mission" and self.prepare_attempts >= self.PREPARE_ATTEMPTS:
+                cmds.terminate("failed", t, f"prepare:{why}")
+            return  # the runner asks again on the next tick (preparing, nothing pending)
+        if not ok:
+            cmds.terminate("failed", t, f"prepare:error:{str(value).splitlines()[0] if value else ''}")
+        elif value["result"] is None:
+            cmds.terminate("failed", t, "prepare:timeout" if value["timed_out"] else
+                           "prepare:all_candidates_failed:" + ";".join(c["status"] for c in value["candidates"]))
+        else:
+            self.start_mission(t, value["result"], p.ctx["inputs"], value)
+
+    def start_mission(self, t: float, plan, inputs: dict, ladder: dict) -> None:
+        """The adoption (D2 start processing): the mission-owned state back to the session's baseline (D0), the
+        mission's inputs into the options, the observation leg and its records, the runner's own start
+        (``hooks.live_mission_start``: its locals, trackers, prior zone, docking reference), then running."""
+        ms, state, options = self.ms, self.state, self.options
+        records = self.baseline.restore(self)
+        options.scenario = inputs["scenario"]
+        options.return_to_pose = options.home_rear = inputs["wait_pose"]
+        options.observation_waypoints[:] = inputs["waypoints"]
+        options.pickup_bounds, options.observe_bounds = inputs["pickup_bounds"], None
+        options.pickup_zone = inputs["pickup_zone"]
+        ms.next_candidate_index = ladder["selected"] + 1
+        ms.lift_command = float(self.hooks.lift_position())
+        state["observation_candidates"] = list(ladder["candidates"])
+        state["observation_waypoint_selected"] = list(ladder["candidates"][-1]["pose"])
+        state["planning_status"] = plan.status
+        self.paths.clear()
+        self.paths["observe"] = plan
+        self.hooks.live_mission_start(t, inputs, plan, records)
+        state["transitions"].append({"from": ms.phase, "to": "observe", "time_s": t,
+                                     "mission_id": self.commands.mission_id})
+        ms.phase, ms.phase_started = "observe", t
+        state["phase"] = ms.phase
+        self.commands.adopt()
+
+    def observe_bounds(self):
+        """The bounds of the observation travel (persistent console plan D2): a live run plans it in the hall
+        (``options.observe_bounds`` None) wherever the operator left the truck; a batch run's options have none, so
+        its observation keeps the pickup bounds."""
+        options = self.options
+        return options.observe_bounds if hasattr(options, "observe_bounds") else options.pickup_bounds
 
     def abandon_jobs(self, t: float) -> None:
         """A live mission's end (docs/plans/2026-10-18-persistent-live-console.md D1 step 2): the plan waited for,

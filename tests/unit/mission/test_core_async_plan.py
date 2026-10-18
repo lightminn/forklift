@@ -454,3 +454,91 @@ def test_abandon_jobs_drops_the_waited_plan_without_the_drops_side_effects(phase
     assert core.observation_live is None and core.capture_acquired_s is None and core.fresh_depth_wait is None
     core.abandon_jobs(23.0)  # nothing left: nothing happens
     assert core.jobs.discarded == [job] and len(state["async_plans"]) == 1
+
+
+# --- persistent console plan D2: a live mission prepared from where the truck stands ------------------------------
+def preparing_core():
+    from forklift_core.mission.baseline import MissionBaseline
+    from forklift_core.mission.commands import Submit
+    from forklift_core.mission.targets import Pose
+
+    core, ms, state, obstacle, slam, calls, _ = make("complete")
+    core.commands.status = "idle"
+    core.targets.add_pallet("P-1", "epal6", Pose(3.1, 0.65, 0.0))
+    core.targets.add_destination("D-1", Pose(-5.0, -21.4, -1.57))
+    core.options.observation_waypoints = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]
+    core.options.pickup_bounds, core.options.home_rear = "BAY", "HOME"
+    core.hooks.lift_position = lambda: 0.004
+    started = []
+    core.hooks.live_mission_start = lambda t, inputs, plan, records: started.append((t, inputs, plan, records))
+    state["observation_attempts"] = []
+    core.baseline = MissionBaseline.capture(core)
+    core.commands.queue(Submit("P-1", "D-1", core.targets.revision))
+    core.commands.apply(10.0)
+    inputs = {"scenario": "SC_NEW", "wait_pose": "WAIT", "waypoints": [[5.0, 5.0, 1.0], [6.0, 5.0, 1.0]],
+              "pickup_bounds": None, "pickup_zone": "ZONE"}
+    return core, ms, state, started, inputs
+
+
+def ladder(result=None, selected=None, timed_out=False, statuses=("no_path",)):
+    return {"result": result, "selected": selected, "timed_out": timed_out, "wall_s": 0.1,
+            "candidates": [{"candidate_index": i, "pose": [5.0 + i, 5.0, 1.0], "status": st, "success": st == "success"}
+                           for i, st in enumerate(statuses)]}
+
+
+def test_a_prepared_mission_is_adopted_with_its_start_processing():
+    core, ms, state, started, inputs = preparing_core()
+    ms.observe_stall_ticks, core.last_permission = 9, (0.2, "slow")
+    core.prepare_request(11.0, REAR, inputs, {"waypoints": inputs["waypoints"]})
+    assert core.commands.status == "preparing" and core.pending.site == "prepare"
+    assert core.jobs.submitted[-1][0] == "observe_ladder" and core.prepare_attempts == 1
+    assert core.job_hold(11.5, REAR, 0.0, False).hold and core.commands.status == "preparing"  # still planning
+    plan = Plan("success")
+    core.jobs.answers[core.pending.job] = (True, ladder(plan, 1, statuses=("no_path", "success")))
+    assert core.job_hold(12.0, REAR, 0.0, False).hold
+    assert core.commands.status == "running" and core.commands.adopted_id == core.commands.mission_id
+    assert ms.phase == "observe" and ms.phase_started == 12.0 and ms.next_candidate_index == 2
+    assert ms.observe_stall_ticks == 0 and core.last_permission is None and ms.lift_command == 0.004
+    assert core.paths == {"observe": plan} and state["planning_status"] == "success"
+    assert state["observation_waypoint_selected"] == [6.0, 5.0, 1.0]
+    assert [c["status"] for c in state["observation_candidates"]] == ["no_path", "success"]
+    o = core.options
+    assert (o.scenario, o.return_to_pose, o.home_rear, o.pickup_bounds, o.observe_bounds, o.pickup_zone) == (
+        "SC_NEW", "WAIT", "WAIT", None, None, "ZONE")
+    assert o.observation_waypoints == inputs["waypoints"]
+    assert started and started[0][0] == 12.0 and started[0][2] is plan
+    assert state["transitions"][-1] == {"from": "complete", "to": "observe", "time_s": 12.0,
+                                        "mission_id": core.commands.mission_id}
+
+
+@pytest.mark.parametrize("answer, reason", [
+    ((True, ladder(timed_out=True)), "prepare:timeout"),
+    ((True, ladder(statuses=("no_path", "invalid_start"))), "prepare:all_candidates_failed:no_path;invalid_start"),
+    ((False, "Traceback ...\nValueError: x"), "prepare:error:Traceback ..."),
+])
+def test_a_preparation_that_plans_nothing_fails_the_mission_and_changes_nothing(answer, reason):
+    core, ms, state, started, inputs = preparing_core()
+    core.prepare_request(11.0, REAR, inputs, {})
+    core.jobs.answers[core.pending.job] = answer
+    core.job_hold(12.0, REAR, 0.0, False)
+    assert core.commands.status == "failed" and core.commands.end_reason == reason
+    assert ms.phase == "complete" and not started and core.options.scenario.destination == "DEST"
+
+
+@pytest.mark.parametrize("change, why", [("drift", "drift"), ("targets", "targets")])
+def test_a_preparation_whose_inputs_changed_is_asked_again_once_then_fails(change, why):
+    from forklift_core.mission.targets import Pose
+
+    core, ms, state, started, inputs = preparing_core()
+    for attempt in (1, 2):
+        core.prepare_request(11.0 + attempt, REAR, inputs, {})
+        core.jobs.answers[core.pending.job] = (True, ladder(Plan("success"), 0, statuses=("success",)))
+        if change == "drift":
+            rear = REAR + [0.05, 0.0, 0.0]
+        else:
+            rear = REAR
+            core.targets.add_destination(f"D-{attempt + 5}", Pose(0.0, 0.0, 0.0))
+        assert core.job_hold(11.5 + attempt, rear, 0.0, False).hold
+        assert core.pending is None and "async_plan_drops" not in state
+        assert core.commands.status == ("preparing" if attempt == 1 else "failed")
+    assert core.commands.end_reason == f"prepare:{why}" and not started
