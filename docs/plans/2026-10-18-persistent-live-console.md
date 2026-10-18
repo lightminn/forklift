@@ -103,6 +103,11 @@
    - 기존 `release_and_stand`(관찰 경로 설치·`retry_stand` 설정)와 `slam_release`(다음 구간 재계획 요청)는 이 조건을 어기므로 그대로 부르지 않는다. 공통 부분을 떼어 내는 구현은 D0·API 검토에서 정한다.
    - 포크 관계가 `constrained`·`unknown` 이면 hold 를 유지하고 D4 의 복구로 간다.
 5. **관절.** `wheel_lock` 이 걸려 있으면 저장된 gain 으로 정상 unlock 한다.
+5a. **열린 구간·감시 닫기.** 기록보다 먼저 하고, 상태는 바꾸지 않는다(D0 9절).
+   - 새 `commands.close_open(t)`(열린 pause·wait 를 닫는다. 지금의 `finish()` 는 terminal 전환까지 해서 쓰지 않는다)
+   - TrackerBook 마지막 drain
+   - 열린 커스프 hold·watch 닫기
+   - 열린 근접 보정·정지 사건 닫기
 6. **결과 판정.**
    - `complete` 이면 지금 루프 밖에 있는 배달 판정(R6438–6474: 목적지 0.08 m, 접지, 포크 이탈)을 미션별 함수로 뽑아 여기서 부른다.
    - 기준은 그 미션의 `truth_destination` 이다.
@@ -116,7 +121,7 @@
    - 세션 종료 때 큐를 비울 때까지 기다린다(상한 시간). 남은 것은 누락으로 기록한다.
 8. **미션 소유 상태 초기화.** D0 표대로.
 9. **결과 확정.**
-   - `commands` 를 terminal 로 바꾼다.
+   - 6단계 판정 직후, 기록 전에 `commands.terminate(outcome, t, reason)` 으로 terminal 이 된다(outcome 은 `done`·`failed`·`cancelled`·`recovery_required`). 여기서는 공개만 한다. 판정이 실패한 `complete` 는 commands·기록부·발행 결과가 모두 `failed` 다.
    - **결과 기록부**(세션 소유)에 `{mission_id, seq, outcome, reason, started_s, ended_s, pallet_id, destination_id}` 를 더한다.
    - 상태 메시지의 `mission.last_result`, 그리고 targets 처럼 저장소에 두는 `missions` 메시지로 내보낸다. 재접속한 페이지도 받는다.
    - `apply()` 가 다음 틱에 슬롯을 `idle` 로 비워도(C111) 결과는 남는다.
@@ -291,6 +296,18 @@
 - 실시간에서는 `--max-sim-seconds` 를 루프 상한으로 쓰지 않는다. 잡 시간 한도가 상한이다.
 - 세션 종료 요청 `session_end`: lease 보유자이고 정지가 확인된 상태여야 한다.
 - 고정 포트 `--live-port`. 빠른 재바인드는 Isaac Python 에서 따로 확인한다(V 항목).
+- **요청 원장 상한.** 중재기 요청 원장(4,096건, 회수 없음)은 상시 세션에서 결국 다 차서, 새 요청이 모두 `busy` 가 된다. 결과를 지우면 옛 요청을 구별할 수 없으므로 계약을 바꾼다:
+  - **요청 토큰**: `hello` 때 서버가 다시 쓰지 않는 단조 번호의 토큰을 준다. 브라우저는 요청마다 이 토큰과 토큰별 **단조 순번 `seq`** 를 붙인다.
+  - 서버는 살아 있는 토큰마다 결과를 지운 최고 순번(워터마크)을 둔다. `seq ≤ 워터마크` 인 요청은 결과 없이 `stale` 로 거절하고, 다시 실행하지 않는다.
+  - 원장은 재전송 창(예: 60 s)을 넘은 결과를 순번 순으로 지우고 워터마크를 올린다.
+  - lease 가 없고 일정 시간(예: 10 분) 조용한 토큰은 표에서 지운다. **모르는 토큰**(지워졌거나 위조)의 요청은 모두 `stale` 이다. 브라우저는 `stale` 을 받으면 `hello` 로 새 토큰을 받는다. 토큰 번호를 다시 쓰지 않으므로, 지운 토큰의 옛 요청은 결코 새 요청으로 보이지 않는다. 메모리는 살아 있는 토큰 수로 묶인다.
+  - lease 재획득(새로고침 뒤)은 지금처럼 `client_id` 로 하고, 요청 중복 판정은 토큰으로 한다.
+  - 시험:
+    - 회수 뒤 재전송한 `lease_request` 가 새 lease 를 받지 않는다.
+    - 지운 토큰의 재전송은 `stale` 이다.
+    - 회수가 계속돼도 원장 크기 상한을 지킨다.
+  - 중재기·프로토콜·브라우저 변경(메인 합의).
+- 작업자 폐기 ID 목록은 응답이 더 올 수 없는 ID(응답 수신·작업자 재시작)를 회수한다.
 
 ### D8 장시간 실행의 자원
 
@@ -529,6 +546,14 @@
 - 물리 상태 판정의 불확실성 처리
 - 다음 틱으로 넘긴 기록의 초기화 이후 소유권
 - 공통 꼬리가 정확히 한 번 실행되는지
+
+**D0 상태 소유권 표 검토(Codex, 새 스레드)**: `docs/design/2026-10-18-live-mission-state.md`, 기준 8452120.
+
+| 회차 | 판정 | 지적과 처리 |
+|---|---|---|
+| 1회차 | P2 6 · P3 3 | `release_replan_needed` 는 `None`(dict|None) / 기록 전 열린 구간·감시 닫기(9절 순서) / 조각은 닫힌 항목만(`near.corrections`·`stop_events`·`_versions`) / `options.pickup_zone` / `known` 은 `known_enabled` 조건 / 요청 원장 포화 → D7 / P3: 누락 항목·`lateral_clearance_min_m` 분리·`near_tracking` 필드·memory 근거 정정·작업자 폐기 ID 회수 |
+| 2회차 | P2 2 | `finish()` 가 판정 전에 terminal 로 확정 → `close_open` 과 `terminate` 분리 / 원장을 지운 뒤 옛 요청을 구별할 근거 없음 → 다시 쓰지 않는 요청 토큰·토큰별 순번·워터마크 |
+| 3회차 | 새 P1/P2 없음 | 계획 수준에서 수렴. 구현 뒤 API·원장 시험과 U3·U21·U29 로 확인할 것 |
 
 ## 7. 사용자 결정 (2026-10-18)
 
