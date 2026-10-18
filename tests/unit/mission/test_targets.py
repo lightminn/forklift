@@ -209,3 +209,24 @@ def test_a_delivered_pallet_can_be_submitted_again():
     assert book.check_submit("P-1", "D-0", book.revision) == "invalid"
     book.put_down("P-1", Pose(9.0, 0.0, 0.0))
     assert book.pallets["P-1"].state == "delivered" and book.check_submit("P-1", "D-0", book.revision) is None
+
+
+def test_a_missions_end_settles_the_list_and_the_ended_mission_no_longer_moves_it():
+    """Codex stage 2 impl round 2 P2: the end dropped the SLAM scenarios, then the same tick's refresh put the
+    delivered pallet and the destination back at the scenario's prior."""
+    from types import SimpleNamespace
+
+    from forklift_core.mission.baseline import MissionBaseline
+
+    slam = {"tracker": SimpleNamespace(applied=None, mode="tracking"), "holds": []}
+    core, pocket = core_with(slam=slam)
+    core.baseline = MissionBaseline.capture(core)
+    slam["return_scenario"] = SimpleNamespace(destination=SimpleNamespace(x_m=9.2, y_m=0.4, yaw_rad=0.12))
+    core.ms.phase = "lift"
+    core.refresh_targets()
+    core.ms.phase = "complete"
+    core.end_reset(30.0)
+    settled = (core.targets.pallets["P-1"].pose, core.targets.destinations["D-1"], core.targets.revision)
+    assert settled[0] == Pose(9.2, 0.4, 0.12) and settled[1] == Pose(9.2, 0.4, 0.12)
+    core.refresh_targets()
+    assert (core.targets.pallets["P-1"].pose, core.targets.destinations["D-1"], core.targets.revision) == settled

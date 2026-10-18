@@ -4556,6 +4556,10 @@ class MissionCore:
         """A live mission's end (D1 steps 3 and 8): the pocket check closed as the insertion's end closes it, then
         the mission-owned state back to the baseline. Returns the mission's records (for its own record)."""
         pocket, obstacle, state = self.pocket, self.obstacle, self.state
+        # The list takes the mission's last estimates (a docking match, a release's re-expression) now, and the
+        # ended mission moves it no more: the scenarios it read from are dropped below (Codex stage 2 round 2 P2).
+        self.refresh_targets()
+        self.commands.adopted_id = None
         if pocket.get("check") is not None:
             if obstacle is not None:
                 obstacle["layer"].exempt = None

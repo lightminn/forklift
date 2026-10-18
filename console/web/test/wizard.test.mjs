@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { blockReason, currentDestination, missionProgress, nextAllowed, subtaskOf, templatesFor } from "../js/wizard.js";
+import { blockReason, currentDestination, missionProgress, nextAllowed, selectable, subtaskOf, templatesFor } from "../js/wizard.js";
 
 test("only templates the vehicle supports are offered", () => {
   assert.deepEqual(templatesFor({ mission: false }), []);
@@ -75,4 +75,12 @@ test("a connection that takes no tasks says so before anything else about the ve
   assert.match(blockReason({ ...base, canMission: false }), /작업 지시를 받지 않습니다/);
   assert.match(blockReason({ ...base, hasLease: false, canMission: false }), /작업 지시를 받지 않습니다/);
   assert.equal(blockReason({ ...base, canMission: true }), null);
+});
+
+test("a delivered pallet can be picked again, a carried one cannot", () => {
+  // persistent console plan D3: put down, it is available again where it lies
+  assert.equal(selectable({ state: "available" }), true);
+  assert.equal(selectable({ state: "delivered" }), true);
+  assert.equal(selectable({ state: "carried" }), false);
+  assert.equal(selectable(null), false);
 });

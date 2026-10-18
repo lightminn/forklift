@@ -34,6 +34,11 @@ const TEMPLATES = [
 
 const ACTIVE = ["accepted", "preparing", "running", "paused", "held", "resuming"];
 
+// A pallet the operator may name in a submit (the vehicle checks again): on the floor, delivered or not.
+export function selectable(pallet) {
+  return Boolean(pallet) && (pallet.state === "available" || pallet.state === "delivered");
+}
+
 export function templatesFor(capabilities, query = "") {
   if (!capabilities) return [];
   const q = query.trim().toLowerCase();

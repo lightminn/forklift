@@ -11,7 +11,7 @@ import { decodeScan, parseFrame } from "./media.js";
 import { API, createSession } from "./protocol.js";
 import { log, render, renderPallets, renderTemplates, renderWizard } from "./ui.js";
 import { controlProfile, disarmAsked, frameAgreement, rejectText, scanDrawable, sessionChanges, staleness, stopIsRefused } from "./profile.js";
-import { blockReason, nextAllowed, templatesFor } from "./wizard.js";
+import { blockReason, nextAllowed, selectable, templatesFor } from "./wizard.js";
 
 const TELEOP_MIN_INTERVAL_MS = 33; // ~30 Hz cap: a fast display must not flood ticks
 const $ = (id) => document.getElementById(id);
@@ -511,7 +511,7 @@ function endPointer(e) {
   if (e.type === "pointerup" && press && !press.moved && pointers.size === 0) {
     const { rc, w, h } = mapSize();
     const p = palletAt(m.view, w, h, m.session.targets, e.clientX - rc.left, e.clientY - rc.top);
-    if (p && p.state === "available") openWizard({ pallet: p.pallet_id });
+    if (selectable(p)) openWizard({ pallet: p.pallet_id });
   }
   if (pointers.size === 0) press = null;
 }

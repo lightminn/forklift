@@ -2,7 +2,7 @@
 // request could be accepted; the vehicle still decides and may reject.
 
 import { controlProfile, forbidText, videoStaleAfterS, palletKindLabel, permitText, rearmState, resumeState, resumeSteps, standWhy, stopInstruction, stopKind } from "./profile.js";
-import { blockReason, currentDestination, missionProgress, PHASES, subtaskOf } from "./wizard.js";
+import { blockReason, currentDestination, missionProgress, PHASES, selectable, subtaskOf } from "./wizard.js";
 
 const MODE_KO = { AUTO: "자동 주행", TELEOP: "수동 조종", PAUSED: "대기", STOPPED: "정지됨" };
 const MODE_CLS = { AUTO: "acc", TELEOP: "tel", PAUSED: "ok", STOPPED: "crit" };
@@ -53,7 +53,7 @@ export function renderPallets(targets, onPick) {
   for (const p of targets.pallets) {
     const lab = document.createElement("label");
     lab.className = "pal";
-    const avail = p.state === "available";
+    const avail = selectable(p);
     lab.innerHTML = `<input type="radio" name="pal" value="${esc(p.pallet_id)}"><span><b>${esc(p.pallet_id)} · ${esc(palletKindLabel(p.kind))}</b><small>${Number.isFinite(p.depth_m) && Number.isFinite(p.width_m) ? `${Math.round(p.depth_m * 1000)} × ${Math.round(p.width_m * 1000)} mm` : "크기 모름"} · ${p.pose ? `(${p.pose.x_m.toFixed(1)}, ${p.pose.y_m.toFixed(1)}) m` : "포크 위"}</small></span><span class="chip ${avail ? "" : "ok"}">${esc(PALLET_STATE[p.state] ?? p.state)}</span>`;
     const input = lab.querySelector("input");
     input.disabled = !avail;
