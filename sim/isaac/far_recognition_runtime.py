@@ -277,14 +277,10 @@ class FarRuntime:
         if len(steps) < 6:
             return None
         fit = B.estimate_lag(steps, measured, truth, max_lag=max_lag)
-        # J2 (Codex): a fit that identifies tau must agree with the lag the run used, within one step, in the whole
-        # leg and in each half that identifies its own; a fit that identifies nothing says nothing (None).
-        identifiable = fit["unique"][0] and fit["residual_p95_m"] <= 0.010
-        if not identifiable:
-            fit["agrees_with_used"] = None
-        else:
-            taus = [fit["tau_steps"]] + [h for h, u in zip(fit["halves"], fit["unique"][1:]) if u]
-            fit["agrees_with_used"] = all(abs(t - self.lag_steps) <= 1 for t in taus)
+        # J2 (Codex): every segment that identifies tau on its own (the whole leg, each half) must agree with the lag
+        # the run used within one step; only when no segment identifies anything is there no judgement (None).
+        taus = [t for t, ok in zip([fit["tau_steps"], *fit["halves"]], fit["identified"]) if ok]
+        fit["agrees_with_used"] = None if not taus else all(abs(t - self.lag_steps) <= 1 for t in taus)
         return fit
 
     @staticmethod

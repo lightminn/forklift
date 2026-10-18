@@ -216,3 +216,33 @@ def test_the_recompute_reproduces_a_leg_ended_by_a_loss(tmp_path):
     assert obs.status == "valid" and run.leg_endings and rec["leg"] == 1
     pairs = RC.recompute(tmp_path, recognition=run.summary())
     assert [RC.differences(a, b) for a, b in pairs] == [[]]
+
+
+def test_a_lag_that_changes_between_the_halves_disagrees_with_the_lag_used():
+    # Codex: first half 24, second half 11 -- the whole leg fits nothing, each half fits exactly
+    xs = _leg()
+    run = _runtime(lag_steps=24)
+    for tick, x in enumerate(xs):
+        base = (float(x), 0.0, 0.0)
+        run.record_step(tick, tick * DT, base, base, PALLET)
+        if run.due(tick, observing=True) and tick >= 24:
+            lag = 24 if tick < 240 else 11
+            scene, ids = _render((float(xs[tick - lag]), 0.0, 0.0))
+            run.drive_frame(tick, tick * DT, scene.rgb, scene.depth_m, ids, scene.intrinsics, scene.base_from_optical)
+    assert run.lag_fit()["agrees_with_used"] is False
+
+
+def test_the_recompute_fails_when_saved_frames_are_missing(tmp_path):
+    from tools import recompute_far_recognition as RC
+
+    xs = _leg()
+    run = _runtime(lag_steps=11, out_dir=tmp_path / "recognition")
+    _drive(run, 11, xs)
+    _stop(run, xs)
+    stop_file = sorted((tmp_path / "recognition").glob("frame_*.npz"))[-1]
+    stop_file.unlink()
+    pairs = RC.recompute(tmp_path, recognition=run.summary())
+    assert any(RC.differences(a, b) for a, b in pairs)
+    for f in (tmp_path / "recognition").glob("frame_*.npz"):
+        f.unlink()
+    assert any(RC.differences(a, b) for a, b in RC.recompute(tmp_path, recognition=run.summary()))

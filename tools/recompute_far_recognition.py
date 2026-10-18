@@ -67,9 +67,18 @@ def recompute(run_dir: Path, *, recognition: dict | None = None) -> list:
             continue
         _, again = far.stop(scene, ids, R.planar(*odom), runtime.instruction(tuple(z["control_base"])),
                             pallet_depth_m=runtime.pallet_depth_m)
-        out.append((next(attempts), again))
+        out.append((next(attempts, {"status": "unrecorded_stop"}), again))
         far.start_leg()
         leg += 1
+    # every recorded frame replayed and every recorded stop compared exactly once (Codex: a missing frame or
+    # directory must not pass as "same")
+    expected = sum(1 for f in rec["frames"] if f.get("kind") == "stop"
+                   or (f.get("kind") == "drive" and "skipped" not in f))
+    found = len(list((run_dir / "recognition").glob("frame_*.npz")))
+    if found != expected:
+        out.append(({"frames": expected}, {"frames": found, "status": "saved_frames_missing"}))
+    for left in attempts:
+        out.append((left, {"status": "stop_not_replayed"}))
     return out
 
 

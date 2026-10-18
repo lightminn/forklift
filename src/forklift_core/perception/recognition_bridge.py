@@ -220,11 +220,14 @@ def estimate_lag(frame_steps, measured_m, truth_by_step, *, max_lag: int, residu
     all_idx = np.arange(len(steps))
     tau, (res, bias), unique = fit(all_idx)
     half = len(steps) // 2
-    tau_a, _, unique_a = fit(all_idx[:half])
-    tau_b, _, unique_b = fit(all_idx[half:])
+    tau_a, (res_a, _), unique_a = fit(all_idx[:half])
+    tau_b, (res_b, _), unique_b = fit(all_idx[half:])
     accepted = bool(unique and unique_a and unique_b and tau_a == tau == tau_b and res <= residual_max_m)
+    # each segment identifies tau on its own when it is unique and fits (the whole leg, then each half)
+    identified = [bool(u and r <= residual_max_m) for u, r in ((unique, res), (unique_a, res_a), (unique_b, res_b))]
     return {"tau_steps": int(tau), "bias_m": bias, "residual_p95_m": res, "halves": [int(tau_a), int(tau_b)],
-            "unique": [unique, unique_a, unique_b], "accepted": accepted}
+            "halves_residual_p95_m": [res_a, res_b], "unique": [unique, unique_a, unique_b],
+            "identified": identified, "accepted": accepted}
 
 
 __all__ = ["FarRecognition", "candidate_to_observation", "decide", "estimate_lag", "face_distance", "far_error",
