@@ -2,7 +2,7 @@
 
 [상시 운용 콘솔 계획](../plans/2026-10-18-persistent-live-console.md) D0 의 산출물이다. 실시간 실행에서 미션이 끝나고(D1) 다음 미션이 시작될 때(D2), 각 상태를 어떻게 처리할지 정한다.
 
-- 기준 코드: `feat/realtime-d9` 8452120. 메인 D9 머지 뒤 main 과 다시 대조한다.
+- 기준 코드: `feat/realtime-d9` 8452120. main 9f0d215(D9 머지, PR #52)와 다시 대조했다. 그사이 바뀐 것은 GC 동결(1e53cbe)뿐이고, 그 키는 7절·8절에 넣었다.
 - 줄 번호 표기: R = `sim/isaac/run_transport.py`, C = `src/forklift_core/mission/core.py`.
 - 목록은 기계적 추출(각 dict 의 키 접근, `MissionCore` 속성, `ms` 속성)에 조사·Codex 지적을 더한 것이다.
 
@@ -103,7 +103,7 @@
 ## 7. `state`
 
 **세션(S)**:
-- 설정·장면 기록: `arguments`, `geometry`, `scenario`(첫 장면), `factory`, `factory_items`, `props`, `prism_colliders`, `camera`, `camera_inset`, `extra_views`, `perception_mount`, `perception_camera_intrinsics`, `pocket_camera`, `plant`, `plant_backend`, `plant_tyre_contact`, `physics_scene`, `planner_config`, `travel_planner_config`, `mission_stages`, `insertion_reserve_m`, `approach_clearance_m`, `pocket_clearance_margin_m`, `lateral_clearance_min_m`, `lidar_synthetic`, `encoder_model`, `source_sha256`, `scene_*`, `pallet_geometry_*`, `asset_origin_offsets_m`, `hidden_overhead_prims`, `low_obstacles_removed`, `new_obstacles`, `destination_marker`, `destination_prior`, `initial_pallet_m`, `setup_snapshot`, `velocities_*`, `steering_probe`, `render_mode`, `overview_render`, `overview_floor_points`, `isaac_audio_args`, `kernels`, `estop_probes`, `slam_feedback`, `slam_async`, `shared_lidar_scan`, `obstacle_layer`, `async_plan_worker`
+- 설정·장면 기록: `arguments`, `geometry`, `scenario`(첫 장면), `factory`, `factory_items`, `props`, `prism_colliders`, `camera`, `camera_inset`, `extra_views`, `perception_mount`, `perception_camera_intrinsics`, `pocket_camera`, `plant`, `plant_backend`, `plant_tyre_contact`, `physics_scene`, `planner_config`, `travel_planner_config`, `mission_stages`, `insertion_reserve_m`, `approach_clearance_m`, `pocket_clearance_margin_m`, `lateral_clearance_min_m`, `lidar_synthetic`, `encoder_model`, `source_sha256`, `scene_*`, `pallet_geometry_*`, `asset_origin_offsets_m`, `hidden_overhead_prims`, `low_obstacles_removed`, `new_obstacles`, `destination_marker`, `destination_prior`, `initial_pallet_m`, `setup_snapshot`, `velocities_*`, `steering_probe`, `render_mode`, `overview_render`, `overview_floor_points`, `isaac_audio_args`, `kernels`, `estop_probes`, `slam_feedback`, `slam_async`, `shared_lidar_scan`, `obstacle_layer`, `async_plan_worker`, `gc_frozen_objects`(첫 제어 틱 전 한 번)
 - 지금 명령: `applied_command`, `command_speed`, `preempt_seen_s`
 - **`lateral_clearance_min_m` 는 설정이 아니다.** 실제 최소 간극을 누적한다(R5877). 세션 최소(S)와 미션 최소(M0, 미션 기록)로 나눈다.
 - 설정성 기록: `runtime_viewpoints`(N, 미션 시작 때 다시 만듦), `tracker_configs`(S)
@@ -146,6 +146,7 @@
 | `LiveRuntime.arbiter.requests`(요청 원장) | S, **상한 계약 필요** | 기본 4,096건이고 회수 경로가 없다(arbiter 43, generations 18). 상시 세션에서는 다 차면 새 요청이 모두 `busy` 가 된다(arbiter 229). 결과를 지운 뒤에는 옛 요청과 처음 온 요청을 구별할 수 없다. 예: 응답이 유실된 `lease_request` 가 회수 뒤 재전송되면 새 lease 를 받는다(arbiter 247·270). 그래서 계획 D7 의 **요청 토큰(다시 쓰지 않는 번호)·토큰별 단조 순번·워터마크**가 필요하다(중재기·프로토콜·브라우저 변경). |
 | 작업자 `_discarded` | S, 회수 필요 | `discard()` 가 쌓기만 한다(plan_worker 149). 응답이 더 올 수 없는 ID(작업자 재시작·응답 수신)는 회수한다. `_next` 는 유지한다. |
 | `book_clock`, `tracker_book` | S | |
+| `gc_seen_`, GC 콜백 `live_gc_timer`, `gc.freeze()` 상태 | S | 1e53cbe. 콜백은 세션에 한 번 붙이고, 목록은 틱 시작에 비운다. 동결은 첫 제어 틱 전 한 번이다. 미션이 남긴 객체는 동결 밖이라 세션이 길수록 2세대 수집이 걷는 양이 는다. 미션 종료 뒤 다시 동결할지는 계획 D8(자원 상한)에서 측정으로 정한다. |
 
 ## 9. 미션 종료 때의 순서 (계획 D1 과 맞춤)
 
