@@ -124,9 +124,10 @@ def face_load(spec, axis: str, load):
                    com_y_max_m=max(spec.overall_depth_m / 2, load.com_x_max_m - spec.overall_depth_m / 2))
 
 
-def _faces(spec, placement, setup, load, scene_local, scene_ids, k, solo_local, solo_ids,
-           camera=instance_rig.PERCEPTION_CAMERA):
-    camera = np.asarray(camera.xyz_m, dtype=float)
+def face_poses(spec, placement, setup, load):
+    """Each entry face's truth pockets (the fork-fit pair) in the placement's frame, without rendering:
+    (axis, sign, insertion yaw, left, right, widths, height, face centre, fit). The Isaac mission's far error
+    reads the same faces as the CPU-rig truth (docs/plans/2026-10-18-isaac-recognition-far-capture.md)."""
     out = []
     for axis in spec.entry_axes:
         layout = face_layout(spec, axis)
@@ -143,13 +144,23 @@ def _faces(spec, placement, setup, load, scene_local, scene_ids, k, solo_local, 
             # The opposite face sees the layout mirrored: its left axis is the nominal right.
             (r_lat, r_w), (l_lat, l_w) = sorted((sign * (lo + hi) / 2, hi - lo) for lo, hi in intervals)
             left, right = face_centre + left_axis * l_lat, face_centre + left_axis * r_lat
-            seen = int((_face_mask(scene_local, spec, axis, sign) & (scene_ids == k)).sum())
-            solo = int((_face_mask(solo_local, spec, axis, sign) & (solo_ids == 0)).sum())
-            out.append(FaceTruth(
-                axis, sign, yaw, (float(left[0]), float(left[1]), z), (float(right[0]), float(right[1]), z),
-                (l_w, r_w), z1 - z0, float(-a @ (camera - face_centre)) > 0,
-                seen / solo if solo else 0.0, fit.to_json(), danger_threshold_m(fit),
-            ))
+            out.append((axis, sign, yaw, (float(left[0]), float(left[1]), z), (float(right[0]), float(right[1]), z),
+                        (l_w, r_w), z1 - z0, face_centre, fit))
+    return tuple(out)
+
+
+def _faces(spec, placement, setup, load, scene_local, scene_ids, k, solo_local, solo_ids,
+           camera=instance_rig.PERCEPTION_CAMERA):
+    camera = np.asarray(camera.xyz_m, dtype=float)
+    out = []
+    for axis, sign, yaw, left, right, widths, height, face_centre, fit in face_poses(spec, placement, setup, load):
+        a = np.array([math.cos(yaw), math.sin(yaw), 0.0])
+        seen = int((_face_mask(scene_local, spec, axis, sign) & (scene_ids == k)).sum())
+        solo = int((_face_mask(solo_local, spec, axis, sign) & (solo_ids == 0)).sum())
+        out.append(FaceTruth(
+            axis, sign, yaw, left, right, widths, height, float(-a @ (camera - face_centre)) > 0,
+            seen / solo if solo else 0.0, fit.to_json(), danger_threshold_m(fit),
+        ))
     return tuple(out)
 
 

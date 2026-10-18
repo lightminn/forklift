@@ -1093,3 +1093,55 @@ def test_a_render_step_error_is_handled_inside_the_capture_as_before():
         run_session(sensor, failing(stepped), max_attempts=3)
     assert a.value.reason == b.value.reason
     assert a.value.diagnostics.rejection_counts == b.value.diagnostics.rejection_counts == {"sensor_frame_not_ready": 3}
+
+
+# Isaac recognition far capture: the frame's instance ids are read with its depth ----------------------------
+
+def _semantic(*readies):
+    """A semantic reader returning not-ready / ready frames in turn (ids marked by the read number)."""
+    calls = {"n": 0}
+
+    def read():
+        n = calls["n"]
+        calls["n"] += 1
+        ready = readies[min(n, len(readies) - 1)]
+        ids = np.full((480, 640), n, dtype=np.int32)
+        return SimpleNamespace(instance_ids=ids if ready else None, ready=ready, status="ready" if ready else "stale")
+
+    return read, calls
+
+
+class ChangingCamera(FakeCamera):
+    """A fresh frame on every read (a moving image), so only the semantics decide."""
+
+    def get_depth(self):
+        self.reads += 1
+        return self.depth + 0.001 * self.reads
+
+    def get_rgba(self):
+        out = self.rgba.copy()
+        out[0, 0, 0] = self.reads % 250
+        return out
+
+
+def test_capture_keeps_the_instance_ids_of_the_accepted_frame():
+    read, calls = _semantic(False, True)
+    state = MODULE.CaptureState()
+    camera = ChangingCamera()
+    scene, _, attempts = capture(camera, max_attempts=3, step_fn=lambda: None, state=state, semantic_fn=read)
+    assert attempts == 2 and calls["n"] == 2
+    assert state.instance_ids is not None and int(state.instance_ids[0, 0]) == 1
+    assert state.diagnostics.rejection_counts == {"semantic_not_ready": 1}
+
+
+def test_capture_without_ready_semantics_fails_after_its_attempts():
+    read, _ = _semantic(False)
+    with pytest.raises(MODULE.CaptureFailure) as error:
+        capture(ChangingCamera(), max_attempts=3, step_fn=lambda: None, state=MODULE.CaptureState(), semantic_fn=read)
+    assert error.value.reason == "semantic_not_ready"
+
+
+def test_capture_without_a_semantic_reader_keeps_no_ids():
+    state = MODULE.CaptureState()
+    capture(FakeCamera(), max_attempts=1, state=state)
+    assert state.instance_ids is None

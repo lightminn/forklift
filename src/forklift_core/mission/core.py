@@ -2743,8 +2743,22 @@ class MissionCore:
             ).tolist(),
         }
         attempt["depth_quantize_mm"] = options.depth_quantize_mm
+        # The far recognition (--recognition far, docs/plans/2026-10-18-isaac-recognition-far-capture.md): only the
+        # far observation -- not the near capture, not a re-observation stand. The detector still runs first, in
+        # the same call order, and stays as the reference; the mission reads the new recognition's observation.
+        far_hook = getattr(hooks, "far_recognition", None)
+        far_capture = (far_hook is not None and state.get("near_capture", {}).get("status") != "pending"
+                       and not (near is not None and near.get("retry_stand")))
         detection = detect_pockets(detector_input, prior, params)
         observation = detection.observation
+        if far_capture:
+            reference = observation
+            observation, far_record = far_hook(scene_input, base, yaw, reference)
+            attempt["detector_reference"] = asdict(reference)
+            attempt["observation_source"] = far_record.get("source") or "none"
+            attempt["recognition"] = {k: far_record.get(k) for k in (
+                "status", "reasons", "reason", "source", "observations", "selected_track", "frames", "drive_frames",
+                "used_error", "single_error", "detector_error", "lag_fit", "leg")}
         if near is not None and near.get("retry_stand"):
             # Plan D8 S4c-2 / S4c-3: the re-observation must see the pallet; no
             # candidate moves on old estimates.

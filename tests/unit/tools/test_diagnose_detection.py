@@ -410,3 +410,13 @@ def test_configurations_with_different_mounts_are_checked_separately(tmp_path):
     assert len(chains) == 2
     assert records[1]["family"] == {"family": "undecidable", "why": "truth_chain_unverified"}
     assert records[0]["family"] == {"family": "OK"}
+
+
+def test_a_far_recognition_attempt_is_replayed_against_the_detectors_reference():
+    from tools import diagnose_detection as D
+
+    plain = {"pocket_observation": {"status": "valid", "stamp_ns": 1}}
+    far = {"pocket_observation": {"status": "valid", "stamp_ns": 1, "x": "fused"},
+           "detector_reference": {"status": "valid", "stamp_ns": 1, "x": "detector"}}
+    assert D.recorded_observation(plain) is plain["pocket_observation"]
+    assert D.recorded_observation(far)["x"] == "detector"

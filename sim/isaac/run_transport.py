@@ -434,6 +434,23 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument("--use-perception", action="store_true")
     parser.add_argument(
+        "--recognition",
+        choices=("off", "far"),
+        default="off",
+        help="far: the far observation's pallet comes from the new recognition (oracle instance masks from "
+        "Isaac's semantic segmentation, instance fit, target selection and the far-range tracker fed every "
+        "--recognition-frame-every physics steps while the observe leg drives); the detector still runs first "
+        "and is kept as the reference. The near capture and the re-observation stands keep the detector "
+        "(docs/plans/2026-10-18-isaac-recognition-far-capture.md).",
+    )
+    parser.add_argument("--recognition-frame-every", type=int, default=24,
+                        help="Physics steps between driving frames for the far tracker (24 = 0.2 s).")
+    parser.add_argument("--recognition-pixel-lag-steps", type=int, default=0,
+                        help="Physics steps the driving frames' pixels trail their render metadata (measured "
+                        "per render cadence; the smoke run records what fits it).")
+    parser.add_argument("--recognition-no-drive-frames", action="store_true",
+                        help="Far recognition from the stop frame only (no driving frames).")
+    parser.add_argument(
         "--camera-inset",
         action="store_true",
         help="Draw the perception camera's live picture at the top left of the "
@@ -868,6 +885,17 @@ def arguments() -> argparse.Namespace:
         parser.error("--new-obstacles needs --obstacle-layer")
     if args.d7_docking and args.slam_feedback is None:
         parser.error("--d7-docking retries the SLAM docking match; it needs --slam-feedback")
+    if args.recognition == "far":
+        # The near-field bounds were measured with the detector's far estimate: a run that changes it is
+        # outside that contract, so near tracking and the pocket check are refused with it (plan v2, Codex P1).
+        if not args.use_perception or args.slam_feedback is None:
+            parser.error("--recognition far needs --use-perception and --slam-feedback")
+        if args.near_tracking or args.pocket_check:
+            parser.error("--recognition far is not defined with --near-tracking or --pocket-check")
+        if getattr(args, "live", False):
+            parser.error("--recognition far is a batch run (the live capture path is out of its scope)")
+        if args.recognition_frame_every <= 0 or args.recognition_pixel_lag_steps < 0:
+            parser.error("--recognition-frame-every must be positive, --recognition-pixel-lag-steps nonnegative")
     if args.record_pocket_frames and args.slam_feedback is None:
         # The frames start after the near capture, which only SLAM runs make.
         parser.error("--record-pocket-frames needs --slam-feedback")
@@ -2540,11 +2568,34 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     }
     for extra_camera in extra_cameras.values():
         extra_camera.initialize()
+    far_runtime = far_intrinsics = rrc = frr = None  # the far recognition (--recognition far)
+    if args.recognition == "far":
+        import far_recognition_runtime as frr
+        import recognition_render_core as rrc
     if args.use_perception:
         perception_camera.initialize()
         verify_camera_intrinsics(perception_camera, perception_calibration, state)
         # Capture needs axial depth as well as RGBA (see determinism_probe.py).
         perception_camera.add_distance_to_image_plane_to_frame()
+        if args.recognition == "far":
+            # Far recognition: oracle instance masks from the semantic segmentation. The run's pallet is
+            # instance 0, the factory's storage pallets the next ids (proposed too, so they can compete), and
+            # the warehouse environment is "floor" -- the background label decode_semantic's readiness needs
+            # (plan v2, Codex P1).
+            from isaacsim.core.utils.semantics import add_labels
+
+            label_targets = [("/World/Pallet", "inst_0"), ("/World/Environment", "floor")]
+            if factory is not None:
+                import factory_assets as _fa
+
+                storage = [i_ for i_, item_ in enumerate(factory.work_items) if item_.asset.uri.endswith(_fa.PALLET)]
+                label_targets += [(f"/World/Factory/Item_{i_}", f"inst_{k_}") for k_, i_ in enumerate(storage, start=1)]
+            for path_, label_ in label_targets:
+                prim_ = stage.GetPrimAtPath(path_)
+                require(prim_.IsValid(), f"recognition label target {path_} is missing")
+                add_labels(prim_, labels=[label_], instance_name="class")
+            perception_camera.add_semantic_segmentation_to_frame({"colorize": False})
+            state["recognition"] = {"labels": [list(t_) for t_ in label_targets]}
         if args.pocket_check or args.record_pocket_frames or args.near_tracking:
             pocket_camera.initialize()
             pocket_camera.add_distance_to_image_plane_to_frame()
@@ -2645,7 +2696,34 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             physics_time_fn=lambda: cells.world.current_time,
             pose_fn=robot.get_world_pose,
             guard_fn=lift_guard,
+            semantic_fn=(lambda: rrc.decode_semantic(perception_camera.get_current_frame().get("semantic_segmentation"),
+                                                     None)) if args.recognition == "far" else None,
         )
+        if args.recognition == "far":
+            from forklift_core.planning.observation_viewpoints import BAY_PICKUP_ZONE as _Z
+
+            far_runtime = frr.FarRuntime(
+                fork_spacing=frr.fork_spacing_m(read_fork_blades_m(args.forklift_urdf)),
+                pallet_depth_m=geometry.pallet_depth_m, pallet_shape=args.pallet_geometry_loaded.geometry_version,
+                # The operator's "the pallet around here": the layout's placement zone (never scenario.pickup)
+                zone_centre_xy=((_Z.x_min_m + _Z.x_max_m) / 2, (_Z.y_min_m + _Z.y_max_m) / 2),
+                zone_radius_m=math.hypot((_Z.x_max_m - _Z.x_min_m) / 2, (_Z.y_max_m - _Z.y_min_m) / 2),
+                camera_x_m=float(perception_mount.translation_m[0]), dt=1 / 120,
+                frame_every=args.recognition_frame_every, lag_steps=args.recognition_pixel_lag_steps,
+                drive_frames=not args.recognition_no_drive_frames, out_dir=args.output / "recognition",
+            )
+            far_intrinsics = adapter.read_isaac_intrinsics(perception_camera).integer_index
+            _plain_capture = perception_capture.capture
+
+            def _paused_capture(**kw):
+                # No driving frame inside a stationary capture's own steps (its frames are the stop's).
+                far_runtime.paused = True
+                try:
+                    return _plain_capture(**kw)
+                finally:
+                    far_runtime.paused = False
+
+            perception_capture.capture = _paused_capture
     names = list(robot.dof_names)
     wheels = np.array(
         [
@@ -2979,6 +3057,12 @@ def drive(S, isaac) -> None:
     its own. ``S`` holds run()'s names as they were bound when the setup ended; a name the setup left
     unbound stays unbound here, as it was."""
     _bound = S.__dict__
+    if "far_runtime" in _bound:
+        far_runtime = _bound["far_runtime"]
+    if "far_intrinsics" in _bound:
+        far_intrinsics = _bound["far_intrinsics"]
+    if "rrc" in _bound:
+        rrc = _bound["rrc"]
     if "ARC_POSES" in _bound:
         ARC_POSES = _bound["ARC_POSES"]
     if "CUSP_STALL" in _bound:
@@ -4482,6 +4566,20 @@ def drive(S, isaac) -> None:
         nonlocal rear
         rear = value
 
+    def far_recognition_hook(scene_input_, base_, yaw_, reference_):
+        """The far observation's decision (plan v2, 3): the stop frame with its instance ids, the control pose for
+        the instruction, odom<-base for the tracker, truth only for the record's error."""
+        truth_b_, truth_q_ = robot.get_world_pose()
+        pallet_p_, pallet_q_ = pallet.get_world_pose()
+        observation_, record_ = far_runtime.stop(
+            scene_input_, perception_capture.state.instance_ids, initial_time_s=initial_time,
+            control_base=(float(base_[0]), float(base_[1]), float(yaw_)), odom_base=slam_odom_base(),
+            truth_base=(float(truth_b_[0]), float(truth_b_[1]), yaw_and_tilt(truth_q_)[0]),
+            truth_pallet=(float(pallet_p_[0]), float(pallet_p_[1]), yaw_and_tilt(pallet_q_)[0]),
+            detector_observation=reference_)
+        state.setdefault("recognition", {}).update(far_runtime.summary())
+        return observation_, record_
+
     core = MissionCore(
         ms, state=state, obstacle=obstacle, slam=slam, pocket=pocket, paths=paths, trackers=trackers,
         geometry=geometry, settings=settings, pallet_geometry=args.pallet_geometry_loaded,
@@ -4550,6 +4648,8 @@ def drive(S, isaac) -> None:
             # port and the capture's dumps.
             perception_capture=lambda: perception_capture, detect_pockets=lambda *a: detect_pockets(*a),
             save_capture=save_capture,
+            # The far recognition's decision (--recognition far), None otherwise.
+            far_recognition=far_recognition_hook if far_runtime is not None else None,
             # M-a1 slice 5: the release at a stop, the measured steering.
             steering_position=lambda: robot.get_joint_positions()[steers],
             # M-a1 slice 6d: the near field's mission side (near_tick, the correction redraws, installs, retry).
@@ -5001,6 +5101,21 @@ def drive(S, isaac) -> None:
                 applied_steering_rad=state.get("applied_command", (None, None))[1],
             )
 
+        def far_drive_frame(tick_: int) -> None:
+            """One driving frame for the far recognition: render-metadata time, pixels and instance ids."""
+            frame_ = perception_camera.get_current_frame()
+            semantic_ = rrc.decode_semantic(frame_.get("semantic_segmentation"), None)
+            rgba_ = np.array(perception_camera.get_rgba(), copy=True)
+            raw_ = np.array(perception_camera.get_depth(), copy=True)
+            if raw_.ndim == 3 and raw_.shape[-1] == 1:
+                raw_ = np.squeeze(raw_, axis=-1)
+            depth_, _ = adapter.normalize_depth(raw_)
+            applied_ = slam["tracker"].applied if slam is not None else None
+            far_runtime.drive_frame(
+                tick_, float(frame_["rendering_time"]) - initial_time, rgba_[:, :, :3], depth_,
+                semantic_.instance_ids if semantic_.ready else None, far_intrinsics, perception_mount,
+                tuple(float(v) for v in applied_[0]) if applied_ is not None else (0.0, 0.0, 0.0))
+
         def step_world(render: bool) -> None:
             """One physics step and everything that must see every step
             (SLAM plan v3.1): encoders, odometry, the 10 Hz scan by physics
@@ -5019,7 +5134,11 @@ def drive(S, isaac) -> None:
                 state["preempt_seen_s"] = float(world.current_time - initial_time)
                 if slam is not None:
                     slam["last_command"] = 0.0
-            world.step(render=render or frame_due)
+            # The far recognition's driving frames: every frame_every steps of a far observe leg (not the near
+            # capture's leg, not inside a stationary capture), rendered here and read after the odometry below.
+            far_due = far_runtime is not None and far_runtime.due(
+                tick, observing=ms.phase == "observe" and state.get("near_capture", {}).get("status") != "pending")
+            world.step(render=render or frame_due or far_due)
             stamp_now = world.current_time - initial_time
             if args.tyre_contact_log and tick % 12 == 0:
                 # New plant candidate V1 (loaded) / V5: each tyre's floor contact every 0.1 s.
@@ -5070,6 +5189,14 @@ def drive(S, isaac) -> None:
                 # Every tracker in this runner stops at 0.012 m/s; its arrival
                 # and gear-change checks wait for the noise-aware detector.
                 slam["tracker_speed"] = slam["stop"].tracker_speed(0.012)
+            if far_runtime is not None and ms.phase == "observe":
+                # Each step's odom and truth (the driving frames' poses and the pixel-lag fit's input).
+                pallet_now_, pallet_q_now_ = pallet.get_world_pose()
+                far_runtime.record_step(tick, stamp_now, slam_odom_base(),
+                                        (now_base[0], now_base[1], yaw_and_tilt(now_q)[0]),
+                                        (pallet_now_[0], pallet_now_[1], yaw_and_tilt(pallet_q_now_)[0]))
+                if far_due:
+                    far_drive_frame(tick)
             if recorder is not None:
                 # Plan D8b truth, after this tick's encoders and odometry so a failure
                 # here cannot drop them (Codex D8b impl P2).
