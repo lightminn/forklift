@@ -525,7 +525,7 @@ D2 의 `mission_start` 는 작업자 작업 `observe_ladder` 로 한다. 이름 
 - 소스 시험: 실시간 시작이 셋업 사다리를 건너뜀, 지운 임시 처리가 남지 않음.
 - Isaac: U2·U3·U4·U5.
 
-### D6 구현 설계 (3단계, 2026-10-18, 2단계 9803b9c 수렴 뒤; 3판 — Codex 설계 검토 1·2회차 반영)
+### D6 구현 설계 (3단계, 2026-10-18, 2단계 9803b9c 수렴 뒤; 5판 — Codex 설계 검토 1–4회차 반영)
 
 **분류표.** `forklift_core/mission/failures.py` 의 `classify(reason) -> "mission" | "scene" | "session"`. 사유 접두로 고르고(가장 긴 접두), 표에 없으면 `session` 이다.
 - **scene**(참값 검사): `Excessive body tilt`, `Actual truck/load footprint overlap`, `Measured pallet footprint overlap`, `Measured pallet solid overlap`, `Pallet dropped during transport`, `Pallet slipped off forks`, `Pallet displaced before pickup`, `Forbidden fork/pallet contact`.
@@ -555,7 +555,11 @@ D2 의 `mission_start` 는 작업자 작업 `observe_ladder` 로 한다. 이름 
 - 서 있으면 그 틱에 하고, 아니면 설 때까지 미룬다(`release_gate` 가 미션 없이도 처리한다).
 - 해제는 다음만 한다:
   1. `release_slam`
-  2. 대상 목록의 재표현: 좌표계 변화 `after ∘ before⁻¹` 로 팔레트(실린 것 제외)와 목적지 자세를 옮기고, 보정 버전·revision 을 올린다(`set_correction_version(…, reexpress)`). 종료 뒤에는 `refresh_targets` 가 돌지 않으므로 여기서 한다(Codex 2회차 P2).
+  2. **hold 좌표계의 추정만** 좌표계 변화 `after ∘ before⁻¹` 로 한 번 옮긴다(Codex 3회차 P2). 지도 사전값은 옮기지 않는다(`docking_retry.py` 계약). hold 좌표계의 추정은 둘이다.
+     - 근접 캡처 hold(관찰·접근에서 끝남): 팔레트 추정(`obstacle["pickup_estimate"]`, `pocket["planning_pickup"]`). 기존 `release_and_stand` 와 같다.
+     - 도킹 hold(도킹이 받아들여진 뒤 `settle` 등에서 끝남; 포켓·적재 단계에서 끝나면 해제하지 않는다): 도킹으로 보정한 목적지. 기존 `slam_release` 의 `return_scenario` 재표현과 같다(Codex 4회차 P2). 배달된 팔레트는 이 목적지를 따른다(`refresh_targets`).
+     - 즉시 해제: 종료 처리의 대상 확정(`refresh_targets`) **전에** 하여, 옮긴 추정이 그대로 목록에 들어간다.
+     - 지연 해제: 종료 뒤에는 `refresh_targets` 가 돌지 않는다(Codex 2회차 P2). 그래서 목록에서 직접 옮긴다. 근접 캡처 hold 면 그 미션 팔레트를, 도킹 hold 면 그 목적지와 거기 배달된 팔레트를 옮긴다. 보정 버전만 올린다(재표현 없음).
   3. 재투영(`_reproject`)
   4. 회계(`slam["holds"]` 에 `reason: "mission_end"`)
 - 계획·경로·재관찰 예약은 없다(U28 사후조건). 즉시 해제와 지연 해제 모두 CPU 시험으로 확인한다.
@@ -569,7 +573,7 @@ D2 의 `mission_start` 는 작업자 작업 `observe_ladder` 로 한다. 이름 
 
 **미션 없는 동안의 2D 겹침(Codex P2-7).** 실시간에서 진행 중 미션이 없으면 팔레트 사각형을 2D 겹침 검사(`checked_obstacles`)에서 뺀다.
 - 수동으로 포크를 포켓에 넣으면 2D 사각형은 겹쳐도 실제로는 닿지 않는다.
-- 실제 접촉은 포크·팔레트 3D 접촉 검사(`Forbidden fork/pallet contact`)가 본다. 이 검사는 지금 insert·withdraw 에서만 도는데, 실시간에서 미션이 없는 동안에는 **모든 단계에서** 돌린다(Codex 2회차 P2). 수동 조종으로 포크가 블록에 닿으면 장면 손상으로 래치된다.
+- 실제 접촉은 포크·팔레트 3D 접촉 검사(`Forbidden fork/pallet contact`)가 본다. 이 검사는 지금 insert·withdraw 에서만 돈다. 실시간에서 미션이 없고 **지난 미션이 포켓·적재 단계 밖에서 끝났을 때**(= 수동 조종이 허용될 때)는 단계와 무관하게 돌린다(Codex 2회차 P2). 수동 조종으로 포크가 블록에 닿으면 장면 손상으로 래치된다. 포켓·적재 단계에서 끝났으면 돌리지 않는다. 이 검사는 정상 지지 접촉도 잡고(`insertion_geometry.py` 계약), 그때는 수동 조종이 거절돼 차가 움직이지 않는다(Codex 3회차 P2).
 - 소품과의 2D 겹침은 그대로 장면 손상이다.
 
 **장면 손상 래치.**
