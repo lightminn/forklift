@@ -64,6 +64,7 @@ import numpy as np
 from forklift_core.control import RearAxlePathTracker, TrackerConfig, ackermann_command
 from forklift_core.control import cusp_stall as CUSP_STALL
 from forklift_core.mission.cargo import CargoState
+from forklift_core.safety.pallet_permit import RECOGNISED_MARGIN_M
 from forklift_core.mission.commands import MissionCommands
 from forklift_core.control.speed_chain import creep, slew_cap_stop
 from forklift_core.mission.targets import Pose as TargetPose
@@ -3040,12 +3041,13 @@ class MissionCore:
             tb.carried(pid)
         elif ms.phase in ("withdraw", "settle", "return_home", "home_settle", "complete"):
             if tb.pallets[pid].state == "carried":
-                tb.put_down(pid, site_pose)
+                tb.put_down(pid, site_pose, uncertainty_m=RECOGNISED_MARGIN_M)  # plan D10
             elif tb.pallets[pid].state == "delivered":
                 tb.update_pose(pid, site_pose)
         elif pocket.get("planning_pickup") is not None:
             site_ = pocket["planning_pickup"]
-            tb.update_pose(pid, TargetPose(float(site_.x_m), float(site_.y_m), float(site_.yaw_rad)))
+            tb.update_pose(pid, TargetPose(float(site_.x_m), float(site_.y_m), float(site_.yaw_rad)),
+                           basis="recognised", uncertainty_m=RECOGNISED_MARGIN_M)  # the observation placed it (D10)
 
     def safety_state(self, t: float | None) -> dict:
         """The mission's safety state for the arbiter (plan E8, M-a0.5 section 4), from what the core already holds

@@ -34,7 +34,8 @@ def test_a_carried_pallet_has_no_pose_and_moving_it_does_not_raise_the_revision(
     for x in (6.0, 7.0, 8.0):
         assert b.update_pose("P-1", Pose(x, 0.0, 0.0)) is False
     assert b.revision == 3
-    assert b.message()["pallets"] == [{"pallet_id": "P-1", "kind": "epal6", "pose": None, "state": "carried"}]
+    assert b.message()["pallets"] == [{"pallet_id": "P-1", "kind": "epal6", "pose": None, "state": "carried",
+                                           "basis": "prior", "uncertainty_m": None}]  # plan D10
 
 
 def test_put_down_registers_it_again_where_it_stands_under_the_same_id():
@@ -230,3 +231,22 @@ def test_a_missions_end_settles_the_list_and_the_ended_mission_no_longer_moves_i
     assert settled[0] == Pose(9.2, 0.4, 0.12) and settled[1] == Pose(9.2, 0.4, 0.12)
     core.refresh_targets()
     assert (core.targets.pallets["P-1"].pose, core.targets.destinations["D-1"], core.targets.revision) == settled
+
+
+def test_a_pallets_basis_follows_what_its_place_rests_on():
+    """Persistent console plan D10: registered = prior; a recognition (an update while on the floor) = recognised;
+    put down = delivered; a frame change keeps the basis; the message carries basis and uncertainty."""
+    from forklift_core.mission.targets import Pose, TargetsBook
+
+    tb = TargetsBook()
+    tb.add_pallet("P-1", "epal6", Pose(5.0, 0.0, 0.0))
+    assert tb.pallets["P-1"].basis == "prior"
+    tb.update_pose("P-1", Pose(5.02, 0.01, 0.0), basis="recognised", uncertainty_m=0.21)
+    assert (tb.pallets["P-1"].basis, tb.pallets["P-1"].uncertainty_m) == ("recognised", 0.21)
+    tb.carried("P-1")
+    tb.put_down("P-1", Pose(9.0, 0.0, 0.0), uncertainty_m=0.21)
+    assert tb.pallets["P-1"].basis == "delivered"
+    tb.set_correction_version(1, lambda p: Pose(p.x_m + 0.1, p.y_m, p.yaw_rad))
+    assert tb.pallets["P-1"].basis == "delivered"
+    entry = next(e for e in tb.message()["pallets"] if e["pallet_id"] == "P-1")
+    assert entry["basis"] == "delivered" and entry["uncertainty_m"] == 0.21

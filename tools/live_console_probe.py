@@ -589,7 +589,7 @@ async def cycle_scenario(p: Probe, args):
         p.report["pre_teleop"] = await teleop_drive(p, args.pre_teleop_s, args.pre_teleop_speed,
                                                     args.pre_teleop_curvature)
     p.report["missions_run"] = []
-    for leg in args.cycle.split(","):
+    for leg in [leg for leg in args.cycle.split(",") if leg]:  # empty: only the teleop (plan U11)
         pallet_id, destination_id = leg.split(":")
         await p.until(p.standing, 30, label="standing_before_submit")
         await asyncio.sleep(1.0)

@@ -154,3 +154,17 @@ def test_a_live_runs_tyre_contacts_stay_in_the_spool():
     src = _runner()
     assert 'if "state.tyre_contact_rows" in (state.get("spool_registered") or ()):' in src
     assert src.index('if "state.tyre_contact_rows" in') < src.index('np.save(args.output / "tyre_contacts.npy"')
+
+
+def test_the_live_teleop_permit_takes_the_pallet_zones_and_advances_them():
+    """Plan D10: the target pallets on the same arcs and outline as the grid permit; the slower wins; the installed
+    distances are advanced by the same driving; the U11 control flag turns it off (live only)."""
+    src = _runner()
+    assert "live_zones_from(core.targets, pickup_zone), core.targets.revision, pose_, curvatures, direction," in src
+    assert "if pallet_[0] < result_[0]:" in src
+    assert src.index("live_perm.advance(driven_)") < src.index("live_pallet_perm.advance(driven_)")
+    assert "if obstacle is not None and not args.live_test_no_pallet_permit else None" in src
+    from pathlib import Path
+
+    near = (Path(__file__).resolve().parents[3] / "sim" / "isaac" / "near_tracking.py").read_text()
+    assert '"live_test_no_pallet_permit": False' in near

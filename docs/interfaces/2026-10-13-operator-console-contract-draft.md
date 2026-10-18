@@ -177,13 +177,15 @@ lease 보유자는 `tick`을 받을 때마다 `{"t": "echo", "session_epoch", "l
 
 ```json
 {"t": "targets", "targets_revision": 17, "map_frame": "map", "correction_version": 12,
- "pallets": [{"pallet_id": "P-01", "kind": "epal6", "pose": {"x_m": 12.3, "y_m": 5.2, "yaw_rad": 0.0}, "state": "available"}],
+ "pallets": [{"pallet_id": "P-01", "kind": "epal6", "pose": {"x_m": 12.3, "y_m": 5.2, "yaw_rad": 0.0}, "state": "available",
+              "basis": "recognised", "uncertainty_m": 0.21}],
  "destinations": [{"destination_id": "D-A", "pose": {"x_m": 2.4, "y_m": 1.6, "yaw_rad": 3.14}}]}
 ```
 
 - ID는 한 지도·세션 안에서 재사용하지 않는다. 대상의 자세나 상태가 바뀌면 `targets_revision`이 올라간다. 그래서 이전 목록을 보고 고른 ID가 다른 팔레트를 가리키는 일이 없다.
 - 보정 버전이 바뀌면 자세를 다시 표현하고 revision을 올린다.
 - 포크에 실린 팔레트(`state: carried`)는 `pose`를 `null`로 싣는다. 차체를 따라 매 주기 움직이는 자세를 대상 목록에 실으면 revision이 쉼 없이 오르기 때문이다. 내려놓으면 그 자리의 자세와 함께 revision을 올린다.
+- **근거와 불확실성**(상시 콘솔 계획 D10, 2026-10-19). 팔레트마다 `basis`(`prior`·`recognised`·`delivered`)와 `uncertainty_m`(m, `prior` 는 `null`)을 싣는다. 등록한 자리는 `prior`, 관찰이 자리를 정하면 `recognised`, 내려놓으면 `delivered` 다. 보정 재표현은 근거를 바꾸지 않는다. 화면은 표시만 한다. 수동 조종 허가는 `recognised`·`delivered` 팔레트를 외곽 + `uncertainty_m` + 번들 여유로 키운 출입 금지 구역으로 쓰고, `prior` 팔레트는 표시 자리 대신 픽업 구역 전체(+ 차량 자세 오차)를 쓴다(시뮬레이션의 등록 자리는 장면 참값이라). 실차 중재기 적용은 메인 합의 사항이다.
 
 **구현 상태(M-a4, 2026-10-16).** `forklift_core/mission/targets.py` 의 `TargetsBook` 이 위 규칙을 구현한다: 등록·자세·상태·보정 버전이 바뀌면 revision 이 오르고(같은 값이면 오르지 않음), `carried` 는 자세를 싣지 않으며 그동안의 자세 갱신은 무시하고, 내려놓으면 같은 ID 로 그 자리에 `delivered` 로 다시 싣는다. 보정 버전이 바뀌면 자세를 다시 표현하는 함수를 받아 모두 옮기고 revision 을 올린다(배치 실행기에서는 보정 버전이 SLAM release 횟수다 — 추적 중에는 보정이 스캔마다 바뀌어도 지도 자세가 뛰지 않고, release 때 코어가 추정치를 새 프레임으로 옮긴다. 목적지와 내려놓은 팔레트는 코어가 지금 쓰는 목적지 추정(도킹 보정, release 재표현)을 매 틱 따른다). `mission_submit` 은 revision 이 다르면 `reject(stale_targets)`, 없는 ID 나 이미 실린 팔레트는 `reject(invalid)`. 배치 실행기는 시나리오의 팔레트·목적지를 `P-1`·`D-1` 로 등록해 스스로 제출한다.
 

@@ -685,6 +685,9 @@ def arguments() -> argparse.Namespace:
                         help="M-c tests only (plan C5): the lift follows a non-periodic wave so the carriage camera's "
                         "horizon tells the sim time a frame's pixels were drawn at; the lift height is logged every "
                         "physics step -- for a run without a mission")
+    parser.add_argument("--live-test-no-pallet-permit", action="store_true",
+                        help="Persistent console plan D10 tests only (U11's control): the teleop permit does not see "
+                        "the target pallets, as before D10")
     parser.add_argument("--live-test-permit-compare", action="store_true",
                         help="M-c tests only (completion 5): every 12th teleoperation permission is also asked of a "
                         "fresh full check on the same grid, pose and arcs, and both are logged with the true rear-axle "
@@ -898,7 +901,7 @@ def arguments() -> argparse.Namespace:
         parser.error("--live does not take --repeat-captures (its captures bypass the stop boundary, plan C2)")
     if args.live and args.record_boundary:
         parser.error("--live is not replayed: not with --record-boundary (plan C4)")
-    if not args.live and (args.live_test_permit_compare or args.live_test_scan_silence):
+    if not args.live and (args.live_test_permit_compare or args.live_test_scan_silence or args.live_test_no_pallet_permit):
         parser.error("--live-test-permit-compare and --live-test-scan-silence are for --live runs only")
     if args.live and not 0 < args.live_factor <= 1:
         # The limits are divided by it (plan C4a); above 1 the 0.05 s tick would exceed a quarter of the command age.
@@ -5362,6 +5365,12 @@ def drive(S, isaac) -> None:
             if not 0 <= live_catchup_ <= 12:
                 raise ValueError("FORKLIFT_LIVE_CATCHUP_STEPS must be 0..12")
             live_perm = LiveBundlePermit(obstacle["layer"].permission.config) if obstacle is not None else None
+            # Persistent console plan D10: the pallets the LiDAR plane does not see are keep-out zones for teleop.
+            from forklift_core.safety.pallet_permit import PalletPermit as LivePalletPermit, zones_from as live_zones_from
+
+            live_pallet_perm = (LivePalletPermit(obstacle["layer"].permission.config.stopping,
+                                                 step_m=obstacle["layer"].permission.config.step_m)
+                                if obstacle is not None and not args.live_test_no_pallet_permit else None)
 
             def live_unlock_wheels():  # persistent console plan D1 step 5: the dwell's lock, released as the loop does
                 if wheel_lock["q"] is not None:
@@ -5509,6 +5518,15 @@ def drive(S, isaac) -> None:
                         live.log({"permit_cmp": now_, "pose": pose_, "curvatures": list(curvatures),
                                   "direction": direction, "check_mps": check, "bundle": list(result_),
                                   "full": list(full_), "truth_rear": truth_, "silenced": scan_silenced(now_)})
+                if live_pallet_perm is not None:
+                    # Plan D10: the target pallets (grown by their margins) on the same arcs and outline; installed
+                    # again on a new grid snapshot, a targets change or a correction (the pose moves without driving).
+                    applied_ = obstacle.get("applied")
+                    pallet_ = live_pallet_perm.limit(
+                        live_zones_from(core.targets, pickup_zone), core.targets.revision, pose_, curvatures, direction,
+                        check, fp_, key=(key_, None if applied_ is None else tuple(float(v) for v in applied_)))
+                    if pallet_[0] < result_[0]:
+                        result_ = pallet_
                 return result_
 
             # Real-time plan S0 (docs/plans/2026-10-17-realtime-sim.md): each region's wall and CPU time, in the
@@ -6652,10 +6670,13 @@ def drive(S, isaac) -> None:
                     odom_now_ = tuple(float(v) for v in slam["odom_rear"][:2]) if slam is not None else None
                     if live_perm is not None:
                         prev_ = live_state.get("odom_prev")
-                        if odom_now_ is not None and prev_ is not None:
-                            live_perm.advance(math.hypot(odom_now_[0] - prev_[0], odom_now_[1] - prev_[1]))
-                        elif odom_now_ is None:
-                            live_perm.advance(abs(float(speed_now_)) * dt)
+                        driven_ = (math.hypot(odom_now_[0] - prev_[0], odom_now_[1] - prev_[1])
+                                   if odom_now_ is not None and prev_ is not None
+                                   else abs(float(speed_now_)) * dt if odom_now_ is None else None)
+                        if driven_ is not None:
+                            live_perm.advance(driven_)
+                            if live_pallet_perm is not None:
+                                live_pallet_perm.advance(driven_)
                     live_state["odom_prev"] = odom_now_
                     target_steer_ = np.asarray(live_ackermann(1.0, live.arbiter.drive.kappa, args.drive_geometry).steering_rad)
                     live_safety_ = core.safety_state(t)

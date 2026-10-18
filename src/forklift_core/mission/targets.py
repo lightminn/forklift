@@ -30,6 +30,11 @@ class Pallet:
     state: str = "available"
     depth_m: float | None = None  # overall size for the console's drawing (C3); None when not known
     width_m: float | None = None
+    # What the pose rests on (persistent console plan D10): "prior" as registered (a simulation registers the scene's
+    # placement -- the teleop permit then keeps out of the whole pickup zone), "recognised" once the observation
+    # placed it, "delivered" where it was put down; and the error margin the permit grows it by (None: prior).
+    basis: str = "prior"
+    uncertainty_m: float | None = None
 
 
 @dataclass
@@ -66,11 +71,16 @@ class TargetsBook:
         self.revision += 1
         return True
 
-    def update_pose(self, pallet_id: str, pose: Pose) -> bool:
-        """A new estimate of a pallet on the floor; a carried pallet keeps no pose."""
+    def update_pose(self, pallet_id: str, pose: Pose, *, basis: str | None = None,
+                    uncertainty_m: float | None = None) -> bool:
+        """A new estimate of a pallet on the floor; a carried pallet keeps no pose. ``basis``/``uncertainty_m``:
+        what the estimate rests on, when it says (plan D10); else they stay."""
         if self.pallets[pallet_id].state == "carried":
             return False
-        return self._set(pallet_id, pose=pose)
+        changes = {"pose": pose}
+        if basis is not None:
+            changes.update(basis=basis, uncertainty_m=uncertainty_m)
+        return self._set(pallet_id, **changes)
 
     def update_destination(self, destination_id: str, pose: Pose) -> bool:
         """A new estimate of a destination (a docking match, a frame change); the same pose changes nothing."""
@@ -83,11 +93,12 @@ class TargetsBook:
     def carried(self, pallet_id: str) -> bool:
         return self._set(pallet_id, pose=None, state="carried")
 
-    def put_down(self, pallet_id: str, pose: Pose, *, state: str = "delivered") -> bool:
-        """Registered again where it was put down, under the same ID."""
+    def put_down(self, pallet_id: str, pose: Pose, *, state: str = "delivered",
+                 uncertainty_m: float | None = None) -> bool:
+        """Registered again where it was put down, under the same ID (basis "delivered", plan D10)."""
         if state not in STATES or state == "carried":
             raise ValueError(state)
-        return self._set(pallet_id, pose=pose, state=state)
+        return self._set(pallet_id, pose=pose, state=state, basis="delivered", uncertainty_m=uncertainty_m)
 
     def set_correction_version(self, version: int, reexpress=None) -> bool:
         """The poses are re-expressed in a new correction (``reexpress(pose) -> pose``, the change of frame) and
@@ -120,7 +131,8 @@ class TargetsBook:
             return None if p is None else {"x_m": p.x_m, "y_m": p.y_m, "yaw_rad": p.yaw_rad}
 
         def pallet_(p):
-            item = {"pallet_id": p.pallet_id, "kind": p.kind, "pose": pose_(p.pose), "state": p.state}
+            item = {"pallet_id": p.pallet_id, "kind": p.kind, "pose": pose_(p.pose), "state": p.state,
+                    "basis": p.basis, "uncertainty_m": p.uncertainty_m}  # plan D10 (contract 3)
             if p.depth_m is not None and p.width_m is not None:  # the size, when registered with one
                 item.update(depth_m=p.depth_m, width_m=p.width_m)
             return item
