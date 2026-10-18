@@ -6512,8 +6512,9 @@ def drive(S, isaac) -> None:
             core.refresh_targets()  # M-a4: the targets list follows the mission (no port call)
             if safety_file is not None:
                 safety_file.write(json.dumps(core.safety_state(t)) + "\n")  # M-a3 (plan E8): every control tick
-            if cancel_stop_:
+            if cancel_stop_ and live is None:
                 break  # M-a3 (plan E6): cancelled standing, its last stop output applied
+            # live: the cancel ends the mission, not the run -- the slot is free for the operator's next submit
             if "chase" in extra_cameras and step % fps_divisor == 0:
                 chase_eye, chase_target, chase_yaw = MISSION_VIEWS.chase_pose(
                     base, yaw, chase_yaw, fps_divisor / 120

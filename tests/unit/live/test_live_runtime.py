@@ -300,3 +300,13 @@ def test_the_runner_replans_the_first_leg_from_where_a_submit_finds_the_truck():
     replan = source[source.index('live_first_replan_["due"] and'):][:1600]
     assert "core.blocked_replan(t, rear, 0.0, 0.0, hall=True)" in replan
     assert 'core.commands.finish("failed", t)' in replan
+
+
+def test_a_cancelled_mission_ends_the_mission_but_not_a_live_run():
+    # 2026-10-18 demo (ws1 run 4129): the operator cancelled 1.7 s after a submit and the run ended "mission_cancelled";
+    # live, a cancel frees the slot (commands: cancelled -> idle at the next apply) and the session goes on.
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
+    block = source[source.index("            if cancel_stop_"):][:300]
+    assert block.startswith("            if cancel_stop_ and live is None:")
