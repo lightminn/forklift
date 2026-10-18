@@ -27,13 +27,15 @@ def _row(lo, hi, *, lat=0.05, along=0.05, yaw=0.0, z_s=0.02, h=0.02, s=0.02, sig
                     centre_height_m=h, yaw_rad=yaw, support_m=z_s, layout_m=s, sigma_m=sigma)
 
 
-def _bounds(*, rows=None, window_s=1.2, e=0.0, psi=0.0, rear_axle=(0.0, 0.0), suppress=False):
+def _bounds(*, rows=None, window_s=1.2, e=0.0, psi=0.0, rear_axle=(0.0, 0.0), suppress=False, layout=False):
     # suppress=False keeps the 2B-3c..3e tests on the duplicate-track machinery; the default in
-    # TrackBounds (2B-3f) suppresses new tracks from suspected-duplicate readings
+    # TrackBounds (2B-3f) suppresses new tracks from suspected-duplicate readings. layout=False likewise
+    # keeps in-place layout splits visible (the 2B-3h default hides them)
     rows = rows or (_row(1.0, 2.5), _row(2.5, 4.0))
     return TrackBounds(rows={"known": rows, "parametric": rows}, ages_s=(0.1, 0.5, 1.0, 10.0),
                        e_m=(e, e, e, e), psi_rad=(psi, psi, psi, psi), rear_axle_xy_m=rear_axle,
-                       window_s=window_s, max_observations=10, expiry_s=0.5, suppress_duplicates=suppress)
+                       window_s=window_s, max_observations=10, expiry_s=0.5, suppress_duplicates=suppress,
+                       hide_layout_splits=layout)
 
 
 def _odom(x=0.0, y=0.0, yaw=0.0):
@@ -1302,3 +1304,146 @@ def test_the_axis_of_the_last_known_reading_outlives_the_fusion_window():
     tr.update(_frame(0.2, [_candidate(hypothesis="t11_06:y")]))
     tr.update(_frame(0.4, [_candidate(hypothesis="parametric:x")]))
     assert tr.update(_frame(0.6, [_candidate((3.3, 0.0, 0.06), hypothesis="t11_06:x")])).new == 1
+
+
+
+# 2B-3h: an in-place layout split of any active visible track is born as its hidden duplicate ----------
+
+WIDE = (_row(1.0, 4.0, lat=0.5, along=0.5),)  # wide position gate, layout bound 0.02 per reading
+
+
+def _split(dy=0.15, t=0.2, **kw):
+    """Track 0 at y 0 (t 0, nothing selected), then a reading whose pockets moved dy sideways with the face
+    centre left in place, so each pocket's face coordinate moves dy: a layout split."""
+    tr = CandidateTracker(_bounds(rows=WIDE, layout=True, **kw))
+    tr.update(_frame(0.0, [_candidate(hypothesis="parametric:x", cid="a")]))
+    report = tr.update(_frame(t, [_candidate((3.0, dy, 0.06), hypothesis="parametric:x", face_offset=dy, cid="b")]))
+    return tr, report
+
+
+def test_an_in_place_layout_split_is_born_as_the_tracks_hidden_duplicate():
+    tr, report = _split()
+    assert report.new == 1 and report.suppressed == 1
+    assert (tr._tracks[1].duplicate_of, tr._tracks[1].duplicate_kind, tr._tracks[1].shadow) == (0, "layout", True)
+    assert [t.track_id for t in tr.tracks(int(0.2 * S), _odom())] == [0]
+
+
+def test_a_layout_split_beyond_the_pocket_cap_stays_visible():
+    tr, report = _split(dy=0.21)
+    assert report.suppressed == 0 and len(tr.tracks(int(0.2 * S), _odom())) == 2
+
+
+def test_a_layout_split_of_a_stale_track_stays_visible():
+    tr, report = _split(t=0.6)
+    assert report.suppressed == 0 and [t.track_id for t in tr.tracks(int(0.6 * S), _odom())] == [1]
+
+
+def test_a_layout_split_of_two_tracks_at_once_stays_visible():
+    tr = CandidateTracker(_bounds(rows=WIDE, layout=True))
+    tr.update(_frame(0.0, [_candidate((3.0, 0.0, 0.06), hypothesis="parametric:x", cid="a"),
+                           _candidate((3.0, 0.1, 0.06), hypothesis="parametric:x", face_offset=0.1, cid="b")]))
+    report = tr.update(_frame(0.2, [_candidate((3.0, 0.05, 0.06), hypothesis="parametric:x", face_offset=0.2,
+                                               cid="c")]))
+    assert report.new == 1 and report.suppressed == 0
+
+
+def test_another_known_shape_in_place_is_not_a_layout_split():
+    tr = CandidateTracker(_bounds(rows=WIDE, layout=True))
+    tr.update(_frame(0.0, [_candidate(hypothesis="epal6:x", cid="a")]))
+    report = tr.update(_frame(0.2, [_candidate(hypothesis="t11_06:x", cid="b")]))
+    assert report.new == 1 and report.suppressed == 0
+
+
+def test_without_hiding_a_layout_split_stays_visible():
+    tr = CandidateTracker(_bounds(rows=WIDE, layout=False))
+    tr.update(_frame(0.0, [_candidate(hypothesis="parametric:x", cid="a")]))
+    report = tr.update(_frame(0.2, [_candidate((3.0, 0.15, 0.06), hypothesis="parametric:x", face_offset=0.15,
+                                               cid="b")]))
+    assert report.suppressed == 0 and len(tr.tracks(int(0.2 * S), _odom())) == 2
+
+
+def test_the_selected_tracks_own_split_keeps_its_reading_kind():
+    tr = CandidateTracker(_bounds(rows=WIDE, layout=True, suppress=True))
+    tr.update(_frame(0.0, [_candidate(hypothesis="parametric:x", cid="a")]))
+    tr.select(0)
+    tr.update(_frame(0.2, [_candidate((3.0, 0.15, 0.06), hypothesis="parametric:x", face_offset=0.15, cid="b")]))
+    assert (tr._tracks[1].duplicate_of, tr._tracks[1].duplicate_kind) == (0, "reading")
+
+
+def test_a_layout_shadow_tracks_on_and_shows_once_its_owner_is_deleted():
+    tr, _ = _split()
+    for t in (0.4, 0.6, 0.8, 1.0, 1.2):  # only the split reading is seen: the owner (last 0.0 s) is deleted
+        report = tr.update(_frame(t, [_candidate((3.0, 0.15, 0.06), hypothesis="parametric:x", face_offset=0.15,
+                                                 cid="b")]))
+        assert report.accepted == {"b": 1}
+    assert [t.track_id for t in tr.tracks(int(1.2 * S), _odom())] == [1]
+
+
+def test_a_layout_shadow_stays_hidden_while_its_owner_is_observed():
+    # the stated limit (Codex P2): release is the owner's deletion only, no time bound
+    tr, _ = _split()
+    for k in range(2, 11):
+        tr.update(_frame(0.2 * k, [_candidate(hypothesis="parametric:x", cid="a"),
+                                   _candidate((3.0, 0.15, 0.06), hypothesis="parametric:x", face_offset=0.15,
+                                              cid="b")]))
+    assert [t.track_id for t in tr.tracks(int(2.0 * S), _odom())] == [0]
+
+
+def test_a_layout_shadow_gives_its_owner_no_priority_once_the_owner_is_selected():
+    # Codex, with the calibrated table: A (spacing 0.40) then B (0.56, layout 80 mm > 64 mm) in place at
+    # 1.75 m, nothing selected -> B is A's layout shadow; A is then selected and a reading with spacing
+    # 0.48 fits both gates. 2B-3g holds it; an owner priority would hand it to A
+    bounds = TrackBounds.load(Path(__file__).resolve().parents[3] / "config/recognition_track_bounds.yaml")
+    tr = CandidateTracker(bounds)
+    tr.update(_frame(0.0, [_candidate((1.75, 0.0, 0.06), hypothesis="parametric:x", spacing=0.40, cid="a")]))
+    tr.update(_frame(0.2, [_candidate((1.75, 0.0, 0.06), hypothesis="parametric:x", spacing=0.56,
+                                      cid="b")]))
+    assert tr._tracks[1].duplicate_kind == "layout"
+    tr.select(0)
+    report = tr.update(_frame(0.4, [_candidate((1.75, 0.0, 0.06), hypothesis="parametric:x", spacing=0.48,
+                                               range_m=1.0, cid="c")]))
+    assert report.accepted == {} and report.held >= 1
+
+
+def test_a_layout_shadow_of_an_absorbed_duplicate_shows_when_its_direct_owner_goes():
+    # S selected; A a visible yaw near miss of S (suppression off); B an in-place layout split of A (its yaw
+    # misses S); S takes a reading A also fits, so A is absorbed (a shadow of S). When A is deleted B shows,
+    # though S lives: the owner is the direct one
+    tr = CandidateTracker(_bounds(rows=(_row(1.0, 4.0, lat=0.5, along=0.5, yaw=0.05),), layout=True))
+    tr.update(_frame(0.0, [_candidate(hypothesis="parametric:x", cid="s")]))
+    tr.select(0)
+    tr.update(_frame(0.2, [_candidate(yaw=0.12, hypothesis="parametric:x", cid="a")]))
+    assert tr._tracks[1].duplicate_kind == "near_miss" and not tr._tracks[1].shadow
+    tr.update(_frame(0.4, [_candidate((3.0, 0.15, 0.06), 0.12, hypothesis="parametric:x", face_offset=0.15,
+                                      cid="b")]))
+    assert (tr._tracks[2].duplicate_of, tr._tracks[2].duplicate_kind) == (1, "layout")
+    tr.update(_frame(0.6, [_candidate(yaw=0.06, hypothesis="parametric:x", cid="s")]))
+    assert tr._tracks[1].shadow  # absorbed
+    for t in (0.8, 1.0, 1.2, 1.4):
+        tr.update(_frame(t, [_candidate(hypothesis="parametric:x", cid="s"),
+                             _candidate((3.0, 0.15, 0.06), 0.12, hypothesis="parametric:x", face_offset=0.15,
+                                        cid="b")]))
+    assert {t.track_id for t in tr.tracks(int(1.4 * S), _odom())} == {0, 2}
+
+
+def _record(frames, target=(0, 0, (1, 0))):
+    """A minimal sequence record for the evaluator: static robot, truth face of the target pair."""
+    face = {"left_m": (1.75, 0.2, 0.06), "right_m": (1.75, -0.2, 0.06), "insertion_yaw_rad": 0.0}
+    return {"scene_id": "synthetic", "case": "S7", "shape_key": "nonstandard", "target": target,
+            "frames": [{"t_s": t, "pose": (0.0, 0.0, 0.0), "candidates": cands, "labels": labels,
+                        "faces": {0: {0: face}}} for t, cands, labels in frames]}
+
+
+def test_the_evaluator_selects_a_shadow_that_shows_without_a_new_reading():
+    # Codex: A (another pair) at 0.0 s only; the target B is A's layout shadow from 0.2 s; at 1.1 s nothing is
+    # read, A passes keep_s and is deleted, B shows -- the selection proxy has to pick it there
+    from tools import evaluate_track_sequences as E
+    bounds = TrackBounds.load(Path(__file__).resolve().parents[3] / "config/recognition_track_bounds.yaml")
+    a = _candidate((1.75, 0.0, 0.06), hypothesis="parametric:x", spacing=0.40, cid="a")
+    b = _candidate((1.75, 0.0, 0.06), hypothesis="parametric:x", spacing=0.56, cid="b")
+    frames = [(0.0, [a], {"a": (0, 0, (2, 1))})]
+    frames += [(t, [b], {"b": (0, 0, (1, 0))}) for t in (0.2, 0.4, 0.6, 0.8)]
+    frames += [(1.1, [], {})]
+    res = E.run(_record(frames), bounds, "V0", {}, seed=0)
+    assert not res["rows"][1]["initialised"]  # B is hidden while A lives
+    assert res["rows"][-1]["initialised"] and res["rows"][-1]["retained"]
