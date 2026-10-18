@@ -117,3 +117,11 @@ def test_the_saved_frames_recompute_every_stop_exactly(tmp_path):
     _stop(run, xs)
     pairs = RC.recompute(tmp_path, recognition=run.summary())
     assert len(pairs) == 1 and RC.differences(*pairs[0]) == []
+
+
+def test_a_frame_before_the_cameras_first_render_is_skipped():
+    run = _runtime()
+    run.record_step(24, 24 * DT, (0, 0, 0), (0, 0, 0), PALLET)
+    scene, ids = _render((0.0, 0.0, 0.0))
+    assert run.drive_frame(24, 24 * DT, None, None, ids, scene.intrinsics,
+                           scene.base_from_optical)["skipped"] == "depth_not_ready"

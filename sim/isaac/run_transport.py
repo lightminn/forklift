@@ -5109,10 +5109,11 @@ def drive(S, isaac) -> None:
             raw_ = np.array(perception_camera.get_depth(), copy=True)
             if raw_.ndim == 3 and raw_.shape[-1] == 1:
                 raw_ = np.squeeze(raw_, axis=-1)
-            depth_, _ = adapter.normalize_depth(raw_)
+            ready_ = raw_.shape == (far_intrinsics.height, far_intrinsics.width) and rgba_.ndim == 3
+            depth_ = adapter.normalize_depth(raw_)[0] if ready_ else None  # the camera's first renders are empty
             applied_ = slam["tracker"].applied if slam is not None else None
             far_runtime.drive_frame(
-                tick_, float(frame_["rendering_time"]) - initial_time, rgba_[:, :, :3], depth_,
+                tick_, float(frame_["rendering_time"]) - initial_time, rgba_[:, :, :3] if ready_ else None, depth_,
                 semantic_.instance_ids if semantic_.ready else None, far_intrinsics, perception_mount,
                 tuple(float(v) for v in applied_[0]) if applied_ is not None else (0.0, 0.0, 0.0))
 

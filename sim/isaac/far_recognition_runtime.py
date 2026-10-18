@@ -119,8 +119,9 @@ class FarRuntime:
         pixel_t = float(t_meta_s) - self.lag_steps * self.dt
         row = self.pose_at(pixel_t)
         record = {"leg": self.leg, "kind": "drive", "tick": int(tick), "t_meta_s": float(t_meta_s), "pixel_t_s": pixel_t}
-        if row is None or instance_ids is None:
-            record["skipped"] = "no_pose" if row is None else "semantic_not_ready"
+        if row is None or instance_ids is None or depth_m is None:
+            record["skipped"] = ("no_pose" if row is None else "depth_not_ready" if depth_m is None
+                                 else "semantic_not_ready")
             self.frame_records.append(record)
             return record
         scene = SceneInput(np.asarray(rgb, dtype=np.uint8), np.asarray(depth_m, dtype=float), intrinsics,
