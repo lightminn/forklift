@@ -247,6 +247,10 @@ class AsyncSlamLink:
 
     def __init__(self, client: SlamLinkClient, *, deadline_s: float = 1.0, queue_max: int = 20, clock=time.monotonic):
         self.client, self.deadline_s, self.queue_max, self.clock = client, float(deadline_s), int(queue_max), clock
+        # Never wait on the socket: the lockstep client's timeout would make an empty read wait it out (Codex D9
+        # impl P1); a send that does not go whole waits in _out for the next poll.
+        client.sock.setblocking(False)
+        self._out = b""
         self.queue: deque = deque()
         self.in_flight = None  # (scan, meta, sent_mono)
         self._buffer = b""
@@ -266,16 +270,24 @@ class AsyncSlamLink:
     def _pump(self) -> None:
         if self.in_flight is None and self.queue:
             scan, meta = self.queue.popleft()
-            try:
-                self.client.sock.sendall(encode_scan(scan))
-            except OSError as exc:
-                raise SlamLinkFailure(f"scan {scan.scan_id}: {exc}") from exc
+            self._out += encode_scan(scan)
             self.in_flight = (scan, meta, self.clock())
+        self._flush()
+
+    def _flush(self) -> None:
+        while self._out:
+            try:
+                sent = self.client.sock.send(self._out)
+            except (BlockingIOError, InterruptedError):
+                return
+            except OSError as exc:
+                raise SlamLinkFailure(f"sending a scan: {exc}") from exc
+            self._out = self._out[sent:]
 
     def _read(self) -> list[bytes]:
         try:
             while True:
-                chunk = self.client.sock.recv(65536, socket.MSG_DONTWAIT)
+                chunk = self.client.sock.recv(65536)
                 if not chunk:
                     raise SlamLinkFailure("the bridge closed the connection")
                 self._buffer += chunk
@@ -295,11 +307,14 @@ class AsyncSlamLink:
     def poll(self) -> list:
         """The replies in since the last call: (reply, meta, sent_mono, received_mono), in order."""
         out = []
+        self._flush()
         for body in self._read():
             now = self.clock()
             if self.in_flight is None:
                 raise SlamLinkFailure("a reply with no scan in flight")
             scan, meta, sent = self.in_flight
+            if now - sent > self.deadline_s:  # a late reply is no reply (Codex D9 impl P2)
+                raise SlamLinkFailure(f"scan {scan.scan_id}: no reply within {self.deadline_s:.2f} s")
             try:
                 reply = decode_reply(body)
             except (ValueError, KeyError) as exc:

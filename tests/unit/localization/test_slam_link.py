@@ -228,3 +228,26 @@ def test_a_reply_to_another_scan_fails_the_link():
     bridge.sendall(_sl.encode_reply(_sl.Reply(7, 0.7, "skipped", (0.0, 0.0, 0.0), 1, 0.0)))
     with pytest.raises(_sl.SlamLinkFailure, match="reply for scan 7"):
         link.poll()
+
+
+def test_an_empty_poll_never_waits_even_on_the_lockstep_client_s_timeout_socket():
+    """Codex D9 impl P1: the lockstep client's socket has a timeout; the link must not wait it out."""
+    import time as _time
+
+    link, bridge, now = async_pair()
+    link.client.sock.settimeout(5.0)
+    link = _sl.AsyncSlamLink(link.client, clock=lambda: now[0])  # takes the socket over as the runner does
+    link.enqueue(scan_of(0), {})
+    started = _time.perf_counter()
+    assert link.poll() == []
+    assert _time.perf_counter() - started < 0.05
+
+
+def test_a_reply_that_comes_after_the_deadline_is_no_reply():
+    """Codex D9 impl P2: the deadline is checked before a reply is taken."""
+    link, bridge, now = async_pair(deadline_s=1.0)
+    link.enqueue(scan_of(0), {})
+    answer(bridge)
+    now[0] = 1.01
+    with pytest.raises(_sl.SlamLinkFailure, match="no reply within"):
+        link.poll()

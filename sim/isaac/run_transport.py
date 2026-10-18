@@ -5337,7 +5337,6 @@ def drive(S, isaac) -> None:
 
                 core.jobs = PlanWorker()
                 state["async_plan_worker"] = {"pid": core.jobs.proc.pid}
-            live.start()
             core.hooks.live_abort = lambda: live.stopped_in_tick  # the core stops right after a raw capture
 
             live_marker_ = None
@@ -5442,6 +5441,18 @@ def drive(S, isaac) -> None:
                 live_timers.wrap(TimedGrid, "snapshot", "grid.snapshot", by_caller=True)
                 live_timers.wrap(TimedShadow, "apply", "shadow.apply")
                 live_timers.wrap(TimedShadow, "_move", "shadow.move")  # real-time plan D9d: is the 0.27 s spike the move?
+                # D9d: the move was not it (d9a_1: 114 calls, at most 14 ms); time Python's garbage collections.
+                import gc as live_gc_
+
+                gc_started_ = {}
+
+                def live_gc_timer(phase, info):
+                    if phase == "start":
+                        gc_started_["t"] = time.perf_counter()
+                    elif "t" in gc_started_:
+                        live_timers.add(f"gc.gen{info.get('generation')}", time.perf_counter() - gc_started_.pop("t"))
+
+                live_gc_.callbacks.append(live_gc_timer)
                 for name_ in ("update", "allowed_speed", "check_path", "check_arc"):
                     live_timers.wrap(timed_permission.DrivePermission, name_, f"permission.{name_}", by_caller=True)
             for name_, value_ in list(vars(type(core)).items()):  # every public step of the mission core
@@ -5606,7 +5617,9 @@ def drive(S, isaac) -> None:
                                    "prewarm_sim_s": float(world.current_time - initial_time),
                                    "prewarm_wall_s": time.monotonic() - prewarm_wall_,
                                    "reply_deadline_s": SLAM_LIVE_REPLY_DEADLINE_S, "queue_max": SLAM_LIVE_QUEUE_MAX,
-                                   "tracker_max_age_s": slam["tracker"].max_age_s}
+                                   "tracker_max_age_s": slam["tracker"].max_age_s, "max_depth": 0}
+        if live is not None:
+            live.start()  # after the SLAM warm-up: the console sees the first control tick next (Codex D9 impl P3)
 
         for step in range(int(120 * args.max_sim_seconds)):
             if early_ports:
@@ -5662,6 +5675,16 @@ def drive(S, isaac) -> None:
             # Ground truth checks, evaluates and renders; control below uses
             # `rear`/`signed_speed`, which --slam-feedback replaces.
             truth_rear = rear
+            if slam is not None and slam.get("async_link") is not None:
+                # Real-time plan D9a: the SLAM replies in since the last tick, applied before this tick's control
+                # pose is read and before any mission work (the grid re-projected with them there).
+                try:
+                    replies_ = slam["async_link"].poll()
+                except slam["module"].SlamLinkFailure as exc:
+                    require(False, f"slam_link_failed: {exc}")
+                if replies_:
+                    core.slam_replies(t, replies_, ms.phase in ["lift", "extract", "transport", "lower"])
+                    state["slam_async"]["max_depth"] = slam["async_link"].max_depth
             if slam is not None:
                 rear = slam_rear(t)
                 signed_speed = slam["tracker_speed"]
@@ -5857,14 +5880,6 @@ def drive(S, isaac) -> None:
                         minima[side] = gap
             requested_speed, curvature = 0.0, 0.0
             tracking = None
-            if slam is not None and slam.get("async_link") is not None:
-                # Real-time plan D9a: the SLAM replies in since the last tick, applied before any mission work.
-                try:
-                    replies_ = slam["async_link"].poll()
-                except slam["module"].SlamLinkFailure as exc:
-                    require(False, f"slam_link_failed: {exc}")
-                if replies_:
-                    core.slam_replies(t, replies_, loaded)
             # M-a1 slice 5: the release gate at the tick's start is the core's.
             gate_ = core.release_gate(t, rear)
             releasing, warming, rear = gate_.releasing, gate_.warming, gate_.rear
@@ -5895,6 +5910,11 @@ def drive(S, isaac) -> None:
                             live_abort_ = True
                         else:
                             core.observation_freeze(t, captured_)
+                            rear = captured_.rear  # the estimate now, after the capture's own release
+                            if captured_.rear_stamp is not None:
+                                rear_stamp = captured_.rear_stamp
+                            if slam is not None:
+                                slam["control"][-1][1:4] = rear.tolist()
                 elif core.observation_live is not None and not plan_wait_:
                     plan_wait_ = True
                     captured_ = core.observation_take(t)

@@ -1297,11 +1297,12 @@ class MissionCore:
                      "position_error_m": tracking.position_error_m, "yaw_error_rad": tracking.yaw_error_rad}
                 )
                 dock_at_delivery_straight(t)
-                rear = slam_rear(t)  # a retry may have released the correction
-                hooks.set_rear(rear)  # the runner's closures (grid_kwargs, ...) read its rear (Codex slice-3 P2)
-                slam["control"][-1][1:4] = rear.tolist()
-                tracking = trackers[ms.phase].update(rear, signed_speed, dt)
-                ms.last_tracking = tracking
+                if not (self.jobs is not None and self.job_pending()):  # D9b: else the match is asked; it stands
+                    rear = slam_rear(t)  # a retry may have released the correction
+                    hooks.set_rear(rear)  # the runner's closures (grid_kwargs, ...) read its rear (Codex slice-3 P2)
+                    slam["control"][-1][1:4] = rear.tolist()
+                    tracking = trackers[ms.phase].update(rear, signed_speed, dt)
+                    ms.last_tracking = tracking
         else:
             ms.dock_stop_ticks = 0
         goal_heading_miss = (
@@ -3803,8 +3804,10 @@ class MissionCore:
         # Delivery corrections of ~10 cm are the point of docking (seed 0: 92 mm),
         # so the box is wider than the insertion one; what makes it safe is the
         # dry run arriving AND its swept loaded footprint staying clear.
+        # D9b: an asynchronous match is placed with the estimate it was matched on, but the straight starts where
+        # the truck stands when it is taken (Codex D9 impl P2).
         straight, offsets = straight_from_pose(
-            PlanningPose(*estimate),
+            PlanningPose(*(estimate if answer is None else tuple(float(v) for v in rear))),
             PlanningPose(*line_start),
             PlanningPose(*goal),
             max_lateral_m=0.12,

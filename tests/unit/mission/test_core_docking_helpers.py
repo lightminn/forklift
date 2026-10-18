@@ -497,3 +497,20 @@ def test_a_dropped_real_time_match_leaves_the_docking_armed_to_be_asked_again(tm
     assert "rounds" not in w.slam["docking"] and w.state["async_plan_drops"] == {"dock": 1}
     w.core.dock_at_delivery_straight(13.1)  # the next arrival asks again
     assert [n for n, _ in w.core.jobs.submitted] == ["dock", "dock"]
+
+
+def test_a_real_time_match_redraws_the_straight_from_where_the_truck_stands_when_it_is_taken(tmp_path, monkeypatch):
+    """Codex D9 impl P2: placed with the estimate it was matched on, started from the pose it is taken at."""
+    w = async_docking_world(tmp_path, monkeypatch)
+    starts = []
+    inner = w.hooks.straight_from_pose
+    w.hooks.straight_from_pose = lambda start, line_start, goal_, **k: starts.append(
+        (start.x_m, start.y_m, start.yaw_rad)) or inner(start, line_start, goal_, **k)
+    w.core.dock_at_delivery_straight(12.0)
+    w.hooks.rear = lambda: np.array([8.015, 0.005, 0.0])  # it stood 16 mm on while the match ran
+    match = SimpleNamespace(accepted=True, reason="ok", correction=[0.0], starts=[(True, "ok", (0.0, 0.0, 0.0))],
+                            start_details=[{"iterations": 3}], goal_estimate=(9.05, 0.02, 0.01),
+                            relative_rear=(-1.0, 0.0, 0.0))
+    w.core.jobs.answers[1] = (True, {"result": match, "wall_s": 1.1})
+    w.core.job_hold(13.3, np.array([8.015, 0.005, 0.0]), 0.0, False)
+    assert starts == [pytest.approx((8.015, 0.005, 0.0))]
