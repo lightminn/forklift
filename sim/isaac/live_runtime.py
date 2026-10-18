@@ -16,7 +16,7 @@ import secrets
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
@@ -74,7 +74,8 @@ class LiveRuntime:
         self.scene = {"damaged": None}  # the runner latches the scene's damage here (plan D6); in every state
         self.dt = dt
         self.session_epoch = session_epoch if session_epoch is not None else secrets.randbits(48)  # a job, an epoch
-        self.arbiter = Arbiter(self.session_epoch, config or ArbiterConfig(tick_s=dt),
+        # Reliable requests are judged by the request ledger here: a session lives long (persistent console plan D7).
+        self.arbiter = Arbiter(self.session_epoch, replace(config or ArbiterConfig(tick_s=dt), request_tokens=True),
                                lambda: secrets.token_hex(16), mission=core.commands)
         self.channels = Channels()
         self.link = Link(self.arbiter, self.channels)

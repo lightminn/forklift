@@ -63,6 +63,8 @@ class Probe:
         await self.ws.send(json.dumps({"t": "hello", "api": API, "client_id": self.client_id}))
         welcome = json.loads(await self.ws.recv())
         self.epoch = welcome["session_epoch"]
+        # persistent console plan D7: the connection's request token, its seq (a reconnect gets a new token)
+        self.request_token, self.request_seq = welcome.get("request_token"), 0
         self.event("welcome", session_epoch=self.epoch, capabilities=welcome.get("capabilities"))
         self._reader = asyncio.create_task(self._read(self.ws))
         if getattr(self, "_echoer", None) is None:
@@ -153,6 +155,9 @@ class Probe:
         self.n += 1
         rid = f"r{self.n}"
         msg = {"t": kind, "request_id": rid, "session_epoch": self.epoch, **fields}
+        if kind != "stop" and getattr(self, "request_token", None) is not None:
+            self.request_seq += 1
+            msg.update(request_token=self.request_token, request_seq=self.request_seq)
         if kind not in ("stop", "lease_request"):
             msg.setdefault("lease_id", self.lease_id)
             msg.setdefault("control_gen", self.control_gen)

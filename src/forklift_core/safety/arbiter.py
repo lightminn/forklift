@@ -18,7 +18,7 @@ from typing import Callable
 from forklift_core.localization.slam_pose import StopDetector
 from forklift_core.mission.commands import ACTIVE, FINAL, Cancel, HoldOff, HoldOn, Resume, Submit
 
-from .generations import PENDING, RequestBook
+from .generations import PENDING, RequestBook, RequestLedger
 from .ledger import FrameLedger, TickLedger
 from .teleop_drive import TeleopDrive, TeleopLimits
 from .teleop_policy import Policy, teleop_policy
@@ -41,6 +41,9 @@ class ArbiterConfig:
     video_max_age_s: float = 0.5
     camera_latency_bound_s: float = 0.15
     request_capacity: int = 4096
+    # Persistent console plan D7 (stage 4c): reliable requests carry the connection's token and a seq, judged by the
+    # request ledger (a live runtime); without it the request-id store of M-b (the unit tests, the fake vehicle).
+    request_tokens: bool = False
     frame_window_s: float = 5.0
     feedback_max_age_s: float = 0.1
     not_stopped_s: float = 10.0  # the mission's E3 limit: not standing by then is a fault (B5)
@@ -97,6 +100,9 @@ class Arbiter:
         self.ticks = TickLedger(max(config.command_max_age_s, config.lease_timeout_s), token_source)
         self.frames = FrameLedger(config.frame_window_s)
         self.requests = RequestBook(config.request_capacity)
+        self.ledger = RequestLedger()  # persistent console plan D7: used when config.request_tokens
+        self._ledger_key: tuple | None = None  # the request being run's (token, seq), kept by a pending one
+        self._cycle_mono = 0.0  # the cycle's time, for a pending request confirmed in it
         self.clients: dict[str, bool] = {}  # connected client -> its connection may control (contract 10)
         self.conns: dict[str, str | None] = {}  # connected client -> its current connection
         self.pacing_ok = True  # the live runner's pacing (M-c plan C2): TELEOP drives only while it holds
@@ -129,8 +135,10 @@ class Arbiter:
         self._drive_fresh = False  # TELEOP just entered: the output curvature starts from the measured one
 
     # --- connections and the lease ------------------------------------------------------------------------------
-    def connect(self, client_id: str, now_mono: float, *, control: bool = True, conn_id: str | None = None) -> dict:
-        """A client's connection; with ``conn_id`` it becomes that client's current connection (M-c plan C2)."""
+    def connect(self, client_id: str, now_mono: float, *, control: bool = True, conn_id: str | None = None,
+                token: int | None = None) -> dict:
+        """A client's connection; with ``conn_id`` it becomes that client's current connection (M-c plan C2); with
+        ``token`` (issued for it, persistent console plan D7) its requests are judged by the ledger."""
         self._expire(now_mono)
         previous = self.conns.get(client_id)
         if (conn_id is not None and client_id in self.clients and previous != conn_id and self.lease is not None
@@ -140,7 +148,13 @@ class Arbiter:
             self._lose_lease(now_mono, "reconnected", reserve=True)
         self.clients[client_id] = bool(control)
         self.conns[client_id] = conn_id
-        return {"t": "welcome", "api": "console/1", "session_epoch": self.session_epoch}
+        welcome = {"t": "welcome", "api": "console/1", "session_epoch": self.session_epoch}
+        if token is not None:
+            if self.ledger.register(token, client_id, conn_id, now_mono):
+                welcome["request_token"] = token
+            else:  # no room for another connection's results: its requests are refused stale
+                self.events.append({"t": now_mono, "event": "token_refused", "client_id": client_id})
+        return welcome
 
     def disconnect(self, client_id: str, now_mono: float, conn_id: str | None = None) -> None:
         """A connection closed. An earlier connection of the same client closing late changes nothing (Codex M-c
@@ -228,6 +242,8 @@ class Arbiter:
                 return self._reply(kind, request_id, "unsupported")
             self.stop(now_mono, f"stop:{msg.get('source', 'console')}")
             return self._reply(kind, request_id)
+        if self.config.request_tokens or "request_token" in msg:
+            return self._handle_ledger(client_id, kind, msg, now_mono, conn_id)
         # 1. Handled before: its original answer, without running it again or checking generations.
         stored = self.requests.get(client_id, request_id)
         if stored is not None:
@@ -237,6 +253,26 @@ class Arbiter:
             return self._reply(kind, request_id, "busy")
         result = self._run(client_id, kind, msg, now_mono)
         self.requests.put(client_id, request_id, result if result is not None else PENDING)
+        return result
+
+    def _handle_ledger(self, client_id, kind, msg, now_mono, conn_id):
+        """Persistent console plan D7: admitted by the connection's token and seq before it runs; a forgotten request
+        (its result purged) is stale, never run again."""
+        request_id, token, seq = msg["request_id"], msg.get("request_token"), msg.get("request_seq")
+        if not (isinstance(token, int) and isinstance(seq, int)) or isinstance(token, bool) or isinstance(seq, bool):
+            return self._reply(kind, request_id, "invalid")
+        conn = conn_id if conn_id is not None else self.conns.get(client_id)
+        verdict, stored = self.ledger.admit(token, client_id, conn, seq)
+        if verdict == "stored":
+            return None if stored == PENDING else stored
+        if verdict in ("stale", "busy"):
+            return self._reply(kind, request_id, verdict)  # not stored: a stale or busy request did not run
+        self._ledger_key = (token, seq)
+        try:
+            result = self._run(client_id, kind, msg, now_mono)
+        finally:
+            self._ledger_key = None
+        self.ledger.put(token, seq, result if result is not None else PENDING, now_mono)
         return result
 
     def _reply(self, kind: str, request_id, reason: str | None = None, **fields) -> dict:
@@ -505,6 +541,9 @@ class Arbiter:
         status = self.mission.status if self.mission is not None else "idle"
         self.provisional_auto = False
         self._context_gen = self.control_gen
+        self._cycle_mono = now_mono
+        if self.config.request_tokens:
+            self.ledger.purge(now_mono)  # once a cycle; bounded by the ledger's own limits (D7)
         if self.mission is not None:
             # The hold follows the cycle's final mode, once, in the mission's own time (Codex M-b review P2/P2:
             # queuing at each transition replayed TELEOP-then-STOP in the wrong order and the vehicle clock).
@@ -537,6 +576,7 @@ class Arbiter:
         """After the mission's tick: answer the queued requests from the lifecycle's records, then keep AUTO only
         while the mission is in a state AUTO stays in (its state after the tick -- a resume accepted at the tick's
         start can be refused by the same tick's checks). Returns the replies made."""
+        self._cycle_mono = now_mono
         by_id = {r.get("request_id"): r for r in records if r.get("request_id") is not None}
         took_auto = False
         for p in self.pending:
@@ -565,7 +605,10 @@ class Arbiter:
 
     def _settle(self, p: dict, reply: dict) -> None:
         p["settled"] = True
-        self.requests.put(p["client_id"], p["request_id"], reply)
+        if p.get("ledger_key") is not None:  # confirmed where it was admitted, whatever connection is current now
+            self.ledger.put(*p["ledger_key"], reply, self._cycle_mono)
+        else:
+            self.requests.put(p["client_id"], p["request_id"], reply)
         self.outbox.append(dict(reply, client_id=p["client_id"], conn_id=p.get("conn_id")))
 
     def step(self, now_mono: float, safety: dict | None, candidate: tuple[float, float],
@@ -660,7 +703,8 @@ class Arbiter:
         if self.mission is None:
             return self._reply(kind, request_id, "unsupported")
         self.pending.append({"client_id": client_id, "conn_id": self._handling_conn, "request_id": request_id,
-                             "kind": kind, "command": command, "control_gen": self.control_gen, "queued": False})
+                             "kind": kind, "command": command, "control_gen": self.control_gen, "queued": False,
+                             "ledger_key": self._ledger_key})  # its result goes where it was admitted (D7)
         return None  # answered by resolve, this cycle
 
     def _on_mission_submit(self, client_id, request_id, msg, now_mono):

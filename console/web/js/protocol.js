@@ -5,7 +5,7 @@
 export const API = "console/1";
 const STALE = new Set(["stale_epoch", "stale_lease", "stale_control", "stale_arm", "stale_seq"]);
 
-export function createSession({ clientId, send, now, newId, retryMs = 500 }) {
+export function createSession({ clientId, send, now, newId, retryMs = 500, onStaleToken = () => {} }) {
   let epoch = null;
   let leaseId = null;
   let controlGen = null;
@@ -18,6 +18,10 @@ export function createSession({ clientId, send, now, newId, retryMs = 500 }) {
   let welcome = null;
   let reclaim = false; // held the lease when the connection dropped
   let targets = null;
+  // persistent console plan D7: the connection's request token (from its welcome) and its seq; none from a back end
+  // that gives none (the fake vehicle)
+  let requestToken = null;
+  let requestSeq = 0;
   const pending = new Map(); // request_id -> {msg, resolve, lastSent}
   const listeners = new Set();
 
@@ -59,6 +63,8 @@ export function createSession({ clientId, send, now, newId, retryMs = 500 }) {
         }
         epoch = msg.session_epoch;
         welcome = msg;
+        requestToken = Number.isInteger(msg.request_token) ? msg.request_token : null;
+        requestSeq = 0; // a new token, its own seq
         if (reclaim) {
           reclaim = false;
           // a lease request sent on the old connection may be answered from the vehicle's
@@ -82,11 +88,18 @@ export function createSession({ clientId, send, now, newId, retryMs = 500 }) {
         if (msg.lease && msg.lease.holder !== clientId) leaseId = null;
         break;
       case "ack":
-      case "reject":
+      case "reject": {
         if (typeof msg.lease_id === "string") leaseId = msg.lease_id;
         if (typeof msg.arm_gen === "number") armGen = msg.arm_gen;
+        // stale (the ledger forgot it, or not this connection's token): an older connection's request just ends;
+        // this connection's own token stale means the vehicle no longer knows it -- a new connection is needed
+        const asked = pending.get(msg.request_id);
+        const current = msg.reason === "stale" && asked && requestToken !== null
+          && asked.msg.request_token === requestToken;
         settle(msg.request_id, msg);
+        if (current) onStaleToken();
         break;
+      }
       case "targets":
         targets = msg;
         break;
@@ -102,6 +115,10 @@ export function createSession({ clientId, send, now, newId, retryMs = 500 }) {
     if (epoch !== null) msg.session_epoch = epoch;
     if (leaseId !== null) msg.lease_id = leaseId;
     if (controlGen !== null) msg.control_gen = controlGen;
+    if (requestToken !== null) {
+      msg.request_token = requestToken;
+      msg.request_seq = ++requestSeq; // a resend is this same message
+    }
     Object.assign(msg, fields);
     return new Promise((resolve) => {
       pending.set(msg.request_id, { msg, resolve, lastSent: now() });

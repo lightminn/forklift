@@ -28,11 +28,19 @@ class Channels:
         self._latest: dict = {}
         self._out: deque = deque()
         self.notify = notify  # called (any thread) when something is put out; the server wakes its loop
+        self._next_token = 0  # persistent console plan D7: the request tokens, one per connection, never reused
 
     # --- the server thread ------------------------------------------------------------------------------------------
-    def connect(self, conn_id: str, client_id: str, control: bool = True) -> None:
+    def issue_token(self) -> int:
+        """A connection's request token (persistent console plan D7): issued here, on the server's thread, so its
+        welcome can carry it at once; registered in the ledger by the connect event, before any of its requests."""
         with self._lock:
-            self._conns.append(("connect", conn_id, client_id, control))
+            self._next_token += 1
+            return self._next_token
+
+    def connect(self, conn_id: str, client_id: str, control: bool = True, token: int | None = None) -> None:
+        with self._lock:
+            self._conns.append(("connect", conn_id, client_id, {"control": control, "token": token}))
 
     def disconnect(self, conn_id: str, client_id: str) -> None:
         with self._lock:
@@ -124,7 +132,8 @@ class Link:
 
     def _conn_event(self, kind, conn_id, client_id, extra, now, where):
         if kind == "connect":
-            welcome = self.a.connect(client_id, now, control=bool(extra), conn_id=conn_id)
+            control, token = (extra["control"], extra["token"]) if isinstance(extra, dict) else (extra, None)
+            welcome = self.a.connect(client_id, now, control=bool(control), conn_id=conn_id, token=token)
             self.conn_of[client_id] = conn_id
             self.log.append({"mono": now, "where": where, "conn": conn_id, "t": "connect",
                              "epoch": welcome["session_epoch"]})

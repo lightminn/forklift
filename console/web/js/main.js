@@ -119,7 +119,10 @@ function cameraLeftScreen() {
 }
 const frames = createFrameTracker({ raf: (cb) => requestAnimationFrame(cb), visible: cameraVisible });
 const clientId = tabClientId();
-m.session = createSession({ clientId, send, now: () => performance.now(), newId: randomId });
+// the vehicle no longer knows this connection's request token (persistent console plan D7): a new connection gets
+// a new one (the close handler reconnects)
+m.session = createSession({ clientId, send, now: () => performance.now(), newId: randomId,
+  onStaleToken: () => control?.close() });
 try {
   if (shouldReclaim(sessionStorage.getItem("console.held_lease"), clientId)) m.session.expectReclaim();
 } catch {

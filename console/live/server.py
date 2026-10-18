@@ -104,9 +104,10 @@ class LiveHandle(wire.ControlOutboxMixin, wire.MediaFanoutMixin):
             return
         conn_id = uuid.uuid4().hex
         self.attach_control(conn_id, ws, client_id)
-        self.channels.connect(conn_id, client_id, True)
+        token = self.channels.issue_token()  # this connection's (persistent console plan D7)
+        self.channels.connect(conn_id, client_id, True, token)
         try:
-            self._send_control(conn_id, self.welcome)
+            self._send_control(conn_id, dict(self.welcome, request_token=token))  # a copy: the shared one stays
             for kind in ("targets", "missions"):  # the current list, as the fake vehicle does after welcome, and
                 item = self.store.get(kind)  # the session's mission results (persistent console plan D1)
                 if item is not None:

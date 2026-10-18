@@ -45,6 +45,19 @@
 
 결과 저장 기간은 해당 `session_epoch`가 끝날 때까지다. 저장 상한(개수·메모리)에 닿으면 저장된 결과를 버리지 않고 새 신뢰 요청을 `reject(busy)`로 받지 않는다. 버린 `request_id`의 재전송을 새 요청과 구분할 수 없게 되는 것을 피하려는 것이다(STOP은 0번대로 영향을 받지 않는다). `request_id`는 클라이언트가 만드는 예측할 수 없는 값이며, 재사용하지 않는다.
 
+**요청 원장(상시 세션, 2026-10-18 추가 — 위 1·2번과 저장 기간을 대신한다).** 계속 띄워 두는 세션에서는 위 규칙대로면 저장소가 결국 다 차서 모든 새 요청이 `busy` 가 된다. 그래서 실시간 실행기(Isaac live)는 다음 원장으로 판정한다(`forklift_core/safety/generations.py` 의 `RequestLedger`, 계획 `docs/plans/2026-10-18-persistent-live-console.md` D7).
+- `welcome` 에 `request_token`(정수)을 싣는다. 연결마다 새로 주고, 다시 쓰지 않는다.
+- STOP 이 아닌 신뢰 요청은 `request_token` 과 `request_seq`(그 토큰 안의 단조 정수, 텔레옵 `seq` 와 별개)를 싣는다. 재전송은 같은 메시지다. `request_id` 는 회신 짝 맞추기에 그대로 쓴다.
+- 원장은 실행 전에 판정한다.
+  - 저장된 결과가 있으면 그것을 돌려준다.
+  - 이 연결의 토큰이 아니거나(다른 클라이언트, 지난 연결, 위조) `request_seq` 가 워터마크 이하이면 `reject(stale)` 이다. 실행하지 않고 저장하지 않는다.
+  - 상한에 닿으면 `reject(busy)` 다.
+  - 결과는 확정 뒤 60 s 가 지나면 순번 순으로 지우고 워터마크를 올린다. 결과가 아직 정해지지 않은 미션 요청에서 멈춘다.
+- 다시 연결하면 그 클라이언트의 옛 토큰은 새 요청을 받지 않는다. 살아 있는 토큰은 64개까지다.
+- 클라이언트는 지난 토큰의 `stale` 을 받으면 그 요청만 끝낸다. 지금 토큰이 `stale` 이면 다시 연결해 새 토큰을 받는다.
+- 토큰이 없는 back end(가짜 차량)는 위 1·2번대로 동작하고, 클라이언트도 토큰 없이 보낸다.
+- STOP 은 토큰이 없거나 낡아도 언제나 실행한다(0번).
+
 **버전.** 첫 메시지에서 `api: "console/1"`을 맞춘다. 맞지 않으면 연결을 거부한다.
 
 ## 2. 연결과 권한
@@ -174,7 +187,7 @@ lease 보유자는 `tick`을 받을 때마다 `{"t": "echo", "session_epoch", "l
 
 **구현 상태(M-a4, 2026-10-16).** `forklift_core/mission/targets.py` 의 `TargetsBook` 이 위 규칙을 구현한다: 등록·자세·상태·보정 버전이 바뀌면 revision 이 오르고(같은 값이면 오르지 않음), `carried` 는 자세를 싣지 않으며 그동안의 자세 갱신은 무시하고, 내려놓으면 같은 ID 로 그 자리에 `delivered` 로 다시 싣는다. 보정 버전이 바뀌면 자세를 다시 표현하는 함수를 받아 모두 옮기고 revision 을 올린다(배치 실행기에서는 보정 버전이 SLAM release 횟수다 — 추적 중에는 보정이 스캔마다 바뀌어도 지도 자세가 뛰지 않고, release 때 코어가 추정치를 새 프레임으로 옮긴다. 목적지와 내려놓은 팔레트는 코어가 지금 쓰는 목적지 추정(도킹 보정, release 재표현)을 매 틱 따른다). `mission_submit` 은 revision 이 다르면 `reject(stale_targets)`, 없는 ID 나 이미 실린 팔레트는 `reject(invalid)`. 배치 실행기는 시나리오의 팔레트·목적지를 `P-1`·`D-1` 로 등록해 스스로 제출한다.
 
-**거부 사유 코드(초안).** `no_lease`, `lease_reserved`, `stale_epoch`, `stale_lease`, `stale_control`, `stale_arm`, `stale_seq`, `bad_echo`, `expired`, `stale_video`, `not_armed`, `stopped_locked`, `state_forbids_teleop`, `stale_targets`, `permission_denied:<허가 reason>`, `no_feedback:<항목>`, `unsupported`, `busy`, `invalid`.
+**거부 사유 코드(초안).** `no_lease`, `lease_reserved`, `stale_epoch`, `stale_lease`, `stale_control`, `stale_arm`, `stale_seq`, `bad_echo`, `expired`, `stale_video`, `not_armed`, `stopped_locked`, `state_forbids_teleop`, `stale_targets`, `stale`(요청 원장: 잊었거나 남의 토큰), `mission_active`·`session_ending`(세션 종료·장면 초기화), `scene_damaged`, `recovery_required`, `permission_denied:<허가 reason>`, `no_feedback:<항목>`, `unsupported`, `busy`, `invalid`.
 
 ## 6. 상태 메시지
 

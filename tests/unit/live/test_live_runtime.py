@@ -628,3 +628,8 @@ def test_the_runner_leaves_its_loop_on_a_session_request_with_its_exit_code():
     head = flat[flat.index("if live is not None and live.arbiter.session_request is not None:"):][:400]
     assert 'state["live_session_request"] = live.arbiter.session_request break' in head
     assert '{"end": 0, "reset": 3}' in flat and 'raise SystemExit(state.get("live_exit_code", 0) if state["success"] else 1)' in flat
+
+
+def test_a_live_runtime_judges_requests_by_the_ledger(tmp_path):
+    rt, core, did, clock = runtime(tmp_path)
+    assert rt.arbiter.config.request_tokens is True
