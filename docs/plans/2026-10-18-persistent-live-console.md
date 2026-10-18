@@ -432,52 +432,74 @@ D2 의 `mission_start` 는 작업자 작업 `observe_ladder` 로 한다. 이름 
 
 §5-2 의 나머지 계약 추가는 메인이 PR 때 본다.
 
-### D2 구현 설계 (2단계, 2026-10-18, 1단계 cc90aca·0c4a08d 수렴 뒤)
+### D2 구현 설계 (2단계, 2026-10-18, 1단계 cc90aca·0c4a08d 수렴 뒤; 2판 — Codex 설계 검토 1회차 반영)
 
 **명령 상태.**
-- `preparing` 을 `ACTIVE` 에 더한다. 흐름은 `accepted → preparing → running` 이다.
-- `preparing` 에서는 미션 일을 하지 않는다. 그 틱은 계획 대기와 같이 선다.
-- 취소는 `accepted` 와 같이 곧바로 `cancelled` 다. 아무것도 움직이지 않았기 때문이다.
-- 중재기 STOP 은 `failed: prepare:stopped` 다(D2 "STOP 이면").
-- `hold_on`(TELEOP 진입)은 `failed: prepare:teleop` 다. 수동으로 움직인 뒤 다시 제출하면 된다. held 에서 재개하는 경로를 준비 중에 만들지 않는다.
+- `preparing` 을 `ACTIVE` 와 중재기 `AUTO_STATUSES` 에 더한다. `hold_on` 대상에도 넣는다. 흐름은 `accepted → preparing → running` 이다(Codex P2-3: AUTO_STATUSES 가 따로 있어 빠지면 AUTO 에 못 간다).
+- 실행기는 상태가 `accepted`·`preparing` 이면 `pending` 이 있든 없든 그 틱을 계획 대기로 세운다(`plan_wait_`). `paused_` 는 거짓으로 둔다. paused 로 두면 `job_hold` 가 준비 작업을 버린다.
+- 취소는 `accepted` 와 같이 곧바로 `cancelled` 다.
+- 중재기의 정지 종류가 `none` 이 아니면 준비를 끝낸다. `apply()` 안에서 `terminate` 한다.
+  - `preempt` 는 `failed: prepare:stopped` 다.
+  - `controlled` 는 `failed: prepare:paused` 다. PAUSED 요청이 여기 해당한다. AUTO→TELEOP 직행은 거절되므로 TELEOP 로 가려면 PAUSED 를 먼저 거친다.
+- `hold_on` 은 `failed: prepare:teleop` 다.
+- 이렇게 `apply()` 에서 끝난 미션은 `tick_start` 가 `end_mission` 으로 거둔다. 1단계의 '실행 전 취소 수거'를 FINAL 전체로 넓혀, 결과 기록·작업 폐기까지 한다(Codex P2-3).
+
+**제출 조건(임시, D4·D5 전까지).** 실시간 `Context.clear_for_submit` 은 지난 미션이 끝난 `ms.phase` 로 정한다(Codex P1-2: 부분 삽입 중 취소 뒤 재제출이 받아들여졌다).
+- `insert`·`lift`·`extract`·`transport`·`lower`·`withdraw` 이면 거짓이다. 이때 제출은 `recovery_required` 로 거절된다.
+- 근거는 `safety_state` 의 `fork_in_pocket`·`load` 와 같은 '단계 기준'이다.
+- D4·D5 가 포켓 점유·포크 관계로 바꾼다.
+
+**대상 목록.** `refresh_targets` 는 상태가 `accepted`·`preparing` 이면 아무것도 하지 않는다. 채택된 미션만 대상을 갱신한다(Codex P1-1: 준비 한 틱에 새 목적지 자리가 이전 시나리오 목적지로 덮였다).
 
 **요청.**
-- 자리: 지금의 첫 구간 재계획 자리(장애물 `control_rear` 와 철수 감시 뒤)다. 이 틱의 SLAM 응답 적용·재투영 뒤의 `rear` 다.
-- 호출: `core.prepare_request(t, rear, inputs)` → `_request("prepare", "observe_ladder", payload, …)`.
+- 자리: 지금의 첫 구간 재계획 자리(장애물 `control_rear` 와 철수 감시 뒤)다.
+- 조건: 상태가 `accepted`·`preparing` 이고 `pending` 이 없을 때. 최대 2회다(`core.prepare_attempts`).
+- 호출: `core.prepare_request(t, rear, inputs)` → `_request("prepare", "observe_ladder", …)`. 요청하면 `preparing` 이 된다.
 - payload:
   - `world = grid_world(미션 시나리오)`
-  - `waypoints` = 관찰 후보를 대상 팔레트로 옮긴 것(아래)
-  - `pickup_bounds=None`(홀 경계)
-  - 요청 틱의 `grid_kwargs("observe")`
-  - `deadline` = 요청 시각 + 2N × 20 s(N 후보 수, 이 호스트 monotonic)
-- 미션 시나리오: 세션 시나리오의 소품·경계에 `start_rear`=지금 `rear`, `pickup`=대상 목록의 팔레트 사전 자세, `destination`=대상 목록의 목적지 자세.
+  - `waypoints = relocate_waypoints(후보 원본, 기준, 대상 팔레트 사전 자세)`. 후보 원본은 실시간 시작 때 복사해 둔 **세션 소유의 불변 목록**이다(Codex P2-5: `options.observation_waypoints` 는 `args` 목록과 같은 객체라 두 번째 변환이 옮긴 후보를 다시 옮겼다).
+  - `pickup_bounds` = 관찰 경계(아래)
+  - `grid_kwargs("observe")` 를 요청 틱에 평가하되, `pickup_obstacle` 은 **새 팔레트의 사전 영역**으로 바꿔 넣는다(Codex P2-4: 지역 `pickup_zone`·`pickup_estimate` 는 옛 미션 것이고, 준비 중에 지역을 바꾸면 P4 를 어긴다).
+  - `deadline` = 요청 시각 + 2N × 20 s
+- 미션 입력은 요청 때 한 번 만들어 `pending.ctx` 에 둔다. 채택은 그 입력을 그대로 쓴다.
+  - 시나리오: 세션 소품·경계, `start_rear`=지금 `rear`, `pickup`=팔레트 사전 자세, `destination`=목적지 사전 자세
+  - 사전 영역, 경계, 참값 목적지, 옮긴 후보
 
-**관찰 후보 옮기기.** 새 순수 함수 `relocate_waypoints(waypoints, reference, target)`:
-- 기준 = 세션 시작의 `scenario.pickup`(첫 팔레트 사전 자세).
-- 각 후보에 강체 변환 `target ∘ reference⁻¹` 를 적용한다(자세와 방향 모두).
-- 첫 자리(target = reference)에서는 항등이라 지금 후보와 같다. CPU 시험으로 확인한다.
-- 배치는 쓰지 않는다.
+**사전 영역과 경계.**
+- 팔레트가 세션 시작의 사전 자리(`scenario.pickup`)에 있으면:
+  - 사전 영역 = 세션의 `pickup_zone`
+  - 접근·삽입 경계 = 세션의 `pickup_bounds`
+- 그 밖(배달된 팔레트):
+  - 사전 영역 = 사전 자세에 놓은, 팔레트보다 사방 0.3 m 큰 사각형
+  - 접근·삽입 경계 = `None`(홀)
+- **관찰 이동의 경계는 실시간에서 항상 홀(`None`)이다.** 대상은 준비·관찰 재계획(C927)·관찰 커스프 검사(C3255)다. 코어 옵션에 `observe_bounds` 를 두고, 배치는 지금처럼 `pickup_bounds` 와 같게 둔다(Codex P2-6: 준비만 홀이면 그 뒤 관찰 재계획과 커스프 검사가 같은 자리를 경계 밖으로 본다).
 
 **채택 검사(`_job_invalid` 의 prepare 갈래).**
 - 미션 세대, 상태 `preparing`, 보정(`applied`), SLAM 모드·hold 수, 정지, 자세(2 cm, 1°), 대상 revision 이 요청 때와 같아야 한다.
-- 다르면 한 번 다시 요청한다. 두 번째도 다르면 `failed: prepare:<사유>` 다.
+- 다르면 버리고(셈하지 않음) 다음 틱에 실행기가 새 입력으로 한 번 더 요청한다. 두 번째도 다르면 `failed: prepare:<사유>` 다.
 - 결과가 `None` 이면 다음 중 하나다:
   - `timed_out`: `failed: prepare:timeout`
   - 그 밖: `failed: prepare:all_candidates_failed:<status;…>`
-- 실패해도 세션 상태는 바꾸지 않는다(P4). 미션 시작 처리는 채택 때만 한다.
+- 실패해도 세션 상태는 바꾸지 않는다(P4).
 
-**채택 = 미션 시작 처리.** 두 부분으로 나눈다.
-- 코어 쪽 `core.start_mission(t, plan, inputs, ladder)`: D0 1–6절의 M0·N 항목이다(`ms`, 코어 속성, `obstacle` 미션 키, `slam` 도킹·시나리오 키, `near`·`pocket` 실행 키, `state` 미션 키, `options` 필드). 메인 합의 4: `next_candidate_index = selected + 1`, `observation_waypoint_selected`, `observation_candidates`, `planning_status`.
-- 실행기 쪽 훅 `hooks.live_mission_start(inputs)`:
-  - `drive()` 지역을 `nonlocal` 로 다시 묶는다: `scenario`, `truth_destination`, `initial_pallet`(지금 팔레트 참값), `pickup_obstacle`, `pickup_zone`(새 팔레트 자리 중심), `pickup_bounds`(원래 자리면 세션 값, 아니면 `None`), `return_to_pose`.
-  - `paths`·`trackers` 를 비우고(drain 뒤) 관찰 추적기를 셋업과 같은 설정으로 설치한다.
-  - 장애물 층 `known` 을 새 사전 영역으로 둔다.
-  - 도킹 참조 스캔을 새 목적지에서 다시 뜬다(R5545–5585 를 함수로 뽑아 셋업과 같이 쓴다).
+**채택 = 미션 시작 처리.**
+- 코어 쪽 `core.start_mission(t, plan, inputs, ladder)`: D0 1–6절의 M0·N 항목이다. 메인 합의 4 의 커서·기록과 `options` 필드(`scenario`, `return_to_pose`, `home_rear`, `observation_waypoints` 의 내용, `pickup_bounds`, `observe_bounds`, `pickup_zone`)를 포함한다.
+- 실행기 쪽 훅 `live_mission_start(inputs)`:
+  - `drive()` 지역을 `nonlocal` 로 다시 묶는다: `scenario`, `truth_destination`, `initial_pallet`, `pickup_obstacle`, `pickup_zone`, `pickup_bounds`, `return_to_pose`.
+  - 추적기 drain·비움 뒤 관찰 추적기를 설치한다.
+  - 층 `known` 은 `known_enabled` 일 때 새 사전 영역으로 둔다. `KnownRect` 는 값으로 쥐므로 새로 만든다.
   - 허가 캐시를 무효화한다.
+  - 도킹 참조 스캔은 새 목적지의 참값에서 다시 뜬다. 실시간에서는 **cast 한 자세(`delivery_rear_reference`)와 `reference_base_z_m` 를 언제나 함께 저장**한다(Codex P2-8: 반복 미션에서는 사전값이 참값과 갈라지는데, 사전값이 참조 자세 자리를 대신해 좌표 변환에 들어갔다). 계획용 사전값은 대상 목록의 목적지 자세다. cast 는 시작 처리 전에 끝내 실패가 상태를 바꾸지 않게 하고, 틱 비용을 잰다(P3).
 - 목적지의 참값:
   - `D-1` 은 세션 시나리오의 참 목적지다.
-  - `D-0` 은 세션 시작 때 팔레트의 참 자리(자세·방향)다. 세션 시작 때 대상 목록에 `D-0` 을 등록한다(사전 자세 = `scenario.pickup`).
-- 대기 자리: `return_to_pose`=`home_rear`=세션 시작의 `scenario.start_rear`(또는 `--live-wait-pose`). 복귀 목표 방향은 완화하지 않는다(사용자 결정 1·2).
+  - `D-0` 은 세션 시작 때 팔레트의 참 자리다. **실시간에서만** 등록한다(P3: 배치 targets revision 이 바뀐다).
+- 대기 자리: `return_to_pose`=`home_rear`=세션 시작의 `scenario.start_rear`(또는 `--live-wait-pose`). 복귀 목표 방향은 완화하지 않는다.
+
+**실시간 시작.**
+- 셋업의 동기 관찰 사다리를 실시간에서는 돌리지 않는다. 경로 없이 `idle` 로 시작한다(Codex P2-7: 다 실패하면 콘솔이 뜨기 전에 예외가 났다). 배치는 그대로다.
+- 실시간은 비동기 계획 작업자를 요구한다. `FORKLIFT_LIVE_ASYNC_PLAN=0` 이면 시작을 거부한다.
+
+**화면(최소).** `ui.js` 의 진행 중 목록에 `preparing` 을 넣어 취소 버튼과 중복 제출 막기를 맞춘다(P3). 표시 개선은 D13 에서 한다.
 
 **지우는 것.**
 - `live_first_replan_`, `live_last_rear_`, `Context.at_start`·`not_at_start`
@@ -487,12 +509,16 @@ D2 의 `mission_start` 는 작업자 작업 `observe_ladder` 로 한다. 이름 
 
 **시험.**
 - CPU:
-  - 명령 상태 전이(준비 중 취소·STOP·TELEOP·채택·재요청·실패)
-  - `relocate_waypoints` 의 항등·회전
-  - `start_mission` 뒤 미션 소유 상태가 첫 미션 시작 직후와 같음(U21 의 CPU 판, 가짜 코어로 D0 키 목록을 비교)
+  - 명령 상태 전이(준비 중 취소·preempt·controlled·hold_on·채택·재요청·실패, 같은 apply 의 종료 수거)
+  - 중재기가 `preparing` 에서 AUTO 를 유지함
+  - `refresh_targets` 가 준비 중 대상을 바꾸지 않음
+  - 포켓 단계에서 끝난 미션 뒤 제출이 `recovery_required` 로 거절됨
+  - `relocate_waypoints`: 항등·회전, 두 번 옮겨도 원본 기준
   - prepare 갈래 `_job_invalid`
-- 소스 시험: 실행기가 지운 임시 처리를 다시 쓰지 않음.
-- Isaac: U2·U3·U4·U5 는 4절의 시나리오로 돌린다.
+  - `start_mission` 뒤 미션 소유 상태가 첫 미션 시작 직후와 같음(U21 의 CPU 판)
+  - 관찰 경계가 배치에서 `pickup_bounds` 와 같음
+- 소스 시험: 실시간 시작이 셋업 사다리를 건너뜀, 지운 임시 처리가 남지 않음.
+- Isaac: U2·U3·U4·U5.
 
 ## 4. 유즈케이스와 시험
 
