@@ -396,6 +396,28 @@
   - 들린 상태에서 서 있을 때: 내리기만.
 - 중재기와 계약 변경이므로 사용자 확인과 메인 합의가 필요하다.
 
+### 구현 메모 — 메인 세션 의견(D8·D9 와 닿는 곳, 2026-10-18)
+
+- **`close_open`**: D8 의 대기 `waits` 는 `begin_wait` 가 연 마지막 항목이 `[t, None]` 인 꼴이다. `end_wait` 와 같은 방식으로 닫아야 `work_elapsed` 가 맞는다. `begin_wait` 는 열린 대기가 있으면 예외를 낸다. 새 미션에서는 `pauses`·`waits` 를 비워(미션 기록으로 옮긴 뒤) 이전 미션 대기가 작업 시계에 섞이지 않게 한다.
+- **`abandon_jobs`**: `_drop` 의 부작용은 사이트마다 다르다. release 는 `release_replan_needed` 를 다시 세우고, live_leg 는 `obstacle["live_replanned"][phase]=False`, dock·observe 는 부작용이 없다. 그래서 직접 처리한다. 순서:
+  1. `jobs.discard(p.job)`
+  2. `commands.end_wait(t)`
+  3. `async_plans[-1]` 에 `finished_s`·`dropped:"abandoned"` 를 기록한다.
+  4. `pending`·`release_replan_needed` 를 `None` 으로 둔다.
+  5. 함께 비운다: `fresh_depth_wait`, `capture_abandon()`, `observation_live`, `capture_acquired_s`.
+
+  `obstacle["live_retry_after_s"]` 는 미션 시작 초기화가 지운다.
+- **작업자 `_discarded` 회수는 시간으로 하지 않는다.** 회수 지점은 둘이다:
+  - 그 ID 의 답을 받아 버릴 때
+  - `_restart_process` 가 again 목록을 만들 때(`_sent` 에 없는 버린 ID)
+
+  대기열에 있던 작업이나 `_sent` 의 첫 번째가 아니던 작업은 늦게 오는 답을 막으려고 그때까지 남는다.
+- **turnaround 를 작업자로 옮기기**: `return_turnaround_kwargs()` 의 `arc_check` 클로저가 장애물 층을 그때그때 읽어서 pickle 할 수 없다. 요청 때 고정한 격자 스냅숏을 받는 순수 함수로 바꿔야 한다. 이 변경은 Codex 교차검증을 따로 받는다(D11 선행 조건).
+- **종료용 SLAM 해제**:
+  - 재투영은 D9 의 `MissionCore._reproject(t, applied_now, rear, loaded)` 를 쓴다. 추종기가 없는 단계는 자기 자세만 `path_ahead` 로 쓴다.
+  - 회계는 `slam["holds"]` 와 `obstacle["reprojections"]` 다.
+  - D9a 비동기에서는 해제 직후에도 대기열에 남은 답이 다음 틱 시작에 들어와 보정이 한 번 더 바뀔 수 있다. 미션 준비의 채택 검사(보정 버전)가 이것을 잡는다.
+
 ## 4. 유즈케이스와 시험
 
 시험은 세 층이다:
