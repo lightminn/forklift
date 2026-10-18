@@ -581,6 +581,10 @@ async def cycle_scenario(p: Probe, args):
     p.report["session"] = {"session_epoch": p.epoch, "lease_id": p.lease_id}
     await p.until(lambda s: p.targets is not None, 10, label="targets")
     await p.until(p.standing, 20, label="standing_at_start")
+    if args.idle_s > 0:  # plan U1: left up, nothing asked, the video subscribed (the frames are counted)
+        p.report["idle_start_mono"] = time.monotonic()
+        await p.keep_alive(args.idle_s)
+        p.report["idle_end_mono"] = time.monotonic()
     if args.pre_teleop_s > 0:
         p.report["pre_teleop"] = await teleop_drive(p, args.pre_teleop_s, args.pre_teleop_speed,
                                                     args.pre_teleop_curvature)
@@ -633,6 +637,7 @@ def main():
     ap.add_argument("--cycle", default="P-1:D-1,P-1:D-0,P-1:D-1", help="cycle scenario: pallet:destination,...")
     ap.add_argument("--pre-teleop-s", type=float, default=0.0, help="cycle scenario: drive by hand first (wall s)")
     ap.add_argument("--end-session", action="store_true", help="cycle scenario: end the session at the end")
+    ap.add_argument("--idle-s", type=float, default=0.0, help="cycle scenario: stay connected this long first (wall s)")
     ap.add_argument("--pre-teleop-speed", type=float, default=0.5)
     ap.add_argument("--pre-teleop-curvature", type=float, default=0.3)
     ap.add_argument("--wait-offset-s", type=float, default=4.0,
