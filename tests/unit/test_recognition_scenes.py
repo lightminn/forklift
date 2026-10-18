@@ -94,3 +94,14 @@ def test_s3_adjacent_gaps_stay_inside_the_design_range(catalogue):
         along = [p.placement.x_m * a[0] + p.placement.y_m * a[1] for p in r.instances]
         for front, back in zip(along, along[1:]):
             assert 0.05 - 1e-9 <= back - front - depth <= 1.0 + 1e-9, r.scene_id
+
+
+def test_the_training_catalogue_is_the_catalogue_composition_from_the_train_band():
+    train = rs.training_catalogue(scale=1)
+    cat = rs.catalogue()
+    assert len(train) == len(cat) == 1020
+    assert {r.split for r in train} == {"train"}
+    assert not {r.seed for r in train} & {r.seed for r in cat}
+    count = lambda rs_: sorted((r.case, r.shape_key) for r in rs_)
+    assert count(train) == count(cat)
+    assert [r.seed for r in rs.training_catalogue(scale=1)] == [r.seed for r in train]
