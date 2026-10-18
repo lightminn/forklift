@@ -10,11 +10,14 @@ one connection, so a new one each epoch) and the runner. The runner's exit decid
 
 - 0, the session ended: stop.
 - 3, the operator asked for a new scene: the next epoch at once.
-With ``--exit-file`` the runner's own code file counts, not the process's: Isaac's ``app.close()`` ends the process with
-0 whatever happened; a runner that wrote no file crashed.
+With ``--exit-file`` the runner's own code file ({"code", "reason"}) counts when the process ended with 0 -- Isaac's
+``app.close()`` ends it with 0 whatever happened; a runner that wrote no file crashed; a process that really failed
+counts as that.
 
 - anything else (a session failure, a crash): the port file says ``crashed`` (the runner may have left it
-  ``running``), then the next epoch after a backoff; three such ends in a row stop the supervisor.
+  ``running``), then the next epoch after a backoff; three ends of the same cause in a row stop the supervisor.
+
+A TERM or INT ends the running runner (TERM, then KILL after a grace), removes its bridge and starts no new epoch.
 
 A command is a JSON list of strings; ``{epoch}``, ``{epoch_dir}``, ``{port_file}`` and ``{out}`` are filled in.
 Every start and exit goes to ``<out>/supervisor.jsonl``.
@@ -25,6 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -60,57 +64,132 @@ def _mark_crashed(port_file: Path, epoch: int, code: int) -> None:
     os.replace(tmp, port_file)
 
 
+def _cause(code: int, reason: str | None) -> tuple:
+    """What a failed epoch is counted by: its code and its reason's head ("slam_link_failed: scan 7082: ..." and
+    "slam_link_failed: scan 12: ..." are one cause)."""
+    return code, None if not reason else str(reason).split(":", 1)[0].strip()
+
+
+def _read_exit(path: Path) -> tuple[int, str | None] | None:
+    try:
+        text = path.read_text().strip()
+    except OSError:
+        return None
+    try:
+        value = json.loads(text)
+    except ValueError:
+        return None
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value, None
+    if isinstance(value, dict) and isinstance(value.get("code"), int):
+        return value["code"], value.get("reason")
+    return None
+
+
+class _Stop:
+    """A TERM or INT for the supervisor (Slurm's --signal reaches the batch shell, which passes it on): the running
+    runner is ended, its bridge removed, no further epoch started."""
+
+    def __init__(self):
+        self.asked = False
+        self.child = None
+
+    def __call__(self, signum, frame):
+        self.asked = True
+        child = self.child
+        if child is not None and child.poll() is None:
+            child.terminate()
+
+
+def _end_child(child, grace_s: float = 60.0) -> int:
+    try:
+        return child.wait(timeout=grace_s)
+    except subprocess.TimeoutExpired:
+        child.kill()
+        return child.wait()
+
+
 def supervise(*, out: Path, runner: list[str], port_file: Path, backoff_s: float = 10.0, max_failures: int = 3,
               max_epochs: int | None = None, bridge: list[str] | None = None, bridge_stop: list[str] | None = None,
-              bridge_ready: str | None = None, ready_timeout_s: float = 120.0, exit_file: str | None = None) -> dict:
+              bridge_ready: str | None = None, ready_timeout_s: float = 120.0, exit_file: str | None = None,
+              grace_s: float = 60.0) -> dict:
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
-    codes, failures, epoch = [], 0, 0
-    while max_epochs is None or epoch < max_epochs:
-        epoch += 1
-        epoch_dir = out / f"epoch_{epoch}"
-        epoch_dir.mkdir()
-        values = {"epoch": epoch, "epoch_dir": str(epoch_dir), "port_file": str(port_file), "out": str(out)}
-        try:
-            ready = True
-            if bridge is not None:
-                subprocess.run(_fill(bridge, **values), check=True)
-                if bridge_ready is not None:
-                    flag, end = Path(_fill([bridge_ready], **values)[0]), time.monotonic() + ready_timeout_s
-                    while not flag.exists() and time.monotonic() < end:
-                        time.sleep(0.5)
-                    ready = flag.exists()
-            if ready:
-                _log(out, {"event": "start", "epoch": epoch})
-                code = subprocess.run(_fill(runner, **values)).returncode
-                if exit_file is not None:
-                    # The runner's own code, written before Isaac's app.close() -- which ends the process with 0
-                    # whatever the run did (ws1 2026-10-18). No file: it did not get that far, a crash.
-                    path = Path(_fill([exit_file], **values)[0])
+    stop = _Stop()
+    previous = {sig: signal.signal(sig, stop) for sig in (signal.SIGTERM, signal.SIGINT)}
+    codes, epoch, last_cause, repeats = [], 0, None, 0
+    try:
+        while not stop.asked and (max_epochs is None or epoch < max_epochs):
+            epoch += 1
+            epoch_dir = out / f"epoch_{epoch}"
+            epoch_dir.mkdir()
+            values = {"epoch": epoch, "epoch_dir": str(epoch_dir), "port_file": str(port_file), "out": str(out)}
+            code, reason = 1, None
+            try:
+                ready = True
+                if bridge is not None:
+                    subprocess.run(_fill(bridge, **values), check=True)
+                    if bridge_ready is not None:
+                        flag, end = Path(_fill([bridge_ready], **values)[0]), time.monotonic() + ready_timeout_s
+                        while not flag.exists() and time.monotonic() < end and not stop.asked:
+                            time.sleep(0.5)
+                        ready = flag.exists()
+                if stop.asked:
+                    code, reason = 1, "terminated"
+                elif not ready:  # no bridge: no runner (it would fail its SLAM warm-up); a failed epoch
+                    _log(out, {"event": "bridge_not_ready", "epoch": epoch})
+                    code, reason = 1, "bridge_not_ready"
+                else:
+                    _log(out, {"event": "start", "epoch": epoch})
+                    stop.child = subprocess.Popen(_fill(runner, **values))
+                    process = _end_child(stop.child, grace_s) if stop.asked else stop.child.wait()
+                    stop.child = None
+                    code = process
+                    if exit_file is not None:
+                        # Isaac's app.close() ends the process with 0 whatever the run did (ws1 2026-10-18): with
+                        # 0 the runner's own file counts (none: it did not get that far, a crash); a process that
+                        # really failed (killed, crashed) counts as that, whatever its file says.
+                        written = _read_exit(Path(_fill([exit_file], **values)[0]))
+                        if process == 0 and written is not None:
+                            code, reason = written
+                        elif process == 0:
+                            _log(out, {"event": "no_exit_file", "epoch": epoch})
+                            code, reason = 1, "no_exit_file"
+            except (OSError, subprocess.SubprocessError) as exc:  # the bridge or the runner would not start
+                _log(out, {"event": "start_failed", "epoch": epoch, "error": f"{type(exc).__name__}: {exc}"})
+                code, reason = 1, f"start_failed: {type(exc).__name__}"
+            finally:
+                if stop.child is not None:  # interrupted while waiting
+                    _end_child(stop.child, grace_s)
+                    stop.child = None
+                if bridge_stop is not None:
                     try:
-                        code = int(path.read_text().strip())
-                    except (OSError, ValueError):
-                        _log(out, {"event": "no_exit_file", "epoch": epoch, "process_code": code})
-                        code = code if code not in (ENDED, NEW_SCENE) else 1
-            else:  # no bridge: no runner (it would fail its SLAM warm-up); counted as a failed epoch
-                _log(out, {"event": "bridge_not_ready", "epoch": epoch})
-                code = 1
-        finally:
-            if bridge_stop is not None:
-                subprocess.run(_fill(bridge_stop, **values))
-        codes.append(code)
-        _log(out, {"event": "exit", "epoch": epoch, "code": code})
-        if code == ENDED:
-            return {"epochs": epoch, "end": "ended", "codes": codes}
-        if code == NEW_SCENE:
-            failures = 0
-            continue
-        _mark_crashed(port_file, epoch, code)
-        failures += 1
-        if failures >= max_failures:
-            return {"epochs": epoch, "end": "failing", "codes": codes}
-        time.sleep(backoff_s)
-    return {"epochs": epoch, "end": "epoch_limit", "codes": codes}
+                        subprocess.run(_fill(bridge_stop, **values))
+                    except (OSError, subprocess.SubprocessError) as exc:
+                        _log(out, {"event": "bridge_stop_failed", "epoch": epoch, "error": str(exc)})
+            codes.append(code)
+            _log(out, {"event": "exit", "epoch": epoch, "code": code, "reason": reason})
+            if stop.asked:
+                _mark_crashed(port_file, epoch, code) if code not in (ENDED, NEW_SCENE) else None
+                return {"epochs": epoch, "end": "terminated", "codes": codes}
+            if code == ENDED:
+                return {"epochs": epoch, "end": "ended", "codes": codes}
+            if code == NEW_SCENE:
+                last_cause, repeats = None, 0
+                continue
+            _mark_crashed(port_file, epoch, code)
+            cause = _cause(code, reason)
+            repeats = repeats + 1 if cause == last_cause else 1
+            last_cause = cause
+            if repeats >= max_failures:  # the same cause, max_failures times in a row (plan D9)
+                return {"epochs": epoch, "end": "failing", "codes": codes}
+            end = time.monotonic() + backoff_s
+            while time.monotonic() < end and not stop.asked:
+                time.sleep(min(0.5, backoff_s))
+        return {"epochs": epoch, "end": "terminated" if stop.asked else "epoch_limit", "codes": codes}
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
 
 def main(argv=None) -> int:
