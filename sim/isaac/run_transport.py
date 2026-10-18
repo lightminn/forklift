@@ -5820,6 +5820,20 @@ def drive(S, isaac) -> None:
             core.baseline = MissionBaseline.capture(core)
             live.start()  # after the SLAM warm-up: the console sees the first control tick next (Codex D9 impl P3)
 
+        def scene_require(t_, ok_, reason_):
+            """A truth check on the scene (simulation only). A batch run aborts as require does; a live one latches
+            the first damage and raises once -- that ends the mission running -- then only counts (persistent
+            console plan D6): the same condition stays false every tick, and the session stays usable."""
+            if ok_:
+                return
+            if live is None:
+                require(False, reason_)
+            if live.scene["damaged"] is None:
+                live.scene["damaged"] = {"reason": reason_, "t": float(t_)}
+                state["scene_damaged"] = dict(live.scene["damaged"])
+                require(False, reason_)
+            state["scene_after_damage"] = state.get("scene_after_damage", 0) + 1
+
         for step in range(int(120 * args.max_sim_seconds)):
             if early_ports:
                 # Format 2: the tick opens first, the clock is read inside it (recorded), then the head's times
@@ -5910,7 +5924,14 @@ def drive(S, isaac) -> None:
                             f"withdraw_tracking_exceeded:{dev_:.4f}")
             if live is not None and core.commands.status in ("accepted", "preparing") and not core.job_pending():
                 live_prepare(t, rear)  # persistent console plan D2: the submitted mission's first leg, from here
-            require(np.isfinite([base, ppos]).all(), "Nonfinite body state")
+            # The quaternions too, before any check reads a tilt from them (Codex D6 design P1-2: a NaN quaternion
+            # read as excessive tilt, scene damage).
+            require(np.isfinite([base, ppos]).all() and np.isfinite(q).all() and np.isfinite(pq).all(),
+                    "Nonfinite body state")
+            # Persistent console plan D6: no live mission running (none yet, or it ended); a free one ended outside
+            # the pocket and loaded phases, so the truck may be driven by hand.
+            live_idle_ = live is not None and core.commands.adopted_id is None
+            live_free_ = live_idle_ and ms.phase not in LIVE_POCKET_PHASES
             if ms.phase == "lift":
                 # Every physics step, so the peak and the aborting state are
                 # kept; the 0.1 s samples miss both.
@@ -5937,15 +5958,17 @@ def drive(S, isaac) -> None:
                     "lift_m": float(robot.get_joint_positions()[lift_index[0]]),
                     "lift_command_m": ms.lift_command,
                 }
-            require(
-                tilt < 0.1 and pallet_tilt < 0.15, f"Excessive body tilt in {ms.phase}"
+            scene_require(
+                t, tilt < 0.1 and pallet_tilt < 0.15, f"Excessive body tilt in {ms.phase}"
             )
             loaded = ms.phase in ["lift", "extract", "transport", "lower"]
             footprint = (
                 geometry.loaded_footprint if loaded else geometry.unloaded_footprint
             )
             checked_obstacles = obstacles + (
-                [pickup_obstacle] if ms.phase in ("approach", "observe") else []
+                # Without a live mission the forks may be put into the pockets by hand: the outline is no contact
+                # there; the fork/pallet contact check below judges it (Codex D6 design P2-7).
+                [pickup_obstacle] if ms.phase in ("approach", "observe") and not live_idle_ else []
             )
             if ms.phase in ("return_home", "home_settle"):
                 # The pallet is on the floor behind the forks now, so drive
@@ -5975,8 +5998,8 @@ def drive(S, isaac) -> None:
                 # stop before the wall is judged from the end pose and the scanned wall, not by this check.
                 b_ = scenario.bounds
                 truth_bounds = type(b_)(b_.x_min_m - 3.0, b_.x_max_m + 3.0, b_.y_min_m - 3.0, b_.y_max_m + 3.0)
-            require(
-                collision_free_pose(truth_rear, [], footprint, truth_bounds)
+            scene_require(
+                t, collision_free_pose(truth_rear, [], footprint, truth_bounds)
                 and not any(SHAPE_MEETS(o, truth_shape, tuple(float(v) for v in truth_rear)) for o in checked_obstacles),
                 f"Actual truck/load footprint overlap in {ms.phase}",
             )
@@ -5995,8 +6018,8 @@ def drive(S, isaac) -> None:
                     v_ = -(r_.x_m - ppos[0]) * sp + (r_.y_m - ppos[1]) * cp
                     if abs(u_) < geometry.pallet_depth_m / 2 and abs(v_) < geometry.pallet_width_m / 2:
                         in_outline.append(r_)
-            require(
-                collision_free_pose(
+            scene_require(
+                t, collision_free_pose(
                     [ppos[0], ppos[1], pallet_yaw],
                     [o for o in obstacles if not any(o is r_ for r_ in in_outline)],
                     Footprint(
@@ -6030,16 +6053,16 @@ def drive(S, isaac) -> None:
                     centre_p = (centre_w - np.asarray(ppos, dtype=float)) @ rot_
                     axes_p = rot_.T @ axes_w
                     for box_ in PALLET_BOXES:
-                        require(
-                            not box_meets_obb(box_.centre_m, np.asarray(box_.size_m) / 2, centre_p, axes_p,
+                        scene_require(
+                            t, not box_meets_obb(box_.centre_m, np.asarray(box_.size_m) / 2, centre_p, axes_p,
                                               (r_.length_m / 2, r_.width_m / 2, h_ / 2)),
                             f"Measured pallet solid overlap in {ms.phase}: {box_.name}",
                         )
             relative = ppos[:2] - base[:2]
             if ms.phase in ["extract", "transport"]:
-                require(ppos[2] > 0.04, "Pallet dropped during transport")
-                require(
-                    abs(
+                scene_require(t, ppos[2] > 0.04, "Pallet dropped during transport")
+                scene_require(
+                    t, abs(
                         float(np.dot(relative, forward))
                         - (geometry.inserted_offset_m - abs(args.rear_axle_offset_m))
                     )
@@ -6048,11 +6071,14 @@ def drive(S, isaac) -> None:
                     "Pallet slipped off forks",
                 )
             if ms.phase in ["approach", "insert"]:
-                require(
-                    np.linalg.norm(ppos[:2] - initial_pallet[:2]) < 0.018,
+                scene_require(
+                    t, np.linalg.norm(ppos[:2] - initial_pallet[:2]) < 0.018,
                     "Pallet displaced before pickup",
                 )
-            if ms.phase in ["insert", "withdraw"]:
+            # Live and free (no mission, ended outside the pocket phases): the forks' contact is checked wherever the
+            # truck is driven; ended inside them it is not -- supporting a pallet touches it, and teleop is refused
+            # there (Codex D6 design round 2-3 P2).
+            if ms.phase in ["insert", "withdraw"] or live_free_:
                 contacts = insertion_geometry.forbidden_contacts(
                     base,
                     q,
@@ -6064,8 +6090,8 @@ def drive(S, isaac) -> None:
                 state["pocket_geometry_checks"] += 1
                 if contacts:
                     state["forbidden_pocket_contacts"] = contacts
-                require(
-                    not contacts,
+                scene_require(
+                    t, not contacts,
                     f"Forbidden fork/pallet contact in {ms.phase}: {contacts}",
                 )
             if ms.phase in ["insert", "extract", "withdraw"]:

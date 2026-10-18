@@ -30,12 +30,14 @@ def _require_reasons(path):
     tree = ast.parse(path.read_text())
     out = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or len(node.args) < 2:
+        if not isinstance(node, ast.Call):
             continue
         func = node.func
-        if (func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)) != "require":
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+        index = {"require": 1, "scene_require": 2}.get(name)  # scene_require(t, ok, reason): the truth checks (D6)
+        if index is None or len(node.args) <= index:
             continue
-        arg = node.args[1]
+        arg = node.args[index]
         if isinstance(arg, ast.Constant):
             out.append((node.lineno, arg.value, None))
         elif isinstance(arg, ast.JoinedStr):
@@ -116,3 +118,26 @@ def test_every_capture_failure_reason_is_classified_through_the_core_s_prefix():
     assert found == set(CAPTURE)
     for reason, cls in CAPTURE.items():
         assert classify(f"perception_capture_failed:{reason}") == cls, reason
+
+
+def test_the_scene_checks_are_scene_class_and_go_through_the_latch():
+    tree = ast.parse((ROOT / "sim/isaac/run_transport.py").read_text())
+    scene = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "scene_require":
+            arg = node.args[2]
+            scene.add(arg.value if isinstance(arg, ast.Constant) else arg.values[0].value)
+    assert scene == {"Excessive body tilt in ", "Actual truck/load footprint overlap in ",
+                     "Measured pallet footprint overlap in ", "Measured pallet solid overlap in ",
+                     "Pallet dropped during transport", "Pallet slipped off forks", "Pallet displaced before pickup",
+                     "Forbidden fork/pallet contact in "}
+    assert all(classify(r) == "scene" for r in scene)
+
+
+def test_the_runner_and_the_core_name_the_same_pocket_phases():
+    from forklift_core.mission.core import POCKET_PHASES
+
+    tree = ast.parse((ROOT / "sim/isaac/run_transport.py").read_text())
+    (value,) = [ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign)
+                and getattr(n.targets[0], "id", None) == "LIVE_POCKET_PHASES"]
+    assert value == POCKET_PHASES

@@ -30,6 +30,10 @@ def teleop_policy(safety: dict | None, *, feedback_ok: bool, standing: bool) -> 
         return refuse("state_unknown")
     if not feedback_ok:
         return refuse("no_feedback:rear_axle_speed")
+    if safety.get("recovery_required"):
+        # A live mission ended where the forks may be in a pocket or the pallet on them: the phase is all the state
+        # knows until D5 judges the pockets (persistent console plan D6), so no manual driving.
+        return refuse("recovery_required")
     if in_pocket:
         return refuse("fork_in_pocket")
     near = safety.get("near") or {}

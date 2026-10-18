@@ -55,6 +55,7 @@ DYNAMIC_SITES = {
     ("sim/isaac/run_transport.py", "'near_field_contract:' + '; '.join(problems_)"): SESSION,
     ("sim/isaac/run_transport.py", "verdict_.reason or ''"): SESSION,  # the batch run's delivery check
     ("sim/isaac/run_transport.py", "f"): SESSION,  # f-strings with no fixed head (setup messages)
+    ("sim/isaac/run_transport.py", "reason_"): SCENE,  # scene_require's own raise: the truth checks' reasons
     ("src/forklift_core/mission/core.py", "plans.status"): MISSION,  # "<phase>:<status>"
     ("src/forklift_core/mission/core.py", "failure"): MISSION,  # a docking retry's "docking_*"
     ("src/forklift_core/mission/core.py", "result_.end"): MISSION,  # "cusp_position_stall*"

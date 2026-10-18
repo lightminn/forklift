@@ -75,6 +75,7 @@ class Context:
     stop_kind: str = "none"
     near_tracker: bool = False  # a near-field tracker exists (pause is refused, E3)
     clear_for_submit: bool = True  # empty forks and outside the near section (else recovery_required)
+    scene_damaged: bool = False  # live: the scene's damage is latched (persistent console plan D6; else scene_damaged)
 
 
 class MissionCommands:
@@ -145,6 +146,8 @@ class MissionCommands:
             return "mission_active"
         if context.stop_kind != "none":
             return "stopping"
+        if context.scene_damaged:
+            return "scene_damaged"
         if not context.clear_for_submit:
             return "recovery_required"
         if self.targets is not None:

@@ -538,3 +538,32 @@ def test_the_end_archives_the_missions_records_under_its_own_id(tmp_path):
     rt.close()
     written = json.loads((tmp_path / "missions" / "m1" / "records.json").read_text())
     assert written == {"state": {"async_plans": [{"site": "leg"}]}}
+
+
+def test_a_mission_end_holds_the_lift_where_it_is(tmp_path):
+    """Codex D6 design P2-6: the end (also after the physics step) fixes the lift target at the measured height."""
+    rt, core, order = ending(tmp_path)
+    core.ms = SimpleNamespace(lift_command=0.08)
+    rt.hooks.lift_position = lambda: 0.031
+    held = []
+    rt.hooks.hold_lift = held.append
+    rt.end_mission(15.0, "failed", "x")
+    assert held == [0.031] and core.ms.lift_command == 0.031
+
+
+def test_the_state_carries_the_scene_and_a_damaged_scene_refuses_submits(tmp_path):
+    from forklift_core.mission.commands import Submit
+
+    rt, core, did, clock = runtime(tmp_path)
+    rt.scene = {"damaged": {"reason": "Pallet displaced before pickup", "t": 3.0}}
+    captured = []
+    real_apply = core.commands.apply
+    core.commands.apply = lambda t, context: captured.append(context) or real_apply(t, context)
+    core.commands.queue(Submit("P-1", "D-1", core.targets.revision))
+    rt.tick_start(4.0, False)
+    assert captured[-1].scene_damaged is True
+    import inspect
+
+    from sim.isaac import live_runtime
+
+    assert 'msg["scene"] = self.scene' in inspect.getsource(live_runtime.LiveRuntime.publish)

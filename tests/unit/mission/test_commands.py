@@ -386,3 +386,10 @@ def test_the_adopted_mission_is_named_by_start_and_adopt():
     assert p.adopted_id is None
     p.adopt()
     assert p.adopted_id == p.mission_id
+
+
+def test_a_submit_is_refused_while_the_scene_is_damaged():
+    """Persistent console plan D6: a latched damage refuses automatic work (teleop stays allowed)."""
+    m = MissionCommands()
+    m.queue(Submit("P1", "D1"))
+    assert m.apply(0.0, Context(scene_damaged=True))[0]["reason"] == "scene_damaged" and m.status == "idle"

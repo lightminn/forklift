@@ -312,3 +312,14 @@ def test_a_preparing_mission_keeps_auto_and_a_pause_request_ends_the_preparation
     r.cycle()
     assert r.m.status in ("failed", "idle") and r.a.mode == "PAUSED"
     assert any(e["command"] == "end" and e["reason"] == "prepare:paused" for e in r.m.log)
+
+
+def test_teleop_is_refused_after_a_mission_ended_with_the_forks_maybe_in_a_pocket():
+    """Persistent console plan D6 (Codex design P1-1): until D5 judges the pockets, the phase the mission ended in
+    is all there is; a dropped pallet would otherwise read as the truck's own load."""
+    from forklift_core.safety.teleop_policy import teleop_policy
+
+    safety = dict(SAFE, recovery_required=True)
+    policy = teleop_policy(safety, feedback_ok=True, standing=True)
+    assert not policy.drive_allowed and policy.reason == "recovery_required"
+    assert teleop_policy(dict(SAFE), feedback_ok=True, standing=True).drive_allowed

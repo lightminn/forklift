@@ -624,6 +624,9 @@ class HeldTracker:
         self.mode, self.applied, self.released = "tracking", ((0.2, 0.0, 0.0), 0), self.released + 1
         return 0.2, 0.0
 
+    def hold(self, odom_from_base=None):
+        self.mode = "holding"
+
     def may_drive(self):
         return True
 
@@ -702,8 +705,12 @@ def test_an_end_after_docking_carries_the_docked_destination_and_the_pallet_deli
 
     core, slam, _ = held_core("settle")
     core.pocket["planning_pickup"] = core.obstacle["pickup_estimate"] = None
+    slam["transport_scenario"] = Scenario(PalletSite(5.1, 1.0, 0.0))  # the prior
+    slam["tracker"].mode = "tracking"
+    core.hold_slam(10.0, held_frame_pallet=False)  # the transport's arrival hold
+    slam["tracker"].mode = "holding"
     slam["docking"] = {"accepted_any": True}
-    slam["transport_scenario"] = Scenario(PalletSite(5.0, 1.0, 0.0))
+    slam["transport_scenario"] = Scenario(PalletSite(5.0, 1.0, 0.0))  # the docking match, in the held frame
     core.targets.carried("P-1")
     core.targets.put_down("P-1", Pose(5.0, 1.0, 0.0))
     slam["stop_now"] = standing
@@ -714,3 +721,59 @@ def test_an_end_after_docking_carries_the_docked_destination_and_the_pallet_deli
     assert slam["tracker"].released == 1
     pallet, dest = core.targets.pallets["P-1"].pose, core.targets.destinations["D-1"]
     assert (pallet.x_m, pallet.y_m) == pytest.approx((5.2, 1.0)) and (dest.x_m, dest.y_m) == pytest.approx((5.2, 1.0))
+
+
+@pytest.mark.parametrize("phase, adopted, flagged", [
+    ("transport", False, True), ("withdraw", False, True), ("complete", False, False), ("observe", False, False),
+    ("transport", True, False),  # a mission running (a batch run's is always adopted)
+])
+def test_the_safety_state_says_a_recovery_is_needed_after_an_end_in_a_pocket_phase(phase, adopted, flagged):
+    core, ms, state, obstacle, slam, calls, _ = make(phase)
+    core.commands.adopted_id = "m1" if adopted else None
+    core.commands.mission_id = "m1"
+    s = core.safety_state(10.0)
+    assert s.get("recovery_required", False) is flagged and (("recovery_required" in s) is flagged)
+
+
+def test_an_arrival_hold_carries_only_what_it_found_itself():
+    """Codex D6 round 5: a hold at the return's arrival must not move the destination the settle release already
+    carried; a hold at the observation's arrival, before any capture, must not move the pallet's map prior."""
+    from forklift_core.mission.targets import Pose
+    from forklift_core.planning.pallet_mission import PalletSite
+
+    # the return's arrival hold, after the delivery: the destination is a map goal already
+    core, slam, _ = held_core("home_settle")
+    core.pocket["planning_pickup"] = core.obstacle["pickup_estimate"] = None
+    slam["docking"] = {"accepted_any": True}
+    slam["return_scenario"] = Scenario(PalletSite(5.0, 1.0, 0.0))
+    core.targets.carried("P-1")
+    core.targets.put_down("P-1", Pose(5.0, 1.0, 0.0))
+    slam["tracker"].mode = "tracking"
+    core.hold_slam(30.0, held_frame_pallet=False)  # the arrival hold (follow's end of leg)
+    slam["tracker"].mode = "holding"
+    core.end_reset(40.0)
+    assert core.targets.destinations["D-1"].x_m == pytest.approx(5.0)
+    assert core.targets.pallets["P-1"].pose.x_m == pytest.approx(5.0)
+
+    # the observation's arrival hold, before the capture; ended while moving, released once standing
+    core, slam, _ = held_core("observe")
+    core.pocket["planning_pickup"] = core.obstacle["pickup_estimate"] = None
+    slam["tracker"].mode = "tracking"
+    core.hold_slam(10.0, held_frame_pallet=False)
+    slam["tracker"].mode = "holding"
+    slam["stop_now"] = False
+    before = core.targets.pallets["P-1"].pose
+    core.end_reset(12.0)
+    slam["stop_now"] = True
+    core.release_gate(13.0, np.array([1.0, 2.0, 0.5]))
+    assert slam["tracker"].released == 1 and core.targets.pallets["P-1"].pose == before
+
+
+def test_a_capture_made_under_the_held_correction_is_carried():
+    """The approach hold begins at the accepted capture, whose estimate was made with the correction it holds."""
+    core, slam, _ = held_core("approach")
+    slam["tracker"].mode = "tracking"
+    core.hold_slam(10.0, held_frame_pallet=True)
+    slam["tracker"].mode = "holding"
+    core.end_reset(12.0)
+    assert core.targets.pallets["P-1"].pose.x_m == pytest.approx(3.2)

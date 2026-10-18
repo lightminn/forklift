@@ -88,6 +88,7 @@ def rollout_callback_spec(config, start) -> dict:
 # A live mission that ended in one of these phases may have left the forks in a pocket or the pallet on them: no end
 # release of the SLAM hold, no submit and no teleop until the recovery (persistent console plan D4/D5).
 POCKET_PHASES = ("insert", "lift", "extract", "transport", "lower", "withdraw")
+_HELD = object()  # a hold basis entry that no estimate is: every estimate counts as found under the hold
 
 
 def apply_tracker_profile_to(trackers: dict, profile) -> None:
@@ -167,6 +168,7 @@ class MissionCore:
         self.prepare_attempts = 0  # persistent console plan D2: the current submit's preparation requests
         self.baseline = None  # persistent console plan D2: the mission-owned state before a live session's first mission
         self.end_release_due: dict | None = None  # plan D1 step 4: an end release waiting for the truck to stand
+        self.hold_basis: dict | None = None  # the estimates a SLAM hold began with (those stay map estimates)
         self.fresh_depth_wait: tuple | None = None  # (since, acquisition stamp): an async near build's first frame
 
     def known_transition(self, from_phase: str, next_phase: str, t: float) -> None:
@@ -316,7 +318,7 @@ class MissionCore:
         # seen, and a later SLAM correction cannot slide the truck against the
         # pallet estimate (plan v3.5; S2 seed 0 on v3.4 hit a block that way).
         if ms.phase in ("approach", "insert", "lower") and slam["tracker"].mode == "tracking":
-            slam["tracker"].hold(odom_from_base=hooks.slam_odom_base())
+            self.hold_slam(t, held_frame_pallet=True)  # the capture's estimate was made with this correction
             slam["holds"].append(
                 {"phase": ms.phase, "time_s": t, "event": "hold", "error": hooks.slam_error()}
             )
@@ -1251,7 +1253,7 @@ class MissionCore:
             # outside the tolerance (S2 seed 1 on v3.4, transport).
             # Freeze it there (plan v3.5; approach already holds from
             # the capture). Released at settle as before.
-            slam["tracker"].hold(odom_from_base=slam_odom_base())
+            self.hold_slam(t, held_frame_pallet=False)
             slam["holds"].append(
                 {"phase": ms.phase, "time_s": t, "event": "hold", "error": slam_error()}
             )
@@ -3052,7 +3054,7 @@ class MissionCore:
         hold_ = "none"
         if slam is not None and slam["tracker"].mode == "holding":
             hold_ = ("docking" if phase_ == "transport" else phase_ if phase_ in ("approach", "insert") else "held")
-        return {
+        out = {
             "t": t,
             "mission": {"id": cmds.mission_id, "status": cmds.status, "generation": cmds.mission_gen,
                         "pallet_id": None if cmds.mission is None else cmds.mission.pallet_id,
@@ -3081,6 +3083,12 @@ class MissionCore:
                         else float(obstacle["permission_cap"][1]),
                         "reason": None if self.last_permission is None else self.last_permission[1]},
         }
+        if cmds.adopted_id is None and ms.phase in POCKET_PHASES:
+            # A live mission ended in a pocket or loaded phase (the batch run's mission is always the adopted one):
+            # no submit and no teleop until the recovery (persistent console plan D6; the key only when it holds,
+            # so a batch run's safety record is as it was).
+            out["recovery_required"] = True
+        return out
 
     def release_gate(self, t: float, rear) -> SimpleNamespace:
         """At each control tick's start: a pending SLAM release waits for the truck to stand (10 s at most), then
@@ -4581,9 +4589,10 @@ class MissionCore:
                     self.end_release(t, deferred=False)
                 else:
                     mission = self.commands.mission
+                    pallet_held, destination_held = self._held_estimates()
                     self.end_release_due = {"pallet_id": None if mission is None else mission.pallet_id,
                                             "destination_id": None if mission is None else mission.destination_id,
-                                            "docked": bool(slam.get("docking", {}).get("accepted_any"))}
+                                            "pallet_held": pallet_held, "destination_held": destination_held}
         # The list takes the mission's last estimates (a docking match, a release's re-expression) now, and the
         # ended mission moves it no more: the scenarios it read from are dropped below (Codex stage 2 round 2 P2).
         self.refresh_targets()
@@ -4595,6 +4604,35 @@ class MissionCore:
             state.setdefault("pocket_check", {}).update(pocket["check"].summary(), frames_read=pocket["frames_read"])
             pocket["check"] = None
         return self.baseline.restore(self) if self.baseline is not None else {}
+
+    def hold_slam(self, t: float, *, held_frame_pallet: bool) -> None:
+        """Hold the SLAM correction, keeping which estimates the hold began with: those were made under earlier
+        corrections and stay map estimates at an end release; what the hold finds itself -- the docking match's
+        destination, a capture's pallet -- is in its frame. ``held_frame_pallet``: the pallet estimate in hand was
+        made with this very correction (the approach's hold begins at the accepted capture)."""
+        slam, obstacle, pocket = self.slam, self.obstacle, self.pocket
+        slam["tracker"].hold(odom_from_base=self.hooks.slam_odom_base())
+        self.hold_basis = {
+            "pallet": (_HELD, _HELD) if held_frame_pallet else (
+                pocket.get("planning_pickup"), None if obstacle is None else obstacle.get("pickup_estimate")),
+            "destination": self._destination_estimate()}
+
+    def _destination_estimate(self):
+        """The destination the core steers to now (a docking match's, a release's re-expression, or the prior)."""
+        slam = self.slam
+        scenario_ = slam.get("return_scenario", slam.get("transport_scenario", getattr(self.options, "scenario", None)))
+        return getattr(scenario_, "destination", None)
+
+    def _held_estimates(self) -> tuple[bool, bool]:
+        """Whether the pallet estimate and the destination in hand were found under the current hold."""
+        obstacle, pocket = self.obstacle, self.pocket
+        destination = self._destination_estimate()
+        # Without a recorded basis: the pallet estimate in hand is the hold's, the destination a map goal.
+        basis = self.hold_basis or {"pallet": (_HELD, _HELD), "destination": destination}
+        planning, estimate = pocket.get("planning_pickup"), None if obstacle is None else obstacle.get("pickup_estimate")
+        pallet = ((planning is not None and planning is not basis["pallet"][0])
+                  or (estimate is not None and estimate is not basis["pallet"][1]))
+        return pallet, destination is not None and destination is not basis["destination"]
 
     def end_release(self, t: float, *, deferred: bool) -> None:
         """The end release of a SLAM hold (plan D1 step 4): the received correction applied, the hold-frame pallet
@@ -4614,25 +4652,27 @@ class MissionCore:
         if deferred:  # the ended mission's own targets, in the list (refresh_targets no longer runs for it)
             due, tb = self.end_release_due or {}, self.targets
             pid, did = due.get("pallet_id"), due.get("destination_id")
-            if due.get("docked"):  # the docking hold: the docked destination and the pallet delivered there
-                if did in tb.destinations:
-                    old = tb.destinations[did]
-                    tb.update_destination(did, carried(old))
-                    if pid in tb.pallets and tb.pallets[pid].state == "delivered" and tb.pallets[pid].pose == old:
-                        tb.update_pose(pid, carried(old))
-            elif pid in tb.pallets and tb.pallets[pid].pose is not None:  # the near capture's hold: its pallet
-                tb.update_pose(pid, carried(tb.pallets[pid].pose))
+            if due.get("destination_held") and did in tb.destinations:
+                # the docking hold: the docked destination and the pallet delivered there
+                old = tb.destinations[did]
+                tb.update_destination(did, carried(old))
+                if pid in tb.pallets and tb.pallets[pid].state == "delivered" and tb.pallets[pid].pose == old:
+                    tb.update_pose(pid, carried(old))
+            elif due.get("pallet_held") and pid in tb.pallets and tb.pallets[pid].pose is not None:
+                tb.update_pose(pid, carried(tb.pallets[pid].pose))  # the near capture's hold: its pallet
             tb.set_correction_version(self.slam_releases)
-        elif slam.get("docking", {}).get("accepted_any"):
-            # The docking hold: the corrected destination is held, carried as slam_release carries it; the delivered
-            # pallet follows it in the list (Codex D6 design round 4 P2).
-            scenario_ = slam.get("return_scenario", slam.get("transport_scenario", self.options.scenario))
-            slam["return_scenario"] = replace(scenario_, destination=carried(scenario_.destination))
         else:
-            if obstacle is not None and obstacle.get("pickup_estimate") is not None:
-                obstacle["pickup_estimate"] = carried(obstacle["pickup_estimate"])
-            if pocket.get("planning_pickup") is not None:
-                pocket["planning_pickup"] = carried(pocket["planning_pickup"])
+            # Only what this hold found is in its frame (Codex D6 rounds 4-5): the docked destination, carried as
+            # slam_release carries it (the delivered pallet follows it in the list), or a capture's pallet.
+            pallet_held, destination_held = self._held_estimates()
+            if destination_held:
+                scenario_ = slam.get("return_scenario", slam.get("transport_scenario", self.options.scenario))
+                slam["return_scenario"] = replace(scenario_, destination=carried(scenario_.destination))
+            if pallet_held:
+                if obstacle is not None and obstacle.get("pickup_estimate") is not None:
+                    obstacle["pickup_estimate"] = carried(obstacle["pickup_estimate"])
+                if pocket.get("planning_pickup") is not None:
+                    pocket["planning_pickup"] = carried(pocket["planning_pickup"])
         if obstacle is not None and slam["tracker"].applied is not None:
             self._reproject(t, tuple(float(v) for v in slam["tracker"].applied[0]), after, False)
         slam["holds"].append({"phase": self.ms.phase, "time_s": float(t), "event": "release", "reason": "mission_end",

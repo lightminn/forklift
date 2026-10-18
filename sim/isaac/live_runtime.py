@@ -70,6 +70,7 @@ class LiveRuntime:
         self.results = ResultsBook()  # the session's mission outcomes (persistent console plan D1 step 9)
         self._ended_id: str | None = None  # the mission end_mission last ended (each ends once)
         self._writers: list = []  # the threads writing the missions' records (plan D2), joined at close
+        self.scene = {"damaged": None}  # the runner latches the scene's damage here (plan D6); in every state
         self.dt = dt
         self.session_epoch = session_epoch if session_epoch is not None else secrets.randbits(48)  # a job, an epoch
         self.arbiter = Arbiter(self.session_epoch, config or ArbiterConfig(tick_s=dt),
@@ -175,7 +176,8 @@ class LiveRuntime:
         stop_kind = self.link.begin(now, self.feedback)
         self.collect_end(t)  # ended after the last apply (a preparation's job_hold failure): before this one frees it
         records = self.core.commands.apply(t, Context(stop_kind=stop_kind, near_tracker=near_active,
-                                                      clear_for_submit=clear_for_submit))
+                                                      clear_for_submit=clear_for_submit,
+                                                      scene_damaged=self.scene["damaged"] is not None))
         self.collect_end(t)  # ended in this apply (a cancel before it ran, a stopped preparation)
         self._flush(t)
         return stop_kind, records
@@ -200,6 +202,11 @@ class LiveRuntime:
             return None
         self._ended_id = mission_id
         self.end.stop()
+        # The lift held where it is, whatever stage of the tick the end came in (Codex D6 design P2-6).
+        lift = float(self.hooks.lift_position())
+        self.hooks.hold_lift(lift)
+        if getattr(self.core, "ms", None) is not None:
+            self.core.ms.lift_command = lift
         self.core.abandon_jobs(t)  # step 2: the plan, the capture and the observation of this mission
         self.capturing = False
         self.end.unlock_wheels()  # step 5
@@ -275,6 +282,7 @@ class LiveRuntime:
             if plan is not OMIT:
                 msg["plan"] = plan
             msg["last_result"] = self.results.last  # the session's last mission outcome, after its slot is free
+            msg["scene"] = self.scene  # a latched damage: automatic work refused until the scene is reset (D6)
             self.channels.put(None, msg)
         targets = self.core.targets
         if targets.revision != self._targets_revision:
