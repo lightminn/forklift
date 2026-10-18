@@ -288,6 +288,9 @@ class CaptureState:
     previous: tuple | None = None
     previous_frame_id: object = None
     diagnostics: CaptureDiagnostics = field(default_factory=CaptureDiagnostics)
+    # The accepted frame's instance ids when a semantic reader is given (Isaac recognition far capture);
+    # None otherwise.
+    instance_ids: np.ndarray | None = None
 
 
 class SensorCapture:
@@ -316,8 +319,12 @@ class SensorCapture:
         angle_tolerance_rad=0.001,
         render_latency_s=0.066667,
         guard_fn=None,
+        semantic_fn=None,
     ):
         self.camera, self.mount = camera, mount
+        # Optional: reads the frame's semantic segmentation (an object with ``ready`` and ``instance_ids``),
+        # inside the same metadata bracket as the depth; a not-ready read retries like a not-ready sensor.
+        self.semantic_fn = semantic_fn
         # Optional check run before the first render step and after every one;
         # it raises CaptureFailure when the mount is no longer valid (e.g. a
         # carriage camera whose lift left 0 during the capture).
@@ -473,6 +480,7 @@ class SensorCapture:
                 step_steps=step,
                 frame_id_fn=frame_id,
                 stamp_ns_fn=lambda: int(metadata[1] * 1e9),
+                semantic_fn=self.semantic_fn,
             )
             self.state.diagnostics.accepted_pose = self.state.diagnostics.pose_after
             return result
@@ -543,6 +551,7 @@ def capture_scene_input(
     frame_id_fn: Callable[[], object] | None = None,
     stamp_ns_fn: Callable[[], int] | None = None,
     state: CaptureState | None = None,
+    semantic_fn: Callable[[], object] | None = None,
 ) -> tuple[SceneInput, FrameDiagnostics, int]:
     """Read a ready synthetic frame, calling step_fn before every attempt (``capture_scene_steps`` driven)."""
 
@@ -552,7 +561,8 @@ def capture_scene_input(
     return drive_capture(
         capture_scene_steps(camera, base_from_optical, stamp_ns, max_attempts=max_attempts,
                             std_threshold=std_threshold, step_steps=plain_step if step_fn is not None else None,
-                            frame_id_fn=frame_id_fn, stamp_ns_fn=stamp_ns_fn, state=state),
+                            frame_id_fn=frame_id_fn, stamp_ns_fn=stamp_ns_fn, state=state,
+                            semantic_fn=semantic_fn),
         step_fn if step_fn is not None else (lambda: None),
     )
 
@@ -568,6 +578,7 @@ def capture_scene_steps(
     frame_id_fn: Callable[[], object] | None = None,
     stamp_ns_fn: Callable[[], int] | None = None,
     state: CaptureState | None = None,
+    semantic_fn: Callable[[], object] | None = None,
 ):
     """Read a ready synthetic frame, running ``step_steps()`` (a generator that yields where the render step
     goes) before every attempt; a generator returning the result.
@@ -624,6 +635,7 @@ def capture_scene_steps(
             raw_depth = np.array(camera.get_depth(), copy=True)
             if raw_depth.ndim and raw_depth.shape[-1] == 1:
                 raw_depth = np.squeeze(raw_depth, axis=-1)
+            semantic = semantic_fn() if semantic_fn is not None else None
             frame_id = frame_id_fn() if frame_id_fn is not None else None
         except CaptureFailure as exc:
             # Only transient sensor readiness/timing failures may consume retries.
@@ -666,6 +678,8 @@ def capture_scene_steps(
             reason = "depth_not_ready"
         elif not fresh:
             reason = "stale_frame"
+        elif semantic is not None and not semantic.ready:
+            reason = "semantic_not_ready"
         else:
             accepted_stamp = stamp_ns_fn() if stamp_ns_fn is not None else stamp_ns
             if (
@@ -686,6 +700,7 @@ def capture_scene_steps(
             )
             state.previous = rgba, raw_depth
             state.previous_frame_id = deepcopy(frame_id)
+            state.instance_ids = None if semantic is None else np.array(semantic.instance_ids, copy=True)
             state.diagnostics.sensor_frame_id = deepcopy(frame_id)
             return scene, diagnostics, attempt + 1
         counts = state.diagnostics.rejection_counts

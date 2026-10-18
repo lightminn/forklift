@@ -831,6 +831,12 @@ def observe_pallet_pose(result: dict):
     return (float(mean[0]), float(mean[1]), float(mean[2]), mean_yaw), None
 
 
+def recorded_observation(attempt: dict) -> dict:
+    """The detector's own observation of an attempt: under --recognition far the mission read the new
+    recognition's (``pocket_observation``) and the detector's is kept as ``detector_reference``."""
+    return attempt.get("detector_reference", attempt["pocket_observation"])
+
+
 def attempt_scene(result: dict, attempt: dict, depth: np.ndarray) -> SceneInput:
     perception_adapter = _adapter()
     # The runner's mount: the recorded named mount when the run recorded one
@@ -855,7 +861,7 @@ def attempt_scene(result: dict, attempt: dict, depth: np.ndarray) -> SceneInput:
     intrinsics = PinholeIntrinsics(
         640, 480, k[0][0], k[1][1], k[0][2], k[1][2], "camera_optical_frame"
     )
-    observation = attempt["pocket_observation"]
+    observation = recorded_observation(attempt)
     return SceneInput(
         rgb=np.zeros((480, 640, 3), dtype=np.uint8),
         depth_m=np.asarray(depth, dtype=float),
@@ -974,7 +980,7 @@ def diagnose_attempt(run_dir: Path, number: int, pallet_urdf: Path) -> dict:
         scene, prior, params, truth, attempt["capture_diagnostics"]["accepted_pose"]
     )
     recorded_detection = {
-        "observation": attempt["pocket_observation"],
+        "observation": recorded_observation(attempt),
         "diagnostics": {
             k: v
             for k, v in attempt["detection_diagnostics"].items()
