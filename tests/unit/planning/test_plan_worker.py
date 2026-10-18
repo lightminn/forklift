@@ -243,3 +243,15 @@ def test_the_ladder_stops_between_candidates_at_its_deadline(monkeypatch):
     assert out["timed_out"] and out["result"] is None and 1 <= len(calls) < 6
     assert len(out["candidates"]) == len(calls)
     assert all(c[2]["deadline"] == calls[0][2]["deadline"] for c in calls)  # the one deadline, to every call
+
+
+@pytest.mark.parametrize("own, grid, sent", [(5.0, 9.0, 5.0), (None, 9.0, 9.0), (5.0, None, 5.0)])
+def test_the_ladders_deadline_is_passed_once_even_when_the_grid_arguments_carry_one(monkeypatch, own, grid, sent):
+    """Codex stage 2 review P2: grid_kwargs("observe") returns a deadline while obstacle["deadline"] is set."""
+    calls = fake_leg(monkeypatch)
+    payload = ladder_payload([(1, 0, 0)], deadline=None)
+    payload["deadline"] = own
+    payload["grid_kwargs"] = {"occupancy": "GRID", **({} if grid is None else {"deadline": grid})}
+    monkeypatch.setattr(pw.time, "monotonic", lambda: 0.0)
+    pw._run("observe_ladder", payload)
+    assert calls and all(c[2]["deadline"] == sent for c in calls)

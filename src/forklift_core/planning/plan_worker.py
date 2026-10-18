@@ -81,7 +81,12 @@ def _observe_ladder(pm, payload: dict) -> dict:
     from forklift_core.planning.geometry import Pose2D
 
     started = time.monotonic()
-    world, deadline = payload["world"], payload.get("deadline")
+    world = payload["world"]
+    kwargs = dict(payload["grid_kwargs"])
+    # One deadline for every call: the payload's whole-ladder one, else what the grid arguments carried (Codex P2:
+    # grid_kwargs("observe") returns obstacle["deadline"] when one is set, so passing both raised a TypeError).
+    deadline = payload.get("deadline") if payload.get("deadline") is not None else kwargs.get("deadline")
+    kwargs["deadline"] = deadline
     start = world.start_rear
     candidates, result, selected, timed_out = [], None, None, False
     for extended in (False, True):
@@ -91,8 +96,7 @@ def _observe_ladder(pm, payload: dict) -> dict:
                 break
             waypoint = Pose2D(*coordinates)
             plan = pm.plan_observation_leg(world, waypoint, payload["config"], geometry=payload["geometry"],
-                                           pickup_bounds=payload["pickup_bounds"], extended=extended,
-                                           deadline=deadline, **payload["grid_kwargs"])
+                                           pickup_bounds=payload["pickup_bounds"], extended=extended, **kwargs)
             candidates.append({"candidate_index": index, "pose": [waypoint.x_m, waypoint.y_m, waypoint.yaw_rad],
                                "success": plan.success, "status": plan.status,
                                "analytic_expansion_interval": plan.analytic_expansion_interval,
