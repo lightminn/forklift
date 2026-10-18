@@ -127,8 +127,10 @@ def test_a_term_ends_the_runner_removes_the_bridge_and_starts_nothing_more(tmp_p
         f"out = pathlib.Path({str(tmp_path / 'out')!r})\n"
         "py = sys.executable\n"
         f"marks = {str(marks)!r}\n"
-        "r = sup.supervise(out=out, runner=[py, '-c', 'import time; time.sleep(60)'], port_file=out / 'p.json',"
-        " backoff_s=0.0, bridge=[py, '-c', 'pass'],"
+        # a runner that ignores TERM: the supervisor must KILL it after the grace (Codex 4b round 2 P2)
+        "r = sup.supervise(out=out, runner=[py, '-c', 'import signal, time; signal.signal(signal.SIGTERM,"
+        " signal.SIG_IGN); time.sleep(60)'], port_file=out / 'p.json', backoff_s=0.0, grace_s=0.5,"
+        " bridge=[py, '-c', 'pass'],"
         " bridge_stop=[py, '-c', 'import sys; open(sys.argv[1], \"a\").write(\"stop {epoch}\\\\n\")', marks])\n"
         "print(json.dumps(r))\n")
     proc = subprocess.Popen([PY, str(script)], stdout=subprocess.PIPE, text=True)
@@ -141,3 +143,10 @@ def test_a_term_ends_the_runner_removes_the_bridge_and_starts_nothing_more(tmp_p
     result = json.loads(out.strip().splitlines()[-1])
     assert result["end"] == "terminated" and result["epochs"] == 1
     assert marks.read_text().split() == ["stop", "1"]
+
+
+def test_a_failing_cleanup_is_logged(tmp_path):
+    result = run(tmp_path, runner_exiting(0), bridge=[PY, "-c", "pass"], bridge_stop=[PY, "-c", "raise SystemExit(9)"])
+    assert result["end"] == "ended"
+    log = [json.loads(line) for line in (tmp_path / "supervisor.jsonl").read_text().splitlines()]
+    assert any(e["event"] == "bridge_stop_failed" and e.get("code") == 9 for e in log)

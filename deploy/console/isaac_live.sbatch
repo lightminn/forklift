@@ -44,7 +44,10 @@ EOT
 cat > "$OUT/stop.sh" <<'EOT'
 #!/bin/bash
 . "$(dirname "$0")/env.sh"
-docker rm -f "slam_bridge_${JOB}_e$1" >/dev/null 2>&1 || true
+# a missing container is no failure; a removal that fails is (the supervisor logs it)
+if [ -n "$(docker ps -aq --filter "name=^slam_bridge_${JOB}_e$1\$")" ]; then
+  docker rm -f "slam_bridge_${JOB}_e$1" >/dev/null
+fi
 EOT
 cat > "$OUT/runner.sh" <<'EOT'
 #!/bin/bash

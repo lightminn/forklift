@@ -142,7 +142,14 @@ def supervise(*, out: Path, runner: list[str], port_file: Path, backoff_s: float
                 else:
                     _log(out, {"event": "start", "epoch": epoch})
                     stop.child = subprocess.Popen(_fill(runner, **values))
-                    process = _end_child(stop.child, grace_s) if stop.asked else stop.child.wait()
+                    while True:  # short waits, so a TERM arriving meanwhile turns into the grace and the KILL
+                        try:
+                            process = stop.child.wait(timeout=0.5)
+                            break
+                        except subprocess.TimeoutExpired:
+                            if stop.asked:
+                                process = _end_child(stop.child, grace_s)
+                                break
                     stop.child = None
                     code = process
                     if exit_file is not None:
@@ -164,7 +171,9 @@ def supervise(*, out: Path, runner: list[str], port_file: Path, backoff_s: float
                     stop.child = None
                 if bridge_stop is not None:
                     try:
-                        subprocess.run(_fill(bridge_stop, **values))
+                        cleaned = subprocess.run(_fill(bridge_stop, **values)).returncode
+                        if cleaned != 0:
+                            _log(out, {"event": "bridge_stop_failed", "epoch": epoch, "code": cleaned})
                     except (OSError, subprocess.SubprocessError) as exc:
                         _log(out, {"event": "bridge_stop_failed", "epoch": epoch, "error": str(exc)})
             codes.append(code)
