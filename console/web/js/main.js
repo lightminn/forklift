@@ -535,6 +535,7 @@ $("map-fit").onclick = () => {
 };
 $("map-follow").onclick = () => {
   m.view.follow = !m.view.follow;
+  if (m.view.follow) m.view.auto = false; // following sets the centre; the zoom stays where it is
   $("map-follow").setAttribute("aria-pressed", String(m.view.follow));
 };
 

@@ -6428,6 +6428,12 @@ def drive(S, isaac) -> None:
                     state["command_speed"] = 0.0
                     state["applied_command"] = (0.0, [float(v) for v in steering_command])
                 # The state carries what is applied after the choice above (contract 6, Codex M-c round 5 P1).
+                live_tracker_ = trackers.get(ms.phase) if core.commands.status in (
+                    "running", "paused", "held", "resuming") else None
+                live_plan_key_ = None if live_tracker_ is None else (
+                    ms.phase, (getattr(live_tracker_, "_book", None) or {}).get("serial", id(live_tracker_)))
+                live_plan_poses_ = None if live_tracker_ is None else (
+                    lambda tr=live_tracker_: (tr._poses, tr._directions))
                 live.publish(
                     t, out_, live_safety_,
                     pose={"frame": "map", "x_m": float(rear[0]), "y_m": float(rear[1]), "yaw_rad": float(rear[2]),
@@ -6439,7 +6445,9 @@ def drive(S, isaac) -> None:
                     speed_mps=float(speed_now_),
                     # measured, not commanded: the joints as they stand (contract 6)
                     steering_rad=[float(v) for v in robot.get_joint_positions()[steers]],
-                    lift_m=float(robot.get_joint_positions()[lift_index[0]]))
+                    lift_m=float(robot.get_joint_positions()[lift_index[0]]),
+                    # the path being followed, for the page's map (display only): none without a running mission
+                    plan_key=live_plan_key_, plan_poses=live_plan_poses_)
             if dwell_standing and wheel_lock["q"] is None:
                 # Plan D8b: hold the wheels where they stand for the dwell (DWELL_WHEEL_KP).
                 controller_ = robot.get_articulation_controller()

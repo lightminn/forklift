@@ -60,6 +60,7 @@ class LiveRuntime:
         self.link = Link(self.arbiter, self.channels)
         self.store = MediaStore()
         self.pacer = Pacer(factor, dt, catchup_steps=catchup_steps)  # real-time plan D7
+        self.plan_feed = PlanFeed()  # the followed path, for the page's map (display only)
         # Frames by sim time (plan C4a): the video limit is scaled by the declared factor like the command age, so
         # a sim-rate camera keeps the same freshness in sim terms; frames by wall time made a slower run render more
         # often and run slower still (2026-10-17).
@@ -167,13 +168,17 @@ class LiveRuntime:
 
     def publish(self, t: float, out, safety: dict, *, pose: dict | None, freshness: dict | None,
                 applied: dict | None, speed_mps: float | None, steering_rad: list | None = None,
-                lift_m: float | None = None) -> None:
-        """The state (with the command as finally applied), the targets and the log entry due this tick."""
+                lift_m: float | None = None, plan_key=None, plan_poses: Callable | None = None) -> None:
+        """The state (with the command as finally applied), the targets and the log entry due this tick.
+        ``plan_key`` names the path being followed (None: none); ``plan_poses()`` gives its poses and directions."""
         now = self.clock()
         if self.link.state_due(now):
             msg = state_message(self.arbiter, out, safety, now_mono=now, rear_axle_speed_mps=speed_mps,
                                 applied=applied, pose=pose, freshness=freshness, pacing=self.pacer.report(),
                                 steering_rad=steering_rad, lift_m=lift_m)
+            plan = self.plan_feed.update(plan_key, plan_poses, now)
+            if plan is not OMIT:
+                msg["plan"] = plan
             self.channels.put(None, msg)
         targets = self.core.targets
         if targets.revision != self._targets_revision:
@@ -280,6 +285,41 @@ def sent_scale(width: int, max_width: int = 640) -> int:
     while width // n > max_width:
         n *= 2
     return n
+
+
+OMIT = object()  # PlanFeed.update: this state carries no plan field
+
+
+class PlanFeed:
+    """The display plan for the state (contract 6: ``plan: {revision, poses: [[x, y, direction], ...]}``, only when it
+    changes): a new plan key is a new revision; no plan any more is said once as null; whatever is current is said
+    again every ``refresh_s`` so a page that connects later gets it. At most ``max_poses`` poses (plus the cusps)."""
+
+    def __init__(self, refresh_s: float = 2.0, max_poses: int = 200) -> None:
+        self.refresh_s, self.max_poses = refresh_s, max_poses
+        self.key, self.revision, self.current, self.sent_at = None, 0, None, None
+
+    def update(self, key, poses: Callable | None, now: float):
+        if key != self.key:
+            self.key = key
+            if key is None:
+                self.current = None
+            else:
+                self.revision += 1
+                self.current = {"revision": self.revision, "poses": self._thin(*poses())}
+        elif self.sent_at is not None and now - self.sent_at < self.refresh_s:
+            return OMIT
+        self.sent_at = now
+        return self.current
+
+    def _thin(self, poses, directions) -> list:
+        n = len(poses)
+        keep = set(range(0, n, max(1, math.ceil(n / self.max_poses)))) | {n - 1}
+        for i in range(1, n):
+            if (directions[i] >= 0) != (directions[i - 1] >= 0):
+                keep |= {i - 1, i}  # both ends of a cusp: the page draws a node there
+        return [[round(float(poses[i][0]), 3), round(float(poses[i][1]), 3), 1 if directions[i] >= 0 else -1]
+                for i in sorted(keep)]
 
 
 def live_video_size(calibration, max_width: int = 640) -> tuple[int, int]:

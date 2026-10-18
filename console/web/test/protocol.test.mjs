@@ -79,3 +79,13 @@ test("a new session_epoch drops lease and tick", () => {
   assert.equal(s.hasLease, false);
   assert.equal(s.echoMessage(), null);
 });
+
+test("a state without a plan keeps the last plan; plan null clears it", () => {
+  const { s } = setup();
+  const plan = { revision: 1, poses: [[0, 0, 1], [1, 0, 1]] };
+  s.onMessage({ t: "state", state_seq: 2, session_epoch: 3, control_gen: 7, arm_gen: 0, armed: false, mode: "AUTO", plan });
+  s.onMessage({ t: "state", state_seq: 3, session_epoch: 3, control_gen: 7, arm_gen: 0, armed: false, mode: "AUTO" });
+  assert.deepEqual(s.state.plan, plan);
+  s.onMessage({ t: "state", state_seq: 4, session_epoch: 3, control_gen: 7, arm_gen: 0, armed: false, mode: "AUTO", plan: null });
+  assert.equal(s.state.plan, null);
+});

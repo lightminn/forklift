@@ -74,7 +74,8 @@ export function createSession({ clientId, send, now, newId, retryMs = 500 }) {
         break;
       case "state":
         if (msg.session_epoch !== epoch) return;
-        state = msg;
+        // the plan rides a state only when it changes (contract 6): keep the last one until a state says otherwise
+        state = "plan" in msg || !state ? msg : { ...msg, plan: state.plan ?? null };
         controlGen = msg.control_gen;
         armGen = msg.arm_gen;
         armed = Boolean(msg.armed);

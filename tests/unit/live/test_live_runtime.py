@@ -238,3 +238,34 @@ def test_the_runner_streams_the_live_video_camera_with_a_near_plane_for_the_fork
     assert '"/LiveVideoCamera"' in setup and "resolution=(video_w_, video_h_)" in setup
     assert "set_clipping_range(near_distance=0.05" in setup
     assert "live_video_camera" in source[source.index("live_cam_ = "):][:200]
+
+
+def test_the_plan_rides_the_state_when_it_changes_and_again_every_two_seconds():
+    # The page draws the plan as a road (contract 6: on change only); a page that connects later gets it at the next
+    # refresh. Isaac live sent none at all before (2026-10-18 demo: the plan layer stayed empty in AUTO).
+    from sim.isaac.live_runtime import OMIT, PlanFeed
+
+    xs = np.linspace(0.0, 9.0, 1000)
+    poses = np.column_stack((xs, np.zeros_like(xs), np.zeros_like(xs)))
+    dirs = np.ones(1000)
+    dirs[900:] = -1  # a cusp: the page marks it with a node
+    feed = PlanFeed(refresh_s=2.0)
+    first = feed.update(7, lambda: (poses, dirs), now=0.0)
+    assert first["revision"] == 1 and 2 <= len(first["poses"]) <= 202
+    assert first["poses"][0] == [0.0, 0.0, 1] and first["poses"][-1] == [9.0, 0.0, -1]
+    signs = [p[2] for p in first["poses"]]
+    k = signs.index(-1)
+    assert first["poses"][k - 1][0] == pytest.approx(xs[899], abs=1e-3) and first["poses"][k][0] == pytest.approx(xs[900], abs=1e-3)
+    assert feed.update(7, lambda: (poses, dirs), now=1.0) is OMIT
+    assert feed.update(7, lambda: (poses, dirs), now=2.1)["revision"] == 1  # the refresh, same plan
+    assert feed.update(8, lambda: (poses[:10], dirs[:10]), now=2.2)["revision"] == 2
+    assert feed.update(None, None, now=2.3) is None  # no plan any more: said once
+    assert feed.update(None, None, now=2.4) is OMIT
+
+
+def test_the_runner_hands_the_followed_path_to_the_live_state():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
+    call = source[source.index("live.publish("):][:1600]
+    assert "plan_key=" in call and "plan_poses=" in call
