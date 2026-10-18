@@ -586,7 +586,7 @@ def test_a_live_missions_failure_in_its_tick_ends_the_mission_and_the_tick_finis
     source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
     tree = ast.parse(source)
     (loop,) = [n for n in ast.walk(tree) if isinstance(n, ast.For)
-               and ast.unparse(n.iter) == "range(int(120 * args.max_sim_seconds))"]
+               and "range(int(120 * args.max_sim_seconds))" in ast.unparse(n.iter)]
     assert ast.unparse(loop.body[0]) == "live_tick_out_ = live_stepped_ = False"
     (body,) = [n for n in loop.body if isinstance(n, ast.Try)]
     (handler,) = body.handlers
@@ -600,5 +600,31 @@ def test_a_live_missions_failure_in_its_tick_ends_the_mission_and_the_tick_finis
     assert inside.index("live_tick_out_ = True") > inside.index("out_ = live.tick_end(")
     step_at = inside.index('stepper["fn"]((pocket_frames and step % 12 == 0) or capturing_)')
     assert step_at < inside.index("live_stepped_ = True") < inside.index("core.capture_stepped(")
-    failed = source[source.index("        def live_failed("):source.index("        for step in range(")]
+    failed = source[source.index("        def live_failed("):source.index("        for step in (")]
     assert failed.index("live.end_mission(t_") < failed.index("if not ticked_:") < failed.index("if not stepped__:")
+
+
+def test_a_supervised_runtime_offers_the_scene_reset_and_binds_the_port_it_is_given(tmp_path):
+    """Persistent console plan D7/D9: a fixed port across epochs; the reset only where a supervisor restarts it."""
+    import socket
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        free = probe.getsockname()[1]
+    rt, core, did, clock = runtime(tmp_path, port=free, supervised=True)
+    assert rt.welcome["capabilities"]["sim_reset"] is True and rt.arbiter.sim_reset_allowed
+    assert rt.start() == free
+    (tmp_path / "plain").mkdir()
+    plain, *_ = runtime(tmp_path / "plain")
+    assert plain.welcome["capabilities"]["sim_reset"] is False and not plain.arbiter.sim_reset_allowed
+
+
+def test_the_runner_leaves_its_loop_on_a_session_request_with_its_exit_code():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
+    flat = _squash(source)
+    assert "for step in (itertools.count() if live is not None else range(int(120 * args.max_sim_seconds))):" in flat
+    head = flat[flat.index("if live is not None and live.arbiter.session_request is not None:"):][:400]
+    assert 'state["live_session_request"] = live.arbiter.session_request break' in head
+    assert '{"end": 0, "reset": 3}' in flat and 'raise SystemExit(state.get("live_exit_code", 0 if state["success"] else 1))' in flat

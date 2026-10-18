@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from forklift_core.localization.slam_pose import StopDetector
-from forklift_core.mission.commands import FINAL, Cancel, HoldOff, HoldOn, Resume, Submit
+from forklift_core.mission.commands import ACTIVE, FINAL, Cancel, HoldOff, HoldOn, Resume, Submit
 
 from .generations import PENDING, RequestBook
 from .ledger import FrameLedger, TickLedger
@@ -26,7 +26,7 @@ from .validate import problem
 
 MODES = ("PAUSED", "AUTO", "TELEOP", "STOPPED")
 LEASED = ("rearm", "mode_request", "arm", "disarm", "mission_submit", "mission_pause", "mission_resume",
-          "mission_cancel", "recovery")
+          "mission_cancel", "recovery", "session_end", "sim_reset")
 RELIABLE = LEASED + ("stop", "lease_request", "lease_release", "targets_request")
 AUTO_STATUSES = ("accepted", "preparing", "running", "resuming", "cancelling")  # the mission states AUTO stays in (B5)
 
@@ -116,6 +116,8 @@ class Arbiter:
         self.last_applied = 0.0  # the speed applied last cycle (the stop detector's command input)
         self.last_safety: dict | None = None  # the mission's safety state from the last step
         self.pending: list[dict] = []  # mission requests waiting for this cycle's lifecycle verdict (B3)
+        self.session_request: str | None = None  # "end" / "reset": the runner leaves its loop (console plan D7/D9)
+        self.sim_reset_allowed = False  # a simulation back end resets its scene on request (welcome sim_reset)
         self.provisional_auto = False
         self._context_gen = 0
         self._handling_conn: str | None = None
@@ -288,6 +290,26 @@ class Arbiter:
 
     def _on_targets_request(self, client_id, request_id, msg, now_mono):
         return self._reply("targets_request", request_id)  # the runner sends the list itself
+
+    def _on_session_end(self, client_id, request_id, msg, now_mono):
+        return self._session_request("session_end", request_id, now_mono)
+
+    def _on_sim_reset(self, client_id, request_id, msg, now_mono):
+        if not self.sim_reset_allowed:  # a simulation's own (welcome capabilities.sim_reset)
+            return self._reply("sim_reset", request_id, "unsupported")
+        return self._session_request("sim_reset", request_id, now_mono)
+
+    def _session_request(self, kind, request_id, now_mono):
+        """End the session or reset the scene (persistent console plan D7/D9): the lease holder's, standing, with no
+        mission on; the runner leaves its loop at the end of the tick."""
+        refused = self._needs_stand(kind, request_id)
+        if refused is not None:
+            return refused
+        if self.mission is not None and self.mission.status in ACTIVE:
+            return self._reply(kind, request_id, "mission_active")
+        self.session_request = "end" if kind == "session_end" else "reset"
+        self.events.append({"t": now_mono, "event": "session_request", "request": self.session_request})
+        return self._reply(kind, request_id)
 
     def _on_recovery(self, client_id, request_id, msg, now_mono):
         return self._reply("recovery", request_id, "unsupported")  # plan section 1: not this slice

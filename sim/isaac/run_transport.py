@@ -8,6 +8,7 @@ output is 60fps by default, and the floor destination is marked by a green ring.
 import argparse
 import hashlib
 import importlib.util
+import itertools
 import json
 import collections
 import math
@@ -662,6 +663,10 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument("--live-port-file", type=Path, default=None, help="M-c: where to write host, port and epoch")
     parser.add_argument("--live-host", default="127.0.0.1", help="M-c: the console server's address")
+    parser.add_argument("--live-port", type=int, default=0,
+                        help="persistent console plan D7: the console server's port, the same across epochs (0: any)")
+    parser.add_argument("--live-supervised", action="store_true",
+                        help="persistent console plan D9: a supervisor restarts the runner (exit 3: a new scene)")
     parser.add_argument("--live-factor", type=float, default=1.0, help="M-c: the declared real-time factor")
     parser.add_argument("--live-lease-timeout-s", type=float, default=5.0,
                         help="M-c: the control lease's timeout -- a tick cannot go out while a synchronous call holds "
@@ -5400,6 +5405,7 @@ def drive(S, isaac) -> None:
                 test_step_delay_s=args.live_test_step_delay_ms / 1000.0, camera_freeze=freeze_,
                 test_stop_in_capture=args.live_test_stop_in_capture,
                 catchup_steps=live_catchup_,
+                port=args.live_port, supervised=args.live_supervised,
                 end=LiveEndHooks(stop=live_zero_wheels, unlock_wheels=live_unlock_wheels,
                                  drain_trackers=trackers.close, judge_delivery=live_judge_delivery),
                 # The page's teleop overlay (display only, contract 3); none without the perception camera.
@@ -5853,11 +5859,16 @@ def drive(S, isaac) -> None:
             if not stepped__:
                 stepper["fn"](False)
 
-        for step in range(int(120 * args.max_sim_seconds)):
+        # Persistent console plan D7: a live session runs until it is ended (or its job's limit), not to a sim time.
+        for step in (itertools.count() if live is not None else range(int(120 * args.max_sim_seconds))):
             # Persistent console plan D6: a live mission's own failure (or the scene's damage) anywhere in the
             # tick ends that mission and the session goes on; the tick's output, publish and physics step run
             # once (the flags say which already did). Any other failure goes on up, as in a batch run.
             live_tick_out_ = live_stepped_ = False
+            if live is not None and live.arbiter.session_request is not None:
+                # The lease holder ended the session or asked for a new scene; the tick that took it is complete.
+                state["live_session_request"] = live.arbiter.session_request
+                break
             try:
                 if early_ports:
                     # Format 2: the tick opens first, the clock is read inside it (recorded), then the head's times
@@ -6781,6 +6792,8 @@ def drive(S, isaac) -> None:
             # Persistent console plan D1: each mission was judged at its own end (the results book); the session
             # ends here (at the loop's limit until D7), a mission still on as session_end.
             live.collect_end(book_clock["t"] if book_clock["t"] is not None else 0.0)  # its own reason (Codex P3)
+            # The session's end decides the exit (plan D9): 0 ended, 3 a new scene; the supervisor reads it.
+            state["live_exit_code"] = {"end": 0, "reset": 3}.get(state.get("live_session_request"), 0)
             live.end_mission(book_clock["t"] if book_clock["t"] is not None else 0.0, "failed", "session_end")
             state.update({"success": True, "mission_results": live.results.message()["results"],
                           "simulated_time_s": world.current_time - initial_time,
@@ -7212,7 +7225,7 @@ def main() -> None:
         )
         if app is not None:
             app.close()
-    raise SystemExit(0 if state["success"] else 1)
+    raise SystemExit(state.get("live_exit_code", 0 if state["success"] else 1))
 
 
 if __name__ == "__main__":

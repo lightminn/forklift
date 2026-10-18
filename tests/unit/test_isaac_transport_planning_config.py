@@ -1424,7 +1424,7 @@ def test_the_runner_stamps_every_leg_switch_and_the_plant_record_carries_frictio
     runner collects each tracker's new leg switches every tick with the time and phase, and V0's
     collider census records the friction coefficients of every bound material."""
     source = SCRIPT.read_text()
-    loop = source[source.index("for step in range(int(120 * args.max_sim_seconds)):"):]
+    loop = source[source.index("for step in (itertools.count() if live is not None else range(int(120 * args.max_sim_seconds))):"):]
     # (real-time plan D9c: the step also renders while a capture runs over the ticks)
     harvest = loop[: loop.index('stepper["fn"]((pocket_frames and step % 12 == 0) or capturing_)')]
     assert "trackers.collect()" in harvest and 'book_clock["t"] = t' in harvest

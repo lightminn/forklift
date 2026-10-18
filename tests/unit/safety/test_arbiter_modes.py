@@ -323,3 +323,41 @@ def test_teleop_is_refused_after_a_mission_ended_with_the_forks_maybe_in_a_pocke
     policy = teleop_policy(safety, feedback_ok=True, standing=True)
     assert not policy.drive_allowed and policy.reason == "recovery_required"
     assert teleop_policy(dict(SAFE), feedback_ok=True, standing=True).drive_allowed
+
+
+# --- persistent console plan D7/D9: ending the session, resetting the scene -----------------------------------------
+@pytest.mark.parametrize("kind, flag", [("session_end", "end"), ("sim_reset", "reset")])
+def test_the_lease_holder_ends_the_session_or_resets_the_scene_standing_with_no_mission(kind, flag):
+    r = Rig()
+    r.a.sim_reset_allowed = True
+    r.stand()
+    out = r.cycle(r.msg(kind))[0]
+    assert out["t"] == "ack" and r.a.session_request == flag
+    assert r.a.events[-1]["event"] == "session_request" and r.a.events[-1]["request"] == flag
+
+
+def test_ending_the_session_is_refused_while_a_mission_is_on_while_moving_and_without_the_lease():
+    r = Rig()
+    r.a.sim_reset_allowed = True
+    auto(r)
+    r.cycle(r.msg("mode_request", to="PAUSED"))
+    r.speed = 0.0
+    r.stand()  # paused and standing: the mission is still on
+    out = r.cycle(r.msg("session_end"))[0]
+    assert out["t"] == "reject" and out["reason"] == "mission_active" and r.a.session_request is None
+    r2 = Rig()
+    r2.speed = 0.3  # moving
+    r2.stand(3)
+    out = r2.cycle(r2.msg("session_end"))[0]
+    assert out["reason"] in ("not_stopped", "no_feedback:rear_axle_speed") and r2.a.session_request is None
+    r3 = Rig()
+    r3.stand()
+    out = r3.cycle({**r3.msg("session_end"), "lease_id": "nope"})[0]
+    assert out["reason"] == "stale_lease"
+
+
+def test_a_scene_reset_is_refused_where_the_back_end_cannot_do_it():
+    r = Rig()
+    r.stand()
+    out = r.cycle(r.msg("sim_reset"))[0]
+    assert out["reason"] == "unsupported" and r.a.session_request is None

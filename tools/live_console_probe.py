@@ -610,6 +610,13 @@ async def cycle_scenario(p: Probe, args):
         entry["result"] = (p.state or {}).get("last_result")
         entry["ended_mono"] = time.monotonic()
     p.report["missions_message"] = p.missions
+    if args.end_session and p.closed_code is None:
+        # Persistent console plan D7: the session ends on request (the runner exits 0), not at a sim time limit.
+        await p.until(p.standing, 30, label="standing_before_end")
+        p.report["session_end"] = await p.request_until_standing("session_end")
+        end = time.monotonic() + 120
+        while p.closed_code is None and time.monotonic() < end:
+            await asyncio.sleep(0.1)
     p.report["close_code"] = p.closed_code
 
 
@@ -620,6 +627,7 @@ def main():
     ap.add_argument("--scenario", choices=("main", "slow", "marker", "approach", "planwait", "cycle"), default="main")
     ap.add_argument("--cycle", default="P-1:D-1,P-1:D-0,P-1:D-1", help="cycle scenario: pallet:destination,...")
     ap.add_argument("--pre-teleop-s", type=float, default=0.0, help="cycle scenario: drive by hand first (wall s)")
+    ap.add_argument("--end-session", action="store_true", help="cycle scenario: end the session at the end")
     ap.add_argument("--pre-teleop-speed", type=float, default=0.5)
     ap.add_argument("--pre-teleop-curvature", type=float, default=0.3)
     ap.add_argument("--wait-offset-s", type=float, default=4.0,

@@ -64,7 +64,8 @@ class LiveRuntime:
                  sleep: Callable[[float], None] = time.sleep, session_epoch: int | None = None,
                  test_step_delay_s: float = 0.0, camera_freeze: tuple | None = None,
                  test_stop_in_capture: bool = False, camera_pixel_lag_s: float = 0.0,
-                 camera_model: dict | None = None, catchup_steps: int = 0, end: EndHooks | None = None):
+                 camera_model: dict | None = None, catchup_steps: int = 0, end: EndHooks | None = None,
+                 port: int = 0, supervised: bool = False):
         self.core, self.hooks, self.clock, self.sleep = core, hooks, clock, sleep
         self.end = end or EndHooks()
         self.results = ResultsBook()  # the session's mission outcomes (persistent console plan D1 step 9)
@@ -88,6 +89,8 @@ class LiveRuntime:
                         "session_epoch": self.session_epoch, "backend": "isaac", "capabilities": {
                             "control": True, "mission": True, "teleop_direct": True, "teleop_video": True,
                             "lift": False, "recovery_actions": [],
+                            # a supervisor restarts the runner on a new scene (persistent console plan D9)
+                            "sim_reset": bool(supervised),
                             "feedback": {"rear_axle_speed": True, "steering": True, "lift_height": True,
                                          "load_state": False},
                             "media": {"camera_rgb": {"max_hz": camera_hz}, "scan": {"max_hz": 10},
@@ -96,7 +99,8 @@ class LiveRuntime:
                             "provisional_limits": True}}
         if camera_model is not None:
             self.welcome["capabilities"]["camera_model"] = camera_model  # display only (contract 3)
-        self.server = LiveServer(self.channels, self.store, self.welcome, host=host, web_root=web_root)
+        self.arbiter.sim_reset_allowed = bool(supervised)
+        self.server = LiveServer(self.channels, self.store, self.welcome, host=host, port=port, web_root=web_root)
         self.output, self.port_file = Path(output), port_file
         self._log = open(self.output / "live_log.jsonl", "w")  # noqa: SIM115 -- closed in close()
         self.feedback: Feedback | None = None
