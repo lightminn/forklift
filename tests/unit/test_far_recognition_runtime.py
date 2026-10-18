@@ -125,3 +125,29 @@ def test_a_frame_before_the_cameras_first_render_is_skipped():
     scene, ids = _render((0.0, 0.0, 0.0))
     assert run.drive_frame(24, 24 * DT, None, None, ids, scene.intrinsics,
                            scene.base_from_optical)["skipped"] == "depth_not_ready"
+
+
+def _payload(grid, labels):
+    return {"data": np.asarray(grid, dtype=np.uint32), "info": {"idToLabels": labels}}
+
+
+def test_the_mission_semantics_keep_this_runs_labels_among_the_assets_own():
+    grid = np.zeros((480, 640), dtype=np.uint32)
+    grid[:, 300:] = 2
+    grid[100:200, 100:200] = 3
+    out = R.decode_mission_semantic(_payload(grid, {"0": {"class": "floor,pillar"}, "2": {"class": "pillar"},
+                                                     "3": {"class": "inst_4,pallet"}}))
+    assert out.ready and int(out.instance_ids[150, 150]) == 4 and int(out.instance_ids[0, 400]) == -1
+    assert int(out.instance_ids[0, 0]) == -1  # the background is not an instance
+
+
+def test_the_mission_semantics_need_the_background_label():
+    grid = np.zeros((480, 640), dtype=np.uint32)
+    assert not R.decode_mission_semantic(_payload(grid, {"0": {"class": "pillar"}})).ready
+    assert not R.decode_mission_semantic(None).ready
+
+
+def test_two_instance_labels_on_one_id_are_a_contract_error():
+    grid = np.zeros((480, 640), dtype=np.uint32)
+    with pytest.raises(ValueError):
+        R.decode_mission_semantic(_payload(grid, {"0": {"class": "inst_0,inst_1"}}))

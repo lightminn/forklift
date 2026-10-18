@@ -67,6 +67,50 @@ def fork_spacing_m(blades) -> float:
     return float(centres[1] - centres[0])
 
 
+def decode_mission_semantic(payload, shape=(480, 640)):
+    """The mission scene's semantic segmentation as instance ids (>= 0 for ``inst_k``, -1 elsewhere).
+
+    Unlike the recognition renders (recognition_render_core.decode_semantic), the warehouse assets carry their
+    own class labels (``pillar``, ...), so one id can hold several names: only this run's labels count -- an
+    ``inst_k`` wins, ``floor`` marks the background that readiness needs, anything else is ignored. Two
+    instance labels on one id are a contract error. Returns (ids or None, ready, status)."""
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    def not_ready(status):
+        return SimpleNamespace(instance_ids=None, ready=False, status=status)
+
+    if not isinstance(payload, dict) or payload.get("data") is None:
+        return not_ready("missing_buffer")
+    array = np.asarray(payload["data"])
+    if not array.size:
+        return not_ready("empty_buffer")
+    info = payload.get("info")
+    labels = info.get("idToLabels") if isinstance(info, dict) else None
+    if not isinstance(labels, dict) or not labels:
+        return not_ready("missing_label_map")
+    if array.ndim == 3 and array.shape[-1] == 1:
+        array = array[..., 0]
+    if array.dtype.kind not in "ui":
+        raise ValueError("semantic segmentation must be an uncolorized integer grid")
+    if array.shape != tuple(shape):
+        return not_ready("shape_mismatch")
+    ids = np.full(array.shape, -1, dtype=np.int32)
+    floor = 0
+    for key, value in labels.items():
+        classes = value.get("class", []) if isinstance(value, dict) else []
+        names = [c for c in classes.split(",") if c] if isinstance(classes, str) else list(classes)
+        inst = [n for n in names if n.startswith("inst_") and n[5:].isdigit()]
+        if len(inst) > 1:
+            raise ValueError(f"semantic id {key} carries several instance labels: {inst}")
+        hit = array == int(key)
+        if inst:
+            ids[hit] = int(inst[0][5:])
+        elif "floor" in names:
+            floor += int(hit.sum())
+    ready = floor > 0
+    return SimpleNamespace(instance_ids=ids if ready else None, ready=ready, status="ready" if ready else "floor_missing")
+
+
 class FarRuntime:
     def __init__(self, *, fork_spacing: float, pallet_depth_m: float, pallet_shape: str, zone_centre_xy,
                  zone_radius_m: float, camera_x_m: float, dt: float, frame_every: int = 24, lag_steps: int = 0,

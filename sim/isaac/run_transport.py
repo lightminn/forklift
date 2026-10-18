@@ -2568,10 +2568,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     }
     for extra_camera in extra_cameras.values():
         extra_camera.initialize()
-    far_runtime = far_intrinsics = rrc = frr = None  # the far recognition (--recognition far)
+    far_runtime = far_intrinsics = frr = None  # the far recognition (--recognition far)
     if args.recognition == "far":
         import far_recognition_runtime as frr
-        import recognition_render_core as rrc
     if args.use_perception:
         perception_camera.initialize()
         verify_camera_intrinsics(perception_camera, perception_calibration, state)
@@ -2696,8 +2695,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             physics_time_fn=lambda: cells.world.current_time,
             pose_fn=robot.get_world_pose,
             guard_fn=lift_guard,
-            semantic_fn=(lambda: rrc.decode_semantic(perception_camera.get_current_frame().get("semantic_segmentation"),
-                                                     None)) if args.recognition == "far" else None,
+            semantic_fn=(lambda: frr.decode_mission_semantic(
+                perception_camera.get_current_frame().get("semantic_segmentation"))) if args.recognition == "far" else None,
         )
         if args.recognition == "far":
             from forklift_core.planning.observation_viewpoints import BAY_PICKUP_ZONE as _Z
@@ -3061,8 +3060,8 @@ def drive(S, isaac) -> None:
         far_runtime = _bound["far_runtime"]
     if "far_intrinsics" in _bound:
         far_intrinsics = _bound["far_intrinsics"]
-    if "rrc" in _bound:
-        rrc = _bound["rrc"]
+    if "frr" in _bound:
+        frr = _bound["frr"]
     if "ARC_POSES" in _bound:
         ARC_POSES = _bound["ARC_POSES"]
     if "CUSP_STALL" in _bound:
@@ -5104,7 +5103,7 @@ def drive(S, isaac) -> None:
         def far_drive_frame(tick_: int) -> None:
             """One driving frame for the far recognition: render-metadata time, pixels and instance ids."""
             frame_ = perception_camera.get_current_frame()
-            semantic_ = rrc.decode_semantic(frame_.get("semantic_segmentation"), None)
+            semantic_ = frr.decode_mission_semantic(frame_.get("semantic_segmentation"))
             rgba_ = np.array(perception_camera.get_rgba(), copy=True)
             raw_ = np.array(perception_camera.get_depth(), copy=True)
             if raw_.ndim == 3 and raw_.shape[-1] == 1:
