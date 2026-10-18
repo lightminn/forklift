@@ -470,6 +470,10 @@ def test_the_safety_state_reports_the_lifecycle_the_load_and_the_command_without
     out = core.safety_state(10.0)
     assert out["mission"]["status"] == "running" and out["mission"]["id"] == "m1"
     assert out["mission"]["phase"] == "transport" and out["mission"]["phase_elapsed_s"] == 10.0
+    # the follower's distance left in the phase (persistent console U7: a cancel at a leg's end), None without one
+    assert out["mission"]["remaining_m"] == pytest.approx(core.trackers["transport"].remaining_to_goal_m())
+    del core.trackers["transport"]
+    assert core.safety_state(10.0)["mission"]["remaining_m"] is None
     assert out["load"] == {"loaded": True, "basis": "phase", "lift_target_m": 0.0}
     assert out["fork_in_pocket"] == {"value": False, "basis": "phase"}
     assert out["command"] == {"applied_speed_mps": 0.25, "steering_rad": [0.1, 0.12]}

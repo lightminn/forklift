@@ -52,6 +52,27 @@ def zones_from(targets, pickup_zone) -> list:
     return out
 
 
+def preparation_obstacle(pallet, pickup_zone, *, pose=None, size=None):
+    """The rectangle a preparation's observation plan holds a target pallet as (plan D4b item 1; one function for
+    the runner's live_prepare and its start check): a prior pallet is the whole pickup zone, the others their outline
+    grown by their uncertainty. ``pose`` replaces the pallet's own (a frame change carried); None when it is on the
+    forks or has no pose. ``size``: (depth, width) when the pallet's own is not recorded."""
+    from forklift_core.planning.geometry import Rectangle
+
+    pose = pose if pose is not None else pallet.pose
+    if pallet.state == "carried" or pose is None:
+        return None
+    if pallet.basis == "prior" and pickup_zone is not None:
+        return pickup_zone
+    grow = RECOGNISED_MARGIN_M if pallet.uncertainty_m is None else pallet.uncertainty_m
+    if pallet.basis == "prior":  # a prior without a zone: the old 0.30 m rule
+        grow = 0.30
+    depth, width = ((pallet.depth_m, pallet.width_m) if pallet.depth_m is not None and pallet.width_m is not None
+                    else size)
+    return Rectangle(float(pose.x_m), float(pose.y_m), float(depth) + 2 * grow, float(width) + 2 * grow,
+                     float(pose.yaw_rad))
+
+
 @dataclass(frozen=True)
 class Zone:
     zone_id: str

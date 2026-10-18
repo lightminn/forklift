@@ -87,6 +87,9 @@ def rollout_callback_spec(config, start) -> dict:
     return {"kind": "bicycle_rollout", "config": asdict(config), "start": [float(v) for v in np.ravel(start)]}
 
 
+CLEAR_OUT_BUDGET_M = 1.0  # plan D4b: the most a cancelled truck backs out to where the next preparation can start
+CLEAR_OUT_MARGIN_M = 0.08  # its end: clear with the arrival and tracking tolerances (0.03 + 0.008 + 0.02 rad x 1.66 m)
+CLEAR_OUT_STEP_M = 0.05  # a final check that fails at the end backs out this much more (within the budget)
 RECOVERY_PHASE_LIMIT_S = 20.0  # plan D4: each recovery phase's work-clock limit
 RECOVERY_LOWER_MIN_S = 1.0  # the lowered verdict is read after this much of recover_lower (the lift ramps down first)
 
@@ -190,6 +193,10 @@ class MissionCore:
         # but only a live run reads it -- core.baseline is set there alone).
         self.cargo = CargoState()
         self._recovery_install_gen = None  # plan D4: the commands generation the retrace was installed under
+        self.recent_odom: list = []  # plan D4b: the last 3 m of odometry rear poses (live), every 0.02 m
+        self.recent_steps: list = []  # whether the step arriving at each of them went forward
+        self.recent_forward = True  # the direction of the last motion
+        self.clear_out_used_m = 0.0  # the back-out budget spent
 
     def known_transition(self, from_phase: str, next_phase: str, t: float) -> None:
         """Known pallets across the mission (plan v10 D5)."""
@@ -348,6 +355,11 @@ class MissionCore:
             slam["pending_release"] = ms.phase
             slam["release_wait_from"] = t
 
+    def _remaining_m(self, phase):
+        """The follower's distance left in ``phase`` for the published state; None without a follower there."""
+        remaining = getattr(self.trackers.get(phase) if phase is not None else None, "remaining_to_goal_m", None)
+        return None if remaining is None else float(remaining())
+
     def tracking_limit(self, t: float) -> float:
         """The follower's time limit in the current phase: three times the path time at the tracker's own speed
         caps (length / cruise when there are none), plus 10 s; standing by design is not slowness."""
@@ -367,7 +379,11 @@ class MissionCore:
         transition = self.transition
         rear = None
         if ms.phase == "recover_withdraw":
-            self.recovery_done(t)  # plan D4: backed out; the live mission ends cancelled, the session goes on
+            # plan D4: backed out; the live mission ends cancelled through the next start's check (D4b)
+            self.finish_cancel(t, self.cargo.last_rear)
+            return SimpleNamespace(stop=False, rear=rear)
+        if ms.phase == "clear_out":
+            self.clear_out_arrived(t, self.cargo.last_rear)  # plan D4b: the final check, or 0.05 m more
             return SimpleNamespace(stop=False, rear=rear)
         if ms.phase == "approach":
             if near is not None and self.options.near_tracking_stop_at == "insert":
@@ -618,17 +634,148 @@ class MissionCore:
     def recovery_failed(self, t: float, why: str) -> None:
         self.commands.terminate("recovery_required", t, f"recovery:{why}")
 
-    def recovery_done(self, t: float) -> None:
-        """Backed out: the mission ends cancelled; the pallet is back on the floor in the targets list where the
-        mission's estimate holds it (the pickup's, or the destination's once placed there -- Codex 6b impl P1-1)."""
-        self.commands.recovered(t)
-        at_destination = self.cargo.placed is not None
-        self.cargo.recovered()
+    # --- plan D4b: a cancel ends where the next preparation can start ---------------------------------------------
+    def observe_motion(self, odom_rear) -> None:
+        """Each live tick's end: the last 3 m of odometry rear poses (never the control pose: a correction jump is not
+        a move), every 0.02 m, and whether the last of those steps went forward along the heading (plan D4b)."""
+        odom_rear = tuple(float(v) for v in odom_rear)
+        forward = True
+        if self.recent_odom:
+            last = self.recent_odom[-1]
+            dx, dy = odom_rear[0] - last[0], odom_rear[1] - last[1]
+            if math.hypot(dx, dy) < 0.02:
+                return
+            forward = self.recent_forward = dx * math.cos(odom_rear[2]) + dy * math.sin(odom_rear[2]) >= 0.0
+        self.recent_odom.append(odom_rear)
+        self.recent_steps.append(forward)
+        del self.recent_odom[:-150], self.recent_steps[:-150]
+
+    def end_gate(self, t: float, rear, extra_m: float = 0.0) -> bool:
+        """Whether the next preparation's start check passes here with the inputs it would have after the end release
+        (the runner's prepare_start_ok); no check (a batch run): passes."""
+        check = getattr(self.hooks, "prepare_start_ok", None)
+        if check is None or self.baseline is None:
+            return True
+        return bool(check(tuple(float(v) for v in rear), extra_m=extra_m, preview=True, t=t))
+
+    def finish_cancel(self, t: float, rear) -> bool:
+        """A live cancel (or a recovery) ends through the gate: there, cancelled (True, the end goes on); inside the
+        next preparation's clearance, a back-out first (False)."""
+        cmds = self.commands
+        if self.end_gate(t, rear):
+            if cmds.status == "cancelling":
+                cmds.cancelled(t)
+            else:
+                self.recovery_done(t)
+            return True
+        if cmds.status == "cancelling":
+            cmds.begin_recovery(t)
+        self.clear_out_used_m = 0.0
+        self.start_clear_out(t, rear)
+        return False
+
+    def _odom_to_control(self, pose):
+        slam = self.slam
+        if slam is None or slam["tracker"].applied is None:
+            return tuple(pose)
+        return tuple(float(v) for v in compose(tuple(float(v) for v in slam["tracker"].applied[0]), tuple(pose)))
+
+    def start_clear_out(self, t: float, rear, *, extend_only: bool = False) -> None:
+        """The back-out (plan D4b): held; after forward motion the recent odometry trajectory retraced, after reverse
+        motion (or to extend) straight back along the heading; it ends at the first sample the next preparation's
+        start check passes with CLEAR_OUT_MARGIN_M; none within the budget: recovery_required."""
+        slam = self.slam
+        if slam is not None and slam["tracker"].mode != "holding":
+            self.hold_slam(t, held_frame_pallet=False)  # the back-out moves in one frame
+        rear = tuple(float(v) for v in rear)
+        budget = CLEAR_OUT_BUDGET_M - self.clear_out_used_m
+        if budget < 0.02:
+            self.recovery_failed(t, "clear_out:budget")
+            return
+        if extend_only:
+            count = max(2, int(round(CLEAR_OUT_STEP_M / 0.02)) + 1)
+            poses = [(rear[0] - s * math.cos(rear[2]), rear[1] - s * math.sin(rear[2]), rear[2])
+                     for s in np.linspace(0.0, min(CLEAR_OUT_STEP_M, budget), count)]
+        else:
+            poses = [rear]
+            if self.recent_forward and len(self.recent_odom) >= 2:
+                # Only the last forward run (Codex D4b impl round 1 P1-2: a gear change in the trace put forward
+                # segments into a reverse path): back to where that run began.
+                first = len(self.recent_odom) - 1
+                while first > 0 and self.recent_steps[first]:
+                    first -= 1
+                poses += [self._odom_to_control(p) for p in reversed(self.recent_odom[first:-1])]
+            # then straight back along the heading there, for what is left of the budget
+            end = poses[-1]
+            run = float(np.sum(np.hypot(np.diff(np.asarray(poses)[:, 0]), np.diff(np.asarray(poses)[:, 1])))) \
+                if len(poses) > 1 else 0.0
+            poses += [(end[0] - s * math.cos(end[2]), end[1] - s * math.sin(end[2]), end[2])
+                      for s in np.arange(0.02, budget - run + 1e-9, 0.02)]
+            out, length = [poses[0]], 0.0
+            for pose in poses[1:]:
+                step = math.hypot(pose[0] - out[-1][0], pose[1] - out[-1][1])
+                if step < 1e-6:
+                    continue
+                if length + step > budget + 1e-9:
+                    break
+                length += step
+                out.append(pose)
+                if self.end_gate(t, pose, CLEAR_OUT_MARGIN_M):
+                    break
+            else:
+                out = None
+            if out is None or len(out) < 2 or not self.end_gate(t, out[-1], CLEAR_OUT_MARGIN_M):
+                self.recovery_failed(t, "clear_out:no_start_within_budget")
+                return
+            poses = out
+        if self._install_retreat(t, rear, poses, "clear_out"):
+            self.clear_out_used_m += self.paths["clear_out"].length_m
+            if self.ms.phase != "clear_out":
+                self.transition("clear_out", t)
+
+    @staticmethod
+    def _rest_from(poses, cum, done, rear):
+        """The rest of a path from the truck's projection on it, in the path's order (Codex D4b impl round 4): the
+        segments that end beyond the follower's progress; the nearest one's foot point starts the rest, so it never
+        goes back to a sample already passed."""
+        here = np.asarray(rear, dtype=float)[:2]
+        best = None
+        for k in range(len(poses) - 1):
+            if cum[k + 1] < done - 1e-9:
+                continue  # wholly behind the progress
+            a, b = poses[k, :2], poses[k + 1, :2]
+            ab = b - a
+            span = float(ab @ ab)
+            lo = 0.0 if cum[k] >= done else min(1.0, (done - cum[k]) / max(cum[k + 1] - cum[k], 1e-12))
+            u = lo if span < 1e-18 else min(1.0, max(lo, float((here - a) @ ab) / span))
+            foot = a + u * ab
+            dist = float(np.hypot(*(here - foot)))
+            if best is None or dist < best[0] - 1e-12:
+                best = (dist, k, u, foot)
+        if best is None:
+            return poses[-1:]
+        _, k, u, foot = best
+        yaw = float(poses[k, 2] + u * math.atan2(math.sin(poses[k + 1, 2] - poses[k, 2]),
+                                                 math.cos(poses[k + 1, 2] - poses[k, 2])))
+        rest = poses[k + 1:]
+        if u < 1.0 - 1e-9:
+            rest = np.vstack((np.asarray([[foot[0], foot[1], yaw]]), rest))
+        return rest
+
+    def clear_out_arrived(self, t: float, rear) -> None:
+        if self.end_gate(t, rear):
+            self.recovery_done(t)
+        else:
+            self.start_clear_out(t, rear, extend_only=True)
+
+    def restore_pallet_target(self) -> None:
+        """The recovered pallet back in the targets (on the floor where the mission's estimate holds it: the pickup's,
+        or the destination's once placed there) -- at the ground verdict, so the end's start check sees it."""
         mission = self.commands.mission
         tb = self.targets
         if mission is None or mission.pallet_id not in tb.pallets or tb.pallets[mission.pallet_id].state != "carried":
             return
-        if at_destination:
+        if self.cargo.placed is not None:
             scenario_ = self.options.scenario
             if self.slam is not None:
                 scenario_ = self.slam.get("return_scenario", self.slam.get("transport_scenario", scenario_))
@@ -640,6 +787,13 @@ class MissionCore:
             if est_ is not None:
                 tb.put_down(mission.pallet_id, TargetPose(float(est_.x_m), float(est_.y_m), float(est_.yaw_rad)),
                             state="available", uncertainty_m=RECOGNISED_MARGIN_M)
+
+    def recovery_done(self, t: float) -> None:
+        """Backed out: the mission ends cancelled; the pallet is back on the floor in the targets list (Codex 6b impl
+        P1-1; already there since the ground verdict)."""
+        self.commands.recovered(t)
+        self.restore_pallet_target()
+        self.cargo.recovered()
 
     def recovery_timers(self, t: float) -> None:
         """recover_lower's verdict (the lift down and the pallet on the floor -- always read, however low the lift
@@ -656,30 +810,30 @@ class MissionCore:
                 if not self.cargo.trace_valid:
                     self.recovery_failed(t, "trace_invalid")
                     return
+                self.restore_pallet_target()  # plan D4b: the end's start check sees it (Codex 6b-2 round 2 P2-2)
                 self.transition("recover_withdraw", t)
                 self.install_recover_withdraw(t, self.cargo.last_rear)
 
     def install_recover_withdraw(self, t: float, rear) -> None:
-        """The retrace from the depth now (plan D4): judged whole by the permission before it moves; none left: done."""
+        """The retrace from the depth now (plan D4): judged whole by the permission before it moves; none left: the
+        end, through the next preparation's start check (plan D4b)."""
         if rear is None:
             self.recovery_failed(t, "no_pose")
             return
         poses = self.cargo.recovery_path(rear, 0.02)
         if len(poses) < 2:
-            self.recovery_done(t)
+            self.finish_cancel(t, rear)
             return
+        if self._install_retreat(t, rear, poses, "recover_withdraw"):
+            self.state.setdefault("recoveries", []).append({"time_s": t, "from_depth_m": self.cargo.depth(rear),
+                                                           "length_m": self.paths["recover_withdraw"].length_m})
+
+    def _install_retreat(self, t: float, rear, poses, phase: str) -> bool:
+        """A reversing path for a recovery phase: judged whole by the permission, then installed with the withdraw's
+        tracker settings. False: refused (recovery_required)."""
         poses = np.asarray(poses, dtype=float)
         count = len(poses)
-        path = RecoveryPath(poses, np.full(count, -1, dtype=np.int8), np.zeros(count),
-                            float(np.sum(np.hypot(np.diff(poses[:, 0]), np.diff(poses[:, 1])))))
-        obstacle = self.obstacle
-        if obstacle is not None:
-            check = obstacle["layer"].check_candidate(path.poses, current_pose=tuple(float(v) for v in rear),
-                                                      direction=-1, loaded=False, lookahead_m=path.length_m)
-            if check.blocked is not None or check.verified_m < path.length_m - 1e-6:
-                self.recovery_failed(t, f"blocked:{check.blocked}")
-                return
-        self.paths["recover_withdraw"] = path
+        steps = np.hypot(np.diff(poses[:, 0]), np.diff(poses[:, 1]))
         if "withdraw" in self.trackers:  # the withdraw's own speed and tolerances (Codex 6b impl P1-2)
             config = self.trackers["withdraw"].config
         elif self.trackers:  # another phase's, at the withdraw's speed and docking tolerance (the runner's withdraw)
@@ -687,13 +841,29 @@ class MissionCore:
                              cruise_speed_mps=self.settings["withdraw_speed_mps"], position_tolerance_m=0.008)
         else:
             self.recovery_failed(t, "no_tracker_config")
-            return
-        self.trackers["recover_withdraw"] = RearAxlePathTracker(path.poses, path.directions, path.curvatures_inv_m,
-                                                                config)
-        self.state.setdefault("recoveries", []).append({"time_s": t, "from_depth_m": self.cargo.depth(rear),
-                                                       "length_m": path.length_m})
-        self.state.setdefault("paths", {})["recover_withdraw"] = self.hooks.path_record(path)  # the record and the map
+            return False
+        # The planner's convention (turn = signed distance x curvature; entry i is the segment arriving at i): a
+        # retraced arc keeps its curvature as the follower's feed-forward, within the follower's limit (odometry
+        # jitter over a 0.02 m step is not a sharper turn).
+        curvatures = np.zeros(count)
+        if count > 1:
+            turns = np.arctan2(np.sin(np.diff(poses[:, 2])), np.cos(np.diff(poses[:, 2])))
+            curvatures[1:] = np.clip(np.where(steps > 1e-9, turns / -np.maximum(steps, 1e-9), 0.0),
+                                     -config.max_curvature_inv_m, config.max_curvature_inv_m)
+            curvatures[0] = curvatures[1]
+        path = RecoveryPath(poses, np.full(count, -1, dtype=np.int8), curvatures, float(np.sum(steps)))
+        obstacle = self.obstacle
+        if obstacle is not None:
+            check = obstacle["layer"].check_candidate(path.poses, current_pose=tuple(float(v) for v in rear),
+                                                      direction=-1, loaded=False, lookahead_m=path.length_m)
+            if check.blocked is not None or check.verified_m < path.length_m - 1e-6:
+                self.recovery_failed(t, f"blocked:{check.blocked}")
+                return False
+        self.paths[phase] = path
+        self.trackers[phase] = RearAxlePathTracker(path.poses, path.directions, path.curvatures_inv_m, config)
+        self.state.setdefault("paths", {})[phase] = self.hooks.path_record(path)  # the record and the map
         self._recovery_install_gen = self.commands.mission_gen
+        return True
 
     def permission_acting(self) -> tuple[bool, bool]:
         """Whether the permission acts on this phase's command, and whether the truck is on a docking straight
@@ -712,7 +882,7 @@ class MissionCore:
             # permission, and the safety evaluation, act on all of it.
             docking_straight = False
         acting = (
-            ms.phase in ("observe", "approach", "transport", "return_home", "recover_withdraw")
+            ms.phase in ("observe", "approach", "transport", "return_home", "recover_withdraw", "clear_out")
             or (ms.phase == "withdraw" and obstacle["layer"].known_enabled
                 and obstacle["layer"].known_config.get("withdraw_mode", "certified") == "certified")  # D5 corridor
         ) and not docking_straight
@@ -2975,6 +3145,10 @@ class MissionCore:
                 cmds.terminate("recovery_required", t, "recovery:" + ("trace_invalid" if not self.cargo.trace_valid
                                                                     else self.cargo.relation))
                 stop = True
+            elif self.baseline is not None and self.cargo.relation == "free":
+                # plan D4b: empty forks end through the next preparation's start check; a loaded cancel keeps its
+                # cargo where it stands (plan D5a: cargo_held -- Codex D4b impl round 1 P1-1)
+                stop = self.finish_cancel(t, rear)
             else:
                 cmds.cancelled(t)
                 stop = True
@@ -3020,6 +3194,9 @@ class MissionCore:
         if ms.phase in ("lift", "lower") and abs(float(self.hooks.lift_position()) - float(ms.lift_command)) > LIFT_RESUME_TOL_M:
             return refuse("state_verified:lift_mismatch")  # R7: the lift is not where the stop held it
         holding_now = slam is not None and slam["tracker"].mode == "holding"
+        if ms.phase == "clear_out" and slam is not None and not holding_now:
+            self.recovery_failed(t, "clear_out:hold_released")  # plan D4b: the back-out moves in its hold only
+            return rear
         if cmds.pause_holding and not cmds.pause_release_pending:
             if not holding_now:
                 return refuse("state_verified:hold_state_mismatch")
@@ -3048,6 +3225,36 @@ class MissionCore:
                 check["reason"] = "docking_retry"
                 return rear
         retry_stand = near is not None and near.get("retry_stand") and ms.phase == "observe"
+        if ms.phase == "clear_out" and self._recovery_install_gen != cmds.mission_gen:
+            # Plan D4b: the back-out goes on from its path, the progress the follower made along it and the budget
+            # (the hold kept -- checked before the general hold rows).
+            path_ = self.paths.get("clear_out")
+            remaining = None
+            if path_ is not None and "clear_out" in trackers:
+                poses_ = np.asarray(path_.poses, dtype=float)
+                cum_ = np.concatenate(([0.0], np.cumsum(np.hypot(np.diff(poses_[:, 0]), np.diff(poses_[:, 1])))))
+                done_ = float(path_.length_m) - float(trackers["clear_out"].remaining_to_goal_m())
+                remaining = self._rest_from(poses_, cum_, done_, rear)
+            if remaining is None or len(remaining) < 2:
+                self.clear_out_arrived(t, rear)
+            else:
+                # The progress made plus the rest is the planned path; the way back onto it from where the truck
+                # stands now is part of the path the permission checks (Codex D4b impl round 2 P2-2), and only what it
+                # adds beyond the rest the follower had left is new travel for the budget (round 3: a stop between
+                # samples is still on the path).
+                here_ = tuple(float(v) for v in rear)
+                join_ = float(math.hypot(remaining[0][0] - here_[0], remaining[0][1] - here_[1]))
+                if join_ > 1e-3:
+                    remaining = np.vstack((np.asarray([here_]), remaining))
+                new_ = float(np.sum(np.hypot(np.diff(remaining[:, 0]), np.diff(remaining[:, 1]))))
+                added_ = max(0.0, new_ - float(trackers["clear_out"].remaining_to_goal_m()))
+                if self.clear_out_used_m + added_ > CLEAR_OUT_BUDGET_M + 1e-9:
+                    self.recovery_failed(t, "clear_out:budget")
+                    return rear
+                if self._install_retreat(t, rear, remaining, "clear_out"):
+                    self.clear_out_used_m += added_
+            if cmds.status != "resuming":
+                return rear
         if ms.phase in ("recover_lower", "recover_withdraw") and not self.cargo.trace_valid:
             self.recovery_failed(t, "trace_invalid")  # the evidence went while paused (Codex 6b impl P1-3)
             return rear
@@ -3167,8 +3374,8 @@ class MissionCore:
         site_ = scenario_.destination
         site_pose = TargetPose(float(site_.x_m), float(site_.y_m), float(site_.yaw_rad))
         tb.update_destination(did, site_pose)
-        if ms.phase in ("recover_lower", "recover_withdraw"):
-            return  # plan D4: the recovery's end puts the pallet back (recovery_done); no branch below applies
+        if ms.phase in ("recover_lower", "recover_withdraw", "clear_out"):
+            return  # plan D4/D4b: the recovery puts the pallet back itself; no branch below applies
         if ms.phase in ("lift", "extract", "transport", "lower"):
             tb.carried(pid)
         elif ms.phase in ("withdraw", "settle", "return_home", "home_settle", "complete"):
@@ -3199,6 +3406,8 @@ class MissionCore:
                         "phase": phase_,
                         "phase_elapsed_s": (cmds.work_elapsed(ms.phase_started, t)
                                             if phase_ is not None and t is not None else None),
+                        # the follower's distance left in this phase (None without one): U7's cancel at a leg's end
+                        "remaining_m": self._remaining_m(phase_),
                         "resume": dict(cmds.resume_check) if cmds.resume_check else None,
                         "stop_seen_s": cmds.stop_seen_s, "not_stopped": cmds.not_stopped},
             "load": {"loaded": phase_ in ("lift", "extract", "transport", "lower"), "basis": "phase",
@@ -3241,7 +3450,8 @@ class MissionCore:
         ``warming`` and ``rear``."""
         slam, hooks = self.slam, self.hooks
         require, slam_release, slam_rear = hooks.require, self.slam_release, hooks.slam_rear
-        if self.commands.status == "recovering" and not self.cargo.trace_valid:
+        if (self.commands.status == "recovering" and self.ms.phase in ("recover_lower", "recover_withdraw")
+                and not self.cargo.trace_valid):
             # Plan D4: the evidence went after the retrace was installed -- ended at the tick's start, before the
             # follower and the command run (Codex 6b impl round 2 P1).
             self.recovery_failed(t, "trace_invalid")
@@ -4824,6 +5034,14 @@ class MissionCore:
                     obstacle["pickup_estimate"] = carried(obstacle["pickup_estimate"])
                 if pocket.get("planning_pickup") is not None:
                     pocket["planning_pickup"] = carried(pocket["planning_pickup"])
+            mission, tb = self.commands.mission, self.targets
+            if self.ms.phase in ("recover_lower", "recover_withdraw", "clear_out") and mission is not None:
+                # Plan D4b item 4: the recovery put the pallet back from the hold's estimate and the list no longer
+                # follows the core there -- carried with what it was put back from (the truck's gap to it kept).
+                entry = tb.pallets.get(mission.pallet_id)
+                held = destination_held if entry is not None and entry.state == "delivered" else pallet_held
+                if held and entry is not None and entry.pose is not None:
+                    tb.update_pose(mission.pallet_id, carried(entry.pose))
         if obstacle is not None and slam["tracker"].applied is not None:
             self._reproject(t, tuple(float(v) for v in slam["tracker"].applied[0]), after, False)
         slam["holds"].append({"phase": self.ms.phase, "time_s": float(t), "event": "release", "reason": "mission_end",

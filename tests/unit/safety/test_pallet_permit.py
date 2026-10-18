@@ -130,3 +130,25 @@ def test_the_zones_follow_the_targets_basis():
                                                      0.8 + 2 * (RECOGNISED_MARGIN_M + ENVELOPE_M)))
     tb.carried("P-1")
     assert zones_from(tb, zone) == []  # on the forks: in the loaded outline
+
+
+def test_the_preparations_pallet_obstacle_follows_the_basis():
+    """Plan D4b item 1: the next preparation's pallet obstacle (one function for live_prepare and its start check):
+    prior -> the pickup zone itself; recognised or delivered -> the outline grown by its uncertainty."""
+    from forklift_core.mission.targets import Pose, TargetsBook
+    from forklift_core.planning.geometry import Rectangle
+    from forklift_core.safety.pallet_permit import RECOGNISED_MARGIN_M, preparation_obstacle
+
+    tb = TargetsBook()
+    tb.add_pallet("P-1", "epal6", Pose(3.2, 1.0, 0.0), depth_m=1.2, width_m=0.8)
+    zone = Rectangle(3.1, 0.65, 3.44, 4.14, 0.0)
+    assert preparation_obstacle(tb.pallets["P-1"], zone) == zone
+    tb.update_pose("P-1", Pose(3.18, 1.03, 0.02), basis="recognised", uncertainty_m=0.15)
+    r = preparation_obstacle(tb.pallets["P-1"], zone)
+    assert (r.x_m, r.y_m, r.yaw_rad) == (3.18, 1.03, 0.02) and (r.length_m, r.width_m) == pytest.approx((1.5, 1.1))
+    tb.carried("P-1")
+    tb.put_down("P-1", Pose(-5.0, -2.0, 1.57))  # delivered, no uncertainty recorded: the recognised margin
+    r = preparation_obstacle(tb.pallets["P-1"], zone, pose=Pose(-5.1, -2.0, 1.57))  # a carried pose replaces it
+    assert (r.x_m, r.length_m) == pytest.approx((-5.1, 1.2 + 2 * RECOGNISED_MARGIN_M))
+    tb.carried("P-1")
+    assert preparation_obstacle(tb.pallets["P-1"], zone) is None

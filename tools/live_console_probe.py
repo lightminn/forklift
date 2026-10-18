@@ -610,11 +610,23 @@ async def cycle_scenario(p: Probe, args):
         if args.cancel_at and len(p.report["missions_run"]) == 1:
             # Persistent console plan U7/U26/U27: the first mission cancelled in a phase (after some seconds in it);
             # the statuses it goes through to its end are kept (recovering, then cancelled or recovery_required).
-            phase_, _, after_ = args.cancel_at.partition(":")
-            after_s_ = float(after_ or 0.0)
-            reached_ = await p.until(lambda s: (s.get("mission") or {}).get("phase") == phase_
-                                     and ((s.get("mission") or {}).get("phase_elapsed_s") or 0.0) >= after_s_,
-                                     args.mission_timeout_s, label=f"phase:{phase_}")
+            # PHASE@METRES: once the follower has at most METRES left in it (a leg's end, plan D4b's approach end).
+            if "@" in args.cancel_at:
+                phase_, _, left_ = args.cancel_at.partition("@")
+                left_m_ = float(left_)
+
+                def due_(s):
+                    m_ = s.get("mission") or {}
+                    return (m_.get("phase") == phase_ and m_.get("remaining_m") is not None
+                            and float(m_["remaining_m"]) <= left_m_)
+            else:
+                phase_, _, after_ = args.cancel_at.partition(":")
+                after_s_ = float(after_ or 0.0)
+
+                def due_(s):
+                    m_ = s.get("mission") or {}
+                    return m_.get("phase") == phase_ and (m_.get("phase_elapsed_s") or 0.0) >= after_s_
+            reached_ = await p.until(due_, args.mission_timeout_s, label=f"phase:{phase_}")
             entry["cancel_phase_reached"] = bool(reached_)
             entry["cancel_reply"] = await p.request("mission_cancel", mission_id=submit.get("mission_id"))
             entry["cancel_mono"] = time.monotonic()
@@ -660,6 +672,7 @@ def main():
     ap.add_argument("--pre-teleop-s", type=float, default=0.0, help="cycle scenario: drive by hand first (wall s)")
     ap.add_argument("--end-session", action="store_true", help="cycle scenario: end the session at the end")
     ap.add_argument("--cancel-at", default="", help="cycle scenario: cancel the first mission in PHASE[:SECONDS in it] "
+                    "or PHASE@METRES (at most METRES left of its leg) "
                     "(plan U7/U26/U27)")
     ap.add_argument("--idle-s", type=float, default=0.0, help="cycle scenario: stay connected this long first (wall s)")
     ap.add_argument("--pre-teleop-speed", type=float, default=0.5)

@@ -3614,12 +3614,33 @@ def drive(S, isaac) -> None:
             np.abs(-dx * st_ + dy * ct) <= geometry.pallet_width_m / 2 + band_across
         )
 
-    def grid_kwargs(kind=None, target=None, own=None, applied=None, band_pose=None, label=None) -> dict:
+    def grid_kwargs(kind=None, target=None, own=None, applied=None, band_pose=None, label=None, scratch=None) -> dict:
         """occupancy (and the pallet obstacle the plan may know) for a grid plan. band_pose (default
         the truck's rear) is where the return's delivered-pallet band is cleared around; label
-        names the call in the plans record (obstacle recovery v4: the escape's grids)."""
+        names the call in the plans record (obstacle recovery v4: the escape's grids).
+        scratch (persistent console plan D4b): {"use_slam": bool, "release_at": (t, pose) or None} -- the
+        grid a plan would get, built the same way on a copy of the obstacle layer (its memory's scans,
+        clears and SLAM map taken there), neither cached nor recorded; with release_at, after the end
+        release's own re-projection on that copy first (the core's _reproject: refresh at t with this
+        correction and the next version -- Codex D4b impl round 2 P2-1). The shared layer is left as it was."""
         if not grid_planning:
             return {}
+        if scratch is not None and not scratch.get("_inner"):
+            import copy as _copy
+
+            layer_shared_, version_ = obstacle["layer"], obstacle["version"]
+            obstacle["layer"] = _copy.deepcopy(layer_shared_)
+            try:
+                if scratch.get("release_at") is not None:
+                    at_t_, at_pose_ = scratch["release_at"]
+                    obstacle["version"] = version_ + 1
+                    at_pose_ = tuple(float(v) for v in at_pose_)
+                    obstacle["layer"].refresh(float(at_t_), tuple(float(v) for v in applied), obstacle["version"],
+                                              current_pose=at_pose_, path_ahead=np.array([at_pose_]), loaded=False,
+                                              direction=0)
+                return grid_kwargs(kind, target, own, applied, band_pose, label, scratch={**scratch, "_inner": True})
+            finally:
+                obstacle["layer"], obstacle["version"] = layer_shared_, version_
         try:  # the first plans run before the SLAM link exists
             slam_ref = slam
         except NameError:
@@ -3645,7 +3666,7 @@ def drive(S, isaac) -> None:
         mode_ = slam_ref["tracker"].mode if slam_ref is not None else None
         key_ = (stamp, obstacle["version"], applied_, mode_, loaded_now_,
                 None if own_now_ is None else tuple(round(v, 4) for v in np.ravel(own_now_)))
-        cache_ = obstacle.get("plan_cache")
+        cache_ = obstacle.get("plan_cache") if scratch is None else None
         if cache_ is not None and cache_[0] == key_:
             # One bundle per planning instant and state: retries and fallbacks
             # see the same map and memory (Codex design review P1).
@@ -3689,7 +3710,7 @@ def drive(S, isaac) -> None:
                             )
                 # The map is in SLAM's frame: only while control applies SLAM's
                 # correction (not holding) do the two frames agree.
-                use_slam = mode_ != "holding"
+                use_slam = mode_ != "holding" if scratch is None else bool(scratch["use_slam"])
             occupancy = layer_.planner_grid(stamp, applied_, obstacle["version"], use_slam=use_slam,
                                             own_pose=own_now_, loaded=loaded_now_)
             bundle = {
@@ -3703,9 +3724,11 @@ def drive(S, isaac) -> None:
                 "applied": list(applied_),
                 "mode": mode_,
             }
-            obstacle["plan_cache"] = (key_, occupancy, bundle)
-        obstacle["plans"].append({"kind": label or kind, "stamp_s": stamp,
-                                  "occupied_cells": int(occupancy.occupied.sum()), **bundle})
+            if scratch is None:
+                obstacle["plan_cache"] = (key_, occupancy, bundle)
+        if scratch is None:
+            obstacle["plans"].append({"kind": label or kind, "stamp_s": stamp,
+                                      "occupied_cells": int(occupancy.occupied.sum()), **bundle})
         out = {"occupancy": occupancy}
         if obstacle.get("deadline") is not None and kind in ("observe", None, "mission", "return"):
             out["deadline"] = obstacle["deadline"]
@@ -5775,6 +5798,75 @@ def drive(S, isaac) -> None:
                 and slam["docking"].get("reference_base_z_m") is not None else None,
             }
 
+            from forklift_core.safety.pallet_permit import preparation_obstacle as live_preparation_obstacle
+
+            def prep_obstacle_of(entry_, at_first_, pose_=None):
+                """The pallet obstacle the next preparation's observation plan holds (plan D4b item 1)."""
+                return live_preparation_obstacle(entry_, live_session_["zone"] if at_first_ else None, pose=pose_,
+                                                 size=(geometry.pallet_depth_m, geometry.pallet_width_m))
+
+            prep_check_cache_ = {}
+
+            def prepare_start_ok(rear_, *, extra_m=0.0, preview=True, t=None):
+                """Plan D4b: whether the next preparation's observation plan would accept this start -- the planner's
+                own check (hybrid_astar: the unloaded outline against the leg's obstacles and grid at the planning
+                clearance, here plus ``extra_m``) with the inputs it would have after the end release (``preview``):
+                the received correction applied to the pose and the grid, the SLAM map in the grid, the mission's
+                pallet carried with the frame change iff the hold found it (the release's own decision)."""
+                from forklift_core.planning.grid_collision import make_checker as prep_make_checker
+                from forklift_core.planning.pallet_mission import leg_obstacles as prep_leg_obstacles
+
+                tracker_ = slam["tracker"] if slam is not None else None
+                frame_ = None
+                if (preview and tracker_ is not None and tracker_.mode == "holding" and tracker_.received is not None
+                        and tracker_.applied is not None):
+                    frame_ = compose(tuple(float(v) for v in tracker_.received[0]),
+                                     invert(tuple(float(v) for v in tracker_.applied[0])))
+                moved = (lambda p_: tuple(float(v) for v in p_)) if frame_ is None else (
+                    lambda p_: tuple(float(v) for v in compose(frame_, tuple(float(v) for v in p_))))
+                pose_ = moved(rear_)
+                mission_ = core.commands.mission
+                entry_ = None if mission_ is None else core.targets.pallets.get(mission_.pallet_id)
+                pallet_obs_ = None
+                if entry_ is not None and entry_.pose is not None:
+                    at_first_ = (float(entry_.pose.x_m), float(entry_.pose.y_m),
+                                 float(entry_.pose.yaw_rad)) == live_session_["reference"]
+                    carried_pose_ = None
+                    if frame_ is not None:
+                        pallet_held_, destination_held_ = core._held_estimates()
+                        if destination_held_ if entry_.state == "delivered" else pallet_held_:
+                            x_, y_, yaw_ = moved((entry_.pose.x_m, entry_.pose.y_m, entry_.pose.yaw_rad))
+                            carried_pose_ = replace(entry_.pose, x_m=x_, y_m=y_, yaw_rad=yaw_)
+                    pallet_obs_ = prep_obstacle_of(entry_, at_first_ and carried_pose_ is None, carried_pose_)
+                occupancy_ = None
+                if grid_planning:
+                    try:
+                        own_ = moved(rear)  # where the truck stands now, in the frame checked
+                    except NameError:
+                        own_ = pose_
+                    correction_ = (tuple(float(v) for v in tracker_.received[0]) if frame_ is not None
+                                   else tuple(float(v) for v in (obstacle["applied"] or (0.0, 0.0, 0.0))))
+                    use_slam_ = tracker_ is None or tracker_.mode != "holding" or frame_ is not None
+                    # Every input the grid is built from (Codex D4b impl round 1 P2-3: the own pose too).
+                    release_at_ = (t, own_) if frame_ is not None and t is not None else None
+                    key_ = (obstacle.get("last_stamp"), obstacle["version"], correction_, use_slam_,
+                            tuple(round(float(v), 4) for v in own_), None if release_at_ is None else float(t))
+                    if prep_check_cache_.get("key") != key_:
+                        # The preparation's own grid call, as it would run after the release (its re-projection
+                        # at t, the received correction, the SLAM map in), on a copy of the layer (Codex D4b impl
+                        # round 1 P2-4, round 2 P2-1).
+                        prep_check_cache_.update(key=key_, occupancy=grid_kwargs(
+                            "observe", own=own_, applied=correction_,
+                            scratch={"use_slam": use_slam_, "release_at": release_at_})["occupancy"])
+                    occupancy_ = prep_check_cache_["occupancy"]
+                obstacles_, footprint_, bounds_ = prep_leg_obstacles(
+                    "observe", grid_world(live_session_["scenario"]), geometry, pickup_obstacle=pallet_obs_,
+                    pickup_bounds=None)
+                return bool(prep_make_checker(obstacles_, footprint_, bounds_, occupancy_).free(
+                    pose_, planner_config.clearance_m + float(extra_m)))
+
+            core.hooks.prepare_start_ok = prepare_start_ok
+
             def live_prepare(t_, rear_):
                 """The submitted mission's inputs, fixed now, and its first leg asked of the worker (D2)."""
                 mission_ = core.commands.mission
@@ -5783,9 +5875,12 @@ def drive(S, isaac) -> None:
                 target_ = (float(pallet_.x_m), float(pallet_.y_m), float(pallet_.yaw_rad))
                 at_first_ = target_ == live_session_["reference"]
                 waypoints_ = relocate_waypoints(live_session_["template"], live_session_["reference"], target_)
-                # A delivered pallet's prior: its place grown 0.3 m on every side; the first place keeps the bay's zone.
-                zone_ = live_session_["zone"] if at_first_ else Rectangle(
-                    target_[0], target_[1], geometry.pallet_depth_m + 0.6, geometry.pallet_width_m + 0.6, target_[2])
+                # Plan D4b item 1: by the pallet's basis -- prior: the bay's zone (at its first place); recognised or
+                # delivered: the outline grown by its uncertainty (the start check below uses the same function).
+                zone_ = prep_obstacle_of(core.targets.pallets[mission_.pallet_id], at_first_)
+                if zone_ is None:
+                    zone_ = Rectangle(target_[0], target_[1], geometry.pallet_depth_m + 0.6,
+                                      geometry.pallet_width_m + 0.6, target_[2])
                 scenario_ = replace(live_session_["scenario"],
                                     start_rear=LivePose(float(rear_[0]), float(rear_[1]), float(rear_[2])),
                                     pickup=LiveSite(*target_),
@@ -6170,7 +6265,9 @@ def drive(S, isaac) -> None:
                 # Live and free (no mission, ended outside the pocket phases): the forks' contact is checked wherever the
                 # truck is driven; ended inside them it is not -- supporting a pallet touches it, and teleop is refused
                 # there (Codex D6 design round 2-3 P2).
-                if ms.phase in ["insert", "withdraw", "recover_withdraw"] or live_free_:  # plan D4: the retrace too
+                # plan D4: the retrace too; D4b: the back-out, with the whole truck as when free
+                clear_out_ = ms.phase == "clear_out"
+                if ms.phase in ["insert", "withdraw", "recover_withdraw"] or live_free_ or clear_out_:
                     contacts = insertion_geometry.forbidden_contacts(
                         base,
                         q,
@@ -6179,7 +6276,7 @@ def drive(S, isaac) -> None:
                         pq,
                         clearance_m=state["pocket_clearance_margin_m"],
                     )
-                    if live_free_:
+                    if live_free_ or clear_out_:
                         # The rest of the truck too -- body and carriage -- since the outline left the 2D check
                         # (Codex D6 review P2: driven onto the pallet, the underbody met its top boards).
                         joints_ = robot.get_joint_positions()
@@ -6692,6 +6789,8 @@ def drive(S, isaac) -> None:
                     live_state["odom_prev"] = odom_now_
                     target_steer_ = np.asarray(live_ackermann(1.0, live.arbiter.drive.kappa, args.drive_geometry).steering_rad)
                     core.cargo.observe(ms.phase, rear)  # plan D4: the insert's anchors and trace, at the tick's end
+                    # plan D4b: the recent odometry trajectory a back-out retraces (odometry, never the control pose)
+                    core.observe_motion(slam["odom_rear"] if slam is not None else rear)
                     if trace_evidence is not None:
                         # The truth read this tick, again with the phase this tick ended in: a reference is taken at
                         # its transition's instant, not a physics step later (Codex 6b impl round 1 P2-5).

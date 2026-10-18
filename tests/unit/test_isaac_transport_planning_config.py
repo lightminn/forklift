@@ -736,7 +736,7 @@ def test_a_failed_replan_backs_off_a_bounded_distance_then_replans():
     # replan opens the obstacle block while standing, the leg direction is kept,
     # and the stall replan ends a backoff too.
     core = CORE.read_text()  # the permission tick moved to the mission core (M-a1 slice 3b)
-    k = core.index('acting = (\n            ms.phase in ("observe", "approach", "transport", "return_home", "recover_withdraw")')
+    k = core.index('acting = (\n            ms.phase in ("observe", "approach", "transport", "return_home", "recover_withdraw", "clear_out")')
     # (persistent console plan D4: the recovery's retrace acts under the permission like a travel leg)
     # Plan v10 D5: the withdrawal acts under the permission too when known pallets are on.
     assert '(ms.phase == "withdraw" and obstacle["layer"].known_enabled' in core[k : k + 400]

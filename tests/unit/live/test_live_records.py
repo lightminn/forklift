@@ -206,7 +206,10 @@ def test_the_runner_feeds_the_recovery_its_evidence_checks_and_outcome():
     assert "core.cargo.observe(ms.phase, rear)" in src
     assert src.index("core.cargo.observe(ms.phase, rear)") < src.index("live_safety_ = core.safety_state(t)")
     assert "core.cargo.trace_valid = False" in src and "trace_evidence = live_records.TraceEvidence()" in src
-    assert 'if ms.phase in ["insert", "withdraw", "recover_withdraw"] or live_free_:' in src
+    # plan D4b: the back-out too, with the whole truck's contacts as when free
+    assert 'if ms.phase in ["insert", "withdraw", "recover_withdraw"] or live_free_ or clear_out_:' in src
+    assert "if live_free_ or clear_out_:" in src and 'clear_out_ = ms.phase == "clear_out"' in src
+    assert 'core.observe_motion(slam["odom_rear"] if slam is not None else rear)' in src
     assert 'if ms.phase in ["insert", "extract", "withdraw", "recover_withdraw"]:' in src
     assert '"recovery_required" if core.commands.recovery else "failed"' in src
 

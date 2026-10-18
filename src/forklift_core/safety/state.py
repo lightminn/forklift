@@ -85,7 +85,7 @@ def state_message(arbiter, out, safety: dict | None, *, now_mono: float, rear_ax
                        else last.get("reason") if mission.get("status") in FINAL
                        else (mission.get("resume") or {}).get("reason") if (mission.get("resume") or {}).get("refused")
                        else last.get("reason")),
-            "phase_elapsed_s": mission.get("phase_elapsed_s"),
+            "phase_elapsed_s": mission.get("phase_elapsed_s"), "remaining_m": mission.get("remaining_m"),
             "resume_steps": resume_steps(mission.get("resume"))},
         "freshness": freshness, "pacing": pacing,
         "last_teleop_reject": a.last_teleop_reject, "stop_latch": a.preempt_latch,

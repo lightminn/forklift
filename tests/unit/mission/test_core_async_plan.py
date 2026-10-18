@@ -836,3 +836,32 @@ def test_a_deferred_end_release_is_dropped_when_the_cargo_turns_unknown_before_s
     slam["stop_now"] = True
     core.release_gate(21.0, np.array([1.0, 2.0, 0.5]))
     assert slam["tracker"].released == 0 and slam["tracker"].mode == "holding" and core.end_release_due is None
+
+
+@pytest.mark.parametrize("phase", ["recover_withdraw", "clear_out"])
+def test_an_end_release_after_a_recovery_carries_the_put_back_pallet(phase):
+    """Plan D4b item 4 (Codex 6b-2 round 1 P2-1): the recovery put the pallet back at the hold's estimate; the
+    targets list no longer follows the core there, so the end release carries the list's pallet itself -- the
+    truck and the pallet keep their gap across the frame change."""
+    core, slam, Pose = held_core(phase)
+    slam["tracker"].mode = "tracking"
+    core.hold_slam(10.0, held_frame_pallet=True)  # the approach hold: the capture's estimate is in its frame
+    slam["tracker"].mode = "holding"
+    core.targets.carried("P-1")
+    core.restore_pallet_target()  # the ground verdict
+    assert core.targets.pallets["P-1"].pose.x_m == pytest.approx(3.0)
+    core.end_reset(20.0)
+    assert slam["tracker"].released == 1
+    assert core.targets.pallets["P-1"].pose.x_m == pytest.approx(3.2)
+
+
+def test_an_end_release_after_a_new_hold_keeps_the_put_back_pallet():
+    """A hold the back-out began itself found nothing: the pallet's estimate is a map estimate and stays."""
+    core, slam, Pose = held_core("clear_out")
+    slam["tracker"].mode = "tracking"
+    core.hold_slam(10.0, held_frame_pallet=False)
+    slam["tracker"].mode = "holding"
+    core.targets.carried("P-1")
+    core.restore_pallet_target()
+    core.end_reset(20.0)
+    assert core.targets.pallets["P-1"].pose.x_m == pytest.approx(3.0)

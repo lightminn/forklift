@@ -16,7 +16,7 @@ const STATUS = {
   done: ["ok", "완료"],
   failed: ["crit", "실패"],
   cancelled: ["", "취소됨"],
-  recovering: ["acc", "포켓에서 빠지는 중"],
+  recovering: ["acc", "복구하며 물러나는 중"],
   recovery_required: ["crit", "복구 필요"],
 };
 const STEP_KO = {
@@ -236,7 +236,7 @@ export function render(m) {
   // a recovery is paused, not cancelled (persistent console plan D4)
   $("m-pause").disabled = !lease || !mi || !["running", "recovering"].includes(mi.status);
   // the mission now is a recovery: paused or resuming too, never a new mission still in its old phase (D4)
-  const recovery = Boolean(mi && String(mi.phase || "").startsWith("recover_")
+  const recovery = Boolean(mi && (String(mi.phase || "").startsWith("recover_") || mi.phase === "clear_out")
     && ["recovering", "paused", "resuming", "held"].includes(mi.status));
   $("m-cancel").title = recovery ? "복구 중에는 취소 대신 일시정지합니다" : "";
   const resume = resumeState({ state: st, mission: mi, hasLease: lease });
