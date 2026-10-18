@@ -432,7 +432,7 @@ D2 의 `mission_start` 는 작업자 작업 `observe_ladder` 로 한다. 이름 
 
 §5-2 의 나머지 계약 추가는 메인이 PR 때 본다.
 
-### D2 구현 설계 (2단계, 2026-10-18, 1단계 cc90aca·0c4a08d 수렴 뒤; 2판 — Codex 설계 검토 1회차 반영)
+### D2 구현 설계 (2단계, 2026-10-18, 1단계 cc90aca·0c4a08d 수렴 뒤; 3판 — Codex 설계 검토 1·2회차 반영)
 
 **명령 상태.**
 - `preparing` 을 `ACTIVE` 와 중재기 `AUTO_STATUSES` 에 더한다. `hold_on` 대상에도 넣는다. 흐름은 `accepted → preparing → running` 이다(Codex P2-3: AUTO_STATUSES 가 따로 있어 빠지면 AUTO 에 못 간다).
@@ -442,14 +442,19 @@ D2 의 `mission_start` 는 작업자 작업 `observe_ladder` 로 한다. 이름 
   - `preempt` 는 `failed: prepare:stopped` 다.
   - `controlled` 는 `failed: prepare:paused` 다. PAUSED 요청이 여기 해당한다. AUTO→TELEOP 직행은 거절되므로 TELEOP 로 가려면 PAUSED 를 먼저 거친다.
 - `hold_on` 은 `failed: prepare:teleop` 다.
-- 이렇게 `apply()` 에서 끝난 미션은 `tick_start` 가 `end_mission` 으로 거둔다. 1단계의 '실행 전 취소 수거'를 FINAL 전체로 넓혀, 결과 기록·작업 폐기까지 한다(Codex P2-3).
+- 끝난 미션은 `tick_start` 가 `end_mission` 으로 거둔다. 1단계의 '실행 전 취소 수거'를 FINAL 전체로 넓혀, 결과 기록·작업 폐기까지 한다(Codex P2-3).
+- 거두는 자리는 둘이다. **`apply()` 전**에는 앞 틱의 `job_hold` 에서 끝난 준비(시간 초과, 후보 전부 실패, 두 번째 불일치)를 거둔다. `apply()` 가 FINAL 을 `idle` 로 지우기 전이어야 한다(Codex 2회차 P2). **`apply()` 뒤**에는 그 apply 안의 STOP·취소를 거둔다.
+- 결과의 끝 시각은 종료 로그의 시각이다. 결과는 미션마다 정확히 한 번 남는다.
 
 **제출 조건(임시, D4·D5 전까지).** 실시간 `Context.clear_for_submit` 은 지난 미션이 끝난 `ms.phase` 로 정한다(Codex P1-2: 부분 삽입 중 취소 뒤 재제출이 받아들여졌다).
 - `insert`·`lift`·`extract`·`transport`·`lower`·`withdraw` 이면 거짓이다. 이때 제출은 `recovery_required` 로 거절된다.
 - 근거는 `safety_state` 의 `fork_in_pocket`·`load` 와 같은 '단계 기준'이다.
 - D4·D5 가 포켓 점유·포크 관계로 바꾼다.
 
-**대상 목록.** `refresh_targets` 는 상태가 `accepted`·`preparing` 이면 아무것도 하지 않는다. 채택된 미션만 대상을 갱신한다(Codex P1-1: 준비 한 틱에 새 목적지 자리가 이전 시나리오 목적지로 덮였다).
+**대상 목록.** `refresh_targets` 는 지금 미션이 **채택된 미션**일 때만 대상을 갱신한다(Codex P1-1: 준비 한 틱에 새 목적지 자리가 이전 시나리오 목적지로 덮였다).
+- 판단은 상태가 아니라 `commands.adopted_id == commands.mission_id` 로 한다. 준비가 실패·취소로 끝난 틱에는 상태가 FINAL 이라도 그 미션은 채택된 적이 없다(Codex 2회차 P1).
+- `adopted_id` 는 `start()`(배치)와 `adopt()`(실시간)가 정한다.
+- 시험은 종료 틱까지 대상이 바뀌지 않는지 본다.
 
 **요청.**
 - 자리: 지금의 첫 구간 재계획 자리(장애물 `control_rear` 와 철수 감시 뒤)다.
@@ -499,7 +504,7 @@ D2 의 `mission_start` 는 작업자 작업 `observe_ladder` 로 한다. 이름 
 - 셋업의 동기 관찰 사다리를 실시간에서는 돌리지 않는다. 경로 없이 `idle` 로 시작한다(Codex P2-7: 다 실패하면 콘솔이 뜨기 전에 예외가 났다). 배치는 그대로다.
 - 실시간은 비동기 계획 작업자를 요구한다. `FORKLIFT_LIVE_ASYNC_PLAN=0` 이면 시작을 거부한다.
 
-**화면(최소).** `ui.js` 의 진행 중 목록에 `preparing` 을 넣어 취소 버튼과 중복 제출 막기를 맞춘다(P3). 표시 개선은 D13 에서 한다.
+**화면(최소).** `ui.js` 의 진행 중 목록(취소 버튼)과 `wizard.js` 의 제출 막기(`blockReason`)에 `preparing` 을 넣는다(P3, Codex 2회차 P3). 표시 개선은 D13 에서 한다.
 
 **지우는 것.**
 - `live_first_replan_`, `live_last_rear_`, `Context.at_start`·`not_at_start`
