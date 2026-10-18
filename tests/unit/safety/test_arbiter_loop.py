@@ -175,3 +175,17 @@ def test_measured_steering_and_lift_height_are_sent_when_given_and_null_otherwis
     assert st["steering_rad"] is None and st["lift_m"] is None
     st = state_message(loop.a, out, SAFE, now_mono=loop.t, steering_rad=[0.1, 0.08], lift_m=0.05)
     assert st["steering_rad"] == [0.1, 0.08] and st["lift_m"] == 0.05
+
+
+def test_an_ended_mission_shows_its_end_reason_not_an_earlier_refused_resume():
+    """Codex persistent-console stage 1 P3: resume refused -> cancel -> confirmed standing showed the old refusal."""
+    loop = Loop()
+    loop.m.log.append({"t": 1.0, "command": "end", "accepted": True, "reason": "operator", "mission_id": "m1",
+                       "status": "cancelled"})
+    safety = dict(SAFE, mission={"id": "m1", "status": "cancelled", "phase": "observe",
+                                 "resume": {"refused": True, "reason": "path_blocked"}})
+    out = loop.a.step(loop.t, safety, (0.0, 0.0), {"measured_mps": 0.0, "measured_kappa": 0.0,
+                                                   "steering_error_rad": 0.0, "permit": loop.permit})
+    assert state_message(loop.a, out, safety, now_mono=loop.t)["mission"]["reason"] == "operator"
+    running = dict(safety, mission=dict(safety["mission"], status="paused"))
+    assert state_message(loop.a, out, running, now_mono=loop.t)["mission"]["reason"] == "path_blocked"

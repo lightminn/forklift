@@ -5817,7 +5817,8 @@ def drive(S, isaac) -> None:
                 state.setdefault("live_first_replans", []).append(
                     {"time_s": t, "phase": ms.phase, "rear": [float(v) for v in rear], "installed": bool(from_truck_)})
                 if not from_truck_:
-                    core.commands.finish("failed", t)
+                    # Persistent console plan D1: recorded in the results book (Codex stage 1 P2: finish alone was not).
+                    live.end_mission(t, "failed", "first_leg_replan_failed")
             require(np.isfinite([base, ppos]).all(), "Nonfinite body state")
             if ms.phase == "lift":
                 # Every physics step, so the peak and the aborting state are

@@ -3,6 +3,8 @@ never 0 or an estimate; the runner passes what it owns (pose, freshness, pacing)
 
 from __future__ import annotations
 
+from forklift_core.mission.commands import FINAL
+
 
 RESUME_STEPS = ("stop_confirmed", "state_verified", "frame_reexpressed", "path_rechecked")
 
@@ -77,6 +79,8 @@ def state_message(arbiter, out, safety: dict | None, *, now_mono: float, rear_ax
             "mission_id": mission.get("id"), "status": mission.get("status"), "phase": mission.get("phase"),
             "pallet_id": mission.get("pallet_id"), "destination_id": mission.get("destination_id"),
             "reason": ("teleop" if mission.get("status") == "held"
+                       # an ended mission: its end's reason (the log's last entry), not an earlier refused resume
+                       else last.get("reason") if mission.get("status") in FINAL
                        else (mission.get("resume") or {}).get("reason") if (mission.get("resume") or {}).get("refused")
                        else last.get("reason")),
             "phase_elapsed_s": mission.get("phase_elapsed_s"),

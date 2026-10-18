@@ -183,7 +183,7 @@ class LiveRuntime:
             final, reason = ("done", None) if verdict.ok else ("failed", verdict.reason)
             extra["delivery_error_m"] = verdict.delivery_error_m
         if not cmds.terminate(final, t, reason):  # step 9: a cancel confirmed standing is already cancelled
-            cmds.end_reason = reason
+            cmds.note_end(t, reason)
         started = next((r["t"] for r in reversed(cmds.log) if r["command"] == "submit" and r["accepted"]
                         and r["mission_id"] == mission_id), None)
         entry = self.results.add(mission_id=mission_id, outcome=cmds.status, reason=reason, started_s=started,

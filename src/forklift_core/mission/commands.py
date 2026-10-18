@@ -136,7 +136,7 @@ class MissionCommands:
         return records
 
     def _submit(self, t, command: Submit, context: Context):
-        if self.status in ACTIVE:
+        if self.status in ACTIVE or self.status in FINAL:  # FINAL: ended in this apply, its end collected first
             return "mission_active"
         if context.stop_kind != "none":
             return "stopping"
@@ -300,6 +300,14 @@ class MissionCommands:
         self._record(t, "end")
         self.log[-1]["reason"] = reason
         return True
+
+    def note_end(self, t: float, reason: str | None) -> None:
+        """Log the end of a mission the core already ended (a cancel confirmed standing: ``cancelled``)."""
+        if self.status not in FINAL:
+            raise RuntimeError(f"note_end while {self.status}")
+        self.end_reason = reason
+        self._record(t, "end")
+        self.log[-1]["reason"] = reason
 
     def take_clock(self) -> dict:
         """The finished mission's pauses and waits, handed to its record; the next mission's work clock starts

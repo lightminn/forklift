@@ -306,3 +306,29 @@ def test_take_clock_refuses_while_a_mission_is_active():
     m = running()
     with pytest.raises(RuntimeError):
         m.take_clock()
+
+
+def test_a_submit_in_the_same_apply_as_an_end_waits_for_the_next_tick():
+    """Codex stage 1 P3: a cancel of an accepted mission and a submit in one apply -- the end is collected first."""
+    m = MissionCommands()
+    m.queue(Submit("P1", "D1"))
+    m.apply(1.0)
+    m.queue(Cancel())
+    m.queue(Submit("P2", "D2"))
+    cancel, submit = m.apply(2.0)
+    assert cancel["accepted"] and (submit["accepted"], submit["reason"]) == (False, "mission_active")
+    assert m.status == "cancelled" and m.mission_id == "m1"
+
+
+def test_note_end_logs_an_end_already_reached():
+    """Codex stage 1 P3: a cancel confirmed standing is cancelled by the core; its end is still logged once."""
+    m = running()
+    m.queue(Cancel())
+    m.apply(1.0)
+    m.cancelled(2.0)
+    assert m.terminate("cancelled", 2.0, "operator") is False
+    m.note_end(2.0, "operator")
+    assert m.log[-1] == {"t": 2.0, "command": "end", "accepted": True, "reason": "operator", "mission_id": "m1",
+                         "status": "cancelled"} and m.end_reason == "operator"
+    with pytest.raises(RuntimeError):
+        running().note_end(3.0, "x")

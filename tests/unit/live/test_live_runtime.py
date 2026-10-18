@@ -299,7 +299,7 @@ def test_the_runner_replans_the_first_leg_from_where_a_submit_finds_the_truck():
     assert "at_start=live_at_start_" in source[source.index("live.tick_start(t, core.near_active()"):][:120]
     replan = source[source.index('live_first_replan_["due"] and'):][:1600]
     assert "core.blocked_replan(t, rear, 0.0, 0.0, hall=True)" in replan
-    assert 'core.commands.finish("failed", t)' in replan
+    assert 'live.end_mission(t, "failed", "first_leg_replan_failed")' in replan
 
 
 def test_a_cancelled_mission_ends_the_mission_but_not_a_live_run():
@@ -453,3 +453,26 @@ def test_a_completed_mission_ends_the_mission_but_not_a_live_run():
     assert "if live is None:\n                    break" in block
     assert 'live.end_mission(t, "complete", None)' in block and "paused_, requested_speed, curvature = True" in block
     assert "end=LiveEndHooks(stop=live_zero_wheels, unlock_wheels=live_unlock_wheels," in source
+
+
+def test_a_cancel_confirmed_standing_logs_its_end_once(tmp_path):
+    from forklift_core.mission.commands import Cancel
+
+    rt, core, _ = ending(tmp_path)
+    core.commands.queue(Cancel())
+    rt.tick_start(12.0, False)
+    core.commands.cancelled(13.0)
+    rt.end_mission(13.0, "cancelled", "operator")
+    ends = [r for r in core.commands.log if r["command"] == "end"]
+    assert ends == [{"t": 13.0, "command": "end", "accepted": True, "reason": "operator", "mission_id": "m1",
+                     "status": "cancelled"}]
+
+
+def test_a_first_leg_replan_that_installs_no_path_from_the_truck_ends_through_end_mission():
+    """Codex stage 1 P2: it called commands.finish only, so the result never reached the results book."""
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
+    block = source[source.index('if live_first_replan_["due"] and core.commands.status == "running":'):][:1800]
+    assert 'live.end_mission(t, "failed", "first_leg_replan_failed")' in block
+    assert 'core.commands.finish("failed", t)' not in block
