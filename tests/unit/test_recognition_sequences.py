@@ -295,3 +295,32 @@ def test_face_centres_sit_at_half_the_depth_or_width_from_the_pallet_centre_on_e
                     side = [float(u[0] * (o[1] - c[1]) - u[1] * (o[0] - c[0])) for o in openings[k][face]]
                     assert np.allclose([abs(np.dot(c - p, np.array(o[:2]) - c)) for o in openings[k][face]], 0, atol=1e-9)
                     assert min(side) < 0 < max(side)
+
+
+# 2B-3g: the sequence seed pool ----------------------------------------------------------------------
+
+def test_every_sequence_band_holds_its_cells_inside_one_seed_pool():
+    pools = [(rs.SEED_BANDS[k], rs.SEED_BANDS[k] + rs.BAND_WIDTH) for k in ("eval_pool", "sequence")]
+    for band, start in R.SEQUENCE_BANDS.items():
+        last = start + len(R.CELLS) * R.CELL_STRIDE - 1
+        assert any(lo <= start and last < hi for lo, hi in pools), band
+    assert R.SEQUENCE_BANDS["evaluation_h"] == rs.SEED_BANDS["sequence"] == 2_000_000
+
+
+def test_the_sequence_pool_stays_clear_of_the_catalogue_and_training():
+    lo, hi = rs.SEED_BANDS["sequence"], rs.SEED_BANDS["sequence"] + rs.BAND_WIDTH
+    assert rs.SEED_BANDS["eval_pool"] + rs.BAND_WIDTH <= lo and hi <= rs.SEED_BANDS["train"]
+    assert not {r.seed for r in rs.catalogue()} & set(range(lo, hi))
+
+
+@pytest.mark.parametrize("band, index", [("evaluation_h", -1), ("evaluation_h", 1_000),
+                                         ("evaluation_h", -17_000), ("calibration", -1)])
+def test_a_sequence_index_outside_its_cell_is_refused(band, index):
+    # -17,000 from evaluation_h is evaluation_g's first seed; 1,000 is the next cell's index 0 (Codex)
+    with pytest.raises(ValueError):
+        R.recipe_for(R.CELLS[0], band, index)
+
+
+@pytest.mark.parametrize("per_cell", [0, 1_001])
+def test_the_evaluation_refuses_a_per_cell_count_outside_the_cell(per_cell):
+    assert E.population_problem([], "evaluation_h", per_cell) is not None
