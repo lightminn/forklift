@@ -18,8 +18,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-ACTIVE = ("accepted", "preparing", "running", "paused", "resuming", "held", "cancelling")
-FINAL = ("done", "failed", "cancelled")
+# recovering: a cancel stood with the forks in a pocket and the truck backs out (persistent console plan D4)
+ACTIVE = ("accepted", "preparing", "running", "paused", "resuming", "held", "cancelling", "recovering")
+FINAL = ("done", "failed", "cancelled", "recovery_required")
 STOP_KINDS = ("none", "controlled", "preempt")
 PRIORITY = {"hold_off": -1, "cancel": 0, "hold_on": 1, "pause": 1, "resume": 2, "submit": 2}
 
@@ -84,6 +85,7 @@ class MissionCommands:
     def __init__(self, targets=None) -> None:
         self.targets = targets  # M-a4: a submit must name the current targets list (TargetsBook.check_submit)
         self.status = "idle"
+        self.recovery = False  # plan D4: the mission is a recovery (kept through a pause and its resume)
         self.mission_id: str | None = None
         self.mission: Submit | None = None
         self.mission_gen = 0
@@ -122,7 +124,7 @@ class MissionCommands:
             # Persistent console plan D2: a stop ends a preparation (nothing has moved; the operator submits again).
             self.terminate("failed", t, "prepare:stopped" if context.stop_kind == "preempt" else "prepare:paused")
             records.append(self.log[-1])
-        if context.stop_kind != "none" and self.status in ("running", "resuming"):
+        if context.stop_kind != "none" and self.status in ("running", "resuming", "recovering"):
             # E7: the arbiter's stop is a pause of the mission (resumed only by a resume once it is lifted).
             if self.paused_since is None:
                 self._stop_boundary(t)
@@ -166,7 +168,7 @@ class MissionCommands:
     def _pause(self, t, command: Pause, context: Context):
         if self.status == "held":
             return "held"
-        if self.status not in ("running", "resuming"):
+        if self.status not in ("running", "resuming", "recovering"):
             return "not_running"
         if context.near_tracker:
             return "near_tracking_active"
@@ -188,6 +190,8 @@ class MissionCommands:
         return None
 
     def _cancel(self, t, command: Cancel, context: Context):
+        if self.recovery and self.status in ACTIVE:
+            return "recovering"  # a recovery is stopped by a pause or STOP, not cancelled (plan D4)
         if self.status not in ACTIVE or self.status == "cancelling":
             return "not_running"
         if command.mission_id is not None and command.mission_id != self.mission_id:
@@ -280,7 +284,7 @@ class MissionCommands:
         if self.status != "resuming":
             raise RuntimeError(f"resumed from {self.status}")
         length = self._close_pause(t)
-        self.status = "running"
+        self.status = "recovering" if self.recovery else "running"
         self.mission_gen += 1
         return length
 
@@ -292,6 +296,23 @@ class MissionCommands:
         self.status = "paused"
         self.log.append({"t": t, "command": "resume", "accepted": False, "reason": reason,
                          "mission_id": self.mission_id, "status": self.status})
+
+    def begin_recovery(self, t: float) -> None:
+        """A cancel stood with the forks in a pocket (plan D4): the truck backs out before the mission ends; the
+        cancel's stop closes (the recovery's work clock runs)."""
+        if self.status != "cancelling":
+            raise RuntimeError(f"begin_recovery from {self.status}")
+        self._close_pause(t)
+        self.status, self.recovery = "recovering", True
+        self.mission_gen += 1
+        self._record(t, "recovery")
+
+    def recovered(self, t: float) -> None:
+        """The recovery backed the forks out: the mission ends cancelled."""
+        if self.status not in ("recovering", "resuming"):  # resuming: already out when the resume re-judged it
+            raise RuntimeError(f"recovered from {self.status}")
+        self._close_pause(t)
+        self.status, self.recovery = "cancelled", False
 
     def cancelled(self, t: float) -> None:
         """Standing still confirmed after a cancel."""
@@ -325,6 +346,7 @@ class MissionCommands:
             return False
         self.close_open(t)
         self.status, self.end_reason, self.end_logged_for = outcome, reason, self.mission_id
+        self.recovery = False
         self.mission_gen += 1
         self._record(t, "end")
         self.log[-1]["reason"] = reason

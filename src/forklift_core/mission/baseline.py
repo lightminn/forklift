@@ -27,7 +27,7 @@ MISSION_KEYS = {
         "async_plans", "async_plan_drops",
         "delivery_docking", "insertion_error", "insertion_measured", "insertion_truth_yaw_rad",
         "withdraw_certificate", "withdraw_tracking", "lift_tilt_peak", "slam_error_insert_end", "return_home_error",
-        "tracking_failure", "handoff",
+        "tracking_failure", "handoff", "recoveries",
         "pocket_check", "forbidden_pocket_contacts", "pocket_geometry_checks", "repeat_capture", "phase",
         "lateral_clearance_min_m", "live_first_replans",
     ),

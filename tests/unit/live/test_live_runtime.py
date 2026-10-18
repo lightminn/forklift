@@ -301,7 +301,9 @@ def test_a_cancelled_mission_ends_the_mission_but_not_a_live_run():
     flat = _squash(source)
     assert "if cancel_stop_ and live is None: break" in flat
     # persistent console plan D1: live, the confirmed cancel goes through the mission end (recorded)
-    assert 'if cancel_stop_ and live is not None: live.end_mission(t, "cancelled", "operator")' in flat
+    assert "if cancel_stop_ and live is not None:" in flat and 'else: live.end_mission(t, "cancelled", "operator")' in flat
+    # plan D4: a cancel that could not recover ends with its own reason
+    assert 'if core.commands.status == "recovery_required": live.end_mission(t, "recovery_required"' in flat
 
 
 def test_the_withdraw_tracking_certificate_is_checked_under_the_obstacle_layer_every_tick():
@@ -523,7 +525,7 @@ def test_the_runner_prepares_each_live_mission_from_where_the_truck_stands():
     assert ('if live is not None and core.commands.status in ("accepted", "preparing") and not core.job_pending(): '
             'live_prepare(t, rear)') in flat
     assert source.index("live_prepare(t, rear)  #") < source.index("plan_wait_ = core.jobs is not None and core.job_hold(")
-    assert 'core.commands.status in ("idle", "done", "failed", "cancelled"):' in source  # accepted is not paused
+    assert 'core.commands.status in ("idle", "done", "failed", "cancelled", "recovery_required"):' in source  # accepted is not paused
     assert 'if live is not None and core.commands.status in ("accepted", "preparing"): plan_wait_ = True' in flat
     assert "submit_refusal=core.cargo.submit_refusal())" in source  # plan D5a: the forks, at the last tick's end
     # the adoption's runner part and the session's baseline, before the console starts

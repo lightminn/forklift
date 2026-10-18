@@ -32,7 +32,7 @@ const TEMPLATES = [
   },
 ];
 
-const ACTIVE = ["accepted", "preparing", "running", "paused", "held", "resuming"];
+const ACTIVE = ["accepted", "preparing", "running", "paused", "held", "resuming", "recovering"];
 
 // A pallet the operator may name in a submit (the vehicle checks again): on the floor, delivered or not.
 export function selectable(pallet) {

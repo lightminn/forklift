@@ -28,7 +28,8 @@ MODES = ("PAUSED", "AUTO", "TELEOP", "STOPPED")
 LEASED = ("rearm", "mode_request", "arm", "disarm", "mission_submit", "mission_pause", "mission_resume",
           "mission_cancel", "recovery", "session_end", "sim_reset")
 RELIABLE = LEASED + ("stop", "lease_request", "lease_release", "targets_request")
-AUTO_STATUSES = ("accepted", "preparing", "running", "resuming", "cancelling")  # the mission states AUTO stays in (B5)
+# the mission states AUTO stays in (B5); recovering: the truck backs out of a pocket on its own (persistent console D4)
+AUTO_STATUSES = ("accepted", "preparing", "running", "resuming", "cancelling", "recovering")
 
 
 @dataclass(frozen=True)

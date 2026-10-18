@@ -607,6 +607,28 @@ async def cycle_scenario(p: Probe, args):
         p.report["missions_run"].append(entry)
         if not submit or submit.get("t") != "ack":
             continue
+        if args.cancel_at and len(p.report["missions_run"]) == 1:
+            # Persistent console plan U7/U26/U27: the first mission cancelled in a phase (after some seconds in it);
+            # the statuses it goes through to its end are kept (recovering, then cancelled or recovery_required).
+            phase_, _, after_ = args.cancel_at.partition(":")
+            after_s_ = float(after_ or 0.0)
+            reached_ = await p.until(lambda s: (s.get("mission") or {}).get("phase") == phase_
+                                     and ((s.get("mission") or {}).get("phase_elapsed_s") or 0.0) >= after_s_,
+                                     args.mission_timeout_s, label=f"phase:{phase_}")
+            entry["cancel_phase_reached"] = bool(reached_)
+            entry["cancel_reply"] = await p.request("mission_cancel", mission_id=submit.get("mission_id"))
+            entry["cancel_mono"] = time.monotonic()
+            statuses_, phases_ = [], []
+            stop_by_ = time.monotonic() + args.mission_timeout_s
+            while time.monotonic() < stop_by_ and p.closed_code is None:
+                mission_ = (p.state or {}).get("mission") or {}
+                for key_, seen_ in (("status", statuses_), ("phase", phases_)):
+                    if mission_.get(key_) and (not seen_ or seen_[-1] != mission_[key_]):
+                        seen_.append(mission_[key_])
+                if ((p.state or {}).get("last_result") or {}).get("seq", 0) > seen:
+                    break
+                await asyncio.sleep(0.1)
+            entry["after_cancel"] = {"statuses": statuses_, "phases": phases_}
         end_by = time.monotonic() + args.mission_timeout_s
         while time.monotonic() < end_by and p.closed_code is None:
             await p.until(lambda s: ((s.get("last_result") or {}).get("seq", 0) > seen) or s.get("mode") == "STOPPED",
@@ -637,6 +659,8 @@ def main():
     ap.add_argument("--cycle", default="P-1:D-1,P-1:D-0,P-1:D-1", help="cycle scenario: pallet:destination,...")
     ap.add_argument("--pre-teleop-s", type=float, default=0.0, help="cycle scenario: drive by hand first (wall s)")
     ap.add_argument("--end-session", action="store_true", help="cycle scenario: end the session at the end")
+    ap.add_argument("--cancel-at", default="", help="cycle scenario: cancel the first mission in PHASE[:SECONDS in it] "
+                    "(plan U7/U26/U27)")
     ap.add_argument("--idle-s", type=float, default=0.0, help="cycle scenario: stay connected this long first (wall s)")
     ap.add_argument("--pre-teleop-speed", type=float, default=0.5)
     ap.add_argument("--pre-teleop-curvature", type=float, default=0.3)

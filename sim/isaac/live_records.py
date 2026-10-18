@@ -4,6 +4,8 @@ made from the chunks one at a time -- the same numbers a batch run makes from th
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 JOINT = ("joint_stamps_s", "wheel_rates_rad_s", "steering_rad", "base_pose_world", "wheel_angles_rad",
@@ -86,3 +88,55 @@ def scan_wall_stats(scan_chunks) -> dict:
             wall = float(record["total_wall_s"])
             n, total, worst = n + 1, total + wall, max(worst, wall)
     return {"scans": n, "wall_s_per_scan": {"mean": total / n if n else 0.0, "max": worst}}
+
+
+FLOOR_PHASES = ("insert", "withdraw", "recover_withdraw")  # the pallet on the floor, the forks in its pockets
+RIDING_PHASES = ("lift", "extract", "transport", "lower")  # the pallet on the forks
+TRACE_BOUNDS = (0.02, 0.01, 0.01)  # longitudinal m, lateral m, heading rad (plan D4 6th ed.)
+
+
+def _relative(frame, pose):
+    fx, fy, fyaw = frame
+    c, s = math.cos(fyaw), math.sin(fyaw)
+    dx, dy = pose[0] - fx, pose[1] - fy
+    return (c * dx + s * dy, -s * dx + c * dy, math.atan2(math.sin(pose[2] - fyaw), math.cos(pose[2] - fyaw)))
+
+
+class TraceEvidence:
+    """The simulation's truth check on the premise a recovery's retrace rests on (persistent console plan D4): the
+    pallet on the floor stays where it was (its map pose against the insert's start, or the lower verdict); riding
+    the forks it stays where it sat on them (its pose relative to the truck against the insert's end -- the instant
+    the trace's placement uses). Beyond TRACE_BOUNDS the trace is no evidence: ``valid`` false until the next
+    insert. Not a failure: a recovery then refuses before moving."""
+
+    def __init__(self) -> None:
+        self.valid = True
+        self.floor_ref = None
+        self.rel_ref = None
+        self.riding = False
+        self.phase = None
+
+    def update(self, phase, base, pallet) -> bool:
+        base, pallet = tuple(float(v) for v in base), tuple(float(v) for v in pallet)
+        if phase != self.phase:
+            if phase == "insert":
+                self.valid, self.floor_ref, self.rel_ref, self.riding = True, pallet, None, False
+            elif phase == "lift" and self.phase == "insert":
+                self.rel_ref, self.riding = _relative(base, pallet), True
+            elif phase in ("withdraw", "recover_withdraw"):
+                self.floor_ref, self.riding = pallet, False  # the lower (or the recovery's ground) verdict
+            elif phase == "recover_lower":
+                self.riding = self.phase in RIDING_PHASES  # the pallet rode the forks when the recovery began
+            self.phase = phase
+        if not self.valid:
+            return False
+        if phase in RIDING_PHASES or (phase == "recover_lower" and self.riding):
+            if self.rel_ref is not None:
+                now = _relative(base, pallet)
+                d = (now[0] - self.rel_ref[0], now[1] - self.rel_ref[1],
+                     math.atan2(math.sin(now[2] - self.rel_ref[2]), math.cos(now[2] - self.rel_ref[2])))
+                self.valid = all(abs(v) <= b for v, b in zip(d, TRACE_BOUNDS))
+        elif phase in FLOOR_PHASES or phase == "recover_lower":
+            if self.floor_ref is not None:
+                self.valid = all(abs(v) <= b for v, b in zip(_relative(self.floor_ref, pallet), TRACE_BOUNDS))
+        return self.valid

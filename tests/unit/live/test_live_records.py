@@ -168,3 +168,62 @@ def test_the_live_teleop_permit_takes_the_pallet_zones_and_advances_them():
 
     near = (Path(__file__).resolve().parents[3] / "sim" / "isaac" / "near_tracking.py").read_text()
     assert '"live_test_no_pallet_permit": False' in near
+
+
+def test_the_trace_evidence_follows_where_the_pallet_is():
+    """Plan D4 (6th ed.): on the floor its map pose against the insert start / the lower verdict; riding the forks
+    its pose relative to them against the insert's end; a normal withdraw is no departure."""
+    ev = live_records.TraceEvidence()
+    pallet = (5.0, 0.0, 0.0)
+    assert ev.update("insert", (3.6, 0.0, 0.0), pallet)  # the insert start: the floor reference
+    assert ev.update("insert", (3.9, 0.0, 0.0), pallet)
+    assert ev.update("lift", (3.9, 0.0, 0.0), (5.0, 0.0, 0.0))  # the insert's end: the riding reference
+    assert ev.update("transport", (8.9, 2.0, 0.0), (10.0, 2.0, 0.0))  # carried along: same relative pose
+    assert ev.update("lower", (8.9, 2.0, 0.0), (10.0, 2.0, 0.0))
+    assert ev.update("withdraw", (8.9, 2.0, 0.0), (10.0, 2.0, 0.0))  # the lower verdict: the floor reference again
+    assert ev.update("withdraw", (8.6, 2.0, 0.0), (10.0, 2.0, 0.0))  # backed out, the pallet still: valid
+
+
+def test_a_pallet_turned_on_the_forks_before_the_lift_verdict_is_caught():
+    """Codex 6b round 4 P2-1: the riding reference is the insert's end, so a turn during the lift shows."""
+    ev = live_records.TraceEvidence()
+    ev.update("insert", (3.6, 0.0, 0.0), (5.0, 0.0, 0.0))
+    ev.update("lift", (3.9, 0.0, 0.0), (5.0, 0.0, 0.0))
+    assert not ev.update("lift", (3.9, 0.0, 0.0), (5.0, 0.0, 0.02))  # 0.02 rad past 0.01
+    assert not ev.update("transport", (8.9, 2.0, 0.0), (10.0, 2.0, 0.0))  # once lost, stays lost
+
+
+def test_a_floor_pallet_pushed_during_the_insert_is_caught():
+    ev = live_records.TraceEvidence()
+    ev.update("insert", (3.6, 0.0, 0.0), (5.0, 0.0, 0.0))
+    assert not ev.update("insert", (3.9, 0.0, 0.0), (5.03, 0.0, 0.0))
+
+
+def test_the_runner_feeds_the_recovery_its_evidence_checks_and_outcome():
+    """Plan D4: the cargo observes each live tick's end pose; the truth evidence clears trace_valid; the retrace has
+    the forbidden-contact check and the lateral gaps; a failure while recovering ends recovery_required."""
+    src = _runner()
+    assert "core.cargo.observe(ms.phase, rear)" in src
+    assert src.index("core.cargo.observe(ms.phase, rear)") < src.index("live_safety_ = core.safety_state(t)")
+    assert "core.cargo.trace_valid = False" in src and "trace_evidence = live_records.TraceEvidence()" in src
+    assert 'if ms.phase in ["insert", "withdraw", "recover_withdraw"] or live_free_:' in src
+    assert 'if ms.phase in ["insert", "extract", "withdraw", "recover_withdraw"]:' in src
+    assert '"recovery_required" if core.commands.recovery else "failed"' in src
+
+
+def test_the_evidence_reference_is_the_transition_ticks_truth():
+    """Codex 6b impl round 1 P2-5: the scene check runs before the tick's transition; the runner feeds the same
+    truth again at the tick's end with the phase it ended in, so the reference is that instant's."""
+    ev = live_records.TraceEvidence()
+    ev.update("insert", (3.6, 0.0, 0.0), (5.0, 0.0, 0.0))
+    ev.update("insert", (3.9, 0.0, 0.0), (5.0, 0.0, 0.0))  # the scene check of the insert's last tick
+    ev.update("lift", (3.9, 0.0, 0.0), (5.0, 0.0, 0.0))  # the same tick's end: insert -> lift happened
+    assert not ev.update("lift", (3.9, 0.0, 0.0), (5.0, 0.0, 0.02))  # one physics step later: turned 0.02 rad
+
+
+def test_the_runner_publishes_the_retrace_and_keeps_a_recovery_refusals_reason():
+    src = _runner()
+    assert '"running", "paused", "held", "resuming", "recovering") else None' in src
+    assert 'live.end_mission(t, "recovery_required", core.commands.end_reason)' in src
+    end_ = src.index("core.cargo.observe(ms.phase, rear)")
+    assert src.index("trace_evidence.update(ms.phase", end_) < src.index("live_safety_ = core.safety_state(t)")

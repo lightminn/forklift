@@ -4066,6 +4066,7 @@ def drive(S, isaac) -> None:
     dt = 1 / 120
     encoder = None
     live_spool = None  # persistent console plan D8: a live run's record spool (made before the first control tick)
+    trace_evidence = None  # plan D4: the simulation's truth check on a recovery's retrace premise (live only)
     extra_encoders = {}
     frame_log = None
     chase_yaw = None
@@ -5853,6 +5854,7 @@ def drive(S, isaac) -> None:
             if args.tyre_contact_log:
                 state.setdefault("tyre_contact_rows", [])
             live_spool = RecordSpool(args.output / "spool", interval_s=10.0)
+            trace_evidence = live_records.TraceEvidence()
             state["spool_registered"] = live_records.register(
                 live_spool, slam_log=slam_log, slam=slam, obstacle=obstacle, state=state,
                 video={"frame_audit": frame_audit, "video_frames": video_frames if args.robot_camera else None,
@@ -5888,7 +5890,8 @@ def drive(S, isaac) -> None:
                         "where": traceback.format_exc().strip().splitlines()[-3:]}
             state.setdefault("live_failures", []).append(failure_)
             print("LIVE_FAILURE", record_json(failure_), flush=True)
-            live.end_mission(t_, "failed", reason_)
+            # Plan D4: a recovery that fails needs one by hand (the forks may still be in the pocket).
+            live.end_mission(t_, "recovery_required" if core.commands.recovery else "failed", reason_)
             if not ticked_:
                 safety_ = core.safety_state(t_)
                 out_failed_ = live.tick_end(t_, applied_, safety_, (0.0, 0.0), None)
@@ -5958,6 +5961,10 @@ def drive(S, isaac) -> None:
                         "Nonfinite body state")
                 yaw, tilt = yaw_and_tilt(q)
                 pallet_yaw, pallet_tilt = yaw_and_tilt(pq)
+                if trace_evidence is not None and not trace_evidence.update(
+                        ms.phase, (float(base[0]), float(base[1]), float(yaw)),
+                        (float(ppos[0]), float(ppos[1]), float(pallet_yaw))):
+                    core.cargo.trace_valid = False  # plan D4: the retrace is no evidence (a recovery refuses)
                 forward = np.array([math.cos(yaw), math.sin(yaw)])
                 rear = np.array(
                     [
@@ -6163,7 +6170,7 @@ def drive(S, isaac) -> None:
                 # Live and free (no mission, ended outside the pocket phases): the forks' contact is checked wherever the
                 # truck is driven; ended inside them it is not -- supporting a pallet touches it, and teleop is refused
                 # there (Codex D6 design round 2-3 P2).
-                if ms.phase in ["insert", "withdraw"] or live_free_:
+                if ms.phase in ["insert", "withdraw", "recover_withdraw"] or live_free_:  # plan D4: the retrace too
                     contacts = insertion_geometry.forbidden_contacts(
                         base,
                         q,
@@ -6189,7 +6196,7 @@ def drive(S, isaac) -> None:
                         f"Forbidden fork/pallet contact in {ms.phase}: {contacts}",
                         cargo=True,
                     )
-                if ms.phase in ["insert", "extract", "withdraw"]:
+                if ms.phase in ["insert", "extract", "withdraw", "recover_withdraw"]:
                     # Smallest sideways gap per blade over every check (SLAM plan
                     # S2 insertion criterion), kept per phase.
                     lateral = insertion_geometry.lateral_clearances(
@@ -6211,7 +6218,7 @@ def drive(S, isaac) -> None:
                 gate_ = core.release_gate(t, rear)
                 releasing, warming, rear = gate_.releasing, gate_.warming, gate_.rear
                 paused_ = core.commands.stopped  # M-a3 (plan E3): paused, resuming or cancelling -- no mission work
-                if live is not None and core.commands.status in ("idle", "done", "failed", "cancelled"):
+                if live is not None and core.commands.status in ("idle", "done", "failed", "cancelled", "recovery_required"):
                     paused_ = True  # M-c: no mission yet (or over): its work does not run
                 cancel_stop_ = False
                 # Real-time plan D8b: a tick waiting for a plan (asked, still computing, or just taken) stands: none of the
@@ -6546,7 +6553,12 @@ def drive(S, isaac) -> None:
                     dwell_hold = True  # the steering held where it is; the wheels brake on its curvature
                     cancel_stop_ = paused_tick_.stop  # the loop ends after this tick's stop output is applied
                     if cancel_stop_ and live is not None:
-                        live.end_mission(t, "cancelled", "operator")  # persistent console plan D1: recorded, run goes on
+                        # persistent console plan D1: recorded, run goes on; D4: a recovery the cancel could not make
+                        # (no evidence, the forks' state unknown) keeps its own reason (Codex 6b impl P3)
+                        if core.commands.status == "recovery_required":
+                            live.end_mission(t, "recovery_required", core.commands.end_reason)
+                        else:
+                            live.end_mission(t, "cancelled", "operator")
                 elif plan_wait_:  # real-time plan D8b: standing for a plan, the steering held
                     requested_speed, curvature = 0.0, 0.0
                     dwell_hold = True
@@ -6679,6 +6691,12 @@ def drive(S, isaac) -> None:
                                 live_pallet_perm.advance(driven_)
                     live_state["odom_prev"] = odom_now_
                     target_steer_ = np.asarray(live_ackermann(1.0, live.arbiter.drive.kappa, args.drive_geometry).steering_rad)
+                    core.cargo.observe(ms.phase, rear)  # plan D4: the insert's anchors and trace, at the tick's end
+                    if trace_evidence is not None:
+                        # The truth read this tick, again with the phase this tick ended in: a reference is taken at
+                        # its transition's instant, not a physics step later (Codex 6b impl round 1 P2-5).
+                        trace_evidence.update(ms.phase, (float(base[0]), float(base[1]), float(yaw)),
+                                              (float(ppos[0]), float(ppos[1]), float(pallet_yaw)))
                     live_safety_ = core.safety_state(t)
                     out_ = live.tick_end(
                         t, applied_commands_, live_safety_, (float(drive.speed_mps), float(drive.curvature_inv_m)),
@@ -6708,7 +6726,7 @@ def drive(S, isaac) -> None:
                         state["applied_command"] = (0.0, [float(v) for v in steering_command])
                     # The state carries what is applied after the choice above (contract 6, Codex M-c round 5 P1).
                     live_tracker_ = trackers.get(ms.phase) if core.commands.status in (
-                        "running", "paused", "held", "resuming") else None
+                        "running", "paused", "held", "resuming", "recovering") else None  # (D4: the retrace drawn)
                     live_plan_key_ = None if live_tracker_ is None else (
                         ms.phase, (getattr(live_tracker_, "_book", None) or {}).get("serial", id(live_tracker_)))
                     live_plan_poses_ = None if live_tracker_ is None else (

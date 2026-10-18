@@ -396,3 +396,44 @@ def test_a_submit_is_refused_while_the_scene_is_damaged():
     m = MissionCommands()
     m.queue(Submit("P1", "D1"))
     assert m.apply(0.0, Context(scene_damaged=True))[0]["reason"] == "scene_damaged" and m.status == "idle"
+
+
+def recovering(t=10.0):
+    m = running()
+    m.queue(Cancel())
+    m.apply(t)
+    m.begin_recovery(t + 1.0)  # the cancel stood: the forks are in a pocket (plan D4)
+    return m
+
+
+def test_a_recovery_reopens_the_work_clock_and_refuses_a_cancel():
+    m = recovering()
+    assert m.status == "recovering" and m.recovery and m.paused_since is None
+    assert m.work_elapsed(11.0, 15.0) == pytest.approx(4.0)  # the cancel's stop closed at the recovery's start
+    m.queue(Cancel())
+    (rec,) = m.apply(12.0)
+    assert (rec["accepted"], rec["reason"], m.status) == (False, "recovering", "recovering")
+
+
+def test_a_stop_pauses_a_recovery_and_the_resume_returns_to_it():
+    m = recovering()
+    m.apply(12.0, Context(stop_kind="preempt"))
+    assert m.status == "paused" and m.recovery
+    m.queue(Resume())
+    m.apply(13.0)
+    m.resumed(13.5)
+    assert m.status == "recovering"
+    m.queue(Pause())
+    m.apply(14.0)
+    assert m.status == "paused"
+
+
+def test_a_recovery_ends_cancelled_or_recovery_required():
+    m = recovering()
+    m.recovered(20.0)
+    assert m.status == "cancelled" and not m.recovery
+    m2 = recovering()
+    assert m2.terminate("recovery_required", 20.0, "recovery:refused") and m2.status == "recovery_required"
+    m2.queue(Submit("P1", "D1"))
+    (rec,) = m2.apply(21.0)  # the slot frees at the next apply, the submit judged then
+    assert rec["accepted"] and not m2.recovery

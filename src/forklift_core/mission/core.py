@@ -56,7 +56,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from types import SimpleNamespace
 
 import numpy as np
@@ -85,6 +85,23 @@ def rollout_callback_spec(config, start) -> dict:
     settings and the start pose it rolls a straight out with. redraw_docking's closures and
     redraw_docking_traced's dry configs describe themselves the same way."""
     return {"kind": "bicycle_rollout", "config": asdict(config), "start": [float(v) for v in np.ravel(start)]}
+
+
+RECOVERY_PHASE_LIMIT_S = 20.0  # plan D4: each recovery phase's work-clock limit
+RECOVERY_LOWER_MIN_S = 1.0  # the lowered verdict is read after this much of recover_lower (the lift ramps down first)
+
+
+@dataclass
+class RecoveryPath:
+    """A recovery's retrace (plan D4): rear-axle poses, all reversing."""
+
+    poses: np.ndarray
+    directions: np.ndarray
+    curvatures_inv_m: np.ndarray
+    length_m: float
+    status: str = "recovery"
+    success: bool = True
+    expanded_nodes: int = 0  # the fields path_record reads (Codex 6b impl round 1 P2-7)
 
 
 _HELD = object()  # a hold basis entry that no estimate is: every estimate counts as found under the hold
@@ -172,6 +189,7 @@ class MissionCore:
         # Persistent console plan D5a: the fork relation and the load, the session's (a batch run updates it too,
         # but only a live run reads it -- core.baseline is set there alone).
         self.cargo = CargoState()
+        self._recovery_install_gen = None  # plan D4: the commands generation the retrace was installed under
 
     def known_transition(self, from_phase: str, next_phase: str, t: float) -> None:
         """Known pallets across the mission (plan v10 D5)."""
@@ -348,6 +366,9 @@ class MissionCore:
         ms, state, slam, hooks, geometry, near = self.ms, self.state, self.slam, self.hooks, self.geometry, self.near
         transition = self.transition
         rear = None
+        if ms.phase == "recover_withdraw":
+            self.recovery_done(t)  # plan D4: backed out; the live mission ends cancelled, the session goes on
+            return SimpleNamespace(stop=False, rear=rear)
         if ms.phase == "approach":
             if near is not None and self.options.near_tracking_stop_at == "insert":
                 # Plan D8 S4a-1: approach only -- end where the insertion would start.
@@ -432,6 +453,8 @@ class MissionCore:
                 "Fork did not lower",
             )
             transition("withdraw", t)
+        if ms.phase in ("recover_lower", "recover_withdraw"):
+            self.recovery_timers(t)
         if ms.phase == "settle" and self.commands.work_elapsed(ms.phase_started, t) > 1.0:
             if "return_home" in self.trackers:
                 transition("return_home", t)
@@ -591,6 +614,87 @@ class MissionCore:
                 stand = True  # a blocked-path replan failed: stand until one succeeds
         return stand
 
+    # --- persistent console plan D4: the recovery of a cancel that stood with the forks in a pocket ------------------
+    def recovery_failed(self, t: float, why: str) -> None:
+        self.commands.terminate("recovery_required", t, f"recovery:{why}")
+
+    def recovery_done(self, t: float) -> None:
+        """Backed out: the mission ends cancelled; the pallet is back on the floor in the targets list where the
+        mission's estimate holds it (the pickup's, or the destination's once placed there -- Codex 6b impl P1-1)."""
+        self.commands.recovered(t)
+        at_destination = self.cargo.placed is not None
+        self.cargo.recovered()
+        mission = self.commands.mission
+        tb = self.targets
+        if mission is None or mission.pallet_id not in tb.pallets or tb.pallets[mission.pallet_id].state != "carried":
+            return
+        if at_destination:
+            scenario_ = self.options.scenario
+            if self.slam is not None:
+                scenario_ = self.slam.get("return_scenario", self.slam.get("transport_scenario", scenario_))
+            site_ = scenario_.destination
+            tb.put_down(mission.pallet_id, TargetPose(float(site_.x_m), float(site_.y_m), float(site_.yaw_rad)),
+                        uncertainty_m=RECOGNISED_MARGIN_M)
+        else:
+            est_ = (self.obstacle or {}).get("pickup_estimate") or (self.pocket or {}).get("planning_pickup")
+            if est_ is not None:
+                tb.put_down(mission.pallet_id, TargetPose(float(est_.x_m), float(est_.y_m), float(est_.yaw_rad)),
+                            state="available", uncertainty_m=RECOGNISED_MARGIN_M)
+
+    def recovery_timers(self, t: float) -> None:
+        """recover_lower's verdict (the lift down and the pallet on the floor -- always read, however low the lift
+        started) and both phases' time limit."""
+        ms, hooks = self.ms, self.hooks
+        if self.commands.status != "recovering":
+            return
+        elapsed = self.commands.work_elapsed(ms.phase_started, t)
+        if elapsed > RECOVERY_PHASE_LIMIT_S:
+            self.recovery_failed(t, f"{ms.phase}_timeout")
+            return
+        if ms.phase == "recover_lower" and elapsed >= RECOVERY_LOWER_MIN_S:
+            if hooks.lift_position() < 0.012 and abs(hooks.pallet_z()) < 0.008:
+                if not self.cargo.trace_valid:
+                    self.recovery_failed(t, "trace_invalid")
+                    return
+                self.transition("recover_withdraw", t)
+                self.install_recover_withdraw(t, self.cargo.last_rear)
+
+    def install_recover_withdraw(self, t: float, rear) -> None:
+        """The retrace from the depth now (plan D4): judged whole by the permission before it moves; none left: done."""
+        if rear is None:
+            self.recovery_failed(t, "no_pose")
+            return
+        poses = self.cargo.recovery_path(rear, 0.02)
+        if len(poses) < 2:
+            self.recovery_done(t)
+            return
+        poses = np.asarray(poses, dtype=float)
+        count = len(poses)
+        path = RecoveryPath(poses, np.full(count, -1, dtype=np.int8), np.zeros(count),
+                            float(np.sum(np.hypot(np.diff(poses[:, 0]), np.diff(poses[:, 1])))))
+        obstacle = self.obstacle
+        if obstacle is not None:
+            check = obstacle["layer"].check_candidate(path.poses, current_pose=tuple(float(v) for v in rear),
+                                                      direction=-1, loaded=False, lookahead_m=path.length_m)
+            if check.blocked is not None or check.verified_m < path.length_m - 1e-6:
+                self.recovery_failed(t, f"blocked:{check.blocked}")
+                return
+        self.paths["recover_withdraw"] = path
+        if "withdraw" in self.trackers:  # the withdraw's own speed and tolerances (Codex 6b impl P1-2)
+            config = self.trackers["withdraw"].config
+        elif self.trackers:  # another phase's, at the withdraw's speed and docking tolerance (the runner's withdraw)
+            config = replace(next(iter(self.trackers.values())).config,
+                             cruise_speed_mps=self.settings["withdraw_speed_mps"], position_tolerance_m=0.008)
+        else:
+            self.recovery_failed(t, "no_tracker_config")
+            return
+        self.trackers["recover_withdraw"] = RearAxlePathTracker(path.poses, path.directions, path.curvatures_inv_m,
+                                                                config)
+        self.state.setdefault("recoveries", []).append({"time_s": t, "from_depth_m": self.cargo.depth(rear),
+                                                       "length_m": path.length_m})
+        self.state.setdefault("paths", {})["recover_withdraw"] = self.hooks.path_record(path)  # the record and the map
+        self._recovery_install_gen = self.commands.mission_gen
+
     def permission_acting(self) -> tuple[bool, bool]:
         """Whether the permission acts on this phase's command, and whether the truck is on a docking straight
         (the permission's own reading, shared by the permission tick and its watch while paused)."""
@@ -608,7 +712,7 @@ class MissionCore:
             # permission, and the safety evaluation, act on all of it.
             docking_straight = False
         acting = (
-            ms.phase in ("observe", "approach", "transport", "return_home")
+            ms.phase in ("observe", "approach", "transport", "return_home", "recover_withdraw")
             or (ms.phase == "withdraw" and obstacle["layer"].known_enabled
                 and obstacle["layer"].known_config.get("withdraw_mode", "certified") == "certified")  # D5 corridor
         ) and not docking_straight
@@ -2841,7 +2945,7 @@ class MissionCore:
             cmds.pause_hold_count = self.hold_count()
             cmds.pause_holding = slam is not None and slam["tracker"].mode == "holding"
             cmds.pause_release_pending = slam is not None and slam.get("pending_release") is not None
-            if ms.phase in ("lift", "lower"):
+            if ms.phase in ("lift", "lower", "recover_lower"):
                 # E3/R7: a lift on its way stops where it is -- the target is set to the measured lift once, at the
                 # stop's first tick, and held. Synchronising every tick ratcheted a loaded lift down by its sag
                 # (Isaac ma3_p_tr: 2.8 mm a tick, the pallet dropped 0.27 s into a transport pause). A lift that is
@@ -2860,9 +2964,20 @@ class MissionCore:
         applied_zero = abs(float((self.state.get("applied_command") or (0.0,))[0])) < 1e-12
         if cmds.status == "cancelling" and standing and applied_zero:
             # Cancelled once standing and the wheels already commanded to zero (the slew may still be stepping
-            # down while the stop detector reads standing): this tick's output is zero too.
-            cmds.cancelled(t)
-            stop = True
+            # down while the stop detector reads standing): this tick's output is zero too. Live (plan D4): the forks
+            # still in a pocket back out first; without the evidence to, the mission needs a recovery by hand.
+            decision = (self.cargo.cancel_decision(rear, in_withdraw=ms.phase == "withdraw")
+                        if self.baseline is not None else "cancelled")
+            if decision == "recover":
+                cmds.begin_recovery(t)
+                self.transition("recover_lower", t)
+            elif decision == "recovery_required":
+                cmds.terminate("recovery_required", t, "recovery:" + ("trace_invalid" if not self.cargo.trace_valid
+                                                                    else self.cargo.relation))
+                stop = True
+            else:
+                cmds.cancelled(t)
+                stop = True
         elif cmds.status == "resuming":
             rear = self.resume_step(t, rear, loaded, standing)
         return SimpleNamespace(requested_speed=0.0, obstacle_hold=obstacle_hold, stop=stop, rear=rear)
@@ -2933,6 +3048,21 @@ class MissionCore:
                 check["reason"] = "docking_retry"
                 return rear
         retry_stand = near is not None and near.get("retry_stand") and ms.phase == "observe"
+        if ms.phase in ("recover_lower", "recover_withdraw") and not self.cargo.trace_valid:
+            self.recovery_failed(t, "trace_invalid")  # the evidence went while paused (Codex 6b impl P1-3)
+            return rear
+        if ms.phase == "recover_withdraw" and not (self.hooks.lift_position() < 0.012
+                                                   and abs(self.hooks.pallet_z()) < 0.008):
+            self.transition("recover_lower", t)  # not on the floor any more: lower again first
+            cmds.resumed(t)
+            return rear
+        if ms.phase == "recover_withdraw" and self._recovery_install_gen != cmds.mission_gen:
+            # Plan D4: the retrace made again from the depth now (the trace's placement does not move), once per
+            # resume -- a resume that waits does not install it every tick (Codex 6b impl round 2 P2); it may end
+            # here (already out) or refuse (blocked).
+            self.install_recover_withdraw(t, rear)
+            if cmds.status != "resuming":
+                return rear
         if ms.phase in trackers and not retry_stand:
             check["step"] = "path_rechecked"
             probe = copy.deepcopy(trackers[ms.phase])
@@ -3037,6 +3167,8 @@ class MissionCore:
         site_ = scenario_.destination
         site_pose = TargetPose(float(site_.x_m), float(site_.y_m), float(site_.yaw_rad))
         tb.update_destination(did, site_pose)
+        if ms.phase in ("recover_lower", "recover_withdraw"):
+            return  # plan D4: the recovery's end puts the pallet back (recovery_done); no branch below applies
         if ms.phase in ("lift", "extract", "transport", "lower"):
             tb.carried(pid)
         elif ms.phase in ("withdraw", "settle", "return_home", "home_settle", "complete"):
@@ -3109,6 +3241,10 @@ class MissionCore:
         ``warming`` and ``rear``."""
         slam, hooks = self.slam, self.hooks
         require, slam_release, slam_rear = hooks.require, self.slam_release, hooks.slam_rear
+        if self.commands.status == "recovering" and not self.cargo.trace_valid:
+            # Plan D4: the evidence went after the retrace was installed -- ended at the tick's start, before the
+            # follower and the command run (Codex 6b impl round 2 P1).
+            self.recovery_failed(t, "trace_invalid")
         if self.end_release_due is not None and slam is not None:
             # A live mission's end release, waiting for the truck to stand (plan D1 step 4).
             if slam["tracker"].mode != "holding" or not self.cargo.release_allowed():

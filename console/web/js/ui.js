@@ -16,6 +16,8 @@ const STATUS = {
   done: ["ok", "완료"],
   failed: ["crit", "실패"],
   cancelled: ["", "취소됨"],
+  recovering: ["acc", "포켓에서 빠지는 중"],
+  recovery_required: ["crit", "복구 필요"],
 };
 const STEP_KO = {
   stop_confirmed: "정지 확인",
@@ -208,7 +210,7 @@ export function render(m) {
 
   // progress strip and destination
   const prog = $("d-progress");
-  const active = mi && ["accepted", "preparing", "running", "paused", "held", "resuming"].includes(mi.status);
+  const active = mi && ["accepted", "preparing", "running", "paused", "held", "resuming", "recovering"].includes(mi.status);
   if (mi) {
     const ph = PHASES.find(([en]) => en === mi.phase);
     $("req-status-line").textContent = `${mko}${ph && mi.status !== "done" ? ` · ${ph[1]}` : ""}${mi.reason ? ` · ${mi.reason}` : ""}`;
@@ -231,11 +233,16 @@ export function render(m) {
   ready.className = `ready ${why ? "warn" : "ok"}`;
   ready.querySelector("span").textContent = why ?? "작업을 받을 수 있습니다";
   $("m-open").disabled = Boolean(why);
-  $("m-pause").disabled = !lease || !mi || mi.status !== "running";
+  // a recovery is paused, not cancelled (persistent console plan D4)
+  $("m-pause").disabled = !lease || !mi || !["running", "recovering"].includes(mi.status);
+  // the mission now is a recovery: paused or resuming too, never a new mission still in its old phase (D4)
+  const recovery = Boolean(mi && String(mi.phase || "").startsWith("recover_")
+    && ["recovering", "paused", "resuming", "held"].includes(mi.status));
+  $("m-cancel").title = recovery ? "복구 중에는 취소 대신 일시정지합니다" : "";
   const resume = resumeState({ state: st, mission: mi, hasLease: lease });
   $("m-resume").disabled = !resume.enabled;
   $("m-resume").title = resume.why;
-  $("m-cancel").disabled = !lease || !active;
+  $("m-cancel").disabled = !lease || !active || recovery;
   if (mi) {
     $("req-id").textContent = `${mi.mission_id}${mi.pallet_id ? ` · ${mi.pallet_id} → ${mi.destination_id ?? "?"}` : ""}`;
     chip($("req-status"), mcls, mi.reason ? `${mko} · ${mi.reason}` : mko);
