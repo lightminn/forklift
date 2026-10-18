@@ -6114,8 +6114,11 @@ def drive(S, isaac) -> None:
                     if live_free_:
                         # The rest of the truck too -- body and carriage -- since the outline left the 2D check
                         # (Codex D6 review P2: driven onto the pallet, the underbody met its top boards).
+                        joints_ = robot.get_joint_positions()
                         contacts = contacts + insertion_geometry.body_contacts(
-                            base, q, float(robot.get_joint_positions()[lift_index[0]]), ppos, pq,
+                            base, q, float(joints_[lift_index[0]]), ppos, pq,
+                            # the steered tyres at their measured angles (Codex D6 review round 3 P2)
+                            steering={"left_steer": float(joints_[steers[0]]), "right_steer": float(joints_[steers[1]])},
                             clearance_m=state["pocket_clearance_margin_m"])
                     state["pocket_geometry_checks"] += 1
                     if contacts:

@@ -59,10 +59,17 @@ def _boxes(link: ET.Element) -> tuple:
     return tuple(boxes)
 
 
+def _turned_about_z(quaternion_wxyz: ArrayLike, angle_rad: float) -> tuple:
+    """q * q_z(angle), wxyz: the frame turned by ``angle_rad`` about its own z (a steered tyre's, about the base's)."""
+    w, x, y, z = (float(v) for v in quaternion_wxyz)
+    c, s = math.cos(angle_rad / 2), math.sin(angle_rad / 2)
+    return (w * c - z * s, x * c + y * s, y * c - x * s, z * c + w * s)
+
+
 def _wheel_boxes(truck: ET.Element) -> tuple:
-    """Each tyre (a cylinder on its own link, axis along the link's y) as a base-frame box at the neutral pose: its
-    width as it is when the wheel cannot steer, and wide enough for every steering angle when it hangs from a
-    steering joint (persistent console plan D6: the truck's own parts against a pallet with no mission)."""
+    """Each tyre (a cylinder on its own link, axis along the link's y) as its box, centred at the wheel's base-frame
+    position at the neutral pose, with the steering joint it hangs from (None: it cannot steer) -- the check turns a
+    steered one by the measured angle (persistent console plan D6: the truck's own parts against a pallet)."""
     parents = {j.find("child").get("link"): j for j in truck.findall("joint") if j.find("child") is not None}
     boxes = []
     for link in truck.findall("link"):
@@ -76,13 +83,13 @@ def _wheel_boxes(truck: ET.Element) -> tuple:
             if not np.allclose(rpy, (math.pi / 2, 0, 0), atol=1e-6):
                 raise ValueError(f"Unsupported tyre orientation: {collision.get('name')}")
             radius, half_width = float(cylinder.get("radius")), float(cylinder.get("length")) / 2
-            steered, chain = False, joint
+            steer, chain = None, joint
             while chain is not None:
-                steered |= "steer" in chain.get("name", "")
+                if "steer" in chain.get("name", ""):
+                    steer = chain.get("name")
                 chain = parents.get(chain.find("parent").get("link"))
-            reach = math.hypot(radius, half_width) if steered else None
-            half = np.array([reach, reach, radius]) if steered else np.array([radius, half_width, radius])
-            boxes.append((collision.get("name", "unnamed"), _base_position_m(truck, joint.get("name")), half))
+            boxes.append((collision.get("name", "unnamed"), _base_position_m(truck, joint.get("name")),
+                          np.array([radius, half_width, radius]), steer))
     return tuple(boxes)
 
 
@@ -498,7 +505,9 @@ class InsertionGeometry:
                 holder.extend(aligned)
                 result.body_boxes = _boxes(holder)
             result.body_boxes_skipped = tuple(c.get("name", "unnamed") for c in skipped)
-        result.wheel_boxes = _wheel_boxes(truck)
+        wheels = _wheel_boxes(truck)
+        result.wheel_boxes = tuple(w[:3] for w in wheels)
+        result.wheel_steer = {w[0]: w[3] for w in wheels}
         if len(result.fork_boxes) != 4:
             raise ValueError("Expected two fork blades and two heels")
         result.pallet_boxes = _boxes(links[0])
@@ -619,15 +628,24 @@ class InsertionGeometry:
 
     def body_contacts(self, base_position_m: ArrayLike, base_quaternion_wxyz: ArrayLike, lift_m: float,
                       pallet_position_m: ArrayLike, pallet_quaternion_wxyz: ArrayLike, *,
-                      clearance_m: float = 0.002) -> tuple[tuple[str, str], ...]:
-        """(truck box, pallet box) pairs that may touch for the base link's boxes (lift 0) and the carriage's
-        non-blade boxes (lifted) -- the parts forbidden_contacts leaves out. Same conventions as it."""
-        return (self.forbidden_contacts(base_position_m, base_quaternion_wxyz, 0.0, pallet_position_m,
-                                        pallet_quaternion_wxyz, clearance_m=clearance_m, boxes=self.body_boxes)
-                + self.forbidden_contacts(base_position_m, base_quaternion_wxyz, 0.0, pallet_position_m,
-                                          pallet_quaternion_wxyz, clearance_m=clearance_m, boxes=self.wheel_boxes)
-                + self.forbidden_contacts(base_position_m, base_quaternion_wxyz, lift_m, pallet_position_m,
-                                          pallet_quaternion_wxyz, clearance_m=clearance_m, boxes=self.carriage_boxes))
+                      steering: dict | None = None, clearance_m: float = 0.002) -> tuple[tuple[str, str], ...]:
+        """(truck box, pallet box) pairs that may touch for the base link's boxes (lift 0), the tyres -- a steered
+        one turned by its measured angle, ``steering`` {joint: rad}, straight when absent -- and the carriage's
+        non-blade boxes (lifted): the parts forbidden_contacts leaves out. Same conventions as it."""
+        contacts = self.forbidden_contacts(base_position_m, base_quaternion_wxyz, 0.0, pallet_position_m,
+                                           pallet_quaternion_wxyz, clearance_m=clearance_m, boxes=self.body_boxes)
+        world_from_base = _rotation(base_quaternion_wxyz)
+        for name, centre, half in self.wheel_boxes:
+            joint = self.wheel_steer.get(name)
+            angle = 0.0 if joint is None else float((steering or {}).get(joint, 0.0))
+            # The tyre's own frame: at its centre, turned by its steering angle about the base's z.
+            contacts += self.forbidden_contacts(
+                _vector(base_position_m) + world_from_base @ centre, _turned_about_z(base_quaternion_wxyz, angle),
+                0.0, pallet_position_m,
+                pallet_quaternion_wxyz, clearance_m=clearance_m, boxes=((name, np.zeros(3), half),))
+        return contacts + self.forbidden_contacts(base_position_m, base_quaternion_wxyz, lift_m, pallet_position_m,
+                                                  pallet_quaternion_wxyz, clearance_m=clearance_m,
+                                                  boxes=self.carriage_boxes)
 
     def forbidden_contacts(
         self,
