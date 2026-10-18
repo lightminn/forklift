@@ -145,3 +145,57 @@ def test_a_forged_or_old_token_is_stale_and_a_stop_always_runs():
     assert a.handle("A", msg("lease_request", token, 1), 0.3, conn_id="c2")["reason"] == "stale"
     stop = {"t": "stop", "request_id": "s", "session_epoch": EPOCH, "source": "key"}  # no token at all
     assert a.handle("A", stop, 0.4, conn_id="c2")["t"] == "ack" and a.mode == "STOPPED"
+
+
+def test_a_closed_connections_token_is_retired_and_goes_when_its_results_do():
+    """Codex 4c review P2-1: 64 different clients coming and going filled the ledger for good."""
+    book = RequestLedger(max_tokens=2, window_s=10.0)
+    for n in range(10):
+        token = book.issue()
+        assert book.register(token, f"C{n}", f"c{n}", now=float(n))
+        book.admit(token, f"C{n}", f"c{n}", 1)
+        book.put(token, 1, {"n": n}, now=float(n))
+        book.retire(token)  # the connection closed
+        book.purge(now=float(n) + 20.0)
+    assert len(book) <= 2
+
+
+def test_an_old_epochs_request_is_refused_before_the_ledger_and_not_stored():
+    """Codex 4c review P2-2: after a restart the tokens began at 1 again and an old epoch's request took the key."""
+    a, welcome = arbiter()
+    token = welcome["request_token"]
+    old = dict(msg("lease_request", token, 1), session_epoch=EPOCH - 1, request_id="old")
+    assert a.handle("A", old, 0.1, conn_id="c1")["reason"] == "stale_epoch"
+    new = a.handle("A", msg("lease_request", token, 1), 0.2, conn_id="c1")
+    assert new["t"] == "ack" and new["request_id"] == "r1"
+
+
+def test_tokens_do_not_start_at_the_same_number_in_two_runs():
+    from forklift_core.live.link import Channels
+
+    assert Channels().issue_token() != Channels().issue_token()
+
+
+def test_a_disconnect_retires_the_connections_token():
+    a, welcome = arbiter()
+    token = welcome["request_token"]
+    a.disconnect("A", 1.0, conn_id="c1")
+    a.connect("A", 2.0, conn_id="c1")  # the same conn id reused without a token must not revive it
+    assert a.handle("A", msg("lease_request", token, 1), 2.1, conn_id="c1")["reason"] == "stale"
+
+
+def test_a_connection_with_no_room_in_the_ledger_is_told_busy():
+    """Codex 4c review P3-3: its welcome carried a token the ledger had refused."""
+    from forklift_core.live.link import Channels, Link
+    from forklift_core.safety.arbiter import Feedback
+
+    a, _ = arbiter()
+    a.ledger = RequestLedger(max_tokens=1)
+    ch = Channels()
+    link = Link(a, ch)
+    ch.connect("k1", "one", True, ch.issue_token())
+    ch.connect("k2", "two", True, ch.issue_token())
+    link.begin(1.0, Feedback(1.0, 0.0))
+    out = ch.take_out()
+    assert ("k2", {"t": "reject", "of": "hello", "reason": "busy"}) in out
+    assert not any(c == "k1" and m.get("of") == "hello" for c, m in out)

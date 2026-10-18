@@ -28,7 +28,11 @@ class Channels:
         self._latest: dict = {}
         self._out: deque = deque()
         self.notify = notify  # called (any thread) when something is put out; the server wakes its loop
-        self._next_token = 0  # persistent console plan D7: the request tokens, one per connection, never reused
+        # persistent console plan D7: the request tokens, one per connection, never reused -- from a random start, so
+        # two runs (a restart, a new epoch) do not number theirs alike (Codex 4c review P2-2)
+        import secrets
+
+        self._next_token = secrets.randbits(40)
 
     # --- the server thread ------------------------------------------------------------------------------------------
     def issue_token(self) -> int:
@@ -134,6 +138,9 @@ class Link:
         if kind == "connect":
             control, token = (extra["control"], extra["token"]) if isinstance(extra, dict) else (extra, None)
             welcome = self.a.connect(client_id, now, control=bool(control), conn_id=conn_id, token=token)
+            if token is not None and "request_token" not in welcome:
+                # No room in the request ledger (plan D7): this connection is refused; the server closes it.
+                self.ch.put(conn_id, {"t": "reject", "of": "hello", "reason": "busy"})
             self.conn_of[client_id] = conn_id
             self.log.append({"mono": now, "where": where, "conn": conn_id, "t": "connect",
                              "epoch": welcome["session_epoch"]})

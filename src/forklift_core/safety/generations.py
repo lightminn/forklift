@@ -78,6 +78,19 @@ class RequestLedger:
                                "retired": False, "since": float(now)}
         return True
 
+    def retire(self, token: int) -> None:
+        """The token's connection closed: no new requests on it; it goes once its results are purged."""
+        entry = self._tokens.get(token)
+        if entry is not None:
+            entry["retired"] = True
+
+    def token_of(self, client_id: str, conn_id: str):
+        """The current (not retired) token of that connection, or None."""
+        for token, entry in self._tokens.items():
+            if entry["client"] == client_id and entry["conn"] == conn_id and not entry["retired"]:
+                return token
+        return None
+
     def _drop(self, token: int) -> None:
         self._count -= len(self._tokens.pop(token)["results"])
 

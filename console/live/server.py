@@ -151,6 +151,12 @@ class LiveHandle(wire.ControlOutboxMixin, wire.MediaFanoutMixin):
                     await self._broadcast_control(msg)
                 else:
                     self._send_control(conn_id, msg)
+                    if msg.get("t") == "reject" and msg.get("of") == "hello":
+                        # refused by the request ledger (no room, plan D7): closed once the reject is out
+                        ws, _ = self.control.get(conn_id, (None, None))
+                        if ws is not None:
+                            asyncio.get_running_loop().call_later(
+                                0.2, lambda ws_=ws: asyncio.ensure_future(ws_.close(1013, "busy")))
 
     def wake(self) -> None:
         self._wake.set()

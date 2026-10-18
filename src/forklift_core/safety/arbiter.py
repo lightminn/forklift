@@ -162,6 +162,9 @@ class Arbiter:
         self._expire(now_mono)
         if conn_id is not None and self.conns.get(client_id) != conn_id:
             return
+        token = self.ledger.token_of(client_id, conn_id)
+        if token is not None:
+            self.ledger.retire(token)  # its results stay out their window; then it goes (Codex 4c review P2-1)
         self.clients.pop(client_id, None)
         self.conns.pop(client_id, None)
         if self.lease is not None and self.lease.client_id == client_id:
@@ -261,6 +264,10 @@ class Arbiter:
         request_id, token, seq = msg["request_id"], msg.get("request_token"), msg.get("request_seq")
         if not (isinstance(token, int) and isinstance(seq, int)) or isinstance(token, bool) or isinstance(seq, bool):
             return self._reply(kind, request_id, "invalid")
+        if msg.get("session_epoch") != self.session_epoch:
+            # Before the ledger, unstored: an older run's request (its tokens may be numbered like these) must not take
+            # a key a request of this run will use (Codex 4c review P2-2).
+            return self._reply(kind, request_id, "stale_epoch")
         conn = conn_id if conn_id is not None else self.conns.get(client_id)
         verdict, stored = self.ledger.admit(token, client_id, conn, seq)
         if verdict == "stored":
