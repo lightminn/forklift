@@ -142,6 +142,30 @@ def _geometric_fit_gate_open(sample):
     return _proposal_fit(sample, opened, got.failures, identity_threshold=0.0)
 
 
+_LEARNED = {}
+
+
+def _learned(sample):
+    """The learned proposals of this sample (the geometric fallback's on a model failure, design §10)."""
+    from forklift_learned.proposer import propose_with_fallback  # noqa: PLC0415 -- the [learned] extra
+
+    key = sample.meta["scene_id"]
+    if _LEARNED.get("key") != key:
+        got = propose_with_fallback(sample.input.scene, _LEARNED["model"], G.propose)
+        if got.source == "learned":
+            proposals, failures = got.proposals, ()
+        else:
+            proposals, failures = got.extra.proposals, got.extra.failures
+            _LEARNED["fallbacks"] = _LEARNED.get("fallbacks", 0) + 1
+        _LEARNED.update(key=key, result=type("R", (), {"proposals": proposals, "failures": failures})())
+    return _LEARNED["result"]
+
+
+def _learned_fit(sample):
+    got = _learned(sample)
+    return _proposal_fit(sample, got.proposals, got.failures, identity_threshold=_LEARNED["tau"])
+
+
 def _oracle_fit(sample):
     """Truth instance masks as proposals (source oracle), then the stage 2 fit and selection.
 
@@ -212,6 +236,13 @@ def _segmentation_summary(scenes) -> dict:
     return {**out, "by_distance": by_distance}
 
 
+def _learned_record(a):
+    if a.onnx is None:
+        return None
+    return {"onnx": str(a.onnx), "onnx_sha256": hashlib.sha256(Path(a.onnx).read_bytes()).hexdigest(), "tau": a.tau,
+            "conf": a.conf, "fallbacks": _LEARNED.get("fallbacks", 0)}
+
+
 def _truth_ids(truth_dir, scene_dir):
     """The depth-aligned truth ids of this scene; refused unless it is the same scene (same truth.json)."""
     other = truth_dir / scene_dir.name
@@ -275,7 +306,10 @@ def main(argv=None):
     p.add_argument("--dataset", type=Path, required=True)
     p.add_argument("--split", choices=("dev", "eval"), required=True)
     p.add_argument("--detector", choices=("baseline", "oracle", "oracle-fit", "geometric-fit", "geometric-fit-gate-open",
-                                          "geometric-proposals"), required=True)
+                                          "geometric-proposals", "learned-fit", "learned-proposals"), required=True)
+    p.add_argument("--onnx", type=Path, default=None, help="the learned proposer's model (learned-*)")
+    p.add_argument("--tau", type=float, default=None, help="the identity threshold on the learned score (learned-fit)")
+    p.add_argument("--conf", type=float, default=0.05, help="the learned proposer's minimum detection score")
     p.add_argument("--segmentation-truth", type=Path, default=None,
                    help="the same scenes without the noise pack's label shift (depth-aligned instance ids)")
     p.add_argument("--output", type=Path, required=True)
@@ -284,8 +318,15 @@ def main(argv=None):
                    "decision and proposal failure)")
     a = p.parse_args(argv)
     run = {"baseline": _baseline, "oracle": _oracle, "oracle-fit": _oracle_fit, "geometric-fit": _geometric_fit,
-           "geometric-fit-gate-open": _geometric_fit_gate_open, "geometric-proposals": None}[a.detector]
-    proposer = _geometric if a.detector.startswith("geometric") else None
+           "geometric-fit-gate-open": _geometric_fit_gate_open, "geometric-proposals": None,
+           "learned-fit": _learned_fit, "learned-proposals": None}[a.detector]
+    proposer = _geometric if a.detector.startswith("geometric") else _learned if a.detector.startswith("learned") else None
+    if proposer is _learned:
+        if a.onnx is None or (a.detector == "learned-fit" and a.tau is None):
+            p.error("learned-* needs --onnx, and learned-fit needs --tau")
+        from forklift_learned.proposer import LearnedProposer  # noqa: PLC0415
+
+        _LEARNED.update(model=LearnedProposer(a.onnx, conf=a.conf), tau=a.tau)
     if proposer is not None and a.segmentation_truth is None:
         p.error(f"--detector {a.detector} needs --segmentation-truth")
     seg_rows, decisions = [], []
@@ -321,7 +362,7 @@ def main(argv=None):
         (a.output / "metrics.json").write_text(json.dumps(
             {"detector": a.detector, "split": a.split, "render_source": sources.pop(), "dataset_sha256": digest.hexdigest(),
              "source": _source(a.source_manifest), "geometric_params": asdict(G.GeometricParams()),
-             "segmentation": _segmentation_summary(seg_rows)}, indent=1, default=float))
+             "learned": _learned_record(a), "segmentation": _segmentation_summary(seg_rows)}, indent=1, default=float))
         (a.output / "segmentation.jsonl").write_text("".join(json.dumps(r, default=float) + "\n" for r in seg_rows))
         return
     if len(signatures) != 1:
@@ -335,7 +376,8 @@ def main(argv=None):
     if a.detector in ("oracle-fit", "geometric-fit", "geometric-fit-gate-open"):
         metrics.update({"fit_params": asdict(FitParams()), "proposal_failures": dict(failures)})
     if proposer is not None:
-        metrics.update({"geometric_params": asdict(G.GeometricParams()), "segmentation": _segmentation_summary(seg_rows)})
+        metrics.update({"geometric_params": asdict(G.GeometricParams()), "learned": _learned_record(a),
+                        "segmentation": _segmentation_summary(seg_rows)})
         (a.output / "segmentation.jsonl").write_text("".join(json.dumps(r, default=float) + "\n" for r in seg_rows))
     (a.output / "decisions.jsonl").write_text("".join(json.dumps(d) + "\n" for d in decisions))
     (a.output / "metrics.json").write_text(json.dumps(metrics, indent=1, default=float))
