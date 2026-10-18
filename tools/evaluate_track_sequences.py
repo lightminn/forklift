@@ -200,9 +200,13 @@ def run(seq, bounds: TrackBounds, variant: str, table: dict, seed: int) -> dict:
         report = tr.update(frame)
         for cid, tid in report.accepted.items():
             labels_of[tid].append(tuple(f["labels"][cid]))
-        if selected is None:
+        if selected is None:  # the first visible track on the target: a hidden duplicate is never selected (2B-3h)
+            visible = {t.track_id for t in tr.tracks(stamp, odom)}
             selected = next((tid for cid, tid in sorted(report.accepted.items())
-                             if tuple(f["labels"][cid]) == target), None)
+                             if tid in visible and tuple(f["labels"][cid]) == target), None)
+            if selected is None:  # a shadow that showed without a new reading (its owner was deleted -- Codex)
+                selected = min((tid for tid in visible if labels_of[tid] and labels_of[tid][-1] == target),
+                               default=None)
             if selected is not None:
                 tr.select(selected)  # the selection proxy tells the tracker which track it follows (2B-3c)
         live = {t.track_id: t for t in tr.tracks(stamp, odom)}

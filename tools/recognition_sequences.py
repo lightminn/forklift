@@ -51,7 +51,7 @@ SEQUENCE_BANDS = {"calibration": 1_500_000, "evaluation": 1_600_000,
                   "evaluation_f": 1_970_000,
                   "evaluation_g": 1_983_000,  # the eval_pool band ends at 2,000,000 (1,983,000 + 13 x 1,000 fits)  # 2B-3b re-judgement: the 2B-3 evaluation set was used for diagnosis
                   # 2B-3g on: the "sequence" seed pool (2,000,000-2,999,999), one band per 100,000
-                  "evaluation_h": 2_000_000}
+                  "evaluation_h": 2_000_000, "evaluation_i": 2_100_000}
 CELLS = tuple((c, s) for c in ("S1", "S2", "S3", "S4", "S5", "S6") for s in ("epal6", "t11_06")) + (("S7", "nonstandard"),)
 CELL_STRIDE = 1_000  # x 13 cells stays inside the 100,000 gap between the two bands
 START_M, END_M, STEP_M, PERIOD_S = 3.5, 1.3, 0.12, 0.2

@@ -100,6 +100,11 @@ class TrackBounds:
     # (a reading split or a near miss, pockets within near_miss_position_cap_m) starts a shadow -- a hidden
     # duplicate -- instead of a visible track; False keeps the 2B-3c..3e duplicate tracks
     suppress_duplicates: bool = True
+    # 2B-3h: a reading that would start a track but, judged before matching, fits exactly one other active
+    # visible track's pose in place (pockets within near_miss_position_cap_m) and splits from it on the
+    # layout alone is born as that track's hidden duplicate (kind "layout"), selected or not; False keeps it
+    # a visible track
+    hide_layout_splits: bool = True
     # Fusion weights only: the assumed odometry noise as random walks (position_m_per_sqrt_s,
     # yaw_rad_per_sqrt_s). None weighs with the worst-case bound, which leaves older observations
     # almost no weight (stage 2B-3 calibration). The budget always uses the bound.
@@ -151,7 +156,8 @@ class TrackBounds:
                    near_miss_support_ratio=float(data.get("near_miss_support_ratio", 2.5)),
                    near_miss_support_cap_m=float(data.get("near_miss_support_cap_m", 0.045)),
                    near_miss_position_cap_m=float(data.get("near_miss_position_cap_m", 0.2)),
-                   suppress_duplicates=bool(data.get("suppress_duplicates", True)))
+                   suppress_duplicates=bool(data.get("suppress_duplicates", True)),
+                   hide_layout_splits=bool(data.get("hide_layout_splits", True)))
 
     @classmethod
     def load(cls, path) -> TrackBounds:
@@ -332,6 +338,18 @@ def _pocket_step(ref: _Observation, new: _Observation) -> float:
 
 
 def _reading_fits(track: _Track, new: _Observation, bounds: TrackBounds) -> bool:
+    return _family_fits(track, new, bounds) and _layout_ok(track, new)
+
+
+def _layout_ok(track: _Track, new: _Observation) -> bool:
+    """Each pocket's face coordinate against the last observation and the interval every accepted
+    observation allows."""
+    return _layout_fits(track.last, new) and track.layout_overlaps(new)
+
+
+def _family_fits(track: _Track, new: _Observation, bounds: TrackBounds) -> bool:
+    """A parametric reading joins any track; a known reading keeps the track's shape (and its axis, unless in
+    place)."""
     if new.family == "known" and track.known is not None:
         # a known reading keeps the track's shape; another axis of that shape is the same face read under the
         # other axis hypothesis (a square T11 face differs only in bottom-board evidence) -- but only in
@@ -341,7 +359,7 @@ def _reading_fits(track: _Track, new: _Observation, bounds: TrackBounds) -> bool
             return False
         if new.key != track.recent_known and _pocket_step(track.last, new) > bounds.near_miss_position_cap_m + 1e-12:
             return False
-    return _layout_fits(track.last, new) and track.layout_overlaps(new)
+    return True
 
 
 def _pose_terms(track: _Track, new: _Observation, bounds: TrackBounds):
@@ -593,6 +611,19 @@ class CandidateTracker:
                 split_off[j] = "reading"
             elif chosen_active and _near_miss(chosen, o, self.bounds):  # 2B-3d
                 split_off[j] = "near_miss"
+        # 2B-3h: before matching, the one other active visible track (if exactly one) a reading fits in place
+        # but splits from on the layout alone -- the selected track's own splits (above) come first
+        layout_owner = {}
+        if self.bounds.hide_layout_splits:
+            owners = [tr for tr in self._live(frame.stamp_ns) if not tr.shadow and tr is not chosen]
+            cap = self.bounds.near_miss_position_cap_m + 1e-12
+            for j, o in enumerate(obs):
+                if j in split_off:
+                    continue
+                fits = [tr for tr in owners if _family_fits(tr, o, self.bounds) and not _layout_ok(tr, o)
+                        and _pose_fits(tr, o, self.bounds) and _pocket_step(tr.last, o) <= cap]
+                if len(fits) == 1:  # two or more: whose duplicate it would be is unknown
+                    layout_owner[j] = fits[0]
         # 2B-3e: before matching, which of the selected track's suspected duplicates each reading fits
         duplicates = [] if chosen is None else [tr for tr in self._tracks
                                                 if tr.duplicate_of == chosen.id and not tr.shadow]
@@ -605,7 +636,9 @@ class CandidateTracker:
             fits = sorted(j for j in free if _gate(chosen, obs[j], self.bounds))
             if len(fits) == 1:
                 rivals = [tr for tr in self._tracks if tr is not chosen and _gate(tr, obs[fits[0]], self.bounds)]
-                if all(tr.duplicate_of == chosen.id for tr in rivals):
+                # a layout duplicate split from another track, not from the selected one: no exemption, or a
+                # later selection of its owner would turn hiding into a matching priority (2B-3h, Codex)
+                if all(tr.duplicate_of == chosen.id and tr.duplicate_kind != "layout" for tr in rivals):
                     priority = fits[0]  # the selected track wins only against its own suspected duplicates
         # 2B-3e shadows are hidden duplicates: they keep matching and taking readings exactly as the
         # duplicate would have in 2B-3d (so every ambiguity it held stays held), but never reach the output
@@ -672,6 +705,10 @@ class CandidateTracker:
                     # output (dropping it handed the target's next reading to a neighbour -- Codex)
                     track.shadow = True
                     suppressed += 1
+            elif j in layout_owner:
+                # 2B-3h: an in-place layout split of another active visible track: born as its hidden duplicate
+                track.duplicate_of, track.duplicate_kind, track.shadow = layout_owner[j].id, "layout", True
+                suppressed += 1
             self._tracks.append(track)
             accepted[o.candidate.candidate_id] = self._next_id
             self._next_id += 1

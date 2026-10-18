@@ -305,6 +305,7 @@ def test_every_sequence_band_holds_its_cells_inside_one_seed_pool():
         last = start + len(R.CELLS) * R.CELL_STRIDE - 1
         assert any(lo <= start and last < hi for lo, hi in pools), band
     assert R.SEQUENCE_BANDS["evaluation_h"] == rs.SEED_BANDS["sequence"] == 2_000_000
+    assert R.SEQUENCE_BANDS["evaluation_i"] == 2_100_000
 
 
 def test_the_sequence_pool_stays_clear_of_the_catalogue_and_training():
