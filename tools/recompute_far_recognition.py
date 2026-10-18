@@ -52,17 +52,24 @@ def recompute(run_dir: Path, *, recognition: dict | None = None) -> list:
                            zone_radius_m=rec["zone"]["radius_m"], camera_x_m=rec["camera_x_m"], dt=1 / 120)
     far = runtime.far
     far.start_leg()
-    out, attempts = [], iter(rec["attempts"])
+    out, attempts, leg = [], iter(rec["attempts"]), 0
     for path in sorted((run_dir / "recognition").glob("frame_*.npz")):
         z = np.load(path)
         scene, ids, odom = _scene(z), np.asarray(z["instance_ids"]), tuple(float(v) for v in z["odom"])
+        if int(z["leg"]) != leg:  # the recorded leg boundaries must be the ones this replay makes
+            out.append(({"leg": int(z["leg"]), "frame": path.name}, {"leg": leg, "status": "leg_boundary_differs"}))
         if str(z["kind"]) == "drive":
-            far.frame(scene, ids, R.planar(*odom), runtime.instruction(R.compose(tuple(z["map_from_odom"]), odom)))
+            again = far.frame(scene, ids, R.planar(*odom),
+                              runtime.instruction(R.compose(tuple(z["map_from_odom"]), odom)))
+            if again["leg_lost"]:  # A': the leg ends here, the next frame starts a re-observation leg
+                far.start_leg()
+                leg += 1
             continue
         _, again = far.stop(scene, ids, R.planar(*odom), runtime.instruction(tuple(z["control_base"])),
                             pallet_depth_m=runtime.pallet_depth_m)
         out.append((next(attempts), again))
         far.start_leg()
+        leg += 1
     return out
 
 

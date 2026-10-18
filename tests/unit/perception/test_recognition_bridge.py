@@ -225,3 +225,24 @@ def test_a_constant_speed_leaves_the_lag_unidentified():
     measured = [truth[k - 11] + 0.012 for k in frames]
     fit = B.estimate_lag(frames, measured, truth, max_lag=48)
     assert not fit["accepted"] and not fit["unique"][0]  # the bias absorbs any lag: no tau stands out
+
+
+def test_a_choice_made_at_the_stop_is_in_the_selection_history():
+    # Codex P3: the history was copied before the stop's own choice
+    far = _far()
+    far.start_leg()
+    obs, rec = far.stop(*_frame_at(0.0, 0.0), pallet_depth_m=EPAL.overall_depth_m)
+    assert rec["selected_track"] == 0 and [h["track"] for h in rec["selection_history"]] == [0]
+
+
+def test_a_driving_frame_reports_the_loss_of_the_legs_target():
+    # A' (Codex): the chosen track deleted while driving ends the leg; a stale-but-kept track does not
+    far = _far()
+    far.start_leg()
+    far.frame(*_frame_at(0.0, 0.0))
+    _, _, odom, instr = _frame_at(0.0, 0.0)
+    empty, empty_ids = _render([])
+    stale = far.frame(replace(empty, stamp_ns=int(0.8 * S)), empty_ids, odom, instr)
+    assert not stale["leg_lost"] and far.tracker.selected == 0
+    gone = far.frame(replace(empty, stamp_ns=int(1.21 * S)), empty_ids, odom, instr)
+    assert gone["leg_lost"]

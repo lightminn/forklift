@@ -151,3 +151,68 @@ def test_two_instance_labels_on_one_id_are_a_contract_error():
     grid = np.zeros((480, 640), dtype=np.uint32)
     with pytest.raises(ValueError):
         R.decode_mission_semantic(_payload(grid, {"0": {"class": "inst_0,inst_1"}}))
+
+
+def test_the_lag_fit_reads_only_counted_readings():
+    xs = _leg()
+    run = _runtime(lag_steps=11)
+    _drive(run, 11, xs)
+    for f in run.leg_frames[::2]:  # half the readings uncounted and far off: they must not move the fit
+        for c in f["candidates"]:
+            c["geometry"], c["pallet_centre_m"] = "ambiguous", [c["pallet_centre_m"][0] + 0.5, 0.0, 0.0]
+    fit = run.lag_fit()
+    assert fit is not None and fit["tau_steps"] == 11 and fit["accepted"]
+
+
+def test_a_target_lost_while_driving_starts_a_new_observation_leg():
+    xs = _leg()
+    run = _runtime(lag_steps=11)
+    _drive(run, 11, xs[:200])
+    first = run.leg
+    assert run.far.tracker.selected is not None
+    empty = np.full_like(_render((0.0, 0.0, 0.0))[1], -1)  # the pallet out of view for 1.3 s
+    scene, _ = _render((float(xs[199]), 0.0, 0.0))
+    for k in range(200, 360):
+        run.record_step(k, k * DT, (float(xs[199]), 0.0, 0.0), (float(xs[199]), 0.0, 0.0), PALLET)
+        if run.due(k, observing=True):
+            run.drive_frame(k, k * DT, scene.rgb, scene.depth_m, empty, scene.intrinsics, scene.base_from_optical)
+    assert run.leg == first + 1
+    ended = run.leg_endings[-1]
+    assert ended["leg"] == first and ended["reason"] == "target_lost_while_driving" and ended["selection_history"]
+    for k in range(360, 480):  # the pallet back in view: the new leg chooses afresh
+        run.record_step(k, k * DT, (float(xs[199]), 0.0, 0.0), (float(xs[199]), 0.0, 0.0), PALLET)
+        if run.due(k, observing=True):
+            s2, ids2 = _render((float(xs[199]), 0.0, 0.0))
+            run.drive_frame(k, k * DT, s2.rgb, s2.depth_m, ids2, s2.intrinsics, s2.base_from_optical)
+    assert run.far.tracker.selected is not None
+
+
+def test_the_lag_fit_says_whether_it_agrees_with_the_lag_used():
+    xs = _leg()
+    run = _runtime(lag_steps=11)
+    _drive(run, 11, xs)
+    assert run.lag_fit()["agrees_with_used"] is True
+    wrong = _runtime(lag_steps=0)
+    _drive(wrong, 11, xs)
+    assert wrong.lag_fit()["agrees_with_used"] is False
+
+
+def test_the_recompute_reproduces_a_leg_ended_by_a_loss(tmp_path):
+    from tools import recompute_far_recognition as RC
+
+    xs = _leg()
+    run = _runtime(lag_steps=11, out_dir=tmp_path / "recognition")
+    _drive(run, 11, xs[:200])
+    x = float(xs[199])
+    scene, ids = _render((x, 0.0, 0.0))
+    for k in range(200, 480):
+        run.record_step(k, k * DT, (x, 0.0, 0.0), (x, 0.0, 0.0), PALLET)
+        if run.due(k, observing=True):
+            shown = ids if k >= 360 else np.full_like(ids, -1)
+            run.drive_frame(k, k * DT, scene.rgb, scene.depth_m, shown, scene.intrinsics, scene.base_from_optical)
+    stop = replace(scene, stamp_ns=int(round(480 * DT * 1e9)))
+    obs, rec = run.stop(stop, ids, initial_time_s=0.0, control_base=(x, 0.0, 0.0), odom_base=(x, 0.0, 0.0),
+                        truth_base=(x, 0.0, 0.0), truth_pallet=PALLET)
+    assert obs.status == "valid" and run.leg_endings and rec["leg"] == 1
+    pairs = RC.recompute(tmp_path, recognition=run.summary())
+    assert [RC.differences(a, b) for a, b in pairs] == [[]]

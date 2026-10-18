@@ -141,6 +141,12 @@ class FarRecognition:
     def frame(self, scene, instance_ids, odom_from_base, instruction) -> dict:
         """A driving frame: tracked, and the leg's target chosen by the first decision a visible track took."""
         _, _, visible, taken, record = self._step(scene, instance_ids, odom_from_base, instruction)
+        # The leg's target deleted (not merely stale) while driving: the caller ends this leg and starts a new
+        # re-observation leg with the next frame (A', Codex) -- this frame stays in the ended leg.
+        record["leg_lost"] = self._chosen is not None and self.tracker.selected is None
+        if record["leg_lost"]:
+            self.frames.append(record)
+            return record
         if self._chosen is None and taken is not None and taken in visible:
             self._choose(taken, scene.stamp_ns)
         self.frames.append(record)
@@ -175,6 +181,7 @@ class FarRecognition:
             out["selected_track"] = self._chosen
         else:
             used, out["source"], out["observations"] = single, "single", 1
+        out["selection_history"] = list(self.selection_history)  # after a choice the stop itself made (Codex P3)
         out["single"] = _candidate_record(single)
         out["used"] = _candidate_record(used)
         try:

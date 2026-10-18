@@ -132,6 +132,7 @@ class FarRuntime:
         self.leg_frames: list = []  # the leg's driving frames (time, measured pallet centre in base)
         self.frame_records: list = []
         self.attempts: list = []
+        self.leg_endings: list = []  # legs ended by a target lost while driving (A')
         self.leg = 0
 
     def _load_for(self, spec):
@@ -171,6 +172,7 @@ class FarRuntime:
         scene = SceneInput(np.asarray(rgb, dtype=np.uint8), np.asarray(depth_m, dtype=float), intrinsics,
                            base_from_optical, int(round(row[1] * 1e9)), "synthetic", "synthetic")
         odom = row[2]
+        history = list(self.far.selection_history)
         rec = self.far.frame(scene, instance_ids, planar(*odom), self.instruction(compose(map_from_odom, odom)))
         record.update(pose_t_s=row[1], odom=list(odom), **{k: rec[k] for k in ("decision", "taken_by", "visible",
                                                                               "untracked", "held", "new")})
@@ -178,10 +180,22 @@ class FarRuntime:
         record["candidates"] = len(rec["candidates"])
         record["selected_track"] = self.far.tracker.selected
         self.frame_records.append(record)
+        record["leg_lost"] = rec["leg_lost"]
         self._save(f"frame_{len(self.frame_records):04d}.npz", kind="drive", leg=self.leg,
                    depth_m=np.asarray(depth_m, dtype=float), instance_ids=np.asarray(instance_ids, dtype=np.int16),
                    stamp_ns=scene.stamp_ns, odom=np.asarray(odom), map_from_odom=np.asarray(map_from_odom, float),
                    **self._intrinsics_arrays(intrinsics, base_from_optical))
+        if rec["leg_lost"]:
+            # The leg's target was deleted while driving: the leg ends as a loss and a re-observation leg starts
+            # with the next frame -- the waypoint re-observation's contract without driving to another waypoint
+            # (A', Codex). Its record is kept; the drive's own progress and limits are untouched.
+            self.leg_endings.append({"leg": self.leg, "reason": "target_lost_while_driving", "tick": int(tick),
+                                     "selection_history": history, "lag_fit": self.lag_fit(),
+                                     "drive_frames": sum(1 for r in self.frame_records if r["leg"] == self.leg
+                                                         and r.get("kind") == "drive" and "skipped" not in r)})
+            self._save(f"leg_{self.leg:02d}_steps.npz", steps=np.array([(r[0], r[1], *r[2], *r[3], *r[4])
+                                                                      for r in self.leg_steps], dtype=float))
+            self.next_leg()
         return record
 
     # --- the stop ---------------------------------------------------------------------------------------
@@ -251,7 +265,8 @@ class FarRuntime:
         truth = np.array([relative(r[3], r[4])[0] for r in self.leg_steps])
         steps, measured = [], []
         for f in self.leg_frames:
-            c = next((c for c in f["candidates"] if c["proposal_id"] == "i0"), None)
+            c = next((c for c in f["candidates"] if c["proposal_id"] == "i0" and c["geometry"] == "fitted"
+                      and c["identity"] == "confirmed"), None)  # counted readings only (Codex)
             if c is None:
                 continue
             k = int(np.searchsorted(ticks, f["tick"]))
@@ -261,7 +276,16 @@ class FarRuntime:
             measured.append(c["pallet_centre_m"][0])
         if len(steps) < 6:
             return None
-        return B.estimate_lag(steps, measured, truth, max_lag=max_lag)
+        fit = B.estimate_lag(steps, measured, truth, max_lag=max_lag)
+        # J2 (Codex): a fit that identifies tau must agree with the lag the run used, within one step, in the whole
+        # leg and in each half that identifies its own; a fit that identifies nothing says nothing (None).
+        identifiable = fit["unique"][0] and fit["residual_p95_m"] <= 0.010
+        if not identifiable:
+            fit["agrees_with_used"] = None
+        else:
+            taus = [fit["tau_steps"]] + [h for h, u in zip(fit["halves"], fit["unique"][1:]) if u]
+            fit["agrees_with_used"] = all(abs(t - self.lag_steps) <= 1 for t in taus)
+        return fit
 
     @staticmethod
     def _intrinsics_arrays(intrinsics, base_from_optical) -> dict:
@@ -277,7 +301,8 @@ class FarRuntime:
         np.savez_compressed(self.out_dir / name, **arrays)
 
     def summary(self) -> dict:
-        return {"frames": self.frame_records, "attempts": self.attempts, "lag_steps": self.lag_steps,
+        return {"frames": self.frame_records, "attempts": self.attempts, "leg_endings": self.leg_endings,
+                "lag_steps": self.lag_steps,
                 "frame_every": self.frame_every, "drive_frames": self.drive_frames,
                 "zone": {"centre_xy": list(self.zone_centre_xy), "radius_m": self.zone_radius_m},
                 "camera_x_m": self.camera_x_m, "fork_spacing_m": self.setup.spacing_m,
