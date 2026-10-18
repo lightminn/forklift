@@ -1,5 +1,5 @@
 role: provisional
-window_s: 1.2
+window_s: 0.6
 expiry_s: 0.5
 max_observations: 10
 rear_axle_xy_m:
@@ -156,7 +156,7 @@ rows:
 provenance:
   records: 102
   records_sha256: 40382a24e5ba07971726020f215f1d69cc971c7218e28cdb29834c2c846a7127
-  commit: d49165a117021a9694e5c8e7689656f64babd053
+  commit: 5885ff3d21c1a73ed41f70315b3c16d9843698bb
   seeds:
   - 1500000
   - 1500001
@@ -312,10 +312,10 @@ provenance:
       sigma_samples: 0
       unmatched: 0
   window_p95_yaw_rad_beyond_2m:
-    '0.0': 0.20085290618250573
-    '0.6': 0.1533506140806571
-    '1.2': 0.14906291091853419
-    '2.0': 0.14906291091853419
+    '0.0': 0.1971196623581084
+    '0.6': 0.14828961040026778
+    '1.2': 0.14828961040026778
+    '2.0': 0.14828961040026778
   note: single-frame p95 rows from the CPU rig with team noise; empirical budgets,
     not probability bounds. The odometry table is the worst-case age table of reported
     odometry
