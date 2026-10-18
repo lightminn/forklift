@@ -85,6 +85,11 @@ def rollout_callback_spec(config, start) -> dict:
     return {"kind": "bicycle_rollout", "config": asdict(config), "start": [float(v) for v in np.ravel(start)]}
 
 
+# A live mission that ended in one of these phases may have left the forks in a pocket or the pallet on them: no end
+# release of the SLAM hold, no submit and no teleop until the recovery (persistent console plan D4/D5).
+POCKET_PHASES = ("insert", "lift", "extract", "transport", "lower", "withdraw")
+
+
 def apply_tracker_profile_to(trackers: dict, profile) -> None:
     """The ``--tracker-profile`` followers (M-a1 slice 6e: a module function, because the runner applies it
     to the first followers before the core exists and the core to the ones it installs later)."""
@@ -161,6 +166,7 @@ class MissionCore:
         self.capture_acquired_s: float | None = None  # D9c: its acquisition time, for the plan it asks
         self.prepare_attempts = 0  # persistent console plan D2: the current submit's preparation requests
         self.baseline = None  # persistent console plan D2: the mission-owned state before a live session's first mission
+        self.end_release_due: dict | None = None  # plan D1 step 4: an end release waiting for the truck to stand
         self.fresh_depth_wait: tuple | None = None  # (since, acquisition stamp): an async near build's first frame
 
     def known_transition(self, from_phase: str, next_phase: str, t: float) -> None:
@@ -3082,6 +3088,13 @@ class MissionCore:
         ``warming`` and ``rear``."""
         slam, hooks = self.slam, self.hooks
         require, slam_release, slam_rear = hooks.require, self.slam_release, hooks.slam_rear
+        if self.end_release_due is not None and slam is not None:
+            # A live mission's end release, waiting for the truck to stand (plan D1 step 4).
+            if slam["tracker"].mode != "holding":
+                self.end_release_due = None
+            elif slam["stop_now"]:
+                self.end_release(t, deferred=True)
+                rear = slam_rear(t)
         releasing = slam is not None and slam.get("pending_release") is not None
         if releasing:
             waited = self.commands.work_elapsed(slam["release_wait_from"], t)
@@ -4484,6 +4497,9 @@ class MissionCore:
                 p.answer, p.answered_s = out, float(t)
             return SimpleNamespace(hold=True)
         ok, value = out
+        if not ok and getattr(self.jobs, "_dead", None) is not None:
+            # No worker any more (its restart failed): not the plan's failure, the session's (Codex D6 P2-4).
+            hooks.require(False, f"plan_worker_dead: {self.jobs._dead}")
         self.pending = None
         self.commands.end_wait(t)
         record = state["async_plans"][-1]
@@ -4555,7 +4571,19 @@ class MissionCore:
     def end_reset(self, t: float) -> dict:
         """A live mission's end (D1 steps 3 and 8): the pocket check closed as the insertion's end closes it, then
         the mission-owned state back to the baseline. Returns the mission's records (for its own record)."""
-        pocket, obstacle, state = self.pocket, self.obstacle, self.state
+        pocket, obstacle, state, slam = self.pocket, self.obstacle, self.state, self.slam
+        if slam is not None:
+            # The mission's release reservation goes with it (Codex D6 P2-3: its 10 s limit failed every tick after);
+            # a hold left with the forks free is released for the end (D1 step 4), now or once standing.
+            slam["pending_release"] = slam["release_wait_from"] = None
+            if slam["tracker"].mode == "holding" and self.ms.phase not in POCKET_PHASES:
+                if slam["stop_now"]:
+                    self.end_release(t, deferred=False)
+                else:
+                    mission = self.commands.mission
+                    self.end_release_due = {"pallet_id": None if mission is None else mission.pallet_id,
+                                            "destination_id": None if mission is None else mission.destination_id,
+                                            "docked": bool(slam.get("docking", {}).get("accepted_any"))}
         # The list takes the mission's last estimates (a docking match, a release's re-expression) now, and the
         # ended mission moves it no more: the scenarios it read from are dropped below (Codex stage 2 round 2 P2).
         self.refresh_targets()
@@ -4567,6 +4595,53 @@ class MissionCore:
             state.setdefault("pocket_check", {}).update(pocket["check"].summary(), frames_read=pocket["frames_read"])
             pocket["check"] = None
         return self.baseline.restore(self) if self.baseline is not None else {}
+
+    def end_release(self, t: float, *, deferred: bool) -> None:
+        """The end release of a SLAM hold (plan D1 step 4): the received correction applied, the hold-frame pallet
+        estimate carried by the frame change once -- the destinations are map goals and stay -- the grid
+        re-projected and the release recorded. No plan, no path, no re-observation (U28). Deferred (the truck was
+        moving at the end), the ended mission's pallet target is carried instead, its correction version raised."""
+        slam, hooks, obstacle, pocket = self.slam, self.hooks, self.obstacle, self.pocket
+        before = hooks.slam_rear(t)
+        jump_m, jump_rad = self.release_slam(hooks.slam_odom_base())
+        after = hooks.slam_rear(t)
+        frame_change = compose(tuple(float(v) for v in after), invert(tuple(float(v) for v in before)))
+
+        def carried(site):
+            x_, y_, yaw_ = compose(frame_change, (float(site.x_m), float(site.y_m), float(site.yaw_rad)))
+            return replace(site, x_m=x_, y_m=y_, yaw_rad=yaw_)
+
+        if deferred:  # the ended mission's own targets, in the list (refresh_targets no longer runs for it)
+            due, tb = self.end_release_due or {}, self.targets
+            pid, did = due.get("pallet_id"), due.get("destination_id")
+            if due.get("docked"):  # the docking hold: the docked destination and the pallet delivered there
+                if did in tb.destinations:
+                    old = tb.destinations[did]
+                    tb.update_destination(did, carried(old))
+                    if pid in tb.pallets and tb.pallets[pid].state == "delivered" and tb.pallets[pid].pose == old:
+                        tb.update_pose(pid, carried(old))
+            elif pid in tb.pallets and tb.pallets[pid].pose is not None:  # the near capture's hold: its pallet
+                tb.update_pose(pid, carried(tb.pallets[pid].pose))
+            tb.set_correction_version(self.slam_releases)
+        elif slam.get("docking", {}).get("accepted_any"):
+            # The docking hold: the corrected destination is held, carried as slam_release carries it; the delivered
+            # pallet follows it in the list (Codex D6 design round 4 P2).
+            scenario_ = slam.get("return_scenario", slam.get("transport_scenario", self.options.scenario))
+            slam["return_scenario"] = replace(scenario_, destination=carried(scenario_.destination))
+        else:
+            if obstacle is not None and obstacle.get("pickup_estimate") is not None:
+                obstacle["pickup_estimate"] = carried(obstacle["pickup_estimate"])
+            if pocket.get("planning_pickup") is not None:
+                pocket["planning_pickup"] = carried(pocket["planning_pickup"])
+        if obstacle is not None and slam["tracker"].applied is not None:
+            self._reproject(t, tuple(float(v) for v in slam["tracker"].applied[0]), after, False)
+        slam["holds"].append({"phase": self.ms.phase, "time_s": float(t), "event": "release", "reason": "mission_end",
+                              "deferred": deferred, "jump_m": jump_m, "jump_rad": jump_rad,
+                              "frame_change": [float(v) for v in frame_change]})
+        hooks.set_rear(after)
+        if slam.get("control"):
+            slam["control"][-1][1:4] = [float(v) for v in after]
+        self.end_release_due = None
 
     def start_mission(self, t: float, plan, inputs: dict, ladder: dict, ready=None) -> None:
         """The adoption (D2 start processing): the mission-owned state back to the session's baseline (D0), the

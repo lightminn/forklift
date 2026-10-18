@@ -26,6 +26,18 @@ class Clock:
         self.t += max(0.0, s)
 
 
+_MADE: list = []  # every runtime a test made, closed after it (its live_log file; -W error, ws1 full suite)
+
+
+@pytest.fixture(autouse=True)
+def _close_runtimes():
+    yield
+    while _MADE:
+        rt = _MADE.pop()
+        if not rt._log.closed:
+            rt.close()
+
+
 def runtime(tmp_path, **k):
     targets = TargetsBook()
     targets.add_pallet("P-1", "epal6", Pose(5.0, 0.0, 0.0))
@@ -38,6 +50,7 @@ def runtime(tmp_path, **k):
     clock = Clock()
     rt = LiveRuntime(core, hooks, output=tmp_path, port_file=tmp_path / "port.json", dt=DT, clock=clock,
                      sleep=clock.sleep, session_epoch=9, **k)
+    _MADE.append(rt)
     return rt, core, did, clock
 
 

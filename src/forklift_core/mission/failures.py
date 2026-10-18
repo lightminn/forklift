@@ -17,7 +17,11 @@ PREFIXES = {
     "Pallet displaced before pickup": SCENE, "Forbidden fork/pallet contact": SCENE,
     # contracts, configuration, localisation, sensors, the body: the session ends
     "near_field_contract": SESSION, "near_field_without_capture": SESSION, "near_field_without_hold": SESSION,
-    "near_field_frame_released": SESSION, "pocket_check_without_capture": SESSION, "pocket_check_refused": SESSION,
+    "near_field_frame_released": SESSION, "pocket_check_without_capture": SESSION,
+    # the capture's own contract (a broken sensor or pose, not a scene that could not be seen; Codex D6 P1-2)
+    "perception_capture_failed:invalid_capture_pose": SESSION,
+    "perception_capture_failed:sensor_metadata_unavailable": SESSION,
+    "plan_worker_dead": SESSION,  # the planning worker could not be started again (Codex D6 P2-4)
     "localization_stale": SESSION, "slam_link_failed": SESSION, "slam_prewarm_timeout": SESSION,
     "sensor_silence_stopped": SESSION, "Camera did not produce RGB": SESSION,
     "Perception camera did not produce depth": SESSION, "Nonfinite body state": SESSION,
@@ -34,6 +38,7 @@ PREFIXES = {
     # the mission's own work: that mission fails
     "Tracking timeout": MISSION, "Tracking failed": MISSION, "obstacle_": MISSION,
     "perception_capture_failed": MISSION, "observation_discarded": MISSION, "near_capture_": MISSION,
+    "pocket_check_refused": MISSION,  # the insertion refused (it turns on the observed yaw too; Codex D6 P2-5)
     "near_field_": MISSION, "observe:": MISSION, "observe_replan_failed": MISSION, "docking_": MISSION,
     "slam_release_": MISSION, "async_plan_failed": MISSION, "async_plan_discarded": MISSION,
     "async_near_no_fresh_depth": MISSION, "planning_wait_moving": MISSION, "Pallet was not lifted": MISSION,

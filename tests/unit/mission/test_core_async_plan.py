@@ -596,3 +596,121 @@ def test_the_end_closes_the_pocket_check_and_hands_the_mission_records_back():
     assert core.pocket["check"] is None and layer.exempt is None and layer.depth_support is None
     assert records["state"]["pocket_check"] == {"frames": 3, "frames_read": 3} and "pocket_check" not in state
     assert records["state"]["async_plans"] == [{"site": "leg"}] and "async_plans" not in state
+
+
+@pytest.mark.parametrize("site", ["leg", "prepare"])
+def test_a_dead_worker_ends_the_session_not_the_mission(site):
+    """Codex D6 P2-4: a worker that could not be started again fails every job at once; that is not 'no path'."""
+    if site == "prepare":
+        core, ms, state, started, inputs = preparing_core()
+        core.prepare_request(11.0, REAR, inputs, {})
+    else:
+        core, ms, state, obstacle, slam, calls, _ = make("transport")
+        core.live_leg(20.0, REAR, True)
+    core.jobs._dead = "plan worker restart failed: boom"
+    core.jobs.answers[core.pending.job] = (False, core.jobs._dead)
+    with pytest.raises(RuntimeError, match="^plan_worker_dead: plan worker restart failed: boom"):
+        core.job_hold(30.0, REAR, 0.0, False)
+
+
+# --- the end SLAM release (plan D1 step 4; stage 3 design, 4th edition) --------------------------------------------
+class HeldTracker:
+    """A SLAM tracker holding a correction: a release moves the estimate by +0.20 m in x."""
+
+    def __init__(self):
+        self.mode, self.applied, self.released = "holding", ((0.0, 0.0, 0.0), 0), 0
+
+    def release(self, odom_from_base=None):
+        self.mode, self.applied, self.released = "tracking", ((0.2, 0.0, 0.0), 0), self.released + 1
+        return 0.2, 0.0
+
+    def may_drive(self):
+        return True
+
+
+def held_core(phase="approach"):
+    from forklift_core.mission.targets import Pose
+
+    core, ms, state, started, inputs = preparing_core()
+    ms.phase = phase
+    slam = core.slam
+    slam["tracker"] = HeldTracker()
+    slam.update(stop_now=True, pending_release="transport", release_wait_from=5.0, control=[[0.0, 1.0, 2.0, 0.5]])
+    pose = {"rear": np.array([1.0, 2.0, 0.5])}
+    core.hooks.slam_rear = lambda t: pose["rear"] + ([0.2, 0.0, 0.0] if slam["tracker"].mode == "tracking" else 0.0)
+    core.hooks.slam_odom_base = lambda: None
+    core.hooks.set_rear = lambda rear: None
+    core.commands.adopted_id = core.commands.mission_id  # the mission ran
+    from forklift_core.planning.pallet_mission import PalletSite
+
+    core.pocket["planning_pickup"] = PalletSite(3.0, 0.5, 0.0)  # seen in the hold
+    core.obstacle["pickup_estimate"] = PalletSite(3.0, 0.5, 0.0)
+    slam["transport_scenario"] = Scenario(PalletSite(-5.0, -21.4, -1.57))
+    return core, slam, Pose
+
+
+@dataclass(frozen=True)
+class Scenario:
+    destination: object
+
+
+def test_an_end_standing_releases_the_hold_and_carries_only_the_held_pallet_estimate():
+    core, slam, Pose = held_core("approach")
+    dest = core.targets.destinations["D-1"]
+    version = core.targets.correction_version
+    core.end_reset(20.0)
+    assert slam["tracker"].released == 1 and slam["pending_release"] is None and slam["release_wait_from"] is None
+    pose = core.targets.pallets["P-1"].pose  # carried by the release, then settled
+    assert (pose.x_m, pose.y_m, pose.yaw_rad) == pytest.approx((3.2, 0.5, 0.0))
+    assert core.targets.destinations["D-1"] == dest  # a map goal: not moved
+    assert core.targets.correction_version == version + 1
+    assert slam["holds"][-1]["reason"] == "mission_end" and core.obstacle["applied"] == (0.2, 0.0, 0.0)
+    assert core.pending is None and not core.jobs.submitted  # no plan, no path (U28)
+
+
+def test_an_end_while_moving_releases_once_standing_and_carries_the_pallet_target():
+    core, slam, Pose = held_core("observe")
+    slam["stop_now"] = False
+    core.end_reset(20.0)
+    assert slam["tracker"].released == 0 and slam["pending_release"] is None
+    before = core.targets.pallets["P-1"].pose
+    core.release_gate(21.0, np.array([1.0, 2.0, 0.5]))  # still moving: waits, no 10 s limit
+    assert slam["tracker"].released == 0
+    slam["stop_now"] = True
+    core.release_gate(22.0, np.array([1.0, 2.0, 0.5]))
+    assert slam["tracker"].released == 1
+    after = core.targets.pallets["P-1"].pose
+    assert (after.x_m - before.x_m) == pytest.approx(0.2) and core.targets.destinations["D-1"].x_m == -5.0
+    core.release_gate(23.0, np.array([1.0, 2.0, 0.5]))
+    assert slam["tracker"].released == 1  # once
+
+
+@pytest.mark.parametrize("phase", ["insert", "lift", "transport", "withdraw"])
+def test_an_end_in_a_pocket_or_loaded_phase_keeps_the_hold(phase):
+    core, slam, Pose = held_core(phase)
+    core.end_reset(20.0)
+    assert slam["tracker"].mode == "holding" and slam["tracker"].released == 0
+    assert slam["pending_release"] is None  # the mission's own reservation is gone either way
+
+
+@pytest.mark.parametrize("standing", [True, False])
+def test_an_end_after_docking_carries_the_docked_destination_and_the_pallet_delivered_there(standing):
+    """Codex D6 design round 4 P2: ended in settle with the docking hold still on; both the immediate and the deferred
+    release move the docked destination and its delivered pallet together, by the frame change, once."""
+    from forklift_core.mission.targets import Pose
+    from forklift_core.planning.pallet_mission import PalletSite
+
+    core, slam, _ = held_core("settle")
+    core.pocket["planning_pickup"] = core.obstacle["pickup_estimate"] = None
+    slam["docking"] = {"accepted_any": True}
+    slam["transport_scenario"] = Scenario(PalletSite(5.0, 1.0, 0.0))
+    core.targets.carried("P-1")
+    core.targets.put_down("P-1", Pose(5.0, 1.0, 0.0))
+    slam["stop_now"] = standing
+    core.end_reset(20.0)
+    if not standing:
+        slam["stop_now"] = True
+        core.release_gate(21.0, np.array([1.0, 2.0, 0.5]))
+    assert slam["tracker"].released == 1
+    pallet, dest = core.targets.pallets["P-1"].pose, core.targets.destinations["D-1"]
+    assert (pallet.x_m, pallet.y_m) == pytest.approx((5.2, 1.0)) and (dest.x_m, dest.y_m) == pytest.approx((5.2, 1.0))

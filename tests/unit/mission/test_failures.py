@@ -55,3 +55,64 @@ def test_every_require_reason_has_a_class_of_its_own(rel):
         if kind == "f" and text == "":
             continue  # an f-string with no fixed head: its sites are checked through DYNAMIC_SITES below
         assert classify(text, strict=True) is not None, f"{rel}:{line} {text!r} unclassified"
+
+
+# Every reason the two files raise today, by its text (a constant, or an f-string's fixed head): a reason added later
+# fails this test until it is read and classified here -- a broad prefix such as near_field_ must not take it
+# silently (Codex D6 round 1).
+KNOWN = {
+    "sim/isaac/run_transport.py": {
+        "Cannot open base scene", "Invalid pallet spawn after settling", "Truck spawn displaced",
+        "This adapter requires 120Hz physics (240 Hz only for a --steering-probe convergence check)",
+        "Settings must be positive finite values", "Camera render product prim is missing",
+        "Perception camera intrinsics mismatch (G1a)", "base scene built from another forklift URDF",
+        "pocket_check_without_capture", "pocket_check_refused:", "Mission planning failed: ",
+        "Mission exceeded simulation time budget", "--odometry-wheel-radius-m ",
+        "Perception camera intrinsics check failed: ", "pocket camera intrinsics differ from the perception camera's",
+        "live video camera intrinsics differ from the scaled perception camera's (the page's camera_model)",
+        "Perception display clipping range did not preserve the far plane",
+        "Perception camera local pose differs from the planned mount", "observe:all_candidates_failed:",
+        "Camera did not produce RGB", "Nonfinite body state", "Excessive body tilt in ",
+        "Actual truck/load footprint overlap in ", "Measured pallet footprint overlap in ", "mission_cancelled",
+        "Pallet dropped during transport", "Pallet slipped off forks", "Pallet displaced before pickup",
+        "Forbidden fork/pallet contact in ", "localization_stale: ", "slam_link_failed: ",
+        "withdraw_tracking_exceeded:", "Perception camera did not produce depth", "Measured pallet solid overlap in ",
+        "",
+    },
+    "src/forklift_core/mission/core.py": {
+        "obstacle_no_progress in ", "near_capture_realign_held_recovery", "Tracking timeout in ", "Tracking failed in ",
+        "perception_capture_failed:", "observation_discarded:", "docking_retry_no_plan:", "docking_unaligned:",
+        "slam_release_replan_failed: ", "async_plan_failed:", "near_field_frame_released",
+        "near_capture_realign_too_long:", "near_field_without_capture", "near_field_without_hold",
+        "Pallet was not lifted", "Pallet did not settle onto destination floor", "Fork did not lower",
+        "sensor_silence_stopped", "near_capture_failed:", "observe:all_candidates_exhausted:",
+        "near_capture_no_final_straight", "slam_release_no_stop after ", "docking_retry_match_refused:",
+        "obstacle_live_plan_failed in ", "planning_wait_moving", "async_plan_discarded:", "near_field_",
+        "withdraw_not_certified:no_pallet_estimate", "withdraw_not_certified:", "pocket_stop in ",
+        "obstacle_replan_failed in ", "transport_recovery_after_docking", "stall_replan_failed:",
+        "observe_replan_failed:", "obstacle_blocked in ", "obstacle_replan_limit in ", "async_near_no_fresh_depth",
+        "plan_worker_dead: ",
+    },
+}
+
+
+@pytest.mark.parametrize("rel", sorted(KNOWN))
+def test_the_reasons_raised_are_the_ones_read_and_classified(rel):
+    found = {text for _, text, _ in _require_reasons(ROOT / rel) if text is not None}
+    assert found == KNOWN[rel], (sorted(found - KNOWN[rel]), sorted(KNOWN[rel] - found))
+
+
+CAPTURE = {"sensor_metadata_unavailable": "session", "invalid_capture_pose": "session", "pose_changed": "mission",
+           "sensor_frame_changed_during_read": "mission", "sensor_frame_not_ready": "mission",
+           "acquisition_outside_capture": "mission", "lift_not_zero": "mission"}
+
+
+def test_every_capture_failure_reason_is_classified_through_the_core_s_prefix():
+    import re
+
+    found = set()
+    for rel in ("sim/isaac/perception_adapter.py", "sim/isaac/run_transport.py"):
+        found |= set(re.findall(r'CaptureFailure\("([a-z_]+)"', (ROOT / rel).read_text()))
+    assert found == set(CAPTURE)
+    for reason, cls in CAPTURE.items():
+        assert classify(f"perception_capture_failed:{reason}") == cls, reason
