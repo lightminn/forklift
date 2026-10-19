@@ -389,6 +389,46 @@
 - 목적지 `D-0`, 팔레트의 배달됨/사용 가능/적재 표시
 
 
+### D13 구현 설계 (9단계, 2026-10-19; 3판 — Codex 1–2회차·agy 반영)
+
+**지금 상태(원자료 확인, d08f42f).**
+- 실행기는 이미 낸다: `missions` 메시지(`missions_seq`, 최근 100건 `results[]`: `seq`·`mission_id`·`outcome`(done/failed/cancelled/recovery_required)·`reason`·`started_s`·`ended_s`·`pallet_id`·`destination_id`, 기록 실패 때 `record_error`, 넘친 건수 `older`; 늦게 붙은 화면도 받게 저장), 상태의 `last_result`·`scene`(`{"damaged": null | {"reason", "t"}}`), welcome `capabilities.sim_reset`(감독 실행일 때만), 요청 `session_end`·`sim_reset`(중재기 `_session_request`: lease·확인된 서 있음·진행 미션 없음, 거절 `mission_active`·`not_stopped`·`unsupported`).
+- 화면은 이 중 아무것도 쓰지 않는다(`protocol.js`·`main.js`·`ui.js` 에 `missions`·`scene`·`session_end`·`sim_reset` 없음). 미션 상태 이름(`preparing`·`recovering`·`recovery_required`)의 표시 문구는 있다(`ui.js` 11–20).
+- 계약 초안에 `missions` 메시지·`last_result`·`scene`·`session_end`·`sim_reset` 의 꼴이 없다(거부 사유 코드만 있음).
+- 가짜 차량(`console/mock_vehicle`)은 이 필드·요청을 하나도 내지 않고, 자기 요청 저장소를 쓴다(공유 `RequestLedger` 로 옮기는 일이 D13 앞에 남아 있다, 위 4c 메모).
+- 수동 복구 뒤 다음 준비가 `invalid_start` 로 거절되면(U20 c 두 번) 조종자는 얼마나 더 물러나야 하는지 모른다. 프로브는 정해진 시간만큼 물러나고 다시 낸다.
+
+**설계(3판).**
+1. **계약 먼저.** 계약 초안에 적는다: `missions` 메시지 꼴과 저장(늦게 붙은 화면도 받음), 결과 순번은 **세션(epoch) 안에서만** 단조 증가(새 실행은 1부터), 상태의 `last_result`·`scene`, 요청 `session_end`(실행기가 끝나고 다시 열리지 않음 — 감독 루프 종료 코드 0)·`sim_reset`(감독 실행에서만; 실행기가 끝나고 새 epoch 로 다시 열림 — 종료 코드 3)의 조건·응답·거절 사유(중재기 순서대로 `no_feedback:…` → `not_stopped` → `mission_active`, `unsupported`), `capabilities.sim_reset`. 새 필드: 결과 항목의 `advice`(아래 6)와 벽시계 시각 `ended_unix`, 장면 손상의 `unix`(agy: 시뮬 시각만으로는 언제 난 일인지 모른다) — 둘 다 결과 확정·첫 손상 때 `time.time()` 으로 한 번 저장하고 재전송·재생 때 그대로 둔다(실행기의 `clock` 은 monotonic 이라 쓰지 않는다, Codex 2회차). 상태의 `feedback_ok`(중재기가 판정한 피드백 유효 — 세션 버튼이 `no_feedback` 과 `not_stopped` 를 가려 보이기 위해, Codex 2회차 P3).
+2. **결과 기록부 패널.** `missions` 를 최신이 위로 오는 표로 보인다: 순번, 팔레트 → 목적지, 결과 배지(완료·실패·취소·복구 필요), 사유(설명 + 원 코드), 끝난 벽시계 시각과 걸린 시뮬 시간, `record_error`, `older` 이면 "앞선 N건은 기록 파일(`missions/<id>/result.json`)에만". 중복 무시는 **같은 epoch 안에서만** 한다: welcome 의 `session_epoch` 가 바뀌면 표·최대 순번·마지막 결과를 비운다(Codex P2-8). 같은 epoch 재연결은 저장본으로 다시 채운다(겹치는 순번은 바꿔 끼움).
+3. **실패 사유 설명.** `profile.js` 에 사유 앞머리 → 한국어 설명 표를 둔다. 이것은 **결과 설명 표**이고 예외 분류(`failures.classify`)와 다르다(Codex P2-4: `prepare:…`·`recovery:…`·`Pallet missed the green destination center` 는 classify 로는 session 이지만 결과로는 미션 실패다). 그래서 분류(미션·장면·세션)는 화면에 보이지 않고, 결과 배지(`outcome`)와 장면 손상 표시만 쓴다. 표가 덮어야 할 사유는 결과를 만드는 경로에서 모은다: `failures.PREFIXES` 의 MISSION·SCENE 키, 준비 실패(`prepare:all_candidates_failed`·`prepare:timeout`·`prepare:error`·`prepare:reference`·`prepare:<drop 사유>`), 복구 결과(`recovery:…`), 배달 판정 사유(live_runtime 배달 결과), 취소 사유. Python 시험이 이 목록을 코드에서 읽어 표 키와 비교한다(빠진 것은 실패, 남는 것은 경고 없이 허용 — 옛 사유를 읽을 수 있게). 가장 긴 앞머리로 고른다. `prepare:all_candidates_failed:<a>;<b>;…` 는 후보별 사유를 세어 "출발 자세가 막힘(16/16 후보)" 처럼 줄인다. 모르는 사유는 원 코드 그대로.
+4. **복구 안내.** 표시·해제는 **지금 상태의 `recovery`** 로만 정한다(결과 문자열이 아님 — Codex P2-5: `pocket_check_refused` 로 `failed` 끝나도 `recovery.stage=in_pocket` 이 남는다; 재연결 때 메시지 순서와도 무관해진다). 보이는 것: 단계(`in_pocket`·`manual_clear`), 접지·증거·정렬, 측정 승강, 그리고 다음 할 일 — 정책(`lift_dirs`·`drive_mode`·`teleop_forbidden_reason`)과 **현재 구동 허가**(`permit.reason`, 예: `recovery:steering` → "조향이 곧게 돌아오기를 기다리는 중", Codex P2-6)를 함께 본다. 구동 허가는 그 틱에 검사한 방향의 결과일 뿐이다(정지·중립에서는 앞쪽을 검사한다, `teleop_drive.py` 212) — "후진이 막힘" 으로 풀어 쓰지 않고 "현재 구동 허가: <사유>" 로 보인다(Codex 2회차 P2). `stand_waiver = lower_only` 면 "서 있음 확인 없이 들어갈 수 있음(내리기만)". 새 판정은 만들지 않는다.
+5. **장면 손상 배너와 세션 버튼.**
+   - `scene.damaged` 가 있으면 화면 위 빨간 띠: 사유 설명, 벽시계 시각, "자동 작업 거절 — 장면 초기화 필요".
+   - 버튼 "장면 초기화"(`capabilities.sim_reset` 일 때만)와 "세션 종료". 손상이 없어도 둔다(상시 운용). 두 버튼은 다른 패널 자리에 둔다(실수로 옆 버튼을 누르지 않게).
+   - **두 단계 확인**(브라우저 대화상자 없음): 첫 클릭이 버튼을 "정말 초기화? (5 s)" 로 바꾸고, **0.5 s 뒤부터 5 s 안**의 두 번째 클릭만 보낸다(agy: 더블클릭 한 번으로 보내지지 않게). 확인 상태는 (요청 종류, epoch, lease_id, control_gen) 에 묶는다: 연결 끊김, 그 넷 중 하나가 바뀜, 버튼이 꺼짐(조건이 깨짐), 5 s 지남 중 하나면 취소한다(Codex P3-10).
+   - 켜짐 조건과 그 이유는 중재기 순서 그대로: lease → 피드백(상태 `feedback_ok`, `no_feedback`) → 확인된 서 있음(`stopped_confirmed`; 면제 대상 아님) → 진행 미션 없음.
+   - 응답 뒤: `session_end` 는 "세션 종료됨 — 다시 열리지 않음"(재연결 시도하지 않음), `sim_reset` 은 "장면 초기화 중 — 새 세션을 기다림"(재연결 시도, 새 epoch 면 표 초기화), 그 밖의 끊김은 지금처럼 "연결 끊김"(Codex P2-9). 끊김 동안 마지막 상태는 흐리게 하고 "마지막 수신 상태, n s 전" 을 보인다(agy).
+6. **물러날 거리 안내(`advice`).** 준비의 모든 후보가 `invalid_start` 면, **작업자가 같은 준비 작업 안에서** 같은 고정 입력(제출 때의 world·격자 스냅숏·팔레트 대상·설정)으로 계산해 답에 붙인다(Codex P2-1·P2-3: 실패 뒤 runner 에서 다시 계산하면 격자가 바뀌어 있고, 제어 틱을 막는다). 판정은 계획기 자신의 출발 검사(`hybrid_astar` 의 `make_checker(...).free(pose, clearance)`, R556)를 `plan_observation_leg` 와 **같은 함수로 만든 검사기**로 한다(검사기 구성을 나눠 두 곳이 같이 쓴다). 공유하는 것은 그 입력 전체다: 넓힌 `pickup_obstacle`, `SplitOccupancy` 를 포함한 점유, 짐 없는 외곽, bounds 의 기본값, 실제 여유(Codex 2회차). 시간 예산은 준비의 deadline 을 그대로 쓴다: 계산 전과 자세마다 확인하고, 다 쓰면 안내를 생략한다(`advice: {"skipped": "deadline"}`) — 원래 준비 실패는 그대로이고, 일부만 본 탐색을 "1.0 m 안에 없음" 으로 내지 않는다(Codex 2회차 P3). 지금 자세에서 곧게 뒤로 0.05 m 씩(최대 1.0 m) 옮기며:
+   - 사이 자세들은 같은 검사기를 여유 0 으로 본다(몸체가 지나가는 자리 — agy: 뒤에 벽이 있으면 안내가 충돌로 이끈다).
+   - 출발 검사(여유 그대로)를 처음 통과하는 거리 `backoff_m` 과, 거기서부터 이어서 통과하는 마지막 거리 `backoff_max_m` 을 낸다(Codex P2-2: 통과 구간이 0.20 m 하나뿐일 수 있다 — 검사하지 않은 거리를 목표로 삼지 않는다).
+   - 못 찾으면 `{"backoff_m": null, "within_m": 1.0}`, 사이 자세가 막혀 못 가면 `{"backoff_m": null, "blocked_at_m": d}`.
+   - 계산할 때의 자세(`from_rear`)를 같이 싣는다. 화면은 "곧게 d–d_max m 물러난 뒤 다시 지시(실패 때 자세 기준)" 만 보이고, **남은 거리는 보이지 않는다**: 상태의 자세는 지도 좌표라 그 뒤의 SLAM 보정이 움직이지 않은 차를 물러난 것처럼 보이게 한다(Codex 2회차 P2). 안내는 새 미션을 내면 끝난다(agy: 시점이 지난 안내는 "실패 때 자세 기준" 으로 밝힌다).
+   - 안내는 허가가 아니다: 조종은 지금의 텔레옵 허가를 그대로 받는다. 화면은 안내 옆에 현재 구동 허가를 위 4 와 같은 말로 보인다(agy, Codex 2회차 P2).
+   - 프로브는 `backoff_m` 과 `backoff_max_m` 의 가운데를 목표로 물러난다.
+7. **목적지 표시.** `D-0` 을 "원래 자리(D-0)", `D-1` 을 "목적지(D-1)" 로 보인다(이름 표는 화면 쪽, 모르는 이름은 그대로). 팔레트 선택은 지금 규칙 그대로 `available` 또는 `delivered` 를 허용한다(Codex P2-7: 배달한 팔레트를 원래 자리로 되돌리는 미션).
+8. **가짜 차량.** 공유 `RequestLedger` 와 요청 토큰으로 옮긴다(4c 메모). 그리고 위 필드를 낸다: 미션이 끝날 때마다 `missions`(epoch 마다 1부터), 상태의 `last_result`·`scene`, `session_end`(서버를 닫고 끝 — 다시 열지 않음)와 `sim_reset`(닫고 새 epoch 로 다시 엶)을 실제와 같게 나누고(Codex P2-9), 주입 명령(장면 손상, `recovery_required` 로 끝내기, `failed` + `recovery` 남기기, `invalid_start` + `advice`, 조향 대기 `permit`)을 둔다. 화면 시험은 가짜 차량으로 한다.
+9. **시험.**
+   - CPU(Python): 결과 사유 목록 ⊆ 설명 표(코드에서 모은 목록), `advice` 계산(작업자 함수에 막힌 출발·뒤 벽·통과 구간 하나·1.0 m 안에 없음을 넣음; 계획기의 출발 검사와 같은 판정 — 같은 입력에서 `backoff_m` 자세로 `plan_observation_leg` 가 `invalid_start` 를 내지 않음), 결과 항목의 `advice`·`ended_unix`, 가짜 차량의 원장·토큰·`session_end`/`sim_reset` 구분.
+   - 화면(node): 결과 패널의 순서·같은 epoch 중복 처리·epoch 바뀜 초기화·`older`, 사유 설명(앞머리·후보 요약·모름), 복구 안내가 상태 값에서만 나옴(`failed` + `recovery` 포함, `permit` 조향 대기), 세션 버튼 켜짐 조건 순서와 두 단계 확인(0.5 s 전 클릭 무시, 5 s 만료, epoch·lease·control_gen 변경과 끊김 때 취소), 끊김 표시 세 가지.
+   - 화면(Playwright, 가짜 차량): 각 표시와 버튼 흐름의 스크린샷.
+   - Isaac: U20 c 를 한 번 더 — `advice` 가 나오고 프로브가 그 구간 가운데로 물러나 한 번에 다음 미션이 시작되는지.
+
+**D13 설계 검토 기록.**
+- ① 원자료 재확인(Claude): 결과 항목 필드(`results.py`), 장면 손상 꼴(R6306 `{"reason", "t"}`), 세션 요청 조건(`_session_request`·`_needs_stand`), welcome `sim_reset`, 화면에 해당 처리가 없음(`protocol.js`·`main.js`·`ui.js` 검색), 준비가 작업자의 고정 입력으로 돎(`_observe_ladder`), 출발 검사(`hybrid_astar` 556).
+- ② Codex 적대 검토 3회: 1회차 P2 9·P3 1(조언 입력 불일치, 검사하지 않은 거리, 제어 틱 멈춤, 설명 표 ≠ 예외 분류, 복구 안내의 기준, 구동 허가 누락, 팔레트 선택 규칙, epoch 경계, 세션 종료 동작, 확인 상태의 소속), 2회차 P2 2·P3 2(지도 자세의 남은 거리, 구동 허가의 방향, 피드백 사유, 시간 예산), 3회차 새 P1/P2 없음.
+- ③ agy 독립 검토(결론을 보이지 않음): 순번 초기화, 다중 클라이언트, 조언의 틱 비용, 끊김 표시, 뒤쪽 장애물, 시점이 지난 조언, 더블클릭, 벽시계 시각, 오래 띄운 화면의 이력 — 모두 반영했다(다중 클라이언트는 lease 보유자만 버튼이 켜지고 확인 상태가 lease 에 묶임).
+
 ### D14 수동 승강과 복구용 조종
 
 - 중재기가 `lift_dir` 을 실제로 구동한다(상한·속도 제한).
