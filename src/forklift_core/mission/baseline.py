@@ -74,7 +74,8 @@ SESSION_KEYS = {
 MS_FIELDS = ("observe_stall_ticks", "slam_stall_ticks", "dock_stop_ticks", "cusp_stop_ticks", "next_candidate_index",
              "last_tracking")
 CORE_FIELDS = ("release_replan_needed", "fresh_depth_wait", "last_permission",
-               "return_correction_drops")  # plan D11: a mission's own count
+               "return_correction_drops",  # plan D11: a mission's own count
+               "loaded_wait")  # plan D5 6c: a loaded mission's start wait
 
 
 def _plain(value, where: str):

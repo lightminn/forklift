@@ -206,6 +206,11 @@ class MissionCore:
         # mission's start; a pause or a resume keeps it, Codex impl round 1 P2), outside the shared live_leg drop
         # limit; at RETURN_CORRECTION_FALLBACK that return is planned in the tick as before.
         self.return_correction_drops: dict = {}
+        # Plan D5 6c: a loaded mission's start wait (the mission's: the baseline clears it), and the loaded lift's
+        # (sag, tolerance) a live runner gives -- the measured lift must be at the carry target less the sag, within
+        # the tolerance, before the truck drives.
+        self.loaded_wait: dict | None = None
+        self.loaded_lift_band: tuple | None = None
 
     def known_transition(self, from_phase: str, next_phase: str, t: float) -> None:
         """Known pallets across the mission (plan v10 D5)."""
@@ -2562,13 +2567,69 @@ class MissionCore:
         near_leg = self._observe_install(plans, planning_trace, planning_start, attempt_number)
         return SimpleNamespace(stop=False, observation=observation, near_leg=near_leg)
 
+    def tracker_config(self, name: str) -> TrackerConfig:
+        """The follower configuration of a mission leg (observe excluded: it keeps its own), as the mission plan's
+        adoption builds it (persistent console plan D5 6c: the loaded start builds its legs the same way)."""
+        settings, speeds = self.settings, self.options.speeds
+        CUSP_HEADING_HOLD_RAD, CUSP_HEADING_HOLD_PHASES = (self.options.cusp_heading_hold_rad,
+                                                           self.options.cusp_heading_hold_phases)
+        return TrackerConfig(
+            cruise_speed_mps=speeds[name],
+            max_curvature_inv_m=settings[
+                "tracker_curvature_inv_m"
+            ],
+            max_acceleration_mps2=settings[
+                "drive_acceleration_mps2"
+            ],
+            lookahead_m=0.28,
+            # Same rule as the trackers built
+            # without perception (observe is
+            # excluded below and keeps its own
+            # tracker; the return is 0.03 rad).
+            position_tolerance_m=(
+                0.03 if name == "observe" else 0.008
+            ),
+            yaw_tolerance_rad=(
+                0.05
+                if name == "observe"
+                else 0.03
+                if name == "return_home"
+                else 0.02
+            ),
+            # Gear-change cusps are not goals (2026-09-26): the next leg
+            # starts from the measured pose. Final goals keep the rules above.
+            cusp_position_tolerance_m=0.03,
+            cusp_yaw_tolerance_rad=0.05,
+            # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad
+            # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).
+            cusp_brake_window_m=0.008,
+            # The return holds a cusp heading miss of 0.05-0.08 rad for
+            # judgement (EPAL 6 fork spacing plan, A').
+            cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD
+            if name in CUSP_HEADING_HOLD_PHASES
+            else None,
+            # Optional path speed caps; absent from the settings = off.
+            max_lateral_acceleration_mps2=settings.get(
+                "max_lateral_acceleration_mps2"
+            ),
+            max_reverse_speed_mps=settings.get(
+                "max_reverse_speed_mps"
+            ),
+            # A stop just past the goal is fine except deeper into
+            # the pallet: insertion keeps the round 8 mm.
+            overshoot_tolerance_m=None
+            if name == "insert"
+            else 0.03,
+            stop_speed_mps=0.012,
+            max_cross_track_error_m=0.35,
+        )
+
     def _observe_install(self, plans, planning_trace: list, planning_start: float, attempt_number: int):
         """After the mission plan of a valid observation: its records, the followers, the paths shown and saved,
         and (the first far observation under SLAM) the near leg to the near capture point."""
         state, slam, hooks, options = self.state, self.slam, self.hooks, self.options
-        paths, trackers, geometry, settings = self.paths, self.trackers, self.geometry, self.settings
-        mission_stages, speeds = options.mission_stages, options.speeds
-        CUSP_HEADING_HOLD_RAD, CUSP_HEADING_HOLD_PHASES = options.cusp_heading_hold_rad, options.cusp_heading_hold_phases
+        paths, trackers, geometry = self.paths, self.trackers, self.geometry
+        mission_stages = options.mission_stages
         require, wall, path_record, record_json = hooks.require, hooks.wall, hooks.path_record, hooks.record_json
         final_straight_prefix = hooks.final_straight_prefix
         apply_tracker_profile, record_tracker_configs = self.apply_tracker_profile, self.record_tracker_configs
@@ -2585,65 +2646,8 @@ class MissionCore:
             {name: getattr(plans, name) for name in mission_stages}
         )
         trackers.update(
-            {
-                name: RearAxlePathTracker(
-                    path.poses,
-                    path.directions,
-                    path.curvatures_inv_m,
-                    TrackerConfig(
-                        cruise_speed_mps=speeds[name],
-                        max_curvature_inv_m=settings[
-                            "tracker_curvature_inv_m"
-                        ],
-                        max_acceleration_mps2=settings[
-                            "drive_acceleration_mps2"
-                        ],
-                        lookahead_m=0.28,
-                        # Same rule as the trackers built
-                        # without perception (observe is
-                        # excluded below and keeps its own
-                        # tracker; the return is 0.03 rad).
-                        position_tolerance_m=(
-                            0.03 if name == "observe" else 0.008
-                        ),
-                        yaw_tolerance_rad=(
-                            0.05
-                            if name == "observe"
-                            else 0.03
-                            if name == "return_home"
-                            else 0.02
-                        ),
-                        # Gear-change cusps are not goals (2026-09-26): the next leg
-                        # starts from the measured pose. Final goals keep the rules above.
-                        cusp_position_tolerance_m=0.03,
-                        cusp_yaw_tolerance_rad=0.05,
-                        # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad
-                        # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).
-                        cusp_brake_window_m=0.008,
-                        # The return holds a cusp heading miss of 0.05-0.08 rad for
-                        # judgement (EPAL 6 fork spacing plan, A').
-                        cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD
-                        if name in CUSP_HEADING_HOLD_PHASES
-                        else None,
-                        # Optional path speed caps; absent from the settings = off.
-                        max_lateral_acceleration_mps2=settings.get(
-                            "max_lateral_acceleration_mps2"
-                        ),
-                        max_reverse_speed_mps=settings.get(
-                            "max_reverse_speed_mps"
-                        ),
-                        # A stop just past the goal is fine except deeper into
-                        # the pallet: insertion keeps the round 8 mm.
-                        overshoot_tolerance_m=None
-                        if name == "insert"
-                        else 0.03,
-                        stop_speed_mps=0.012,
-                        max_cross_track_error_m=0.35,
-                    ),
-                )
-                for name, path in paths.items()
-                if name != "observe"
-            }
+            {name: RearAxlePathTracker(path.poses, path.directions, path.curvatures_inv_m, self.tracker_config(name))
+             for name, path in paths.items() if name != "observe"}
         )
         apply_tracker_profile()
         record_tracker_configs()
@@ -4949,6 +4953,8 @@ class MissionCore:
                 return "mission"
             if self.targets.revision != p.ctx["targets_revision"]:
                 return "targets"
+            if p.ctx.get("loaded") and not self.hooks.loaded_cargo_ok():
+                return "cargo"  # plan D5 6c item 4a: the carried pallet is no longer what the submit delivers
         elif cmds.status != "running" or cmds.mission_gen != p.gen:
             return "mission"
         elif self.ms.phase != p.phase:
@@ -5059,28 +5065,36 @@ class MissionCore:
     # --- a live mission's preparation (docs/plans/2026-10-18-persistent-live-console.md D2) ------------------------
     PREPARE_ATTEMPTS = 2  # a preparation whose inputs changed is asked again once
 
-    def prepare_request(self, t: float, rear, inputs: dict, payload: dict) -> None:
-        """Ask the worker for a submitted mission's first leg (``observe_ladder``) from where the truck stands.
-        ``inputs`` (the mission's scenario, waiting pose, candidates, bounds, prior zone) are fixed here and used as
-        they are at the adoption; nothing of the running state changes before it (plan principle P4)."""
+    def prepare_request(self, t: float, rear, inputs: dict, payload: dict, job: str = "observe_ladder") -> None:
+        """Ask the worker for a submitted mission's first leg (``observe_ladder``) from where the truck stands -- or,
+        a loaded submit (plan D5 6c), its whole delivery (``loaded_delivery``). ``inputs`` (the mission's scenario,
+        waiting pose, candidates, bounds, prior zone) are fixed here and used as they are at the adoption; nothing of
+        the running state changes before it (plan principle P4)."""
         cmds = self.commands
         if cmds.status == "accepted":
             cmds.begin_prepare()
             self.prepare_attempts = 0
         self.prepare_attempts += 1
-        self._request("prepare", "observe_ladder", payload, t, rear, self._applied_now(),
-                      {"inputs": inputs, "targets_revision": self.targets.revision})
+        self._request("prepare", job, payload, t, rear, self._applied_now(),
+                      {"inputs": inputs, "targets_revision": self.targets.revision,
+                       "loaded": job == "loaded_delivery"})
 
     def _prepare_answer(self, p, why: str | None, ok: bool, value, t: float) -> None:
         """A preparation's answer: dropped and asked again once when what it rests on changed (not counted as a
         plan drop), failed when it planned nothing, else adopted."""
         cmds = self.commands
+        loaded = bool(p.ctx.get("loaded"))
+        if why == "cargo":
+            cmds.terminate("failed", t, "prepare:loaded:cargo_changed")
+            return
         if why is not None:
             if why != "mission" and self.prepare_attempts >= self.PREPARE_ATTEMPTS:
                 cmds.terminate("failed", t, f"prepare:{why}")
             return  # the runner asks again on the next tick (preparing, nothing pending)
         if not ok:
             cmds.terminate("failed", t, f"prepare:error:{str(value).splitlines()[0] if value else ''}")
+        elif loaded and not value["result"].success:
+            cmds.terminate("failed", t, f"prepare:loaded:{value['result'].status}")  # its stage and status (item 3)
         elif value["result"] is None:
             cmds.terminate("failed", t, "prepare:timeout" if value["timed_out"] else
                            "prepare:all_candidates_failed:" + ";".join(c["status"] for c in value["candidates"]),
@@ -5091,7 +5105,10 @@ class MissionCore:
             except Exception as exc:  # noqa: BLE001 -- the preparation fails, the session goes on (P4)
                 cmds.terminate("failed", t, f"prepare:reference:{exc}")
                 return
-            self.start_mission(t, value["result"], p.ctx["inputs"], value, ready)
+            if loaded:
+                self.start_loaded_mission(t, value["result"], p.ctx["inputs"], ready)
+            else:
+                self.start_mission(t, value["result"], p.ctx["inputs"], value, ready)
 
     def end_reset(self, t: float) -> dict:
         """A live mission's end (D1 steps 3 and 8): the pocket check closed as the insertion's end closes it, then
@@ -5241,6 +5258,89 @@ class MissionCore:
         ms.phase, ms.phase_started = "observe", t
         state["phase"] = ms.phase
         self.commands.adopt()
+
+    def start_loaded_mission(self, t: float, plan, inputs: dict, ready=None) -> None:
+        """A loaded submit's adoption (plan D5 6c item 4): the baseline back, the mission's inputs into the options,
+        the delivery's legs (transport, withdraw, return) and their followers built as the mission plan's are, the
+        runner's own start, then transport entered directly -- not through ``transition()``: a transport entry books
+        a SLAM release, and the cancel that left the pallet on the forks already released (Codex 6c P2-1). The cargo
+        stays as it is (the session's). The docking is armed on the planned leg, and the truck stands in its start
+        wait (``loaded_start_wait``) until the lift, the first live leg and the docking are ready."""
+        ms, state, options, paths, trackers = self.ms, self.state, self.options, self.paths, self.trackers
+        for owner, kept in self.baseline.restore(self).items():
+            getattr(self, owner).update(kept)
+        options.scenario = inputs["scenario"]
+        options.return_to_pose = options.home_rear = inputs["wait_pose"]
+        options.observation_waypoints[:] = inputs["waypoints"]
+        options.pickup_bounds, options.observe_bounds = inputs["pickup_bounds"], None
+        options.pickup_zone = inputs["pickup_zone"]
+        ms.lift_command = float(self.hooks.lift_position())  # the ramp starts from the measured lift (item 5)
+        state["planning_status"] = plan.status
+        paths.clear()
+        paths.update({name: getattr(plan, name) for name in ("transport", "withdraw", "return_home")
+                      if getattr(plan, name) is not None})
+        getattr(trackers, "close", lambda: None)()  # the last mission's leg switches into the record first
+        trackers.clear()
+        trackers.update({name: RearAxlePathTracker(path.poses, path.directions, path.curvatures_inv_m,
+                                                   self.tracker_config(name)) for name, path in paths.items()})
+        self.apply_tracker_profile()
+        self.record_tracker_configs()
+        state["paths"] = {name: self.hooks.path_record(path) for name, path in paths.items()}
+        self.hooks.write_paths()
+        self.hooks.live_mission_start(t, inputs, plan, ready)
+        state["transitions"].append({"from": ms.phase, "to": "transport", "time_s": t,
+                                     "mission_id": self.commands.mission_id, "loaded": True})
+        ms.phase, ms.phase_started = "transport", t
+        state["phase"] = ms.phase
+        if self.slam is not None:
+            self.arm_docking()
+        self.loaded_wait = {"since": float(t)}
+        state.setdefault("loaded_lift_wait", []).append({"start_s": float(t)})
+        self.commands.adopt()
+
+    LOADED_START_WAIT_S = 60.0
+
+    def loaded_start_wait(self, t: float) -> bool:
+        """A loaded mission's start wait (plan D5 6c item 5), each control tick: True while the truck stands for
+        it -- the runner then skips the follower, the arrival and the cusp and stall counts, and commands no wheel
+        speed; the lift ramp, the live leg and the permission watch run. It ends when the measured lift is at the
+        carry target less the loaded sag (within the loaded tolerance), the first live leg is taken and the docking
+        armed on it; the cargo is checked again then (item 4a), and the tracking clock starts there. A live leg with
+        no delivery straight, or 60 s of waiting outside the operator's pauses (a plan's wait counts), fails the
+        mission. Outside a running mission it only stands."""
+        wait, cmds = self.loaded_wait, self.commands
+        if wait is None:
+            return False
+        if cmds.status != "running":
+            return True
+        slam, obstacle = self.slam, self.obstacle
+        docking = (slam or {}).get("docking") or {}
+        if docking.get("status") == "no_final_straight":
+            cmds.terminate("failed", t, "prepare:loaded:no_final_straight")
+            return True
+        sag, tolerance = self.loaded_lift_band if self.loaded_lift_band is not None else (0.0, 0.01)
+        left = []
+        if abs(float(self.hooks.lift_position()) - (self.settings["lift_target_m"] - sag)) > tolerance:
+            left.append("lift")
+        taken = (bool((obstacle or {}).get("live_replanned", {}).get("transport"))
+                 and (self.pending is None or self.pending.site != "live_leg"))
+        if not taken:
+            left.append("leg")
+        if slam is not None and docking.get("status") != "armed":
+            left.append("docking")
+        if not left:
+            if not self.hooks.loaded_cargo_ok():
+                cmds.terminate("failed", t, "prepare:loaded:cargo_changed")
+                return True
+            self.loaded_wait = None
+            self.ms.phase_started = t
+            self.state["loaded_lift_wait"][-1]["end_s"] = float(t)
+            return False
+        paused = sum(max(0.0, min(t, end if end is not None else t) - max(wait["since"], start))
+                     for start, end in cmds.pauses)
+        if t - wait["since"] - paused > self.LOADED_START_WAIT_S:
+            cmds.terminate("failed", t, "prepare:loaded:start_wait:" + ",".join(left))
+        return True
 
     def observe_bounds(self):
         """The bounds of the observation travel (persistent console plan D2): a live run plans it in the hall

@@ -93,6 +93,12 @@ export const REASONS = {
   "prepare:stopped": "계획하는 동안 STOP 으로 멈췄습니다",
   "prepare:paused": "계획하는 동안 일시정지됐습니다",
   "prepare:teleop": "계획하는 동안 수동 조종으로 바뀌었습니다",
+  // a loaded submit (plan D5 6c): the pallet already on the forks, delivered from where the truck stands
+  "prepare:loaded:cargo_changed": "준비하는 동안 실린 팔레트의 상태가 바뀌었습니다",
+  "prepare:loaded:transport:no_final_straight": "배달 직선이 남지 않았습니다 — 목적지에서 곧게 더 물러난 뒤 다시 내십시오",
+  "prepare:loaded:no_final_straight": "배달 직선이 남지 않았습니다 — 목적지에서 곧게 더 물러난 뒤 다시 내십시오",
+  "prepare:loaded:start_wait": "출발 준비(승강·첫 구간·도킹)가 60 초 안에 끝나지 않았습니다",
+  "prepare:loaded:": "실린 팔레트의 운반을 계획하지 못했습니다",
   "prepare:": "첫 구간을 준비하지 못했습니다",
   // the recovery of a mission that ended with the forks in a pocket
   "recovery:clear_out:budget": "물러나기 거리(1.0 m)를 다 썼습니다 — 수동 복구가 필요합니다",

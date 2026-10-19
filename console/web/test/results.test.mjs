@@ -21,6 +21,15 @@ test("an unknown reason is shown as its code", () => {
   assert.equal(reasonText(null).text, "");
 });
 
+test("a loaded submit's failures say what to do, its other stages fall to the loaded head", () => {
+  // persistent console plan D5 6c item 3: no delivery straight left -> back off straight and submit again
+  assert.match(reasonText("prepare:loaded:transport:no_final_straight").text, /곧게 더 물러난 뒤/);
+  assert.match(reasonText("prepare:loaded:no_final_straight").text, /곧게 더 물러난 뒤/);
+  assert.match(reasonText("prepare:loaded:start_wait:lift,leg").text, /60 초/);
+  assert.equal(reasonText("prepare:loaded:return_home:no_path").text, REASONS["prepare:loaded:"]);
+  assert.notEqual(REASONS["prepare:loaded:"], REASONS["prepare:"]);
+});
+
 test("a preparation whose candidates all failed is summed up by their reasons", () => {
   const r = reasonText("prepare:all_candidates_failed:invalid_start;invalid_start;no_path");
   assert.match(r.text, /출발 자세가 막힘 2/);
