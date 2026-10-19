@@ -428,7 +428,8 @@ $("m-start").onclick = () => {
   const pallet = document.querySelector('input[name="pal"]:checked')?.value;
   const targets = m.session.targets;
   if (!pallet || !targets) return;
-  req("mission_submit", { pallet_id: pallet, destination_id: $("dest").value, targets_revision: targets.targets_revision }).then((r) => {
+  // not req(): this handler logs its own refusal (one line, not two)
+  m.session.request("mission_submit", { pallet_id: pallet, destination_id: $("dest").value, targets_revision: targets.targets_revision }).then((r) => {
     if (r && r.t === "reject") {
       m.wz.note = `거부 · ${rejectText(r.reason)}`;
       log(`작업 지시 거부 · ${rejectText(r.reason)}`, "warn");
