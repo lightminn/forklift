@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import math
 import sys
+import time
 from collections import deque
 from dataclasses import replace
 from pathlib import Path
@@ -30,6 +31,56 @@ from forklift_core.perception.pallet_model import KNOWN_ENTRY_AXES, spec_from_ge
 from forklift_core.perception.scene_dataset import SceneInput  # noqa: E402
 
 SHAPES = ("epal6", "t11_06")
+
+
+class LearnedSource:
+    """FarRecognition's proposer on the learned path (stage 3 plan, task 6): the model's proposals -- the instance
+    ids are never read -- or the geometric fallback's on any model failure (design §10). ``last`` keeps what the
+    latest frame used, so the run can save it and the recompute can replay it exactly."""
+
+    def __init__(self, model, geometric=None):
+        if geometric is None:
+            from forklift_core.perception import geometric_proposals as G  # noqa: PLC0415
+
+            geometric = G.propose
+        self.model, self.geometric = model, geometric
+        self.fallbacks: list = []
+        self.times_ms: list = []  # the model's wall time per call, failures included (design §6 budget)
+        self.last: dict | None = None
+
+    def __call__(self, scene, _instance_ids):
+        t0 = time.perf_counter()
+        try:
+            try:
+                props, failures, source, reason = list(self.model.propose(scene)), (), "learned", None
+            finally:
+                self.times_ms.append(1e3 * (time.perf_counter() - t0))
+        except Exception as exc:  # noqa: BLE001 -- any model failure falls back
+            reason = f"{type(exc).__name__}: {exc}"
+            got = self.geometric(scene)
+            props, failures, source = list(got.proposals), tuple(got.failures), "geometric_fallback"
+            self.fallbacks.append(reason)
+        self.last = {"source": source, "reason": reason, "proposals": props, "failures": failures}
+        return props, failures
+
+    def timing(self) -> dict:
+        t = np.asarray(self.times_ms, float)
+        if not len(t):
+            return {"n": 0}
+        return {"n": int(len(t)), "p50": float(np.median(t)), "p95": float(np.percentile(t, 95)), "max": float(t.max())}
+
+    def saved(self) -> dict:
+        """The latest frame's proposals as npz arrays."""
+        last = self.last
+        props = last["proposals"]
+        shape = props[0].mask.shape if props else (0, 0)
+        return {"proposal_masks": np.stack([p.mask for p in props]) if props else np.zeros((0, *shape), bool),
+                "proposal_scores": np.array([p.score for p in props], float),
+                "proposal_ids": np.array([p.proposal_id for p in props], dtype=str),
+                "proposal_sources": np.array([p.source for p in props], dtype=str),
+                "proposer_source": last["source"], "proposer_reason": last["reason"] or "",
+                "extra_failures": json.dumps([[f.proposal_id, f.reason, list(f.centre_xy) if f.centre_xy else None,
+                                               f.extent_m] for f in last["failures"]])}
 
 
 def _wrap(a: float) -> float:
@@ -114,13 +165,17 @@ def decode_mission_semantic(payload, shape=(480, 640)):
 class FarRuntime:
     def __init__(self, *, fork_spacing: float, pallet_depth_m: float, pallet_shape: str, zone_centre_xy,
                  zone_radius_m: float, camera_x_m: float, dt: float, frame_every: int = 24, lag_steps: int = 0,
-                 drive_frames: bool = True, out_dir: Path | None = None, root: Path = ROOT):
+                 drive_frames: bool = True, out_dir: Path | None = None, root: Path = ROOT, proposer=None,
+                 identity_threshold=None, proposer_record=None):
         self.specs = known_specs(root)
         site = load_site_defaults(root / "config/site_load_defaults.yaml", self.specs)
         self.site = {self.specs[k].name: v for k, v in site.items()}
         self.setup = ForkSetup(float(fork_spacing))
         self.bounds = TrackBounds.load(root / "config/recognition_track_bounds.yaml")
-        self.far = B.FarRecognition(self.bounds, specs=self.specs, setup=self.setup, load_for=self._load_for)
+        self.far = B.FarRecognition(self.bounds, specs=self.specs, setup=self.setup, load_for=self._load_for,
+                                    proposer=proposer, identity_threshold=identity_threshold)
+        self.proposer_record = proposer_record
+        self.source = proposer if isinstance(proposer, LearnedSource) else None  # saves rgb and proposals
         self.pallet_depth_m, self.pallet_shape = float(pallet_depth_m), pallet_shape
         self.zone_centre_xy, self.zone_radius_m = tuple(float(v) for v in zone_centre_xy), float(zone_radius_m)
         self.camera_x_m, self.dt = float(camera_x_m), float(dt)
@@ -176,7 +231,13 @@ class FarRuntime:
         rec = self.far.frame(scene, instance_ids, planar(*odom), self.instruction(compose(map_from_odom, odom)))
         record.update(pose_t_s=row[1], odom=list(odom), **{k: rec[k] for k in ("decision", "taken_by", "visible",
                                                                               "untracked", "held", "new")})
-        self.leg_frames.append({"t_s": row[1], "tick": int(tick), "candidates": rec["candidates"]})
+        # evaluation only (the lag fit): the proposal that best covers truth instance 0, by IoU >= 0.5 -- never the
+        # proposal's id or order (Codex)
+        truth = np.asarray(instance_ids) == 0
+        ious = [((p.mask & truth).sum() / max(1, (p.mask | truth).sum()), p.proposal_id) for p in self.far.last_proposals]
+        best = max(ious, default=(0.0, None))
+        self.leg_frames.append({"t_s": row[1], "tick": int(tick), "candidates": rec["candidates"],
+                                "truth_proposal": best[1] if best[0] >= 0.5 else None})
         record["candidates"] = len(rec["candidates"])
         record["selected_track"] = self.far.tracker.selected
         self.frame_records.append(record)
@@ -184,7 +245,7 @@ class FarRuntime:
         self._save(f"frame_{len(self.frame_records):04d}.npz", kind="drive", leg=self.leg,
                    depth_m=np.asarray(depth_m, dtype=float), instance_ids=np.asarray(instance_ids, dtype=np.int16),
                    stamp_ns=scene.stamp_ns, odom=np.asarray(odom), map_from_odom=np.asarray(map_from_odom, float),
-                   **self._intrinsics_arrays(intrinsics, base_from_optical))
+                   **self._intrinsics_arrays(intrinsics, base_from_optical), **self._learned_arrays(scene))
         if rec["leg_lost"]:
             # The leg's target was deleted while driving: the leg ends as a loss and a re-observation leg starts
             # with the next frame -- the waypoint re-observation's contract without driving to another waypoint
@@ -224,12 +285,13 @@ class FarRuntime:
         scene = replace(scene_input, stamp_ns=rel_ns)
         ids = instance_ids if instance_ids is not None else np.full(np.asarray(scene.depth_m).shape, -1)
         self.frame_records.append({"leg": self.leg, "kind": "stop", "stamp_ns": rel_ns})
-        self._save(f"frame_{len(self.frame_records):04d}.npz", kind="stop", leg=self.leg,
-                   depth_m=np.asarray(scene.depth_m, dtype=float), instance_ids=np.asarray(ids, dtype=np.int16),
-                   stamp_ns=rel_ns, odom=np.asarray(odom_base, float), control_base=np.asarray(control_base, float),
-                   **self._intrinsics_arrays(scene.intrinsics, scene.base_from_optical))
+        name = f"frame_{len(self.frame_records):04d}.npz"
         obs, rec = self.far.stop(scene, ids, planar(*odom_base), self.instruction(control_base),
                                  pallet_depth_m=self.pallet_depth_m)
+        self._save(name, kind="stop", leg=self.leg,
+                   depth_m=np.asarray(scene.depth_m, dtype=float), instance_ids=np.asarray(ids, dtype=np.int16),
+                   stamp_ns=rel_ns, odom=np.asarray(odom_base, float), control_base=np.asarray(control_base, float),
+                   **self._intrinsics_arrays(scene.intrinsics, scene.base_from_optical), **self._learned_arrays(scene))
         obs = replace(obs, stamp_ns=int(scene_input.stamp_ns), clock_domain=scene_input.clock_domain)
         rec = {k: v for k, v in rec.items() if k != "stop"}
         rec["leg"], rec["drive_frames"] = self.leg, sum(1 for r in self.frame_records if r["leg"] == self.leg
@@ -265,7 +327,8 @@ class FarRuntime:
         truth = np.array([relative(r[3], r[4])[0] for r in self.leg_steps])
         steps, measured = [], []
         for f in self.leg_frames:
-            c = next((c for c in f["candidates"] if c["proposal_id"] == "i0" and c["geometry"] == "fitted"
+            c = next((c for c in f["candidates"] if f.get("truth_proposal") is not None
+                      and c["proposal_id"] == f["truth_proposal"] and c["geometry"] == "fitted"
                       and c["identity"] == "confirmed"), None)  # counted readings only (Codex)
             if c is None:
                 continue
@@ -290,6 +353,12 @@ class FarRuntime:
                 "intrinsics_frame": k.frame_id, "mount_rotation": np.asarray(base_from_optical.rotation, float),
                 "mount_translation": np.asarray(base_from_optical.translation_m, float)}
 
+    def _learned_arrays(self, scene) -> dict:
+        """The learned path's frame extras: the RGB the model read and the proposals the decision used."""
+        if self.source is None:
+            return {}
+        return {"rgb": np.asarray(scene.rgb, dtype=np.uint8), **self.source.saved()}
+
     def _save(self, name: str, **arrays) -> None:
         if self.out_dir is None:
             return
@@ -302,7 +371,10 @@ class FarRuntime:
                 "frame_every": self.frame_every, "drive_frames": self.drive_frames,
                 "zone": {"centre_xy": list(self.zone_centre_xy), "radius_m": self.zone_radius_m},
                 "camera_x_m": self.camera_x_m, "fork_spacing_m": self.setup.spacing_m,
-                "pallet_depth_m": self.pallet_depth_m, "pallet_shape": self.pallet_shape}
+                "pallet_depth_m": self.pallet_depth_m, "pallet_shape": self.pallet_shape,
+                "proposer": {**(self.proposer_record or {"kind": "oracle"}),
+                             **({"fallbacks": len(self.source.fallbacks), "fallback_reasons": self.source.fallbacks[:5],
+                                 "model_ms": self.source.timing()} if self.source is not None else {})}}
 
 
 class _P:

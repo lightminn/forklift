@@ -334,6 +334,21 @@ def catalogue() -> list[SceneRecipe]:
     return out
 
 
+def training_catalogue(scale: int = 8) -> list[SceneRecipe]:
+    """The learned proposer's training scenes (stage 3 plan, task 3): the evaluation catalogue's composition
+    times ``scale``, drawn from the train band -- disjoint from eval_pool, never judged."""
+    out, seed = [], SEED_BANDS["train"]
+    for case in ("S1", "S2", "S3", "S4", "S5", "S6"):
+        for shape in ("epal6", "t11_06"):
+            out += generate(case, shape, 61 * scale, band="train", first_seed=seed)
+            seed += 61 * scale
+    out += generate("S7", "nonstandard", 194 * scale, band="train", first_seed=seed)
+    seed += 194 * scale
+    out += generate("N", "negative", 94 * scale, band="train", first_seed=seed)
+    assert_disjoint(out)
+    return out
+
+
 def catalogue_digest(recipes) -> str:
     """sha256 over the recipes at 12 significant digits, to compare machines."""
     def norm(value):

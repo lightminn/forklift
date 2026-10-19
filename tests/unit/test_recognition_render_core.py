@@ -125,3 +125,38 @@ def test_fixed_labels_decode_without_a_token(rc):
     labels = {"0": {"class": "BACKGROUND"}, "1": {"class": "floor"}, "2": {"class": "inst_1"}, "3": {"class": "distractor"}}
     frame = rc.decode_semantic(_payload([[0, 1, 2, 3]], labels), None, shape=(1, 4))
     assert frame.ready and frame.instance_ids.tolist() == [[-1, -1, 1, -2]]
+
+
+# stage 3 task 3: training appearance -------------------------------------------------------------------
+
+def test_training_colours_keep_one_colour_per_pallet_and_vary_by_seed(rc):
+    recipe = next(r for r in rs.training_catalogue(scale=1) if r.case == "S6")
+    specs = rc.prim_specs(recipe)
+    a = rc.randomized_specs(specs, np.random.default_rng(1))
+    b = rc.randomized_specs(specs, np.random.default_rng(1))
+    assert [s.colour for s in a] == [s.colour for s in b]  # deterministic per seed
+    for k in range(len(recipe.instances)):
+        assert len({s.colour for s in a if s.base_label == f"inst_{k}"}) == 1
+    c = rc.randomized_specs(specs, np.random.default_rng(2))
+    assert [s.colour for s in a] != [s.colour for s in c]
+    assert [(s.path, s.centre_m, s.size_m, s.base_label) for s in a] == [(s.path, s.centre_m, s.size_m, s.base_label)
+                                                                         for s in specs]  # geometry untouched
+
+
+def test_pallets_and_distractors_draw_colours_from_one_distribution(rc):
+    # colour must not tell a pallet from a distractor (plan v2: the renders painted them wood and grey)
+    recipe = next(r for r in rs.training_catalogue(scale=1) if r.case == "S6" and r.distractors)
+    specs = rc.prim_specs(recipe)
+    wood = lambda c: c in rc.OBJECT_PALETTE[:3]
+    pallet, distractor = [], []
+    for seed in range(400):
+        out = rc.randomized_specs(specs, np.random.default_rng(seed))
+        pallet.append(wood(next(s.colour for s in out if s.base_label == "inst_0")))
+        distractor.append(wood(next(s.colour for s in out if s.base_label == "distractor")))
+    assert abs(np.mean(pallet) - np.mean(distractor)) < 0.1
+
+
+def test_training_lighting_is_bounded_and_seeded(rc):
+    a = rc.training_lighting(np.random.default_rng(5))
+    assert a == rc.training_lighting(np.random.default_rng(5))
+    assert 300 <= a["dome_intensity"] <= 3000 and 20 <= a["sun_elevation_deg"] <= 80

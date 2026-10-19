@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "sim/isaac/run_transport.py"
 CORE = ROOT / "src/forklift_core/mission/core.py"  # the mission logic moved out of the runner (M-a1)
@@ -1029,3 +1031,27 @@ def test_a_live_slam_link_failure_ends_the_session_not_only_the_mission() -> Non
     assert source.count('raise SessionFailure(f"slam_link_failed: {exc}") from exc') == 3
     assert 'raise SessionFailure("slam_prewarm_timeout")' in source
     assert source.count('require(False, f"slam_link_failed: {exc}")') == 1  # the batch lockstep exchange
+
+
+@pytest.mark.parametrize("extra, message", [
+    (("--recognition-proposals", "learned"), "--recognition-proposals learned needs --recognition far"),
+    (("--recognition", "far", "--recognition-proposals", "learned",
+      "--recognition-tau", "0.5"),
+     "--recognition-proposals learned needs --recognition-onnx, --recognition-tau and --recognition-learned-python"),
+    (("--recognition", "far", "--recognition-proposals", "learned",
+      "--recognition-tau", "0.5", "--recognition-onnx", "missing.onnx", "--recognition-learned-python", "python"),
+     "--recognition-onnx missing.onnx is not a file"),
+])
+def test_learned_far_proposals_are_refused_without_their_model_inputs(tmp_path, full_t11_pallet_urdf, extra, message):
+    # Stage 3 task 6: the learned path needs the far recognition, the model, tau and the worker interpreter
+    result = run_geometry_cli(tmp_path, full_t11_pallet_urdf(), "t11_06", *extra)
+    assert result.returncode == 2 and message in result.stderr
+    assert not (tmp_path / "run").exists()
+
+
+def test_the_learned_worker_has_a_deadline_and_is_closed_at_exit():
+    source = SCRIPT.read_text()
+    block = source[source.index('far_learned["worker"] = WorkerProposer('):]
+    block = block[: block.index("far_runtime = frr.FarRuntime(")]
+    assert "timeout_s=args.recognition_timeout_s" in block and "threads=args.recognition_threads" in block
+    assert 'atexit.register(far_learned["worker"].close)' in block

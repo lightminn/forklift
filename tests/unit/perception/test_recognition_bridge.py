@@ -246,3 +246,19 @@ def test_a_driving_frame_reports_the_loss_of_the_legs_target():
     assert not stale["leg_lost"] and far.tracker.selected == 0
     gone = far.frame(replace(empty, stamp_ns=int(1.21 * S)), empty_ids, odom, instr)
     assert gone["leg_lost"]
+
+
+# stage 3 task 6: an injected proposer and the identity threshold ---------------------------------------
+
+def test_a_learned_reading_below_tau_is_not_selected():
+    from forklift_core.perception.instance_proposals import InstanceProposal
+
+    def proposer(scene, ids):
+        return [InstanceProposal(f"l{k}", ids == k, 0.3, "learned") for k in sorted(set(ids[ids >= 0].tolist()))], ()
+
+    for tau, want in ((0.5, False), (0.2, True)):
+        far = B.FarRecognition(BOUNDS, specs=SPECS, setup=ForkSetup(0.3725), load_for=_load, proposer=proposer,
+                               identity_threshold=tau)
+        far.start_leg()
+        obs, rec = far.stop(*_frame_at(0.0, 0.0), pallet_depth_m=EPAL.overall_depth_m)
+        assert (rec["status"] == "selected") is want, tau
