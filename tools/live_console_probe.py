@@ -606,6 +606,13 @@ async def manual_recovery(p: Probe, args) -> dict:
             last = key
         if rec is None and mode == "normal":
             break
+        if st.get("mode") != "TELEOP" or not st.get("armed"):
+            # Not in TELEOP (entry refused while the sim lagged real time, or a preempt disarmed it): as an operator
+            # would, ask again rather than send commands nobody takes.
+            out.setdefault("reentries", []).append({"mono": time.monotonic(), "mode": st.get("mode"),
+                                                    "armed": st.get("armed")})
+            await enter_teleop(p)
+            continue
         if dirs == [-1]:
             await p.teleop(0.0, 0.0, True, lift_dir=-1)
             await asyncio.sleep(0.05)
