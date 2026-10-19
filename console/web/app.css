@@ -338,3 +338,14 @@ select { border: 1px solid var(--line-2); background: var(--panel-2); border-rad
   .scrim { padding-bottom: 84px; } /* the fixed STOP bar stays visible and reachable below the dialog */
 }
 @media (prefers-reduced-motion: reduce) { .knob, .progress-fill { transition: none; } }
+/* persistent console plan D13: the scene banner, the session note, the results book, the session buttons */
+.scene-banner { color: #fff; background: var(--crit); font-weight: 600; padding: 3px 10px; border-radius: 6px; display: inline-flex; gap: 8px; align-items: center; }
+.scene-banner .btn { padding: 2px 10px; }
+.session-note { color: var(--warn); background: var(--warn-soft); font-weight: 600; padding: 3px 10px; border-radius: 6px; }
+.results-sect { border-top: 1px solid var(--line); padding-top: 10px; display: grid; gap: 6px; }
+.results { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 240px; overflow: auto; }
+.results li { display: grid; grid-template-columns: auto 1fr auto; gap: 2px 8px; font-size: 12px; padding: 4px 6px; border-radius: 6px; background: var(--panel-2); }
+.results li .what { grid-column: 2; } .results li .when { grid-column: 3; color: var(--muted); }
+.results li .why { grid-column: 1 / -1; color: var(--muted); } .results li .advice { grid-column: 1 / -1; color: var(--warn); }
+.session-row .btn[data-confirm="armed"] { background: var(--crit); color: #fff; }
+.reset-row { margin-top: 14px; }

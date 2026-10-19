@@ -12,6 +12,7 @@ import { API, createSession } from "./protocol.js";
 import { log, render, renderPallets, renderTemplates, renderWizard } from "./ui.js";
 import { controlProfile, disarmAsked, frameAgreement, rejectText, scanDrawable, sessionChanges, staleness, stopIsRefused } from "./profile.js";
 import { blockReason, nextAllowed, selectable, templatesFor } from "./wizard.js";
+import { ConfirmGate, ResultsBook } from "./results.js";
 
 const TELEOP_MIN_INTERVAL_MS = 33; // ~30 Hz cap: a fast display must not flood ticks
 const $ = (id) => document.getElementById(id);
@@ -58,6 +59,10 @@ function storeFlag(key, on) {
 }
 
 const m = {
+  results: new ResultsBook(), // plan D13
+  confirm: new ConfirmGate(),
+  sessionNote: null,
+  sessionEnding: null,
   session: null,
   link: { up: false, tickGapMs: null, lastTickAt: null },
   grid: null,
@@ -140,6 +145,11 @@ m.session.subscribe((msg) => {
       $("pallet-list").innerHTML = "";
       $("dest").innerHTML = "";
     }
+    m.results.welcome(msg.session_epoch); // plan D13: the results seq starts again in a new session
+    if (m.sessionEnding === "sim_reset" && msg.session_epoch !== m.endingEpoch) {
+      m.sessionEnding = null; // the reset scene's new session is up
+      m.sessionNote = null;
+    }
     subscribeMedia(); // (re)subscribe now that the epoch is known: frames sent before it were dropped
     m.linkWelcome = msg;
     if (!stopIsRefused(msg)) $("nostop").hidden = true; // a vehicle that can stop: no stale notice
@@ -160,6 +170,8 @@ m.session.subscribe((msg) => {
       renderPallets(msg, () => {});
       if (m.wz.open) refreshWizard();
     }
+  } else if (msg.t === "missions") {
+    m.results.update(msg); // plan D13: the results book (contract 5.2)
   } else if (msg.t === "event") {
     log(`${msg.kind}${msg.reason ? ` · ${msg.reason}` : ""}${msg.phase ? ` · ${msg.phase}` : ""}${msg.status ? ` · ${msg.status}` : ""}`, msg.kind.includes("stop") ? "crit" : "");
   } else if (msg.t === "ack" && typeof msg.lease_id === "string") {
@@ -205,9 +217,16 @@ function connectControl() {
   });
   ws.addEventListener("close", () => {
     m.link.up = false;
+    m.confirm.cancel(); // plan D13: a confirm belongs to the connection it was armed on
     m.session.onDisconnect(); // the old lease is not used again; the next welcome reclaims it
     m.linkWelcome = null; // until the next welcome, STOP is queued and resent (C1 rule)
     if (control === ws) control = null;
+    if (m.sessionEnding === "session_end") {
+      // plan D13: the vehicle program ended on request and does not come back -- no reconnecting
+      m.sessionNote = "세션 종료됨 · 차량 프로그램이 끝났고 다시 열리지 않습니다";
+      return;
+    }
+    if (m.sessionEnding === "sim_reset") m.sessionNote = "장면 초기화 중 · 새 세션을 기다립니다";
     const wait = Math.max(1000, m.dropUntil - performance.now());
     setTimeout(connectControl, wait);
   });
@@ -385,6 +404,25 @@ const missionId = () => m.session.state?.mission?.mission_id;
 $("lease").onclick = () => (m.session.hasLease ? req("lease_release") : req("lease_request"));
 $("stop").onclick = $("stop2").onclick = () => pressStop("console");
 $("rearm").onclick = () => req("rearm");
+// plan D13: the session requests, each behind a two-step confirm bound to its epoch, lease and control generation
+m.confirmKey = (kind) => {
+  const g = m.session.generations;
+  return { kind, epoch: g.session_epoch, leaseId: g.lease_id, controlGen: g.control_gen };
+};
+function sessionRequest(kind) {
+  const step = m.confirm.click(m.confirmKey(kind), performance.now());
+  if (step !== "send") return;
+  req(kind).then((r) => {
+    if (r && r.t === "ack") {
+      m.sessionEnding = kind;
+      m.endingEpoch = m.session.generations.session_epoch;
+      m.sessionNote = kind === "session_end" ? "세션을 끝내는 중" : "장면 초기화 중 · 새 세션을 기다립니다";
+      log(kind === "session_end" ? "세션 종료 요청 수락" : "장면 초기화 요청 수락", "warn");
+    }
+  });
+}
+$("s-end").onclick = () => sessionRequest("session_end");
+$("s-reset").onclick = $("scene-reset").onclick = () => sessionRequest("sim_reset");
 $("m-start").onclick = () => {
   const pallet = document.querySelector('input[name="pal"]:checked')?.value;
   const targets = m.session.targets;

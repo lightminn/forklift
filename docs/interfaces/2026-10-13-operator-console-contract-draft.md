@@ -172,6 +172,8 @@ lease 보유자는 `tick`을 받을 때마다 `{"t": "echo", "session_epoch", "l
 | `mission_submit` | lease | `request_id`, `lease_id`, `control_gen`, `pallet_id`, `destination_id`, `targets_revision` | 대상 목록의 revision이 다르면 `reject(stale_targets)`. 수락하면 `mission_id`를 발급한다. 같은 `request_id`의 재전송은 1절의 처리 순서에 따라 저장된 결과(같은 `mission_id`)를 돌려받는다 |
 | `mission_pause` / `mission_resume` / `mission_cancel` | lease | `request_id`, `lease_id`, `control_gen`, `mission_id` | 재개는 재개 절차(설계 4.3)를 시작하고, 각 단계 결과를 상태로 보낸다 |
 | `recovery` | lease | `request_id`, `lease_id`, `control_gen`, `action: withdraw_straight` | 상태별로 허용된 복구 동작만 받는다. 나머지는 거부한다 |
+| `session_end` | lease | `request_id`, `lease_id`, `control_gen` | 2026-10-19(상시 운용 콘솔 계획 D7·D13). 중재기 순서대로 피드백(`reject(no_feedback:…)`) → 확인된 서 있음(`reject(not_stopped)`, 면제 없음) → 진행 미션 없음(`reject(mission_active)`). 수락하면 그 틱에 AUTO·TELEOP 를 PAUSED 로 두고 새 `control_gen` 을 낸 뒤 실행기가 끝난다(감독 루프 종료 코드 0). **다시 열리지 않는다** |
+| `sim_reset` | lease | 같음 | 감독 실행(`capabilities.sim_reset: true`)에서만, 아니면 `reject(unsupported)`. 조건은 `session_end` 와 같다. 수락하면 실행기가 끝나고(종료 코드 3) 감독 루프가 장면을 처음으로 되돌려 **새 `session_epoch`** 로 다시 연다 |
 
 ### 5.1 작업 대상 목록
 
@@ -190,6 +192,24 @@ lease 보유자는 `tick`을 받을 때마다 `{"t": "echo", "session_epoch", "l
 **구현 상태(M-a4, 2026-10-16).** `forklift_core/mission/targets.py` 의 `TargetsBook` 이 위 규칙을 구현한다: 등록·자세·상태·보정 버전이 바뀌면 revision 이 오르고(같은 값이면 오르지 않음), `carried` 는 자세를 싣지 않으며 그동안의 자세 갱신은 무시하고, 내려놓으면 같은 ID 로 그 자리에 `delivered` 로 다시 싣는다. 보정 버전이 바뀌면 자세를 다시 표현하는 함수를 받아 모두 옮기고 revision 을 올린다(배치 실행기에서는 보정 버전이 SLAM release 횟수다 — 추적 중에는 보정이 스캔마다 바뀌어도 지도 자세가 뛰지 않고, release 때 코어가 추정치를 새 프레임으로 옮긴다. 목적지와 내려놓은 팔레트는 코어가 지금 쓰는 목적지 추정(도킹 보정, release 재표현)을 매 틱 따른다). `mission_submit` 은 revision 이 다르면 `reject(stale_targets)`, 없는 ID 나 이미 실린 팔레트는 `reject(invalid)`. 배치 실행기는 시나리오의 팔레트·목적지를 `P-1`·`D-1` 로 등록해 스스로 제출한다.
 
 **거부 사유 코드(초안).** `no_lease`, `lease_reserved`, `stale_epoch`, `stale_lease`, `stale_control`, `stale_arm`, `stale_seq`, `bad_echo`, `expired`, `stale_video`, `not_armed`, `stopped_locked`, `state_forbids_teleop`, `stale_targets`, `stale`(요청 원장: 잊었거나 남의 토큰), `mission_active`·`session_ending`(세션 종료·장면 초기화), `scene_damaged`, `recovery_required`, `permission_denied:<허가 reason>`, `no_feedback:<항목>`, `unsupported`, `busy`, `invalid`.
+
+### 5.2 미션 결과 기록부 (2026-10-19, 상시 운용 콘솔 계획 D1·D13)
+
+미션이 끝날 때마다 차량은 `missions` 메시지를 모든 연결에 보내고, 대상 목록처럼 저장해 늦게 붙은 연결에도 welcome·대상 목록 뒤에 보낸다.
+
+```json
+{"t": "missions", "missions_seq": 7, "older": 2,
+ "results": [{"seq": 7, "mission_id": "M-0007", "outcome": "failed",
+              "reason": "prepare:all_candidates_failed:invalid_start;invalid_start",
+              "started_s": 1201.4, "ended_s": 1203.0, "ended_unix": 1792400123.5,
+              "pallet_id": "P-1", "destination_id": "D-0",
+              "advice": {"backoff_m": 0.15, "backoff_max_m": 0.6, "from_rear": [1.2, 3.4, 0.05]}}]}
+```
+
+- `missions_seq` 와 `seq` 는 **세션(`session_epoch`) 안에서만** 단조 증가한다. 새 실행(장면 초기화 포함)은 1부터 센다. 화면은 epoch 가 바뀌면 표를 비운다.
+- `results` 는 최근 100건이고, 넘친 건수는 `older` 다. 각 미션의 전체 기록은 실행기 출력의 `missions/<mission_id>/result.json` 에 있다.
+- `outcome`: `done`, `failed`, `cancelled`, `recovery_required`. `reason` 은 사유 코드(설명은 화면 쪽 표). `started_s`·`ended_s` 는 시뮬 시각, `ended_unix` 는 결과를 만든 순간의 벽시계(Unix) 시각이다(한 번 찍고 재전송·재생에서 바꾸지 않는다). `record_error` 는 기록 파일을 못 쓴 경우에만 있다.
+- `advice`(준비의 모든 후보가 출발 자세에서 막힌 실패에만): 실패를 낸 준비 작업이 **같은 입력**(제출 때 고정한 격자·팔레트 대상·설정)과 계획기 자신의 출발 검사로, 그때 자세(`from_rear`)에서 곧게 뒤로 0.05 m 씩 1.0 m 까지 본 결과다. `backoff_m`–`backoff_max_m` 은 출발 검사가 이어서 통과하는 거리(그 사이 자세는 몸체가 지나가는 자리로 여유 0 에서 비어 있음). 찾지 못하면 `{"backoff_m": null, "within_m": 1.0, …}`, 가는 길이 막히면 `{"backoff_m": null, "blocked_at_m": d, …}`, 준비 시간을 다 쓰면 `{"skipped": "deadline"}`. **안내일 뿐 허가가 아니다** — 조종은 텔레옵 허가를 그대로 받는다. 상태의 자세는 지도 좌표라 이후 SLAM 보정이 움직이지 않은 차를 옮겨 보일 수 있으므로, 안내는 "실패 때 자세 기준" 으로만 쓴다.
 
 ## 6. 상태 메시지
 
@@ -225,6 +245,7 @@ lease 보유자는 `tick`을 받을 때마다 `{"t": "echo", "session_epoch", "l
 - `drive_allowed`·`lift_allowed`는 중재기가 **제어 주기마다** 현재 상태로 따로 판정한 결과다(설계 4.5). TELEOP 진입 때 한 번만 보는 것이 아니다.
 - 2026-10-19(상시 운용 콘솔 계획 D14) 추가: `lift_dirs`(허용된 승강 방향 배열, `lift_allowed` 는 그 배열이 비어 있지 않은지), `drive_mode`(`normal` / `reverse_straight` — 수동 복구의 곧은 후진: 곡률 0, 후진만, 0.10 m/s 이하, 측정 조향 ≈ 0 일 때만 속도), `lift_limit_m`(승강 한계), `recovery`(포크가 포켓에 남은 채 끝난 미션의 수동 복구 단계: `stage` `in_pocket`/`manual_clear`, `grounded`, `evidence`, `aligned`, `pallet_id`; 없으면 `null`). `teleop_allowed` 는 주행 또는 승강 중 하나라도 허용이면 참이다(내리기만 되는 상태에도 TELEOP 에 들어갈 수 있다). 수동 복구는 시뮬레이션에서만 열린다(빠져나옴 판정이 참값을 쓴다).
 - 2026-10-19(메인 세션 합의, D14 보강) 추가: `state.stand_waiver` — `"lower_only"` 이면 서 있음 확인(`stopped_confirmed`)을 기다리는 요청 가운데 **TELEOP 진입과 rearm** 을 확인 없이 받는다. 조건은 정책이 내리기만 허용(주행 거절, `lift_dirs` = `[-1]`)하고, 지금 측정 속도 ≤ 0.10 m/s, 최근 1 s 순변위 ≤ 0.02 m(100 ms 넘는 피드백 공백 없이 1 s 전부 측정)인 것이다 — 포크가 데크를 누르는 동안 차가 흔들려 정지 감지기가 확인을 못 하는 경우다. 그 밖에는 `null`. 마지막으로 서 있음이 확인된 뒤 순이동이 0.05 m 를 넘으면(느린 미끄러짐) 면제되지 않는다. 순이동은 차량이 주행기록 위치(피드백 `odom_xy`)를 주면 확인 때 위치와 지금 위치의 거리다 — 피드백 공백 동안의 이동도 앞뒤 위치 차이로 들어간다. 위치를 주지 않는 차량은 측정 속도를 적분하고, 피드백 나이 한계(100 ms)를 넘는 공백이 나면 이동을 알 수 없으므로 다음 서 있음 확인까지 면제하지 않는다. 어느 쪽이든 공백이 든 1 s 동안은 면제하지 않는다(떨림인지 미끄러짐인지 모른다). 한계: 주행기록 위치는 바퀴 회전에서 나오므로, 바퀴가 돌지 않고 차체가 밀리는 미끄러짐(받친 포크가 팔레트와 엉켜 밀리는 경우)은 보지 못한다 — 누적 이동 판정이 그만큼 낙관적이다. 실차에서는 SLAM 보정이 들어간 지도 자세의 변위도 함께 보고 둘 중 큰 쪽을 쓰는 것이 후속 과제다(시뮬레이션에서는 지금 형태로 충분, 메인 세션 2026-10-19). 면제 중에는 PAUSED·STOPPED 의 `not_stopped` 고장이 나지 않지만 시간은 계속 세어, 면제가 끝나면 바로 판정한다. 선점 래치도 면제 상태에서 풀린다(이벤트 `latch_released` 에 `stand_waiver`). 확인 없이 들어오거나(이벤트 `stand_unconfirmed`, `reason` `lower_only`; rearm 은 `rearm_lower_only`) TELEOP 에서 래치가 면제로 풀리면(`latch_lower_only`), 정책이 주행을 열어도 정지 감지기가 확인한 틱에서만 주행이 열린다(그 전엔 정책 `reason` = `stand_unconfirmed`, 속도 0). 이 제약은 처음 실제 바퀴 속도가 나갈 때 끝난다 — 배속 차단·무장 해제 중에 잠깐 확인된 서 있음은 소모되지 않는다. 미션 제출·재개는 여전히 확인된 서 있음을 기다린다.
+- 2026-10-19(상시 운용 콘솔 계획 D1·D6·D13) 추가: `last_result`(세션의 마지막 미션 결과 — 5.2 의 항목 하나, 없으면 `null`), `scene`(`{"damaged": null | {"reason", "t", "unix"}}` — 시뮬레이션의 참값 검사가 장면 손상을 처음 본 순간 고정된다; 그동안 자동 작업은 `reject(scene_damaged)`, 장면 초기화로만 풀린다), `feedback_ok`(중재기가 판정한 피드백 유효 — 세션 요청이 `no_feedback` 인지 `not_stopped` 인지 화면이 가려 보이기 위해). `mission.status` 에 `preparing`(제출 뒤 첫 구간 계획 중), `recovering`(취소·실패 뒤 스스로 물러나는 중), `recovery_required`(스스로 빼지 못해 사람이 복구해야 함 — 이때 상태의 `recovery` 가 단계를 준다)가 더해진다.
 - `pacing`은 Isaac에서만 의미가 있다. 실시간 배속을 유지하지 못하면(`ok: false`) 수동 조종을 막는다. 기준은 M-c가 정한다.
 - 잴 수 없는 값은 `null`로 둔다. 0이나 추정값으로 채우지 않는다.
 

@@ -3,6 +3,7 @@
 
 import { controlProfile, forbidText, liftControls, recoveryNote, videoStaleAfterS, palletKindLabel, permitText, rearmState, resumeState, resumeSteps, standWhy, stopInstruction, stopKind } from "./profile.js";
 import { blockReason, currentDestination, missionProgress, PHASES, selectable, subtaskOf } from "./wizard.js";
+import { adviceText, destinationLabel, reasonText, recoveryGuide, sessionButtons } from "./results.js";
 
 const MODE_KO = { AUTO: "자동 주행", TELEOP: "수동 조종", PAUSED: "대기", STOPPED: "정지됨" };
 const MODE_CLS = { AUTO: "acc", TELEOP: "tel", PAUSED: "ok", STOPPED: "crit" };
@@ -74,7 +75,7 @@ export function renderPallets(targets, onPick) {
   dest.innerHTML =
     '<option value="">하역 위치를 고르세요</option>' +
     targets.destinations
-      .map((d) => `<option value="${esc(d.destination_id)}">${esc(d.destination_id)} · (${d.pose.x_m.toFixed(1)}, ${d.pose.y_m.toFixed(1)}) m</option>`)
+      .map((d) => `<option value="${esc(d.destination_id)}">${esc(destinationLabel(d.destination_id))} · (${d.pose.x_m.toFixed(1)}, ${d.pose.y_m.toFixed(1)}) m</option>`)
       .join("");
   if (keep && targets.destinations.some((d) => d.destination_id === keep)) dest.value = keep;
   else if (firstDest && targets.destinations.length) dest.value = targets.destinations[0].destination_id;
@@ -225,6 +226,7 @@ export function render(m) {
     $("d-prog-pct").textContent = "";
   }
   $("d-dest").textContent = currentDestination(mi) ?? (monitor ? "알 수 없음 (관찰 전용)" : "지정된 목적지 없음");
+  renderSession(m, st, lease, prof, monitor);
 
   // mission
   const why = blockReason({ state: st, canMission: prof.mission, hasLease: lease, mode, mission: mi });
@@ -356,4 +358,64 @@ export function render(m) {
   const notes = [...(st.notes ?? []), ...(m.frameNote ? [m.frameNote] : [])];
   $("notes").hidden = notes.length === 0;
   $("notes").textContent = notes.join(" · ");
+}
+
+const OUTCOME = { done: ["ok", "완료"], failed: ["crit", "실패"], cancelled: ["warn", "취소"], recovery_required: ["crit", "복구 필요"] };
+
+function wallTime(unix) {
+  if (!Number.isFinite(unix)) return "";
+  const d = new Date(unix * 1000);
+  return d.toLocaleTimeString("ko-KR", { hour12: false });
+}
+
+// Persistent console plan D13: the scene banner, the results book, the recovery guidance, the advice, the session
+// buttons. The vehicle decides; these show what it said and enable a button only when it could be taken.
+function renderSession(m, stIn, lease, prof, monitor) {
+  const st = stIn ?? {};
+  const damaged = st.scene?.damaged ?? null;
+  $("scene-banner").hidden = !damaged;
+  if (damaged) $("scene-text").textContent = `${reasonText(damaged.reason).text}${damaged.unix ? ` · ${wallTime(damaged.unix)}` : ""}`;
+  const note = $("session-note");
+  note.hidden = !m.sessionNote;
+  note.textContent = m.sessionNote ?? "";
+
+  const book = m.results;
+  if (book && book.version !== m.cache.resultsVersion) {
+    m.cache.resultsVersion = book.version;
+    const rows = book.rows();
+    $("results-list").innerHTML = rows.length ? rows.map((r) => {
+      const [cls, ko] = OUTCOME[r.outcome] ?? ["", r.outcome];
+      const why = r.reason ? reasonText(r.reason) : null;
+      const advice = adviceText(r.advice);
+      const span = Number.isFinite(r.started_s) && Number.isFinite(r.ended_s) ? ` · ${(r.ended_s - r.started_s).toFixed(0)} s` : "";
+      return `<li><span class="chip ${cls}">${esc(ko)}</span><span class="what">#${r.seq} ${esc(r.pallet_id ?? "?")} → ${esc(destinationLabel(r.destination_id ?? "?"))}</span><span class="when">${esc(wallTime(r.ended_unix))}${span}</span>${why ? `<span class="why">${esc(why.text)}${why.text !== why.code ? ` <span class="mono">(${esc(why.code)})</span>` : ""}</span>` : ""}${advice ? `<span class="advice">${esc(advice)}</span>` : ""}${r.record_error ? `<span class="why">기록 파일을 쓰지 못함 · ${esc(r.record_error)}</span>` : ""}</li>`;
+    }).join("") : '<li class="hint">아직 끝난 미션이 없습니다</li>';
+    $("results-older").textContent = book.older ? `앞선 ${book.older}건은 기록 파일(missions/<id>/result.json)에만` : "";
+  }
+
+  const guide = recoveryGuide(st);
+  const g = $("recovery-guide");
+  g.hidden = !guide;
+  if (guide) g.innerHTML = `<b>수동 복구 · ${esc(guide.next)}</b><br>${guide.notes.map(esc).join(" · ")}${guide.permit ? `<br>${esc(guide.permit)}` : ""}`;
+  // the advice of the last result, while no newer mission runs (it is from the pose at that failure)
+  const last = st.last_result;
+  const active = st.mission && ["accepted", "preparing", "running", "paused", "held", "resuming", "recovering"].includes(st.mission.status);
+  const advice = !active && last?.advice ? adviceText(last.advice) : null;
+  const a = $("advice-line");
+  a.hidden = !advice;
+  if (advice) a.textContent = `${advice}${st.permit?.reason ? ` · 현재 구동 허가: ${permitText(st.permit, st.teleop_forbidden_reason)}` : ""}`;
+
+  const caps = m.session.welcome?.capabilities ?? {};
+  const btn = sessionButtons(st, { hasLease: lease && !monitor && prof.control, caps });
+  for (const [id, kind, b, whyId] of [["s-end", "session_end", btn.end, "s-end-why"], ["s-reset", "sim_reset", btn.reset, "s-reset-why"], ["scene-reset", "sim_reset", btn.reset, null]]) {
+    const el = $(id);
+    el.hidden = !b.shown;
+    const armed = m.confirm?.pending(m.confirmKey?.(kind), performance.now());
+    el.disabled = !b.enabled;
+    el.dataset.confirm = armed ? "armed" : "";
+    el.textContent = armed ? (kind === "sim_reset" ? "정말 초기화? (5 s)" : "정말 종료? (5 s)") : (kind === "sim_reset" ? "장면 초기화" : "세션 종료");
+    el.title = b.why;
+    if (whyId) $(whyId).textContent = b.why;
+    if (!b.enabled && armed) m.confirm.cancel(); // the condition broke: the confirm is gone
+  }
 }

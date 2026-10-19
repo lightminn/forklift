@@ -572,21 +572,40 @@ async def teleop_drive(p: Probe, seconds: float, speed: float, curvature: float)
 
 
 async def back_off_by(p: Probe, distance_m: float, max_s: float) -> float:
-    """Reverse until the reported rear-axle speed, integrated, says ``distance_m`` (or ``max_s`` passed); the
-    distance it says (plan D13 item 6)."""
-    moved, last = 0.0, time.monotonic()
-    stop_by = last + max_s
-    while moved < distance_m and time.monotonic() < stop_by and p.closed_code is None:
-        await p.teleop(-0.5, 0.0, True)
-        await asyncio.sleep(0.05)
-        now = time.monotonic()
+    """Reverse ``distance_m`` by the reported rear-axle speed, integrated over the states that arrive (a state not
+    renewed adds nothing -- Codex D13 impl round 1 P2: a stalled sim kept "moving" on the last speed), slowing in
+    the last 0.20 m and counting the stop (the speed chain coasts after a zero command, P2: a narrow interval was
+    overshot); the distance it says, stop included (plan D13 item 6)."""
+    moved, seen = 0.0, None
+    stop_by = time.monotonic() + max_s
+
+    def take() -> float:
+        nonlocal seen
         st = p.state or {}
+        stamp = (st.get("state_seq"), id(p.state))
+        if p.state is None or stamp == seen:
+            return 0.0
+        prev, seen = seen, stamp
+        now = time.monotonic()
+        dt = 0.0 if prev is None or take.at is None else now - take.at
+        take.at = now
         v = st.get("rear_axle_speed_mps")
         pacing = st.get("pacing") or {}
         factor = pacing.get("realtime_factor") or pacing.get("target_factor") or 1.0  # sim s per wall s
-        if v is not None and v < 0:
-            moved += -float(v) * (now - last) * float(factor)
-        last = now
+        return -float(v) * dt * float(factor) if v is not None and v < 0 and dt < 0.5 else 0.0
+
+    take.at = None
+    while moved < distance_m - 0.01 and time.monotonic() < stop_by and p.closed_code is None:
+        left = distance_m - moved
+        ratio = max(0.1, min(0.5, 0.5 * left / 0.20))  # slower in the last 0.20 m
+        await p.teleop(-ratio, 0.0, True)
+        await asyncio.sleep(0.05)
+        moved += take()
+    settle_by = time.monotonic() + 15.0
+    while time.monotonic() < settle_by and p.closed_code is None and not (p.state and p.standing(p.state)):
+        await p.teleop(0.0, 0.0, True)
+        await asyncio.sleep(0.05)
+        moved += take()  # the coasting counts
     return moved
 
 
