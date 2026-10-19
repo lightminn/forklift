@@ -1195,6 +1195,23 @@ D2 의 `mission_start` 는 작업자 작업 `observe_ladder` 로 한다. 이름 
 
 판정은 결과 코드만 보지 않는다. 미션마다 참값 배달 오차·접지·포크 이탈을 보고, 실패 뒤에는 **새 미션을 끝까지 수행**해야 통과다.
 
+**유즈케이스 묶음 결과(2026-10-19, pc10_26f9a18, ws1 두 줄, 배속 0.3, 직접 실행).**
+
+| U | 결과 | 비고 |
+|---|---|---|
+| U3 연속 세 미션 | 2/3 — P-1→D-1 `done`, P-1→D-0 `done`, P-1→D-1 `failed: cusp_position_stall` | 세 번째는 배달 뒤 복귀(`return_home`, 복귀 원호 켬) 중 방향 전환점에서 멈춤(시뮬 678 s). 세션은 유지. 주행 제어 쪽이라 메인 세션에 넘김 |
+| U4 수동 이동 뒤 지시 | 통과 | 20 s 수동 조종 뒤 P-1→D-1 `done` |
+| U8 운반 중 취소 → 다른 목적지 | 미충족(설계대로) | 취소 `cancelled(operator)`, 다음 적재 제출은 `cargo_held` — 적재 제출(6c)이 아직 없다 |
+| U10b 실행 중 실패 | 통과 | `failed: Tracking failed in approach (test injection)`, 다음 미션 `done` |
+| U12 장면 손상 → 초기화 | 통과 | `failed: Pallet displaced before pickup`, 재제출 `scene_damaged`, 수동 `recovery:unknown`(수정한 기대), `sim_reset` → 같은 포트 새 epoch, 미션 `done` |
+| U20c 수동 복구 | 통과 | `recovery_required` → 내리기·곧은 후진 → 다음 미션 `done`(이번엔 출발 막힘 없음, 안내 미발생) |
+| U22 계획 대기 중 일시정지·STOP·취소 | 통과 | 셋 다 수락, 그동안 최대 0.03–0.05 m/s, 끝에 미션 없음 |
+| U23 작업자 사망 | 통과 | `failed: prepare:error:plan worker exited with 9`, 작업자 재시작, 다음 미션 `done` |
+| U13 재접속(C3 main) | 진행 중 | |
+
+ws1 전체 pytest(26f9a18): 5161 통과, 실패 10(알려진 ws1 전용), 건너뜀 19.
+
+
 | U | 유즈케이스 | 통과 조건 | 시험 |
 |---|---|---|---|
 | U1 | 띄워 두고 30분(벽시계) 대기 후 지시 | 대기 중 sim 이 계속 진행. 미션 성공. 대기 동안 메모리 상한 안(D8) | Isaac `idle_then_submit` |
