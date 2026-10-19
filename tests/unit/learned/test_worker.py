@@ -87,7 +87,13 @@ def test_close_is_bounded_while_a_send_is_stuck_in_the_pipe():
     import time
 
     w = W.WorkerProposer(None, None, command=[sys.executable, "-c", "import time; time.sleep(60)"])
-    stuck = threading.Thread(target=lambda: W._send(w.proc.stdin, b"\0" * (4 << 20)), daemon=True)
+    def send():
+        try:
+            W._send(w.proc.stdin, b"\0" * (4 << 20))
+        except (OSError, ValueError):
+            pass  # the pipe breaks when close kills the child
+
+    stuck = threading.Thread(target=send, daemon=True)
     stuck.start()
     time.sleep(0.3)  # the child never reads: the 4 MB write blocks holding the writer's lock
     t0 = time.monotonic()

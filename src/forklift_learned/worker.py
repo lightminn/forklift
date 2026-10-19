@@ -101,24 +101,31 @@ class WorkerProposer:
         if self.proc.poll() is None:
             self.proc.kill()
         self.proc.wait()
+        self._release()
+
+    def _release(self) -> None:
+        """Close the pipes of an ended worker (stdin off-thread: a stuck send may still hold its lock briefly)."""
+        threading.Thread(target=_quiet_close, args=(self.proc.stdin,), daemon=True).start()
+        _quiet_close(self.proc.stdout)
 
     def close(self, timeout_s: float = 10.0) -> None:
         """End the worker within ``timeout_s``: its stdin is closed off-thread (a send stuck in the pipe holds the
-        writer's lock -- Codex re-review 1), and a worker still alive at the deadline is killed and reaped."""
-        if self.proc.poll() is not None:
-            return
-
-        def close_stdin():
+        writer's lock -- Codex re-review 1), and a worker still alive at the deadline is killed and reaped. The
+        pipes are closed either way."""
+        if self.proc.poll() is None:
+            threading.Thread(target=_quiet_close, args=(self.proc.stdin,), daemon=True).start()
             try:
-                self.proc.stdin.close()
-            except (OSError, ValueError):
+                self.proc.wait(timeout=timeout_s)
+            except subprocess.TimeoutExpired:
                 pass
+        self._kill()
 
-        threading.Thread(target=close_stdin, daemon=True).start()
-        try:
-            self.proc.wait(timeout=timeout_s)
-        except subprocess.TimeoutExpired:
-            self._kill()
+
+def _quiet_close(stream) -> None:
+    try:
+        stream.close()
+    except (OSError, ValueError):
+        pass
 
 
 def main(argv=None) -> int:
