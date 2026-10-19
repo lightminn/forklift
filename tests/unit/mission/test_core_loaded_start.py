@@ -200,3 +200,21 @@ def test_the_lift_ramps_while_the_loaded_start_waits_for_a_plan():
     core.hooks.lift_position = lambda: 0.077
     core.loaded_start_wait(13.0)
     assert not core.lift_ramps_in_plan_wait()  # the wait is over: a plan wait stands as before
+
+
+def test_the_runner_ramps_the_lift_in_a_plan_wait_only_for_the_loaded_start():
+    """Codex 6c impl round 2 P3: the helper alone passed with the runner's condition removed. The ramp itself moves the
+    lift command toward the carry target during the wait, and the runner's lift call is gated on the helper."""
+    import re
+    from pathlib import Path
+
+    core, ms, state, started, inputs, _ = loaded_core()
+    core.settings.update(lift_rate_mps=0.05)
+    adopt(core, inputs)
+    before = ms.lift_command
+    core.lift_and_timers(13.0, 0.1)
+    assert ms.lift_command == pytest.approx(before + 0.005)
+    source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
+    gate = re.search(r"if \(not paused_ and not live_abort_ and \(not plan_wait_ or core\.lift_ramps_in_plan_wait\(\)\)"
+                     r"\s+and core\.lift_and_timers\(t, dt\)\):", source)
+    assert gate is not None
