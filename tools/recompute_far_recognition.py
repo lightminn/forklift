@@ -61,21 +61,28 @@ def saved_proposals(z):
 
 
 class _Replay:
-    """FarRecognition's proposer for a learned run's replay: the current frame's recorded proposals."""
+    """FarRecognition's proposer for a learned run's replay: the current frame's recorded proposals, or, with a
+    ``model``, that model rerun on the frame's saved RGB (frames that fell back keep their recorded geometric
+    proposals -- the failure is not reproducible). The rerun recomputes the whole decision, so a score that crosses
+    tau shows as a decision difference (Codex review 1), not only as a numeric one."""
 
-    def __init__(self):
-        self.frame = None
+    def __init__(self, model=None):
+        self.frame, self.model = None, model
 
     def __call__(self, scene, ids):
+        if self.model is not None and str(self.frame["proposer_source"]) == "learned":
+            return list(self.model.propose(scene)), ()
         return saved_proposals(self.frame)
 
 
-def recompute(run_dir: Path, *, recognition: dict | None = None) -> list:
-    """[(recorded attempt, recomputed record)] per stop, in order."""
+def recompute(run_dir: Path, *, recognition: dict | None = None, model=None) -> list:
+    """[(recorded attempt, recomputed record)] per stop, in order. ``model``: a learned run's model, rerun."""
     R = _runtime_module()
     rec = recognition if recognition is not None else json.loads((run_dir / "result.json").read_text())["recognition"]
     proposer = rec.get("proposer") or {"kind": "oracle"}
-    replay = _Replay() if proposer["kind"] == "learned" else None
+    if model is not None and proposer["kind"] != "learned":
+        raise ValueError("a model rerun needs a learned run")
+    replay = _Replay(model) if proposer["kind"] == "learned" else None
     runtime = R.FarRuntime(fork_spacing=rec["fork_spacing_m"], pallet_depth_m=rec["pallet_depth_m"],
                            pallet_shape=rec["pallet_shape"], zone_centre_xy=rec["zone"]["centre_xy"],
                            zone_radius_m=rec["zone"]["radius_m"], camera_x_m=rec["camera_x_m"], dt=1 / 120,
@@ -160,11 +167,16 @@ def main(argv=None) -> int:
         from forklift_learned.proposer import LearnedProposer  # noqa: PLC0415
 
         rec = json.loads((args.run_dir / "result.json").read_text())["recognition"]["proposer"]
-        problems = model_check(args.run_dir, LearnedProposer(args.onnx, conf=rec.get("conf", 0.05)))
+        model = LearnedProposer(args.onnx, conf=rec.get("conf", 0.05))
+        problems = model_check(args.run_dir, model)
         for name, what in problems:
             print(f"model {name}: {what}")
         print(f"model check: {'same' if not problems else f'{len(problems)} differ'}")
         bad += bool(problems)
+        for i, (recorded, again) in enumerate(recompute(args.run_dir, model=model)):
+            diffs = differences(recorded, again)
+            bad += bool(diffs)
+            print(f"stop {i} (model rerun): {'same' if not diffs else 'DIFFERS ' + ','.join(diffs)}")
     return 1 if bad else 0
 
 

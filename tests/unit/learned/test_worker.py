@@ -56,3 +56,26 @@ def test_no_proposals_come_back_empty(tmp_path):
         assert w.propose(_Scene()) == []
     finally:
         w.close()
+
+
+def test_a_hung_worker_is_killed_at_the_deadline_and_raises(tmp_path):
+    # Codex review 1: a silent worker blocked the mission forever and the fallback never ran
+    import time
+
+    w = _fake_worker(tmp_path, """
+        import time; time.sleep(60)
+    """)
+    w.timeout_s = w.first_timeout_s = 1.0
+    t0 = time.monotonic()
+    with pytest.raises(RuntimeError, match="deadline"):
+        w.propose(_Scene())
+    assert time.monotonic() - t0 < 10 and w.proc.poll() is not None  # killed and reaped
+    with pytest.raises(RuntimeError, match="ended"):
+        w.propose(_Scene())  # later frames fall back at once
+
+
+def test_close_kills_a_worker_that_does_not_exit(tmp_path):
+    w = W.WorkerProposer(None, None, command=[sys.executable, "-c",
+                                              "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"])
+    w.close(timeout_s=1.0)
+    assert w.proc.poll() is not None

@@ -1,6 +1,7 @@
 """The YOLO segmentation export of training renders (stage 3 plan, task 3)."""
 import cv2
 import numpy as np
+import pytest
 
 from tools import export_yolo_seg as X
 
@@ -58,3 +59,36 @@ def test_export_writes_images_labels_and_data_yaml(tmp_path):
     counts = X.export(renders, tmp_path / "out")
     assert counts["train"] + counts["val"] == 3 and counts["instances"] == 6
     assert (tmp_path / "out" / "data.yaml").read_text().count("pallet") == 1
+
+
+def _renders(root, names):
+    from PIL import Image
+
+    for name in names:
+        scene = root / name
+        scene.mkdir(parents=True)
+        Image.fromarray(np.zeros((120, 160, 3), np.uint8)).save(scene / "rgb.png")
+        Image.fromarray(_codes()).save(scene / "instances.png")
+    return root
+
+
+def test_several_render_shards_export_in_one_call(tmp_path):
+    a = _renders(tmp_path / "a", ["s1_epal6_0", "s1_epal6_1"])
+    b = _renders(tmp_path / "b", ["s1_epal6_2"])
+    counts = X.export([a, b], tmp_path / "out")
+    assert counts["train"] + counts["val"] == 3
+
+
+def test_an_existing_export_is_refused_so_no_scene_lands_in_both_splits(tmp_path):
+    # Codex review 1: re-exporting into the same folder at another val share left a train copy beside the val one
+    renders = _renders(tmp_path / "r", ["s1_epal6_5000015"])
+    X.export(renders, tmp_path / "out", val_percent=10)
+    with pytest.raises(FileExistsError):
+        X.export(renders, tmp_path / "out", val_percent=20)
+
+
+def test_a_scene_id_in_two_shards_is_refused(tmp_path):
+    a = _renders(tmp_path / "a", ["s1_epal6_0"])
+    b = _renders(tmp_path / "b", ["s1_epal6_0"])
+    with pytest.raises(ValueError):
+        X.export([a, b], tmp_path / "out")

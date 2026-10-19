@@ -1047,3 +1047,11 @@ def test_learned_far_proposals_are_refused_without_their_model_inputs(tmp_path, 
     result = run_geometry_cli(tmp_path, full_t11_pallet_urdf(), "t11_06", *extra)
     assert result.returncode == 2 and message in result.stderr
     assert not (tmp_path / "run").exists()
+
+
+def test_the_learned_worker_has_a_deadline_and_is_closed_at_exit():
+    source = SCRIPT.read_text()
+    block = source[source.index('far_learned["worker"] = WorkerProposer('):]
+    block = block[: block.index("far_runtime = frr.FarRuntime(")]
+    assert "timeout_s=args.recognition_timeout_s" in block
+    assert 'atexit.register(far_learned["worker"].close)' in block

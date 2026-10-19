@@ -240,16 +240,23 @@ def _learned_record(a):
     if a.onnx is None:
         return None
     return {"onnx": str(a.onnx), "onnx_sha256": hashlib.sha256(Path(a.onnx).read_bytes()).hexdigest(), "tau": a.tau,
-            "conf": a.conf, "fallbacks": _LEARNED.get("fallbacks", 0)}
+            "conf": a.conf, "fallbacks": _LEARNED.get("fallbacks", 0), "onnx_threads": a.onnx_threads}
 
 
-def _truth_ids(truth_dir, scene_dir):
-    """The depth-aligned truth ids of this scene; refused unless it is the same scene (same truth.json)."""
+def _truth_ids(truth_dir, scene_dir, intrinsics):
+    """The depth-aligned truth ids of this scene; refused unless it is the same scene (same truth.json), on the same
+    camera grid, and noise-free -- a noise pack shifts its labels with the RGB (registration), so it would hide the
+    very misalignment the metric must see (Codex review 1)."""
     other = truth_dir / scene_dir.name
     if not (other / "truth.json").exists() or (json.loads((other / "truth.json").read_text())
                                                != json.loads((scene_dir / "truth.json").read_text())):
         raise SystemExit(f"segmentation truth {other} is not the same scene as {scene_dir}")
-    return load_recognition_sample(other).instance_ids
+    truth = load_recognition_sample(other)
+    if truth.meta.get("noise") is not None:
+        raise SystemExit(f"segmentation truth {other} must be noise-free (its labels carry the noise shift)")
+    if truth.input.scene.intrinsics != intrinsics:
+        raise SystemExit(f"segmentation truth {other} is on another camera grid")
+    return truth.instance_ids
 
 
 def _diagnostics(sample, views, decision, fitted):
@@ -310,6 +317,8 @@ def main(argv=None):
     p.add_argument("--onnx", type=Path, default=None, help="the learned proposer's model (learned-*)")
     p.add_argument("--tau", type=float, default=None, help="the identity threshold on the learned score (learned-fit)")
     p.add_argument("--conf", type=float, default=0.05, help="the learned proposer's minimum detection score")
+    p.add_argument("--onnx-threads", type=int, default=None,
+                   help="CPU threads for the learned model (CPU provider only when given)")
     p.add_argument("--segmentation-truth", type=Path, default=None,
                    help="the same scenes without the noise pack's label shift (depth-aligned instance ids)")
     p.add_argument("--output", type=Path, required=True)
@@ -326,7 +335,8 @@ def main(argv=None):
             p.error("learned-* needs --onnx, and learned-fit needs --tau")
         from forklift_learned.proposer import LearnedProposer  # noqa: PLC0415
 
-        _LEARNED.update(model=LearnedProposer(a.onnx, conf=a.conf), tau=a.tau)
+        _LEARNED.update(model=LearnedProposer(a.onnx, conf=a.conf, threads=a.onnx_threads,
+                                              providers=["CPUExecutionProvider"] if a.onnx_threads else None), tau=a.tau)
     if proposer is not None and a.segmentation_truth is None:
         p.error(f"--detector {a.detector} needs --segmentation-truth")
     seg_rows, decisions = [], []
@@ -341,7 +351,7 @@ def main(argv=None):
         start = time.perf_counter()
         if proposer is not None:
             got = proposer(sample)
-            seg_rows.append(_segmentation_rows(sample, _truth_ids(a.segmentation_truth, scene_json.parent), got.proposals))
+            seg_rows.append(_segmentation_rows(sample, _truth_ids(a.segmentation_truth, scene_json.parent, sample.input.scene.intrinsics), got.proposals))
         if run is None:  # segmentation only
             signatures.add(json.dumps(sample.meta.get("noise"), sort_keys=True))
             continue

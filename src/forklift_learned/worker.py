@@ -10,6 +10,7 @@ import io
 import struct
 import subprocess
 import sys
+import threading
 
 import numpy as np
 
@@ -50,18 +51,45 @@ def serve(proposer, stdin=None, stdout=None) -> None:
 
 
 class WorkerProposer:
-    """The client: ``propose(scene)`` as LearnedProposer, the model in ``python`` (the learned venv)."""
+    """The client: ``propose(scene)`` as LearnedProposer, the model in ``python`` (the learned venv).
+
+    Every request has a deadline (``first_timeout_s`` for the first, which includes the model load, ``timeout_s``
+    after): past it the worker is killed and reaped and the call raises, so the caller falls back (Codex review 1:
+    a silent worker otherwise blocked the mission loop). A dead worker raises at once on every later call."""
 
     def __init__(self, python, onnx_path, *, conf: float = 0.05, providers: str = "CPUExecutionProvider", cwd=None,
-                 env=None, command=None):
+                 env=None, command=None, timeout_s: float = 10.0, first_timeout_s: float = 120.0):
         cmd = command or [str(python), "-m", "forklift_learned.worker", str(onnx_path), str(conf), providers]
         self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, cwd=cwd, env=env)
+        self.timeout_s, self.first_timeout_s, self.calls = float(timeout_s), float(first_timeout_s), 0
+
+    def _exchange(self, payload: bytes) -> bytes | None:
+        out: dict = {}
+
+        def run():
+            try:
+                _send(self.proc.stdin, payload)
+                out["raw"] = _recv(self.proc.stdout)
+            except (OSError, ValueError) as exc:  # broken pipe, closed file
+                out["error"] = exc
+
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+        deadline = self.first_timeout_s if self.calls == 0 else self.timeout_s
+        t.join(deadline)
+        self.calls += 1
+        if t.is_alive():
+            self._kill()
+            t.join(5)
+            raise RuntimeError(f"learned worker missed its deadline ({deadline:g} s); killed")
+        return out.get("raw")
 
     def propose(self, scene) -> list:
+        if self.proc.poll() is not None:
+            raise RuntimeError(f"learned worker ended (code {self.proc.returncode})")
         buf = io.BytesIO()
         np.save(buf, np.asarray(scene.rgb, dtype=np.uint8))
-        _send(self.proc.stdin, buf.getvalue())
-        raw = _recv(self.proc.stdout)
+        raw = self._exchange(buf.getvalue())
         if raw is None:
             raise RuntimeError(f"learned worker ended (code {self.proc.poll()})")
         z = np.load(io.BytesIO(raw))
@@ -69,10 +97,21 @@ class WorkerProposer:
             raise RuntimeError(str(z["error"]))
         return [InstanceProposal(str(i), m, float(s), "learned") for m, s, i in zip(z["masks"], z["scores"], z["ids"])]
 
-    def close(self) -> None:
+    def _kill(self) -> None:
         if self.proc.poll() is None:
-            self.proc.stdin.close()
-            self.proc.wait(timeout=10)
+            self.proc.kill()
+        self.proc.wait()
+
+    def close(self, timeout_s: float = 10.0) -> None:
+        if self.proc.poll() is None:
+            try:
+                self.proc.stdin.close()
+            except OSError:
+                pass
+            try:
+                self.proc.wait(timeout=timeout_s)
+            except subprocess.TimeoutExpired:
+                self._kill()
 
 
 def main(argv=None) -> int:

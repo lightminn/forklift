@@ -51,11 +51,15 @@ def _linear_weights(n_out: int, n_in: int) -> np.ndarray:
 
 class LearnedProposer:
     def __init__(self, onnx_path=None, *, providers=None, conf: float = 0.05, iou: float = 0.6, max_det: int = 8,
-                 session=None):
+                 session=None, threads: int | None = None):
         if session is None:
             import onnxruntime as ort  # noqa: PLC0415 -- the [learned] extra
 
-            session = ort.InferenceSession(str(onnx_path), providers=providers or ort.get_available_providers())
+            options = ort.SessionOptions()
+            if threads:  # onnxruntime sizes its pool to the machine, not the Slurm allocation
+                options.intra_op_num_threads, options.inter_op_num_threads = int(threads), 1
+            session = ort.InferenceSession(str(onnx_path), sess_options=options,
+                                           providers=providers or ort.get_available_providers())
         self.session, self.conf, self.iou, self.max_det = session, float(conf), float(iou), int(max_det)
 
     def propose(self, scene) -> list:

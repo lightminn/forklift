@@ -67,14 +67,24 @@ def split_of(scene_id: str, val_percent: int) -> str:
     return "val" if int(hashlib.sha256(scene_id.encode()).hexdigest(), 16) % 100 < val_percent else "train"
 
 
-def export(renders: Path, out: Path, *, val_percent: int = 10) -> dict:
+def export(renders, out: Path, *, val_percent: int = 10) -> dict:
+    """Render folders (one or a list of shards) -> one YOLO dataset in a new ``out``. An existing export is refused
+    (Codex review 1: re-exporting at another val share left a scene in both splits), and so is a scene id found in
+    two shards."""
     from PIL import Image  # noqa: PLC0415
 
+    shards = [Path(renders)] if isinstance(renders, (str, Path)) else [Path(r) for r in renders]
+    scenes = [p for shard in shards for p in sorted(shard.iterdir()) if (p / "rgb.png").exists()]
+    names = [p.name for p in scenes]
+    if len(set(names)) != len(names):
+        raise ValueError("a scene id appears in more than one render shard")
+    if (out / "images").exists() or (out / "labels").exists():
+        raise FileExistsError(f"{out} already holds an export; export into a new folder")
     counts = {"train": 0, "val": 0, "instances": 0, "scenes_without_instances": 0}
     for split in ("train", "val"):
         (out / "images" / split).mkdir(parents=True, exist_ok=True)
         (out / "labels" / split).mkdir(parents=True, exist_ok=True)
-    for scene in sorted(p for p in renders.iterdir() if (p / "rgb.png").exists()):
+    for scene in scenes:
         codes = np.asarray(Image.open(scene / "instances.png")).astype(np.int64)
         lines = label_lines(codes)
         split = split_of(scene.name, val_percent)
@@ -83,15 +93,20 @@ def export(renders: Path, out: Path, *, val_percent: int = 10) -> dict:
         counts[split] += 1
         counts["instances"] += len(lines)
         counts["scenes_without_instances"] += not lines
+    train = {p.stem for p in (out / "images" / "train").iterdir()}
+    val = {p.stem for p in (out / "images" / "val").iterdir()}
+    if train & val or len(train) != counts["train"] or len(val) != counts["val"]:
+        raise RuntimeError("the export's splits do not match the scenes written")
     (out / "data.yaml").write_text(f"path: {out.resolve()}\ntrain: images/train\nval: images/val\nnames:\n  0: pallet\n")
-    (out / "export.json").write_text(json.dumps({"renders": str(renders), **counts}, indent=1))
+    (out / "export.json").write_text(json.dumps({"renders": [str(r) for r in shards], "val_percent": val_percent,
+                                                 **counts}, indent=1))
     return counts
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("renders", type=Path)
-    ap.add_argument("out", type=Path)
+    ap.add_argument("renders", type=Path, nargs="+", help="render shard folders")
+    ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--val-percent", type=int, default=10)
     args = ap.parse_args(argv)
     print(json.dumps(export(args.renders, args.out, val_percent=args.val_percent)))

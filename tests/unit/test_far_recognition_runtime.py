@@ -355,3 +355,33 @@ def test_an_oracle_run_saves_no_rgb_or_proposals(tmp_path):
     _drive(run, 11, xs)
     z = np.load(sorted((tmp_path / "recognition").glob("frame_*.npz"))[0])
     assert "rgb" not in z.files and "proposal_masks" not in z.files
+
+
+class _DepthModel:
+    """A learned stand-in that reads only the saved frame (the depth components, relabelled learned at a fixed
+    score), so a recompute can rerun it."""
+
+    def __init__(self, score):
+        self.score = score
+
+    def propose(self, scene):
+        from forklift_core.perception import geometric_proposals as G
+
+        return [replace(p, source="learned", score=self.score, proposal_id=f"l{k}")
+                for k, p in enumerate(G.propose(scene).proposals)]
+
+
+def test_rerunning_the_model_recomputes_the_decision_not_only_the_numbers(tmp_path):
+    # Codex review 1: scores 0.50025 -> 0.49975 at tau 0.5 flip selected -> reobserve, yet the numeric check passed
+    from tools import recompute_far_recognition as RC
+
+    xs = _leg()
+    run, _ = _learned_runtime(_DepthModel(0.50025), tmp_path, tau=0.5)
+    _drive(run, 11, xs)
+    obs, _ = _stop(run, xs)
+    assert obs.status == "valid"
+    summary = run.summary()
+    same = RC.recompute(tmp_path, recognition=summary, model=_DepthModel(0.50025))
+    assert [RC.differences(*p) for p in same] == [[]]
+    flipped = RC.recompute(tmp_path, recognition=summary, model=_DepthModel(0.49975))
+    assert any(RC.differences(*p) for p in flipped)

@@ -19,10 +19,32 @@ def test_the_lowest_tau_meeting_every_bound_is_chosen():
 def test_without_a_meeting_tau_the_least_excess_is_chosen_with_its_shortfalls():
     runs = [(0.2, _metrics(10, 30)), (0.5, _metrics(12, 12)), (0.8, _metrics(30, 2))]
     out = C.choose(runs)
-    assert out["chosen"] == 0.5 and not out["met"] and set(out["shortfalls"]) == {"miss", "negative_fp"}
+    assert out["chosen"] == 0.5 and not out["met"] and {k.rsplit(":", 1)[-1] for k in out["shortfalls"]} == {"miss", "negative_fp"}
 
 
 def test_the_request_rate_counts_against_a_tau():
     # Codex v2: a tau that defers every unambiguous instruction must not pass
     runs = [(0.3, _metrics(1, 5, deferred=40)), (0.5, _metrics(2, 5, deferred=5))]
     assert C.choose(runs)["chosen"] == 0.5
+
+
+def test_one_population_over_its_bound_fails_the_tau_even_when_the_pool_is_under():
+    # Codex review 1: EPAL6 8/100 missed with two other populations at 0/100 pooled to 2.67 % and passed
+    def runs_with(epal_miss):
+        m = _metrics(0, 5)
+        m["gates"]["known:t11_06:miss"] = {"n": 100, "failures": 0, "bound": 0.05}
+        m["gates"]["s7:miss"] = {"n": 100, "failures": 0, "bound": 0.05}
+        m["gates"]["known:epal6:miss"] = {"n": 100, "failures": epal_miss, "bound": 0.05}
+        return m
+    out = C.choose([(0.2, runs_with(8)), (0.4, runs_with(3))])
+    assert out["chosen"] == 0.4 and out["met"]
+    out = C.choose([(0.2, runs_with(8))])
+    assert not out["met"] and "known:epal6:miss" in out["shortfalls"]
+
+
+def test_a_gate_without_samples_is_a_shortfall_not_a_pass():
+    m = _metrics(0, 5)
+    del m["gates"]["negative:negative_fp"]
+    m["gates"]["known:epal6:target_error"]["n"] = 0
+    out = C.choose([(0.5, m)])
+    assert not out["met"] and {"negative_fp", "target_error"} <= set(out["missing"])
