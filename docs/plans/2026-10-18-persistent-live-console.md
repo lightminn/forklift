@@ -1209,7 +1209,7 @@ D2 의 `mission_start` 는 작업자 작업 `observe_ladder` 로 한다. 이름 
 | U10a | 준비 실패(관찰 경로 불가 자리에서 지시, 또는 `mission_start` 실패 주입) | `failed: prepare:*`, 상태 불변(U21 비교), 다음 지시 성공 | CPU + Isaac |
 | U10b | 실행 중 실패(실패 주입: 인식 실패, 추적 실패; 배달 목적지 계획 불가) | `failed` + 사유, 세션 유지, 다음 지시 성공 | CPU 주입 + Isaac 주입 플래그 |
 | U11 | LiDAR 에 안 보이는 팔레트로 수동 직진 | 허가가 팔레트 앞에서 멈춤. D10 을 끄면 같은 시험이 실패함 | Isaac `pallet_teleop`(새 시험) |
-| U12 | 장면 손상(통제된 주입: 시험 플래그로 팔레트를 넘어뜨림) | 래치, 자동 거절, 수동 허용, 장면 초기화 → 새 epoch 정상 | Isaac `reset` |
+| U12 | 장면 손상(통제된 주입: `--live-test-push-pallet` 이 접근 중 팔레트를 0.05 m 밈) | 래치, 자동 거절(`scene_damaged`), 수동은 포크·팔레트 관계를 알 때만 허용 — 미는 주입은 관계를 `unknown` 으로 만들어 `recovery:unknown` 으로 거절되는 것이 맞다(Codex 주입 검토 P2), 장면 초기화 → 새 epoch 정상 | Isaac `reset` |
 | U13 | 끊김·재접속·새로고침·두 브라우저 | C3 기준 | C3 시나리오 재실행 |
 | U14 | 세션 종료 | 정상 종료, 감독 루프 끝 | Isaac `end` |
 | U15 | 실행기 강제 종료 | 감독 루프가 같은 포트로 재기동, 포트 파일 `crashed`→새 epoch, 재접속 | Isaac `kill` |

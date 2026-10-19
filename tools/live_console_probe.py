@@ -925,6 +925,9 @@ async def reset_scenario(p: Probe, args):
     await asyncio.sleep(1.0)
     p.report["refused_submit"] = await p.request("mission_submit", pallet_id="P-1", destination_id="D-1",
                                                   targets_revision=p.targets["targets_revision"])
+    # recorded as it is: allowed when the forks' relation to the pallet is known; a push that leaves it unknown is
+    # refused recovery:unknown (plan U12 as amended, Codex injection review P2)
+    p.report["teleop_allowed_after_damage"] = (p.state or {}).get("teleop_allowed")
     p.report["teleop_after_damage"] = await p.request("mode_request", to="TELEOP")
     await p.request("mode_request", to="PAUSED")
     await p.until(p.standing, 30, label="standing_before_reset")
@@ -1004,19 +1007,23 @@ def main():
         asyncio.run(scenario(p, args))
         if args.scenario == "reset" and (report.get("reset") or {}).get("t") == "ack":
             # U12: the supervisor's next session (a new epoch on the same port), the cycle there
-            old = info.get("session_epoch")
+            old, info2, ready = info.get("session_epoch"), {}, False
             end = time.monotonic() + args.wait_port_s
             while time.monotonic() < end:
                 info2 = json.loads(args.port_file.read_text()) if args.port_file.exists() else {}
                 if info2.get("state") == "running" and info2.get("session_epoch") not in (None, old):
+                    ready = True
                     break
                 time.sleep(2.0)
-            report["after_reset"] = {"port_file": info2}
-            p2 = Probe(info2["port"], report["after_reset"])
-            try:
-                asyncio.run(cycle_scenario(p2, args))
-            finally:
-                report["after_reset"]["states_n"] = len(p2.states)
+            # the next session must be up, new, and on the same port (the supervisor's) -- else nothing more is run
+            ready = ready and info2.get("port") == info.get("port")
+            report["after_reset"] = {"port_file": info2, "ready": ready}
+            if ready:
+                p2 = Probe(info2["port"], report["after_reset"])
+                try:
+                    asyncio.run(cycle_scenario(p2, args))
+                finally:
+                    report["after_reset"]["states_n"] = len(p2.states)
     finally:
         report["frames"] = p.frames
         report["states"] = p.states

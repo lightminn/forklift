@@ -6305,13 +6305,23 @@ def drive(S, isaac) -> None:
                            "pallet_id": mission_.pallet_id, "destination_id": mission_.destination_id}
                 core.prepare_request(t_, rear_, inputs_, payload_)
                 if args.live_test_kill_worker and args.live_epoch in (None, 1) and not live_injected_.get("worker"):
-                    # Plan section 4 (U23): the worker dies with this preparation's job on it
+                    # Plan section 4 (U23): the worker dies with this preparation's job on it -- killed only once the
+                    # job is written to it (queued is not enough: a restart then resends it and it succeeds, Codex)
                     live_injected_["worker"] = True
+                    job_ = core.pending.job if core.pending is not None else None
+                    sent_by_ = time.monotonic() + 2.0
+                    while time.monotonic() < sent_by_:
+                        with core.jobs._lock:
+                            if job_ in core.jobs._sent:
+                                break
+                        time.sleep(0.005)
                     proc_ = getattr(core.jobs, "proc", None)
-                    if proc_ is not None and proc_.poll() is None:
+                    sent_ = job_ is not None and job_ in list(core.jobs._sent)
+                    if sent_ and proc_ is not None and proc_.poll() is None:
                         proc_.kill()
-                        state.setdefault("live_test_injections", []).append({"killed_worker": int(proc_.pid),
-                                                                             "t": float(t_)})
+                    state.setdefault("live_test_injections", []).append(
+                        {"killed_worker": int(proc_.pid) if (sent_ and proc_ is not None) else None,
+                         "job_sent": bool(sent_), "t": float(t_)})
 
             def live_mission_ready(t_, inputs_):
                 """What can fail in the adoption, made before anything changes (Codex stage 2 impl P2-6): the
