@@ -263,3 +263,95 @@ def test_the_lag_fit_does_not_depend_on_proposal_ids_or_order():
     _drive(other, 11, xs)
     a, b = plain.lag_fit(), other.lag_fit()
     assert a is not None and b is not None and (a["tau_steps"], a["accepted"]) == (b["tau_steps"], b["accepted"]) == (11, True)
+
+
+class _TruthModel:
+    """A learned model stand-in: the truth masks of the rendered pallet at a fixed score (no truth in the API --
+    it reads the RGB's non-background pixels, which the rig paints only on the pallet)."""
+
+    def __init__(self, score=0.9, fail_after=None):
+        self.score, self.calls, self.fail_after = score, 0, fail_after
+
+    def propose(self, scene):
+        from forklift_core.perception.instance_proposals import InstanceProposal
+
+        self.calls += 1
+        if self.fail_after is not None and self.calls > self.fail_after:
+            raise RuntimeError("model gone")
+        _, ids = self._ids
+        return [InstanceProposal("l0", ids == 0, self.score, "learned")] if (ids == 0).any() else []
+
+
+def _learned_runtime(model, tmp_path=None, tau=0.5):
+    source = R.LearnedSource(model)
+    run = _runtime(lag_steps=11, out_dir=None if tmp_path is None else tmp_path / "recognition",
+                   proposer=source, identity_threshold=tau, proposer_record={"kind": "learned", "tau": tau})
+    return run, source
+
+
+def _drive_learned(run, model, xs, lag=11):
+    for tick, x in enumerate(xs):
+        base = (float(x), 0.0, 0.0)
+        run.record_step(tick, tick * DT, base, base, PALLET)
+        if run.due(tick, observing=True) and tick >= lag:
+            model._ids = _render((float(xs[tick - lag]), 0.0, 0.0))
+            scene, ids = model._ids
+            run.drive_frame(tick, tick * DT, scene.rgb, scene.depth_m, ids, scene.intrinsics, scene.base_from_optical)
+
+
+def _stop_learned(run, model, xs):
+    base = (float(xs[-1]), 0.0, 0.0)
+    model._ids = _render(base)
+    scene, ids = model._ids
+    scene = replace(scene, stamp_ns=int(round((len(xs) * DT + 0.1) * 1e9)))
+    return run.stop(scene, ids, initial_time_s=0.0, control_base=base, odom_base=base, truth_base=base,
+                    truth_pallet=PALLET)
+
+
+def test_a_confident_learned_reading_is_selected_and_one_below_tau_is_not():
+    xs = _leg()
+    hi, lo = _TruthModel(0.9), _TruthModel(0.3)
+    run_hi, _ = _learned_runtime(hi)
+    run_lo, _ = _learned_runtime(lo)
+    _drive_learned(run_hi, hi, xs)
+    _drive_learned(run_lo, lo, xs)
+    assert _stop_learned(run_hi, hi, xs)[0].status == "valid"
+    obs, rec = _stop_learned(run_lo, lo, xs)
+    assert obs.status != "valid" and rec["status"] != "selected"
+
+
+def test_a_model_failure_falls_back_to_the_geometric_proposals_and_is_counted():
+    xs = _leg()
+    model = _TruthModel(0.9, fail_after=3)
+    run, source = _learned_runtime(model)
+    _drive_learned(run, model, xs)
+    obs, rec = _stop_learned(run, model, xs)
+    assert source.fallbacks and all("model gone" in r for r in source.fallbacks)
+    assert all(p.source == "geometric" for p in run.far.last_proposals)
+    assert obs.status != "valid" and rec["status"] != "selected"  # geometric proposals are never confirmed
+    assert run.summary()["proposer"]["fallbacks"] == len(source.fallbacks)
+    timing = run.summary()["proposer"]["model_ms"]  # plan task 6: the model's time per call (design §6: 200 ms)
+    assert timing["n"] == model.calls and 0 <= timing["p50"] <= timing["max"]
+
+
+def test_a_learned_run_saves_rgb_and_proposals_and_recomputes_exactly(tmp_path):
+    from tools import recompute_far_recognition as RC
+
+    xs = _leg()
+    model = _TruthModel(0.9, fail_after=8)  # learned frames, then geometric fallback frames
+    run, _ = _learned_runtime(model, tmp_path)
+    _drive_learned(run, model, xs)
+    _stop_learned(run, model, xs)
+    z = np.load(sorted((tmp_path / "recognition").glob("frame_*.npz"))[0])
+    assert z["rgb"].shape == (*z["depth_m"].shape, 3) and z["proposal_masks"].dtype == bool
+    assert str(z["proposer_source"]) == "learned"
+    pairs = RC.recompute(tmp_path, recognition=run.summary())
+    assert len(pairs) == 1 and RC.differences(*pairs[0]) == []
+
+
+def test_an_oracle_run_saves_no_rgb_or_proposals(tmp_path):
+    xs = _leg()
+    run = _runtime(lag_steps=11, out_dir=tmp_path / "recognition")
+    _drive(run, 11, xs)
+    z = np.load(sorted((tmp_path / "recognition").glob("frame_*.npz"))[0])
+    assert "rgb" not in z.files and "proposal_masks" not in z.files

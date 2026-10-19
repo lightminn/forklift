@@ -52,8 +52,9 @@ def serve(proposer, stdin=None, stdout=None) -> None:
 class WorkerProposer:
     """The client: ``propose(scene)`` as LearnedProposer, the model in ``python`` (the learned venv)."""
 
-    def __init__(self, python, onnx_path, *, conf: float = 0.05, cwd=None, env=None, command=None):
-        cmd = command or [str(python), "-m", "forklift_learned.worker", str(onnx_path), str(conf)]
+    def __init__(self, python, onnx_path, *, conf: float = 0.05, providers: str = "CPUExecutionProvider", cwd=None,
+                 env=None, command=None):
+        cmd = command or [str(python), "-m", "forklift_learned.worker", str(onnx_path), str(conf), providers]
         self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, cwd=cwd, env=env)
 
     def propose(self, scene) -> list:
@@ -78,7 +79,8 @@ def main(argv=None) -> int:
     from forklift_learned.proposer import LearnedProposer  # noqa: PLC0415
 
     argv = sys.argv[1:] if argv is None else argv
-    serve(LearnedProposer(argv[0], conf=float(argv[1]) if len(argv) > 1 else 0.05))
+    providers = argv[2].split(",") if len(argv) > 2 else None
+    serve(LearnedProposer(argv[0], conf=float(argv[1]) if len(argv) > 1 else 0.05, providers=providers))
     return 0
 
 
