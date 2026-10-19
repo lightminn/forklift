@@ -1,0 +1,327 @@
+# tests/unit/test_recognition_sequences.py
+"""Approach sequences, their odometry and the tracker evaluation (stage 2B-3 plan sections 6-7)."""
+import json
+import math
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from tools import calibrate_track_bounds as C
+from tools import evaluate_track_sequences as E
+from tools import recognition_scenes as rs
+from tools import recognition_sequences as R
+
+ROOT = Path(__file__).resolve().parents[2]
+TABLE = json.loads((ROOT / "config/obstacle_odometry_age.json").read_text())
+
+
+class _Face:
+    def __init__(self, left, right, yaw):
+        self.left_m, self.right_m, self.insertion_yaw_rad = left, right, yaw
+
+
+def _face(yaw=0.3):
+    a = np.array([math.cos(yaw), math.sin(yaw)])
+    n = np.array([-a[1], a[0]])
+    mid = np.array([4.0, 1.0])
+    return _Face((*(mid + 0.2 * n), 0.06), (*(mid - 0.2 * n), 0.06), yaw)
+
+
+def _camera(p):
+    x = R.instance_rig.PERCEPTION_CAMERA.xyz_m[0]
+    return np.array([p.x + x * math.cos(p.yaw), p.y + x * math.sin(p.yaw)])
+
+
+def test_a_straight_path_runs_on_the_face_normal_from_3_5_to_1_3_m_in_0_12_m_steps():
+    face = _face()
+    poses = R.path(face, "straight")
+    a = np.array([math.cos(face.insertion_yaw_rad), math.sin(face.insertion_yaw_rad)])
+    mid = (np.asarray(face.left_m[:2]) + np.asarray(face.right_m[:2])) / 2
+    d = [float((mid - _camera(p)) @ a) for p in poses]
+    assert d[0] == pytest.approx(3.5) and d[-1] >= 1.3 - 1e-9 and d[-1] < 1.3 + 0.12
+    assert np.allclose(np.diff(d), -0.12)
+    assert all(abs(p.yaw - face.insertion_yaw_rad) < 1e-12 for p in poses)
+
+
+def test_a_curved_path_starts_offset_and_turned_and_ends_aligned():
+    face = _face(0.0)
+    poses = R.path(face, "curve")
+    cam = _camera(poses[0])
+    assert cam[1] - 1.0 == pytest.approx(0.4)
+    assert poses[0].yaw == pytest.approx(-math.radians(15))
+    assert abs(_camera(poses[-1])[1] - 1.0) < 0.002 and abs(poses[-1].yaw) < math.radians(1.5)
+
+
+def test_sequence_seeds_stay_clear_of_the_catalogue_and_of_each_other():
+    catalogue = {r.seed for r in rs.catalogue()}
+    seeds = {R.SEQUENCE_BANDS[b] + c * R.CELL_STRIDE + i for b in R.SEQUENCE_BANDS for c in range(len(R.CELLS))
+             for i in range(100)}
+    assert not seeds & catalogue
+    assert len(seeds) == len(R.SEQUENCE_BANDS) * len(R.CELLS) * 100
+    starts = sorted(R.SEQUENCE_BANDS.values())
+    assert all(len(R.CELLS) * R.CELL_STRIDE <= b - a for a, b in zip(starts, starts[1:]))
+
+
+def test_noisy_odometry_starts_true_and_stays_within_a_few_millimetres_per_second():
+    poses = [(0.12 * k, 0.0, 0.0) for k in range(19)]
+    reported = E.odometry(poses, "noise", seed=4)
+    assert reported[0] == pytest.approx(poses[0])
+    errs = [math.hypot(r[0] - p[0], r[1] - p[1]) for r, p in zip(reported, poses)]
+    assert max(errs) < 0.02 and errs[-1] > 0
+    assert E.odometry(poses, "noise", seed=4) == reported  # deterministic
+
+
+def test_the_late_read_is_the_noisy_stream_30_ms_ahead():
+    poses = [(0.12 * k, 0.0, 0.0) for k in range(5)]
+    late = E.odometry(poses, "late", seed=1)
+    assert late[0][0] == pytest.approx(0.6 * 0.03, abs=0.002)
+
+
+def test_the_drift_stays_inside_every_window_of_the_odometry_table():
+    poses = [(0.12 * k, 0.05 * k, 0.01 * k) for k in range(19)]
+    assert E.drift_problem(poses, TABLE) is None
+    drift = E.odometry(poses, "drift", 0, TABLE)
+    assert math.hypot(drift[-1][0] - poses[-1][0], drift[-1][1] - poses[-1][1]) == pytest.approx(0.0327268 * 3.6, rel=1e-3)
+
+
+def test_the_drift_check_reports_a_window_outside_the_table(monkeypatch):
+    poses = [(0.12 * k, 0.0, 0.0) for k in range(5)]
+    jump = [(x, y + (0.05 if k >= 2 else 0.0), yaw) for k, (x, y, yaw) in enumerate(poses)]
+    monkeypatch.setattr(E, "odometry", lambda *a, **kw: jump)
+    assert "frames 1-2" in E.drift_problem(poses, TABLE)  # 50 mm in 0.2 s > 31.5 mm
+
+
+@pytest.fixture(scope="module")
+def short_sequence(tmp_path_factory):
+    """Three frames (3.5 / 3.38 / 3.26 m) of the first S1 EPAL 6 calibration recipe, recorded twice."""
+    mp = pytest.MonkeyPatch()
+    mp.setattr(R, "END_M", 3.26)
+    try:
+        recipe = R.recipe_for(R.CELLS[0], "calibration", 0)
+        site = R.load_site()
+        first = R.sequence(recipe, "straight", level="frame_848", clean=True, site=site)
+        second = R.sequence(recipe, "straight", level="frame_848", clean=False, site=site)
+    finally:
+        mp.undo()
+    return recipe, first, second
+
+
+def test_a_sequence_is_deterministic(short_sequence):
+    _, first, second = short_sequence
+    assert first["skipped"] is None and len(first["frames"]) == 3
+    for a, b in zip(first["frames"], second["frames"]):
+        assert a["noise_seed"] == b["noise_seed"] and a["pose"] == b["pose"]
+        assert [c.left.centre_m for c in a["candidates"]] == [c.left.centre_m for c in b["candidates"]]
+
+
+def test_each_frames_truth_is_the_world_face_seen_from_that_pose(short_sequence):
+    recipe, first, _ = short_sequence
+    k, i, _ = first["target"]
+    world = R.choose_target(recipe, R.load_site())
+    face = next(f for kk, ii, f in world if (kk, ii) == (k, i))
+    for f in first["frames"]:
+        pose = R.Pose(*f["pose"])
+        got = f["faces"][k][i]
+        assert got["left_m"][:2] == pytest.approx(pose.to_base(face.left_m[:2]), abs=1e-9)
+        assert got["insertion_yaw_rad"] == pytest.approx(R._wrap(face.insertion_yaw_rad - pose.yaw), abs=1e-12)
+
+
+def test_the_tracker_input_carries_no_truth_ids(short_sequence):
+    _, first, _ = short_sequence
+    for f in first["frames"]:
+        for c in f["candidates"]:
+            assert c.proposal_id.startswith("p") and len(c.proposal_id) == 13
+        assert "clean" in f
+
+
+def test_the_camera_never_enters_a_box():
+    box = R.scene_rig.Box((1.0, 0.0, 0.2), (0.4, 0.4, 0.4))
+
+    class _Recipe:
+        instances, distractors = (), (box,)
+
+    assert R._inside_any(_Recipe, (1.1, 0.1, 0.27))
+    assert not R._inside_any(_Recipe, (1.3, 0.0, 0.27))
+
+
+def test_the_evaluation_and_calibration_run_on_a_recorded_sequence(short_sequence, monkeypatch):
+    _, first, _ = short_sequence
+    monkeypatch.setattr(C, "MIN_SAMPLES", 1)
+    rows, report = C.table([first])
+    assert rows["known"], report
+    bounds = E.TrackBounds.from_dict(C.config(rows, TABLE, 1.2))
+    res = E.run(first, bounds, "V1", TABLE, seed=1)
+    assert len(res["rows"]) == 3 and res["identity_errors"] == 0
+    assert res["rows"][0]["initialised"] and res["rows"][-1]["retained"]
+    s = E.summarise([res], 0)["V1"]
+    assert s["sequences"] == 1 and s["verdict"]["pass"] is False  # one sequence cannot fill a bin
+
+
+def test_a_track_that_accepts_another_instance_is_an_identity_error_even_without_a_face_match():
+    assert E.identity_errors({0: [(0, 0, (0, 1)), (1, None, None)]}) == 1
+    assert E.identity_errors({0: [(0, 0, (0, 1)), (0, 1, (0, 1))]}) == 1          # another face
+    assert E.identity_errors({0: [(0, 0, (0, 1)), (0, 0, (1, 2))]}) == 1          # another pocket pair
+    assert E.identity_errors({0: [(0, 0, (0, 1)), (0, None, None), (0, 0, (0, 1))]}) == 0
+
+
+def test_the_front_back_and_side_floor_is_judged_per_case():
+    # S3 13/16 retained against 15/16 single misses the floor even though S2+S3+S6 pooled would pass
+    def cell(case, retained, single, n=16):
+        return [{"case": case, "rows": [{"distance_m": 2.75, "retained": k < retained, "reacquired": False,
+                                         "single": k < single, "duplicates": 0, "held": 0, "initialised": True}],
+                 "variant": "V2", "identity_errors": 0} for k in range(n)]
+    res = cell("S2", 16, 15) + cell("S3", 13, 15) + cell("S6", 14, 15)
+    s = E.summarise(res, 0)["V2"]
+    fails = " ".join(s["verdict"]["failures"])
+    assert "bin [2.5, 3.0]: S3 retained" in fails and "S2 retained" not in fails
+
+
+def test_sequence_recipes_take_their_rank_from_the_index():
+    s2 = [R.recipe_for(R.CELLS[2], "calibration", i) for i in range(4)]   # S2 EPAL 6: rank % 4 == 0 touches
+    assert [r.rank for r in s2] == [0, 1, 2, 3] and [r.touching for r in s2] == [True, False, False, False]
+    from forklift_core.perception.pallet_model import face_layout
+    s7 = [R.recipe_for(R.CELLS[12], "calibration", i) for i in range(8)]
+    openings = {len(face_layout(r.instances[0].spec, "x").opening_intervals_m) for r in s7}
+    assert openings == {2, 3}  # rank 0 is always a four-block layout; other ranks draw three blocks too
+
+
+def test_one_recipe_matches_the_catalogue_generator():
+    batch = rs.generate("S5", "epal6", 5, band="eval_pool", first_seed=1_000_000 + 7 * 61)
+    for r in batch:
+        assert rs.recipe(r.case, r.shape_key, r.seed, r.rank, r.split) == r
+
+
+def test_the_truth_pockets_are_two_of_the_recorded_openings(short_sequence):
+    _, first, _ = short_sequence
+    k, i, pair = first["target"]
+    for f in first["frames"]:
+        face, openings = f["faces"][k][i], f["openings"][k][i]
+        assert np.allclose(face["left_m"], openings[pair[0]]) and np.allclose(face["right_m"], openings[pair[1]])
+    labels = [lab for f in first["frames"] for lab in f["labels"].values() if lab[0] == k and lab[1] == i]
+    assert labels and all(len(lab) == 3 and lab[2] == pair for lab in labels)
+
+
+def test_the_evaluation_refuses_anything_but_the_planned_population():
+    def rec(c, i, kind, band="evaluation_b"):
+        case, shape = R.CELLS[c]
+        return {"band": band, "case": case, "shape_key": shape, "seed": R.SEQUENCE_BANDS[band] + c * R.CELL_STRIDE + i,
+                "kind": kind}
+    full = [rec(c, i, k) for c in range(len(R.CELLS)) for i in range(2) for k in ("straight", "curve", "pitch")]
+    assert E.population_problem(full, "evaluation_b", 2) is None
+    assert "calibration" in E.population_problem(full[:-1] + [rec(0, 0, "straight", "calibration")], "evaluation_b", 2)
+    assert "duplicate" in E.population_problem(full[:-1] + [full[0]], "evaluation_b", 2)
+    assert "1 planned records missing" in E.population_problem(full[:-1], "evaluation_b", 2)
+    straight_only = [r for r in full if r["kind"] == "straight"] * 3  # Codex: one kind copied to the full count
+    assert E.population_problem(straight_only, "evaluation_b", 2) is not None
+
+
+def test_calibration_measures_a_candidate_against_the_pocket_pair_it_took(short_sequence):
+    _, first, _ = short_sequence
+    k, i, pair = first["target"]
+    f = first["frames"][0]
+    openings = f["openings"][k][i]
+    other = (len(openings) - 1, 0) if pair != (len(openings) - 1, 0) else (1, 0)
+    face = C.pair_face(f, k, i, other)
+    assert np.allclose(face["left_m"], openings[other[0]]) and np.allclose(face["right_m"], openings[other[1]])
+    assert face["insertion_yaw_rad"] == f["faces"][k][i]["insertion_yaw_rad"]
+
+
+def test_the_face_centre_and_openings_share_one_geometry(short_sequence):
+    _, first, _ = short_sequence
+    k, i, pair = first["target"]
+    for f in first["frames"]:
+        centre, openings = np.asarray(f["face_centres"][k][i]), np.asarray(f["openings"][k][i])
+        yaw = f["faces"][k][i]["insertion_yaw_rad"]
+        n = np.array([-math.sin(yaw), math.cos(yaw)])
+        lats = (openings[:, :2] - centre[:2]) @ n
+        assert np.allclose((openings[:, :2] - centre[:2]) - np.outer(lats, n), 0, atol=1e-9)  # on the face line
+        assert lats[0] < lats[-1]  # sorted along the left axis, like recognition_truth._faces
+
+
+def test_the_layout_error_is_zero_for_a_candidate_on_the_truth(short_sequence):
+    _, first, _ = short_sequence
+    f = first["frames"][0]
+    k, i, pair = first["target"]
+    cand = next(c for c in f["candidates"] if tuple(f["labels"][c.candidate_id]) == (k, i, pair))
+    centre, openings = f["face_centres"][k][i], f["openings"][k][i]
+    yaw = f["faces"][k][i]["insertion_yaw_rad"]
+    from dataclasses import replace as _r
+    exact = _r(cand, insertion_yaw_rad=yaw, face_centre_m=tuple(centre),
+               left=_r(cand.left, centre_m=tuple(openings[pair[0]])), right=_r(cand.right, centre_m=tuple(openings[pair[1]])))
+    assert C.face_offset_error(exact, f, (k, i, pair)) == pytest.approx(0.0, abs=1e-9)
+    shifted = _r(exact, face_centre_m=(centre[0] - 0.03 * math.sin(yaw), centre[1] + 0.03 * math.cos(yaw), centre[2]))
+    assert C.face_offset_error(shifted, f, (k, i, pair)) == pytest.approx(0.03, abs=1e-9)
+
+
+def test_calibration_refuses_records_of_another_band(tmp_path):
+    import pickle
+    with open(tmp_path / "x.pkl", "wb") as fh:
+        pickle.dump({"band": "evaluation_c", "skipped": None, "kind": "straight", "frames": []}, fh)
+    with pytest.raises(SystemExit, match="calibration band only"):
+        C.main([str(tmp_path), "--out", str(tmp_path / "b.yaml")])
+
+
+def test_the_evaluation_follows_the_first_selection_and_never_reselects(short_sequence, monkeypatch):
+    _, first, _ = short_sequence
+    calls = []
+    orig = E.CandidateTracker.select
+    monkeypatch.setattr(E.CandidateTracker, "select", lambda self, tid: (calls.append(tid), orig(self, tid))[1])
+    monkeypatch.setattr(C, "MIN_SAMPLES", 1)
+    rows, _ = C.table([first])
+    res = E.run(first, E.TrackBounds.from_dict(C.config(rows, TABLE, 1.2)), "V1", TABLE, seed=1)
+    assert calls == [0] and "interval_refused" in res["rows"][0]
+
+
+def test_face_centres_sit_at_half_the_depth_or_width_from_the_pallet_centre_on_every_face():
+    # independent of face_layout: opposite faces mirror through the pallet centre, x faces sit at half the
+    # depth and y faces at half the width; openings lie on their face line on both sides of the centre
+    for cell, index in ((R.CELLS[12], 1), (R.CELLS[12], 2), (R.CELLS[1], 0)):
+        recipe = R.recipe_for(cell, "calibration", index)
+        pose = R.Pose(-0.4, 0.3, 0.2)
+        openings, centres = R.face_geometry(recipe, pose)
+        for k, inst in enumerate(recipe.instances):
+            spec, pl = inst.spec, inst.placement
+            p = np.array(pose.to_base((pl.x_m, pl.y_m)))
+            axes = [ax for ax in spec.entry_axes for _ in (1, -1)]
+            for f in range(0, len(axes), 2):
+                c1, c2 = np.array(centres[k][f][:2]), np.array(centres[k][f + 1][:2])
+                assert np.allclose((c1 + c2) / 2, p, atol=1e-9)
+                half = (spec.overall_depth_m if axes[f] == "x" else spec.overall_width_m) / 2
+                assert np.linalg.norm(c1 - p) == pytest.approx(half, abs=1e-9)
+                for face in (f, f + 1):
+                    c = np.array(centres[k][face][:2])
+                    u = c - p
+                    side = [float(u[0] * (o[1] - c[1]) - u[1] * (o[0] - c[0])) for o in openings[k][face]]
+                    assert np.allclose([abs(np.dot(c - p, np.array(o[:2]) - c)) for o in openings[k][face]], 0, atol=1e-9)
+                    assert min(side) < 0 < max(side)
+
+
+# 2B-3g: the sequence seed pool ----------------------------------------------------------------------
+
+def test_every_sequence_band_holds_its_cells_inside_one_seed_pool():
+    pools = [(rs.SEED_BANDS[k], rs.SEED_BANDS[k] + rs.BAND_WIDTH) for k in ("eval_pool", "sequence")]
+    for band, start in R.SEQUENCE_BANDS.items():
+        last = start + len(R.CELLS) * R.CELL_STRIDE - 1
+        assert any(lo <= start and last < hi for lo, hi in pools), band
+    assert R.SEQUENCE_BANDS["evaluation_h"] == rs.SEED_BANDS["sequence"] == 2_000_000
+    assert R.SEQUENCE_BANDS["evaluation_i"] == 2_100_000
+
+
+def test_the_sequence_pool_stays_clear_of_the_catalogue_and_training():
+    lo, hi = rs.SEED_BANDS["sequence"], rs.SEED_BANDS["sequence"] + rs.BAND_WIDTH
+    assert rs.SEED_BANDS["eval_pool"] + rs.BAND_WIDTH <= lo and hi <= rs.SEED_BANDS["train"]
+    assert not {r.seed for r in rs.catalogue()} & set(range(lo, hi))
+
+
+@pytest.mark.parametrize("band, index", [("evaluation_h", -1), ("evaluation_h", 1_000),
+                                         ("evaluation_h", -17_000), ("calibration", -1)])
+def test_a_sequence_index_outside_its_cell_is_refused(band, index):
+    # -17,000 from evaluation_h is evaluation_g's first seed; 1,000 is the next cell's index 0 (Codex)
+    with pytest.raises(ValueError):
+        R.recipe_for(R.CELLS[0], band, index)
+
+
+@pytest.mark.parametrize("per_cell", [0, 1_001])
+def test_the_evaluation_refuses_a_per_cell_count_outside_the_cell(per_cell):
+    assert E.population_problem([], "evaluation_h", per_cell) is not None

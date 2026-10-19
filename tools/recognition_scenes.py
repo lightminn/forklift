@@ -22,7 +22,8 @@ from tools.recognition_truth import Placement, instance_boxes, placed_boxes
 
 ROOT = Path(__file__).resolve().parents[1]
 CASES = ("S1", "S2", "S3", "S4", "S5", "S6", "S7", "N")
-SEED_BANDS = {"eval_pool": 1_000_000, "train": 5_000_000}
+# "sequence" holds the approach-sequence bands from 2B-3g on (eval_pool ran out at evaluation_g)
+SEED_BANDS = {"eval_pool": 1_000_000, "sequence": 2_000_000, "train": 5_000_000}
 BAND_WIDTH = 1_000_000
 MAX_TRIES = 200
 S7_VIOLATIONS = ("fork_spacing_adjust", "lift_alignment_needed", "support_unverified",
@@ -293,17 +294,22 @@ def generate(case: str, shape_key: str, count: int, *, band: str, first_seed: in
     seen, recipes = {"eval": 0, "dev": 0, "train": 0}, []
     for i in range(count):
         split = "train" if band == "train" else ("eval" if i in eval_set else "dev")
-        rank = seen[split]
+        recipes.append(recipe(case, shape_key, first_seed + i, seen[split], split))
         seen[split] += 1
-        seed = first_seed + i
-        instances, distractors, spacing, rule, touching, load, instr_seq = _scene(case, shape_key, seed, rank)
-        kind = _instruction_kind(rule, rank)
-        if kind == "ambiguous" and len(instances) < 2:
-            kind = "unambiguous"
-        instruction = _instruction(rule, kind, instances, load, np.random.default_rng(instr_seq))
-        recipes.append(SceneRecipe(f"{case.lower()}_{shape_key}_{seed}", case, shape_key, split, rank, seed,
-                                   spacing, touching, tuple(instances), tuple(distractors), instruction))
     return recipes
+
+
+def recipe(case: str, shape_key: str, seed: int, rank: int, split: str) -> SceneRecipe:
+    """One recipe. The rank (the recipe's index inside its split) picks the scene type -- S2 touching,
+    the S5 placement rule, the S7 layout and violation -- so a caller drawing single recipes must pass
+    its own index, not 0 (tools/recognition_sequences.py)."""
+    instances, distractors, spacing, rule, touching, load, instr_seq = _scene(case, shape_key, seed, rank)
+    kind = _instruction_kind(rule, rank)
+    if kind == "ambiguous" and len(instances) < 2:
+        kind = "unambiguous"
+    instruction = _instruction(rule, kind, instances, load, np.random.default_rng(instr_seq))
+    return SceneRecipe(f"{case.lower()}_{shape_key}_{seed}", case, shape_key, split, rank, seed,
+                       spacing, touching, tuple(instances), tuple(distractors), instruction)
 
 
 def assert_disjoint(*lists) -> None:

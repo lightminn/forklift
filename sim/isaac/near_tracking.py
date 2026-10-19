@@ -1075,7 +1075,11 @@ POST_MEASUREMENT_ARGUMENTS = {"return_turnaround": False, "repeat_at_near_captur
                               "live_test_recovery_blocked": None,
                               "live_test_scan_silence": None,
                               # 2026-10-18: the persistent console (a fixed port, a supervisor's restarts)
-                              "live_port": 0, "live_supervised": False}
+                              "live_port": 0, "live_supervised": False,
+                              # 2026-10-18: the far recognition (docs/plans/2026-10-18-isaac-recognition-far-capture.md);
+                              # only "off" reproduces the measurement runs -- a far run is refused with near tracking.
+                              "recognition": "off", "recognition_frame_every": 24,
+                              "recognition_pixel_lag_steps": 0, "recognition_no_drive_frames": False}
 # Arguments that only add records to a run (M-a0 boundary record, docs/plans/2026-10-15-m-a05-boundary.md
 # section 5): any value matches the measurement condition. The recorder only reads (values are copied before
 # a call runs), so what it can change is wall-clock timing, to which runs are already sensitive (render

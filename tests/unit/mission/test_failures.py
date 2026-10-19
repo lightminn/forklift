@@ -65,6 +65,7 @@ def test_every_require_reason_has_a_class_of_its_own(rel):
 KNOWN = {
     "sim/isaac/run_transport.py": {
         "Cannot open base scene", "Invalid pallet spawn after settling", "Truck spawn displaced",
+        "recognition label target ",  # main's far recognition (merged 2026-10-19): a setup check
         "This adapter requires 120Hz physics (240 Hz only for a --steering-probe convergence check)",
         "Settings must be positive finite values", "Camera render product prim is missing",
         "Perception camera intrinsics mismatch (G1a)", "base scene built from another forklift URDF",
