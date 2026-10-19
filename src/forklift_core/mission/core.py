@@ -199,6 +199,9 @@ class MissionCore:
         self.recent_steps: list = []  # whether the step arriving at each of them went forward
         self.recent_forward = True  # the direction of the last motion
         self.clear_out_used_m = 0.0  # the back-out budget spent
+        # Plan D14: the event hold tolerance a live runner gives (a callable: loaded or not, as of now); None in a
+        # batch run, whose first pause keeps the measured latch the replay gate records.
+        self.lift_hold_tolerance = None
 
     def known_transition(self, from_phase: str, next_phase: str, t: float) -> None:
         """Known pallets across the mission (plan v10 D5)."""
@@ -3236,7 +3239,15 @@ class MissionCore:
                 # stop's first tick, and held. Synchronising every tick ratcheted a loaded lift down by its sag
                 # (Isaac ma3_p_tr: 2.8 mm a tick, the pallet dropped 0.27 s into a transport pause). A lift that is
                 # not being moved (transport and the rest) keeps its target.
-                ms.lift_command = float(hooks.lift_position())
+                measured_ = float(hooks.lift_position())
+                tolerance_ = self.lift_hold_tolerance() if self.lift_hold_tolerance is not None else None
+                if self.baseline is not None and tolerance_ is not None:
+                    # Live (plan D14, main 2026-10-19; Codex impl round 5 P1): as the gate's latch -- the target
+                    # within the hold tolerance of the measurement, so a loaded sag is not taken for a new target.
+                    ms.lift_command = float(min(measured_ + tolerance_, max(measured_ - tolerance_,
+                                                                              float(ms.lift_command))))
+                else:
+                    ms.lift_command = measured_
         if standing and cmds.stop_seen_s is None:
             cmds.stop_seen_s = t
             cmds.stop_pose = tuple(float(v) for v in rear)  # R11 measures a move from where it stood, not braking

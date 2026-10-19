@@ -5761,6 +5761,7 @@ def drive(S, isaac) -> None:
             core.hooks.live_abort = lambda: live.stopped_in_tick  # the core stops right after a raw capture
             # plan D14 (main 2026-10-19): the loaded hold tolerance for the gate, a mission end and the manual lift
             live.loaded_hold_tolerance_m = live.arbiter.lift.loaded_tolerance_m = live_loaded_tolerance_
+            core.lift_hold_tolerance = live.hold_tolerance  # the core's first pause holds the same way (Codex r5 P1)
 
             live_marker_ = None
             if args.live_test_marker and live_cam_ is not None:

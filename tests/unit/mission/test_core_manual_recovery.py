@@ -140,3 +140,26 @@ def test_the_lower_test_flag_refuses_the_recovery_before_its_lowering():
     stand(core, 6.0, rear)
     assert core.commands.status == "recovery_required" and core.commands.end_reason == "recovery:blocked:test_lower"
     assert core.ms.lift_command == pytest.approx(0.10) or core.ms.lift_command >= 0.0
+
+
+def test_a_live_first_pause_in_the_lift_holds_within_the_tolerance_not_at_the_measurement():
+    """Codex D14 impl round 5 P1: a STOP handled at the tick's start reached paused_tick first, which set the target
+    to the measured lift (a loaded 33 mm sag lower) before the gate clipped it. Live, with the runner's tolerance,
+    the first pause clips too; a batch run keeps the measured latch (the replay gate's)."""
+    from test_core_pause import make as make_pause
+    from forklift_core.mission.commands import Pause
+
+    core, obs, _ = make_pause("lift", lift=0.0666)
+    core.ms.lift_command = 0.100
+    core.baseline = object()
+    core.lift_hold_tolerance = lambda: 0.0434  # the runner's: loaded here
+    core.commands.queue(Pause())
+    core.commands.apply(5.0)
+    core.paused_tick(5.0, np.array([0.0, 0.0, 0.0]), 0.0, True)
+    assert core.ms.lift_command == pytest.approx(0.100)
+    batch, _, _ = make_pause("lift", lift=0.0666)
+    batch.ms.lift_command = 0.100
+    batch.commands.queue(Pause())
+    batch.commands.apply(5.0)
+    batch.paused_tick(5.0, np.array([0.0, 0.0, 0.0]), 0.0, True)
+    assert batch.ms.lift_command == pytest.approx(0.0666)

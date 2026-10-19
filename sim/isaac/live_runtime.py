@@ -360,24 +360,25 @@ class LiveRuntime:
             self.log({"gate": zero, "step": self.step, "sim_t": sim_t})
         return zero
 
+    def hold_tolerance(self) -> float:
+        """The event hold tolerance now (plan D14): the loaded one while the forks carry or may carry a pallet."""
+        a = float(self.arbiter.config.teleop_limits.lift_hold_tolerance_m)
+        cargo = getattr(self.core, "cargo", None)
+        loaded = cargo is not None and (cargo.relation in ("carrying", "unknown")
+                                        or cargo.load in ("acquiring", "confirmed", "releasing", "unknown"))
+        if loaded and self.loaded_hold_tolerance_m is not None:
+            a = max(a, float(self.loaded_hold_tolerance_m))
+        return a
+
     def _held_lift(self) -> float:
         """Where an event stops the lift (plan D14, main 2026-10-19): the target as it is, within the hold tolerance
-        of the measured lift -- a target that ran ahead stops near the lift, a standing lift's gravity sag (target -
-        measured) leaves the target alone. Without a core target: the measurement."""
+        of the measured lift (the loaded one when loaded) -- a target that ran ahead stops near the lift, a standing
+        lift's gravity sag leaves the target alone. Without a core target: the measurement."""
         measured = float(self.hooks.lift_position())
         ms = getattr(self.core, "ms", None)
         if ms is None or getattr(ms, "lift_command", None) is None:
             return measured
-        a = float(self.arbiter.config.teleop_limits.lift_hold_tolerance_m)
-        cargo = getattr(self.core, "cargo", None)
-        # Unknown counts as loaded: a failed pallet check may leave the pallet on the forks (Codex D14 impl round 4
-        # P1-2), and the manual lift's safety load says loaded there too.
-        loaded = cargo is not None and (cargo.relation in ("carrying", "unknown")
-                                        or cargo.load in ("acquiring", "confirmed", "releasing", "unknown"))
-        if loaded and self.loaded_hold_tolerance_m is not None:
-            # Main 2026-10-19: a STOP while a loaded ramp moves would otherwise drop it by the load's sag beyond a --
-            # a pallet just lifted set down again.
-            a = max(a, float(self.loaded_hold_tolerance_m))
+        a = self.hold_tolerance()
         return float(min(measured + a, max(measured - a, float(ms.lift_command))))
 
     def after_step(self, sim_t: float, *, odom_speed: float | None, yaw_rate: float, rendered: bool,
