@@ -323,11 +323,20 @@ async def main_scenario(p: Probe, args):
     p.lease_id = saved
     await p.until(p.standing, 10, label="standing_before_final_resume")
     await asyncio.sleep(0.5)
+    seen_ = ((p.state or {}).get("last_result") or {}).get("seq", 0)
     await p.request_until_standing("mission_resume", mission_id=mission_id)
     end_by = time.monotonic() + args.mission_timeout_s
+
+    def ended_(s):
+        # an ended mission leaves the state's mission slot (persistent console plan D1): its result is the end
+        # (U13b pc14: the failure at sim 240 s was missed and the wait ran to its limit)
+        r_ = s.get("last_result") or {}
+        return (s.get("mission") or {}).get("status") in ("done", "failed", "cancelled") or (
+            r_.get("seq", 0) > seen_ and r_.get("mission_id") == mission_id)
+
     while time.monotonic() < end_by and p.closed_code is None:
-        await p.until(lambda s: (s.get("mission") or {}).get("status") in ("done", "failed", "cancelled")
-                      or s.get("mode") == "STOPPED", end_by - time.monotonic(), label="mission_end_or_stop")
+        await p.until(lambda s: ended_(s) or s.get("mode") == "STOPPED", end_by - time.monotonic(),
+                      label="mission_end_or_stop")
         if p.state is None or p.state.get("mode") != "STOPPED" or p.closed_code is not None:
             break
         # Stopped on the way (a STOP inside a later capture, a fault): stand, rearm and resume, as an operator would.
