@@ -134,14 +134,16 @@ class TargetsBook:
         return True
 
     # --- the submit check and the message ---------------------------------------------------------------------
-    def check_submit(self, pallet_id: str, destination_id: str, targets_revision: int) -> str | None:
+    def check_submit(self, pallet_id: str, destination_id: str, targets_revision: int, *,
+                     loaded: bool = False) -> str | None:
         """None when a submit may name these; otherwise the refusal reason."""
         if targets_revision != self.revision:
             return "stale_targets"
         pallet = self.pallets.get(pallet_id)
         if pallet is None or destination_id not in self.destinations:
             return "invalid"
-        if pallet.state not in ("available", "delivered"):  # delivered: put down, available again where it lies
+        # delivered: put down, available again where it lies; carried: only a loaded submit (plan D5 6c)
+        if pallet.state not in (("carried",) if loaded else ("available", "delivered")):
             return "invalid"
         if pallet.at == destination_id:
             return "already_there"  # plan D3: its verified place, not a distance (the list copies the target's pose)

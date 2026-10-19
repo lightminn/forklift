@@ -465,3 +465,25 @@ def test_a_submit_before_localization_tracks_is_refused_localization_lost():
     assert rec[-1]["reason"] == "recovery_required"  # a hold is said first
     m.queue(Submit("P-1", "D-1", 0))
     assert m.apply(3.0, Context())[-1]["accepted"]
+
+
+def test_a_loaded_submit_names_the_carried_pallet_and_marks_the_mission_loaded():
+    """Persistent console plan D5 6c: cargo_held lets through only the submit of the pallet the runner says can be
+    delivered as carried; any other is still cargo_held."""
+    m = MissionCommands()
+    m.queue(Submit("P-2", "D-1", 0))
+    rec = m.apply(1.0, Context(submit_refusal="cargo_held", loaded_pallet="P-1"))
+    assert rec[-1]["reason"] == "cargo_held"
+    m.queue(Submit("P-1", "D-1", 0))
+    rec = m.apply(2.0, Context(submit_refusal="cargo_held", loaded_pallet=None))
+    assert rec[-1]["reason"] == "cargo_held"
+    m.queue(Submit("P-1", "D-1", 0))
+    rec = m.apply(3.0, Context(submit_refusal="cargo_held", loaded_pallet="P-1"))
+    assert rec[-1]["accepted"] and m.mission_loaded
+    m2 = MissionCommands()
+    m2.queue(Submit("P-1", "D-1", 0))
+    assert m2.apply(1.0, Context())[-1]["accepted"] and not m2.mission_loaded
+    m3 = MissionCommands()
+    m3.queue(Submit("P-1", "D-1", 0))
+    assert m3.apply(1.0, Context(submit_refusal="recovery_required", loaded_pallet="P-1"))[-1]["reason"] == \
+        "recovery_required"

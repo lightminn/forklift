@@ -81,6 +81,9 @@ class Context:
     scene_damaged: bool = False  # live: the scene's damage is latched (persistent console plan D6; else scene_damaged)
     # live: the SLAM tracker tracks or holds (plan D3; warming_up -- before its scan 4 processed -- localization_lost)
     localization_ok: bool = True
+    # live: the pallet on the forks a submit may deliver as it is carried (plan D5 6c; the runner's conditions
+    # met), else None -- a cargo_held refusal lets that one submit through as a loaded submit
+    loaded_pallet: str | None = None
 
 
 class MissionCommands:
@@ -107,6 +110,7 @@ class MissionCommands:
         self.pause_release_pending = False  # a SLAM release was due then (R9, R14: it may happen while paused)
         self.end_reason: str | None = None  # why the last mission ended (live: terminate), for its result
         self.end_advice: dict | None = None  # what that end advises the operator (plan D13 item 6), for its result
+        self.mission_loaded = False  # plan D5 6c: the mission delivers the pallet already on the forks
         self.end_logged_for: str | None = None  # the mission whose end is in the log (terminate, note_end)
         self.adopted_id: str | None = None  # the mission that ran (start, adopt): only it moves the targets list
 
@@ -155,18 +159,25 @@ class MissionCommands:
             return "stopping"
         if context.scene_damaged:
             return "scene_damaged"
+        loaded = False
         if context.submit_refusal is not None:
-            return context.submit_refusal
+            # plan D5 6c: the carried pallet itself, its conditions met, goes as a loaded submit
+            loaded = (context.submit_refusal == "cargo_held" and context.loaded_pallet is not None
+                      and command.pallet_id == context.loaded_pallet)
+            if not loaded:
+                return context.submit_refusal
         if not context.clear_for_submit:
             return "recovery_required"
         if not context.localization_ok:
             return "localization_lost"
         if self.targets is not None:
-            refused = self.targets.check_submit(command.pallet_id, command.destination_id, command.targets_revision)
+            refused = self.targets.check_submit(command.pallet_id, command.destination_id, command.targets_revision,
+                                                loaded=loaded)
             if refused is not None:
                 return refused
         self._issued += 1
         self.mission_id, self.mission, self.status = f"m{self._issued}", command, "accepted"
+        self.mission_loaded = loaded
         self.resume_check = None  # the last mission's resume is not this one's (Codex M-b review round 5 P1)
         return None
 

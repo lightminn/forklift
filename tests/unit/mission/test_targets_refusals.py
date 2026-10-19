@@ -122,3 +122,14 @@ def test_a_sizeless_pallet_registered_before_the_shapes_is_still_bounded_by_its_
     assert b.check_submit("P-1", "D-1", b.revision) == "invalid"
     b.add_shape("t11_06", *T11)
     assert b.check_submit("P-1", "D-1", b.revision) == "destination_occupied"
+
+
+def test_a_carried_pallet_is_submitted_only_as_a_loaded_submit():
+    b = scene()
+    b.carried("P-1")
+    assert b.check_submit("P-1", "D-1", b.revision) == "invalid"
+    assert b.check_submit("P-1", "D-1", b.revision, loaded=True) is None
+    b2 = scene()
+    assert b2.check_submit("P-1", "D-1", b2.revision, loaded=True) == "invalid"  # not on the forks
+    b.add_pallet("P-2", "epal6", Pose(9.0, 0.0, 0.0), depth_m=EPAL[0], width_m=EPAL[1])
+    assert b.check_submit("P-1", "D-1", b.revision, loaded=True) == "destination_occupied"
