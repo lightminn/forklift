@@ -155,3 +155,23 @@ def test_the_worker_passes_the_cuda_device(monkeypatch):
     monkeypatch.setattr(P, "LearnedProposer", lambda *a, **kw: built.update(kw))
     W.main(["m.onnx", "0.05", "CUDAExecutionProvider,CPUExecutionProvider", "2", "1"])
     assert built["device_id"] == 1
+
+
+def test_serve_warms_the_model_up_before_the_first_request(tmp_path):
+    script = tmp_path / "fake.py"
+    script.write_text("from forklift_learned.worker import serve\n"
+                      "class P:\n"
+                      "    warmed = 0\n"
+                      "    active_providers = []\n"
+                      "    def warm_up(self, n=3):\n"
+                      "        P.warmed += n\n"
+                      "    def propose(self, scene):\n"
+                      "        from forklift_core.perception.instance_proposals import InstanceProposal\n"
+                      "        import numpy as np\n"
+                      "        return [InstanceProposal('l0', np.ones(scene.rgb.shape[:2], bool), P.warmed / 10, 'learned')]\n"
+                      "serve(P())\n")
+    w = W.WorkerProposer(None, None, command=[sys.executable, str(script)])
+    try:
+        assert w.propose(_Scene())[0].score == pytest.approx(0.3)
+    finally:
+        w.close()

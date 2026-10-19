@@ -67,7 +67,8 @@ class LearnedSource:
         t = np.asarray(self.times_ms, float)
         if not len(t):
             return {"n": 0}
-        return {"n": int(len(t)), "p50": float(np.median(t)), "p95": float(np.percentile(t, 95)), "max": float(t.max())}
+        return {"n": int(len(t)), "p50": float(np.median(t)), "p95": float(np.percentile(t, 95)), "max": float(t.max()),
+                "first": float(t[0]), "max_after_first": float(t[1:].max()) if len(t) > 1 else None}
 
     def saved(self) -> dict:
         """The latest frame's proposals as npz arrays."""

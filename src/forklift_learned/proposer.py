@@ -75,6 +75,14 @@ class LearnedProposer:
         self.session, self.conf, self.iou, self.max_det = session, float(conf), float(iou), int(max_det)
         self.active_providers = list(session.get_providers()) if hasattr(session, "get_providers") else []
 
+    def warm_up(self, n: int = 3) -> None:
+        """Run the session on zeros of its input shape (CUDA builds its kernels and picks cuDNN algorithms on the
+        first runs: 391-444 ms on ws1 against p95 76-80 ms after)."""
+        inp = self.session.get_inputs()[0]
+        zeros = np.zeros([int(d) for d in inp.shape], np.float32)
+        for _ in range(n):
+            self.session.run(None, {inp.name: zeros})
+
     def propose(self, scene) -> list:
         inp = self.session.get_inputs()[0]
         rgb = np.asarray(scene.rgb, dtype=np.float32) / 255.0

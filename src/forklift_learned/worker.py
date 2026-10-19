@@ -35,6 +35,8 @@ def _recv(stream) -> bytes | None:
 def serve(proposer, stdin=None, stdout=None) -> None:
     stdin = stdin or sys.stdin.buffer
     stdout = stdout or sys.stdout.buffer
+    if hasattr(proposer, "warm_up"):
+        proposer.warm_up()  # inside the first request's (longer) deadline, before any frame waits on it
     while True:
         raw = _recv(stdin)
         if raw is None:

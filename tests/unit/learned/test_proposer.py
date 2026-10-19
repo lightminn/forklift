@@ -136,3 +136,22 @@ def test_the_default_providers_leave_out_tensorrt(monkeypatch):
     monkeypatch.setitem(__import__("sys").modules, "onnxruntime", ort)
     P.LearnedProposer("m.onnx")
     assert ort.asked == ["CPUExecutionProvider"] and not ort.preloaded
+
+
+def test_warm_up_runs_the_session_on_its_input_shape():
+    # ws1 CUDA: the first request paid the kernel and cuDNN set-up (391-444 ms against p95 76-80 ms after)
+    runs = []
+
+    class S:
+        def get_inputs(self):
+            class I:
+                name = "images"
+                shape = [1, 3, H, W]
+            return [I()]
+
+        def run(self, _names, feeds):
+            runs.append(feeds["images"].shape)
+            return [np.zeros((1, 37, 5), np.float32), np.zeros((1, 32, H // 4, W // 4), np.float32)]
+
+    P.LearnedProposer(session=S()).warm_up(2)
+    assert runs == [(1, 3, H, W)] * 2
