@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import math
 import secrets
+import time
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 
 from console.mock_vehicle import paths
+from forklift_core.mission.results import ResultsBook
+from forklift_core.safety.generations import RequestLedger
 from console.mock_vehicle.world import (
     CAMERA_MODEL,
     CHASSIS,
@@ -51,6 +54,8 @@ LEASE_REQUIRED = {
     "mission_cancel",
     "recovery",
     "lease_release",
+    "session_end",  # persistent console plan D7/D13: as the live runner
+    "sim_reset",
 }
 RELIABLE = LEASE_REQUIRED | {"stop", "lease_request", "targets_request"}
 LATEST_ONLY = {"echo", "teleop", "input_state"}
@@ -194,6 +199,15 @@ class MockVehicle:
         self.last_permission_direction = 1
         self.clients: dict[str, set] = {}
         self.events: list[dict] = []
+        # persistent console plan D13 item 8: as the live runner -- the shared request ledger, the results book, the
+        # scene latch, the session requests, and the states the screen's D13 cases need (``inject``)
+        self.ledger = RequestLedger()
+        self.results = ResultsBook()
+        self.scene = {"damaged": None}
+        self.session_request = None  # "end" | "reset", taken by the server
+        self.recovery = None
+        self._permit_override = None
+        self._booked = None
 
     # ------------------------------------------------------------------ helpers
     def _now(self) -> float:
@@ -282,6 +296,8 @@ class MockVehicle:
     # --------------------------------------------------------------- connection
     def connect(self, client_id: str, conn_id: str | None = None) -> dict:
         self.clients.setdefault(client_id, set()).add(conn_id)
+        token = self.ledger.issue()
+        registered = self.ledger.register(token, client_id, conn_id, self._now())
         caps = {
             "mission": True,
             "teleop_direct": True,
@@ -309,8 +325,9 @@ class MockVehicle:
                 "model_turning_radius_m": 1.0 / CHASSIS.max_curvature_inv_m,
             },
             "provisional_limits": True,
+            "sim_reset": True,  # a scene reset starts a new session (D13; the live runner's when supervised)
         }
-        return {
+        welcome = {
             "t": "welcome",
             "api": API,
             "vehicle_id": "mock-1",
@@ -318,8 +335,14 @@ class MockVehicle:
             "backend": "mock",
             "capabilities": caps,
         }
+        if registered:
+            welcome["request_token"] = token
+        return welcome
 
     def disconnect(self, client_id: str, conn_id: str | None = None) -> None:
+        token = self.ledger.token_of(client_id, conn_id)
+        if token is not None:
+            self.ledger.retire(token)
         conns = self.clients.get(client_id)
         if conns is not None:
             conns.discard(conn_id)
@@ -447,7 +470,11 @@ class MockVehicle:
                 "curvature_inv_m": self.applied_curvature_inv_m,
                 "stop_kind": self.stop_kind,
             },
-            "permit": {"limit_mps": self.permit[0], "reason": self.permit[1]},
+            "permit": (
+                {"limit_mps": self._permit_override[0], "reason": self._permit_override[1]}
+                if self._permit_override
+                else {"limit_mps": self.permit[0], "reason": self.permit[1]}
+            ),
             "limits": {
                 "forward_mps": self.cfg.forward_mps * scale,
                 "reverse_mps": self.cfg.reverse_mps * scale,
@@ -464,6 +491,10 @@ class MockVehicle:
             },
             "pacing": None,
             "stopped_confirmed": self.stopped_confirmed,
+            "feedback_ok": True,  # the fake vehicle always measures its speed
+            "last_result": self.results.last,
+            "scene": {"damaged": dict(self.scene["damaged"]) if self.scene["damaged"] else None},
+            "recovery": dict(self.recovery) if self.recovery else None,
             "teleop_allowed": teleop_reason is None,
             "teleop_forbidden_reason": teleop_reason,
             "plan": self._plan(),
@@ -507,6 +538,8 @@ class MockVehicle:
                 "request_id": msg.get("request_id"),
                 "reason": "unsupported",
             }
+        if "request_token" in msg:
+            return self._handle_ledger(client_id, msg, conn_id)
         key = (client_id, msg.get("session_epoch"), msg["request_id"])
         if key in self._results:  # contract 1, rule 1
             return self._results[key]
@@ -514,6 +547,23 @@ class MockVehicle:
             return self._reply(msg, reason="busy")  # not stored
         result = self._reliable(client_id, msg, conn_id)
         self._results[key] = result
+        return result
+
+    def _handle_ledger(self, client_id: str, msg: dict, conn_id) -> dict:
+        """Persistent console plan D7 (contract 1, the request ledger), as the live arbiter: admitted by the
+        connection's token and seq before it runs; a forgotten request is stale, never run again."""
+        token, seq = msg.get("request_token"), msg.get("request_seq")
+        if not (_is_int(token) and _is_int(seq)):
+            return self._reply(msg, reason="invalid")
+        if msg.get("session_epoch") != self.session_epoch:
+            return self._reply(msg, reason="stale_epoch")  # before the ledger, unstored
+        verdict, stored = self.ledger.admit(token, client_id, conn_id, seq)
+        if verdict == "stored":
+            return stored
+        if verdict in ("stale", "busy"):
+            return self._reply(msg, reason=verdict)
+        result = self._reliable(client_id, msg, conn_id)
+        self.ledger.put(token, seq, result, self._now())
         return result
 
     @staticmethod
@@ -752,6 +802,82 @@ class MockVehicle:
                     return reason
         return None
 
+    # ---------------------------------------------- persistent console plan D13 (as the live runner)
+    FINAL = ("done", "failed", "cancelled", "recovery_required")
+    ACTIVE = ("accepted", "preparing", "running", "paused", "held", "resuming", "recovering")
+
+    def make_missions(self) -> dict:
+        return self.results.message()
+
+    def _book(self, *, mission_id, outcome, reason, started_s, pallet_id, destination_id, advice=None) -> dict:
+        entry = self.results.add(mission_id=mission_id, outcome=outcome, reason=reason, started_s=started_s,
+                                 ended_s=self._now(), pallet_id=pallet_id, destination_id=destination_id,
+                                 advice=advice)
+        self.events.append(self.make_missions())
+        return entry
+
+    def _book_end(self, now: float) -> None:
+        """A mission that reached a final status is booked once and published (contract 5.2)."""
+        m = self.mission
+        if m is None or m["status"] not in self.FINAL or self._booked == m["mission_id"]:
+            return
+        self._booked = m["mission_id"]
+        reason = m.get("reason") or ("operator" if m["status"] == "cancelled" else None)
+        self._book(mission_id=m["mission_id"], outcome=m["status"], reason=reason, started_s=m.get("started_t"),
+                   pallet_id=m["pallet_id"], destination_id=m["destination_id"], advice=m.get("advice"))
+
+    def _session_request(self, msg: dict, kind: str) -> dict:
+        # the arbiter's order after the lease: the feedback (always measured here), the stand, no mission on
+        if not self.stopped_confirmed:
+            return self._reply(msg, reason="not_stopped")
+        if self.mission is not None and self.mission["status"] in self.ACTIVE:
+            return self._reply(msg, reason="mission_active")
+        self.session_request = kind
+        if self.mode in ("AUTO", "TELEOP"):
+            self._set_mode("PAUSED")
+        else:
+            self._boundary()
+        return self._reply(msg)
+
+    def _req_session_end(self, msg: dict) -> dict:
+        return self._session_request(msg, "end")
+
+    def _req_sim_reset(self, msg: dict) -> dict:
+        return self._session_request(msg, "reset")
+
+    def reset_session(self) -> None:
+        """The scene back to its start under a new session epoch (the live runner's supervisor restarts it)."""
+        self.__init__(self.clock, self.token, self.cfg)
+
+    def inject(self, kind: str) -> None:
+        """The screen's D13 cases without driving into them (fake vehicle only, for the page's tests)."""
+        now = self._now()
+        if kind == "scene_damage":
+            if self.scene["damaged"] is None:
+                self.scene["damaged"] = {"reason": "Forbidden fork/pallet contact", "t": now, "unix": time.time()}
+            return
+        self.missions_created += 1
+        mission_id = f"M-{self.missions_created:04d}"
+        if kind == "recovery_required":
+            self.recovery = {"stage": "in_pocket", "grounded": False, "evidence": True, "aligned": True,
+                             "pallet_id": "P-01"}
+            self._book(mission_id=mission_id, outcome="recovery_required", reason="recovery:blocked:test",
+                       started_s=now, pallet_id="P-01", destination_id="D-A")
+        elif kind == "steering_wait":
+            self.recovery = {"stage": "in_pocket", "grounded": True, "evidence": True, "aligned": True,
+                             "pallet_id": "P-01"}
+            self._permit_override = (0.0, "recovery:steering")
+            self.missions_created -= 1
+        elif kind == "invalid_start":
+            self._book(mission_id=mission_id, outcome="failed",
+                       reason="prepare:all_candidates_failed:invalid_start;invalid_start", started_s=now,
+                       pallet_id="P-01", destination_id="D-A",
+                       advice={"backoff_m": 0.15, "backoff_max_m": 0.6,
+                               "from_rear": [self.pose.x_m, self.pose.y_m, self.pose.yaw_rad]})
+        else:
+            self.missions_created -= 1
+            raise ValueError(f"unknown injection {kind!r}")
+
     def _req_recovery(self, msg: dict) -> dict:
         if msg.get("action") != "withdraw_straight" or not self.forks_in_pocket:
             return self._reply(msg, reason="invalid")
@@ -849,6 +975,8 @@ class MockVehicle:
     # ------------------------------------------------------------------ control
     def step(self, dt_s: float) -> None:
         now = self._now()
+        self.ledger.purge(now)  # D7: once a cycle, as the live arbiter
+        self._book_end(now)
         if (
             self.lease is not None
             and now - self.lease["last_sent"] > self.cfg.lease_timeout_s

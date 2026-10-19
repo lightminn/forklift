@@ -346,6 +346,6 @@ select { border: 1px solid var(--line-2); background: var(--panel-2); border-rad
 .results { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 240px; overflow: auto; }
 .results li { display: grid; grid-template-columns: auto 1fr auto; gap: 2px 8px; font-size: 12px; padding: 4px 6px; border-radius: 6px; background: var(--panel-2); }
 .results li .what { grid-column: 2; } .results li .when { grid-column: 3; color: var(--muted); }
-.results li .why { grid-column: 1 / -1; color: var(--muted); } .results li .advice { grid-column: 1 / -1; color: var(--warn); }
+.results li .why { grid-column: 1 / -1; color: var(--muted); overflow-wrap: anywhere; } .results li .advice { grid-column: 1 / -1; color: var(--warn); }
 .session-row .btn[data-confirm="armed"] { background: var(--crit); color: #fff; }
 .reset-row { margin-top: 14px; }

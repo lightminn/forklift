@@ -365,7 +365,7 @@ const OUTCOME = { done: ["ok", "완료"], failed: ["crit", "실패"], cancelled:
 function wallTime(unix) {
   if (!Number.isFinite(unix)) return "";
   const d = new Date(unix * 1000);
-  return d.toLocaleTimeString("ko-KR", { hour12: false });
+  return [d.getHours(), d.getMinutes(), d.getSeconds()].map((v) => String(v).padStart(2, "0")).join(":");
 }
 
 // Persistent console plan D13: the scene banner, the results book, the recovery guidance, the advice, the session

@@ -272,6 +272,7 @@ function connectMedia() {
   });
   ws.addEventListener("close", () => {
     if (media === ws) media = null;
+    if (m.sessionEnding === "session_end") return; // plan D13: the vehicle program ended; nothing comes back
     setTimeout(connectMedia, 1000);
   });
 }
