@@ -280,7 +280,8 @@ def replay_run(run_dir: Path, output: Path | None = None) -> dict:
     spec = importlib.util.spec_from_file_location("run_transport_replay", ROOT / "sim/isaac/run_transport.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    if output is None:
+    own_output = output is None
+    if own_output:
         import tempfile
 
         output = Path(tempfile.mkdtemp(prefix="boundary_replay_"))
@@ -331,6 +332,15 @@ def replay_run(run_dir: Path, output: Path | None = None) -> dict:
     outcome["ticks_done"] = session.ticks_done
     outcome["failure"] = session.failure
     outcome["tick_open"] = session.tick["tick"] if session.tick else None
+    if own_output:
+        # The replay's own scratch output (about 38 MB a run): removed when the replay passed -- 925 of them filled
+        # ws1's /tmp (2026-10-19) -- and kept, named in the outcome, when it failed (for the diagnosis).
+        if session.failure is None and outcome.get("finish") == "ok":
+            import shutil
+
+            shutil.rmtree(output, ignore_errors=True)
+        else:
+            outcome["output_dir"] = str(output)
     return outcome
 
 
