@@ -30,6 +30,11 @@ def arguments(argv=None):
     p.add_argument("--shard", default="0/1")
     p.add_argument("--render-mode", default="RaytracedLighting")
     p.add_argument("--max-captures", type=int, default=8)
+    # Stage 3 task 3: the learned proposer's training renders (docs/plans/2026-10-19-recognition-stage3-learned-proposals.md)
+    p.add_argument("--catalogue", choices=("eval", "train"), default="eval",
+                   help="train: tools.recognition_scenes.training_catalogue(--scale), randomized appearance and "
+                   "lighting per recipe seed, and the light output (rgb.png, instances.png, meta.json; no truth)")
+    p.add_argument("--scale", type=int, default=8)
     p.add_argument("--save-unready", type=Path, default=None,
                    help="diagnosis: write scenes that never became ready, decoded ignoring the token")
     return p.parse_args(argv)
@@ -40,8 +45,9 @@ def selected(args):
 
     index, count = (int(v) for v in args.shard.split("/"))
     cases, seen, out = set(args.cases.split(",")), {}, []
-    for recipe in rs.catalogue():
-        if recipe.case not in cases or (args.split != "all" and recipe.split != args.split):
+    recipes = rs.training_catalogue(args.scale) if args.catalogue == "train" else rs.catalogue()
+    for recipe in recipes:
+        if recipe.case not in cases or (args.catalogue == "eval" and args.split != "all" and recipe.split != args.split):
             continue
         key = (recipe.case, recipe.shape_key)
         seen[key] = seen.get(key, 0) + 1
@@ -50,13 +56,16 @@ def selected(args):
     return out[index::count]
 
 
-def build(stage, recipe, token, rc):
-    """Labelled box prims for one scene under its own root, labels carrying the scene token."""
+def build(stage, recipe, token, rc, randomize=False):
+    """Labelled box prims for one scene under its own root, labels carrying the scene token; with ``randomize``
+    the training appearance seeded by the recipe seed."""
     from isaacsim.core.utils.semantics import add_labels
     from pxr import Gf, UsdGeom
 
     root = rc.scene_root(token)
     specs = rc.prim_specs(recipe, root=root)
+    if randomize:
+        specs = rc.randomized_specs(specs, np.random.default_rng([recipe.seed, 0xC0105]))
     UsdGeom.Xform.Define(stage, root)
     for spec in specs:
         parent = spec.path.rsplit("/", 1)[0]
@@ -73,6 +82,19 @@ def build(stage, recipe, token, rc):
     return root
 
 
+def write_training_scene(scene_dir, rgb, instance_ids, meta) -> None:
+    """The light training output: rgb.png, instances.png (0 background, k+1 instance k, 65535 distractor -- the
+    dataset's code) and meta.json. No truth.json: the training scenes are never judged."""
+    from PIL import Image
+
+    scene_dir.mkdir(parents=True, exist_ok=False)
+    ids = np.asarray(instance_ids)
+    codes = np.where(ids >= 0, ids + 1, np.where(ids == -2, 65535, 0)).astype(np.uint16)
+    Image.fromarray(np.asarray(rgb, dtype=np.uint8)).save(scene_dir / "rgb.png")
+    Image.fromarray(codes).save(scene_dir / "instances.png")
+    (scene_dir / "meta.json").write_text(json.dumps(meta, indent=1))
+
+
 def main(argv=None):
     args = arguments(argv)
     args.out.mkdir(parents=True, exist_ok=False)
@@ -85,7 +107,7 @@ def main(argv=None):
         import omni.replicator.core as rep
         import omni.usd
         from isaacsim.core.api import World
-        from pxr import UsdGeom, UsdLux
+        from pxr import Gf, UsdGeom, UsdLux
 
         import camera_calibration as cc
         import perception_camera as pc
@@ -102,7 +124,13 @@ def main(argv=None):
         stage = omni.usd.get_context().get_stage()
         world = World(stage_units_in_meters=1.0)
         UsdGeom.Xform.Define(stage, "/World/Base")
-        UsdLux.DomeLight.Define(stage, "/World/Dome").CreateIntensityAttr(1000.0)
+        dome = UsdLux.DomeLight.Define(stage, "/World/Dome")
+        dome.CreateIntensityAttr(1000.0)
+        sun = UsdLux.DistantLight.Define(stage, "/World/Sun") if args.catalogue == "train" else None
+        if sun is not None:
+            sun.CreateIntensityAttr(0.0)
+            sun_xf = UsdGeom.Xformable(sun)
+            sun_rot = sun_xf.AddRotateXYZOp()
         camera = pc.create_perception_camera(args.settings, prim_path="/World/Base/PerceptionCamera")
         world.reset()
         camera.initialize()
@@ -128,7 +156,13 @@ def main(argv=None):
                     # previous scene's id->label map for 34 of 1,020 scenes (2026-10-15, jobs 2848/2852/2857),
                     # app updates and fresh prim paths did not help; with it S1 rendered 122/122 (job 2860).
                     cc.capture_static(rep, annotators)
-                build(stage, recipe, token, rc)
+                lighting = None
+                if args.catalogue == "train":
+                    lighting = rc.training_lighting(np.random.default_rng([recipe.seed, 0x116]))
+                    dome.GetIntensityAttr().Set(lighting["dome_intensity"])
+                    sun.GetIntensityAttr().Set(lighting["sun_intensity"])
+                    sun_rot.Set(Gf.Vec3f(90.0 - lighting["sun_elevation_deg"], 0.0, lighting["sun_azimuth_deg"]))
+                build(stage, recipe, token, rc, randomize=args.catalogue == "train")
                 frame, semantic, attempt = None, None, 0
                 for attempt in range(1, args.max_captures + 1):
                     frame = cc.capture_static(rep, annotators)
@@ -157,6 +191,13 @@ def main(argv=None):
                 if not semantic.ready:
                     raise RuntimeError(f"semantics not ready after {args.max_captures} captures: {semantic.status} "
                                        f"(stale pixels {semantic.stale_pixels}, tokens {semantic.stale_tokens})")
+                if args.catalogue == "train":
+                    write_training_scene(args.out / recipe.scene_id, np.asarray(frame["rgb"])[:, :, :3].astype(np.uint8),
+                                         semantic.instance_ids, {"scene_id": recipe.scene_id, "case": recipe.case,
+                                                                 "shape_key": recipe.shape_key, "seed": recipe.seed,
+                                                                 "lighting": lighting, "render_token": token})
+                    status["rendered"].append({"scene_id": recipe.scene_id, "captures": attempt})
+                    continue
                 pos, q_wxyz = camera.get_world_pose(camera_axes="ros")
                 scene = SceneInput(
                     rgb=np.asarray(frame["rgb"])[:, :, :3].astype(np.uint8), depth_m=rc.clean_depth(frame["z"]),

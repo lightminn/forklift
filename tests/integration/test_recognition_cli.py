@@ -208,3 +208,54 @@ def test_oracle_fit_proposes_every_instance_however_small(monkeypatch):
                              input=SimpleNamespace(scene=None, instruction={"present": False}))
     ev._oracle_fit(sample)
     assert seen == ["i0", "i1"]
+
+
+def test_geometric_proposals_report_segmentation_and_never_select_automatically(tmp_path):
+    # stage 3 tasks 1-2: the rig dataset is its own depth-aligned truth (no noise, no label shift)
+    data = tmp_path / "data"
+    _run("tools/generate_recognition_scenes.py", "--out", str(data), "--cases", "S1,S2,N", "--limit", "3", "--noise", "none")
+    seg = tmp_path / "seg"
+    _run("tools/evaluate_recognition.py", "--dataset", str(data), "--split", "dev", "--detector", "geometric-proposals",
+         "--segmentation-truth", str(data), "--output", str(seg))
+    metrics = json.loads((seg / "metrics.json").read_text())["segmentation"]
+    assert metrics["all"]["eligible"] > 0 and metrics["all"]["recall"] >= 0.6
+    assert set(metrics["by_distance"]) == {"0.0-1.5", "1.5-2.0", "2.0-2.5", "2.5-3.0", "3.0-"}
+    fit = tmp_path / "fit"
+    _run("tools/evaluate_recognition.py", "--dataset", str(data), "--split", "dev", "--detector", "geometric-fit",
+         "--segmentation-truth", str(data), "--output", str(fit))
+    decisions = [json.loads(line) for line in (fit / "decisions.jsonl").read_text().splitlines()]
+    assert decisions and all(d["decision"] != "selected" for d in decisions)  # unconfirmed: never auto-selected
+
+
+def test_segmentation_needs_a_matching_truth_scene(tmp_path):
+    data = tmp_path / "data"
+    _run("tools/generate_recognition_scenes.py", "--out", str(data), "--cases", "S1", "--limit", "1", "--noise", "none")
+    other = tmp_path / "other"
+    _run("tools/generate_recognition_scenes.py", "--out", str(other), "--cases", "S2", "--limit", "1", "--noise", "none")
+    proc = subprocess.run([sys.executable, "tools/evaluate_recognition.py", "--dataset", str(data), "--split", "dev",
+                           "--detector", "geometric-proposals", "--segmentation-truth", str(other),
+                           "--output", str(tmp_path / "out")], cwd=ROOT, capture_output=True, text=True)
+    assert proc.returncode != 0 and "segmentation truth" in proc.stderr
+
+
+def test_segmentation_truth_with_shifted_noise_labels_is_refused(tmp_path):
+    # Codex review 1: a noise pack shifts its labels with the RGB, so as truth it hides the registration error
+    data = tmp_path / "data"
+    _run("tools/generate_recognition_scenes.py", "--out", str(data), "--cases", "S1", "--limit", "1")
+    proc = subprocess.run([sys.executable, "tools/evaluate_recognition.py", "--dataset", str(data), "--split", "dev",
+                           "--detector", "geometric-proposals", "--segmentation-truth", str(data),
+                           "--output", str(tmp_path / "out")], cwd=ROOT, capture_output=True, text=True)
+    assert proc.returncode != 0 and "noise-free" in proc.stderr
+
+
+def test_the_segmentation_distance_is_the_horizontal_range_to_the_pocket_midpoint():
+    # Codex re-review 1: the insertion-axis projection put a 3.10 m pallet at 30 deg yaw into the 2.5-3.0 bin
+    import math
+
+    from tools import evaluate_recognition as ev
+
+    mid = (3.1 * math.cos(0.3), 3.1 * math.sin(0.3))
+    face = {"accessible": True, "exposure": 1.0, "insertion_yaw_rad": math.radians(30.0) + 0.3,
+            "left_m": [mid[0] - 0.1, mid[1] + 0.1, 0.05], "right_m": [mid[0] + 0.1, mid[1] - 0.1, 0.05]}
+    assert ev._instance_distance({"faces": [face]}, (0.0, 0.0)) == pytest.approx(3.1)
+    assert ev._instance_distance({"faces": [face]}, (0.5, 0.0)) == pytest.approx(math.dist(mid, (0.5, 0.0)))

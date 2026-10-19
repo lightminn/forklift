@@ -69,6 +69,41 @@ def prim_specs(recipe, root: str = "/World/Scene") -> list[PrimSpec]:
     return specs
 
 
+# Stage 3 task 3 (docs/plans/2026-10-19-recognition-stage3-learned-proposals.md): training appearance. Pallets and
+# distractors draw from ONE palette so colour never tells them apart (the evaluation renders paint pallets WOOD and
+# distractors GREY); floor and wall from a neutral one. Geometry and labels are untouched.
+OBJECT_PALETTE = ((0.62, 0.45, 0.28), (0.75, 0.60, 0.42), (0.45, 0.32, 0.20),    # wood
+                  (0.10, 0.25, 0.70), (0.75, 0.12, 0.10), (0.08, 0.08, 0.08),    # blue, red, black plastic
+                  (0.50, 0.50, 0.52), (0.15, 0.55, 0.25), (0.90, 0.90, 0.88))    # grey, green, white
+NEUTRAL_PALETTE = ((0.55, 0.55, 0.55), (0.40, 0.40, 0.42), (0.70, 0.68, 0.62), (0.30, 0.30, 0.32), (0.85, 0.85, 0.80))
+
+
+def randomized_specs(specs, rng) -> list:
+    """One colour per pallet instance and per distractor box from OBJECT_PALETTE, floor and wall from
+    NEUTRAL_PALETTE (each with a small brightness jitter); everything else unchanged."""
+    from dataclasses import replace  # noqa: PLC0415
+
+    chosen, out = {}, []
+    for k, spec in enumerate(specs):
+        if spec.base_label in ("floor", "wall"):
+            key, palette = spec.base_label, NEUTRAL_PALETTE
+        elif spec.base_label.startswith("inst_"):
+            key, palette = spec.base_label, OBJECT_PALETTE
+        else:
+            key, palette = f"box_{k}", OBJECT_PALETTE
+        if key not in chosen:
+            base = palette[int(rng.integers(len(palette)))]
+            chosen[key] = base if rng.random() < 0.5 else tuple(float(min(1.0, max(0.0, c * rng.uniform(0.85, 1.15))))
+                                                                  for c in base)
+        out.append(replace(spec, colour=chosen[key]))
+    return out
+
+
+def training_lighting(rng) -> dict:
+    return {"dome_intensity": float(rng.uniform(300, 3000)), "sun_intensity": float(rng.uniform(0, 3000)),
+            "sun_elevation_deg": float(rng.uniform(20, 80)), "sun_azimuth_deg": float(rng.uniform(0, 360))}
+
+
 def scene_label(base: str, token: int | None = None) -> str:
     return base if token is None else f"{base}_t{token}"
 

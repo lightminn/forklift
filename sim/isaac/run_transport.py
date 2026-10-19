@@ -451,6 +451,24 @@ def arguments() -> argparse.Namespace:
                         "per render cadence; the smoke run records what fits it).")
     parser.add_argument("--recognition-no-drive-frames", action="store_true",
                         help="Far recognition from the stop frame only (no driving frames).")
+    parser.add_argument("--recognition-proposals", choices=("oracle", "learned"), default="oracle",
+                        help="learned: the far recognition's proposals come from the learned proposer (YOLO-seg "
+                        "ONNX in a worker process on --recognition-learned-python, the geometric fallback on a model "
+                        "failure) instead of the oracle instance masks; identity is confirmed at score >= "
+                        "--recognition-tau (docs/plans/2026-10-19-recognition-stage3-learned-proposals.md, task 6).")
+    parser.add_argument("--recognition-onnx", type=Path, default=None, help="The learned proposer's ONNX model.")
+    parser.add_argument("--recognition-tau", type=float, default=None, help="The learned identity threshold.")
+    parser.add_argument("--recognition-conf", type=float, default=0.05,
+                        help="The learned proposer's minimum detection score.")
+    parser.add_argument("--recognition-learned-python", type=Path, default=None,
+                        help="The interpreter with onnxruntime (the learned venv) that runs the model worker.")
+    parser.add_argument("--recognition-providers", default="CPUExecutionProvider",
+                        help="onnxruntime providers for the worker, comma-separated (CPU keeps Isaac's VRAM).")
+    parser.add_argument("--recognition-threads", type=int, default=4,
+                        help="onnxruntime threads for the worker (pinned: unpinned it sizes itself to the machine).")
+    parser.add_argument("--recognition-timeout-s", type=float, default=10.0,
+                        help="Deadline per learned request (wall clock); past it the worker is killed and the "
+                        "frames fall back to the geometric proposals.")
     parser.add_argument(
         "--camera-inset",
         action="store_true",
@@ -784,6 +802,15 @@ def arguments() -> argparse.Namespace:
         "allowance. For the G2b diagnosis; current keeps today's rules.",
     )
     args, unknown = parser.parse_known_args()
+    # Stage 3's learned far proposals stand on their own inputs (checked before anything else reads them).
+    if args.recognition_proposals == "learned":
+        if args.recognition != "far":
+            parser.error("--recognition-proposals learned needs --recognition far")
+        if args.recognition_onnx is None or args.recognition_tau is None or args.recognition_learned_python is None:
+            parser.error("--recognition-proposals learned needs --recognition-onnx, --recognition-tau and "
+                         "--recognition-learned-python")
+        if not args.recognition_onnx.is_file():
+            parser.error(f"--recognition-onnx {args.recognition_onnx} is not a file")
     try:
         args.extra_views = MISSION_VIEWS.parse_extra_views(
             args.extra_views, args.video, args.use_perception
@@ -2855,6 +2882,26 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         if args.recognition == "far":
             from forklift_core.planning.observation_viewpoints import BAY_PICKUP_ZONE as _Z
 
+            far_learned = {}
+            if args.recognition_proposals == "learned":
+                from forklift_learned.worker import WorkerProposer
+
+                import atexit
+
+                far_learned["worker"] = WorkerProposer(args.recognition_learned_python, args.recognition_onnx,
+                                                       conf=args.recognition_conf,
+                                                       providers=args.recognition_providers,
+                                                       timeout_s=args.recognition_timeout_s,
+                                                       threads=args.recognition_threads)
+                # Its stdin closing also ends it when the runner dies; a deadline miss kills it (fallback after).
+                atexit.register(far_learned["worker"].close)
+                far_learned["source"] = frr.LearnedSource(far_learned["worker"])
+                far_learned["record"] = {
+                    "kind": "learned", "onnx": str(args.recognition_onnx),
+                    "onnx_sha256": hashlib.sha256(args.recognition_onnx.read_bytes()).hexdigest(),
+                    "tau": args.recognition_tau, "conf": args.recognition_conf,
+                    "providers": args.recognition_providers, "timeout_s": args.recognition_timeout_s,
+                    "threads": args.recognition_threads}
             far_runtime = frr.FarRuntime(
                 fork_spacing=frr.fork_spacing_m(read_fork_blades_m(args.forklift_urdf)),
                 pallet_depth_m=geometry.pallet_depth_m, pallet_shape=args.pallet_geometry_loaded.geometry_version,
@@ -2864,6 +2911,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 camera_x_m=float(perception_mount.translation_m[0]), dt=1 / 120,
                 frame_every=args.recognition_frame_every, lag_steps=args.recognition_pixel_lag_steps,
                 drive_frames=not args.recognition_no_drive_frames, out_dir=args.output / "recognition",
+                proposer=far_learned.get("source"),
+                identity_threshold=args.recognition_tau if far_learned else None,
+                proposer_record=far_learned.get("record"),
             )
             far_intrinsics = adapter.read_isaac_intrinsics(perception_camera).integer_index
             _plain_capture = perception_capture.capture

@@ -16,7 +16,7 @@ import math
 import numpy as np
 
 from forklift_core.perception.candidate_tracking import CandidateTracker, Frame
-from forklift_core.perception.instance_fit import fit_scene
+from forklift_core.perception.instance_fit import SceneFit, fit_scene
 from forklift_core.perception.instance_proposals import InstanceProposal
 from forklift_core.perception.pocket_observation import Pocket, PocketObservation
 from forklift_core.perception.target_selection import select_target
@@ -107,9 +107,16 @@ def _candidate_record(c) -> dict:
 class FarRecognition:
     """Frames of one observation leg, its target and the stop decision."""
 
-    def __init__(self, bounds, *, specs: dict, setup, load_for, clock_domain: str = "ros_sim"):
+    def __init__(self, bounds, *, specs: dict, setup, load_for, clock_domain: str = "ros_sim", proposer=None,
+                 identity_threshold=None):
+        """``proposer(scene, instance_ids) -> (proposals, extra failures)``: the oracle instance masks by default,
+        the learned proposer (with its geometric fallback) in stage 3; ``identity_threshold`` is tau on the learned
+        score (instance_fit._identity). The instance ids are the evaluation truth -- only the oracle reads them."""
         self.bounds, self.specs, self.setup, self.load_for = bounds, specs, setup, load_for
         self.clock_domain = clock_domain
+        self.proposer = proposer or (lambda scene, ids: (proposals_from_ids(ids), ()))
+        self.identity_threshold = identity_threshold
+        self.last_proposals: list = []
         self.start_leg()
 
     def start_leg(self) -> None:
@@ -120,8 +127,11 @@ class FarRecognition:
         self.frames: list = []
 
     def _step(self, scene, instance_ids, odom_from_base, instruction):
-        fit = fit_scene(scene, proposals_from_ids(instance_ids), specs=self.specs, setup=self.setup,
-                        load_for=self.load_for)
+        proposals, extra = self.proposer(scene, instance_ids)
+        self.last_proposals = list(proposals)
+        fit = fit_scene(scene, proposals, specs=self.specs, setup=self.setup, load_for=self.load_for,
+                        identity_threshold=self.identity_threshold)
+        fit = SceneFit(fit.candidates, tuple(fit.failures) + tuple(extra))
         sel = decide(fit, instruction)
         report = self.tracker.update(Frame(scene.stamp_ns, self.clock_domain, 0, odom_from_base, fit.candidates))
         visible = {t.track_id: t for t in self.tracker.tracks(scene.stamp_ns, odom_from_base)}
