@@ -86,3 +86,109 @@ def test_the_box_crop_rounds_its_edges_like_ultralytics_predict():
     cols = np.nonzero(m.any(axis=0))[0]
     assert (rows.min(), rows.max()) == (253, 266)  # y 253.4 -> 253, y 266.6 -> 267 (exclusive)
     assert (cols.min(), cols.max()) == (240, 359)
+
+
+class _FakeOrt:
+    """A stand-in onnxruntime: records the preload and the providers asked for; ``active`` is what loads."""
+
+    def __init__(self, active):
+        self.active, self.preloaded, self.asked = active, False, None
+
+    def preload_dlls(self, **kw):
+        self.preloaded = True
+
+    def get_available_providers(self):
+        return ["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"]
+
+    class SessionOptions:
+        pass
+
+    def InferenceSession(self, path, sess_options=None, providers=None):
+        self.asked = providers
+        ort = self
+
+        class S:
+            fallback_disabled = False
+
+            def get_providers(self):
+                return list(ort.active)
+
+            def disable_fallback(self):
+                S.fallback_disabled = True
+
+            def get_inputs(self):
+                class I:
+                    name = "images"
+                    shape = [1, 3, H, W]
+                return [I()]
+
+            def run(self, _names, feeds):
+                if ort.fall_on_run:  # what onnxruntime does on an EP failure unless fallback is disabled
+                    ort.active = ["CPUExecutionProvider"]
+                return [np.zeros((1, 37, 5), np.float32), np.zeros((1, 32, H // 4, W // 4), np.float32)]
+
+        self.session = S
+        return S()
+
+    fall_on_run = False
+
+
+def test_cuda_is_preloaded_and_pinned_to_the_device_asked(monkeypatch):
+    # ws1: without torch imported first, onnxruntime-gpu could not find the pip CUDA 13 / cuDNN libraries and ran
+    # on the CPU silently; the device is named explicitly (the AMD iGPU is never a CUDA device, but say which one)
+    ort = _FakeOrt(["CUDAExecutionProvider", "CPUExecutionProvider"])
+    monkeypatch.setitem(__import__("sys").modules, "onnxruntime", ort)
+    prop = P.LearnedProposer("m.onnx", providers=["CUDAExecutionProvider", "CPUExecutionProvider"], device_id=1)
+    assert ort.preloaded and ort.asked[0] == ("CUDAExecutionProvider", {"device_id": 1})
+    assert prop.active_providers == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+
+def test_a_cuda_request_that_lands_on_the_cpu_is_an_error(monkeypatch):
+    ort = _FakeOrt(["CPUExecutionProvider"])
+    monkeypatch.setitem(__import__("sys").modules, "onnxruntime", ort)
+    with pytest.raises(RuntimeError, match="CUDAExecutionProvider"):
+        P.LearnedProposer("m.onnx", providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
+
+
+def test_the_default_providers_leave_out_tensorrt(monkeypatch):
+    ort = _FakeOrt(["CPUExecutionProvider"])
+    monkeypatch.setitem(__import__("sys").modules, "onnxruntime", ort)
+    P.LearnedProposer("m.onnx")
+    assert ort.asked == ["CPUExecutionProvider"] and not ort.preloaded
+
+
+def test_warm_up_runs_the_session_on_its_input_shape():
+    # ws1 CUDA: the first request paid the kernel and cuDNN set-up (391-444 ms against p95 76-80 ms after)
+    runs = []
+
+    class S:
+        def get_inputs(self):
+            class I:
+                name = "images"
+                shape = [1, 3, H, W]
+            return [I()]
+
+        def run(self, _names, feeds):
+            runs.append(feeds["images"].shape)
+            return [np.zeros((1, 37, 5), np.float32), np.zeros((1, 32, H // 4, W // 4), np.float32)]
+
+    P.LearnedProposer(session=S()).warm_up(2)
+    assert runs == [(1, 3, H, W)] * 2
+
+
+def test_a_cuda_session_disables_onnxruntimes_silent_cpu_retry(monkeypatch):
+    # Codex review (stage 3b): ORT 1.31's run() rebuilds the session on the CPU after an EP failure unless fallback is
+    # disabled, while the record still said CUDA
+    ort = _FakeOrt(["CUDAExecutionProvider", "CPUExecutionProvider"])
+    monkeypatch.setitem(__import__("sys").modules, "onnxruntime", ort)
+    P.LearnedProposer("m.onnx", providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
+    assert ort.session.fallback_disabled
+
+
+def test_the_providers_are_checked_again_after_the_warm_up(monkeypatch):
+    ort = _FakeOrt(["CUDAExecutionProvider", "CPUExecutionProvider"])
+    monkeypatch.setitem(__import__("sys").modules, "onnxruntime", ort)
+    prop = P.LearnedProposer("m.onnx", providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
+    ort.fall_on_run = True
+    with pytest.raises(RuntimeError, match="CUDAExecutionProvider"):
+        prop.warm_up(1)

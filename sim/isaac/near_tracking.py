@@ -1082,7 +1082,8 @@ POST_MEASUREMENT_ARGUMENTS = {"return_turnaround": False, "repeat_at_near_captur
                               "recognition_tau": None, "recognition_conf": 0.05,
                               "recognition_learned_python": None,
                               "recognition_providers": "CPUExecutionProvider",
-                              "recognition_timeout_s": 10.0, "recognition_threads": 4}
+                              "recognition_timeout_s": 10.0, "recognition_threads": 4,
+                              "recognition_device_id": 0}
 # Arguments that only add records to a run (M-a0 boundary record, docs/plans/2026-10-15-m-a05-boundary.md
 # section 5): any value matches the measurement condition. The recorder only reads (values are copied before
 # a call runs), so what it can change is wall-clock timing, to which runs are already sensitive (render
