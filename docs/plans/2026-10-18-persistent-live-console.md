@@ -204,6 +204,21 @@
   - `localization_lost`: 위치 추정 tracking 아님
 - **단순 이동 미션**(agy 지적)은 이번 범위에서 뺀다. 미션 종류별로 제출 입력·준비 출력·장애물 구성(`plan_return_leg` 은 배달 팔레트를 장애물로 넣는다)·완료 판정을 따로 정해야 해서 별도 계획으로 한다. 그동안 빈 차 이동은 수동 조종으로 한다.
 
+
+**D3 제출 거절 — 구현 설계(2026-10-19, 3판 — Codex 1–2회차·agy 반영).** 원자료 확인: 지금 구현된 제출 거절은 `mission_active`·`stopping`·`scene_damaged`·`submit_refusal`(D5a: `recovery_required`·`cargo_held` — 위 `loaded` 의 자리)·`recovery_required`(SLAM hold·근접 구간)·`stale_targets`·`invalid`(`commands._submit`, `targets.check_submit`)뿐이고, `already_there`·`destination_occupied`·`localization_lost` 는 없다. 화면의 거절 사유 표(`profile.js REJECT`)는 비어 있어 거절이 원 코드로 보인다(U19 미충족). 실제 요청에는 이 `_submit` 순서 앞에 중재기의 `stopped_locked`·`not_stopped` 등이 먼저 온다(R831).
+1. **`already_there`** — 거리로 정하지 않는다(Codex P2-1: 배달 뒤 대상 목록의 팔레트 자세는 목적지 추정을 그대로 복사한 값이라, 배달 판정이 실패해도 거리 0 이다, core R3518). 대상 목록이 팔레트마다 **검증된 자리** `at`(목적지 ID 또는 없음)를 둔다:
+   - 세션 시작에 첫 자리에 놓인 팔레트는 `at = "D-0"`(D-0 은 그 자리로 정의된다 — Isaac 은 D-0 과 첫 팔레트를 같은 `scenario.pickup` 으로 등록하고 실제 배치가 5 mm 안인지 검사한다, R2898·R4910). 이것을 일반 사전값 등록의 기본값으로 두지는 않는다.
+   - 미션이 그 팔레트를 들면(`carried`) `at = None`.
+   - 미션이 `done` 으로 끝나면 — 배달 참값 판정(중심 0.08 m·접지·포크 빠짐)을 통과한 경우만, `end_mission` 의 마지막 대상 갱신 뒤(live_runtime R270 직후) — `at = 그 목적지`. 판정이 실패한 배달은 `None` 이라 같은 목적지로 다시 보낼 수 있다. 들기 전에 끝난 미션(준비 실패·취소)은 `at` 을 그대로 둔다. 자동 복구 완료는 `cancelled` 이고, 팔레트가 들렸다면 이미 `None` 이다.
+   - 수동으로 옮겨진 팔레트(복구의 접지 판정 등, D14)는 `None`.
+   - 제출 팔레트의 `at` 이 제출 목적지면 `already_there`. 방향만 바로잡는 재배치(agy)는 이 규칙으로 막힌다 — 다른 목적지에 갔다 오거나 수동으로 한다(이번 범위 밖, 화면 설명에 적음).
+2. **`destination_occupied`** — 제출한 것이 아닌, 바닥에 있는(`carried` 아님, 자세 있음) 팔레트마다 D10 의 외곽(`pallet_permit.preparation_obstacle`: 사전값은 픽업 구역 또는 0.30 m, 그 밖은 `uncertainty_m`, 없으면 0.21 m 로 키움 — 이 여유는 팔레트 추정과 차량 자세 오차를 합친 값이다)이, 제출 팔레트를 목적지 자세에 놓은 외곽과 겹치면 거절한다. **크기를 모르는 팔레트**(다른 것이든 제출한 것이든)는 그 세션의 **허용 형상 집합**(대상 목록에 따로 등록하는 종류 → 깊이·폭; 라이브는 EPAL 6·T11 x0.6 의 형상 파일에서)의 가장 큰 깊이·폭을 쓴다(Codex P2-2: 제출 팔레트 크기로 대신하면 작은 팔레트가 큰 팔레트 자리를 통과한다). 집합은 비어 있으면 안 되고(비면 점유 판정을 할 수 없으니 그 제출은 `invalid`), 집합에 없는 종류의 팔레트를 크기 없이 등록하는 것은 거절한다(Codex 2회차 P2). 겹침은 두 회전 사각형의 분리축 판정. 벽·기둥 같은 고정물은 이 검사의 몫이 아니다 — 준비는 관찰 위치까지만 계획하므로, 막힌 목적지는 인식 뒤의 운반 계획에서 `invalid_goal` 로 실패한다(agy, Codex 2회차 P3).
+3. **`localization_lost`** — SLAM 을 쓰는 실행에서 추적기 모드가 `tracking`·`holding` 이 아닐 때(`warming_up`: scan_id ≥ 4 인 `processed` 응답 전, slam_pose R209 — 첫 보정 뒤에도 그 전까지는 warming_up 이다, Codex P3). 기본 라이브 경로는 워밍업을 마친 뒤 서버를 열어 보통은 드러나지 않는다(R6087·R6291). 시험은 상태를 주입한다. 화면 문구는 "위치 추정 준비 중"(agy: '유실' 로 읽히지 않게). 추적 중 보정이 오래되면 이미 세션 실패(`localization_stale`), hold 중 제출은 이미 `recovery_required`. SLAM 이 없는 실행은 거절하지 않는다.
+4. 순서(`_submit` 안): `mission_active` → `stopping` → `scene_damaged` → `submit_refusal` → `recovery_required` → `localization_lost` → `stale_targets`·`invalid` → `already_there` → `destination_occupied`. 1·2 는 `TargetsBook.check_submit`(같은 revision 에서 판정; `at` 이 바뀌면 revision 이 오른다), 3 은 `Context.localization_ok`. 거절은 한 번에 하나만 알린다(agy 의 '먼저 나온 사유' 문제는 화면이 거절 뒤 남은 조건을 다시 보이게 해 줄인다 — 이번 범위 밖).
+5. **화면 거절 사유 표**: `REJECT` 에 차량이 낼 수 있는 모든 거절 사유의 한국어 설명. 시험은 차량 소스에서 사유를 모은다 — 중재기의 `_reply(kind, request_id, <사유>)`, 명령 처리(`_submit`·`_pause`·`_resume`·`_cancel`)와 `check_submit`·`CargoState.submit_refusal` 의 반환 문자열, 그리고 이들로 흘러가는 동적 값(Codex P2-3: `not_running`·`cargo_held` 가 빠졌다)은 생성 지점까지 따라가고, 해석하지 못한 표현식은 출처를 적은 허용 목록에 없으면 시험 실패. 앞머리 사유(`no_feedback:`·`permission_denied:`·`no_resume:`·`state_verified:`)는 앞머리로 설명한다.
+6. **가짜 차량**: 배달된 팔레트도 제출할 수 있게 고친다(Codex P2-4: 지금은 `available` 만 허용해 `invalid`) — 그리고 1·2 를 같은 규칙으로 거절한다. 화면 시험에 '배달 뒤 다른 목적지'(받아들임)·'같은 목적지'(already_there)를 넣는다.
+7. 시험: 대상 목록 단위 시험(`at` 의 전이 — 시작 D-0·들기·`done`·실패한 배달·수동 접지; 겹침·안 겹침·회전·크기 모름의 상한·사전값 구역·불확실성 없음), `_submit` 순서, 라이브 문맥(`warming_up` → 거절, `tracking`·`holding`(hold 는 이미 recovery_required) → 이 사유 없음, SLAM 없음 → 통과), 거절 표 덮음 시험, Playwright 로 가짜 차량의 거절 문구.
+
 ### D4 취소와 복구
 
 지금 `cancelling` 은 미션 일을 금지하고, 정지가 확인되면 곧바로 `cancelled` 가 된다(C2741). 그래서 기존 단계로 정리 동작을 실행할 수 없다. 취소 의도와 물리 복구를 나눈다. 취소가 확정되면 물리 상태에 따라 아래 표를 따른다.
