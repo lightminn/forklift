@@ -956,6 +956,46 @@ async def cycle_scenario(p: Probe, args):
     p.report["close_code"] = p.closed_code
 
 
+async def restart_scenario(p: Probe, args):
+    """Persistent console plan U15/U24: the runner killed (SIGKILL) while the console holds the lease and stands;
+    main() then follows the supervisor's next session, resends the old session's request there (its epoch, token
+    and lease: refused stale_epoch) and runs the cycle."""
+    import os
+
+    await p.open()
+    await p.until(lambda s: True, 10, label="first_state")
+    lease = await p.request("lease_request")
+    p.lease_id = lease.get("lease_id") if lease else None
+    await p.until(lambda s: p.targets is not None, 10, label="targets")
+    await p.until(p.standing, 30, label="standing_before_kill")
+    p.report["session"] = {"session_epoch": p.epoch, "lease_id": p.lease_id, "control_gen": p.control_gen,
+                           "request_token": p.request_token, "request_seq": p.request_seq}
+    pid = (p.report.get("port_file") or {}).get("pid")
+    if not pid:
+        p.event("no_pid")
+        return
+    p.report["killed"] = {"pid": pid, "mono": time.monotonic()}
+    os.kill(int(pid), signal.SIGKILL)
+    await p.until(lambda s: p.closed_code is not None, 30, label="closed_after_kill")
+    p.report["killed"]["close_code"] = p.closed_code
+
+
+async def old_session_requests(p: Probe, old: dict) -> dict:
+    """Plan U24: the old session's next request as its console would resend it (its epoch, token, seq and lease) on
+    the new session's connection -- a mode change and a submit; both must be refused stale_epoch."""
+    await p.open()
+    await p.until(lambda s: True, 10, label="first_state_new_session")
+    saved = (p.epoch, p.request_token, p.request_seq, p.lease_id, p.control_gen)
+    p.epoch, p.request_token, p.request_seq = old["session_epoch"], old["request_token"], old["request_seq"]
+    p.lease_id, p.control_gen = old["lease_id"], old["control_gen"]
+    out = {"new_epoch": saved[0],
+           "mode_request": await p._request("mode_request", to="PAUSED"),
+           "mission_submit": await p._request("mission_submit", pallet_id="P-1", destination_id="D-1",
+                                              targets_revision=(p.targets or {}).get("targets_revision"))}
+    p.epoch, p.request_token, p.request_seq, p.lease_id, p.control_gen = saved
+    return out
+
+
 async def reset_scenario(p: Probe, args):
     """Persistent console plan U12: a scene damaged under a mission (the runner's --live-test-push-pallet moves the
     pallet at a phase) is latched; automatic work is refused, manual control is not; a scene reset ends the session --
@@ -995,7 +1035,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port-file", type=Path, required=True)
     ap.add_argument("--report", type=Path, required=True)
-    ap.add_argument("--scenario", choices=("main", "slow", "marker", "approach", "planwait", "cycle", "lift", "reset"),
+    ap.add_argument("--scenario", choices=("main", "slow", "marker", "approach", "planwait", "cycle", "lift", "reset",
+                                           "restart"),
                     default="main")
     ap.add_argument("--manual-recovery", action="store_true",
                     help="cycle scenario (plan D14 U20 c): a mission ending recovery_required is recovered by hand "
@@ -1064,10 +1105,11 @@ def main():
     try:
         scenario = {"main": main_scenario, "slow": slow_scenario, "marker": marker_scenario,
                     "approach": approach_scenario, "planwait": planwait_scenario, "cycle": cycle_scenario,
-                    "lift": lift_scenario, "reset": reset_scenario}[args.scenario]
+                    "lift": lift_scenario, "reset": reset_scenario, "restart": restart_scenario}[args.scenario]
         asyncio.run(scenario(p, args))
-        if args.scenario == "reset" and (report.get("reset") or {}).get("t") == "ack":
-            # U12: the supervisor's next session (a new epoch on the same port), the cycle there
+        if ((args.scenario == "reset" and (report.get("reset") or {}).get("t") == "ack")
+                or (args.scenario == "restart" and "killed" in report)):
+            # U12, U15: the supervisor's next session (a new epoch on the same port), the cycle there
             old, info2, ready = info.get("session_epoch"), {}, False
             end = time.monotonic() + args.wait_port_s
             while time.monotonic() < end:
@@ -1082,7 +1124,14 @@ def main():
             if ready:
                 p2 = Probe(info2["port"], report["after_reset"])
                 try:
-                    asyncio.run(cycle_scenario(p2, args))
+                    if args.scenario == "restart":
+                        async def resend_then_cycle():
+                            report["after_reset"]["old_requests"] = await old_session_requests(p2, report["session"])
+                            await cycle_scenario(p2, args)
+
+                        asyncio.run(resend_then_cycle())
+                    else:
+                        asyncio.run(cycle_scenario(p2, args))
                 finally:
                     report["after_reset"]["states_n"] = len(p2.states)
     finally:

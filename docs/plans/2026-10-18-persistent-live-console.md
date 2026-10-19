@@ -1224,7 +1224,7 @@ D2 의 `mission_start` 는 작업자 작업 `observe_ladder` 로 한다. 이름 
 | U20c 수동 복구 | 통과 | `recovery_required` → 내리기·곧은 후진 → 다음 미션 `done`(이번엔 출발 막힘 없음, 안내 미발생) |
 | U22 계획 대기 중 일시정지·STOP·취소 | 통과 | 셋 다 수락, 그동안 최대 0.03–0.05 m/s, 끝에 미션 없음 |
 | U23 작업자 사망 | 통과 | `failed: prepare:error:plan worker exited with 9`, 작업자 재시작, 다음 미션 `done` |
-| U13 재접속(C3 main) | 통과 | 수동 조종 진입·첫 움직임 0.15 s, 끊김 뒤 재접속에 새 lease, 옛 lease 요청은 `stale_lease` |
+| U13 재접속(C3 main) | 통과 | 수동 조종 진입·첫 움직임 0.15 s, 끊김 뒤 재접속에 새 lease, 옛 lease 요청은 `stale_lease`. 같은 실행의 미션은 끝나지 않았다: STOP → 재무장 → 재개와 일시정지 → 수동 → 재개는 모두 받아들여졌으나, 추출 중 세션 실패 `slam_link_failed: scan 620: no reply within 1.00 s`(실행기 250 s, 두 줄 동시 부하). 그래서 U6·U9 는 이 실행으로 통과로 세지 않고 다시 돌린다(2026-10-19 재확인) |
 
 ws1 전체 pytest(26f9a18): 5161 통과, 실패 10(알려진 ws1 전용), 건너뜀 19.
 
