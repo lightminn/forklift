@@ -32,8 +32,9 @@ def _lift(dirs) -> dict:
 
 
 def teleop_policy(safety: dict | None, *, feedback_ok: bool, standing: bool, lift_m: float | None = 0.0,
-                  steering_rad: float | None = 0.0) -> Policy:
-    """``lift_m`` / ``steering_rad``: the measured lift and the larger measured steering angle (None: not measured)."""
+                  steering_rad: float | None = 0.0, still: bool = False) -> Policy:
+    """``lift_m`` / ``steering_rad``: the measured lift and the larger measured steering angle (None: not measured).
+    ``still``: not rolling though not confirmed standing (main 2026-10-19) -- enough for a recovery's lowering."""
     def refuse(reason, dirs=NONE):
         return Policy(False, reason=reason, **_lift(dirs))
 
@@ -52,7 +53,7 @@ def teleop_policy(safety: dict | None, *, feedback_ok: bool, standing: bool, lif
     if near.get("active"):
         return refuse("near_section")
     if recovery:
-        return _recovery(safety, recovery, standing=standing, lift_m=lift_m, steering_rad=steering_rad)
+        return _recovery(safety, recovery, standing=standing or still, lift_m=lift_m, steering_rad=steering_rad)
     if safety.get("recovery_required"):
         # A live mission ended where the forks may be in a pocket or the pallet on them and no recovery context
         # says how to get out (persistent console plan D6): no manual driving.

@@ -141,6 +141,11 @@ class Arbiter:
         self.drive = TeleopDrive(config.teleop_limits, config.decel_mps2, config.tick_s)
         self.lift = TeleopLift(config.teleop_limits, limit_m=config.lift_limit_m, dt=config.tick_s)  # plan D14
         self.lift_m: float | None = None  # this cycle's measured lift and steering (None: not measured)
+        # Main session 2026-10-19 (D14): a lower-only TELEOP may be entered without a confirmed stand (forks pressing a
+        # pallet shake the truck past the stop detector) while the truck is still enough -- the last second's
+        # speeds, to judge that; the drive then waits for a confirmed stand.
+        self._recent_speeds: list = []  # (stamp, speed) of the last second's fresh feedback
+        self._stand_unconfirmed = False
         self.steering_rad: float | None = None
         self._drive_fresh = False  # TELEOP just entered: the output curvature starts from the measured one
 
@@ -217,6 +222,8 @@ class Arbiter:
             raise ValueError(mode)
         if mode == self.mode:
             return
+        if mode != "TELEOP":
+            self._stand_unconfirmed = False
         self.events.append({"t": now_mono, "event": "mode", "from": self.mode, "to": mode, "reason": reason})
         self.mode = mode
         self._drive_fresh = mode == "TELEOP"
@@ -519,6 +526,11 @@ class Arbiter:
         fresh = _valid_feedback(feedback, now_mono, self.config.feedback_max_age_s)
         self.feedback_ok = fresh
         self.lift_m = _finite(getattr(feedback, "lift_m", None)) if fresh else None
+        if fresh:
+            self._recent_speeds = [(s, v) for s, v in self._recent_speeds if now_mono - s <= STILL_WINDOW_S] + [
+                (now_mono, float(feedback.rear_axle_speed_mps))]
+        else:
+            self._recent_speeds = []
         self.steering_rad = _finite(getattr(feedback, "steering_rad", None)) if fresh else None
         if fresh:
             self.stop_confirmed = self.detector.update(commanded_speed=self.last_applied,
@@ -673,13 +685,31 @@ class Arbiter:
 
     def _policy(self, safety) -> Policy:
         policy = teleop_policy(safety, feedback_ok=self.feedback_ok, standing=self.stop_confirmed,
-                               lift_m=self.lift_m, steering_rad=self.steering_rad)
+                               lift_m=self.lift_m, steering_rad=self.steering_rad, still=self._still_enough())
+        if self._stand_unconfirmed:
+            if self.stop_confirmed:
+                self._stand_unconfirmed = False
+            elif policy.drive_allowed:
+                # Entered unconfirmed: no speed before the detector confirms the stand (main 2026-10-19).
+                return Policy(False, reason="stand_unconfirmed", loaded=policy.loaded, lift_dirs=policy.lift_dirs,
+                              lift_allowed=policy.lift_allowed, drive_mode=policy.drive_mode)
         if policy.teleop_allowed and not self.pacing_ok:
             # M-c: no real time, no hands on -- the lift too (plan D14).
             return Policy(False, False, "pacing", loaded=policy.loaded)
         return policy
 
     # --- mode and mission requests (B5) --------------------------------------------------------------------------
+    def _still_enough(self) -> bool:
+        """Main 2026-10-19: the truck is not rolling -- its speed now at most STILL_SPEED_MPS and its net travel over
+        the last second (the integrated measured speed) at most STILL_TRAVEL_M, with a second of fresh feedback."""
+        samples = self._recent_speeds
+        if len(samples) < 2 or samples[-1][0] - samples[0][0] < 0.9 * STILL_WINDOW_S:
+            return False
+        if abs(samples[-1][1]) > STILL_SPEED_MPS:
+            return False
+        travel = sum((t1 - t0) * v1 for (t0, _), (t1, v1) in zip(samples, samples[1:]))
+        return abs(travel) <= STILL_TRAVEL_M
+
     def _needs_stand(self, kind: str, request_id) -> dict | None:
         if not self.feedback_ok:
             return self._reply(kind, request_id, "no_feedback:rear_axle_speed")
@@ -717,13 +747,20 @@ class Arbiter:
             return self._reply("mode_request", request_id, "stopped_locked")
         if self.mode != "PAUSED":
             return self._reply("mode_request", request_id, "invalid")  # no AUTO -> TELEOP: PAUSED first
-        refused = self._needs_stand("mode_request", request_id)
+        policy = self._policy(self.last_safety)
+        unconfirmed = (self.feedback_ok and not self.stop_confirmed and not policy.drive_allowed
+                       and policy.lift_dirs == frozenset({-1}) and self._still_enough())
+        refused = None if unconfirmed else self._needs_stand("mode_request", request_id)
         if refused is not None:
             return refused
-        policy = self._policy(self.last_safety)
         if not policy.teleop_allowed:
             return self._reply("mode_request", request_id, "state_forbids_teleop", detail=policy.reason)
         self._set_mode("TELEOP", now_mono, "mode_request")  # the hold follows in mission_context
+        if unconfirmed:
+            # Main 2026-10-19: lower only (the drive refused, its command held at 0), the truck still enough but not
+            # confirmed standing; the drive waits for the stop detector's confirmation (in _policy).
+            self._stand_unconfirmed = True
+            self.events.append({"t": now_mono, "event": "stand_unconfirmed", "reason": "lower_only"})
         return self._reply("mode_request", request_id, control_gen=self.control_gen)
 
     def _mission_request(self, client_id, request_id, kind, command):
@@ -774,6 +811,11 @@ def _ratio(value) -> float:
     except (TypeError, ValueError):
         return 0.0
     return max(-1.0, min(1.0, v)) if v == v else 0.0
+
+
+STILL_WINDOW_S = 1.0  # main 2026-10-19: the lower-only entry's stillness is judged over the last second
+STILL_SPEED_MPS = 0.10  # ... no faster than this now
+STILL_TRAVEL_M = 0.02  # ... and no further than this over the window (the net, integrated speed)
 
 
 def _finite(value) -> float | None:
