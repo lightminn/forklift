@@ -255,3 +255,20 @@ def test_the_fake_vehicle_verifies_the_place_only_at_done(env):
             break
     assert pallet.state == "delivered" and v.mission["status"] != "done"
     assert pallet.pallet_id not in v.at
+
+
+def test_the_verified_place_at_done_is_a_new_targets_revision(env):
+    v, clock = env
+    c = Client(v)
+    c.take_lease()
+    pallet = v.world.pallets[0]
+    submit(c, v, pallet=pallet.pallet_id, dest="D-A")
+    before = None
+    for _ in range(8000):
+        clock.t += 0.05
+        v.step(0.05)
+        if pallet.state == "delivered" and before is None:
+            before = v.targets_revision
+        if v.mission["status"] == "done":
+            break
+    assert v.mission["status"] == "done" and v.targets_revision > before

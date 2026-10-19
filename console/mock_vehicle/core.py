@@ -1306,7 +1306,9 @@ class MockVehicle:
         m["phase_index"] += 1
         if m["phase_index"] >= len(PHASES):
             m["status"], m["phase"] = "done", "complete"
-            self.at[m["pallet_id"]] = m["destination_id"]  # plan D3: verified there only at done (as live)
+            if self.at.get(m["pallet_id"]) != m["destination_id"]:
+                self.at[m["pallet_id"]] = m["destination_id"]  # plan D3: verified there only at done (as live)
+                self.targets_revision += 1  # a list change (Codex D3 impl round 2 P3)
             m["legs"] = []
             self._event("mission", mission_id=m["mission_id"], status="done")
             self._set_mode("PAUSED")

@@ -31,6 +31,9 @@ FLOWS = {
 }
 
 
+REASON_ARG = {ARBITER: 2, MOCK: 1}
+
+
 def parse(rel):
     return ast.parse((ROOT / rel).read_text())
 
@@ -51,15 +54,34 @@ def called(value):
 
 
 def assigned_from(fn, name, method):
-    """Whether ``name`` is assigned in ``fn`` only from calls to ``method`` (a tuple target's first element too)."""
+    """Whether every write to ``name`` in ``fn`` is an assignment from a call to ``method`` (a tuple target's first
+    element too). Any other write -- annotated, augmented, walrus, a loop, ``with`` or comprehension target, or a
+    later element of a tuple -- counts as unexplained (Codex D3 impl round 2 P2: ``problem: str = "..."`` slipped)."""
     sources = []
+
+    def names_in(target):
+        return [n for n in ast.walk(target) if isinstance(n, ast.Name) and n.id == name]
+
     for node in ast.walk(fn):
         if isinstance(node, ast.Assign):
             for target in node.targets:
-                names = [target] if isinstance(target, ast.Name) else list(getattr(target, "elts", []))[:1]
-                if any(isinstance(n, ast.Name) and n.id == name for n in names):
-                    sources.append(node.value)
-    return bool(sources) and all(called(v) == method for v in sources)
+                if isinstance(target, ast.Name):
+                    if target.id == name:
+                        sources.append(node.value)
+                elif names_in(target):
+                    elts = list(getattr(target, "elts", []))
+                    first = elts[0] if elts else None
+                    ok = isinstance(first, ast.Name) and first.id == name and len(names_in(target)) == 1
+                    sources.append(node.value if ok else None)
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)) and names_in(node.target):
+            sources.append(None)
+        elif isinstance(node, ast.NamedExpr) and node.target.id == name:
+            sources.append(None)
+        elif isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)) and names_in(node.target):
+            sources.append(None)
+        elif isinstance(node, ast.withitem) and node.optional_vars is not None and names_in(node.optional_vars):
+            sources.append(None)
+    return bool(sources) and all(v is not None and called(v) == method for v in sources)
 
 
 def strings(node, rel, fn, unknown, pending):
@@ -97,8 +119,9 @@ def replies(rel, tree, unknown, pending):
         if not (isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "_reply"):
             continue
         arg = next((k.value for k in node.keywords if k.arg == "reason"), None)
-        if arg is None and len(node.args) >= 3:
-            arg = node.args[2]
+        index = REASON_ARG[rel]  # the live arbiter: _reply(kind, request_id, reason); the fake: _reply(msg, reason)
+        if arg is None and len(node.args) > index:
+            arg = node.args[index]
         if arg is not None:
             found |= strings(arg, rel, owner.get(id(node)), unknown, pending)
     return found
@@ -160,4 +183,19 @@ def test_a_keyword_reason_and_a_name_made_elsewhere_are_caught():
     unknown, pending = [], []
     found = replies(ARBITER, tree, unknown, pending)
     assert "novel_reply" in found and not explained("novel_reply", table())
+    assert unknown == [(ARBITER, "problem")] and not pending
+
+
+def test_a_positional_fake_reason_and_an_annotated_rewrite_are_caught():
+    """Codex D3 impl round 2 P2: _reply(msg, "novel") on the fake vehicle and problem: str = "novel" after the call."""
+    fake = ast.parse("class V:\n    def f(self, msg):\n        return self._reply(msg, 'novel_mock_reply')\n")
+    unknown, pending = [], []
+    assert "novel_mock_reply" in replies(MOCK, fake, unknown, pending)
+    live = ast.parse("class A:\n"
+                     "    def g(self, kind, rid, msg):\n"
+                     "        problem = self._generation_problem(msg)\n"
+                     "        problem: str = 'novel_flow'\n"
+                     "        return self._reply(kind, rid, problem)\n")
+    unknown, pending = [], []
+    replies(ARBITER, live, unknown, pending)
     assert unknown == [(ARBITER, "problem")] and not pending
