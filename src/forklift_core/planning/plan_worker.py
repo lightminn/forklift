@@ -87,6 +87,13 @@ def _run(name: str, payload: dict):
         return {"result": result, "wall_s": time.monotonic() - started}
     if name == "observe_ladder":
         return _observe_ladder(pm, payload)
+    if name == "loaded_delivery":  # persistent console plan D5 6c: a pallet already on the forks, to its destination
+        started = time.monotonic()
+        result = pm.plan_loaded_delivery(*payload["args"], **payload["kwargs"])
+        if result.success and pm.final_straight_prefix(result.transport, payload["keep_m"]) is None:
+            # no delivery straight left to arm the docking on (arm_docking's own rule, Codex 6c round 2 P2-1)
+            result = pm.MissionPlan(False, "transport:no_final_straight")
+        return {"result": result, "wall_s": time.monotonic() - started}
     if name == "echo":  # the tests' job
         if payload.get("sleep_s"):
             time.sleep(payload["sleep_s"])

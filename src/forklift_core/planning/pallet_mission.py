@@ -1383,6 +1383,73 @@ def _return_turnaround(start_rear, return_to, obstacles, footprint, bounds, conf
     return replace(best, turnaround=record)
 
 
+def plan_loaded_delivery(
+    scenario: TransportScenario,
+    start_rear: Pose2D,
+    config: PlannerConfig | None = None,
+    *,
+    geometry: SyntheticMissionGeometry | None = None,
+    return_to: Pose2D | None = None,
+    travel_config: PlannerConfig | None = None,
+    trace: list | None = None,
+    occupancy=None,
+    docking_occupancy=None,
+    deadline=None,
+) -> MissionPlan:
+    """The delivery of a pallet already on the forks (persistent console plan D5 6c): from ``start_rear`` the same
+    steps plan_transport takes from its extracted pose on -- the transport search with the loaded footprint (on a
+    grid, once more with no clearance when the start is invalid), the delivery straight, the withdraw straight and,
+    with ``return_to``, the return with the delivered pallet as an obstacle. plan_transport is left as it is; the
+    tests hold the two equal from the extracted pose. approach, insert and extract are None."""
+    geometry = geometry if geometry is not None else SyntheticMissionGeometry()
+    config = config if config is not None else make_transport_planner_config()
+    travel_config = travel_config if travel_config is not None else config
+
+    def note(stage: str, result: PlanResult) -> PlanResult:
+        if trace is not None:
+            directions = np.asarray(result.directions)
+            trace.append({"stage": stage, "status": result.status, "length_m": float(result.length_m),
+                          "expansions": int(result.expanded_nodes),
+                          "analytic_expansion_interval": result.analytic_expansion_interval,
+                          "search_attempts": [list(entry) for entry in result.search_attempts],
+                          "gear_changes": int(np.count_nonzero(np.diff(directions))) if directions.size else 0})
+        return result
+
+    props = [prop.rectangle for prop in scenario.props]
+    destination = site_poses(scenario.destination, geometry)
+    grid = docking_occupancy if docking_occupancy is not None else occupancy
+    transport = note("transport_search", _search(start_rear, destination["predelivery"], props,
+                                                 geometry.loaded_footprint, scenario.bounds, travel_config,
+                                                 occupancy=grid, deadline=deadline))
+    if transport.status == "invalid_start" and occupancy is not None:
+        transport = note("transport_search_tight", _search(start_rear, destination["predelivery"], props,
+                                                           geometry.loaded_footprint, scenario.bounds,
+                                                           replace(travel_config, clearance_m=0.0), occupancy=grid,
+                                                           deadline=deadline))
+    if not transport.success:
+        return MissionPlan(False, f"transport:{transport.status}")
+    tail = note("transport_straight", _straight_plan(destination["predelivery"], destination["delivery"], 1, props,
+                                                     geometry.loaded_footprint, scenario.bounds, config.clearance_m,
+                                                     grid))
+    if not tail.success:
+        return MissionPlan(False, f"transport:{tail.status}")
+    transport = _append_straight(transport, tail)
+    withdraw = note("withdraw", _straight_plan(destination["delivery"], destination["withdrawn"], -1, props,
+                                               geometry.unloaded_footprint, scenario.bounds, config.clearance_m, grid))
+    if not withdraw.success:
+        return MissionPlan(False, f"withdraw:{withdraw.status}")
+    if return_to is None:
+        return MissionPlan(True, "success", None, None, None, transport, withdraw)
+    delivered = Rectangle(scenario.destination.x_m, scenario.destination.y_m, geometry.pallet_depth_m,
+                          geometry.pallet_width_m, scenario.destination.yaw_rad)
+    return_home = note("return_home", _search(destination["withdrawn"], return_to, props + [delivered],
+                                              geometry.unloaded_footprint, scenario.bounds, travel_config,
+                                              occupancy=grid, deadline=deadline))
+    if not return_home.success:
+        return MissionPlan(False, f"return_home:{return_home.status}")
+    return MissionPlan(True, "success", None, None, None, transport, withdraw, return_home)
+
+
 def plan_transport(
     scenario: TransportScenario,
     config: PlannerConfig | None = None,
