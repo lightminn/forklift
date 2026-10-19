@@ -557,31 +557,20 @@ def test_a_mission_end_holds_the_lift_where_it_is(tmp_path):
     rt.hooks.lift_position = lambda: 0.031
     held = []
     rt.hooks.hold_lift = held.append
-    rt._lift_moving = True  # the ramp was moving in the last tick
     rt.end_mission(15.0, "failed", "x")
     # within the hold tolerance (0.02 m) of the measured lift: a target that ran ahead stops near it (main
     # 2026-10-19, plan D14 condition 3 amended)
     assert held == [pytest.approx(0.051)] and core.ms.lift_command == pytest.approx(0.051)
 
 
-def test_a_standing_target_is_kept_at_a_mission_end(tmp_path):
-    """Main 2026-10-19 (option 1): a target not moving in the last tick is kept, however far the lift sags below."""
-    rt, core, order = ending(tmp_path)
-    core.ms = SimpleNamespace(lift_command=0.08)
-    rt.hooks.lift_position = lambda: 0.031
-    held = []
-    rt.hooks.hold_lift = held.append
-    rt._lift_moving = False
-    rt.end_mission(15.0, "failed", "x")
-    assert held == [pytest.approx(0.08)] and core.ms.lift_command == pytest.approx(0.08)
-
-
 def test_a_loaded_standing_lift_keeps_its_target_through_three_gate_events(tmp_path):
-    """Main 2026-10-19: a pallet on the forks sags the lift 36 mm (above a = 0.02 m); three STOPs in a row while it
-    stands must not lower it."""
+    """Main 2026-10-19: a pallet on the forks sags the lift 33 mm (13.6 kg on the 4000 N/m drive, above a = 0.02 m);
+    three STOPs in a row while it stands must not lower it -- the loaded tolerance covers the sag."""
     rt, core, did, clock = runtime(tmp_path)
     core.ms = SimpleNamespace(lift_command=0.20)
-    did["lift_pos"] = 0.164
+    core.cargo = SimpleNamespace(relation="carrying", load="confirmed")
+    rt.loaded_hold_tolerance_m = 0.0434
+    did["lift_pos"] = 0.20 - 0.0334
     rt.start()
     try:
         t = 0.0
@@ -595,6 +584,20 @@ def test_a_loaded_standing_lift_keeps_its_target_through_three_gate_events(tmp_p
     finally:
         rt.close()
 
+
+def test_an_unknown_cargo_keeps_the_loaded_tolerance(tmp_path):
+    """Codex D14 impl round 4 P1-2: a scene failure turns the cargo unknown before the end -- the pallet may still be
+    on the forks, so the end's hold keeps the loaded tolerance (it lowered a moving loaded lift by 8.5 mm)."""
+    (tmp_path / "e").mkdir()
+    rt, core, order = ending(tmp_path / "e")
+    core.ms = SimpleNamespace(lift_command=0.10)
+    core.cargo = SimpleNamespace(relation="unknown", load="unknown")
+    rt.loaded_hold_tolerance_m = 0.0434
+    rt.hooks.lift_position = lambda: 0.07155
+    held = []
+    rt.hooks.hold_lift = held.append
+    rt.end_mission(15.0, "failed", "x")
+    assert held == [pytest.approx(0.10)]
 
 def test_a_standing_lifts_sag_is_not_taken_for_a_new_target_at_a_gate_or_an_end(tmp_path):
     """Main 2026-10-19: a loaded lift standing 9 mm below its target (the drive's gravity sag) keeps the target at
@@ -790,9 +793,8 @@ def test_a_stop_during_a_loaded_lift_ramp_holds_within_the_loaded_tolerance(tmp_
     rt, core, did, clock = runtime(tmp_path)
     core.ms = SimpleNamespace(lift_command=0.10)
     core.cargo = SimpleNamespace(relation="constrained", load="acquiring")
-    rt.loaded_hold_tolerance_m = 0.063 + 0.01
-    did["lift_pos"] = 0.10 - 0.063
-    rt._lift_moving = True
+    rt.loaded_hold_tolerance_m = 0.0334 + 0.01
+    did["lift_pos"] = 0.10 - 0.0334
     rt.start()
     try:
         rt.arbiter.stop(clock(), "stop:test")
@@ -804,9 +806,8 @@ def test_a_stop_during_a_loaded_lift_ramp_holds_within_the_loaded_tolerance(tmp_
     rt2, core2, did2, clock2 = runtime(tmp_path / "empty")
     core2.ms = SimpleNamespace(lift_command=0.10)
     core2.cargo = SimpleNamespace(relation="free", load="none")
-    rt2.loaded_hold_tolerance_m = 0.073
+    rt2.loaded_hold_tolerance_m = 0.0434
     did2["lift_pos"] = 0.04
-    rt2._lift_moving = True
     rt2.start()
     try:
         rt2.arbiter.stop(clock2(), "stop:test")

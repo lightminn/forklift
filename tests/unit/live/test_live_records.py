@@ -290,22 +290,46 @@ def test_the_runner_closes_the_review_gaps_of_d14():
     assert '"lift": True' in rt
 
 
-def test_the_models_lift_sag_bounds_the_hold_tolerance(tmp_path):
-    """Main 2026-10-19: a hold tolerance below the lift's gravity sag would ratchet a standing lift down at every
-    event -- the runner refuses it. The sag is the model's carriage weight over its lift position gain."""
+def test_the_plants_lift_sag_bounds_the_hold_tolerance(tmp_path):
+    """Main 2026-10-19, Codex D14 impl round 4 P2-3: the sag is the engine's own -- the bodies the lift carries
+    (carriage and blades, 3.6 kg) over the lift drive's stiffness (4000 N/m: 8.8 mm, 8.5 mm observed); loaded with
+    the configured pallet 33.4 mm. A tolerance below the empty sag is refused; loaded, the tolerance is the loaded
+    sag plus 0.01 m."""
     import ast
     import math as _math
 
     src = _runner()
-    fn = next(n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.FunctionDef) and n.name == "model_lift_sag_m")
+    fn = next(n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.FunctionDef) and n.name == "plant_lift_sag_m")
+    scope = {"math": _math}
+    exec(compile(ast.Module([fn], []), "run_transport.py", "exec"), scope)
+    plant = {"body_names": ["base_link", "fork_carriage", "left_fork_tip", "right_fork_tip", "rear_left_wheel"],
+             "masses_kg": [20.1, 1.6, 1.0, 1.0, 0.55], "dof_names": ["fork_lift", "left_steer"],
+             "drive_stiffness": [4000.0, 57295.8]}
+    assert scope["plant_lift_sag_m"](plant) == pytest.approx(3.6 * 9.81 / 4000.0)
+    assert scope["plant_lift_sag_m"](plant, 10.0) == pytest.approx(13.6 * 9.81 / 4000.0)
+    assert scope["plant_lift_sag_m"]({"error": "x"}) is None
+    assert "if live_sag_ is not None and LiveTeleopLimits().lift_hold_tolerance_m < live_sag_:" in src
+    assert "live.loaded_hold_tolerance_m = live.arbiter.lift.loaded_tolerance_m =" in src
+
+
+def test_the_loaded_mass_takes_the_heaviest_pallet_source_and_the_load_on_it(tmp_path):
+    """Main 2026-10-19: the loaded sag counts the load on the pallet (site_load_defaults load_mass_kg) and the
+    heaviest of the pallet masses known (the setting, the site table, the engine's pallet body)."""
+    import ast
+    import math as _math
+
+    src = _runner()
+    fn = next(n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.FunctionDef) and n.name == "loaded_lift_mass_kg")
     scope = {"math": _math, "Path": Path}
     exec(compile(ast.Module([fn], []), "run_transport.py", "exec"), scope)
+    site = tmp_path / "site.yaml"
+    site.write_text("source: site_default\nshapes:\n  epal6: {pallet_mass_kg: 12.0, load_mass_kg: 5.0, com: centred}\n")
+    mass, why = scope["loaded_lift_mass_kg"](site, "epal6", setting_kg=10.0, engine_kg=11.0)
+    assert mass == pytest.approx(12.0 + 5.0) and why["pallet_kg"] == 12.0 and why["load_kg"] == 5.0
+    mass, why = scope["loaded_lift_mass_kg"](tmp_path / "none.yaml", "epal6", setting_kg=10.0, engine_kg=None)
+    assert mass == pytest.approx(10.0) and why["load_kg"] == 0.0
     root = Path(__file__).resolve().parents[3]
-    sag = scope["model_lift_sag_m"](root / "sim/models/dls08_measured/forklift.urdf")
-    assert sag == pytest.approx(1.6 * 9.81 / 1800.0)
-    assert scope["model_lift_sag_m"](root / "sim/models/dls08_measured/forklift.urdf", 10.0) == pytest.approx(
-        11.6 * 9.81 / 1800.0)  # with the configured 10 kg pallet: 63 mm, above a -- a warning, not a refusal
-    assert scope["model_lift_sag_m"](tmp_path / "none.urdf") is None
-    assert "if live_sag_ is not None and LiveTeleopLimits().lift_hold_tolerance_m < live_sag_:" in src
-    # loaded, the tolerance is the loaded sag (carriage plus the configured pallet mass) plus a margin (main 2026-10-19)
-    assert "loaded_sag_m" in src and "live.loaded_hold_tolerance_m = live.arbiter.lift.loaded_tolerance_m =" in src
+    mass, _ = scope["loaded_lift_mass_kg"](root / "config/site_load_defaults.yaml", "t11_06", setting_kg=10.0,
+                                           engine_kg=10.0)
+    assert mass == pytest.approx(10.0)  # both shapes carry no load today
+    assert "loaded_lift_mass_kg(args.output.parent" not in src  # the site table is the repository's

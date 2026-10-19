@@ -221,21 +221,21 @@ def test_the_hold_tolerance_is_positive_and_finite(value):
         TeleopLimits(lift_hold_tolerance_m=value)
 
 
-def test_a_stretch_ending_with_the_target_standing_keeps_it_whatever_the_sag():
-    """Main 2026-10-19 (option 1): only a ramp target moving in that tick is clipped to the measurement; at the
-    travel's end the target stands, so a loaded sag of 36 mm (above a) does not lower it."""
+def test_a_lift_left_far_behind_its_target_is_stopped_near_where_it_is():
+    """Codex D14 impl round 4 P1-1: at the travel's end the target stood (0.28 m) while the lift lagged 80 mm behind
+    -- that is not a sag, and the release must not leave it pushing on. Empty forks: within a = 0.02 m."""
     tl = lift()
     for _ in range(int(20 / DT)):
-        tl.step(True, cmd(1), armed=True, dirs={-1, 1}, measured=0.244, start_from=0.0)  # at 0.28, a 36 mm sag
-    assert tl.step(True, cmd(0), armed=True, dirs={-1, 1}, measured=0.244, start_from=None) == pytest.approx(0.28)
+        tl.step(True, cmd(1), armed=True, dirs={-1, 1}, measured=0.20, start_from=0.0)
+    assert tl.step(True, cmd(0), armed=True, dirs={-1, 1}, measured=0.20, start_from=None) == pytest.approx(0.22)
 
 
 def test_a_loaded_manual_lift_holds_within_the_loaded_tolerance():
     """Main 2026-10-19: lowering a pallet by hand (recovery: lower only) with a 63 mm loaded sag -- the stretch's end
     keeps the target within the loaded tolerance instead of dropping the load by the sag beyond a."""
     tl = lift()
-    tl.loaded_tolerance_m = 0.073
+    tl.loaded_tolerance_m = 0.0434  # 33.4 mm loaded sag (13.6 kg on 4000 N/m) + 10 mm
     for _ in range(30):
-        tl.step(True, cmd(-1), armed=True, dirs={-1}, measured=0.037, start_from=0.10, loaded=True)
-    out = tl.step(True, cmd(0), armed=True, dirs={-1}, measured=0.037, start_from=None, loaded=True)
-    assert out == pytest.approx(0.10 - 30 * 0.02 * DT)
+        tl.step(True, cmd(-1), armed=True, dirs={-1}, measured=0.10 - 0.0334, start_from=0.10, loaded=True)
+    out = tl.step(True, cmd(0), armed=True, dirs={-1}, measured=0.10 - 0.0334, start_from=None, loaded=True)
+    assert out == pytest.approx(0.10 - 30 * 0.02 * DT)  # the sag is within the loaded tolerance: kept

@@ -1716,6 +1716,40 @@ def model_lift_sag_m(urdf_path, extra_mass_kg: float = 0.0) -> float | None:
 LOADED_HOLD_MARGIN_M = 0.01  # plan D14 (main 2026-10-19): the loaded hold tolerance's margin over the loaded sag
 
 
+def loaded_lift_mass_kg(site_path, shape: str, *, setting_kg: float, engine_kg: float | None) -> tuple[float, dict]:
+    """Plan D14 (main 2026-10-19): the mass a loaded lift carries beyond its own -- the heaviest of the pallet masses
+    known (the run's setting, the site table's for the shape, the engine's pallet body) plus the load on it (the site
+    table's load_mass_kg; 0 without a table). Returns the mass and where each part came from."""
+    import yaml
+
+    site_pallet, load = None, 0.0
+    try:
+        entry = (yaml.safe_load(Path(site_path).read_text()) or {}).get("shapes", {}).get(shape) or {}
+        site_pallet = None if entry.get("pallet_mass_kg") is None else float(entry["pallet_mass_kg"])
+        load = float(entry.get("load_mass_kg") or 0.0)
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    known = [float(v) for v in (setting_kg, site_pallet, engine_kg) if v is not None and math.isfinite(float(v))]
+    pallet_kg = max(known) if known else 0.0
+    return pallet_kg + load, {"pallet_kg": pallet_kg, "load_kg": load, "setting_kg": setting_kg,
+                              "site_pallet_kg": site_pallet, "engine_pallet_kg": engine_kg}
+
+
+def plant_lift_sag_m(plant_backend: dict, extra_mass_kg: float = 0.0) -> float | None:
+    """Plan D14 (Codex impl round 4 P2-3): the lift drive's gravity sag in the engine as built -- the bodies the lift
+    carries (the carriage and the blades: their names hold "fork") plus ``extra_mass_kg`` over the fork_lift drive's
+    stiffness, from the run's plant_backend record (the scene sets 4000 N/m, not the model YAML's 1800). None when the
+    record has no such body or drive."""
+    try:
+        mass = sum(float(m) for n, m in zip(plant_backend["body_names"], plant_backend["masses_kg"]) if "fork" in n)
+        stiffness = float(dict(zip(plant_backend["dof_names"], plant_backend["drive_stiffness"]))["fork_lift"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not (mass > 0 and math.isfinite(stiffness) and stiffness > 0):
+        return None
+    return (mass + float(extra_mass_kg)) * 9.81 / stiffness
+
+
 class TrackerBook(dict):
     """The runner's path trackers by owner phase (fork spacing plan, V5 cusp arrivals; Codex leg-switch
     review). Installing a tracker stamps it with a serial (its path version), its owner phase, the time
@@ -5581,7 +5615,9 @@ def drive(S, isaac) -> None:
                                     "rate_mps": LiveTeleopLimits().lift_rate_mps}
             if LiveTeleopLimits().lift_rate_mps > float(settings["lift_rate_mps"]) + 1e-12:
                 raise ValueError("teleop lift rate above the autonomous lift_rate_mps (plan D14, main condition 2)")
-            live_sag_ = model_lift_sag_m(args.forklift_urdf)
+            live_sag_ = plant_lift_sag_m(state.get("plant_backend") or {})
+            if live_sag_ is None:
+                live_sag_ = model_lift_sag_m(args.forklift_urdf)  # no engine record: the model's (a lower bound)
             state["teleop_lift"].update(hold_tolerance_m=LiveTeleopLimits().lift_hold_tolerance_m, model_sag_m=live_sag_)
             if live_sag_ is not None and LiveTeleopLimits().lift_hold_tolerance_m < live_sag_:
                 # Main 2026-10-19: a tolerance below the sag lowers a moving empty lift's target at every event.
@@ -5590,7 +5626,17 @@ def drive(S, isaac) -> None:
             if live_sag_ is not None:
                 # Main 2026-10-19: loaded, the tolerance is the loaded sag (the configured pallet on the carriage) plus
                 # a margin -- a STOP while a loaded ramp moves keeps the target, the pallet is not set down again.
-                loaded_sag_m = model_lift_sag_m(args.forklift_urdf, float(settings["pallet_mass_kg"]))
+                try:  # the engine's pallet body, where the API gives it
+                    engine_pallet_kg_ = float(pallet.get_mass())
+                except Exception:  # noqa: BLE001 -- not every prim wrapper has it
+                    engine_pallet_kg_ = None
+                loaded_kg_, loaded_why_ = loaded_lift_mass_kg(
+                    Path(__file__).resolve().parents[2] / "config" / "site_load_defaults.yaml",
+                    Path(args.pallet_geometry).stem.replace("pallet_geometry_", ""),
+                    setting_kg=float(settings["pallet_mass_kg"]), engine_kg=engine_pallet_kg_)
+                state["teleop_lift"]["loaded_mass"] = loaded_why_
+                loaded_sag_m = (plant_lift_sag_m(state.get("plant_backend") or {}, loaded_kg_)
+                                or model_lift_sag_m(args.forklift_urdf, loaded_kg_))
                 live_loaded_tolerance_ = max(LiveTeleopLimits().lift_hold_tolerance_m, loaded_sag_m + LOADED_HOLD_MARGIN_M)
                 state["teleop_lift"].update(loaded_sag_m=loaded_sag_m, loaded_hold_tolerance_m=live_loaded_tolerance_)
             live_pallet_perm = (LivePalletPermit(obstacle["layer"].permission.config.stopping,

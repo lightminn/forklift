@@ -751,6 +751,7 @@ async def cycle_scenario(p: Probe, args):
                  "submitted_mono": time.monotonic()}
         p.report["missions_run"].append(entry)
         if not submit or submit.get("t") != "ack":
+            leg_index += 1  # refused: the next leg (Codex D14 impl round 4 P2-4 -- it asked the same one forever)
             continue
         if args.cancel_at and len(p.report["missions_run"]) == 1:
             # Persistent console plan U7/U26/U27: the first mission cancelled in a phase (after some seconds in it);
