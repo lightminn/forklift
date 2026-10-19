@@ -27,7 +27,6 @@ from forklift_core.perception.evaluation_multi import (
 from forklift_core.perception.fork_fit import ForkSetup, LoadDeclaration, load_site_defaults
 from forklift_core.perception import geometric_proposals as G
 from forklift_core.perception.instance_fit import FitParams, SceneFit, fit_scene
-from forklift_core.perception.recognition_bridge import face_distance
 from forklift_core.perception.segmentation_eval import evaluate_segmentation
 from forklift_core.perception.instance_proposals import InstanceProposal
 from forklift_core.perception.pallet_prior import load_pallet_prior
@@ -189,19 +188,21 @@ def _bin_name(lo, hi):
     return f"{lo:.1f}-" if math.isinf(hi) else f"{lo:.1f}-{hi:.1f}"
 
 
-def _instance_distance(inst, camera_x):
-    """From the truth only: the accessible face with the largest exposure, its pocket midpoint's distance."""
+def _instance_distance(inst, camera_xy):
+    """From the truth only: the accessible face with the largest exposure, the horizontal (XY) range from the camera
+    to its pocket midpoint -- the plan's distance, not the insertion-axis projection (Codex re-review 1)."""
     faces = [f for f in inst["faces"] if f["accessible"]] or inst["faces"]
     face = max(faces, key=lambda f: f.get("exposure", 0.0))
-    return face_distance(face, camera_x)
+    mid = (np.asarray(face["left_m"][:2], float) + np.asarray(face["right_m"][:2], float)) / 2
+    return float(np.hypot(*(mid - np.asarray(camera_xy, float)[:2])))
 
 
 def _segmentation_rows(sample, truth_ids, proposals):
     """Per scene: the segmentation result and one row per truth instance (eligible, distance, matched, IoU)."""
     eligible = {k for k, inst in enumerate(sample.truth["instances"]) if inst["eligible"]}
     res = evaluate_segmentation([p.mask for p in proposals], truth_ids, eligible=eligible)
-    camera_x = float(sample.input.scene.base_from_optical.translation_m[0])
-    rows = [{"instance": k, "eligible": k in eligible, "distance_m": _instance_distance(inst, camera_x),
+    camera_xy = np.asarray(sample.input.scene.base_from_optical.translation_m, float)[:2]
+    rows = [{"instance": k, "eligible": k in eligible, "distance_m": _instance_distance(inst, camera_xy),
              "matched": k in res.matched, "iou": res.ious.get(k), "split": k in res.splits}
             for k, inst in enumerate(sample.truth["instances"])]
     return {"scene_id": sample.meta["scene_id"], "case": sample.meta["case"], "shape_key": sample.meta["shape_key"],

@@ -47,4 +47,16 @@ def test_a_gate_without_samples_is_a_shortfall_not_a_pass():
     del m["gates"]["negative:negative_fp"]
     m["gates"]["known:epal6:target_error"]["n"] = 0
     out = C.choose([(0.5, m)])
-    assert not out["met"] and {"negative_fp", "target_error"} <= set(out["missing"])
+    assert not out["met"] and {"negative_fp", "target_error"} <= {k.rsplit(":", 1)[-1] for k in out["missing"]}
+
+
+def test_a_population_gate_without_samples_is_missing_even_when_another_population_has_it():
+    # Codex re-review 1: T11 miss at n=0 vanished while EPAL6's miss stood in for it -> met with nothing missing
+    full = _metrics(0, 5)
+    full["gates"]["known:t11_06:miss"] = {"n": 100, "failures": 0, "bound": 0.05}
+    empty = _metrics(0, 5)
+    empty["gates"]["known:t11_06:miss"] = {"n": 0, "failures": 0, "bound": 0.05}
+    out = C.choose([(0.3, empty), (0.5, full)])
+    assert out["chosen"] == 0.5 and out["met"]
+    out = C.choose([(0.3, empty)])
+    assert not out["met"] and "known:t11_06:miss" in out["missing"]

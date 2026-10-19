@@ -246,3 +246,16 @@ def test_segmentation_truth_with_shifted_noise_labels_is_refused(tmp_path):
                            "--detector", "geometric-proposals", "--segmentation-truth", str(data),
                            "--output", str(tmp_path / "out")], cwd=ROOT, capture_output=True, text=True)
     assert proc.returncode != 0 and "noise-free" in proc.stderr
+
+
+def test_the_segmentation_distance_is_the_horizontal_range_to_the_pocket_midpoint():
+    # Codex re-review 1: the insertion-axis projection put a 3.10 m pallet at 30 deg yaw into the 2.5-3.0 bin
+    import math
+
+    from tools import evaluate_recognition as ev
+
+    mid = (3.1 * math.cos(0.3), 3.1 * math.sin(0.3))
+    face = {"accessible": True, "exposure": 1.0, "insertion_yaw_rad": math.radians(30.0) + 0.3,
+            "left_m": [mid[0] - 0.1, mid[1] + 0.1, 0.05], "right_m": [mid[0] + 0.1, mid[1] - 0.1, 0.05]}
+    assert ev._instance_distance({"faces": [face]}, (0.0, 0.0)) == pytest.approx(3.1)
+    assert ev._instance_distance({"faces": [face]}, (0.5, 0.0)) == pytest.approx(math.dist(mid, (0.5, 0.0)))

@@ -4,10 +4,10 @@
 Reads the metrics.json of learned-fit runs (one per tau, ``learned.tau`` inside) and, per tau, the observed rates
 of the gates the plan names: miss, negative_fp, extra, deferred_unambiguous (the console request rate) and
 target_error. Every population's gate is held to its own bound (design §3.4 bounds are per shape; Codex review 1:
-pooling let EPAL 6 miss 8 % pass beside two clean populations), and a named gate with no samples in a run is a
-shortfall, never a pass. The chosen tau is the lowest one with every cell within its bound and no gate missing;
-when none is, the one with the fewest missing gates and then the least summed excess, with its shortfalls
-recorded. Low-score proposals are never dropped to reach a bound -- they stay unconfirmed candidates (plan v3).
+pooling let EPAL 6 miss 8 % pass beside two clean populations), and a population:gate cell named in any run
+but without samples in this one (or a gate no population reports) is missing, never a pass. The chosen tau is
+the lowest one with every cell within its bound and nothing missing; when none is, the one with the fewest
+missing cells and then the least summed excess, with its shortfalls recorded. Low-score proposals are never dropped to reach a bound -- they stay unconfirmed candidates (plan v3).
 """
 from __future__ import annotations
 
@@ -37,11 +37,15 @@ def cells(metrics: dict) -> dict:
 
 def choose(runs: list) -> dict:
     """runs: [(tau, metrics)] -> {"table", "chosen", "met", "shortfalls", "missing"}."""
+    # every population:gate cell named in any run is required in each (Codex re-review 1: a population's gate at
+    # n = 0 must not be stood in for by another population's)
+    required = sorted({k for _, m in runs for k in m["gates"] if k.rsplit(":", 1)[-1] in GATES})
     table = []
     for tau, metrics in sorted(runs, key=lambda r: r[0]):
         c = cells(metrics)
         excess = {k: v["rate"] - v["bound"] for k, v in c.items() if v["rate"] > v["bound"]}
-        missing = [g for g in GATES if not any(k.rsplit(":", 1)[-1] == g for k in c)]
+        missing = ([k for k in required if k not in c]
+                   + [g for g in GATES if not any(k.rsplit(":", 1)[-1] == g for k in required)])
         table.append({"tau": tau, "rates": rates(metrics), "cells": c, "excess": excess, "missing": missing,
                       "total_excess": sum(excess.values())})
     meeting = [row for row in table if not row["excess"] and not row["missing"]]

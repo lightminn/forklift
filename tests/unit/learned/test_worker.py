@@ -79,3 +79,17 @@ def test_close_kills_a_worker_that_does_not_exit(tmp_path):
                                               "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"])
     w.close(timeout_s=1.0)
     assert w.proc.poll() is not None
+
+
+def test_close_is_bounded_while_a_send_is_stuck_in_the_pipe():
+    # Codex re-review 1: closing stdin waited on the buffer lock a stuck send held (1.2 s past close(0.05))
+    import threading
+    import time
+
+    w = W.WorkerProposer(None, None, command=[sys.executable, "-c", "import time; time.sleep(60)"])
+    stuck = threading.Thread(target=lambda: W._send(w.proc.stdin, b"\0" * (4 << 20)), daemon=True)
+    stuck.start()
+    time.sleep(0.3)  # the child never reads: the 4 MB write blocks holding the writer's lock
+    t0 = time.monotonic()
+    w.close(timeout_s=0.2)
+    assert time.monotonic() - t0 < 1.0 and w.proc.poll() is not None

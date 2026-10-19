@@ -103,15 +103,22 @@ class WorkerProposer:
         self.proc.wait()
 
     def close(self, timeout_s: float = 10.0) -> None:
-        if self.proc.poll() is None:
+        """End the worker within ``timeout_s``: its stdin is closed off-thread (a send stuck in the pipe holds the
+        writer's lock -- Codex re-review 1), and a worker still alive at the deadline is killed and reaped."""
+        if self.proc.poll() is not None:
+            return
+
+        def close_stdin():
             try:
                 self.proc.stdin.close()
-            except OSError:
+            except (OSError, ValueError):
                 pass
-            try:
-                self.proc.wait(timeout=timeout_s)
-            except subprocess.TimeoutExpired:
-                self._kill()
+
+        threading.Thread(target=close_stdin, daemon=True).start()
+        try:
+            self.proc.wait(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            self._kill()
 
 
 def main(argv=None) -> int:
