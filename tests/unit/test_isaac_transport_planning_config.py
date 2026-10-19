@@ -250,13 +250,21 @@ def test_trackers_rebuilt_after_detection_use_the_same_tolerance_rules():
     # deadlocks it (docs/validation/2026-09-23-return-to-start-runs.md,
     # 2026-09-26-factory-hall-and-isaac-slam.md).
     rules = []  # (the mission plan after a detection moved to the mission core, M-a1 slice 4b-iv)
-    for node in [*ast.walk(ast.parse(SCRIPT.read_text())), *ast.walk(ast.parse(CORE.read_text()))]:
-        if not isinstance(node, ast.DictComp):
+    # (persistent console plan D5 6c: the core's rule is MissionCore.tracker_config, shared by the mission plan's and
+    # the loaded start's followers)
+    core_rule = [node for node in ast.walk(ast.parse(CORE.read_text()))
+                 if isinstance(node, ast.FunctionDef) and node.name == "tracker_config"]
+    assert len(core_rule) == 1
+    for node in [*ast.walk(ast.parse(SCRIPT.read_text())), *core_rule]:
+        if isinstance(node, ast.DictComp):
+            if ast.unparse(node.generators[0].iter) != "paths.items()":
+                continue
+            body = node.value
+        elif node in core_rule:
+            body = node
+        else:
             continue
-        source = ast.unparse(node.generators[0].iter)
-        if source != "paths.items()":
-            continue
-        for call in ast.walk(node.value):
+        for call in ast.walk(body):
             if (
                 isinstance(call, ast.Call)
                 and getattr(call.func, "id", "") == "TrackerConfig"

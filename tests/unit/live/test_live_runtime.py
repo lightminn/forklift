@@ -459,7 +459,7 @@ def test_a_completed_mission_ends_the_mission_but_not_a_live_run():
     from pathlib import Path
 
     source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
-    block = _squash(source[source.index("core.lift_and_timers(t, dt):"):][:500])
+    block = _squash(source[source.index("and core.lift_and_timers(t, dt)):"):][:500])
     assert "if live is None: break" in block
     assert 'live.end_mission(t, "complete", None)' in block and "paused_, requested_speed, curvature = True" in block
     assert "end=LiveEndHooks(stop=live_zero_wheels, unlock_wheels=live_unlock_wheels," in source
@@ -551,9 +551,12 @@ def test_the_runner_prepares_each_live_mission_from_where_the_truck_stands():
     assert 'raise ValueError("a live session needs the planning worker' in source
     # each submit is prepared once the control pose is this tick's, and stands while it is
     flat = _squash(source)
+    # (plan D5 6c: a loaded submit is prepared by its own branch, at the same point)
     assert ('if live is not None and core.commands.status in ("accepted", "preparing") and not core.job_pending(): '
-            'live_prepare(t, rear)') in flat
-    assert source.index("live_prepare(t, rear)  #") < source.index("plan_wait_ = core.jobs is not None and core.job_hold(")
+            '# persistent console plan D2: the submitted mission\'s first leg, from here (D5 6c: a loaded one\'s '
+            '# whole delivery) (live_prepare_loaded if core.commands.mission_loaded else live_prepare)(t, rear)') in flat
+    assert (source.index("(live_prepare_loaded if core.commands.mission_loaded else live_prepare)(t, rear)")
+            < source.index("plan_wait_ = core.jobs is not None and core.job_hold("))
     assert 'core.commands.status in ("idle", "done", "failed", "cancelled", "recovery_required"):' in source  # accepted is not paused
     assert 'if live is not None and core.commands.status in ("accepted", "preparing"): plan_wait_ = True' in flat
     assert "submit_refusal=core.cargo.submit_refusal()," in source  # plan D5a: the forks, at the last tick's end

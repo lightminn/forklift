@@ -461,9 +461,10 @@ def test_slam_release_replans_both_travel_legs_and_gates_on_a_stop() -> None:
     gate = CORE.read_text()  # the release gate moved to the mission core (M-a1 slice 5)
     assert "if slam[\"stop_now\"]:\n                slam_release(t)" in gate
     assert "rear = slam_rear(t)  # the released estimate" in gate
-    # (M-a3: nor while paused, resuming or cancelling, plan E3; real-time plan D8: nor while a plan is waited for)
-    assert ("if ms.phase in trackers and not releasing and not warming and not paused_ and not plan_wait_:"
-            in source)
+    # (M-a3: nor while paused, resuming or cancelling, plan E3; real-time plan D8: nor while a plan is waited for;
+    # persistent console plan D5 6c: nor in a loaded start wait)
+    assert ("if (ms.phase in trackers and not releasing and not warming and not paused_ and not plan_wait_\n"
+            "                        and not loaded_wait_):" in source)
 
 
 def test_slam_runs_see_the_pallet_again_before_the_final_straight() -> None:
