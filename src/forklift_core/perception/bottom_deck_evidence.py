@@ -17,9 +17,10 @@ block rows. One side observation is judged here:
    (behind the plane or on the floor) or occluded (in front). A gap that reads board must also be flush with the
    board band under the rows and topped at the bottom-board thickness.
 
-The face reads ``present`` only when every gap is board and passes both checks, ``absent`` when every gap is open
-(or, seen squarely, there are no block rows at all: a shelf), and ``unobserved`` otherwise. The plan's section 5
-lists what this cannot tell apart (a separate board-height object in each gap, a slab).
+The face reads ``present`` only when every gap is board and passes both checks, ``absent`` only when every gap is
+open, and ``unobserved`` otherwise -- including a face closed along its whole depth (``closed_face``): a shelf's
+columns and a board standing in front of a real face look alike from one view. The plan's section 5 lists what this
+cannot tell apart (a separate board-height object in each gap, a slab).
 """
 
 import math
@@ -63,6 +64,7 @@ class BottomDeckParams:
     bin_m: float = 0.01
     profile_pad_m: float = 0.15             # the profile spans the target's depth +- this
     row_length: tuple = (0.8, 1.5)          # x row depth (+ row_pad_m on the upper end)
+    row_min_solid: float = 0.5              # a row candidate: a stretch with no open bin, at least this share solid
     row_pad_m: float = 0.03
     gap_length: tuple = (0.4, 1.3)          # x nominal gap (+- gap_pad_m)
     gap_pad_m: float = 0.01
@@ -191,6 +193,22 @@ def _runs(profile):
     return runs
 
 
+def _row_runs(profile, min_solid):
+    """Stretches without an open bin, unknown ends trimmed, at least ``min_solid`` of them solid: a few unknown bins
+    (dropped or mixed pixels) inside a block row do not split it; an open bin does."""
+    out = []
+    for st, a, b in _runs(["O" if c == "O" else "x" for c in profile]):
+        if st == "O":
+            continue
+        while a < b and profile[a] == "?":
+            a += 1
+        while b > a and profile[b - 1] == "?":
+            b -= 1
+        if b - a >= 3 and sum(c == "S" for c in profile[a:b]) >= min_solid * (b - a):
+            out.append(["S", a, b])
+    return out
+
+
 def _top_height(z, params: BottomDeckParams) -> float:
     """The highest height with a dense cluster just below it (stray points above it do not count)."""
     zf = np.sort(z)
@@ -228,9 +246,15 @@ def evaluate_side(scene, target: BottomDeckTarget, *, face: int | None = None,
     def out(verdict, reason, **kw):
         return BottomDeckEvidence(verdict, reason, face=seen, range_m=range_m, **kw)
 
-    # 1. the side plane from block-height points near the nominal face
+    # 1. the side plane from block-height points near the nominal face; heights above a provisional floor fitted in
+    #    front of the nominal face, so a camera tilt / height error does not slide the band onto the bottom board
     rel = pts - p0
-    band = valid & (np.abs(rel @ n) <= params.side_window_m) & (pts[..., 2] >= blk[0]) & (pts[..., 2] <= blk[1]) \
+    off0, s0 = rel @ n, rel @ ex
+    near0 = valid & (off0 > params.floor_offset_m[0]) & (off0 < params.floor_offset_m[1]) \
+        & (np.abs(s0) <= half_x + params.profile_pad_m + 0.05) & (pts[..., 2] < params.floor_max_z_m)
+    pre = dominant_floor(s0[near0], off0[near0], pts[..., 2][near0], params) if near0.any() else None
+    z0 = pts[..., 2] if pre is None else pts[..., 2] - (pre.coef[0] + pre.coef[1] * s0 + pre.coef[2] * off0)
+    band = valid & (np.abs(off0) <= params.side_window_m) & (z0 >= blk[0]) & (z0 <= blk[1]) \
         & (np.abs(rel @ ex) <= half_x + params.profile_pad_m)
     if band.sum() < params.side_min_points:
         return out("unobserved", "no_side_points")
@@ -295,8 +319,12 @@ def evaluate_side(scene, target: BottomDeckTarget, *, face: int | None = None,
     profile = "".join(prof)
     solids = [r for r in _runs(prof) if r[0] == "S" and (r[2] - r[1]) >= 3]
     rd = spec.row_depth_m
-    rows = [r for r in solids
-            if params.row_length[0] * rd <= (r[2] - r[1]) * step <= params.row_length[1] * rd + params.row_pad_m]
+    hi_len = params.row_length[1] * rd + params.row_pad_m
+    # a run longer than a row may stand only at either end of the row set (a coplanar neighbour's row joined to it):
+    # it is clipped to one nominal row from its inner edge, which is the only edge a gap uses
+    rows = [r + [(r[2] - r[1]) * step > hi_len] for r in _row_runs(prof, params.row_min_solid)
+            if params.row_length[0] * rd <= (r[2] - r[1]) * step]
+    rd_bins = max(1, int(round(rd / step)))
     gaps_nom = nominal_gaps(spec)
     k = len(gaps_nom) + 1
 
@@ -307,7 +335,13 @@ def evaluate_side(scene, target: BottomDeckTarget, *, face: int | None = None,
 
     matches = []
     for i in range(len(rows) - k + 1):
-        seq = rows[i:i + k]
+        seq = [list(r) for r in rows[i:i + k]]
+        if any(r[3] for r in seq[1:-1]):
+            continue
+        if seq[0][3]:
+            seq[0][1] = seq[0][2] - rd_bins
+        if seq[-1][3]:
+            seq[-1][2] = seq[-1][1] + rd_bins
         extent = (seq[-1][2] - seq[0][1]) * step
         mid = (edges[seq[0][1]] + edges[seq[-1][2]]) / 2
         if all(gap_ok(a, b, w) for a, b, w in zip(seq, seq[1:], gaps_nom)) \
@@ -320,7 +354,9 @@ def evaluate_side(scene, target: BottomDeckTarget, *, face: int | None = None,
         solid_total = max(((r[2] - r[1]) * step for r in solids), default=0.0)
         if solid_total >= spec.overall_depth_m - params.no_rows_solid_slack_m \
                 and theta_face <= params.no_rows_max_theta_face_deg:
-            return out("absent", "no_block_rows", profile=profile, **common)
+            # a closed face: a shelf's columns, or a board standing in front of a real face -- one view cannot tell
+            # them apart (task 2 dev 5, Codex round 4), so it is not evidence of absence
+            return out("unobserved", "closed_face", profile=profile, **common)
         return out("unobserved", "rows_not_located", profile=profile, **common)
     seq = matches[0]
     gaps = [(edges[a[2]], edges[b[1]]) for a, b in zip(seq, seq[1:])]

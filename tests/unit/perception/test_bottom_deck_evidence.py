@@ -42,10 +42,15 @@ def test_x_hypothesis_seen_from_the_entry_face_is_unobserved():
     assert ev.verdict == "unobserved"
 
 
-def test_shelf_absent_only_when_the_face_is_seen_squarely():
-    assert judge(S.SideCase("epal6", "shelf", theta_e_deg=40.0)).verdict == "absent"
+def test_closed_face_is_not_evidence_of_absence():
+    """Task 2 dev 5 / Codex round 4: a shelf's closed face and a board standing in front of a real face look alike."""
+    ev = judge(S.SideCase("epal6", "shelf", theta_e_deg=40.0))
+    assert ev.verdict == "unobserved" and ev.reason == "closed_face"
     ev = judge(S.SideCase("epal6", "shelf", theta_e_deg=60.0))       # entry-face view 30 deg
     assert ev.verdict == "unobserved" and ev.theta_face_deg > 50.0
+    for offset in (0.014, 0.08):                                    # 4 mm and 70 mm clear of the face
+        ev = judge(S.SideCase("t11_06", "pallet", theta_e_deg=0.0, occluder=True, occluder_offset_m=offset))
+        assert ev.verdict != "absent", (offset, ev)
 
 
 def test_slab_reads_present():
@@ -238,3 +243,17 @@ def test_params_are_from_the_spec_not_constants():
     spec = rs.known_spec("t11_06")
     gaps = B.nominal_gaps(spec)
     assert len(gaps) == 2 and gaps[0] == pytest.approx(0.21, abs=1e-6)
+
+
+@pytest.mark.parametrize("structure,want", [("pallet", "present"), ("grounded", "absent")])
+def test_low_t11_band_survives_camera_tilt_and_height_error(structure, want):
+    """Task 2 dev: +0.9 deg tilt with -7 mm height slid T11's 27 mm block band onto the bottom board (absolute z)."""
+    case = S.SideCase("t11_06", structure, face=-1, tilt_err_deg=0.91, height_err_m=-0.0074,
+                      stand_dy_m=0.045, heading_err_deg=1.7, along_err_m=0.043, yaw_err_deg=-4.5)
+    assert judge(case).verdict == want
+
+
+def test_unknown_bins_do_not_split_a_row():
+    assert B._row_runs(list("OOSS????SSSSOOO"), 0.5) == [["S", 2, 12]]
+    assert B._row_runs(list("OOSSOSSSOO"), 0.5) == [["S", 5, 8]]          # an open bin splits; 2 bins too short
+    assert B._row_runs(list("O??S????OO"), 0.5) == []                     # mostly unknown: not a row
