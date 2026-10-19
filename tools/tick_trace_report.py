@@ -12,7 +12,7 @@ plan 5.10 (from the first ``tracking`` SLAM record's scan time on):
     next control tick, the control tick (its SLAM replies are part of it, shown apart), and on to the next wait;
     and the wait's overshoot S - (q + d), outside W_i;
   - render counts by who asked (live camera, video frame, the runner's render argument and, of those, a capture's
-    or a pocket frame's step; ``unattributed``: rendered with no request bit -- the far recognition's frames);
+    or a pocket frame's step, the far recognition's driving frame; ``unattributed``: rendered with no request bit);
   - the steps of the driving period whose world.step, or the step from its paced start to after_step, took
     longer than --stall-s (the last step included).
 
@@ -51,7 +51,7 @@ def driving_start_s(run: Path) -> float:
     return float(min(stamps))
 
 
-ASKED = BIT["live_camera"] | BIT["video"] | BIT["render_arg"]
+ASKED = BIT["live_camera"] | BIT["video"] | BIT["render_arg"] | BIT["far"]
 
 
 def kind(flags: np.ndarray) -> np.ndarray:
@@ -114,7 +114,7 @@ def report(run: Path, factor: float = 1.0, stall_s: float = 0.1) -> dict:
         "mean_ms_by_kind": {k: {p: float(np.nanmean(v[kinds == k]) * 1000) for p, v in {**parts, **apart}.items()}
                             for k in sorted(set(kinds))},
         "renders": {**{f: int(np.sum((bits & BIT[f]) != 0))
-                       for f in ("live_camera", "video", "render_arg", "capture", "pocket", "rendered")},
+                       for f in ("live_camera", "video", "render_arg", "capture", "pocket", "far", "rendered")},
                     "unattributed": int(np.sum(((bits & BIT["rendered"]) != 0) & ((bits & ASKED) == 0)))},
         "stalls": stalls,
     }

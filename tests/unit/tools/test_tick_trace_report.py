@@ -58,7 +58,7 @@ def test_the_overrun_is_the_work_past_the_spacing_by_kind(tmp_path):
     assert r["overrun_by_kind"]["render+scan"] == pytest.approx(r["overrun_per_sim_s"])
     assert r["overrun_by_kind"]["plain"] == 0.0
     assert r["overrun_by_phase"][0] == pytest.approx(r["overrun_per_sim_s"])
-    assert r["renders"] == {"live_camera": 10, "video": 0, "render_arg": 0, "capture": 0, "pocket": 0,
+    assert r["renders"] == {"live_camera": 10, "video": 0, "render_arg": 0, "capture": 0, "pocket": 0, "far": 0,
                             "rendered": 10, "unattributed": 0}
     assert r["wall_per_sim_s"] == pytest.approx(10 * 0.030 + 110 * DT, rel=1e-6)
     assert r["model_wall_per_sim_s"] == pytest.approx(r["wall_per_sim_s"], rel=1e-6)
@@ -92,11 +92,14 @@ def test_a_stall_after_the_world_step_and_on_the_last_step_are_listed(tmp_path):
     assert r["stalls"][0]["world_s"] < 0.01 and r["stalls"][0]["step_s"] == pytest.approx(0.202)
 
 
-def test_a_far_frame_render_counts_as_a_render_unattributed(tmp_path):
-    # Codex 5.12 implementation P2-4: a render with no request bit (the far frames, asked inside step_world).
-    run = make_run(tmp_path, [0.002] * 24, lambda i: ["rendered"] if i % 12 == 3 else [])
+def test_a_far_frame_is_counted_with_or_without_another_request(tmp_path):
+    # Codex 5.12 implementation P2-4 and round 2: the far bit stands on its own, a camera render on the same step
+    # included; a render with no request bit is unattributed.
+    flags = {3: ["far", "rendered"], 15: ["far", "live_camera", "rendered"], 20: ["rendered"]}
+    run = make_run(tmp_path, [0.002] * 24, lambda i: flags.get(i, []))
     r = report(run)
-    assert r["rows_by_kind"]["render"] == 2 and r["renders"]["unattributed"] == 2
+    assert r["rows_by_kind"]["render"] == 3
+    assert r["renders"]["far"] == 2 and r["renders"]["live_camera"] == 1 and r["renders"]["unattributed"] == 1
 
 
 def test_a_trace_with_other_columns_is_refused(tmp_path):
