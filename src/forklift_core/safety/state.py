@@ -52,7 +52,9 @@ def state_message(arbiter, out, safety: dict | None, *, now_mono: float, rear_ax
     blocked = (safety or {}).get("blocked") or {}
     permit = ({"limit_mps": out.permit[0], "reason": out.permit[1]} if out.permit is not None
               else {"limit_mps": blocked.get("cap"), "reason": blocked.get("reason")})
-    last = a.mission.log[-1] if a.mission is not None and a.mission.log else {}
+    # a refused submit is logged under the active mission's id; its reason is the submit's reply, not the mission's
+    last = next((r for r in reversed(a.mission.log) if not (r.get("command") == "submit" and not r.get("accepted"))),
+                {}) if a.mission is not None else {}
     return {
         "t": "state", "state_seq": a.ticks.next_seq(), "session_epoch": a.session_epoch,
         "mode": out.mode, "stop_kind": out.stop_kind, "control_gen": out.control_gen, "armed": out.armed,

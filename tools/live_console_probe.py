@@ -886,11 +886,18 @@ async def cycle_scenario(p: Probe, args):
             statuses_ = []
             stop_by_ = time.monotonic() + args.mission_timeout_s
             while time.monotonic() < stop_by_ and p.closed_code is None:
-                status_ = ((p.state or {}).get("mission") or {}).get("status")
+                mission_ = (p.state or {}).get("mission") or {}
+                status_ = mission_.get("status")
                 if status_ and (not statuses_ or statuses_[-1] != status_):
                     statuses_.append(status_)
                 if p.state is not None and ended_(p.state):
                     break
+                if (status_ == "paused" and str(mission_.get("phase") or "").startswith("recover_")
+                        and "recovery_resume" not in wait_):
+                    # Plan D4: the cancel stood with the forks in the pocket, so it became a recovery, and the PAUSED
+                    # mode pauses that at once; nothing moves until the operator resumes it (U30 pc15).
+                    wait_["recovery_resume"] = await p.request_until_standing("mission_resume",
+                                                                              mission_id=submit.get("mission_id"))
                 await asyncio.sleep(0.1)
             wait_["after_cancel_statuses"] = statuses_
         if args.cancel_at and len(p.report["missions_run"]) == 1:

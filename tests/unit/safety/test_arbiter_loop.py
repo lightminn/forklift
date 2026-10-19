@@ -203,6 +203,20 @@ def test_an_ended_mission_shows_its_end_reason_not_an_earlier_refused_resume():
     assert state_message(loop.a, out, running, now_mono=loop.t)["mission"]["reason"] == "path_blocked"
 
 
+def test_a_refused_submit_does_not_become_the_active_missions_reason():
+    """U30 pc15: a submit refused mission_active is logged under the active mission's id; the paused mission's
+    reason showed "mission_active" (the refusal belongs to the submit's reply, not to the mission)."""
+    loop = Loop()
+    loop.m.log.append({"t": 1.0, "command": "stop_kind:controlled", "accepted": True, "reason": None,
+                       "mission_id": "m1", "status": "paused"})
+    loop.m.log.append({"t": 2.0, "command": "submit", "accepted": False, "reason": "mission_active",
+                       "mission_id": "m1", "status": "paused"})
+    safety = dict(SAFE, mission={"id": "m1", "status": "paused", "phase": "recover_lower"})
+    out = loop.a.step(loop.t, safety, (0.0, 0.0), {"measured_mps": 0.0, "measured_kappa": 0.0,
+                                                   "steering_error_rad": 0.0, "permit": loop.permit})
+    assert state_message(loop.a, out, safety, now_mono=loop.t)["mission"]["reason"] is None
+
+
 def test_a_live_load_names_its_pallet_after_the_mission_ended():
     """Plan D5a (Codex round 1 P3): the mission is cleared the tick after its end; the carried pallet stays drawn."""
     loop = Loop()
