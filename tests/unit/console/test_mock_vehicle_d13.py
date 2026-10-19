@@ -238,3 +238,20 @@ def test_a_destination_another_pallet_stands_on_is_occupied(env):
     v.targets_revision += 1
     r = c.send("mission_submit", pallet_id=p1.pallet_id, destination_id="D-A", targets_revision=v.targets_revision)
     assert r["reason"] == "destination_occupied"
+
+
+def test_the_fake_vehicle_verifies_the_place_only_at_done(env):
+    """Codex D3 impl round 1 P3: it set the place when the lowering ended; cancelled after that, the same
+    destination was refused already_there while the live runner takes it."""
+    v, clock = env
+    c = Client(v)
+    c.take_lease()
+    pallet = v.world.pallets[0]
+    mid = submit(c, v, pallet=pallet.pallet_id, dest="D-A")
+    for _ in range(4000):  # until the lowering has ended, before done
+        clock.t += 0.05
+        v.step(0.05)
+        if pallet.state == "delivered" or v.mission["status"] == "done":
+            break
+    assert pallet.state == "delivered" and v.mission["status"] != "done"
+    assert pallet.pallet_id not in v.at

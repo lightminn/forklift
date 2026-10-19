@@ -153,8 +153,8 @@ class TargetsBook:
     def _size(self, pallet: Pallet):
         if pallet.depth_m is not None and pallet.width_m is not None:
             return (float(pallet.depth_m), float(pallet.width_m))
-        if not self.shapes:
-            return None
+        if not self.shapes or pallet.kind not in self.shapes:
+            return None  # a kind outside the allowed set cannot be bounded (Codex D3 impl round 1 P2)
         # an unknown size takes the largest allowed shape (Codex D3 round 1 P2-2: the submitted one's understates)
         return (max(d for d, _ in self.shapes.values()), max(w for _, w in self.shapes.values()))
 

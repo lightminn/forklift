@@ -238,6 +238,10 @@ export const REJECT = {
   recovering: "복구 중에는 취소 대신 일시정지하세요",
   not_held: "보류 중이 아닙니다",
   "permission_denied:": "주행 허가가 거절했습니다",
+  // the fake vehicle's own (console/mock_vehicle)
+  fork_in_pocket: "포크가 팔레트 포켓 안에 있습니다",
+  load_present: "포크에 짐이 실려 있습니다",
+  resume_failed: "재개 확인에 실패했습니다",
 };
 export function rejectText(reason) {
   if (!reason) return reason;

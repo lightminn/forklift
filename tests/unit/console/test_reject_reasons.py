@@ -1,7 +1,9 @@
-"""Persistent console plan D3 item 5 (U19): every reason the vehicle can refuse a request with has a Korean text on
-the screen (console/web/js/profile.js REJECT). The reasons are read from the source: the arbiter's ``_reply`` reasons,
-and the values that flow into them followed to where they are made (the mission commands' returns, the targets
-check, the cargo's submit refusal, the message check, the request ledger). A value no rule below explains fails."""
+"""Persistent console plan D3 item 5 (U19): every reason a vehicle can refuse a request with has a Korean text on the
+screen (console/web/js/profile.js REJECT). The reasons are read from the source -- the live arbiter's ``_reply`` and
+the fake vehicle's, positional or ``reason=`` -- and a run-time value is followed to where it is made: a name only
+through the assignment in the same function that FLOWS names (Codex D3 impl round 1 P2: a name matched by spelling
+alone let a new ``problem = "..."`` through), into the mission commands' returns, the targets check, the cargo's
+refusal and the request ledger. A value no rule explains fails the test."""
 
 import ast
 import json
@@ -9,78 +11,112 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
+ARBITER = "src/forklift_core/safety/arbiter.py"
+MOCK = "console/mock_vehicle/core.py"
+COMMANDS = ("src/forklift_core/mission/commands.py",
+            frozenset({"_submit", "_pause", "_resume", "_cancel", "_hold_on", "_hold_off"}))
+# a run-time value, by (file, the expression), and where it is made: ("call", the called method's name -- the name
+# must be assigned from that call in the same function -- then the sources to read), or ("direct", ...)
+FLOWS = {
+    (ARBITER, "problem"): ("call", "_generation_problem", [(ARBITER, frozenset({"_generation_problem"}))]),
+    (ARBITER, "verdict"): ("call", "admit", "ledger"),
+    (ARBITER, "rec['reason']"): ("direct", None, [COMMANDS]),
+    ("src/forklift_core/mission/commands.py", "context.submit_refusal"): (
+        "direct", None, [("src/forklift_core/mission/cargo.py", frozenset({"submit_refusal"}))]),
+    ("src/forklift_core/mission/commands.py", "refused"): (
+        "call", "check_submit", [("src/forklift_core/mission/targets.py", frozenset({"check_submit"}))]),
+    (MOCK, "verdict"): ("call", "admit", "ledger"),
+    (MOCK, "reason"): [("call", "_valid", [(MOCK, frozenset({"_valid"}))]),
+                       ("call", "_teleop_reason", [(MOCK, frozenset({"_teleop_reason"}))])],
+}
 
 
 def parse(rel):
     return ast.parse((ROOT / rel).read_text())
 
 
-def strings(node, unknown, where):
-    """The reason strings an expression can be; a run-time value goes to ``unknown``."""
+def enclosing(tree):
+    """Each node's innermost enclosing function."""
+    owner = {}
+    for fn in ast.walk(tree):
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for node in ast.walk(fn):
+                owner[id(node)] = fn  # a nested function walked later overrides: innermost wins
+    return owner
+
+
+def called(value):
+    func = value.func if isinstance(value, ast.Call) else None
+    return getattr(func, "attr", None) or getattr(func, "id", None)
+
+
+def assigned_from(fn, name, method):
+    """Whether ``name`` is assigned in ``fn`` only from calls to ``method`` (a tuple target's first element too)."""
+    sources = []
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                names = [target] if isinstance(target, ast.Name) else list(getattr(target, "elts", []))[:1]
+                if any(isinstance(n, ast.Name) and n.id == name for n in names):
+                    sources.append(node.value)
+    return bool(sources) and all(called(v) == method for v in sources)
+
+
+def strings(node, rel, fn, unknown, pending):
     if isinstance(node, ast.Constant):
         return set() if node.value is None else {str(node.value)}
     if isinstance(node, ast.IfExp):
-        return strings(node.body, unknown, where) | strings(node.orelse, unknown, where)
-    unknown.append((where, ast.unparse(node)))
+        return strings(node.body, rel, fn, unknown, pending) | strings(node.orelse, rel, fn, unknown, pending)
+    key = (rel, ast.unparse(node))
+    flow = FLOWS.get(key)
+    if flow is None:
+        unknown.append(key)
+        return set()
+    for how, method, targets in (flow if isinstance(flow, list) else [flow]):
+        if how == "direct" or (isinstance(node, ast.Name) and fn is not None and assigned_from(fn, node.id, method)):
+            pending.append(targets)
+            return set()
+    unknown.append(key)  # the name is not made where any rule says
     return set()
 
 
-def returns(rel, names, unknown):
+def returns(rel, names, unknown, pending):
     found = set()
-    for node in ast.walk(parse(rel)):
-        if isinstance(node, ast.FunctionDef) and node.name in names:
-            for ret in ast.walk(node):
+    for fn in ast.walk(parse(rel)):
+        if isinstance(fn, ast.FunctionDef) and fn.name in names:
+            for ret in ast.walk(fn):
                 if isinstance(ret, ast.Return) and ret.value is not None:
-                    found |= strings(ret.value, unknown, (rel, node.name))
+                    found |= strings(ret.value, rel, fn, unknown, pending)
     return found
 
 
-# run-time values, by (file, function or "_reply"), and the sources they come from
-FLOWS = {
-    ("src/forklift_core/safety/arbiter.py", "problem"): ("src/forklift_core/safety/arbiter.py", {"_generation_problem"}),
-    ("src/forklift_core/safety/arbiter.py", "verdict"): "ledger",  # RequestLedger.admit: stale / busy
-    ("src/forklift_core/safety/arbiter.py", "rec['reason']"): "commands",
-    (("src/forklift_core/mission/commands.py", "_submit"), "context.submit_refusal"): (
-        "src/forklift_core/mission/cargo.py", {"submit_refusal"}),
-    (("src/forklift_core/mission/commands.py", "_submit"), "refused"): (
-        "src/forklift_core/mission/targets.py", {"check_submit"}),
-}
-COMMANDS = {"_submit", "_pause", "_resume", "_cancel", "_hold_on", "_hold_off"}
+def replies(rel, tree, unknown, pending):
+    """Every reason given to ``_reply``: the live arbiter's third positional argument, ``reason=`` anywhere."""
+    found, owner = set(), enclosing(tree)
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "_reply"):
+            continue
+        arg = next((k.value for k in node.keywords if k.arg == "reason"), None)
+        if arg is None and len(node.args) >= 3:
+            arg = node.args[2]
+        if arg is not None:
+            found |= strings(arg, rel, owner.get(id(node)), unknown, pending)
+    return found
 
 
 def vehicle_reasons():
-    unknown, found = [], set()
-    arbiter = "src/forklift_core/safety/arbiter.py"
-    for node in ast.walk(parse(arbiter)):
-        if isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "_reply" and len(node.args) >= 3:
-            found |= strings(node.args[2], unknown, arbiter)
-    pending, done = list(unknown), set()
-    unknown.clear()
+    unknown, pending, found, seen = [], [], set(), set()
+    for rel in (ARBITER, MOCK):
+        found |= replies(rel, parse(rel), unknown, pending)
     while pending:
-        key = pending.pop()
-        if key in done:
+        targets = pending.pop()
+        if targets == "ledger":
+            found |= {"stale", "busy"}  # RequestLedger.admit's refusals
             continue
-        done.add(key)
-        flow = FLOWS.get(key)
-        if flow is None:
-            unknown.append(key)
-        elif flow == "ledger":
-            found |= {"stale", "busy"}
-        elif flow == "commands":
-            more = []
-            found |= returns("src/forklift_core/mission/commands.py", COMMANDS, more)
-            pending.extend(more)
-        else:
-            rel, names = flow
-            more = []
-            if names is None:
-                tree = parse(rel)
-                for ret in ast.walk(tree):
-                    if isinstance(ret, ast.Return) and ret.value is not None:
-                        found |= strings(ret.value, more, rel)
-            else:
-                found |= returns(rel, names, more)
-            pending.extend(more)
+        for rel, names in targets:
+            if (rel, names) not in seen:
+                seen.add((rel, names))
+                found |= returns(rel, names, unknown, pending)
     return found, unknown
 
 
@@ -98,16 +134,30 @@ def explained(reason, keys):
     return reason in keys or any(k.endswith(":") and reason.startswith(k) for k in keys)
 
 
-def test_every_reason_the_vehicle_can_refuse_with_has_a_text():
+def test_every_reason_a_vehicle_can_refuse_with_has_a_text():
     found, unknown = vehicle_reasons()
     assert not unknown, f"run-time refusal reasons with no rule in FLOWS: {unknown}"
-    keys = table()
-    missing = sorted(r for r in found if not explained(r, keys))
+    missing = sorted(r for r in found if not explained(r, table()))
     assert not missing, missing
 
 
-def test_the_scan_reaches_through_the_flows():
-    """Codex D3 round 1 P2-3: not_running (a pause's return) and cargo_held (the cargo's refusal) were missed."""
+def test_the_scan_reaches_through_the_flows_and_the_fake_vehicle():
+    """Codex D3 round 1 P2-3 (not_running, cargo_held) and impl round 1 P3 (the fake vehicle's reasons)."""
     found, _ = vehicle_reasons()
     assert {"not_running", "cargo_held", "already_there", "destination_occupied", "localization_lost", "stale",
-            "busy", "no_feedback:rear_axle_speed", "stale_targets", "invalid"} <= found
+            "busy", "no_feedback:rear_axle_speed", "stale_targets", "invalid", "fork_in_pocket", "load_present",
+            "resume_failed"} <= found
+
+
+def test_a_keyword_reason_and_a_name_made_elsewhere_are_caught():
+    """Codex D3 impl round 1 P2: reason="novel" passed; so did problem = "novel" returned through _reply."""
+    tree = ast.parse("class A:\n"
+                     "    def f(self, kind, rid):\n"
+                     "        return self._reply(kind, rid, reason='novel_reply')\n"
+                     "    def g(self, kind, rid):\n"
+                     "        problem = 'novel_flow'\n"
+                     "        return self._reply(kind, rid, problem)\n")
+    unknown, pending = [], []
+    found = replies(ARBITER, tree, unknown, pending)
+    assert "novel_reply" in found and not explained("novel_reply", table())
+    assert unknown == [(ARBITER, "problem")] and not pending

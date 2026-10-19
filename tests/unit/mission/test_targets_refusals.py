@@ -109,3 +109,16 @@ def test_the_order_is_invalid_then_already_there_then_occupied():
     b.add_pallet("P-2", "epal6", Pose(1.0, 0.0, 0.0), depth_m=EPAL[0], width_m=EPAL[1])
     assert b.check_submit("P-1", "D-0", b.revision) == "already_there"  # before the occupancy by P-2
     assert b.check_submit("P-1", "D-0", b.revision - 1) == "stale_targets"
+
+
+def test_a_sizeless_pallet_registered_before_the_shapes_is_still_bounded_by_its_kind():
+    """Codex D3 impl round 1 P2: registered with no shape set, its kind was never checked again."""
+    b = TargetsBook()
+    b.add_pallet("P-2", "t11_06", Pose(9.62, 0.0, 0.0))  # no shapes yet: allowed
+    b.add_shape("epal6", *EPAL)  # only the EPAL known: the T11 cannot be bounded
+    b.add_pallet("P-1", "epal6", Pose(1.0, 0.0, 0.0), depth_m=EPAL[0], width_m=EPAL[1])
+    b.add_destination("D-1", Pose(9.0, 0.0, 0.0))
+    b.put_down("P-2", Pose(9.62, 0.0, 0.0), uncertainty_m=0.0)
+    assert b.check_submit("P-1", "D-1", b.revision) == "invalid"
+    b.add_shape("t11_06", *T11)
+    assert b.check_submit("P-1", "D-1", b.revision) == "destination_occupied"

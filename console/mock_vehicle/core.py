@@ -1306,6 +1306,7 @@ class MockVehicle:
         m["phase_index"] += 1
         if m["phase_index"] >= len(PHASES):
             m["status"], m["phase"] = "done", "complete"
+            self.at[m["pallet_id"]] = m["destination_id"]  # plan D3: verified there only at done (as live)
             m["legs"] = []
             self._event("mission", mission_id=m["mission_id"], status="done")
             self._set_mode("PAUSED")
@@ -1352,7 +1353,6 @@ class MockVehicle:
                 if phase == "lower":
                     p = self._pallet()
                     p.state, self.world.carried = "delivered", None
-                    self.at[p.pallet_id] = m["destination_id"]  # the fake vehicle always puts it there
                     p.pose = self._carried_pose(p)
                     self.targets_revision += 1
                 self._next_phase()
