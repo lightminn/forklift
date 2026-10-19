@@ -809,6 +809,47 @@ async def cycle_scenario(p: Probe, args):
         if not submit or submit.get("t") != "ack":
             leg_index += 1  # refused: the next leg (Codex D14 impl round 4 P2-4 -- it asked the same one forever)
             continue
+        if args.stop_wait_at and len(p.report["missions_run"]) == 1:
+            # Persistent console plan U30: STOP the first mission while the near field tracks (PHASE[:SECONDS in
+            # it]), stand STOPPED for --stop-wait-sim-s of sim time (read from the video frames' stamps: the pacing
+            # is not the factor), then rearm and cancel it; the cycle goes on with the next leg.
+            phase_, _, after_ = args.stop_wait_at.partition(":")
+            after_s_ = float(after_ or 0.0)
+            reached_ = await p.until(lambda s: ((s.get("mission") or {}).get("phase") == phase_
+                                                and ((s.get("mission") or {}).get("phase_elapsed_s") or 0.0) >= after_s_),
+                                     args.mission_timeout_s, label=f"stop_wait:{phase_}")
+
+            def sim_now_():
+                return p.frames[-1]["stamp_ns"] / 1e9 if p.frames and p.frames[-1].get("stamp_ns") else None
+
+            wait_ = entry["stop_wait"] = {"phase_reached": bool(reached_),
+                                          "stop_reply": await p.request("stop", source="key")}
+            await p.until(lambda s: s.get("mode") == "STOPPED", 5, label="stopped_for_wait")
+            wait_["start_mono"], wait_["start_wall"], wait_["start_sim_s"] = time.monotonic(), time.time(), sim_now_()
+            wall_end_ = time.monotonic() + args.stop_wait_wall_s
+            while p.closed_code is None and time.monotonic() < wall_end_:
+                now_ = sim_now_()
+                if now_ is not None and wait_["start_sim_s"] is not None and now_ - wait_["start_sim_s"] >= args.stop_wait_sim_s:
+                    break
+                await p.echo()
+                await asyncio.sleep(0.5)
+            wait_["end_mono"], wait_["end_wall"], wait_["end_sim_s"] = time.monotonic(), time.time(), sim_now_()  # the RSS samples are wall-stamped
+            wait_["mode_at_end"] = (p.state or {}).get("mode")
+            wait_["mission_at_end"] = (p.state or {}).get("mission")
+            await p.until(p.standing, 20, label="standing_after_wait")
+            wait_["rearm"] = await p.request_until_standing("rearm")
+            await p.until(lambda s: s.get("mode") == "PAUSED", 5, label="paused_after_rearm")
+            wait_["cancel_reply"] = await p.request("mission_cancel", mission_id=submit.get("mission_id"))
+            statuses_ = []
+            stop_by_ = time.monotonic() + args.mission_timeout_s
+            while time.monotonic() < stop_by_ and p.closed_code is None:
+                status_ = ((p.state or {}).get("mission") or {}).get("status")
+                if status_ and (not statuses_ or statuses_[-1] != status_):
+                    statuses_.append(status_)
+                if ((p.state or {}).get("last_result") or {}).get("seq", 0) > seen:
+                    break
+                await asyncio.sleep(0.1)
+            wait_["after_cancel_statuses"] = statuses_
         if args.cancel_at and len(p.report["missions_run"]) == 1:
             # Persistent console plan U7/U26/U27: the first mission cancelled in a phase (after some seconds in it);
             # the statuses it goes through to its end are kept (recovering, then cancelled or recovery_required).
@@ -975,6 +1016,11 @@ def main():
     ap.add_argument("--cancel-at", default="", help="cycle scenario: cancel the first mission in PHASE[:SECONDS in it] "
                     "or PHASE@METRES (at most METRES left of its leg) or transport@docked (on the docked straight) "
                     "(plan U7/U26/U27)")
+    ap.add_argument("--stop-wait-at", default="", help="cycle scenario: STOP the first mission in PHASE[:SECONDS in "
+                    "it], stand --stop-wait-sim-s, rearm and cancel it (plan U30)")
+    ap.add_argument("--stop-wait-sim-s", type=float, default=1500.0, help="cycle scenario: the STOP's stand (sim s)")
+    ap.add_argument("--stop-wait-wall-s", type=float, default=7200.0,
+                    help="cycle scenario: the STOP's stand at most (wall s), when the frames' time does not get there")
     ap.add_argument("--idle-s", type=float, default=0.0, help="cycle scenario: stay connected this long first (wall s)")
     ap.add_argument("--pre-teleop-speed", type=float, default=0.5)
     ap.add_argument("--pre-teleop-curvature", type=float, default=0.3)
