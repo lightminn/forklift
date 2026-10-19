@@ -47,8 +47,24 @@ class WorkerFailure(RuntimeError):
     """The worker could not be started."""
 
 
+def _test_death(name: str) -> None:
+    """Tests only (persistent console plan section 4, U23): ``FORKLIFT_TEST_WORKER_DIE_ONCE=<job>:<marker path>``
+    -- the worker exits as it starts that job, once (the marker it leaves keeps the next worker alive), so the job
+    fails with no answer to race."""
+    spec = os.environ.get("FORKLIFT_TEST_WORKER_DIE_ONCE")
+    if not spec:
+        return
+    job, _, marker = spec.partition(":")
+    if job == name and marker and not os.path.exists(marker):
+        with open(marker, "w") as f:
+            f.write(str(os.getpid()))
+        os._exit(9)
+
+
 def _run(name: str, payload: dict):
     from forklift_core.planning import pallet_mission as pm
+
+    _test_death(name)
 
     if name == "plan_transport":
         kwargs = dict(payload["kwargs"])

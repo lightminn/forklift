@@ -5,6 +5,7 @@ asked again with the tight arguments exactly when its first status is a retry st
 transport plan and its objects both ways, a job's failure as text, the control thread's calls never wait (a slow
 job, a discard that restarts the worker), a dead worker fails the job it had, and close ends it."""
 
+import os
 import time
 from types import SimpleNamespace
 
@@ -275,3 +276,17 @@ def test_a_worker_takes_the_kernels_it_is_given_and_says_so():
     finally:
         plain.close()
     assert pw.worker_env("numba")["FORKLIFT_KERNELS"] == "numba" and kernels.mode() in kernels.MODES
+
+
+def test_the_test_death_kills_the_worker_once_as_it_starts_that_job(tmp_path):
+    """Persistent console plan section 4 (U23): the worker dies inside the job, so the job fails without racing its
+    answer (Codex injection review round 2 P2); the marker keeps the restarted worker alive."""
+    marker = tmp_path / "died"
+    w = pw.PlanWorker(env={**os.environ, "FORKLIFT_TEST_WORKER_DIE_ONCE": f"echo:{marker}"})
+    try:
+        ok, value = wait_for(w, w.submit("echo", {"value": 1}))
+        assert not ok and marker.exists()
+        ok, value = wait_for(w, w.submit("echo", {"value": 2}))  # on the restarted worker, which stays up
+        assert ok and value["result"] == 2 and w.restarts == 1
+    finally:
+        w.close()

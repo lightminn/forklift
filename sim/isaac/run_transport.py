@@ -5844,7 +5844,13 @@ def drive(S, isaac) -> None:
                 from forklift_core.planning.plan_worker import PlanWorker, worker_env
 
                 # plan D11: the worker runs the live kernels, warmed up before it says ready (restarts too)
-                core.jobs = PlanWorker(env=worker_env(live_kernels.mode()))
+                env_ = worker_env(live_kernels.mode())
+                if args.live_test_kill_worker and args.live_epoch in (None, 1):
+                    # Plan section 4 (U23): the worker exits as it starts the first preparation, inside the job -- no
+                    # answer to race (Codex injection review round 2); the marker keeps the restarted one up
+                    env_["FORKLIFT_TEST_WORKER_DIE_ONCE"] = f"observe_ladder:{Path(args.output) / 'worker_died'}"
+                    state.setdefault("live_test_injections", []).append({"worker_dies_at": "observe_ladder"})
+                core.jobs = PlanWorker(env=env_)
                 state["async_plan_worker"] = {"pid": core.jobs.proc.pid, "kernels": core.jobs.kernels}
             else:  # persistent console plan D2: each mission is prepared by the worker
                 raise ValueError("a live session needs the planning worker (FORKLIFT_LIVE_ASYNC_PLAN=0 is batch-only)")
@@ -6304,24 +6310,6 @@ def drive(S, isaac) -> None:
                            "truth_destination": live_session_["truth"].get(mission_.destination_id, dest_),
                            "pallet_id": mission_.pallet_id, "destination_id": mission_.destination_id}
                 core.prepare_request(t_, rear_, inputs_, payload_)
-                if args.live_test_kill_worker and args.live_epoch in (None, 1) and not live_injected_.get("worker"):
-                    # Plan section 4 (U23): the worker dies with this preparation's job on it -- killed only once the
-                    # job is written to it (queued is not enough: a restart then resends it and it succeeds, Codex)
-                    live_injected_["worker"] = True
-                    job_ = core.pending.job if core.pending is not None else None
-                    sent_by_ = time.monotonic() + 2.0
-                    while time.monotonic() < sent_by_:
-                        with core.jobs._lock:
-                            if job_ in core.jobs._sent:
-                                break
-                        time.sleep(0.005)
-                    proc_ = getattr(core.jobs, "proc", None)
-                    sent_ = job_ is not None and job_ in list(core.jobs._sent)
-                    if sent_ and proc_ is not None and proc_.poll() is None:
-                        proc_.kill()
-                    state.setdefault("live_test_injections", []).append(
-                        {"killed_worker": int(proc_.pid) if (sent_ and proc_ is not None) else None,
-                         "job_sent": bool(sent_), "t": float(t_)})
 
             def live_mission_ready(t_, inputs_):
                 """What can fail in the adoption, made before anything changes (Codex stage 2 impl P2-6): the
