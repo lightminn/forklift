@@ -36,6 +36,19 @@ def nms(boxes, scores, iou):
     return keep
 
 
+def _linear_weights(n_out: int, n_in: int) -> np.ndarray:
+    """(n_out, n_in) bilinear weights with half-pixel centres (align_corners=False, as torch interpolate)."""
+    x = (np.arange(n_out) + 0.5) * n_in / n_out - 0.5
+    x = np.clip(x, 0, n_in - 1)
+    lo = np.floor(x).astype(int)
+    hi = np.minimum(lo + 1, n_in - 1)
+    frac = x - lo
+    w = np.zeros((n_out, n_in))
+    w[np.arange(n_out), lo] += 1 - frac
+    w[np.arange(n_out), hi] += frac
+    return w
+
+
 class LearnedProposer:
     def __init__(self, onnx_path=None, *, providers=None, conf: float = 0.05, iou: float = 0.6, max_det: int = 8,
                  session=None):
@@ -63,14 +76,15 @@ class LearnedProposer:
         keep = nms(boxes, scores, self.iou)[: self.max_det]
         proto = protos[0]
         nm, ph, pw = proto.shape
+        wy, wx = _linear_weights(h, ph), _linear_weights(w, pw)
+        rows, cols = np.arange(h)[:, None], np.arange(w)[None, :]
         out = []
         for rank, i in enumerate(keep):
-            logits = (p[i, 5:5 + nm] @ proto.reshape(nm, -1)).reshape(ph, pw)
-            mask = np.repeat(np.repeat(1.0 / (1.0 + np.exp(-logits)), h // ph, axis=0), w // pw, axis=1) > 0.5
-            x0, y0, x1, y1 = (int(round(v)) for v in boxes[i])
-            crop = np.zeros_like(mask)
-            crop[max(0, y0):max(0, y1), max(0, x0):max(0, x1)] = True
-            mask &= crop
+            # Ultralytics' native-resolution masks: logits upsampled bilinearly, cropped to the box at pixel
+            # indices (x0 <= c < x1), positive logit (sigmoid > 0.5)
+            logits = wy @ (p[i, 5:5 + nm] @ proto.reshape(nm, -1)).reshape(ph, pw) @ wx.T
+            x0, y0, x1, y1 = boxes[i]
+            mask = (logits > 0.0) & (cols >= x0) & (cols < x1) & (rows >= y0) & (rows < y1)
             if mask.any():
                 out.append(InstanceProposal(f"l{rank}", mask, float(np.clip(scores[i], 0.0, 1.0)), "learned"))
         return out
