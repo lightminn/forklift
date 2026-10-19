@@ -183,6 +183,7 @@ export function render(m) {
   for (const [id, be] of [["be-real", "real"], ["be-isaac", "isaac"], ["be-mock", "mock"]]) $(id).setAttribute("aria-pressed", String(w?.backend === be));
   if (!st) {
     $("m-open").disabled = true;
+    $("mission-gate").textContent = ""; // an old session's recovery hint (Codex U30 review round 2 P3)
     renderSession(m, null, lease, prof, monitor); // a new session's welcome before its first state: nothing old stays
     return;
   }
