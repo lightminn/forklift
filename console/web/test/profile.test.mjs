@@ -204,8 +204,11 @@ test("a forbidden drive names the policy's reason, not the permit's code (2026-1
   assert.equal(permitText({ reason: "clear", limit_mps: 0.3 }, "pacing"), "clear · 상한 0.30 m/s");
 });
 
-test("a reject without a Korean text shows its code", () => {
-  assert.equal(rejectText("mission_active"), "mission_active");
+test("a reject reads in Korean; a head reason keeps its tail; an unknown code shows as it is", () => {
+  assert.match(rejectText("mission_active"), /진행 중인 미션/);
+  assert.match(rejectText("destination_occupied"), /다른 팔레트/);
+  assert.match(rejectText("no_feedback:rear_axle_speed"), /피드백.*\(rear_axle_speed\)/);
+  assert.equal(rejectText("brand_new_code"), "brand_new_code");
 });
 
 test("plan D14: each lift button follows the allowed directions, and the travel is the state's", async () => {

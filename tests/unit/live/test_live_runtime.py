@@ -544,7 +544,7 @@ def test_the_runner_prepares_each_live_mission_from_where_the_truck_stands():
     assert source.index("live_prepare(t, rear)  #") < source.index("plan_wait_ = core.jobs is not None and core.job_hold(")
     assert 'core.commands.status in ("idle", "done", "failed", "cancelled", "recovery_required"):' in source  # accepted is not paused
     assert 'if live is not None and core.commands.status in ("accepted", "preparing"): plan_wait_ = True' in flat
-    assert "submit_refusal=core.cargo.submit_refusal())" in source  # plan D5a: the forks, at the last tick's end
+    assert "submit_refusal=core.cargo.submit_refusal()," in source  # plan D5a: the forks, at the last tick's end
     # the adoption's runner part and the session's baseline, before the console starts
     assert "nonlocal scenario, truth_destination, initial_pallet, pickup_obstacle, pickup_zone, pickup_bounds" in source
     start = source.index("            live.start()  # after the SLAM warm-up")
@@ -841,3 +841,19 @@ def test_a_preparation_ended_with_advice_puts_it_in_the_result(tmp_path):
     assert core.commands.terminate("failed", 15.0, "prepare:all_candidates_failed:invalid_start", advice=advice)
     rt.collect_end(16.0)
     assert rt.results.last["advice"] == advice and rt.results.last["ended_s"] == 15.0
+
+
+def test_a_passed_delivery_verifies_the_pallet_at_its_destination(tmp_path):
+    """Persistent console plan D3 (3rd ed.): the verified place is set only once the delivery verdict passed."""
+    rt, core, order = ending(tmp_path)
+    rt.end_mission(20.0, "complete", None)
+    assert core.targets.pallets["P-1"].at == "D-1"
+
+
+def test_a_failed_delivery_leaves_no_verified_place(tmp_path):
+    from types import SimpleNamespace as NS
+
+    rt, core, order = ending(tmp_path, verdict=NS(ok=False, reason="Pallet missed the green destination center",
+                                                  delivery_error_m=0.081))
+    rt.end_mission(20.0, "complete", None)
+    assert core.targets.pallets["P-1"].at is None and rt.results.last["outcome"] == "failed"

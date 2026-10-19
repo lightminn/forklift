@@ -449,3 +449,19 @@ def test_a_recovery_ends_cancelled_or_recovery_required():
     m2.queue(Submit("P1", "D1"))
     (rec,) = m2.apply(21.0)  # the slot frees at the next apply, the submit judged then
     assert rec["accepted"] and not m2.recovery
+
+
+def test_a_submit_before_localization_tracks_is_refused_localization_lost():
+    """Persistent console plan D3 (3rd ed.): the tracker not yet tracking (warming_up) refuses a submit; the
+    reasons before it keep their order."""
+    from forklift_core.mission.commands import Context, Submit  # noqa: PLC0415
+
+    m = MissionCommands()
+    m.queue(Submit("P-1", "D-1", 0))
+    rec = m.apply(1.0, Context(localization_ok=False))
+    assert rec[-1]["reason"] == "localization_lost"
+    m.queue(Submit("P-1", "D-1", 0))
+    rec = m.apply(2.0, Context(localization_ok=False, clear_for_submit=False))
+    assert rec[-1]["reason"] == "recovery_required"  # a hold is said first
+    m.queue(Submit("P-1", "D-1", 0))
+    assert m.apply(3.0, Context())[-1]["accepted"]

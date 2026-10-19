@@ -203,9 +203,45 @@ export function disarmAsked(asked, prev, nowMs) {
   return Boolean(asked) && prev?.arm_gen === asked.armGen && nowMs - asked.at < 3000;
 }
 
-// A refused request's reason as the operator reads it; an unknown code is shown as it is.
-const REJECT = {
+// A refused request's reason as the operator reads it; an unknown code is shown as it is. Every reason the vehicle can
+// send is here (tests/unit/console/test_reject_reasons.py reads them from the arbiter and the mission commands); a
+// reason ending in ":" is a head (no_feedback:rear_axle_speed).
+export const REJECT = {
+  busy: "차량이 요청을 너무 많이 받고 있습니다 · 잠시 뒤 다시 보내세요",
+  invalid: "요청이 올바르지 않습니다(없는 대상이거나 형식 오류)",
+  lease_reserved: "끊긴 기기가 조종 권한을 되찾을 수 있는 시간입니다",
+  mission_active: "진행 중인 미션이 있습니다",
+  near_tracking_active: "근접 추적 중에는 일시정지할 수 없습니다",
+  "no_feedback:": "차량 피드백(측정 속도)이 없습니다",
+  no_lease: "조종 권한이 없습니다",
+  not_stopped: "차가 멈췄는지 아직 확인되지 않았습니다",
+  session_ending: "세션을 끝내는 중입니다",
+  stale: "오래된 요청입니다(연결이 바뀌었거나 그 기록이 지워졌습니다)",
+  stale_control: "그사이 제어 상태가 바뀌었습니다 · 화면을 보고 다시 보내세요",
+  stale_epoch: "차량 세션이 바뀌었습니다",
+  stale_lease: "조종 권한이 바뀌었습니다",
+  stale_targets: "대상 목록이 바뀌었습니다 · 다시 고르세요",
+  state_forbids_teleop: "지금 상태에서는 수동 조종을 할 수 없습니다",
+  stopped_locked: "정지됨 상태입니다 · 재무장을 먼저 하세요",
+  unknown_mission: "그 미션은 지금 미션이 아닙니다",
+  unsupported: "이 차량이 지원하지 않는 요청입니다",
+  stopping: "차가 멈추는 중입니다",
+  scene_damaged: "장면이 손상되어 자동 작업을 받지 않습니다 · 장면 초기화가 필요합니다",
+  recovery_required: "포크가 팔레트 안에 있거나 위치 고정 중이라 받을 수 없습니다 · 수동 복구를 먼저 하세요",
+  cargo_held: "포크에 팔레트가 실려 있습니다",
+  localization_lost: "위치 추정 준비 중입니다",
+  already_there: "그 팔레트는 이미 그 목적지에 있습니다",
+  destination_occupied: "목적지를 다른 팔레트가 차지하고 있습니다",
+  held: "수동 조종으로 보류 중입니다",
+  not_running: "실행 중인 미션이 없습니다",
+  not_paused: "일시정지된 미션이 없습니다",
+  recovering: "복구 중에는 취소 대신 일시정지하세요",
+  not_held: "보류 중이 아닙니다",
+  "permission_denied:": "주행 허가가 거절했습니다",
 };
 export function rejectText(reason) {
-  return REJECT[reason] ?? reason;
+  if (!reason) return reason;
+  if (REJECT[reason]) return REJECT[reason];
+  const head = Object.keys(REJECT).find((k) => k.endsWith(":") && reason.startsWith(k));
+  return head ? `${REJECT[head]} (${reason.slice(head.length)})` : reason;
 }

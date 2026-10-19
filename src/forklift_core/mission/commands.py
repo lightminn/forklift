@@ -79,6 +79,8 @@ class Context:
     # live: what the forks are in refuses a submit (persistent console plan D5a: recovery_required, cargo_held)
     submit_refusal: str | None = None
     scene_damaged: bool = False  # live: the scene's damage is latched (persistent console plan D6; else scene_damaged)
+    # live: the SLAM tracker tracks or holds (plan D3; warming_up -- before its scan 4 processed -- localization_lost)
+    localization_ok: bool = True
 
 
 class MissionCommands:
@@ -157,6 +159,8 @@ class MissionCommands:
             return context.submit_refusal
         if not context.clear_for_submit:
             return "recovery_required"
+        if not context.localization_ok:
+            return "localization_lost"
         if self.targets is not None:
             refused = self.targets.check_submit(command.pallet_id, command.destination_id, command.targets_revision)
             if refused is not None:

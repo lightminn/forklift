@@ -215,6 +215,7 @@ class MockVehicle:
         self.recovery = None
         self._permit_override = None
         self._booked = None
+        self.at: dict[str, str] = {}  # plan D3: where each pallet is verified to stand (set at a delivery here)
 
     # ------------------------------------------------------------------ helpers
     def _now(self) -> float:
@@ -690,8 +691,12 @@ class MockVehicle:
             (p for p in self.world.pallets if p.pallet_id == msg.get("pallet_id")), None
         )
         dest = self.world.destinations.get(msg.get("destination_id"))
-        if pallet is None or dest is None or pallet.state != "available":
-            return self._reply(msg, reason="invalid")
+        if pallet is None or dest is None or pallet.state not in ("available", "delivered"):
+            return self._reply(msg, reason="invalid")  # delivered: available again where it lies (plan D3)
+        if self.at.get(pallet.pallet_id) == msg.get("destination_id"):
+            return self._reply(msg, reason="already_there")
+        if self._occupied(pallet, dest):
+            return self._reply(msg, reason="destination_occupied")
         if self.forks_in_pocket:  # a new job starts with an empty observe approach
             return self._reply(msg, reason="fork_in_pocket")
         if self._load() is not None:
@@ -720,6 +725,21 @@ class MockVehicle:
         self._set_mode("AUTO")
         self._event("mission", mission_id=self.mission["mission_id"], status="accepted")
         return self._reply(msg, mission_id=self.mission["mission_id"])
+
+    def _occupied(self, pallet, dest) -> bool:
+        """Plan D3, as the targets book: another pallet on the floor (its outline grown 0.21 m) overlapping the
+        submitted one placed at the destination."""
+        from forklift_core.safety.pallet_permit import obb_overlap  # noqa: PLC0415
+
+        for other in self.world.pallets:
+            if other is pallet or other.state == "carried":
+                continue
+            grow = 0.21
+            if obb_overlap([[other.pose.x_m, other.pose.y_m]],
+                           (other.depth_m / 2 + grow, other.width_m / 2 + grow), [other.pose.yaw_rad],
+                           (dest.x_m, dest.y_m), (pallet.depth_m / 2, pallet.width_m / 2), dest.yaw_rad)[0]:
+                return True
+        return False
 
     def _mission_matches(self, msg: dict) -> bool:
         return (
@@ -1305,6 +1325,7 @@ class MockVehicle:
         p = self._pallet()
         if m["phase"] == "lift":
             p.state, self.world.carried = "carried", p.pallet_id
+            self.at.pop(p.pallet_id, None)
             self.targets_revision += 1  # contract 5.1: a target's state changed
         self._event("phase", phase=m["phase"])
 
@@ -1331,6 +1352,7 @@ class MockVehicle:
                 if phase == "lower":
                     p = self._pallet()
                     p.state, self.world.carried = "delivered", None
+                    self.at[p.pallet_id] = m["destination_id"]  # the fake vehicle always puts it there
                     p.pose = self._carried_pose(p)
                     self.targets_revision += 1
                 self._next_phase()

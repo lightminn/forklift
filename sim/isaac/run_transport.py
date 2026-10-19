@@ -4898,10 +4898,22 @@ def drive(S, isaac) -> None:
         return "none"
 
     # M-a4 (plan D7): the scenario's pallet and destination are the targets list; the submit names them.
+    # Persistent console plan D3: the allowed pallet shapes (an unknown size is bounded by the largest) -- the two the
+    # assignment requires and the run's own.
+    from forklift_core.perception.pallet_geometry import load_pallet_geometry as load_shape_
+
+    repo_ = Path(__file__).resolve().parents[2]
+    for shape_path_ in {repo_ / "config/pallet_geometry_epal6.yaml", repo_ / "config/pallet_geometry_t11_06.yaml",
+                        Path(args.pallet_geometry).resolve()}:
+        if shape_path_.exists():
+            shape_ = load_shape_(shape_path_)
+            core.targets.add_shape(shape_path_.stem, float(shape_.overall_depth_m), float(shape_.overall_width_m))
     core.targets.add_pallet("P-1", Path(args.pallet_geometry).stem, MissionTargetPose(
         float(scenario.pickup.x_m), float(scenario.pickup.y_m), float(scenario.pickup.yaw_rad)),
         depth_m=float(args.pallet_geometry_loaded.overall_depth_m),  # the console draws it (C3)
-        width_m=float(args.pallet_geometry_loaded.overall_width_m))
+        width_m=float(args.pallet_geometry_loaded.overall_width_m),
+        # plan D3: live, D-0 is this place by definition (registered from the same pickup, the spawn checked 5 mm)
+        at="D-0" if getattr(args, "live", False) else None)
     core.targets.add_destination("D-1", MissionTargetPose(
         float(scenario.destination.x_m), float(scenario.destination.y_m), float(scenario.destination.yaw_rad)))
     if getattr(args, "live", False):
@@ -6363,7 +6375,9 @@ def drive(S, isaac) -> None:
                     # refuses the next submit (recovery_required).
                     stop_kind_, applied_commands_ = live.tick_start(
                         t, core.near_active(), clear_for_submit=slam is None or slam["tracker"].mode != "holding",
-                        submit_refusal=core.cargo.submit_refusal())  # the forks' state at the last tick's end (D5a)
+                        submit_refusal=core.cargo.submit_refusal(),  # the forks' state at the last tick's end (D5a)
+                        # plan D3: a submit before the tracker tracks is localization_lost
+                        localization_ok=slam is None or slam["tracker"].mode in ("tracking", "holding"))
                 elif mission_schedule is not None:
                     # M-a3 (plan E2, E7): the schedule's due commands and the stop kind in force, applied at this
                     # control tick's start.

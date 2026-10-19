@@ -204,7 +204,7 @@ class LiveRuntime:
 
     # --- per control tick ------------------------------------------------------------------------------------------
     def tick_start(self, t: float, near_active: bool, clear_for_submit: bool = True,
-                   submit_refusal: str | None = None) -> tuple[str, list]:
+                   submit_refusal: str | None = None, localization_ok: bool = True) -> tuple[str, list]:
         """The arbiter's cycle start, then the mission's commands with the stop kind it gives (M-b B3). ``clear_for_submit``:
         outside a SLAM hold (else a submit is refused recovery_required); ``submit_refusal``: what the forks are in
         refuses it (persistent console plan D5a: recovery_required, cargo_held)."""
@@ -216,7 +216,8 @@ class LiveRuntime:
         records = self.core.commands.apply(t, Context(stop_kind=stop_kind, near_tracker=near_active,
                                                       clear_for_submit=clear_for_submit,
                                                       submit_refusal=submit_refusal,
-                                                      scene_damaged=self.scene["damaged"] is not None))
+                                                      scene_damaged=self.scene["damaged"] is not None,
+                                                      localization_ok=localization_ok))
         self.collect_end(t)  # ended in this apply (a cancel before it ran, a stopped preparation)
         self._flush(t)
         return stop_kind, records
@@ -268,6 +269,9 @@ class LiveRuntime:
                                  destination_id=mission.destination_id if mission else None, advice=advice)
         clock = cmds.take_clock()  # step 8: the next mission's work clock starts clean
         records = self.core.end_reset(t)  # steps 3 and 8: the pocket check closed, the mission's state back to the start
+        if cmds.status == "done" and mission is not None:
+            # plan D3: verified there only now -- the delivery verdict passed, after the end's last targets update
+            self.core.targets.verify_at(mission.pallet_id, mission.destination_id)
         if any(records.values()):
             self.archive(mission_id, records)  # under this mission's own id (Codex stage 2 impl P2-5)
         try:  # step 7: bounded (the result, its clock); the mission's paths and logs go by chunks (plan D8)

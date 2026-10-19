@@ -315,7 +315,7 @@ const inputs = createInputs({
 });
 
 function report(r) {
-  if (r && r.t === "reject") log(`거부 · ${r.reason}`, "warn");
+  if (r && r.t === "reject") log(`거부 · ${rejectText(r.reason)}`, "warn");
   return r;
 }
 
@@ -430,7 +430,7 @@ $("m-start").onclick = () => {
   if (!pallet || !targets) return;
   req("mission_submit", { pallet_id: pallet, destination_id: $("dest").value, targets_revision: targets.targets_revision }).then((r) => {
     if (r && r.t === "reject") {
-      m.wz.note = r.reason === "stale_targets" ? "대상 목록이 바뀌었습니다 · 다시 고르세요" : `거부 · ${r.reason}`;
+      m.wz.note = `거부 · ${rejectText(r.reason)}`;
       log(`작업 지시 거부 · ${rejectText(r.reason)}`, "warn");
       if (r.reason === "stale_targets") wizardGo(2); // the list changed: pick again
       else refreshWizard();

@@ -211,3 +211,30 @@ def test_the_recovery_injections_carry_the_policy_the_guidance_reads(env):
     v.inject("steering_wait")
     st = v.make_state()
     assert st["drive_mode"] == "reverse_straight" and st["lift_dirs"] == [] and st["stand_waiver"] is None
+
+
+def test_a_delivered_pallet_can_go_elsewhere_but_not_where_it_already_is(env):
+    """Codex D3 round 1 P2-4: the fake vehicle refused delivered pallets invalid; plan D3: already_there."""
+    v, clock = env
+    c = Client(v)
+    c.take_lease()
+    p = v.world.pallets[0]
+    p.state, p.pose = "delivered", v.world.destinations["D-A"]
+    v.at[p.pallet_id] = "D-A"
+    v.targets_revision += 1
+    r = c.send("mission_submit", pallet_id=p.pallet_id, destination_id="D-A", targets_revision=v.targets_revision)
+    assert r["reason"] == "already_there"
+    other = next(d for d in v.world.destinations if d != "D-A")
+    r = c.send("mission_submit", pallet_id=p.pallet_id, destination_id=other, targets_revision=v.targets_revision)
+    assert r["t"] == "ack", r
+
+
+def test_a_destination_another_pallet_stands_on_is_occupied(env):
+    v, clock = env
+    c = Client(v)
+    c.take_lease()
+    p1, p2 = v.world.pallets[0], v.world.pallets[1]
+    p2.pose = v.world.destinations["D-A"]
+    v.targets_revision += 1
+    r = c.send("mission_submit", pallet_id=p1.pallet_id, destination_id="D-A", targets_revision=v.targets_revision)
+    assert r["reason"] == "destination_occupied"
