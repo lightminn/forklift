@@ -32,6 +32,32 @@ from forklift_core.mission.replay import ReplayGate, ReplayMismatch, ReplayProxy
 from forklift_core.mission.replay_codec import decode  # noqa: E402
 
 
+# Names today's setup binds on every run, with the value it binds when their feature is off. A snapshot recorded
+# before the name existed has none of them: that run had no such feature, so the name is bound as the setup binds
+# it off (drive's prologue would otherwise leave it unbound, unlike any setup now). Recorded with the feature on,
+# the snapshot holds the name. (PR #53 far recognition: the 29 gate records predate it.)
+SETUP_NAMES_ADDED = {
+    "far_runtime": ("recognition", "off", None),  # (args flag, its off value, the name's value then)
+    "far_intrinsics": ("recognition", "off", None),
+    "frr": ("recognition", "off", None),
+}
+
+
+def bind_added_names(values: dict, names: dict) -> list[str]:
+    """Bind the SETUP_NAMES_ADDED a snapshot lacks; a lacking name whose recorded flag is not off is refused."""
+    added = []
+    args_ = values.get("args")
+    for name, (flag, off, value) in SETUP_NAMES_ADDED.items():
+        if name in names:
+            continue
+        recorded = getattr(args_, flag, off)  # a record from before the flag has none: it ran without it
+        if recorded != off:
+            raise ReplayMismatch(f"the setup snapshot has no {name} although {flag}={recorded!r}")
+        values[name] = value
+        added.append(name)
+    return added
+
+
 class _SiblingFinder:
     """The runner loads some sibling modules by file under ``run_transport_<stem>`` only inside its setup (the
     new-obstacle schedule); a record's values name their classes by that module: found here the same way."""
@@ -211,6 +237,7 @@ def build_inputs(run_dir: Path, gate: ReplayBoundary, output: Path | None = None
     if output is not None and "args" in values:  # the replay writes its own outputs, never the evidence's
         values["args"].output = Path(output)
         Path(output).mkdir(parents=True, exist_ok=True)
+    bind_added_names(values, snap["names"])
     values["RecordingProxy"] = proxy_factory
     values["recorded_function"] = BR.recorded_function
     values["boundary"] = gate
