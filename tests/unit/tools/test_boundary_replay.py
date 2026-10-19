@@ -162,9 +162,14 @@ def test_every_added_setup_name_is_one_drive_binds_and_the_setup_always_binds():
     fns = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
     prologue = {ast.literal_eval(st.test.left) for st in fns["drive"].body
                 if isinstance(st, ast.If) and ast.unparse(st.test).endswith("in _bound")}
-    unconditional = set()  # names run() assigns at its own top level (not under an if)
+    unconditional = {}  # the constant run() assigns each name at its own top level (not under an if)
     for st in fns["run"].body:
         if isinstance(st, ast.Assign):
-            unconditional |= {t.id for t in st.targets if isinstance(t, ast.Name)}
-    for name in H.SETUP_NAMES_ADDED:
+            try:
+                value = ast.literal_eval(st.value)
+            except ValueError:
+                continue
+            unconditional.update({t.id: value for t in st.targets if isinstance(t, ast.Name)})
+    for name, (_flag, _off, value) in H.SETUP_NAMES_ADDED.items():
         assert name in prologue and name in unconditional, name
+        assert unconditional[name] == value and type(unconditional[name]) is type(value), name  # Codex P3
