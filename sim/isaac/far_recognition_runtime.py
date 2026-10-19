@@ -114,13 +114,16 @@ def decode_mission_semantic(payload, shape=(480, 640)):
 class FarRuntime:
     def __init__(self, *, fork_spacing: float, pallet_depth_m: float, pallet_shape: str, zone_centre_xy,
                  zone_radius_m: float, camera_x_m: float, dt: float, frame_every: int = 24, lag_steps: int = 0,
-                 drive_frames: bool = True, out_dir: Path | None = None, root: Path = ROOT):
+                 drive_frames: bool = True, out_dir: Path | None = None, root: Path = ROOT, proposer=None,
+                 identity_threshold=None, proposer_record=None):
         self.specs = known_specs(root)
         site = load_site_defaults(root / "config/site_load_defaults.yaml", self.specs)
         self.site = {self.specs[k].name: v for k, v in site.items()}
         self.setup = ForkSetup(float(fork_spacing))
         self.bounds = TrackBounds.load(root / "config/recognition_track_bounds.yaml")
-        self.far = B.FarRecognition(self.bounds, specs=self.specs, setup=self.setup, load_for=self._load_for)
+        self.far = B.FarRecognition(self.bounds, specs=self.specs, setup=self.setup, load_for=self._load_for,
+                                    proposer=proposer, identity_threshold=identity_threshold)
+        self.proposer_record = proposer_record
         self.pallet_depth_m, self.pallet_shape = float(pallet_depth_m), pallet_shape
         self.zone_centre_xy, self.zone_radius_m = tuple(float(v) for v in zone_centre_xy), float(zone_radius_m)
         self.camera_x_m, self.dt = float(camera_x_m), float(dt)
@@ -176,7 +179,13 @@ class FarRuntime:
         rec = self.far.frame(scene, instance_ids, planar(*odom), self.instruction(compose(map_from_odom, odom)))
         record.update(pose_t_s=row[1], odom=list(odom), **{k: rec[k] for k in ("decision", "taken_by", "visible",
                                                                               "untracked", "held", "new")})
-        self.leg_frames.append({"t_s": row[1], "tick": int(tick), "candidates": rec["candidates"]})
+        # evaluation only (the lag fit): the proposal that best covers truth instance 0, by IoU >= 0.5 -- never the
+        # proposal's id or order (Codex)
+        truth = np.asarray(instance_ids) == 0
+        ious = [((p.mask & truth).sum() / max(1, (p.mask | truth).sum()), p.proposal_id) for p in self.far.last_proposals]
+        best = max(ious, default=(0.0, None))
+        self.leg_frames.append({"t_s": row[1], "tick": int(tick), "candidates": rec["candidates"],
+                                "truth_proposal": best[1] if best[0] >= 0.5 else None})
         record["candidates"] = len(rec["candidates"])
         record["selected_track"] = self.far.tracker.selected
         self.frame_records.append(record)
@@ -265,7 +274,8 @@ class FarRuntime:
         truth = np.array([relative(r[3], r[4])[0] for r in self.leg_steps])
         steps, measured = [], []
         for f in self.leg_frames:
-            c = next((c for c in f["candidates"] if c["proposal_id"] == "i0" and c["geometry"] == "fitted"
+            c = next((c for c in f["candidates"] if f.get("truth_proposal") is not None
+                      and c["proposal_id"] == f["truth_proposal"] and c["geometry"] == "fitted"
                       and c["identity"] == "confirmed"), None)  # counted readings only (Codex)
             if c is None:
                 continue
@@ -302,7 +312,8 @@ class FarRuntime:
                 "frame_every": self.frame_every, "drive_frames": self.drive_frames,
                 "zone": {"centre_xy": list(self.zone_centre_xy), "radius_m": self.zone_radius_m},
                 "camera_x_m": self.camera_x_m, "fork_spacing_m": self.setup.spacing_m,
-                "pallet_depth_m": self.pallet_depth_m, "pallet_shape": self.pallet_shape}
+                "pallet_depth_m": self.pallet_depth_m, "pallet_shape": self.pallet_shape,
+                "proposer": self.proposer_record or {"kind": "oracle"}}
 
 
 class _P:

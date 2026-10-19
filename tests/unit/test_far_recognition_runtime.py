@@ -246,3 +246,20 @@ def test_the_recompute_fails_when_saved_frames_are_missing(tmp_path):
     for f in (tmp_path / "recognition").glob("frame_*.npz"):
         f.unlink()
     assert any(RC.differences(a, b) for a, b in RC.recompute(tmp_path, recognition=run.summary()))
+
+
+def test_the_lag_fit_does_not_depend_on_proposal_ids_or_order():
+    # Codex v2: renaming the same reading to learned_0 turned an accepted 11-step lag into None
+    from forklift_core.perception.recognition_bridge import proposals_from_ids
+    from forklift_core.perception.instance_proposals import InstanceProposal
+
+    def renamed(scene, ids):
+        props = proposals_from_ids(ids)
+        return [InstanceProposal(f"learned_{9 - k}", p.mask, 1.0, "oracle") for k, p in enumerate(reversed(props))], ()
+
+    xs = _leg()
+    plain, other = _runtime(lag_steps=11), _runtime(lag_steps=11, proposer=renamed)
+    _drive(plain, 11, xs)
+    _drive(other, 11, xs)
+    a, b = plain.lag_fit(), other.lag_fit()
+    assert a is not None and b is not None and (a["tau_steps"], a["accepted"]) == (b["tau_steps"], b["accepted"]) == (11, True)
