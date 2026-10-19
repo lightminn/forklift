@@ -835,9 +835,11 @@ async def cycle_scenario(p: Probe, args):
             p.report["stop_wait_done"] = reached_
 
             def fresh_sim_(after_mono):
-                # the newest frame received after ``after_mono`` (a capture made before the STOP does not start it)
+                # the newest frame *acquired* after ``after_mono``: a capture made before the STOP and sent late does not
+                # start it (Codex probe review round 2 P2-2). acquired_mono_ns is the runner's time.monotonic(), the
+                # probe's clock on the same host (live.sbatch runs both on one node).
                 for f_ in reversed(p.frames):
-                    if f_["mono"] <= after_mono:
+                    if f_["acquired_mono_ns"] / 1e9 <= after_mono:
                         return None
                     if f_.get("stamp_ns"):
                         return f_["stamp_ns"] / 1e9
@@ -1166,7 +1168,11 @@ def main():
         if ((args.scenario == "reset" and (report.get("reset") or {}).get("t") == "ack")
                 or (args.scenario == "restart" and "killed" in report)):
             # U12, U15: the supervisor's next session (a new epoch on the same port), the cycle there
-            old, info2, ready = info.get("session_epoch"), {}, False
+            # the successor is newer than the session left behind -- for a restart the one killed, which may be later
+            # than the snapshot taken at start (Codex probe review round 2 P2-1)
+            old = ((report.get("session") or {}).get("session_epoch") if args.scenario == "restart"
+                   else info.get("session_epoch"))
+            info2, ready = {}, False
             end = time.monotonic() + args.wait_port_s
             while time.monotonic() < end:
                 info2 = json.loads(args.port_file.read_text()) if args.port_file.exists() else {}
