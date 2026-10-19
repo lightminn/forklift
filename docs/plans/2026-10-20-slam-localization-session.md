@@ -1,4 +1,4 @@
-# 상시 운용 세션의 SLAM — 미리 만든 지도에서 위치 추정 (계획 v2.2)
+# 상시 운용 세션의 SLAM — 미리 만든 지도에서 위치 추정 (계획 v2.3)
 
 작성일: 2026-10-20 · 상위: [시뮬레이션 실시간화](2026-10-17-realtime-sim.md) D9(SLAM 비동기),
 [상시 운용 콘솔](2026-10-18-persistent-live-console.md) U16(2 h 연속 운용 미충족)·D9(감독 에폭),
@@ -129,14 +129,22 @@ Slurm 밖 도커 컨테이너는 아무 코어나 쓴다). tick trace 가 없는
     처리 `[0, 4]`). localization 일 때만 시작 scan 을 7 개로 늘려 1·5·6·7 번을 `expect_pose`, 2–4 번을 drop 으로 보낸다(slam_toolbox 의 2–4 번 drop 은 그대로).
     브리지는 7 번에 답하기 전에 L4 세 조건을 끝내고, 실패면 그 답을 `failed`(이유 포함)로 보낸다. tracker 는 localization 일 때 마지막 bootstrap scan 의 processed
     에서만 tracking 이 된다 — runner 의 warm-up 은 L4 가 끝나야 끝난다. tracker 는 콘솔과 함께 쓰는 코드라 바꾸기 전에 콘솔 세션에 diff 를 보낸다. mapping 경로의
-    시작 규칙은 바꾸지 않는다.
+    시작 규칙은 바꾸지 않는다. tracker 의 bootstrap 은 생성자 옵션으로 두고 기본값은 지금의 mapping 규칙이다(기존 시험 — processed 0, 4 → tracking — 이 그대로
+    유효하다). 콘솔 D15 가 같은 클래스의 `map_from_base`·`hold`·`release` 를 고쳤으므로(`receive`/warming_up 은 건드리지 않음) 그 PR 이 main 에 들어간 뒤의 main 에서 고친다.
+  - **실패 이유와 감독자.** 세 이유(`slam_map_mismatch`·`slam_map_not_loaded`·`slam_not_localized`)를 `src/forklift_core/mission/failures.py` 에 SESSION 으로 명시한다
+    (콘솔 화면의 이유 문구와 감독자의 원인 머리가 이 표를 읽는다). `slam_map_mismatch` 는 에폭 사이에 묶음이 바뀔 수 없어 결정적이므로 감독자는 **첫 번에** 멈춘다
+    (같은 원인 3 회 규칙을 기다리지 않는다). 나머지 둘은 적재 경합처럼 일시적일 수 있어 지금의 3 회 규칙을 따른다.
+  - **운용자에게 보이기.** L4 실패는 runner 가 live 서버를 열기 전(prewarm)에 일어나 화면에는 연결 거부만 보인다. 감독자는 exit 파일에서 이미 읽는 `reason` 을
+    port 파일(`_mark_crashed` 가 쓰는 `state=crashed`·`exit_code` 옆)과 `supervisor.jsonl` 에 남긴다. port 파일에 선택 필드 `reason` 이 생기는 계약 추가다. 화면 표시
+    ("세션 시작 실패: <이유>")는 콘솔 세션이 맡는다.
 - **L5 브리지 CPU 배치.** 지금의 작업 첫 CPU 하나 고정을 (a) 작업의 CPU 전체(`--cpuset-cpus` = 작업 affinity) 또는 (b) 전용 코어 2 개(작업 CPU 를 2 개 늘려
   그 둘에 고정)로 바꾸는 안을 S4 에서 잰다. 코어를 늘려도 mutex 대기는 남으므로 L3(재생성 없음)과 함께 본다. `isaac_live.sbatch` 는 콘솔 세션의 파일이고
   `test_isaac_slam_bridge_rules.py` 127–132·239–243 이 문구를 고정하므로, 바꾸기 전에 diff 를 보내 합의한다.
 - **L6 콘솔 계약(콘솔 세션 요구 2026-10-19).**
-  - 상태: `slam: {mode: "localization"|"mapping", map_id, map_loaded}` 를 상태 메시지에 더한다. 결과 기록의 임무마다 `map_id` 를 남기고, 임무 폴더의
+  - 상태: `slam: {mode: "localization"|"mapping", map_id, map_loaded}` 를 상태 메시지에 선택 필드로 더하고 운용 콘솔 계약 문서(`docs/interfaces/2026-10-13-operator-console-contract-draft.md`)의
+    상태 절에 적는다. 없으면 mapping/알 수 없음으로 읽고, mapping 모드의 `map_id` 는 `null` 이다. 화면 표시는 S3 뒤 콘솔 세션이 맡는다. 결과 기록의 임무마다 `map_id` 를 남기고(결과 키를 고정한 `tests/unit/mission/test_results.py` 도 함께 고친다), 임무 폴더의
     `result.json`(에폭 폴더에 남는다)에도 쓴다. 결과 기록이 에폭마다 새로 생기므로 에폭을 넘는 연결은 이 파일들이 맡는다.
-  - 감독 재시작(새 에폭)은 같은 묶음을 다시 읽고 L4 로 `expected_map_id` 를 확인한다. 장면을 다시 만들므로 트럭은 출발 자세에 있고 `map_start_pose` = 출발 자세다.
+  - 감독 재시작(새 에폭)은 같은 묶음을 다시 읽고 L4 로 `expected_map_id` 를 확인한다(콘솔의 재시작 시나리오 U15/U24 가 에폭 사이 `map_id` 동일을 확인한다). 장면을 다시 만들므로 트럭은 출발 자세에 있고 `map_start_pose` = 출발 자세다.
     같은 `map_id` 는 **좌표계가 같다**는 뜻일 뿐 상태가 이어진다는 뜻이 아니다 — 진행 중이던 임무·lease·arm·hold·planning memory 는 지금처럼 에폭과 함께 끝난다.
   - 아는 픽업 구역·적재 운반의 목적지·home 은 world 좌표로 정의되고 map = world 이므로 같은 `map_id` 에서 그대로 유효하다. 깨지는 경우(지도·장면 불일치)는 L4 가
     세션 시작에서 막으므로 임무 도중의 새 실패 이유는 만들지 않는다.
@@ -217,6 +225,12 @@ V1 의 +0.02 s·0.08 s, V2 의 0.02 m·3 배, V5 의 1.5 배·50 개는 Claude �
 | (2차) P2-4 철회 | Codex 가 v2 입력 설명에 따라 철회 |
 | (3차) P2 V1′ 이 비용만 봐서, 정합을 잃고 가벼워진 실행도 통과(`ProcessLocalization` 은 정합 점수와 무관하게 `true`) | V1′ 에 같은 8 h 실행 전체의 정렬 없는 위치·방향 오차 상한을 AND 로 붙였다 |
 | 확인: 시작 drop 은 공통 경로라 1·5 번 처리 규칙이 localization 에서도 맞음 | 2.2·L4 에 반영(시작 규칙은 S1 확인 뒤에만 고침) |
+
+### 7.2b 콘솔 세션 검토 (v2.2 → v2.3)
+
+충돌 없음. 요청 셋을 반영했다: 세 실패 이유를 `failures.py` 에 SESSION 으로 명시, `slam_map_mismatch` 는 감독자가 첫 번에 멈춤(결정적 설정 실패에 Isaac 기동 3 번을
+쓰지 않도록), port 파일·`supervisor.jsonl` 에 `reason` 을 남겨 prewarm 실패가 화면에 보이게 함. 그 밖에 상태 필드를 계약 문서에 선택 필드로 적고, 결과 키 시험을
+함께 고치고, tracker bootstrap 을 기본값이 mapping 규칙인 생성자 옵션으로 하고, 콘솔 D15 의 tracker 변경이 main 에 들어간 뒤에 고친다. 계약 추가뿐이라 Codex 재검토는 하지 않았다.
 
 ### 7.3 ③ 독립 검토 (agy, Gemini 3.8 Flash High — ①·② 결론을 보이지 않음. Claude Opus 4.6 은 쿼터 소진으로 실패)
 
