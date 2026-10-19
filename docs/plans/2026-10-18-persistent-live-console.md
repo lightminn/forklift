@@ -1225,6 +1225,7 @@ D2 의 `mission_start` 는 작업자 작업 `observe_ladder` 로 한다. 이름 
 | U22 계획 대기 중 일시정지·STOP·취소 | 통과 | 셋 다 수락, 그동안 최대 0.03–0.05 m/s, 끝에 미션 없음 |
 | U23 작업자 사망 | 통과 | `failed: prepare:error:plan worker exited with 9`, 작업자 재시작, 다음 미션 `done` |
 | U13 재접속(C3 main) | 통과 | 수동 조종 진입·첫 움직임 0.15 s, 끊김 뒤 재접속에 새 lease, 옛 lease 요청은 `stale_lease`. 같은 실행의 미션은 끝나지 않았다: STOP → 재무장 → 재개와 일시정지 → 수동 → 재개는 모두 받아들여졌으나, 추출 중 세션 실패 `slam_link_failed: scan 620: no reply within 1.00 s`(실행기 250 s, 두 줄 동시 부하). 그래서 U6·U9 는 이 실행으로 통과로 세지 않고 다시 돌린다(2026-10-19 재확인) |
+| U30 STOP 뒤 오래 대기(pc14_6c56339, 한 줄, 배속 0.3) | 미충족 | 첫 미션 삽입 진입 직후(시뮬 30.9 s) STOP. 대기 중 실행기 RSS 는 벽시계 71분 동안 −2.5 MB(6,694 MB)로 기준을 만족했다. 그러나 STOP 시뮬 1,228 s 에 세션 실패 `localization_stale: dead reckoning 15.00 m while holding` 으로 실행기가 끝나 취소·새 미션까지 가지 못했다. 원인은 holding 중 이동 거리를 매 틱 \|Δodom\| 합으로 세는 것(slam_pose `map_from_base`, 상한 15 m)이다. 서 있는 동안 오도메트리 잡음이 초당 약 12 mm 씩 쌓였고, 같은 구간 참값 변위는 69 mm 였다. 이 69 mm 는 STOP 중 차체가 포켓 쪽으로 밀려간 것이다(따로 메인에 넘김). `frames_overflow` 는 라이브에서 근접 추적이 거절되어(`near_field_contract`) 시험할 수 없다. 상한은 단위 시험(`test_live_records.py`)만 덮는다 |
 
 ws1 전체 pytest(26f9a18): 5161 통과, 실패 10(알려진 ws1 전용), 건너뜀 19.
 
