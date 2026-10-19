@@ -727,8 +727,12 @@ class Arbiter:
         if self.stop_confirmed:
             self._creep_m, self._stand_xy = 0.0, xy
             return
-        if xy is not None and self._stand_xy is not None:
-            self._creep_m = math.hypot(xy[0] - self._stand_xy[0], xy[1] - self._stand_xy[1])
+        if self._stand_xy is not None:
+            # Measured from positions: a distance, no sign -- a speed integral cannot go on from it (Codex round 5:
+            # a reverse after the positions stopped shrank the creep), so without a position now it is unknown. An
+            # odometry frame re-initialised under the same arbiter would need its stand position reset with it.
+            self._creep_m = (math.inf if xy is None
+                             else math.hypot(xy[0] - self._stand_xy[0], xy[1] - self._stand_xy[1]))
             return
         samples = self._recent_speeds
         dt = samples[-1][0] - samples[-2][0] if len(samples) >= 2 else 0.0

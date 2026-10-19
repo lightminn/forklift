@@ -430,3 +430,18 @@ def test_a_latch_released_by_the_waiver_in_teleop_is_recorded_as_stand_unconfirm
     events = [e for e in r.a.events if e.get("event") in ("latch_released", "stand_unconfirmed")]
     assert any(e.get("stand_waiver") for e in events)
     assert any(e.get("event") == "stand_unconfirmed" and e.get("reason") == "latch_lower_only" for e in events)
+
+
+def test_losing_the_odometry_positions_does_not_cancel_the_travel_they_measured():
+    """Codex round 5 P2: a distance from positions plus a signed speed integral after them shrank on a reverse."""
+    r = Shaky(in_pocket(), odom=True)
+    for _ in range(60):
+        r.cycle(0.0)
+    for _ in range(int(3.3 * 120)):
+        r.cycle(-0.019)
+    assert r.a.stand_waiver() is None  # 6 cm from the positions
+    r.odom = False
+    for _ in range(120):
+        r.cycle(-0.019)
+    assert r.a.stand_waiver() is None
+    assert r.cycle(-0.019, r.msg("mode_request", to="TELEOP"))[0]["reason"] == "not_stopped"
