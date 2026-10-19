@@ -202,8 +202,9 @@ class MissionCore:
         # Plan D14: the event hold tolerance a live runner gives (a callable: loaded or not, as of now); None in a
         # batch run, whose first pause keeps the measured latch the replay gate records.
         self.lift_hold_tolerance = None
-        # Plan D11: the return turnaround's correction drops, per (mission generation, phase) -- outside the shared
-        # live_leg drop limit; at RETURN_CORRECTION_FALLBACK that return is planned in the tick as before.
+        # Plan D11: the return turnaround's correction drops, per phase -- a mission's (the baseline restores it at each
+        # mission's start; a pause or a resume keeps it, Codex impl round 1 P2), outside the shared live_leg drop
+        # limit; at RETURN_CORRECTION_FALLBACK that return is planned in the tick as before.
         self.return_correction_drops: dict = {}
 
     def known_transition(self, from_phase: str, next_phase: str, t: float) -> None:
@@ -5040,7 +5041,7 @@ class MissionCore:
         if (count and why == "correction" and p.site == "live_leg" and (p.ctx or {}).get("turnaround")):
             # Plan D11: a return turnaround's correction drop has its own count (the shared one ended the mission
             # before the fallback could run -- Codex design round 4 P2); the other reasons count as before.
-            key = (self.commands.mission_gen, p.phase)
+            key = p.phase
             self.return_correction_drops[key] = self.return_correction_drops.get(key, 0) + 1
             self.state.setdefault("return_correction_drops", []).append(
                 {"time_s": float(t), "phase": p.phase, "count": self.return_correction_drops[key]})
@@ -5806,8 +5807,7 @@ class MissionCore:
         options, ms = self.options, self.ms
         if not (options.return_turnaround and ms.phase == "return_home"):
             return False
-        return self.return_correction_drops.get((self.commands.mission_gen, ms.phase), 0) >= \
-            self.RETURN_CORRECTION_FALLBACK
+        return self.return_correction_drops.get(ms.phase, 0) >= self.RETURN_CORRECTION_FALLBACK
 
     def return_turnaround_kwargs(self, frozen: bool = False) -> dict:
         """--return-turnaround: the plan_return_leg options for the return path the truck sets off

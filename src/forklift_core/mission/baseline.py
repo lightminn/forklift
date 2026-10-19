@@ -29,7 +29,7 @@ MISSION_KEYS = {
         "withdraw_certificate", "withdraw_tracking", "lift_tilt_peak", "slam_error_insert_end", "return_home_error",
         "tracking_failure", "handoff", "recoveries",
         "pocket_check", "forbidden_pocket_contacts", "pocket_geometry_checks", "repeat_capture", "phase",
-        "lateral_clearance_min_m", "live_first_replans",
+        "lateral_clearance_min_m", "live_first_replans", "return_correction_drops",
     ),
     "obstacle": (
         "pickup_estimate", "pallet_rel", "delivered_pending", "withdraw_line",
@@ -73,7 +73,8 @@ SESSION_KEYS = {
 }
 MS_FIELDS = ("observe_stall_ticks", "slam_stall_ticks", "dock_stop_ticks", "cusp_stop_ticks", "next_candidate_index",
              "last_tracking")
-CORE_FIELDS = ("release_replan_needed", "fresh_depth_wait", "last_permission")
+CORE_FIELDS = ("release_replan_needed", "fresh_depth_wait", "last_permission",
+               "return_correction_drops")  # plan D11: a mission's own count
 
 
 def _plain(value, where: str):
@@ -141,7 +142,8 @@ class MissionBaseline:
         for name in MS_FIELDS:
             values[("ms", name)] = _plain(getattr(core.ms, name), f"ms.{name}")
         for name in CORE_FIELDS:
-            values[("core", name)] = _plain(getattr(core, name), name)
+            if hasattr(core, name):  # a stand-in core without a field restores nothing for it
+                values[("core", name)] = _plain(getattr(core, name), name)
         return cls(values)
 
     def restore(self, core) -> dict:

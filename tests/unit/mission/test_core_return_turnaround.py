@@ -61,7 +61,7 @@ def test_three_correction_drops_of_the_return_fall_back_to_the_tick_plan_without
         core.job_hold(20.5 + k, REAR, 0.0, False)
         assert state["async_plans"][-1]["dropped"] == "correction"
     assert state.get("async_plan_drops", {}).get("live_leg", 0) == 0  # outside the shared limit
-    assert core.return_correction_drops[(core.commands.mission_gen, "return_home")] == 3
+    assert core.return_correction_drops["return_home"] == 3
     core.live_leg(30.0, REAR, False)
     assert len(core.jobs.submitted) == 3 and len(sync) == 1  # planned in the tick, as before D11
     assert sync[0]["forward_turnaround"] is True and callable(sync[0]["turnaround_check"])
@@ -89,7 +89,7 @@ def test_a_transport_drop_and_three_return_correction_drops_do_not_end_the_missi
 
 def test_a_failed_fallback_retries_in_the_tick_not_the_worker():
     core, state, obstacle, slam, sync = turnaround_core()
-    core.return_correction_drops[(core.commands.mission_gen, "return_home")] = 3
+    core.return_correction_drops["return_home"] = 3
     core.hooks.plan_return_leg = lambda *a, **k: sync.append(k) or Plan("no_path")
     core.live_leg(20.0, REAR, False)
     assert obstacle["live_retry_after_s"] == pytest.approx(21.0) and len(sync) == 2  # the tight one too
@@ -105,9 +105,14 @@ def test_other_drop_reasons_of_the_return_still_count_against_the_shared_limit()
     assert state["async_plans"][-1]["dropped"] == "drift" and state["async_plan_drops"] == {"live_leg": 1}
 
 
-def test_the_return_count_is_the_missions_and_the_phases():
+def test_the_fallback_survives_a_pause_and_a_resume_and_a_new_mission_starts_it_over():
+    """Codex D11 impl round 1 P2: the count was keyed by the commands generation, which a pause and a resume raise
+    -- the fallback came undone in the same return. P3: it is a mission's, restored by the baseline."""
+    from forklift_core.mission.baseline import CORE_FIELDS, MISSION_KEYS
+
     core, state, obstacle, slam, sync = turnaround_core()
-    core.return_correction_drops[(core.commands.mission_gen, "return_home")] = 3
-    core.commands.mission_gen += 1  # a new mission
+    core.return_correction_drops["return_home"] = 3
+    core.commands.mission_gen += 2  # a pause and a resume
     core.live_leg(20.0, REAR, False)
-    assert core.jobs.submitted and not sync
+    assert not core.jobs.submitted and len(sync) == 1
+    assert "return_correction_drops" in CORE_FIELDS and "return_correction_drops" in MISSION_KEYS["state"]
