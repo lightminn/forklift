@@ -38,6 +38,11 @@ import traceback
 from multiprocessing.connection import Connection, wait
 
 
+def worker_env(mode: str) -> dict:
+    """The environment for a worker that runs the kernels ``mode`` (persistent console plan D11)."""
+    return {**os.environ, "FORKLIFT_KERNELS": str(mode)}
+
+
 class WorkerFailure(RuntimeError):
     """The worker could not be started."""
 
@@ -126,7 +131,14 @@ def main(argv: list[str]) -> int:
                 return
 
     threading.Thread(target=read, name="plan-worker-read", daemon=True).start()
-    conn_out.send_bytes(pickle.dumps(("ready", os.getpid())))
+    # Persistent console plan D11: the kernels the environment names (the live runner passes its own), compiled
+    # before the first job -- a new interpreter would otherwise plan on the reference kernels, slower than the live
+    # one and so judged differently against the candidates' wall-clock deadline.
+    from forklift_core import kernels
+
+    if kernels.mode() != "reference":
+        kernels.warm_up()
+    conn_out.send_bytes(pickle.dumps(("ready", os.getpid(), kernels.mode())))
     while True:
         message = inbox.get()
         if message is None:
@@ -152,6 +164,7 @@ class PlanWorker:
     def __init__(self, *, ready_timeout_s: float = 120.0, env: dict | None = None):
         self.ready_timeout_s = ready_timeout_s
         self.env = env
+        self.kernels: str | None = None  # what the process said it runs (plan D11)
         self.restarts = 0
         self._lock = threading.Lock()  # guards the bookkeeping below, never held across pipe or process work
         self._outbox: queue.Queue = queue.Queue()  # (job_id, bytes)
@@ -228,7 +241,8 @@ class PlanWorker:
                 self._stop_process()
                 raise WorkerFailure("plan worker not ready")
         try:
-            tag, _pid = pickle.loads(self._recv.recv_bytes())
+            tag, _pid, *rest = pickle.loads(self._recv.recv_bytes())
+            self.kernels = rest[0] if rest else None
         except (OSError, EOFError) as exc:
             self._stop_process()
             raise WorkerFailure(f"plan worker gone before ready: {exc}") from exc

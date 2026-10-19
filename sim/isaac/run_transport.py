@@ -497,12 +497,18 @@ def arguments() -> argparse.Namespace:
     parser.add_argument(
         "--return-turnaround",
         action="store_true",
+        default=None,
         help="Return-leg forward preference (docs/plans/2026-10-12-return-forward-turnaround.md): "
         "the first live return plan on the grid (after the SLAM release, which it waits for, and "
         "the grid's re-projection) also weighs full-lock reverse arcs, each followed by a search "
         "home, against the direct plan, reverse length weighted 3.0; each arc's start must be "
         "verified on the drive permission's snapshot and no known occupied cell may lie on it. "
         "Later return replans are unchanged.",
+    )
+    parser.add_argument(
+        "--no-return-turnaround", dest="return_turnaround", action="store_false",
+        help="Persistent console plan D11: a live run weighs the return turnaround by default (planned by the "
+        "worker); this turns it off. A batch run's default stays off.",
     )
     parser.add_argument(
         "--destination-prior-error-m",
@@ -702,6 +708,9 @@ def arguments() -> argparse.Namespace:
                         help="M-c tests only (plan C5): the lift follows a non-periodic wave so the carriage camera's "
                         "horizon tells the sim time a frame's pixels were drawn at; the lift height is logged every "
                         "physics step -- for a run without a mission")
+    parser.add_argument("--live-test-return-correction-drops", type=int, default=0,
+                        help="Persistent console plan D11 tests only: the first N worker answers of a return "
+                        "turnaround are dropped as if the correction had changed (the synchronous fallback after 3)")
     parser.add_argument("--live-test-recovery-blocked", nargs="?", const="withdraw", choices=("withdraw", "lower"),
                         default=None,
                         help="Persistent console plan D14 tests only (U20 c): the automatic recovery is refused with its "
@@ -934,8 +943,10 @@ def arguments() -> argparse.Namespace:
         parser.error("--live does not take --repeat-captures (its captures bypass the stop boundary, plan C2)")
     if args.live and args.record_boundary:
         parser.error("--live is not replayed: not with --record-boundary (plan C4)")
+    if args.return_turnaround is None:
+        args.return_turnaround = bool(args.live)  # plan D11: on for a live run, off for a batch one (as before)
     if not args.live and (args.live_test_permit_compare or args.live_test_scan_silence or args.live_test_no_pallet_permit
-                          or args.live_test_recovery_blocked):
+                          or args.live_test_recovery_blocked or args.live_test_return_correction_drops):
         parser.error("--live-test-permit-compare and --live-test-scan-silence are for --live runs only")
     if args.live and not 0 < args.live_factor <= 1:
         # The limits are divided by it (plan C4a); above 1 the 0.05 s tick would exceed a quarter of the command age.
@@ -5648,6 +5659,7 @@ def drive(S, isaac) -> None:
                                                  step_m=obstacle["layer"].permission.config.step_m)
                                 if live_pallet_perm is not None else None)
             core.hooks.test_recovery_blocked = args.live_test_recovery_blocked or False
+            core.hooks.test_return_correction_drops = int(args.live_test_return_correction_drops)  # plan D11 tests
 
             live_withdraw = {"open": None, "watch": False}  # plan D14: the uncertified teleop withdraw's episode
 
@@ -5752,10 +5764,11 @@ def drive(S, isaac) -> None:
             state["kernels"] = {"mode": live_kernels.mode(), "warm_up_s": live_kernels.warm_up()}
             if os.environ.get("FORKLIFT_LIVE_ASYNC_PLAN", "1") != "0":
                 # Real-time plan D8: the long plans go to a worker process; the control loop stands and goes on.
-                from forklift_core.planning.plan_worker import PlanWorker
+                from forklift_core.planning.plan_worker import PlanWorker, worker_env
 
-                core.jobs = PlanWorker()
-                state["async_plan_worker"] = {"pid": core.jobs.proc.pid}
+                # plan D11: the worker runs the live kernels, warmed up before it says ready (restarts too)
+                core.jobs = PlanWorker(env=worker_env(live_kernels.mode()))
+                state["async_plan_worker"] = {"pid": core.jobs.proc.pid, "kernels": core.jobs.kernels}
             else:  # persistent console plan D2: each mission is prepared by the worker
                 raise ValueError("a live session needs the planning worker (FORKLIFT_LIVE_ASYNC_PLAN=0 is batch-only)")
             core.hooks.live_abort = lambda: live.stopped_in_tick  # the core stops right after a raw capture

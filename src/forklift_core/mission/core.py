@@ -202,6 +202,9 @@ class MissionCore:
         # Plan D14: the event hold tolerance a live runner gives (a callable: loaded or not, as of now); None in a
         # batch run, whose first pause keeps the measured latch the replay gate records.
         self.lift_hold_tolerance = None
+        # Plan D11: the return turnaround's correction drops, per (mission generation, phase) -- outside the shared
+        # live_leg drop limit; at RETURN_CORRECTION_FALLBACK that return is planned in the tick as before.
+        self.return_correction_drops: dict = {}
 
     def known_transition(self, from_phase: str, next_phase: str, t: float) -> None:
         """Known pallets across the mission (plan v10 D5)."""
@@ -555,17 +558,17 @@ class MissionCore:
                 obstacle["live_replanned"][ms.phase] = False
                 obstacle["deadline"] = None
                 return True
-            if (self.jobs is not None and not (options.return_turnaround and ms.phase == "return_home")
-                    and slam is not None and not slam["stop_now"]):
+            worker_ = self.jobs is not None and not self._return_in_tick()
+            if worker_ and slam is not None and not slam["stop_now"]:
                 # Real-time plan D8b: a leg asked while the truck still rolls out of the last phase is dropped as
                 # moving when it comes back, and each drop counts (Isaac V8-4 d8c_6: two drops in 0.25 s at the
                 # transport's start). It stands until the stop detector holds, then asks.
                 obstacle["live_replanned"][ms.phase] = False
                 obstacle["deadline"] = None
                 return True
-            if self.jobs is not None and not (options.return_turnaround and ms.phase == "return_home"):
+            if worker_:
                 # Real-time plan D8b: the worker plans (the tight retry with it, under the same deadline); the leg
-                # stands until the plan is taken. A return turnaround's closure arguments keep it here.
+                # stands until the plan is taken. Plan D11: a return turnaround goes too, with its arc check frozen.
                 if ms.phase == "transport":
                     sc_ = slam.get("transport_scenario", scenario) if slam is not None else scenario
                     payload = self._leg_payload("transport", grid_world(sc_), start, grid_kwargs(None),
@@ -573,10 +576,12 @@ class MissionCore:
                 else:
                     sc_ = scenario if slam is None else slam.get("return_scenario", slam.get("transport_scenario", scenario))
                     payload = self._leg_payload("return", grid_world(sc_), start,
-                                                {**grid_kwargs("return", sc_.destination), **return_turnaround_kwargs()},
+                                                {**grid_kwargs("return", sc_.destination),
+                                                 **return_turnaround_kwargs(frozen=True)},
                                                 retry_on=("invalid_start", "no_path"))
                 obstacle["deadline"] = None
-                self._request("live_leg", "leg", payload, t, rear, self._applied_now(), ctx={})
+                self._request("live_leg", "leg", payload, t, rear, self._applied_now(),
+                              ctx={"turnaround": bool(options.return_turnaround and ms.phase == "return_home")})
                 return True
             if ms.phase == "transport":
                 sc_ = slam.get("transport_scenario", scenario) if slam is not None else scenario
@@ -4795,6 +4800,7 @@ class MissionCore:
 
     # --- M-a1 slice 6d: closures moved from run(), statement for statement ---
     # --- real-time plan D8: waiting for a plan without stopping the control loop -----------------------------------
+    RETURN_CORRECTION_FALLBACK = 3  # plan D11: correction drops of a return turnaround before the tick plan
     ASYNC_DRIFT_M = 0.02
     ASYNC_DRIFT_RAD = math.radians(1.0)
     ASYNC_MAX_DISCARDS = 3
@@ -4948,6 +4954,10 @@ class MissionCore:
             return "phase"
         if self._applied_now() != p.applied:
             return "correction"
+        if (p.site == "live_leg" and (p.ctx or {}).get("turnaround")
+                and getattr(self.hooks, "test_return_correction_drops", 0) > 0):
+            self.hooks.test_return_correction_drops -= 1  # plan D11 tests only: the fallback forced
+            return "correction"
         if slam is not None and (slam["tracker"].mode != p.mode or self.hold_count() != p.hold):
             return "slam_mode"
         if slam is not None and not slam["stop_now"]:
@@ -5027,6 +5037,14 @@ class MissionCore:
             self.commands.end_wait(t)
             self.jobs.discard(p.job)
             self.state["async_plans"][-1].update(finished_s=float(t), dropped=why)
+        if (count and why == "correction" and p.site == "live_leg" and (p.ctx or {}).get("turnaround")):
+            # Plan D11: a return turnaround's correction drop has its own count (the shared one ended the mission
+            # before the fallback could run -- Codex design round 4 P2); the other reasons count as before.
+            key = (self.commands.mission_gen, p.phase)
+            self.return_correction_drops[key] = self.return_correction_drops.get(key, 0) + 1
+            self.state.setdefault("return_correction_drops", []).append(
+                {"time_s": float(t), "phase": p.phase, "count": self.return_correction_drops[key]})
+            count = False
         if count:
             drops = self.state.setdefault("async_plan_drops", {})
             drops[p.site] = drops.get(p.site, 0) + 1
@@ -5782,7 +5800,16 @@ class MissionCore:
         state.setdefault("known_pallets", []).append(
             {"event": event, "time_s": stamp_, "rect": [float(v) for v in rect_xyyaw], "r_fix_m": float(r_fix_m)})
 
-    def return_turnaround_kwargs(self) -> dict:
+    def _return_in_tick(self) -> bool:
+        """Plan D11: this return turnaround is planned in the tick -- its worker answers were dropped for a changed
+        correction RETURN_CORRECTION_FALLBACK times in this mission's return (the way it ran before D11)."""
+        options, ms = self.options, self.ms
+        if not (options.return_turnaround and ms.phase == "return_home"):
+            return False
+        return self.return_correction_drops.get((self.commands.mission_gen, ms.phase), 0) >= \
+            self.RETURN_CORRECTION_FALLBACK
+
+    def return_turnaround_kwargs(self, frozen: bool = False) -> dict:
         """--return-turnaround: the plan_return_leg options for the return path the truck sets off
         with -- the first live plan on the grid, which runs after the SLAM release and the obstacle
         block's re-projection, so the arc check's snapshot and the plan's grid share one correction
@@ -5817,6 +5844,12 @@ class MissionCore:
         # the obstacle snapshot's version the arcs are checked on.
         arc_check.callback_spec = {"kind": "turnaround_arc", "grid_planning": bool(grid_planning),
                                    "obstacle_version": obstacle.get("version") if obstacle is not None else None}
+        if frozen:
+            # Plan D11: for the worker -- the permission and its snapshot copied now (the plan's grid is fixed now
+            # too); no grid planning: no check, as the closure's None.
+            checker = (obstacle["layer"].turnaround_arc_check(dict(arc_check.callback_spec)) if grid_planning
+                       else None)
+            return {"forward_turnaround": True, "turnaround_check": checker}
 
         return {"forward_turnaround": True, "turnaround_check": arc_check}
 

@@ -635,3 +635,54 @@ def test_the_start_check_preview_takes_the_release_reprojection_at_its_time():
         pickup_bounds=None)
     real = bool(make_checker(obstacles, footprint, bounds, occupancy).free(released, 0.1))
     assert (preview, real, without_release) == (True, True, False)
+
+
+def _arcs():
+    """Reverse arcs from the origin: free, and long enough to reach the wall behind (x = -3.5)."""
+    out = {}
+    for name, kappa, length in (("straight", 0.0, 1.0), ("left", 0.4, 1.2), ("long", 0.0, 3.5)):
+        s = np.linspace(0.0, length, 41)
+        yaw = -kappa * s
+        x = -np.where(kappa == 0, s, np.sin(kappa * s) / max(kappa, 1e-9))
+        y = np.where(kappa == 0, 0.0, -(1 - np.cos(kappa * s)) / max(kappa, 1e-9))
+        out[name] = np.column_stack((x, y, yaw))
+    return out
+
+
+def _wall_behind_layer():
+    lay = layer()
+    pose = (0.0, 0.0, 0.0)
+    raw = {}
+    for s in CONFIG["sensors"]:
+        ox = s.xyz_m[0] + 0.34
+        ang = lay.beam_angles + s.yaw_rad
+        d = np.where(np.cos(ang) < -0.05, (-3.5 - ox) / np.cos(ang), np.nan)
+        ok = np.isfinite(d) & (np.abs(s.xyz_m[1] + d * np.sin(ang)) < 3.0) & (d > 0)
+        raw[s.name] = (np.where(ok, d, 4.0), np.ones(len(ang), bool), np.zeros(len(ang), bool))
+    for k in range(3):
+        lay.add_scans(0.1 * k, raw, odom_rear=pose, loaded=False)
+    lay.refresh(0.2, (0.0, 0.0, 0.0), 0, current_pose=pose, path_ahead=np.array([pose]), loaded=False,
+                direction=-1)
+    return lay
+
+
+def test_the_turnaround_arc_check_is_one_function_frozen_and_picklable():
+    """Persistent console plan D11: the layer's check and the frozen checker give the same verdicts; the checker
+    pickles (the worker gets it) and keeps the snapshot it was made with when the layer changes."""
+    import pickle
+
+    from forklift_core.control.turnaround_check import TurnaroundArcCheck
+
+    lay = _wall_behind_layer()
+    checker = lay.turnaround_arc_check()
+    assert isinstance(checker, TurnaroundArcCheck)
+    arcs = _arcs()
+    expected = {name: lay.check_turnaround_arc(poses, current_pose=tuple(poses[0])) for name, poses in arcs.items()}
+    assert len(set(map(str, expected.values()))) >= 2  # the cases differ (a verdict passes, another does not)
+    assert {name: checker(poses) for name, poses in arcs.items()} == expected
+    again = pickle.loads(pickle.dumps(checker))
+    assert {name: again(poses) for name, poses in arcs.items()} == expected
+    assert again.callback_spec["kind"] == "turnaround_arc"
+    lay.snapshot = None  # the layer moves on; the frozen checker does not
+    assert {name: checker(poses) for name, poses in arcs.items()} == expected
+    assert layer().turnaround_arc_check()(arcs["straight"]) == "no_snapshot"

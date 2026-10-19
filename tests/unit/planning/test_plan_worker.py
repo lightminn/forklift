@@ -255,3 +255,23 @@ def test_the_ladders_deadline_is_passed_once_even_when_the_grid_arguments_carry_
     monkeypatch.setattr(pw.time, "monotonic", lambda: 0.0)
     pw._run("observe_ladder", payload)
     assert calls and all(c[2]["deadline"] == sent for c in calls)
+
+
+def test_a_worker_takes_the_kernels_it_is_given_and_says_so():
+    """Persistent console plan D11 (Codex design round 1 P2-2): a new interpreter starts on the reference kernels;
+    the live runner passes its own mode in the environment, and the worker reports what it runs."""
+    import os
+
+    from forklift_core import kernels
+
+    w = pw.PlanWorker(env={**os.environ, "FORKLIFT_KERNELS": "numpy"})
+    try:
+        assert w.kernels == "numpy"
+    finally:
+        w.close()
+    plain = pw.PlanWorker(env={k: v for k, v in os.environ.items() if k != "FORKLIFT_KERNELS"})
+    try:
+        assert plain.kernels == "reference"
+    finally:
+        plain.close()
+    assert pw.worker_env("numba")["FORKLIFT_KERNELS"] == "numba" and kernels.mode() in kernels.MODES
