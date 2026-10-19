@@ -734,6 +734,19 @@ def arguments() -> argparse.Namespace:
                         help="Persistent console plan D14 tests only (U20 c): the automatic recovery is refused with its "
                         "evidence valid -- at its retrace (withdraw, the default) or before its lowering (lower, the "
                         "pallet left on the forks) -- so the mission ends recovery_required for a manual recovery")
+    parser.add_argument("--live-epoch", type=int, default=None,
+                        help="the supervisor's session number (its {epoch}); recorded, and the --live-test injections act "
+                        "in the first session only (a scene reset restarts the runner with the same arguments)")
+    # Persistent console plan section 4 (U10b, U12, U23): controlled injections for the use cases
+    parser.add_argument("--live-test-push-pallet", default=None, metavar="PHASE",
+                        help="U12 tests only: when a mission first enters PHASE, the pallet is moved 0.05 m sideways -- the "
+                        "truth checks see a displaced pallet (scene damage, latched)")
+    parser.add_argument("--live-test-fail-at", default=None, metavar="PHASE",
+                        help="U10b tests only: when a mission first enters PHASE it fails as a tracking failure (the "
+                        "mission's own failure; the session goes on)")
+    parser.add_argument("--live-test-kill-worker", action="store_true",
+                        help="U23 tests only: the planning worker is killed right after the first preparation is asked "
+                        "(its job fails, the worker is replaced)")
     parser.add_argument("--live-test-no-pallet-permit", action="store_true",
                         help="Persistent console plan D10 tests only (U11's control): the teleop permit does not see "
                         "the target pallets, as before D10")
@@ -973,7 +986,8 @@ def arguments() -> argparse.Namespace:
     if args.return_turnaround is None:
         args.return_turnaround = bool(args.live)  # plan D11: on for a live run, off for a batch one (as before)
     if not args.live and (args.live_test_permit_compare or args.live_test_scan_silence or args.live_test_no_pallet_permit
-                          or args.live_test_recovery_blocked or args.live_test_return_correction_drops):
+                          or args.live_test_recovery_blocked or args.live_test_return_correction_drops
+                          or args.live_test_push_pallet or args.live_test_fail_at or args.live_test_kill_worker):
         parser.error("--live-test-permit-compare and --live-test-scan-silence are for --live runs only")
     if args.live and not 0 < args.live_factor <= 1:
         # The limits are divided by it (plan C4a); above 1 the 0.05 s tick would exceed a quarter of the command age.
@@ -5724,6 +5738,7 @@ def drive(S, isaac) -> None:
             core.hooks.test_return_correction_drops = int(args.live_test_return_correction_drops)  # plan D11 tests
 
             live_withdraw = {"open": None, "watch": False}  # plan D14: the uncertified teleop withdraw's episode
+            live_injected_ = {}  # plan section 4: the --live-test injections done this session (each once)
 
             def live_teleop_withdraw(t_, out_, rear_):
                 """Plan D14 (main condition 4): every stretch the recovery's straight reverse moves is recorded as an
@@ -6289,6 +6304,14 @@ def drive(S, isaac) -> None:
                            "truth_destination": live_session_["truth"].get(mission_.destination_id, dest_),
                            "pallet_id": mission_.pallet_id, "destination_id": mission_.destination_id}
                 core.prepare_request(t_, rear_, inputs_, payload_)
+                if args.live_test_kill_worker and args.live_epoch in (None, 1) and not live_injected_.get("worker"):
+                    # Plan section 4 (U23): the worker dies with this preparation's job on it
+                    live_injected_["worker"] = True
+                    proc_ = getattr(core.jobs, "proc", None)
+                    if proc_ is not None and proc_.poll() is None:
+                        proc_.kill()
+                        state.setdefault("live_test_injections", []).append({"killed_worker": int(proc_.pid),
+                                                                             "t": float(t_)})
 
             def live_mission_ready(t_, inputs_):
                 """What can fail in the adoption, made before anything changes (Codex stage 2 impl P2-6): the
@@ -6452,6 +6475,19 @@ def drive(S, isaac) -> None:
                 # failure; and a NaN quaternion read as tilt, scene damage): the session's own failure.
                 require(np.isfinite([base, ppos]).all() and np.isfinite(q).all() and np.isfinite(pq).all(),
                         "Nonfinite body state")
+                if (live is not None and core.commands.adopted_id is not None and args.live_epoch in (None, 1)
+                        and ms.phase in (args.live_test_push_pallet, args.live_test_fail_at)):
+                    # Plan section 4 (U12, U10b): the use cases' controlled injections, once a session
+                    if ms.phase == args.live_test_push_pallet and not live_injected_.get("push"):
+                        live_injected_["push"] = True
+                        pallet.set_world_pose(np.asarray(ppos, dtype=float) + np.array([0.0, 0.05, 0.0]), pq)
+                        state.setdefault("live_test_injections", []).append(
+                            {"push_pallet_m": 0.05, "phase": ms.phase, "t": float(t)})
+                        ppos, pq = pallet.get_world_pose()
+                    if ms.phase == args.live_test_fail_at and not live_injected_.get("fail"):
+                        live_injected_["fail"] = True
+                        state.setdefault("live_test_injections", []).append({"fail": ms.phase, "t": float(t)})
+                        require(False, f"Tracking failed in {ms.phase} (test injection)")
                 yaw, tilt = yaw_and_tilt(q)
                 pallet_yaw, pallet_tilt = yaw_and_tilt(pq)
                 if trace_evidence is not None and not trace_evidence.update(

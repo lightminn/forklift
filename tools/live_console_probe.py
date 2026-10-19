@@ -900,11 +900,43 @@ async def cycle_scenario(p: Probe, args):
     p.report["close_code"] = p.closed_code
 
 
+async def reset_scenario(p: Probe, args):
+    """Persistent console plan U12: a scene damaged under a mission (the runner's --live-test-push-pallet moves the
+    pallet at a phase) is latched; automatic work is refused, manual control is not; a scene reset ends the session --
+    main() then follows the supervisor's next session and runs the cycle there."""
+    await p.open()
+    await p.until(lambda s: True, 10, label="first_state")
+    lease = await p.request("lease_request")
+    p.lease_id = lease.get("lease_id") if lease else None
+    p.report["session"] = {"session_epoch": p.epoch, "lease_id": p.lease_id}
+    await p.until(lambda s: p.targets is not None, 10, label="targets")
+    await p.until(p.standing, 30, label="standing_at_start")
+    await asyncio.sleep(1.0)
+    p.report["first_submit"] = await p.request("mission_submit", pallet_id="P-1", destination_id="D-1",
+                                                targets_revision=p.targets["targets_revision"])
+    await p.until(lambda s: ((s.get("scene") or {}).get("damaged") is not None), args.mission_timeout_s,
+                  label="scene_damaged")
+    await p.until(lambda s: ((s.get("last_result") or {}).get("outcome") in ("failed", "cancelled",
+                                                                               "recovery_required", "done")),
+                  120, label="first_end")
+    p.report["first_result"] = (p.state or {}).get("last_result")
+    p.report["scene"] = (p.state or {}).get("scene")
+    await p.until(p.standing, 60, label="standing_after_damage")
+    await asyncio.sleep(1.0)
+    p.report["refused_submit"] = await p.request("mission_submit", pallet_id="P-1", destination_id="D-1",
+                                                  targets_revision=p.targets["targets_revision"])
+    p.report["teleop_after_damage"] = await p.request("mode_request", to="TELEOP")
+    await p.request("mode_request", to="PAUSED")
+    await p.until(p.standing, 30, label="standing_before_reset")
+    p.report["reset"] = await p.request_until_standing("sim_reset")
+    await asyncio.sleep(3.0)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port-file", type=Path, required=True)
     ap.add_argument("--report", type=Path, required=True)
-    ap.add_argument("--scenario", choices=("main", "slow", "marker", "approach", "planwait", "cycle", "lift"),
+    ap.add_argument("--scenario", choices=("main", "slow", "marker", "approach", "planwait", "cycle", "lift", "reset"),
                     default="main")
     ap.add_argument("--manual-recovery", action="store_true",
                     help="cycle scenario (plan D14 U20 c): a mission ending recovery_required is recovered by hand "
@@ -968,8 +1000,23 @@ def main():
     try:
         scenario = {"main": main_scenario, "slow": slow_scenario, "marker": marker_scenario,
                     "approach": approach_scenario, "planwait": planwait_scenario, "cycle": cycle_scenario,
-                    "lift": lift_scenario}[args.scenario]
+                    "lift": lift_scenario, "reset": reset_scenario}[args.scenario]
         asyncio.run(scenario(p, args))
+        if args.scenario == "reset" and (report.get("reset") or {}).get("t") == "ack":
+            # U12: the supervisor's next session (a new epoch on the same port), the cycle there
+            old = info.get("session_epoch")
+            end = time.monotonic() + args.wait_port_s
+            while time.monotonic() < end:
+                info2 = json.loads(args.port_file.read_text()) if args.port_file.exists() else {}
+                if info2.get("state") == "running" and info2.get("session_epoch") not in (None, old):
+                    break
+                time.sleep(2.0)
+            report["after_reset"] = {"port_file": info2}
+            p2 = Probe(info2["port"], report["after_reset"])
+            try:
+                asyncio.run(cycle_scenario(p2, args))
+            finally:
+                report["after_reset"]["states_n"] = len(p2.states)
     finally:
         report["frames"] = p.frames
         report["states"] = p.states
