@@ -59,9 +59,10 @@ def test_the_spread_ratio_is_reported():
 
 
 # --- the decision table --------------------------------------------------------------------------------------------
-def run(i, arm, *, set_="decision", ok=True, unpermitted=0, forbidden=0, e50=40.0, e99=110.0, gaps=0,
+def run(i, arm, *, set_="decision", seed=0, ok=True, unpermitted=0, forbidden=0, e50=40.0, e99=110.0, gaps=0,
         ratio=0.74, lat=70.0, beyond=10.0, yaw=0.003, t=True, e=True, p=True):
-    return {"tag": f"r{i}", "arm": arm, "set": set_, "block": i // 4, "rerun_of": None, "success": ok,
+    return {"tag": f"r{i}", "arm": arm, "set": set_, "block": i // 4 if set_ == "decision" else None, "seed": seed,
+            "rerun_of": None, "success": ok,
             "failure_reason": None if ok else "x", "unpermitted": unpermitted, "forbidden": forbidden,
             "E": {"p50_mm": e50, "p99_mm": e99} if e else None,
             "T": {"gaps": gaps, "ratio": ratio} if t else None,
@@ -79,8 +80,13 @@ def good_runs(**over):
     return out
 
 
-def decide(runs):
-    return AB.judge({"blocks": BLOCKS}, runs)
+def general(**over):
+    return [run(24 + k, arm, set_="general", seed=seed, **over)
+            for k, (seed, arm) in enumerate(((1, "on"), (1, "off"), (2, "off"), (2, "on")))]
+
+
+def decide(runs, extra=None):
+    return AB.judge({"blocks": BLOCKS}, runs + (general() if extra is None else extra))
 
 
 def test_async_better_on_gaps_and_no_worse_elsewhere_keeps_it_on():
@@ -94,8 +100,9 @@ def test_a_breach_on_turns_it_off_unless_off_breached_too():
     assert decide(runs)["outcome"] == "off"
     runs[1]["unpermitted"] = 2  # an off run as well
     assert decide(runs)["row"] == 1
-    runs = good_runs() + [run(24, "on", set_="general", forbidden=1)]  # the generalisation runs count for R1
-    assert decide(runs)["outcome"] == "off"
+    extra = general()
+    extra[0]["forbidden"] = 1  # a generalisation run (on) counts for R1
+    assert decide(good_runs(), extra)["outcome"] == "off"
 
 
 def test_no_gain_turns_it_off_only_when_off_is_safe():
@@ -180,6 +187,7 @@ def test_measures_from_a_run_directory(tmp_path):
     assert m["E"]["n"] == 5 and m["E"]["p50_mm"] == pytest.approx(20.0)  # the warm-up record is left out
     assert m["E"]["lag_over_20mm"] == 0 and m["E"]["lag_max_mm"] == pytest.approx(10.0)
     assert m["T"]["gaps"] == 1 and m["T"]["gap_s"] == [0.5]  # the wait before the first tracking scan is not counted
+    assert m["T"]["warmup_gaps"] == 1
     assert m["P"] == pytest.approx({"lat_min_mm": 60.0, "beyond_mm": 15.0, "yaw_abs_rad": 0.002,
                                     "tracking_error_mm": 7.0})
     assert m["unpermitted"] == 0 and m["forbidden"] == 0 and m["slam_async_record"]
@@ -188,5 +196,74 @@ def test_measures_from_a_run_directory(tmp_path):
 def test_a_link_failure_gives_no_time_or_estimate_and_an_off_run_with_async_records_is_refused(tmp_path):
     m = AB.measure(write_run(tmp_path, failure="slam_link_failed: scan 9: no reply within 1.00 s"))
     assert m["T"] is None and m["E"] is None and not m["success"]
-    with pytest.raises(ValueError, match="off run carries slam_async"):
+    with pytest.raises(ValueError, match="off run carries async SLAM records"):
         AB.measure(write_run(tmp_path / "b", arm="off"))
+
+
+def test_only_the_plans_set_of_runs_is_judged():
+    """Codex 5.10 script review P2: five blocks, no generalisation runs or a repeated tag were judged."""
+    with pytest.raises(ValueError, match="drawn"):
+        AB.judge({"blocks": BLOCKS[:5]}, good_runs()[:20] + general())
+    with pytest.raises(ValueError, match="generalisation"):
+        decide(good_runs(), [])
+    runs = good_runs()
+    runs[3]["tag"] = runs[2]["tag"]
+    with pytest.raises(ValueError, match="twice"):
+        decide(runs)
+
+
+def test_a_missing_safety_field_is_unknown_and_blocks_both_choices():
+    runs = good_runs()
+    runs[0]["forbidden"] = None  # an on run whose contacts were not recorded
+    assert not decide(runs)["rules"]["R1"]
+    runs = [run(i, a, gaps=0, ratio=0.74 + 0.001 * ((7 * i) % 24)) for i, a in enumerate(ARMS)]
+    runs[1]["unpermitted"] = None  # an off run: no automatic turn to off
+    assert decide(runs)["outcome"] == "user:off_arm_unsafe"
+
+
+def test_a_non_finite_value_stops_the_automatic_decision():
+    runs = good_runs()
+    runs[0]["E"]["p50_mm"] = float("nan")
+    assert decide(runs)["row"] == 7
+    with pytest.raises(ValueError, match="non-finite"):
+        AB.shown([float("nan")] + [1.0] * 23, ARMS, BLOCKS, 0.0, "<", "mean")
+
+
+def test_every_estimate_and_insertion_test_is_reported_even_after_one_fails():
+    runs = good_runs()
+    for r in runs:
+        if r["arm"] == "on":
+            r["E"]["p50_mm"] += 30.0
+    assert {"e_p50<10", "e_p99<15", "lat_min>-10", "beyond>-10", "beyond<10", "yaw<0.005"} <= set(
+        decide(runs)["tests"])
+
+
+def test_the_records_must_agree_with_the_scheduled_arm(tmp_path):
+    with pytest.raises(ValueError, match="off run carries"):
+        AB.measure(write_run(tmp_path / "a", arm="off"))
+    spec = write_run(tmp_path / "b")
+    result = json.loads((Path(spec["dir"]) / "run/result.json").read_text())
+    del result["slam_async"]
+    (Path(spec["dir"]) / "run/result.json").write_text(json.dumps(result))
+    with pytest.raises(ValueError, match="no slam_async"):
+        AB.measure(spec)
+
+
+def test_insertion_needs_both_forks_and_survives_null_descriptives(tmp_path):
+    good = {"lateral_clearance_min_m": {"insert": {"left": 0.07, "right": 0.06}},
+            "insertion_measured": {"left": {"beyond_centre_m": 0.01}, "right": {"beyond_centre_m": 0.02}},
+            "insertion_truth_yaw_rad": 0.001, "insertion_error": {"position_m": None}}
+    assert AB.insertion(good)["tracking_error_mm"] is None
+    one = json.loads(json.dumps(good))
+    del one["insertion_measured"]["right"]
+    assert AB.insertion(one) is None
+    null = json.loads(json.dumps(good))
+    null["insertion_measured"]["left"]["beyond_centre_m"] = None
+    assert AB.insertion(null) is None
+
+
+def test_a_jump_is_timed_at_its_application_tick_and_its_first_command_counts():
+    e = {"jumps_mm": [(50.0, 1.0)]}
+    t = {"curvature": [(0.9, 0.0), (1.05, 1.0), (1.2, 1.0)]}
+    assert AB.jumps(e, t)["curvature_step_after_max"] == pytest.approx(1.0)
+

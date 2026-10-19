@@ -85,7 +85,8 @@ def estimate_error(records) -> dict | None:
         applied = after if after is not None else used
         if previous is not None:
             a, b = _compose(previous, r["odom_base"]), _compose(applied, r["odom_base"])
-            jumps.append((math.hypot(a[0] - b[0], a[1] - b[1]) * 1000.0, float(r["stamp_s"])))
+            at = r.get("applied_tick_s") if r.get("link") == "async" else None  # when control took it
+            jumps.append((math.hypot(a[0] - b[0], a[1] - b[1]) * 1000.0, float(at if at is not None else r["stamp_s"])))
         previous = applied
     if not e:
         return None
@@ -96,6 +97,7 @@ def estimate_error(records) -> dict | None:
         "max_mm": float(e.max()),
         "lag_over_20mm": len(worse), "lag_max_mm": max((x[0] for x in lag), default=None),
         "lag_over_20mm_modes": sorted({str(x[1]) for x in worse}),
+        "lag_over_20mm_phases": sorted({str(x[2]) for x in worse}),
         "jumps_mm": jumps,
     }
 
@@ -109,7 +111,7 @@ def timing(records, log) -> dict | None:
         return None
     lines = [d for d in log if "tick_t" in d and "mono" in d and not d.get("status") and not d.get("request_id")
              and "mode" in d]
-    drive = [d for d in lines if float(d["tick_t"]) >= t0]
+    drive = [d for d in lines if float(d["tick_t"]) > t0]  # after the first tracking scan's stamp (plan 5.10)
     if len(drive) < 2:
         return None
     gaps = [b["mono"] - a["mono"] for a, b in zip(drive, drive[1:]) if b["mono"] - a["mono"] > GAP_S]
@@ -119,7 +121,10 @@ def timing(records, log) -> dict | None:
             sim += float(b["tick_t"]) - float(a["tick_t"])
             wall += float(b["mono"]) - float(a["mono"])
     first = next((d for d in lines), None)
+    before = [d for d in lines if float(d["tick_t"]) <= t0] + drive[:1]
+    warm_gaps = [b["mono"] - a["mono"] for a, b in zip(before, before[1:]) if b["mono"] - a["mono"] > GAP_S]
     return {
+        "warmup_gaps": len(warm_gaps),
         "gaps": len(gaps), "gap_s": [round(g, 3) for g in gaps], "ratio": sim / wall if wall > 0 else None,
         "drive_wall_s": float(drive[-1]["mono"] - drive[0]["mono"]),
         "warmup_wall_s": float(drive[0]["mono"] - first["mono"]) if first else None,
@@ -129,33 +134,46 @@ def timing(records, log) -> dict | None:
 
 def insertion(result) -> dict | None:
     """P: physical insertion measures; None unless all three are there."""
-    try:
+    try:  # both sides of each, finite, or no P (Codex 5.10 script review P2)
         lat = result["lateral_clearance_min_m"]["insert"]
-        beyond = [v["beyond_centre_m"] for v in result["insertion_measured"].values() if isinstance(v, dict)]
-        yaw = result["insertion_truth_yaw_rad"]
-        lat_min = min(float(v) for v in lat.values())
+        lat_min = min(float(lat["left"]), float(lat["right"]))
+        measured = result["insertion_measured"]
+        beyond = [float(measured["left"]["beyond_centre_m"]), float(measured["right"]["beyond_centre_m"])]
+        yaw = float(result["insertion_truth_yaw_rad"])
     except (KeyError, TypeError, ValueError, AttributeError):
         return None
-    if not beyond or yaw is None or not all(math.isfinite(float(v)) for v in [lat_min, yaw, *beyond]):
+    if not all(math.isfinite(v) for v in [lat_min, yaw, *beyond]):
         return None
+    try:
+        tracking = 1000.0 * float((result.get("insertion_error") or {}).get("position_m"))
+    except (TypeError, ValueError):
+        tracking = None  # descriptive only
     return {"lat_min_mm": lat_min * 1000.0, "beyond_mm": float(np.mean(beyond)) * 1000.0,
-            "yaw_abs_rad": abs(float(yaw)), "tracking_error_mm": 1000.0 * float(
-                (result.get("insertion_error") or {}).get("position_m", float("nan")))}
+            "yaw_abs_rad": abs(yaw), "tracking_error_mm": tracking}
 
 
 def measure(run: dict) -> dict:
     d = Path(run["dir"]) / "run"
     result, records, log = _load(d / "result.json"), _load(d / "slam_records.json"), _load(d / "live_log.jsonl")
-    out = {k: run.get(k) for k in ("tag", "arm", "set", "block", "rerun_of")}
+    out = {k: run.get(k) for k in ("tag", "arm", "set", "block", "seed", "rerun_of")}
     out["result"] = result is not None
     out["success"] = bool(result and result.get("success"))
     out["failure_reason"] = result.get("failure_reason") if result else "no_result"
     out["slam_async_record"] = bool(result and result.get("slam_async") is not None)
-    if out["slam_async_record"] and run["arm"] != "on":
-        raise ValueError(f"{run['tag']}: an off run carries slam_async")  # the arm comes from the schedule
-    ol = (result or {}).get("obstacle_layer") or {}
-    out["unpermitted"] = len(ol.get("unpermitted") or []) if result else None
-    out["forbidden"] = len((result or {}).get("forbidden_pocket_contacts") or []) if result else None
+    # The arm comes from the schedule; the records must agree both ways (Codex 5.10 script review P2).
+    any_async = any(r.get("link") == "async" for r in records or [])
+    warmed = any(r.get("mode") == "tracking" for r in records or [])
+    if run["arm"] != "on" and (out["slam_async_record"] or any_async):
+        raise ValueError(f"{run['tag']}: an off run carries async SLAM records")
+    if run["arm"] == "on" and warmed and not out["slam_async_record"]:
+        raise ValueError(f"{run['tag']}: an on run past its warm-up has no slam_async")
+
+    def count(container, key):  # a missing or null safety field is unknown, never 0
+        value = (container or {}).get(key) if isinstance(container, dict) else None
+        return len(value) if isinstance(value, list) else None
+
+    out["unpermitted"] = count((result or {}).get("obstacle_layer"), "unpermitted")
+    out["forbidden"] = count(result, "forbidden_pocket_contacts")
     ended = not session_failed(result)
     out["E"] = estimate_error(records) if ended else None
     out["T"] = timing(records, log) if ended else None
@@ -174,7 +192,8 @@ def jumps(e, t) -> dict | None:
     curv = t["curvature"]
     after = []
     for _mm, at in big:
-        window = [k for tt, k in curv if at <= tt <= at + 0.5]
+        start = max([i for i, (tt, _k) in enumerate(curv) if tt < at] or [0])  # the command just before it
+        window = [k for i, (tt, k) in enumerate(curv) if i >= start and tt <= at + 0.5]
         after.append(max((abs(b - a) for a, b in zip(window, window[1:])), default=0.0))
     every = [abs(b[1] - a[1]) for a, b in zip(curv, curv[1:])]
     return {"jumps_over_20mm": len(big), "jump_max_mm": max((mm for mm, _ in e["jumps_mm"]), default=None),
@@ -201,6 +220,8 @@ def stat(values, arms, kind):
 
 def shown(values, arms, blocks, c, side, kind):
     """p for 'diff > c' (side '>') or 'diff < c' (side '<') under the sharp null on = off + c."""
+    if not all(math.isfinite(float(v)) for v in values):
+        raise ValueError("a non-finite value reached a test")  # R0 keeps them out (Codex 5.10 script review P2)
     adjusted = [v - c if a == "on" else v for v, a in zip(values, arms)]
     observed = stat(adjusted, arms, kind)
     stats = [stat(adjusted, other, kind) for other in assignments(blocks)]
@@ -222,9 +243,32 @@ def iqr_ratio(values, arms) -> float | None:
     return a / b if b > 0 else None
 
 
+PLAN_BLOCKS = [0, 0, 1, 1, 0, 0]  # plan 5.10: numpy.random.default_rng(20261019).integers(0, 2, 6)
+GENERAL = sorted([(1, "on"), (1, "off"), (2, "on"), (2, "off")])
+
+
+def _finite(*xs) -> bool:
+    try:
+        return all(x is not None and math.isfinite(float(x)) for x in xs)
+    except (TypeError, ValueError):
+        return False
+
+
 def judge(manifest: dict, runs: list[dict]) -> dict:
+    """The plan's set of runs only (Codex 5.10 script review P2): six drawn blocks, 24 decision runs in block order,
+    the four generalisation runs, every tag once."""
     blocks = list(manifest["blocks"])
+    if blocks != PLAN_BLOCKS:
+        raise ValueError(f"blocks {blocks} are not the plan's drawn {PLAN_BLOCKS}")
+    tags = [r["tag"] for r in runs]
+    if len(set(tags)) != len(tags):
+        raise ValueError("a tag appears twice")
     decision = [r for r in runs if r["set"] == "decision"]
+    general = [r for r in runs if r["set"] == "general"]
+    if len(decision) != 24 or [r["block"] for r in decision] != [i // 4 for i in range(24)]:
+        raise ValueError("the decision set is not 24 runs in block order")
+    if sorted((r.get("seed"), r["arm"]) for r in general) != GENERAL:
+        raise ValueError("the generalisation set is not seeds 1 and 2 once per arm")
     arms = [r["arm"] for r in decision]
     expected = [a for b in blocks for a in BLOCK_ORDER[b]]
     if arms != expected:
@@ -241,8 +285,10 @@ def judge(manifest: dict, runs: list[dict]) -> dict:
     on_ok = sum(r["success"] for r in decision if r["arm"] == "on")
     off_ok = sum(r["success"] for r in decision if r["arm"] == "off")
     r2 = on_ok >= off_ok - 1
-    r0t = all(r["T"] is not None and r["T"]["ratio"] is not None for r in decision)
-    r0ep = all(r["E"] is not None and r["P"] is not None for r in decision)
+    r0t = all(r["T"] is not None and _finite(r["T"]["ratio"], r["T"]["gaps"]) for r in decision)
+    r0ep = all(r["E"] is not None and r["P"] is not None and _finite(
+        r["E"]["p50_mm"], r["E"]["p99_mm"], r["P"]["lat_min_mm"], r["P"]["beyond_mm"], r["P"]["yaw_abs_rad"])
+        for r in decision)
     out["rules"].update(R1=r1, off_safe=off_safe, R2=r2, R0_T=r0t, R0_EP=r0ep,
                         successes={"on": on_ok, "off": off_ok})
 
@@ -277,12 +323,14 @@ def judge(manifest: dict, runs: list[dict]) -> dict:
         lat = [r["P"]["lat_min_mm"] for r in decision]
         beyond = [r["P"]["beyond_mm"] for r in decision]
         yaw = [r["P"]["yaw_abs_rad"] for r in decision]
-        r3 = test("e_p50<10", e50, MARGINS["e_p50_mm"], "<", "median") and test(
-            "e_p99<15", e99, MARGINS["e_p99_mm"], "<", "median")
-        r4 = (test("lat_min>-10", lat, MARGINS["lat_min_mm"], ">", "median")
-              and test("beyond>-10", beyond, -MARGINS["beyond_mm"], ">", "median")
-              and test("beyond<10", beyond, MARGINS["beyond_mm"], "<", "median")
-              and test("yaw<0.005", yaw, MARGINS["yaw_abs_rad"], "<", "median"))
+        # Every test first, then the conjunction: the user gets every number (Codex 5.10 script review P3).
+        t3 = [test("e_p50<10", e50, MARGINS["e_p50_mm"], "<", "median"),
+              test("e_p99<15", e99, MARGINS["e_p99_mm"], "<", "median")]
+        t4 = [test("lat_min>-10", lat, MARGINS["lat_min_mm"], ">", "median"),
+              test("beyond>-10", beyond, -MARGINS["beyond_mm"], ">", "median"),
+              test("beyond<10", beyond, MARGINS["beyond_mm"], "<", "median"),
+              test("yaw<0.005", yaw, MARGINS["yaw_abs_rad"], "<", "median")]
+        r3, r4 = all(t3), all(t4)
         r34 = r3 and r4
         out["rules"].update(R3=r3, R4=r4)
 
