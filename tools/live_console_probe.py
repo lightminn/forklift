@@ -813,7 +813,22 @@ async def cycle_scenario(p: Probe, args):
             # Persistent console plan U7/U26/U27: the first mission cancelled in a phase (after some seconds in it);
             # the statuses it goes through to its end are kept (recovering, then cancelled or recovery_required).
             # PHASE@METRES: once the follower has at most METRES left in it (a leg's end, plan D4b's approach end).
-            if "@" in args.cancel_at:
+            if args.cancel_at.endswith("@docked"):
+                # Plan U8: on the docked delivery straight (under the docking's SLAM hold) -- the follower stopped
+                # short of the destination to look (at most 0.1 m left), then the docked straight was installed
+                # (more than 0.3 m left again). The state does not publish the hold, so its leg change is read.
+                phase_ = args.cancel_at.partition("@")[0]
+                seen_short_ = []
+
+                def due_(s):
+                    m_ = s.get("mission") or {}
+                    left_ = m_.get("remaining_m")
+                    if m_.get("phase") != phase_ or left_ is None:
+                        return False
+                    if float(left_) <= 0.1:
+                        seen_short_.append(True)
+                    return bool(seen_short_) and float(left_) > 0.3
+            elif "@" in args.cancel_at:
                 phase_, _, left_ = args.cancel_at.partition("@")
                 left_m_ = float(left_)
 
@@ -958,7 +973,7 @@ def main():
     ap.add_argument("--pre-teleop-s", type=float, default=0.0, help="cycle scenario: drive by hand first (wall s)")
     ap.add_argument("--end-session", action="store_true", help="cycle scenario: end the session at the end")
     ap.add_argument("--cancel-at", default="", help="cycle scenario: cancel the first mission in PHASE[:SECONDS in it] "
-                    "or PHASE@METRES (at most METRES left of its leg) "
+                    "or PHASE@METRES (at most METRES left of its leg) or transport@docked (on the docked straight) "
                     "(plan U7/U26/U27)")
     ap.add_argument("--idle-s", type=float, default=0.0, help="cycle scenario: stay connected this long first (wall s)")
     ap.add_argument("--pre-teleop-speed", type=float, default=0.5)
