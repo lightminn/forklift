@@ -5824,10 +5824,14 @@ def drive(S, isaac) -> None:
                 try:
                     replies_ = slam["async_link"].poll()
                 except slam["module"].SlamLinkFailure as exc:
+                    if slam["async_link"].long_poll_gaps:  # the gap that ended it stays in the record
+                        state["slam_async"]["long_poll_gaps"] = [list(g) for g in slam["async_link"].long_poll_gaps]
                     raise SessionFailure(f"slam_link_failed: {exc}") from exc
                 if replies_:
                     core.slam_replies(t, replies_, ms.phase in ["lift", "extract", "transport", "lower"])
                     state["slam_async"]["max_depth"] = slam["async_link"].max_depth
+                if slam["async_link"].long_poll_gaps:  # polls further apart than the deadline (a stop, a stall)
+                    state["slam_async"]["long_poll_gaps"] = [list(g) for g in slam["async_link"].long_poll_gaps]
             if slam is not None:
                 rear = slam_rear(t)
                 signed_speed = slam["tracker_speed"]
