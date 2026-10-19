@@ -6532,9 +6532,9 @@ def drive(S, isaac) -> None:
                 while gc_seen_:  # D9d: the collections timed since the last tick, folded in outside any walk
                     live_timers.add(*gc_seen_.pop())
                 if live is not None:
-                    live_spool.tick(time.monotonic())  # plan D8: before any of this tick's appends
-                    if live.trace is not None:
+                    if live.trace is not None:  # the spool's cut is control-tick work (main review of #61, P3)
                         live.trace.control("ctrl_start", live.trace.now())
+                    live_spool.tick(time.monotonic())  # plan D8: before any of this tick's appends
                     # Persistent console plan D2: a submit is prepared from where the truck stands (below, once the
                     # control pose is this tick's). Until D4/D5 a mission that ended with the forks possibly in a pocket
                     # refuses the next submit (recovery_required).
