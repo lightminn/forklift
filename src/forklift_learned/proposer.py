@@ -69,11 +69,20 @@ class LearnedProposer:
             if threads:  # onnxruntime sizes its pool to the machine, not the Slurm allocation
                 options.intra_op_num_threads, options.inter_op_num_threads = int(threads), 1
             session = ort.InferenceSession(str(onnx_path), sess_options=options, providers=asked)
-            if wants_cuda and "CUDAExecutionProvider" not in session.get_providers():
-                raise RuntimeError(f"CUDAExecutionProvider was asked for but the session runs on "
-                                   f"{session.get_providers()}")
+            if wants_cuda and hasattr(session, "disable_fallback"):
+                # onnxruntime otherwise rebuilds the session on the CPU after an EP failure in run() and retries
+                # silently (Codex review, stage 3b) -- a failure must raise, so the caller falls back on the record
+                session.disable_fallback()
+        else:
+            wants_cuda = False
         self.session, self.conf, self.iou, self.max_det = session, float(conf), float(iou), int(max_det)
-        self.active_providers = list(session.get_providers()) if hasattr(session, "get_providers") else []
+        self.wants_cuda = wants_cuda
+        self._check_providers()
+
+    def _check_providers(self) -> None:
+        self.active_providers = list(self.session.get_providers()) if hasattr(self.session, "get_providers") else []
+        if self.wants_cuda and "CUDAExecutionProvider" not in self.active_providers:
+            raise RuntimeError(f"CUDAExecutionProvider was asked for but the session runs on {self.active_providers}")
 
     def warm_up(self, n: int = 3) -> None:
         """Run the session on zeros of its input shape (CUDA builds its kernels and picks cuDNN algorithms on the
@@ -82,6 +91,7 @@ class LearnedProposer:
         zeros = np.zeros([int(d) for d in inp.shape], np.float32)
         for _ in range(n):
             self.session.run(None, {inp.name: zeros})
+        self._check_providers()  # what the warmed-up session really runs on
 
     def propose(self, scene) -> list:
         inp = self.session.get_inputs()[0]

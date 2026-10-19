@@ -108,10 +108,29 @@ class _FakeOrt:
         ort = self
 
         class S:
+            fallback_disabled = False
+
             def get_providers(self):
                 return list(ort.active)
 
+            def disable_fallback(self):
+                S.fallback_disabled = True
+
+            def get_inputs(self):
+                class I:
+                    name = "images"
+                    shape = [1, 3, H, W]
+                return [I()]
+
+            def run(self, _names, feeds):
+                if ort.fall_on_run:  # what onnxruntime does on an EP failure unless fallback is disabled
+                    ort.active = ["CPUExecutionProvider"]
+                return [np.zeros((1, 37, 5), np.float32), np.zeros((1, 32, H // 4, W // 4), np.float32)]
+
+        self.session = S
         return S()
+
+    fall_on_run = False
 
 
 def test_cuda_is_preloaded_and_pinned_to_the_device_asked(monkeypatch):
@@ -155,3 +174,21 @@ def test_warm_up_runs_the_session_on_its_input_shape():
 
     P.LearnedProposer(session=S()).warm_up(2)
     assert runs == [(1, 3, H, W)] * 2
+
+
+def test_a_cuda_session_disables_onnxruntimes_silent_cpu_retry(monkeypatch):
+    # Codex review (stage 3b): ORT 1.31's run() rebuilds the session on the CPU after an EP failure unless fallback is
+    # disabled, while the record still said CUDA
+    ort = _FakeOrt(["CUDAExecutionProvider", "CPUExecutionProvider"])
+    monkeypatch.setitem(__import__("sys").modules, "onnxruntime", ort)
+    P.LearnedProposer("m.onnx", providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
+    assert ort.session.fallback_disabled
+
+
+def test_the_providers_are_checked_again_after_the_warm_up(monkeypatch):
+    ort = _FakeOrt(["CUDAExecutionProvider", "CPUExecutionProvider"])
+    monkeypatch.setitem(__import__("sys").modules, "onnxruntime", ort)
+    prop = P.LearnedProposer("m.onnx", providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
+    ort.fall_on_run = True
+    with pytest.raises(RuntimeError, match="CUDAExecutionProvider"):
+        prop.warm_up(1)

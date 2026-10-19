@@ -114,7 +114,8 @@ def test_the_worker_pins_its_onnxruntime_threads(monkeypatch):
     W.WorkerProposer("py", "m.onnx", conf=0.05, threads=3)
     assert seen["cmd"][-2] == "3"
     built = {}
-    monkeypatch.setattr(W, "serve", lambda proposer: None)
+    monkeypatch.setattr(W, "serve", lambda proposer, stdout=None: None)
+    monkeypatch.setattr(W, "protocol_stdout", lambda: None)  # never redirect the test process's own stdout
     import forklift_learned.proposer as P
 
     monkeypatch.setattr(P, "LearnedProposer", lambda *a, **kw: built.update(kw))
@@ -149,7 +150,8 @@ def test_the_worker_passes_the_cuda_device(monkeypatch):
     W.WorkerProposer("py", "m.onnx", providers="CUDAExecutionProvider,CPUExecutionProvider", threads=2, device_id=1)
     assert seen["cmd"][-2:] == ["2", "1"]
     built = {}
-    monkeypatch.setattr(W, "serve", lambda proposer: None)
+    monkeypatch.setattr(W, "serve", lambda proposer, stdout=None: None)
+    monkeypatch.setattr(W, "protocol_stdout", lambda: None)  # never redirect the test process's own stdout
     import forklift_learned.proposer as P
 
     monkeypatch.setattr(P, "LearnedProposer", lambda *a, **kw: built.update(kw))
@@ -175,3 +177,38 @@ def test_serve_warms_the_model_up_before_the_first_request(tmp_path):
         assert w.propose(_Scene())[0].score == pytest.approx(0.3)
     finally:
         w.close()
+
+
+def test_stray_stdout_output_does_not_corrupt_the_protocol(tmp_path):
+    # Codex review (stage 3b): preload_dlls prints its diagnostics to stdout; unbuffered, they reached the client
+    # before the reply and were read as a length
+    script = tmp_path / "fake.py"
+    script.write_text("import os, sys\n"
+                      "from forklift_learned.worker import protocol_stdout, serve\n"
+                      "out = protocol_stdout()\n"
+                      "print('preload: could not load from the pip path, retrying', flush=True)\n"
+                      "os.write(1, b'C-level noise\\n')\n"
+                      "class P:\n"
+                      "    active_providers = ['CPUExecutionProvider']\n"
+                      "    def warm_up(self, n=3):\n"
+                      "        print('warming', flush=True)\n"
+                      "    def propose(self, scene):\n"
+                      "        print('frame', flush=True)\n"
+                      "        return []\n"
+                      "serve(P(), stdout=out)\n")
+    import os
+
+    w = W.WorkerProposer(None, None, command=[sys.executable, str(script)],
+                         env={**os.environ, "PYTHONUNBUFFERED": "1"})
+    try:
+        assert w.providers() == ["CPUExecutionProvider"]
+        assert w.propose(_Scene()) == []
+    finally:
+        w.close()
+
+
+def test_an_implausible_reply_length_is_an_error_not_an_allocation():
+    import io
+
+    with pytest.raises(RuntimeError, match="length"):
+        W._recv(io.BytesIO(b"preload!" + b"x" * 16))

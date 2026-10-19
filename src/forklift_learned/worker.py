@@ -8,6 +8,7 @@ An empty request asks for the session's active providers (reply ``providers``).
 from __future__ import annotations
 
 import io
+import os
 import struct
 import subprocess
 import sys
@@ -24,12 +25,28 @@ def _send(stream, payload: bytes) -> None:
     stream.flush()
 
 
+MAX_MESSAGE = 1 << 28  # 256 MB: a 640 x 480 frame and eight masks are a few MB
+
+
 def _recv(stream) -> bytes | None:
     head = stream.read(8)
     if len(head) < 8:
         return None
     (n,) = struct.unpack("<Q", head)
+    if n > MAX_MESSAGE:
+        raise RuntimeError(f"implausible message length {n} (stray output on the protocol stream?)")
     return stream.read(n)
+
+
+def protocol_stdout():
+    """The protocol's binary stream: the real stdout, kept on its own descriptor; fd 1 and ``sys.stdout`` then go to
+    stderr, so nothing else the process prints (onnxruntime's preload diagnostics, C libraries) reaches the client
+    (Codex review, stage 3b). Call before importing or building the model."""
+    sys.stdout.flush()
+    fd = os.dup(1)
+    os.dup2(2, 1)
+    sys.stdout = sys.stderr
+    return os.fdopen(fd, "wb")
 
 
 def serve(proposer, stdin=None, stdout=None) -> None:
@@ -81,7 +98,7 @@ class WorkerProposer:
             try:
                 _send(self.proc.stdin, payload)
                 out["raw"] = _recv(self.proc.stdout)
-            except (OSError, ValueError) as exc:  # broken pipe, closed file
+            except Exception as exc:  # noqa: BLE001 -- broken pipe, closed file, a corrupt stream
                 out["error"] = exc
 
         t = threading.Thread(target=run, daemon=True)
@@ -93,6 +110,9 @@ class WorkerProposer:
             self._kill()
             t.join(5)
             raise RuntimeError(f"learned worker missed its deadline ({deadline:g} s); killed")
+        if isinstance(out.get("error"), RuntimeError):  # the stream is out of step: no later reply can be trusted
+            self._kill()
+            raise RuntimeError(f"learned worker protocol broken: {out['error']}")
         return out.get("raw")
 
     def providers(self) -> list:
@@ -149,6 +169,7 @@ def _quiet_close(stream) -> None:
 
 
 def main(argv=None) -> int:
+    out = protocol_stdout()
     from forklift_learned import proposer  # noqa: PLC0415
 
     argv = sys.argv[1:] if argv is None else argv
@@ -156,7 +177,7 @@ def main(argv=None) -> int:
     threads = int(argv[3]) if len(argv) > 3 else None
     device_id = int(argv[4]) if len(argv) > 4 else 0
     serve(proposer.LearnedProposer(argv[0], conf=float(argv[1]) if len(argv) > 1 else 0.05, providers=providers,
-                                   threads=threads, device_id=device_id))
+                                   threads=threads, device_id=device_id), stdout=out)
     return 0
 
 
