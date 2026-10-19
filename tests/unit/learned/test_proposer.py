@@ -75,3 +75,14 @@ def test_a_failure_falls_back_to_the_geometric_proposer():
     got = P.propose_with_fallback(_Scene(), P.LearnedProposer(session=Broken()),
                                   lambda scene: calls.append(scene) or "geometric")
     assert got.source == "geometric_fallback" and got.reason.startswith("RuntimeError") and calls
+
+
+def test_the_box_crop_rounds_its_edges_like_ultralytics_predict():
+    # ws1 equivalence on the trained yolo11n: Ultralytics' predict crop keeps rows/cols in [round(y1), round(y2)) --
+    # a box from y 253.4 keeps row 253; cropping at the raw edge lost a row of thin far pallets (IoU 0.78-0.95)
+    prop = P.LearnedProposer(session=_session([(300.0, 260.0, 120.0, 13.2, 0.9)], mask_boxes=[(200, 200, 400, 320)]))
+    m = prop.propose(_Scene())[0].mask
+    rows = np.nonzero(m.any(axis=1))[0]
+    cols = np.nonzero(m.any(axis=0))[0]
+    assert (rows.min(), rows.max()) == (253, 266)  # y 253.4 -> 253, y 266.6 -> 267 (exclusive)
+    assert (cols.min(), cols.max()) == (240, 359)

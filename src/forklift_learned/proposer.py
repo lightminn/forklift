@@ -3,7 +3,7 @@
 The model is exported at the camera's grid (480 x 640, no letterbox), so the input is the RGB / 255 in CHW and
 the masks come back on the same grid. Decoding follows the Ultralytics segment head: per anchor 4 box values
 (cx, cy, w, h), one class score (``pallet``) and 32 mask coefficients; masks = sigmoid(coefficients @ prototypes)
-upsampled x4, cropped to the box, thresholded at 0.5. Scores >= ``conf``, class-agnostic NMS at ``iou``, at most
+upsampled x4, cropped to the rounded box, thresholded at 0.5. Scores >= ``conf``, class-agnostic NMS at ``iou``, at most
 ``max_det`` (design §8). The proposal score is the detection confidence; identity is decided downstream against
 tau (instance_fit._identity), never here. A failure falls back to the geometric proposer (design §10).
 """
@@ -84,10 +84,11 @@ class LearnedProposer:
         rows, cols = np.arange(h)[:, None], np.arange(w)[None, :]
         out = []
         for rank, i in enumerate(keep):
-            # Ultralytics' native-resolution masks: logits upsampled bilinearly, cropped to the box at pixel
-            # indices (x0 <= c < x1), positive logit (sigmoid > 0.5)
+            # Ultralytics' native-resolution masks (predict path, ops.crop_mask with < 50 masks on CPU): logits
+            # upsampled bilinearly, cropped to the box rounded to whole pixels (round(x0) <= c < round(x1),
+            # half to even like torch.round), positive logit (sigmoid > 0.5)
             logits = wy @ (p[i, 5:5 + nm] @ proto.reshape(nm, -1)).reshape(ph, pw) @ wx.T
-            x0, y0, x1, y1 = boxes[i]
+            x0, y0, x1, y1 = np.round(boxes[i])
             mask = (logits > 0.0) & (cols >= x0) & (cols < x1) & (rows >= y0) & (rows < y1)
             if mask.any():
                 out.append(InstanceProposal(f"l{rank}", mask, float(np.clip(scores[i], 0.0, 1.0)), "learned"))
