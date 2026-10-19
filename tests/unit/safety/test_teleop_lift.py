@@ -228,3 +228,14 @@ def test_a_stretch_ending_with_the_target_standing_keeps_it_whatever_the_sag():
     for _ in range(int(20 / DT)):
         tl.step(True, cmd(1), armed=True, dirs={-1, 1}, measured=0.244, start_from=0.0)  # at 0.28, a 36 mm sag
     assert tl.step(True, cmd(0), armed=True, dirs={-1, 1}, measured=0.244, start_from=None) == pytest.approx(0.28)
+
+
+def test_a_loaded_manual_lift_holds_within_the_loaded_tolerance():
+    """Main 2026-10-19: lowering a pallet by hand (recovery: lower only) with a 63 mm loaded sag -- the stretch's end
+    keeps the target within the loaded tolerance instead of dropping the load by the sag beyond a."""
+    tl = lift()
+    tl.loaded_tolerance_m = 0.073
+    for _ in range(30):
+        tl.step(True, cmd(-1), armed=True, dirs={-1}, measured=0.037, start_from=0.10, loaded=True)
+    out = tl.step(True, cmd(0), armed=True, dirs={-1}, measured=0.037, start_from=None, loaded=True)
+    assert out == pytest.approx(0.10 - 30 * 0.02 * DT)

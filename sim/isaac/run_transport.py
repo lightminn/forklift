@@ -1685,6 +1685,9 @@ def model_lift_sag_m(urdf_path, extra_mass_kg: float = 0.0) -> float | None:
         else None
 
 
+LOADED_HOLD_MARGIN_M = 0.01  # plan D14 (main 2026-10-19): the loaded hold tolerance's margin over the loaded sag
+
+
 class TrackerBook(dict):
     """The runner's path trackers by owner phase (fork spacing plan, V5 cusp arrivals; Codex leg-switch
     review). Installing a tracker stamps it with a serial (its path version), its owner phase, the time
@@ -5456,13 +5459,13 @@ def drive(S, isaac) -> None:
             if live_sag_ is not None and LiveTeleopLimits().lift_hold_tolerance_m < live_sag_:
                 # Main 2026-10-19: a tolerance below the sag lowers a moving empty lift's target at every event.
                 raise ValueError(f"lift_hold_tolerance_m below the model's lift sag {live_sag_:.4f} m (plan D14)")
+            live_loaded_tolerance_ = None
             if live_sag_ is not None:
-                # Loaded: the configured pallet's weight sags it further; a standing lift keeps its target (option 1),
-                # but an event while a loaded ramp moves lowers it once by the sag beyond the tolerance -- warned.
+                # Main 2026-10-19: loaded, the tolerance is the loaded sag (the configured pallet on the carriage) plus
+                # a margin -- a STOP while a loaded ramp moves keeps the target, the pallet is not set down again.
                 loaded_sag_m = model_lift_sag_m(args.forklift_urdf, float(settings["pallet_mass_kg"]))
-                state["teleop_lift"]["loaded_sag_m"] = loaded_sag_m
-                if LiveTeleopLimits().lift_hold_tolerance_m < loaded_sag_m:
-                    state["teleop_lift"]["warning"] = "loaded_sag_above_hold_tolerance"
+                live_loaded_tolerance_ = max(LiveTeleopLimits().lift_hold_tolerance_m, loaded_sag_m + LOADED_HOLD_MARGIN_M)
+                state["teleop_lift"].update(loaded_sag_m=loaded_sag_m, loaded_hold_tolerance_m=live_loaded_tolerance_)
             live_pallet_perm = (LivePalletPermit(obstacle["layer"].permission.config.stopping,
                                                  step_m=obstacle["layer"].permission.config.step_m)
                                 if obstacle is not None and not args.live_test_no_pallet_permit else None)
@@ -5583,6 +5586,8 @@ def drive(S, isaac) -> None:
             else:  # persistent console plan D2: each mission is prepared by the worker
                 raise ValueError("a live session needs the planning worker (FORKLIFT_LIVE_ASYNC_PLAN=0 is batch-only)")
             core.hooks.live_abort = lambda: live.stopped_in_tick  # the core stops right after a raw capture
+            # plan D14 (main 2026-10-19): the loaded hold tolerance for the gate, a mission end and the manual lift
+            live.loaded_hold_tolerance_m = live.arbiter.lift.loaded_tolerance_m = live_loaded_tolerance_
 
             live_marker_ = None
             if args.live_test_marker and live_cam_ is not None:

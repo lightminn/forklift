@@ -125,6 +125,9 @@ class TeleopLift:
         self.target: float | None = None
         self.active = False
         self.moved = False  # the last step moved the target (main 2026-10-19, option 1: only then is it clipped)
+        # Main 2026-10-19: loaded, the tolerance is the loaded sag plus a margin (the runner sets it from the model and
+        # the configured pallet); None: the plain one.
+        self.loaded_tolerance_m: float | None = None
 
     def sync(self, value: float) -> None:
         """A target set from outside while owned -- the stop gate's latch (Codex D14 impl round 1 P1-1): the old
@@ -133,12 +136,12 @@ class TeleopLift:
             self.target, self.active, self.moved = float(value), False, False
 
     def step(self, teleop_mode: bool, teleop: dict | None, *, armed: bool, dirs, measured: float | None,
-             start_from: float | None) -> float | None:
+             start_from: float | None, loaded: bool = False) -> float | None:
         measured = None if measured is None or not math.isfinite(measured) else float(measured)
         if not teleop_mode:
             if self.target is None:
                 return None
-            out = (self.hold(self.target, measured) if self.active and self.moved and measured is not None
+            out = (self.hold(self.target, measured, loaded) if self.active and self.moved and measured is not None
                    else self.target)  # handed over once
             self.target, self.active, self.moved = None, False, False
             return out
@@ -155,14 +158,17 @@ class TeleopLift:
             if measured is not None and self.moved:
                 # Main 2026-10-19 (option 1): a ramp that was moving stops near the lift; a target standing (at the
                 # travel's end) is kept, whatever the sag -- a loaded lift's can exceed the tolerance.
-                self.target = self.hold(self.target, measured)
+                self.target = self.hold(self.target, measured, loaded)
             self.active, self.moved = False, False
         return self.target
 
-    def hold(self, target: float, measured: float) -> float:
+    def hold(self, target: float, measured: float, loaded: bool = False) -> float:
         """Where an event stops the lift (main 2026-10-19): the target as it was, within the hold tolerance of the
-        measurement -- a ramp that ran ahead stops near the lift; a standing lift's sag does not move the target."""
+        measurement -- a ramp that ran ahead stops near the lift; a standing lift's sag does not move the target.
+        Loaded, the tolerance is the loaded one (the load's sag would otherwise set a pallet just lifted down)."""
         a = self.limits.lift_hold_tolerance_m
+        if loaded and self.loaded_tolerance_m is not None:
+            a = max(a, float(self.loaded_tolerance_m))
         return float(min(measured + a, max(measured - a, target)))
 
 

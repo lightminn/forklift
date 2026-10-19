@@ -116,6 +116,7 @@ class LiveRuntime:
         self.stopped_in_tick = False  # the gate stopped the wheels inside this control tick (plan C2)
         self._lift_latch: float | None = None  # the lift held since the first preempted step
         self._lift_moving = False  # plan D14: the lift target moved in the last control tick (main 2026-10-19)
+        self.loaded_hold_tolerance_m: float | None = None  # loaded: the loaded sag plus a margin (the runner sets it)
         self._lift_prev: float | None = None
         self.frame_id = 0
         self._last_render_time = None
@@ -380,6 +381,13 @@ class LiveRuntime:
             # the tolerance, and clipping it would lower the load at every event.
             return float(ms.lift_command)
         a = float(self.arbiter.config.teleop_limits.lift_hold_tolerance_m)
+        cargo = getattr(self.core, "cargo", None)
+        loaded = cargo is not None and (cargo.relation == "carrying" or cargo.load in ("acquiring", "confirmed",
+                                                                                       "releasing"))
+        if loaded and self.loaded_hold_tolerance_m is not None:
+            # Main 2026-10-19: a STOP while a loaded ramp moves would otherwise drop it by the load's sag beyond a --
+            # a pallet just lifted set down again.
+            a = max(a, float(self.loaded_hold_tolerance_m))
         return float(min(measured + a, max(measured - a, float(ms.lift_command))))
 
     def after_step(self, sim_t: float, *, odom_speed: float | None, yaw_rate: float, rendered: bool,

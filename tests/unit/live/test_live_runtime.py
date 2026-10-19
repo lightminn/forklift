@@ -781,3 +781,36 @@ def test_the_rolled_log_says_how_often_it_rolled_so_a_reader_knows_what_is_gone(
     rt2.close()
     with pytest.raises(ValueError, match="rolled"):
         read_live_log(tmp_path / "x")
+
+
+def test_a_stop_during_a_loaded_lift_ramp_holds_within_the_loaded_tolerance(tmp_path):
+    """Main 2026-10-19: loaded, the tolerance is the loaded sag plus a margin -- a STOP while the lift ramp carries a
+    pallet up (target ahead of the measurement by the 63 mm loaded sag) keeps the target: the pallet just off the
+    floor is not set down again (the drop stays within the margin)."""
+    rt, core, did, clock = runtime(tmp_path)
+    core.ms = SimpleNamespace(lift_command=0.10)
+    core.cargo = SimpleNamespace(relation="constrained", load="acquiring")
+    rt.loaded_hold_tolerance_m = 0.063 + 0.01
+    did["lift_pos"] = 0.10 - 0.063
+    rt._lift_moving = True
+    rt.start()
+    try:
+        rt.arbiter.stop(clock(), "stop:test")
+        step(rt, clock, 0.0)
+        assert did["lift"][-1] == pytest.approx(0.10)  # within a_eff of the measurement: kept
+    finally:
+        rt.close()
+    (tmp_path / "empty").mkdir()
+    rt2, core2, did2, clock2 = runtime(tmp_path / "empty")
+    core2.ms = SimpleNamespace(lift_command=0.10)
+    core2.cargo = SimpleNamespace(relation="free", load="none")
+    rt2.loaded_hold_tolerance_m = 0.073
+    did2["lift_pos"] = 0.04
+    rt2._lift_moving = True
+    rt2.start()
+    try:
+        rt2.arbiter.stop(clock2(), "stop:test")
+        step(rt2, clock2, 0.0)
+        assert did2["lift"][-1] == pytest.approx(0.06)  # empty forks: the plain tolerance (0.02 m)
+    finally:
+        rt2.close()

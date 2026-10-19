@@ -665,7 +665,8 @@ class Arbiter:
         lift_target = self.lift.step(
             self.mode == "TELEOP" and self.preempt_latch is None, self.teleop, armed=self.armed,
             dirs=policy.lift_dirs, measured=self.lift_m,
-            start_from=None if drive is None else drive.get("lift_command_m"))
+            start_from=None if drive is None else drive.get("lift_command_m"),
+            loaded=bool(((safety or {}).get("load") or {}).get("loaded")))
         self.last_applied = speed
         return Output(self.mode, stop_kind, source, speed, curvature, policy, self.control_gen, self.armed,
                       self.preempt_latch, permit, lift_target)
