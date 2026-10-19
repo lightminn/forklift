@@ -137,6 +137,16 @@ test("resume is offered for a paused or held mission once the truck stands", () 
   assert.equal(resumeState({ state: st, mission: null, hasLease: true }).enabled, false);
 });
 
+test("a cancel's recovery paused by the PAUSED mode says the resume finishes the cancel (U30 pc15)", () => {
+  const st = { mode: "PAUSED", stopped_confirmed: true };
+  for (const phase of ["recover_lower", "recover_withdraw", "clear_out"]) {
+    const r = resumeState({ state: st, mission: { status: "paused", phase }, hasLease: true });
+    assert.equal(r.enabled, true);
+    assert.match(r.hint, /취소/);
+  }
+  assert.equal(resumeState({ state: st, mission: { status: "paused", phase: "insert" }, hasLease: true }).hint, "");
+});
+
 test("a permit whose limit is unknown is shown, not dropped", () => {
   assert.equal(permitText(null), "판정 없음");
   assert.equal(permitText({ reason: "clear", limit_mps: 0.3 }), "clear · 상한 0.30 m/s");

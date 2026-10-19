@@ -232,7 +232,6 @@ export function render(m) {
 
   // mission
   const why = blockReason({ state: st, canMission: prof.mission, hasLease: lease, mode, mission: mi });
-  $("mission-gate").textContent = "";
   const ready = $("ready-line");
   ready.className = `ready ${why ? "warn" : "ok"}`;
   ready.querySelector("span").textContent = why ?? "작업을 받을 수 있습니다";
@@ -245,7 +244,8 @@ export function render(m) {
   $("m-cancel").title = recovery ? "복구 중에는 취소 대신 일시정지합니다" : "";
   const resume = resumeState({ state: st, mission: mi, hasLease: lease });
   $("m-resume").disabled = !resume.enabled;
-  $("m-resume").title = resume.why;
+  $("m-resume").title = resume.why || resume.hint;
+  $("mission-gate").textContent = resume.hint;  // visible on a touch screen too (no hover)
   $("m-cancel").disabled = !lease || !active || recovery;
   if (mi) {
     $("req-id").textContent = `${mi.mission_id}${mi.pallet_id ? ` · ${mi.pallet_id} → ${mi.destination_id ?? "?"}` : ""}`;
