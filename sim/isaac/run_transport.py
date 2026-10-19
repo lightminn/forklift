@@ -1655,9 +1655,10 @@ def urdf_lift_limit(urdf_path) -> tuple[float, str]:
     return 0.20, "default"
 
 
-def model_lift_sag_m(urdf_path) -> float | None:
-    """Plan D14 (main 2026-10-19): the lift position drive's gravity sag the model implies -- its carriage weight over
-    the lift position gain (parameters.yaml beside the URDF) -- without the blades, so a lower bound. None unknown."""
+def model_lift_sag_m(urdf_path, extra_mass_kg: float = 0.0) -> float | None:
+    """Plan D14 (main 2026-10-19): the lift position drive's gravity sag the model implies -- its carriage weight (plus
+    ``extra_mass_kg``, a load) over the lift position gain (parameters.yaml beside the URDF) -- without the blades, so
+    a lower bound. None unknown."""
     import yaml
 
     try:
@@ -1680,7 +1681,8 @@ def model_lift_sag_m(urdf_path) -> float | None:
         mass, gain = float(mass), float(gain)
     except (TypeError, ValueError):
         return None
-    return mass * 9.81 / gain if math.isfinite(mass) and math.isfinite(gain) and gain > 0 else None
+    return (mass + float(extra_mass_kg)) * 9.81 / gain if math.isfinite(mass) and math.isfinite(gain) and gain > 0 \
+        else None
 
 
 class TrackerBook(dict):
@@ -5452,8 +5454,15 @@ def drive(S, isaac) -> None:
             live_sag_ = model_lift_sag_m(args.forklift_urdf)
             state["teleop_lift"].update(hold_tolerance_m=LiveTeleopLimits().lift_hold_tolerance_m, model_sag_m=live_sag_)
             if live_sag_ is not None and LiveTeleopLimits().lift_hold_tolerance_m < live_sag_:
-                # Main 2026-10-19: a tolerance below the sag lowers a standing lift's target at every event.
+                # Main 2026-10-19: a tolerance below the sag lowers a moving empty lift's target at every event.
                 raise ValueError(f"lift_hold_tolerance_m below the model's lift sag {live_sag_:.4f} m (plan D14)")
+            if live_sag_ is not None:
+                # Loaded: the configured pallet's weight sags it further; a standing lift keeps its target (option 1),
+                # but an event while a loaded ramp moves lowers it once by the sag beyond the tolerance -- warned.
+                loaded_sag_m = model_lift_sag_m(args.forklift_urdf, float(settings["pallet_mass_kg"]))
+                state["teleop_lift"]["loaded_sag_m"] = loaded_sag_m
+                if LiveTeleopLimits().lift_hold_tolerance_m < loaded_sag_m:
+                    state["teleop_lift"]["warning"] = "loaded_sag_above_hold_tolerance"
             live_pallet_perm = (LivePalletPermit(obstacle["layer"].permission.config.stopping,
                                                  step_m=obstacle["layer"].permission.config.step_m)
                                 if obstacle is not None and not args.live_test_no_pallet_permit else None)

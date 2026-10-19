@@ -115,6 +115,8 @@ class LiveRuntime:
         self._start_mono = None
         self.stopped_in_tick = False  # the gate stopped the wheels inside this control tick (plan C2)
         self._lift_latch: float | None = None  # the lift held since the first preempted step
+        self._lift_moving = False  # plan D14: the lift target moved in the last control tick (main 2026-10-19)
+        self._lift_prev: float | None = None
         self.frame_id = 0
         self._last_render_time = None
         self._targets_revision = None
@@ -313,6 +315,12 @@ class LiveRuntime:
         """The state (with the command as finally applied), the targets and the log entry due this tick.
         ``plan_key`` names the path being followed (None: none); ``plan_poses()`` gives its poses and directions."""
         now = self.clock()
+        ms = getattr(self.core, "ms", None)
+        if ms is not None and getattr(ms, "lift_command", None) is not None:
+            # plan D14: whether the lift target moved this tick (the event hold clips only a moving one)
+            cmd = float(ms.lift_command)
+            self._lift_moving = self._lift_prev is not None and abs(cmd - self._lift_prev) > 1e-9
+            self._lift_prev = cmd
         if self.link.state_due(now):
             msg = state_message(self.arbiter, out, safety, now_mono=now, rear_axle_speed_mps=speed_mps,
                                 applied=applied, pose=pose, freshness=freshness, pacing=self.pacer.report(),
@@ -367,6 +375,10 @@ class LiveRuntime:
         ms = getattr(self.core, "ms", None)
         if ms is None or getattr(ms, "lift_command", None) is None:
             return measured
+        if not self._lift_moving:
+            # Main 2026-10-19 (option 1): a target standing in the last tick is kept -- a loaded lift's sag can exceed
+            # the tolerance, and clipping it would lower the load at every event.
+            return float(ms.lift_command)
         a = float(self.arbiter.config.teleop_limits.lift_hold_tolerance_m)
         return float(min(measured + a, max(measured - a, float(ms.lift_command))))
 

@@ -303,5 +303,9 @@ def test_the_models_lift_sag_bounds_the_hold_tolerance(tmp_path):
     root = Path(__file__).resolve().parents[3]
     sag = scope["model_lift_sag_m"](root / "sim/models/dls08_measured/forklift.urdf")
     assert sag == pytest.approx(1.6 * 9.81 / 1800.0)
+    assert scope["model_lift_sag_m"](root / "sim/models/dls08_measured/forklift.urdf", 10.0) == pytest.approx(
+        11.6 * 9.81 / 1800.0)  # with the configured 10 kg pallet: 63 mm, above a -- a warning, not a refusal
     assert scope["model_lift_sag_m"](tmp_path / "none.urdf") is None
     assert "if live_sag_ is not None and LiveTeleopLimits().lift_hold_tolerance_m < live_sag_:" in src
+    # the loaded sag (carriage plus the configured pallet mass) above a: recorded as a warning (main 2026-10-19)
+    assert "loaded_sag_m" in src and '"loaded_sag_above_hold_tolerance"' in src

@@ -124,12 +124,13 @@ class TeleopLift:
         self.limits, self.limit_m, self.dt = limits, float(limit_m), float(dt)
         self.target: float | None = None
         self.active = False
+        self.moved = False  # the last step moved the target (main 2026-10-19, option 1: only then is it clipped)
 
     def sync(self, value: float) -> None:
         """A target set from outside while owned -- the stop gate's latch (Codex D14 impl round 1 P1-1): the old
         target must not come back when the gate lifts."""
         if self.target is not None:
-            self.target, self.active = float(value), False
+            self.target, self.active, self.moved = float(value), False, False
 
     def step(self, teleop_mode: bool, teleop: dict | None, *, armed: bool, dirs, measured: float | None,
              start_from: float | None) -> float | None:
@@ -137,8 +138,9 @@ class TeleopLift:
         if not teleop_mode:
             if self.target is None:
                 return None
-            out = self.hold(self.target, measured) if self.active and measured is not None else self.target  # once
-            self.target, self.active = None, False
+            out = (self.hold(self.target, measured) if self.active and self.moved and measured is not None
+                   else self.target)  # handed over once
+            self.target, self.active, self.moved = None, False, False
             return out
         if self.target is None:
             self.target = float(start_from) if start_from is not None else (measured or 0.0)
@@ -146,12 +148,15 @@ class TeleopLift:
         if (armed and teleop is not None and teleop.get("deadman") and direction != 0 and direction in dirs
                 and measured is not None):
             step = direction * self.limits.lift_rate_mps * self.dt
+            before = self.target
             self.target = float(min(self.limit_m, max(0.0, self.target + step)))
-            self.active = True
+            self.active, self.moved = True, abs(self.target - before) > 1e-12
         elif self.active:
-            if measured is not None:
+            if measured is not None and self.moved:
+                # Main 2026-10-19 (option 1): a ramp that was moving stops near the lift; a target standing (at the
+                # travel's end) is kept, whatever the sag -- a loaded lift's can exceed the tolerance.
                 self.target = self.hold(self.target, measured)
-            self.active = False
+            self.active, self.moved = False, False
         return self.target
 
     def hold(self, target: float, measured: float) -> float:

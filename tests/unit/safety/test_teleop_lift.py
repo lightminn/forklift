@@ -219,3 +219,12 @@ def test_repeated_events_do_not_ratchet_a_standing_lift_down():
 def test_the_hold_tolerance_is_positive_and_finite(value):
     with pytest.raises(ValueError):
         TeleopLimits(lift_hold_tolerance_m=value)
+
+
+def test_a_stretch_ending_with_the_target_standing_keeps_it_whatever_the_sag():
+    """Main 2026-10-19 (option 1): only a ramp target moving in that tick is clipped to the measurement; at the
+    travel's end the target stands, so a loaded sag of 36 mm (above a) does not lower it."""
+    tl = lift()
+    for _ in range(int(20 / DT)):
+        tl.step(True, cmd(1), armed=True, dirs={-1, 1}, measured=0.244, start_from=0.0)  # at 0.28, a 36 mm sag
+    assert tl.step(True, cmd(0), armed=True, dirs={-1, 1}, measured=0.244, start_from=None) == pytest.approx(0.28)

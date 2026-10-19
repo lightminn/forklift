@@ -557,10 +557,43 @@ def test_a_mission_end_holds_the_lift_where_it_is(tmp_path):
     rt.hooks.lift_position = lambda: 0.031
     held = []
     rt.hooks.hold_lift = held.append
+    rt._lift_moving = True  # the ramp was moving in the last tick
     rt.end_mission(15.0, "failed", "x")
     # within the hold tolerance (0.02 m) of the measured lift: a target that ran ahead stops near it (main
     # 2026-10-19, plan D14 condition 3 amended)
     assert held == [pytest.approx(0.051)] and core.ms.lift_command == pytest.approx(0.051)
+
+
+def test_a_standing_target_is_kept_at_a_mission_end(tmp_path):
+    """Main 2026-10-19 (option 1): a target not moving in the last tick is kept, however far the lift sags below."""
+    rt, core, order = ending(tmp_path)
+    core.ms = SimpleNamespace(lift_command=0.08)
+    rt.hooks.lift_position = lambda: 0.031
+    held = []
+    rt.hooks.hold_lift = held.append
+    rt._lift_moving = False
+    rt.end_mission(15.0, "failed", "x")
+    assert held == [pytest.approx(0.08)] and core.ms.lift_command == pytest.approx(0.08)
+
+
+def test_a_loaded_standing_lift_keeps_its_target_through_three_gate_events(tmp_path):
+    """Main 2026-10-19: a pallet on the forks sags the lift 36 mm (above a = 0.02 m); three STOPs in a row while it
+    stands must not lower it."""
+    rt, core, did, clock = runtime(tmp_path)
+    core.ms = SimpleNamespace(lift_command=0.20)
+    did["lift_pos"] = 0.164
+    rt.start()
+    try:
+        t = 0.0
+        for _ in range(3):
+            rt.arbiter.stop(clock(), "stop:test")
+            step(rt, clock, t)
+            assert did["lift"][-1] == pytest.approx(0.20)
+            rt._lift_latch = None  # the gate lifted between the events
+            t += DT
+        assert core.ms.lift_command == pytest.approx(0.20)
+    finally:
+        rt.close()
 
 
 def test_a_standing_lifts_sag_is_not_taken_for_a_new_target_at_a_gate_or_an_end(tmp_path):
