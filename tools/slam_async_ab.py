@@ -136,7 +136,10 @@ def insertion(result) -> dict | None:
     """P: physical insertion measures; None unless all three are there."""
     try:  # both sides of each, finite, or no P (Codex 5.10 script review P2)
         lat = result["lateral_clearance_min_m"]["insert"]
-        lat_min = min(float(lat["left"]), float(lat["right"]))
+        sides = [float(lat["left"]), float(lat["right"])]
+        if not all(math.isfinite(v) for v in sides):  # each side, before the min hides one (Codex round 10)
+            return None
+        lat_min = min(sides)
         measured = result["insertion_measured"]
         beyond = [float(measured["left"]["beyond_centre_m"]), float(measured["right"]["beyond_centre_m"])]
         yaw = float(result["insertion_truth_yaw_rad"])
@@ -267,6 +270,8 @@ def judge(manifest: dict, runs: list[dict]) -> dict:
     general = [r for r in runs if r["set"] == "general"]
     if len(decision) != 24 or [r["block"] for r in decision] != [i // 4 for i in range(24)]:
         raise ValueError("the decision set is not 24 runs in block order")
+    if any(r.get("seed") != 0 for r in decision):
+        raise ValueError("a decision run is not seed 0")
     if sorted((r.get("seed"), r["arm"]) for r in general) != GENERAL:
         raise ValueError("the generalisation set is not seeds 1 and 2 once per arm")
     arms = [r["arm"] for r in decision]

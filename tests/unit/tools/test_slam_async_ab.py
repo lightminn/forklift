@@ -267,3 +267,15 @@ def test_a_jump_is_timed_at_its_application_tick_and_its_first_command_counts():
     t = {"curvature": [(0.9, 0.0), (1.05, 1.0), (1.2, 1.0)]}
     assert AB.jumps(e, t)["curvature_step_after_max"] == pytest.approx(1.0)
 
+
+def test_a_non_finite_side_and_a_wrong_decision_seed_are_refused():
+    """Codex round 10: one NaN side hid behind min(); decision runs on another seed were judged."""
+    side = {"lateral_clearance_min_m": {"insert": {"left": 0.06, "right": float("nan")}},
+            "insertion_measured": {"left": {"beyond_centre_m": 0.01}, "right": {"beyond_centre_m": 0.02}},
+            "insertion_truth_yaw_rad": 0.001}
+    assert AB.insertion(side) is None
+    runs = good_runs()
+    runs[4]["seed"] = 99
+    with pytest.raises(ValueError, match="seed 0"):
+        decide(runs)
+
