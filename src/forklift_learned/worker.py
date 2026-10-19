@@ -3,6 +3,7 @@ mission runs the model in the learned venv and talks to it over stdin/stdout.
 
 Protocol: each request is an 8-byte little-endian length and an .npy of the RGB (H, W, 3) uint8; each reply is an
 8-byte length and an .npz with ``masks`` (n, H, W) bool, ``scores`` (n,) float and ``ids`` (n,) str, or ``error``.
+An empty request asks for the session's active providers (reply ``providers``).
 """
 from __future__ import annotations
 
@@ -38,8 +39,12 @@ def serve(proposer, stdin=None, stdout=None) -> None:
         raw = _recv(stdin)
         if raw is None:
             return
-        rgb = np.load(io.BytesIO(raw))
         buf = io.BytesIO()
+        if not raw:
+            np.savez(buf, providers=np.array(list(getattr(proposer, "active_providers", [])), dtype=str))
+            _send(stdout, buf.getvalue())
+            continue
+        rgb = np.load(io.BytesIO(raw))
         try:
             props = proposer.propose(type("Scene", (), {"rgb": rgb})())
             masks = np.stack([p.mask for p in props]) if props else np.zeros((0, *rgb.shape[:2]), bool)
@@ -58,11 +63,12 @@ class WorkerProposer:
     a silent worker otherwise blocked the mission loop). A dead worker raises at once on every later call."""
 
     def __init__(self, python, onnx_path, *, conf: float = 0.05, providers: str = "CPUExecutionProvider", cwd=None,
-                 env=None, command=None, timeout_s: float = 10.0, first_timeout_s: float = 120.0, threads: int = 4):
+                 env=None, command=None, timeout_s: float = 10.0, first_timeout_s: float = 120.0, threads: int = 4,
+                 device_id: int = 0):
         # threads: onnxruntime's pool, pinned (unpinned it sized itself to the machine, not the Slurm allocation:
         # 830 ms a round trip on ws1 against 106 ms at 4 threads)
         cmd = command or [str(python), "-m", "forklift_learned.worker", str(onnx_path), str(conf), providers,
-                          str(int(threads))]
+                          str(int(threads)), str(int(device_id))]
         self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, cwd=cwd, env=env)
         self.timeout_s, self.first_timeout_s, self.calls = float(timeout_s), float(first_timeout_s), 0
 
@@ -86,6 +92,15 @@ class WorkerProposer:
             t.join(5)
             raise RuntimeError(f"learned worker missed its deadline ({deadline:g} s); killed")
         return out.get("raw")
+
+    def providers(self) -> list:
+        """The worker session's active onnxruntime providers (what really runs, not what was asked)."""
+        if self.proc.poll() is not None:
+            raise RuntimeError(f"learned worker ended (code {self.proc.returncode})")
+        raw = self._exchange(b"")
+        if raw is None:
+            raise RuntimeError(f"learned worker ended (code {self.proc.poll()})")
+        return [str(p) for p in np.load(io.BytesIO(raw))["providers"]]
 
     def propose(self, scene) -> list:
         if self.proc.poll() is not None:
@@ -137,8 +152,9 @@ def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     providers = argv[2].split(",") if len(argv) > 2 else None
     threads = int(argv[3]) if len(argv) > 3 else None
+    device_id = int(argv[4]) if len(argv) > 4 else 0
     serve(proposer.LearnedProposer(argv[0], conf=float(argv[1]) if len(argv) > 1 else 0.05, providers=providers,
-                                   threads=threads))
+                                   threads=threads, device_id=device_id))
     return 0
 
 

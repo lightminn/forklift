@@ -462,7 +462,10 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--recognition-learned-python", type=Path, default=None,
                         help="The interpreter with onnxruntime (the learned venv) that runs the model worker.")
     parser.add_argument("--recognition-providers", default="CPUExecutionProvider",
-                        help="onnxruntime providers for the worker, comma-separated (CPU keeps Isaac's VRAM).")
+                        help="onnxruntime providers for the worker, comma-separated (CPU keeps Isaac's VRAM; "
+                        "CUDAExecutionProvider must come up or the run stops).")
+    parser.add_argument("--recognition-device-id", type=int, default=0,
+                        help="CUDA device ordinal for the worker (of the GPUs the Slurm job was given).")
     parser.add_argument("--recognition-threads", type=int, default=4,
                         help="onnxruntime threads for the worker (pinned: unpinned it sizes itself to the machine).")
     parser.add_argument("--recognition-timeout-s", type=float, default=10.0,
@@ -2738,16 +2741,21 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                                        conf=args.recognition_conf,
                                                        providers=args.recognition_providers,
                                                        timeout_s=args.recognition_timeout_s,
-                                                       threads=args.recognition_threads)
+                                                       threads=args.recognition_threads,
+                                                       device_id=args.recognition_device_id)
                 # Its stdin closing also ends it when the runner dies; a deadline miss kills it (fallback after).
                 atexit.register(far_learned["worker"].close)
+                # What really runs: a CUDA request that does not come up stops the run here, before any driving
+                # (it once fell back to the CPU silently).
+                far_learned["active_providers"] = far_learned["worker"].providers()
                 far_learned["source"] = frr.LearnedSource(far_learned["worker"])
                 far_learned["record"] = {
                     "kind": "learned", "onnx": str(args.recognition_onnx),
                     "onnx_sha256": hashlib.sha256(args.recognition_onnx.read_bytes()).hexdigest(),
                     "tau": args.recognition_tau, "conf": args.recognition_conf,
                     "providers": args.recognition_providers, "timeout_s": args.recognition_timeout_s,
-                    "threads": args.recognition_threads}
+                    "threads": args.recognition_threads, "device_id": args.recognition_device_id,
+                    "active_providers": far_learned["active_providers"]}
             far_runtime = frr.FarRuntime(
                 fork_spacing=frr.fork_spacing_m(read_fork_blades_m(args.forklift_urdf)),
                 pallet_depth_m=geometry.pallet_depth_m, pallet_shape=args.pallet_geometry_loaded.geometry_version,

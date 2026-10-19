@@ -112,7 +112,7 @@ def test_the_worker_pins_its_onnxruntime_threads(monkeypatch):
 
     monkeypatch.setattr(W.subprocess, "Popen", FakePopen)
     W.WorkerProposer("py", "m.onnx", conf=0.05, threads=3)
-    assert seen["cmd"][-1] == "3"
+    assert seen["cmd"][-2] == "3"
     built = {}
     monkeypatch.setattr(W, "serve", lambda proposer: None)
     import forklift_learned.proposer as P
@@ -120,3 +120,38 @@ def test_the_worker_pins_its_onnxruntime_threads(monkeypatch):
     monkeypatch.setattr(P, "LearnedProposer", lambda *a, **kw: built.update(kw))
     W.main(["m.onnx", "0.05", "CPUExecutionProvider", "3"])
     assert built["threads"] == 3 and built["providers"] == ["CPUExecutionProvider"]
+
+
+def test_the_worker_reports_the_providers_its_session_runs_on(tmp_path):
+    script = tmp_path / "fake.py"
+    script.write_text("from forklift_learned.worker import serve\n"
+                      "class P:\n"
+                      "    active_providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']\n"
+                      "    def propose(self, scene):\n"
+                      "        return []\n"
+                      "serve(P())\n")
+    w = W.WorkerProposer(None, None, command=[sys.executable, str(script)])
+    try:
+        assert w.providers() == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        assert w.propose(_Scene()) == []  # the info request does not disturb the frames
+    finally:
+        w.close()
+
+
+def test_the_worker_passes_the_cuda_device(monkeypatch):
+    seen = {}
+
+    class FakePopen:
+        def __init__(self, cmd, **kw):
+            seen["cmd"] = cmd
+
+    monkeypatch.setattr(W.subprocess, "Popen", FakePopen)
+    W.WorkerProposer("py", "m.onnx", providers="CUDAExecutionProvider,CPUExecutionProvider", threads=2, device_id=1)
+    assert seen["cmd"][-2:] == ["2", "1"]
+    built = {}
+    monkeypatch.setattr(W, "serve", lambda proposer: None)
+    import forklift_learned.proposer as P
+
+    monkeypatch.setattr(P, "LearnedProposer", lambda *a, **kw: built.update(kw))
+    W.main(["m.onnx", "0.05", "CUDAExecutionProvider,CPUExecutionProvider", "2", "1"])
+    assert built["device_id"] == 1

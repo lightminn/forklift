@@ -86,3 +86,53 @@ def test_the_box_crop_rounds_its_edges_like_ultralytics_predict():
     cols = np.nonzero(m.any(axis=0))[0]
     assert (rows.min(), rows.max()) == (253, 266)  # y 253.4 -> 253, y 266.6 -> 267 (exclusive)
     assert (cols.min(), cols.max()) == (240, 359)
+
+
+class _FakeOrt:
+    """A stand-in onnxruntime: records the preload and the providers asked for; ``active`` is what loads."""
+
+    def __init__(self, active):
+        self.active, self.preloaded, self.asked = active, False, None
+
+    def preload_dlls(self, **kw):
+        self.preloaded = True
+
+    def get_available_providers(self):
+        return ["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"]
+
+    class SessionOptions:
+        pass
+
+    def InferenceSession(self, path, sess_options=None, providers=None):
+        self.asked = providers
+        ort = self
+
+        class S:
+            def get_providers(self):
+                return list(ort.active)
+
+        return S()
+
+
+def test_cuda_is_preloaded_and_pinned_to_the_device_asked(monkeypatch):
+    # ws1: without torch imported first, onnxruntime-gpu could not find the pip CUDA 13 / cuDNN libraries and ran
+    # on the CPU silently; the device is named explicitly (the AMD iGPU is never a CUDA device, but say which one)
+    ort = _FakeOrt(["CUDAExecutionProvider", "CPUExecutionProvider"])
+    monkeypatch.setitem(__import__("sys").modules, "onnxruntime", ort)
+    prop = P.LearnedProposer("m.onnx", providers=["CUDAExecutionProvider", "CPUExecutionProvider"], device_id=1)
+    assert ort.preloaded and ort.asked[0] == ("CUDAExecutionProvider", {"device_id": 1})
+    assert prop.active_providers == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+
+def test_a_cuda_request_that_lands_on_the_cpu_is_an_error(monkeypatch):
+    ort = _FakeOrt(["CPUExecutionProvider"])
+    monkeypatch.setitem(__import__("sys").modules, "onnxruntime", ort)
+    with pytest.raises(RuntimeError, match="CUDAExecutionProvider"):
+        P.LearnedProposer("m.onnx", providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
+
+
+def test_the_default_providers_leave_out_tensorrt(monkeypatch):
+    ort = _FakeOrt(["CPUExecutionProvider"])
+    monkeypatch.setitem(__import__("sys").modules, "onnxruntime", ort)
+    P.LearnedProposer("m.onnx")
+    assert ort.asked == ["CPUExecutionProvider"] and not ort.preloaded
