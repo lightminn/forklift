@@ -28,16 +28,31 @@ test("a preparation whose candidates all failed is summed up by their reasons", 
   assert.match(r.text, /3 후보/);
 });
 
-test("the results book keeps the newest first and replaces a seq it already has", () => {
+test("the results book shows the vehicle's newest list, newest first, and never an older one", () => {
   const book = new ResultsBook();
   book.welcome(5);
   book.update({ missions_seq: 2, results: [{ seq: 1, mission_id: "a" }, { seq: 2, mission_id: "b" }] });
   assert.deepEqual(book.rows().map((r) => r.mission_id), ["b", "a"]);
-  book.update({ missions_seq: 2, results: [{ seq: 2, mission_id: "b", record_error: "x" }] }); // re-sent
+  book.update({ missions_seq: 2, results: [{ seq: 1, mission_id: "a" }, { seq: 2, mission_id: "b", record_error: "x" }] });
   assert.equal(book.rows().length, 2);
-  assert.equal(book.rows()[0].record_error, "x");
+  assert.equal(book.rows()[0].record_error, "x"); // a note on a kept result is shown
   book.update({ missions_seq: 4, older: 2, results: [{ seq: 3, mission_id: "c" }, { seq: 4, mission_id: "d" }] });
   assert.equal(book.older, 2);
+  assert.deepEqual(book.rows().map((r) => r.seq), [4, 3]); // what the vehicle keeps, not every seq ever seen
+  book.update({ missions_seq: 3, results: [{ seq: 3, mission_id: "c" }] }); // an older message arriving late
+  assert.deepEqual(book.rows().map((r) => r.seq), [4, 3]);
+});
+
+test("a long session does not grow the page's list past what the vehicle keeps", () => {
+  const book = new ResultsBook();
+  book.welcome(1);
+  for (let n = 1; n <= 1001; n++) {
+    const results = [];
+    for (let s = Math.max(1, n - 99); s <= n; s++) results.push({ seq: s, mission_id: `m${s}` });
+    book.update({ missions_seq: n, older: Math.max(0, n - 100), results });
+  }
+  assert.equal(book.rows().length, 100);
+  assert.equal(book.older, 901);
 });
 
 test("a new session epoch empties the book (its seq starts again at 1)", () => {
@@ -80,6 +95,8 @@ test("the session buttons follow the arbiter's order: lease, feedback, stand, no
   assert.match(sessionButtons(st({ stopped_confirmed: false, stand_waiver: "lower_only" }),
                               { hasLease: true, caps }).end.why, /정지 확인/); // no waiver for the session
   assert.match(sessionButtons(st({ mission: { status: "running" } }), { hasLease: true, caps }).end.why, /미션/);
+  // the arbiter's ACTIVE (commands.py) includes cancelling (Codex D13 impl round 2 P2)
+  assert.match(sessionButtons(st({ mission: { status: "cancelling" } }), { hasLease: true, caps }).end.why, /미션/);
   const ok = sessionButtons(st(), { hasLease: true, caps });
   assert.equal(ok.end.enabled, true);
   assert.equal(ok.reset.shown, true);

@@ -24,7 +24,7 @@ from websockets.http11 import Request, Response
 
 from console import wire
 from console.mock_vehicle import camera
-from console.mock_vehicle.core import API, MockVehicle
+from console.mock_vehicle.core import API, Config, MockVehicle
 from console.mock_vehicle.world import raycast
 from console.wire import CONTROL_PATH, MEDIA_PATH
 
@@ -337,7 +337,8 @@ class Handle(wire.ControlOutboxMixin, wire.MediaFanoutMixin):
 async def start(
     host: str, port: int, web_root: Path, *, test_frame_pad_bytes: int = 0
 ) -> Handle:
-    vehicle = MockVehicle(time.monotonic, lambda: secrets.token_hex(8))
+    # as the live runner: the request ledger and its tokens (persistent console plan D7/D13)
+    vehicle = MockVehicle(time.monotonic, lambda: secrets.token_hex(8), Config(request_tokens=True))
     h = Handle(vehicle, Path(web_root), test_frame_pad_bytes)
     h.server = await serve(
         h.handler,

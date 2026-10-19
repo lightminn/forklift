@@ -3,7 +3,7 @@
 
 import { controlProfile, forbidText, liftControls, recoveryNote, videoStaleAfterS, palletKindLabel, permitText, rearmState, resumeState, resumeSteps, standWhy, stopInstruction, stopKind } from "./profile.js";
 import { blockReason, currentDestination, missionProgress, PHASES, selectable, subtaskOf } from "./wizard.js";
-import { adviceText, destinationLabel, reasonText, recoveryGuide, sessionButtons } from "./results.js";
+import { ACTIVE as MISSION_ACTIVE, adviceText, destinationLabel, reasonText, recoveryGuide, sessionButtons } from "./results.js";
 
 const MODE_KO = { AUTO: "자동 주행", TELEOP: "수동 조종", PAUSED: "대기", STOPPED: "정지됨" };
 const MODE_CLS = { AUTO: "acc", TELEOP: "tel", PAUSED: "ok", STOPPED: "crit" };
@@ -182,6 +182,7 @@ export function render(m) {
   for (const [id, be] of [["be-real", "real"], ["be-isaac", "isaac"], ["be-mock", "mock"]]) $(id).setAttribute("aria-pressed", String(w?.backend === be));
   if (!st) {
     $("m-open").disabled = true;
+    renderSession(m, null, lease, prof, monitor); // a new session's welcome before its first state: nothing old stays
     return;
   }
 
@@ -399,7 +400,7 @@ function renderSession(m, stIn, lease, prof, monitor) {
   if (guide) g.innerHTML = `<b>수동 복구 · ${esc(guide.next)}</b><br>${guide.notes.map(esc).join(" · ")}${guide.permit ? `<br>${esc(guide.permit)}` : ""}`;
   // the advice of the last result, while no newer mission runs (it is from the pose at that failure)
   const last = st.last_result;
-  const active = st.mission && ["accepted", "preparing", "running", "paused", "held", "resuming", "recovering"].includes(st.mission.status);
+  const active = st.mission && MISSION_ACTIVE.includes(st.mission.status);
   const advice = !active && last?.advice ? adviceText(last.advice) : null;
   const a = $("advice-line");
   a.hidden = !advice;

@@ -90,6 +90,9 @@ export const REASONS = {
   "prepare:reference": "목적지 기준 스캔을 만들지 못했습니다",
   "prepare:targets": "계획하는 동안 대상 목록이 바뀌었습니다",
   "prepare:correction": "계획하는 동안 위치 보정이 바뀌었습니다",
+  "prepare:stopped": "계획하는 동안 STOP 으로 멈췄습니다",
+  "prepare:paused": "계획하는 동안 일시정지됐습니다",
+  "prepare:teleop": "계획하는 동안 수동 조종으로 바뀌었습니다",
   "prepare:": "첫 구간을 준비하지 못했습니다",
   // the recovery of a mission that ended with the forks in a pocket
   "recovery:clear_out:budget": "물러나기 거리(1.0 m)를 다 썼습니다 — 수동 복구가 필요합니다",
@@ -124,24 +127,28 @@ export function reasonText(code) {
   return { text: head ? REASONS[head] : code, code };
 }
 
-// The results book of this session (contract 5.2): the seq counts within a session_epoch only.
+// The results book of this session (contract 5.2): the seq counts within a session_epoch only. Every message carries
+// the vehicle's whole kept list (its newest 100) and how many are older; the page shows that list as it is -- a long
+// session does not grow it (Codex D13 impl round 2) -- and never goes back to an older message arriving late.
 export class ResultsBook {
-  constructor() { this.epoch = null; this.bySeq = new Map(); this.older = 0; this.seq = 0; this.version = 0; }
+  constructor() { this.epoch = null; this.list = []; this.older = 0; this.seq = 0; this.version = 0; }
 
   welcome(epoch) {
     if (epoch !== this.epoch) {
-      this.epoch = epoch; this.bySeq.clear(); this.older = 0; this.seq = 0; this.version += 1;
+      this.epoch = epoch; this.list = []; this.older = 0; this.seq = 0; this.version += 1;
     }
   }
 
   update(msg) {
-    for (const r of msg.results ?? []) this.bySeq.set(r.seq, r);
+    const seq = msg.missions_seq ?? 0;
+    if (seq < this.seq) return;
+    this.seq = seq;
+    this.list = [...(msg.results ?? [])].sort((a, b) => b.seq - a.seq);
     this.older = msg.older ?? 0;
-    this.seq = Math.max(this.seq, msg.missions_seq ?? 0);
     this.version += 1; // the page redraws the list when this changes
   }
 
-  rows() { return [...this.bySeq.values()].sort((a, b) => b.seq - a.seq); }
+  rows() { return this.list; }
 }
 
 const PERMIT = { "recovery:steering": "조향이 곧게 돌아오기를 기다리는 중", ok: "허용", occupied: "앞이나 뒤가 막힘" };
@@ -166,7 +173,8 @@ export function recoveryGuide(st) {
   return { stage: rec.stage, next, notes, permit };
 }
 
-const ACTIVE = ["accepted", "preparing", "running", "paused", "held", "resuming", "recovering"];
+// the arbiter's ACTIVE (src/forklift_core/mission/commands.py)
+export const ACTIVE = ["accepted", "preparing", "running", "paused", "resuming", "held", "cancelling", "recovering"];
 
 // The session buttons (D13 item 5), enabled in the arbiter's order; the stand waiver does not apply to them.
 export function sessionButtons(st, { hasLease, caps }) {

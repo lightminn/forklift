@@ -68,6 +68,8 @@ STOPPED_ALLOWED = {
     "mission_cancel",
     "mission_pause",
     "targets_request",
+    "session_end",  # the arbiter takes them in STOPPED too (stand, feedback, no mission)
+    "sim_reset",
 }
 INT_FIELDS = ("session_epoch", "control_gen", "arm_gen", "seq")
 LIFT_TOP_M = 0.28
@@ -91,6 +93,9 @@ class Config:
     stop_threshold_mps: float = 0.02
     stop_hold_s: float = 0.5
     result_cache_max: int = 4096
+    # persistent console plan D7/D13: the live runner's request ledger (tokens); the server turns it on, the older
+    # unit tests keep the request-id store
+    request_tokens: bool = False
 
 
 def _is_int(v) -> bool:
@@ -205,6 +210,8 @@ class MockVehicle:
         self.results = ResultsBook()
         self.scene = {"damaged": None}
         self.session_request = None  # "end" | "reset", taken by the server
+        self.session_ending = False  # accepted: every later leased request is refused session_ending
+        self._policy_override = None  # injected recovery policy fields (lift_dirs, drive_mode, ...)
         self.recovery = None
         self._permit_override = None
         self._booked = None
@@ -296,8 +303,8 @@ class MockVehicle:
     # --------------------------------------------------------------- connection
     def connect(self, client_id: str, conn_id: str | None = None) -> dict:
         self.clients.setdefault(client_id, set()).add(conn_id)
-        token = self.ledger.issue()
-        registered = self.ledger.register(token, client_id, conn_id, self._now())
+        token = self.ledger.issue() if self.cfg.request_tokens else None
+        registered = token is not None and self.ledger.register(token, client_id, conn_id, self._now())
         caps = {
             "mission": True,
             "teleop_direct": True,
@@ -497,6 +504,10 @@ class MockVehicle:
             "recovery": dict(self.recovery) if self.recovery else None,
             "teleop_allowed": teleop_reason is None,
             "teleop_forbidden_reason": teleop_reason,
+            "lift_dirs": [-1, 1] if self.lift_allowed else [],
+            "drive_mode": "normal",
+            "stand_waiver": None,
+            **(self._policy_override or {}),
             "plan": self._plan(),
         }
 
@@ -538,7 +549,7 @@ class MockVehicle:
                 "request_id": msg.get("request_id"),
                 "reason": "unsupported",
             }
-        if "request_token" in msg:
+        if self.cfg.request_tokens or "request_token" in msg:
             return self._handle_ledger(client_id, msg, conn_id)
         key = (client_id, msg.get("session_epoch"), msg["request_id"])
         if key in self._results:  # contract 1, rule 1
@@ -594,6 +605,8 @@ class MockVehicle:
             return self._reply(msg, reason="stale_lease")
         if msg.get("control_gen") != self.control_gen:
             return self._reply(msg, reason="stale_control")
+        if self.session_ending:
+            return self._reply(msg, reason="session_ending")  # the session closes (as the live arbiter, D7)
         if self.mode == "STOPPED" and t not in STOPPED_ALLOWED:
             return self._reply(msg, reason="stopped_locked")
         handler = getattr(self, "_req_" + t)
@@ -668,6 +681,9 @@ class MockVehicle:
 
     # --------------------------------------------------------------- mission API
     def _req_mission_submit(self, msg: dict) -> dict:
+        self._book_end(self._now())  # the ended mission is booked before a new one replaces it
+        if self.scene["damaged"] is not None:
+            return self._reply(msg, reason="scene_damaged")  # automatic work waits for a scene reset (D6)
         if msg.get("targets_revision") != self.targets_revision:
             return self._reply(msg, reason="stale_targets")
         pallet = next(
@@ -732,6 +748,8 @@ class MockVehicle:
         return self._reply(msg)
 
     def _req_mission_resume(self, msg: dict) -> dict:
+        if self.scene["damaged"] is not None:
+            return self._reply(msg, reason="scene_damaged")
         m = self.mission
         if not self._mission_matches(msg) or m["status"] not in ("paused", "held"):
             return self._reply(msg, reason="invalid")
@@ -833,6 +851,7 @@ class MockVehicle:
         if self.mission is not None and self.mission["status"] in self.ACTIVE:
             return self._reply(msg, reason="mission_active")
         self.session_request = kind
+        self.session_ending = True
         if self.mode in ("AUTO", "TELEOP"):
             self._set_mode("PAUSED")
         else:
@@ -861,12 +880,17 @@ class MockVehicle:
         if kind == "recovery_required":
             self.recovery = {"stage": "in_pocket", "grounded": False, "evidence": True, "aligned": True,
                              "pallet_id": "P-01"}
+            # as the live state sends a lifted, pressed pocket: lower only, the stand waived (plan D14)
+            self._policy_override = {"lift_dirs": [-1], "drive_mode": "normal", "stand_waiver": "lower_only",
+                                     "teleop_forbidden_reason": "recovery:lower_first", "teleop_allowed": True}
             self._book(mission_id=mission_id, outcome="recovery_required", reason="recovery:blocked:test",
                        started_s=now, pallet_id="P-01", destination_id="D-A")
         elif kind == "steering_wait":
             self.recovery = {"stage": "in_pocket", "grounded": True, "evidence": True, "aligned": True,
                              "pallet_id": "P-01"}
             self._permit_override = (0.0, "recovery:steering")
+            self._policy_override = {"lift_dirs": [], "drive_mode": "reverse_straight", "stand_waiver": None,
+                                     "teleop_forbidden_reason": None, "teleop_allowed": True}
             self.missions_created -= 1
         elif kind == "invalid_start":
             self._book(mission_id=mission_id, outcome="failed",

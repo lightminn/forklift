@@ -20,7 +20,7 @@ class Clock:
 def env():
     clock = Clock()
     tokens = (f"tok{i}" for i in itertools.count())
-    return MockVehicle(clock, lambda: next(tokens), Config()), clock
+    return MockVehicle(clock, lambda: next(tokens), Config(request_tokens=True)), clock
 
 
 class Client:
@@ -148,3 +148,66 @@ def test_the_injections_give_the_screens_cases(env):
     assert last["outcome"] == "failed" and last["advice"]["backoff_m"] == pytest.approx(0.15)
     with pytest.raises(ValueError):
         v.inject("nonsense")
+
+
+def test_without_request_tokens_configured_the_old_store_is_kept():
+    clock = Clock()
+    v = MockVehicle(clock, lambda: "t", Config())
+    assert "request_token" not in v.connect("a", "c1")
+
+
+def test_a_connection_with_a_token_must_send_it(env):
+    """Codex D13 impl round 2 P3: the live runner refuses a tokenless request (request_tokens=True)."""
+    v, _ = env
+    Client(v)
+    msg = {"t": "lease_request", "request_id": "x", "session_epoch": v.session_epoch}
+    assert v.handle("a", msg, conn_id="c1")["reason"] == "invalid"
+
+
+def test_a_session_request_is_taken_while_stopped_and_closes_everything_else(env):
+    """Codex D13 impl round 2 P2: STOPPED does not lock it out (the arbiter allows it); after the ack every other
+    request is session_ending."""
+    v, clock = env
+    c = Client(v)
+    c.take_lease()
+    v._stop("console")
+    stand(v, clock)
+    assert v.mode == "STOPPED"
+    assert c.send("session_end")["t"] == "ack"
+    r = c.send("mission_submit", pallet_id="P-01", destination_id="D-A", targets_revision=v.targets_revision)
+    assert r["reason"] == "session_ending"
+
+
+def test_a_cancelled_mission_is_booked_before_the_next_one_replaces_it(env):
+    """Codex D13 impl round 2 P2: submit M1, cancel, submit M2 at once -- M1's result was lost."""
+    v, clock = env
+    c = Client(v)
+    c.take_lease()
+    m1 = submit(c, v)
+    c.send("mission_cancel", mission_id=m1)
+    stand(v, clock, 0.6)
+    submit(c, v)
+    stand(v, clock, 0.1)
+    assert [r["mission_id"] for r in v.make_missions()["results"]][:1] == [m1]
+
+
+def test_a_damaged_scene_refuses_automatic_work(env):
+    """Codex D13 impl round 2 P2: the screen says automatic work is refused; the vehicle must agree."""
+    v, clock = env
+    c = Client(v)
+    c.take_lease()
+    v.inject("scene_damage")
+    r = c.send("mission_submit", pallet_id="P-01", destination_id="D-A", targets_revision=v.targets_revision)
+    assert r["reason"] == "scene_damaged"
+
+
+def test_the_recovery_injections_carry_the_policy_the_guidance_reads(env):
+    """Codex D13 impl round 2 P3: lift_dirs, drive_mode and the stand waiver, as the live state sends them."""
+    v, clock = env
+    v.inject("recovery_required")
+    st = v.make_state()
+    assert st["lift_dirs"] == [-1] and st["drive_mode"] == "normal" and st["stand_waiver"] == "lower_only"
+    assert st["teleop_forbidden_reason"] == "recovery:lower_first"
+    v.inject("steering_wait")
+    st = v.make_state()
+    assert st["drive_mode"] == "reverse_straight" and st["lift_dirs"] == [] and st["stand_waiver"] is None

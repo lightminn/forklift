@@ -571,13 +571,14 @@ async def teleop_drive(p: Probe, seconds: float, speed: float, curvature: float)
     return teleop
 
 
-async def back_off_by(p: Probe, distance_m: float, max_s: float) -> float:
-    """Reverse ``distance_m`` by the reported rear-axle speed, integrated over the states that arrive (a state not
-    renewed adds nothing -- Codex D13 impl round 1 P2: a stalled sim kept "moving" on the last speed), slowing in
-    the last 0.20 m and counting the stop (the speed chain coasts after a zero command, P2: a narrow interval was
-    overshot); the distance it says, stop included (plan D13 item 6)."""
+async def back_off_by(p: Probe, low_m: float, high_m: float, max_s: float) -> dict:
+    """Reverse into the advised interval [``low_m``, ``high_m``] by the reported rear-axle speed, integrated over the
+    states that arrive (a state not renewed adds nothing -- Codex D13 impl round 1 P2), aiming at its middle, crawling
+    in the last 0.20 m, the stop included; short of the interval after the stop, crawl again (at most 3 times). Says
+    how far it went and whether that is inside the interval -- a fixed tolerance is no proof (Codex round 2 P2)."""
     moved, seen = 0.0, None
     stop_by = time.monotonic() + max_s
+    target = 0.5 * (low_m + high_m)
 
     def take() -> float:
         nonlocal seen
@@ -594,19 +595,28 @@ async def back_off_by(p: Probe, distance_m: float, max_s: float) -> float:
         factor = pacing.get("realtime_factor") or pacing.get("target_factor") or 1.0  # sim s per wall s
         return -float(v) * dt * float(factor) if v is not None and v < 0 and dt < 0.5 else 0.0
 
+    async def stop_and_count():
+        nonlocal moved
+        settle_by = time.monotonic() + 15.0
+        while time.monotonic() < settle_by and p.closed_code is None and not (p.state and p.standing(p.state)):
+            await p.teleop(0.0, 0.0, True)
+            await asyncio.sleep(0.05)
+            moved += take()  # the coasting counts
+
     take.at = None
-    while moved < distance_m - 0.01 and time.monotonic() < stop_by and p.closed_code is None:
-        left = distance_m - moved
-        ratio = max(0.1, min(0.5, 0.5 * left / 0.20))  # slower in the last 0.20 m
-        await p.teleop(-ratio, 0.0, True)
-        await asyncio.sleep(0.05)
-        moved += take()
-    settle_by = time.monotonic() + 15.0
-    while time.monotonic() < settle_by and p.closed_code is None and not (p.state and p.standing(p.state)):
-        await p.teleop(0.0, 0.0, True)
-        await asyncio.sleep(0.05)
-        moved += take()  # the coasting counts
-    return moved
+    goal = target
+    for attempt in range(4):
+        while moved < goal and time.monotonic() < stop_by and p.closed_code is None:
+            left = goal - moved
+            ratio = max(0.05, min(0.5, 0.5 * left / 0.20))  # a crawl in the last 0.20 m
+            await p.teleop(-ratio, 0.0, True)
+            await asyncio.sleep(0.05)
+            moved += take()
+        await stop_and_count()
+        if moved >= low_m or attempt == 3:
+            break
+        goal = low_m + 0.25 * (high_m - low_m)  # short: crawl again into the interval's first quarter
+    return {"moved_m": moved, "target_m": target, "within": low_m <= moved <= high_m}
 
 
 async def enter_teleop(p: Probe) -> dict | None:
@@ -860,8 +870,8 @@ async def cycle_scenario(p: Probe, args):
             if advice_:
                 # the middle of the passing interval, measured by the reported rear-axle speed (the map pose moves
                 # with SLAM corrections; plan D13 item 6)
-                target_ = 0.5 * (float(advice_["backoff_m"]) + float(advice_["backoff_max_m"]))
-                moved_ = await back_off_by(p, target_, max_s=60.0)
+                moved_ = await back_off_by(p, float(advice_["backoff_m"]), float(advice_["backoff_max_m"]), max_s=60.0)
+                target_ = moved_["target_m"]
             else:
                 stop_by = time.monotonic() + args.manual_extra_s
                 while time.monotonic() < stop_by:
