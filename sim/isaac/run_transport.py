@@ -7075,7 +7075,9 @@ def drive(S, isaac) -> None:
                     plan_wait_ = True  # real-time plan D9b: the delivery docking match was just asked; this tick stands
                 if live_abort_:
                     requested_speed, curvature = 0.0, 0.0
-                if not paused_ and not live_abort_ and not plan_wait_ and core.lift_and_timers(t, dt):  # M-a1 slice 2: the lift ramp, timers
+                # M-a1 slice 2: the lift ramp, timers (plan D5 6c: a loaded start wait ramps while a plan is waited for)
+                if (not paused_ and not live_abort_ and (not plan_wait_ or core.lift_ramps_in_plan_wait())
+                        and core.lift_and_timers(t, dt)):
                     if live is None:
                         break
                     # Persistent console plan D1: the mission ends, judged on the truth; the session goes on standing.

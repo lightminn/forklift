@@ -30,6 +30,7 @@ MISSION_KEYS = {
         "tracking_failure", "handoff", "recoveries",
         "pocket_check", "forbidden_pocket_contacts", "pocket_geometry_checks", "repeat_capture", "phase",
         "lateral_clearance_min_m", "live_first_replans", "return_correction_drops",
+        "loaded_lift_wait",  # plan D5 6c: a loaded start wait's record (Codex 6c impl round 1 P3)
     ),
     "obstacle": (
         "pickup_estimate", "pallet_rel", "delivered_pending", "withdraw_line",

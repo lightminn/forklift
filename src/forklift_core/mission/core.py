@@ -5300,6 +5300,11 @@ class MissionCore:
 
     LOADED_START_WAIT_S = 60.0
 
+    def lift_ramps_in_plan_wait(self) -> bool:
+        """Whether the lift ramp runs on a tick standing for a plan (plan D5 6c item 5): in a loaded start wait, so the
+        lift reaches the carry height while the first live leg is planned (Codex 6c impl round 1 P2)."""
+        return self.loaded_wait is not None
+
     def loaded_start_wait(self, t: float) -> bool:
         """A loaded mission's start wait (plan D5 6c item 5), each control tick: True while the truck stands for
         it -- the runner then skips the follower, the arrival and the cusp and stall counts, and commands no wheel

@@ -180,3 +180,23 @@ def test_the_wait_is_the_missions_and_goes_with_its_end():
 def test_an_unloaded_mission_has_no_start_wait():
     core, ms, state, started, inputs = preparing_core()
     assert not core.loaded_start_wait(13.0) and getattr(core, "loaded_wait", None) is None
+
+
+def test_the_wait_record_is_the_missions_handed_to_its_record_and_not_carried_on():
+    """Codex 6c impl round 1 P3: the loaded_lift_wait record piled up across missions and missed the ended one's."""
+    core, ms, state, started, inputs, _ = loaded_core()
+    adopt(core, inputs)
+    records = core.baseline.restore(core)
+    assert records["state"]["loaded_lift_wait"] == [{"start_s": 12.0}] and "loaded_lift_wait" not in state
+
+
+def test_the_lift_ramps_while_the_loaded_start_waits_for_a_plan():
+    """Codex 6c impl round 1 P2: a plan wait stopped the lift ramp too, so a late first live leg failed start_wait:lift."""
+    core, ms, state, started, inputs, _ = loaded_core()
+    assert not core.lift_ramps_in_plan_wait()
+    adopt(core, inputs)
+    assert core.lift_ramps_in_plan_wait()
+    ready_leg(core)
+    core.hooks.lift_position = lambda: 0.077
+    core.loaded_start_wait(13.0)
+    assert not core.lift_ramps_in_plan_wait()  # the wait is over: a plan wait stands as before
