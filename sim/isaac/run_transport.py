@@ -463,6 +463,8 @@ def arguments() -> argparse.Namespace:
                         help="The interpreter with onnxruntime (the learned venv) that runs the model worker.")
     parser.add_argument("--recognition-providers", default="CPUExecutionProvider",
                         help="onnxruntime providers for the worker, comma-separated (CPU keeps Isaac's VRAM).")
+    parser.add_argument("--recognition-threads", type=int, default=4,
+                        help="onnxruntime threads for the worker (pinned: unpinned it sizes itself to the machine).")
     parser.add_argument("--recognition-timeout-s", type=float, default=10.0,
                         help="Deadline per learned request (wall clock); past it the worker is killed and the "
                         "frames fall back to the geometric proposals.")
@@ -2735,7 +2737,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 far_learned["worker"] = WorkerProposer(args.recognition_learned_python, args.recognition_onnx,
                                                        conf=args.recognition_conf,
                                                        providers=args.recognition_providers,
-                                                       timeout_s=args.recognition_timeout_s)
+                                                       timeout_s=args.recognition_timeout_s,
+                                                       threads=args.recognition_threads)
                 # Its stdin closing also ends it when the runner dies; a deadline miss kills it (fallback after).
                 atexit.register(far_learned["worker"].close)
                 far_learned["source"] = frr.LearnedSource(far_learned["worker"])
@@ -2743,7 +2746,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     "kind": "learned", "onnx": str(args.recognition_onnx),
                     "onnx_sha256": hashlib.sha256(args.recognition_onnx.read_bytes()).hexdigest(),
                     "tau": args.recognition_tau, "conf": args.recognition_conf,
-                    "providers": args.recognition_providers, "timeout_s": args.recognition_timeout_s}
+                    "providers": args.recognition_providers, "timeout_s": args.recognition_timeout_s,
+                    "threads": args.recognition_threads}
             far_runtime = frr.FarRuntime(
                 fork_spacing=frr.fork_spacing_m(read_fork_blades_m(args.forklift_urdf)),
                 pallet_depth_m=geometry.pallet_depth_m, pallet_shape=args.pallet_geometry_loaded.geometry_version,

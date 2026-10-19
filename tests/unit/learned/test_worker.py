@@ -99,3 +99,24 @@ def test_close_is_bounded_while_a_send_is_stuck_in_the_pipe():
     t0 = time.monotonic()
     w.close(timeout_s=0.2)
     assert time.monotonic() - t0 < 1.0 and w.proc.poll() is not None
+
+
+def test_the_worker_pins_its_onnxruntime_threads(monkeypatch):
+    # ws1 timing: unpinned, onnxruntime sized its pool to the machine (24 cores) inside a 4-CPU allocation and a
+    # round trip took 830 ms against 106 ms in-process at 4 threads
+    seen = {}
+
+    class FakePopen:
+        def __init__(self, cmd, **kw):
+            seen["cmd"] = cmd
+
+    monkeypatch.setattr(W.subprocess, "Popen", FakePopen)
+    W.WorkerProposer("py", "m.onnx", conf=0.05, threads=3)
+    assert seen["cmd"][-1] == "3"
+    built = {}
+    monkeypatch.setattr(W, "serve", lambda proposer: None)
+    import forklift_learned.proposer as P
+
+    monkeypatch.setattr(P, "LearnedProposer", lambda *a, **kw: built.update(kw))
+    W.main(["m.onnx", "0.05", "CPUExecutionProvider", "3"])
+    assert built["threads"] == 3 and built["providers"] == ["CPUExecutionProvider"]

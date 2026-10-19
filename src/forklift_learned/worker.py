@@ -58,8 +58,11 @@ class WorkerProposer:
     a silent worker otherwise blocked the mission loop). A dead worker raises at once on every later call."""
 
     def __init__(self, python, onnx_path, *, conf: float = 0.05, providers: str = "CPUExecutionProvider", cwd=None,
-                 env=None, command=None, timeout_s: float = 10.0, first_timeout_s: float = 120.0):
-        cmd = command or [str(python), "-m", "forklift_learned.worker", str(onnx_path), str(conf), providers]
+                 env=None, command=None, timeout_s: float = 10.0, first_timeout_s: float = 120.0, threads: int = 4):
+        # threads: onnxruntime's pool, pinned (unpinned it sized itself to the machine, not the Slurm allocation:
+        # 830 ms a round trip on ws1 against 106 ms at 4 threads)
+        cmd = command or [str(python), "-m", "forklift_learned.worker", str(onnx_path), str(conf), providers,
+                          str(int(threads))]
         self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, cwd=cwd, env=env)
         self.timeout_s, self.first_timeout_s, self.calls = float(timeout_s), float(first_timeout_s), 0
 
@@ -129,11 +132,13 @@ def _quiet_close(stream) -> None:
 
 
 def main(argv=None) -> int:
-    from forklift_learned.proposer import LearnedProposer  # noqa: PLC0415
+    from forklift_learned import proposer  # noqa: PLC0415
 
     argv = sys.argv[1:] if argv is None else argv
     providers = argv[2].split(",") if len(argv) > 2 else None
-    serve(LearnedProposer(argv[0], conf=float(argv[1]) if len(argv) > 1 else 0.05, providers=providers))
+    threads = int(argv[3]) if len(argv) > 3 else None
+    serve(proposer.LearnedProposer(argv[0], conf=float(argv[1]) if len(argv) > 1 else 0.05, providers=providers,
+                                   threads=threads))
     return 0
 
 
