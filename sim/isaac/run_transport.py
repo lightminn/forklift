@@ -61,6 +61,9 @@ CUSP_HEADING_HOLD_PHASES = ("observe", "return_home")
 # retry's or a realignment's re-observation) opens its own. Both S4 failures of this kind were on a
 # near leg whose run had spent the budget before it.
 OBSERVE_REPLANS_PER_LEG = 2
+# Persistent console plan D15: a live stand while holding starts once the applied wheel speed has been zero this many
+# physics steps (0.2 s at 120 Hz); from there the hold's dead reckoning counts the stand's net displacement.
+LIVE_STAND_STEPS = 24
 
 
 def same_path(new, current, remaining_m: float, tol_m: float = 0.01, yaw_tol_rad: float = 0.02) -> bool:
@@ -4561,7 +4564,10 @@ def drive(S, isaac) -> None:
             x, y, yaw_o = slam["odom_rear"]
             return np.array([x, y, yaw_o])
         try:
-            est = slam["tracker"].map_from_base(now_s, slam_odom_base())
+            # Persistent console plan D15 (live only: a batch run's tracker calls are recorded and replayed as they
+            # were): a stand counts its net displacement, not the odometry noise.
+            stand_ = {"standing": slam.get("stand_steps", 0) >= LIVE_STAND_STEPS} if getattr(args, "live", False) else {}
+            est = slam["tracker"].map_from_base(now_s, slam_odom_base(), **stand_)
         except slam["stale"] as exc:
             # N9 with the shared LiDAR (Codex stage-1 P1-1): the silence that stops
             # the permission also starves SLAM. Keep driving the stop on odometry
@@ -5464,6 +5470,11 @@ def drive(S, isaac) -> None:
                     # M-c (plan C2): the vehicle time the odometry sample was made, before the SLAM exchange below
                     # waits (live only: a batch run's clock reads are recorded and replayed).
                     slam["odom_mono"] = time.monotonic()
+                if getattr(args, "live", False):
+                    # Plan D15: the physics steps the applied wheel speed has been zero for (the assembled, teleop or
+                    # preempt command, whichever drove this step), not the requested speed a braking slew still runs.
+                    applied_speed_ = (state.get("applied_command") or (0.0, []))[0]
+                    slam["stand_steps"] = slam.get("stand_steps", 0) + 1 if applied_speed_ == 0.0 else 0
                 slam["stop_now"] = slam["stop"].update(
                     commanded_speed=slam.get("last_command", 0.0),
                     speed=slam["odom_speed"],
